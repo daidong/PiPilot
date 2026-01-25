@@ -417,6 +417,21 @@ export type {
   RepairStrategy
 } from './llm/index.js'
 
+// Schema Utilities (OpenAI Structured Outputs compatibility)
+export {
+  boundedArray,
+  analyzeSchema,
+  assertSchemaCompatible,
+  warnSchemaIssues,
+  nullable,
+  withDefault,
+  stringEnum
+} from './llm/index.js'
+export type {
+  SchemaIssue,
+  SchemaAnalysisResult
+} from './llm/index.js'
+
 // AgentLoop 相关
 export type { LLMClient, AgentLoopConfig } from './agent/agent-loop.js'
 export { runAgent } from './agent/agent-loop.js'
@@ -634,8 +649,11 @@ export {
   // Team runtime
   TeamRuntime,
   createTeamRuntime,
+  createAutoTeamRuntime,
   createPassthroughInvoker,
   createMockInvoker,
+  canUseAutoRuntime,
+  getMissingRunners,
 
   // Flow combinators
   seq,

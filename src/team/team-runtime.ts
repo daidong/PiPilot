@@ -539,3 +539,122 @@ export function createMockInvoker(
     return response
   }
 }
+
+// ============================================================================
+// Auto Team Runtime (No manual agentInvoker switch needed)
+// ============================================================================
+
+/**
+ * Configuration for auto team runtime
+ */
+export interface AutoTeamRuntimeConfig {
+  /** The team definition */
+  team: TeamDefinition
+  /**
+   * Shared context passed to all agents.
+   * For LLM agents, should include getLanguageModel().
+   * For tool agents, should include getTool() and toolContext.
+   */
+  context: unknown
+  /** Optional custom reducer registry */
+  reducerRegistry?: ReducerRegistry
+  /** Trace event handler */
+  onTrace?: (event: TeamTraceEvent) => void
+  /** Progress callback */
+  onProgress?: (info: { step: number; agentId?: string; status: string }) => void
+  /**
+   * Fallback invoker for agents without runners.
+   * Used when an agent handle doesn't have a runner function.
+   */
+  fallbackInvoker?: AgentInvoker
+}
+
+/**
+ * Create a team runtime that auto-invokes agents based on their handles.
+ *
+ * This eliminates the need to write a manual agentInvoker switch statement.
+ * Agents registered via agentHandle() with a run method are automatically invoked.
+ *
+ * @example
+ * ```typescript
+ * const planner = defineLLMAgent({...})
+ * const executor = defineToolAgent({...})
+ *
+ * const team = defineTeam({
+ *   id: 'my-team',
+ *   agents: {
+ *     planner: agentHandle('planner', planner),
+ *     executor: agentHandle('executor', executor),
+ *   },
+ *   flow: seq(
+ *     step(planner).in(state.initial()).out(state.path('plan')),
+ *     step(executor).in(state.path('plan')).out(state.path('result'))
+ *   )
+ * })
+ *
+ * // Create runtime with shared context - no agentInvoker needed!
+ * const runtime = createAutoTeamRuntime({
+ *   team,
+ *   context: {
+ *     getLanguageModel: () => openai('gpt-4o'),
+ *     getTool: (id) => toolRegistry.get(id),
+ *     toolContext: { cwd: process.cwd() }
+ *   }
+ * })
+ *
+ * const result = await runtime.run({ userRequest: 'analyze this data' })
+ * ```
+ */
+export function createAutoTeamRuntime(config: AutoTeamRuntimeConfig): TeamRuntime {
+  const { team, context, fallbackInvoker, ...restConfig } = config
+
+  // Build agent invoker from team's agent handles
+  const agentInvoker: AgentInvoker = async (agentId, input, execCtx) => {
+    const handle = team.agents[agentId]
+
+    if (!handle) {
+      throw new Error(`Unknown agent: ${agentId}. Available: ${Object.keys(team.agents).join(', ')}`)
+    }
+
+    // Use the runner if available
+    if (handle.runner) {
+      return handle.runner(input, context)
+    }
+
+    // Use fallback invoker if provided
+    if (fallbackInvoker) {
+      return fallbackInvoker(agentId, input, execCtx)
+    }
+
+    // No runner available - helpful error message
+    throw new Error(
+      `Agent '${agentId}' has no runner. ` +
+      `Either:\n` +
+      `  1. Pass an agent with a run() method to agentHandle()\n` +
+      `  2. Provide a custom runner: agentHandle('${agentId}', agent, { runner: async (input, ctx) => {...} })\n` +
+      `  3. Provide a fallbackInvoker in createAutoTeamRuntime()`
+    )
+  }
+
+  return new TeamRuntime({
+    team,
+    agentInvoker,
+    ...restConfig
+  })
+}
+
+/**
+ * Check if all agents in a team have runners (can use auto runtime)
+ */
+export function canUseAutoRuntime(team: TeamDefinition): boolean {
+  return Object.values(team.agents).every(handle => handle.runner !== undefined)
+}
+
+/**
+ * Get agents that are missing runners
+ */
+export function getMissingRunners(team: TeamDefinition): string[] {
+  return Object.entries(team.agents)
+    .filter(([_, handle]) => !handle.runner)
+    .map(([key, _]) => key)
+}

@@ -7,9 +7,11 @@ import { z } from 'zod'
 import {
   until,
   evaluateBusinessUntil,
+  evaluateThreeState,
   isBusinessUntilSpec,
   isFieldUntilSpec,
-  isValidatorUntilSpec
+  isValidatorUntilSpec,
+  isThreeStateUntilSpec
 } from '../../src/team/flow/until.js'
 import { state } from '../../src/team/state/typed-blackboard.js'
 import type { UntilEvaluationContext } from '../../src/team/flow/until.js'
@@ -453,6 +455,221 @@ describe('type guards', () => {
     it('should return false for non-validator until specs', () => {
       expect(isValidatorUntilSpec(until.field('x').eq(true))).toBe(false)
       expect(isValidatorUntilSpec(null)).toBe(false)
+    })
+  })
+
+  describe('isThreeStateUntilSpec', () => {
+    it('should return true for three-state until specs', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.additionalQueries'
+      })
+      expect(isThreeStateUntilSpec(spec)).toBe(true)
+    })
+
+    it('should return false for other until specs', () => {
+      expect(isThreeStateUntilSpec(until.field('x').eq(true))).toBe(false)
+      expect(isThreeStateUntilSpec(until.maxIterations(3))).toBe(false)
+      expect(isThreeStateUntilSpec(null)).toBe(false)
+    })
+  })
+})
+
+describe('three-state termination', () => {
+  describe('until.threeState', () => {
+    it('should create three-state condition spec', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.additionalQueries'
+      })
+
+      expect(spec.type).toBe('three-state')
+      expect(spec.approvalPath).toBe('review.approved')
+      expect(spec.refinementPath).toBe('review.additionalQueries')
+    })
+
+    it('should accept custom hasActionableRefinement function', () => {
+      const customCheck = (r: unknown) => Array.isArray(r) && r.length > 2
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.queries',
+        hasActionableRefinement: customCheck
+      })
+
+      expect(spec.hasActionableRefinement).toBe(customCheck)
+    })
+  })
+
+  describe('evaluateThreeState', () => {
+    it('should return success when approved is true', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.additionalQueries'
+      })
+      const ctx = createContext({
+        review: { approved: true, additionalQueries: [] }
+      })
+
+      const result = evaluateThreeState(spec, ctx)
+
+      expect(result.done).toBe(true)
+      expect(result.reason).toBe('approved')
+      expect(result.failed).toBe(false)
+    })
+
+    it('should return no-actionable-refinement when rejected with empty queries', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.additionalQueries'
+      })
+      const ctx = createContext({
+        review: { approved: false, additionalQueries: [] }
+      })
+
+      const result = evaluateThreeState(spec, ctx)
+
+      expect(result.done).toBe(true)
+      expect(result.reason).toBe('no-actionable-refinement')
+      expect(result.failed).toBe(true)
+    })
+
+    it('should return no-actionable-refinement when refinement is undefined', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.additionalQueries'
+      })
+      const ctx = createContext({
+        review: { approved: false }
+      })
+
+      const result = evaluateThreeState(spec, ctx)
+
+      expect(result.done).toBe(true)
+      expect(result.reason).toBe('no-actionable-refinement')
+      expect(result.failed).toBe(true)
+    })
+
+    it('should return no-actionable-refinement when refinement is null', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.additionalQueries'
+      })
+      const ctx = createContext({
+        review: { approved: false, additionalQueries: null }
+      })
+
+      const result = evaluateThreeState(spec, ctx)
+
+      expect(result.done).toBe(true)
+      expect(result.reason).toBe('no-actionable-refinement')
+      expect(result.failed).toBe(true)
+    })
+
+    it('should return continue when rejected with actionable queries', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.additionalQueries'
+      })
+      const ctx = createContext({
+        review: { approved: false, additionalQueries: ['query1', 'query2'] }
+      })
+
+      const result = evaluateThreeState(spec, ctx)
+
+      expect(result.done).toBe(false)
+      expect(result.reason).toBe('continue')
+      expect(result.failed).toBe(false)
+    })
+
+    it('should use custom hasActionableRefinement check', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.suggestions',
+        hasActionableRefinement: (r) => {
+          // Only consider it actionable if there are at least 2 suggestions
+          return Array.isArray(r) && r.length >= 2
+        }
+      })
+
+      // Single suggestion - not actionable
+      const ctx1 = createContext({
+        review: { approved: false, suggestions: ['one'] }
+      })
+      expect(evaluateThreeState(spec, ctx1)).toEqual({
+        done: true,
+        reason: 'no-actionable-refinement',
+        failed: true
+      })
+
+      // Two suggestions - actionable
+      const ctx2 = createContext({
+        review: { approved: false, suggestions: ['one', 'two'] }
+      })
+      expect(evaluateThreeState(spec, ctx2)).toEqual({
+        done: false,
+        reason: 'continue',
+        failed: false
+      })
+    })
+
+    it('should work with nested approval paths', () => {
+      const spec = until.threeState({
+        approvalPath: 'feedback.result.approved',
+        refinementPath: 'feedback.result.nextSteps'
+      })
+      const ctx = createContext({
+        feedback: {
+          result: {
+            approved: true,
+            nextSteps: []
+          }
+        }
+      })
+
+      const result = evaluateThreeState(spec, ctx)
+
+      expect(result.done).toBe(true)
+      expect(result.reason).toBe('approved')
+    })
+
+    it('should handle object refinements as actionable when non-empty', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.changes'
+      })
+
+      // Empty object - not actionable
+      const ctx1 = createContext({
+        review: { approved: false, changes: {} }
+      })
+      expect(evaluateThreeState(spec, ctx1).reason).toBe('no-actionable-refinement')
+
+      // Non-empty object - actionable
+      const ctx2 = createContext({
+        review: { approved: false, changes: { title: 'New title' } }
+      })
+      expect(evaluateThreeState(spec, ctx2).reason).toBe('continue')
+    })
+  })
+
+  describe('evaluateBusinessUntil with three-state', () => {
+    it('should work as condition in evaluateBusinessUntil', () => {
+      const spec = until.threeState({
+        approvalPath: 'review.approved',
+        refinementPath: 'review.queries'
+      })
+
+      // Approved - should stop
+      const ctx1 = createContext({ review: { approved: true, queries: [] } })
+      expect(evaluateBusinessUntil(spec, ctx1)).toBe(true)
+
+      // Not approved with queries - should continue
+      const ctx2 = createContext({ review: { approved: false, queries: ['q'] } })
+      expect(evaluateBusinessUntil(spec, ctx2)).toBe(false)
+
+      // Not approved without queries - should stop (failed)
+      const ctx3 = createContext({ review: { approved: false, queries: [] } })
+      expect(evaluateBusinessUntil(spec, ctx3)).toBe(true)
     })
   })
 })

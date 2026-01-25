@@ -53,9 +53,11 @@ export {
 export {
   until,
   evaluateBusinessUntil,
+  evaluateThreeState,
   isBusinessUntilSpec,
   isFieldUntilSpec,
-  isValidatorUntilSpec
+  isValidatorUntilSpec,
+  isThreeStateUntilSpec
 } from './until.js'
 
 export type {
@@ -72,6 +74,9 @@ export type {
   BudgetExceededUntilSpec,
   AllUntilSpec,
   AnyUntilSpec,
+  ThreeStateUntilSpec,
+  ThreeStateResult,
+  ThreeStateReason,
   FieldConditionBuilder,
   UntilEvaluationContext
 } from './until.js'

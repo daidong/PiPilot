@@ -106,3 +106,23 @@ export {
   type StructuredTraceEvent,
   type RepairStrategy
 } from './structured.js'
+
+// ============================================================================
+// Schema Utilities
+// ============================================================================
+
+export {
+  // Bounded array helper
+  boundedArray,
+  // Schema analysis
+  analyzeSchema,
+  assertSchemaCompatible,
+  warnSchemaIssues,
+  // Compatibility helpers
+  nullable,
+  withDefault,
+  stringEnum,
+  // Types
+  type SchemaIssue,
+  type SchemaAnalysisResult
+} from './schema-utils.js'

@@ -10,33 +10,51 @@
  * import {
  *   defineTeam, agentHandle, stateConfig,
  *   seq, step, state, mapInput,
- *   createTeamRuntime
+ *   createAutoTeamRuntime
  * } from 'agent-foundry/team'
+ * import { defineLLMAgent } from 'agent-foundry'
  *
- * // Define typed schemas
- * const ResearchSchema = z.object({ findings: z.array(z.string()) })
- * const ArticleSchema = z.object({ title: z.string(), content: z.string() })
+ * // Define typed agents
+ * const researcher = defineLLMAgent({
+ *   id: 'researcher',
+ *   inputSchema: z.object({ topic: z.string() }),
+ *   outputSchema: z.object({ findings: z.array(z.string()) }),
+ *   system: 'You are a researcher.',
+ *   buildPrompt: ({ topic }) => `Research: ${topic}`
+ * })
  *
+ * const writer = defineLLMAgent({
+ *   id: 'writer',
+ *   inputSchema: z.object({ findings: z.array(z.string()) }),
+ *   outputSchema: z.object({ title: z.string(), content: z.string() }),
+ *   system: 'You are a writer.',
+ *   buildPrompt: ({ findings }) => `Write article based on: ${findings.join(', ')}`
+ * })
+ *
+ * // Define team - agentHandle auto-creates runners
  * const team = defineTeam({
  *   id: 'my-team',
  *   agents: {
- *     researcher: agentHandle('researcher', researcherAgent),
- *     writer: agentHandle('writer', writerAgent),
+ *     researcher: agentHandle('researcher', researcher),
+ *     writer: agentHandle('writer', writer),
  *   },
  *   state: stateConfig.memory('my-team'),
  *   flow: seq(
  *     step(researcher)
  *       .in(state.initial<{ topic: string }>())
- *       .name('Research topic')
- *       .out(state.path<z.infer<typeof ResearchSchema>>('research')),
+ *       .out(state.path('research')),
  *     step(writer)
  *       .in(mapInput(state.path('research'), r => ({ findings: r.findings })))
- *       .name('Write article')
- *       .out(state.path<z.infer<typeof ArticleSchema>>('article'))
+ *       .out(state.path('article'))
  *   )
  * })
  *
- * const runtime = createTeamRuntime({ team, agentInvoker })
+ * // Create runtime - no agentInvoker switch needed!
+ * const runtime = createAutoTeamRuntime({
+ *   team,
+ *   context: { getLanguageModel: () => openai('gpt-4o') }
+ * })
+ *
  * const result = await runtime.run({ topic: 'AI Safety' })
  * ```
  */
@@ -53,6 +71,7 @@ export type {
   TeamId,
   TeamDefinition,
   AgentHandle,
+  AgentRunner,
   ChannelConfig,
   ValidatorRegistration,
   ValidatorResult,
@@ -78,14 +97,18 @@ export type {
 export {
   TeamRuntime,
   createTeamRuntime,
+  createAutoTeamRuntime,
   createPassthroughInvoker,
-  createMockInvoker
+  createMockInvoker,
+  canUseAutoRuntime,
+  getMissingRunners
 } from './team-runtime.js'
 
 export type {
   TeamRunResult,
   TeamTraceEvent,
-  TeamRuntimeConfig
+  TeamRuntimeConfig,
+  AutoTeamRuntimeConfig
 } from './team-runtime.js'
 
 // Runtime Events

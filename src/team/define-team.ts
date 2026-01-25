@@ -17,6 +17,12 @@ import type { AgentDefinition } from '../types/agent.js'
 export type TeamId = string
 
 /**
+ * Agent runner function type.
+ * This is what gets called when the agent is invoked.
+ */
+export type AgentRunner = (input: unknown, ctx: unknown) => Promise<unknown>
+
+/**
  * Agent handle within a team
  */
 export interface AgentHandle {
@@ -28,6 +34,11 @@ export interface AgentHandle {
   capabilities?: string[]
   /** The actual agent definition or instance */
   agent: AgentDefinition | unknown
+  /**
+   * Runner function that executes the agent.
+   * If provided, the team runtime can auto-invoke agents without manual switch.
+   */
+  runner?: AgentRunner
 }
 
 /**
@@ -213,7 +224,45 @@ export function defineTeam(definition: TeamDefinition): TeamDefinition {
 // ============================================================================
 
 /**
- * Create an agent handle for use in defineTeam
+ * Interface for agents that have a run method
+ */
+interface RunnableAgent {
+  id: string
+  run: (input: unknown, ctx: unknown) => Promise<{ output: unknown; [key: string]: unknown }>
+}
+
+/**
+ * Check if agent has a run method
+ */
+function isRunnableAgent(agent: unknown): agent is RunnableAgent {
+  return (
+    typeof agent === 'object' &&
+    agent !== null &&
+    'run' in agent &&
+    typeof (agent as { run: unknown }).run === 'function'
+  )
+}
+
+/**
+ * Create an agent handle for use in defineTeam.
+ *
+ * If the agent has a `run` method, a runner is automatically created,
+ * enabling the team runtime to auto-invoke agents without manual switch.
+ *
+ * @example
+ * ```typescript
+ * // With LLM or Tool agents (auto-runner)
+ * const team = defineTeam({
+ *   agents: {
+ *     planner: agentHandle('planner', plannerAgent),  // runner auto-created
+ *     executor: agentHandle('executor', executorAgent),
+ *   },
+ *   // ...
+ * })
+ *
+ * // No need to write agentInvoker switch!
+ * const runtime = createAutoTeamRuntime({ team, context: myContext })
+ * ```
  */
 export function agentHandle(
   id: string,
@@ -221,13 +270,27 @@ export function agentHandle(
   options?: {
     role?: string
     capabilities?: string[]
+    /** Custom runner (overrides auto-detection) */
+    runner?: AgentRunner
   }
 ): AgentHandle {
+  // Auto-create runner if agent has a run method
+  let runner: AgentRunner | undefined = options?.runner
+
+  if (!runner && isRunnableAgent(agent)) {
+    // Create a runner that extracts the output from the result
+    runner = async (input: unknown, ctx: unknown) => {
+      const result = await agent.run(input, ctx)
+      return result.output
+    }
+  }
+
   return {
     id,
     agent,
     role: options?.role,
-    capabilities: options?.capabilities
+    capabilities: options?.capabilities,
+    runner
   }
 }
 

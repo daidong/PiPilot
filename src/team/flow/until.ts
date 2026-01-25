@@ -317,6 +317,50 @@ export const until = {
   any: (...conditions: BusinessUntilSpec[]): AnyUntilSpec => ({
     type: 'any',
     conditions
+  }),
+
+  /**
+   * Three-state termination: success, no-progress-fail, or continue.
+   *
+   * This prevents loops from spinning when reviewer rejects but provides
+   * no actionable refinement (a common real-world scenario).
+   *
+   * States:
+   * - approved=true → success exit
+   * - approved=false + no actionable refinement → fail exit
+   * - approved=false + has actionable refinement → continue
+   *
+   * @example
+   * ```typescript
+   * loop(
+   *   seq(
+   *     step(reviewer).in(...).out(state.path('review')),
+   *     branch({
+   *       when: (s) => s.review?.additionalQueries?.length > 0,
+   *       then: step(refiner).in(...).out(...),
+   *       else: noop
+   *     })
+   *   ),
+   *   until.threeState({
+   *     approvalPath: 'review.approved',
+   *     refinementPath: 'review.additionalQueries'
+   *   }),
+   *   { maxIters: 5 }
+   * )
+   * ```
+   */
+  threeState: (options: {
+    /** Path to approval field (e.g., 'review.approved') */
+    approvalPath: string
+    /** Path to refinement field (e.g., 'review.additionalQueries') */
+    refinementPath: string
+    /** Custom check for actionable refinement (default: non-empty array/object) */
+    hasActionableRefinement?: (refinement: unknown) => boolean
+  }): ThreeStateUntilSpec => ({
+    type: 'three-state',
+    approvalPath: options.approvalPath,
+    refinementPath: options.refinementPath,
+    hasActionableRefinement: options.hasActionableRefinement
   })
 }
 
@@ -336,8 +380,13 @@ export interface AnyUntilSpec {
   conditions: BusinessUntilSpec[]
 }
 
-// Extend BusinessUntilSpec to include combinators
-export type ExtendedBusinessUntilSpec = BusinessUntilSpec | AllUntilSpec | AnyUntilSpec | FieldCompareUntilSpec
+// Extend BusinessUntilSpec to include combinators and three-state
+export type ExtendedBusinessUntilSpec =
+  | BusinessUntilSpec
+  | AllUntilSpec
+  | AnyUntilSpec
+  | FieldCompareUntilSpec
+  | ThreeStateUntilSpec
 
 // ============================================================================
 // Type Guards
@@ -360,8 +409,17 @@ export function isBusinessUntilSpec(value: unknown): value is ExtendedBusinessUn
     spec.type === 'no-progress' ||
     spec.type === 'budget-exceeded' ||
     spec.type === 'all' ||
-    spec.type === 'any'
+    spec.type === 'any' ||
+    spec.type === 'three-state'
   )
+}
+
+/**
+ * Check if a value is a three-state until spec
+ */
+export function isThreeStateUntilSpec(value: unknown): value is ThreeStateUntilSpec {
+  if (typeof value !== 'object' || value === null) return false
+  return (value as { type?: unknown }).type === 'three-state'
 }
 
 /**
@@ -387,6 +445,45 @@ export function isFieldUntilSpec(
 export function isValidatorUntilSpec(value: unknown): value is ValidatorUntilSpec {
   if (typeof value !== 'object' || value === null) return false
   return (value as { type?: unknown }).type === 'validator'
+}
+
+// ============================================================================
+// Three-State Termination
+// ============================================================================
+
+/**
+ * Three-state termination result.
+ * Addresses the issue of loops spinning without progress.
+ */
+export interface ThreeStateResult {
+  /** Whether the loop should stop */
+  done: boolean
+  /** Reason for termination */
+  reason: ThreeStateReason
+  /** Whether this is a failure (vs success) */
+  failed?: boolean
+}
+
+/**
+ * Reason for three-state termination
+ */
+export type ThreeStateReason =
+  | 'approved'              // Success: condition met
+  | 'no-actionable-refinement'  // Fail: can't make progress
+  | 'max-iterations'        // Fail: exceeded max attempts
+  | 'continue'              // Continue: has refinement to try
+
+/**
+ * Three-state condition spec
+ */
+export interface ThreeStateUntilSpec {
+  type: 'three-state'
+  /** Path to approval field (e.g., 'review.approved') */
+  approvalPath: string
+  /** Path to refinement field (e.g., 'review.additionalQueries') */
+  refinementPath: string
+  /** Optional: custom check for actionable refinement */
+  hasActionableRefinement?: (refinement: unknown) => boolean
 }
 
 // ============================================================================
@@ -483,7 +580,75 @@ export function evaluateBusinessUntil(
     case 'any':
       return spec.conditions.some(cond => evaluateBusinessUntil(cond, ctx))
 
+    case 'three-state':
+      // Three-state evaluation returns boolean for backwards compatibility
+      // Use evaluateThreeState for full result
+      return evaluateThreeState(spec, ctx).done
+
     default:
       return false
   }
+}
+
+/**
+ * Evaluate a three-state termination condition.
+ *
+ * Returns a detailed result indicating:
+ * - done: whether to stop
+ * - reason: why (approved, no-actionable-refinement, or continue)
+ * - failed: whether this is a failure state
+ *
+ * @example
+ * ```typescript
+ * const spec = until.threeState({
+ *   approvalPath: 'review.approved',
+ *   refinementPath: 'review.additionalQueries'
+ * })
+ *
+ * const result = evaluateThreeState(spec, ctx)
+ * if (result.done) {
+ *   if (result.failed) {
+ *     console.log(`Loop failed: ${result.reason}`)
+ *   } else {
+ *     console.log('Loop succeeded')
+ *   }
+ * }
+ * ```
+ */
+export function evaluateThreeState(
+  spec: ThreeStateUntilSpec,
+  ctx: UntilEvaluationContext
+): ThreeStateResult {
+  // Check approval
+  const approved = ctx.getStateValue(spec.approvalPath)
+  if (approved === true) {
+    return { done: true, reason: 'approved', failed: false }
+  }
+
+  // Not approved - check if there's actionable refinement
+  const refinement = ctx.getStateValue(spec.refinementPath)
+
+  // Default check: refinement is a non-empty array or truthy value
+  const hasRefinement = spec.hasActionableRefinement
+    ? spec.hasActionableRefinement(refinement)
+    : defaultHasActionableRefinement(refinement)
+
+  if (!hasRefinement) {
+    // No actionable refinement - fail exit
+    return { done: true, reason: 'no-actionable-refinement', failed: true }
+  }
+
+  // Has actionable refinement - continue
+  return { done: false, reason: 'continue', failed: false }
+}
+
+/**
+ * Default check for actionable refinement.
+ * Returns true if refinement is a non-empty array or truthy non-empty value.
+ */
+function defaultHasActionableRefinement(refinement: unknown): boolean {
+  if (refinement === null || refinement === undefined) return false
+  if (Array.isArray(refinement)) return refinement.length > 0
+  if (typeof refinement === 'object') return Object.keys(refinement).length > 0
+  return Boolean(refinement)
 }
