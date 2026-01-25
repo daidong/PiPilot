@@ -13,7 +13,7 @@
  * - Session-based search limits
  */
 
-import { defineTool } from '../../../dist/index.js'
+import { defineTool } from '../../../src/index.js'
 import type { Paper, SearchResult } from '../types.js'
 import { LITERATURE_DEFAULTS, LITERATURE_STATE_KEYS } from '../types.js'
 

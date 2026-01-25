@@ -9,8 +9,8 @@
  * Network tools (fetch) are provided by packs.network()
  */
 
-import { definePack, network } from '../../dist/index.js'
-import type { Runtime } from '../../dist/index.js'
+import { definePack, network } from '../../src/index.js'
+import type { Runtime } from '../../src/index.js'
 
 import { multiSearch } from './tools/multi-search.js'
 import { LITERATURE_STATE_KEYS, LITERATURE_DEFAULTS } from './types.js'

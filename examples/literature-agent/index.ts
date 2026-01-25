@@ -20,7 +20,10 @@ import {
   type AgentConfig,
   type AgentRunResult,
   type TraceEvent
-} from '../../dist/index.js'
+} from '../../src/index.js'
+
+// Note: For multi-agent team version, see ./team.ts
+// Usage: npx tsx examples/literature-agent/team.ts
 
 import { literaturePack } from './pack.js'
 import { LITERATURE_DEFAULTS } from './types.js'
