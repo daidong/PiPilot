@@ -42,7 +42,8 @@ export function adaptMCPTool(
 ): Tool {
   const { prefix = '', timeout, includeSource = true, sourceName } = options
 
-  const toolName = prefix ? `${prefix}.${mcpTool.name}` : mcpTool.name
+  // Use underscore instead of dot for OpenAI compatibility (pattern: ^[a-zA-Z0-9_-]+$)
+  const toolName = prefix ? `${prefix}_${mcpTool.name}` : mcpTool.name
 
   let description = mcpTool.description ?? `MCP tool: ${mcpTool.name}`
   if (includeSource && sourceName) {

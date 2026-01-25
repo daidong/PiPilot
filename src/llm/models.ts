@@ -10,7 +10,84 @@ import type { ModelConfig } from './provider.types.js'
  * 内置模型配置
  */
 export const builtinModels: ModelConfig[] = [
-  // OpenAI Models
+  // OpenAI Models - GPT-5.x (Responses API)
+  {
+    id: 'gpt-5.2',
+    name: 'GPT-5.2',
+    providerID: 'openai',
+    api: 'chat',
+    capabilities: {
+      temperature: false,  // GPT-5.2 does not support temperature
+      reasoning: true,     // Uses Responses API
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 2.5, output: 10 },
+    limit: { maxContext: 128000, maxOutput: 16384 }
+  },
+  {
+    id: 'gpt-5.1',
+    name: 'GPT-5.1',
+    providerID: 'openai',
+    api: 'chat',
+    capabilities: {
+      temperature: false,
+      reasoning: true,     // Uses Responses API
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 2.5, output: 10 },
+    limit: { maxContext: 128000, maxOutput: 16384 }
+  },
+  {
+    id: 'gpt-5.1-mini',
+    name: 'GPT-5.1 Mini',
+    providerID: 'openai',
+    api: 'chat',
+    capabilities: {
+      temperature: false,
+      reasoning: true,     // Uses Responses API
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 0.3, output: 1.2 },
+    limit: { maxContext: 128000, maxOutput: 16384 }
+  },
+  {
+    id: 'gpt-5-mini',
+    name: 'GPT-5 Mini',
+    providerID: 'openai',
+    api: 'chat',
+    capabilities: {
+      temperature: false,
+      reasoning: true,     // Uses Responses API
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 0.15, output: 0.6 },
+    limit: { maxContext: 128000, maxOutput: 16384 }
+  },
+  {
+    id: 'gpt-5-nano',
+    name: 'GPT-5 Nano',
+    providerID: 'openai',
+    api: 'chat',
+    capabilities: {
+      temperature: false,
+      reasoning: true,     // Uses Responses API
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 0.075, output: 0.3 },
+    limit: { maxContext: 128000, maxOutput: 16384 }
+  },
+
+  // OpenAI Models - GPT-4 (Chat Completions API)
   {
     id: 'gpt-4o',
     name: 'GPT-4o',
@@ -18,7 +95,7 @@ export const builtinModels: ModelConfig[] = [
     api: 'chat',
     capabilities: {
       temperature: true,
-      reasoning: false,
+      reasoning: false,    // Uses Chat Completions API
       toolcall: true,
       input: ['text', 'image'],
       output: ['text']
@@ -33,7 +110,7 @@ export const builtinModels: ModelConfig[] = [
     api: 'chat',
     capabilities: {
       temperature: true,
-      reasoning: false,
+      reasoning: false,    // Uses Chat Completions API
       toolcall: true,
       input: ['text', 'image'],
       output: ['text']
@@ -48,7 +125,7 @@ export const builtinModels: ModelConfig[] = [
     api: 'chat',
     capabilities: {
       temperature: true,
-      reasoning: false,
+      reasoning: false,    // Uses Chat Completions API
       toolcall: true,
       input: ['text', 'image'],
       output: ['text']
@@ -56,6 +133,8 @@ export const builtinModels: ModelConfig[] = [
     cost: { input: 10, output: 30 },
     limit: { maxContext: 128000, maxOutput: 4096 }
   },
+
+  // OpenAI Models - Reasoning (Responses API)
   {
     id: 'o1',
     name: 'OpenAI o1',
@@ -63,7 +142,7 @@ export const builtinModels: ModelConfig[] = [
     api: 'chat',
     capabilities: {
       temperature: false,
-      reasoning: true,
+      reasoning: true,     // Uses Responses API
       toolcall: true,
       input: ['text', 'image'],
       output: ['text']
@@ -78,7 +157,7 @@ export const builtinModels: ModelConfig[] = [
     api: 'chat',
     capabilities: {
       temperature: false,
-      reasoning: true,
+      reasoning: true,     // Uses Responses API
       toolcall: true,
       input: ['text'],
       output: ['text']
@@ -93,9 +172,24 @@ export const builtinModels: ModelConfig[] = [
     api: 'chat',
     capabilities: {
       temperature: false,
-      reasoning: true,
+      reasoning: true,     // Uses Responses API
       toolcall: true,
       input: ['text'],
+      output: ['text']
+    },
+    cost: { input: 1.1, output: 4.4 },
+    limit: { maxContext: 200000, maxOutput: 100000 }
+  },
+  {
+    id: 'o4-mini',
+    name: 'OpenAI o4 Mini',
+    providerID: 'openai',
+    api: 'chat',
+    capabilities: {
+      temperature: false,
+      reasoning: true,     // Uses Responses API
+      toolcall: true,
+      input: ['text', 'image'],
       output: ['text']
     },
     cost: { input: 1.1, output: 4.4 },

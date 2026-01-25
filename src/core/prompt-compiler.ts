@@ -184,6 +184,8 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
     contextSources?: ContextManager
     constraints?: string[]
     additionalInstructions?: string
+    /** Pre-loaded context to include in system prompt */
+    initialContext?: string
   }, tokenBudget: TokenBudget): CompiledPrompt {
     const sections: PromptSection[] = []
 
@@ -208,6 +210,15 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
         id: 'context-sources',
         content: `## Available Context Sources\n\n${config.contextSources.getAvailableSourcesDescription()}`,
         protected: true
+      })
+    }
+
+    // Pre-loaded context (agent knowledge, cached schema, etc.)
+    if (config.initialContext) {
+      sections.push({
+        id: 'initial-context',
+        content: `## Pre-loaded Context\n\n${config.initialContext.trim()}`,
+        protected: false  // Can be truncated if too large
       })
     }
 

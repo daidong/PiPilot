@@ -138,7 +138,11 @@ export class MCPClient extends EventEmitter {
    * 刷新工具列表
    */
   async refreshTools(): Promise<MCPToolDefinition[]> {
-    await this.ensureConnected()
+    // Allow refreshTools during initialization (called from connect())
+    // or when already connected
+    if (this.state !== 'connected' && this.state !== 'initializing') {
+      await this.ensureConnected()
+    }
 
     const response = await this.transport!.request<{ tools: MCPToolDefinition[] }>(
       'tools/list'
@@ -225,7 +229,7 @@ export class MCPClient extends EventEmitter {
     if (transport.type === 'stdio') {
       return new StdioTransport({
         stdio: transport,
-        timeout: this.config.connectTimeout,
+        timeout: transport.timeout ?? this.config.connectTimeout,
         debug: this.config.debug
       })
     } else if (transport.type === 'http') {

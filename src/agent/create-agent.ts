@@ -77,7 +77,13 @@ const packFactories: Record<string, PackFactory> = {
   repo: packs.repo,
   git: packs.git,
   exploration: packs.exploration,
-  browser: packs.browser
+  browser: packs.browser,
+  'kv-memory': packs.kvMemory,
+  kvMemory: packs.kvMemory,  // alias without hyphen
+  docs: packs.docs,
+  discovery: packs.discovery,
+  'session-memory': packs.sessionMemory,
+  sessionMemory: packs.sessionMemory  // alias without hyphen
   // python: requires PythonBridge, cannot be auto-created from config
 }
 
@@ -135,6 +141,13 @@ export interface CreateAgentOptions extends AgentConfig {
 
   /** 约束条件 */
   constraints?: string[]
+
+  /**
+   * Pre-loaded context to include in system prompt.
+   * Use this to inject agent knowledge, cached schema, etc.
+   * The content will be included in the "Pre-loaded Context" section.
+   */
+  initialContext?: string
 }
 
 /**
@@ -151,9 +164,12 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   const sessionId = generateId()
 
   // 合并配置：参数 > YAML 配置 > 默认值
+  // Let the LLM layer use model-specific defaults if not specified
   const effectiveMaxTokens = config.maxTokens
     ?? yamlConfig?.model?.maxTokens
-    ?? 100000
+
+  // Token budget for tracking usage (separate from LLM maxTokens)
+  const tokenBudgetTotal = effectiveMaxTokens ?? 100000
 
   const effectiveMaxSteps = config.maxSteps
     ?? yamlConfig?.maxSteps
@@ -177,7 +193,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   const eventBus = new EventBus()
   const trace = new TraceCollector(sessionId)
   const tokenBudget = new TokenBudget({
-    total: effectiveMaxTokens,
+    total: tokenBudgetTotal,
     warningThreshold: 0.8
   })
 
@@ -304,7 +320,8 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     identity: effectiveIdentity,
     tools: toolRegistry,
     contextSources: contextManager,
-    constraints: effectiveConstraints
+    constraints: effectiveConstraints,
+    initialContext: config.initialContext
   }, tokenBudget)
 
   const systemPrompt = compiledPrompt.render()

@@ -33,6 +33,8 @@ export { kvMemory } from './kv-memory.js'
 export { sessionMemory } from './session-memory.js'
 export { docs } from './docs.js'
 export { discovery } from './discovery.js'
+export { documents } from './documents.js'
+export type { DocumentsPackOptions } from './documents.js'
 
 // ============ 组合与工厂 ============
 
@@ -52,6 +54,7 @@ import { kvMemory } from './kv-memory.js'
 import { sessionMemory } from './session-memory.js'
 import { docs } from './docs.js'
 import { discovery } from './discovery.js'
+import { documents } from './documents.js'
 
 /**
  * 创建安全最小 Pack（仅核心安全工具）
@@ -119,6 +122,7 @@ export const packs = {
   sessionMemory,
   docs,
   discovery,
+  documents,
 
   // 组合工厂
   minimal,
@@ -223,5 +227,11 @@ export const packMeta: Record<string, PackMeta> = {
     riskLevel: 'safe',
     requiresExplicitEnable: false,
     description: 'Context source discovery: ctx.catalog, ctx.describe, ctx.route'
+  },
+  documents: {
+    id: 'documents',
+    riskLevel: 'safe',
+    requiresExplicitEnable: false,
+    description: 'Document processing via MarkItDown: PDF, Word, Excel, PPT, Images, Audio'
   }
 }

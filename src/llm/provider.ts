@@ -108,14 +108,30 @@ function getGoogleSDK(config: ProviderSDKConfig): OpenAIProvider {
 
 /**
  * 获取 Language Model 实例
+ *
+ * Note: AI SDK v5+ defaults to Responses API for OpenAI.
+ * We need to explicitly use .chat() for Chat Completions API
+ * or .responses() for Responses API based on model capabilities.
+ *
+ * - reasoning: true  -> use sdk.responses(model) (GPT-5.x, o-series)
+ * - reasoning: false -> use sdk.chat(model) (GPT-4o, etc.)
  */
 export function getLanguageModel(options: ProviderOptions): LanguageModelV1 {
   const { provider, model, config } = options
 
+  // Get model config to determine API type
+  const modelConfig = getModel(model)
+
   switch (provider) {
     case 'openai': {
       const sdk = getOpenAISDK(config)
-      return sdk(model)
+      // GPT-5.x and reasoning models (o-series) use Responses API
+      // GPT-4o and older models use Chat Completions API
+      if (modelConfig?.capabilities.reasoning) {
+        return sdk.responses(model)
+      }
+      // Must explicitly use .chat() for Chat Completions API in AI SDK v5+
+      return sdk.chat(model)
     }
     case 'anthropic': {
       const sdk = getAnthropicSDK(config)

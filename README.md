@@ -962,10 +962,16 @@ const agent = myAgentFactory({ apiKey: 'sk-xxx' })
 ### Different LLM Providers
 
 ```typescript
-// OpenAI (API key starts with 'sk-')
-const openaiAgent = createAgent({
+// OpenAI GPT-4 (Chat Completions API)
+const gpt4Agent = createAgent({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o'
+})
+
+// OpenAI GPT-5 (Responses API - requires strict schemas)
+const gpt5Agent = createAgent({
+  apiKey: process.env.OPENAI_API_KEY,
+  model: 'gpt-5.2'
 })
 
 // Anthropic (API key starts with 'sk-ant-')
@@ -974,6 +980,9 @@ const anthropicAgent = createAgent({
   model: 'claude-3-5-sonnet-20241022'
 })
 ```
+
+> **Note**: GPT-5.x and o-series models use OpenAI's Responses API which requires strict JSON schemas.
+> Agent Foundry handles this automatically through schema coercion. See [Schema Coercion](docs/SCHEMA-COERCION.md) for details.
 
 ### Custom Approval Handler
 
@@ -1057,6 +1066,7 @@ npm run lint
 - [MCP Guide](docs/MCP-GUIDE.md) - MCP integration guide
 - [Providers](docs/PROVIDERS.md) - Provider plugin system
 - [Multi-Agent Teams](docs/TEAM.md) - Multi-agent collaboration system
+- [Schema Coercion](docs/SCHEMA-COERCION.md) - OpenAI Responses API compatibility
 
 ## License
 

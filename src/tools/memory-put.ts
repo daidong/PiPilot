@@ -11,6 +11,7 @@
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool } from '../types/tool.js'
 import type { MemoryNamespace, MemorySensitivity, MemoryItem } from '../types/memory.js'
+import { coerceDeep } from '../utils/schema-coercion.js'
 
 export interface MemoryPutInput {
   /** Namespace for isolation (user, project, session) */
@@ -116,6 +117,11 @@ export const memoryPut: Tool<MemoryPutInput, MemoryPutOutput> = defineTool({
         }
       }
 
+      // Coerce string values to their intended types
+      // This is needed because OpenAI Responses API requires additionalProperties: { type: 'string' }
+      // See: src/utils/schema-coercion.ts for details
+      const coercedValue = coerceDeep(input.value)
+
       // Check if item already exists
       const existing = await memoryStorage.has(input.namespace, input.key)
       if (existing && !input.overwrite) {
@@ -129,7 +135,7 @@ export const memoryPut: Tool<MemoryPutInput, MemoryPutOutput> = defineTool({
       const item = await memoryStorage.put({
         namespace: input.namespace,
         key: input.key,
-        value: input.value,
+        value: coercedValue,
         valueText: input.valueText,
         tags: input.tags,
         sensitivity: input.sensitivity,

@@ -239,8 +239,10 @@ export class AgentLoop {
           this.config.onToolResult?.(toolUse.name, result)
 
           // 构建工具结果
+          // Note: JSON.stringify(undefined) returns undefined, not a string
+          // We need to handle this case to avoid null content errors
           const resultContent = result.success
-            ? JSON.stringify(result.data, null, 2)
+            ? (result.data !== undefined ? JSON.stringify(result.data, null, 2) : '{"success": true}')
             : `Error: ${result.error}`
 
           toolResults.push({

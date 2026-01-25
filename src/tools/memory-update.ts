@@ -10,6 +10,7 @@
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool } from '../types/tool.js'
 import type { MemoryNamespace, MemorySensitivity, MemoryStatus, MemoryItem } from '../types/memory.js'
+import { coerceDeep } from '../utils/schema-coercion.js'
 
 export interface MemoryUpdateInput {
   /** Namespace of the item to update */
@@ -127,7 +128,10 @@ export const memoryUpdate: Tool<MemoryUpdateInput, MemoryUpdateOutput> = defineT
       const updatedFields: string[] = []
 
       if (input.value !== undefined) {
-        updateOptions.value = input.value
+        // Coerce string values to their intended types
+        // This is needed because OpenAI Responses API requires additionalProperties: { type: 'string' }
+        // See: src/utils/schema-coercion.ts for details
+        updateOptions.value = coerceDeep(input.value)
         updatedFields.push('value')
       }
       if (input.valueText !== undefined) {

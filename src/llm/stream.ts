@@ -177,10 +177,15 @@ function jsonSchemaToZod(schema: {
         zodProp = z.boolean()
         break
       case 'array':
-        zodProp = z.array(z.unknown())
+        // Use z.string() for array items to satisfy OpenAI's strict schema requirements
+        // Actual type coercion happens at runtime in tools
+        zodProp = z.array(z.string())
         break
       case 'object':
-        zodProp = z.record(z.unknown())
+        // Use z.string() for record values to satisfy OpenAI's strict schema requirements
+        // This ensures additionalProperties: { type: 'string' } in the JSON Schema
+        // Actual type coercion happens at runtime in tools (see src/utils/schema-coercion.ts)
+        zodProp = z.record(z.string())
         break
       default:
         zodProp = z.unknown()
@@ -190,8 +195,11 @@ function jsonSchemaToZod(schema: {
       zodProp = zodProp.describe(prop.description)
     }
 
+    // OpenAI Responses API requires ALL properties in 'required' array (strict mode)
+    // For optional fields, use .nullable() instead of .optional()
+    // This keeps the field in 'required' but allows null values
     if (!required.includes(key)) {
-      zodProp = zodProp.optional()
+      zodProp = zodProp.nullable()
     }
 
     props[key] = zodProp

@@ -104,6 +104,44 @@ export const factRemember: Tool<FactRememberInput, FactRememberOutput> = defineT
       }
 
       if (input.type === 'fact') {
+        // Check for existing similar facts to avoid duplicates
+        const existingFacts = await store.getFacts({
+          topics: input.topics,
+          limit: 50
+        })
+
+        // Find if a similar fact already exists (same topics and similar content)
+        const similarFact = existingFacts.find(f => {
+          // Check if topics overlap
+          const topicsMatch = input.topics?.some(t => f.topics.includes(t))
+          if (!topicsMatch) return false
+
+          // Check content similarity (simple substring match for now)
+          const contentLower = input.content.toLowerCase()
+          const existingLower = f.content.toLowerCase()
+
+          // If new content is contained in existing or vice versa, consider it similar
+          return contentLower.includes(existingLower.slice(0, 50)) ||
+                 existingLower.includes(contentLower.slice(0, 50))
+        })
+
+        if (similarFact) {
+          // Update existing fact instead of creating duplicate
+          const updatedFact = await store.updateFact(similarFact.id, {
+            content: input.content,
+            confidence: input.confidence ?? similarFact.confidence
+          })
+
+          return {
+            success: true,
+            type: 'fact',
+            id: similarFact.id,
+            item: updatedFact ?? similarFact,
+            message: `Updated existing fact ${similarFact.id} instead of creating duplicate`
+          }
+        }
+
+        // No similar fact found, create new one
         const fact = await store.addFact({
           content: input.content,
           topics: input.topics ?? [],

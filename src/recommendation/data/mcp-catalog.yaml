@@ -4,48 +4,55 @@
 # Validation: Run `npm run validate-catalog` to check npm packages and documentation links
 # To update lastVerified dates for valid entries: `npm run validate-catalog:fix`
 
-version: "1.1.0"
-lastUpdated: "2026-01-24"
+version: "1.2.0"
+lastUpdated: "2026-01-25"
 
 entries:
   # ============================================================================
-  # Database
+  # Database - Local data persistence for agent memory and state
   # ============================================================================
-  - name: postgres
-    package: "@modelcontextprotocol/server-postgres"
-    description: "PostgreSQL database operations with query and schema management"
+  - name: sqlite
+    package: "mcp-server-sqlite-npx"
+    description: "SQLite database operations for local databases"
     category: database
     keywords:
       - database
       - sql
-      - postgres
-      - postgresql
+      - sqlite
+      - local
       - query
       - data
+      - embedded
+      - memory
+      - persistence
       - 数据库
+      - 本地
       - 查询
     useCases:
-      - Database queries and analysis
-      - Data import/export
-      - Schema management
+      - Local database queries
+      - Agent memory persistence
+      - Application data access
+      - Data analysis
+      - Schema inspection
     popularity: high
     riskLevel: elevated
     configTemplate:
       type: simple
-      id: postgres
-      name: postgres
+      id: sqlite
+      name: sqlite
       transport:
         type: stdio
         command: npx
         args:
           - "-y"
-          - "@modelcontextprotocol/server-postgres"
+          - "mcp-server-sqlite-npx"
+          - "${SQLITE_DB_PATH}"
     envVars:
-      - POSTGRES_CONNECTION_STRING
+      - SQLITE_DB_PATH
     envVarDescriptions:
-      POSTGRES_CONNECTION_STRING: "PostgreSQL connection string, format: postgresql://user:pass@host:5432/db"
-    installCommand: "npx -y @modelcontextprotocol/server-postgres"
-    documentation: "https://github.com/modelcontextprotocol/servers"
+      SQLITE_DB_PATH: "Path to SQLite database file (e.g., /path/to/database.db)"
+    installCommand: "npx -y mcp-server-sqlite-npx /path/to/database.db"
+    documentation: "https://github.com/johnnyoshika/mcp-server-sqlite-npx"
     permissions:
       - type: database
         access: read-write
@@ -54,10 +61,10 @@ entries:
       - darwin
       - linux
       - win32
-    lastVerified: "2026-01-24"
+    lastVerified: "2026-01-25"
 
   # ============================================================================
-  # Search
+  # Search - Web information retrieval for real-time data access
   # ============================================================================
   - name: brave-search
     package: "@modelcontextprotocol/server-brave-search"
@@ -70,6 +77,7 @@ entries:
       - query
       - find
       - lookup
+      - research
       - 搜索
       - 网络
       - 查询
@@ -77,6 +85,7 @@ entries:
       - Web information search
       - Real-time data retrieval
       - Research and investigation
+      - Current events lookup
     popularity: high
     riskLevel: safe
     configTemplate:
@@ -105,522 +114,69 @@ entries:
       - win32
     lastVerified: "2026-01-24"
 
-  - name: google-maps
-    package: "@modelcontextprotocol/server-google-maps"
-    description: "Google Maps API (place search, navigation, geocoding)"
-    category: search
-    keywords:
-      - map
-      - location
-      - place
-      - navigation
-      - geocode
-      - directions
-      - 地图
-      - 位置
-      - 导航
-    useCases:
-      - Place search
-      - Route planning
-      - Geocoding
-    popularity: medium
-    riskLevel: safe
-    configTemplate:
-      type: simple
-      id: google-maps
-      name: google-maps
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@modelcontextprotocol/server-google-maps"
-    envVars:
-      - GOOGLE_MAPS_API_KEY
-    envVarDescriptions:
-      GOOGLE_MAPS_API_KEY: "Google Maps API Key"
-    installCommand: "npx -y @modelcontextprotocol/server-google-maps"
-    documentation: "https://github.com/modelcontextprotocol/servers"
-    permissions:
-      - type: api
-        access: read
-        scope: google-maps-api
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
   # ============================================================================
-  # Dev Tools
+  # Documents - Document processing and format conversion for LLM input
   # ============================================================================
-  - name: github
-    package: "@modelcontextprotocol/server-github"
-    description: "GitHub API integration (repository, issue, PR operations)"
-    category: dev-tools
+  - name: markitdown
+    package: "markitdown-mcp-npx"
+    description: "Microsoft's MarkItDown tool for converting documents, images, and audio to markdown"
+    category: documents
     keywords:
-      - github
-      - git
-      - repository
-      - pr
-      - issue
-      - code
-      - review
-      - 仓库
-      - 代码
+      - markdown
+      - convert
+      - pdf
+      - word
+      - excel
+      - powerpoint
+      - image
+      - audio
+      - docx
+      - xlsx
+      - pptx
+      - html
+      - youtube
+      - ocr
+      - transcription
+      - microsoft
+      - 转换
+      - 文档
+      - 图片
+      - 音频
     useCases:
-      - Code repository management
-      - Issue/PR operations
-      - Code review automation
+      - Convert documents to markdown
+      - Extract text from PDF files
+      - Process Office documents (Word, Excel, PowerPoint)
+      - Image OCR to markdown
+      - Audio transcription
+      - YouTube transcript extraction
+      - HTML content extraction
     popularity: high
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: github
-      name: github
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@modelcontextprotocol/server-github"
-    envVars:
-      - GITHUB_TOKEN
-    envVarDescriptions:
-      GITHUB_TOKEN: "GitHub Personal Access Token"
-    installCommand: "npx -y @modelcontextprotocol/server-github"
-    documentation: "https://github.com/modelcontextprotocol/servers"
-    permissions:
-      - type: api
-        access: read-write
-        scope: github-api
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  - name: heroku
-    package: "@heroku/mcp-server"
-    description: "Heroku Platform API for app management, deployments, and configuration"
-    category: dev-tools
-    keywords:
-      - heroku
-      - deploy
-      - paas
-      - cloud
-      - hosting
-      - 部署
-      - 云
-    useCases:
-      - App deployment
-      - Dyno management
-      - Config var management
-      - Add-on provisioning
-    popularity: medium
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: heroku
-      name: heroku
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@heroku/mcp-server"
-    envVars:
-      - HEROKU_API_KEY
-    envVarDescriptions:
-      HEROKU_API_KEY: "Heroku API Key (get from Heroku Dashboard > Account Settings)"
-    installCommand: "npx -y @heroku/mcp-server"
-    documentation: "https://github.com/heroku/heroku-mcp-server"
-    permissions:
-      - type: api
-        access: read-write
-        scope: heroku-platform
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  # ============================================================================
-  # Communication
-  # ============================================================================
-  - name: slack
-    package: "@modelcontextprotocol/server-slack"
-    description: "Slack message and channel operations"
-    category: communication
-    keywords:
-      - slack
-      - message
-      - channel
-      - team
-      - notification
-      - chat
-      - 消息
-      - 通知
-      - 聊天
-    useCases:
-      - Send notifications
-      - Channel message management
-      - Team collaboration automation
-    popularity: medium
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: slack
-      name: slack
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@modelcontextprotocol/server-slack"
-    envVars:
-      - SLACK_BOT_TOKEN
-    envVarDescriptions:
-      SLACK_BOT_TOKEN: "Slack Bot Token"
-    installCommand: "npx -y @modelcontextprotocol/server-slack"
-    documentation: "https://github.com/modelcontextprotocol/servers"
-    permissions:
-      - type: api
-        access: read-write
-        scope: slack-workspace
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  - name: gmail
-    package: "@gongrzhe/server-gmail-autoauth-mcp"
-    description: "Gmail integration with OAuth auto-authentication"
-    category: communication
-    keywords:
-      - gmail
-      - email
-      - google
-      - mail
-      - inbox
-      - 邮件
-      - 收件箱
-    useCases:
-      - Read and send emails
-      - Email search and filtering
-      - Email automation
-    popularity: medium
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: gmail
-      name: gmail
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@gongrzhe/server-gmail-autoauth-mcp"
-    envVars:
-      - GMAIL_CLIENT_ID
-      - GMAIL_CLIENT_SECRET
-    envVarDescriptions:
-      GMAIL_CLIENT_ID: "Google OAuth Client ID (from Google Cloud Console)"
-      GMAIL_CLIENT_SECRET: "Google OAuth Client Secret"
-    installCommand: "npx -y @gongrzhe/server-gmail-autoauth-mcp"
-    documentation: "https://www.npmjs.com/package/@gongrzhe/server-gmail-autoauth-mcp"
-    permissions:
-      - type: api
-        access: read-write
-        scope: gmail-api
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  # ============================================================================
-  # Documents
-  # ============================================================================
-  - name: notion
-    package: "@notionhq/notion-mcp-server"
-    description: "Official Notion API integration for pages, databases, and blocks"
-    category: documents
-    keywords:
-      - notion
-      - wiki
-      - docs
-      - database
-      - page
-      - notes
-      - 笔记
-      - 文档
-      - 知识库
-    useCases:
-      - Read and create Notion pages
-      - Query Notion databases
-      - Update page content
-      - Knowledge base management
-    popularity: high
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: notion
-      name: notion
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@notionhq/notion-mcp-server"
-    envVars:
-      - NOTION_API_KEY
-    envVarDescriptions:
-      NOTION_API_KEY: "Notion Integration Token (from notion.so/my-integrations)"
-    installCommand: "npx -y @notionhq/notion-mcp-server"
-    documentation: "https://github.com/makenotion/notion-mcp-server"
-    permissions:
-      - type: api
-        access: read-write
-        scope: notion-workspace
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  - name: google-drive
-    package: "@modelcontextprotocol/server-gdrive"
-    description: "Google Drive file operations"
-    category: documents
-    keywords:
-      - google
-      - drive
-      - docs
-      - sheets
-      - cloud
-      - storage
-      - 云
-      - 文档
-      - 存储
-    useCases:
-      - Cloud document read/write
-      - Google Docs/Sheets operations
-      - File sharing management
-    popularity: medium
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: google-drive
-      name: google-drive
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@modelcontextprotocol/server-gdrive"
-    envVars:
-      - GOOGLE_APPLICATION_CREDENTIALS
-    envVarDescriptions:
-      GOOGLE_APPLICATION_CREDENTIALS: "Google service account credentials file path"
-    installCommand: "npx -y @modelcontextprotocol/server-gdrive"
-    documentation: "https://github.com/modelcontextprotocol/servers"
-    permissions:
-      - type: api
-        access: read-write
-        scope: google-drive
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  - name: atlassian
-    package: "mcp-atlassian"
-    description: "Atlassian Confluence and Jira integration"
-    category: documents
-    keywords:
-      - jira
-      - confluence
-      - atlassian
-      - wiki
-      - ticket
-      - issue
-      - project
-      - 项目管理
-      - 文档
-    useCases:
-      - Read and create Jira issues
-      - Query Confluence pages
-      - Project management
-      - Documentation access
-    popularity: medium
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: atlassian
-      name: atlassian
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "mcp-atlassian"
-    envVars:
-      - ATLASSIAN_URL
-      - ATLASSIAN_EMAIL
-      - ATLASSIAN_API_TOKEN
-    envVarDescriptions:
-      ATLASSIAN_URL: "Atlassian instance URL (e.g., https://yourcompany.atlassian.net)"
-      ATLASSIAN_EMAIL: "Atlassian account email"
-      ATLASSIAN_API_TOKEN: "Atlassian API Token (from id.atlassian.com)"
-    installCommand: "npx -y mcp-atlassian"
-    documentation: "https://github.com/Vijay-Duke/mcp-atlassian"
-    permissions:
-      - type: api
-        access: read-write
-        scope: atlassian-workspace
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  # ============================================================================
-  # Other
-  # ============================================================================
-  - name: sequential-thinking
-    package: "@modelcontextprotocol/server-sequential-thinking"
-    description: "Sequential thinking tool for step-by-step complex problem solving"
-    category: other
-    keywords:
-      - thinking
-      - reasoning
-      - step
-      - plan
-      - 思考
-      - 推理
-      - 步骤
-      - 计划
-    useCases:
-      - Complex problem decomposition
-      - Step-by-step reasoning
-      - Plan creation
-    popularity: medium
     riskLevel: safe
     configTemplate:
       type: simple
-      id: sequential-thinking
-      name: sequential-thinking
+      id: markitdown
+      name: markitdown
       transport:
         type: stdio
         command: npx
         args:
           - "-y"
-          - "@modelcontextprotocol/server-sequential-thinking"
-    installCommand: "npx -y @modelcontextprotocol/server-sequential-thinking"
-    documentation: "https://github.com/modelcontextprotocol/servers"
+          - "markitdown-mcp-npx"
+    installCommand: "npx -y markitdown-mcp-npx"
+    documentation: "https://github.com/microsoft/markitdown"
     permissions:
-      - type: memory
-        access: read-write
-        scope: session-only
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  - name: mapbox
-    package: "@mapbox/mcp-server"
-    description: "Mapbox API for maps, geocoding, and navigation"
-    category: other
-    keywords:
-      - mapbox
-      - map
-      - geocode
-      - navigation
-      - location
-      - 地图
-      - 导航
-    useCases:
-      - Map visualization
-      - Geocoding and reverse geocoding
-      - Route optimization
-      - Location-based services
-    popularity: medium
-    riskLevel: safe
-    configTemplate:
-      type: simple
-      id: mapbox
-      name: mapbox
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@mapbox/mcp-server"
-    envVars:
-      - MAPBOX_ACCESS_TOKEN
-    envVarDescriptions:
-      MAPBOX_ACCESS_TOKEN: "Mapbox Access Token (from mapbox.com)"
-    installCommand: "npx -y @mapbox/mcp-server"
-    documentation: "https://github.com/mapbox/mcp-server"
-    permissions:
-      - type: api
+      - type: filesystem
         access: read
-        scope: mapbox-api
-    platform:
-      - darwin
-      - linux
-      - win32
-    lastVerified: "2026-01-24"
-
-  - name: apify
-    package: "@apify/actors-mcp-server"
-    description: "Apify web scraping and automation actors"
-    category: other
-    keywords:
-      - apify
-      - scrape
-      - automation
-      - actor
-      - web
-      - crawler
-      - 爬虫
-      - 抓取
-    useCases:
-      - Web scraping at scale
-      - Data extraction
-      - Browser automation
-      - Workflow automation
-    popularity: medium
-    riskLevel: elevated
-    configTemplate:
-      type: simple
-      id: apify
-      name: apify
-      transport:
-        type: stdio
-        command: npx
-        args:
-          - "-y"
-          - "@apify/actors-mcp-server"
-    envVars:
-      - APIFY_TOKEN
-    envVarDescriptions:
-      APIFY_TOKEN: "Apify API Token (from apify.com)"
-    installCommand: "npx -y @apify/actors-mcp-server"
-    documentation: "https://github.com/apify/actors-mcp-server"
-    permissions:
-      - type: api
-        access: read-write
-        scope: apify-platform
+        scope: local-files
       - type: network
         access: read
-        scope: web-scraping
+        scope: url-fetch
     platform:
       - darwin
       - linux
       - win32
-    lastVerified: "2026-01-24"
+    requires:
+      dependencies:
+        - "Node.js 16+"
+        - "Python 3.10+"
+    lastVerified: "2026-01-25"

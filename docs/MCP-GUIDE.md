@@ -167,6 +167,74 @@ Common MCP servers:
 
 ---
 
+## Document Processing
+
+AgentFoundry provides built-in document processing via MarkItDown MCP server.
+
+### Quick Start
+
+```typescript
+import { createAgent, packs } from 'agent-foundry'
+
+const agent = createAgent({
+  packs: [
+    packs.safe(),
+    await packs.documents()
+  ]
+})
+```
+
+### Supported Formats
+
+| Category | Formats |
+|----------|---------|
+| Documents | PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx) |
+| Images | PNG, JPG, GIF, BMP, TIFF, WEBP (with OCR) |
+| Audio | MP3, WAV (requires FFmpeg for transcription) |
+| Web | HTML, YouTube URLs |
+| Other | ZIP (processes contents), EPUB, CSV, JSON, XML |
+
+### Available Tool
+
+The pack provides a single tool:
+
+- **`convert_to_markdown`**: Convert any supported file to markdown
+  ```typescript
+  // Local file
+  { uri: "file:///path/to/document.pdf" }
+
+  // URL
+  { uri: "https://example.com/page.html" }
+
+  // YouTube
+  { uri: "https://youtube.com/watch?v=..." }
+  ```
+
+### Requirements
+
+- Node.js 16+
+- Python 3.10+
+- FFmpeg (optional, for audio transcription)
+
+### Manual Configuration
+
+If you prefer manual MCP configuration:
+
+```typescript
+import { createStdioMCPProvider } from 'agent-foundry'
+
+const markitdown = createStdioMCPProvider({
+  id: 'markitdown',
+  name: 'MarkItDown',
+  command: 'npx',
+  args: ['-y', 'markitdown-mcp-npx']
+})
+
+const packs = await markitdown.createPacks()
+```
+
+---
+
 ## Configuring MCP: Local vs Remote
 
 MCP servers can run locally (STDIO) or remotely (HTTP). Here's how to decide:

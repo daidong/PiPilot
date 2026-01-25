@@ -9,6 +9,7 @@
 
 import { definePack } from '../factories/define-pack.js'
 import type { Pack } from '../types/pack.js'
+import type { Runtime } from '../types/runtime.js'
 import {
   sessionRecent,
   sessionSearch,
@@ -17,6 +18,7 @@ import {
   decisionsList
 } from '../context-sources/index.js'
 import { factRemember, factForget } from '../tools/index.js'
+import { FileFactsDecisionsStore } from '../core/facts-decisions-store.js'
 
 /**
  * Session Memory Pack - Conversation history and long-term memory
@@ -33,6 +35,9 @@ import { factRemember, factForget } from '../tools/index.js'
  * - fact-forget: Delete facts or deprecate decisions
  */
 export function sessionMemory(): Pack {
+  // Store reference for cleanup
+  let store: FileFactsDecisionsStore | null = null
+
   return definePack({
     id: 'session-memory',
     description: 'Session history and long-term memory: session.recent, session.search, session.thread, facts.list, decisions.list + fact-remember, fact-forget tools',
@@ -49,6 +54,22 @@ export function sessionMemory(): Pack {
       factsList as any,
       decisionsList as any
     ],
+
+    onInit: async (runtime: Runtime) => {
+      // Initialize facts/decisions store
+      store = new FileFactsDecisionsStore(runtime.projectPath)
+      await store.init()
+      // Attach to runtime for tools and context sources to use
+      ;(runtime as any).factsDecisionsStore = store
+    },
+
+    onDestroy: async (_runtime: Runtime) => {
+      // Clean up store
+      if (store) {
+        await store.close()
+        store = null
+      }
+    },
 
     promptFragment: `
 ## Session & Memory Management

@@ -162,7 +162,7 @@ Step types: sql, python, file, fetch, transform`,
   ],
 
   packs: [packs.safe(), packs.compute()],
-  model: { default: 'gpt-4o', maxTokens: 4096 },
+  model: { default: 'gpt-5.2', maxTokens: 4096 },
   maxSteps: DEFAULTS.PLANNER_MAX_STEPS
 })
 
@@ -205,7 +205,7 @@ When receiving feedback with issues, address critical issues first and re-execut
   ],
 
   packs: [packs.safe(), packs.exec(), packs.network(), packs.kvMemory()],
-  model: { default: 'gpt-4o', maxTokens: 8192 },
+  model: { default: 'gpt-5.2', maxTokens: 8192 },
   maxSteps: DEFAULTS.EXECUTOR_MAX_STEPS
 })
 
@@ -254,7 +254,7 @@ Approval: approved=true when no critical issues AND confidence >= 0.8`,
   ],
 
   packs: [packs.safe(), packs.compute()],
-  model: { default: 'gpt-4o', maxTokens: 4096 },
+  model: { default: 'gpt-5.2', maxTokens: 4096 },
   maxSteps: DEFAULTS.REVIEWER_MAX_STEPS
 })
 

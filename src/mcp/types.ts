@@ -23,6 +23,8 @@ export interface MCPStdioConfig {
   cwd?: string
   /** 环境变量 */
   env?: Record<string, string>
+  /** 请求超时（毫秒）。Default: 30000. Increase for slow-starting servers. */
+  timeout?: number
 }
 
 /**

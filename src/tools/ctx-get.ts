@@ -11,9 +11,11 @@
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool } from '../types/tool.js'
 import type { ContextResult, CostTier, KindEcho, NextStep } from '../types/context.js'
+import { coerceObjectValues } from '../utils/schema-coercion.js'
 
 export interface CtxGetInput {
   source: string
+  /** Parameters for the context source */
   params?: Record<string, unknown>
 }
 
@@ -102,12 +104,17 @@ export const ctxGet: Tool<CtxGetInput, CtxGetOutput> = defineTool({
     }
   },
   execute: async (input, { runtime }) => {
+    // Coerce string values to their intended types
+    // This is needed because OpenAI Responses API requires additionalProperties: { type: 'string' }
+    // See: src/utils/schema-coercion.ts for details
+    const params = coerceObjectValues(input.params)
+
     // Get source info for cost tier
     const sourceInfo = runtime.contextManager.getSource?.(input.source)
     const costTier: CostTier = sourceInfo?.costTier ?? 'medium'
 
     // Execute context fetch
-    const result: ContextResult = await runtime.contextManager.get(input.source, input.params)
+    const result: ContextResult = await runtime.contextManager.get(input.source, params)
 
     // Handle errors - return rendered error for actionable feedback
     if (!result.success) {

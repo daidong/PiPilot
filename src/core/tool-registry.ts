@@ -405,7 +405,9 @@ export class ToolRegistry {
           type: def.type,
           description: def.description,
           ...(def.enum ? { enum: def.enum } : {}),
-          ...(def.default !== undefined ? { default: def.default } : {})
+          ...(def.default !== undefined ? { default: def.default } : {}),
+          ...(def.properties ? { properties: def.properties } : {}),
+          ...(def.items ? { items: def.items } : {})
         }
 
         if (def.required !== false) {

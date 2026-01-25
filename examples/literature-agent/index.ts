@@ -17,8 +17,6 @@
  */
 
 import { z } from "zod";
-import { createOpenAI } from "@ai-sdk/openai";
-import type { LanguageModelV1 } from "ai";
 
 import {
   defineTeam,
@@ -41,6 +39,8 @@ import {
   type LLMAgentContext,
 } from "../../src/agent/define-llm-agent.js";
 
+import { getLanguageModelByModelId } from "../../src/index.js";
+
 import {
   SearchMetadataSchema,
   boundedArray,
@@ -54,19 +54,21 @@ import {
 // ============================================================================
 
 // Paper schema - shared across agents (bounded arrays prevent token explosion)
+// Note: Using .nullable() instead of .optional() for OpenAI Responses API compatibility
+// OpenAI's strict mode requires ALL properties in 'required' array
 const PaperSchema = z.object({
   id: z.string(),
   title: z.string(),
   authors: boundedArray(z.string(), 20), // Max 20 authors per paper
   abstract: z.string(),
   year: z.number(),
-  venue: z.string().optional(),
-  citationCount: z.number().optional(),
+  venue: z.string().nullable(),
+  citationCount: z.number().nullable(),
   url: z.string(),
   source: z.enum(["semantic_scholar", "arxiv", "openalex"]),
-  doi: z.string().optional(),
-  pdfUrl: z.string().optional(),
-  relevanceScore: z.number().optional(),
+  doi: z.string().nullable(),
+  pdfUrl: z.string().nullable(),
+  relevanceScore: z.number().nullable(),
 });
 
 type Paper = z.infer<typeof PaperSchema>;
@@ -85,7 +87,7 @@ const QueryPlanOutputSchema = z.object({
       z.enum(["semantic_scholar", "arxiv", "openalex"]),
       3,
     ),
-    timeRange: z.object({ start: z.number(), end: z.number() }).optional(),
+    timeRange: z.object({ start: z.number(), end: z.number() }).nullable(),
   }),
   expectedTopics: boundedArray(z.string(), 8), // Max 8 expected topics
 });
@@ -113,7 +115,7 @@ const ReviewResultSchema = z.object({
     missingTopics: boundedArray(z.string(), 10), // Max 10 missing topics
   }),
   issues: boundedArray(z.string(), 10), // Max 10 issues
-  additionalQueries: boundedArray(z.string(), 3).optional(), // Max 3 additional queries
+  additionalQueries: boundedArray(z.string(), 3).nullable(), // Max 3 additional queries
 });
 
 type ReviewResult = z.infer<typeof ReviewResultSchema>;
@@ -352,12 +354,16 @@ function parseSemanticScholar(data: {
         .map((a) => a.name),
       abstract: String(p.abstract || ""),
       year: Number(p.year) || 0,
-      venue: p.venue as string | undefined,
-      citationCount: p.citationCount as number | undefined,
+      // Use null instead of undefined for nullable fields (OpenAI Responses API compatibility)
+      venue: (p.venue as string) ?? null,
+      citationCount: (p.citationCount as number) ?? null,
       url: String(
         p.url || `https://www.semanticscholar.org/paper/${p.paperId}`,
       ),
       source: "semantic_scholar",
+      doi: null,
+      pdfUrl: null,
+      relevanceScore: null,
     }),
   );
 }
@@ -391,6 +397,12 @@ function parseArxiv(xml: string): Paper[] {
       year: parseInt(published.slice(0, 4)) || 0,
       url: id,
       source: "arxiv",
+      // Use null instead of undefined for nullable fields (OpenAI Responses API compatibility)
+      venue: null,
+      citationCount: null,
+      doi: null,
+      pdfUrl: null,
+      relevanceScore: null,
     });
   }
 
@@ -425,11 +437,15 @@ function parseOpenAlex(data: {
         .map((a) => a.author.display_name),
       abstract,
       year: Number(w.publication_year) || 0,
+      // Use null instead of undefined for nullable fields (OpenAI Responses API compatibility)
       venue: (w.primary_location as { source?: { display_name: string } })
-        ?.source?.display_name,
-      citationCount: w.cited_by_count as number | undefined,
+        ?.source?.display_name ?? null,
+      citationCount: (w.cited_by_count as number) ?? null,
       url: String(w.id),
       source: "openalex",
+      doi: null,
+      pdfUrl: null,
+      relevanceScore: null,
     };
   });
 }
@@ -458,13 +474,13 @@ export function createLiteratureTeam(config: {
   model?: string;
   maxReviewIterations?: number;
 }) {
-  const { apiKey, model = "gpt-4o-mini", maxReviewIterations = 2 } = config;
+  const { apiKey, model = "gpt-5.2", maxReviewIterations = 2 } = config;
 
   if (!apiKey) throw new Error("API key is required");
 
-  // Create OpenAI model
-  const openai = createOpenAI({ apiKey });
-  const languageModel = openai(model);
+  // Create language model using AgentFoundry's LLM abstraction
+  // This automatically handles chat vs responses API based on model capabilities
+  const languageModel = getLanguageModelByModelId(model, { apiKey });
 
   // Create searcher agent
   const searcherAgent = createSearcherAgent();
