@@ -657,10 +657,38 @@ async function main() {
     if (result.summary) {
       console.log("");
       console.log(`Title: ${result.summary.title}`);
-      console.log(`Overview: ${result.summary.overview}`);
       console.log("");
+      console.log("Overview:");
+      console.log(`  ${result.summary.overview}`);
+
+      console.log("");
+      console.log("-".repeat(60));
+      console.log("Papers:");
+      result.summary.papers.forEach((p, i) => {
+        console.log(`  ${i + 1}. ${p.title}`);
+        console.log(`     Authors: ${p.authors}`);
+        console.log(`     Year: ${p.year}`);
+        console.log(`     Summary: ${p.summary}`);
+        console.log("");
+      });
+
+      console.log("-".repeat(60));
+      console.log("Themes:");
+      result.summary.themes.forEach((t, i) => {
+        console.log(`  ${i + 1}. ${t.name}`);
+        console.log(`     Papers: ${t.papers.join(", ")}`);
+        console.log(`     Insight: ${t.insight}`);
+        console.log("");
+      });
+
+      console.log("-".repeat(60));
       console.log("Key Findings:");
       result.summary.keyFindings.forEach((f) => console.log(`  • ${f}`));
+
+      console.log("");
+      console.log("-".repeat(60));
+      console.log("Research Gaps:");
+      result.summary.researchGaps.forEach((g) => console.log(`  • ${g}`));
     }
 
     if (result.error) {
