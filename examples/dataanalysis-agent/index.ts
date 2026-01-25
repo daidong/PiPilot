@@ -119,7 +119,7 @@ const DEFAULTS = {
 // ============================================================================
 
 const plannerAgent = defineAgent({
-  id: 'data-analysis-planner',
+  id: 'planner',
   name: 'Data Analysis Planner',
 
   identity: `You are a Data Analysis Planning Agent.
@@ -167,7 +167,7 @@ Step types: sql, python, file, fetch, transform`,
 })
 
 const executorAgent = defineAgent({
-  id: 'data-analysis-executor',
+  id: 'executor',
   name: 'Data Analysis Executor',
 
   identity: `You are a Data Analysis Executor Agent.
@@ -210,7 +210,7 @@ When receiving feedback with issues, address critical issues first and re-execut
 })
 
 const reviewerAgent = defineAgent({
-  id: 'data-analysis-reviewer',
+  id: 'reviewer',
   name: 'Data Analysis Reviewer',
 
   identity: `You are a Data Analysis Reviewer Agent.
