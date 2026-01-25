@@ -309,6 +309,8 @@ async function searchSource(
 ): Promise<Paper[]> {
   const encodedQuery = encodeURIComponent(query);
   let url: string;
+  // arxiv API is slower, use longer timeout
+  let timeoutMs = source === "arxiv" ? 30000 : 15000;
 
   switch (source) {
     case "semantic_scholar":
@@ -324,7 +326,7 @@ async function searchSource(
       return [];
   }
 
-  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) return [];
 
   if (source === "arxiv") {
