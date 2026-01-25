@@ -10,8 +10,31 @@ export { createSearcherAgent, type SearcherAgent, type SearchRequest, type Searc
 export { createReviewerAgent, type ReviewerAgent, type ReviewInput, type ReviewResult } from './reviewer.js'
 export { createSummarizerAgent, type SummarizerAgent, type SummaryInput, type ResearchSummary } from './summarizer.js'
 
-// LLM-powered agents (real LLM calls, requires API key)
-export { createLLMQueryPlannerAgent, type LLMQueryPlannerAgent } from './llm-query-planner.js'
-export { createLLMSearcherAgent, type LLMSearcherAgent } from './llm-searcher.js'
-export { createLLMReviewerAgent, type LLMReviewerAgent } from './llm-reviewer.js'
-export { createLLMSummarizerAgent, type LLMSummarizerAgent } from './llm-summarizer.js'
+// LLM-powered agents (real LLM calls + API searches, requires OPENAI_API_KEY)
+export {
+  createLLMQueryPlannerAgent,
+  type LLMQueryPlannerAgent,
+  type QueryPlannerConfig,
+  type QueryPlan as LLMQueryPlan
+} from './llm-query-planner.js'
+
+export {
+  createLLMSearcherAgent,
+  type LLMSearcherAgent,
+  type SearcherConfig,
+  type SearchResults as LLMSearchResults
+} from './llm-searcher.js'
+
+export {
+  createLLMReviewerAgent,
+  type LLMReviewerAgent,
+  type ReviewerConfig,
+  type ReviewResult as LLMReviewResult
+} from './llm-reviewer.js'
+
+export {
+  createLLMSummarizerAgent,
+  type LLMSummarizerAgent,
+  type SummarizerConfig,
+  type ResearchSummary as LLMResearchSummary
+} from './llm-summarizer.js'

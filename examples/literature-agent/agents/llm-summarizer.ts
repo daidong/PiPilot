@@ -1,17 +1,40 @@
 /**
  * LLM-Powered Summarizer Agent
  *
- * Uses a real LLM to synthesize research findings into
+ * Uses direct LLM calls to synthesize research findings into
  * a comprehensive, well-organized summary.
  */
 
-import { defineAgent, packs } from '../../../src/index.js'
-import type { AgentInstance } from '../../../src/types/agent.js'
+import { createOpenAI } from '@ai-sdk/openai'
+import { generateText } from 'ai'
+import type { Paper } from '../types.js'
 
 export interface SummarizerConfig {
   apiKey: string
-  projectPath?: string
   model?: string
+}
+
+export interface ResearchSummary {
+  title: string
+  overview: string
+  papers: Array<{
+    title: string
+    authors: string
+    year: number
+    venue?: string
+    citations?: number
+    summary: string
+    url: string
+  }>
+  themes: Array<{
+    name: string
+    papers: string[]
+    insight: string
+  }>
+  keyFindings: string[]
+  researchGaps: string[]
+  limitations: string[]
+  suggestedFollowUp: string[]
 }
 
 export interface LLMSummarizerAgent {
@@ -20,17 +43,14 @@ export interface LLMSummarizerAgent {
   destroy: () => Promise<void>
 }
 
-const SUMMARIZER_IDENTITY = `You are a Research Synthesis Specialist who creates comprehensive literature review summaries.
+const SYSTEM_PROMPT = `You are a Research Synthesis Specialist who creates comprehensive literature review summaries.
 
 Your task is to take reviewed academic papers and create an insightful, well-organized research summary.
 
-## Output Format
-
-You MUST output a JSON object in this format:
-\`\`\`json
+You MUST respond with ONLY a valid JSON object (no markdown, no explanation) in this format:
 {
   "title": "Literature Review: [Topic]",
-  "overview": "A 2-3 sentence executive summary of findings",
+  "overview": "A 2-3 sentence executive summary",
   "papers": [
     {
       "title": "Paper Title",
@@ -45,87 +65,39 @@ You MUST output a JSON object in this format:
   "themes": [
     {
       "name": "Theme Name",
-      "papers": ["Paper 1", "Paper 2"],
+      "papers": ["Paper 1 title", "Paper 2 title"],
       "insight": "Key insight about this theme"
     }
   ],
-  "keyFindings": [
-    "Finding 1",
-    "Finding 2"
-  ],
-  "researchGaps": [
-    "Gap 1",
-    "Gap 2"
-  ],
-  "limitations": [
-    "Limitation of this review"
-  ],
-  "suggestedFollowUp": [
-    "Suggestion 1",
-    "Suggestion 2"
-  ]
+  "keyFindings": ["Finding 1", "Finding 2"],
+  "researchGaps": ["Gap 1", "Gap 2"],
+  "limitations": ["Limitation of this review"],
+  "suggestedFollowUp": ["Suggestion 1", "Suggestion 2"]
 }
-\`\`\`
 
-## Guidelines
+Guidelines:
+1. Overview: Capture the main thrust of the research in 2-3 sentences
+2. Papers: List top 5-10 most relevant papers, sorted by importance
+3. Themes: Group papers into 2-4 thematic categories
+4. Key Findings: Extract 3-5 main takeaways
+5. Research Gaps: Identify 2-3 areas needing more research
+6. Be objective and scholarly in tone
 
-1. **Overview**: Capture the main thrust of the research area in 2-3 sentences
-2. **Papers**: List top 5-10 most relevant papers, sorted by importance
-3. **Themes**: Group papers into 2-4 thematic categories
-4. **Key Findings**: Extract 3-5 main takeaways from the literature
-5. **Research Gaps**: Identify 2-3 areas needing more research
-6. **Limitations**: Note any limitations of this literature review
-
-## Quality Standards
-
-- Be objective and balanced
-- Highlight seminal/highly-cited works
-- Note emerging trends vs. established methods
-- Provide actionable insights for researchers
-
-IMPORTANT: Output ONLY the JSON object.`
-
-const SUMMARIZER_CONSTRAINTS = [
-  'Output ONLY valid JSON',
-  'Include 5-10 most relevant papers',
-  'Group into 2-4 clear themes',
-  'Extract actionable key findings',
-  'Be objective and scholarly in tone',
-  'Cite specific papers when making claims'
-]
+IMPORTANT: Output ONLY the JSON object, nothing else.`
 
 /**
  * Create an LLM-powered Summarizer Agent
  */
 export function createLLMSummarizerAgent(config: SummarizerConfig): LLMSummarizerAgent {
-  const { apiKey, projectPath = process.cwd(), model = 'gpt-4o-mini' } = config
+  const { apiKey, model = 'gpt-4o-mini' } = config
 
-  const agentDef = defineAgent({
-    id: 'summarizer-llm',
-    name: 'Research Summarizer Agent',
-    identity: SUMMARIZER_IDENTITY,
-    constraints: SUMMARIZER_CONSTRAINTS,
-    packs: [packs.safe()],
-    model: { default: model, maxTokens: 4096 },
-    maxSteps: 3
-  })
-
-  let agentInstance: AgentInstance | null = null
-
-  const getAgent = () => {
-    if (!agentInstance) {
-      agentInstance = agentDef({ apiKey, projectPath })
-    }
-    return agentInstance
-  }
+  const openai = createOpenAI({ apiKey })
 
   return {
     id: 'summarizer',
 
     async run(input: string): Promise<{ success: boolean; output: string }> {
       console.log('  [Summarizer-LLM] Creating research synthesis with LLM...')
-
-      const agent = getAgent()
 
       // Parse input (review results)
       let reviewData: {
@@ -139,7 +111,6 @@ export function createLLMSummarizerAgent(config: SummarizerConfig): LLMSummarize
           citationCount?: number
           url?: string
           relevanceScore?: number
-          relevanceReason?: string
         }>
         coverage?: {
           coveredTopics?: string[]
@@ -158,73 +129,71 @@ export function createLLMSummarizerAgent(config: SummarizerConfig): LLMSummarize
 
       console.log(`  [Summarizer-LLM] Synthesizing ${papers.length} papers...`)
 
+      if (papers.length === 0) {
+        // No papers to summarize
+        const result: ResearchSummary = {
+          title: 'Literature Review: No Results',
+          overview: 'The search did not return any relevant papers.',
+          papers: [],
+          themes: [],
+          keyFindings: ['No papers found matching the search criteria'],
+          researchGaps: ['Unable to assess - no papers reviewed'],
+          limitations: ['Search may need refinement'],
+          suggestedFollowUp: ['Try different search terms', 'Expand date range']
+        }
+        return { success: true, output: JSON.stringify(result) }
+      }
+
       // Build paper details for the LLM
-      const paperDetails = papers.map((p, i) => `
+      const paperDetails = papers.slice(0, 12).map((p, i) => `
 Paper ${i + 1}:
 - Title: ${p.title || 'Unknown'}
-- Authors: ${Array.isArray(p.authors) ? p.authors.slice(0, 3).join(', ') : p.authors || 'Unknown'}
+- Authors: ${Array.isArray(p.authors) ? p.authors.slice(0, 3).join(', ') + (p.authors.length > 3 ? ' et al.' : '') : p.authors || 'Unknown'}
 - Year: ${p.year || 'N/A'}
 - Venue: ${p.venue || 'N/A'}
 - Citations: ${p.citationCount || 'N/A'}
-- URL: ${p.url || 'N/A'}
 - Relevance Score: ${p.relevanceScore || 'N/A'}/10
-- Relevance Reason: ${p.relevanceReason || 'N/A'}
-- Abstract: ${(p.abstract || '').slice(0, 400)}
+- URL: ${p.url || 'N/A'}
+- Abstract: ${(p.abstract || '').slice(0, 350)}
 `).join('\n')
 
       const prompt = `Create a comprehensive literature review summary from these papers.
 
-${papers.length > 0 ? `Papers (${papers.length} total):
-${paperDetails}` : 'No papers provided.'}
+Papers (${papers.length} total):
+${paperDetails}
 
 Coverage Analysis:
 - Covered Topics: ${coverage.coveredTopics?.join(', ') || 'Not specified'}
 - Missing Topics: ${coverage.missingTopics?.join(', ') || 'None identified'}
 
-Create a well-organized research summary with:
-1. Executive overview
-2. Top papers with brief summaries
-3. Thematic groupings
-4. Key findings
-5. Research gaps
-6. Suggested follow-up
-
+Create a well-organized research summary with overview, top papers, themes, key findings, and research gaps.
 Output ONLY the JSON summary object.`
 
       try {
-        const result = await agent.run(prompt)
+        const result = await generateText({
+          model: openai(model),
+          system: SYSTEM_PROMPT,
+          prompt,
+          maxTokens: 4096,
+          temperature: 0.3
+        })
 
-        if (!result.success) {
-          return { success: false, output: JSON.stringify({ error: result.error }) }
-        }
+        // Extract JSON from response
+        let jsonOutput = result.text.trim()
 
-        // Extract JSON from output
-        let jsonOutput = result.output
+        // Remove markdown code blocks if present
         const jsonMatch = jsonOutput.match(/```(?:json)?\s*([\s\S]*?)```/)
         if (jsonMatch) {
           jsonOutput = jsonMatch[1].trim()
         }
 
-        try {
-          const parsed = JSON.parse(jsonOutput)
-          console.log(`  [Summarizer-LLM] Summary created: ${parsed.papers?.length || 0} papers, ${parsed.themes?.length || 0} themes`)
-          return { success: true, output: JSON.stringify(parsed) }
-        } catch {
-          const jsonStart = jsonOutput.indexOf('{')
-          const jsonEnd = jsonOutput.lastIndexOf('}')
-          if (jsonStart !== -1 && jsonEnd !== -1) {
-            const extracted = jsonOutput.slice(jsonStart, jsonEnd + 1)
-            try {
-              const parsed = JSON.parse(extracted)
-              console.log(`  [Summarizer-LLM] Summary created: ${parsed.papers?.length || 0} papers, ${parsed.themes?.length || 0} themes`)
-              return { success: true, output: JSON.stringify(parsed) }
-            } catch {
-              return { success: true, output: result.output }
-            }
-          }
-          return { success: true, output: result.output }
-        }
+        // Parse and validate
+        const parsed = JSON.parse(jsonOutput) as ResearchSummary
+        console.log(`  [Summarizer-LLM] Summary created: ${parsed.papers?.length || 0} papers, ${parsed.themes?.length || 0} themes`)
+
+        return { success: true, output: JSON.stringify(parsed) }
       } catch (error) {
+        console.error('  [Summarizer-LLM] Error:', error)
         return {
           success: false,
           output: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' })
@@ -233,10 +202,7 @@ Output ONLY the JSON summary object.`
     },
 
     async destroy() {
-      if (agentInstance) {
-        await agentInstance.destroy()
-        agentInstance = null
-      }
+      // No cleanup needed
     }
   }
 }

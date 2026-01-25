@@ -1,12 +1,12 @@
 /**
  * Literature Research Multi-Agent Team (LLM-Powered)
  *
- * A team of real LLM-powered agents for academic literature research.
- * Each agent uses actual LLM calls with specialized prompts.
+ * A team of LLM-powered agents for academic literature research.
+ * Uses direct LLM calls (via Vercel AI SDK) and real academic API searches.
  *
  * Team Structure:
  * - QueryPlanner (LLM): Analyzes requests and creates search strategies
- * - Searcher (LLM + Tools): Executes real academic database searches
+ * - Searcher (APIs): Executes real Semantic Scholar, arXiv, OpenAlex searches
  * - Reviewer (LLM): Evaluates results and identifies gaps
  * - Summarizer (LLM): Synthesizes findings into comprehensive summary
  *
@@ -37,6 +37,8 @@ import {
   createLLMSummarizerAgent
 } from './agents/index.js'
 
+import type { ResearchSummary } from './agents/llm-summarizer.js'
+
 // State paths for blackboard
 const STATE_PATHS = {
   PLAN: 'queryPlan',
@@ -48,8 +50,6 @@ const STATE_PATHS = {
 export interface LiteratureTeamLLMConfig {
   /** OpenAI API key (required) */
   apiKey: string
-  /** Project path (default: cwd) */
-  projectPath?: string
   /** Model to use (default: gpt-4o-mini) */
   model?: string
   /** Max review iterations (default: 2) */
@@ -61,13 +61,11 @@ export interface LiteratureTeamLLMConfig {
 /**
  * Create an LLM-Powered Literature Research Team
  *
- * All agents use real LLM calls with specialized prompts.
- * The Searcher agent also calls real academic APIs (Semantic Scholar, arXiv, OpenAlex).
+ * Uses direct LLM calls for analysis and real academic API searches.
  */
 export function createLiteratureTeamLLM(config: LiteratureTeamLLMConfig) {
   const {
     apiKey,
-    projectPath = process.cwd(),
     model = 'gpt-4o-mini',
     maxReviewIterations = 2,
     onProgress
@@ -78,16 +76,16 @@ export function createLiteratureTeamLLM(config: LiteratureTeamLLMConfig) {
   }
 
   // Create LLM-powered agent instances
-  const queryPlannerAgent = createLLMQueryPlannerAgent({ apiKey, projectPath, model })
-  const searcherAgent = createLLMSearcherAgent({ apiKey, projectPath, model })
-  const reviewerAgent = createLLMReviewerAgent({ apiKey, projectPath, model })
-  const summarizerAgent = createLLMSummarizerAgent({ apiKey, projectPath, model })
+  const queryPlannerAgent = createLLMQueryPlannerAgent({ apiKey, model })
+  const searcherAgent = createLLMSearcherAgent({ apiKey, model })
+  const reviewerAgent = createLLMReviewerAgent({ apiKey, model })
+  const summarizerAgent = createLLMSummarizerAgent({ apiKey, model })
 
   // Define the team
   const team = defineTeam({
     id: 'literature-research-team-llm',
     name: 'Literature Research Team (LLM-Powered)',
-    description: 'A multi-agent team using real LLM agents for comprehensive academic literature research',
+    description: 'A multi-agent team using LLM for comprehensive academic literature research',
 
     agents: {
       queryPlanner: agentHandle('queryPlanner', queryPlannerAgent, {
@@ -95,7 +93,7 @@ export function createLiteratureTeamLLM(config: LiteratureTeamLLMConfig) {
         capabilities: ['query-expansion', 'search-strategy', 'topic-analysis']
       }),
       searcher: agentHandle('searcher', searcherAgent, {
-        role: 'Literature Searcher (LLM + APIs)',
+        role: 'Literature Searcher (APIs)',
         capabilities: ['api-search', 'multi-source', 'deduplication']
       }),
       reviewer: agentHandle('reviewer', reviewerAgent, {
@@ -151,7 +149,7 @@ export function createLiteratureTeamLLM(config: LiteratureTeamLLMConfig) {
     defaults: {
       concurrency: 1,
       timeouts: {
-        agentSec: 120, // Longer timeout for LLM calls
+        agentSec: 120,
         flowSec: 600
       }
     }
@@ -212,7 +210,7 @@ export function createLiteratureTeamLLM(config: LiteratureTeamLLMConfig) {
      */
     async research(request: string): Promise<{
       success: boolean
-      summary?: unknown
+      summary?: ResearchSummary
       error?: string
       steps: number
       durationMs: number
@@ -224,11 +222,11 @@ export function createLiteratureTeamLLM(config: LiteratureTeamLLMConfig) {
         const summary = stateData?.[STATE_PATHS.SUMMARY]
 
         if (summary) {
-          let parsedSummary: unknown
+          let parsedSummary: ResearchSummary
           try {
-            parsedSummary = typeof summary === 'string' ? JSON.parse(summary) : summary
+            parsedSummary = typeof summary === 'string' ? JSON.parse(summary) : summary as ResearchSummary
           } catch {
-            parsedSummary = summary
+            parsedSummary = summary as ResearchSummary
           }
 
           return {
@@ -289,11 +287,11 @@ async function main() {
   console.log('Literature Research Multi-Agent Team (LLM-Powered)')
   console.log('='.repeat(60))
   console.log('')
-  console.log('This version uses REAL LLM agents with actual API calls:')
-  console.log('  1. QueryPlanner (LLM): Analyzes request, creates search strategy')
-  console.log('  2. Searcher (LLM + APIs): Searches Semantic Scholar, arXiv, OpenAlex')
-  console.log('  3. Reviewer (LLM): Evaluates relevance, identifies gaps')
-  console.log('  4. Summarizer (LLM): Creates comprehensive research synthesis')
+  console.log('This version uses:')
+  console.log('  - QueryPlanner (LLM): Creates optimized search strategies')
+  console.log('  - Searcher (APIs): Real Semantic Scholar, arXiv, OpenAlex searches')
+  console.log('  - Reviewer (LLM): Evaluates relevance, identifies gaps')
+  console.log('  - Summarizer (LLM): Creates comprehensive synthesis')
   console.log('')
   console.log('Flow: QueryPlanner → Searcher → loop(Reviewer → Searcher) → Summarizer')
   console.log('')
@@ -310,7 +308,7 @@ async function main() {
   })
 
   try {
-    console.log('[Team] Starting literature research with LLM agents...\n')
+    console.log('[Team] Starting literature research...\n')
 
     const result = await team.research(`
       Find recent papers about retrieval augmented generation (RAG) for large language models.
@@ -329,7 +327,7 @@ async function main() {
     console.log('')
     console.log('Success:', result.success)
     console.log('Steps:', result.steps)
-    console.log('Duration:', result.durationMs, 'ms')
+    console.log('Duration:', (result.durationMs / 1000).toFixed(1), 'seconds')
 
     if (result.summary) {
       console.log('')
@@ -337,17 +335,58 @@ async function main() {
       console.log('SUMMARY')
       console.log('-'.repeat(60))
       console.log('')
-      console.log(JSON.stringify(result.summary, null, 2))
+      console.log('Title:', result.summary.title)
+      console.log('')
+      console.log('Overview:', result.summary.overview)
+      console.log('')
+
+      if (result.summary.papers?.length > 0) {
+        console.log('Top Papers:')
+        for (const paper of result.summary.papers.slice(0, 5)) {
+          console.log(`  • ${paper.title}`)
+          console.log(`    ${paper.authors}, ${paper.year}${paper.venue ? `, ${paper.venue}` : ''}`)
+          if (paper.summary) console.log(`    → ${paper.summary}`)
+          console.log('')
+        }
+      }
+
+      if (result.summary.themes?.length > 0) {
+        console.log('Themes:')
+        for (const theme of result.summary.themes) {
+          console.log(`  • ${theme.name}`)
+          console.log(`    Insight: ${theme.insight}`)
+          console.log('')
+        }
+      }
+
+      if (result.summary.keyFindings?.length > 0) {
+        console.log('Key Findings:')
+        for (const finding of result.summary.keyFindings) {
+          console.log(`  • ${finding}`)
+        }
+        console.log('')
+      }
+
+      if (result.summary.researchGaps?.length > 0) {
+        console.log('Research Gaps:')
+        for (const gap of result.summary.researchGaps) {
+          console.log(`  • ${gap}`)
+        }
+        console.log('')
+      }
+
+      if (result.summary.suggestedFollowUp?.length > 0) {
+        console.log('Suggested Follow-up:')
+        for (const suggestion of result.summary.suggestedFollowUp) {
+          console.log(`  • ${suggestion}`)
+        }
+      }
     }
 
     if (result.error) {
       console.log('')
       console.log('Error:', result.error)
     }
-
-    console.log('')
-    console.log('-'.repeat(60))
-    console.log('Final State Keys:', Object.keys(team.getState()))
 
   } catch (error) {
     console.error('Research failed:', error)
