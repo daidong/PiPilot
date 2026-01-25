@@ -306,13 +306,13 @@ export function createDataAnalysisTeam(config: DataAnalysisConfig) {
     // Flow using step() builder
     flow: seq(
       // Step 1: Create analysis plan
-      step(planner as any)
+      step(planner)
         .in(state.initial<{ userRequest: string; availableDatabases?: string[] }>())
         .name('Create analysis plan')
         .out(state.path<AnalysisPlan>('plan')),
 
       // Step 2: Execute initial analysis
-      step(executor as any)
+      step(executor)
         .in(mapInput(
           state.path<AnalysisPlan>('plan'),
           (plan) => ({
@@ -326,7 +326,7 @@ export function createDataAnalysisTeam(config: DataAnalysisConfig) {
       // Step 3: Review-refine loop
       loop(
         seq(
-          step(reviewer as any)
+          step(reviewer)
             .in(state.path<AnalysisResults>('results'))
             .name('Review results')
             .out(state.path<ReviewFeedback>('feedback')),
@@ -334,7 +334,7 @@ export function createDataAnalysisTeam(config: DataAnalysisConfig) {
           // Refine if not approved
           branch({
             when: (s: any) => s.feedback?.approved === false,
-            then: step(executor as any)
+            then: step(executor)
               .in(mapInput(
                 state.path<ReviewFeedback>('feedback'),
                 (feedback) => ({

@@ -5,7 +5,13 @@
  * This is the foundation for contract-first agent communication.
  */
 
-import { generateText, Output, type LanguageModelV1, type CoreMessage } from 'ai'
+import {
+  generateText,
+  Output,
+  NoObjectGeneratedError,
+  type LanguageModelV1,
+  type CoreMessage
+} from 'ai'
 import { type ZodSchema, ZodError } from 'zod'
 import type { TokenUsage } from './provider.types.js'
 
@@ -36,11 +42,12 @@ export interface StructuredTraceEvent {
 export interface RepairStrategy {
   /**
    * Generate repair instructions based on the error
-   * @param error - The error that occurred (ZodError or other)
-   * @param rawText - The raw text that failed to parse (if available)
+   * @param error - The error that occurred (ZodError, NoObjectGeneratedError, etc.)
+   * @param rawText - The raw text that failed to parse (from NoObjectGeneratedError.text)
+   * @param cause - The underlying cause (from NoObjectGeneratedError.cause, e.g., JSON parse error)
    * @returns Modified prompt/system to retry with
    */
-  repair: (error: unknown, rawText?: string) => {
+  repair: (error: unknown, rawText?: string, cause?: unknown) => {
     system?: string
     prompt?: string
     messages?: CoreMessage[]
@@ -116,9 +123,10 @@ export interface GenerateStructuredResult<T> {
  * Default repair strategy that adds schema validation feedback to the prompt
  */
 export const defaultRepairStrategy: RepairStrategy = {
-  repair: (error: unknown, rawText?: string) => {
+  repair: (error: unknown, rawText?: string, cause?: unknown) => {
     let errorMessage = 'Unknown error'
 
+    // Handle different error types with specific messaging
     if (error instanceof ZodError) {
       // Format Zod errors in a helpful way
       const issues = error.issues.map((issue) => {
@@ -126,13 +134,32 @@ export const defaultRepairStrategy: RepairStrategy = {
         return `- ${path ? `"${path}": ` : ''}${issue.message}`
       })
       errorMessage = `Schema validation failed:\n${issues.join('\n')}`
+    } else if (NoObjectGeneratedError.isInstance(error)) {
+      // NoObjectGeneratedError - include cause details for better repair
+      errorMessage = 'Failed to generate valid structured output.'
+      if (cause instanceof Error) {
+        errorMessage += `\nParse error: ${cause.message}`
+      } else if (cause instanceof ZodError) {
+        const issues = cause.issues.map((issue) => {
+          const path = issue.path.join('.')
+          return `- ${path ? `"${path}": ` : ''}${issue.message}`
+        })
+        errorMessage += `\nValidation errors:\n${issues.join('\n')}`
+      }
     } else if (error instanceof Error) {
       errorMessage = error.message
     }
 
-    const repairPrompt = rawText
-      ? `Your previous response was:\n\`\`\`\n${rawText.slice(0, 500)}${rawText.length > 500 ? '...' : ''}\n\`\`\`\n\n${errorMessage}\n\nPlease provide a corrected response that matches the required schema.`
-      : `${errorMessage}\n\nPlease provide a response that matches the required schema.`
+    // Build repair prompt with raw text when available
+    let repairPrompt: string
+    if (rawText) {
+      const truncatedText = rawText.length > 1000
+        ? rawText.slice(0, 1000) + '... [truncated]'
+        : rawText
+      repairPrompt = `Your previous response was:\n\`\`\`\n${truncatedText}\n\`\`\`\n\n${errorMessage}\n\nPlease provide a corrected response that matches the required JSON schema exactly. Ensure all required fields are present and have the correct types.`
+    } else {
+      repairPrompt = `${errorMessage}\n\nPlease provide a response that matches the required JSON schema exactly. Ensure all required fields are present and have the correct types.`
+    }
 
     return { prompt: repairPrompt }
   }
@@ -218,7 +245,8 @@ export async function generateStructured<T>(
         temperature,
         maxTokens,
         abortSignal,
-        // AI SDK structured output - validates automatically
+        // AI SDK v4 structured output (experimental API)
+        // TODO: Migrate to stable `output` property when upgrading to AI SDK v6+
         experimental_output: Output.object({ schema })
       })
 
@@ -230,6 +258,7 @@ export async function generateStructured<T>(
       }
 
       // The output is already validated by AI SDK
+      // TODO: Use result.output when upgrading to AI SDK v6+
       const output = result.experimental_output as T
 
       const durationMs = Date.now() - attemptStart
@@ -257,7 +286,19 @@ export async function generateStructured<T>(
       }
     } catch (error) {
       lastError = error
-      lastRawText = undefined // AI SDK doesn't expose raw text on error
+
+      // Extract raw text from NoObjectGeneratedError for better repair
+      if (NoObjectGeneratedError.isInstance(error)) {
+        lastRawText = error.text
+        // Also accumulate usage from failed attempts
+        if (error.usage) {
+          totalUsage.promptTokens += error.usage.promptTokens
+          totalUsage.completionTokens += error.usage.completionTokens
+          totalUsage.totalTokens += error.usage.totalTokens
+        }
+      } else {
+        lastRawText = undefined
+      }
 
       const durationMs = Date.now() - attemptStart
 
@@ -267,8 +308,10 @@ export async function generateStructured<T>(
         attempt,
         schemaName,
         error: error instanceof Error ? error.message : String(error),
-        durationMs
-      })
+        durationMs,
+        // Include raw text in trace for debugging
+        rawText: lastRawText?.slice(0, 500)
+      } as StructuredTraceEvent & { rawText?: string })
 
       // Don't retry on abort
       if (abortSignal?.aborted) {
@@ -280,8 +323,9 @@ export async function generateStructured<T>(
         break
       }
 
-      // Apply repair strategy for next attempt
-      const repair = repairStrategy.repair(error, lastRawText)
+      // Apply repair strategy for next attempt with raw text and cause
+      const errorCause = NoObjectGeneratedError.isInstance(error) ? error.cause : undefined
+      const repair = repairStrategy.repair(error, lastRawText, errorCause)
 
       onTrace?.({
         type: 'structured.call.retry',
@@ -301,7 +345,9 @@ export async function generateStructured<T>(
   throw new StructuredOutputError(
     `Failed to generate structured output after ${retries + 1} attempts`,
     lastError,
-    schemaName
+    schemaName,
+    lastRawText,
+    totalUsage
   )
 }
 
@@ -316,12 +362,17 @@ export class StructuredOutputError extends Error {
   constructor(
     message: string,
     public readonly cause: unknown,
-    public readonly schemaName?: string
+    public readonly schemaName?: string,
+    public readonly rawText?: string,
+    public readonly usage?: TokenUsage
   ) {
     super(message)
     this.name = 'StructuredOutputError'
   }
 }
+
+// Re-export NoObjectGeneratedError for users who want to handle it directly
+export { NoObjectGeneratedError } from 'ai'
 
 // ============================================================================
 // Utility Functions

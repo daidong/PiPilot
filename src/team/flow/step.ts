@@ -10,8 +10,7 @@
 
 import type { ZodSchema } from 'zod'
 import type { InvokeSpec, InputRef, StateRef, TransferSpec } from './ast.js'
-import type { LLMAgent } from '../../agent/define-llm-agent.js'
-import type { ToolAgent } from '../../agent/define-tool-agent.js'
+import type { Agent, BaseAgentContext } from '../../agent/types.js'
 import type {
   TypedInputRef,
   TypedStateRef
@@ -23,23 +22,26 @@ import type { MappedInputRef } from './edges.js'
 // ============================================================================
 
 /**
- * Agent type that can be used with step builder
+ * Minimal agent interface for custom agents that don't use Zod schemas.
+ * Provides backward compatibility for simple agent implementations.
  */
-export type StepAgent<TInput, TOutput> =
-  | LLMAgent<TInput, TOutput>
-  | ToolAgent<TInput, TOutput>
-  | TypedAgent<TInput, TOutput>
-
-/**
- * Generic typed agent interface for custom agents
- */
-export interface TypedAgent<TInput, TOutput> {
+export interface MinimalAgent<TInput, TOutput> {
   id: string
   kind: string
   inputSchema?: ZodSchema<TInput>
   outputSchema?: ZodSchema<TOutput>
   run: (input: TInput, ctx: unknown) => Promise<{ output: TOutput; [key: string]: unknown }>
 }
+
+/**
+ * Agent type that can be used with step builder.
+ * Accepts:
+ * - Unified Agent interface (LLMAgent, ToolAgent)
+ * - Minimal agent implementations for backward compatibility
+ */
+export type StepAgent<TInput, TOutput> =
+  | Agent<TInput, TOutput, BaseAgentContext>
+  | MinimalAgent<TInput, TOutput>
 
 /**
  * Input types accepted by step builder

@@ -115,6 +115,23 @@ export type { CreateAgentOptions } from './agent/create-agent.js'
 export { defineAgent, validateAgentDefinition } from './agent/define-agent.js'
 export { AgentLoop } from './agent/agent-loop.js'
 
+// Unified Agent Interface (contract-first, typed I/O)
+export {
+  isAgent,
+  isLLMAgentKind,
+  isToolAgentKind,
+  successResult,
+  failureResult
+} from './agent/types.js'
+export type {
+  Agent as UnifiedAgent,
+  AgentResult as UnifiedAgentResult,
+  AgentKind,
+  BaseAgentContext,
+  AgentInput,
+  AgentOutput
+} from './agent/types.js'
+
 // LLM Agent (contract-first, typed I/O)
 export {
   defineLLMAgent,
@@ -390,7 +407,8 @@ export {
   defaultRepairStrategy,
   createConsoleTracer,
   combineTracers,
-  StructuredOutputError
+  StructuredOutputError,
+  NoObjectGeneratedError
 } from './llm/index.js'
 export type {
   GenerateStructuredOptions,

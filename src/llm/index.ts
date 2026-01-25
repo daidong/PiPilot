@@ -100,6 +100,7 @@ export {
   createConsoleTracer,
   combineTracers,
   StructuredOutputError,
+  NoObjectGeneratedError,
   type GenerateStructuredOptions,
   type GenerateStructuredResult,
   type StructuredTraceEvent,

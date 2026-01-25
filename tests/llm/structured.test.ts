@@ -13,13 +13,36 @@ import {
   type StructuredTraceEvent
 } from '../../src/llm/structured.js'
 
-// Mock the AI SDK
-vi.mock('ai', () => ({
-  generateText: vi.fn(),
-  Output: {
-    object: vi.fn(({ schema }) => ({ schema, type: 'object-output' }))
+// Mock the AI SDK with NoObjectGeneratedError class defined inline
+vi.mock('ai', () => {
+  // Define mock class inside factory to avoid hoisting issues
+  class MockNoObjectGeneratedError extends Error {
+    text?: string
+    cause?: unknown
+    usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+
+    constructor(options?: { text?: string; cause?: unknown; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }) {
+      super('No object generated')
+      this.name = 'AI_NoObjectGeneratedError'
+      this.text = options?.text
+      this.cause = options?.cause
+      this.usage = options?.usage
+    }
+
+    static isInstance(error: unknown): error is MockNoObjectGeneratedError {
+      return error instanceof MockNoObjectGeneratedError ||
+        (error !== null && typeof error === 'object' && 'name' in error && (error as { name: string }).name === 'AI_NoObjectGeneratedError')
+    }
   }
-}))
+
+  return {
+    generateText: vi.fn(),
+    Output: {
+      object: vi.fn(({ schema }) => ({ schema, type: 'object-output' }))
+    },
+    NoObjectGeneratedError: MockNoObjectGeneratedError
+  }
+})
 
 import { generateText, Output } from 'ai'
 

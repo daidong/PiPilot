@@ -6,10 +6,12 @@
  * - Input transformation (agent schema → tool input)
  * - Output transformation (tool output → agent schema)
  * - Works natively with the team system
+ * - Implements the unified Agent interface
  */
 
 import { type ZodSchema } from 'zod'
 import type { Tool, ToolContext, ToolResult } from '../types/tool.js'
+import type { Agent, AgentResult, BaseAgentContext } from './types.js'
 
 // ============================================================================
 // Types
@@ -18,39 +20,19 @@ import type { Tool, ToolContext, ToolResult } from '../types/tool.js'
 /**
  * Context provided to tool agents during execution
  */
-export interface ToolAgentContext {
+export interface ToolAgentContext extends BaseAgentContext {
   /** Get a tool by ID from the registry */
   getTool: (toolId: string) => Tool | undefined
 
   /** Tool execution context */
   toolContext: ToolContext
-
-  /** Abort signal for cancellation */
-  abortSignal?: AbortSignal
-
-  /** Runtime metadata */
-  metadata?: {
-    teamId?: string
-    runId?: string
-    stepIndex?: number
-  }
 }
 
 /**
- * Result of tool agent execution
+ * Result of tool agent execution (extends unified AgentResult)
  */
-export interface ToolAgentResult<T> {
-  /** The validated output */
-  output: T
-
-  /** Whether the tool execution was successful */
-  success: boolean
-
-  /** Error message if failed */
-  error?: string
-
-  /** Total duration in milliseconds */
-  durationMs: number
+export interface ToolAgentResult<T> extends AgentResult<T> {
+  // Tool agents use the base AgentResult fields
 }
 
 /**
@@ -101,32 +83,20 @@ export interface ToolAgentDefinition<TInput, TOutput> {
 }
 
 /**
- * Tool Agent instance
+ * Tool Agent instance (implements unified Agent interface)
  */
-export interface ToolAgent<TInput, TOutput> {
-  /** Agent ID */
-  readonly id: string
-
+export interface ToolAgent<TInput, TOutput> extends Agent<TInput, TOutput, ToolAgentContext> {
   /** Agent kind discriminator (for type checking) */
   readonly kind: 'tool-agent'
 
-  /** Human-readable description */
-  readonly description?: string
-
   /** Tool ID this agent wraps */
   readonly toolId: string
-
-  /** Input schema */
-  readonly inputSchema: ZodSchema<TInput>
-
-  /** Output schema */
-  readonly outputSchema: ZodSchema<TOutput>
 
   /**
    * Run the agent with typed input
    * @param input - Input object (will be validated)
    * @param ctx - Agent context
-   * @returns Typed output result
+   * @returns Typed output result (uses unified AgentResult)
    */
   run: (input: TInput, ctx: ToolAgentContext) => Promise<ToolAgentResult<TOutput>>
 }

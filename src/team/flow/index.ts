@@ -178,7 +178,7 @@ export {
 
 export type {
   StepAgent,
-  TypedAgent,
+  MinimalAgent,
   StepInput,
   TypedInvokeSpec,
   StepBuilderWithAgent,

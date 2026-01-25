@@ -6,6 +6,7 @@
  * - Return typed output (validated with AI SDK structured output)
  * - Don't require tools infrastructure
  * - Work natively with the team system
+ * - Implement the unified Agent interface
  */
 
 import { type ZodSchema } from 'zod'
@@ -16,6 +17,7 @@ import {
   type StructuredTraceEvent
 } from '../llm/structured.js'
 import type { TokenUsage } from '../llm/provider.types.js'
+import type { Agent, AgentResult, BaseAgentContext } from './types.js'
 
 // ============================================================================
 // Types
@@ -24,36 +26,20 @@ import type { TokenUsage } from '../llm/provider.types.js'
 /**
  * Context provided to LLM agents during execution
  */
-export interface LLMAgentContext {
+export interface LLMAgentContext extends BaseAgentContext {
   /** Get a language model by ID (or default if not specified) */
   getLanguageModel: (modelId?: string) => LanguageModelV1
 
   /** Trace callback for observability */
   trace?: (event: StructuredTraceEvent) => void
-
-  /** Abort signal for cancellation */
-  abortSignal?: AbortSignal
-
-  /** Runtime metadata */
-  metadata?: {
-    teamId?: string
-    runId?: string
-    stepIndex?: number
-  }
 }
 
 /**
- * Result of LLM agent execution
+ * Result of LLM agent execution (extends unified AgentResult)
  */
-export interface LLMAgentResult<T> {
-  /** The validated output */
-  output: T
-
+export interface LLMAgentResult<T> extends AgentResult<T> {
   /** Token usage statistics */
   usage: TokenUsage
-
-  /** Total duration in milliseconds */
-  durationMs: number
 
   /** Number of LLM call attempts */
   attempts: number
@@ -111,29 +97,17 @@ export interface LLMAgentDefinition<TInput, TOutput> {
 }
 
 /**
- * LLM Agent instance
+ * LLM Agent instance (implements unified Agent interface)
  */
-export interface LLMAgent<TInput, TOutput> {
-  /** Agent ID */
-  readonly id: string
-
+export interface LLMAgent<TInput, TOutput> extends Agent<TInput, TOutput, LLMAgentContext> {
   /** Agent kind discriminator (for type checking) */
   readonly kind: 'llm-agent'
-
-  /** Human-readable description */
-  readonly description?: string
-
-  /** Input schema */
-  readonly inputSchema: ZodSchema<TInput>
-
-  /** Output schema */
-  readonly outputSchema: ZodSchema<TOutput>
 
   /**
    * Run the agent with typed input
    * @param input - Input object (will be validated)
    * @param ctx - Agent context
-   * @returns Typed output result
+   * @returns Typed output result (extends AgentResult with LLM-specific fields)
    */
   run: (input: TInput, ctx: LLMAgentContext) => Promise<LLMAgentResult<TOutput>>
 }
@@ -237,6 +211,7 @@ export function defineLLMAgent<TInput, TOutput>(
 
       return {
         output: finalOutput,
+        success: true,
         usage: result.usage,
         durationMs: Date.now() - startTime,
         attempts: result.attempts

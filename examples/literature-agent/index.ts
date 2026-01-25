@@ -391,7 +391,7 @@ export function createLiteratureTeam(config: {
         .out(state.path<QueryPlan>('plan')),
 
       // Step 2: Execute search (with input transformation)
-      step(searcherAgent as any)
+      step(searcherAgent)
         .in(mapInput(
           state.path<QueryPlan>('plan'),
           (plan): SearcherInput => ({
@@ -413,7 +413,7 @@ export function createLiteratureTeam(config: {
           // Refine search if not approved
           branch({
             when: (s: any) => s.review?.approved === false && s.review?.additionalQueries?.length > 0,
-            then: step(searcherAgent as any)
+            then: step(searcherAgent)
               .in(mapInput(
                 state.path<ReviewResult>('review'),
                 (review): SearcherInput => ({
