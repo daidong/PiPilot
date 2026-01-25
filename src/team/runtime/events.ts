@@ -36,6 +36,43 @@ export interface TokenUsage {
 }
 
 // ============================================================================
+// Base Event Interface (Correlation Fields)
+// ============================================================================
+
+/**
+ * Base interface for all team runtime events.
+ * Provides correlation fields for distributed tracing and observability.
+ */
+export interface BaseEvent {
+  /** Unique ID for this team.run() invocation */
+  runId: string
+  /** Unique span ID for this specific operation (for distributed tracing) */
+  spanId: string
+  /** Parent span ID (for nested operations like loops, branches) */
+  parentSpanId: string | null
+  /** Nesting depth (0 = top level) */
+  depth: number
+  /** Timestamp (Date.now()) */
+  ts: number
+  /** Optional tags for filtering/grouping */
+  tags?: Record<string, string | number | boolean>
+}
+
+/**
+ * Generate a unique span ID
+ */
+export function generateSpanId(): string {
+  return `span-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * Generate a unique run ID
+ */
+export function generateRunId(): string {
+  return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+// ============================================================================
 // Event Definitions
 // ============================================================================
 
@@ -77,237 +114,191 @@ export interface TeamRuntimeEvents {
 /**
  * Team started event
  */
-export interface TeamStartedEvent {
+export interface TeamStartedEvent extends BaseEvent {
   /** Team ID */
   teamId: string
-  /** Run ID for correlation */
-  runId: string
   /** Input provided to the team */
   input: unknown
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Team completed event
  */
-export interface TeamCompletedEvent {
+export interface TeamCompletedEvent extends BaseEvent {
   /** Team ID */
   teamId: string
-  /** Run ID for correlation */
-  runId: string
   /** Final output */
   output: unknown
   /** Duration in milliseconds */
   durationMs: number
   /** Total steps executed */
   steps: number
-  /** Timestamp */
-  ts: number
+  /** Cumulative token usage across all agents */
+  totalTokens?: TokenUsage
 }
 
 /**
  * Team failed event
  */
-export interface TeamFailedEvent {
+export interface TeamFailedEvent extends BaseEvent {
   /** Team ID */
   teamId: string
-  /** Run ID for correlation */
-  runId: string
   /** Error that caused failure */
   error: Error
   /** Duration before failure */
   durationMs: number
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Agent started event
  */
-export interface AgentStartedEvent {
+export interface AgentStartedEvent extends BaseEvent {
   /** Agent ID */
   agentId: string
-  /** Run ID for correlation */
-  runId: string
   /** Input provided to the agent */
   input: unknown
   /** Step number */
   step: number
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Agent completed event
  */
-export interface AgentCompletedEvent {
+export interface AgentCompletedEvent extends BaseEvent {
   /** Agent ID */
   agentId: string
-  /** Run ID for correlation */
-  runId: string
   /** Agent output */
   output: unknown
   /** Duration in milliseconds */
   durationMs: number
   /** Token usage (if available) */
   tokens?: TokenUsage
+  /** Number of LLM call attempts (for retries) */
+  attempts?: number
   /** Step number */
   step: number
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Agent failed event
  */
-export interface AgentFailedEvent {
+export interface AgentFailedEvent extends BaseEvent {
   /** Agent ID */
   agentId: string
-  /** Run ID for correlation */
-  runId: string
   /** Error that caused failure */
   error: Error
   /** Duration before failure */
   durationMs: number
+  /** Number of LLM call attempts before failure */
+  attempts?: number
   /** Step number */
   step: number
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Flow step started event
  */
-export interface StepStartedEvent {
+export interface StepStartedEvent extends BaseEvent {
   /** Step ID */
   stepId: string
   /** Step kind (invoke, seq, par, etc.) */
   kind: string
-  /** Run ID for correlation */
-  runId: string
   /** Optional step name */
   name?: string
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Flow step completed event
  */
-export interface StepCompletedEvent {
+export interface StepCompletedEvent extends BaseEvent {
   /** Step ID */
   stepId: string
   /** Step kind */
   kind: string
-  /** Run ID for correlation */
-  runId: string
   /** Step output */
   output: unknown
   /** Duration in milliseconds */
   durationMs: number
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Flow step failed event
  */
-export interface StepFailedEvent {
+export interface StepFailedEvent extends BaseEvent {
   /** Step ID */
   stepId: string
   /** Step kind */
   kind: string
-  /** Run ID for correlation */
-  runId: string
   /** Error that caused failure */
   error: Error
   /** Duration before failure */
   durationMs: number
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Loop iteration event
  */
-export interface LoopIterationEvent {
+export interface LoopIterationEvent extends BaseEvent {
   /** Loop ID */
   loopId: string
-  /** Run ID for correlation */
-  runId: string
   /** Current iteration (1-based) */
   iteration: number
   /** Maximum iterations allowed */
   maxIterations: number
   /** Whether loop will continue */
   continuing: boolean
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Loop completed event
  */
-export interface LoopCompletedEvent {
+export interface LoopCompletedEvent extends BaseEvent {
   /** Loop ID */
   loopId: string
-  /** Run ID for correlation */
-  runId: string
   /** Total iterations executed */
   totalIterations: number
   /** Reason for stopping */
-  reason: 'condition-met' | 'max-iterations' | 'error'
-  /** Timestamp */
-  ts: number
+  reason: 'condition-met' | 'max-iterations' | 'error' | 'no-actionable-refinement'
+  /** Duration in milliseconds */
+  durationMs: number
 }
 
 /**
  * State updated event
  */
-export interface StateUpdatedEvent {
+export interface StateUpdatedEvent extends BaseEvent {
   /** Path that was updated */
   path: string
   /** New value */
   value: unknown
   /** Previous value (if available) */
   previousValue?: unknown
-  /** Run ID for correlation */
-  runId: string
   /** Agent that made the update */
   updatedBy?: string
-  /** Timestamp */
-  ts: number
 }
 
 /**
  * Branch decision event
  */
-export interface BranchDecisionEvent {
+export interface BranchDecisionEvent extends BaseEvent {
   /** Branch step ID */
   branchId: string
-  /** Run ID for correlation */
-  runId: string
   /** Which branch was taken */
   taken: 'then' | 'else'
-  /** Timestamp */
-  ts: number
+  /** Condition evaluation result */
+  conditionValue?: unknown
 }
 
 /**
  * Select decision event
  */
-export interface SelectDecisionEvent {
+export interface SelectDecisionEvent extends BaseEvent {
   /** Select step ID */
   selectId: string
-  /** Run ID for correlation */
-  runId: string
   /** Branch key that was selected */
   selected: string
   /** Whether default branch was used */
   usedDefault: boolean
-  /** Timestamp */
-  ts: number
 }
 
 // ============================================================================

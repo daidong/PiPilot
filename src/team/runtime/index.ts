@@ -5,12 +5,15 @@
 // Events
 export {
   TeamEventEmitter,
-  createEventEmitter
+  createEventEmitter,
+  generateSpanId,
+  generateRunId
 } from './events.js'
 
 export type {
   TeamRuntimeEvents,
   TokenUsage,
+  BaseEvent,
   TeamStartedEvent,
   TeamCompletedEvent,
   TeamFailedEvent,

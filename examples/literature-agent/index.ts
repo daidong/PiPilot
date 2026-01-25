@@ -41,15 +41,23 @@ import {
   type LLMAgentContext
 } from '../../src/agent/define-llm-agent.js'
 
+import {
+  SearchMetadataSchema,
+  boundedArray,
+  type SearchMetadata,
+  type SourceQueryResult,
+  buildSearchMetadata
+} from '../../src/llm/schema-utils.js'
+
 // ============================================================================
 // Schemas (Contracts)
 // ============================================================================
 
-// Paper schema - shared across agents
+// Paper schema - shared across agents (bounded arrays prevent token explosion)
 const PaperSchema = z.object({
   id: z.string(),
   title: z.string(),
-  authors: z.array(z.string()),
+  authors: boundedArray(z.string(), 20),  // Max 20 authors per paper
   abstract: z.string(),
   year: z.number(),
   venue: z.string().optional(),
@@ -70,60 +78,61 @@ const QueryPlanInputSchema = z.object({
 
 const QueryPlanOutputSchema = z.object({
   originalRequest: z.string(),
-  searchQueries: z.array(z.string()).min(1).max(3),
+  searchQueries: boundedArray(z.string(), 3, 1),  // 1-3 search queries
   searchStrategy: z.object({
-    focusAreas: z.array(z.string()),
-    suggestedSources: z.array(z.enum(['semantic_scholar', 'arxiv', 'openalex'])),
+    focusAreas: boundedArray(z.string(), 5),  // Max 5 focus areas
+    suggestedSources: boundedArray(z.enum(['semantic_scholar', 'arxiv', 'openalex']), 3),
     timeRange: z.object({ start: z.number(), end: z.number() }).optional()
   }),
-  expectedTopics: z.array(z.string())
+  expectedTopics: boundedArray(z.string(), 8)  // Max 8 expected topics
 })
 
 type QueryPlan = z.infer<typeof QueryPlanOutputSchema>
 
-// Search Results
+// Search Results (with metadata for observability)
 const SearchResultsSchema = z.object({
   papers: z.array(PaperSchema),
   totalFound: z.number(),
-  queriesUsed: z.array(z.string())
+  queriesUsed: z.array(z.string()),
+  metadata: SearchMetadataSchema
 })
 
 type SearchResults = z.infer<typeof SearchResultsSchema>
 
-// Review Result
+// Review Result (bounded to prevent token explosion in loop)
 const ReviewResultSchema = z.object({
   approved: z.boolean(),
-  relevantPapers: z.array(PaperSchema),
+  relevantPapers: boundedArray(PaperSchema, 20),  // Max 20 relevant papers
   confidence: z.number().min(0).max(1),
   coverage: z.object({
     score: z.number().min(0).max(1),
-    coveredTopics: z.array(z.string()),
-    missingTopics: z.array(z.string())
+    coveredTopics: boundedArray(z.string(), 10),  // Max 10 covered topics
+    missingTopics: boundedArray(z.string(), 10)   // Max 10 missing topics
   }),
-  issues: z.array(z.string()),
-  additionalQueries: z.array(z.string()).optional()
+  issues: boundedArray(z.string(), 10),  // Max 10 issues
+  additionalQueries: boundedArray(z.string(), 3).optional()  // Max 3 additional queries
 })
 
 type ReviewResult = z.infer<typeof ReviewResultSchema>
 
-// Research Summary
+// Research Summary (bounded outputs for predictable token usage)
 const ResearchSummarySchema = z.object({
   title: z.string(),
   overview: z.string(),
-  papers: z.array(z.object({
+  papers: boundedArray(z.object({
     title: z.string(),
     authors: z.string(),
     year: z.number(),
     summary: z.string(),
     url: z.string()
-  })),
-  themes: z.array(z.object({
+  }), 15),  // Max 15 paper summaries
+  themes: boundedArray(z.object({
     name: z.string(),
-    papers: z.array(z.string()),
+    papers: boundedArray(z.string(), 10),  // Max 10 paper refs per theme
     insight: z.string()
-  })),
-  keyFindings: z.array(z.string()),
-  researchGaps: z.array(z.string())
+  }), 6),  // Max 6 themes
+  keyFindings: boundedArray(z.string(), 8),  // Max 8 key findings
+  researchGaps: boundedArray(z.string(), 5)   // Max 5 research gaps
 })
 
 type ResearchSummary = z.infer<typeof ResearchSummarySchema>
@@ -195,34 +204,71 @@ function createSearcherAgent() {
 
     async run(input: SearcherInput): Promise<{ output: SearchResults }> {
       const { queries, sources = ['semantic_scholar', 'arxiv', 'openalex'] } = input
+      const startTime = Date.now()
 
       if (queries.length === 0) {
-        return { output: { papers: [], totalFound: 0, queriesUsed: [] } }
+        const metadata: SearchMetadata = {
+          sourcesTried: [],
+          sourcesSucceeded: [],
+          sourcesFailed: [],
+          perSourceStats: [],
+          perQueryResults: [],
+          totalDurationMs: 0,
+          allSourcesSucceeded: true,
+          hasResults: false
+        }
+        return { output: { papers: [], totalFound: 0, queriesUsed: [], metadata } }
       }
 
       console.log(`  [Searcher] Searching: ${queries.join(', ')}`)
 
       const allPapers: Paper[] = []
+      const queryResults: SourceQueryResult[] = []
 
       for (const query of queries) {
         for (const source of sources) {
+          const queryStart = Date.now()
           try {
             const papers = await searchSource(source, query, 8)
             allPapers.push(...papers)
+            queryResults.push({
+              source,
+              query,
+              success: true,
+              resultCount: papers.length,
+              error: null,
+              durationMs: Date.now() - queryStart
+            })
           } catch (error) {
-            console.log(`  [Searcher] ${source} failed: ${error}`)
+            const errorMsg = error instanceof Error ? error.message : String(error)
+            console.log(`  [Searcher] ${source} failed: ${errorMsg}`)
+            queryResults.push({
+              source,
+              query,
+              success: false,
+              resultCount: 0,
+              error: errorMsg,
+              durationMs: Date.now() - queryStart
+            })
           }
         }
       }
 
       const uniquePapers = deduplicatePapers(allPapers)
+      const totalDurationMs = Date.now() - startTime
+      const metadata = buildSearchMetadata(queryResults, totalDurationMs)
+
       console.log(`  [Searcher] Found ${uniquePapers.length} unique papers`)
+      if (!metadata.allSourcesSucceeded) {
+        console.log(`  [Searcher] Failed sources: ${metadata.sourcesFailed.join(', ')}`)
+      }
 
       return {
         output: {
           papers: uniquePapers,
           totalFound: uniquePapers.length,
-          queriesUsed: queries
+          queriesUsed: queries,
+          metadata
         }
       }
     }

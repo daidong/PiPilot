@@ -25,6 +25,27 @@ import {
 // ============================================================================
 
 /**
+ * Cumulative usage stats for a team run
+ */
+export interface TeamUsageStats {
+  /** Total token usage across all agents */
+  totalTokens: TokenUsage
+  /** Token usage per agent */
+  perAgent: Record<string, {
+    tokens: TokenUsage
+    calls: number
+    totalAttempts: number
+    avgDurationMs: number
+  }>
+  /** Total LLM calls made */
+  totalCalls: number
+  /** Total LLM attempts (including retries) */
+  totalAttempts: number
+  /** Overall average duration per call */
+  avgDurationMs: number
+}
+
+/**
  * Team run result
  */
 export interface TeamRunResult {
@@ -44,6 +65,8 @@ export interface TeamRunResult {
   trace: TeamTraceEvent[]
   /** Final state snapshot */
   finalState?: Record<string, unknown>
+  /** Cumulative usage statistics */
+  usage?: TeamUsageStats
 }
 
 /**
@@ -151,6 +174,16 @@ export class TeamRuntime {
     const startTime = Date.now()
     let step = 0
 
+    // Track cumulative usage stats
+    const usageStats: TeamUsageStats = {
+      totalTokens: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      perAgent: {},
+      totalCalls: 0,
+      totalAttempts: 0,
+      avgDurationMs: 0
+    }
+    let totalDurationMs = 0
+
     // Clear trace for this run
     this.traceEvents = []
 
@@ -159,6 +192,9 @@ export class TeamRuntime {
       teamId: this.team.id,
       runId,
       input,
+      spanId: runId,
+      parentSpanId: null,
+      depth: 0,
       ts: Date.now()
     })
 
@@ -195,6 +231,9 @@ export class TeamRuntime {
             runId,
             input: agentInput,
             step,
+            spanId: `agent-${agentId}-${step}`,
+            parentSpanId: runId,
+            depth: 1,
             ts: agentStartTime
           })
 
@@ -204,8 +243,38 @@ export class TeamRuntime {
             const result = await this.agentInvoker(agentId, agentInput, execCtx)
             const agentDurationMs = Date.now() - agentStartTime
 
-            // Extract token usage if available
+            // Extract token usage and attempts if available
             const tokens = extractTokenUsage(result)
+            const attempts = extractAttempts(result)
+
+            // Accumulate usage stats
+            if (tokens) {
+              usageStats.totalTokens.promptTokens += tokens.promptTokens
+              usageStats.totalTokens.completionTokens += tokens.completionTokens
+              usageStats.totalTokens.totalTokens += tokens.totalTokens
+            }
+            usageStats.totalCalls++
+            usageStats.totalAttempts += attempts
+            totalDurationMs += agentDurationMs
+
+            // Track per-agent stats
+            if (!usageStats.perAgent[agentId]) {
+              usageStats.perAgent[agentId] = {
+                tokens: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+                calls: 0,
+                totalAttempts: 0,
+                avgDurationMs: 0
+              }
+            }
+            const agentStats = usageStats.perAgent[agentId]
+            if (tokens) {
+              agentStats.tokens.promptTokens += tokens.promptTokens
+              agentStats.tokens.completionTokens += tokens.completionTokens
+              agentStats.tokens.totalTokens += tokens.totalTokens
+            }
+            agentStats.calls++
+            agentStats.totalAttempts += attempts
+            agentStats.avgDurationMs = (agentStats.avgDurationMs * (agentStats.calls - 1) + agentDurationMs) / agentStats.calls
 
             // Emit agent completed event
             this.eventEmitter.emit('agent.completed', {
@@ -214,7 +283,11 @@ export class TeamRuntime {
               output: result,
               durationMs: agentDurationMs,
               tokens,
+              attempts,
               step,
+              spanId: `agent-${agentId}-${step}`,
+              parentSpanId: runId,
+              depth: 1,
               ts: Date.now()
             })
 
@@ -229,6 +302,9 @@ export class TeamRuntime {
               error: error instanceof Error ? error : new Error(String(error)),
               durationMs: agentDurationMs,
               step,
+              spanId: `agent-${agentId}-${step}`,
+              parentSpanId: runId,
+              depth: 1,
               ts: Date.now()
             })
 
@@ -242,6 +318,11 @@ export class TeamRuntime {
       const result = await executeFlow(this.team.flow, ctx)
       const durationMs = Date.now() - startTime
 
+      // Calculate final average duration
+      if (usageStats.totalCalls > 0) {
+        usageStats.avgDurationMs = totalDurationMs / usageStats.totalCalls
+      }
+
       // Emit team completed event
       if (result.success) {
         this.eventEmitter.emit('team.completed', {
@@ -250,6 +331,10 @@ export class TeamRuntime {
           output: result.output,
           durationMs,
           steps: step,
+          totalTokens: usageStats.totalTokens,
+          spanId: runId,
+          parentSpanId: null,
+          depth: 0,
           ts: Date.now()
         })
       } else {
@@ -258,6 +343,9 @@ export class TeamRuntime {
           runId,
           error: new Error(result.error ?? 'Unknown error'),
           durationMs,
+          spanId: runId,
+          parentSpanId: null,
+          depth: 0,
           ts: Date.now()
         })
       }
@@ -280,11 +368,17 @@ export class TeamRuntime {
         steps: step,
         durationMs,
         trace: this.traceEvents,
-        finalState: this.state.toObject()
+        finalState: this.state.toObject(),
+        usage: usageStats
       }
     } catch (error) {
       const durationMs = Date.now() - startTime
       const errorMessage = error instanceof Error ? error.message : String(error)
+
+      // Calculate final average duration even on error
+      if (usageStats.totalCalls > 0) {
+        usageStats.avgDurationMs = totalDurationMs / usageStats.totalCalls
+      }
 
       // Emit team failed event
       this.eventEmitter.emit('team.failed', {
@@ -292,6 +386,9 @@ export class TeamRuntime {
         runId,
         error: error instanceof Error ? error : new Error(errorMessage),
         durationMs,
+        spanId: runId,
+        parentSpanId: null,
+        depth: 0,
         ts: Date.now()
       })
 
@@ -313,7 +410,8 @@ export class TeamRuntime {
         steps: step,
         durationMs,
         trace: this.traceEvents,
-        finalState: this.state.toObject()
+        finalState: this.state.toObject(),
+        usage: usageStats
       }
     }
   }
@@ -371,67 +469,69 @@ export class TeamRuntime {
   private handleTraceEvent(event: TeamTraceEvent, runId: string): void {
     this.recordTrace(event)
 
+    // Helper to create base event fields
+    const baseEventFields = (nodeId: string, depth: number = 1) => ({
+      runId,
+      spanId: `${event.type}-${nodeId}-${event.ts}`,
+      parentSpanId: runId,
+      depth,
+      ts: event.ts
+    })
+
     // Emit corresponding runtime events based on trace event type
     if (event.type === 'flow.node.start') {
       this.eventEmitter.emit('step.started', {
         stepId: event.nodeId,
         kind: event.kind,
-        runId,
         name: event.name,
-        ts: event.ts
+        ...baseEventFields(event.nodeId)
       })
     } else if (event.type === 'flow.node.end') {
       if (event.success) {
         this.eventEmitter.emit('step.completed', {
           stepId: event.nodeId,
           kind: event.kind,
-          runId,
           output: undefined, // Output not available in trace event
           durationMs: 0, // Duration not available directly
-          ts: event.ts
+          ...baseEventFields(event.nodeId)
         })
       } else {
         this.eventEmitter.emit('step.failed', {
           stepId: event.nodeId,
           kind: event.kind,
-          runId,
           error: new Error(event.error ?? 'Unknown error'),
           durationMs: 0,
-          ts: event.ts
+          ...baseEventFields(event.nodeId)
         })
       }
     } else if (event.type === 'loop.iteration') {
       this.eventEmitter.emit('loop.iteration', {
         loopId: event.nodeId,
-        runId,
         iteration: event.iteration,
         maxIterations: 0, // Not available in current trace
         continuing: event.continuing,
-        ts: event.ts
+        ...baseEventFields(event.nodeId, 2)
       })
     } else if (event.type === 'router.decision') {
       if (event.routerType === 'branch') {
         this.eventEmitter.emit('branch.decision', {
           branchId: event.nodeId,
-          runId,
           taken: event.chosen as 'then' | 'else',
-          ts: event.ts
+          ...baseEventFields(event.nodeId)
         })
       } else if (event.routerType === 'select') {
         this.eventEmitter.emit('select.decision', {
           selectId: event.nodeId,
-          runId,
           selected: event.chosen,
           usedDefault: false, // Not tracked currently
-          ts: event.ts
+          ...baseEventFields(event.nodeId)
         })
       }
     } else if (event.type === 'state.write') {
       this.eventEmitter.emit('state.updated', {
         path: event.path,
         value: undefined, // Value not available in trace
-        runId,
-        ts: event.ts
+        ...baseEventFields(`state-${event.path}`)
       })
     }
   }
@@ -508,6 +608,22 @@ function extractTokenUsage(result: unknown): TokenUsage | undefined {
   }
 
   return undefined
+}
+
+/**
+ * Extract attempt count from agent result if available
+ */
+function extractAttempts(result: unknown): number {
+  if (!result || typeof result !== 'object') return 1
+
+  const r = result as Record<string, unknown>
+
+  // Check for direct attempts property
+  if (typeof r.attempts === 'number' && r.attempts >= 1) {
+    return r.attempts
+  }
+
+  return 1  // Default to 1 attempt if not tracked
 }
 
 // ============================================================================

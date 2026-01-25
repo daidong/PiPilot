@@ -108,18 +108,22 @@ export type {
   TeamRunResult,
   TeamTraceEvent,
   TeamRuntimeConfig,
-  AutoTeamRuntimeConfig
+  AutoTeamRuntimeConfig,
+  TeamUsageStats
 } from './team-runtime.js'
 
 // Runtime Events
 export {
   TeamEventEmitter,
-  createEventEmitter
+  createEventEmitter,
+  generateSpanId,
+  generateRunId
 } from './runtime/index.js'
 
 export type {
   TeamRuntimeEvents,
   TokenUsage,
+  BaseEvent,
   TeamStartedEvent,
   TeamCompletedEvent,
   TeamFailedEvent,

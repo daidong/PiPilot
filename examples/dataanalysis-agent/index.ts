@@ -31,6 +31,7 @@ import {
   noop
 } from '../../src/team/index.js'
 import { defineAgent, packs } from '../../src/index.js'
+import { boundedArray } from '../../src/llm/schema-utils.js'
 
 // ============================================================================
 // Schemas (Contracts)
@@ -39,21 +40,21 @@ import { defineAgent, packs } from '../../src/index.js'
 // Analysis step types
 const AnalysisStepTypeSchema = z.enum(['sql', 'python', 'file', 'fetch', 'transform'])
 
-// Analysis step
+// Analysis step (bounded dependencies to prevent explosion)
 const AnalysisStepSchema = z.object({
   id: z.string(),
   type: AnalysisStepTypeSchema,
   description: z.string(),
   command: z.string(),
-  dependsOn: z.array(z.string()).optional()
+  dependsOn: boundedArray(z.string(), 5).optional()  // Max 5 dependencies per step
 })
 
-// Analysis plan created by planner
+// Analysis plan created by planner (bounded arrays)
 const AnalysisPlanSchema = z.object({
   id: z.string(),
   originalRequest: z.string(),
-  steps: z.array(AnalysisStepSchema),
-  dataSources: z.array(z.string()).optional(),
+  steps: boundedArray(AnalysisStepSchema, 10),  // Max 10 steps per plan
+  dataSources: boundedArray(z.string(), 10).optional(),  // Max 10 data sources
   expectedOutput: z.string().optional()
 })
 
@@ -68,13 +69,13 @@ const StepResultSchema = z.object({
   error: z.string().optional()
 })
 
-// Analysis results from executor
+// Analysis results from executor (bounded step results)
 const AnalysisResultsSchema = z.object({
   success: z.boolean(),
   data: z.unknown(),
   summary: z.string(),
   executionTimeMs: z.number(),
-  stepResults: z.array(StepResultSchema).optional(),
+  stepResults: boundedArray(StepResultSchema, 10).optional(),  // Max 10 step results
   error: z.string().optional()
 })
 
@@ -90,12 +91,12 @@ const ReviewIssueSchema = z.object({
   stepId: z.string().optional()
 })
 
-// Review feedback from reviewer
+// Review feedback from reviewer (bounded to prevent explosion in loop)
 const ReviewFeedbackSchema = z.object({
   approved: z.boolean(),
   confidence: z.number().min(0).max(1),
-  issues: z.array(ReviewIssueSchema),
-  suggestions: z.array(z.string()),
+  issues: boundedArray(ReviewIssueSchema, 10),  // Max 10 issues
+  suggestions: boundedArray(z.string(), 5),  // Max 5 suggestions
   reviewSummary: z.string().optional()
 })
 

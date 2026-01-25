@@ -122,7 +122,16 @@ export {
   nullable,
   withDefault,
   stringEnum,
+  // Search metadata schemas
+  SearchMetadataSchema,
+  SourceStatsSchema,
+  SourceQueryResultSchema,
+  createEmptySearchMetadata,
+  buildSearchMetadata,
   // Types
   type SchemaIssue,
-  type SchemaAnalysisResult
+  type SchemaAnalysisResult,
+  type SearchMetadata,
+  type SourceStats,
+  type SourceQueryResult
 } from './schema-utils.js'

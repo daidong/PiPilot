@@ -295,3 +295,126 @@ export function warnSchemaIssues(
   }
   return result
 }
+
+// ============================================================================
+// Search Metadata Schemas (Reusable Patterns)
+// ============================================================================
+
+/**
+ * Schema for tracking a single source query result
+ */
+export const SourceQueryResultSchema = z.object({
+  source: z.string(),
+  query: z.string(),
+  success: z.boolean(),
+  resultCount: z.number(),
+  error: z.string().nullable(),
+  durationMs: z.number()
+})
+
+export type SourceQueryResult = z.infer<typeof SourceQueryResultSchema>
+
+/**
+ * Schema for aggregated source statistics
+ */
+export const SourceStatsSchema = z.object({
+  source: z.string(),
+  queriesAttempted: z.number(),
+  queriesSucceeded: z.number(),
+  queriesFailed: z.number(),
+  totalResults: z.number(),
+  errors: z.array(z.string())
+})
+
+export type SourceStats = z.infer<typeof SourceStatsSchema>
+
+/**
+ * Schema for search metadata - tracks success/failure of search operations.
+ * Use this to provide observability into multi-source search agents.
+ *
+ * @example
+ * ```typescript
+ * const SearchResultsSchema = z.object({
+ *   papers: z.array(PaperSchema),
+ *   totalFound: z.number(),
+ *   queriesUsed: z.array(z.string()),
+ *   metadata: SearchMetadataSchema
+ * })
+ * ```
+ */
+export const SearchMetadataSchema = z.object({
+  /** Total sources that were attempted */
+  sourcesTried: z.array(z.string()),
+  /** Sources that returned at least one result */
+  sourcesSucceeded: z.array(z.string()),
+  /** Sources that failed completely */
+  sourcesFailed: z.array(z.string()),
+  /** Per-source aggregated stats */
+  perSourceStats: z.array(SourceStatsSchema),
+  /** Detailed per-query results for debugging */
+  perQueryResults: z.array(SourceQueryResultSchema),
+  /** Total search duration in ms */
+  totalDurationMs: z.number(),
+  /** Whether all sources succeeded */
+  allSourcesSucceeded: z.boolean(),
+  /** Whether any results were found */
+  hasResults: z.boolean()
+})
+
+export type SearchMetadata = z.infer<typeof SearchMetadataSchema>
+
+/**
+ * Helper to create an empty SearchMetadata object
+ */
+export function createEmptySearchMetadata(): SearchMetadata {
+  return {
+    sourcesTried: [],
+    sourcesSucceeded: [],
+    sourcesFailed: [],
+    perSourceStats: [],
+    perQueryResults: [],
+    totalDurationMs: 0,
+    allSourcesSucceeded: true,
+    hasResults: false
+  }
+}
+
+/**
+ * Helper to build SearchMetadata from query results
+ */
+export function buildSearchMetadata(
+  results: SourceQueryResult[],
+  totalDurationMs: number
+): SearchMetadata {
+  const sourcesTried = [...new Set(results.map(r => r.source))]
+  const sourcesSucceeded = [...new Set(results.filter(r => r.success).map(r => r.source))]
+  const sourcesFailed = sourcesTried.filter(s => !sourcesSucceeded.includes(s))
+
+  // Build per-source stats
+  const perSourceStats: SourceStats[] = sourcesTried.map(source => {
+    const sourceResults = results.filter(r => r.source === source)
+    const succeeded = sourceResults.filter(r => r.success)
+    const failed = sourceResults.filter(r => !r.success)
+    return {
+      source,
+      queriesAttempted: sourceResults.length,
+      queriesSucceeded: succeeded.length,
+      queriesFailed: failed.length,
+      totalResults: succeeded.reduce((sum, r) => sum + r.resultCount, 0),
+      errors: failed.map(r => r.error).filter((e): e is string => e !== null)
+    }
+  })
+
+  const totalResults = results.reduce((sum, r) => sum + r.resultCount, 0)
+
+  return {
+    sourcesTried,
+    sourcesSucceeded,
+    sourcesFailed,
+    perSourceStats,
+    perQueryResults: results,
+    totalDurationMs,
+    allSourcesSucceeded: sourcesFailed.length === 0,
+    hasResults: totalResults > 0
+  }
+}
