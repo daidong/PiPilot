@@ -26,7 +26,7 @@ import {
   stateConfig,
   seq,
   loop,
-  createTeamRuntime,
+  createAutoTeamRuntime,
   step,
   state,
   mapInput,
@@ -489,37 +489,14 @@ export function createLiteratureTeam(config: {
     }
   })
 
-  // Create LLM agent context
+  // Create LLM agent context - passed to all agents via createAutoTeamRuntime
   const agentContext: LLMAgentContext = {
     getLanguageModel: () => languageModel
   }
 
-  // Agent invoker that handles both LLM and tool agents
-  const agentInvoker = async (agentId: string, agentInput: unknown): Promise<unknown> => {
-    switch (agentId) {
-      case 'planner': {
-        const result = await planner.run(agentInput as z.infer<typeof QueryPlanInputSchema>, agentContext)
-        return result.output
-      }
-      case 'reviewer': {
-        const result = await reviewer.run(agentInput as SearchResults, agentContext)
-        return result.output
-      }
-      case 'summarizer': {
-        const result = await summarizer.run(agentInput as ReviewResult, agentContext)
-        return result.output
-      }
-      case 'searcher': {
-        const result = await searcherAgent.run(agentInput as SearcherInput)
-        return result.output
-      }
-      default:
-        throw new Error(`Unknown agent: ${agentId}`)
-    }
-  }
-
-  // Create runtime with event subscriptions
-  const runtime = createTeamRuntime({ team, agentInvoker })
+  // Create runtime - no manual agentInvoker switch needed!
+  // agentHandle() auto-creates runners for agents with run() methods
+  const runtime = createAutoTeamRuntime({ team, context: agentContext })
 
   return {
     runtime,

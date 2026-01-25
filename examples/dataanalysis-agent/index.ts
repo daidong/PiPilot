@@ -23,7 +23,7 @@ import {
   stateConfig,
   seq,
   loop,
-  createTeamRuntime,
+  createAutoTeamRuntime,
   step,
   state,
   mapInput,
@@ -282,6 +282,16 @@ export function createDataAnalysisTeam(config: DataAnalysisConfig) {
   const executor = executorAgent({ apiKey, projectPath })
   const reviewer = reviewerAgent({ apiKey, projectPath })
 
+  // Helper to create a runner for defineAgent-based agents
+  // These agents take string input and return string output that needs JSON parsing
+  const createAgentRunner = (agent: ReturnType<typeof plannerAgent>) => {
+    return async (input: unknown) => {
+      const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
+      const result = await agent.run(inputStr)
+      return parseJsonOutput(result.output)
+    }
+  }
+
   // Define team with contract-first approach
   const team = defineTeam({
     id: 'data-analysis-team',
@@ -290,15 +300,18 @@ export function createDataAnalysisTeam(config: DataAnalysisConfig) {
     agents: {
       planner: agentHandle('planner', planner, {
         role: 'Analysis Planner',
-        capabilities: ['planning', 'task-decomposition']
+        capabilities: ['planning', 'task-decomposition'],
+        runner: createAgentRunner(planner)
       }),
       executor: agentHandle('executor', executor, {
         role: 'Analysis Executor',
-        capabilities: ['sql', 'python', 'file-io']
+        capabilities: ['sql', 'python', 'file-io'],
+        runner: createAgentRunner(executor)
       }),
       reviewer: agentHandle('reviewer', reviewer, {
         role: 'Quality Reviewer',
-        capabilities: ['validation', 'quality-check']
+        capabilities: ['validation', 'quality-check'],
+        runner: createAgentRunner(reviewer)
       })
     },
 
@@ -360,32 +373,9 @@ export function createDataAnalysisTeam(config: DataAnalysisConfig) {
     }
   })
 
-  // Agent invoker using framework agents
-  const agentInvoker = async (agentId: string, agentInput: unknown): Promise<unknown> => {
-    const inputStr = typeof agentInput === 'string'
-      ? agentInput
-      : JSON.stringify(agentInput)
-
-    switch (agentId) {
-      case 'planner': {
-        const result = await planner.run(inputStr)
-        return parseJsonOutput(result.output)
-      }
-      case 'executor': {
-        const result = await executor.run(inputStr)
-        return parseJsonOutput(result.output)
-      }
-      case 'reviewer': {
-        const result = await reviewer.run(inputStr)
-        return parseJsonOutput(result.output)
-      }
-      default:
-        throw new Error(`Unknown agent: ${agentId}`)
-    }
-  }
-
-  // Create runtime
-  const runtime = createTeamRuntime({ team, agentInvoker })
+  // Create runtime - no manual agentInvoker switch needed!
+  // Custom runners are provided via agentHandle() above
+  const runtime = createAutoTeamRuntime({ team, context: {} })
 
   return {
     runtime,

@@ -16,7 +16,7 @@ import {
   stateConfig,
   seq,
   loop,
-  createTeamRuntime,
+  createAutoTeamRuntime,
   type TeamRunResult
 } from '../../src/team/index.js'
 import type { InvokeSpec, InputRef } from '../../src/team/flow/ast.js'
@@ -231,6 +231,15 @@ export function createDemoTeam() {
   const executorAgent = createExecutorAgent()
   const reviewerAgent = createReviewerAgent()
 
+  // Helper to create a runner for mock agents
+  const createMockRunner = (agent: MockAgent) => {
+    return async (input: unknown) => {
+      const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
+      const result = await agent.run(inputStr)
+      return result.output
+    }
+  }
+
   // Define team using AST-level flow spec (for mock agents)
   // For real LLM agents with Zod schemas, use step().in().out() instead
   const team = defineTeam({
@@ -239,9 +248,9 @@ export function createDemoTeam() {
     description: 'Demonstrates plan-execute-review workflow',
 
     agents: {
-      planner: agentHandle('planner', plannerAgent),
-      executor: agentHandle('executor', executorAgent),
-      reviewer: agentHandle('reviewer', reviewerAgent)
+      planner: agentHandle('planner', plannerAgent, { runner: createMockRunner(plannerAgent) }),
+      executor: agentHandle('executor', executorAgent, { runner: createMockRunner(executorAgent) }),
+      reviewer: agentHandle('reviewer', reviewerAgent, { runner: createMockRunner(reviewerAgent) })
     },
 
     state: stateConfig.memory('demo'),
@@ -278,30 +287,16 @@ export function createDemoTeam() {
     )
   })
 
-  // Create custom invoker for mock agents
+  // Agent instances for cleanup
   const agents: Record<string, MockAgent> = {
     planner: plannerAgent,
     executor: executorAgent,
     reviewer: reviewerAgent
   }
 
-  const mockInvoker = async (agentId: string, agentInput: unknown) => {
-    const agent = agents[agentId]
-    if (!agent) throw new Error(`Unknown agent: ${agentId}`)
-
-    const inputStr = typeof agentInput === 'string'
-      ? agentInput
-      : JSON.stringify(agentInput)
-
-    const result = await agent.run(inputStr)
-    return result.output
-  }
-
-  // Create runtime
-  const runtime = createTeamRuntime({
-    team,
-    agentInvoker: mockInvoker
-  })
+  // Create runtime - no manual agentInvoker switch needed!
+  // Custom runners are provided via agentHandle() above
+  const runtime = createAutoTeamRuntime({ team, context: {} })
 
   return {
     runtime,
