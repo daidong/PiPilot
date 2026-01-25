@@ -16,7 +16,11 @@ import type {
   GateSpec,
   RaceSpec,
   SuperviseSpec,
+  BranchSpec,
+  NoopSpec,
+  SelectSpec,
   InputRef,
+  MappedInputRef,
   PredicateSpec,
   UntilSpec
 } from './ast.js'
@@ -147,6 +151,15 @@ export async function executeFlow(
         break
       case 'supervise':
         result = await executeSupervise(spec, nodeId, ctx)
+        break
+      case 'branch':
+        result = await executeBranch(spec, nodeId, ctx)
+        break
+      case 'noop':
+        result = await executeNoop(spec, ctx)
+        break
+      case 'select':
+        result = await executeSelect(spec, nodeId, ctx)
         break
       default:
         throw new Error(`Unknown flow node kind: ${(spec as FlowSpec).kind}`)
@@ -455,7 +468,7 @@ async function executeLoop(
     lastOutput = result.output
 
     // Check until condition with updated prevOutput
-    const shouldStop = evaluateUntil(spec.until, { ...ctx, prevOutput: lastOutput })
+    const shouldStop = evaluateUntil(spec.until, { ...ctx, prevOutput: lastOutput }, iteration)
 
     ctx.trace.record({
       type: 'loop.iteration',
@@ -641,6 +654,88 @@ async function executeSupervise(
   return joinedOutput
 }
 
+async function executeBranch(
+  spec: BranchSpec,
+  nodeId: string,
+  ctx: ExecutionContext
+): Promise<unknown> {
+  // Get current state for condition evaluation
+  // Strip namespace from toObject to make condition evaluation simpler
+  const stateObj = getStateWithoutNamespace(ctx)
+  const conditionInput = { ...stateObj, _prev: ctx.prevOutput }
+
+  // Evaluate condition
+  const shouldTakeThenBranch = spec.condition(conditionInput)
+
+  ctx.trace.record({
+    type: 'router.decision',
+    runId: ctx.runId,
+    nodeId,
+    ts: Date.now(),
+    routerType: 'branch',
+    chosen: shouldTakeThenBranch ? 'then' : 'else'
+  })
+
+  // Execute the appropriate branch
+  const branch = shouldTakeThenBranch ? spec.then : spec.else
+  const result = await executeFlow(branch, ctx)
+
+  if (!result.success) {
+    throw new Error(result.error ?? 'Branch execution failed')
+  }
+
+  return result.output
+}
+
+async function executeNoop(
+  _spec: NoopSpec,
+  ctx: ExecutionContext
+): Promise<unknown> {
+  // Noop simply passes through the previous output
+  return ctx.prevOutput
+}
+
+async function executeSelect(
+  spec: SelectSpec,
+  nodeId: string,
+  ctx: ExecutionContext
+): Promise<unknown> {
+  // Get current state for selector evaluation
+  // Strip namespace from toObject to make selector evaluation simpler
+  const stateObj = getStateWithoutNamespace(ctx)
+  const selectorInput = { ...stateObj, _prev: ctx.prevOutput }
+
+  // Evaluate selector
+  const branchKey = spec.selector(selectorInput)
+
+  ctx.trace.record({
+    type: 'router.decision',
+    runId: ctx.runId,
+    nodeId,
+    ts: Date.now(),
+    routerType: 'select',
+    chosen: branchKey
+  })
+
+  // Find the branch to execute
+  let branch = spec.branches[branchKey]
+  if (!branch) {
+    if (spec.default) {
+      branch = spec.default
+    } else {
+      throw new Error(`No branch found for selector value '${branchKey}' and no default branch`)
+    }
+  }
+
+  const result = await executeFlow(branch, ctx)
+
+  if (!result.success) {
+    throw new Error(result.error ?? 'Select branch execution failed')
+  }
+
+  return result.output
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -655,6 +750,12 @@ function resolveInput(ref: InputRef, ctx: ExecutionContext): unknown {
       return ctx.state.getTree(ref.path)
     case 'const':
       return ref.value
+    case 'mapped': {
+      // Resolve the source first, then apply transform
+      const mappedRef = ref as MappedInputRef
+      const sourceValue = resolveInput(mappedRef.source, ctx)
+      return mappedRef.transform(sourceValue)
+    }
     default:
       throw new Error(`Unknown input ref type: ${(ref as InputRef).ref}`)
   }
@@ -662,11 +763,17 @@ function resolveInput(ref: InputRef, ctx: ExecutionContext): unknown {
 
 function evaluatePredicate(pred: PredicateSpec, ctx: ExecutionContext): boolean {
   const getValue = (path: string): unknown => {
-    // Try state first, then prevOutput
-    const stateValue = ctx.state.getTree(path)
-    if (stateValue !== undefined) return stateValue
+    // First try direct state access
+    const directValue = ctx.state.getTree(path)
+    if (directValue !== undefined) return directValue
 
-    // Try nested path in prevOutput
+    // If not found, try to access nested path within state (without namespace)
+    // e.g., 'result.approved' might be 'approved' within 'result' object
+    const stateObj = getStateWithoutNamespace(ctx)
+    const nestedStateValue = getNestedValue(stateObj, path)
+    if (nestedStateValue !== undefined) return nestedStateValue
+
+    // Finally, try nested path in prevOutput
     return getNestedValue(ctx.prevOutput, path)
   }
 
@@ -705,10 +812,27 @@ function evaluatePredicate(pred: PredicateSpec, ctx: ExecutionContext): boolean 
   }
 }
 
-function evaluateUntil(until: UntilSpec, ctx: ExecutionContext): boolean {
+function evaluateUntil(until: UntilSpec, ctx: ExecutionContext, iteration?: number): boolean {
+  const getStateValue = (path: string): unknown => {
+    // First try direct state access
+    const directValue = ctx.state.getTree(path)
+    if (directValue !== undefined) return directValue
+
+    // If not found, try to access nested path within state (without namespace)
+    // e.g., 'result.approved' might be 'approved' within 'result' object
+    const stateObj = getStateWithoutNamespace(ctx)
+    const nestedStateValue = getNestedValue(stateObj, path)
+    if (nestedStateValue !== undefined) return nestedStateValue
+
+    // Finally, try nested path in prevOutput
+    return getNestedValue(ctx.prevOutput, path)
+  }
+
   switch (until.type) {
+    // Legacy conditions (for backward compatibility)
     case 'predicate':
       return evaluatePredicate(until.predicate, ctx)
+
     case 'noCriticalIssues': {
       const reviews = ctx.state.getTree(until.path) as unknown
       if (!reviews) return true
@@ -719,12 +843,76 @@ function evaluateUntil(until: UntilSpec, ctx: ExecutionContext): boolean {
       }
       return true
     }
+
     case 'noProgress':
       // TODO: Implement progress detection
       return false
+
     case 'budgetExceeded':
       // TODO: Implement budget tracking
       return false
+
+    // Business-semantic conditions (preferred)
+    case 'field-eq': {
+      const value = getStateValue(until.path)
+      return value === until.value
+    }
+
+    case 'field-neq': {
+      const value = getStateValue(until.path)
+      return value !== until.value
+    }
+
+    case 'field-truthy': {
+      const value = getStateValue(until.path)
+      return Boolean(value)
+    }
+
+    case 'field-falsy': {
+      const value = getStateValue(until.path)
+      return !value
+    }
+
+    case 'field-compare': {
+      const value = getStateValue(until.path) as number
+      if (typeof value !== 'number') return false
+      switch (until.comparator) {
+        case 'gt': return value > until.value
+        case 'gte': return value >= until.value
+        case 'lt': return value < until.value
+        case 'lte': return value <= until.value
+      }
+      return false
+    }
+
+    case 'validator': {
+      const value = getStateValue(until.path)
+      if (value === undefined) return false
+      try {
+        const validated = until.schema.parse(value)
+        return until.check(validated)
+      } catch {
+        return false
+      }
+    }
+
+    case 'max-iterations':
+      return (iteration ?? 0) >= until.count
+
+    case 'no-progress':
+      // TODO: Implement progress detection with window
+      return false
+
+    case 'budget-exceeded':
+      // TODO: Implement budget tracking
+      return false
+
+    case 'all':
+      return until.conditions.every(cond => evaluateUntil(cond, ctx, iteration))
+
+    case 'any':
+      return until.conditions.some(cond => evaluateUntil(cond, ctx, iteration))
+
     default:
       throw new Error(`Unknown until type: ${(until as UntilSpec).type}`)
   }
@@ -742,4 +930,22 @@ function getNestedValue(obj: unknown, path: string): unknown {
   }
 
   return current
+}
+
+/**
+ * Get state object without namespace prefix
+ * Blackboard stores values with namespace prefix (e.g., 'test.taskType'),
+ * but we want conditions to access values without prefix (e.g., 'taskType')
+ */
+function getStateWithoutNamespace(ctx: ExecutionContext): Record<string, unknown> {
+  const fullStateObj = ctx.state.toObject?.() ?? {}
+  const namespace = ctx.state.namespace
+
+  // If namespace exists and state has it as a key, return its contents
+  if (namespace && fullStateObj[namespace] && typeof fullStateObj[namespace] === 'object') {
+    return fullStateObj[namespace] as Record<string, unknown>
+  }
+
+  // Otherwise return as-is
+  return fullStateObj
 }

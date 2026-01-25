@@ -3,22 +3,67 @@
  *
  * These templates provide common patterns for multi-agent workflows.
  * Users can use them directly or customize them for their needs.
+ *
+ * Note: These protocols build FlowSpec AST nodes using internal helpers.
+ * For building flows with typed agents, prefer using the step() builder.
  */
 
-import type { FlowSpec } from '../flow/ast.js'
+import type { FlowSpec, InvokeSpec, InputRef, UntilSpec } from '../flow/ast.js'
 import {
-  invoke,
   seq,
   par,
   loop,
   gate,
   race,
   supervise,
-  input,
-  until,
-  pred,
   join
 } from '../flow/combinators.js'
+
+// ============================================================================
+// Internal Helpers (not exported publicly)
+// ============================================================================
+
+/**
+ * Internal helper to build InvokeSpec AST nodes.
+ * For typed agents, use step() builder instead.
+ */
+function buildInvokeSpec(
+  agent: string,
+  inputRef: InputRef,
+  options?: { outputAs?: { path: string }; name?: string }
+): InvokeSpec {
+  return {
+    kind: 'invoke',
+    agent,
+    input: inputRef,
+    outputAs: options?.outputAs,
+    name: options?.name
+  }
+}
+
+/**
+ * Internal input reference builders
+ */
+const inputRef = {
+  initial: (): InputRef => ({ ref: 'initial' }),
+  prev: (): InputRef => ({ ref: 'prev' }),
+  state: (path: string): InputRef => ({ ref: 'state', path })
+}
+
+/**
+ * Internal until condition builders
+ */
+const untilCondition = {
+  fieldEq: (path: string, value: unknown): UntilSpec => ({
+    type: 'field-eq',
+    path,
+    value
+  }),
+  maxIterations: (count: number): UntilSpec => ({
+    type: 'max-iterations',
+    count
+  })
+}
 
 // ============================================================================
 // Types
@@ -84,11 +129,11 @@ export const pipeline: ProtocolTemplate = {
     }
 
     if (stages.length === 1) {
-      return invoke(stages[0], input.initial())
+      return buildInvokeSpec(stages[0], inputRef.initial())
     }
 
     const steps: FlowSpec[] = stages.map((agentId, index) =>
-      invoke(agentId, index === 0 ? input.initial() : input.prev())
+      buildInvokeSpec(agentId, index === 0 ? inputRef.initial() : inputRef.prev())
     )
 
     return seq(...steps)
@@ -128,7 +173,7 @@ export const fanOutFanIn: ProtocolTemplate = {
     const reducer = (config.options?.['reducer'] as string) ?? 'merge'
 
     const branches = workers.map(agentId =>
-      invoke(agentId, input.initial())
+      buildInvokeSpec(agentId, inputRef.initial())
     )
 
     return par(branches, join(reducer))
@@ -178,18 +223,18 @@ export const supervisorProtocol: ProtocolTemplate = {
 
     if (strategy === 'sequential') {
       const steps = workers.map((agentId, index) =>
-        invoke(agentId, index === 0 ? input.prev() : input.prev())
+        buildInvokeSpec(agentId, index === 0 ? inputRef.prev() : inputRef.prev())
       )
       workersFlow = seq(...steps)
     } else {
       const branches = workers.map(agentId =>
-        invoke(agentId, input.prev())
+        buildInvokeSpec(agentId, inputRef.prev())
       )
       workersFlow = par(branches, join(reducer))
     }
 
     return supervise(
-      invoke(supervisorId, input.initial()),
+      buildInvokeSpec(supervisorId, inputRef.initial()),
       workersFlow,
       join(reducer),
       strategy
@@ -237,15 +282,15 @@ export const criticRefineLoop: ProtocolTemplate = {
 
     return seq(
       // Initial production
-      invoke(producerId, input.initial(), { outputAs: { path: 'draft' } }),
+      buildInvokeSpec(producerId, inputRef.initial(), { outputAs: { path: 'draft' } }),
 
       // Refine loop
       loop(
         seq(
-          invoke(criticId, input.state('draft'), { outputAs: { path: reviewsPath } }),
-          invoke(refinerId, input.prev(), { outputAs: { path: 'draft' } })
+          buildInvokeSpec(criticId, inputRef.state('draft'), { outputAs: { path: reviewsPath } }),
+          buildInvokeSpec(refinerId, inputRef.prev(), { outputAs: { path: 'draft' } })
         ),
-        until.noCriticalIssues(reviewsPath),
+        untilCondition.fieldEq(`${reviewsPath}.approved`, true),
         { maxIters: maxIterations }
       )
     )
@@ -291,7 +336,7 @@ export const debate: ProtocolTemplate = {
 
     // Build debate rounds
     const debaterBranches = debaters.map(agentId =>
-      invoke(agentId, input.initial())
+      buildInvokeSpec(agentId, inputRef.initial())
     )
 
     const debateRound = par(debaterBranches, join('collect'))
@@ -299,7 +344,7 @@ export const debate: ProtocolTemplate = {
     if (rounds === 1) {
       return seq(
         debateRound,
-        invoke(judgeId, input.prev())
+        buildInvokeSpec(judgeId, inputRef.prev())
       )
     }
 
@@ -307,10 +352,10 @@ export const debate: ProtocolTemplate = {
     return seq(
       loop(
         debateRound,
-        until.predicate(pred.gte('round', rounds)),
+        untilCondition.maxIterations(rounds),
         { maxIters: rounds }
       ),
-      invoke(judgeId, input.prev())
+      buildInvokeSpec(judgeId, inputRef.prev())
     )
   }
 }
@@ -343,7 +388,7 @@ export const voting: ProtocolTemplate = {
     }
 
     const voterBranches = voters.map(agentId =>
-      invoke(agentId, input.initial())
+      buildInvokeSpec(agentId, inputRef.initial())
     )
 
     return par(voterBranches, join('vote'))
@@ -378,7 +423,7 @@ export const raceProtocol: ProtocolTemplate = {
     }
 
     const racerBranches = racers.map(agentId =>
-      invoke(agentId, input.initial())
+      buildInvokeSpec(agentId, inputRef.initial())
     )
 
     return race(racerBranches, { type: 'firstSuccess' })
@@ -422,20 +467,20 @@ export const gatedPipeline: ProtocolTemplate = {
 
     stages.forEach((agentId, index) => {
       // Add stage
-      steps.push(invoke(agentId, index === 0 ? input.initial() : input.prev()))
+      steps.push(buildInvokeSpec(agentId, index === 0 ? inputRef.initial() : inputRef.prev()))
 
       // Add gate after stage (except last)
       if (validators && index < stages.length - 1) {
         const validatorId = validators[index % validators.length]
         if (validatorId) {
           const fallback = fallbackId
-            ? invoke(fallbackId, input.prev())
-            : invoke(agentId, input.prev()) // Re-run same stage as fallback
+            ? buildInvokeSpec(fallbackId, inputRef.prev())
+            : buildInvokeSpec(agentId, inputRef.prev()) // Re-run same stage as fallback
 
           steps.push(
             gate(
-              { type: 'validator', validatorId, input: input.prev() },
-              invoke(stages[index + 1] ?? agentId, input.prev()),
+              { type: 'validator', validatorId, input: inputRef.prev() },
+              buildInvokeSpec(stages[index + 1] ?? agentId, inputRef.prev()),
               fallback
             )
           )

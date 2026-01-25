@@ -15,7 +15,7 @@ export type FlowNodeId = string
  * Union type for all flow specifications
  * Phase 1: invoke, seq
  * Phase 2: par, map
- * Phase 3: choose, loop, gate
+ * Phase 3: choose, loop, gate, branch, noop, select
  * Phase 4: race, supervise
  */
 export type FlowSpec =
@@ -28,6 +28,9 @@ export type FlowSpec =
   | GateSpec
   | RaceSpec
   | SuperviseSpec
+  | BranchSpec
+  | NoopSpec
+  | SelectSpec
 
 /**
  * Base specification shared by all flow nodes
@@ -55,6 +58,18 @@ export type InputRef =
   | { ref: 'state'; path: string }        // Read from shared state
   | { ref: 'prev' }                       // Output from previous step
   | { ref: 'const'; value: unknown }      // Constant value
+  | MappedInputRef                        // Transformed input
+
+/**
+ * Mapped input reference with transform function
+ */
+export interface MappedInputRef {
+  ref: 'mapped'
+  /** Source input reference */
+  source: Exclude<InputRef, MappedInputRef>
+  /** Transform function (stored for runtime execution) */
+  transform: (input: unknown) => unknown
+}
 
 /**
  * Reference to a state location for writing
@@ -199,6 +214,42 @@ export interface SuperviseSpec extends BaseSpec {
   join: JoinSpec
 }
 
+/**
+ * Binary conditional branching
+ * A simpler alternative to ChooseSpec for two-way decisions
+ */
+export interface BranchSpec extends BaseSpec {
+  kind: 'branch'
+  /** Condition function to evaluate */
+  condition: (state: unknown) => boolean
+  /** Flow to execute if condition is true */
+  then: FlowSpec
+  /** Flow to execute if condition is false */
+  else: FlowSpec
+}
+
+/**
+ * No-operation step
+ * Used in conditional branches to skip execution
+ */
+export interface NoopSpec extends BaseSpec {
+  kind: 'noop'
+}
+
+/**
+ * Multi-way conditional branching based on selector
+ * Maps a selector value to one of many branches
+ */
+export interface SelectSpec extends BaseSpec {
+  kind: 'select'
+  /** Function to determine which branch to take */
+  selector: (state: unknown) => string
+  /** Named branches keyed by selector return value */
+  branches: Record<string, FlowSpec>
+  /** Default branch if selector returns unknown key */
+  default?: FlowSpec
+}
+
 // ============================================================================
 // Join Specification
 // ============================================================================
@@ -283,12 +334,29 @@ export type PredicateSpec =
 
 /**
  * Condition for loop termination
+ *
+ * Includes both legacy framework conditions and new business-semantic conditions.
+ * Business-semantic conditions (field-*, validator, max-iterations) are preferred
+ * as they express intent more clearly.
  */
 export type UntilSpec =
+  // Legacy conditions (for backward compatibility)
   | { type: 'predicate'; predicate: PredicateSpec }
   | { type: 'noCriticalIssues'; path: string }
   | { type: 'noProgress'; windowSize?: number }
   | { type: 'budgetExceeded' }
+  // Business-semantic conditions (preferred)
+  | { type: 'field-eq'; path: string; value: unknown }
+  | { type: 'field-neq'; path: string; value: unknown }
+  | { type: 'field-truthy'; path: string }
+  | { type: 'field-falsy'; path: string }
+  | { type: 'field-compare'; path: string; comparator: 'gt' | 'gte' | 'lt' | 'lte'; value: number }
+  | { type: 'validator'; path: string; schema: import('zod').ZodSchema; check: (value: unknown) => boolean }
+  | { type: 'max-iterations'; count: number }
+  | { type: 'no-progress'; windowSize?: number }
+  | { type: 'budget-exceeded' }
+  | { type: 'all'; conditions: UntilSpec[] }
+  | { type: 'any'; conditions: UntilSpec[] }
 
 // ============================================================================
 // Winner Specification (Race)

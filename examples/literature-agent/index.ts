@@ -1,366 +1,588 @@
 /**
- * Literature Research Agent
+ * Literature Research Multi-Agent Team
  *
- * An agent specialized for academic literature research with a structured workflow:
+ * A contract-first multi-agent system for academic literature research:
+ * - Zod schemas for typed input/output contracts
+ * - defineLLMAgent() for type-safe LLM agents
+ * - step() builder for readable flow definition
+ * - mapInput() for edge transformations
+ * - Runtime events for observability
  *
- * 1. Query Expansion - Use llm-expand to optimize queries for academic search
- * 2. Multi-Source Search - Parallel search across Semantic Scholar, arXiv, OpenAlex
- * 3. Relevance Filtering - Use llm-filter to score and filter results
- * 4. Summary Generation - Present findings with suggestions
+ * Team Structure:
+ *   Planner (LLM) → Searcher (APIs) → loop(Reviewer → Searcher) → Summarizer (LLM)
  *
- * Session Limits:
- * - Max 3 unique queries (prevents API abuse)
- * - Max 24 papers per session (prevents token explosion)
- * - Each query searched only once (no duplicates)
+ * Usage:
+ *   export OPENAI_API_KEY=sk-xxx
+ *   npx tsx examples/literature-agent/index.ts
  */
+
+import { z } from 'zod'
+import { createOpenAI } from '@ai-sdk/openai'
+import type { LanguageModelV1 } from 'ai'
 
 import {
-  defineAgent,
-  packs,
-  type AgentConfig,
-  type AgentRunResult,
-  type TraceEvent
-} from '../../src/index.js'
+  defineTeam,
+  agentHandle,
+  stateConfig,
+  seq,
+  loop,
+  createTeamRuntime,
+  step,
+  state,
+  mapInput,
+  branch,
+  noop,
+  until
+} from '../../src/team/index.js'
 
-// Note: For multi-agent team version, see ./team.ts
-// Usage: npx tsx examples/literature-agent/team.ts
+import {
+  defineLLMAgent,
+  type LLMAgent,
+  type LLMAgentContext
+} from '../../src/agent/define-llm-agent.js'
 
-import { literaturePack } from './pack.js'
-import { LITERATURE_DEFAULTS } from './types.js'
+// ============================================================================
+// Schemas (Contracts)
+// ============================================================================
 
-// Re-export types
-export type { Paper, SearchResult, MultiSearchResult, LiteratureConfig } from './types.js'
-export { literaturePack } from './pack.js'
-
-/**
- * Extended agent config with literature options
- */
-export interface LiteratureAgentConfig extends AgentConfig {
-  /** Enable verbose trace output */
-  enableTraceOutput?: boolean
-  /** Semantic Scholar API key (optional) */
-  semanticScholarApiKey?: string
-}
-
-/**
- * Literature Research Agent Definition
- */
-export const literatureAgentDefinition = defineAgent({
-  id: 'literature-researcher',
-  name: 'Literature Research Agent',
-
-  identity: `You are an expert academic literature research assistant.
-Your job is to help users find and understand academic papers efficiently.
-
-## Your Workflow (ALWAYS follow this sequence)
-
-### Step 1: Query Expansion
-When a user asks about a topic, FIRST use \`llm-expand\` to generate optimized search queries:
-\`\`\`
-llm-expand({
-  text: "user's query",
-  style: "search",
-  domain: "academic",
-  numVariations: 3
+// Paper schema - shared across agents
+const PaperSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  authors: z.array(z.string()),
+  abstract: z.string(),
+  year: z.number(),
+  venue: z.string().optional(),
+  citationCount: z.number().optional(),
+  url: z.string(),
+  source: z.enum(['semantic_scholar', 'arxiv', 'openalex']),
+  doi: z.string().optional(),
+  pdfUrl: z.string().optional(),
+  relevanceScore: z.number().optional()
 })
-\`\`\`
-This generates 2-3 academic search query variations with technical terminology.
 
-### Step 2: Multi-Source Search
-Use \`literature_multi_search\` with the expanded queries:
-\`\`\`
-literature_multi_search({
-  queries: [...variations from step 1],
-  sources: ["semanticScholar", "arxiv", "openAlex"],
-  maxResultsPerSource: 8
+type Paper = z.infer<typeof PaperSchema>
+
+// Query Planner
+const QueryPlanInputSchema = z.object({
+  userRequest: z.string()
 })
-\`\`\`
-This searches Semantic Scholar, arXiv, and OpenAlex in parallel.
 
-### Step 3: Relevance Filtering
-Convert papers to filter format and use \`llm-filter\`:
-\`\`\`
-llm-filter({
-  items: papers.map(p => ({
-    id: p.id,
-    title: p.title,
-    description: p.abstract
+const QueryPlanOutputSchema = z.object({
+  originalRequest: z.string(),
+  searchQueries: z.array(z.string()).min(1).max(3),
+  searchStrategy: z.object({
+    focusAreas: z.array(z.string()),
+    suggestedSources: z.array(z.enum(['semantic_scholar', 'arxiv', 'openalex'])),
+    timeRange: z.object({ start: z.number(), end: z.number() }).optional()
+  }),
+  expectedTopics: z.array(z.string())
+})
+
+type QueryPlan = z.infer<typeof QueryPlanOutputSchema>
+
+// Search Results
+const SearchResultsSchema = z.object({
+  papers: z.array(PaperSchema),
+  totalFound: z.number(),
+  queriesUsed: z.array(z.string())
+})
+
+type SearchResults = z.infer<typeof SearchResultsSchema>
+
+// Review Result
+const ReviewResultSchema = z.object({
+  approved: z.boolean(),
+  relevantPapers: z.array(PaperSchema),
+  confidence: z.number().min(0).max(1),
+  coverage: z.object({
+    score: z.number().min(0).max(1),
+    coveredTopics: z.array(z.string()),
+    missingTopics: z.array(z.string())
+  }),
+  issues: z.array(z.string()),
+  additionalQueries: z.array(z.string()).optional()
+})
+
+type ReviewResult = z.infer<typeof ReviewResultSchema>
+
+// Research Summary
+const ResearchSummarySchema = z.object({
+  title: z.string(),
+  overview: z.string(),
+  papers: z.array(z.object({
+    title: z.string(),
+    authors: z.string(),
+    year: z.number(),
+    summary: z.string(),
+    url: z.string()
   })),
-  query: "original user query",
-  maxItems: 10,
-  minScore: 5
-})
-\`\`\`
-This scores each paper 0-10 and keeps only relevant ones.
-
-### Step 4: Present Results
-Summarize the findings:
-- List papers with title, authors, year, brief description
-- Highlight citation counts for influential papers
-- Suggest related topics for further exploration
-
-## Available Tools
-- \`llm-expand\`: Expand queries for academic search (style: "search", domain: "academic")
-- \`literature_multi_search\`: Search multiple academic databases in parallel
-- \`llm-filter\`: Filter and score items by relevance to a query
-
-## Example
-User: "Find papers about attention in neural networks"
-
-1. llm-expand → ["transformer attention mechanism", "self-attention deep learning", "attention neural network architecture"]
-2. literature_multi_search → ~24 papers from 3 sources
-3. llm-filter → Top 8-10 most relevant papers with scores
-4. Present with summaries and suggestions`,
-
-  constraints: [
-    `Maximum ${LITERATURE_DEFAULTS.maxQueriesPerSession} unique search queries per session`,
-    `Maximum ${LITERATURE_DEFAULTS.maxPapersPerSession} papers per session`,
-    'Each query is searched only once (no duplicates)',
-    'ALWAYS use llm-expand before searching',
-    'ALWAYS use llm-filter after searching',
-    'Map papers to {id, title, description} format for llm-filter',
-    'Present papers with: Title, Authors, Year, Citation count, Brief description',
-    'Suggest related topics after presenting results',
-    'Acknowledge limitations (e.g., rate limits, missing abstracts)'
-  ],
-
-  packs: [
-    packs.compute(),                    // llm-call, llm-expand, llm-filter
-    packs.network({ allowHttp: true }), // fetch (with HTTP for arXiv)
-    literaturePack                      // literature_multi_search + session state
-  ],
-
-  model: {
-    default: 'gpt-4o',
-    maxTokens: 16384
-  },
-
-  maxSteps: 25
+  themes: z.array(z.object({
+    name: z.string(),
+    papers: z.array(z.string()),
+    insight: z.string()
+  })),
+  keyFindings: z.array(z.string()),
+  researchGaps: z.array(z.string())
 })
 
-/**
- * Create a Literature Research Agent
- */
-export function createLiteratureAgent(config: LiteratureAgentConfig) {
-  const {
-    enableTraceOutput = true,
-    semanticScholarApiKey,
-    ...baseConfig
-  } = config
+type ResearchSummary = z.infer<typeof ResearchSummarySchema>
 
-  return literatureAgentDefinition(baseConfig)
+// ============================================================================
+// LLM Agents (Contract-First)
+// ============================================================================
+
+const planner = defineLLMAgent({
+  id: 'planner',
+  description: 'Query Planning Specialist for academic literature research',
+  inputSchema: QueryPlanInputSchema,
+  outputSchema: QueryPlanOutputSchema,
+  system: `You are a Query Planning Specialist for academic literature research.
+Analyze research requests and create optimized search strategies.
+Generate 2-3 diverse search queries covering different aspects.
+Use academic terminology and consider synonyms, acronyms, and related concepts.`,
+  buildPrompt: ({ userRequest }) =>
+    `Analyze this research request and create a search strategy:\n\n"${userRequest}"`
+})
+
+const reviewer = defineLLMAgent({
+  id: 'reviewer',
+  description: 'Research Quality Reviewer who evaluates search results',
+  inputSchema: SearchResultsSchema,
+  outputSchema: ReviewResultSchema,
+  system: `You are a Research Quality Reviewer who evaluates academic paper search results.
+Assess relevance (0-10 scale), analyze topic coverage, and decide if results are sufficient.
+Approve if at least 3 relevant papers (score >= 7) AND coverage >= 0.7.
+Only suggest additionalQueries if not approved.`,
+  buildPrompt: (results) => {
+    const paperSummaries = results.papers.slice(0, 15).map((p, i) =>
+      `Paper ${i + 1}: "${p.title}" (${p.year}) - ${p.abstract.slice(0, 200)}...`
+    ).join('\n')
+    return `Review these ${results.papers.length} papers:\n\n${paperSummaries}\n\nQueries used: ${results.queriesUsed.join(', ')}`
+  }
+})
+
+const summarizer = defineLLMAgent({
+  id: 'summarizer',
+  description: 'Research Synthesizer who creates comprehensive summaries',
+  inputSchema: ReviewResultSchema,
+  outputSchema: ResearchSummarySchema,
+  system: `You are a Research Synthesis Specialist who creates comprehensive literature review summaries.
+Create an insightful, well-organized summary with overview, top papers, themes, key findings, and research gaps.
+Be objective and scholarly in tone.`,
+  buildPrompt: (review) => {
+    const paperDetails = review.relevantPapers.slice(0, 12).map((p, i) =>
+      `Paper ${i + 1}: "${p.title}" by ${p.authors.slice(0, 3).join(', ')} (${p.year})\nAbstract: ${p.abstract.slice(0, 350)}`
+    ).join('\n\n')
+    return `Create a literature review summary from these papers:\n\n${paperDetails}\n\nCovered topics: ${review.coverage.coveredTopics.join(', ')}`
+  }
+})
+
+// ============================================================================
+// Searcher Agent (Tool-based, not LLM)
+// ============================================================================
+
+interface SearcherInput {
+  queries: string[]
+  sources: string[]
 }
 
-// =============================================================================
-// Trace Utilities
-// =============================================================================
+// Searcher is a tool agent - it calls APIs, not LLM
+function createSearcherAgent() {
+  return {
+    id: 'searcher',
+    kind: 'tool-agent' as const,
 
-/**
- * Print trace summary from AgentRunResult
- */
-export function printTraceSummary(result: AgentRunResult): void {
-  const events = result.trace
+    async run(input: SearcherInput): Promise<{ output: SearchResults }> {
+      const { queries, sources = ['semantic_scholar', 'arxiv', 'openalex'] } = input
 
-  console.log('\n' + '='.repeat(60))
-  console.log('TRACE SUMMARY')
-  console.log('='.repeat(60))
-  console.log(`Success: ${result.success}`)
-  console.log(`Total Events: ${events.length}`)
-  console.log(`Total Duration: ${result.durationMs}ms`)
-  console.log(`Steps: ${result.steps}`)
-
-  // Count by type
-  const byType: Record<string, number> = {}
-  for (const event of events) {
-    byType[event.type] = (byType[event.type] ?? 0) + 1
-  }
-
-  console.log('\nEvents by Type:')
-  for (const [type, count] of Object.entries(byType).sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${type}: ${count}`)
-  }
-
-  // Show tool calls with timing
-  const toolCalls = events.filter(e => e.type === 'tool.call')
-  if (toolCalls.length > 0) {
-    console.log('\nTool Calls:')
-    for (const call of toolCalls) {
-      const tool = call.data.tool as string
-      const duration = call.durationMs ?? 0
-      console.log(`  [Step ${call.step}] ${tool} (${duration}ms)`)
-    }
-  }
-
-  // Show LLM calls
-  const llmCalls = events.filter(e => e.type === 'llm.request' || e.type === 'llm.response')
-  if (llmCalls.length > 0) {
-    console.log('\nLLM Calls: ' + (llmCalls.length / 2))
-  }
-
-  // Show policy events
-  const policyEvents = events.filter(e => e.type.startsWith('policy.'))
-  if (policyEvents.length > 0) {
-    console.log('\nPolicy Events:')
-    const policyTypes: Record<string, number> = {}
-    for (const pe of policyEvents) {
-      policyTypes[pe.type] = (policyTypes[pe.type] ?? 0) + 1
-    }
-    for (const [type, count] of Object.entries(policyTypes)) {
-      console.log(`  ${type}: ${count}`)
-    }
-  }
-}
-
-/**
- * Export trace to JSON file
- */
-export async function exportTrace(events: TraceEvent[], filePath: string): Promise<void> {
-  const fs = await import('node:fs/promises')
-  await fs.writeFile(filePath, JSON.stringify(events, null, 2), 'utf-8')
-  console.log(`\nTrace exported to: ${filePath}`)
-}
-
-/**
- * Print detailed trace (for debugging)
- */
-export function printDetailedTrace(events: TraceEvent[]): void {
-  console.log('\n' + '='.repeat(60))
-  console.log('DETAILED TRACE')
-  console.log('='.repeat(60))
-
-  for (const event of events) {
-    console.log(`\n[${event.type}] Step ${event.step}`)
-    console.log(`  ID: ${event.id}`)
-    console.log(`  Duration: ${event.durationMs ?? 0}ms`)
-    console.log(`  Timestamp: ${new Date(event.timestamp).toISOString()}`)
-    if (Object.keys(event.data).length > 0) {
-      // Truncate large data
-      const dataStr = JSON.stringify(event.data)
-      const truncated = dataStr.length > 500 ? dataStr.slice(0, 500) + '...' : dataStr
-      console.log(`  Data: ${truncated}`)
-    }
-  }
-}
-
-// =============================================================================
-// Main (Example Usage)
-// =============================================================================
-
-async function main() {
-  const apiKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY
-
-  if (!apiKey) {
-    console.error('Please set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable')
-    process.exit(1)
-  }
-
-  console.log('Creating Literature Research Agent...\n')
-  console.log('Workflow: llm-expand → literature_multi_search → llm-filter → Summary\n')
-
-  const agent = createLiteratureAgent({
-    apiKey,
-    projectPath: process.cwd(),
-    enableTraceOutput: true,
-    semanticScholarApiKey: process.env.SEMANTIC_SCHOLAR_API_KEY,
-
-    onStream: (text) => process.stdout.write(text),
-
-    onToolCall: (tool, input) => {
-      console.log(`\n[Tool] ${tool}`)
-      if (tool === 'fetch') {
-        const url = (input as { url?: string })?.url
-        if (url) {
-          const displayUrl = url.length > 80 ? url.slice(0, 80) + '...' : url
-          console.log(`  → ${displayUrl}`)
-        }
-      } else if (tool === 'llm-expand') {
-        const text = (input as { text?: string })?.text
-        console.log(`  → Expanding: "${text}"`)
-      } else if (tool === 'literature_multi_search') {
-        const queries = (input as { queries?: string[] })?.queries
-        console.log(`  → Searching ${queries?.length || 0} queries`)
-      } else if (tool === 'llm-filter') {
-        const count = (input as { items?: unknown[] })?.items?.length
-        console.log(`  → Filtering ${count || 0} items`)
+      if (queries.length === 0) {
+        return { output: { papers: [], totalFound: 0, queriesUsed: [] } }
       }
+
+      console.log(`  [Searcher] Searching: ${queries.join(', ')}`)
+
+      const allPapers: Paper[] = []
+
+      for (const query of queries) {
+        for (const source of sources) {
+          try {
+            const papers = await searchSource(source, query, 8)
+            allPapers.push(...papers)
+          } catch (error) {
+            console.log(`  [Searcher] ${source} failed: ${error}`)
+          }
+        }
+      }
+
+      const uniquePapers = deduplicatePapers(allPapers)
+      console.log(`  [Searcher] Found ${uniquePapers.length} unique papers`)
+
+      return {
+        output: {
+          papers: uniquePapers,
+          totalFound: uniquePapers.length,
+          queriesUsed: queries
+        }
+      }
+    }
+  }
+}
+
+// ============================================================================
+// Search Utilities (Simplified)
+// ============================================================================
+
+async function searchSource(source: string, query: string, limit: number): Promise<Paper[]> {
+  const encodedQuery = encodeURIComponent(query)
+  let url: string
+
+  switch (source) {
+    case 'semantic_scholar':
+      url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodedQuery}&limit=${limit}&fields=paperId,title,abstract,year,venue,citationCount,url,authors`
+      break
+    case 'arxiv':
+      url = `http://export.arxiv.org/api/query?search_query=all:${encodedQuery}&max_results=${limit}`
+      break
+    case 'openalex':
+      url = `https://api.openalex.org/works?search=${encodedQuery}&per-page=${limit}`
+      break
+    default:
+      return []
+  }
+
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+  if (!response.ok) return []
+
+  if (source === 'arxiv') {
+    return parseArxiv(await response.text())
+  }
+
+  const data = await response.json()
+  return source === 'semantic_scholar' ? parseSemanticScholar(data) : parseOpenAlex(data)
+}
+
+function parseSemanticScholar(data: { data?: Array<Record<string, unknown>> }): Paper[] {
+  return (data.data || []).map((p): Paper => ({
+    id: String(p.paperId || ''),
+    title: String(p.title || 'Unknown'),
+    authors: ((p.authors as Array<{ name: string }>) || []).map(a => a.name),
+    abstract: String(p.abstract || ''),
+    year: Number(p.year) || 0,
+    venue: p.venue as string | undefined,
+    citationCount: p.citationCount as number | undefined,
+    url: String(p.url || `https://www.semanticscholar.org/paper/${p.paperId}`),
+    source: 'semantic_scholar'
+  }))
+}
+
+function parseArxiv(xml: string): Paper[] {
+  const papers: Paper[] = []
+  const entryRegex = /<entry>([\s\S]*?)<\/entry>/g
+  let match
+
+  while ((match = entryRegex.exec(xml)) !== null) {
+    const entry = match[1]
+    const id = entry.match(/<id>([^<]+)<\/id>/)?.[1] || ''
+    const title = entry.match(/<title>([^<]+)<\/title>/)?.[1]?.trim() || ''
+    const summary = entry.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim() || ''
+    const published = entry.match(/<published>([^<]+)<\/published>/)?.[1] || ''
+
+    const authors: string[] = []
+    const authorRegex = /<author>[\s\S]*?<name>([^<]+)<\/name>[\s\S]*?<\/author>/g
+    let authorMatch
+    while ((authorMatch = authorRegex.exec(entry)) !== null) {
+      authors.push(authorMatch[1])
+    }
+
+    papers.push({
+      id: id.split('/abs/')[1] || id,
+      title,
+      authors,
+      abstract: summary,
+      year: parseInt(published.slice(0, 4)) || 0,
+      url: id,
+      source: 'arxiv'
+    })
+  }
+
+  return papers
+}
+
+function parseOpenAlex(data: { results?: Array<Record<string, unknown>> }): Paper[] {
+  return (data.results || []).map((w): Paper => {
+    let abstract = ''
+    const inverted = w.abstract_inverted_index as Record<string, number[]> | undefined
+    if (inverted) {
+      const words: [string, number][] = []
+      for (const [word, positions] of Object.entries(inverted)) {
+        for (const pos of positions) words.push([word, pos])
+      }
+      words.sort((a, b) => a[1] - b[1])
+      abstract = words.map(w => w[0]).join(' ')
+    }
+
+    return {
+      id: String(w.id),
+      title: String(w.title || 'Unknown'),
+      authors: ((w.authorships as Array<{ author: { display_name: string } }>) || [])
+        .map(a => a.author.display_name),
+      abstract,
+      year: Number(w.publication_year) || 0,
+      venue: (w.primary_location as { source?: { display_name: string } })?.source?.display_name,
+      citationCount: w.cited_by_count as number | undefined,
+      url: String(w.id),
+      source: 'openalex'
+    }
+  })
+}
+
+function deduplicatePapers(papers: Paper[]): Paper[] {
+  const seen = new Map<string, Paper>()
+  for (const paper of papers) {
+    const key = paper.doi || paper.title.toLowerCase().replace(/\s+/g, ' ').trim()
+    if (!seen.has(key) || (paper.citationCount || 0) > (seen.get(key)!.citationCount || 0)) {
+      seen.set(key, paper)
+    }
+  }
+  return Array.from(seen.values())
+}
+
+// ============================================================================
+// Team Definition (Contract-First)
+// ============================================================================
+
+export function createLiteratureTeam(config: {
+  apiKey: string
+  model?: string
+  maxReviewIterations?: number
+}) {
+  const { apiKey, model = 'gpt-4o-mini', maxReviewIterations = 2 } = config
+
+  if (!apiKey) throw new Error('API key is required')
+
+  // Create OpenAI model
+  const openai = createOpenAI({ apiKey })
+  const languageModel = openai(model)
+
+  // Create searcher agent
+  const searcherAgent = createSearcherAgent()
+
+  // Define the team with contract-first approach
+  const team = defineTeam({
+    id: 'literature-research',
+    name: 'Literature Research Team (Contract-First)',
+
+    agents: {
+      planner: agentHandle('planner', planner),
+      searcher: agentHandle('searcher', searcherAgent),
+      reviewer: agentHandle('reviewer', reviewer),
+      summarizer: agentHandle('summarizer', summarizer)
     },
 
-    onToolResult: (tool, result) => {
-      const r = result as { success: boolean; error?: string; data?: unknown }
-      if (r.success) {
-        if (tool === 'literature_multi_search') {
-          const data = r.data as { papers?: unknown[]; sourcesSucceeded?: string[] }
-          console.log(`[Result] Found ${data?.papers?.length || 0} papers from ${data?.sourcesSucceeded?.join(', ')}`)
-        } else if (tool === 'llm-filter') {
-          const data = r.data as { totalAfter?: number; filteredOut?: number }
-          console.log(`[Result] Kept ${data?.totalAfter || 0} items (filtered ${data?.filteredOut || 0})`)
-        } else if (tool === 'llm-expand') {
-          const data = r.data as { variations?: string[] }
-          console.log(`[Result] Generated ${data?.variations?.length || 0} query variants`)
-        } else {
-          console.log(`[Result] ${tool}: success`)
-        }
-      } else {
-        console.log(`[Result] ${tool}: FAILED - ${r.error}`)
-      }
+    state: stateConfig.memory('literature'),
+
+    // Flow using step() builder and mapInput()
+    flow: seq(
+      // Step 1: Plan search strategy
+      step(planner)
+        .in(state.initial<{ userRequest: string }>())
+        .name('Create search strategy')
+        .out(state.path<QueryPlan>('plan')),
+
+      // Step 2: Execute search (with input transformation)
+      step(searcherAgent as any)
+        .in(mapInput(
+          state.path<QueryPlan>('plan'),
+          (plan): SearcherInput => ({
+            queries: plan.searchQueries,
+            sources: plan.searchStrategy.suggestedSources
+          })
+        ))
+        .name('Execute search')
+        .out(state.path<SearchResults>('search')),
+
+      // Step 3: Review loop
+      loop(
+        seq(
+          step(reviewer)
+            .in(state.path<SearchResults>('search'))
+            .name('Review results')
+            .out(state.path<ReviewResult>('review')),
+
+          // Refine search if not approved
+          branch({
+            when: (s: any) => s.review?.approved === false && s.review?.additionalQueries?.length > 0,
+            then: step(searcherAgent as any)
+              .in(mapInput(
+                state.path<ReviewResult>('review'),
+                (review): SearcherInput => ({
+                  queries: review.additionalQueries || [],
+                  sources: ['semantic_scholar', 'arxiv', 'openalex']
+                })
+              ))
+              .name('Refine search')
+              .out(state.path<SearchResults>('search')),
+            else: noop
+          })
+        ),
+        { type: 'field-eq', path: 'review.approved', value: true },
+        { maxIters: maxReviewIterations }
+      ),
+
+      // Step 4: Synthesize findings
+      step(summarizer)
+        .in(state.path<ReviewResult>('review'))
+        .name('Synthesize findings')
+        .out(state.path<ResearchSummary>('summary'))
+    ),
+
+    defaults: {
+      concurrency: 1,
+      timeouts: { agentSec: 120, flowSec: 600 }
     }
   })
 
-  // Debug: Check registered tools
-  console.log('Registered tools:', agent.id)
+  // Create LLM agent context
+  const agentContext: LLMAgentContext = {
+    getLanguageModel: () => languageModel
+  }
 
-  try {
-    console.log('=' .repeat(60))
-    console.log('Running literature search...\n')
-
-    const result = await agent.run(`
-      Find recent papers about "retrieval augmented generation" (RAG) for large language models.
-      Focus on papers from 2023-2024 that discuss:
-      1. Techniques for improving retrieval quality
-      2. Integration with LLMs
-      3. Evaluation methods
-
-      Please follow the workflow: expand query, search, filter, then present the top papers.
-    `)
-
-    console.log('\n' + '='.repeat(60))
-    console.log('\n=== Research Complete ===')
-    console.log(`Success: ${result.success}`)
-    console.log(`Steps: ${result.steps}`)
-    console.log(`Duration: ${result.durationMs}ms`)
-
-    if (!result.success) {
-      console.error(`Error: ${result.error}`)
+  // Agent invoker that handles both LLM and tool agents
+  const agentInvoker = async (agentId: string, agentInput: unknown): Promise<unknown> => {
+    switch (agentId) {
+      case 'planner': {
+        const result = await planner.run(agentInput as z.infer<typeof QueryPlanInputSchema>, agentContext)
+        return result.output
+      }
+      case 'reviewer': {
+        const result = await reviewer.run(agentInput as SearchResults, agentContext)
+        return result.output
+      }
+      case 'summarizer': {
+        const result = await summarizer.run(agentInput as ReviewResult, agentContext)
+        return result.output
+      }
+      case 'searcher': {
+        const result = await searcherAgent.run(agentInput as SearcherInput)
+        return result.output
+      }
+      default:
+        throw new Error(`Unknown agent: ${agentId}`)
     }
+  }
 
-    // Print the agent's output (search results and summary)
-    if (result.output) {
-      console.log('\n' + '='.repeat(60))
-      console.log('AGENT OUTPUT')
-      console.log('='.repeat(60))
-      console.log(result.output)
+  // Create runtime with event subscriptions
+  const runtime = createTeamRuntime({ team, agentInvoker })
+
+  return {
+    runtime,
+
+    // Subscribe to events for observability
+    onAgentStarted(handler: (info: { agentId: string; step: number }) => void) {
+      return runtime.on('agent.started', handler)
+    },
+
+    onAgentCompleted(handler: (info: { agentId: string; durationMs: number }) => void) {
+      return runtime.on('agent.completed', handler)
+    },
+
+    // Main research function
+    async research(request: string): Promise<{
+      success: boolean
+      summary?: ResearchSummary
+      error?: string
+      steps: number
+      durationMs: number
+    }> {
+      const result = await runtime.run({ userRequest: request })
+
+      if (result.success && result.finalState) {
+        const stateData = result.finalState['literature'] as Record<string, unknown> | undefined
+        const summary = stateData?.summary as ResearchSummary | undefined
+        return {
+          success: true,
+          summary,
+          steps: result.steps,
+          durationMs: result.durationMs
+        }
+      }
+
+      return {
+        success: false,
+        error: result.error,
+        steps: result.steps,
+        durationMs: result.durationMs
+      }
     }
-
-    // Print trace summary
-    printTraceSummary(result)
-
-    // Export trace
-    const traceFile = `./literature-agent-trace-${Date.now()}.json`
-    await exportTrace(result.trace, traceFile)
-
-    // Uncomment for detailed debugging:
-    // printDetailedTrace(result.trace)
-
-  } finally {
-    await agent.destroy()
-    console.log('\nAgent destroyed.')
   }
 }
 
-// Run if executed directly
-const isMainModule = process.argv[1]?.includes('literature-agent')
-if (isMainModule) {
+// ============================================================================
+// Main (Example Usage)
+// ============================================================================
+
+async function main() {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    console.error('Error: OPENAI_API_KEY required')
+    process.exit(1)
+  }
+
+  console.log('='.repeat(60))
+  console.log('Literature Research Team (Contract-First)')
+  console.log('='.repeat(60))
+  console.log('')
+  console.log('This version uses:')
+  console.log('  - Zod schemas for typed contracts')
+  console.log('  - defineLLMAgent() for type-safe LLM agents')
+  console.log('  - step() builder for readable flow')
+  console.log('  - mapInput() for edge transformations')
+  console.log('')
+
+  const team = createLiteratureTeam({ apiKey, maxReviewIterations: 2 })
+
+  // Subscribe to events
+  team.onAgentStarted(({ agentId, step }) => {
+    console.log(`[Step ${step}] Starting ${agentId}...`)
+  })
+
+  team.onAgentCompleted(({ agentId, durationMs }) => {
+    console.log(`[✓] ${agentId} completed in ${(durationMs / 1000).toFixed(1)}s`)
+  })
+
+  try {
+    const result = await team.research(
+      'Find recent papers about retrieval augmented generation (RAG) for large language models. Focus on techniques for improving retrieval quality.'
+    )
+
+    console.log('')
+    console.log('='.repeat(60))
+    console.log('RESULTS')
+    console.log('='.repeat(60))
+    console.log(`Success: ${result.success}`)
+    console.log(`Steps: ${result.steps}`)
+    console.log(`Duration: ${(result.durationMs / 1000).toFixed(1)}s`)
+
+    if (result.summary) {
+      console.log('')
+      console.log(`Title: ${result.summary.title}`)
+      console.log(`Overview: ${result.summary.overview}`)
+      console.log('')
+      console.log('Key Findings:')
+      result.summary.keyFindings.forEach(f => console.log(`  • ${f}`))
+    }
+
+    if (result.error) {
+      console.log(`Error: ${result.error}`)
+    }
+  } catch (error) {
+    console.error('Research failed:', error)
+  }
+}
+
+if (process.argv[1]?.includes('literature-agent')) {
   main().catch(console.error)
 }
 
-export default createLiteratureAgent
+export default createLiteratureTeam

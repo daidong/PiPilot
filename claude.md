@@ -91,31 +91,48 @@ Guard Phase → Mutate Phase → Execute Tool → Observe Phase
 
 ### Multi-Agent Teams
 
-The Team module enables multi-agent collaboration:
+The Team module enables multi-agent collaboration with a contract-first API:
 
 ```typescript
+import { z } from 'zod'
 import {
   defineTeam, agentHandle,
-  seq, par, invoke, input,
+  seq, loop, step, state, mapInput, branch, noop,
   createTeamRuntime
 } from 'agent-foundry/team'
+import { defineLLMAgent } from 'agent-foundry'
 
+// Define agents with Zod schemas
+const researcher = defineLLMAgent({
+  id: 'researcher',
+  inputSchema: z.object({ topic: z.string() }),
+  outputSchema: z.object({ findings: z.string() }),
+  system: 'You are a researcher.',
+  buildPrompt: ({ topic }) => `Research: ${topic}`
+})
+
+// Define team with typed flow
 const team = defineTeam({
   id: 'my-team',
   agents: {
-    researcher: agentHandle('researcher', researcherAgent),
+    researcher: agentHandle('researcher', researcher),
     writer: agentHandle('writer', writerAgent)
   },
   flow: seq(
-    invoke('researcher', input.initial()),
-    invoke('writer', input.prev())
+    step(researcher)
+      .in(state.initial<{ topic: string }>())
+      .out(state.path('research')),
+    step(writerAgent)
+      .in(state.path('research'))
+      .out(state.path('article'))
   )
 })
 ```
 
 Key components:
-- **Flow Combinators**: `seq`, `par`, `loop`, `invoke`, `race`, `supervise`, `gate`
-- **Input Selectors**: `input.initial()`, `input.prev()`, `input.state()`, `input.literal()`
+- **Contract-First API**: `step()`, `state`, `mapInput()`, `branch()`, `noop`
+- **Flow Combinators**: `seq`, `par`, `loop`, `map`, `choose`, `race`, `supervise`, `gate`
+- **Typed State**: `state.initial<T>()`, `state.path<T>()`, `state.prev<T>()`
 - **Reducers**: `merge`, `collect`, `first`, `vote`
 - **Protocols**: `pipeline`, `fanOutFanIn`, `supervisorProtocol`, `criticRefineLoop`, `debate`, `voting`
 - **Channels**: Pub/sub and request/response messaging

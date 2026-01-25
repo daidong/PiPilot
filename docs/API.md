@@ -1184,7 +1184,8 @@ The Team API provides primitives for building multi-agent collaborative workflow
 Define a multi-agent team with agents and a flow specification.
 
 ```typescript
-import { defineTeam, agentHandle, seq, invoke, input } from 'agent-foundry/team'
+import { z } from 'zod'
+import { defineTeam, agentHandle, seq, step, state } from 'agent-foundry/team'
 
 const team = defineTeam({
   id: 'my-team',
@@ -1194,8 +1195,12 @@ const team = defineTeam({
     writer: agentHandle('writer', writerAgent)
   },
   flow: seq(
-    invoke('researcher', input.initial()),
-    invoke('writer', input.prev())
+    step(researcherAgent)
+      .in(state.initial<{ topic: string }>())
+      .out(state.path('research')),
+    step(writerAgent)
+      .in(state.path('research'))
+      .out(state.path('article'))
   )
 })
 ```
@@ -1251,42 +1256,120 @@ const result = await runtime.run({ topic: 'AI' })
 | `validators` | `Map<string, Validator>` | No | Custom validators |
 | `channelHub` | `ChannelHub` | No | Channel hub for communication |
 
+### Contract-First API
+
+The recommended approach using type-safe Zod schemas:
+
+```typescript
+import { z } from 'zod'
+import { step, state, mapInput, branch, noop } from 'agent-foundry/team'
+import { defineLLMAgent } from 'agent-foundry'
+
+// Define agent with contracts
+const planner = defineLLMAgent({
+  id: 'planner',
+  inputSchema: z.object({ topic: z.string() }),
+  outputSchema: z.object({ queries: z.array(z.string()) }),
+  system: 'You are a planner.',
+  buildPrompt: ({ topic }) => `Plan research on: ${topic}`
+})
+
+// Use step() builder for flow
+step(planner)
+  .in(state.initial<{ topic: string }>())
+  .name('Create plan')
+  .out(state.path('plan'))
+
+// Transform data with mapInput()
+step(searcher)
+  .in(mapInput(state.path('plan'), (p) => ({ queries: p.queries })))
+  .out(state.path('results'))
+
+// Conditional branching
+branch({
+  when: (s) => s.review?.approved === false,
+  then: step(refiner).in(state.path('review')).build(),
+  else: noop
+})
+```
+
 ### Flow Combinators
 
 ```typescript
-import { seq, par, loop, invoke, race, supervise, gate, input, until } from 'agent-foundry/team'
+import { seq, par, loop, race, supervise, gate, join, step, state } from 'agent-foundry/team'
 
 // Sequential execution
-seq(step1, step2, step3)
+seq(
+  step(agent1).in(state.initial()).out(state.path('result1')),
+  step(agent2).in(state.path('result1')).out(state.path('result2'))
+)
 
 // Parallel execution with join
-par(branch1, branch2, { join: { reducerId: 'merge' } })
+par(
+  [
+    step(analyst1).in(state.initial()).build(),
+    step(analyst2).in(state.initial()).build()
+  ],
+  join('merge')
+)
 
 // Loop with condition
-loop(body, until.custom('condition'), { maxIters: 5 })
-
-// Invoke agent
-invoke('agent-id', input.initial())
+loop(
+  seq(
+    step(critic).in(state.path('draft')).out(state.path('review')),
+    step(refiner).in(state.path('review')).out(state.path('draft'))
+  ),
+  { type: 'field-eq', path: 'review.approved', value: true },  // Until condition
+  { maxIters: 5 }
+)
 
 // Race (first success wins)
-race(contender1, contender2, { winner: { type: 'firstSuccess' } })
+race(
+  [
+    step(fastModel).in(state.initial()).build(),
+    step(accurateModel).in(state.initial()).build()
+  ],
+  { type: 'firstSuccess' }
+)
 
 // Supervisor pattern
-supervise(supervisorInvoke, [worker1, worker2], { strategy: 'parallel' })
+supervise(
+  step(manager).in(state.initial()).build(),
+  par([step(worker1).in(state.prev()).build()], join('merge')),
+  join('merge'),
+  'parallel'
+)
 
 // Conditional gate
-gate('validator-id', flow, { fallback: fallbackFlow })
+gate(
+  { type: 'predicate', predicate: { op: 'eq', path: 'quality', value: true } },
+  step(publisher).in(state.prev()).build(),
+  step(improver).in(state.prev()).build()
+)
 ```
 
-### Input Selectors
+### Typed State References
 
 ```typescript
-input.initial()              // Initial team input
-input.prev()                 // Previous step output
-input.state('path.to.key')   // State value
-input.literal({ value: 1 })  // Literal value
-input.merge(['a', 'b'])      // Merge paths from state
-input.branch(0)              // Specific parallel branch output
+import { state } from 'agent-foundry/team'
+
+state.initial<{ topic: string }>()    // Initial team input with type
+state.path<QueryPlan>('plan')         // State path with type
+state.prev<SearchResults>()           // Previous output with type
+state.const({ limit: 10 })            // Constant value
+```
+
+### Until Conditions
+
+```typescript
+// Stop when field equals value
+{ type: 'field-eq', path: 'review.approved', value: true }
+
+// Stop after N iterations
+{ type: 'max-iterations', count: 5 }
+
+// Stop based on predicate
+{ type: 'predicate', predicate: { op: 'eq', path: 'done', value: true } }
 ```
 
 ### Built-in Reducers

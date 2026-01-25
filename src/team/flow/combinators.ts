@@ -16,7 +16,6 @@ import type {
   RaceSpec,
   SuperviseSpec,
   InvokeSpec,
-  InputRef,
   StateRef,
   ItemsRef,
   TransferSpec,
@@ -28,44 +27,6 @@ import type {
 } from './ast.js'
 
 // ============================================================================
-// Invoke Combinator
-// ============================================================================
-
-export interface InvokeOptions {
-  /** Context transfer mode */
-  transfer?: TransferSpec
-  /** Write output to state path */
-  outputAs?: StateRef
-  /** Human-readable name */
-  name?: string
-  /** Tags for filtering */
-  tags?: string[]
-}
-
-/**
- * Invoke a single agent
- *
- * @example
- * invoke('researcher', { ref: 'initial' })
- * invoke('drafter', { ref: 'state', path: 'outline' }, { outputAs: { path: 'draft' } })
- */
-export function invoke(
-  agent: string,
-  input: InputRef,
-  options?: InvokeOptions
-): InvokeSpec {
-  return {
-    kind: 'invoke',
-    agent,
-    input,
-    transfer: options?.transfer,
-    outputAs: options?.outputAs,
-    name: options?.name,
-    tags: options?.tags
-  }
-}
-
-// ============================================================================
 // Sequential Combinator
 // ============================================================================
 
@@ -74,9 +35,9 @@ export function invoke(
  *
  * @example
  * seq(
- *   invoke('planner', { ref: 'initial' }),
- *   invoke('executor', { ref: 'prev' }),
- *   invoke('verifier', { ref: 'prev' })
+ *   step(planner).in(state.initial<Input>()).out(state.path('plan')),
+ *   step(executor).in(state.path('plan')).out(state.path('result')),
+ *   step(verifier).in(state.path('result'))
  * )
  */
 export function seq(...steps: FlowSpec[]): SeqSpec {
@@ -103,8 +64,8 @@ export interface ParOptions {
  * @example
  * par(
  *   [
- *     invoke('researcher1', { ref: 'initial' }),
- *     invoke('researcher2', { ref: 'initial' }),
+ *     step(researcher1).in(state.initial<Input>()),
+ *     step(researcher2).in(state.initial<Input>()),
  *   ],
  *   { reducerId: 'merge', outputAs: { path: 'evidence' } }
  * )
@@ -142,7 +103,7 @@ export interface MapOptions {
  * @example
  * map(
  *   { ref: 'state', path: 'chapters' },
- *   invoke('reviewer', { ref: 'prev' }),
+ *   step(reviewer).in(state.prev<Chapter>()),
  *   { reducerId: 'concat', outputAs: { path: 'reviews' } },
  *   { concurrency: 3 }
  * )
@@ -187,8 +148,8 @@ export interface ChooseOptions {
  *     { when: { op: 'eq', path: 'type', value: 'feature' }, route: 'feature' },
  *   ]},
  *   {
- *     bugfix: invoke('bugfixer', { ref: 'prev' }),
- *     feature: invoke('developer', { ref: 'prev' }),
+ *     bugfix: step(bugfixer).in(state.prev()),
+ *     feature: step(developer).in(state.prev()),
  *   },
  *   { defaultBranch: 'feature' }
  * )
@@ -225,10 +186,10 @@ export interface LoopOptions {
  * @example
  * loop(
  *   seq(
- *     invoke('critic', { ref: 'state', path: 'draft' }),
- *     invoke('reviser', { ref: 'prev' })
+ *     step(critic).in(state.path('draft')).out(state.path('review')),
+ *     step(reviser).in(state.path('review')).out(state.path('draft'))
  *   ),
- *   { type: 'noCriticalIssues', path: 'reviews' },
+ *   { type: 'field-eq', path: 'review.approved', value: true },
  *   { maxIters: 3 }
  * )
  */
@@ -264,8 +225,8 @@ export interface GateOptions {
  * @example
  * gate(
  *   { type: 'validator', validatorId: 'qualityCheck', input: { ref: 'prev' } },
- *   invoke('publisher', { ref: 'prev' }),  // on pass
- *   invoke('fixer', { ref: 'prev' })       // on fail
+ *   step(publisher).in(state.prev()),  // on pass
+ *   step(fixer).in(state.prev())       // on fail
  * )
  */
 export function gate(
@@ -301,8 +262,8 @@ export interface RaceOptions {
  * @example
  * race(
  *   [
- *     invoke('fastSearch', { ref: 'initial' }),
- *     invoke('deepSearch', { ref: 'initial' }),
+ *     step(fastSearch).in(state.initial<Query>()),
+ *     step(deepSearch).in(state.initial<Query>()),
  *   ],
  *   { type: 'firstSuccess' }
  * )
@@ -337,10 +298,10 @@ export interface SuperviseOptions {
  *
  * @example
  * supervise(
- *   invoke('supervisor', { ref: 'initial' }),
+ *   step(supervisor).in(state.initial<Task>()).toSpec(),
  *   par([
- *     invoke('worker1', { ref: 'prev' }),
- *     invoke('worker2', { ref: 'prev' }),
+ *     step(worker1).in(state.prev()),
+ *     step(worker2).in(state.prev()),
  *   ], { reducerId: 'merge' }),
  *   { reducerId: 'supervisorMerge' },
  *   'parallel'
@@ -383,24 +344,6 @@ export function join(
 }
 
 // ============================================================================
-// Helper: Input Reference Builders
-// ============================================================================
-
-export const input = {
-  /** Reference to initial team input */
-  initial: (): InputRef => ({ ref: 'initial' }),
-
-  /** Reference to previous step output */
-  prev: (): InputRef => ({ ref: 'prev' }),
-
-  /** Reference to state at path */
-  state: (path: string): InputRef => ({ ref: 'state', path }),
-
-  /** Constant value */
-  const: (value: unknown): InputRef => ({ ref: 'const', value })
-}
-
-// ============================================================================
 // Helper: Transfer Mode Builders
 // ============================================================================
 
@@ -419,51 +362,3 @@ export const transfer = {
   full: (): TransferSpec => ({ mode: 'full' })
 }
 
-// ============================================================================
-// Helper: Until Condition Builders
-// ============================================================================
-
-export const until = {
-  /** Stop when predicate is true */
-  predicate: (predicate: import('./ast.js').PredicateSpec): UntilSpec => ({
-    type: 'predicate',
-    predicate
-  }),
-
-  /** Stop when no critical issues remain */
-  noCriticalIssues: (path: string): UntilSpec => ({
-    type: 'noCriticalIssues',
-    path
-  }),
-
-  /** Stop when no progress made */
-  noProgress: (windowSize?: number): UntilSpec => ({
-    type: 'noProgress',
-    windowSize
-  }),
-
-  /** Stop when budget exceeded */
-  budgetExceeded: (): UntilSpec => ({
-    type: 'budgetExceeded'
-  })
-}
-
-// ============================================================================
-// Helper: Predicate Builders
-// ============================================================================
-
-export const pred = {
-  eq: (path: string, value: unknown) => ({ op: 'eq' as const, path, value }),
-  neq: (path: string, value: unknown) => ({ op: 'neq' as const, path, value }),
-  gt: (path: string, value: number) => ({ op: 'gt' as const, path, value }),
-  gte: (path: string, value: number) => ({ op: 'gte' as const, path, value }),
-  lt: (path: string, value: number) => ({ op: 'lt' as const, path, value }),
-  lte: (path: string, value: number) => ({ op: 'lte' as const, path, value }),
-  contains: (path: string, value: string) => ({ op: 'contains' as const, path, value }),
-  regex: (path: string, pattern: string) => ({ op: 'regex' as const, path, pattern }),
-  exists: (path: string) => ({ op: 'exists' as const, path }),
-  empty: (path: string) => ({ op: 'empty' as const, path }),
-  and: (...clauses: import('./ast.js').PredicateSpec[]) => ({ op: 'and' as const, clauses }),
-  or: (...clauses: import('./ast.js').PredicateSpec[]) => ({ op: 'or' as const, clauses }),
-  not: (clause: import('./ast.js').PredicateSpec) => ({ op: 'not' as const, clause })
-}

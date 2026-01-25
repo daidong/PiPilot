@@ -8,19 +8,44 @@ import { createReducerRegistry } from '../../src/team/flow/reducers.js'
 import { createBlackboard } from '../../src/team/state/blackboard.js'
 import { createAgentRegistry } from '../../src/team/agent-registry.js'
 import {
-  invoke,
   seq,
   par,
   map,
   choose,
   loop,
   gate,
-  input,
-  pred,
-  until,
   join
 } from '../../src/team/flow/combinators.js'
 import type { ExecutionContext, AgentInvoker } from '../../src/team/flow/executor.js'
+import type { InvokeSpec, InputRef, PredicateSpec } from '../../src/team/flow/ast.js'
+
+// Local helpers for building AST nodes (since invoke/input/pred are internal now)
+function buildInvoke(
+  agent: string,
+  inputRef: InputRef,
+  options?: { outputAs?: { path: string } }
+): InvokeSpec {
+  return {
+    kind: 'invoke',
+    agent,
+    input: inputRef,
+    outputAs: options?.outputAs
+  }
+}
+
+const inputRef = {
+  initial: (): InputRef => ({ ref: 'initial' }),
+  prev: (): InputRef => ({ ref: 'prev' }),
+  state: (path: string): InputRef => ({ ref: 'state', path }),
+  const: (value: unknown): InputRef => ({ ref: 'const', value })
+}
+
+const predicate = {
+  eq: (path: string, value: unknown): PredicateSpec => ({ op: 'eq', path, value }),
+  and: (...clauses: PredicateSpec[]): PredicateSpec => ({ op: 'and', clauses }),
+  or: (...clauses: PredicateSpec[]): PredicateSpec => ({ op: 'or', clauses }),
+  not: (clause: PredicateSpec): PredicateSpec => ({ op: 'not', clause })
+}
 
 describe('Flow Executor', () => {
   let ctx: ExecutionContext
@@ -72,7 +97,7 @@ describe('Flow Executor', () => {
 
   describe('invoke', () => {
     it('should invoke agent with initial input', async () => {
-      const spec = invoke('researcher', input.initial())
+      const spec = buildInvoke('researcher', inputRef.initial())
       const result = await executeFlow(spec, ctx)
 
       expect(invokedAgents.length).toBe(1)
@@ -85,7 +110,7 @@ describe('Flow Executor', () => {
     })
 
     it('should invoke agent with const input', async () => {
-      const spec = invoke('researcher', input.const({ custom: 'data' }))
+      const spec = buildInvoke('researcher', inputRef.const({ custom: 'data' }))
       await executeFlow(spec, ctx)
 
       expect(invokedAgents[0].input).toEqual({ custom: 'data' })
@@ -93,14 +118,14 @@ describe('Flow Executor', () => {
 
     it('should invoke agent with state input', async () => {
       ctx.state.put('myData', { key: 'value' })
-      const spec = invoke('researcher', input.state('myData'))
+      const spec = buildInvoke('researcher', inputRef.state('myData'))
       await executeFlow(spec, ctx)
 
       expect(invokedAgents[0].input).toEqual({ key: 'value' })
     })
 
     it('should write output to state when outputAs specified', async () => {
-      const spec = invoke('researcher', input.initial(), { outputAs: { path: 'research_result' } })
+      const spec = buildInvoke('researcher', inputRef.initial(), { outputAs: { path: 'research_result' } })
       await executeFlow(spec, ctx)
 
       expect(ctx.state.get('research_result')).toEqual({ research: 'findings about AI' })
@@ -110,8 +135,8 @@ describe('Flow Executor', () => {
   describe('seq', () => {
     it('should execute steps sequentially', async () => {
       const spec = seq(
-        invoke('researcher', input.initial()),
-        invoke('writer', input.prev())
+        buildInvoke('researcher', inputRef.initial()),
+        buildInvoke('writer', inputRef.prev())
       )
       const result = await executeFlow(spec, ctx)
 
@@ -125,9 +150,9 @@ describe('Flow Executor', () => {
 
     it('should chain multiple steps', async () => {
       const spec = seq(
-        invoke('researcher', input.initial()),
-        invoke('writer', input.prev()),
-        invoke('reviewer', input.prev())
+        buildInvoke('researcher', inputRef.initial()),
+        buildInvoke('writer', inputRef.prev()),
+        buildInvoke('reviewer', inputRef.prev())
       )
       const result = await executeFlow(spec, ctx)
 
@@ -141,8 +166,8 @@ describe('Flow Executor', () => {
     it('should execute branches in parallel', async () => {
       const spec = par(
         [
-          invoke('researcher', input.initial()),
-          invoke('writer', input.initial())
+          buildInvoke('researcher', inputRef.initial()),
+          buildInvoke('writer', inputRef.initial())
         ],
         join('merge')
       )
@@ -159,8 +184,8 @@ describe('Flow Executor', () => {
     it('should use specified reducer', async () => {
       const spec = par(
         [
-          invoke('researcher', input.initial()),
-          invoke('writer', input.initial())
+          buildInvoke('researcher', inputRef.initial()),
+          buildInvoke('writer', inputRef.initial())
         ],
         join('collect')
       )
@@ -177,7 +202,7 @@ describe('Flow Executor', () => {
 
       const spec = map(
         { ref: 'state', path: 'items' },
-        invoke('processor', input.prev()),
+        buildInvoke('processor', inputRef.prev()),
         join('collect')
       )
       const result = await executeFlow(spec, ctx)
@@ -196,13 +221,13 @@ describe('Flow Executor', () => {
         {
           type: 'rule',
           rules: [
-            { when: pred.eq('type', 'research'), route: 'researchBranch' },
-            { when: pred.eq('type', 'writing'), route: 'writeBranch' }
+            { when: predicate.eq('type', 'research'), route: 'researchBranch' },
+            { when: predicate.eq('type', 'writing'), route: 'writeBranch' }
           ]
         },
         {
-          'researchBranch': invoke('researcher', input.initial()),
-          'writeBranch': invoke('writer', input.initial())
+          'researchBranch': buildInvoke('researcher', inputRef.initial()),
+          'writeBranch': buildInvoke('writer', inputRef.initial())
         }
       )
       const result = await executeFlow(spec, ctx)
@@ -218,12 +243,12 @@ describe('Flow Executor', () => {
         {
           type: 'rule',
           rules: [
-            { when: pred.eq('type', 'research'), route: 'researchBranch' }
+            { when: predicate.eq('type', 'research'), route: 'researchBranch' }
           ]
         },
         {
-          'researchBranch': invoke('researcher', input.initial()),
-          'default': invoke('writer', input.initial())
+          'researchBranch': buildInvoke('researcher', inputRef.initial()),
+          'default': buildInvoke('writer', inputRef.initial())
         },
         { defaultBranch: 'default' }
       )
@@ -237,8 +262,8 @@ describe('Flow Executor', () => {
     it('should loop until condition met', async () => {
       // refiner returns { done: true } after 2 iterations
       const spec = loop(
-        invoke('refiner', input.prev()),
-        until.predicate(pred.eq('done', true)),
+        buildInvoke('refiner', inputRef.prev()),
+        { type: 'predicate', predicate: predicate.eq('done', true) },
         { maxIters: 10 }
       )
 
@@ -257,8 +282,8 @@ describe('Flow Executor', () => {
       }
 
       const spec = loop(
-        invoke('endless', input.prev()),
-        until.predicate(pred.eq('done', true)),
+        buildInvoke('endless', inputRef.prev()),
+        { type: 'predicate', predicate: predicate.eq('done', true) },
         { maxIters: 3 }
       )
 
@@ -273,9 +298,9 @@ describe('Flow Executor', () => {
       ctx.state.put('approved', true)
 
       const spec = gate(
-        { type: 'predicate', predicate: pred.eq('approved', true) },
-        invoke('researcher', input.initial()),
-        invoke('notifier', input.initial())
+        { type: 'predicate', predicate: predicate.eq('approved', true) },
+        buildInvoke('researcher', inputRef.initial()),
+        buildInvoke('notifier', inputRef.initial())
       )
       const result = await executeFlow(spec, ctx)
 
@@ -287,9 +312,9 @@ describe('Flow Executor', () => {
       ctx.state.put('approved', false)
 
       const spec = gate(
-        { type: 'predicate', predicate: pred.eq('approved', true) },
-        invoke('researcher', input.initial()),
-        invoke('notifier', input.initial())
+        { type: 'predicate', predicate: predicate.eq('approved', true) },
+        buildInvoke('researcher', inputRef.initial()),
+        buildInvoke('notifier', inputRef.initial())
       )
       const result = await executeFlow(spec, ctx)
 
@@ -303,10 +328,10 @@ describe('Flow Executor', () => {
       const spec = par(
         [
           seq(
-            invoke('researcher', input.initial()),
-            invoke('writer', input.prev())
+            buildInvoke('researcher', inputRef.initial()),
+            buildInvoke('writer', inputRef.prev())
           ),
-          invoke('reviewer', input.initial())
+          buildInvoke('reviewer', inputRef.initial())
         ],
         join('merge')
       )
@@ -325,16 +350,16 @@ describe('Flow Executor', () => {
           {
             type: 'rule',
             rules: [
-              { when: pred.eq('mode', 'research'), route: 'researchBranch' }
+              { when: predicate.eq('mode', 'research'), route: 'researchBranch' }
             ]
           },
           {
-            'researchBranch': invoke('researcher', input.initial()),
-            'writeBranch': invoke('writer', input.initial())
+            'researchBranch': buildInvoke('researcher', inputRef.initial()),
+            'writeBranch': buildInvoke('writer', inputRef.initial())
           },
           { defaultBranch: 'writeBranch' }
         ),
-        invoke('reviewer', input.prev())
+        buildInvoke('reviewer', inputRef.prev())
       )
 
       const result = await executeFlow(spec, ctx)
@@ -350,9 +375,9 @@ describe('Flow Executor', () => {
       ctx.state.put('value', 42)
 
       const spec = gate(
-        { type: 'predicate', predicate: pred.eq('value', 42) },
-        invoke('processor', input.initial()),
-        invoke('fallback', input.initial())
+        { type: 'predicate', predicate: predicate.eq('value', 42) },
+        buildInvoke('processor', inputRef.initial()),
+        buildInvoke('fallback', inputRef.initial())
       )
       await executeFlow(spec, ctx)
 
@@ -367,13 +392,13 @@ describe('Flow Executor', () => {
       const spec = gate(
         {
           type: 'predicate',
-          predicate: pred.and(
-            pred.eq('a', 1),
-            pred.eq('b', 2)
+          predicate: predicate.and(
+            predicate.eq('a', 1),
+            predicate.eq('b', 2)
           )
         },
-        invoke('processor', input.initial()),
-        invoke('fallback', input.initial())
+        buildInvoke('processor', inputRef.initial()),
+        buildInvoke('fallback', inputRef.initial())
       )
       await executeFlow(spec, ctx)
 
@@ -388,13 +413,13 @@ describe('Flow Executor', () => {
       const spec = gate(
         {
           type: 'predicate',
-          predicate: pred.or(
-            pred.eq('a', 1),
-            pred.eq('b', 2)
+          predicate: predicate.or(
+            predicate.eq('a', 1),
+            predicate.eq('b', 2)
           )
         },
-        invoke('processor', input.initial()),
-        invoke('fallback', input.initial())
+        buildInvoke('processor', inputRef.initial()),
+        buildInvoke('fallback', inputRef.initial())
       )
       await executeFlow(spec, ctx)
 
@@ -408,10 +433,10 @@ describe('Flow Executor', () => {
       const spec = gate(
         {
           type: 'predicate',
-          predicate: pred.not(pred.eq('flag', true))
+          predicate: predicate.not(predicate.eq('flag', true))
         },
-        invoke('processor', input.initial()),
-        invoke('fallback', input.initial())
+        buildInvoke('processor', inputRef.initial()),
+        buildInvoke('fallback', inputRef.initial())
       )
       await executeFlow(spec, ctx)
 
@@ -426,7 +451,7 @@ describe('Flow Executor', () => {
         throw new Error('Agent failed')
       }
 
-      const spec = invoke('failing', input.initial())
+      const spec = buildInvoke('failing', inputRef.initial())
       const result = await executeFlow(spec, ctx)
 
       expect(result.success).toBe(false)

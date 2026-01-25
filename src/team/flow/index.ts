@@ -16,7 +16,11 @@ export type {
   GateSpec,
   RaceSpec,
   SuperviseSpec,
+  BranchSpec,
+  NoopSpec,
+  SelectSpec,
   InputRef,
+  MappedInputRef,
   StateRef,
   ItemsRef,
   TransferSpec,
@@ -33,7 +37,6 @@ export type {
 
 // Combinators
 export {
-  invoke,
   seq,
   par,
   map,
@@ -43,14 +46,37 @@ export {
   race,
   supervise,
   join,
-  input,
-  transfer,
-  until,
-  pred
+  transfer
 } from './combinators.js'
 
+// Business-Semantic Until Conditions (preferred)
+export {
+  until,
+  evaluateBusinessUntil,
+  isBusinessUntilSpec,
+  isFieldUntilSpec,
+  isValidatorUntilSpec
+} from './until.js'
+
 export type {
-  InvokeOptions,
+  BusinessUntilSpec,
+  ExtendedBusinessUntilSpec,
+  FieldEqUntilSpec,
+  FieldNeqUntilSpec,
+  FieldTruthyUntilSpec,
+  FieldFalsyUntilSpec,
+  FieldCompareUntilSpec,
+  ValidatorUntilSpec,
+  MaxIterationsUntilSpec,
+  NoProgressUntilSpec,
+  BudgetExceededUntilSpec,
+  AllUntilSpec,
+  AnyUntilSpec,
+  FieldConditionBuilder,
+  UntilEvaluationContext
+} from './until.js'
+
+export type {
   ParOptions,
   MapOptions,
   ChooseOptions,
@@ -112,3 +138,49 @@ export type {
   HandoffChainConfig,
   HandoffChainState
 } from './handoff.js'
+
+// Edge Combinators (contract-first input transformation)
+export {
+  mapInput,
+  composeMapInput,
+  branch,
+  noop,
+  namedNoop,
+  select,
+  isMappedInputRef,
+  isBranchSpec,
+  isNoopSpec,
+  isSelectSpec,
+  resolveMappedInput,
+  passthrough as passthroughTransform,
+  pick,
+  omit,
+  merge as mergeTransform
+} from './edges.js'
+
+// Note: edges.ts exports typed versions with generics for API use
+// ast.ts exports runtime versions without generics for FlowSpec
+export type {
+  MappedInputRef as TypedMappedInputRef,
+  BranchSpec as TypedBranchSpec,
+  NoopSpec as TypedNoopSpec,
+  SelectSpec as TypedSelectSpec
+} from './edges.js'
+
+// Step Builder (fluent API for flow definition)
+export {
+  step,
+  isTypedInvokeSpec,
+  hasSchemaInfo,
+  passthrough as passthroughStep,
+  pipeline as pipelineSteps
+} from './step.js'
+
+export type {
+  StepAgent,
+  TypedAgent,
+  StepInput,
+  TypedInvokeSpec,
+  StepBuilderWithAgent,
+  StepBuilderWithInput
+} from './step.js'

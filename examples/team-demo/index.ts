@@ -16,12 +16,38 @@ import {
   stateConfig,
   seq,
   loop,
-  invoke,
-  input,
-  until,
   createTeamRuntime,
   type TeamRunResult
 } from '../../src/team/index.js'
+import type { InvokeSpec, InputRef } from '../../src/team/flow/ast.js'
+
+// ============================================================================
+// AST Helpers (for mock agents without Zod schemas)
+// ============================================================================
+
+/**
+ * Build an invoke spec for mock agents (without Zod schemas).
+ * For real LLM agents, use step().in().out() instead.
+ */
+function buildInvoke(
+  agent: string,
+  inputRef: InputRef,
+  options?: { outputAs?: { path: string }; name?: string }
+): InvokeSpec {
+  return {
+    kind: 'invoke',
+    agent,
+    input: inputRef,
+    outputAs: options?.outputAs,
+    name: options?.name
+  }
+}
+
+const inputRef = {
+  initial: (): InputRef => ({ ref: 'initial' }),
+  prev: (): InputRef => ({ ref: 'prev' }),
+  state: (path: string): InputRef => ({ ref: 'state', path })
+}
 
 // ============================================================================
 // Mock Agent Type
@@ -205,7 +231,8 @@ export function createDemoTeam() {
   const executorAgent = createExecutorAgent()
   const reviewerAgent = createReviewerAgent()
 
-  // Define team
+  // Define team using AST-level flow spec (for mock agents)
+  // For real LLM agents with Zod schemas, use step().in().out() instead
   const team = defineTeam({
     id: 'demo-team',
     name: 'Demo Multi-Agent Team',
@@ -221,13 +248,13 @@ export function createDemoTeam() {
 
     flow: seq(
       // Step 1: Planner creates a plan
-      invoke('planner', input.initial(), {
+      buildInvoke('planner', inputRef.initial(), {
         outputAs: { path: STATE_PATHS.PLAN },
         name: 'Create plan'
       }),
 
       // Step 2: Executor runs initial analysis
-      invoke('executor', input.state(STATE_PATHS.PLAN), {
+      buildInvoke('executor', inputRef.state(STATE_PATHS.PLAN), {
         outputAs: { path: STATE_PATHS.RESULTS },
         name: 'Execute plan'
       }),
@@ -235,16 +262,17 @@ export function createDemoTeam() {
       // Step 3: Review-refine loop
       loop(
         seq(
-          invoke('reviewer', input.state(STATE_PATHS.RESULTS), {
+          buildInvoke('reviewer', inputRef.state(STATE_PATHS.RESULTS), {
             outputAs: { path: STATE_PATHS.FEEDBACK },
             name: 'Review results'
           }),
-          invoke('executor', input.state(STATE_PATHS.FEEDBACK), {
+          buildInvoke('executor', inputRef.state(STATE_PATHS.FEEDBACK), {
             outputAs: { path: STATE_PATHS.RESULTS },
             name: 'Refine results'
           })
         ),
-        until.noCriticalIssues(STATE_PATHS.FEEDBACK),
+        // Until condition: approved field equals true
+        { type: 'field-eq', path: `${STATE_PATHS.FEEDBACK}.approved`, value: true },
         { maxIters: 3 }
       )
     )

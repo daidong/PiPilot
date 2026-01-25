@@ -115,6 +115,34 @@ export type { CreateAgentOptions } from './agent/create-agent.js'
 export { defineAgent, validateAgentDefinition } from './agent/define-agent.js'
 export { AgentLoop } from './agent/agent-loop.js'
 
+// LLM Agent (contract-first, typed I/O)
+export {
+  defineLLMAgent,
+  isLLMAgent,
+  createSimpleLLMAgentContext,
+  createModelContext
+} from './agent/define-llm-agent.js'
+export type {
+  LLMAgentDefinition,
+  LLMAgent,
+  LLMAgentContext,
+  LLMAgentResult
+} from './agent/define-llm-agent.js'
+
+// Tool Agent (contract-first, typed I/O)
+export {
+  defineToolAgent,
+  isToolAgent,
+  createSimpleToolAgentContext,
+  definePassthroughToolAgent
+} from './agent/define-tool-agent.js'
+export type {
+  ToolAgentDefinition,
+  ToolAgent,
+  ToolAgentContext,
+  ToolAgentResult
+} from './agent/define-tool-agent.js'
+
 // ============================================================================
 // 核心组件导出
 // ============================================================================
@@ -356,6 +384,21 @@ export {
   streamWithCallbacks
 } from './llm/index.js'
 
+// Structured Output (contract-first LLM calls)
+export {
+  generateStructured,
+  defaultRepairStrategy,
+  createConsoleTracer,
+  combineTracers,
+  StructuredOutputError
+} from './llm/index.js'
+export type {
+  GenerateStructuredOptions,
+  GenerateStructuredResult,
+  StructuredTraceEvent,
+  RepairStrategy
+} from './llm/index.js'
+
 // AgentLoop 相关
 export type { LLMClient, AgentLoopConfig } from './agent/agent-loop.js'
 export { runAgent } from './agent/agent-loop.js'
@@ -577,7 +620,6 @@ export {
   createMockInvoker,
 
   // Flow combinators
-  invoke,
   seq,
   par,
   map,
@@ -587,10 +629,8 @@ export {
   race,
   supervise,
   join,
-  input,
   transfer,
   until,
-  pred,
 
   // Flow execution
   executeFlow,

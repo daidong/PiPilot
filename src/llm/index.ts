@@ -89,3 +89,19 @@ export {
   type LLMClientConfig,
   type StreamCallbacks
 } from './stream.js'
+
+// ============================================================================
+// Structured Output
+// ============================================================================
+
+export {
+  generateStructured,
+  defaultRepairStrategy,
+  createConsoleTracer,
+  combineTracers,
+  StructuredOutputError,
+  type GenerateStructuredOptions,
+  type GenerateStructuredResult,
+  type StructuredTraceEvent,
+  type RepairStrategy
+} from './structured.js'

@@ -11,8 +11,24 @@ import {
   createBridgedTeamRuntime
 } from '../../src/team/agent-bridge.js'
 import { defineTeam, agentHandle } from '../../src/team/define-team.js'
-import { seq, invoke, input } from '../../src/team/flow/index.js'
+import { seq } from '../../src/team/flow/index.js'
 import type { Agent, AgentRunResult } from '../../src/types/agent.js'
+import type { InvokeSpec, InputRef } from '../../src/team/flow/ast.js'
+
+// Local helpers for building AST nodes (since invoke/input are internal now)
+function buildInvoke(
+  agent: string,
+  inputRef: InputRef,
+  options?: { outputAs?: { path: string } }
+): InvokeSpec {
+  return { kind: 'invoke', agent, input: inputRef, outputAs: options?.outputAs }
+}
+
+const inputRef = {
+  initial: (): InputRef => ({ ref: 'initial' }),
+  prev: (): InputRef => ({ ref: 'prev' }),
+  state: (path: string): InputRef => ({ ref: 'state', path })
+}
 
 // Mock agent factory
 function createMockAgent(id: string, response: string): Agent {
@@ -43,8 +59,8 @@ describe('AgentBridge', () => {
         agent2: agentHandle('agent2', mockAgent2)
       },
       flow: seq(
-        invoke('agent1', input.initial()),
-        invoke('agent2', input.prev())
+        buildInvoke('agent1', inputRef.initial()),
+        buildInvoke('agent2', inputRef.prev())
       )
     })
   })
@@ -156,7 +172,7 @@ describe('AgentBridge', () => {
         team: defineTeam({
           id: 'test',
           agents: { failing: agentHandle('failing', failingAgent) },
-          flow: invoke('failing', input.initial())
+          flow: buildInvoke('failing', inputRef.initial())
         }),
         agentResolver: async () => failingAgent,
         onError: errorHandler
@@ -196,7 +212,7 @@ describe('AgentBridge', () => {
         team: defineTeam({
           id: 'test',
           agents: { handoff: agentHandle('handoff', handoffAgent) },
-          flow: invoke('handoff', input.initial())
+          flow: buildInvoke('handoff', inputRef.initial())
         }),
         agentResolver: async () => handoffAgent,
         onHandoff: handoffHandler
@@ -260,7 +276,7 @@ describe('AgentBridge', () => {
         agents: {
           direct: agentHandle('direct', directAgent)
         },
-        flow: invoke('direct', input.initial())
+        flow: buildInvoke('direct', inputRef.initial())
       })
 
       const resolver = vi.fn(async () => null)
@@ -372,7 +388,7 @@ describe('createBridgedTeamRuntime', () => {
       agents: {
         agent1: agentHandle('agent1', mockAgent1)
       },
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })
 
     const { runtime, bridge } = createBridgedTeamRuntime({
@@ -396,8 +412,8 @@ describe('createBridgedTeamRuntime', () => {
         agent2: agentHandle('agent2', mockAgent2)
       },
       flow: seq(
-        invoke('agent1', input.initial()),
-        invoke('agent2', input.prev())
+        buildInvoke('agent1', inputRef.initial()),
+        buildInvoke('agent2', inputRef.prev())
       )
     })
 
@@ -421,7 +437,7 @@ describe('Input formatting', () => {
     const team = defineTeam({
       id: 'test',
       agents: { agent1: agentHandle('agent1', agent) },
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })
 
     const bridge = createAgentBridge({
@@ -446,7 +462,7 @@ describe('Input formatting', () => {
     const team = defineTeam({
       id: 'test',
       agents: { agent1: agentHandle('agent1', agent) },
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })
 
     const bridge = createAgentBridge({
@@ -471,7 +487,7 @@ describe('Input formatting', () => {
     const team = defineTeam({
       id: 'test',
       agents: { agent1: agentHandle('agent1', agent) },
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })
 
     const bridge = createAgentBridge({
@@ -496,7 +512,7 @@ describe('Input formatting', () => {
     const team = defineTeam({
       id: 'test',
       agents: { agent1: agentHandle('agent1', agent) },
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })
 
     const bridge = createAgentBridge({

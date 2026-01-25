@@ -10,7 +10,28 @@ import {
   createPassthroughInvoker
 } from '../../src/team/team-runtime.js'
 import { defineTeam, agentHandle } from '../../src/team/define-team.js'
-import { invoke, seq, par, input, join } from '../../src/team/flow/combinators.js'
+import { seq, par, join } from '../../src/team/flow/combinators.js'
+import type { InvokeSpec, InputRef } from '../../src/team/flow/ast.js'
+
+// Local helpers for building AST nodes (since invoke/input are internal now)
+function buildInvoke(
+  agent: string,
+  inputRef: InputRef,
+  options?: { outputAs?: { path: string } }
+): InvokeSpec {
+  return {
+    kind: 'invoke',
+    agent,
+    input: inputRef,
+    outputAs: options?.outputAs
+  }
+}
+
+const inputRef = {
+  initial: (): InputRef => ({ ref: 'initial' }),
+  prev: (): InputRef => ({ ref: 'prev' }),
+  state: (path: string): InputRef => ({ ref: 'state', path })
+}
 
 describe('TeamRuntime', () => {
   describe('createTeamRuntime', () => {
@@ -23,8 +44,8 @@ describe('TeamRuntime', () => {
           writer: agentHandle('writer', { name: 'writer-agent' }, { role: 'Writer agent' })
         },
         flow: seq(
-          invoke('researcher', input.initial()),
-          invoke('writer', input.prev())
+          buildInvoke('researcher', inputRef.initial()),
+          buildInvoke('writer', inputRef.prev())
         )
       })
 
@@ -84,8 +105,8 @@ describe('TeamRuntime', () => {
           writer: agentHandle('writer', {}, { role: 'Write' })
         },
         flow: seq(
-          invoke('researcher', input.initial()),
-          invoke('writer', input.prev())
+          buildInvoke('researcher', inputRef.initial()),
+          buildInvoke('writer', inputRef.prev())
         )
       })
 
@@ -117,7 +138,7 @@ describe('TeamRuntime', () => {
         agents: {
           echo: agentHandle('echo', {})
         },
-        flow: invoke('echo', input.initial())
+        flow: buildInvoke('echo', inputRef.initial())
       })
 
       const runtime = createTeamRuntime({
@@ -140,7 +161,7 @@ describe('TeamRuntime', () => {
         agents: {
           slow: agentHandle('slow', {})
         },
-        flow: invoke('slow', input.initial())
+        flow: buildInvoke('slow', inputRef.initial())
       })
 
       const runtime = createTeamRuntime({
@@ -166,8 +187,8 @@ describe('TeamRuntime', () => {
         },
         flow: par(
           [
-            invoke('a', input.initial()),
-            invoke('b', input.initial())
+            buildInvoke('a', inputRef.initial()),
+            buildInvoke('b', inputRef.initial())
           ],
           join('merge')
         )
@@ -199,7 +220,7 @@ describe('TeamRuntime', () => {
         agents: {
           incrementer: agentHandle('incrementer', {})
         },
-        flow: invoke('incrementer', input.initial(), { outputAs: { path: 'result' } })
+        flow: buildInvoke('incrementer', inputRef.initial(), { outputAs: { path: 'result' } })
       })
 
       const runtime = createTeamRuntime({
@@ -223,7 +244,7 @@ describe('TeamRuntime', () => {
         agents: {
           agent: agentHandle('agent', {})
         },
-        flow: invoke('agent', input.initial())
+        flow: buildInvoke('agent', inputRef.initial())
       })
 
       const runtime = createTeamRuntime({
@@ -248,7 +269,7 @@ describe('TeamRuntime', () => {
         agents: {
           failing: agentHandle('failing', {})
         },
-        flow: invoke('failing', input.initial())
+        flow: buildInvoke('failing', inputRef.initial())
       })
 
       const runtime = createTeamRuntime({
@@ -273,7 +294,7 @@ describe('TeamRuntime', () => {
         agents: {
           agent: agentHandle('agent', {})
         },
-        flow: invoke('agent', input.initial())
+        flow: buildInvoke('agent', inputRef.initial())
       })
 
       const runtime = createTeamRuntime({
@@ -294,7 +315,7 @@ describe('TeamRuntime', () => {
         agents: {
           agent: agentHandle('agent', {})
         },
-        flow: invoke('agent', input.initial(), { outputAs: { path: 'result' } })
+        flow: buildInvoke('agent', inputRef.initial(), { outputAs: { path: 'result' } })
       })
 
       const runtime = createTeamRuntime({
@@ -319,7 +340,7 @@ describe('defineTeam', () => {
       agents: {
         agent1: agentHandle('agent1', {})
       },
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })
 
     expect(team.id).toBe('test-team')
@@ -330,7 +351,7 @@ describe('defineTeam', () => {
     expect(() => defineTeam({
       id: '',
       agents: { agent1: agentHandle('agent1', {}) },
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })).toThrow()
   })
 
@@ -338,7 +359,7 @@ describe('defineTeam', () => {
     expect(() => defineTeam({
       id: 'test-team',
       agents: {},
-      flow: invoke('agent1', input.initial())
+      flow: buildInvoke('agent1', inputRef.initial())
     })).toThrow()
   })
 })

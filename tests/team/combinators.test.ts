@@ -1,10 +1,12 @@
 /**
  * Flow Combinator Tests
+ *
+ * Tests for the low-level flow combinators that build FlowSpec AST nodes.
+ * For typed flow building, use the step() builder (see step.test.ts).
  */
 
 import { describe, it, expect } from 'vitest'
 import {
-  invoke,
   seq,
   par,
   map,
@@ -13,46 +15,29 @@ import {
   gate,
   race,
   supervise,
-  input,
   transfer,
-  until,
-  pred,
   join
 } from '../../src/team/flow/combinators.js'
+import type { InvokeSpec, InputRef } from '../../src/team/flow/ast.js'
+
+// Helper to build InvokeSpec for testing (not exported from combinators)
+function buildInvokeSpec(agent: string, input: InputRef): InvokeSpec {
+  return { kind: 'invoke', agent, input }
+}
+
+// Helper input refs for testing
+const inputRefs = {
+  initial: (): InputRef => ({ ref: 'initial' }),
+  prev: (): InputRef => ({ ref: 'prev' }),
+  state: (path: string): InputRef => ({ ref: 'state', path })
+}
 
 describe('Flow Combinators', () => {
-  describe('invoke', () => {
-    it('should create invoke spec', () => {
-      const spec = invoke('agent1', input.initial())
-      expect(spec).toMatchObject({
-        kind: 'invoke',
-        agent: 'agent1',
-        input: { ref: 'initial' }
-      })
-    })
-
-    it('should support transfer option', () => {
-      const spec = invoke('agent1', input.initial(), { transfer: transfer.minimal() })
-      expect(spec.transfer).toEqual({ mode: 'minimal' })
-    })
-
-    it('should support outputAs option', () => {
-      const spec = invoke('agent1', input.initial(), { outputAs: { path: 'result' } })
-      expect(spec.outputAs).toEqual({ path: 'result' })
-    })
-
-    it('should support name and tags options', () => {
-      const spec = invoke('agent1', input.initial(), { name: 'My Agent', tags: ['test'] })
-      expect(spec.name).toBe('My Agent')
-      expect(spec.tags).toEqual(['test'])
-    })
-  })
-
   describe('seq', () => {
     it('should create sequence spec', () => {
       const spec = seq(
-        invoke('a', input.initial()),
-        invoke('b', input.prev())
+        buildInvokeSpec('a', inputRefs.initial()),
+        buildInvokeSpec('b', inputRefs.prev())
       )
       expect(spec).toMatchObject({
         kind: 'seq',
@@ -62,14 +47,27 @@ describe('Flow Combinators', () => {
         ]
       })
     })
+
+    it('should handle empty sequence', () => {
+      const spec = seq()
+      expect(spec).toMatchObject({
+        kind: 'seq',
+        steps: []
+      })
+    })
+
+    it('should handle single step', () => {
+      const spec = seq(buildInvokeSpec('a', inputRefs.initial()))
+      expect(spec.steps).toHaveLength(1)
+    })
   })
 
   describe('par', () => {
     it('should create parallel spec with reducer', () => {
       const spec = par(
         [
-          invoke('a', input.initial()),
-          invoke('b', input.initial())
+          buildInvokeSpec('a', inputRefs.initial()),
+          buildInvokeSpec('b', inputRefs.initial())
         ],
         join('merge')
       )
@@ -82,13 +80,23 @@ describe('Flow Combinators', () => {
         join: { reducerId: 'merge' }
       })
     })
+
+    it('should support name and tags options', () => {
+      const spec = par(
+        [buildInvokeSpec('a', inputRefs.initial())],
+        join('merge'),
+        { name: 'Parallel Work', tags: ['parallel'] }
+      )
+      expect(spec.name).toBe('Parallel Work')
+      expect(spec.tags).toEqual(['parallel'])
+    })
   })
 
   describe('map', () => {
     it('should create map spec', () => {
       const spec = map(
         { ref: 'state', path: 'items' },
-        invoke('processor', input.prev()),
+        buildInvokeSpec('processor', inputRefs.prev()),
         join('collect')
       )
       expect(spec).toMatchObject({
@@ -102,11 +110,22 @@ describe('Flow Combinators', () => {
     it('should support concurrency option', () => {
       const spec = map(
         { ref: 'state', path: 'items' },
-        invoke('processor', input.prev()),
+        buildInvokeSpec('processor', inputRefs.prev()),
         join('collect'),
         { concurrency: 3 }
       )
       expect(spec.concurrency).toBe(3)
+    })
+
+    it('should support name and tags options', () => {
+      const spec = map(
+        { ref: 'state', path: 'items' },
+        buildInvokeSpec('processor', inputRefs.prev()),
+        join('collect'),
+        { name: 'Map Items', tags: ['map'] }
+      )
+      expect(spec.name).toBe('Map Items')
+      expect(spec.tags).toEqual(['map'])
     })
   })
 
@@ -116,12 +135,12 @@ describe('Flow Combinators', () => {
         {
           type: 'rule',
           rules: [
-            { when: pred.eq('type', 'option1'), route: 'branch1' }
+            { when: { op: 'eq', path: 'type', value: 'option1' }, route: 'branch1' }
           ]
         },
         {
-          'branch1': invoke('agent1', input.initial()),
-          'branch2': invoke('agent2', input.initial())
+          'branch1': buildInvokeSpec('agent1', inputRefs.initial()),
+          'branch2': buildInvokeSpec('agent2', inputRefs.initial())
         },
         { defaultBranch: 'branch2' }
       )
@@ -135,39 +154,60 @@ describe('Flow Combinators', () => {
         defaultBranch: 'branch2'
       })
     })
+
+    it('should support name and tags options', () => {
+      const spec = choose(
+        { type: 'rule', rules: [] },
+        { 'default': buildInvokeSpec('agent', inputRefs.initial()) },
+        { name: 'Router', tags: ['routing'] }
+      )
+      expect(spec.name).toBe('Router')
+      expect(spec.tags).toEqual(['routing'])
+    })
   })
 
   describe('loop', () => {
-    it('should create loop spec with until condition', () => {
+    it('should create loop spec with field-eq condition', () => {
       const spec = loop(
-        invoke('refiner', input.prev()),
-        until.predicate(pred.eq('status', 'done')),
+        buildInvokeSpec('refiner', inputRefs.prev()),
+        { type: 'field-eq', path: 'status', value: 'done' },
         { maxIters: 5 }
       )
       expect(spec).toMatchObject({
         kind: 'loop',
         body: { kind: 'invoke', agent: 'refiner' },
-        until: { type: 'predicate' },
+        until: { type: 'field-eq', path: 'status', value: 'done' },
         maxIters: 5
       })
     })
 
-    it('should require maxIters option', () => {
+    it('should create loop spec with max-iterations condition', () => {
       const spec = loop(
-        invoke('refiner', input.prev()),
-        until.noCriticalIssues('reviews'),
+        buildInvokeSpec('worker', inputRefs.prev()),
+        { type: 'max-iterations', count: 10 },
         { maxIters: 10 }
       )
+      expect(spec.until).toEqual({ type: 'max-iterations', count: 10 })
       expect(spec.maxIters).toBe(10)
+    })
+
+    it('should support name and tags options', () => {
+      const spec = loop(
+        buildInvokeSpec('refiner', inputRefs.prev()),
+        { type: 'field-eq', path: 'done', value: true },
+        { maxIters: 5, name: 'Refine Loop', tags: ['loop'] }
+      )
+      expect(spec.name).toBe('Refine Loop')
+      expect(spec.tags).toEqual(['loop'])
     })
   })
 
   describe('gate', () => {
     it('should create gate spec with predicate rule', () => {
       const spec = gate(
-        { type: 'predicate', predicate: pred.eq('approved', true) },
-        invoke('executor', input.prev()),
-        invoke('notifier', input.prev())
+        { type: 'predicate', predicate: { op: 'eq', path: 'approved', value: true } },
+        buildInvokeSpec('executor', inputRefs.prev()),
+        buildInvokeSpec('notifier', inputRefs.prev())
       )
       expect(spec).toMatchObject({
         kind: 'gate',
@@ -179,14 +219,25 @@ describe('Flow Combinators', () => {
 
     it('should support validator gate', () => {
       const spec = gate(
-        { type: 'validator', validatorId: 'myValidator', input: input.prev() },
-        invoke('pass', input.prev()),
-        invoke('fail', input.prev())
+        { type: 'validator', validatorId: 'myValidator', input: inputRefs.prev() },
+        buildInvokeSpec('pass', inputRefs.prev()),
+        buildInvokeSpec('fail', inputRefs.prev())
       )
       expect(spec.gate).toMatchObject({
         type: 'validator',
         validatorId: 'myValidator'
       })
+    })
+
+    it('should support name and tags options', () => {
+      const spec = gate(
+        { type: 'predicate', predicate: { op: 'eq', path: 'ok', value: true } },
+        buildInvokeSpec('pass', inputRefs.prev()),
+        buildInvokeSpec('fail', inputRefs.prev()),
+        { name: 'Quality Gate', tags: ['gate'] }
+      )
+      expect(spec.name).toBe('Quality Gate')
+      expect(spec.tags).toEqual(['gate'])
     })
   })
 
@@ -194,8 +245,8 @@ describe('Flow Combinators', () => {
     it('should create race spec with firstSuccess winner', () => {
       const spec = race(
         [
-          invoke('fast', input.initial()),
-          invoke('slow', input.initial())
+          buildInvokeSpec('fast', inputRefs.initial()),
+          buildInvokeSpec('slow', inputRefs.initial())
         ],
         { type: 'firstSuccess' }
       )
@@ -212,20 +263,30 @@ describe('Flow Combinators', () => {
     it('should support highestScore winner', () => {
       const spec = race(
         [
-          invoke('a', input.initial()),
-          invoke('b', input.initial())
+          buildInvokeSpec('a', inputRefs.initial()),
+          buildInvokeSpec('b', inputRefs.initial())
         ],
         { type: 'highestScore', path: 'score' }
       )
       expect(spec.winner).toEqual({ type: 'highestScore', path: 'score' })
+    })
+
+    it('should support name and tags options', () => {
+      const spec = race(
+        [buildInvokeSpec('a', inputRefs.initial())],
+        { type: 'firstSuccess' },
+        { name: 'Race', tags: ['race'] }
+      )
+      expect(spec.name).toBe('Race')
+      expect(spec.tags).toEqual(['race'])
     })
   })
 
   describe('supervise', () => {
     it('should create supervise spec', () => {
       const spec = supervise(
-        invoke('supervisor', input.initial()),
-        invoke('worker', input.prev()),
+        buildInvokeSpec('supervisor', inputRefs.initial()),
+        buildInvokeSpec('worker', inputRefs.prev()),
         join('merge'),
         'sequential'
       )
@@ -237,29 +298,30 @@ describe('Flow Combinators', () => {
         join: { reducerId: 'merge' }
       })
     })
-  })
-})
 
-describe('Input Helpers', () => {
-  it('should create initial input ref', () => {
-    expect(input.initial()).toEqual({ ref: 'initial' })
-  })
-
-  it('should create prev input ref', () => {
-    expect(input.prev()).toEqual({ ref: 'prev' })
-  })
-
-  it('should create state input ref', () => {
-    expect(input.state('path.to.value')).toEqual({
-      ref: 'state',
-      path: 'path.to.value'
+    it('should support parallel strategy', () => {
+      const spec = supervise(
+        buildInvokeSpec('supervisor', inputRefs.initial()),
+        par([
+          buildInvokeSpec('w1', inputRefs.prev()),
+          buildInvokeSpec('w2', inputRefs.prev())
+        ], join('merge')),
+        join('merge'),
+        'parallel'
+      )
+      expect(spec.strategy).toBe('parallel')
     })
-  })
 
-  it('should create const input ref', () => {
-    expect(input.const({ key: 'value' })).toEqual({
-      ref: 'const',
-      value: { key: 'value' }
+    it('should support name and tags options', () => {
+      const spec = supervise(
+        buildInvokeSpec('supervisor', inputRefs.initial()),
+        buildInvokeSpec('worker', inputRefs.prev()),
+        join('merge'),
+        'sequential',
+        { name: 'Supervised Work', tags: ['supervise'] }
+      )
+      expect(spec.name).toBe('Supervised Work')
+      expect(spec.tags).toEqual(['supervise'])
     })
   })
 })
@@ -290,120 +352,6 @@ describe('Transfer Helpers', () => {
   it('should create full transfer', () => {
     const spec = transfer.full()
     expect(spec).toEqual({ mode: 'full' })
-  })
-})
-
-describe('Predicate Helpers', () => {
-  it('should create eq predicate', () => {
-    const spec = pred.eq('status', 'done')
-    expect(spec).toEqual({
-      op: 'eq',
-      path: 'status',
-      value: 'done'
-    })
-  })
-
-  it('should create neq predicate', () => {
-    const spec = pred.neq('status', 'failed')
-    expect(spec).toEqual({
-      op: 'neq',
-      path: 'status',
-      value: 'failed'
-    })
-  })
-
-  it('should create comparison predicates', () => {
-    expect(pred.gt('count', 5)).toEqual({ op: 'gt', path: 'count', value: 5 })
-    expect(pred.gte('count', 5)).toEqual({ op: 'gte', path: 'count', value: 5 })
-    expect(pred.lt('count', 5)).toEqual({ op: 'lt', path: 'count', value: 5 })
-    expect(pred.lte('count', 5)).toEqual({ op: 'lte', path: 'count', value: 5 })
-  })
-
-  it('should create and predicate', () => {
-    const spec = pred.and(
-      pred.eq('a', 1),
-      pred.eq('b', 2)
-    )
-    expect(spec).toMatchObject({
-      op: 'and',
-      clauses: [
-        { op: 'eq', path: 'a', value: 1 },
-        { op: 'eq', path: 'b', value: 2 }
-      ]
-    })
-  })
-
-  it('should create or predicate', () => {
-    const spec = pred.or(
-      pred.eq('a', 1),
-      pred.eq('b', 2)
-    )
-    expect(spec).toMatchObject({
-      op: 'or',
-      clauses: [
-        { op: 'eq', path: 'a', value: 1 },
-        { op: 'eq', path: 'b', value: 2 }
-      ]
-    })
-  })
-
-  it('should create not predicate', () => {
-    const spec = pred.not(pred.eq('flag', true))
-    expect(spec).toMatchObject({
-      op: 'not',
-      clause: { op: 'eq', path: 'flag', value: true }
-    })
-  })
-
-  it('should create contains predicate', () => {
-    const spec = pred.contains('text', 'hello')
-    expect(spec).toEqual({ op: 'contains', path: 'text', value: 'hello' })
-  })
-
-  it('should create regex predicate', () => {
-    const spec = pred.regex('text', '^test.*$')
-    expect(spec).toEqual({ op: 'regex', path: 'text', pattern: '^test.*$' })
-  })
-
-  it('should create exists predicate', () => {
-    const spec = pred.exists('optional')
-    expect(spec).toEqual({ op: 'exists', path: 'optional' })
-  })
-
-  it('should create empty predicate', () => {
-    const spec = pred.empty('list')
-    expect(spec).toEqual({ op: 'empty', path: 'list' })
-  })
-})
-
-describe('Until Helpers', () => {
-  it('should create predicate until', () => {
-    const spec = until.predicate(pred.eq('done', true))
-    expect(spec).toMatchObject({
-      type: 'predicate',
-      predicate: { op: 'eq', path: 'done', value: true }
-    })
-  })
-
-  it('should create noCriticalIssues until', () => {
-    const spec = until.noCriticalIssues('reviews')
-    expect(spec).toEqual({
-      type: 'noCriticalIssues',
-      path: 'reviews'
-    })
-  })
-
-  it('should create noProgress until', () => {
-    const spec = until.noProgress(3)
-    expect(spec).toEqual({
-      type: 'noProgress',
-      windowSize: 3
-    })
-  })
-
-  it('should create budgetExceeded until', () => {
-    const spec = until.budgetExceeded()
-    expect(spec).toEqual({ type: 'budgetExceeded' })
   })
 })
 

@@ -2,34 +2,41 @@
  * Team Module - Multi-Agent Collaboration
  *
  * This module provides primitives and combinators for building
- * multi-agent collaborative workflows.
+ * multi-agent collaborative workflows using a contract-first approach.
  *
  * @example
  * ```typescript
+ * import { z } from 'zod'
  * import {
- *   defineTeam,
- *   seq, par, loop, invoke,
- *   input, until, join,
+ *   defineTeam, agentHandle, stateConfig,
+ *   seq, step, state, mapInput,
  *   createTeamRuntime
  * } from 'agent-foundry/team'
+ *
+ * // Define typed schemas
+ * const ResearchSchema = z.object({ findings: z.array(z.string()) })
+ * const ArticleSchema = z.object({ title: z.string(), content: z.string() })
  *
  * const team = defineTeam({
  *   id: 'my-team',
  *   agents: {
- *     researcher: { id: 'researcher', agent: researcherAgent },
- *     writer: { id: 'writer', agent: writerAgent },
+ *     researcher: agentHandle('researcher', researcherAgent),
+ *     writer: agentHandle('writer', writerAgent),
  *   },
+ *   state: stateConfig.memory('my-team'),
  *   flow: seq(
- *     invoke('researcher', input.initial()),
- *     invoke('writer', input.prev())
+ *     step(researcher)
+ *       .in(state.initial<{ topic: string }>())
+ *       .name('Research topic')
+ *       .out(state.path<z.infer<typeof ResearchSchema>>('research')),
+ *     step(writer)
+ *       .in(mapInput(state.path('research'), r => ({ findings: r.findings })))
+ *       .name('Write article')
+ *       .out(state.path<z.infer<typeof ArticleSchema>>('article'))
  *   )
  * })
  *
- * const runtime = createTeamRuntime({
- *   team,
- *   agentInvoker: myAgentInvoker
- * })
- *
+ * const runtime = createTeamRuntime({ team, agentInvoker })
  * const result = await runtime.run({ topic: 'AI Safety' })
  * ```
  */
@@ -80,6 +87,35 @@ export type {
   TeamTraceEvent,
   TeamRuntimeConfig
 } from './team-runtime.js'
+
+// Runtime Events
+export {
+  TeamEventEmitter,
+  createEventEmitter
+} from './runtime/index.js'
+
+export type {
+  TeamRuntimeEvents,
+  TokenUsage,
+  TeamStartedEvent,
+  TeamCompletedEvent,
+  TeamFailedEvent,
+  AgentStartedEvent,
+  AgentCompletedEvent,
+  AgentFailedEvent,
+  StepStartedEvent,
+  StepCompletedEvent,
+  StepFailedEvent,
+  LoopIterationEvent,
+  LoopCompletedEvent,
+  StateUpdatedEvent,
+  BranchDecisionEvent,
+  SelectDecisionEvent,
+  EventHandler,
+  Unsubscribe,
+  EventPayload,
+  ITeamEventEmitter
+} from './runtime/index.js'
 
 // Flow (re-export all)
 export * from './flow/index.js'

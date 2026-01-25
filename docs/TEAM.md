@@ -7,14 +7,15 @@ The Team module provides primitives and combinators for building multi-agent col
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [Defining Teams](#defining-teams)
+- [Contract-First API](#contract-first-api)
 - [Flow Specification](#flow-specification)
-- [Input Selectors](#input-selectors)
 - [Reducers](#reducers)
 - [Shared State (Blackboard)](#shared-state-blackboard)
 - [Channels](#channels)
 - [Protocol Templates](#protocol-templates)
 - [Handoff Mechanism](#handoff-mechanism)
 - [Agent Bridge](#agent-bridge)
+- [Runtime Events](#runtime-events)
 - [Complete Example](#complete-example)
 
 ---
@@ -24,6 +25,7 @@ The Team module provides primitives and combinators for building multi-agent col
 The Team system enables:
 
 - **Flow-based orchestration**: Define how agents collaborate using composable flow combinators
+- **Contract-first design**: Zod schemas define typed contracts between agents
 - **Parallel execution**: Run agents concurrently with join/reduce operations
 - **Shared state**: Blackboard pattern for inter-agent communication
 - **Pub/Sub channels**: Real-time messaging between agents
@@ -63,30 +65,49 @@ The Team system enables:
 ## Quick Start
 
 ```typescript
+import { z } from 'zod'
 import {
   defineTeam,
   agentHandle,
   seq,
-  invoke,
-  input,
+  step,
+  state,
   createTeamRuntime,
   createPassthroughInvoker
 } from 'agent-foundry/team'
+import { defineLLMAgent } from 'agent-foundry'
 
-// 1. Define agents
-const researcherAgent = { /* your agent */ }
-const writerAgent = { /* your agent */ }
+// 1. Define agents with contracts
+const researcher = defineLLMAgent({
+  id: 'researcher',
+  inputSchema: z.object({ topic: z.string() }),
+  outputSchema: z.object({ findings: z.string() }),
+  system: 'You are a research specialist.',
+  buildPrompt: ({ topic }) => `Research: ${topic}`
+})
 
-// 2. Define team
+const writer = defineLLMAgent({
+  id: 'writer',
+  inputSchema: z.object({ findings: z.string() }),
+  outputSchema: z.object({ article: z.string() }),
+  system: 'You are a content writer.',
+  buildPrompt: ({ findings }) => `Write article based on: ${findings}`
+})
+
+// 2. Define team with typed flow
 const team = defineTeam({
   id: 'writing-team',
   agents: {
-    researcher: agentHandle('researcher', researcherAgent),
-    writer: agentHandle('writer', writerAgent)
+    researcher: agentHandle('researcher', researcher),
+    writer: agentHandle('writer', writer)
   },
   flow: seq(
-    invoke('researcher', input.initial()),
-    invoke('writer', input.prev())
+    step(researcher)
+      .in(state.initial<{ topic: string }>())
+      .out(state.path<{ findings: string }>('research')),
+    step(writer)
+      .in(state.path<{ findings: string }>('research'))
+      .out(state.path<{ article: string }>('article'))
   )
 })
 
@@ -176,6 +197,144 @@ const handle = agentHandle('researcher', researcherAgent, {
 
 ---
 
+## Contract-First API
+
+The contract-first API uses Zod schemas to define typed contracts between agents.
+
+### Benefits
+
+- **Type Safety**: Full TypeScript support with Zod schemas
+- **No JSON Parsing**: Objects flow directly between agents
+- **Edge Transformations**: Use `mapInput()` for data transformation
+- **Step Builder**: Fluent API with `step().in().out()`
+- **Code Reduction**: ~70% less code compared to string-based I/O
+
+### defineLLMAgent()
+
+Create type-safe LLM agents with schema validation.
+
+```typescript
+import { z } from 'zod'
+import { defineLLMAgent } from 'agent-foundry'
+
+// Define contracts
+const InputSchema = z.object({
+  userRequest: z.string()
+})
+
+const OutputSchema = z.object({
+  queries: z.array(z.string()),
+  focusAreas: z.array(z.string())
+})
+
+// Create agent
+const planner = defineLLMAgent({
+  id: 'planner',
+  description: 'Query Planning Specialist',
+  inputSchema: InputSchema,
+  outputSchema: OutputSchema,
+  system: 'You are a query planning specialist...',
+  buildPrompt: ({ userRequest }) =>
+    `Analyze this request and create search queries:\n\n"${userRequest}"`
+})
+```
+
+### step() Builder
+
+Fluent API for defining flow steps with type checking.
+
+```typescript
+import { step, state, mapInput } from 'agent-foundry/team'
+
+// Basic step with state output
+step(planner)
+  .in(state.initial<{ userRequest: string }>())
+  .out(state.path<QueryPlan>('plan'))
+
+// With name and tags
+step(reviewer)
+  .in(state.path<SearchResults>('search'))
+  .name('Review results')
+  .tags('review', 'validation')
+  .out(state.path<ReviewResult>('review'))
+
+// Without state output (uses previous output)
+step(validator)
+  .in(state.path('data'))
+  .build()
+```
+
+### mapInput()
+
+Transform data between steps without agent modification.
+
+```typescript
+import { mapInput, state } from 'agent-foundry/team'
+
+// Transform plan to searcher input
+step(searcher)
+  .in(mapInput(
+    state.path<QueryPlan>('plan'),
+    (plan) => ({
+      queries: plan.searchQueries,
+      sources: plan.searchStrategy.suggestedSources
+    })
+  ))
+  .out(state.path<SearchResults>('search'))
+
+// Chain transformations
+step(formatter)
+  .in(mapInput(
+    state.path<ReviewResult>('review'),
+    (review) => ({
+      papers: review.relevantPapers.map(p => ({
+        title: p.title,
+        year: p.year
+      }))
+    })
+  ))
+  .build()
+```
+
+### Typed State References
+
+Type-safe state path references.
+
+```typescript
+import { state } from 'agent-foundry/team'
+
+// State paths with type annotations
+state.initial<{ userRequest: string }>()   // Initial input
+state.path<QueryPlan>('plan')               // State path
+state.prev<SearchResults>()                 // Previous output
+state.const({ limit: 10 })                  // Constant value
+```
+
+### branch() and noop
+
+Conditional flow without agent logic pollution.
+
+```typescript
+import { branch, noop, step, state, mapInput } from 'agent-foundry/team'
+
+// Only refine if not approved
+branch({
+  when: (s: any) => s.review?.approved === false,
+  then: step(searcher)
+    .in(mapInput(
+      state.path<ReviewResult>('review'),
+      (r) => ({
+        queries: r.additionalQueries || [],
+        sources: ['arxiv', 'semantic_scholar']
+      })
+    ))
+    .out(state.path<SearchResults>('search')),
+  else: noop
+})
+```
+
+---
+
 ## Flow Specification
 
 Flows define how agents collaborate. They are composable and serializable.
@@ -185,29 +344,29 @@ Flows define how agents collaborate. They are composable and serializable.
 Execute steps sequentially. Each step receives the previous step's output.
 
 ```typescript
-import { seq, invoke, input } from 'agent-foundry/team'
+import { seq, step, state } from 'agent-foundry/team'
 
 const flow = seq(
-  invoke('researcher', input.initial()),
-  invoke('analyzer', input.prev()),
-  invoke('writer', input.prev())
+  step(researcher).in(state.initial()).out(state.path('research')),
+  step(analyzer).in(state.path('research')).out(state.path('analysis')),
+  step(writer).in(state.path('analysis')).out(state.path('draft'))
 )
 ```
 
-### par(...branches, options?)
+### par(branches, joinSpec, options?)
 
 Execute branches in parallel, then join results.
 
 ```typescript
-import { par, invoke, input } from 'agent-foundry/team'
+import { par, step, state, join } from 'agent-foundry/team'
 
 const flow = par(
-  invoke('analyst1', input.initial()),
-  invoke('analyst2', input.initial()),
-  invoke('analyst3', input.initial()),
-  {
-    join: { reducerId: 'merge' }  // Combine results
-  }
+  [
+    step(analyst1).in(state.initial()).build(),
+    step(analyst2).in(state.initial()).build(),
+    step(analyst3).in(state.initial()).build()
+  ],
+  join('merge')  // Combine results
 )
 ```
 
@@ -225,14 +384,14 @@ const flow = par(
 Repeat a flow until a condition is met.
 
 ```typescript
-import { loop, seq, invoke, input, until } from 'agent-foundry/team'
+import { loop, seq, step, state } from 'agent-foundry/team'
 
 const flow = loop(
   seq(
-    invoke('critic', input.prev()),
-    invoke('refiner', input.prev())
+    step(critic).in(state.path('draft')).out(state.path('review')),
+    step(refiner).in(state.path('review')).out(state.path('draft'))
   ),
-  until.custom('reviews.approved'),  // Stop when approved
+  { type: 'field-eq', path: 'review.approved', value: true },  // Until condition
   { maxIters: 5 }  // Maximum iterations
 )
 ```
@@ -240,32 +399,29 @@ const flow = loop(
 **Until Conditions:**
 
 ```typescript
-until.maxIterations(5)          // Stop after N iterations
-until.custom('state.path')      // Stop when state path is truthy
-until.noCriticalIssues('reviews')  // Stop when no critical issues
+// Stop when field equals value
+{ type: 'field-eq', path: 'review.approved', value: true }
+
+// Stop after N iterations
+{ type: 'max-iterations', count: 5 }
+
+// Stop based on predicate
+{ type: 'predicate', predicate: { op: 'eq', path: 'done', value: true } }
 ```
 
-### invoke(agent, inputSelector)
+### race(contenders, winner, options?)
 
-Invoke a specific agent with input.
-
-```typescript
-const step = invoke('writer', input.prev())
-```
-
-### race(...contenders, options?)
-
-Execute multiple flows, take the first successful result.
+Execute multiple flows, take the winner based on strategy.
 
 ```typescript
-import { race, invoke, input } from 'agent-foundry/team'
+import { race, step, state } from 'agent-foundry/team'
 
 const flow = race(
-  invoke('fast-model', input.initial()),
-  invoke('accurate-model', input.initial()),
-  {
-    winner: { type: 'firstSuccess' }
-  }
+  [
+    step(fastModel).in(state.initial()).build(),
+    step(accurateModel).in(state.initial()).build()
+  ],
+  { type: 'firstSuccess' }
 )
 ```
 
@@ -275,72 +431,38 @@ const flow = race(
 |------|-------------|
 | `firstSuccess` | First non-error result |
 | `firstComplete` | First to complete (even if error) |
+| `highestScore` | Highest score at specified path |
 
-### supervise(supervisor, workers, options?)
+### supervise(supervisor, workers, joinSpec, strategy, options?)
 
 Supervisor pattern: one agent coordinates others.
 
 ```typescript
-import { supervise, invoke, input } from 'agent-foundry/team'
+import { supervise, step, state, join } from 'agent-foundry/team'
 
 const flow = supervise(
-  invoke('manager', input.initial()),  // Supervisor
-  [
-    invoke('worker1', input.prev()),
-    invoke('worker2', input.prev())
-  ],
-  {
-    strategy: 'parallel',  // or 'sequential'
-    maxRounds: 3
-  }
+  step(manager).in(state.initial()).build(),  // Supervisor
+  par([
+    step(worker1).in(state.prev()).build(),
+    step(worker2).in(state.prev()).build()
+  ], join('merge')),
+  join('merge'),
+  'parallel'  // or 'sequential'
 )
 ```
 
-### gate(validator, flow, options?)
+### gate(gateSpec, onPass, onFail, options?)
 
 Conditional execution based on validation.
 
 ```typescript
-import { gate, invoke, input } from 'agent-foundry/team'
+import { gate, step, state } from 'agent-foundry/team'
 
 const flow = gate(
-  'quality-validator',  // Validator ID
-  invoke('publisher', input.prev()),
-  {
-    fallback: invoke('improver', input.prev())  // If validation fails
-  }
+  { type: 'predicate', predicate: { op: 'eq', path: 'quality.score', value: true } },
+  step(publisher).in(state.prev()).build(),  // If validation passes
+  step(improver).in(state.prev()).build()    // If validation fails
 )
-```
-
----
-
-## Input Selectors
-
-Input selectors specify what data an agent receives.
-
-```typescript
-import { input } from 'agent-foundry/team'
-
-// Initial input to the team
-input.initial()
-
-// Output from previous step
-input.prev()
-
-// Value from shared state
-input.state('research.findings')
-
-// Literal value
-input.literal({ prompt: 'Analyze this' })
-
-// Merge multiple state paths
-input.merge(['research', 'context'])
-
-// Output from specific parallel branch (0-indexed)
-input.branch(0)
-
-// Select specific field from previous output
-input.select('summary')
 ```
 
 ---
@@ -352,19 +474,19 @@ Reducers combine results from parallel execution.
 ### Built-in Reducers
 
 ```typescript
-import { merge, collect, first, vote } from 'agent-foundry/team'
+import { par, join } from 'agent-foundry/team'
 
 // Deep merge objects
-par(branch1, branch2, { join: { reducerId: 'merge' } })
+par(branches, join('merge'))
 
 // Collect into array
-par(branch1, branch2, { join: { reducerId: 'collect' } })
+par(branches, join('collect'))
 
 // Take first result
-par(branch1, branch2, { join: { reducerId: 'first' } })
+par(branches, join('first'))
 
 // Majority voting
-par(branch1, branch2, branch3, { join: { reducerId: 'vote' } })
+par(branches, join('vote'))
 ```
 
 ### Custom Reducers
@@ -384,7 +506,7 @@ const team = defineTeam({
 })
 
 // Use in flow
-par(branch1, branch2, { join: { reducerId: 'weighted-merge' } })
+par(branches, join('weighted-merge'))
 ```
 
 ---
@@ -565,65 +687,6 @@ const flow = registry.build('critic-refine-loop', {
     maxIterations: 5
   }
 })
-
-// Register custom protocol
-registry.register({
-  id: 'my-protocol',
-  name: 'My Custom Protocol',
-  description: 'A custom workflow',
-  requiredRoles: ['main', 'helper'],
-  build: (config) => seq(
-    invoke(config.agents.main, input.initial()),
-    invoke(config.agents.helper, input.prev())
-  )
-})
-```
-
-### Protocol Examples
-
-#### Pipeline
-
-```typescript
-const flow = pipeline.build({
-  agents: { stages: ['extract', 'transform', 'load'] }
-})
-// Results in: seq(invoke('extract'), invoke('transform'), invoke('load'))
-```
-
-#### Fan-Out Fan-In
-
-```typescript
-const flow = fanOutFanIn.build({
-  agents: { workers: ['worker1', 'worker2', 'worker3'] },
-  options: { reducer: 'merge' }
-})
-// Results in: par(invoke('worker1'), invoke('worker2'), invoke('worker3'), { join: 'merge' })
-```
-
-#### Supervisor
-
-```typescript
-const flow = supervisorProtocol.build({
-  agents: {
-    supervisor: 'manager',
-    workers: ['dev1', 'dev2', 'dev3']
-  },
-  options: { strategy: 'parallel' }
-})
-```
-
-#### Critic-Refine Loop
-
-```typescript
-const flow = criticRefineLoop.build({
-  agents: {
-    producer: 'writer',
-    critic: 'reviewer',
-    refiner: 'editor'
-  },
-  options: { maxIterations: 3 }
-})
-// Results in: seq(invoke('writer'), loop(seq(invoke('reviewer'), invoke('editor')), until, { maxIters: 3 }))
 ```
 
 ---
@@ -787,63 +850,232 @@ console.log(bridge.getInvocationCount('researcher'))
 
 ---
 
-## Complete Example
+## Runtime Events
 
-A complete example of a research and writing team:
+Subscribe to team execution events for observability.
+
+### Event Types
+
+| Event | Description |
+|-------|-------------|
+| `team.started` | Team execution started |
+| `team.completed` | Team execution completed successfully |
+| `team.failed` | Team execution failed |
+| `agent.started` | Agent invocation started |
+| `agent.completed` | Agent invocation completed |
+| `agent.failed` | Agent invocation failed |
+| `step.started` | Flow step started |
+| `step.completed` | Flow step completed |
+| `step.failed` | Flow step failed |
+| `loop.iteration` | Loop iteration executed |
+| `loop.completed` | Loop finished |
+| `branch.decision` | Branch condition evaluated |
+| `state.updated` | State value changed |
+
+### Subscribing to Events
 
 ```typescript
+import { createTeamRuntime } from 'agent-foundry/team'
+
+const runtime = createTeamRuntime({ team, agentInvoker })
+
+// Subscribe to agent events
+runtime.on('agent.started', ({ agentId, step, input }) => {
+  console.log(`[Step ${step}] Starting ${agentId}`)
+})
+
+runtime.on('agent.completed', ({ agentId, durationMs, tokens }) => {
+  console.log(`${agentId} completed in ${durationMs}ms`)
+  if (tokens) {
+    console.log(`  Tokens: ${tokens.totalTokens}`)
+  }
+})
+
+// Subscribe to team lifecycle
+runtime.on('team.started', ({ teamId, input }) => {
+  console.log(`Team ${teamId} started with input:`, input)
+})
+
+runtime.on('team.completed', ({ teamId, steps, durationMs }) => {
+  console.log(`Team ${teamId} completed in ${durationMs}ms (${steps} steps)`)
+})
+
+runtime.on('team.failed', ({ teamId, error }) => {
+  console.error(`Team ${teamId} failed:`, error.message)
+})
+
+// One-time subscription
+runtime.once('team.completed', ({ output }) => {
+  console.log('Final output:', output)
+})
+
+// Unsubscribe
+const unsubscribe = runtime.on('agent.started', handler)
+unsubscribe() // Stop receiving events
+```
+
+### Direct Emitter Access
+
+```typescript
+const emitter = runtime.getEventEmitter()
+
+emitter.on('loop.iteration', ({ loopId, iteration, maxIterations }) => {
+  console.log(`Loop ${loopId}: iteration ${iteration}/${maxIterations}`)
+})
+
+emitter.on('branch.decision', ({ branchId, taken }) => {
+  console.log(`Branch ${branchId} took: ${taken}`)
+})
+```
+
+### Event Payloads
+
+```typescript
+// Agent events include token usage
+interface AgentCompletedEvent {
+  agentId: string
+  runId: string
+  output: unknown
+  durationMs: number
+  step: number
+  tokens?: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+  }
+  ts: number
+}
+
+// Loop events track iterations
+interface LoopIterationEvent {
+  loopId: string
+  runId: string
+  iteration: number
+  maxIterations: number
+  continuing: boolean
+  ts: number
+}
+
+// State events track changes
+interface StateUpdatedEvent {
+  path: string
+  value: unknown
+  previousValue?: unknown
+  runId: string
+  updatedBy?: string
+  ts: number
+}
+```
+
+---
+
+## Complete Example
+
+A complete example of a literature research team using contract-first API:
+
+```typescript
+import { z } from 'zod'
 import {
   defineTeam,
   agentHandle,
   stateConfig,
   seq,
-  par,
   loop,
-  invoke,
-  input,
-  until,
+  step,
+  state,
+  mapInput,
+  branch,
+  noop,
   createBridgedTeamRuntime,
   createMapBasedResolver,
-  createChannelHub,
-  criticRefineLoop
+  createChannelHub
 } from 'agent-foundry/team'
+import { defineLLMAgent } from 'agent-foundry'
 
-// Define agents (your actual agent implementations)
-const researcherAgent = createResearcherAgent()
-const writerAgent = createWriterAgent()
-const criticAgent = createCriticAgent()
-const editorAgent = createEditorAgent()
+// ============= Schemas (Contracts) =============
 
-// Create channel hub for real-time communication
-const channelHub = createChannelHub({ retentionMs: 300000 })
+const QueryPlanSchema = z.object({
+  searchQueries: z.array(z.string()),
+  searchStrategy: z.object({
+    focusAreas: z.array(z.string()),
+    suggestedSources: z.array(z.string())
+  })
+})
 
-// Define team
-const writingTeam = defineTeam({
-  id: 'writing-team',
-  name: 'Research & Writing Team',
-  description: 'A team that researches topics and produces polished articles',
+const SearchResultsSchema = z.object({
+  papers: z.array(z.object({
+    title: z.string(),
+    authors: z.array(z.string()),
+    abstract: z.string()
+  })),
+  totalFound: z.number()
+})
+
+const ReviewResultSchema = z.object({
+  approved: z.boolean(),
+  relevantPapers: z.array(z.object({
+    title: z.string(),
+    relevanceScore: z.number()
+  })),
+  additionalQueries: z.array(z.string()).optional()
+})
+
+// ============= Agents =============
+
+const planner = defineLLMAgent({
+  id: 'planner',
+  inputSchema: z.object({ userRequest: z.string() }),
+  outputSchema: QueryPlanSchema,
+  system: 'You are a query planning specialist.',
+  buildPrompt: ({ userRequest }) =>
+    `Create search queries for: "${userRequest}"`
+})
+
+const searcher = defineLLMAgent({
+  id: 'searcher',
+  inputSchema: z.object({
+    queries: z.array(z.string()),
+    sources: z.array(z.string())
+  }),
+  outputSchema: SearchResultsSchema,
+  system: 'You are a literature search specialist.',
+  buildPrompt: ({ queries }) =>
+    `Search for papers matching: ${queries.join(', ')}`
+})
+
+const reviewer = defineLLMAgent({
+  id: 'reviewer',
+  inputSchema: SearchResultsSchema,
+  outputSchema: ReviewResultSchema,
+  system: 'You are a research quality reviewer.',
+  buildPrompt: (results) =>
+    `Review these ${results.papers.length} papers for relevance.`
+})
+
+// ============= Team Definition =============
+
+const team = defineTeam({
+  id: 'literature-research',
+  name: 'Literature Research Team',
+  description: 'A team that researches academic literature',
 
   agents: {
-    researcher: agentHandle('researcher', researcherAgent, {
-      role: 'Research Specialist',
-      capabilities: ['web-search', 'document-analysis']
+    planner: agentHandle('planner', planner, {
+      role: 'Query Planning Specialist',
+      capabilities: ['query-planning', 'strategy']
     }),
-    writer: agentHandle('writer', writerAgent, {
-      role: 'Content Writer',
-      capabilities: ['article-writing', 'summarization']
+    searcher: agentHandle('searcher', searcher, {
+      role: 'Literature Search Specialist',
+      capabilities: ['search', 'document-retrieval']
     }),
-    critic: agentHandle('critic', criticAgent, {
-      role: 'Quality Critic',
-      capabilities: ['review', 'feedback']
-    }),
-    editor: agentHandle('editor', editorAgent, {
-      role: 'Editor',
-      capabilities: ['editing', 'polishing']
+    reviewer: agentHandle('reviewer', reviewer, {
+      role: 'Quality Reviewer',
+      capabilities: ['review', 'quality-assessment']
     })
   },
 
-  // Shared state for all agents
-  state: stateConfig.memory('writing-team'),
+  // Shared state configuration
+  state: stateConfig.memory('literature-research'),
 
   // Communication channels
   channels: {
@@ -851,26 +1083,52 @@ const writingTeam = defineTeam({
     feedback: { kind: 'reqrep' }
   },
 
-  // Flow: Research -> Write -> Critique/Refine Loop -> Final Edit
+  // Flow: Plan -> Search -> Review Loop
   flow: seq(
-    // Phase 1: Research
-    invoke('researcher', input.initial()),
+    // Step 1: Create search plan
+    step(planner)
+      .in(state.initial<{ userRequest: string }>())
+      .name('Create search plan')
+      .out(state.path<z.infer<typeof QueryPlanSchema>>('plan')),
 
-    // Phase 2: Initial Draft
-    invoke('writer', input.prev()),
+    // Step 2: Execute search (with transformation)
+    step(searcher)
+      .in(mapInput(
+        state.path<z.infer<typeof QueryPlanSchema>>('plan'),
+        (plan) => ({
+          queries: plan.searchQueries,
+          sources: plan.searchStrategy.suggestedSources
+        })
+      ))
+      .name('Execute search')
+      .out(state.path<z.infer<typeof SearchResultsSchema>>('search')),
 
-    // Phase 3: Critique and Refine (up to 3 iterations)
+    // Step 3: Review loop
     loop(
       seq(
-        invoke('critic', input.prev()),
-        invoke('writer', input.prev())
-      ),
-      until.custom('reviews.approved'),
-      { maxIters: 3 }
-    ),
+        step(reviewer)
+          .in(state.path<z.infer<typeof SearchResultsSchema>>('search'))
+          .name('Review results')
+          .out(state.path<z.infer<typeof ReviewResultSchema>>('review')),
 
-    // Phase 4: Final Polish
-    invoke('editor', input.prev())
+        branch({
+          when: (s: any) => !s.review?.approved,
+          then: step(searcher)
+            .in(mapInput(
+              state.path<z.infer<typeof ReviewResultSchema>>('review'),
+              (r) => ({
+                queries: r.additionalQueries || [],
+                sources: ['arxiv', 'semantic_scholar']
+              })
+            ))
+            .name('Additional search')
+            .out(state.path<z.infer<typeof SearchResultsSchema>>('search')),
+          else: noop
+        })
+      ),
+      { type: 'field-eq', path: 'review.approved', value: true },
+      { maxIters: 2 }
+    )
   ),
 
   // Default settings
@@ -883,22 +1141,37 @@ const writingTeam = defineTeam({
   }
 })
 
+// ============= Runtime =============
+
+// Create channel hub for real-time communication
+const channelHub = createChannelHub({ retentionMs: 300000 })
+
 // Create runtime with bridge
-const { runtime, bridge } = createBridgedTeamRuntime(
-  {
-    team: writingTeam,
-    agentResolver: createMapBasedResolver({
-      researcher: researcherAgent,
-      writer: writerAgent,
-      critic: criticAgent,
-      editor: editorAgent
-    }),
-    channelHub,
-    onError: (error, agentId) => {
-      console.error(`Error in ${agentId}:`, error.message)
-    }
+const { runtime, bridge } = createBridgedTeamRuntime({
+  team,
+  agentResolver: createMapBasedResolver({
+    planner,
+    searcher,
+    reviewer
+  }),
+  channelHub,
+  onError: (error, agentId) => {
+    console.error(`Error in ${agentId}:`, error.message)
   }
-)
+})
+
+// Subscribe to events
+runtime.on('agent.started', ({ agentId, step }) => {
+  console.log(`[Step ${step}] Starting ${agentId}`)
+})
+
+runtime.on('agent.completed', ({ agentId, durationMs }) => {
+  console.log(`${agentId} completed in ${durationMs}ms`)
+})
+
+runtime.on('loop.iteration', ({ iteration, maxIterations }) => {
+  console.log(`Review loop: iteration ${iteration}/${maxIterations}`)
+})
 
 // Subscribe to progress updates
 channelHub.subscribe('progress.*', (msg) => {
@@ -906,25 +1179,20 @@ channelHub.subscribe('progress.*', (msg) => {
 })
 
 // Execute the team
-async function runWritingTeam(topic: string) {
-  console.log(`Starting research on: ${topic}`)
+async function runResearchTeam(request: string) {
+  console.log(`Starting research: ${request}`)
 
-  const result = await runtime.run({
-    topic,
-    requirements: 'Write a comprehensive 2000-word article'
-  })
+  const result = await runtime.run({ userRequest: request })
 
   if (result.success) {
-    console.log('\n=== Final Article ===')
+    console.log('\n=== Results ===')
     console.log(result.output)
 
     // Print execution stats
     console.log('\n=== Execution Stats ===')
-    console.log(`Total steps: ${result.trace.length}`)
-    console.log(`Researcher invocations: ${bridge.getInvocationCount('researcher')}`)
-    console.log(`Writer invocations: ${bridge.getInvocationCount('writer')}`)
-    console.log(`Critic invocations: ${bridge.getInvocationCount('critic')}`)
-    console.log(`Editor invocations: ${bridge.getInvocationCount('editor')}`)
+    console.log(`Planner invocations: ${bridge.getInvocationCount('planner')}`)
+    console.log(`Searcher invocations: ${bridge.getInvocationCount('searcher')}`)
+    console.log(`Reviewer invocations: ${bridge.getInvocationCount('reviewer')}`)
   } else {
     console.error('Team execution failed:', result.error)
   }
@@ -933,7 +1201,7 @@ async function runWritingTeam(topic: string) {
 }
 
 // Run
-runWritingTeam('The Future of AI in Healthcare')
+runResearchTeam('Find papers on transformer architectures in vision models')
 ```
 
 ---
@@ -954,22 +1222,20 @@ import {
   seq,
   par,
   loop,
-  invoke,
+  map,
+  choose,
   race,
   supervise,
   gate,
+  join,
+  transfer,
 
-  // Input Selectors
-  input,
-
-  // Until Conditions
-  until,
-
-  // Reducers
-  merge,
-  collect,
-  first,
-  vote,
+  // Contract-First API
+  step,
+  state,
+  mapInput,
+  branch,
+  noop,
 
   // Runtime
   TeamRuntime,
@@ -1023,10 +1289,15 @@ interface AgentHandle { ... }
 interface TeamDefaults { ... }
 
 // Flow
-type FlowSpec = SeqSpec | ParSpec | LoopSpec | InvokeSpec | RaceSpec | SuperviseSpec | GateSpec
-interface InputSpec { ... }
+type FlowSpec = SeqSpec | ParSpec | LoopSpec | InvokeSpec | RaceSpec | SuperviseSpec | GateSpec | BranchSpec | NoopSpec
+interface InputRef { ... }
 interface JoinSpec { ... }
 interface UntilSpec { ... }
+
+// Contract-First
+interface TypedStateRef<T> { ... }
+interface MappedInputRef<S, T> { ... }
+interface StepBuilder<I, O> { ... }
 
 // Runtime
 interface TeamRunResult { success: boolean; output: unknown; trace: TeamTraceEvent[] }
