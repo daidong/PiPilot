@@ -562,6 +562,56 @@ const unsub = blackboard.subscribe('research.*', (key, value) => {
 })
 ```
 
+### Agent State Isolation (Optional)
+
+Enable namespace isolation to give each agent private state while sharing a team namespace:
+
+```typescript
+const team = defineTeam({
+  id: 'isolated-team',
+  agents: { /* ... */ },
+  flow: /* ... */,
+
+  // Enable state isolation
+  isolation: {
+    enabled: true,
+    conflictStrategy: 'last-write-wins',  // or 'error', 'merge'
+    permissions: [
+      // Custom permission rules (optional)
+      { agentId: 'admin', namespace: 'team', permission: 'write' }
+    ]
+  }
+})
+```
+
+#### How Isolation Works
+
+When `isolation.enabled` is true:
+
+| Namespace | Access | Description |
+|-----------|--------|-------------|
+| `team` | All agents read/write | Shared team state |
+| `agent.<id>` | Only that agent | Private agent state |
+
+```typescript
+// Inside agent execution:
+
+// Write to shared team namespace
+state.put('findings', data)  // writes to team.findings
+
+// Access private namespace (via IsolatedBlackboard)
+state.getPrivate('scratchpad')  // reads from agent.<agentId>.scratchpad
+state.setPrivate('scratchpad', data)  // writes to agent.<agentId>.scratchpad
+```
+
+#### Conflict Strategies
+
+| Strategy | Behavior |
+|----------|----------|
+| `last-write-wins` | Latest write overwrites (default) |
+| `error` | Throw error on concurrent writes |
+| `merge` | Attempt to merge objects |
+
 ---
 
 ## Channels

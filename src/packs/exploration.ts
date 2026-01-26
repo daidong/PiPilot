@@ -1,5 +1,5 @@
 /**
- * exploration - 探索指南包
+ * exploration - Code Exploration Guide Pack
  */
 
 import { definePack } from '../factories/define-pack.js'
@@ -7,28 +7,28 @@ import type { Pack } from '../types/pack.js'
 import { defineGuardPolicy, defineApprovalPolicy } from '../factories/define-policy.js'
 
 /**
- * 探索前先了解结构策略
+ * Suggest exploration before modification policy
  */
 const exploreBeforeModify = defineApprovalPolicy({
   id: 'explore-before-modify',
-  description: '修改前建议先了解项目结构',
+  description: 'Suggest exploring project structure before making modifications',
   priority: 50,
   match: (ctx) => {
-    // 检查会话状态是否已探索
+    // Check if session has explored
     const hasExplored = ctx.sessionId && (ctx as unknown as { sessionState?: { get: (k: string) => boolean } })
       .sessionState?.get?.('hasExplored')
 
     return ['edit', 'write'].includes(ctx.tool) && !hasExplored
   },
-  message: '建议先用 ctx.get("repo.index") 了解项目结构。确定要直接修改吗？'
+  message: 'Consider exploring the project structure first with glob("**/*"). Proceed with modification anyway?'
 })
 
 /**
- * 禁止用 bash 做探索策略
+ * Discourage bash for exploration policy
  */
 const noBashExplore = defineGuardPolicy({
   id: 'no-bash-explore',
-  description: '禁止使用 bash 进行代码探索',
+  description: 'Discourage using bash for code exploration',
   priority: 30,
   match: (ctx) => {
     if (ctx.tool !== 'bash') return false
@@ -39,30 +39,30 @@ const noBashExplore = defineGuardPolicy({
   decide: (ctx) => {
     const cmd = (ctx.input as { command?: string })?.command ?? ''
 
-    // 构建替代建议
+    // Build alternative suggestion
     let suggestion = ''
     if (/\bls\b/.test(cmd) || /\btree\b/.test(cmd) || /\bfind\b/.test(cmd)) {
-      suggestion = 'ctx.get("repo.index")'
+      suggestion = 'glob("**/*")'
     } else if (/\bgrep\b|\brg\b/.test(cmd)) {
-      suggestion = 'ctx.get("repo.search", { pattern: "..." })'
+      suggestion = 'grep({ pattern: "...", path: "." })'
     } else if (/\bcat\b|\bhead\b|\btail\b/.test(cmd)) {
-      suggestion = 'ctx.get("repo.file", { path: "..." })'
+      suggestion = 'read({ path: "..." })'
     }
 
     return {
       action: 'deny',
-      reason: `请使用 ${suggestion || 'ctx.get'} 而不是 bash 命令`
+      reason: `Please use ${suggestion || 'dedicated tools (glob, grep, read)'} instead of bash commands`
     }
   }
 })
 
 /**
- * 探索指南 Pack
+ * Exploration Guide Pack
  */
 export function exploration(): Pack {
   return definePack({
     id: 'exploration',
-    description: '代码探索指南和策略',
+    description: 'Code exploration guidance and policies',
 
     policies: [
       exploreBeforeModify,
@@ -70,32 +70,34 @@ export function exploration(): Pack {
     ],
 
     promptFragment: `
-## 代码探索指南
+## Code Exploration Guide
 
-### 优先使用 ctx.get
-在探索代码时，优先使用 ctx.get 而不是原始工具：
+### Exploration Tools
+Use dedicated tools for exploring codebases:
 
-| 需求 | 使用 ctx.get | 不要用 |
-|------|------------|--------|
-| 查看项目结构 | ctx.get("repo.index") | ls, tree, find |
-| 搜索代码 | ctx.get("repo.search", {...}) | grep, rg |
-| 读取文件 | ctx.get("repo.file", {...}) | read (低层) |
-| Git 状态 | ctx.get("repo.git") | git status |
+| Need | Use Tool | Don't Use |
+|------|----------|-----------|
+| List project structure | glob("**/*") | ls, tree, find |
+| Search code | grep({ pattern: "...", path: "." }) | grep, rg |
+| Read file content | read({ path: "..." }) | cat, head, tail |
 
-### ctx.get 的优势
-1. **结构化输出** - 返回格式化的、易读的内容
-2. **预算控制** - 自动限制结果数量
-3. **覆盖度说明** - 告诉你是否看到了完整结果
-4. **缓存** - 重复请求会使用缓存
+### Exploration Workflow
+1. Use \`glob("**/*")\` to understand project structure
+2. Use \`grep({ pattern: "...", path: "." })\` to find relevant code
+3. Use \`read({ path: "..." })\` to read specific files
+4. Understand the code before making modifications
 
-### 探索流程
-1. 先用 \`ctx.get("repo.index")\` 了解项目结构
-2. 用 \`ctx.get("repo.search", {...})\` 找到相关代码
-3. 用 \`ctx.get("repo.file", {...})\` 阅读具体实现
-4. 理解后再进行修改
+### Context Sources
+For session history and memory:
+- \`ctx.get("session.messages")\` - Recent conversation
+- \`ctx.get("session.trace")\` - Operation trace
+- \`ctx.get("ctx.catalog")\` - List all available context sources
 
-### 注意 coverage 信息
-如果返回结果显示 "not complete"，根据 suggestions 决定是否需要进一步探索。
+### Best Practices
+1. Explore before modifying unfamiliar code
+2. Use glob to find files by pattern
+3. Use grep to search for specific patterns
+4. Read files to understand implementation details
     `.trim()
   })
 }

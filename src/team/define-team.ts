@@ -8,6 +8,7 @@
 import type { FlowSpec, TransferSpec } from './flow/ast.js'
 import type { ReducerSpec } from './flow/reducers.js'
 import type { BlackboardConfig } from './state/blackboard.js'
+import type { ConflictStrategy } from './state/conflict-resolver.js'
 import type { AgentDefinition } from '../types/agent.js'
 
 // ============================================================================
@@ -110,6 +111,30 @@ export interface TeamDefaults {
 }
 
 /**
+ * Permission rule for agent isolation
+ */
+export interface PermissionRule {
+  /** Agent ID (use '*' for wildcard) */
+  agentId: string
+  /** Namespace to grant access to */
+  namespace: string
+  /** Permission level */
+  permission: 'read' | 'write' | 'admin'
+}
+
+/**
+ * State isolation configuration
+ */
+export interface IsolationConfig {
+  /** Enable agent namespace isolation */
+  enabled: boolean
+  /** Conflict resolution strategy for shared state (default: last-write-wins) */
+  conflictStrategy?: ConflictStrategy
+  /** Custom permission rules (optional) */
+  permissions?: PermissionRule[]
+}
+
+/**
  * Team definition
  */
 export interface TeamDefinition {
@@ -125,6 +150,13 @@ export interface TeamDefinition {
 
   /** Shared state configuration */
   state?: BlackboardConfig
+
+  /**
+   * State isolation configuration (optional, opt-in)
+   * When enabled, uses IsolatedBlackboard instead of Blackboard
+   * for agent namespace isolation
+   */
+  isolation?: IsolationConfig
 
   /** Channel configurations */
   channels?: Record<string, ChannelConfig>

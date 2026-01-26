@@ -3,7 +3,7 @@
  *
  * An interactive email assistant agent that:
  * - Reads emails from local SQLite database (ChatMail) via MCP
- * - Uses facts system for persistent knowledge (schema, preferences)
+ * - Uses kv-memory for persistent knowledge (schema, preferences)
  * - Maintains long-term memory across sessions
  *
  * This example demonstrates using the SQLite MCP server which is now
@@ -52,20 +52,20 @@ Database schema is provided in "Pre-loaded Context" section below.
 ## Schema Discovery (only if no pre-loaded schema)
 If you need to discover schema:
 1. Call sqlite_describe_table to get column names
-2. Save discoveries using fact-remember with topics=["schema", "database"]
+2. Save discoveries using memory-set with key like "schema:<table_name>"
 3. Future sessions will have this schema pre-loaded automatically
 
 ## Learning from Errors
 If a query fails due to wrong column name:
 1. Call sqlite_describe_table to get correct columns
-2. Save correction using fact-remember with topics=["schema", "database"]
+2. Save correction using memory-set with key like "schema:<table_name>"
 3. Retry with corrected query`
 
 const CONSTRAINTS = [
   // Schema usage
   'USE column names from "Pre-loaded Context" section - do NOT guess',
   'Only call sqlite_describe_table if column not in pre-loaded schema',
-  'Save any schema discoveries using fact-remember with topics=["schema", "database"]',
+  'Save any schema discoveries using memory-set with key like "schema:<table_name>"',
 
   // Database query safety
   'Only execute read-only queries on the email database',
@@ -74,7 +74,7 @@ const CONSTRAINTS = [
 
   // Privacy and UX
   'Respect user privacy - never share email content externally',
-  'Remember user preferences using fact-remember with confidence="confirmed"'
+  'Remember user preferences using memory-set with key like "pref:<preference_name>"'
 ]
 
 // ============================================================================
@@ -106,51 +106,54 @@ function expandPath(p: string): string {
 }
 
 /**
- * Load schema facts from the facts store to inject into system prompt.
- * This ensures the LLM always has schema info without needing to call facts.list.
+ * Load schema from kv-memory store to inject into system prompt.
+ * This ensures the LLM always has schema info without needing to call describe_table.
  */
-async function loadSchemaFacts(projectPath: string, debug: boolean): Promise<string | undefined> {
-  const factsPath = path.join(projectPath, '.agent-foundry', 'memory', 'facts.json')
+async function loadSchemaFromMemory(projectPath: string, debug: boolean): Promise<string | undefined> {
+  const memoryPath = path.join(projectPath, '.agent-foundry', 'memory', 'kv-store.json')
 
   try {
     const content = await import('node:fs').then(fs =>
-      fs.promises.readFile(factsPath, 'utf-8')
+      fs.promises.readFile(memoryPath, 'utf-8')
     )
     const data = JSON.parse(content)
-    const facts = data.facts || []
+    const entries = data.entries || {}
 
-    // Filter for schema-related facts
-    const schemaFacts = facts.filter((f: any) =>
-      f.topics?.includes('schema') || f.topics?.includes('database')
+    // Filter for schema-related entries (keys starting with "schema:")
+    const schemaEntries = Object.entries(entries).filter(([key]) =>
+      key.startsWith('schema:')
     )
 
-    if (schemaFacts.length === 0) {
+    if (schemaEntries.length === 0) {
       if (debug) {
-        console.log('[Debug] No schema facts found, agent will discover schema')
+        console.log('[Debug] No schema entries found, agent will discover schema')
       }
       return undefined
     }
 
-    // Build context string from schema facts
+    // Build context string from schema entries
     const lines = [
-      '## Pre-loaded Database Schema (from facts)',
+      '## Pre-loaded Database Schema (from memory)',
       '',
       'Use this schema information directly. Do NOT call sqlite_describe_table unless you need columns not listed here.',
       ''
     ]
 
-    for (const fact of schemaFacts) {
-      lines.push(`- ${fact.content}`)
+    for (const [key, value] of schemaEntries) {
+      const tableName = key.replace('schema:', '')
+      lines.push(`### Table: ${tableName}`)
+      lines.push(`${JSON.stringify(value)}`)
+      lines.push('')
     }
 
     if (debug) {
-      console.log(`[Debug] Loaded ${schemaFacts.length} schema facts into context`)
+      console.log(`[Debug] Loaded ${schemaEntries.length} schema entries into context`)
     }
 
     return lines.join('\n')
   } catch (error) {
     if (debug) {
-      console.log('[Debug] No facts file found, agent will discover schema')
+      console.log('[Debug] No memory file found, agent will discover schema')
     }
     return undefined
   }
@@ -183,9 +186,9 @@ export async function createPersonalAssistant(config: PersonalAssistantConfig): 
     console.log(`[Debug] Project path: ${projectPath}`)
   }
 
-  // Load schema facts to inject into system prompt
-  // This ensures the LLM has schema info without needing to call facts.list or describe_table
-  const schemaContext = await loadSchemaFacts(projectPath, debug)
+  // Load schema from memory to inject into system prompt
+  // This ensures the LLM has schema info without needing to call describe_table
+  const schemaContext = await loadSchemaFromMemory(projectPath, debug)
 
   // Create MCP provider for SQLite
   // Uses mcp-server-sqlite-npx from the MCP catalog (src/recommendation/data/mcp-catalog.yaml)
@@ -236,11 +239,13 @@ export async function createPersonalAssistant(config: PersonalAssistantConfig): 
 
   // Merge all packs:
   // - safe: basic file operations
-  // - sessionMemory: facts system for persistent knowledge
+  // - kvMemory: key-value memory for persistent knowledge
+  // - sessionHistory: conversation history viewing
   // - MCP packs: sqlite, markitdown
   const allPacks = mergePacks(
     packs.safe(),
-    packs.sessionMemory(),  // Provides facts.list, fact-remember, fact-forget
+    packs.kvMemory(),        // Provides memory-set, memory-delete tools
+    packs.sessionHistory(),  // Provides session.messages, session.trace, session.search
     ...mcpPacks
   )
 
@@ -297,7 +302,7 @@ async function main() {
   console.log('This assistant can:')
   console.log('  - Read and summarize your emails (read-only)')
   console.log('  - Analyze attachments (PDF, Word, Excel, images)')
-  console.log('  - Learn and remember your preferences (via facts)')
+  console.log('  - Learn and remember your preferences (via kv-memory)')
   console.log('  - Persist knowledge across sessions')
   console.log('')
   console.log('Type your questions. Type "exit" or "quit" to quit.')
@@ -346,7 +351,7 @@ async function main() {
 Usage Tips:
 -----------
 1. Start by asking: "What tables are in my email database?"
-   (The agent will discover schema and save it as facts)
+   (The agent will discover schema and save it to memory)
 
 2. Then explore: "Show me emails from this week"
 
@@ -358,17 +363,17 @@ Usage Tips:
 
 6. Set preferences: "Remember that I prefer brief responses"
 
-7. Check memory: "What facts do you remember about me?"
+7. Check memory: "What have you saved to memory?"
 
 Supported attachment formats:
   PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx),
   Images (PNG, JPG with OCR), Audio (MP3, WAV), HTML
 
 Knowledge Persistence:
-  - Schema and preferences are stored in .agent-foundry/memory/facts.json
+  - Schema and preferences are stored in .agent-foundry/memory/kv-store.json
   - Knowledge persists across sessions
-  - Use "fact-remember" to add new knowledge
-  - Use "facts.list" to see all stored knowledge
+  - Use "memory-set" to save new knowledge
+  - Use ctx.get("memory.list") to see all stored knowledge
 
 Commands:
 ---------

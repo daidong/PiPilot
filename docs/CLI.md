@@ -329,9 +329,9 @@ custom:
 | Pack | Risk | Description |
 |------|------|-------------|
 | `kv-memory` | Safe | Key-value memory storage |
-| `session-memory` | Safe | Session history + facts/decisions |
+| `session-history` | Safe | Session history viewing |
 | `docs` | Safe | Document library (requires index-docs) |
-| `discovery` | Safe | Context source discovery (ctx.catalog, ctx.describe, ctx.route) |
+| `discovery` | Safe | Context source discovery (ctx.catalog, ctx.describe) |
 
 ### Pack Options
 

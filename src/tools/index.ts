@@ -17,7 +17,7 @@ export { edit } from './edit.js'
 export { bash } from './bash.js'
 export { glob } from './glob.js'
 export { grep } from './grep.js'
-export { ctxGet } from './ctx-get.js'
+export { ctxGet, createCtxGetTool } from './ctx-get.js'
 export { fetchTool } from './fetch.js'
 export { llmCall } from './llm-call.js'
 export { llmExpand } from './llm-expand.js'
@@ -26,8 +26,6 @@ export { browser, browse } from './browser.js'
 export { memoryPut } from './memory-put.js'
 export { memoryUpdate } from './memory-update.js'
 export { memoryDelete } from './memory-delete.js'
-export { factRemember } from './fact-remember.js'
-export { factForget } from './fact-forget.js'
 
 // ============ 类型导出 ============
 
@@ -37,7 +35,7 @@ export type { EditInput, EditOutput } from './edit.js'
 export type { BashInput, BashOutput } from './bash.js'
 export type { GlobInput, GlobOutput } from './glob.js'
 export type { GrepInput, GrepOutput } from './grep.js'
-export type { CtxGetInput } from './ctx-get.js'
+export type { CtxGetInput, CtxGetOutput, CreateCtxGetOptions, SourceInfo } from './ctx-get.js'
 export type { FetchInput, FetchOutput } from './fetch.js'
 export type { LLMCallInput, LLMCallOutput } from './llm-call.js'
 export type { LLMExpandInput, LLMExpandOutput } from './llm-expand.js'
@@ -46,8 +44,6 @@ export type { BrowserInput, BrowserOutput, BrowseInput, BrowseOutput, SnapshotEl
 export type { MemoryPutInput, MemoryPutOutput } from './memory-put.js'
 export type { MemoryUpdateInput, MemoryUpdateOutput } from './memory-update.js'
 export type { MemoryDeleteInput, MemoryDeleteOutput } from './memory-delete.js'
-export type { FactRememberInput, FactRememberOutput } from './fact-remember.js'
-export type { FactForgetInput, FactForgetOutput } from './fact-forget.js'
 
 // ============ 分层工具集 ============
 
@@ -67,8 +63,6 @@ import { browser, browse } from './browser.js'
 import { memoryPut } from './memory-put.js'
 import { memoryUpdate } from './memory-update.js'
 import { memoryDelete } from './memory-delete.js'
-import { factRemember } from './fact-remember.js'
-import { factForget } from './fact-forget.js'
 
 /**
  * 安全核心工具（默认启用）
@@ -145,18 +139,7 @@ export const memoryTools: Tool<any, any>[] = [
 ]
 
 /**
- * Facts and decisions tools
- *
- * Risk level: safe
- * Contains: fact-remember, fact-forget
- */
-export const factsTools: Tool<any, any>[] = [
-  factRemember,
-  factForget
-]
-
-/**
- * 所有内置工具
+ * All builtin tools
  */
 export const builtinTools: Tool<any, any>[] = [
   ...safeTools,
@@ -164,8 +147,7 @@ export const builtinTools: Tool<any, any>[] = [
   ...networkTools,
   ...computeTools,
   ...browserTools,
-  ...memoryTools,
-  ...factsTools
+  ...memoryTools
 ]
 
 /**
@@ -306,20 +288,6 @@ export const toolMeta: Record<string, ToolMeta> = {
     category: 'memory',
     requiresExplicitEnable: false,
     description: 'Delete a memory item'
-  },
-  'fact-remember': {
-    name: 'fact-remember',
-    riskLevel: 'safe',
-    category: 'memory',
-    requiresExplicitEnable: false,
-    description: 'Add a fact or decision to long-term memory'
-  },
-  'fact-forget': {
-    name: 'fact-forget',
-    riskLevel: 'safe',
-    category: 'memory',
-    requiresExplicitEnable: false,
-    description: 'Forget a fact or deprecate a decision'
   }
 }
 

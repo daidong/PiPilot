@@ -4,6 +4,11 @@
  * A simple example demonstrating the multi-agent team system
  * using mock agents that show clear data flow.
  *
+ * This example uses the schema-free API (RFC-002):
+ * - simpleStep('agent').from('path').to('output')
+ * - simpleBranch, simpleSeq, simpleLoop
+ * - JSON output mode instead of Zod schemas
+ *
  * Flow: Planner → Executor → loop(Reviewer → Executor) → Final Output
  *
  * Usage:
@@ -17,37 +22,9 @@ import {
   seq,
   loop,
   createAutoTeamRuntime,
+  simpleStep,
   type TeamRunResult
 } from '../../src/team/index.js'
-import type { InvokeSpec, InputRef } from '../../src/team/flow/ast.js'
-
-// ============================================================================
-// AST Helpers (for mock agents without Zod schemas)
-// ============================================================================
-
-/**
- * Build an invoke spec for mock agents (without Zod schemas).
- * For real LLM agents, use step().in().out() instead.
- */
-function buildInvoke(
-  agent: string,
-  inputRef: InputRef,
-  options?: { outputAs?: { path: string }; name?: string }
-): InvokeSpec {
-  return {
-    kind: 'invoke',
-    agent,
-    input: inputRef,
-    outputAs: options?.outputAs,
-    name: options?.name
-  }
-}
-
-const inputRef = {
-  initial: (): InputRef => ({ ref: 'initial' }),
-  prev: (): InputRef => ({ ref: 'prev' }),
-  state: (path: string): InputRef => ({ ref: 'state', path })
-}
 
 // ============================================================================
 // Mock Agent Type
@@ -223,7 +200,7 @@ const STATE_PATHS = {
 }
 
 /**
- * Create the demo team
+ * Create the demo team using schema-free API
  */
 export function createDemoTeam() {
   // Create mock agents
@@ -240,8 +217,7 @@ export function createDemoTeam() {
     }
   }
 
-  // Define team using AST-level flow spec (for mock agents)
-  // For real LLM agents with Zod schemas, use step().in().out() instead
+  // Define team using schema-free step API (RFC-002)
   const team = defineTeam({
     id: 'demo-team',
     name: 'Demo Multi-Agent Team',
@@ -255,30 +231,19 @@ export function createDemoTeam() {
 
     state: stateConfig.memory('demo'),
 
+    // Schema-free flow using simpleStep
     flow: seq(
       // Step 1: Planner creates a plan
-      buildInvoke('planner', inputRef.initial(), {
-        outputAs: { path: STATE_PATHS.PLAN },
-        name: 'Create plan'
-      }),
+      simpleStep('planner').from('initial').to(STATE_PATHS.PLAN),
 
       // Step 2: Executor runs initial analysis
-      buildInvoke('executor', inputRef.state(STATE_PATHS.PLAN), {
-        outputAs: { path: STATE_PATHS.RESULTS },
-        name: 'Execute plan'
-      }),
+      simpleStep('executor').from(STATE_PATHS.PLAN).to(STATE_PATHS.RESULTS),
 
       // Step 3: Review-refine loop
       loop(
         seq(
-          buildInvoke('reviewer', inputRef.state(STATE_PATHS.RESULTS), {
-            outputAs: { path: STATE_PATHS.FEEDBACK },
-            name: 'Review results'
-          }),
-          buildInvoke('executor', inputRef.state(STATE_PATHS.FEEDBACK), {
-            outputAs: { path: STATE_PATHS.RESULTS },
-            name: 'Refine results'
-          })
+          simpleStep('reviewer').from(STATE_PATHS.RESULTS).to(STATE_PATHS.FEEDBACK),
+          simpleStep('executor').from(STATE_PATHS.FEEDBACK).to(STATE_PATHS.RESULTS)
         ),
         // Until condition: approved field equals true
         { type: 'field-eq', path: `${STATE_PATHS.FEEDBACK}.approved`, value: true },
@@ -333,7 +298,7 @@ export function createDemoTeam() {
 
 async function main() {
   console.log('=' .repeat(60))
-  console.log('Multi-Agent Team Demo')
+  console.log('Multi-Agent Team Demo (Schema-Free API)')
   console.log('=' .repeat(60))
   console.log('')
   console.log('This demo shows a plan-execute-review workflow:')

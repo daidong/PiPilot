@@ -535,7 +535,6 @@ export class ContextManager {
     lines.push('## Help')
     lines.push('- Use `ctx.get("ctx.catalog")` for detailed listing')
     lines.push('- Use `ctx.get("ctx.describe", { id: "..." })` for full documentation')
-    lines.push('- Use `ctx.get("ctx.route", { intent: "search", query: "..." })` for routing help')
 
     return lines.join('\n')
   }

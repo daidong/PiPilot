@@ -11,7 +11,9 @@
  */
 
 import type { ZodSchema } from 'zod'
-import type { TypedStateRef } from '../state/typed-blackboard.js'
+
+// Type alias for schema-free API (keeping interface compatible)
+type TypedStateRef<T> = { ref: 'state'; path: string; _phantom?: T }
 
 // ============================================================================
 // Types

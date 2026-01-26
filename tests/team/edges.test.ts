@@ -20,8 +20,14 @@ import {
   omit,
   merge
 } from '../../src/team/flow/edges.js'
-import { state } from '../../src/team/state/typed-blackboard.js'
 import type { InvokeSpec, InputRef } from '../../src/team/flow/ast.js'
+
+// Local mock of state helpers for schema-free API
+const state = {
+  path: <T>(path: string) => ({ type: 'typed-state-ref' as const, path, _phantom: undefined as T | undefined }),
+  initial: <T>() => ({ type: 'typed-initial-ref' as const, _phantom: undefined as T | undefined }),
+  prev: <T>() => ({ type: 'typed-prev-ref' as const, _phantom: undefined as T | undefined })
+}
 
 // Local helpers for building AST nodes (since invoke/input are internal now)
 function buildInvoke(

@@ -6,13 +6,13 @@
  */
 
 import type { FlowSpec, InputRef } from './ast.js'
-import type {
-  TypedInputRef,
-  TypedStateRef,
-  TypedInitialRef,
-  TypedPrevRef,
-  TypedConstRef
-} from '../state/typed-blackboard.js'
+
+// Type aliases for schema-free API (keeping interface compatible)
+type TypedInputRef<T> = InputRef & { _phantom?: T }
+type TypedStateRef<T> = { ref: 'state'; path: string; _phantom?: T }
+type TypedInitialRef<T> = { ref: 'initial'; _phantom?: T }
+type TypedPrevRef<T> = { ref: 'prev'; _phantom?: T }
+type TypedConstRef<T> = { ref: 'const'; value: T }
 
 // ============================================================================
 // Types

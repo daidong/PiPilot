@@ -1,15 +1,15 @@
 /**
- * session.recent - Context source for recent conversation turns
+ * session.messages - Context source for conversation messages
  *
- * Provides a short view of "what happened recently" for continuation tasks.
- * Returns the last N turns of conversation with optional tool calls.
+ * Provides a view of recent conversation turns (user/assistant messages).
+ * This is different from session.trace which returns operation events.
  */
 
 import { defineContextSource, createSuccessResult, createErrorResult } from '../factories/define-context-source.js'
 import type { ContextSource, ContextResult } from '../types/context.js'
 import type { Message } from '../types/session.js'
 
-export interface SessionRecentParams {
+export interface SessionMessagesParams {
   /** Number of recent turns to include (default: 10) */
   turns?: number
   /** Include tool call messages (default: true) */
@@ -20,7 +20,7 @@ export interface SessionRecentParams {
   format?: 'summary' | 'full'
 }
 
-export interface SessionRecentData {
+export interface SessionMessagesData {
   messages: {
     id: string
     role: 'user' | 'assistant' | 'tool' | 'system'
@@ -34,11 +34,11 @@ export interface SessionRecentData {
   totalMessages: number
 }
 
-export const sessionRecent: ContextSource<SessionRecentParams, SessionRecentData> = defineContextSource({
-  id: 'session.recent',
+export const sessionMessages: ContextSource<SessionMessagesParams, SessionMessagesData> = defineContextSource({
+  id: 'session.messages',
   kind: 'index',
-  description: 'Get recent conversation turns. Shows the last N messages for context continuation.',
-  shortDescription: 'Get recent conversation',
+  description: 'Get recent conversation messages. Shows the last N user/assistant turns.',
+  shortDescription: 'Get conversation messages',
   resourceTypes: ['session'],
   params: [
     { name: 'turns', type: 'number', required: false, default: 10, description: 'Number of recent turns' },
@@ -47,7 +47,7 @@ export const sessionRecent: ContextSource<SessionRecentParams, SessionRecentData
     { name: 'format', type: 'string', required: false, default: 'summary', description: 'Output format', enum: ['summary', 'full'] }
   ],
   examples: [
-    { description: 'Get last 10 turns', params: {}, resultSummary: 'Recent 10 conversation turns' },
+    { description: 'Get last 10 messages', params: {}, resultSummary: 'Recent 10 conversation turns' },
     { description: 'Get last 5 turns without tools', params: { turns: 5, includeTools: false }, resultSummary: 'Last 5 user/assistant messages' },
     { description: 'Get full content', params: { turns: 3, format: 'full' }, resultSummary: 'Full content of last 3 turns' }
   ],
@@ -61,12 +61,12 @@ export const sessionRecent: ContextSource<SessionRecentParams, SessionRecentData
     truncateStrategy: 'tail'
   },
 
-  fetch: async (params, runtime): Promise<ContextResult<SessionRecentData>> => {
+  fetch: async (params, runtime): Promise<ContextResult<SessionMessagesData>> => {
     const startTime = Date.now()
 
     const messageStore = runtime.messageStore
     if (!messageStore) {
-      return createErrorResult('Message store not available. Make sure session-memory pack is loaded.', {
+      return createErrorResult('Message store not available. Make sure session-history pack is loaded.', {
         durationMs: Date.now() - startTime
       })
     }
@@ -100,7 +100,7 @@ export const sessionRecent: ContextSource<SessionRecentParams, SessionRecentData
 
     // Transform to output format
     const outputMessages = messages.map(m => {
-      const msg: SessionRecentData['messages'][0] = {
+      const msg: SessionMessagesData['messages'][0] = {
         id: m.id,
         role: m.role,
         summary: createSummary(m),
@@ -127,7 +127,7 @@ export const sessionRecent: ContextSource<SessionRecentParams, SessionRecentData
 
     // Render output
     const lines: string[] = [
-      '# Recent Conversation',
+      '# Conversation Messages',
       '',
       `**Session:** ${sessionId}`,
       `**Showing:** ${outputMessages.length} of ${totalMessages} messages`,
@@ -171,7 +171,7 @@ export const sessionRecent: ContextSource<SessionRecentParams, SessionRecentData
             : undefined
         },
         kindEcho: {
-          source: 'session.recent',
+          source: 'session.messages',
           kind: 'index',
           paramsUsed: { turns, includeTools, format }
         },

@@ -119,23 +119,23 @@ tools:
 
   - name: ctx-get
     category: safe
-    description: "Get context information (repo structure, Git status, etc.)"
+    description: "Get context information (session history, memory, documents)"
     useCases:
-      - Understand project structure
-      - Get Git information
       - View session history
+      - Access memory storage
+      - Browse documentation
     keywords:
       - context
       - info
-      - repo
-      - git
-      - project
+      - session
+      - memory
+      - docs
       - 上下文
       - 信息
     riskLevel: safe
     requiresApproval: false
     providedBy: safe
-    exampleUsage: 'ctx-get({ source: "repo.index" })'
+    exampleUsage: 'ctx-get({ source: "session.messages" })'
 
   # ============================================================================
   # Compute Tools

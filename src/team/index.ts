@@ -2,59 +2,75 @@
  * Team Module - Multi-Agent Collaboration
  *
  * This module provides primitives and combinators for building
- * multi-agent collaborative workflows using a contract-first approach.
+ * multi-agent collaborative workflows using a schema-free approach.
  *
  * @example
  * ```typescript
- * import { z } from 'zod'
  * import {
  *   defineTeam, agentHandle, stateConfig,
- *   seq, step, state, mapInput,
+ *   seq, loop, simpleStep, simpleBranch,
  *   createAutoTeamRuntime
  * } from 'agent-foundry/team'
- * import { defineLLMAgent } from 'agent-foundry'
+ * import { defineAgent, packs } from 'agent-foundry'
  *
- * // Define typed agents
- * const researcher = defineLLMAgent({
- *   id: 'researcher',
- *   inputSchema: z.object({ topic: z.string() }),
- *   outputSchema: z.object({ findings: z.array(z.string()) }),
- *   system: 'You are a researcher.',
- *   buildPrompt: ({ topic }) => `Research: ${topic}`
+ * // Define schema-free agents with JSON output mode
+ * const planner = defineAgent({
+ *   id: 'planner',
+ *   name: 'Research Planner',
+ *   identity: 'You are a research planner. Output JSON with searchQueries array.',
+ *   constraints: ['Always output valid JSON'],
+ *   packs: [packs.safe()],
+ *   model: { default: 'gpt-4o' }
  * })
  *
- * const writer = defineLLMAgent({
- *   id: 'writer',
- *   inputSchema: z.object({ findings: z.array(z.string()) }),
- *   outputSchema: z.object({ title: z.string(), content: z.string() }),
- *   system: 'You are a writer.',
- *   buildPrompt: ({ findings }) => `Write article based on: ${findings.join(', ')}`
+ * const searcher = defineAgent({
+ *   id: 'searcher',
+ *   name: 'Paper Searcher',
+ *   identity: 'You search academic papers. Output JSON with papers array.',
+ *   constraints: ['Always output valid JSON'],
+ *   packs: [packs.safe(), packs.network()],
+ *   model: { default: 'gpt-4o' }
  * })
  *
- * // Define team - agentHandle auto-creates runners
+ * // Create agent instances
+ * const plannerAgent = planner({ apiKey: 'sk-xxx' })
+ * const searcherAgent = searcher({ apiKey: 'sk-xxx' })
+ *
+ * // Helper to create runners
+ * const createRunner = (agent) => async (input) => {
+ *   const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
+ *   const result = await agent.run(inputStr)
+ *   return parseJsonOutput(result.output)
+ * }
+ *
+ * // Define team with schema-free flow
  * const team = defineTeam({
- *   id: 'my-team',
+ *   id: 'research-team',
  *   agents: {
- *     researcher: agentHandle('researcher', researcher),
- *     writer: agentHandle('writer', writer),
+ *     planner: agentHandle('planner', plannerAgent, { runner: createRunner(plannerAgent) }),
+ *     searcher: agentHandle('searcher', searcherAgent, { runner: createRunner(searcherAgent) }),
  *   },
- *   state: stateConfig.memory('my-team'),
+ *   state: stateConfig.memory('research-team'),
  *   flow: seq(
- *     step(researcher)
- *       .in(state.initial<{ topic: string }>())
- *       .out(state.path('research')),
- *     step(writer)
- *       .in(mapInput(state.path('research'), r => ({ findings: r.findings })))
- *       .out(state.path('article'))
+ *     simpleStep('planner').from('initial').to('plan'),
+ *     simpleStep('searcher').from('plan').to('papers'),
+ *     loop(
+ *       seq(
+ *         simpleStep('reviewer').from('papers').to('feedback'),
+ *         simpleBranch({
+ *           if: (s) => s?.feedback?.approved === false,
+ *           then: simpleStep('searcher').from('feedback').to('papers'),
+ *           else: { kind: 'noop' }
+ *         })
+ *       ),
+ *       { type: 'field-eq', path: 'feedback.approved', value: true },
+ *       { maxIters: 3 }
+ *     )
  *   )
  * })
  *
- * // Create runtime - no agentInvoker switch needed!
- * const runtime = createAutoTeamRuntime({
- *   team,
- *   context: { getLanguageModel: () => openai('gpt-4o') }
- * })
- *
+ * // Create runtime
+ * const runtime = createAutoTeamRuntime({ team, context: {} })
  * const result = await runtime.run({ topic: 'AI Safety' })
  * ```
  */
@@ -76,7 +92,9 @@ export type {
   ValidatorRegistration,
   ValidatorResult,
   ValidatorIssue,
-  TeamDefaults
+  TeamDefaults,
+  IsolationConfig,
+  PermissionRule
 } from './define-team.js'
 
 // Agent Registry
@@ -109,7 +127,8 @@ export type {
   TeamTraceEvent,
   TeamRuntimeConfig,
   AutoTeamRuntimeConfig,
-  TeamUsageStats
+  TeamUsageStats,
+  TeamState
 } from './team-runtime.js'
 
 // Runtime Events
@@ -199,3 +218,18 @@ export type {
   AgentBridgeConfig,
   BridgeTraceEvent
 } from './agent-bridge.js'
+
+// Utilities (format helpers)
+export {
+  format,
+  formatJson,
+  formatList,
+  formatBullets,
+  formatKeyValue,
+  formatTable,
+  formatTruncated
+} from './utils/index.js'
+
+export type {
+  FormatOptions
+} from './utils/index.js'

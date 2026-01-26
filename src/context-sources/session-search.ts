@@ -79,14 +79,14 @@ export const sessionSearch: ContextSource<SessionSearchParams, SessionSearchData
         durationMs: Date.now() - startTime,
         suggestions: [
           'Provide query: ctx.get("session.search", { query: "your search" })',
-          'Use ctx.get("session.recent") to see recent messages without search'
+          'Use ctx.get("session.messages") to see recent messages without search'
         ]
       })
     }
 
     const messageStore = runtime.messageStore as FileMessageStore | undefined
     if (!messageStore) {
-      return createErrorResult('Message store not available. Make sure session-memory pack is loaded.', {
+      return createErrorResult('Message store not available. Make sure session-history pack is loaded.', {
         durationMs: Date.now() - startTime
       })
     }

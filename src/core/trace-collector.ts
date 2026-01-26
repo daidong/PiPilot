@@ -1,28 +1,74 @@
 /**
- * TraceCollector - Trace 收集器
+ * TraceCollector - Event trace collector with correlation support
  */
 
-import type { TraceEvent, TraceEventType, TraceFilter } from '../types/trace.js'
+import type { TraceEvent, TraceEventType, TraceFilter, EventCorrelation } from '../types/trace.js'
 
 /**
- * 生成唯一 ID
+ * Generate unique ID
  */
 function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 }
 
 /**
- * Trace 收集器
+ * Configuration for TraceCollector
+ */
+export interface TraceCollectorConfig {
+  sessionId: string
+  runId?: string
+  agentId?: string
+}
+
+/**
+ * Trace collector with event correlation support
  */
 export class TraceCollector {
   private events: TraceEvent[] = []
   private sessionId: string
+  private runId: string
+  private agentId: string
   private currentStep = 0
   private currentTraceId: string | null = null
   private eventStack: string[] = []
 
-  constructor(sessionId: string) {
-    this.sessionId = sessionId
+  constructor(config: string | TraceCollectorConfig) {
+    if (typeof config === 'string') {
+      // Legacy support: just session ID
+      this.sessionId = config
+      this.runId = generateId()
+      this.agentId = 'default'
+    } else {
+      this.sessionId = config.sessionId
+      this.runId = config.runId ?? generateId()
+      this.agentId = config.agentId ?? 'default'
+    }
+  }
+
+  /**
+   * Get current correlation context
+   */
+  getCorrelation(): EventCorrelation {
+    return {
+      runId: this.runId,
+      stepId: this.currentStep,
+      agentId: this.agentId,
+      sessionId: this.sessionId
+    }
+  }
+
+  /**
+   * Set run ID
+   */
+  setRunId(runId: string): void {
+    this.runId = runId
+  }
+
+  /**
+   * Set agent ID
+   */
+  setAgentId(agentId: string): void {
+    this.agentId = agentId
   }
 
   /**
@@ -40,7 +86,7 @@ export class TraceCollector {
   }
 
   /**
-   * 记录事件
+   * Record an event with correlation fields
    */
   record(event: {
     type: TraceEventType
@@ -57,7 +103,9 @@ export class TraceCollector {
       sessionId: this.sessionId,
       step: this.currentStep,
       data: event.data ?? {},
-      parentId: event.parentId ?? this.eventStack[this.eventStack.length - 1]
+      parentId: event.parentId ?? this.eventStack[this.eventStack.length - 1],
+      runId: this.runId,
+      agentId: this.agentId
     }
 
     this.events.push(traceEvent)
@@ -99,7 +147,7 @@ export class TraceCollector {
   }
 
   /**
-   * 按条件过滤事件
+   * Filter events by criteria
    */
   filter(filter: TraceFilter): TraceEvent[] {
     return this.events.filter(event => {
@@ -119,6 +167,14 @@ export class TraceCollector {
       }
 
       if (filter.step !== undefined && event.step !== filter.step) {
+        return false
+      }
+
+      if (filter.runId && event.runId !== filter.runId) {
+        return false
+      }
+
+      if (filter.agentId && event.agentId !== filter.agentId) {
         return false
       }
 

@@ -76,7 +76,7 @@ export const sessionThread: ContextSource<SessionThreadParams, SessionThreadData
 
     const messageStore = runtime.messageStore
     if (!messageStore) {
-      return createErrorResult('Message store not available. Make sure session-memory pack is loaded.', {
+      return createErrorResult('Message store not available. Make sure session-history pack is loaded.', {
         durationMs: Date.now() - startTime
       })
     }

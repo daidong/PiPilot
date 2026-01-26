@@ -6,11 +6,12 @@
  * - Budget feedback: token consumption, cost tier, truncation
  * - Coverage info: completeness, limitations, suggestions
  * - Discovery via meta sources: ctx.catalog, ctx.describe
+ * - Dynamic source catalog embedded in schema for better LLM guidance
  */
 
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool } from '../types/tool.js'
-import type { ContextResult, CostTier, KindEcho, NextStep } from '../types/context.js'
+import type { ContextSource, ContextResult, CostTier, KindEcho, NextStep } from '../types/context.js'
 import { coerceObjectValues } from '../utils/schema-coercion.js'
 
 export interface CtxGetInput {
@@ -52,11 +53,67 @@ export interface CtxGetOutput {
 }
 
 /**
+ * Source info for schema generation
+ */
+export interface SourceInfo {
+  id: string
+  shortDescription: string
+  requiredParams?: string[]
+  optionalParams?: string[]
+}
+
+/**
  * Estimate token count (simple implementation)
  */
 function estimateTokens(text: string): number {
   // Rough estimate: ~3 chars per token (conservative for mixed content)
   return Math.ceil(text.length / 3)
+}
+
+/**
+ * Extract source info from ContextSource
+ */
+function extractSourceInfo(source: ContextSource): SourceInfo {
+  const requiredParams: string[] = []
+  const optionalParams: string[] = []
+
+  if (source.params) {
+    for (const param of source.params) {
+      if (param.required) {
+        requiredParams.push(param.name)
+      } else {
+        optionalParams.push(param.name)
+      }
+    }
+  }
+
+  return {
+    id: source.id,
+    shortDescription: source.shortDescription,
+    requiredParams: requiredParams.length > 0 ? requiredParams : undefined,
+    optionalParams: optionalParams.length > 0 ? optionalParams : undefined
+  }
+}
+
+/**
+ * Generate source catalog description for schema
+ */
+function generateSourceCatalog(sources: SourceInfo[]): string {
+  if (sources.length === 0) {
+    return 'Use ctx.catalog to discover available sources'
+  }
+
+  const lines: string[] = ['Available sources:']
+
+  for (const source of sources) {
+    let line = `- ${source.id}: ${source.shortDescription}`
+    if (source.requiredParams && source.requiredParams.length > 0) {
+      line += ` (requires: ${source.requiredParams.join(', ')})`
+    }
+    lines.push(line)
+  }
+
+  return lines.join('\n')
 }
 
 /**
@@ -88,66 +145,125 @@ ${nsListStr}
 - next: Suggested follow-up actions`
 }
 
-export const ctxGet: Tool<CtxGetInput, CtxGetOutput> = defineTool({
-  name: 'ctx-get',
-  description: generateDescription([]),  // Static fallback, runtime will have actual namespaces
-  parameters: {
-    source: {
-      type: 'string',
-      description: 'Context source ID (e.g., repo.index, docs.search, ctx.catalog)',
-      required: true
+/**
+ * Options for creating ctx-get tool
+ */
+export interface CreateCtxGetOptions {
+  /** Context sources to embed in schema */
+  sources?: ContextSource[]
+  /** Maximum sources to list in description (default: 15) */
+  maxSourcesInDescription?: number
+}
+
+/**
+ * Create ctx-get tool with embedded source catalog
+ *
+ * This factory allows creating a ctx-get tool with source information
+ * embedded in the schema, helping LLM know available sources and
+ * their required parameters upfront.
+ *
+ * @example
+ * ```typescript
+ * const ctxGet = createCtxGetTool({
+ *   sources: contextManager.getAllSources()
+ * })
+ * ```
+ */
+export function createCtxGetTool(options: CreateCtxGetOptions = {}): Tool<CtxGetInput, CtxGetOutput> {
+  const { sources = [], maxSourcesInDescription = 15 } = options
+
+  // Extract source info
+  const sourceInfos = sources.map(extractSourceInfo)
+
+  // Generate enum values if we have sources
+  const sourceEnum = sourceInfos.length > 0
+    ? sourceInfos.map(s => s.id)
+    : undefined
+
+  // Generate description with embedded catalog
+  const namespaces = [...new Set(sourceInfos.map(s => s.id.split('.')[0]!))]
+  const baseDescription = generateDescription(namespaces)
+
+  // Add source catalog to description (limited to maxSourcesInDescription)
+  const catalogSources = sourceInfos.slice(0, maxSourcesInDescription)
+  const sourceCatalog = generateSourceCatalog(catalogSources)
+  const hasMore = sourceInfos.length > maxSourcesInDescription
+
+  const fullDescription = hasMore
+    ? `${baseDescription}\n\n## Source Catalog (${catalogSources.length} of ${sourceInfos.length})\n${sourceCatalog}\n\nUse ctx.get("ctx.catalog") for full list.`
+    : `${baseDescription}\n\n## Source Catalog\n${sourceCatalog}`
+
+  return defineTool({
+    name: 'ctx-get',
+    description: fullDescription,
+    parameters: {
+      source: {
+        type: 'string',
+        description: 'Context source ID. ' + (sourceEnum
+          ? `Available: ${sourceEnum.slice(0, 10).join(', ')}${sourceEnum.length > 10 ? ` (+${sourceEnum.length - 10} more)` : ''}`
+          : 'Use ctx.catalog to discover available sources'),
+        required: true,
+        ...(sourceEnum ? { enum: sourceEnum } : {})
+      },
+      params: {
+        type: 'object',
+        description: 'Parameters for the source. Check source description for required params.',
+        required: false
+      }
     },
-    params: {
-      type: 'object',
-      description: 'Parameters for the source (shape depends on source kind)',
-      required: false
-    }
-  },
-  execute: async (input, { runtime }) => {
-    // Coerce string values to their intended types
-    // This is needed because OpenAI Responses API requires additionalProperties: { type: 'string' }
-    // See: src/utils/schema-coercion.ts for details
-    const params = coerceObjectValues(input.params)
+    execute: async (input, { runtime }) => {
+      // Coerce string values to their intended types
+      // This is needed because OpenAI Responses API requires additionalProperties: { type: 'string' }
+      // See: src/utils/schema-coercion.ts for details
+      const params = coerceObjectValues(input.params)
 
-    // Get source info for cost tier
-    const sourceInfo = runtime.contextManager.getSource?.(input.source)
-    const costTier: CostTier = sourceInfo?.costTier ?? 'medium'
+      // Get source info for cost tier
+      const sourceInfo = runtime.contextManager.getSource?.(input.source)
+      const costTier: CostTier = sourceInfo?.costTier ?? 'medium'
 
-    // Execute context fetch
-    const result: ContextResult = await runtime.contextManager.get(input.source, params)
+      // Execute context fetch
+      const result: ContextResult = await runtime.contextManager.get(input.source, params)
 
-    // Handle errors - return rendered error for actionable feedback
-    if (!result.success) {
-      // Even on error, we include rendered content for the model to understand what went wrong
-      // The ContextManager now provides helpful error messages with suggestions
+      // Handle errors - return rendered error for actionable feedback
+      if (!result.success) {
+        // Even on error, we include rendered content for the model to understand what went wrong
+        // The ContextManager now provides helpful error messages with suggestions
+        return {
+          success: false,
+          error: result.error ?? `Failed to get context from source: ${input.source}`
+        }
+      }
+
+      const rendered = result.rendered ?? ''
+      const estimatedTokens = estimateTokens(rendered)
+
+      const output: CtxGetOutput = {
+        source: input.source,
+        rendered,
+        data: result.data,
+        budget: {
+          estimatedTokens,
+          costTier,
+          truncated: !result.coverage.complete,
+          cached: result.provenance.cached,
+          durationMs: result.provenance.durationMs
+        },
+        coverage: result.coverage,
+        kindEcho: result.kindEcho,
+        next: result.next
+      }
+
       return {
-        success: false,
-        error: result.error ?? `Failed to get context from source: ${input.source}`
+        success: true,
+        data: output
       }
     }
+  })
+}
 
-    const rendered = result.rendered ?? ''
-    const estimatedTokens = estimateTokens(rendered)
-
-    const output: CtxGetOutput = {
-      source: input.source,
-      rendered,
-      data: result.data,
-      budget: {
-        estimatedTokens,
-        costTier,
-        truncated: !result.coverage.complete,
-        cached: result.provenance.cached,
-        durationMs: result.provenance.durationMs
-      },
-      coverage: result.coverage,
-      kindEcho: result.kindEcho,
-      next: result.next
-    }
-
-    return {
-      success: true,
-      data: output
-    }
-  }
-})
+/**
+ * Default ctx-get tool (static, no embedded catalog)
+ *
+ * For better LLM guidance, use createCtxGetTool() with sources.
+ */
+export const ctxGet: Tool<CtxGetInput, CtxGetOutput> = createCtxGetTool()

@@ -74,7 +74,6 @@ const packFactories: Record<string, PackFactory> = {
   exec: packs.exec,
   network: packs.network as PackFactory,
   compute: packs.compute as PackFactory,
-  repo: packs.repo,
   git: packs.git,
   exploration: packs.exploration,
   browser: packs.browser,
@@ -82,8 +81,8 @@ const packFactories: Record<string, PackFactory> = {
   kvMemory: packs.kvMemory,  // alias without hyphen
   docs: packs.docs,
   discovery: packs.discovery,
-  'session-memory': packs.sessionMemory,
-  sessionMemory: packs.sessionMemory  // alias without hyphen
+  'session-history': packs.sessionHistory,
+  sessionHistory: packs.sessionHistory  // alias without hyphen
   // python: requires PythonBridge, cannot be auto-created from config
 }
 
@@ -127,19 +126,39 @@ function resolvePacksFromConfig(yamlConfig: AgentYAMLConfig): Pack[] {
 }
 
 /**
- * 创建 Agent 的选项（扩展 AgentConfig）
+ * Budget management configuration
+ */
+export interface BudgetConfig {
+  /** Enable unified budget management */
+  enabled: boolean
+  /** Model ID for context window detection (auto-detected if not specified) */
+  modelId?: string
+  /** Override context window size */
+  contextWindow?: number
+  /** Budget allocation percentages */
+  allocation?: {
+    system?: number   // default: 0.15
+    tools?: number    // default: 0.25
+    messages?: number // default: 0.60
+  }
+  /** Priority tools to keep in minimal mode */
+  priorityTools?: string[]
+}
+
+/**
+ * Options for creating an Agent (extends AgentConfig)
  */
 export interface CreateAgentOptions extends AgentConfig {
-  /** 是否禁用配置文件加载 */
+  /** Disable config file loading */
   skipConfigFile?: boolean
 
-  /** 配置文件搜索目录（默认 process.cwd()） */
+  /** Config file search directory (default: process.cwd()) */
   configDir?: string
 
-  /** Agent 身份描述（从配置文件或参数） */
+  /** Agent identity description (from config file or parameter) */
   identity?: string
 
-  /** 约束条件 */
+  /** Constraints */
   constraints?: string[]
 
   /**
@@ -148,6 +167,12 @@ export interface CreateAgentOptions extends AgentConfig {
    * The content will be included in the "Pre-loaded Context" section.
    */
   initialContext?: string
+
+  /**
+   * Token budget management configuration (optional).
+   * When enabled, uses smart context selection to optimize token usage.
+   */
+  budgetConfig?: BudgetConfig
 }
 
 /**
@@ -350,7 +375,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         maxTokens: effectiveMaxTokens,
         onText: config.onStream,
         onToolCall: config.onToolCall,
-        onToolResult: config.onToolResult
+        onToolResult: config.onToolResult,
+        // Pass budget config if provided
+        budgetConfig: config.budgetConfig
       })
 
       return agentLoop.run(prompt)

@@ -43,37 +43,58 @@ export type TraceEventType =
   | 'prompt.compiled'
   | 'llm.request'
   | 'llm.response'
+  | 'budget.degradation'
 
 /**
- * Trace 事件
+ * Event correlation context for tracing
  */
-export interface TraceEvent {
-  /** 事件 ID */
-  id: string
-  /** 事件类型 */
-  type: TraceEventType
-  /** 时间戳 */
-  timestamp: number
-  /** 会话 ID */
+export interface EventCorrelation {
+  /** Unique ID for this execution run */
+  runId: string
+  /** Current step number within the run */
+  stepId: number
+  /** Agent ID that generated this event */
+  agentId: string
+  /** Session ID for multi-turn conversations */
   sessionId: string
-  /** 步骤号 */
-  step: number
-  /** 事件数据 */
-  data: Record<string, unknown>
-  /** 父事件 ID */
-  parentId?: string
-  /** 持续时间（毫秒） */
-  durationMs?: number
 }
 
 /**
- * Trace 过滤器
+ * Trace event
+ */
+export interface TraceEvent {
+  /** Event ID */
+  id: string
+  /** Event type */
+  type: TraceEventType
+  /** Timestamp */
+  timestamp: number
+  /** Session ID */
+  sessionId: string
+  /** Step number */
+  step: number
+  /** Event data */
+  data: Record<string, unknown>
+  /** Parent event ID */
+  parentId?: string
+  /** Duration in milliseconds */
+  durationMs?: number
+  /** Run ID for correlation */
+  runId?: string
+  /** Agent ID for correlation */
+  agentId?: string
+}
+
+/**
+ * Trace filter
  */
 export interface TraceFilter {
   type?: TraceEventType | TraceEventType[]
   minTimestamp?: number
   maxTimestamp?: number
   step?: number
+  runId?: string
+  agentId?: string
 }
 
 /**

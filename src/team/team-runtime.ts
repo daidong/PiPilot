@@ -10,6 +10,11 @@ import type { TeamDefinition } from './define-team.js'
 import { AgentRegistry, createAgentRegistry } from './agent-registry.js'
 import { createReducerRegistry, type ReducerRegistry } from './flow/reducers.js'
 import { createBlackboard, type Blackboard } from './state/blackboard.js'
+import {
+  IsolatedBlackboard,
+  createIsolatedBlackboard,
+  isIsolatedBlackboard
+} from './state/isolated-blackboard.js'
 import { executeFlow, type ExecutionContext, type FlowTraceEvent, type AgentInvoker } from './flow/executor.js'
 import {
   TeamEventEmitter,
@@ -19,6 +24,11 @@ import {
   type Unsubscribe,
   type TokenUsage
 } from './runtime/events.js'
+
+/**
+ * State type - can be either Blackboard or IsolatedBlackboard
+ */
+export type TeamState = Blackboard | IsolatedBlackboard
 
 // ============================================================================
 // Types
@@ -107,7 +117,7 @@ export class TeamRuntime {
   private team: TeamDefinition
   private agentRegistry: AgentRegistry
   private reducerRegistry: ReducerRegistry
-  private state: Blackboard
+  private state: TeamState
   private agentInvoker: AgentInvoker
   private onTrace?: (event: TeamTraceEvent) => void
   private onProgress?: (info: { step: number; agentId?: string; status: string }) => void
@@ -131,10 +141,28 @@ export class TeamRuntime {
       }
     }
 
-    // Create shared state
-    this.state = createBlackboard(
-      this.team.state ?? { storage: 'memory', namespace: this.team.id }
-    )
+    // Create shared state (with optional isolation)
+    if (this.team.isolation?.enabled) {
+      // Use IsolatedBlackboard for agent namespace isolation
+      this.state = createIsolatedBlackboard({
+        namespace: this.team.id,
+        conflictStrategy: this.team.isolation.conflictStrategy,
+        storage: this.team.state?.storage ?? 'memory'
+      })
+
+      // Apply custom permission rules if provided
+      if (this.team.isolation.permissions) {
+        const permissions = (this.state as IsolatedBlackboard).getPermissions()
+        for (const rule of this.team.isolation.permissions) {
+          permissions.grant(rule.agentId, rule.namespace, rule.permission)
+        }
+      }
+    } else {
+      // Use standard Blackboard (backward compatible)
+      this.state = createBlackboard(
+        this.team.state ?? { storage: 'memory', namespace: this.team.id }
+      )
+    }
 
     // Create event emitter
     this.eventEmitter = createEventEmitter()
@@ -433,8 +461,15 @@ export class TeamRuntime {
   /**
    * Get the shared state
    */
-  getState(): Blackboard {
+  getState(): TeamState {
     return this.state
+  }
+
+  /**
+   * Check if state isolation is enabled
+   */
+  isIsolated(): boolean {
+    return isIsolatedBlackboard(this.state)
   }
 
   /**

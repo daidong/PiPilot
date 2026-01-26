@@ -58,6 +58,37 @@ const agent = createAgent({
 | `onToolCall` | `(tool: string, input: unknown) => void` | No | Tool call callback |
 | `onToolResult` | `(tool: string, result: unknown) => void` | No | Tool result callback |
 | `onApprovalRequired` | `(message: string, timeout?: number) => Promise<boolean>` | No | Approval handler |
+| `budgetConfig` | `BudgetConfig` | No | Token budget management (see below) |
+
+#### BudgetConfig (Optional)
+
+Enable intelligent token budget management to optimize context usage:
+
+```typescript
+const agent = createAgent({
+  apiKey: 'sk-...',
+  budgetConfig: {
+    enabled: true,
+    contextWindow: 128000,  // Optional, auto-detected from model
+    allocation: {
+      system: 0.15,   // 15% for system prompt
+      tools: 0.25,    // 25% for tool schemas
+      messages: 0.60  // 60% for conversation history
+    },
+    priorityTools: ['read', 'write', 'edit']  // Tools to keep in minimal mode
+  }
+})
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | `boolean` | `false` | Enable budget management |
+| `modelId` | `string` | Auto | Model ID for context window detection |
+| `contextWindow` | `number` | Auto | Override context window size |
+| `allocation.system` | `number` | `0.15` | System prompt budget percentage |
+| `allocation.tools` | `number` | `0.25` | Tool schemas budget percentage |
+| `allocation.messages` | `number` | `0.60` | Messages budget percentage |
+| `priorityTools` | `string[]` | `[]` | Tools to prioritize in minimal mode |
 
 #### Configuration Priority
 
@@ -724,17 +755,17 @@ Packs bundle tools, policies, context sources, and prompt fragments.
 | Pack | Risk | Description |
 |------|------|-------------|
 | `kvMemory()` | Safe | Key-value memory: memory.get, memory.search, memory.list + memory-set, memory-delete tools |
-| `sessionMemory()` | Safe | Session history + facts/decisions: session.recent, session.search, session.thread, facts.list, decisions.list + fact-remember, fact-forget tools |
+| `sessionHistory()` | Safe | Session history: session.messages, session.trace, session.search, session.thread |
 | `docs()` | Safe | Document library: docs.index, docs.search, docs.open |
-| `discovery()` | Safe | Context discovery: ctx.catalog, ctx.describe, ctx.route |
+| `discovery()` | Safe | Context discovery: ctx.catalog, ctx.describe |
 
 #### Composite Packs
 
 | Pack | Contents |
 |------|----------|
 | `minimal()` | safe |
-| `standard()` | safe + execDev + repo + git + exploration |
-| `full()` | safe + exec + network + compute + repo + git + exploration |
+| `standard()` | safe + execDev + git + exploration |
+| `full()` | safe + exec + network + compute + git + exploration |
 | `strict()` | safe only |
 
 ### Usage
@@ -746,7 +777,6 @@ import { createAgent, packs } from 'agent-foundry'
 const agent = createAgent({
   packs: [
     packs.safe(),
-    packs.repo(),
     packs.kvMemory(),
     packs.docs(),
     packs.discovery()
@@ -762,7 +792,7 @@ const agent2 = createAgent({
 packs.safe()
 packs.exec()
 packs.kvMemory()
-packs.sessionMemory()
+packs.sessionHistory()
 packs.docs()
 packs.discovery()
 ```

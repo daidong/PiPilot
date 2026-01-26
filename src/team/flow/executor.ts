@@ -26,6 +26,7 @@ import type {
 } from './ast.js'
 import type { ReducerRegistry } from './reducers.js'
 import type { Blackboard } from '../state/blackboard.js'
+import { isIsolatedBlackboard, type IsolatedBlackboard } from '../state/isolated-blackboard.js'
 import type { AgentRegistry } from '../agent-registry.js'
 
 // ============================================================================
@@ -44,8 +45,8 @@ export interface ExecutionContext {
   agentRegistry: AgentRegistry
   /** Reducer registry */
   reducerRegistry: ReducerRegistry
-  /** Shared state */
-  state: Blackboard
+  /** Shared state (Blackboard or IsolatedBlackboard) */
+  state: Blackboard | IsolatedBlackboard
   /** Initial input */
   initialInput: unknown
   /** Previous step output */
@@ -201,53 +202,65 @@ async function executeInvoke(
   nodeId: string,
   ctx: ExecutionContext
 ): Promise<unknown> {
-  // Resolve input
-  const input = resolveInput(spec.input, ctx)
-
-  ctx.trace.record({
-    type: 'agent.invoke.start',
-    runId: ctx.runId,
-    nodeId,
-    agentId: spec.agent,
-    ts: Date.now()
-  })
+  // Set agent context for isolated state access
+  if (isIsolatedBlackboard(ctx.state)) {
+    ctx.state.setCurrentAgent(spec.agent)
+  }
 
   try {
-    // Invoke the agent
-    const output = await ctx.invokeAgent(spec.agent, input, ctx)
+    // Resolve input
+    const input = resolveInput(spec.input, ctx)
 
-    // Write to state if specified
-    if (spec.outputAs) {
-      ctx.state.put(spec.outputAs.path, output, {
+    ctx.trace.record({
+      type: 'agent.invoke.start',
+      runId: ctx.runId,
+      nodeId,
+      agentId: spec.agent,
+      ts: Date.now()
+    })
+
+    try {
+      // Invoke the agent
+      const output = await ctx.invokeAgent(spec.agent, input, ctx)
+
+      // Write to state if specified
+      if (spec.outputAs) {
+        ctx.state.put(spec.outputAs.path, output, {
+          runId: ctx.runId,
+          trace: ctx.trace
+        }, spec.agent)
+      }
+
+      // Update prev output
+      ctx.prevOutput = output
+
+      ctx.trace.record({
+        type: 'agent.invoke.end',
         runId: ctx.runId,
-        trace: ctx.trace
-      }, spec.agent)
+        nodeId,
+        agentId: spec.agent,
+        ts: Date.now(),
+        success: true
+      })
+
+      return output
+    } catch (error) {
+      ctx.trace.record({
+        type: 'agent.invoke.end',
+        runId: ctx.runId,
+        nodeId,
+        agentId: spec.agent,
+        ts: Date.now(),
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      throw error
     }
-
-    // Update prev output
-    ctx.prevOutput = output
-
-    ctx.trace.record({
-      type: 'agent.invoke.end',
-      runId: ctx.runId,
-      nodeId,
-      agentId: spec.agent,
-      ts: Date.now(),
-      success: true
-    })
-
-    return output
-  } catch (error) {
-    ctx.trace.record({
-      type: 'agent.invoke.end',
-      runId: ctx.runId,
-      nodeId,
-      agentId: spec.agent,
-      ts: Date.now(),
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    })
-    throw error
+  } finally {
+    // Reset to system agent after step execution
+    if (isIsolatedBlackboard(ctx.state)) {
+      ctx.state.resetAgent()
+    }
   }
 }
 

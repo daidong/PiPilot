@@ -9,7 +9,7 @@ import type { ToolRegistry } from '../core/tool-registry.js'
 import type { PolicyEngine } from '../core/policy-engine.js'
 import type { ContextManager } from '../core/context-manager.js'
 import type { MemoryStorage } from './memory.js'
-import type { MessageStore, FactsDecisionsStore } from './session.js'
+import type { MessageStore } from './session.js'
 import type { SessionState } from './agent.js'
 import type { createLLMClient } from '../llm/stream.js'
 
@@ -217,9 +217,6 @@ export interface Runtime {
 
   /** Message store for conversation history */
   messageStore?: MessageStore
-
-  /** Facts and decisions store for long-term memory */
-  factsDecisionsStore?: FactsDecisionsStore
 }
 
 /**

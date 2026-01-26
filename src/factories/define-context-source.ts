@@ -16,12 +16,12 @@ import type { Runtime } from '../types/runtime.js'
 
 /**
  * Extract namespace from source ID
- * e.g., 'repo.index' -> 'repo'
+ * e.g., 'docs.index' -> 'docs'
  */
 function extractNamespace(id: string): string {
   const dotIndex = id.indexOf('.')
   if (dotIndex === -1) {
-    throw new Error(`Invalid source ID format: ${id}. Expected 'namespace.name' (e.g., 'repo.index')`)
+    throw new Error(`Invalid source ID format: ${id}. Expected 'namespace.name' (e.g., 'docs.index')`)
   }
   return id.substring(0, dotIndex)
 }
@@ -48,7 +48,7 @@ function validateSourceId(id: string): void {
   if (!pattern.test(id)) {
     throw new Error(
       `Invalid source ID format: ${id}. ` +
-      `Expected lowercase 'namespace.name' format (e.g., 'repo.index', 'docs.search')`
+      `Expected lowercase 'namespace.name' format (e.g., 'docs.index', 'session.messages')`
     )
   }
 }

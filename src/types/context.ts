@@ -15,13 +15,13 @@ export type ContextKind = 'index' | 'search' | 'open' | 'get'
 /**
  * Built-in namespaces
  */
-export type ContextNamespace = 'repo' | 'docs' | 'session' | 'memory' | 'images' | 'ctx'
+export type ContextNamespace = 'docs' | 'session' | 'memory' | 'ctx'
 
 // ============ Standard Parameter Shapes ============
 
 /**
  * Index Shape - Browse structure
- * Used by: repo.index, docs.index, images.index, memory.list
+ * Used by: docs.index, memory.list, session.messages, session.trace
  */
 export interface IndexParams {
   /** Subtree to browse */
@@ -40,7 +40,7 @@ export interface IndexParams {
 
 /**
  * Search Shape - Retrieve candidates
- * Used by: repo.search, docs.search, session.search, memory.search, images.search
+ * Used by: docs.search, session.search, memory.search
  */
 export interface SearchParams {
   /** Search query (required) */
@@ -64,7 +64,7 @@ export interface SearchParams {
 
 /**
  * Open Shape - Read single object
- * Used by: repo.file, docs.open, session.thread, images.open
+ * Used by: docs.open, session.thread
  */
 export interface OpenParams {
   /** Object ID (mutually exclusive with path) */
@@ -234,9 +234,9 @@ export interface ContextSourceExample {
  * 上下文源定义
  */
 export interface ContextSource<TParams = unknown, TData = unknown> {
-  /** 源 ID（如 repo.index, repo.search） */
+  /** Source ID (e.g., docs.index, session.messages) */
   id: string
-  /** Namespace (extracted from id, e.g., 'repo' from 'repo.index') */
+  /** Namespace (extracted from id, e.g., 'docs' from 'docs.index') */
   namespace: string
   /** Kind determines parameter shape and usage pattern */
   kind: ContextKind
@@ -264,7 +264,7 @@ export interface ContextSource<TParams = unknown, TData = unknown> {
  * 上下文源配置（用于 defineContextSource）
  */
 export interface ContextSourceConfig<TParams = unknown, TData = unknown> {
-  /** Source ID (e.g., 'repo.index') - namespace is extracted automatically */
+  /** Source ID (e.g., 'docs.index') - namespace is extracted automatically */
   id: string
   /** Kind determines parameter shape */
   kind: ContextKind
@@ -289,18 +289,12 @@ export interface ContextSourceConfig<TParams = unknown, TData = unknown> {
 }
 
 /**
- * 内置上下文源 ID
+ * Built-in context source IDs
  */
 export type BuiltinContextSourceId =
-  // repo namespace
-  | 'repo.index'
-  | 'repo.search'
-  | 'repo.symbols'
-  | 'repo.file'
-  | 'repo.git'
   // session namespace
-  | 'session.history'
-  | 'session.recent'
+  | 'session.messages'
+  | 'session.trace'
   | 'session.search'
   | 'session.thread'
   // memory namespace
@@ -314,4 +308,3 @@ export type BuiltinContextSourceId =
   // meta namespace
   | 'ctx.catalog'
   | 'ctx.describe'
-  | 'ctx.route'

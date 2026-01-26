@@ -57,25 +57,25 @@ export function safe(): Pack {
     ],
 
     promptFragment: `
-## 核心工具使用指南
+## Core Tools Guide
 
-### 上下文获取（推荐首选）
-- **ctx-get**: 统一上下文入口，获取结构化信息
-  - 可用源: repo.index, repo.search, repo.file 等
-  - 降低心智负担，优先使用
+### Context Retrieval
+- **ctx-get**: Unified context entry point for structured information
+  - Available sources: session.*, memory.*, docs.*, ctx.*
+  - Use ctx.get("ctx.catalog") to list all sources
 
-### 文件操作
-- **read**: 读取文件内容，支持分页
-- **write**: 写入/创建文件
-- **edit**: 编辑文件（替换指定内容）
-- **glob**: 按模式匹配文件
-- **grep**: 在文件中搜索内容
+### File Operations
+- **read**: Read file content with pagination
+- **write**: Write/create files
+- **edit**: Edit files (replace specific content)
+- **glob**: Match files by pattern
+- **grep**: Search content in files
 
-### 最佳实践
-1. 优先使用 ctx-get 获取结构化信息
-2. 使用 glob 找到文件后再用 read 读取
-3. 使用 grep 搜索特定内容
-4. 使用 edit 进行精确修改，避免整体重写
+### Best Practices
+1. Use glob to find files, then read to view content
+2. Use grep to search for specific patterns
+3. Use edit for precise modifications, avoid full rewrites
+4. Use ctx-get for session history, memory, and documentation
     `.trim()
   })
 }

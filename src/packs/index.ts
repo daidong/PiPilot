@@ -1,15 +1,15 @@
 /**
- * Packs - Pack 导出
+ * Packs - Pack exports
  *
- * 分层架构：
- * - safe: 核心安全工具（默认启用）
- * - exec: 执行能力（需显式启用）
- * - network: 网络能力（需显式启用）
- * - compute: 计算能力（需显式启用）
- * - 领域 Pack: repo, git, exploration, python, browser
+ * Layered architecture:
+ * - safe: Core safe tools (default)
+ * - exec: Execution capability (requires explicit enable)
+ * - network: Network capability (requires explicit enable)
+ * - compute: Compute capability (requires explicit enable)
+ * - Domain Packs: git, exploration, python, browser, memory, docs
  */
 
-// ============ 分层核心 Pack ============
+// ============ Layered Core Packs ============
 
 export { safe, safePack } from './safe.js'
 export { exec, execPack, execStrict, execDev } from './exec.js'
@@ -22,21 +22,20 @@ export {
 } from './compute.js'
 export type { ComputePackOptions } from './compute.js'
 
-// ============ 领域 Pack ============
+// ============ Domain Packs ============
 
-export { repo } from './repo.js'
 export { git } from './git.js'
 export { exploration } from './exploration.js'
 export { python } from './python.js'
 export { browserPack } from './browser.js'
 export { kvMemory } from './kv-memory.js'
-export { sessionMemory } from './session-memory.js'
+export { sessionHistory } from './session-history.js'
 export { docs } from './docs.js'
 export { discovery } from './discovery.js'
 export { documents } from './documents.js'
 export type { DocumentsPackOptions } from './documents.js'
 
-// ============ 组合与工厂 ============
+// ============ Composite & Factory ============
 
 import type { Pack } from '../types/pack.js'
 import { mergePacks } from '../factories/define-pack.js'
@@ -45,42 +44,40 @@ import { safe } from './safe.js'
 import { exec, execDev } from './exec.js'
 import { network } from './network.js'
 import { compute, computeStandard } from './compute.js'
-import { repo } from './repo.js'
 import { git } from './git.js'
 import { exploration } from './exploration.js'
 import { python } from './python.js'
 import { browserPack } from './browser.js'
 import { kvMemory } from './kv-memory.js'
-import { sessionMemory } from './session-memory.js'
+import { sessionHistory } from './session-history.js'
 import { docs } from './docs.js'
 import { discovery } from './discovery.js'
 import { documents } from './documents.js'
 
 /**
- * 创建安全最小 Pack（仅核心安全工具）
- * 推荐作为默认起点
+ * Create minimal safe pack (core safe tools only)
+ * Recommended as default starting point
  */
 export function minimal(): Pack {
   return safe()
 }
 
 /**
- * 创建标准 Pack（安全核心 + 执行 + 领域）
- * 适合大多数开发场景
+ * Create standard pack (safe core + exec + git + exploration)
+ * Suitable for most development scenarios
  */
 export function standard(): Pack {
   return mergePacks(
     safe(),
     execDev(),
-    repo(),
     git(),
     exploration()
   )
 }
 
 /**
- * 创建完整 Pack（所有能力）
- * 适合需要完整功能的场景
+ * Create full pack (all capabilities)
+ * For scenarios requiring full functionality
  */
 export function full(): Pack {
   return mergePacks(
@@ -88,43 +85,41 @@ export function full(): Pack {
     exec(),
     network(),
     computeStandard(),
-    repo(),
     git(),
     exploration()
   )
 }
 
 /**
- * 创建严格模式 Pack（最小权限）
- * 适合安全敏感场景
+ * Create strict mode pack (minimal permissions)
+ * For security-sensitive scenarios
  */
 export function strict(): Pack {
   return safe()
 }
 
 /**
- * Packs 命名空间
+ * Packs namespace
  */
 export const packs = {
-  // 分层核心
+  // Layered core
   safe,
   exec,
   network,
   compute,
 
-  // 领域 Pack
-  repo,
+  // Domain Packs
   git,
   exploration,
   python,
   browser: browserPack,
   kvMemory,
-  sessionMemory,
+  sessionHistory,
   docs,
   discovery,
   documents,
 
-  // 组合工厂
+  // Composite factories
   minimal,
   standard,
   full,
@@ -132,12 +127,12 @@ export const packs = {
 }
 
 /**
- * Pack 风险等级
+ * Pack risk level
  */
 export type PackRiskLevel = 'safe' | 'elevated' | 'high'
 
 /**
- * Pack 元信息
+ * Pack metadata
  */
 export interface PackMeta {
   id: string
@@ -147,62 +142,56 @@ export interface PackMeta {
 }
 
 /**
- * 内置 Pack 元信息
+ * Built-in pack metadata
  */
 export const packMeta: Record<string, PackMeta> = {
   safe: {
     id: 'safe',
     riskLevel: 'safe',
     requiresExplicitEnable: false,
-    description: '核心安全工具：ctx-get, read, write, edit, glob, grep'
+    description: 'Core safe tools: ctx-get, read, write, edit, glob, grep'
   },
   exec: {
     id: 'exec',
     riskLevel: 'high',
     requiresExplicitEnable: true,
-    description: '执行能力：bash 命令'
+    description: 'Execution capability: bash commands'
   },
   network: {
     id: 'network',
     riskLevel: 'elevated',
     requiresExplicitEnable: true,
-    description: '网络能力：HTTP 请求'
+    description: 'Network capability: HTTP requests'
   },
   compute: {
     id: 'compute',
     riskLevel: 'elevated',
     requiresExplicitEnable: true,
-    description: '计算能力：LLM 子调用'
-  },
-  repo: {
-    id: 'repo',
-    riskLevel: 'safe',
-    requiresExplicitEnable: false,
-    description: '仓库上下文'
+    description: 'Compute capability: LLM sub-calls'
   },
   git: {
     id: 'git',
     riskLevel: 'elevated',
     requiresExplicitEnable: false,
-    description: 'Git 操作'
+    description: 'Git operations'
   },
   exploration: {
     id: 'exploration',
     riskLevel: 'safe',
     requiresExplicitEnable: false,
-    description: '代码探索'
+    description: 'Code exploration'
   },
   python: {
     id: 'python',
     riskLevel: 'elevated',
     requiresExplicitEnable: true,
-    description: 'Python 执行'
+    description: 'Python execution'
   },
   browser: {
     id: 'browser',
     riskLevel: 'elevated',
     requiresExplicitEnable: true,
-    description: '浏览器自动化'
+    description: 'Browser automation'
   },
   'kv-memory': {
     id: 'kv-memory',
@@ -210,11 +199,11 @@ export const packMeta: Record<string, PackMeta> = {
     requiresExplicitEnable: false,
     description: 'Key-value memory storage for agents'
   },
-  'session-memory': {
-    id: 'session-memory',
+  'session-history': {
+    id: 'session-history',
     riskLevel: 'safe',
     requiresExplicitEnable: false,
-    description: 'Session history and long-term memory for agents'
+    description: 'Session history viewing: messages, trace, search, thread'
   },
   docs: {
     id: 'docs',
@@ -226,7 +215,7 @@ export const packMeta: Record<string, PackMeta> = {
     id: 'discovery',
     riskLevel: 'safe',
     requiresExplicitEnable: false,
-    description: 'Context source discovery: ctx.catalog, ctx.describe, ctx.route'
+    description: 'Context source discovery: ctx.catalog, ctx.describe'
   },
   documents: {
     id: 'documents',

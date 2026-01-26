@@ -134,10 +134,10 @@ export const ctxDescribe: ContextSource<CtxDescribeParams, CtxDescribeData> = de
   shortDescription: 'Get full source documentation',
   resourceTypes: [],
   params: [
-    { name: 'id', type: 'string', required: true, description: 'Source ID to describe (e.g., "repo.search")' }
+    { name: 'id', type: 'string', required: true, description: 'Source ID to describe (e.g., "docs.search")' }
   ],
   examples: [
-    { description: 'Describe repo.search', params: { id: 'repo.search' }, resultSummary: 'Full documentation for repo.search' },
+    { description: 'Describe docs.search', params: { id: 'docs.search' }, resultSummary: 'Full documentation for docs.search' },
     { description: 'Describe docs.open', params: { id: 'docs.open' }, resultSummary: 'Full documentation for docs.open' }
   ],
   costTier: 'cheap',
@@ -157,7 +157,7 @@ export const ctxDescribe: ContextSource<CtxDescribeParams, CtxDescribeData> = de
       return createErrorResult('Missing required field "id"', {
         durationMs: Date.now() - startTime,
         suggestions: [
-          'Provide source ID: ctx.get("ctx.describe", { id: "repo.search" })',
+          'Provide source ID: ctx.get("ctx.describe", { id: "docs.search" })',
           'Use ctx.get("ctx.catalog") to list available sources'
         ]
       })

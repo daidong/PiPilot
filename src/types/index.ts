@@ -95,7 +95,8 @@ export type {
   TraceEventType,
   TraceEvent,
   TraceFilter,
-  ReplayOptions
+  ReplayOptions,
+  EventCorrelation
 } from './trace.js'
 
 // Memory types
@@ -131,25 +132,13 @@ export type {
   Message,
   SessionMeta,
   SessionsIndex,
-  FactConfidence,
-  SessionProvenance,
-  Fact,
-  FactsData,
-  DecisionStatus,
-  Decision,
-  DecisionsData,
   MessageStore,
   SessionIndex,
   SessionSearchOptions,
-  SessionSearchResult,
-  FactFilter,
-  DecisionFilter,
-  FactsDecisionsStore
+  SessionSearchResult
 } from './session.js'
 
 export {
   generateMessageId,
-  generateSessionId,
-  generateFactId,
-  generateDecisionId
+  generateSessionId
 } from './session.js'

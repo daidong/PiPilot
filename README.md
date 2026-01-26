@@ -271,8 +271,6 @@ Tools are operations that agents can execute.
 | `llm-call` | compute | LLM sub-calls |
 | `memory-set` | kv-memory | Store key-value data |
 | `memory-delete` | kv-memory | Delete stored data |
-| `fact-remember` | session-memory | Store facts/decisions |
-| `fact-forget` | session-memory | Remove facts/decisions |
 
 ### Define Custom Tools
 
@@ -601,9 +599,9 @@ Packs bundle tools, policies, context sources, and prompt fragments.
 | Pack | Risk | Contents |
 |------|------|----------|
 | `kvMemory()` | Safe | memory.get/search/list + memory-set/delete tools |
-| `sessionMemory()` | Safe | session.* + facts.* + decisions.* + fact tools |
+| `sessionHistory()` | Safe | session.messages/trace/search/thread |
 | `docs()` | Safe | docs.index/search/open (requires index-docs) |
-| `discovery()` | Safe | ctx.catalog/describe/route |
+| `discovery()` | Safe | ctx.catalog/describe |
 
 #### Composite Packs
 

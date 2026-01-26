@@ -149,7 +149,104 @@ function convertTools(
 }
 
 /**
- * 简化的 JSON Schema 到 Zod 转换
+ * JSON Schema property type
+ */
+interface JsonSchemaProperty {
+  type?: string
+  description?: string
+  enum?: string[]
+  items?: JsonSchemaProperty
+  properties?: Record<string, JsonSchemaProperty>
+  required?: string[]
+}
+
+/**
+ * Convert a single JSON Schema property to Zod type
+ * OpenAI strict mode requirements:
+ * - All types must be explicit (no 'any' or 'unknown')
+ * - additionalProperties must have 'type' key
+ * - All object properties must be in 'required' array (use nullable for optional)
+ */
+function convertPropertyToZod(prop: JsonSchemaProperty, isRequired: boolean): z.ZodType<any> {
+  let zodType: z.ZodType<any>
+
+  switch (prop.type) {
+    case 'string':
+      // Handle enum
+      if (prop.enum && prop.enum.length > 0) {
+        zodType = z.enum(prop.enum as [string, ...string[]])
+      } else {
+        zodType = z.string()
+      }
+      break
+
+    case 'number':
+      zodType = z.number()
+      break
+
+    case 'integer':
+      zodType = z.number().int()
+      break
+
+    case 'boolean':
+      zodType = z.boolean()
+      break
+
+    case 'array':
+      // Handle array items
+      if (prop.items) {
+        const itemType = convertPropertyToZod(prop.items, true)
+        zodType = z.array(itemType)
+      } else {
+        // Default to string array for OpenAI strict mode
+        zodType = z.array(z.string())
+      }
+      break
+
+    case 'object':
+      // Handle object with defined properties
+      if (prop.properties && Object.keys(prop.properties).length > 0) {
+        const nestedRequired = prop.required || []
+        const nestedProps: Record<string, z.ZodType<any>> = {}
+
+        for (const [key, nestedProp] of Object.entries(prop.properties)) {
+          const isNestedRequired = nestedRequired.includes(key)
+          nestedProps[key] = convertPropertyToZod(nestedProp, isNestedRequired)
+        }
+        zodType = z.object(nestedProps)
+      } else {
+        // Dynamic object without defined properties
+        // Use z.object({}).catchall() to generate both:
+        // - "properties": {} (required by OpenAI strict mode for 'required' array)
+        // - "additionalProperties": { "type": "string" }
+        // z.record() doesn't generate 'properties' which causes OpenAI strict mode errors
+        zodType = z.object({}).catchall(z.string())
+      }
+      break
+
+    default:
+      // Fallback to string for OpenAI strict mode
+      zodType = z.string()
+  }
+
+  // Add description
+  if (prop.description) {
+    zodType = zodType.describe(prop.description)
+  }
+
+  // Handle optional (nullable) fields
+  // OpenAI strict mode requires all properties in 'required' array
+  // Use nullable() for optional fields
+  if (!isRequired) {
+    zodType = zodType.nullable()
+  }
+
+  return zodType
+}
+
+/**
+ * Convert JSON Schema to Zod schema
+ * Handles nested objects, arrays, enums, and OpenAI strict mode requirements
  */
 function jsonSchemaToZod(schema: {
   type: string
@@ -160,49 +257,8 @@ function jsonSchemaToZod(schema: {
   const required = schema.required || []
 
   for (const [key, propSchema] of Object.entries(schema.properties)) {
-    const prop = propSchema as { type?: string; description?: string }
-    let zodProp: z.ZodType<any>
-
-    switch (prop.type) {
-      case 'string':
-        zodProp = z.string()
-        break
-      case 'number':
-        zodProp = z.number()
-        break
-      case 'integer':
-        zodProp = z.number().int()
-        break
-      case 'boolean':
-        zodProp = z.boolean()
-        break
-      case 'array':
-        // Use z.string() for array items to satisfy OpenAI's strict schema requirements
-        // Actual type coercion happens at runtime in tools
-        zodProp = z.array(z.string())
-        break
-      case 'object':
-        // Use z.string() for record values to satisfy OpenAI's strict schema requirements
-        // This ensures additionalProperties: { type: 'string' } in the JSON Schema
-        // Actual type coercion happens at runtime in tools (see src/utils/schema-coercion.ts)
-        zodProp = z.record(z.string())
-        break
-      default:
-        zodProp = z.unknown()
-    }
-
-    if (prop.description) {
-      zodProp = zodProp.describe(prop.description)
-    }
-
-    // OpenAI Responses API requires ALL properties in 'required' array (strict mode)
-    // For optional fields, use .nullable() instead of .optional()
-    // This keeps the field in 'required' but allows null values
-    if (!required.includes(key)) {
-      zodProp = zodProp.nullable()
-    }
-
-    props[key] = zodProp
+    const isRequired = required.includes(key)
+    props[key] = convertPropertyToZod(propSchema as JsonSchemaProperty, isRequired)
   }
 
   return z.object(props)

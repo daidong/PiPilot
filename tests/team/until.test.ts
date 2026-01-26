@@ -13,8 +13,12 @@ import {
   isValidatorUntilSpec,
   isThreeStateUntilSpec
 } from '../../src/team/flow/until.js'
-import { state } from '../../src/team/state/typed-blackboard.js'
 import type { UntilEvaluationContext } from '../../src/team/flow/until.js'
+
+// Local mock of state helpers for schema-free API
+const state = {
+  path: <T>(path: string) => ({ ref: 'state' as const, path, _phantom: undefined as T | undefined })
+}
 
 // Helper to create evaluation context
 function createContext(

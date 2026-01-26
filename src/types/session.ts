@@ -92,7 +92,7 @@ export interface SessionsIndex {
 /**
  * Confidence level for facts
  */
-export type FactConfidence = 'confirmed' | 'inferred'
+export type FactConfidence = 'confirmed' | 'inferred' | 'speculative'
 
 /**
  * Provenance for facts and decisions
@@ -126,6 +126,14 @@ export interface Fact {
   createdAt: string
   /** When last updated */
   updatedAt: string
+  /** Priority for sorting (higher = more important, default: 50) */
+  priority?: number
+  /** Time-to-live in milliseconds (null = permanent) */
+  ttl?: number | null
+  /** When this fact was last used (for LRU eviction) */
+  lastUsedAt?: string
+  /** Expiration timestamp (computed from createdAt + ttl) */
+  expiresAt?: string
 }
 
 /**

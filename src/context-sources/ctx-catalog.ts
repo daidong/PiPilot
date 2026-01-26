@@ -75,12 +75,12 @@ export const ctxCatalog: ContextSource<CtxCatalogParams, CtxCatalogData> = defin
   shortDescription: 'List available context sources',
   resourceTypes: [],
   params: [
-    { name: 'namespace', type: 'string', required: false, description: 'Filter by namespace (e.g., "repo", "docs")' },
+    { name: 'namespace', type: 'string', required: false, description: 'Filter by namespace (e.g., "session", "docs", "memory")' },
     { name: 'kind', type: 'string', required: false, description: 'Filter by kind', enum: ['index', 'search', 'open', 'get'] }
   ],
   examples: [
     { description: 'List all sources', params: {}, resultSummary: 'All available sources' },
-    { description: 'List repo sources', params: { namespace: 'repo' }, resultSummary: 'repo.* sources only' },
+    { description: 'List session sources', params: { namespace: 'session' }, resultSummary: 'session.* sources only' },
     { description: 'List search sources', params: { kind: 'search' }, resultSummary: 'All search-type sources' }
   ],
   costTier: 'cheap',
@@ -175,7 +175,6 @@ export const ctxCatalog: ContextSource<CtxCatalogParams, CtxCatalogData> = defin
     // Help section
     lines.push('## Help')
     lines.push('- Use `ctx.get("ctx.describe", { id: "source.id" })` for full documentation')
-    lines.push('- Use `ctx.get("ctx.route", { intent: "search", query: "..." })` for routing help')
     lines.push('')
     lines.push(`[${entries.length} sources in ${namespaces.length} namespaces]`)
 

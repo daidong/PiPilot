@@ -61,10 +61,11 @@ export type {
   RuntimeIO as RuntimeIOType,
   IOResult,
 
-  // Trace 相关类型
+  // Trace types
   TraceEvent,
   TraceEventType,
-  FrameworkEvent
+  FrameworkEvent,
+  EventCorrelation
 } from './types/index.js'
 
 // ============================================================================
@@ -115,50 +116,28 @@ export type { CreateAgentOptions } from './agent/create-agent.js'
 export { defineAgent, validateAgentDefinition } from './agent/define-agent.js'
 export { AgentLoop } from './agent/agent-loop.js'
 
-// Unified Agent Interface (contract-first, typed I/O)
+// Schema-free Agent (RFC-002) - Primary API
 export {
-  isAgent,
-  isLLMAgentKind,
-  isToolAgentKind,
-  successResult,
-  failureResult
-} from './agent/types.js'
+  defineAgent as defineSimpleAgent,
+  isAgent as isSchemaFreeAgent,
+  createAgentContext as createSimpleAgentContext,
+  createAgentContext,
+  isAgent
+} from './agent/define-simple-agent.js'
 export type {
-  Agent as UnifiedAgent,
-  AgentResult as UnifiedAgentResult,
-  AgentKind,
-  BaseAgentContext,
-  AgentInput,
-  AgentOutput
-} from './agent/types.js'
-
-// LLM Agent (contract-first, typed I/O)
-export {
-  defineLLMAgent,
-  isLLMAgent,
-  createSimpleLLMAgentContext,
-  createModelContext
-} from './agent/define-llm-agent.js'
-export type {
-  LLMAgentDefinition,
-  LLMAgent,
-  LLMAgentContext,
-  LLMAgentResult
-} from './agent/define-llm-agent.js'
-
-// Tool Agent (contract-first, typed I/O)
-export {
-  defineToolAgent,
-  isToolAgent,
-  createSimpleToolAgentContext,
-  definePassthroughToolAgent
-} from './agent/define-tool-agent.js'
-export type {
-  ToolAgentDefinition,
-  ToolAgent,
-  ToolAgentContext,
-  ToolAgentResult
-} from './agent/define-tool-agent.js'
+  // Primary exports (recommended)
+  Agent as SchemaFreeAgent,
+  AgentDefinition as SchemaFreeAgentDefinition,
+  AgentContext as SchemaFreeAgentContext,
+  AgentResult as SchemaFreeAgentResult,
+  AgentTraceEvent as SchemaFreeAgentTraceEvent,
+  // Legacy aliases (deprecated)
+  SimpleAgentDefinition,
+  SimpleAgent,
+  SimpleAgentContext,
+  SimpleAgentResult,
+  SimpleAgentTraceEvent
+} from './agent/define-simple-agent.js'
 
 // ============================================================================
 // 核心组件导出
@@ -175,14 +154,38 @@ export { PromptCompiler } from './core/prompt-compiler.js'
 export { ProviderRegistry } from './core/provider-registry.js'
 export { FileMemoryStorage } from './core/memory-storage.js'
 export { FileMessageStore } from './core/message-store.js'
-export { FileFactsDecisionsStore } from './core/facts-decisions-store.js'
+export { UnifiedBudgeter, createBudgeterForModel } from './core/unified-budgeter.js'
+export { ToolsetCompiler } from './core/toolset-compiler.js'
+export {
+  generateRuntimeSnapshot,
+  createSnapshotData,
+  renderSnapshot,
+  validateSnapshot
+} from './core/runtime-snapshot.js'
+export {
+  AdaptiveMessageSelector,
+  createMessageSelector,
+  InsufficientBudgetError
+} from './core/adaptive-message-selector.js'
+export {
+  TokenEstimator,
+  createTokenEstimator
+} from './core/token-estimator.js'
 
 // ============================================================================
-// 工具函数导出
+// Utility exports
 // ============================================================================
 
 export { Cache } from './utils/cache.js'
-export { SimpleTokenizer } from './utils/tokenizer.js'
+export {
+  SimpleTokenizer,
+  countTokens,
+  truncateToTokens,
+  setCalibration,
+  setModelFamily,
+  getCalibration,
+  configureForModel
+} from './utils/tokenizer.js'
 export { applyTransform, applyTransforms } from './utils/transform.js'
 
 // ============================================================================
@@ -259,14 +262,14 @@ export {
 // ============================================================================
 
 export {
-  repoIndex,
-  repoSearch,
-  repoSymbols,
-  repoFile,
-  repoGit,
-  sessionHistory,
-  repoContextSources,
+  sessionTrace,
+  sessionMessages,
+  sessionSearch,
+  sessionThread,
   sessionContextSources,
+  metaContextSources,
+  memoryContextSources,
+  docsContextSources,
   builtinContextSources
 } from './context-sources/index.js'
 
@@ -295,8 +298,7 @@ export {
   computeWithApproval,
   getSessionTokenUsage,
   resetSessionTokenUsage,
-  // 领域 Pack
-  repo,
+  // Domain Packs
   git,
   exploration,
   python,
@@ -714,7 +716,24 @@ export {
   createAgentBridge,
   createMapBasedResolver,
   createFactoryResolver,
-  createBridgedTeamRuntime
+  createBridgedTeamRuntime,
+
+  // Schema-free Step API (RFC-002)
+  simpleStep,
+  simpleBranch,
+  simpleSeq,
+  simpleLoop,
+  simpleSelect,
+  simplePar,
+
+  // Format utilities
+  format,
+  formatJson,
+  formatList,
+  formatBullets,
+  formatKeyValue,
+  formatTable,
+  formatTruncated
 } from './team/index.js'
 
 export type {
@@ -789,5 +808,17 @@ export type {
   ResolvedAgent,
   AgentResolver,
   AgentBridgeConfig,
-  BridgeTraceEvent
+  BridgeTraceEvent,
+
+  // Schema-free Step types (RFC-002)
+  SimpleInvokeSpec,
+  SimpleStepBuilder,
+  SimpleStepBuilderWithFrom,
+  SimpleBranchConfig,
+  SimpleLoopConfig,
+  SimpleSelectConfig,
+  SimpleParConfig,
+
+  // Format utility types
+  FormatOptions
 } from './team/index.js'

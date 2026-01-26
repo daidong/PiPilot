@@ -15,7 +15,7 @@ export interface PolicyContext {
   input: unknown
   /** IO 操作参数 */
   params?: unknown
-  /** 调用来源（如 ctx.get:repo.search） */
+  /** Call source (e.g., ctx.get:docs.search) */
   caller?: string
   /** 代理 ID */
   agentId: string

@@ -1,40 +1,43 @@
 /**
- * session.history - 会话历史上下文源
+ * session.trace - Session operation trace context source
+ *
+ * Returns trace events (tool calls, file operations) from the current session.
+ * This is different from session.messages which returns conversation messages.
  */
 
 import { defineContextSource, createSuccessResult } from '../factories/define-context-source.js'
 import type { ContextSource, ContextResult } from '../types/context.js'
 
-export interface SessionHistoryParams {
+export interface SessionTraceParams {
   limit?: number
   type?: 'all' | 'tool' | 'file'
 }
 
-export interface HistoryEntry {
+export interface TraceEntry {
   step: number
   type: string
   summary: string
   timestamp: number
 }
 
-export interface SessionHistoryData {
-  entries: HistoryEntry[]
+export interface SessionTraceData {
+  entries: TraceEntry[]
   totalSteps: number
   currentStep: number
 }
 
-export const sessionHistory: ContextSource<SessionHistoryParams, SessionHistoryData> = defineContextSource({
-  id: 'session.history',
+export const sessionTrace: ContextSource<SessionTraceParams, SessionTraceData> = defineContextSource({
+  id: 'session.trace',
   kind: 'index',
-  description: 'Get current session operation history. Shows tool calls, file operations, and context fetches.',
-  shortDescription: 'Get session operation history',
+  description: 'Get current session operation trace. Shows tool calls, file operations, and context fetches.',
+  shortDescription: 'Get session operation trace',
   resourceTypes: [],
   params: [
     { name: 'limit', type: 'number', required: false, description: 'Max entries to return', default: 20 },
     { name: 'type', type: 'string', required: false, description: 'Filter by event type', default: 'all', enum: ['all', 'tool', 'file'] }
   ],
   examples: [
-    { description: 'Get recent history', params: {}, resultSummary: 'Last 20 operations' },
+    { description: 'Get recent trace', params: {}, resultSummary: 'Last 20 operations' },
     { description: 'Get tool calls only', params: { type: 'tool', limit: 10 }, resultSummary: 'Last 10 tool calls' }
   ],
   costTier: 'cheap',
@@ -46,19 +49,19 @@ export const sessionHistory: ContextSource<SessionHistoryParams, SessionHistoryD
     truncateStrategy: 'tail'
   },
 
-  fetch: async (params, runtime): Promise<ContextResult<SessionHistoryData>> => {
+  fetch: async (params, runtime): Promise<ContextResult<SessionTraceData>> => {
     const startTime = Date.now()
     const limit = params?.limit ?? 20
     const filterType = params?.type ?? 'all'
 
-    // 从 trace 获取历史
+    // Get events from trace
     const allEvents = runtime.trace.getEvents()
 
-    // 过滤并转换为历史条目
-    const entries: HistoryEntry[] = []
+    // Filter and convert to trace entries
+    const entries: TraceEntry[] = []
 
     for (const event of allEvents) {
-      // 根据类型过滤
+      // Filter by type
       if (filterType === 'tool' && !event.type.startsWith('tool.')) {
         continue
       }
@@ -99,14 +102,14 @@ export const sessionHistory: ContextSource<SessionHistoryParams, SessionHistoryD
       })
     }
 
-    // 按时间倒序，取最近的 limit 个
+    // Sort by time descending, take limit
     const recentEntries = entries
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, limit)
 
-    // 渲染
+    // Render
     const lines = [
-      `# Session History`,
+      `# Session Trace`,
       '',
       `Current step: ${runtime.step}`,
       '',

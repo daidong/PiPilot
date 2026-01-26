@@ -1,7 +1,7 @@
 /**
- * AgentLoop - Agent 执行循环
+ * AgentLoop - Agent execution loop
  *
- * 使用 Vercel AI SDK 的统一 LLM 接口
+ * Uses Vercel AI SDK's unified LLM interface with optional budget management.
  */
 
 import type {
@@ -20,6 +20,10 @@ import type { ToolRegistry } from '../core/tool-registry.js'
 import type { TraceCollector } from '../core/trace-collector.js'
 import type { Runtime } from '../types/runtime.js'
 import type { AgentRunResult } from '../types/agent.js'
+import {
+  AgentLoopBudgetManager,
+  type BlockEstimates
+} from './agent-loop-budget.js'
 
 /**
  * LLM 客户端类型
@@ -27,48 +31,70 @@ import type { AgentRunResult } from '../types/agent.js'
 export type LLMClient = ReturnType<typeof createLLMClient>
 
 /**
- * AgentLoop 配置
+ * AgentLoop configuration
  */
 export interface AgentLoopConfig {
-  /** LLM 客户端 (新 API) */
+  /** LLM client (new API) */
   client?: LLMClient
-  /** LLM 客户端配置 (用于自动创建客户端) */
+  /** LLM client config (for auto-creating client) */
   llmConfig?: LLMClientConfig
-  /** 工具注册表 */
+  /** Tool registry */
   toolRegistry: ToolRegistry
-  /** 运行时 */
+  /** Runtime */
   runtime: Runtime
-  /** Trace 收集器 */
+  /** Trace collector */
   trace: TraceCollector
-  /** 系统提示 */
+  /** System prompt */
   systemPrompt: string
-  /** 最大步骤数 */
+  /** Maximum steps */
   maxSteps: number
-  /** 最大 token 数 */
+  /** Maximum tokens for generation */
   maxTokens?: number
-  /** 温度 */
+  /** Temperature */
   temperature?: number
-  /** 流式文本回调 */
+  /** Streaming text callback */
   onText?: (text: string) => void
-  /** 工具调用回调 */
+  /** Tool call callback */
   onToolCall?: (tool: string, input: unknown) => void
-  /** 工具结果回调 */
+  /** Tool result callback */
   onToolResult?: (tool: string, result: unknown) => void
+
+  /**
+   * Token budget configuration (optional)
+   * When enabled, uses smart budget management to optimize context
+   */
+  budgetConfig?: {
+    /** Enable unified budget management */
+    enabled: boolean
+    /** Model ID for context window detection */
+    modelId?: string
+    /** Override context window size */
+    contextWindow?: number
+    /** Budget allocation percentages */
+    allocation?: {
+      system?: number   // default: 0.15
+      tools?: number    // default: 0.25
+      messages?: number // default: 0.60
+    }
+    /** Priority tools to keep in minimal mode */
+    priorityTools?: string[]
+  }
 }
 
 /**
- * Agent 执行循环
+ * Agent execution loop
  */
 export class AgentLoop {
   private config: AgentLoopConfig
   private client: LLMClient
   private messages: Message[] = []
   private stopped = false
+  private budgetManager: AgentLoopBudgetManager | null = null
 
   constructor(config: AgentLoopConfig) {
     this.config = config
 
-    // 创建或使用传入的 LLM 客户端
+    // Create or use provided LLM client
     if (config.client) {
       this.client = config.client
     } else if (config.llmConfig) {
@@ -76,22 +102,32 @@ export class AgentLoop {
     } else {
       throw new Error('Either client or llmConfig must be provided')
     }
+
+    // Initialize budget manager if enabled
+    if (config.budgetConfig?.enabled) {
+      this.budgetManager = new AgentLoopBudgetManager({
+        modelId: config.budgetConfig.modelId ?? config.llmConfig?.model,
+        contextWindow: config.budgetConfig.contextWindow,
+        allocation: config.budgetConfig.allocation,
+        priorityTools: config.budgetConfig.priorityTools
+      })
+    }
   }
 
   /**
-   * 运行 Agent
+   * Run the agent
    */
   async run(userPrompt: string): Promise<AgentRunResult> {
     const startTime = Date.now()
     this.stopped = false
 
-    // 记录开始
+    // Record start
     this.config.trace.record({
       type: 'agent.start',
       data: { prompt: userPrompt }
     })
 
-    // 添加用户消息
+    // Add user message
     this.messages.push({
       role: 'user',
       content: userPrompt
@@ -106,19 +142,51 @@ export class AgentLoop {
         this.config.runtime.step = step
         this.config.trace.setStep(step)
 
-        // 记录步骤开始
+        // Record step start
         this.config.trace.record({
           type: 'agent.step',
           data: { step }
         })
 
-        // 发送请求
+        // Prepare context (with optional budget management)
+        let systemPrompt = this.config.systemPrompt
+        let tools = this.config.toolRegistry.generateToolSchemas() as LLMToolDefinition[]
+        let messagesToSend = this.messages
+        let estimates: BlockEstimates | undefined
+
+        if (this.budgetManager) {
+          const prepared = this.budgetManager.prepareContext({
+            systemPrompt,
+            tools,
+            messages: messagesToSend as unknown as import('../types/session.js').Message[]
+          })
+
+          systemPrompt = prepared.systemPrompt
+          tools = prepared.tools
+          messagesToSend = prepared.messages as unknown as Message[]
+          estimates = prepared.estimates
+
+          // Log degradation if occurred
+          if (prepared.decision.level !== 'normal') {
+            this.config.trace.record({
+              type: 'budget.degradation',
+              data: {
+                level: prepared.decision.level,
+                actions: prepared.decision.actions,
+                messagesExcluded: prepared.messagesExcluded,
+                warning: prepared.warning
+              }
+            })
+          }
+        }
+
+        // Send request
         this.config.trace.record({
           type: 'llm.request',
-          data: { messagesCount: this.messages.length }
+          data: { messagesCount: messagesToSend.length }
         })
 
-        // 使用新的流式 API
+        // Use streaming API
         const toolCalls: ToolUseContent[] = []
         let responseText = ''
         let usage: TokenUsage = {
@@ -132,9 +200,9 @@ export class AgentLoop {
         const response = await streamWithCallbacks(
           this.client,
           {
-            system: this.config.systemPrompt,
-            messages: this.messages,
-            tools: this.config.toolRegistry.generateToolSchemas() as LLMToolDefinition[],
+            system: systemPrompt,
+            messages: messagesToSend,
+            tools,
             maxTokens: this.config.maxTokens,
             temperature: this.config.temperature
           },
@@ -203,26 +271,31 @@ export class AgentLoop {
           }
         })
 
-        // 构建助手消息内容
+        // Calibrate budget manager with actual usage
+        if (this.budgetManager && estimates) {
+          this.budgetManager.calibrate(estimates, usage)
+        }
+
+        // Build assistant message content
         const assistantContent: ContentBlock[] = []
         if (responseText) {
           assistantContent.push({ type: 'text', text: responseText })
         }
         assistantContent.push(...toolCalls)
 
-        // 添加助手消息
+        // Add assistant message
         this.messages.push({
           role: 'assistant',
           content: assistantContent
         })
 
-        // 如果没有工具调用，提取文本并结束
+        // If no tool calls, extract text and finish
         if (toolCalls.length === 0 || response.finishReason === 'stop') {
           finalOutput = responseText
           break
         }
 
-        // 执行工具调用
+        // Execute tool calls
         const toolResults: ContentBlock[] = []
 
         for (const toolUse of toolCalls) {
@@ -238,7 +311,7 @@ export class AgentLoop {
 
           this.config.onToolResult?.(toolUse.name, result)
 
-          // 构建工具结果
+          // Build tool result
           // Note: JSON.stringify(undefined) returns undefined, not a string
           // We need to handle this case to avoid null content errors
           const resultContent = result.success
@@ -253,13 +326,13 @@ export class AgentLoop {
           })
         }
 
-        // 添加工具结果消息
+        // Add tool result message
         this.messages.push({
           role: 'tool',
           content: toolResults
         })
 
-        // 检查是否达到 max_tokens
+        // Check if reached max_tokens
         if (response.finishReason === 'length') {
           finalOutput =
             responseText + '\n[Response truncated due to token limit]'
@@ -267,12 +340,12 @@ export class AgentLoop {
         }
       }
 
-      // 检查是否达到最大步骤
+      // Check if reached max steps
       if (step >= this.config.maxSteps) {
         finalOutput += '\n[Reached maximum steps limit]'
       }
 
-      // 记录完成
+      // Record completion
       this.config.trace.record({
         type: 'agent.complete',
         data: { steps: step, success: true }
@@ -306,36 +379,43 @@ export class AgentLoop {
   }
 
   /**
-   * 停止执行
+   * Stop execution
    */
   stop(): void {
     this.stopped = true
   }
 
   /**
-   * 获取消息历史
+   * Get message history
    */
   getMessages(): Message[] {
     return [...this.messages]
   }
 
   /**
-   * 清空消息历史
+   * Clear message history
    */
   clearMessages(): void {
     this.messages = []
   }
 
   /**
-   * 获取 LLM 客户端
+   * Get LLM client
    */
   getClient(): LLMClient {
     return this.client
   }
+
+  /**
+   * Get budget manager (if enabled)
+   */
+  getBudgetManager(): AgentLoopBudgetManager | null {
+    return this.budgetManager
+  }
 }
 
 /**
- * 快捷方式：创建 AgentLoop 并运行
+ * Shortcut: Create AgentLoop and run
  */
 export async function runAgent(
   config: AgentLoopConfig,

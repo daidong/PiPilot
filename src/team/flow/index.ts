@@ -172,20 +172,23 @@ export type {
   SelectSpec as TypedSelectSpec
 } from './edges.js'
 
-// Step Builder (fluent API for flow definition)
+// Step Builder (schema-free API, RFC-002)
 export {
-  step,
-  isTypedInvokeSpec,
-  hasSchemaInfo,
-  passthrough as passthroughStep,
-  pipeline as pipelineSteps
-} from './step.js'
+  simpleStep,
+  simpleStep as step,
+  simpleBranch,
+  simpleSeq,
+  simpleLoop,
+  simpleSelect,
+  simplePar
+} from './simple-step.js'
 
 export type {
-  StepAgent,
-  MinimalAgent,
-  StepInput,
-  TypedInvokeSpec,
-  StepBuilderWithAgent,
-  StepBuilderWithInput
-} from './step.js'
+  SimpleInvokeSpec,
+  SimpleStepBuilder,
+  SimpleStepBuilderWithFrom,
+  SimpleBranchConfig,
+  SimpleLoopConfig,
+  SimpleSelectConfig,
+  SimpleParConfig
+} from './simple-step.js'
