@@ -2,7 +2,7 @@
  * createAgent - Agent 创建工厂
  */
 
-import type { Agent, AgentConfig, AgentRunResult, SessionState } from '../types/agent.js'
+import type { Agent, AgentConfig, AgentRunResult, AgentRunOptions, SessionState } from '../types/agent.js'
 import type { Runtime } from '../types/runtime.js'
 import type { Pack } from '../types/pack.js'
 
@@ -82,7 +82,9 @@ const packFactories: Record<string, PackFactory> = {
   docs: packs.docs,
   discovery: packs.discovery,
   'session-history': packs.sessionHistory,
-  sessionHistory: packs.sessionHistory  // alias without hyphen
+  sessionHistory: packs.sessionHistory,  // alias without hyphen
+  'context-pipeline': packs.contextPipeline,
+  contextPipeline: packs.contextPipeline  // alias without hyphen
   // python: requires PythonBridge, cannot be auto-created from config
 }
 
@@ -357,12 +359,17 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   const agent: Agent = {
     id: agentId,
 
-    async run(prompt: string): Promise<AgentRunResult> {
+    async run(prompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
       // 初始化 Packs
       for (const pack of packsToLoad) {
         if (pack.onInit) {
           await pack.onInit(runtime)
         }
+      }
+
+      // Store selected context in session state for phases to access
+      if (options?.selectedContext) {
+        runtime.sessionState.set('selectedContext', options.selectedContext)
       }
 
       agentLoop = new AgentLoop({
@@ -372,7 +379,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         trace,
         systemPrompt,
         maxSteps: effectiveMaxSteps,
-        maxTokens: effectiveMaxTokens,
+        maxTokens: options?.tokenBudget ?? effectiveMaxTokens,
         onText: config.onStream,
         onToolCall: config.onToolCall,
         onToolResult: config.onToolResult,

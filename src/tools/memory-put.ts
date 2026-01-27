@@ -18,8 +18,8 @@ export interface MemoryPutInput {
   namespace: MemoryNamespace
   /** Key within namespace (dot-separated path, e.g., "writing.style") */
   key: string
-  /** Value to store (any JSON-serializable data) */
-  value: unknown
+  /** Value to store as JSON string (will be parsed) */
+  value: string
   /** Human-readable description of the value */
   valueText?: string
   /** Tags for categorization and search */
@@ -76,8 +76,8 @@ export const memoryPut: Tool<MemoryPutInput, MemoryPutOutput> = defineTool({
       required: true
     },
     value: {
-      type: 'object',
-      description: 'Value to store (any JSON-serializable data)',
+      type: 'string',
+      description: 'Value to store as JSON string (e.g., "{\\"key\\": \\"value\\"}" or "\\"simple string\\""). For complex data, stringify the object.',
       required: true
     },
     valueText: {
@@ -117,10 +117,18 @@ export const memoryPut: Tool<MemoryPutInput, MemoryPutOutput> = defineTool({
         }
       }
 
-      // Coerce string values to their intended types
-      // This is needed because OpenAI Responses API requires additionalProperties: { type: 'string' }
-      // See: src/utils/schema-coercion.ts for details
-      const coercedValue = coerceDeep(input.value)
+      // Parse the JSON string value
+      // The value is passed as a JSON string to work around OpenAI strict mode limitations
+      let parsedValue: unknown
+      try {
+        parsedValue = JSON.parse(input.value)
+      } catch {
+        // If parsing fails, treat the value as a plain string
+        parsedValue = input.value
+      }
+
+      // Coerce string values to their intended types (for nested objects)
+      const coercedValue = coerceDeep(parsedValue)
 
       // Check if item already exists
       const existing = await memoryStorage.has(input.namespace, input.key)

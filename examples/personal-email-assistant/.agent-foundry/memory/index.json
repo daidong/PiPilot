@@ -1,0 +1,177 @@
+{
+  "version": "1.0.0",
+  "updatedAt": "2026-01-27T02:14:55.279Z",
+  "keywords": {
+    "correction": [
+      "project:correction.internal_date_format"
+    ],
+    "internal": [
+      "project:correction.internal_date_format",
+      "project:schema.messages"
+    ],
+    "date": [
+      "project:correction.internal_date_format",
+      "project:schema.messages"
+    ],
+    "format": [
+      "project:correction.internal_date_format"
+    ],
+    "messages": [
+      "project:correction.internal_date_format",
+      "project:schema.messages",
+      "project:schema.attachments"
+    ],
+    "stored": [
+      "project:correction.internal_date_format"
+    ],
+    "milliseconds": [
+      "project:correction.internal_date_format"
+    ],
+    "not": [
+      "project:correction.internal_date_format"
+    ],
+    "seconds": [
+      "project:correction.internal_date_format"
+    ],
+    "use": [
+      "project:correction.internal_date_format"
+    ],
+    "date/1000": [
+      "project:correction.internal_date_format"
+    ],
+    "for": [
+      "project:correction.internal_date_format"
+    ],
+    "epoch": [
+      "project:correction.internal_date_format"
+    ],
+    "pinned": [
+      "project:correction.internal_date_format",
+      "project:schema.messages",
+      "project:schema.attachments"
+    ],
+    "schema": [
+      "project:schema.messages",
+      "project:schema.attachments"
+    ],
+    "table": [
+      "project:schema.messages",
+      "project:schema.attachments"
+    ],
+    "columns": [],
+    "text": [
+      "project:schema.messages"
+    ],
+    "primary": [],
+    "key": [],
+    "gmail": [
+      "project:schema.messages"
+    ],
+    "thread": [
+      "project:schema.messages"
+    ],
+    "account": [
+      "project:schema.messages"
+    ],
+    "from": [
+      "project:schema.messages"
+    ],
+    "email": [
+      "project:schema.messages"
+    ],
+    "name": [
+      "project:schema.messages"
+    ],
+    "subject": [
+      "project:schema.messages"
+    ],
+    "snippet": [
+      "project:schema.messages"
+    ],
+    "body": [
+      "project:schema.messages"
+    ],
+    "html": [
+      "project:schema.messages"
+    ],
+    "integer": [
+      "project:schema.messages"
+    ],
+    "read": [
+      "project:schema.messages"
+    ],
+    "starred": [
+      "project:schema.messages"
+    ],
+    "sent": [
+      "project:schema.messages"
+    ],
+    "multi": [
+      "project:schema.messages"
+    ],
+    "recipient": [
+      "project:schema.messages"
+    ],
+    "original": [
+      "project:schema.messages"
+    ],
+    "forwarded": [
+      "project:schema.messages"
+    ],
+    "fully": [
+      "project:schema.messages"
+    ],
+    "downloaded": [
+      "project:schema.messages",
+      "project:schema.attachments"
+    ],
+    "created": [
+      "project:schema.messages"
+    ],
+    "tracked": [
+      "project:schema.messages"
+    ],
+    "since": [],
+    "has": [],
+    "attachments": [
+      "project:schema.attachments"
+    ],
+    "boolean": [],
+    "message": [
+      "project:schema.attachments"
+    ],
+    "filename": [
+      "project:schema.attachments"
+    ],
+    "mime": [
+      "project:schema.attachments"
+    ],
+    "type": [
+      "project:schema.attachments"
+    ],
+    "size": [
+      "project:schema.attachments"
+    ],
+    "local": [
+      "project:schema.attachments"
+    ],
+    "path": [
+      "project:schema.attachments"
+    ],
+    "0/1": []
+  },
+  "tags": {
+    "pinned": [
+      "project:correction.internal_date_format",
+      "project:schema.messages",
+      "project:schema.attachments"
+    ]
+  },
+  "namespaces": {
+    "project": [
+      "project:correction.internal_date_format",
+      "project:schema.messages",
+      "project:schema.attachments"
+    ]
+  }
+}

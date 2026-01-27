@@ -9,8 +9,8 @@ import {
   generateText,
   Output,
   NoObjectGeneratedError,
-  type LanguageModelV1,
-  type CoreMessage
+  type LanguageModel,
+  type ModelMessage
 } from 'ai'
 import { type ZodSchema, ZodError } from 'zod'
 import type { TokenUsage } from './provider.types.js'
@@ -50,7 +50,7 @@ export interface RepairStrategy {
   repair: (error: unknown, rawText?: string, cause?: unknown) => {
     system?: string
     prompt?: string
-    messages?: CoreMessage[]
+    messages?: ModelMessage[]
   }
 }
 
@@ -59,7 +59,7 @@ export interface RepairStrategy {
  */
 export interface GenerateStructuredOptions<T> {
   /** Language model to use */
-  model: LanguageModelV1
+  model: LanguageModel
 
   /** System prompt */
   system?: string
@@ -68,7 +68,7 @@ export interface GenerateStructuredOptions<T> {
   prompt?: string
 
   /** Message history (complex case) */
-  messages?: CoreMessage[]
+  messages?: ModelMessage[]
 
   /** Zod schema for output validation */
   schema: ZodSchema<T>
@@ -237,32 +237,39 @@ export async function generateStructured<T>(
         throw new Error('Operation aborted')
       }
 
-      const result = await generateText({
+      // Build base options
+      const baseOptions = {
         model,
         system: currentSystem,
-        prompt: currentPrompt,
-        messages: currentMessages,
         temperature,
-        maxTokens,
+        maxOutputTokens: maxTokens,
         abortSignal,
-        // AI SDK v4 structured output (experimental API)
-        // TODO: Migrate to stable `output` property when upgrading to AI SDK v6+
-        experimental_output: Output.object({ schema })
-      })
+        // AI SDK v6 stable output API
+        output: Output.object({ schema })
+      }
 
-      // Accumulate usage
+      // SDK 6 requires either prompt (string) or messages (array), not both undefined
+      // Use conditional call to ensure proper typing
+      const result = currentMessages
+        ? await generateText({ ...baseOptions, messages: currentMessages })
+        : await generateText({ ...baseOptions, prompt: currentPrompt ?? '' })
+
+      // Accumulate usage (SDK 6: inputTokens/outputTokens)
       if (result.usage) {
-        totalUsage.promptTokens += result.usage.promptTokens
-        totalUsage.completionTokens += result.usage.completionTokens
-        totalUsage.totalTokens += result.usage.totalTokens
+        const inputTokens = result.usage.inputTokens ?? 0
+        const outputTokens = result.usage.outputTokens ?? 0
+        totalUsage.promptTokens += inputTokens
+        totalUsage.completionTokens += outputTokens
+        totalUsage.totalTokens += inputTokens + outputTokens
       }
 
       // The output is already validated by AI SDK
-      // TODO: Use result.output when upgrading to AI SDK v6+
-      const output = result.experimental_output as T
+      const output = result.output as T
 
       const durationMs = Date.now() - attemptStart
 
+      const inputTokens = result.usage?.inputTokens ?? 0
+      const outputTokens = result.usage?.outputTokens ?? 0
       onTrace?.({
         type: 'structured.call.ok',
         timestamp: Date.now(),
@@ -271,9 +278,9 @@ export async function generateStructured<T>(
         durationMs,
         usage: result.usage
           ? {
-              promptTokens: result.usage.promptTokens,
-              completionTokens: result.usage.completionTokens,
-              totalTokens: result.usage.totalTokens
+              promptTokens: inputTokens,
+              completionTokens: outputTokens,
+              totalTokens: inputTokens + outputTokens
             }
           : undefined
       })
@@ -290,11 +297,13 @@ export async function generateStructured<T>(
       // Extract raw text from NoObjectGeneratedError for better repair
       if (NoObjectGeneratedError.isInstance(error)) {
         lastRawText = error.text
-        // Also accumulate usage from failed attempts
+        // Also accumulate usage from failed attempts (SDK 6: inputTokens/outputTokens)
         if (error.usage) {
-          totalUsage.promptTokens += error.usage.promptTokens
-          totalUsage.completionTokens += error.usage.completionTokens
-          totalUsage.totalTokens += error.usage.totalTokens
+          const inputTokens = error.usage.inputTokens ?? 0
+          const outputTokens = error.usage.outputTokens ?? 0
+          totalUsage.promptTokens += inputTokens
+          totalUsage.completionTokens += outputTokens
+          totalUsage.totalTokens += inputTokens + outputTokens
         }
       } else {
         lastRawText = undefined

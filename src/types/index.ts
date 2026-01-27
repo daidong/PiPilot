@@ -67,6 +67,7 @@ export type {
   AgentDefinition,
   LLMProvider,
   AgentConfig,
+  AgentRunOptions,
   AgentRunResult,
   Agent,
   SessionState
@@ -142,3 +143,24 @@ export {
   generateMessageId,
   generateSessionId
 } from './session.js'
+
+// Context Pipeline types
+export type {
+  PhaseBudgetType,
+  PhaseBudget,
+  ContextFragment,
+  ContextSelectionType,
+  ContextSelection,
+  HistorySegment,
+  CompressedHistory,
+  HistoryCompressor,
+  AssemblyContext,
+  ContextPhase,
+  PhaseResult,
+  AssembledContext,
+  CompressionConfig,
+  PhaseConfig,
+  PipelineConfig,
+  ContextPipeline,
+  RuntimeWithCompressor
+} from './context-pipeline.js'

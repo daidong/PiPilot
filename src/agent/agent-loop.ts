@@ -225,14 +225,28 @@ export class AgentLoop {
             },
             onError: (error) => {
               llmError = error
-              console.error('[AgentLoop] LLM Error:', error.message)
+              // Log full error details for debugging
+              console.error('[AgentLoop] LLM Error:', error.message || error)
+              if (error && typeof error === 'object') {
+                const errorDetails = {
+                  message: error.message,
+                  name: (error as any).name,
+                  code: (error as any).code,
+                  status: (error as any).status,
+                  cause: (error as any).cause
+                }
+                console.error('[AgentLoop] Error details:', JSON.stringify(errorDetails, null, 2))
+              }
             }
           }
         )
 
         // Check for LLM error
         if (response.finishReason === 'error' || llmError) {
-          const errorMessage = llmError?.message || 'Unknown LLM error'
+          const errorMessage = llmError?.message
+            || (llmError as any)?.cause?.message
+            || (typeof llmError === 'string' ? llmError : null)
+            || `Unknown LLM error (finishReason: ${response.finishReason})`
           this.config.trace.record({
             type: 'llm.response',
             data: {

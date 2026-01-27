@@ -18,8 +18,7 @@
  * ```
  */
 
-import type { LanguageModelV1 } from 'ai'
-import { generateText } from 'ai'
+import { generateText, type LanguageModel } from 'ai'
 import type { TokenUsage } from '../llm/provider.types.js'
 
 // ============================================================================
@@ -31,7 +30,7 @@ import type { TokenUsage } from '../llm/provider.types.js'
  */
 export interface AgentContext {
   /** Get a language model by ID (or default if not specified) */
-  getLanguageModel: (modelId?: string) => LanguageModelV1
+  getLanguageModel: (modelId?: string) => LanguageModel
   /** Trace callback */
   trace?: (event: AgentTraceEvent) => void
   /** Abort signal for cancellation */
@@ -230,13 +229,13 @@ export function defineAgent(definition: AgentDefinition): Agent {
         attempts++
 
         try {
-          // Call LLM
+          // Call LLM (SDK 6: maxOutputTokens instead of maxTokens)
           const result = await generateText({
             model,
             system,
             prompt: userPrompt,
             temperature,
-            maxTokens,
+            maxOutputTokens: maxTokens,
             // Use JSON mode if enabled (OpenAI/compatible models)
             ...(jsonMode && {
               response_format: { type: 'json_object' as const }
@@ -272,10 +271,13 @@ export function defineAgent(definition: AgentDefinition): Agent {
           // Post-process output if hook provided
           const finalOutput = postProcess ? await postProcess(output, processedInput) : output
 
+          // SDK 6: inputTokens/outputTokens instead of promptTokens/completionTokens
+          const inputTokens = result.usage?.inputTokens ?? 0
+          const outputTokens = result.usage?.outputTokens ?? 0
           const usage: TokenUsage = {
-            promptTokens: result.usage?.promptTokens ?? 0,
-            completionTokens: result.usage?.completionTokens ?? 0,
-            totalTokens: result.usage?.totalTokens ?? 0
+            promptTokens: inputTokens,
+            completionTokens: outputTokens,
+            totalTokens: inputTokens + outputTokens
           }
 
           ctx.trace?.({
@@ -356,7 +358,7 @@ export function isAgent(value: unknown): value is Agent {
  * Create a context for standalone agent execution
  */
 export function createAgentContext(
-  getLanguageModel: (modelId?: string) => LanguageModelV1,
+  getLanguageModel: (modelId?: string) => LanguageModel,
   options?: {
     trace?: (event: AgentTraceEvent) => void
     abortSignal?: AbortSignal

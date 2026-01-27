@@ -52,6 +52,7 @@ export type {
   // Agent 相关类型
   AgentDefinition,
   AgentConfig,
+  AgentRunOptions,
   Agent,
   AgentRunResult,
   SessionState,
@@ -152,8 +153,8 @@ export { PolicyEngine } from './core/policy-engine.js'
 export { ContextManager } from './core/context-manager.js'
 export { PromptCompiler } from './core/prompt-compiler.js'
 export { ProviderRegistry } from './core/provider-registry.js'
-export { FileMemoryStorage } from './core/memory-storage.js'
-export { FileMessageStore } from './core/message-store.js'
+export { FileMemoryStorage, createMemoryStorage } from './core/memory-storage.js'
+export { FileMessageStore, createMessageStore } from './core/message-store.js'
 export { UnifiedBudgeter, createBudgeterForModel } from './core/unified-budgeter.js'
 export { ToolsetCompiler } from './core/toolset-compiler.js'
 export {
@@ -200,6 +201,7 @@ export {
   glob,
   grep,
   ctxGet,
+  ctxExpand,
   fetchTool,
   llmCall,
   llmExpand,
@@ -230,7 +232,10 @@ export type {
   BrowserOutput,
   BrowseInput,
   BrowseOutput,
-  SnapshotElement
+  SnapshotElement,
+  CtxExpandInput,
+  CtxExpandOutput,
+  CtxExpandType
 } from './tools/index.js'
 
 // ============================================================================
@@ -303,6 +308,8 @@ export {
   exploration,
   python,
   browserPack,
+  contextPipeline,
+  contextPipelinePack,
   // 组合工厂
   minimal,
   standard,
@@ -317,6 +324,7 @@ export type {
   ExecPackOptions,
   NetworkPackOptions,
   ComputePackOptions,
+  ContextPipelinePackOptions,
   PackRiskLevel,
   PackMeta
 } from './packs/index.js'
@@ -822,3 +830,60 @@ export type {
   // Format utility types
   FormatOptions
 } from './team/index.js'
+
+// ============================================================================
+// Context Pipeline 导出
+// ============================================================================
+
+// Pipeline core
+export {
+  createContextPipeline,
+  createBudget,
+  PHASE_PRIORITIES,
+  DEFAULT_BUDGETS
+} from './context/index.js'
+export type { ContextPipelineConfig } from './context/index.js'
+
+// Built-in phases
+export {
+  createSystemPhase,
+  createPinnedPhase,
+  createSelectedPhase,
+  createSessionPhase,
+  createIndexPhase
+} from './context/index.js'
+export type {
+  SystemPhaseConfig,
+  PinnedPhaseConfig,
+  SelectedPhaseConfig,
+  SessionPhaseConfig,
+  IndexPhaseConfig
+} from './context/index.js'
+
+// History compressors
+export {
+  SimpleHistoryCompressor,
+  createSimpleCompressor
+} from './context/index.js'
+export type { SimpleHistoryCompressorConfig } from './context/index.js'
+
+// Context Pipeline types (re-export from types for convenience)
+export type {
+  PhaseBudgetType,
+  PhaseBudget,
+  ContextFragment,
+  ContextSelectionType,
+  ContextSelection,
+  HistorySegment,
+  CompressedHistory,
+  HistoryCompressor,
+  AssemblyContext,
+  ContextPhase,
+  PhaseResult,
+  AssembledContext,
+  CompressionConfig,
+  PhaseConfig,
+  PipelineConfig,
+  ContextPipeline,
+  RuntimeWithCompressor
+} from './types/index.js'

@@ -7,9 +7,9 @@
 import {
   streamText,
   generateText,
-  type CoreMessage,
-  type CoreTool,
-  type LanguageModelV1
+  type ModelMessage,
+  type LanguageModel,
+  type ToolSet
 } from 'ai'
 import { z } from 'zod'
 import type {
@@ -38,8 +38,8 @@ import type { ProviderSDKConfig, ProviderID } from './provider.types.js'
 /**
  * 将框架消息转换为 Vercel AI SDK 消息格式
  */
-function convertMessages(messages: Message[]): CoreMessage[] {
-  return messages.map((msg): CoreMessage => {
+function convertMessages(messages: Message[]): ModelMessage[] {
+  return messages.map((msg): ModelMessage => {
     if (typeof msg.content === 'string') {
       return {
         role: msg.role as 'user' | 'assistant' | 'system',
@@ -56,9 +56,10 @@ function convertMessages(messages: Message[]): CoreMessage[] {
       const toolCallBlocks = blocks.filter(b => b.type === 'tool_use')
 
       // 构建内容数组，包含文本和工具调用
+      // SDK 6: ToolCallPart uses 'input' instead of 'args'
       const content: Array<
         | { type: 'text'; text: string }
-        | { type: 'tool-call'; toolCallId: string; toolName: string; args: Record<string, unknown> }
+        | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
       > = []
 
       // 添加文本块
@@ -75,7 +76,7 @@ function convertMessages(messages: Message[]): CoreMessage[] {
           type: 'tool-call',
           toolCallId: (tc as ToolUseContent).id,
           toolName: (tc as ToolUseContent).name,
-          args: (tc as ToolUseContent).input as Record<string, unknown>
+          input: (tc as ToolUseContent).input
         })
       }
 
@@ -102,6 +103,7 @@ function convertMessages(messages: Message[]): CoreMessage[] {
 
     if (msg.role === 'tool') {
       // Tool 结果消息
+      // SDK 6: ToolResultPart uses output: { type: 'text', value: string }
       const toolResults = blocks.filter(b => b.type === 'tool_result')
       return {
         role: 'tool',
@@ -109,7 +111,10 @@ function convertMessages(messages: Message[]): CoreMessage[] {
           type: 'tool-result' as const,
           toolCallId: (tr as { tool_use_id: string }).tool_use_id,
           toolName: 'unknown', // Will be matched by toolCallId
-          result: (tr as { content: string }).content
+          output: {
+            type: 'text' as const,
+            value: (tr as { content: string }).content
+          }
         }))
       }
     }
@@ -129,11 +134,12 @@ function convertMessages(messages: Message[]): CoreMessage[] {
 
 /**
  * 将 LLM 工具定义转换为 Vercel AI SDK 工具格式
+ * SDK 6: uses inputSchema instead of parameters, strict defaults to false
  */
 function convertTools(
   tools: LLMToolDefinition[]
-): Record<string, CoreTool<any, any>> {
-  const result: Record<string, CoreTool<any, any>> = {}
+): ToolSet {
+  const result: ToolSet = {}
 
   for (const tool of tools) {
     // 将 JSON Schema 转换为 Zod schema
@@ -141,7 +147,8 @@ function convertTools(
 
     result[tool.name] = {
       description: tool.description,
-      parameters: zodSchema
+      inputSchema: zodSchema
+      // strict: false is the default in SDK 6, no need to set
     }
   }
 
@@ -301,7 +308,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
         model: languageModel,
         system,
         messages: convertMessages(messages),
-        maxTokens: maxTokens ?? defaults.maxTokens,
+        maxOutputTokens: maxTokens ?? defaults.maxTokens,
         stopSequences
       }
 
@@ -311,6 +318,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       }
 
       // 只在模型支持时添加工具
+      // SDK 6: strict mode defaults to false per tool, no need to configure globally
       if (tools && tools.length > 0 && supportsTools(clientConfig.model)) {
         streamOptions.tools = convertTools(tools)
       }
@@ -324,7 +332,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
             case 'text-delta':
               yield {
                 type: 'text-delta',
-                data: { text: event.textDelta }
+                data: { text: event.text }
               } as TextDeltaEvent
               break
 
@@ -334,13 +342,9 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
                 data: {
                   toolCallId: event.toolCallId,
                   toolName: event.toolName,
-                  args: event.args
+                  args: event.input
                 }
               } as ToolCallEvent
-              break
-
-            case 'step-finish':
-              // 可以处理步骤完成事件
               break
 
             case 'finish':
@@ -348,38 +352,59 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
               const text = await result.text
               const toolCalls = (await result.toolCalls) || []
 
+              // SDK 6: inputTokens/outputTokens instead of promptTokens/completionTokens
+              const inputTokens = usage?.inputTokens ?? 0
+              const outputTokens = usage?.outputTokens ?? 0
+
               yield {
                 type: 'finish',
                 data: {
                   finishReason: event.finishReason,
                   usage: {
-                    promptTokens: usage?.promptTokens ?? 0,
-                    completionTokens: usage?.completionTokens ?? 0,
-                    totalTokens: usage?.totalTokens ?? 0
+                    promptTokens: inputTokens,
+                    completionTokens: outputTokens,
+                    totalTokens: inputTokens + outputTokens
                   },
                   text,
-                  toolCalls: toolCalls.map((tc: { toolCallId: string; toolName: string; args: unknown }) => ({
+                  toolCalls: toolCalls.map((tc: { toolCallId: string; toolName: string; input: unknown }) => ({
                     type: 'tool_use' as const,
                     id: tc.toolCallId,
                     name: tc.toolName,
-                    input: tc.args
+                    input: tc.input
                   }))
                 }
               } as FinishEvent
               break
 
             case 'error':
+              // Normalize error to ensure it has a message
+              const rawError = event.error
+              const normalizedError = rawError instanceof Error
+                ? rawError
+                : new Error(
+                    typeof rawError === 'string'
+                      ? rawError
+                      : JSON.stringify(rawError) || 'Unknown streaming error'
+                  )
               yield {
                 type: 'error',
-                data: { error: event.error as Error }
+                data: { error: normalizedError }
               } as ErrorEvent
               break
           }
         }
       } catch (error) {
+        // Normalize caught error to ensure it has a message
+        const normalizedError = error instanceof Error
+          ? error
+          : new Error(
+              typeof error === 'string'
+                ? error
+                : JSON.stringify(error) || 'Unknown error during streaming'
+            )
         yield {
           type: 'error',
-          data: { error: error as Error }
+          data: { error: normalizedError }
         } as ErrorEvent
       }
     },
@@ -395,7 +420,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
         model: languageModel,
         system,
         messages: convertMessages(messages),
-        maxTokens: maxTokens ?? defaults.maxTokens,
+        maxOutputTokens: maxTokens ?? defaults.maxTokens,
         stopSequences
       }
 
@@ -405,17 +430,18 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       }
 
       // 只在模型支持时添加工具
+      // SDK 6: strict mode defaults to false per tool
       if (tools && tools.length > 0 && supportsTools(clientConfig.model)) {
         generateOptions.tools = convertTools(tools)
       }
 
       const result = await generateText(generateOptions)
 
-      const toolCalls: ToolUseContent[] = (result.toolCalls || []).map((tc: { toolCallId: string; toolName: string; args: unknown }) => ({
+      const toolCalls: ToolUseContent[] = (result.toolCalls || []).map((tc: { toolCallId: string; toolName: string; input: unknown }) => ({
         type: 'tool_use',
         id: tc.toolCallId,
         name: tc.toolName,
-        input: tc.args
+        input: tc.input
       }))
 
       let finishReason: CompletionResponse['finishReason'] = 'stop'
@@ -429,15 +455,19 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
         finishReason = 'error'
       }
 
+      // SDK 6: inputTokens/outputTokens instead of promptTokens/completionTokens
+      const inputTokens = result.usage?.inputTokens ?? 0
+      const outputTokens = result.usage?.outputTokens ?? 0
+
       return {
         id: result.response?.id ?? crypto.randomUUID(),
         text: result.text,
         toolCalls,
         finishReason,
         usage: {
-          promptTokens: result.usage?.promptTokens ?? 0,
-          completionTokens: result.usage?.completionTokens ?? 0,
-          totalTokens: result.usage?.totalTokens ?? 0
+          promptTokens: inputTokens,
+          completionTokens: outputTokens,
+          totalTokens: inputTokens + outputTokens
         }
       }
     },
@@ -452,7 +482,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
     /**
      * 获取语言模型实例
      */
-    getLanguageModel(): LanguageModelV1 {
+    getLanguageModel(): LanguageModel {
       return languageModel
     }
   }

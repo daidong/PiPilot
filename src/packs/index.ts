@@ -34,6 +34,8 @@ export { docs } from './docs.js'
 export { discovery } from './discovery.js'
 export { documents } from './documents.js'
 export type { DocumentsPackOptions } from './documents.js'
+export { contextPipeline, contextPipelinePack } from './context-pipeline.js'
+export type { ContextPipelinePackOptions } from './context-pipeline.js'
 
 // ============ Composite & Factory ============
 
@@ -53,6 +55,7 @@ import { sessionHistory } from './session-history.js'
 import { docs } from './docs.js'
 import { discovery } from './discovery.js'
 import { documents } from './documents.js'
+import { contextPipeline } from './context-pipeline.js'
 
 /**
  * Create minimal safe pack (core safe tools only)
@@ -118,6 +121,7 @@ export const packs = {
   docs,
   discovery,
   documents,
+  contextPipeline,
 
   // Composite factories
   minimal,
@@ -222,5 +226,11 @@ export const packMeta: Record<string, PackMeta> = {
     riskLevel: 'safe',
     requiresExplicitEnable: false,
     description: 'Document processing via MarkItDown: PDF, Word, Excel, PPT, Images, Audio'
+  },
+  'context-pipeline': {
+    id: 'context-pipeline',
+    riskLevel: 'safe',
+    requiresExplicitEnable: false,
+    description: 'Context assembly pipeline with history compression and on-demand expansion'
   }
 }

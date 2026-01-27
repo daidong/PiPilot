@@ -592,3 +592,10 @@ export class FileMessageStore implements MessageStore {
     }
   }
 }
+
+/**
+ * Create a new FileMessageStore instance
+ */
+export function createMessageStore(projectPath: string): MessageStore {
+  return new FileMessageStore(projectPath)
+}

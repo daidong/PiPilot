@@ -14,14 +14,16 @@ import {
 } from '../../src/llm/structured.js'
 
 // Mock the AI SDK with NoObjectGeneratedError class defined inline
+// SDK 6: uses inputTokens/outputTokens instead of promptTokens/completionTokens
+// SDK 6: uses output instead of experimental_output
 vi.mock('ai', () => {
   // Define mock class inside factory to avoid hoisting issues
   class MockNoObjectGeneratedError extends Error {
     text?: string
     cause?: unknown
-    usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+    usage?: { inputTokens: number; outputTokens: number }
 
-    constructor(options?: { text?: string; cause?: unknown; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }) {
+    constructor(options?: { text?: string; cause?: unknown; usage?: { inputTokens: number; outputTokens: number } }) {
       super('No object generated')
       this.name = 'AI_NoObjectGeneratedError'
       this.text = options?.text
@@ -62,12 +64,12 @@ describe('generateStructured', () => {
     it('should generate structured output', async () => {
       const mockOutput = { name: 'John', age: 30 }
 
+      // SDK 6: uses output and inputTokens/outputTokens
       vi.mocked(generateText).mockResolvedValueOnce({
-        experimental_output: mockOutput,
+        output: mockOutput,
         usage: {
-          promptTokens: 10,
-          completionTokens: 20,
-          totalTokens: 30
+          inputTokens: 10,
+          outputTokens: 20
         },
         text: '',
         finishReason: 'stop'
@@ -89,9 +91,10 @@ describe('generateStructured', () => {
     it('should pass correct options to generateText', async () => {
       const mockOutput = { name: 'Jane', age: 25 }
 
+      // SDK 6: uses output and inputTokens/outputTokens
       vi.mocked(generateText).mockResolvedValueOnce({
-        experimental_output: mockOutput,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+        output: mockOutput,
+        usage: { inputTokens: 10, outputTokens: 20 }
       } as any)
 
       await generateStructured({
@@ -103,14 +106,15 @@ describe('generateStructured', () => {
         maxTokens: 1000
       })
 
+      // SDK 6: uses maxOutputTokens and output instead of maxTokens and experimental_output
       expect(generateText).toHaveBeenCalledWith(
         expect.objectContaining({
           model: mockModel,
           system: 'System prompt',
           prompt: 'User prompt',
           temperature: 0.5,
-          maxTokens: 1000,
-          experimental_output: expect.anything()
+          maxOutputTokens: 1000,
+          output: expect.anything()
         })
       )
     })
@@ -120,11 +124,12 @@ describe('generateStructured', () => {
     it('should retry on failure', async () => {
       const mockOutput = { name: 'John', age: 30 }
 
+      // SDK 6: uses output and inputTokens/outputTokens
       vi.mocked(generateText)
         .mockRejectedValueOnce(new Error('First attempt failed'))
         .mockResolvedValueOnce({
-          experimental_output: mockOutput,
-          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+          output: mockOutput,
+          usage: { inputTokens: 10, outputTokens: 20 }
         } as any)
 
       const result = await generateStructured({
@@ -158,9 +163,10 @@ describe('generateStructured', () => {
       const mockOutput = { name: 'John', age: 30 }
       const traceEvents: StructuredTraceEvent[] = []
 
+      // SDK 6: uses output and inputTokens/outputTokens
       vi.mocked(generateText).mockResolvedValueOnce({
-        experimental_output: mockOutput,
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }
+        output: mockOutput,
+        usage: { inputTokens: 10, outputTokens: 20 }
       } as any)
 
       await generateStructured({

@@ -5,6 +5,7 @@
 import type { Pack } from './pack.js'
 import type { Policy } from './policy.js'
 import type { TraceEvent } from './trace.js'
+import type { ContextSelection } from './context-pipeline.js'
 
 /**
  * 模型配置
@@ -96,13 +97,23 @@ export interface AgentRunResult {
 }
 
 /**
+ * Options for agent.run()
+ */
+export interface AgentRunOptions {
+  /** User-selected context to include */
+  selectedContext?: ContextSelection[]
+  /** Override token budget for this run */
+  tokenBudget?: number
+}
+
+/**
  * Agent 实例
  */
 export interface Agent {
   /** Agent ID */
   id: string
   /** 运行 Agent */
-  run: (prompt: string) => Promise<AgentRunResult>
+  run: (prompt: string, options?: AgentRunOptions) => Promise<AgentRunResult>
   /** 停止运行 */
   stop: () => void
   /** 销毁 Agent */

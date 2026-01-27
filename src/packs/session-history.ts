@@ -3,16 +3,23 @@
  *
  * Provides conversation history viewing:
  * - Session context sources: session.messages, session.trace, session.search, session.thread
+ *
+ * IMPORTANT: This pack sets up runtime.messageStore which is required by:
+ * - session.messages, session.trace, session.search, session.thread context sources
+ * - ctx-expand tool (for message expansion)
+ * - Session phase (context pipeline) for including recent messages
  */
 
 import { definePack } from '../factories/define-pack.js'
 import type { Pack } from '../types/pack.js'
+import type { Runtime } from '../types/runtime.js'
 import {
   sessionMessages,
   sessionTrace,
   sessionSearch,
   sessionThread
 } from '../context-sources/index.js'
+import { createMessageStore } from '../core/message-store.js'
 
 /**
  * Session History Pack - Conversation history viewing
@@ -36,6 +43,28 @@ export function sessionHistory(): Pack {
       sessionSearch as any,
       sessionThread as any
     ],
+
+    /**
+     * Initialize message store on runtime.
+     * This is REQUIRED for session context sources and ctx-expand to work.
+     */
+    onInit: async (runtime: Runtime) => {
+      // Only create if not already set (e.g., by another pack)
+      if (!runtime.messageStore) {
+        const messageStore = createMessageStore(runtime.projectPath)
+        await messageStore.init()
+        runtime.messageStore = messageStore
+      }
+    },
+
+    /**
+     * Clean up message store on destroy.
+     */
+    onDestroy: async (runtime: Runtime) => {
+      if (runtime.messageStore) {
+        await runtime.messageStore.close()
+      }
+    },
 
     promptFragment: `
 ## Session History

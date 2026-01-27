@@ -3,12 +3,19 @@
  *
  * Provides explicit memory storage for agents to save and retrieve information.
  * Uses file-based JSON storage in .agent-foundry/memory/
+ *
+ * IMPORTANT: This pack sets up runtime.memoryStorage which is required by:
+ * - memory-put, memory-update, memory-delete tools
+ * - memory.get, memory.search, memory.list context sources
+ * - Pinned phase (context pipeline) for auto-loading pinned items
  */
 
 import { definePack } from '../factories/define-pack.js'
 import type { Pack } from '../types/pack.js'
+import type { Runtime } from '../types/runtime.js'
 import { memoryPut, memoryUpdate, memoryDelete } from '../tools/index.js'
 import { memoryGet, memorySearch, memoryList } from '../context-sources/index.js'
+import { createMemoryStorage } from '../core/memory-storage.js'
 
 /**
  * KV Memory Pack - Key-Value memory storage for agents
@@ -39,6 +46,33 @@ export function kvMemory(): Pack {
       memorySearch as any,
       memoryList as any
     ],
+
+    /**
+     * Initialize memory storage on runtime.
+     * This is REQUIRED for memory tools and pinned phase to work.
+     */
+    onInit: async (runtime: Runtime) => {
+      // Only create if not already set (e.g., by another pack)
+      if (!runtime.memoryStorage) {
+        try {
+          const memoryStorage = createMemoryStorage(runtime.projectPath)
+          await memoryStorage.init()
+          runtime.memoryStorage = memoryStorage
+        } catch (error) {
+          console.error('[kv-memory] Failed to initialize memory storage:', error)
+          throw error
+        }
+      }
+    },
+
+    /**
+     * Clean up memory storage on destroy.
+     */
+    onDestroy: async (runtime: Runtime) => {
+      if (runtime.memoryStorage) {
+        await runtime.memoryStorage.close()
+      }
+    },
 
     promptFragment: `
 ## Memory Storage

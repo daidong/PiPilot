@@ -6,7 +6,7 @@
 
 import { createOpenAI, type OpenAIProvider } from '@ai-sdk/openai'
 import { createAnthropic, type AnthropicProvider } from '@ai-sdk/anthropic'
-import type { LanguageModelV1 } from 'ai'
+import type { LanguageModel } from 'ai'
 import type {
   ProviderID,
   ProviderSDKConfig,
@@ -116,7 +116,7 @@ function getGoogleSDK(config: ProviderSDKConfig): OpenAIProvider {
  * - reasoning: true  -> use sdk.responses(model) (GPT-5.x, o-series)
  * - reasoning: false -> use sdk.chat(model) (GPT-4o, etc.)
  */
-export function getLanguageModel(options: ProviderOptions): LanguageModelV1 {
+export function getLanguageModel(options: ProviderOptions): LanguageModel {
   const { provider, model, config } = options
 
   // Get model config to determine API type
@@ -156,7 +156,7 @@ export function getLanguageModel(options: ProviderOptions): LanguageModelV1 {
 export function getLanguageModelByModelId(
   modelId: string,
   config: ProviderSDKConfig
-): LanguageModelV1 {
+): LanguageModel {
   const modelConfig = getModel(modelId)
   if (!modelConfig) {
     throw new Error(`Unknown model: ${modelId}`)

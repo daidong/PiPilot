@@ -484,9 +484,15 @@ export class FileMemoryStorage implements MemoryStorage {
 
   /**
    * Rebuild the entire index from data
+   * Note: Can be called during init() before initialized flag is set,
+   * so we only check for data existence, not the initialized flag.
    */
   async rebuildIndex(): Promise<void> {
-    this.ensureInitialized()
+    // Don't call ensureInitialized() here - this may be called during init()
+    // before the initialized flag is set. Just check we have data.
+    if (!this.data) {
+      throw new Error('Cannot rebuild index: data not loaded')
+    }
 
     this.index = {
       version: '1.0.0',
@@ -496,7 +502,7 @@ export class FileMemoryStorage implements MemoryStorage {
       namespaces: {}
     }
 
-    for (const [fullKey, item] of Object.entries(this.data!.items)) {
+    for (const [fullKey, item] of Object.entries(this.data.items)) {
       if (item.status === 'active') {
         this.indexItem(fullKey, item)
       }
