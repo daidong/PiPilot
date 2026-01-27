@@ -34,6 +34,8 @@ export interface Provenance {
   agentId?: string
   /** Where content was extracted from */
   extractedFrom?: 'agent-response' | 'user-input' | 'file-import'
+  /** Chat message ID this entity was derived from */
+  messageId?: string
 }
 
 /**

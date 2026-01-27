@@ -161,6 +161,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     const agent: Agent = {
       id: agentId,
+      runtime,
 
       async run(prompt: string): Promise<AgentRunResult> {
         // 初始化 Packs

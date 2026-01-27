@@ -156,7 +156,7 @@ async function syncEntitiesToMemory(runtime: Runtime, projectPath: string, debug
 
     await storage.put({
       namespace: 'research',
-      key: `${entity.type}.${entity.id}`,
+      key: `${entity.type}.${entity.id}`.toLowerCase(),
       value: entity,
       valueText,
       tags,

@@ -204,10 +204,10 @@ export interface MemoryStorage {
 // ============ Validation ============
 
 /**
- * Valid key pattern: lowercase letters, numbers, underscores, dots
- * Example: "writing.style", "code_preferences", "api.endpoint"
+ * Valid key pattern: lowercase letters, numbers, underscores, hyphens, dots
+ * Example: "writing.style", "code_preferences", "note.011b3f93-6ee8-4a74-96c4-f0dc722041ff"
  */
-export const MEMORY_KEY_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/
+export const MEMORY_KEY_PATTERN = /^[a-z][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)*$/
 
 /**
  * Maximum value size in bytes (10KB)

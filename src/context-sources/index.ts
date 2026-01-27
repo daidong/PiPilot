@@ -28,6 +28,10 @@ export { docsIndex } from './docs-index.js'
 export { docsSearch } from './docs-search.js'
 export { docsOpen } from './docs-open.js'
 
+// Todo namespace
+export { todoList } from './todo-list.js'
+export { todoGet } from './todo-get.js'
+
 // Type exports
 export type { SessionTraceParams, SessionTraceData, TraceEntry } from './session-trace.js'
 export type { SessionMessagesParams, SessionMessagesData } from './session-messages.js'
@@ -41,6 +45,8 @@ export type { MemoryListParams, MemoryListData } from './memory-list.js'
 export type { DocsIndexParams, DocsIndexData } from './docs-index.js'
 export type { DocsSearchParams, DocsSearchData } from './docs-search.js'
 export type { DocsOpenParams, DocsOpenData } from './docs-open.js'
+export type { TodoListParams, TodoListData } from './todo-list.js'
+export type { TodoGetParams, TodoGetData } from './todo-get.js'
 
 import type { ContextSource } from '../types/context.js'
 import { sessionTrace } from './session-trace.js'
@@ -55,6 +61,8 @@ import { memoryList } from './memory-list.js'
 import { docsIndex } from './docs-index.js'
 import { docsSearch } from './docs-search.js'
 import { docsOpen } from './docs-open.js'
+import { todoList } from './todo-list.js'
+import { todoGet } from './todo-get.js'
 
 /**
  * Session namespace context sources
@@ -96,13 +104,23 @@ export const docsContextSources: ContextSource<any, any>[] = [
 ]
 
 /**
+ * Todo namespace context sources
+ * For task tracking operations
+ */
+export const todoContextSources: ContextSource<any, any>[] = [
+  todoList,
+  todoGet
+]
+
+/**
  * All builtin context sources
  */
 export const builtinContextSources: ContextSource<any, any>[] = [
   ...sessionContextSources,
   ...metaContextSources,
   ...memoryContextSources,
-  ...docsContextSources
+  ...docsContextSources,
+  ...todoContextSources
 ]
 
 /**

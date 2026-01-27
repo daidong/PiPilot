@@ -36,6 +36,7 @@ export { documents } from './documents.js'
 export type { DocumentsPackOptions } from './documents.js'
 export { contextPipeline, contextPipelinePack } from './context-pipeline.js'
 export type { ContextPipelinePackOptions } from './context-pipeline.js'
+export { todo } from './todo.js'
 
 // ============ Composite & Factory ============
 
@@ -56,6 +57,7 @@ import { docs } from './docs.js'
 import { discovery } from './discovery.js'
 import { documents } from './documents.js'
 import { contextPipeline } from './context-pipeline.js'
+import { todo } from './todo.js'
 
 /**
  * Create minimal safe pack (core safe tools only)
@@ -122,6 +124,7 @@ export const packs = {
   discovery,
   documents,
   contextPipeline,
+  todo,
 
   // Composite factories
   minimal,
@@ -232,5 +235,11 @@ export const packMeta: Record<string, PackMeta> = {
     riskLevel: 'safe',
     requiresExplicitEnable: false,
     description: 'Context assembly pipeline with history compression and on-demand expansion'
+  },
+  todo: {
+    id: 'todo',
+    riskLevel: 'safe',
+    requiresExplicitEnable: false,
+    description: 'Task tracking: todo-add, todo-update, todo-complete, todo-remove + todo.list, todo.get'
   }
 }

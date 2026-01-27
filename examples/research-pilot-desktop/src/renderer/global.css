@@ -1,0 +1,182 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 400 900;
+  src: url('https://fonts.gstatic.com/s/playfairdisplay/v37/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKd3vXDXbtM.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  src: url('https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiA.woff2') format('woff2');
+}
+
+:root {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* === Theme tokens via CSS custom properties === */
+html.dark {
+  --color-bg-base: #0a0a0a;
+  --color-bg-surface: #171717;
+  --color-bg-elevated: #262626;
+  --color-bg-hover: rgba(255 255 255 / 0.06);
+  --color-border: #262626;
+  --color-border-subtle: #1f1f1f;
+  --color-text: #f5f5f5;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #525252;
+  --color-bubble-user: rgba(234, 88, 12, 0.8);
+  --color-bubble-assistant: #262626;
+  --color-input-bg: #171717;
+  --color-input-border: #404040;
+  --color-input-focus: rgba(249, 115, 22, 0.5);
+  color-scheme: dark;
+}
+
+html.light {
+  --color-bg-base: #ffffff;
+  --color-bg-surface: #f5f5f5;
+  --color-bg-elevated: #e5e5e5;
+  --color-bg-hover: rgba(0 0 0 / 0.04);
+  --color-border: #e5e5e5;
+  --color-border-subtle: #f0f0f0;
+  --color-text: #171717;
+  --color-text-secondary: #525252;
+  --color-text-muted: #a3a3a3;
+  --color-bubble-user: rgba(234, 88, 12, 0.85);
+  --color-bubble-assistant: #f5f5f5;
+  --color-input-bg: #ffffff;
+  --color-input-border: #d4d4d4;
+  --color-input-focus: rgba(249, 115, 22, 0.4);
+  color-scheme: light;
+}
+
+/* Apply tokens globally */
+body {
+  background: var(--color-bg-base);
+  color: var(--color-text);
+}
+
+/* Themed utility classes */
+.t-bg-base { background: var(--color-bg-base); }
+.t-bg-surface { background: var(--color-bg-surface); }
+.t-bg-elevated { background: var(--color-bg-elevated); }
+.t-bg-hover:hover { background: var(--color-bg-hover); }
+.t-border { border-color: var(--color-border); }
+.t-border-subtle { border-color: var(--color-border-subtle); }
+.t-text { color: var(--color-text); }
+.t-text-secondary { color: var(--color-text-secondary); }
+.t-text-muted { color: var(--color-text-muted); }
+
+/* Draggable title bar area */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Markdown prose styling inside assistant bubbles */
+.md-prose {
+  line-height: 1.65;
+}
+.md-prose p {
+  margin: 0.4em 0;
+}
+.md-prose p:first-child {
+  margin-top: 0;
+}
+.md-prose p:last-child {
+  margin-bottom: 0;
+}
+.md-prose h1, .md-prose h2, .md-prose h3, .md-prose h4 {
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+}
+.md-prose h1 { font-size: 1.25em; }
+.md-prose h2 { font-size: 1.1em; }
+.md-prose h3 { font-size: 1em; }
+.md-prose ul, .md-prose ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+.md-prose li {
+  margin: 0.15em 0;
+}
+.md-prose ul { list-style-type: disc; }
+.md-prose ol { list-style-type: decimal; }
+.md-prose code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.85em;
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  background: var(--color-bg-hover);
+}
+.md-prose pre {
+  margin: 0.6em 0;
+  padding: 0.75em 1em;
+  border-radius: 8px;
+  overflow-x: auto;
+  background: var(--color-bg-base) !important;
+  border: 1px solid var(--color-border);
+}
+.md-prose pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.82em;
+  line-height: 1.5;
+}
+.md-prose blockquote {
+  margin: 0.5em 0;
+  padding: 0.2em 0.8em;
+  border-left: 3px solid var(--color-text-muted);
+  color: var(--color-text-secondary);
+}
+.md-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+}
+.md-prose th, .md-prose td {
+  padding: 0.35em 0.6em;
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+.md-prose th {
+  font-weight: 600;
+  background: var(--color-bg-hover);
+}
+.md-prose a {
+  color: #f97316;
+  text-decoration: underline;
+}
+.md-prose hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 0.8em 0;
+}
+.md-prose img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-elevated);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}

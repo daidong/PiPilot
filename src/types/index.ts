@@ -144,6 +144,13 @@ export {
   generateSessionId
 } from './session.js'
 
+// Todo types
+export type {
+  TodoStatus,
+  TodoPriority,
+  TodoItem
+} from './todo.js'
+
 // Context Pipeline types
 export type {
   PhaseBudgetType,

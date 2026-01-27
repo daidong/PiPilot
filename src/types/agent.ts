@@ -6,6 +6,7 @@ import type { Pack } from './pack.js'
 import type { Policy } from './policy.js'
 import type { TraceEvent } from './trace.js'
 import type { ContextSelection } from './context-pipeline.js'
+import type { Runtime } from './runtime.js'
 
 /**
  * 模型配置
@@ -112,6 +113,8 @@ export interface AgentRunOptions {
 export interface Agent {
   /** Agent ID */
   id: string
+  /** Runtime instance (for advanced use: memory sync, session state, etc.) */
+  runtime: Runtime
   /** 运行 Agent */
   run: (prompt: string, options?: AgentRunOptions) => Promise<AgentRunResult>
   /** 停止运行 */

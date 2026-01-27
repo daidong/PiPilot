@@ -27,6 +27,10 @@ export { browser, browse } from './browser.js'
 export { memoryPut } from './memory-put.js'
 export { memoryUpdate } from './memory-update.js'
 export { memoryDelete } from './memory-delete.js'
+export { todoAdd } from './todo-add.js'
+export { todoUpdate } from './todo-update.js'
+export { todoComplete } from './todo-complete.js'
+export { todoRemove } from './todo-remove.js'
 
 // ============ 类型导出 ============
 
@@ -46,6 +50,10 @@ export type { BrowserInput, BrowserOutput, BrowseInput, BrowseOutput, SnapshotEl
 export type { MemoryPutInput, MemoryPutOutput } from './memory-put.js'
 export type { MemoryUpdateInput, MemoryUpdateOutput } from './memory-update.js'
 export type { MemoryDeleteInput, MemoryDeleteOutput } from './memory-delete.js'
+export type { TodoAddInput, TodoAddOutput } from './todo-add.js'
+export type { TodoUpdateInput, TodoUpdateOutput } from './todo-update.js'
+export type { TodoCompleteInput, TodoCompleteOutput } from './todo-complete.js'
+export type { TodoRemoveInput, TodoRemoveOutput } from './todo-remove.js'
 
 // ============ 分层工具集 ============
 
@@ -66,6 +74,10 @@ import { browser, browse } from './browser.js'
 import { memoryPut } from './memory-put.js'
 import { memoryUpdate } from './memory-update.js'
 import { memoryDelete } from './memory-delete.js'
+import { todoAdd } from './todo-add.js'
+import { todoUpdate } from './todo-update.js'
+import { todoComplete } from './todo-complete.js'
+import { todoRemove } from './todo-remove.js'
 
 /**
  * 安全核心工具（默认启用）
@@ -143,6 +155,19 @@ export const memoryTools: Tool<any, any>[] = [
 ]
 
 /**
+ * Todo task tracking tools
+ *
+ * Risk level: safe
+ * Contains: todo-add, todo-update, todo-complete, todo-remove
+ */
+export const todoTools: Tool<any, any>[] = [
+  todoAdd,
+  todoUpdate,
+  todoComplete,
+  todoRemove
+]
+
+/**
  * All builtin tools
  */
 export const builtinTools: Tool<any, any>[] = [
@@ -151,7 +176,8 @@ export const builtinTools: Tool<any, any>[] = [
   ...networkTools,
   ...computeTools,
   ...browserTools,
-  ...memoryTools
+  ...memoryTools,
+  ...todoTools
 ]
 
 /**
@@ -299,6 +325,34 @@ export const toolMeta: Record<string, ToolMeta> = {
     category: 'memory',
     requiresExplicitEnable: false,
     description: 'Delete a memory item'
+  },
+  'todo-add': {
+    name: 'todo-add',
+    riskLevel: 'safe',
+    category: 'memory',
+    requiresExplicitEnable: false,
+    description: 'Create a new todo item'
+  },
+  'todo-update': {
+    name: 'todo-update',
+    riskLevel: 'safe',
+    category: 'memory',
+    requiresExplicitEnable: false,
+    description: 'Update an existing todo item'
+  },
+  'todo-complete': {
+    name: 'todo-complete',
+    riskLevel: 'safe',
+    category: 'memory',
+    requiresExplicitEnable: false,
+    description: 'Mark a todo item as done'
+  },
+  'todo-remove': {
+    name: 'todo-remove',
+    riskLevel: 'safe',
+    category: 'memory',
+    requiresExplicitEnable: false,
+    description: 'Remove a todo item'
   }
 }
 

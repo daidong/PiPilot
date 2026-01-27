@@ -1,0 +1,22 @@
+import React from 'react'
+import { ProgressSteps } from '../right/ProgressSteps'
+import { WorkingFolder } from '../right/WorkingFolder'
+import { ContextChips } from '../right/ContextChips'
+
+export function RightSidebar() {
+  return (
+    <aside className="w-80 flex flex-col border-l t-border t-bg-base pt-10">
+      <div className="px-4 py-3 border-b t-border">
+        <h2 className="text-xs font-semibold t-text-muted uppercase tracking-wider">
+          Context
+        </h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <WorkingFolder />
+        <ContextChips />
+        <ProgressSteps />
+      </div>
+    </aside>
+  )
+}

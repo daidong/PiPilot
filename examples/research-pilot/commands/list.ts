@@ -5,19 +5,22 @@
 
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { PATHS, Note, Literature, DataAttachment } from '../types.js'
+import { PATHS, Note, Literature, DataAttachment, type Provenance } from '../types.js'
 
 export interface NoteListItem {
   id: string
   title: string
+  content: string
   tags: string[]
   pinned: boolean
   selectedForAI: boolean
+  provenance?: Provenance
 }
 
 export interface LiteratureListItem {
   id: string
   title: string
+  abstract: string
   authors: string[]
   year?: number
   citeKey: string
@@ -28,6 +31,7 @@ export interface LiteratureListItem {
 export interface DataListItem {
   id: string
   name: string
+  filePath: string
   rowCount?: number
   pinned: boolean
   selectedForAI: boolean
@@ -48,9 +52,11 @@ export function listNotes(projectPath: string): NoteListItem[] {
       items.push({
         id: note.id,
         title: note.title,
+        content: note.content,
         tags: note.tags,
         pinned: note.pinned,
-        selectedForAI: note.selectedForAI
+        selectedForAI: note.selectedForAI,
+        provenance: note.provenance
       })
     } catch {
       // Skip invalid files
@@ -75,6 +81,7 @@ export function listLiterature(projectPath: string): LiteratureListItem[] {
       items.push({
         id: lit.id,
         title: lit.title,
+        abstract: lit.abstract,
         authors: lit.authors,
         year: lit.year,
         citeKey: lit.citeKey,
@@ -104,6 +111,7 @@ export function listData(projectPath: string): DataListItem[] {
       items.push({
         id: data.id,
         name: data.name,
+        filePath: data.filePath,
         rowCount: data.schema?.rowCount,
         pinned: data.pinned,
         selectedForAI: data.selectedForAI

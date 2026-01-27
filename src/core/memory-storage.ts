@@ -159,7 +159,7 @@ export class FileMemoryStorage implements MemoryStorage {
 
     // Validate key
     if (!isValidMemoryKey(options.key)) {
-      throw new Error(`Invalid memory key format: "${options.key}". Use lowercase letters, numbers, underscores, and dots.`)
+      throw new Error(`Invalid memory key format: "${options.key}". Use lowercase letters, numbers, underscores, hyphens, and dots.`)
     }
 
     // Validate value size

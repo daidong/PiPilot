@@ -275,6 +275,7 @@ export {
   metaContextSources,
   memoryContextSources,
   docsContextSources,
+  todoContextSources,
   builtinContextSources
 } from './context-sources/index.js'
 
@@ -310,6 +311,7 @@ export {
   browserPack,
   contextPipeline,
   contextPipelinePack,
+  todo,
   // 组合工厂
   minimal,
   standard,

@@ -84,7 +84,8 @@ const packFactories: Record<string, PackFactory> = {
   'session-history': packs.sessionHistory,
   sessionHistory: packs.sessionHistory,  // alias without hyphen
   'context-pipeline': packs.contextPipeline,
-  contextPipeline: packs.contextPipeline  // alias without hyphen
+  contextPipeline: packs.contextPipeline,  // alias without hyphen
+  todo: packs.todo,
   // python: requires PythonBridge, cannot be auto-created from config
 }
 
@@ -358,6 +359,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
 
   const agent: Agent = {
     id: agentId,
+    runtime,
 
     async run(prompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
       // 初始化 Packs

@@ -45,10 +45,18 @@ export function saveNote(
   content: string,
   tags: string[],
   context: CLIContext,
-  fromLast: boolean = false
+  fromLast: boolean = false,
+  messageId?: string
 ): SaveNoteResult {
   if (!title) return { success: false, error: 'Note title is required.' }
   if (!content) return { success: false, error: 'Note content is required.' }
+
+  const provenance: Note['provenance'] = {
+    source: 'user',
+    sessionId: context.sessionId,
+    extractedFrom: fromLast ? 'agent-response' : 'user-input'
+  }
+  if (messageId) provenance.messageId = messageId
 
   const note: Note = {
     id: crypto.randomUUID(),
@@ -60,11 +68,7 @@ export function saveNote(
     selectedForAI: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    provenance: {
-      source: 'user',
-      sessionId: context.sessionId,
-      extractedFrom: fromLast ? 'agent-response' : 'user-input'
-    }
+    provenance
   }
 
   mkdirSync(PATHS.notes, { recursive: true })
