@@ -1,18 +1,23 @@
 /**
  * Coordinator Agent
  *
- * Main chat agent with context pipeline integration:
- * - Uses createAgent from the framework
- * - Reads pinned/selected entities directly from JSON files
- * - File tools (read, write, glob, grep) + ctx-expand
+ * Main chat agent using the framework's 5-phase context pipeline:
+ * - Syncs disk entities into kvMemory before each chat
+ * - Pipeline auto-includes pinned/selected items via tags
+ * - @-mentions passed as selectedContext for the selected phase
+ * - Token budgeting, history compression, and ctx-expand come for free
  */
 
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { createAgent, packs } from '../../../src/index.js'
+import { createAgent, packs, definePack } from '../../../src/index.js'
+import { createSubagentTools } from './subagent-tools.js'
 import type { Agent } from '../../../src/types/agent.js'
+import type { Runtime } from '../../../src/types/runtime.js'
+import type { ContextSelection } from '../../../src/types/context-pipeline.js'
 import { PATHS, Entity, Note, Literature, DataAttachment } from '../types.js'
 import type { ResolvedMention } from '../mentions/index.js'
+import { countTokens } from '../../../src/utils/tokenizer.js'
 
 /**
  * System prompt for the coordinator
@@ -38,21 +43,42 @@ To list entities: glob("${PATHS.notes}/*.json")
 To read an entity: read("${PATHS.notes}/<id>.json")
 To search: grep("search term", "${PATHS.notes}")
 
+## Subagent Tools
+
+For research tasks requiring external knowledge:
+- **literature-search**: Search academic papers on a topic. Input: { query: "..." }
+  Returns structured summary with papers, themes, key findings, and research gaps.
+- **data-analyze**: Analyze a dataset file. Input: { filePath: "...", question?: "..." }
+  Returns schema, quality assessment, insights, and visualization suggestions.
+
+Use these tools when the user asks to research a topic or analyze data.
+Do NOT attempt to search the web manually — use literature-search instead.
+
 ## Best Practices
 
 - Be concise and focused
 - When providing insights worth saving, remind users about /save-note --from-last
 - Use glob/read to access entity content
-- Cite sources when discussing literature`
+- Cite sources when discussing literature
+
+## Task Planning
+
+For non-trivial requests that require multiple steps (research, multi-file
+analysis, complex synthesis, comparative work):
+1. Create a plan of up to 10 tasks using todo-add BEFORE starting work
+2. Update each task to in_progress as you begin it (todo-update)
+3. Mark each task done when finished (todo-complete)
+
+Skip planning for simple conversational questions or single-step answers.`
 
 // ============================================================================
-// Helper Functions (Direct Implementation, No Phase Abstraction)
+// Helper Functions
 // ============================================================================
 
 /**
- * Load all entities from a directory
+ * Load all entities from a directory on disk
  */
-function loadEntities(dir: string): Entity[] {
+function loadEntitiesFromDisk(dir: string): Entity[] {
   if (!existsSync(dir)) return []
 
   const entities: Entity[] = []
@@ -71,9 +97,9 @@ function loadEntities(dir: string): Entity[] {
 }
 
 /**
- * Format entity for context
+ * Format entity as human-readable text for context
  */
-function formatEntity(entity: Entity): string {
+function formatEntityForContext(entity: Entity): string {
   if (entity.type === 'note') {
     const note = entity as Note
     const tags = note.tags.length > 0 ? `\nTags: ${note.tags.join(', ')}` : ''
@@ -98,65 +124,71 @@ function formatEntity(entity: Entity): string {
 }
 
 /**
- * Build context from pinned and selected entities
+ * Sync disk entities into runtime.memoryStorage with pinned/selected tags.
+ * The context pipeline's pinned phase auto-includes items tagged 'pinned',
+ * and the selected phase auto-includes items tagged 'selected'.
  */
-function buildResearchContext(projectPath: string, debug: boolean): string {
-  // Load all entities
+async function syncEntitiesToMemory(runtime: Runtime, projectPath: string, debug: boolean): Promise<void> {
+  const storage = (runtime as any).memoryStorage
+  if (!storage) {
+    if (debug) console.log('[Sync] No memoryStorage on runtime, skipping sync')
+    return
+  }
+
   const allEntities: Entity[] = [
-    ...loadEntities(join(projectPath, PATHS.notes)),
-    ...loadEntities(join(projectPath, PATHS.literature)),
-    ...loadEntities(join(projectPath, PATHS.data))
+    ...loadEntitiesFromDisk(join(projectPath, PATHS.notes)),
+    ...loadEntitiesFromDisk(join(projectPath, PATHS.literature)),
+    ...loadEntitiesFromDisk(join(projectPath, PATHS.data))
   ]
 
-  const pinned = allEntities.filter(e => e.pinned)
-  const selected = allEntities.filter(e => e.selectedForAI && !e.pinned)
-
   if (debug) {
-    console.log(`[Context] Pinned: ${pinned.length}, Selected: ${selected.length}, Total: ${allEntities.length}`)
+    const pinned = allEntities.filter(e => e.pinned).length
+    const selected = allEntities.filter(e => e.selectedForAI).length
+    console.log(`[Sync] Entities: ${allEntities.length} total, ${pinned} pinned, ${selected} selected`)
   }
 
-  if (pinned.length === 0 && selected.length === 0) {
-    return ''
+  for (const entity of allEntities) {
+    const tags: string[] = []
+    if (entity.pinned) tags.push('pinned')
+    if (entity.selectedForAI && !entity.pinned) tags.push('selected')
+
+    const valueText = formatEntityForContext(entity)
+
+    await storage.put({
+      namespace: 'research',
+      key: `${entity.type}.${entity.id}`,
+      value: entity,
+      valueText,
+      tags,
+      sensitivity: 'public' as const,
+      overwrite: true,
+      provenance: { createdBy: 'system' }
+    })
   }
-
-  const parts: string[] = []
-
-  if (pinned.length > 0) {
-    parts.push('## Pinned Context\n')
-    parts.push(pinned.map(formatEntity).join('\n\n'))
-  }
-
-  if (selected.length > 0) {
-    parts.push('## Selected Context\n')
-    parts.push(selected.map(formatEntity).join('\n\n'))
-  }
-
-  // Add brief index of what's available
-  if (allEntities.length > pinned.length + selected.length) {
-    const other = allEntities.length - pinned.length - selected.length
-    parts.push(`\n## Available (not in context)\n${other} more entities. Use /notes, /papers, /data to list.`)
-  }
-
-  return parts.join('\n\n')
 }
 
 /**
- * Build a context block from resolved @-mentions
+ * Build ContextSelection[] from resolved @-mentions.
+ * These are passed to agent.run() as selectedContext so the pipeline's
+ * selected phase includes them alongside tagged 'selected' memory items.
  */
-function buildMentionedContext(mentions?: ResolvedMention[]): string {
-  if (!mentions || mentions.length === 0) return ''
+function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[] {
+  if (!mentions || mentions.length === 0) return []
 
-  const parts: string[] = ['## Mentioned\n']
-
-  for (const m of mentions) {
-    if (m.error) {
-      parts.push(`(Could not resolve: ${m.ref.raw}) — ${m.error}`)
-    } else {
-      parts.push(`### ${m.label}\n\n${m.content}`)
-    }
-  }
-
-  return parts.join('\n\n')
+  return mentions
+    .filter(m => !m.error)
+    .map(m => ({
+      type: 'custom' as const,
+      ref: m.ref.raw,
+      resolve: async () => {
+        const content = `### ${m.label}\n\n${m.content}`
+        return {
+          source: `mention:${m.ref.raw}`,
+          content,
+          tokens: countTokens(content)
+        }
+      }
+    }))
 }
 
 // ============================================================================
@@ -169,6 +201,7 @@ export interface CoordinatorConfig {
   projectPath?: string
   debug?: boolean
   onStream?: (text: string) => void
+  onToolResult?: (tool: string, result: unknown) => void
 }
 
 export function createCoordinator(config: CoordinatorConfig): {
@@ -176,7 +209,18 @@ export function createCoordinator(config: CoordinatorConfig): {
   chat: (message: string, mentions?: ResolvedMention[]) => Promise<{ success: boolean; response?: string; error?: string }>
   destroy: () => Promise<void>
 } {
-  const { apiKey, model, projectPath = process.cwd(), debug = false, onStream } = config
+  const { apiKey, model, projectPath = process.cwd(), debug = false, onStream, onToolResult } = config
+
+  // Create subagent tools with the coordinator's API key and onToolResult
+  // so the team pipeline can emit progress updates to the desktop app's panel
+  const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(apiKey, onToolResult)
+
+  const subagentPack = definePack({
+    id: 'subagents',
+    name: 'Subagent Tools',
+    description: 'Literature search and data analysis subagent tools',
+    tools: [literatureSearchTool, dataAnalyzeTool]
+  })
 
   const agent = createAgent({
     apiKey,
@@ -185,9 +229,13 @@ export function createCoordinator(config: CoordinatorConfig): {
     identity: SYSTEM_PROMPT,
     packs: [
       packs.safe(),           // read, write, edit, glob, grep
-      packs.contextPipeline() // ctx-expand, history compression
+      packs.kvMemory(),       // memory storage (pinned phase reads from here)
+      packs.todo(),           // todo-add, todo-update, todo-complete, todo-remove
+      packs.contextPipeline(), // ctx-expand, history compression, 5-phase assembly
+      subagentPack             // literature-search, data-analyze
     ],
     onStream,
+    onToolResult,
     ...(debug && {
       onToolCall: (name, args) => {
         console.log(`  [Tool] ${name}(${JSON.stringify(args).slice(0, 80)}...)`)
@@ -200,24 +248,19 @@ export function createCoordinator(config: CoordinatorConfig): {
 
     async chat(message: string, mentions?: ResolvedMention[]) {
       try {
-        // Build context from pinned/selected entities
-        const context = buildResearchContext(projectPath, debug)
+        // Sync disk entities into memory so the pipeline picks them up
+        await syncEntitiesToMemory(agent.runtime, projectPath, debug)
 
-        // Build mentioned-context block from resolved mentions
-        const mentionedContext = buildMentionedContext(mentions)
-
-        // Prepend context if any
-        const parts: string[] = []
-        if (context) parts.push(`<research-context>\n${context}\n</research-context>`)
-        if (mentionedContext) parts.push(`<mentioned-context>\n${mentionedContext}\n</mentioned-context>`)
-        parts.push(context || mentionedContext ? `User: ${message}` : message)
-        const fullMessage = parts.join('\n\n')
+        // Build selectedContext from @-mentions
+        const selectedContext = buildMentionSelections(mentions)
 
         if (debug) {
-          console.log('[Chat] Sending message to agent...')
+          console.log(`[Chat] Sending message to agent (${selectedContext.length} mention selections)...`)
         }
 
-        const result = await agent.run(fullMessage)
+        const result = await agent.run(message, {
+          ...(selectedContext.length > 0 && { selectedContext })
+        })
 
         if (debug) {
           console.log(`[Chat] Result: success=${result.success}, hasOutput=${!!result.output}`)
