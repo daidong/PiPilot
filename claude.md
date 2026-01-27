@@ -4,6 +4,9 @@ always coding in english and all the comments should be in english as well.
 
 # AgentFoundry Development Guide
 
+> **Building an app on AgentFoundry?** Read `docs/AGENT_DEV_GUIDE.md` FIRST.
+> It prevents over-engineering by showing what the framework already provides.
+
 ## Project Overview
 
 AgentFoundry is an AI agent framework implementing a **three-axis orthogonal architecture**:
@@ -47,9 +50,11 @@ docs/
 ├── CLI.md           # CLI documentation
 ├── PROVIDERS.md     # Provider plugin system
 ├── MCP-GUIDE.md     # MCP integration guide
-└── TEAM.md          # Multi-agent team documentation
+├── TEAM.md          # Multi-agent team documentation
+└── AGENT_DEV_GUIDE.md  # **READ THIS when building apps on AgentFoundry**
 examples/
-└── literature-agent/  # Example agent implementation
+├── literature-agent/   # Multi-agent literature search
+└── research-pilot/     # Research assistant (context pipeline demo)
 ```
 
 ## Key Concepts
