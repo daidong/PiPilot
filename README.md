@@ -1,6 +1,6 @@
 # Agent Foundry
 
-A powerful AI agent framework with a **three-axis orthogonal architecture** for building intelligent, controllable, and context-aware agents.
+A powerful AI agent framework with a **three-axis orthogonal architecture** for building intelligent, controllable, and context-aware agents — plus a fully featured **Research Pilot** example application.
 
 ## Architecture Overview
 
@@ -30,6 +30,7 @@ Agent Foundry is built on three orthogonal axes:
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Research Pilot](#research-pilot)
 - [CLI Tools](#cli-tools)
 - [Configuration](#configuration)
 - [Tools](#tools)
@@ -40,6 +41,8 @@ Agent Foundry is built on three orthogonal axes:
 - [Multi-Agent Teams](#multi-agent-teams)
 - [API Reference](#api-reference)
 - [Advanced Usage](#advanced-usage)
+- [Examples](#examples)
+- [Development](#development)
 
 ## Installation
 
@@ -103,6 +106,152 @@ const agent = createAgent({
 
 const result = await agent.run('Analyze the codebase structure')
 await agent.destroy()
+```
+
+## Research Pilot
+
+Research Pilot is a full-featured example application demonstrating AgentFoundry's capabilities. It is a CLI-based research assistant with an Ink (React terminal UI) interface.
+
+### Running Research Pilot
+
+```bash
+export OPENAI_API_KEY=sk-xxx
+npx tsx examples/research-pilot/index.tsx
+npx tsx examples/research-pilot/index.tsx --debug
+```
+
+### Features
+
+#### Context Assembly Pipeline
+
+Research Pilot exercises the 5-phase context pipeline (RFC-003):
+
+| Phase | Priority | Content |
+|-------|----------|---------|
+| System | 100 | System prompt + tool descriptions |
+| Pinned | 90 | Pinned entities always in context |
+| Selected | 80 | User-selected notes/papers/data |
+| Session | 50 | Recent conversation history |
+| Index | 30 | Compressed history + catalog |
+
+#### Research Entity Management
+
+All research data is stored as JSON files under `.research-pilot/`:
+
+```
+.research-pilot/
+├── project.json          # Project config
+├── notes/                # Research notes
+├── literature/           # Academic papers
+├── data/                 # Data attachments
+└── sessions/             # Session history
+```
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/notes` | List all notes |
+| `/papers` | List all literature |
+| `/data` | List all data files |
+| `/search <query>` | Search across all entities |
+| `/save-note --from-last` | Save agent response as a note |
+| `/save-note --from-last --lines 5-12` | Save specific lines |
+| `/save-paper <title> [--authors "A, B"] [--year N]` | Save a paper reference |
+| `/save-data <name> --path <file>` | Register a data file |
+| `/delete <id>` | Delete any entity |
+| `/select <id>` | Toggle AI context selection |
+| `/pin <id>` | Toggle pinned status (always in context) |
+| `/lit-search <query>` | Search academic literature via agent |
+| `/debug` | Toggle debug mode |
+
+#### @-Mention System
+
+Inline-reference entities, files, and URLs directly in chat messages:
+
+```
+@note:<id-or-title>       → research note
+@paper:<citekey-or-id>    → literature entity
+@data:<id-or-name>        → data attachment
+@file:<path>              → arbitrary file on disk
+@url:<url>                → web content (async fetch)
+```
+
+Quoting is supported for values with spaces: `@file:"my data/file.csv"`
+
+**Autocomplete popup**: Typing `@` triggers an autocomplete dropdown showing matching entities and files. Navigate with arrow keys, select with Enter/Tab, dismiss with Escape.
+
+**Example usage:**
+
+```
+Summarize @paper:smith2024 and compare with @note:hypothesis
+Analyze @file:package.json
+Summarize @url:https://example.com
+```
+
+Mentioned items are resolved and injected into the agent context as a `<mentioned-context>` block for that message only.
+
+#### Activity Panel
+
+A tabbed right-side panel showing recent activity across all entity types:
+
+- **Tabs**: Notes, Papers, Data — switch with Tab/Shift+Tab
+- **Navigation**: Arrow up/down to browse items
+- **Preview**: Press Enter to open a full-screen entity preview overlay
+- **Focus**: Ctrl+R toggles panel focus, Esc closes preview or unfocuses
+
+The preview overlay displays full entity content (metadata, tags, pinned/selected status, body) and overlaps the main chat view.
+
+#### Multi-Agent Team
+
+| Agent | Purpose |
+|-------|---------|
+| Coordinator | Main chat agent with context pipeline |
+| Literature Agent | Academic literature search and review |
+| Writing Agent | Writing assistance and drafting |
+| Data Agent | Data analysis and insights |
+
+### Research Pilot Structure
+
+```
+examples/research-pilot/
+├── index.tsx                 # Entry point (Ink renderer)
+├── types.ts                  # Entity types + path constants
+├── agents/
+│   ├── coordinator.ts        # Main chat agent (context pipeline)
+│   ├── literature-agent.ts   # Literature search
+│   ├── writing-agent.ts      # Writing assistance
+│   ├── data-agent.ts         # Data analysis
+│   └── index.ts              # Agent exports
+├── commands/
+│   ├── save-note.ts          # /save-note handler
+│   ├── save-paper.ts         # /save-paper handler
+│   ├── save-data.ts          # /save-data handler
+│   ├── select.ts             # /select handler
+│   ├── pin.ts                # /pin handler
+│   ├── list.ts               # /notes, /papers, /data
+│   ├── search.ts             # /search handler
+│   ├── delete.ts             # /delete handler
+│   └── index.ts              # Command exports
+├── mentions/
+│   ├── parser.ts             # @-mention regex parser
+│   ├── resolver.ts           # Entity/file/URL resolution
+│   ├── candidates.ts         # Autocomplete candidate builder
+│   └── index.ts              # Mention exports
+└── ui/
+    ├── App.tsx               # Root component (layout + state)
+    ├── LineStore.ts           # Agent output line tracking
+    ├── hooks/
+    │   └── useAgent.ts       # Agent hook (streaming + mentions)
+    └── components/
+        ├── Banner.tsx         # Startup info display
+        ├── AgentResponse.tsx  # Response with line numbers
+        ├── CommandOutput.tsx  # Structured command results
+        ├── InputBar.tsx       # Input with @-mention autocomplete
+        ├── MentionPopup.tsx   # Autocomplete dropdown
+        ├── ActivityPanel.tsx  # Tabbed right panel (Notes/Papers/Data)
+        ├── EntityPreview.tsx  # Full-screen entity overlay
+        └── Sidebar.tsx        # Legacy pinned/selected sidebar
 ```
 
 ## CLI Tools
@@ -593,6 +742,7 @@ Packs bundle tools, policies, context sources, and prompt fragments.
 | `exploration()` | Safe | Code exploration guidelines |
 | `python()` | Elevated | Python execution |
 | `browserPack()` | Elevated | Browser automation |
+| `contextPipeline()` | Safe | 5-phase context assembly + ctx-expand |
 
 #### Memory & Context Packs
 
@@ -1038,6 +1188,25 @@ registry.register(myTool)
 const result = await registry.call('my-tool', { input: 'value' }, context)
 ```
 
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| `examples/research-pilot/` | Full-featured research assistant with Ink UI, @-mentions, activity panel, entity preview, context pipeline |
+| `examples/literature-agent/` | Multi-agent literature search and review |
+| `examples/dataanalysis-agent/` | Data analysis agent |
+| `examples/personal-email-assistant/` | Email management assistant |
+| `examples/team-demo/` | Multi-agent team orchestration demo |
+
+### Building Apps on AgentFoundry
+
+Read [`docs/AGENT_DEV_GUIDE.md`](docs/AGENT_DEV_GUIDE.md) before building an application. Key principles:
+
+- **Check before creating**: The framework provides file tools, context pipeline, and history compression out of the box
+- **No storage abstractions**: Use `fs` directly with path constants — agents use framework tools
+- **Minimal custom tools**: Only create tools for domain-specific external APIs
+- **Reuse context pipeline**: Use `packs.contextPipeline()` instead of custom implementations
+
 ## Development
 
 ```bash
@@ -1057,6 +1226,35 @@ npm run dev
 npm run lint
 ```
 
+### Project Structure
+
+```
+src/
+├── agent/           # Agent creation (createAgent, defineAgent, AgentLoop)
+├── core/            # Runtime components (ToolRegistry, PolicyEngine, ContextManager, EventBus)
+├── factories/       # Definition factories (defineTool, definePolicy, definePack)
+├── types/           # TypeScript type definitions
+├── packs/           # Pre-built capability packs
+├── tools/           # Built-in tools (read, write, edit, bash, glob, grep, fetch)
+├── policies/        # Built-in policies
+├── context-sources/ # Built-in context sources (repo-index, repo-search, session-history)
+├── llm/             # LLM integration (Vercel AI SDK)
+├── mcp/             # Model Context Protocol support
+├── cli/             # CLI commands and init wizard
+├── recommendation/  # Tool/MCP recommendation engine
+├── config/          # agent.yaml loading and validation
+├── team/            # Multi-agent team system
+│   ├── flow/        # Flow combinators, executor, AST, reducers, handoff
+│   ├── state/       # Blackboard shared state
+│   ├── channels/    # Pub/sub and request/response channels
+│   ├── protocols/   # Built-in protocol templates
+│   ├── define-team.ts
+│   ├── team-runtime.ts
+│   ├── agent-bridge.ts
+│   └── index.ts
+└── index.ts         # Main exports
+```
+
 ## Documentation
 
 - [API Reference](docs/API.md) - Complete API documentation
@@ -1065,6 +1263,7 @@ npm run lint
 - [Providers](docs/PROVIDERS.md) - Provider plugin system
 - [Multi-Agent Teams](docs/TEAM.md) - Multi-agent collaboration system
 - [Schema Coercion](docs/SCHEMA-COERCION.md) - OpenAI Responses API compatibility
+- [Agent Dev Guide](docs/AGENT_DEV_GUIDE.md) - Guide for building apps on AgentFoundry
 
 ## License
 
