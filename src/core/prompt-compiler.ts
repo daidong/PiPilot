@@ -124,7 +124,7 @@ export class PromptCompiler {
     })
 
     // 2. Available Tools
-    const toolsSection = `## Available Tools\n\n${toolRegistry.generateToolDescriptions()}`
+    const toolsSection = `## Available Tools\n\n${toolRegistry.generateCompactToolDescriptions()}`
     sections.push({
       id: 'tools',
       content: toolsSection,
@@ -200,7 +200,7 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
     if (config.tools) {
       sections.push({
         id: 'tools',
-        content: `## Available Tools\n\n${config.tools.generateToolDescriptions()}`,
+        content: `## Available Tools\n\n${config.tools.generateCompactToolDescriptions()}`,
         protected: true
       })
     }

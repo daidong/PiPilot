@@ -34,16 +34,7 @@ function generateTodoId(): string {
 
 export const todoAdd: Tool<TodoAddInput, TodoAddOutput> = defineTool({
   name: 'todo-add',
-  description: `Create a new todo item for task tracking.
-
-## Usage
-- Provide a title (required) and optional description, priority, tags
-- Items start with status "pending"
-- Use parentId to create sub-tasks
-
-## Examples
-- Simple: { "title": "Fix login bug" }
-- Detailed: { "title": "Refactor auth", "priority": "high", "tags": ["backend"] }`,
+  description: `Create a new todo item. Starts as "pending". Use parentId for sub-tasks.`,
   parameters: {
     title: {
       type: 'string',

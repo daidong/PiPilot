@@ -172,32 +172,7 @@ function parseSnapshot(output: string): SnapshotElement[] {
  */
 export const browser: Tool<BrowserInput, BrowserOutput> = defineTool({
   name: 'browser',
-  description: `Automate web browser for scraping and interaction.
-Uses agent-browser CLI for headless browser automation.
-
-**Prerequisites**: Install with \`npm install -g agent-browser && agent-browser install\`
-
-**Workflow**:
-1. Use action='open' to navigate to a URL
-2. Use action='snapshot' to see interactive elements (returns refs like @e1, @e2)
-3. Use action='click'/'fill' with selector='@e1' to interact
-4. Re-snapshot after page changes to get new refs
-
-**Available actions**:
-- open: Navigate to URL
-- snapshot: Get accessibility tree with element refs
-- click: Click element by ref (e.g., @e1)
-- fill: Clear and fill input field
-- type: Type text into element
-- press: Press key (Enter, Tab, Escape, Control+a, etc.)
-- scroll: Scroll page (up/down/left/right)
-- screenshot: Capture page image
-- getText: Extract text from element
-- getHtml: Get element HTML
-- getValue: Get input value
-- eval: Execute JavaScript
-- wait: Wait for element/condition
-- close: Close browser session`,
+  description: `Automate web browser via agent-browser CLI. Workflow: open URL → snapshot (get refs @e1,@e2) → click/fill/type → re-snapshot. Actions: open, snapshot, click, fill, type, press, scroll, screenshot, getText, getHtml, getValue, eval, wait, close.`,
   parameters: {
     action: {
       type: 'string',
@@ -491,16 +466,7 @@ export interface BrowseOutput {
  */
 export const browse: Tool<BrowseInput, BrowseOutput> = defineTool({
   name: 'browse',
-  description: `Browse a web page and extract content.
-Simplified interface for common web scraping tasks.
-
-**Use cases**:
-- Extract text content from a webpage
-- Get all links on a page
-- See interactive elements for further interaction
-- Take screenshots
-
-**Prerequisites**: Install with \`npm install -g agent-browser && agent-browser install\``,
+  description: `Browse a web page and extract content (text, links, images). Simplified scraping interface using agent-browser.`,
   parameters: {
     url: {
       type: 'string',

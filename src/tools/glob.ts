@@ -1,10 +1,10 @@
 /**
- * glob - 文件匹配工具
+ * glob - File matching tool
  *
- * 特性：
- * - 硬限制 maxResults
- * - 自动合并默认 ignore 模式
- * - 一致的输出结构（count/truncated/error）
+ * Features:
+ * - Hard limit on maxResults
+ * - Auto-merges default ignore patterns
+ * - Consistent output structure (count/truncated/error)
  */
 
 import { defineTool } from '../factories/define-tool.js'
@@ -17,40 +17,33 @@ export interface GlobInput {
 }
 
 export interface GlobOutput {
-  /** 匹配的文件列表 */
+  /** List of matched files */
   files: string[]
-  /** 匹配数量 */
+  /** Number of matches */
   count: number
-  /** 是否被截断 */
+  /** Whether results were truncated */
   truncated: boolean
-  /** 总匹配数（截断前） */
+  /** Total matches (before truncation) */
   total?: number
 }
 
 export const glob: Tool<GlobInput, GlobOutput> = defineTool({
   name: 'glob',
-  description: `使用 glob 模式匹配文件。例如 "**/*.ts" 匹配所有 TypeScript 文件。
-
-默认忽略：
-- node_modules, .git, dist, build, coverage 等
-
-安全限制：
-- 有最大结果数限制
-- 路径必须在项目目录内`,
+  description: `Match files using glob patterns (e.g. "**/*.ts"). Auto-ignores node_modules, .git, dist, etc.`,
   parameters: {
     pattern: {
       type: 'string',
-      description: 'Glob 匹配模式（如 **/*.ts）',
+      description: 'Glob pattern (e.g. **/*.ts)',
       required: true
     },
     cwd: {
       type: 'string',
-      description: '搜索的起始目录（相对于项目根目录）',
+      description: 'Starting directory for search (relative to project root)',
       required: false
     },
     ignore: {
       type: 'array',
-      description: '额外要忽略的模式（会与默认忽略模式合并）',
+      description: 'Additional ignore patterns (merged with default ignores)',
       required: false,
       items: { type: 'string' }
     }

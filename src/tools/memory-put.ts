@@ -47,23 +47,7 @@ export interface MemoryPutOutput {
 
 export const memoryPut: Tool<MemoryPutInput, MemoryPutOutput> = defineTool({
   name: 'memory-put',
-  description: `Store a memory item for later retrieval.
-
-## Usage
-- Use namespaces to isolate different types of data:
-  - "user": User preferences, settings
-  - "project": Project-specific information
-  - "session": Current session context
-- Keys are dot-separated paths: "writing.style", "api.endpoint"
-- Include valueText for human-readable description
-
-## Examples
-- Store user preference: { namespace: "user", key: "code.style", value: "typescript", valueText: "User prefers TypeScript" }
-- Store project info: { namespace: "project", key: "db.connection", value: {...}, sensitivity: "sensitive" }
-
-## Notes
-- Use ctx.get("memory.get") or ctx.get("memory.search") to retrieve items
-- Sensitive items are excluded from search by default`,
+  description: `Store a memory item. Use namespaces (user/project/session) and dot-separated keys. Include valueText for readability. Retrieve via ctx.get("memory.get").`,
   parameters: {
     namespace: {
       type: 'string',

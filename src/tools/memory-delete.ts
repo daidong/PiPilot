@@ -33,19 +33,7 @@ export interface MemoryDeleteOutput {
 
 export const memoryDelete: Tool<MemoryDeleteInput, MemoryDeleteOutput> = defineTool({
   name: 'memory-delete',
-  description: `Delete a memory item.
-
-## Usage
-- Provide namespace and key to identify the item
-- Include reason for audit trail
-
-## Examples
-- Delete item: { namespace: "session", key: "temp.data", reason: "Session ended" }
-- Clean up deprecated: { namespace: "project", key: "old.config", reason: "Migrated to new format" }
-
-## Notes
-- Deletion is permanent but tracked in history
-- Prefer using memory-update with status: "deprecated" for soft deletion`,
+  description: `Delete a memory item by namespace and key. Permanent but tracked in history. Prefer memory-update with status "deprecated" for soft delete.`,
   parameters: {
     namespace: {
       type: 'string',

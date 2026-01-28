@@ -363,7 +363,7 @@ export class ToolRegistry {
   }
 
   /**
-   * 生成工具描述（给 LLM 用）
+   * Generate full tool descriptions for LLM system prompt
    */
   generateToolDescriptions(): string {
     const descriptions: string[] = []
@@ -377,6 +377,29 @@ export class ToolRegistry {
         .join('\n')
 
       descriptions.push(`### ${tool.name}\n${tool.description}\n\nParameters:\n${params}`)
+    }
+
+    return descriptions.join('\n\n')
+  }
+
+  /**
+   * Generate compact tool descriptions (first line of description + params as inline list)
+   */
+  generateCompactToolDescriptions(): string {
+    const descriptions: string[] = []
+
+    for (const tool of this.tools.values()) {
+      // Take only the first line of the description
+      const firstLine = (tool.description.split('\n')[0] ?? '').trim()
+
+      const params = Object.entries(tool.parameters)
+        .map(([name, def]) => {
+          const required = def.required !== false ? '' : '?'
+          return `${name}${required}: ${def.type}`
+        })
+        .join(', ')
+
+      descriptions.push(`### ${tool.name}\n${firstLine}\nParams: ${params}`)
     }
 
     return descriptions.join('\n\n')

@@ -1,34 +1,34 @@
 /**
- * llm-expand - LLM 文本扩展工具
+ * llm-expand - LLM text expansion tool
  *
- * 使用 LLM 将文本扩展为多个变体，用于：
- * - 查询扩展（搜索优化）
- * - 同义词生成
- * - 多角度重述
+ * Uses LLM to expand text into multiple variations for:
+ * - Query expansion (search optimization)
+ * - Synonym generation
+ * - Multi-perspective rephrasing
  */
 
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool } from '../types/tool.js'
 
 export interface LLMExpandInput {
-  /** 原始文本 */
+  /** Original text */
   text: string
-  /** 生成变体数量，默认 3 */
+  /** Number of variations to generate, defaults to 3 */
   numVariations?: number
-  /** 扩展风格：search（搜索优化）、synonyms（同义词）、rephrase（重述） */
+  /** Expansion style: search (search-optimized), synonyms, rephrase */
   style?: 'search' | 'synonyms' | 'rephrase'
-  /** 领域提示（如 "academic"、"technical"、"casual"） */
+  /** Domain hint (e.g. "academic", "technical", "casual") */
   domain?: string
-  /** 额外上下文 */
+  /** Additional context */
   context?: string
 }
 
 export interface LLMExpandOutput {
-  /** 原始文本 */
+  /** Original text */
   original: string
-  /** 扩展后的变体 */
+  /** Expanded variations */
   variations: string[]
-  /** 扩展策略说明 */
+  /** Expansion strategy explanation */
   explanation: string
 }
 
@@ -54,13 +54,7 @@ const STYLE_PROMPTS: Record<string, string> = {
 
 export const llmExpand: Tool<LLMExpandInput, LLMExpandOutput> = defineTool({
   name: 'llm-expand',
-  description: `Expand text into multiple variations using LLM.
-Useful for:
-- Search query optimization (style: "search")
-- Generating synonyms (style: "synonyms")
-- Rephrasing text (style: "rephrase")
-
-Returns the original text plus generated variations.`,
+  description: `Expand text into multiple variations using LLM. Styles: search, synonyms, rephrase. Returns original plus variations.`,
 
   parameters: {
     text: {

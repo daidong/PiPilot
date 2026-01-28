@@ -1,76 +1,74 @@
 /**
- * fetch - HTTP 请求工具
- * 支持 GET, POST, PUT, DELETE 等 HTTP 方法
+ * fetch - HTTP request tool
+ * Supports GET, POST, PUT, DELETE and other HTTP methods
  */
 
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool } from '../types/tool.js'
 
 export interface FetchInput {
-  /** 请求 URL */
+  /** Request URL */
   url: string
-  /** HTTP 方法，默认 GET */
+  /** HTTP method, defaults to GET */
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
-  /** 请求头 */
+  /** Request headers */
   headers?: Record<string, string>
-  /** 请求体（POST/PUT/PATCH 时使用） */
+  /** Request body (used for POST/PUT/PATCH) */
   body?: string
-  /** 超时时间（毫秒），默认 30000 */
+  /** Timeout in milliseconds, defaults to 30000 */
   timeout?: number
-  /** 是否返回原始响应体（不尝试解析 JSON），默认 false */
+  /** Whether to return raw response body (skip JSON parsing), defaults to false */
   raw?: boolean
 }
 
 export interface FetchOutput {
-  /** HTTP 状态码 */
+  /** HTTP status code */
   status: number
-  /** HTTP 状态文本 */
+  /** HTTP status text */
   statusText: string
-  /** 响应头 */
+  /** Response headers */
   headers: Record<string, string>
-  /** 响应体（如果是 JSON 会自动解析，除非 raw=true） */
+  /** Response body (auto-parsed as JSON unless raw=true) */
   body: unknown
-  /** 是否成功（2xx 状态码） */
+  /** Whether the request succeeded (2xx status code) */
   ok: boolean
 }
 
 export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
   name: 'fetch',
-  description: `发送 HTTP 请求到外部 API。支持 GET, POST, PUT, DELETE 等方法。
-响应体会自动尝试解析为 JSON，如果失败则返回原始文本。
-注意：此工具用于调用外部 API，不适合访问本地文件。`,
+  description: `Send HTTP requests to external APIs. Supports GET/POST/PUT/DELETE. Response auto-parsed as JSON.`,
   parameters: {
     url: {
       type: 'string',
-      description: '请求 URL（必须是完整的 URL，包含协议）',
+      description: 'Request URL (must be a full URL including protocol)',
       required: true
     },
     method: {
       type: 'string',
-      description: 'HTTP 方法：GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
+      description: 'HTTP method: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
       required: false,
       default: 'GET',
       enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
     },
     headers: {
       type: 'object',
-      description: '请求头，键值对形式',
+      description: 'Request headers as key-value pairs',
       required: false
     },
     body: {
       type: 'string',
-      description: '请求体（JSON 字符串或其他格式）',
+      description: 'Request body (JSON string or other format)',
       required: false
     },
     timeout: {
       type: 'number',
-      description: '超时时间（毫秒），默认 30000',
+      description: 'Timeout in milliseconds, defaults to 30000',
       required: false,
       default: 30000
     },
     raw: {
       type: 'boolean',
-      description: '是否返回原始响应体（不尝试解析 JSON）',
+      description: 'Whether to return raw response body (skip JSON parsing)',
       required: false,
       default: false
     }
@@ -78,7 +76,7 @@ export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
   execute: async (input, { runtime }) => {
     const { url, method = 'GET', headers = {}, body, timeout = 30000, raw = false } = input
 
-    // 验证 URL
+    // Validate URL
     try {
       new URL(url)
     } catch {
@@ -88,12 +86,12 @@ export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
       }
     }
 
-    // 创建 AbortController 用于超时控制
+    // Create AbortController for timeout
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), timeout)
 
     try {
-      // 记录事件
+      // Emit event
       runtime.eventBus.emit('tool:fetch:start', {
         url,
         method,
@@ -112,13 +110,13 @@ export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
 
       clearTimeout(timeoutId)
 
-      // 解析响应头
+      // Parse response headers
       const responseHeaders: Record<string, string> = {}
       response.headers.forEach((value, key) => {
         responseHeaders[key] = value
       })
 
-      // 解析响应体
+      // Parse response body
       let responseBody: unknown
       const contentType = response.headers.get('content-type') || ''
 
@@ -131,10 +129,10 @@ export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
           responseBody = await response.text()
         }
       } else if (contentType.includes('application/xml') || contentType.includes('text/xml')) {
-        // XML 返回原始文本
+        // Return raw text for XML
         responseBody = await response.text()
       } else {
-        // 尝试解析为 JSON，失败则返回文本
+        // Try to parse as JSON, fall back to text
         const text = await response.text()
         try {
           responseBody = JSON.parse(text)
@@ -143,7 +141,7 @@ export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
         }
       }
 
-      // 记录事件
+      // Emit event
       runtime.eventBus.emit('tool:fetch:complete', {
         url,
         method,
@@ -164,7 +162,7 @@ export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
     } catch (error) {
       clearTimeout(timeoutId)
 
-      // 记录错误事件
+      // Emit error event
       runtime.eventBus.emit('tool:fetch:error', {
         url,
         method,

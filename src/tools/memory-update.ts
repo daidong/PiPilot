@@ -44,21 +44,7 @@ export interface MemoryUpdateOutput {
 
 export const memoryUpdate: Tool<MemoryUpdateInput, MemoryUpdateOutput> = defineTool({
   name: 'memory-update',
-  description: `Update an existing memory item.
-
-## Usage
-- Provide namespace and key to identify the item
-- Include only the fields you want to update
-- Use status: "deprecated" to mark items as outdated
-
-## Examples
-- Update value: { namespace: "user", key: "code.style", value: "python" }
-- Add tags: { namespace: "project", key: "db.config", tags: ["database", "config"] }
-- Deprecate item: { namespace: "session", key: "temp.data", status: "deprecated" }
-
-## Notes
-- Item must exist; use memory-put to create new items
-- Updates are atomic and tracked in history`,
+  description: `Update an existing memory item by namespace and key. Only include fields to change. Use status: "deprecated" for soft delete.`,
   parameters: {
     namespace: {
       type: 'string',

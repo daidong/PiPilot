@@ -1,11 +1,11 @@
 /**
- * grep - 内容搜索工具
+ * grep - Content search tool
  *
- * 特性：
- * - 非 shell 执行（spawn + 参数数组，防止命令注入）
- * - 源头限量（使用 -m 参数）
- * - 默认排除 node_modules/.git/dist 等
- * - 一致的输出结构（count/truncated/error）
+ * Features:
+ * - Non-shell execution (spawn + args array, prevents command injection)
+ * - Source-level limiting (uses -m flag)
+ * - Default excludes: node_modules/.git/dist etc.
+ * - Consistent output structure (count/truncated/error)
  */
 
 import { defineTool } from '../factories/define-tool.js'
@@ -21,53 +21,42 @@ export interface GrepInput {
 }
 
 export interface GrepOutput {
-  /** 匹配结果 */
+  /** Search matches */
   matches: GrepMatch[]
-  /** 匹配数量 */
+  /** Number of matches */
   count: number
-  /** 是否被截断 */
+  /** Whether results were truncated */
   truncated: boolean
 }
 
 export const grep: Tool<GrepInput, GrepOutput> = defineTool({
   name: 'grep',
-  description: `在文件中搜索内容。支持正则表达式。
-
-默认排除：
-- node_modules, .git, dist, build, coverage 等
-
-安全特性：
-- 非 shell 执行（防止命令注入）
-- 有最大结果数限制
-- 路径必须在项目目录内
-
-输出说明：
-- truncated=true 表示结果被截断，建议缩小搜索范围或使用 type 过滤`,
+  description: `Search file contents using regular expressions. Auto-excludes node_modules, .git, dist, etc. Results may be truncated.`,
   parameters: {
     pattern: {
       type: 'string',
-      description: '搜索模式（支持正则表达式）',
+      description: 'Search pattern (supports regular expressions)',
       required: true
     },
     cwd: {
       type: 'string',
-      description: '搜索的起始目录（相对于项目根目录）',
+      description: 'Starting directory for search (relative to project root)',
       required: false
     },
     type: {
       type: 'string',
-      description: '文件类型过滤（如 ts, js, py）',
+      description: 'File type filter (e.g. ts, js, py)',
       required: false
     },
     limit: {
       type: 'number',
-      description: '最大结果数（默认 100，受系统硬限制）',
+      description: 'Max number of results (default 100, subject to system hard limit)',
       required: false,
       default: 100
     },
     ignoreCase: {
       type: 'boolean',
-      description: '是否忽略大小写',
+      description: 'Whether to ignore case',
       required: false,
       default: false
     }

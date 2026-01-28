@@ -431,31 +431,7 @@ async function getMessagesInRange(
  */
 export const ctxExpand: Tool<CtxExpandInput, CtxExpandOutput> = defineTool({
   name: 'ctx-expand',
-  description: `Expand compressed context from the history index.
-
-Use this tool to retrieve specific details that were summarized in the History Index section.
-
-## Types
-
-- **segment**: Retrieve a full segment by ID (e.g., "seg-0", "seg-1")
-- **message**: Retrieve a message range (e.g., "0-5", "10-20", "last-5")
-- **memory**: Retrieve a memory item by key (e.g., "project:config", "user:prefs")
-- **search**: Search through history by keywords
-
-## Examples
-
-\`\`\`json
-{ "type": "segment", "ref": "seg-0" }
-{ "type": "message", "ref": "last-10" }
-{ "type": "memory", "ref": "project:rules" }
-{ "type": "search", "ref": "authentication error" }
-\`\`\`
-
-## Tips
-
-- Check the History Index section for available segment IDs
-- Use segment keywords to find relevant history
-- Specify maxTokens to limit response size`,
+  description: `Expand compressed context from history index. Types: segment (by ID e.g. "seg-0"), message (range e.g. "last-10"), memory (key e.g. "project:rules"), search (keywords).`,
   parameters: {
     type: {
       type: 'string',

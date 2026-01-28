@@ -33,16 +33,7 @@ export interface TodoUpdateOutput {
 
 export const todoUpdate: Tool<TodoUpdateInput, TodoUpdateOutput> = defineTool({
   name: 'todo-update',
-  description: `Update an existing todo item.
-
-## Usage
-- Provide the item ID and any fields to update
-- Setting status to "done" auto-sets completedAt
-- Use blockedBy to track dependencies
-
-## Examples
-- Change status: { "id": "todo-xxx", "status": "in_progress" }
-- Update priority: { "id": "todo-xxx", "priority": "critical" }`,
+  description: `Update an existing todo item by ID. Setting status "done" auto-sets completedAt. Use blockedBy for dependencies.`,
   parameters: {
     id: {
       type: 'string',

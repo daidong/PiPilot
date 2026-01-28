@@ -124,25 +124,7 @@ function generateDescription(namespaces: string[]): string {
     ? namespaces.map(ns => `${ns}.*`).join(', ')
     : 'repo.*, session.*'
 
-  return `Get context information from registered sources.
-
-## Available Namespaces
-${nsListStr}
-
-## Discovery Sources
-- ctx.catalog: List all available sources
-- ctx.describe: Get full documentation for a source
-
-## Quick Pattern
-1. Unsure which source? Use ctx.get("ctx.catalog")
-2. Need params? Use ctx.get("ctx.describe", { id: "source.id" })
-3. Standard workflow: index → search → open
-
-## Output
-- budget: Token consumption and cost info
-- coverage: Completeness and suggestions for next steps
-- kindEcho: Confirms what was called
-- next: Suggested follow-up actions`
+  return `Get context from registered sources. Namespaces: ${nsListStr}. Discovery: ctx.catalog (list sources), ctx.describe (source docs). Workflow: index → search → open.`
 }
 
 /**

@@ -1,35 +1,35 @@
 /**
- * llm-filter - LLM 智能过滤工具
+ * llm-filter - LLM smart filtering tool
  *
- * 使用 LLM 对列表进行相关性评分和过滤，用于：
- * - 搜索结果过滤
- * - 内容相关性排序
- * - 质量筛选
+ * Uses LLM to score and filter lists by relevance for:
+ * - Search result filtering
+ * - Content relevance ranking
+ * - Quality screening
  */
 
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool } from '../types/tool.js'
 
 export interface LLMFilterInput {
-  /** 待过滤的项目列表 */
+  /** List of items to filter */
   items: Array<{
     id: string
     title: string
     description?: string
     [key: string]: unknown
   }>
-  /** 过滤查询/标准 */
+  /** Filter query/criteria */
   query: string
-  /** 最大返回数量，默认 10 */
+  /** Max items to return, defaults to 10 */
   maxItems?: number
-  /** 最低相关性分数 0-10，默认 5 */
+  /** Minimum relevance score 0-10, defaults to 5 */
   minScore?: number
-  /** 评分标准说明 */
+  /** Scoring criteria description */
   criteria?: string
 }
 
 export interface LLMFilterOutput {
-  /** 过滤后的项目（带评分） */
+  /** Filtered items (with scores) */
   items: Array<{
     id: string
     title: string
@@ -37,25 +37,17 @@ export interface LLMFilterOutput {
     relevanceScore: number
     [key: string]: unknown
   }>
-  /** 过滤前数量 */
+  /** Count before filtering */
   totalBefore: number
-  /** 过滤后数量 */
+  /** Count after filtering */
   totalAfter: number
-  /** 被过滤掉的数量 */
+  /** Count of filtered-out items */
   filteredOut: number
 }
 
 export const llmFilter: Tool<LLMFilterInput, LLMFilterOutput> = defineTool({
   name: 'llm-filter',
-  description: `Filter a list of items by relevance using LLM.
-Scores each item 0-10 based on the query/criteria and returns only relevant ones.
-
-Useful for:
-- Filtering search results by relevance
-- Content quality assessment
-- Matching items to requirements
-
-Each item must have 'id' and 'title' fields. 'description' is optional but improves accuracy.`,
+  description: `Filter items by relevance using LLM. Scores each item 0-10 and returns relevant ones. Items need 'id' and 'title'; 'description' optional.`,
 
   parameters: {
     items: {
