@@ -190,6 +190,33 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
   )
 }
 
+// Animated dots for thinking state
+function ThinkingDots() {
+  return (
+    <span className="inline-flex gap-1 items-center">
+      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+    </span>
+  )
+}
+
+function ThinkingBubble() {
+  return (
+    <div className="flex justify-start">
+      <div
+        className="rounded-2xl px-4 py-3 text-sm t-text-secondary"
+        style={{ background: 'var(--color-bubble-assistant)' }}
+      >
+        <div className="flex items-center gap-2">
+          <ThinkingDots />
+          <span className="text-xs">Thinking</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StreamingBubble() {
   const text = useChatStore((s) => s.streamingText)
   if (!text) return null
@@ -221,6 +248,7 @@ export function ChatMessages() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
+  const isInitialMount = useRef(true)
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current
@@ -250,7 +278,14 @@ export function ChatMessages() {
 
   useEffect(() => {
     if (autoScroll) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      // On initial mount, scroll instantly without animation
+      if (isInitialMount.current) {
+        isInitialMount.current = false
+        bottomRef.current?.scrollIntoView({ behavior: 'instant' })
+      } else {
+        // After initial mount, use smooth scrolling for new messages
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      }
     }
   }, [messages, streamingText, autoScroll])
 
@@ -286,7 +321,7 @@ export function ChatMessages() {
             isSaved={savedMessageIds.has(msg.id)}
           />
         ))}
-        {isStreaming && <StreamingBubble />}
+        {isStreaming && (streamingText ? <StreamingBubble /> : <ThinkingBubble />)}
         <div ref={bottomRef} />
       </div>
     </>

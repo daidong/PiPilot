@@ -1,8 +1,56 @@
-import React, { useEffect, useCallback, useState } from 'react'
+import React, { useEffect, useCallback, useState, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { StickyNote, BookOpen, Database, Brain, Upload, MessageSquare, Trash2 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
+
+// Hover preview tooltip
+function HoverPreview({
+  entity,
+  anchorRect,
+  onMouseEnter,
+  onMouseLeave
+}: {
+  entity: EntityItem
+  anchorRect: DOMRect
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}) {
+  const content = entity.content || entity.abstract || entity.valueText || ''
+  if (!content) return null
+
+  // Position to the right of the sidebar (fixed position)
+  // Left sidebar is ~220px, so position preview at ~230px from left
+  const top = Math.min(anchorRect.top, window.innerHeight - 320)
+
+  return (
+    <div
+      className="fixed z-50 w-80 max-h-72 overflow-y-auto rounded-lg border t-border t-bg-surface shadow-xl"
+      style={{ left: 230, top }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <div className="px-3 py-2 border-b t-border">
+        <h4 className="text-xs font-semibold t-text truncate">{entity.title}</h4>
+        {entity.type === 'paper' && entity.authors?.length > 0 && (
+          <p className="text-[11px] t-text-muted truncate mt-0.5">
+            {entity.authors.slice(0, 3).join(', ')}{entity.authors.length > 3 ? ' et al.' : ''}
+            {entity.year ? ` (${entity.year})` : ''}
+          </p>
+        )}
+      </div>
+      <div className="px-3 py-2">
+        <div className="md-prose text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content.length > 600 ? content.slice(0, 600) + '…' : content}
+          </ReactMarkdown>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 const tabs = [
   { key: 'notes' as const, label: 'Notes', icon: StickyNote },
@@ -20,8 +68,42 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   const previewEntity = useUIStore((s) => s.previewEntity)
   const requestScrollTo = useChatStore((s) => s.requestScrollTo)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [showHover, setShowHover] = useState(false)
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const showTimeoutRef = useRef<number | null>(null)
+  const hideTimeoutRef = useRef<number | null>(null)
 
   const messageId = entity.provenance?.messageId as string | undefined
+
+  const cancelHide = () => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current)
+      hideTimeoutRef.current = null
+    }
+  }
+
+  const handleMouseEnter = () => {
+    cancelHide()
+    // Delay before showing hover preview
+    showTimeoutRef.current = window.setTimeout(() => {
+      if (rowRef.current) {
+        setAnchorRect(rowRef.current.getBoundingClientRect())
+        setShowHover(true)
+      }
+    }, 400)
+  }
+
+  const handleMouseLeave = () => {
+    if (showTimeoutRef.current) {
+      clearTimeout(showTimeoutRef.current)
+      showTimeoutRef.current = null
+    }
+    // Delay before hiding so user can move mouse to preview
+    hideTimeoutRef.current = window.setTimeout(() => {
+      setShowHover(false)
+    }, 300)
+  }
 
   const handleProvenanceClick = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -43,9 +125,20 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   return (
     <div>
       <div
+        ref={rowRef}
         className="group flex items-center gap-2 px-3 py-2 rounded-lg t-bg-hover transition-colors cursor-pointer"
         onClick={() => openPreview(entity)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
+        {showHover && anchorRect && (
+          <HoverPreview
+            entity={entity}
+            anchorRect={anchorRect}
+            onMouseEnter={cancelHide}
+            onMouseLeave={handleMouseLeave}
+          />
+        )}
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
           entity.pinned ? 'bg-orange-400' : entity.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
         }`} />
