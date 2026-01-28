@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 export interface ElectronAPI {
   // Agent
-  sendMessage: (message: string, rawMentions?: string) => Promise<any>
+  sendMessage: (message: string, rawMentions?: string, model?: string) => Promise<any>
   onStreamChunk: (cb: (chunk: string) => void) => () => void
   onAgentDone: (cb: (result: any) => void) => () => void
 
@@ -12,6 +12,7 @@ export interface ElectronAPI {
   listData: () => Promise<any>
   search: (query: string) => Promise<any>
   deleteEntity: (id: string) => Promise<any>
+  renameNote: (id: string, newTitle: string) => Promise<any>
   saveNote: (title: string, content: string, messageId?: string) => Promise<any>
   savePaper: (argsStr: string) => Promise<any>
   saveData: (argsStr: string) => Promise<any>
@@ -23,12 +24,21 @@ export interface ElectronAPI {
   togglePin: (id: string) => Promise<any>
   getPinned: () => Promise<any>
 
+  // Memory
+  listMemory: () => Promise<any>
+  toggleMemoryPin: (id: string) => Promise<any>
+  toggleMemorySelect: (id: string) => Promise<any>
+  deleteMemory: (id: string) => Promise<any>
+
   // Mentions
   getCandidates: (partial: string, type?: string) => Promise<any>
 
   // Todo progress
   onTodoUpdate: (cb: (item: any) => void) => () => void
   onTodoClear: (cb: () => void) => () => void
+
+  // Activity feed
+  onActivity: (cb: (event: any) => void) => () => void
 
   // File tracking
   onFileCreated: (cb: (path: string) => void) => () => void
@@ -48,8 +58,8 @@ export interface ElectronAPI {
 }
 
 const api: ElectronAPI = {
-  sendMessage: (message, rawMentions) =>
-    ipcRenderer.invoke('agent:send', message, rawMentions),
+  sendMessage: (message, rawMentions, model) =>
+    ipcRenderer.invoke('agent:send', message, rawMentions, model),
   onStreamChunk: (cb) => {
     const handler = (_: any, chunk: string) => cb(chunk)
     ipcRenderer.on('agent:stream-chunk', handler)
@@ -66,6 +76,7 @@ const api: ElectronAPI = {
   listData: () => ipcRenderer.invoke('cmd:list-data'),
   search: (query) => ipcRenderer.invoke('cmd:search', query),
   deleteEntity: (id) => ipcRenderer.invoke('cmd:delete', id),
+  renameNote: (id, newTitle) => ipcRenderer.invoke('cmd:rename-note', id, newTitle),
   saveNote: (title, content, messageId) => ipcRenderer.invoke('cmd:save-note', title, content, messageId),
   savePaper: (argsStr) => ipcRenderer.invoke('cmd:save-paper', argsStr),
   saveData: (argsStr) => ipcRenderer.invoke('cmd:save-data', argsStr),
@@ -75,6 +86,11 @@ const api: ElectronAPI = {
   clearSelections: () => ipcRenderer.invoke('cmd:clear-selections'),
   togglePin: (id) => ipcRenderer.invoke('cmd:pin', id),
   getPinned: () => ipcRenderer.invoke('cmd:get-pinned'),
+
+  listMemory: () => ipcRenderer.invoke('cmd:list-memory'),
+  toggleMemoryPin: (id) => ipcRenderer.invoke('cmd:memory-pin', id),
+  toggleMemorySelect: (id) => ipcRenderer.invoke('cmd:memory-select', id),
+  deleteMemory: (id) => ipcRenderer.invoke('cmd:memory-delete', id),
 
   getCandidates: (partial, type) => ipcRenderer.invoke('mention:candidates', partial, type),
 
@@ -87,6 +103,12 @@ const api: ElectronAPI = {
     const handler = () => cb()
     ipcRenderer.on('agent:todo-clear', handler)
     return () => ipcRenderer.removeListener('agent:todo-clear', handler)
+  },
+
+  onActivity: (cb) => {
+    const handler = (_: any, event: any) => cb(event)
+    ipcRenderer.on('agent:activity', handler)
+    return () => ipcRenderer.removeListener('agent:activity', handler)
   },
 
   onFileCreated: (cb) => {

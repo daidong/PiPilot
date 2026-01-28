@@ -343,7 +343,7 @@ export function createLiteratureTeam(config: {
   model?: string
   maxReviewIterations?: number
 }) {
-  const { apiKey, model = 'gpt-4o', maxReviewIterations = 2 } = config
+  const { apiKey, model = 'gpt-5.2', maxReviewIterations = 2 } = config
   if (!apiKey) throw new Error('API key is required')
 
   const languageModel = getLanguageModelByModelId(model, { apiKey })

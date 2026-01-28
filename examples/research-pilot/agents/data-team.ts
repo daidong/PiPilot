@@ -174,7 +174,7 @@ export function createDataTeam(config: {
   apiKey: string
   model?: string
 }) {
-  const { apiKey, model = 'gpt-4o' } = config
+  const { apiKey, model = 'gpt-5.2' } = config
   if (!apiKey) throw new Error('API key is required')
 
   const languageModel = getLanguageModelByModelId(model, { apiKey })

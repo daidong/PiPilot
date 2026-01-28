@@ -55,6 +55,7 @@ function emitTodo(cb: ToolResultCallback | undefined, item: TodoItem): void {
 
 export function createSubagentTools(
   apiKey: string,
+  model?: string,
   onToolResult?: ToolResultCallback
 ): {
   literatureSearchTool: Tool
@@ -65,14 +66,15 @@ export function createSubagentTools(
 
   const literatureSearchTool = defineTool({
     name: 'literature-search',
-    description: 'Search academic papers on a topic using a multi-agent literature research team. Returns a structured summary with papers, themes, key findings, and research gaps.',
+    description: 'Search academic papers on a topic using a multi-agent literature research team. Returns a structured summary with papers, themes, key findings, and research gaps. IMPORTANT: Always include relevant context from the conversation to help the search planner generate better queries.',
     parameters: {
-      query: { type: 'string', description: 'The research topic or question to search for', required: true }
+      query: { type: 'string', description: 'The research topic or question to search for', required: true },
+      context: { type: 'string', description: 'Additional context from the conversation that helps refine the search (e.g. researcher names, institutions, specific fields, paper titles mentioned by the user)', required: false }
     },
-    execute: async (input: { query: string }) => {
+    execute: async (input: { query: string; context?: string }) => {
       try {
         if (!literatureTeam) {
-          literatureTeam = createLiteratureTeam({ apiKey })
+          literatureTeam = createLiteratureTeam({ apiKey, model })
         }
 
         // Emit initial todo items so the panel shows what's happening
@@ -110,7 +112,11 @@ export function createSubagentTools(
           }
         })
 
-        const result = await literatureTeam.research(input.query)
+        // Pass context alongside query so the planner can generate better search terms
+        const searchRequest = input.context
+          ? `${input.query}\n\nAdditional context: ${input.context}`
+          : input.query
+        const result = await literatureTeam.research(searchRequest)
 
         // Clean up subscriptions
         unsub1()
@@ -145,7 +151,7 @@ export function createSubagentTools(
     execute: async (input: { filePath: string; question?: string }) => {
       try {
         if (!dataTeam) {
-          dataTeam = createDataTeam({ apiKey })
+          dataTeam = createDataTeam({ apiKey, model })
         }
 
         // Emit initial todo items

@@ -2,6 +2,8 @@ import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 import { createCoordinator, type CoordinatorConfig } from '@research-pilot/agents/coordinator'
+import { FileMemoryStorage } from '../../../../src/core/memory-storage.js'
+import type { MemoryItem } from '../../../../src/types/memory.js'
 import {
   listNotes, listLiterature, listData,
   searchEntities, deleteEntity,
@@ -15,9 +17,25 @@ import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/m
 import { PATHS, type ProjectConfig } from '@research-pilot/types'
 
 let coordinator: ReturnType<typeof createCoordinator> | null = null
+let currentModel = 'gpt-5.2'
 // Start with empty project path — user must select a folder
 let projectPath = ''
 let sessionId = crypto.randomUUID()
+let memoryStorage: FileMemoryStorage | null = null
+let memoryInitPromise: Promise<FileMemoryStorage> | null = null
+
+/** Get or create the memory storage instance for the current project */
+async function getMemoryStorage(): Promise<FileMemoryStorage | null> {
+  if (!projectPath) return null
+  if (!memoryInitPromise) {
+    const storage = new FileMemoryStorage(projectPath)
+    memoryInitPromise = storage.init().then(() => {
+      memoryStorage = storage
+      return storage
+    })
+  }
+  return memoryInitPromise
+}
 
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
@@ -63,14 +81,34 @@ function loadOrCreateSessionId(path: string): string {
   return newId
 }
 
-function ensureCoordinator(win: BrowserWindow) {
+function ensureCoordinator(win: BrowserWindow, model?: string) {
+  const requestedModel = model || currentModel
+  // Recreate coordinator if model changed
+  if (coordinator && requestedModel !== currentModel) {
+    coordinator.destroy().catch(() => {})
+    coordinator = null
+  }
+  currentModel = requestedModel
+
   if (!coordinator) {
     const apiKey = process.env.OPENAI_API_KEY || ''
     coordinator = createCoordinator({
       apiKey,
+      model: currentModel,
       projectPath,
+      sessionId,
+      debug: true,
       onStream: (chunk: string) => {
         win.webContents.send('agent:stream-chunk', chunk)
+      },
+      onToolCall: (tool: string, args: unknown) => {
+        // Send activity event for tool invocation
+        const summary = formatToolCallSummary(tool, args)
+        win.webContents.send('agent:activity', {
+          type: 'tool-call',
+          tool,
+          summary
+        })
       },
       onToolResult: (tool: string, result: unknown) => {
         if (tool.startsWith('todo-') && result && typeof result === 'object' && 'success' in result) {
@@ -87,22 +125,129 @@ function ensureCoordinator(win: BrowserWindow) {
             win.webContents.send('agent:file-created', r.data.path)
           }
         }
+
+        // Send activity event for tool result
+        const r = result as any
+        const success = r?.success !== false
+        const error = !success ? (r?.error || 'Unknown error') : undefined
+        const summary = formatToolResultSummary(tool, result)
+        win.webContents.send('agent:activity', {
+          type: 'tool-result',
+          tool,
+          summary,
+          success,
+          error
+        })
       }
     })
   }
   return coordinator
 }
 
+/** Format a short summary for a tool call activity event */
+function formatToolCallSummary(tool: string, args: unknown): string {
+  const a = args as Record<string, unknown> | undefined
+  switch (tool) {
+    case 'literature-search':
+      return `Searching: "${a?.query || ''}"`
+    case 'data-analyze':
+      return `Analyzing: ${a?.filePath || 'data'}`
+    case 'read':
+      return `Reading: ${a?.path || a?.file || ''}`
+    case 'write':
+      return `Writing: ${a?.path || a?.file || ''}`
+    case 'edit':
+      return `Editing: ${a?.path || a?.file || ''}`
+    case 'glob':
+      return `Glob: ${a?.pattern || ''}`
+    case 'grep':
+      return `Grep: "${a?.pattern || ''}"`
+    case 'memory-put':
+    case 'ctx-set': {
+      const key = (a?.key as string) || ''
+      return key ? `Storing: ${key.slice(0, 60)}` : 'Storing memory'
+    }
+    case 'memory-get':
+    case 'ctx-get': {
+      const key = (a?.key as string) || (a?.query as string) || ''
+      return key ? `Recalling: ${key.slice(0, 60)}` : 'Recalling memory'
+    }
+    case 'ctx-expand':
+      return `Expanding context: ${(a?.segment as string) || (a?.query as string) || ''}`
+    case 'fetch':
+      return `Fetching: ${(a?.url as string)?.slice(0, 60) || 'URL'}`
+    default:
+      if (tool.startsWith('todo-')) {
+        const action = tool.replace('todo-', '')
+        const subject = (a?.subject as string) || (a?.id as string) || ''
+        return subject ? `Task ${action}: ${subject.slice(0, 60)}` : `Task ${action}`
+      }
+      return `${tool}`
+  }
+}
+
+/** Format a short summary for a tool result activity event */
+function formatToolResultSummary(tool: string, result: unknown): string {
+  const r = result as Record<string, unknown> | undefined
+  const success = r?.success !== false
+  if (!success) {
+    const error = (r?.error as string) || 'failed'
+    return `${tool} failed: ${error.slice(0, 80)}`
+  }
+  switch (tool) {
+    case 'literature-search': {
+      const data = r?.data as Record<string, unknown> | undefined
+      const steps = data?.steps as number | undefined
+      return `Literature search done (${steps ?? '?'} steps)`
+    }
+    case 'read':
+      return `Read complete`
+    case 'write':
+      return `File written`
+    case 'edit':
+      return `File edited`
+    case 'memory-put':
+    case 'ctx-set':
+      return 'Memory stored'
+    case 'memory-get':
+    case 'ctx-get':
+      return 'Memory recalled'
+    case 'ctx-expand':
+      return 'Context expanded'
+    case 'glob':
+      return 'Glob complete'
+    case 'grep':
+      return 'Grep complete'
+    case 'fetch':
+      return 'Fetch complete'
+    default:
+      if (tool.startsWith('todo-')) {
+        const action = tool.replace('todo-', '')
+        const data = r?.data as Record<string, unknown> | undefined
+        const item = (data ?? r?.item ?? r) as Record<string, unknown> | undefined
+        const subject = (item?.subject as string) || (item?.id as string) || ''
+        const status = item?.status as string | undefined
+        if (action === 'add') return subject ? `Task added: ${subject.slice(0, 60)}` : 'Task added'
+        if (action === 'complete') return subject ? `Task done: ${subject.slice(0, 60)}` : 'Task completed'
+        if (action === 'remove') return subject ? `Task removed: ${subject.slice(0, 60)}` : 'Task removed'
+        // update
+        const detail = status ? ` → ${status}` : ''
+        return subject ? `Task updated: ${subject.slice(0, 50)}${detail}` : `Task updated${detail}`
+      }
+      return `${tool} done`
+  }
+}
+
 export function registerIpcHandlers(win: BrowserWindow): void {
   // Agent chat
-  ipcMain.handle('agent:send', async (_e, message: string, rawMentions?: string) => {
+  ipcMain.handle('agent:send', async (_e, message: string, rawMentions?: string, model?: string) => {
     if (!projectPath) {
       const errResult = { success: false, error: 'No project folder selected. Please select a folder first.' }
       win.webContents.send('agent:done', errResult)
       return errResult
     }
 
-    const coord = ensureCoordinator(win)
+    const coord = ensureCoordinator(win, model)
     win.webContents.send('agent:todo-clear')
     let mentions: any[] = []
     if (rawMentions) {
@@ -144,6 +289,22 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return deleteEntity(id, projectPath)
   })
 
+  // Commands - rename note
+  ipcMain.handle('cmd:rename-note', (_e, id: string, newTitle: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    const filePath = join(projectPath, PATHS.notes, `${id}.json`)
+    if (!existsSync(filePath)) return { success: false, error: 'Note not found.' }
+    try {
+      const note = JSON.parse(readFileSync(filePath, 'utf-8'))
+      note.title = newTitle
+      note.updatedAt = new Date().toISOString()
+      writeFileSync(filePath, JSON.stringify(note, null, 2))
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
   // Commands - save
   // saveNote signature: saveNote(title, content, tags, context, fromLast)
   ipcMain.handle('cmd:save-note', (_e, title: string, content: string, messageId?: string) => {
@@ -181,6 +342,59 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('cmd:get-pinned', () => {
     if (!projectPath) return []
     return getPinned(projectPath)
+  })
+
+  // Memory items
+  ipcMain.handle('cmd:list-memory', async () => {
+    const storage = await getMemoryStorage()
+    if (!storage) return []
+    const { items } = await storage.list({ status: 'active', limit: 200 })
+    // Filter out 'research' namespace (entity-sync mirrors)
+    return items
+      .filter((item: MemoryItem) => item.namespace !== 'research')
+      .map((item: MemoryItem) => ({
+        id: item.id,
+        type: 'memory' as const,
+        title: item.key,
+        pinned: item.tags.includes('pinned'),
+        selectedForAI: item.tags.includes('selected'),
+        namespace: item.namespace,
+        valueText: item.valueText,
+        createdAt: item.createdAt
+      }))
+  })
+
+  ipcMain.handle('cmd:memory-pin', async (_e, id: string) => {
+    const storage = await getMemoryStorage()
+    if (!storage) return null
+    const { items } = await storage.list({ status: 'active', limit: 500 })
+    const item = items.find((i: MemoryItem) => i.id === id)
+    if (!item) return null
+    const newTags = item.tags.includes('pinned')
+      ? item.tags.filter((t: string) => t !== 'pinned')
+      : [...item.tags, 'pinned']
+    return storage.update(item.namespace, item.key, { tags: newTags })
+  })
+
+  ipcMain.handle('cmd:memory-select', async (_e, id: string) => {
+    const storage = await getMemoryStorage()
+    if (!storage) return null
+    const { items } = await storage.list({ status: 'active', limit: 500 })
+    const item = items.find((i: MemoryItem) => i.id === id)
+    if (!item) return null
+    const newTags = item.tags.includes('selected')
+      ? item.tags.filter((t: string) => t !== 'selected')
+      : [...item.tags, 'selected']
+    return storage.update(item.namespace, item.key, { tags: newTags })
+  })
+
+  ipcMain.handle('cmd:memory-delete', async (_e, id: string) => {
+    const storage = await getMemoryStorage()
+    if (!storage) return false
+    const { items } = await storage.list({ status: 'active', limit: 500 })
+    const item = items.find((i: MemoryItem) => i.id === id)
+    if (!item) return false
+    return storage.delete(item.namespace, item.key)
   })
 
   // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
@@ -290,11 +504,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       projectPath = result.filePaths[0]
       // Initialize .research-pilot directory structure
       initializeProject(projectPath)
-      // Reset coordinator for new project
+      // Reset coordinator and memory storage for new project
       if (coordinator) {
         await coordinator.destroy()
         coordinator = null
       }
+      memoryStorage = null
+      memoryInitPromise = null
       // Reuse persistent session ID for this project folder
       sessionId = loadOrCreateSessionId(projectPath)
       return { projectPath, sessionId }

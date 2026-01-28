@@ -133,7 +133,7 @@ export function createWritingAgent(config: {
   apiKey: string
   model?: string
 }) {
-  const { apiKey, model = 'gpt-4o' } = config
+  const { apiKey, model = 'gpt-5.2' } = config
 
   const languageModel = getLanguageModelByModelId(model, { apiKey })
 

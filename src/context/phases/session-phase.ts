@@ -86,7 +86,7 @@ export function createSessionPhase(config: SessionPhaseConfig = {}): ContextPhas
       }
 
       // Build conversation content
-      const parts: string[] = ['## Conversation']
+      const parts: string[] = ['## Prior Conversation']
 
       if (excludedMessages.length > 0) {
         parts.push(`\n[${excludedMessages.length} earlier messages in index - use ctx-expand to retrieve]`)

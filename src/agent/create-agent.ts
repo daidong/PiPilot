@@ -59,14 +59,14 @@ function detectProviderAndModel(apiKey: string, preferredModel?: string): { prov
   const provider = detectProviderFromApiKey(apiKey)
 
   if (provider) {
-    const model = preferredModel || (provider === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+    const model = preferredModel || (provider === 'openai' ? 'gpt-5.2' : 'claude-3-5-sonnet-20241022')
     return { provider, model }
   }
 
   // 默认使用 OpenAI
   return {
     provider: 'openai',
-    model: preferredModel || 'gpt-4o'
+    model: preferredModel || 'gpt-5.2'
   }
 }
 
@@ -422,9 +422,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
           })
 
           if (assembled.content && assembled.content.trim().length > 0) {
-            // Assembled content already has section headers from each phase
-            // (e.g. ## Pinned Context, ## Selected Context, ## Conversation, etc.)
-            dynamicSystemPrompt = systemPrompt + '\n\n' + assembled.content
+            // Wrap assembled context in <working-context> tags so the LLM
+            // treats prior history as background, not the current request.
+            dynamicSystemPrompt = systemPrompt + '\n\n<working-context>\nThe following is prior conversation history and project context from this session. Use it as background reference, but focus your full attention on the user\'s latest message.\n\n' + assembled.content + '\n</working-context>'
           }
 
           // Store compressed history on runtime for ctx-expand to use
