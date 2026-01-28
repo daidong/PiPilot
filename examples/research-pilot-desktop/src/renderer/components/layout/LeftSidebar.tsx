@@ -10,7 +10,7 @@ export function LeftSidebar() {
   const toggleTheme = useUIStore((s) => s.toggleTheme)
 
   return (
-    <aside className="w-64 flex flex-col border-r t-border t-bg-base pt-10">
+    <aside className="w-78 flex flex-col border-r t-border t-bg-base pt-10">
       <div className="px-4 pb-3 flex items-center justify-between">
         <ModelSelector />
         <button

@@ -14,6 +14,7 @@ import { saveNote, getSaveNoteContent } from '@research-pilot/commands/save-note
 import { savePaper, parseSavePaperArgs } from '@research-pilot/commands/save-paper'
 import { saveData, parseSaveDataArgs } from '@research-pilot/commands/save-data'
 import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/mentions/index'
+import { setCachedMarkdown, fileUriToPath } from '@research-pilot/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@research-pilot/types'
 
 let coordinator: ReturnType<typeof createCoordinator> | null = null
@@ -39,7 +40,7 @@ async function getMemoryStorage(): Promise<FileMemoryStorage | null> {
 
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
-  const dirs = [PATHS.root, PATHS.notes, PATHS.literature, PATHS.data, PATHS.sessions]
+  const dirs = [PATHS.root, PATHS.notes, PATHS.literature, PATHS.data, PATHS.sessions, PATHS.cache, PATHS.documentCache]
 
   for (const dir of dirs) {
     const fullPath = join(path, dir)
@@ -81,7 +82,7 @@ function loadOrCreateSessionId(path: string): string {
   return newId
 }
 
-function ensureCoordinator(win: BrowserWindow, model?: string) {
+async function ensureCoordinator(win: BrowserWindow, model?: string) {
   const requestedModel = model || currentModel
   // Recreate coordinator if model changed
   if (coordinator && requestedModel !== currentModel) {
@@ -92,7 +93,14 @@ function ensureCoordinator(win: BrowserWindow, model?: string) {
 
   if (!coordinator) {
     const apiKey = process.env.OPENAI_API_KEY || ''
-    coordinator = createCoordinator({
+
+    // Notify UI that we're initializing (includes MCP servers like MarkItDown)
+    win.webContents.send('agent:activity', {
+      type: 'system',
+      summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...'
+    })
+
+    coordinator = await createCoordinator({
       apiKey,
       model: currentModel,
       projectPath,
@@ -110,7 +118,7 @@ function ensureCoordinator(win: BrowserWindow, model?: string) {
           summary
         })
       },
-      onToolResult: (tool: string, result: unknown) => {
+      onToolResult: (tool: string, result: unknown, args?: unknown) => {
         if (tool.startsWith('todo-') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.item) {
@@ -126,11 +134,35 @@ function ensureCoordinator(win: BrowserWindow, model?: string) {
           }
         }
 
+        // Cache convert_to_markdown results for document files
+        if (tool === 'convert_to_markdown' && result && typeof result === 'object' && 'success' in result) {
+          const r = result as any
+          if (r.success && r.data?.content && args && typeof args === 'object' && 'uri' in args) {
+            const uri = (args as { uri: string }).uri
+            const filePath = fileUriToPath(uri)
+            if (filePath && projectPath) {
+              setCachedMarkdown(filePath, r.data.content, projectPath)
+            }
+          }
+        }
+
+        // Notify UI to refresh entity lists when notes or papers are saved
+        if ((tool === 'save-note' || tool === 'save-paper') && result && typeof result === 'object' && 'success' in result) {
+          const r = result as any
+          if (r.success) {
+            win.webContents.send('agent:entity-created', {
+              type: tool === 'save-note' ? 'note' : 'literature',
+              id: r.data?.id,
+              title: r.data?.title
+            })
+          }
+        }
+
         // Send activity event for tool result
         const r = result as any
         const success = r?.success !== false
         const error = !success ? (r?.error || 'Unknown error') : undefined
-        const summary = formatToolResultSummary(tool, result)
+        const summary = formatToolResultSummary(tool, result, args)
         win.webContents.send('agent:activity', {
           type: 'tool-result',
           tool,
@@ -140,101 +172,219 @@ function ensureCoordinator(win: BrowserWindow, model?: string) {
         })
       }
     })
+
+    // Notify UI that initialization is complete
+    win.webContents.send('agent:activity', {
+      type: 'system',
+      summary: 'Agent ready'
+    })
   }
   return coordinator
+}
+
+/** Extract just the filename from a path */
+function getFileName(path: string): string {
+  if (!path) return ''
+  return path.split('/').pop() || path
 }
 
 /** Format a short summary for a tool call activity event */
 function formatToolCallSummary(tool: string, args: unknown): string {
   const a = args as Record<string, unknown> | undefined
   switch (tool) {
-    case 'literature-search':
-      return `Searching: "${a?.query || ''}"`
-    case 'data-analyze':
-      return `Analyzing: ${a?.filePath || 'data'}`
-    case 'read':
-      return `Reading: ${a?.path || a?.file || ''}`
-    case 'write':
-      return `Writing: ${a?.path || a?.file || ''}`
-    case 'edit':
-      return `Editing: ${a?.path || a?.file || ''}`
-    case 'glob':
-      return `Glob: ${a?.pattern || ''}`
-    case 'grep':
-      return `Grep: "${a?.pattern || ''}"`
+    case 'literature-search': {
+      const query = (a?.query as string) || ''
+      return `Search: ${query.slice(0, 40)}${query.length > 40 ? '...' : ''}`
+    }
+    case 'data-analyze': {
+      const file = getFileName((a?.filePath as string) || '')
+      return `Analyze: ${file || 'data'}`
+    }
+    case 'read': {
+      const file = getFileName((a?.path as string) || (a?.file as string) || '')
+      return `Read ${file}`
+    }
+    case 'write': {
+      const file = getFileName((a?.path as string) || (a?.file as string) || '')
+      return `Write ${file}`
+    }
+    case 'edit': {
+      const file = getFileName((a?.path as string) || (a?.file as string) || '')
+      return `Edit ${file}`
+    }
+    case 'glob': {
+      const pattern = (a?.pattern as string) || ''
+      return `Glob ${pattern}`
+    }
+    case 'grep': {
+      const pattern = (a?.pattern as string) || ''
+      return `Grep "${pattern.slice(0, 30)}${pattern.length > 30 ? '...' : ''}"`
+    }
+    case 'bash': {
+      const cmd = (a?.command as string) || ''
+      // Show first meaningful part of command
+      const shortCmd = cmd.split('\n')[0].slice(0, 40)
+      return `Run: ${shortCmd}${cmd.length > 40 ? '...' : ''}`
+    }
     case 'memory-put':
     case 'ctx-set': {
       const key = (a?.key as string) || ''
-      return key ? `Storing: ${key.slice(0, 60)}` : 'Storing memory'
+      return key ? `Store: ${key.slice(0, 40)}` : 'Store memory'
     }
     case 'memory-get':
     case 'ctx-get': {
       const key = (a?.key as string) || (a?.query as string) || ''
-      return key ? `Recalling: ${key.slice(0, 60)}` : 'Recalling memory'
+      return key ? `Recall: ${key.slice(0, 40)}` : 'Recall memory'
     }
-    case 'ctx-expand':
-      return `Expanding context: ${(a?.segment as string) || (a?.query as string) || ''}`
-    case 'fetch':
-      return `Fetching: ${(a?.url as string)?.slice(0, 60) || 'URL'}`
+    case 'ctx-expand': {
+      const seg = (a?.segment as string) || (a?.query as string) || ''
+      return `Expand: ${seg.slice(0, 40)}`
+    }
+    case 'fetch': {
+      const url = (a?.url as string) || ''
+      // Extract domain or filename
+      try {
+        const u = new URL(url)
+        return `Fetch: ${u.hostname}`
+      } catch {
+        return `Fetch: ${url.slice(0, 40)}`
+      }
+    }
+    case 'convert_to_markdown': {
+      const uri = (a?.uri as string) || ''
+      const filename = getFileName(uri)
+      return `Convert: ${filename}`
+    }
+    case 'save-note': {
+      const title = (a?.title as string) || 'note'
+      return `Save note: ${title.slice(0, 35)}`
+    }
+    case 'save-paper': {
+      const title = (a?.title as string) || 'paper'
+      return `Save paper: ${title.slice(0, 35)}`
+    }
     default:
       if (tool.startsWith('todo-')) {
         const action = tool.replace('todo-', '')
         const subject = (a?.subject as string) || (a?.id as string) || ''
-        return subject ? `Task ${action}: ${subject.slice(0, 60)}` : `Task ${action}`
+        return subject ? `Task ${action}: ${subject.slice(0, 40)}` : `Task ${action}`
       }
-      return `${tool}`
+      return tool
   }
 }
 
 /** Format a short summary for a tool result activity event */
-function formatToolResultSummary(tool: string, result: unknown): string {
+function formatToolResultSummary(tool: string, result: unknown, args?: unknown): string {
   const r = result as Record<string, unknown> | undefined
+  const a = args as Record<string, unknown> | undefined
   const success = r?.success !== false
   if (!success) {
     const error = (r?.error as string) || 'failed'
-    return `${tool} failed: ${error.slice(0, 80)}`
+    return `Failed: ${error.slice(0, 50)}`
   }
   switch (tool) {
     case 'literature-search': {
       const data = r?.data as Record<string, unknown> | undefined
-      const steps = data?.steps as number | undefined
-      return `Literature search done (${steps ?? '?'} steps)`
+      const local = data?.localPapersUsed as number | undefined
+      const external = data?.externalPapersUsed as number | undefined
+      const saved = data?.savedPapers as number | undefined
+      let summary = 'Search done'
+      if (typeof local === 'number' && typeof external === 'number') {
+        summary = `Found ${local + external} papers`
+        if (local > 0) summary += ` (${local} local)`
+      }
+      if (saved && saved > 0) summary += `, saved ${saved}`
+      return summary
     }
-    case 'read':
-      return `Read complete`
-    case 'write':
-      return `File written`
-    case 'edit':
-      return `File edited`
+    case 'read': {
+      const data = r?.data as Record<string, unknown> | undefined
+      const content = (data?.content as string) || ''
+      const lines = content.split('\n').length
+      const file = getFileName((a?.path as string) || (a?.file as string) || '')
+      return `Read ${file} (${lines} lines)`
+    }
+    case 'write': {
+      const data = r?.data as Record<string, unknown> | undefined
+      const file = getFileName((data?.path as string) || (a?.path as string) || '')
+      return `Wrote ${file}`
+    }
+    case 'edit': {
+      const file = getFileName((a?.path as string) || (a?.file as string) || '')
+      return `Edited ${file}`
+    }
+    case 'bash': {
+      const cmd = (a?.command as string) || ''
+      const shortCmd = cmd.split(/[\n|&;]/)[0].trim().slice(0, 25)
+      const data = r?.data as Record<string, unknown> | undefined
+      const output = (data?.output as string) || (data?.stdout as string) || ''
+      const lines = output.split('\n').filter(Boolean).length
+      return lines > 0 ? `${shortCmd}: ${lines} lines` : `${shortCmd}: done`
+    }
     case 'memory-put':
-    case 'ctx-set':
-      return 'Memory stored'
+    case 'ctx-set': {
+      const key = (a?.key as string) || ''
+      return key ? `Stored "${key.slice(0, 30)}"` : 'Stored memory'
+    }
     case 'memory-get':
-    case 'ctx-get':
-      return 'Memory recalled'
-    case 'ctx-expand':
-      return 'Context expanded'
-    case 'glob':
-      return 'Glob complete'
-    case 'grep':
-      return 'Grep complete'
-    case 'fetch':
-      return 'Fetch complete'
+    case 'ctx-get': {
+      const key = (a?.key as string) || (a?.query as string) || ''
+      const data = r?.data as Record<string, unknown> | undefined
+      const value = data?.value || data?.content
+      const keyPart = key ? `"${key.slice(0, 25)}"` : 'memory'
+      return value ? `Recalled ${keyPart}` : `${keyPart}: not found`
+    }
+    case 'ctx-expand': {
+      const seg = (a?.segment as string) || (a?.query as string) || ''
+      return seg ? `Expanded "${seg.slice(0, 30)}"` : 'Expanded context'
+    }
+    case 'glob': {
+      const pattern = (a?.pattern as string) || ''
+      const data = r?.data as Record<string, unknown> | undefined
+      const files = (data?.files as string[]) || (data?.matches as string[]) || []
+      return `${pattern}: ${files.length} files`
+    }
+    case 'grep': {
+      const pattern = (a?.pattern as string) || ''
+      const data = r?.data as Record<string, unknown> | undefined
+      const matches = (data?.matches as unknown[]) || (data?.results as unknown[]) || []
+      return `"${pattern.slice(0, 20)}": ${matches.length} matches`
+    }
+    case 'fetch': {
+      const url = (a?.url as string) || ''
+      try {
+        const u = new URL(url)
+        return `Fetched ${u.hostname}`
+      } catch {
+        return 'Fetched URL'
+      }
+    }
+    case 'convert_to_markdown': {
+      const uri = (a?.uri as string) || ''
+      const file = getFileName(uri)
+      return `Converted ${file}`
+    }
+    case 'save-note': {
+      const data = r?.data as Record<string, unknown> | undefined
+      const title = (data?.title as string) || ''
+      return title ? `Saved note: ${title.slice(0, 30)}` : 'Saved note'
+    }
+    case 'save-paper': {
+      const data = r?.data as Record<string, unknown> | undefined
+      const title = (data?.title as string) || ''
+      return title ? `Saved paper: ${title.slice(0, 30)}` : 'Saved paper'
+    }
     default:
       if (tool.startsWith('todo-')) {
         const action = tool.replace('todo-', '')
         const data = r?.data as Record<string, unknown> | undefined
         const item = (data ?? r?.item ?? r) as Record<string, unknown> | undefined
         const subject = (item?.subject as string) || (item?.id as string) || ''
-        const status = item?.status as string | undefined
-        if (action === 'add') return subject ? `Task added: ${subject.slice(0, 60)}` : 'Task added'
-        if (action === 'complete') return subject ? `Task done: ${subject.slice(0, 60)}` : 'Task completed'
-        if (action === 'remove') return subject ? `Task removed: ${subject.slice(0, 60)}` : 'Task removed'
-        // update
-        const detail = status ? ` → ${status}` : ''
-        return subject ? `Task updated: ${subject.slice(0, 50)}${detail}` : `Task updated${detail}`
+        if (action === 'add') return subject ? `Task added: ${subject.slice(0, 35)}` : 'Task added'
+        if (action === 'complete') return subject ? `Task done: ${subject.slice(0, 35)}` : 'Task done'
+        if (action === 'remove') return subject ? `Task removed: ${subject.slice(0, 35)}` : 'Task removed'
+        return subject ? `Task updated: ${subject.slice(0, 35)}` : 'Task updated'
       }
-      return `${tool} done`
+      return `${tool}: done`
   }
 }
 
@@ -247,7 +397,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       return errResult
     }
 
-    const coord = ensureCoordinator(win, model)
+    const coord = await ensureCoordinator(win, model)
     win.webContents.send('agent:todo-clear')
     let mentions: any[] = []
     if (rawMentions) {

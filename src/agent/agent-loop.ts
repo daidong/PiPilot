@@ -59,7 +59,7 @@ export interface AgentLoopConfig {
   /** Tool call callback */
   onToolCall?: (tool: string, input: unknown) => void
   /** Tool result callback */
-  onToolResult?: (tool: string, result: unknown) => void
+  onToolResult?: (tool: string, result: unknown, args?: unknown) => void
 
   /** Enable debug logging (prints full LLM payload to stderr) */
   debug?: boolean
@@ -340,7 +340,7 @@ export class AgentLoop {
             }
           )
 
-          this.config.onToolResult?.(toolUse.name, result)
+          this.config.onToolResult?.(toolUse.name, result, toolUse.input)
 
           // Build tool result
           // Note: JSON.stringify(undefined) returns undefined, not a string

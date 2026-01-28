@@ -11221,7 +11221,7 @@ function requireReactDomClient_production() {
     r: requestFormReset,
     D: prefetchDNS,
     C: preconnect,
-    L: preload,
+    L: preload2,
     m: preloadModule,
     X: preinitScript,
     S: preinitStyle,
@@ -11253,7 +11253,7 @@ function requireReactDomClient_production() {
     previousDispatcher.C(href, crossOrigin);
     preconnectAs("preconnect", href, crossOrigin);
   }
-  function preload(href, as, options2) {
+  function preload2(href, as, options2) {
     previousDispatcher.L(href, as, options2);
     var ownerDocument = globalDocument;
     if (ownerDocument && href && as) {
@@ -12511,6 +12511,15 @@ const createLucideIcon = (iconName, iconNode) => {
   Component.displayName = `${iconName}`;
   return Component;
 };
+const Activity = createLucideIcon("Activity", [
+  [
+    "path",
+    {
+      d: "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2",
+      key: "169zse"
+    }
+  ]
+]);
 const AtSign = createLucideIcon("AtSign", [
   ["circle", { cx: "12", cy: "12", r: "4", key: "4exip2" }],
   ["path", { d: "M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8", key: "7n84p3" }]
@@ -12536,11 +12545,39 @@ const BookmarkCheck = createLucideIcon("BookmarkCheck", [
 const Bookmark = createLucideIcon("Bookmark", [
   ["path", { d: "m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z", key: "1fy3hk" }]
 ]);
+const Brain = createLucideIcon("Brain", [
+  [
+    "path",
+    {
+      d: "M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z",
+      key: "l5xja"
+    }
+  ],
+  [
+    "path",
+    {
+      d: "M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z",
+      key: "ep3f8r"
+    }
+  ],
+  ["path", { d: "M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4", key: "1p4c4q" }],
+  ["path", { d: "M17.599 6.5a3 3 0 0 0 .399-1.375", key: "tmeiqw" }],
+  ["path", { d: "M6.003 5.125A3 3 0 0 0 6.401 6.5", key: "105sqy" }],
+  ["path", { d: "M3.477 10.896a4 4 0 0 1 .585-.396", key: "ql3yin" }],
+  ["path", { d: "M19.938 10.5a4 4 0 0 1 .585.396", key: "1qfode" }],
+  ["path", { d: "M6 18a4 4 0 0 1-1.967-.516", key: "2e4loj" }],
+  ["path", { d: "M19.967 17.484A4 4 0 0 1 18 18", key: "159ez6" }]
+]);
 const Check = createLucideIcon("Check", [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]]);
 const ChevronDown = createLucideIcon("ChevronDown", [
   ["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]
 ]);
 const ChevronUp = createLucideIcon("ChevronUp", [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]]);
+const CircleAlert = createLucideIcon("CircleAlert", [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
+  ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
+]);
 const CircleCheck = createLucideIcon("CircleCheck", [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
@@ -12590,6 +12627,11 @@ const Folder = createLucideIcon("Folder", [
     }
   ]
 ]);
+const Info$1 = createLucideIcon("Info", [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["path", { d: "M12 16v-4", key: "1dtifu" }],
+  ["path", { d: "M12 8h.01", key: "e9boi3" }]
+]);
 const LoaderCircle = createLucideIcon("LoaderCircle", [
   ["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]
 ]);
@@ -12598,6 +12640,16 @@ const MessageSquare = createLucideIcon("MessageSquare", [
 ]);
 const Moon = createLucideIcon("Moon", [
   ["path", { d: "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z", key: "a7tn18" }]
+]);
+const Pencil = createLucideIcon("Pencil", [
+  [
+    "path",
+    {
+      d: "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+      key: "1a8usu"
+    }
+  ],
+  ["path", { d: "m15 5 4 4", key: "1mk7zo" }]
 ]);
 const Pin = createLucideIcon("Pin", [
   ["path", { d: "M12 17v5", key: "bb1du9" }],
@@ -12653,6 +12705,15 @@ const Upload = createLucideIcon("Upload", [
   ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
   ["polyline", { points: "17 8 12 3 7 8", key: "t8dd8p" }],
   ["line", { x1: "12", x2: "12", y1: "3", y2: "15", key: "widbto" }]
+]);
+const Wrench = createLucideIcon("Wrench", [
+  [
+    "path",
+    {
+      d: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
+      key: "cbrjhi"
+    }
+  ]
 ]);
 const X = createLucideIcon("X", [
   ["path", { d: "M18 6 6 18", key: "1bl5f8" }],
@@ -12710,9 +12771,9 @@ const SUPPORTED_MODELS = [
   { id: "gpt-4-turbo", label: "GPT-4 Turbo", provider: "OpenAI" }
 ];
 const useUIStore = create$1((set) => ({
-  theme: "dark",
+  theme: "light",
   leftTab: "notes",
-  selectedModel: "gpt-4o",
+  selectedModel: "gpt-5.2",
   isIdle: true,
   rightSidebarCollapsed: false,
   leftSidebarCollapsed: false,
@@ -12734,40 +12795,78 @@ const useUIStore = create$1((set) => ({
   openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true }),
   closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false })
 }));
+const uiStore = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+  __proto__: null,
+  SUPPORTED_MODELS,
+  useUIStore
+}, Symbol.toStringTag, { value: "Module" }));
 const api$7 = window.api;
 const useEntityStore = create$1((set) => ({
   notes: [],
   papers: [],
   data: [],
+  memory: [],
   pinned: [],
   selected: [],
   refreshAll: async () => {
-    const [notes, papers, data, pinned, selected] = await Promise.all([
+    const [notes, papers, data, memory, pinned, selected] = await Promise.all([
       api$7.listNotes(),
       api$7.listLiterature(),
       api$7.listData(),
+      api$7.listMemory(),
       api$7.getPinned(),
       api$7.getSelected()
     ]);
+    const stamp = (items, type) => (items || []).map((i) => ({ ...i, type }));
     set({
-      notes: notes || [],
-      papers: papers || [],
-      data: data || [],
+      notes: stamp(notes, "note"),
+      papers: stamp(papers, "paper"),
+      data: stamp(data, "data"),
+      memory: memory || [],
       pinned: pinned || [],
       selected: selected || []
     });
   },
   togglePin: async (id) => {
+    const state = useEntityStore.getState();
+    const isMemory = state.memory.some((m) => m.id === id);
+    if (isMemory) {
+      await api$7.toggleMemoryPin(id);
+      const memory = await api$7.listMemory();
+      set({ memory: memory || [] });
+      return;
+    }
     await api$7.togglePin(id);
     const pinned = await api$7.getPinned();
     set({ pinned: pinned || [] });
   },
   toggleSelect: async (id) => {
+    const state = useEntityStore.getState();
+    const isMemory = state.memory.some((m) => m.id === id);
+    if (isMemory) {
+      await api$7.toggleMemorySelect(id);
+      const memory = await api$7.listMemory();
+      set({ memory: memory || [] });
+      return;
+    }
     await api$7.toggleSelect(id);
     const selected = await api$7.getSelected();
     set({ selected: selected || [] });
   },
+  renameNote: async (id, newTitle) => {
+    await api$7.renameNote(id, newTitle);
+    const notes = await api$7.listNotes();
+    set({ notes: notes || [] });
+  },
   deleteEntity: async (id) => {
+    const state = useEntityStore.getState();
+    const isMemory = state.memory.some((m) => m.id === id);
+    if (isMemory) {
+      await api$7.deleteMemory(id);
+      const memory = await api$7.listMemory();
+      set({ memory: memory || [] });
+      return;
+    }
     await api$7.deleteEntity(id);
     const [notes, papers, data, pinned, selected] = await Promise.all([
       api$7.listNotes(),
@@ -12785,6 +12884,67 @@ const useEntityStore = create$1((set) => ({
     });
   }
 }));
+const scriptRel = /* @__PURE__ */ (function detectScriptRel() {
+  const relList = typeof document !== "undefined" && document.createElement("link").relList;
+  return relList && relList.supports && relList.supports("modulepreload") ? "modulepreload" : "preload";
+})();
+const assetsURL = function(dep, importerUrl) {
+  return new URL(dep, importerUrl).href;
+};
+const seen = {};
+const __vitePreload = function preload(baseModule, deps, importerUrl) {
+  let promise = Promise.resolve();
+  if (deps && deps.length > 0) {
+    let allSettled = function(promises$2) {
+      return Promise.all(promises$2.map((p) => Promise.resolve(p).then((value$1) => ({
+        status: "fulfilled",
+        value: value$1
+      }), (reason) => ({
+        status: "rejected",
+        reason
+      }))));
+    };
+    const links = document.getElementsByTagName("link");
+    const cspNonceMeta = document.querySelector("meta[property=csp-nonce]");
+    const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute("nonce");
+    promise = allSettled(deps.map((dep) => {
+      dep = assetsURL(dep, importerUrl);
+      if (dep in seen) return;
+      seen[dep] = true;
+      const isCss = dep.endsWith(".css");
+      const cssSelector = isCss ? '[rel="stylesheet"]' : "";
+      if (!!importerUrl) for (let i$1 = links.length - 1; i$1 >= 0; i$1--) {
+        const link$12 = links[i$1];
+        if (link$12.href === dep && (!isCss || link$12.rel === "stylesheet")) return;
+      }
+      else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) return;
+      const link2 = document.createElement("link");
+      link2.rel = isCss ? "stylesheet" : scriptRel;
+      if (!isCss) link2.as = "script";
+      link2.crossOrigin = "";
+      link2.href = dep;
+      if (cspNonce) link2.setAttribute("nonce", cspNonce);
+      document.head.appendChild(link2);
+      if (isCss) return new Promise((res, rej) => {
+        link2.addEventListener("load", res);
+        link2.addEventListener("error", () => rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`)));
+      });
+    }));
+  }
+  function handlePreloadError(err$2) {
+    const e$1 = new Event("vite:preloadError", { cancelable: true });
+    e$1.payload = err$2;
+    window.dispatchEvent(e$1);
+    if (!e$1.defaultPrevented) throw err$2;
+  }
+  return promise.then((res) => {
+    for (const item of res || []) {
+      if (item.status !== "rejected") continue;
+      handlePreloadError(item.reason);
+    }
+    return baseModule().catch(handlePreloadError);
+  });
+};
 const PAGE_SIZE = 20;
 const api$6 = window.api;
 let _sessionId = "";
@@ -12814,7 +12974,12 @@ const useChatStore = create$1((set, get) => ({
       });
     }
     try {
-      await api$6.sendMessage(text2);
+      const { useUIStore: useUIStore2 } = await __vitePreload(async () => {
+        const { useUIStore: useUIStore3 } = await Promise.resolve().then(() => uiStore);
+        return { useUIStore: useUIStore3 };
+      }, true ? void 0 : void 0, import.meta.url);
+      const model = useUIStore2.getState().selectedModel;
+      await api$6.sendMessage(text2, void 0, model);
     } catch {
     }
   },
@@ -12908,7 +13073,8 @@ const useChatStore = create$1((set, get) => ({
 const tabs = [
   { key: "notes", label: "Notes", icon: StickyNote },
   { key: "data", label: "Data", icon: Database },
-  { key: "papers", label: "Papers", icon: BookOpen }
+  { key: "papers", label: "Papers", icon: BookOpen },
+  { key: "memory", label: "Mem", icon: Brain }
 ];
 function EntityRow({ entity }) {
   const togglePin = useEntityStore((s) => s.togglePin);
@@ -12999,14 +13165,15 @@ function EntityRow({ entity }) {
 function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab);
   const setLeftTab = useUIStore((s) => s.setLeftTab);
-  const { notes, papers, data, refreshAll } = useEntityStore();
+  const { notes, papers, data, memory, refreshAll } = useEntityStore();
   reactExports.useEffect(() => {
     refreshAll();
   }, []);
   const entities = {
     notes,
     papers,
-    data
+    data,
+    memory
   };
   const items = entities[leftTab] || [];
   const handleDragOver = reactExports.useCallback((e) => {
@@ -13033,7 +13200,7 @@ function EntityTabs() {
       },
       key
     )) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    leftTab !== "memory" && /* @__PURE__ */ jsxRuntimeExports.jsxs(
       "div",
       {
         onDragOver: handleDragOver,
@@ -13170,7 +13337,7 @@ function ModelSelector() {
 function LeftSidebar() {
   const theme = useUIStore((s) => s.theme);
   const toggleTheme = useUIStore((s) => s.toggleTheme);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { className: "w-64 flex flex-col border-r t-border t-bg-base pt-10", children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { className: "w-78 flex flex-col border-r t-border t-bg-base pt-10", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 pb-3 flex items-center justify-between", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(ModelSelector, {}),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -15669,15 +15836,15 @@ function initializeDocument(effects) {
       }
       const indexBeforeExits = self2.events.length;
       let indexBeforeFlow = indexBeforeExits;
-      let seen;
+      let seen2;
       let point2;
       while (indexBeforeFlow--) {
         if (self2.events[indexBeforeFlow][0] === "exit" && self2.events[indexBeforeFlow][1].type === "chunkFlow") {
-          if (seen) {
+          if (seen2) {
             point2 = self2.events[indexBeforeFlow][1].end;
             break;
           }
-          seen = true;
+          seen2 = true;
         }
       }
       exitContainers(continued);
@@ -16974,7 +17141,7 @@ function factoryDestination(effects, ok2, nok, type, literalType, literalMarkerT
 function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
   const self2 = this;
   let size = 0;
-  let seen;
+  let seen2;
   return start;
   function start(code2) {
     effects.enter(type);
@@ -16985,7 +17152,7 @@ function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
     return atBreak;
   }
   function atBreak(code2) {
-    if (size > 999 || code2 === null || code2 === 91 || code2 === 93 && !seen || // To do: remove in the future once we’ve switched from
+    if (size > 999 || code2 === null || code2 === 91 || code2 === 93 && !seen2 || // To do: remove in the future once we’ve switched from
     // `micromark-extension-footnote` to `micromark-extension-gfm-footnote`,
     // which doesn’t need this.
     // Hidden footnotes hook.
@@ -17018,7 +17185,7 @@ function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
       return atBreak(code2);
     }
     effects.consume(code2);
-    if (!seen) seen = !markdownSpace(code2);
+    if (!seen2) seen2 = !markdownSpace(code2);
     return code2 === 92 ? labelEscape : labelInside;
   }
   function labelEscape(code2) {
@@ -17091,18 +17258,18 @@ function factoryTitle(effects, ok2, nok, type, markerType, stringType) {
   }
 }
 function factoryWhitespace(effects, ok2) {
-  let seen;
+  let seen2;
   return start;
   function start(code2) {
     if (markdownLineEnding(code2)) {
       effects.enter("lineEnding");
       effects.consume(code2);
       effects.exit("lineEnding");
-      seen = true;
+      seen2 = true;
       return start;
     }
     if (markdownSpace(code2)) {
-      return factorySpace(effects, start, seen ? "linePrefix" : "lineSuffix")(code2);
+      return factorySpace(effects, start, seen2 ? "linePrefix" : "lineSuffix")(code2);
     }
     return ok2(code2);
   }
@@ -24629,7 +24796,7 @@ function tokenizeWwwAutolink(effects, ok2, nok) {
 function tokenizeProtocolAutolink(effects, ok2, nok) {
   const self2 = this;
   let buffer = "";
-  let seen = false;
+  let seen2 = false;
   return protocolStart;
   function protocolStart(code2) {
     if ((code2 === 72 || code2 === 104) && previousProtocol.call(self2, self2.previous) && !previousUnbalanced(self2.events)) {
@@ -24659,10 +24826,10 @@ function tokenizeProtocolAutolink(effects, ok2, nok) {
   function protocolSlashesInside(code2) {
     if (code2 === 47) {
       effects.consume(code2);
-      if (seen) {
+      if (seen2) {
         return afterProtocol;
       }
-      seen = true;
+      seen2 = true;
       return protocolSlashesInside;
     }
     return nok(code2);
@@ -24698,7 +24865,7 @@ function tokenizeWwwPrefix(effects, ok2, nok) {
 function tokenizeDomain(effects, ok2, nok) {
   let underscoreInLastSegment;
   let underscoreInLastLastSegment;
-  let seen;
+  let seen2;
   return domainInside;
   function domainInside(code2) {
     if (code2 === 46 || code2 === 95) {
@@ -24707,7 +24874,7 @@ function tokenizeDomain(effects, ok2, nok) {
     if (code2 === null || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || code2 !== 45 && unicodePunctuation(code2)) {
       return domainAfter(code2);
     }
-    seen = true;
+    seen2 = true;
     effects.consume(code2);
     return domainInside;
   }
@@ -24722,7 +24889,7 @@ function tokenizeDomain(effects, ok2, nok) {
     return domainInside;
   }
   function domainAfter(code2) {
-    if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
+    if (underscoreInLastLastSegment || underscoreInLastSegment || !seen2) {
       return nok(code2);
     }
     return ok2(code2);
@@ -25325,7 +25492,7 @@ function tokenizeTable(effects, ok2, nok) {
   const self2 = this;
   let size = 0;
   let sizeB = 0;
-  let seen;
+  let seen2;
   return start;
   function start(code2) {
     let index2 = self2.events.length - 1;
@@ -25351,7 +25518,7 @@ function tokenizeTable(effects, ok2, nok) {
     if (code2 === 124) {
       return headRowBreak(code2);
     }
-    seen = true;
+    seen2 = true;
     sizeB += 1;
     return headRowBreak(code2);
   }
@@ -25375,15 +25542,15 @@ function tokenizeTable(effects, ok2, nok) {
       return factorySpace(effects, headRowBreak, "whitespace")(code2);
     }
     sizeB += 1;
-    if (seen) {
-      seen = false;
+    if (seen2) {
+      seen2 = false;
       size += 1;
     }
     if (code2 === 124) {
       effects.enter("tableCellDivider");
       effects.consume(code2);
       effects.exit("tableCellDivider");
-      seen = true;
+      seen2 = true;
       return headRowBreak;
     }
     effects.enter("data");
@@ -25410,7 +25577,7 @@ function tokenizeTable(effects, ok2, nok) {
       return nok(code2);
     }
     effects.enter("tableDelimiterRow");
-    seen = false;
+    seen2 = false;
     if (markdownSpace(code2)) {
       return factorySpace(effects, headDelimiterBefore, "linePrefix", self2.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(code2);
     }
@@ -25421,7 +25588,7 @@ function tokenizeTable(effects, ok2, nok) {
       return headDelimiterValueBefore(code2);
     }
     if (code2 === 124) {
-      seen = true;
+      seen2 = true;
       effects.enter("tableCellDivider");
       effects.consume(code2);
       effects.exit("tableCellDivider");
@@ -25438,7 +25605,7 @@ function tokenizeTable(effects, ok2, nok) {
   function headDelimiterValueBefore(code2) {
     if (code2 === 58) {
       sizeB += 1;
-      seen = true;
+      seen2 = true;
       effects.enter("tableDelimiterMarker");
       effects.consume(code2);
       effects.exit("tableDelimiterMarker");
@@ -25466,7 +25633,7 @@ function tokenizeTable(effects, ok2, nok) {
       return headDelimiterFiller;
     }
     if (code2 === 58) {
-      seen = true;
+      seen2 = true;
       effects.exit("tableDelimiterFiller");
       effects.enter("tableDelimiterMarker");
       effects.consume(code2);
@@ -25487,7 +25654,7 @@ function tokenizeTable(effects, ok2, nok) {
       return headDelimiterBefore(code2);
     }
     if (code2 === null || markdownLineEnding(code2)) {
-      if (!seen || size !== sizeB) {
+      if (!seen2 || size !== sizeB) {
         return headDelimiterNok(code2);
       }
       effects.exit("tableDelimiterRow");
@@ -25848,7 +26015,8 @@ function SelectionBookmark() {
     if (saveState !== "idle" || !selectedText) return;
     setSaveState("saving");
     try {
-      const title = `Selection — ${(/* @__PURE__ */ new Date()).toLocaleString()}`;
+      const first = selectedText.split(/[.!?\n]/)[0].trim();
+      const title = first.length > 60 ? first.slice(0, 57) + "…" : first || "Untitled selection";
       await api$4.saveNote(title, selectedText, selectedMsgId || void 0);
       setSaveState("saved");
       if (selectedMsgId) markSaved(selectedMsgId);
@@ -25899,7 +26067,8 @@ function MessageBubble({ msg, isSaved }) {
     if (saveState !== "idle") return;
     setSaveState("saving");
     try {
-      const title = `Note from ${new Date(msg.timestamp).toLocaleString()}`;
+      const first = msg.content.replace(/^#+\s*/, "").split(/[.!?\n]/)[0].trim();
+      const title = first.length > 60 ? first.slice(0, 57) + "…" : first || "Untitled note";
       await api$4.saveNote(title, msg.content, msg.id);
       setSaveState("saved");
       markSaved(msg.id);
@@ -25917,7 +26086,7 @@ function MessageBubble({ msg, isSaved }) {
       },
       "data-msg-id": msg.id,
       children: [
-        isUser ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "leading-relaxed", children: msg.content }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "md-prose", style: { color: "var(--color-text)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Markdown, { remarkPlugins: [remarkGfm], children: msg.content }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "md-prose", style: { color: isUser ? "inherit" : "var(--color-text)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Markdown, { remarkPlugins: [remarkGfm], children: msg.content }) }),
         !isUser && /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
@@ -26536,6 +26705,90 @@ function statusTextClass(status) {
       return "t-text-muted";
   }
 }
+const MAX_EVENTS = 50;
+const useActivityStore = create$1((set) => ({
+  events: [],
+  push: (event) => set((state) => {
+    if (event.tool && event.tool.startsWith("todo-")) return state;
+    if (event.type === "tool-result") {
+      const idx = findLastIndex(state.events, (e) => e.type === "tool-call" && e.tool === event.tool);
+      if (idx !== -1) {
+        const updated = [...state.events];
+        updated[idx] = {
+          ...updated[idx],
+          type: "tool-result",
+          summary: event.summary,
+          success: event.success,
+          error: event.error,
+          timestamp: event.timestamp
+        };
+        return { events: updated };
+      }
+    }
+    const next = [...state.events, event];
+    return { events: next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next };
+  }),
+  clear: () => set({ events: [] })
+}));
+function findLastIndex(arr, pred) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (pred(arr[i])) return i;
+  }
+  return -1;
+}
+function ActivityLog() {
+  const events = useActivityStore((s) => s.events);
+  const listRef = React.useRef(null);
+  React.useEffect(() => {
+    if (listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [events.length]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("h3", { className: "text-xs font-semibold t-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Activity, { size: 12 }),
+      "Activity"
+    ] }),
+    events.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs t-text-muted", children: "No activity yet" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: listRef, className: "space-y-1 max-h-48 overflow-y-auto", children: events.map((event) => /* @__PURE__ */ jsxRuntimeExports.jsx(EventRow, { event }, event.id)) })
+  ] });
+}
+function EventRow({ event }) {
+  const time = new Date(event.timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start gap-1.5 text-xs py-0.5", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `mt-0.5 shrink-0 ${eventColor(event)}`, children: eventIcon(event) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "min-w-0 flex-1", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: eventTextClass(event), children: event.summary }),
+      event.error && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-red-400 text-[10px] mt-0.5 truncate", title: event.error, children: event.error })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] t-text-muted shrink-0", children: time })
+  ] });
+}
+function eventIcon(event) {
+  if (event.type === "error") return /* @__PURE__ */ jsxRuntimeExports.jsx(CircleAlert, { size: 12 });
+  if (event.type === "system") return /* @__PURE__ */ jsxRuntimeExports.jsx(Info$1, { size: 12 });
+  if (event.type === "tool-call") return /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { size: 12, className: "animate-spin" });
+  if (event.type === "tool-result" && event.success) return /* @__PURE__ */ jsxRuntimeExports.jsx(CircleCheck, { size: 12 });
+  if (event.type === "tool-result" && !event.success) return /* @__PURE__ */ jsxRuntimeExports.jsx(CircleAlert, { size: 12 });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(Wrench, { size: 12 });
+}
+function eventColor(event) {
+  if (event.type === "error") return "text-red-500";
+  if (event.type === "system") return "text-orange-400";
+  if (event.type === "tool-call") return "text-blue-400";
+  if (event.type === "tool-result" && event.success) return "text-green-500";
+  if (event.type === "tool-result" && !event.success) return "text-red-500";
+  return "t-text-muted";
+}
+function eventTextClass(event) {
+  if (event.type === "error" || event.type === "tool-result" && !event.success) return "text-red-400";
+  if (event.type === "system") return "text-orange-400";
+  if (event.type === "tool-call") return "t-text";
+  return "t-text-secondary";
+}
 const api$1 = window.api;
 const MAX_VISIBLE = 5;
 function WorkingFolder() {
@@ -26605,17 +26858,20 @@ function FileRow({ file }) {
 const typeColors = {
   note: "bg-yellow-900/30 border-yellow-700/40 text-yellow-300",
   paper: "bg-blue-900/30 border-blue-700/40 text-blue-300",
-  data: "bg-green-900/30 border-green-700/40 text-green-300"
+  data: "bg-green-900/30 border-green-700/40 text-green-300",
+  memory: "bg-purple-900/30 border-purple-700/40 text-purple-300"
 };
 const typeColorsLight = {
   note: "bg-yellow-50 border-yellow-300 text-yellow-800",
   paper: "bg-blue-50 border-blue-300 text-blue-800",
-  data: "bg-green-50 border-green-300 text-green-800"
+  data: "bg-green-50 border-green-300 text-green-800",
+  memory: "bg-purple-50 border-purple-300 text-purple-800"
 };
 const typeIcons$1 = {
   note: /* @__PURE__ */ jsxRuntimeExports.jsx(StickyNote, { size: 12 }),
   paper: /* @__PURE__ */ jsxRuntimeExports.jsx(BookOpen, { size: 12 }),
-  data: /* @__PURE__ */ jsxRuntimeExports.jsx(Database, { size: 12 })
+  data: /* @__PURE__ */ jsxRuntimeExports.jsx(Database, { size: 12 }),
+  memory: /* @__PURE__ */ jsxRuntimeExports.jsx(Brain, { size: 12 })
 };
 function Chip({ entity, variant, onRemove }) {
   const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
@@ -26629,24 +26885,28 @@ function Chip({ entity, variant, onRemove }) {
   ] });
 }
 function ContextChips() {
-  const { pinned, selected, togglePin, toggleSelect, refreshAll } = useEntityStore();
+  const { pinned, selected, memory, togglePin, toggleSelect, refreshAll } = useEntityStore();
   reactExports.useEffect(() => {
     refreshAll();
   }, []);
+  const pinnedMemory = memory.filter((m) => m.pinned);
+  const allPinned = [...pinned, ...pinnedMemory];
+  const selectedMemory = memory.filter((m) => m.selectedForAI);
+  const allSelected = [...selected, ...selectedMemory];
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-3", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("h3", { className: "text-xs font-semibold t-text-muted uppercase tracking-wider mb-2 flex items-center gap-1", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(Pin, { size: 10 }),
         " Pinned"
       ] }),
-      pinned.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs t-text-muted", children: "No pinned entities" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex flex-wrap gap-1.5", children: pinned.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { entity: e, variant: "pinned", onRemove: () => togglePin(e.id) }, e.id)) })
+      allPinned.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs t-text-muted", children: "No pinned entities" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex flex-wrap gap-1.5", children: allPinned.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { entity: e, variant: "pinned", onRemove: () => togglePin(e.id) }, e.id)) })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("h3", { className: "text-xs font-semibold t-text-muted uppercase tracking-wider mb-2 flex items-center gap-1", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(SquareCheckBig, { size: 10 }),
         " Selected"
       ] }),
-      selected.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs t-text-muted", children: "No selected entities" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex flex-wrap gap-1.5", children: selected.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { entity: e, variant: "selected", onRemove: () => toggleSelect(e.id) }, e.id)) })
+      allSelected.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs t-text-muted", children: "No selected entities" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex flex-wrap gap-1.5", children: allSelected.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { entity: e, variant: "selected", onRemove: () => toggleSelect(e.id) }, e.id)) })
     ] })
   ] });
 }
@@ -26656,14 +26916,16 @@ function RightSidebar() {
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 overflow-y-auto px-4 py-3 space-y-4", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(WorkingFolder, {}),
       /* @__PURE__ */ jsxRuntimeExports.jsx(ContextChips, {}),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(ProgressSteps, {})
+      /* @__PURE__ */ jsxRuntimeExports.jsx(ProgressSteps, {}),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(ActivityLog, {})
     ] })
   ] });
 }
 const typeIcons = {
   note: /* @__PURE__ */ jsxRuntimeExports.jsx(StickyNote, { size: 16, className: "text-yellow-500" }),
   paper: /* @__PURE__ */ jsxRuntimeExports.jsx(BookOpen, { size: 16, className: "text-blue-500" }),
-  data: /* @__PURE__ */ jsxRuntimeExports.jsx(Database, { size: 16, className: "text-green-500" })
+  data: /* @__PURE__ */ jsxRuntimeExports.jsx(Database, { size: 16, className: "text-green-500" }),
+  memory: /* @__PURE__ */ jsxRuntimeExports.jsx(Brain, { size: 16, className: "text-purple-500" })
 };
 function EntityPreviewPanel() {
   const entity = useUIStore((s) => s.previewEntity);
@@ -26671,7 +26933,14 @@ function EntityPreviewPanel() {
   const togglePin = useEntityStore((s) => s.togglePin);
   const toggleSelect = useEntityStore((s) => s.toggleSelect);
   const deleteEntity = useEntityStore((s) => s.deleteEntity);
+  const renameNote = useEntityStore((s) => s.renameNote);
   const [confirmDelete, setConfirmDelete] = reactExports.useState(false);
+  const [editing, setEditing] = reactExports.useState(false);
+  const [editTitle, setEditTitle] = reactExports.useState("");
+  reactExports.useEffect(() => {
+    setEditing(false);
+    setEditTitle(entity?.title ?? "");
+  }, [entity?.id]);
   if (!entity) return null;
   const handleDelete2 = async () => {
     if (!confirmDelete) {
@@ -26682,12 +26951,51 @@ function EntityPreviewPanel() {
     await deleteEntity(entity.id);
     closePreview();
   };
-  const content2 = entity.content || entity.abstract || entity.filePath || "No content available.";
+  const startEditing = () => {
+    setEditTitle(entity.title);
+    setEditing(true);
+  };
+  const commitRename = async () => {
+    const trimmed = editTitle.trim();
+    if (trimmed && trimmed !== entity.title) {
+      await renameNote(entity.id, trimmed);
+    }
+    setEditing(false);
+  };
+  const handleRenameKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitRename();
+    }
+    if (e.key === "Escape") {
+      setEditing(false);
+    }
+  };
+  const content2 = entity.content || entity.abstract || entity.valueText || entity.filePath || "No content available.";
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "w-[480px] flex flex-col border-l t-border t-bg-base pt-10 shrink-0", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-3 px-4 py-3 border-b t-border", children: [
       typeIcons[entity.type] || null,
-      /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "flex-1 text-sm font-semibold t-text truncate", children: entity.title }),
+      editing ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          autoFocus: true,
+          value: editTitle,
+          onChange: (e) => setEditTitle(e.target.value),
+          onBlur: commitRename,
+          onKeyDown: handleRenameKeyDown,
+          className: "flex-1 text-sm font-semibold t-text bg-transparent border-b border-orange-400 outline-none min-w-0"
+        }
+      ) : /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "flex-1 text-sm font-semibold t-text truncate", children: entity.title }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1", children: [
+        entity.type === "note" && !editing && /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: startEditing,
+            className: "p-1 rounded transition-colors t-text-muted hover:text-orange-400",
+            title: "Rename note",
+            children: /* @__PURE__ */ jsxRuntimeExports.jsx(Pencil, { size: 14 })
+          }
+        ),
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
@@ -26744,6 +27052,16 @@ function EntityPreviewPanel() {
         /* @__PURE__ */ jsxRuntimeExports.jsx("code", { className: "t-bg-surface px-1 rounded", children: entity.citeKey })
       ] })
     ] }),
+    entity.type === "memory" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 py-2 border-b t-border text-xs t-text-secondary space-y-1", children: [
+      entity.namespace && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+        "Namespace: ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { className: "t-bg-surface px-1 rounded", children: entity.namespace })
+      ] }),
+      entity.createdAt && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+        "Created: ",
+        new Date(entity.createdAt).toLocaleString()
+      ] })
+    ] }),
     entity.type === "data" && entity.schema && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 py-2 border-b t-border text-xs t-text-secondary", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
         "File: ",
@@ -26754,7 +27072,7 @@ function EntityPreviewPanel() {
         entity.schema.rowCount
       ] })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex-1 overflow-y-auto px-4 py-4", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prose prose-sm max-w-none t-text", children: /* @__PURE__ */ jsxRuntimeExports.jsx(Markdown, { children: typeof content2 === "string" ? content2 : JSON.stringify(content2, null, 2) }) }) })
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex-1 overflow-y-auto px-4 py-4", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "md-prose", style: { color: "var(--color-text)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Markdown, { remarkPlugins: [remarkGfm], children: typeof content2 === "string" ? content2 : JSON.stringify(content2, null, 2) }) }) })
   ] });
 }
 const api = window.api;
@@ -26820,6 +27138,14 @@ function App() {
     });
     const unsub4 = api.onTodoClear(() => {
       useProgressStore.getState().clear();
+      useActivityStore.getState().clear();
+    });
+    const unsubActivity = api.onActivity((event) => {
+      useActivityStore.getState().push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        ...event
+      });
     });
     const unsub1 = api.onStreamChunk((chunk) => appendChunk(chunk));
     const unsub2 = api.onAgentDone((result) => {
@@ -26835,12 +27161,17 @@ function App() {
     const unsub5 = api.onFileCreated((path2) => {
       useUIStore.getState().addWorkingFile(path2);
     });
+    const unsub6 = api.onEntityCreated(() => {
+      refreshEntities();
+    });
     return () => {
       unsub1();
       unsub2();
       unsub3();
       unsub4();
       unsub5();
+      unsub6();
+      unsubActivity();
     };
   }, [hasProject]);
   reactExports.useEffect(() => {

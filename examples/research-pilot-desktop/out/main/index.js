@@ -18,6 +18,7 @@ const fs$2 = require("fs/promises");
 const require$$0 = require("process");
 const require$$0$1 = require("buffer");
 require("readline");
+const crypto$2 = require("crypto");
 function _interopNamespaceDefault(e) {
   const n = Object.create(null, { [Symbol.toStringTag]: { value: "Module" } });
   if (e) {
@@ -724,7 +725,7 @@ let defaultTokenizer = new SimpleTokenizer();
 function countTokens(text2) {
   return defaultTokenizer.count(text2);
 }
-function truncateToTokens$1(text2, maxTokens, strategy = "tail") {
+function truncateToTokens$2(text2, maxTokens, strategy = "tail") {
   return defaultTokenizer.truncate(text2, maxTokens, strategy);
 }
 class TokenBudget {
@@ -8258,7 +8259,7 @@ class ToolRegistry {
     return validateInput(input, tool2.parameters);
   }
   /**
-   * 生成工具描述（给 LLM 用）
+   * Generate full tool descriptions for LLM system prompt
    */
   generateToolDescriptions() {
     const descriptions = [];
@@ -8272,6 +8273,23 @@ ${tool2.description}
 
 Parameters:
 ${params}`);
+    }
+    return descriptions.join("\n\n");
+  }
+  /**
+   * Generate compact tool descriptions (first line of description + params as inline list)
+   */
+  generateCompactToolDescriptions() {
+    const descriptions = [];
+    for (const tool2 of this.tools.values()) {
+      const firstLine = (tool2.description.split("\n")[0] ?? "").trim();
+      const params = Object.entries(tool2.parameters).map(([name15, def]) => {
+        const required2 = def.required !== false ? "" : "?";
+        return `${name15}${required2}: ${def.type}`;
+      }).join(", ");
+      descriptions.push(`### ${tool2.name}
+${firstLine}
+Params: ${params}`);
     }
     return descriptions.join("\n\n");
   }
@@ -9080,7 +9098,7 @@ ${source.id} (${source.kind})`,
     if (source.render?.maxTokens && result.rendered) {
       const tokens = countTokens(result.rendered);
       if (tokens > source.render.maxTokens) {
-        result.rendered = truncateToTokens$1(
+        result.rendered = truncateToTokens$2(
           result.rendered,
           source.render.maxTokens,
           source.render.truncateStrategy
@@ -9224,7 +9242,7 @@ class CompiledPrompt {
         } else {
           const available = remainingBudget - (totalTokens - protectedTokens);
           if (available > 100) {
-            const truncated = truncateToTokens$1(section.content, available, "tail");
+            const truncated = truncateToTokens$2(section.content, available, "tail");
             result.push(truncated);
             totalTokens += countTokens(truncated);
           }
@@ -9265,7 +9283,7 @@ class PromptCompiler {
     });
     const toolsSection = `## Available Tools
 
-${toolRegistry.generateToolDescriptions()}`;
+${toolRegistry.generateCompactToolDescriptions()}`;
     sections.push({
       id: "tools",
       content: toolsSection,
@@ -9322,7 +9340,7 @@ ${agent.constraints.map((c) => `- ${c}`).join("\n")}`;
         id: "tools",
         content: `## Available Tools
 
-${config2.tools.generateToolDescriptions()}`,
+${config2.tools.generateCompactToolDescriptions()}`,
         protected: true
       });
     }
@@ -30145,11 +30163,11 @@ function createAnthropic(options = {}) {
 }
 createAnthropic();
 const sdkCache = /* @__PURE__ */ new Map();
-function getCacheKey(provider, apiKey) {
+function getCacheKey$1(provider, apiKey) {
   return `${provider}:${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`;
 }
 function getOpenAISDK(config2) {
-  const cacheKey = getCacheKey("openai", config2.apiKey);
+  const cacheKey = getCacheKey$1("openai", config2.apiKey);
   let sdk = sdkCache.get(cacheKey);
   if (!sdk) {
     sdk = createOpenAI({
@@ -30161,7 +30179,7 @@ function getOpenAISDK(config2) {
   return sdk;
 }
 function getAnthropicSDK(config2) {
-  const cacheKey = getCacheKey("anthropic", config2.apiKey);
+  const cacheKey = getCacheKey$1("anthropic", config2.apiKey);
   let sdk = sdkCache.get(cacheKey);
   if (!sdk) {
     sdk = createAnthropic({
@@ -30173,7 +30191,7 @@ function getAnthropicSDK(config2) {
   return sdk;
 }
 function getDeepSeekSDK(config2) {
-  const cacheKey = getCacheKey("deepseek", config2.apiKey);
+  const cacheKey = getCacheKey$1("deepseek", config2.apiKey);
   let sdk = sdkCache.get(cacheKey);
   if (!sdk) {
     sdk = createOpenAI({
@@ -30185,7 +30203,7 @@ function getDeepSeekSDK(config2) {
   return sdk;
 }
 function getGoogleSDK(config2) {
-  const cacheKey = getCacheKey("google", config2.apiKey);
+  const cacheKey = getCacheKey$1("google", config2.apiKey);
   let sdk = sdkCache.get(cacheKey);
   if (!sdk) {
     sdk = createOpenAI({
@@ -38887,7 +38905,7 @@ function createLLMClient(clientConfig) {
      * 流式生成
      */
     async *stream(options) {
-      const { system, messages, tools, maxTokens, temperature, stopSequences } = options;
+      const { system, messages, tools, maxTokens, temperature, stopSequences, reasoningEffort } = options;
       const streamOptions = {
         model: languageModel,
         system,
@@ -38897,6 +38915,11 @@ function createLLMClient(clientConfig) {
       };
       if (modelConfig?.capabilities.temperature && temperature !== void 0) {
         streamOptions.temperature = temperature;
+      }
+      if (modelConfig?.capabilities.reasoning && reasoningEffort) {
+        streamOptions.providerOptions = {
+          openai: { reasoningEffort }
+        };
       }
       if (tools && tools.length > 0 && supportsTools(clientConfig.model)) {
         streamOptions.tools = convertTools(tools);
@@ -40108,6 +40131,15 @@ class AgentLoop {
           totalTokens: 0
         };
         let llmError;
+        if (this.config.debug) {
+          console.error("[AgentLoop:debug] === LLM Request Payload ===");
+          console.error("[AgentLoop:debug] System prompt length:", systemPrompt.length);
+          console.error("[AgentLoop:debug] System prompt:\n", systemPrompt);
+          console.error("[AgentLoop:debug] Messages count:", messagesToSend.length);
+          console.error("[AgentLoop:debug] Messages:\n", JSON.stringify(messagesToSend, null, 2));
+          console.error("[AgentLoop:debug] Tools:", tools.map((t) => t.name).join(", "));
+          console.error("[AgentLoop:debug] === End Payload ===");
+        }
         const response = await streamWithCallbacks(
           this.client,
           {
@@ -40115,7 +40147,8 @@ class AgentLoop {
             messages: messagesToSend,
             tools,
             maxTokens: this.config.maxTokens,
-            temperature: this.config.temperature
+            temperature: this.config.temperature,
+            reasoningEffort: this.config.reasoningEffort
           },
           {
             onText: (text2) => {
@@ -40212,7 +40245,7 @@ class AgentLoop {
               agentId: this.config.runtime.agentId
             }
           );
-          this.config.onToolResult?.(toolUse.name, result);
+          this.config.onToolResult?.(toolUse.name, result, toolUse.input);
           const resultContent = result.success ? result.data !== void 0 ? JSON.stringify(result.data, null, 2) : '{"success": true}' : `Error: ${result.error}`;
           toolResults.push({
             type: "tool_result",
@@ -40293,35 +40326,27 @@ class AgentLoop {
 }
 const read = defineTool({
   name: "read",
-  description: `读取文件内容。可以指定编码、偏移量和行数限制。
-
-安全限制：
-- 路径必须在项目目录内
-- 有最大字节和行数限制
-- 大文件会自动截断
-
-输出说明：
-- truncated=true 表示内容被截断，需要使用 offset/limit 分页读取`,
+  description: `Read file contents. Supports encoding, offset, and line limit. Large files are auto-truncated; use offset/limit to paginate.`,
   parameters: {
     path: {
       type: "string",
-      description: "文件路径（相对于项目根目录）",
+      description: "File path (relative to project root)",
       required: true
     },
     encoding: {
       type: "string",
-      description: "文件编码，默认 utf-8",
+      description: "File encoding, defaults to utf-8",
       required: false,
       default: "utf-8"
     },
     offset: {
       type: "number",
-      description: "起始行号（从 0 开始）",
+      description: "Starting line number (0-based)",
       required: false
     },
     limit: {
       type: "number",
-      description: "读取的最大行数（受系统硬限制）",
+      description: "Maximum number of lines to read (subject to system hard limit)",
       required: false
     }
   },
@@ -40352,22 +40377,16 @@ const read = defineTool({
 });
 const write = defineTool({
   name: "write",
-  description: `写入文件内容。如果文件不存在会创建，如果存在会覆盖。
-
-安全特性：
-- 原子写入（先写临时文件再 rename，防止中途失败导致文件损坏）
-- 保留原文件权限
-- 路径必须在项目目录内
-- 有最大写入大小限制`,
+  description: `Write file contents. Creates if missing, overwrites if exists. Atomic writes with permission preservation.`,
   parameters: {
     path: {
       type: "string",
-      description: "文件路径（相对于项目根目录）",
+      description: "File path (relative to project root)",
       required: true
     },
     content: {
       type: "string",
-      description: "要写入的内容",
+      description: "Content to write",
       required: true
     }
   },
@@ -40393,33 +40412,26 @@ const write = defineTool({
 });
 const edit = defineTool({
   name: "edit",
-  description: `编辑文件内容。将 old_string 替换为 new_string。
-
-特性：
-- 精确匹配：old_string 必须完全匹配
-- 唯一性检测：默认要求 old_string 只出现一次
-- 如需替换多处，设置 replace_all=true
-
-注意：为确保编辑准确，old_string 应包含足够的上下文使其唯一。`,
+  description: `Edit file contents. Replaces old_string with new_string. old_string must match exactly and be unique (or set replace_all=true).`,
   parameters: {
     path: {
       type: "string",
-      description: "文件路径（相对于项目根目录）",
+      description: "File path (relative to project root)",
       required: true
     },
     old_string: {
       type: "string",
-      description: "要替换的原始内容（需完全匹配）",
+      description: "Original content to replace (must match exactly)",
       required: true
     },
     new_string: {
       type: "string",
-      description: "替换后的新内容",
+      description: "New content to replace with",
       required: true
     },
     replace_all: {
       type: "boolean",
-      description: "是否替换所有匹配项，默认只替换第一个",
+      description: "Whether to replace all occurrences; defaults to replacing only the first",
       required: false,
       default: false
     }
@@ -40483,21 +40495,21 @@ const edit = defineTool({
 });
 const bash = defineTool({
   name: "bash",
-  description: "执行 bash 命令。用于运行系统命令、构建脚本等。",
+  description: "Execute bash commands. Used to run system commands, build scripts, etc.",
   parameters: {
     command: {
       type: "string",
-      description: "要执行的命令",
+      description: "Command to execute",
       required: true
     },
     cwd: {
       type: "string",
-      description: "工作目录（相对于项目根目录）",
+      description: "Working directory (relative to project root)",
       required: false
     },
     timeout: {
       type: "number",
-      description: "超时时间（毫秒），默认 60000",
+      description: "Timeout in milliseconds, defaults to 60000",
       required: false,
       default: 6e4
     }
@@ -40520,28 +40532,21 @@ const bash = defineTool({
 });
 const glob = defineTool({
   name: "glob",
-  description: `使用 glob 模式匹配文件。例如 "**/*.ts" 匹配所有 TypeScript 文件。
-
-默认忽略：
-- node_modules, .git, dist, build, coverage 等
-
-安全限制：
-- 有最大结果数限制
-- 路径必须在项目目录内`,
+  description: `Match files using glob patterns (e.g. "**/*.ts"). Auto-ignores node_modules, .git, dist, etc.`,
   parameters: {
     pattern: {
       type: "string",
-      description: "Glob 匹配模式（如 **/*.ts）",
+      description: "Glob pattern (e.g. **/*.ts)",
       required: true
     },
     cwd: {
       type: "string",
-      description: "搜索的起始目录（相对于项目根目录）",
+      description: "Starting directory for search (relative to project root)",
       required: false
     },
     ignore: {
       type: "array",
-      description: "额外要忽略的模式（会与默认忽略模式合并）",
+      description: "Additional ignore patterns (merged with default ignores)",
       required: false,
       items: { type: "string" }
     }
@@ -40569,43 +40574,32 @@ const glob = defineTool({
 });
 const grep = defineTool({
   name: "grep",
-  description: `在文件中搜索内容。支持正则表达式。
-
-默认排除：
-- node_modules, .git, dist, build, coverage 等
-
-安全特性：
-- 非 shell 执行（防止命令注入）
-- 有最大结果数限制
-- 路径必须在项目目录内
-
-输出说明：
-- truncated=true 表示结果被截断，建议缩小搜索范围或使用 type 过滤`,
+  description: `Search file contents using regular expressions. Auto-excludes node_modules, .git, dist, etc. Results may be truncated.`,
   parameters: {
     pattern: {
       type: "string",
-      description: "搜索模式（支持正则表达式）",
+      description: "Search pattern (supports regular expressions)",
       required: true
     },
     cwd: {
       type: "string",
-      description: "搜索的起始目录（相对于项目根目录）",
+      description: "Starting directory for search (relative to project root)",
       required: false
     },
     type: {
       type: "string",
-      description: "文件类型过滤（如 ts, js, py）",
+      description: "File type filter (e.g. ts, js, py)",
       required: false
     },
     limit: {
       type: "number",
-      description: "最大结果数（默认 100，受系统硬限制）",
+      description: "Max number of results (default 100, subject to system hard limit)",
       required: false,
       default: 100
     },
     ignoreCase: {
       type: "boolean",
-      description: "是否忽略大小写",
+      description: "Whether to ignore case",
       required: false,
       default: false
     }
@@ -40674,7 +40668,7 @@ function coerceDeep(value) {
   }
   return value;
 }
-function estimateTokens$2(text2) {
+function estimateTokens$6(text2) {
   return Math.ceil(text2.length / 3);
 }
 function extractSourceInfo(source) {
@@ -40712,25 +40706,7 @@ function generateSourceCatalog(sources) {
 }
 function generateDescription(namespaces) {
   const nsListStr = namespaces.length > 0 ? namespaces.map((ns) => `${ns}.*`).join(", ") : "repo.*, session.*";
-  return `Get context information from registered sources.
-
-## Available Namespaces
-${nsListStr}
-
-## Discovery Sources
-- ctx.catalog: List all available sources
-- ctx.describe: Get full documentation for a source
-
-## Quick Pattern
-1. Unsure which source? Use ctx.get("ctx.catalog")
-2. Need params? Use ctx.get("ctx.describe", { id: "source.id" })
-3. Standard workflow: index → search → open
-
-## Output
-- budget: Token consumption and cost info
-- coverage: Completeness and suggestions for next steps
-- kindEcho: Confirms what was called
-- next: Suggested follow-up actions`;
+  return `Get context from registered sources. Namespaces: ${nsListStr}. Discovery: ctx.catalog (list sources), ctx.describe (source docs). Workflow: index → search → open.`;
 }
 function createCtxGetTool(options = {}) {
   const { sources = [], maxSourcesInDescription = 15 } = options;
@@ -40778,7 +40754,7 @@ ${sourceCatalog}`;
         };
       }
       const rendered = result.rendered ?? "";
-      const estimatedTokens = estimateTokens$2(rendered);
+      const estimatedTokens = estimateTokens$6(rendered);
       const output = {
         source: input.source,
         rendered,
@@ -40802,10 +40778,10 @@ ${sourceCatalog}`;
   });
 }
 const ctxGet = createCtxGetTool();
-function estimateTokens$1(text2) {
+function estimateTokens$5(text2) {
   return Math.ceil(text2.length / 3);
 }
-function truncateToTokens(content, maxTokens) {
+function truncateToTokens$1(content, maxTokens) {
   const maxChars = maxTokens * 3 - 30;
   if (content.length <= maxChars) return content;
   return content.slice(0, maxChars) + "\n[...truncated]";
@@ -40850,9 +40826,9 @@ async function expandSegment(segmentId, compressedHistory, runtime, maxTokens) {
     formatMessages(messages)
   ].join("\n");
   let truncated = false;
-  const tokens = estimateTokens$1(content);
+  const tokens = estimateTokens$5(content);
   if (maxTokens && tokens > maxTokens) {
-    content = truncateToTokens(content, maxTokens);
+    content = truncateToTokens$1(content, maxTokens);
     truncated = true;
   }
   return {
@@ -40903,9 +40879,9 @@ async function expandMessages(rangeRef, runtime, maxTokens) {
     formatMessages(messages)
   ].join("\n");
   let truncated = false;
-  const tokens = estimateTokens$1(content);
+  const tokens = estimateTokens$5(content);
   if (maxTokens && tokens > maxTokens) {
-    content = truncateToTokens(content, maxTokens);
+    content = truncateToTokens$1(content, maxTokens);
     truncated = true;
   }
   return {
@@ -40964,9 +40940,9 @@ ${JSON.stringify(item.value, null, 2)}
 \`\`\``;
   }
   let truncated = false;
-  const tokens = estimateTokens$1(content);
+  const tokens = estimateTokens$5(content);
   if (maxTokens && tokens > maxTokens) {
-    content = truncateToTokens(content, maxTokens);
+    content = truncateToTokens$1(content, maxTokens);
     truncated = true;
   }
   return {
@@ -41036,9 +41012,9 @@ Available keywords: ${getTopKeywords(compressedHistory, 20).join(", ")}`,
   }
   let content = lines.join("\n");
   let truncated = false;
-  const tokens = estimateTokens$1(content);
+  const tokens = estimateTokens$5(content);
   if (maxTokens && tokens > maxTokens) {
-    content = truncateToTokens(content, maxTokens);
+    content = truncateToTokens$1(content, maxTokens);
     truncated = true;
   }
   return {
@@ -41078,31 +41054,7 @@ async function getMessagesInRange(runtime, startIdx, endIdx) {
 }
 const ctxExpand = defineTool({
   name: "ctx-expand",
-  description: `Expand compressed context from the history index.
-
-Use this tool to retrieve specific details that were summarized in the History Index section.
-
-## Types
-
-- **segment**: Retrieve a full segment by ID (e.g., "seg-0", "seg-1")
-- **message**: Retrieve a message range (e.g., "0-5", "10-20", "last-5")
-- **memory**: Retrieve a memory item by key (e.g., "project:config", "user:prefs")
-- **search**: Search through history by keywords
-
-## Examples
-
-\`\`\`json
-{ "type": "segment", "ref": "seg-0" }
-{ "type": "message", "ref": "last-10" }
-{ "type": "memory", "ref": "project:rules" }
-{ "type": "search", "ref": "authentication error" }
-\`\`\`
-
-## Tips
-
-- Check the History Index section for available segment IDs
-- Use segment keywords to find relevant history
-- Specify maxTokens to limit response size`,
+  description: `Expand compressed context from history index. Types: segment (by ID e.g. "seg-0"), message (range e.g. "last-10"), memory (key e.g. "project:rules"), search (keywords).`,
   parameters: {
     type: {
       type: "string",
@@ -41153,41 +41105,39 @@ Use this tool to retrieve specific details that were summarized in the History I
 });
 const fetchTool = defineTool({
   name: "fetch",
-  description: `发送 HTTP 请求到外部 API。支持 GET, POST, PUT, DELETE 等方法。
-响应体会自动尝试解析为 JSON，如果失败则返回原始文本。
-注意：此工具用于调用外部 API，不适合访问本地文件。`,
+  description: `Send HTTP requests to external APIs. Supports GET/POST/PUT/DELETE. Response auto-parsed as JSON.`,
   parameters: {
     url: {
       type: "string",
-      description: "请求 URL（必须是完整的 URL，包含协议）",
+      description: "Request URL (must be a full URL including protocol)",
       required: true
     },
     method: {
       type: "string",
-      description: "HTTP 方法：GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      description: "HTTP method: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       required: false,
       default: "GET",
       enum: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
     },
     headers: {
       type: "object",
-      description: "请求头，键值对形式",
+      description: "Request headers as key-value pairs",
       required: false
     },
     body: {
       type: "string",
-      description: "请求体（JSON 字符串或其他格式）",
+      description: "Request body (JSON string or other format)",
       required: false
     },
     timeout: {
       type: "number",
-      description: "超时时间（毫秒），默认 30000",
+      description: "Timeout in milliseconds, defaults to 30000",
       required: false,
       default: 3e4
     },
     raw: {
       type: "boolean",
-      description: "是否返回原始响应体（不尝试解析 JSON）",
+      description: "Whether to return raw response body (skip JSON parsing)",
       required: false,
       default: false
     }
@@ -41288,41 +41238,32 @@ const fetchTool = defineTool({
 });
 const llmCall = defineTool({
   name: "llm-call",
-  description: `进行 LLM 子调用，用于文本处理任务如查询重写、分类、摘要、过滤等。
-使用与主 Agent 相同的模型和配置。
-适用于：
-- 查询重写/扩展
-- 文本分类
-- 相关性判断
-- 摘要生成
-- 结构化数据提取
-
-注意：此工具会消耗 token，请合理使用。`,
+  description: `Make an LLM sub-call for text processing (rewriting, classification, summarization, extraction). Uses the main Agent's model. Consumes tokens; use judiciously.`,
   parameters: {
     prompt: {
       type: "string",
-      description: "用户提示（任务描述和输入数据）",
+      description: "User prompt (task description and input data)",
       required: true
     },
     systemPrompt: {
       type: "string",
-      description: "系统提示（定义 LLM 的角色和行为）",
+      description: "System prompt (defines the LLM role and behavior)",
       required: false
     },
     maxTokens: {
       type: "number",
-      description: "最大生成 token 数，默认 1000",
+      description: "Max tokens to generate, defaults to 1000",
       required: false,
       default: 1e3
     },
     temperature: {
       type: "number",
-      description: "温度参数（0-1），控制输出随机性",
+      description: "Temperature (0-1), controls output randomness",
       required: false
     },
     jsonMode: {
       type: "boolean",
-      description: "是否期望返回 JSON 格式",
+      description: "Whether to expect JSON format response",
       required: false,
       default: false
     }
@@ -41416,13 +41357,7 @@ const STYLE_PROMPTS = {
 };
 const llmExpand = defineTool({
   name: "llm-expand",
-  description: `Expand text into multiple variations using LLM.
-Useful for:
-- Search query optimization (style: "search")
-- Generating synonyms (style: "synonyms")
-- Rephrasing text (style: "rephrase")
-
-Returns the original text plus generated variations.`,
+  description: `Expand text into multiple variations using LLM. Styles: search, synonyms, rephrase. Returns original plus variations.`,
   parameters: {
     text: {
       type: "string",
@@ -41542,15 +41477,7 @@ Return JSON in this exact format:
 });
 const llmFilter = defineTool({
   name: "llm-filter",
-  description: `Filter a list of items by relevance using LLM.
-Scores each item 0-10 based on the query/criteria and returns only relevant ones.
-
-Useful for:
-- Filtering search results by relevance
-- Content quality assessment
-- Matching items to requirements
-
-Each item must have 'id' and 'title' fields. 'description' is optional but improves accuracy.`,
+  description: `Filter items by relevance using LLM. Scores each item 0-10 and returns relevant ones. Items need 'id' and 'title'; 'description' optional.`,
   parameters: {
     items: {
       type: "array",
@@ -41768,32 +41695,7 @@ function parseSnapshot(output) {
 }
 const browser = defineTool({
   name: "browser",
-  description: `Automate web browser for scraping and interaction.
-Uses agent-browser CLI for headless browser automation.
-
-**Prerequisites**: Install with \`npm install -g agent-browser && agent-browser install\`
-
-**Workflow**:
-1. Use action='open' to navigate to a URL
-2. Use action='snapshot' to see interactive elements (returns refs like @e1, @e2)
-3. Use action='click'/'fill' with selector='@e1' to interact
-4. Re-snapshot after page changes to get new refs
-
-**Available actions**:
-- open: Navigate to URL
-- snapshot: Get accessibility tree with element refs
-- click: Click element by ref (e.g., @e1)
-- fill: Clear and fill input field
-- type: Type text into element
-- press: Press key (Enter, Tab, Escape, Control+a, etc.)
-- scroll: Scroll page (up/down/left/right)
-- screenshot: Capture page image
-- getText: Extract text from element
-- getHtml: Get element HTML
-- getValue: Get input value
-- eval: Execute JavaScript
-- wait: Wait for element/condition
-- close: Close browser session`,
+  description: `Automate web browser via agent-browser CLI. Workflow: open URL → snapshot (get refs @e1,@e2) → click/fill/type → re-snapshot. Actions: open, snapshot, click, fill, type, press, scroll, screenshot, getText, getHtml, getValue, eval, wait, close.`,
   parameters: {
     action: {
       type: "string",
@@ -42015,16 +41917,7 @@ Uses agent-browser CLI for headless browser automation.
 });
 const browse = defineTool({
   name: "browse",
-  description: `Browse a web page and extract content.
-Simplified interface for common web scraping tasks.
-
-**Use cases**:
-- Extract text content from a webpage
-- Get all links on a page
-- See interactive elements for further interaction
-- Take screenshots
-
-**Prerequisites**: Install with \`npm install -g agent-browser && agent-browser install\``,
+  description: `Browse a web page and extract content (text, links, images). Simplified scraping interface using agent-browser.`,
   parameters: {
     url: {
       type: "string",
@@ -42120,23 +42013,7 @@ Simplified interface for common web scraping tasks.
 });
 const memoryPut = defineTool({
   name: "memory-put",
-  description: `Store a memory item for later retrieval.
-
-## Usage
-- Use namespaces to isolate different types of data:
-  - "user": User preferences, settings
-  - "project": Project-specific information
-  - "session": Current session context
-- Keys are dot-separated paths: "writing.style", "api.endpoint"
-- Include valueText for human-readable description
-
-## Examples
-- Store user preference: { namespace: "user", key: "code.style", value: "typescript", valueText: "User prefers TypeScript" }
-- Store project info: { namespace: "project", key: "db.connection", value: {...}, sensitivity: "sensitive" }
-
-## Notes
-- Use ctx.get("memory.get") or ctx.get("memory.search") to retrieve items
-- Sensitive items are excluded from search by default`,
+  description: `Store a memory item. Use namespaces (user/project/session) and dot-separated keys. Include valueText for readability. Retrieve via ctx.get("memory.get").`,
   parameters: {
     namespace: {
       type: "string",
@@ -42231,21 +42108,7 @@ const memoryPut = defineTool({
 });
 const memoryUpdate = defineTool({
   name: "memory-update",
-  description: `Update an existing memory item.
-
-## Usage
-- Provide namespace and key to identify the item
-- Include only the fields you want to update
-- Use status: "deprecated" to mark items as outdated
-
-## Examples
-- Update value: { namespace: "user", key: "code.style", value: "python" }
-- Add tags: { namespace: "project", key: "db.config", tags: ["database", "config"] }
-- Deprecate item: { namespace: "session", key: "temp.data", status: "deprecated" }
-
-## Notes
-- Item must exist; use memory-put to create new items
-- Updates are atomic and tracked in history`,
+  description: `Update an existing memory item by namespace and key. Only include fields to change. Use status: "deprecated" for soft delete.`,
   parameters: {
     namespace: {
       type: "string",
@@ -42350,19 +42213,7 @@ const memoryUpdate = defineTool({
 });
 const memoryDelete = defineTool({
   name: "memory-delete",
-  description: `Delete a memory item.
-
-## Usage
-- Provide namespace and key to identify the item
-- Include reason for audit trail
-
-## Examples
-- Delete item: { namespace: "session", key: "temp.data", reason: "Session ended" }
-- Clean up deprecated: { namespace: "project", key: "old.config", reason: "Migrated to new format" }
-
-## Notes
-- Deletion is permanent but tracked in history
-- Prefer using memory-update with status: "deprecated" for soft deletion`,
+  description: `Delete a memory item by namespace and key. Permanent but tracked in history. Prefer memory-update with status "deprecated" for soft delete.`,
   parameters: {
     namespace: {
       type: "string",
@@ -42428,16 +42279,7 @@ function generateTodoId() {
 }
 const todoAdd = defineTool({
   name: "todo-add",
-  description: `Create a new todo item for task tracking.
-
-## Usage
-- Provide a title (required) and optional description, priority, tags
-- Items start with status "pending"
-- Use parentId to create sub-tasks
-
-## Examples
-- Simple: { "title": "Fix login bug" }
-- Detailed: { "title": "Refactor auth", "priority": "high", "tags": ["backend"] }`,
+  description: `Create a new todo item. Starts as "pending". Use parentId for sub-tasks.`,
   parameters: {
     title: {
       type: "string",
@@ -42507,16 +42349,7 @@ const todoAdd = defineTool({
 });
 const todoUpdate = defineTool({
   name: "todo-update",
-  description: `Update an existing todo item.
-
-## Usage
-- Provide the item ID and any fields to update
-- Setting status to "done" auto-sets completedAt
-- Use blockedBy to track dependencies
-
-## Examples
-- Change status: { "id": "todo-xxx", "status": "in_progress" }
-- Update priority: { "id": "todo-xxx", "priority": "critical" }`,
+  description: `Update an existing todo item by ID. Setting status "done" auto-sets completedAt. Use blockedBy for dependencies.`,
   parameters: {
     id: {
       type: "string",
@@ -45600,10 +45433,10 @@ const STOP_WORDS$1 = /* @__PURE__ */ new Set([
   "why",
   "how"
 ]);
-function tokenize$2(text2) {
+function tokenize$3(text2) {
   return text2.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((word) => word.length >= 2 && word.length <= 30).filter((word) => !STOP_WORDS$1.has(word));
 }
-function estimateTokens(text2) {
+function estimateTokens$4(text2) {
   return Math.ceil(text2.length / 4);
 }
 function computeHash(content) {
@@ -45667,13 +45500,13 @@ function chunkDocument(content, docId, chunkSize, chunkOverlap) {
   let totalTokens = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const lineTokens = estimateTokens(line);
+    const lineTokens = estimateTokens$4(line);
     totalTokens += lineTokens;
     currentChunk.push(line);
     currentTokens += lineTokens;
     if (currentTokens >= chunkSize) {
       const chunkContent = currentChunk.join("\n");
-      const keywords = [...new Set(tokenize$2(chunkContent))].slice(0, 20);
+      const keywords = [...new Set(tokenize$3(chunkContent))].slice(0, 20);
       chunks.push({
         id: generateChunkId(docId, chunkIndex),
         startLine,
@@ -45685,13 +45518,13 @@ function chunkDocument(content, docId, chunkSize, chunkOverlap) {
       const overlapLines = Math.ceil(chunkOverlap / (chunkSize / currentChunk.length));
       const keepLines = Math.min(overlapLines, currentChunk.length);
       currentChunk = currentChunk.slice(-keepLines);
-      currentTokens = currentChunk.reduce((sum, l) => sum + estimateTokens(l), 0);
+      currentTokens = currentChunk.reduce((sum, l) => sum + estimateTokens$4(l), 0);
       startLine = i + 2 - keepLines;
     }
   }
   if (currentChunk.length > 0) {
     const chunkContent = currentChunk.join("\n");
-    const keywords = [...new Set(tokenize$2(chunkContent))].slice(0, 20);
+    const keywords = [...new Set(tokenize$3(chunkContent))].slice(0, 20);
     chunks.push({
       id: generateChunkId(docId, chunkIndex),
       startLine,
@@ -45893,7 +45726,7 @@ Index built:`);
   async search(query, limit = 20) {
     const index = this.index ?? await this.load();
     if (!index) return [];
-    const queryKeywords = tokenize$2(query);
+    const queryKeywords = tokenize$3(query);
     if (queryKeywords.length === 0) return [];
     const docScores = /* @__PURE__ */ new Map();
     for (const keyword of queryKeywords) {
@@ -46672,11 +46505,11 @@ function generateId$1() {
   }
   return result;
 }
-function tokenize$1(text2) {
+function tokenize$2(text2) {
   return text2.toLowerCase().split(/[\s\-_.,;:!?'"()[\]{}]+/).filter((word) => word.length > 2).filter((word, index, self) => self.indexOf(word) === index);
 }
 function calculateScore(query, item, matchedKeywords) {
-  const queryTokens = tokenize$1(query);
+  const queryTokens = tokenize$2(query);
   if (queryTokens.length === 0) return 0;
   let score = matchedKeywords.length / queryTokens.length;
   if (item.key.toLowerCase().includes(query.toLowerCase())) {
@@ -46911,7 +46744,7 @@ class FileMemoryStorage {
    */
   async search(query, options) {
     this.ensureInitialized();
-    const queryTokens = tokenize$1(query);
+    const queryTokens = tokenize$2(query);
     if (queryTokens.length === 0) {
       return [];
     }
@@ -47045,7 +46878,7 @@ class FileMemoryStorage {
       item.valueText ?? "",
       ...item.tags
     ].join(" ");
-    const keywords = tokenize$1(textToIndex);
+    const keywords = tokenize$2(textToIndex);
     for (const keyword of keywords) {
       if (!this.index.keywords[keyword]) {
         this.index.keywords[keyword] = [];
@@ -47209,7 +47042,7 @@ function generateMessageId() {
 function generateSessionId() {
   return `sess_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 8)}`;
 }
-function tokenize(text2) {
+function tokenize$1(text2) {
   return text2.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((word) => word.length >= 2 && word.length <= 30).filter((word) => !STOP_WORDS.has(word));
 }
 const STOP_WORDS = /* @__PURE__ */ new Set([
@@ -47357,7 +47190,7 @@ class FileMessageStore {
     const sessionPath = this.getSessionPath(sessionId2);
     const messagesPath = this.getMessagesPath(sessionId2);
     await fs__namespace$1.mkdir(sessionPath, { recursive: true });
-    const keywords = tokenize(messageData.content);
+    const keywords = tokenize$1(messageData.content);
     const message = {
       ...messageData,
       id: generateMessageId(),
@@ -47499,7 +47332,7 @@ class FileMessageStore {
   async searchMessages(sessionId2, query, limit = 20) {
     await this.init();
     const indexPath = this.getSessionIndexPath(sessionId2);
-    const queryKeywords = tokenize(query);
+    const queryKeywords = tokenize$1(query);
     if (queryKeywords.length === 0) {
       return [];
     }
@@ -47615,7 +47448,7 @@ class FileMessageStore {
     const limit = options?.limit ?? 20;
     const recencyBias = options?.recencyBias ?? "medium";
     const includeTools = options?.includeTools ?? true;
-    const queryKeywords = tokenize(query);
+    const queryKeywords = tokenize$1(query);
     if (queryKeywords.length === 0) {
       return [];
     }
@@ -48474,6 +48307,7 @@ class MCPClient extends node_events.EventEmitter {
       return new StdioTransport({
         stdio: transport,
         timeout: transport.timeout ?? this.config.connectTimeout,
+        startTimeout: transport.startTimeout,
         debug: this.config.debug
       });
     } else if (transport.type === "http") {
@@ -48848,7 +48682,8 @@ function createStdioMCPProvider(options) {
           args: options.args,
           cwd: options.cwd,
           env: options.env,
-          timeout: options.timeout
+          timeout: options.timeout,
+          startTimeout: options.startTimeout
         },
         toolPrefix: options.toolPrefix
       }
@@ -48856,15 +48691,16 @@ function createStdioMCPProvider(options) {
   });
 }
 async function documents(options = {}) {
-  const { toolPrefix, timeout = 6e4 } = options;
+  const { toolPrefix, timeout = 6e4, startTimeout = 12e4 } = options;
   const provider = createStdioMCPProvider({
     id: "markitdown",
     name: "MarkItDown",
     command: "npx",
     args: ["-y", "markitdown-mcp-npx"],
     toolPrefix,
-    timeout
-    // MarkItDown needs extra time to initialize Python venv
+    timeout,
+    startTimeout
+    // MarkItDown needs extra time to initialize Python venv on first run
   });
   const packs2 = await provider.createPacks();
   const pack = packs2[0];
@@ -49331,6 +49167,675 @@ const packs = {
   full,
   strict
 };
+function createContextPipeline(config2 = {}) {
+  const phases = /* @__PURE__ */ new Map();
+  if (config2.phases) {
+    for (const phase of config2.phases) {
+      phases.set(phase.id, phase);
+    }
+  }
+  function getSortedPhases() {
+    return [...phases.values()].sort((a, b) => b.priority - a.priority);
+  }
+  function calculateAllocations(totalBudget) {
+    const allocations = /* @__PURE__ */ new Map();
+    const sortedPhases = getSortedPhases();
+    let reservedTotal = 0;
+    const percentagePhases = [];
+    const remainingPhases = [];
+    for (const phase of sortedPhases) {
+      const budget = phase.budget;
+      if (budget.type === "reserved" || budget.type === "fixed") {
+        const tokens = budget.tokens ?? 0;
+        allocations.set(phase.id, tokens);
+        reservedTotal += tokens;
+      } else if (budget.type === "percentage") {
+        percentagePhases.push(phase);
+      } else if (budget.type === "remaining") {
+        remainingPhases.push(phase);
+      }
+    }
+    const availableAfterReserved = Math.max(0, totalBudget - reservedTotal);
+    let percentageTotal = 0;
+    for (const phase of percentagePhases) {
+      const percentage = phase.budget.value ?? 0;
+      const tokens = Math.floor(availableAfterReserved * (percentage / 100));
+      allocations.set(phase.id, tokens);
+      percentageTotal += tokens;
+    }
+    const remainingBudget = Math.max(0, availableAfterReserved - percentageTotal);
+    if (remainingPhases.length > 0) {
+      const perPhase = Math.floor(remainingBudget / remainingPhases.length);
+      for (const phase of remainingPhases) {
+        allocations.set(phase.id, perPhase);
+      }
+    }
+    return allocations;
+  }
+  async function assemble(options) {
+    const { runtime, totalBudget, selectedContext } = options;
+    const allocations = calculateAllocations(totalBudget);
+    const sortedPhases = getSortedPhases();
+    let usedBudget = 0;
+    const phaseResults = [];
+    const allFragments = [];
+    let excludedMessages = [];
+    for (const phase of sortedPhases) {
+      const allocatedBudget = allocations.get(phase.id) ?? 0;
+      const ctx = {
+        runtime,
+        totalBudget,
+        usedBudget,
+        remainingBudget: totalBudget - usedBudget,
+        selectedContext,
+        excludedMessages
+      };
+      if (phase.enabled && !phase.enabled(ctx)) {
+        phaseResults.push({
+          phaseId: phase.id,
+          fragments: [],
+          tokens: 0,
+          allocatedBudget
+        });
+        continue;
+      }
+      try {
+        const fragments = await phase.assemble(ctx);
+        let phaseTokens = 0;
+        for (const fragment of fragments) {
+          phaseTokens += fragment.tokens;
+        }
+        const trimmedFragments = trimFragmentsToFit(fragments, allocatedBudget);
+        let actualTokens = 0;
+        for (const frag of trimmedFragments) {
+          actualTokens += frag.tokens;
+        }
+        phaseResults.push({
+          phaseId: phase.id,
+          fragments: trimmedFragments,
+          tokens: actualTokens,
+          allocatedBudget
+        });
+        allFragments.push(...trimmedFragments);
+        usedBudget += actualTokens;
+        if (phase.id === "session") {
+        }
+      } catch (error) {
+        console.error(`[Pipeline] Phase ${phase.id} failed:`, error);
+        phaseResults.push({
+          phaseId: phase.id,
+          fragments: [],
+          tokens: 0,
+          allocatedBudget
+        });
+      }
+    }
+    const content = allFragments.map((f) => f.content).join("\n\n");
+    const indexResult = phaseResults.find((r) => r.phaseId === "index");
+    const compressedHistoryMeta = indexResult?.fragments[0]?.metadata;
+    return {
+      content,
+      totalTokens: usedBudget,
+      phases: phaseResults,
+      excludedMessages,
+      compressedHistory: compressedHistoryMeta?.compressedHistory
+    };
+  }
+  function trimFragmentsToFit(fragments, maxTokens) {
+    if (maxTokens <= 0) return [];
+    const result = [];
+    let usedTokens = 0;
+    for (const fragment of fragments) {
+      if (usedTokens + fragment.tokens <= maxTokens) {
+        result.push(fragment);
+        usedTokens += fragment.tokens;
+      } else {
+        const remainingTokens = maxTokens - usedTokens;
+        if (remainingTokens > 50) {
+          const truncatedContent = truncateToTokens2(fragment.content, remainingTokens);
+          result.push({
+            ...fragment,
+            content: truncatedContent + "\n[...truncated]",
+            tokens: remainingTokens
+          });
+        }
+        break;
+      }
+    }
+    return result;
+  }
+  function truncateToTokens2(content, maxTokens) {
+    const maxChars = maxTokens * 3 - 20;
+    if (content.length <= maxChars) return content;
+    return content.slice(0, maxChars);
+  }
+  return {
+    registerPhase(phase) {
+      phases.set(phase.id, phase);
+    },
+    getPhases() {
+      return getSortedPhases();
+    },
+    assemble,
+    calculateAllocations
+  };
+}
+function createBudget(type, value) {
+  if (type === "reserved" || type === "fixed") {
+    return { type, tokens: value };
+  } else if (type === "percentage") {
+    return { type, value };
+  } else {
+    return { type };
+  }
+}
+const PHASE_PRIORITIES = {
+  pinned: 90,
+  selected: 80,
+  session: 50,
+  index: 30
+};
+const DEFAULT_BUDGETS = {
+  system: createBudget("reserved", 2e3),
+  pinned: createBudget("reserved", 2e3),
+  selected: createBudget("percentage", 30),
+  session: createBudget("remaining"),
+  index: createBudget("fixed", 500)
+};
+function createPinnedPhase(config2 = {}) {
+  const { maxItems = 10 } = config2;
+  return {
+    id: "pinned",
+    priority: PHASE_PRIORITIES.pinned,
+    budget: DEFAULT_BUDGETS.pinned,
+    async assemble(ctx) {
+      const { runtime } = ctx;
+      const fragments = [];
+      const memoryStorage = runtime.memoryStorage;
+      if (!memoryStorage) {
+        return fragments;
+      }
+      try {
+        const result = await memoryStorage.list({
+          tags: ["pinned"],
+          status: "active",
+          limit: maxItems
+        });
+        if (result.items.length === 0) {
+          return fragments;
+        }
+        const sortedItems = result.items.sort((a, b) => {
+          const priorityA = a.priority ?? 50;
+          const priorityB = b.priority ?? 50;
+          return priorityB - priorityA;
+        });
+        const headerContent = "## Pinned Context";
+        fragments.push({
+          source: "pinned:header",
+          content: headerContent,
+          tokens: estimateTokens$3(headerContent)
+        });
+        for (const item of sortedItems) {
+          const content = formatPinnedItem(item);
+          fragments.push({
+            source: `pinned:${item.namespace}:${item.key}`,
+            content,
+            tokens: estimateTokens$3(content),
+            metadata: {
+              key: item.key,
+              namespace: item.namespace,
+              priority: item.priority
+            }
+          });
+        }
+      } catch (error) {
+        console.error("[PinnedPhase] Failed to retrieve pinned items:", error);
+      }
+      return fragments;
+    },
+    // Only enable if memory storage is available
+    enabled(ctx) {
+      return ctx.runtime.memoryStorage !== void 0;
+    }
+  };
+}
+function formatPinnedItem(item) {
+  const lines = [];
+  lines.push(`### ${item.key}`);
+  if (item.valueText) {
+    lines.push(item.valueText);
+  } else if (typeof item.value === "string") {
+    lines.push(item.value);
+  } else {
+    lines.push("```json");
+    lines.push(JSON.stringify(item.value, null, 2));
+    lines.push("```");
+  }
+  return lines.join("\n");
+}
+function estimateTokens$3(content) {
+  return Math.ceil(content.length / 3);
+}
+function createSelectedPhase(config2 = {}) {
+  const { maxTokensPerFile = 5e3, maxTokensPerMemory = 2e3 } = config2;
+  return {
+    id: "selected",
+    priority: PHASE_PRIORITIES.selected,
+    budget: DEFAULT_BUDGETS.selected,
+    async assemble(ctx) {
+      const { runtime, selectedContext } = ctx;
+      const fragments = [];
+      if (!selectedContext || selectedContext.length === 0) {
+        return fragments;
+      }
+      const headerContent = "## Selected Context";
+      fragments.push({
+        source: "selected:header",
+        content: headerContent,
+        tokens: estimateTokens$2(headerContent)
+      });
+      for (const selection of selectedContext) {
+        try {
+          const fragment = await resolveSelection(selection, runtime, {
+            maxTokensPerFile,
+            maxTokensPerMemory
+          });
+          if (fragment) {
+            fragments.push(fragment);
+          }
+        } catch (error) {
+          console.error(`[SelectedPhase] Failed to resolve selection:`, selection, error);
+          fragments.push({
+            source: `selected:error:${selection.type}:${selection.ref}`,
+            content: `[Error loading ${selection.type}:${selection.ref}]`,
+            tokens: 20,
+            metadata: { error: String(error) }
+          });
+        }
+      }
+      return fragments;
+    },
+    // Only enable if there are selections
+    enabled(ctx) {
+      return (ctx.selectedContext?.length ?? 0) > 0;
+    }
+  };
+}
+async function resolveSelection(selection, runtime, config2) {
+  const maxTokens = selection.maxTokens;
+  switch (selection.type) {
+    case "memory":
+      return resolveMemorySelection(selection, runtime, maxTokens ?? config2.maxTokensPerMemory);
+    case "file":
+      return resolveFileSelection(selection, runtime, maxTokens ?? config2.maxTokensPerFile);
+    case "messages":
+      return resolveMessagesSelection(selection, runtime, maxTokens);
+    case "url":
+      return resolveUrlSelection(selection);
+    case "custom":
+      if (selection.resolve) {
+        return selection.resolve(runtime);
+      }
+      return null;
+    default:
+      console.warn(`[SelectedPhase] Unknown selection type: ${selection.type}`);
+      return null;
+  }
+}
+async function resolveMemorySelection(selection, runtime, maxTokens) {
+  if (!runtime.memoryStorage) {
+    return {
+      source: `selected:memory:${selection.ref}`,
+      content: `[Memory storage not available]`,
+      tokens: 10
+    };
+  }
+  const parts = selection.ref.split(":");
+  const namespace = parts[0] ?? "project";
+  const keyParts = parts.slice(1);
+  const key = keyParts.length > 0 ? keyParts.join(":") : namespace;
+  const item = await runtime.memoryStorage.get(
+    keyParts.length > 0 ? namespace : "project",
+    // Default to 'project' namespace
+    keyParts.length > 0 ? key : namespace
+  );
+  if (!item) {
+    return {
+      source: `selected:memory:${selection.ref}`,
+      content: `[Memory key not found: ${selection.ref}]`,
+      tokens: 15
+    };
+  }
+  let content;
+  if (item.valueText) {
+    content = `### Memory: ${item.key}
+
+${item.valueText}`;
+  } else if (typeof item.value === "string") {
+    content = `### Memory: ${item.key}
+
+${item.value}`;
+  } else {
+    content = `### Memory: ${item.key}
+
+\`\`\`json
+${JSON.stringify(item.value, null, 2)}
+\`\`\``;
+  }
+  const tokens = estimateTokens$2(content);
+  if (tokens > maxTokens) {
+    content = truncateToTokens(content, maxTokens);
+  }
+  return {
+    source: `selected:memory:${selection.ref}`,
+    content,
+    tokens: Math.min(tokens, maxTokens),
+    metadata: { key: item.key, namespace: item.namespace }
+  };
+}
+async function resolveFileSelection(selection, runtime, maxTokens) {
+  try {
+    const result = await runtime.io.readFile(selection.ref);
+    if (!result.success) {
+      return {
+        source: `selected:file:${selection.ref}`,
+        content: `[File not found: ${selection.ref}]`,
+        tokens: 15
+      };
+    }
+    let content = `### File: ${selection.ref}
+
+\`\`\`
+${result.data}
+\`\`\``;
+    const tokens = estimateTokens$2(content);
+    if (tokens > maxTokens) {
+      content = truncateToTokens(content, maxTokens);
+    }
+    return {
+      source: `selected:file:${selection.ref}`,
+      content,
+      tokens: Math.min(tokens, maxTokens),
+      metadata: { path: selection.ref }
+    };
+  } catch (error) {
+    return {
+      source: `selected:file:${selection.ref}`,
+      content: `[Error reading file: ${selection.ref}]`,
+      tokens: 15
+    };
+  }
+}
+async function resolveMessagesSelection(selection, runtime, maxTokens) {
+  if (!runtime.messageStore) {
+    return {
+      source: `selected:messages:${selection.ref}`,
+      content: `[Message store not available]`,
+      tokens: 10
+    };
+  }
+  const ref = selection.ref;
+  let startIdx = 0;
+  let endIdx = 10;
+  if (ref.startsWith("last-")) {
+    const count = parseInt(ref.slice(5), 10);
+    if (!isNaN(count)) {
+      const recentMsgs = await runtime.messageStore.getRecentMessages(runtime.sessionId, 1e3);
+      startIdx = Math.max(0, recentMsgs.length - count);
+      endIdx = recentMsgs.length;
+    }
+  } else if (ref.includes("-")) {
+    const parts = ref.split("-");
+    const start = parseInt(parts[0] ?? "0", 10);
+    const end = parseInt(parts[1] ?? "10", 10);
+    if (!isNaN(start) && !isNaN(end)) {
+      startIdx = start;
+      endIdx = end;
+    }
+  }
+  const messages = await runtime.messageStore.getMessageRange(runtime.sessionId, startIdx, endIdx);
+  if (messages.length === 0) {
+    return {
+      source: `selected:messages:${selection.ref}`,
+      content: `[No messages in range: ${selection.ref}]`,
+      tokens: 15
+    };
+  }
+  const formattedMsgs = messages.map((m) => {
+    const roleLabel = m.role.charAt(0).toUpperCase() + m.role.slice(1);
+    return `**${roleLabel}**: ${m.content}`;
+  });
+  let content = `### Messages ${startIdx}-${endIdx}
+
+${formattedMsgs.join("\n\n")}`;
+  const tokens = estimateTokens$2(content);
+  if (maxTokens && tokens > maxTokens) {
+    content = truncateToTokens(content, maxTokens);
+  }
+  return {
+    source: `selected:messages:${selection.ref}`,
+    content,
+    tokens: maxTokens ? Math.min(tokens, maxTokens) : tokens,
+    metadata: { range: [startIdx, endIdx] }
+  };
+}
+async function resolveUrlSelection(selection, _runtime, _maxTokens) {
+  return {
+    source: `selected:url:${selection.ref}`,
+    content: `[URL fetching not implemented: ${selection.ref}]`,
+    tokens: 15
+  };
+}
+function estimateTokens$2(content) {
+  return Math.ceil(content.length / 3);
+}
+function truncateToTokens(content, maxTokens) {
+  const maxChars = maxTokens * 3 - 30;
+  if (content.length <= maxChars) return content;
+  return content.slice(0, maxChars) + "\n[...truncated]";
+}
+function createSessionPhase(config2 = {}) {
+  const {
+    maxMessages = 100,
+    includeToolMessages = true,
+    format = "full"
+  } = config2;
+  return {
+    id: "session",
+    priority: PHASE_PRIORITIES.session,
+    budget: DEFAULT_BUDGETS.session,
+    async assemble(ctx) {
+      const { runtime, remainingBudget } = ctx;
+      const fragments = [];
+      const messages = await getMessages(runtime, maxMessages, includeToolMessages);
+      if (messages.length === 0) {
+        return fragments;
+      }
+      let usedTokens = 0;
+      const includedMessages = [];
+      const excludedMessages = [];
+      const reversedMessages = [...messages].reverse();
+      for (const msg of reversedMessages) {
+        const formatted = formatMessage(msg, format);
+        const msgTokens = estimateTokens$1(formatted);
+        if (usedTokens + msgTokens <= remainingBudget) {
+          includedMessages.unshift(msg);
+          usedTokens += msgTokens;
+        } else {
+          excludedMessages.unshift(msg);
+        }
+      }
+      ctx.excludedMessages = excludedMessages;
+      if (includedMessages.length === 0) {
+        const headerContent = `## Conversation
+
+[All ${messages.length} messages excluded due to token budget. Use ctx-expand to retrieve specific messages.]`;
+        fragments.push({
+          source: "session:header",
+          content: headerContent,
+          tokens: estimateTokens$1(headerContent)
+        });
+        return fragments;
+      }
+      const parts = ["## Prior Conversation"];
+      if (excludedMessages.length > 0) {
+        parts.push(`
+[${excludedMessages.length} earlier messages in index - use ctx-expand to retrieve]`);
+      }
+      parts.push("");
+      for (const msg of includedMessages) {
+        parts.push(formatMessage(msg, format));
+        parts.push("");
+      }
+      const content = parts.join("\n");
+      fragments.push({
+        source: "session:messages",
+        content,
+        tokens: estimateTokens$1(content),
+        metadata: {
+          includedCount: includedMessages.length,
+          excludedCount: excludedMessages.length,
+          totalCount: messages.length
+        }
+      });
+      return fragments;
+    },
+    // Always enabled if we have a message store or messages in state
+    enabled(ctx) {
+      return ctx.runtime.messageStore !== void 0 || ctx.runtime.sessionState.has("messages");
+    }
+  };
+}
+async function getMessages(runtime, maxMessages, includeToolMessages) {
+  let messages = [];
+  if (runtime.messageStore) {
+    try {
+      messages = await runtime.messageStore.getRecentMessages(
+        runtime.sessionId,
+        maxMessages
+      );
+    } catch (error) {
+      console.error("[SessionPhase] Failed to get messages from store:", error);
+    }
+  }
+  if (messages.length === 0) {
+    const storedMessages = runtime.sessionState.get("messages");
+    if (storedMessages) {
+      messages = storedMessages.slice(-maxMessages);
+    }
+  }
+  if (!includeToolMessages) {
+    messages = messages.filter((m) => m.role !== "tool");
+  }
+  return messages;
+}
+function formatMessage(msg, format) {
+  const roleLabels = {
+    user: "User",
+    assistant: "Assistant",
+    tool: "Tool",
+    system: "System"
+  };
+  const roleLabel = roleLabels[msg.role] || msg.role;
+  if (format === "compact") {
+    const contentPreview = msg.content.slice(0, 100).replace(/\n/g, " ");
+    const suffix = msg.content.length > 100 ? "..." : "";
+    return `**${roleLabel}**: ${contentPreview}${suffix}`;
+  }
+  if (msg.role === "tool" && msg.toolCall) {
+    return [
+      `**${roleLabel}** (${msg.toolCall.name}):`,
+      "```",
+      msg.content,
+      "```"
+    ].join("\n");
+  }
+  return `**${roleLabel}**: ${msg.content}`;
+}
+function estimateTokens$1(content) {
+  return Math.ceil(content.length / 3);
+}
+function createIndexPhase(config2 = {}) {
+  const compressor = config2.compressor ?? new SimpleHistoryCompressor({
+    segmentSize: config2.segmentSize ?? 20
+  });
+  return {
+    id: "index",
+    priority: PHASE_PRIORITIES.index,
+    budget: DEFAULT_BUDGETS.index,
+    async assemble(ctx) {
+      const { excludedMessages } = ctx;
+      const fragments = [];
+      if (!excludedMessages || excludedMessages.length === 0) {
+        return fragments;
+      }
+      try {
+        const budget = DEFAULT_BUDGETS.index.tokens ?? 500;
+        const compressed = await compressor.compress(excludedMessages, budget);
+        ctx.compressedHistory = compressed;
+        const content = buildIndexContent(compressed);
+        fragments.push({
+          source: "index:compressed",
+          content,
+          tokens: compressed.tokens,
+          metadata: {
+            compressedHistory: compressed,
+            segmentCount: compressed.segments.length,
+            messageCount: excludedMessages.length
+          }
+        });
+      } catch (error) {
+        console.error("[IndexPhase] Compression failed:", error);
+        const fallbackContent = `## History Index
+
+[Compression failed. ${excludedMessages.length} messages available via ctx-expand.]`;
+        fragments.push({
+          source: "index:fallback",
+          content: fallbackContent,
+          tokens: estimateTokens(fallbackContent)
+        });
+      }
+      return fragments;
+    },
+    // Only enable if there are excluded messages
+    enabled(ctx) {
+      return (ctx.excludedMessages?.length ?? 0) > 0;
+    }
+  };
+}
+function buildIndexContent(compressed) {
+  const lines = [];
+  lines.push("## History Index");
+  lines.push("");
+  lines.push(compressed.summary);
+  lines.push("");
+  if (compressed.segments.length > 0) {
+    lines.push("### Available Segments");
+    lines.push("");
+    lines.push("Use `ctx-expand` tool to retrieve segment details:");
+    lines.push("");
+    for (const seg of compressed.segments) {
+      const keywords = seg.keywords.length > 0 ? ` [${seg.keywords.slice(0, 5).join(", ")}]` : "";
+      lines.push(`- **${seg.id}**: ${seg.summary}${keywords}`);
+    }
+  }
+  lines.push("");
+  lines.push("### ctx-expand Usage");
+  lines.push("");
+  lines.push("To retrieve segment details:");
+  lines.push("```json");
+  lines.push('{ "type": "segment", "ref": "seg-0" }');
+  lines.push("```");
+  lines.push("");
+  lines.push("To retrieve specific message range:");
+  lines.push("```json");
+  lines.push('{ "type": "message", "ref": "0-5" }');
+  lines.push("```");
+  return lines.join("\n");
+}
+function estimateTokens(content) {
+  return Math.ceil(content.length / 3);
+}
 var dist = {};
 var composer = {};
 var directives = {};
@@ -56684,12 +57189,12 @@ function createSessionState() {
 function detectProviderAndModel(apiKey, preferredModel) {
   const provider = detectProviderFromApiKey(apiKey);
   if (provider) {
-    const model = preferredModel || (provider === "openai" ? "gpt-4o" : "claude-3-5-sonnet-20241022");
+    const model = preferredModel || (provider === "openai" ? "gpt-5.2" : "claude-3-5-sonnet-20241022");
     return { provider, model };
   }
   return {
     provider: "openai",
-    model: preferredModel || "gpt-4o"
+    model: preferredModel || "gpt-5.2"
   };
 }
 const packFactories = {
@@ -56745,10 +57250,11 @@ function createAgent(config2 = {}) {
     yamlConfig = tryLoadConfig(config2.configDir ?? config2.projectPath);
   }
   const agentId = generateId();
-  const sessionId2 = generateId();
+  const sessionId2 = config2.sessionId ?? generateId();
   const effectiveMaxTokens = config2.maxTokens ?? yamlConfig?.model?.maxTokens;
   const tokenBudgetTotal = effectiveMaxTokens ?? 1e5;
   const effectiveMaxSteps = config2.maxSteps ?? yamlConfig?.maxSteps ?? 30;
+  const effectiveReasoningEffort = config2.reasoningEffort ?? yamlConfig?.model?.reasoningEffort;
   const effectiveModel = config2.model ?? yamlConfig?.model?.default;
   const effectiveIdentity = config2.identity ?? yamlConfig?.identity ?? "You are a helpful AI assistant with access to various tools.";
   const effectiveConstraints = config2.constraints ?? yamlConfig?.constraints ?? [
@@ -56851,37 +57357,97 @@ function createAgent(config2 = {}) {
     initialContext: config2.initialContext
   }, tokenBudget);
   const systemPrompt = compiledPrompt.render();
-  let agentLoop = null;
+  const contextPipeline2 = createContextPipeline({
+    phases: [
+      createPinnedPhase(),
+      createSelectedPhase(),
+      createSessionPhase({ maxMessages: 100, includeToolMessages: false }),
+      createIndexPhase()
+    ]
+  });
+  let packsInitialized = false;
+  let activeAgentLoop = null;
   const agent = {
     id: agentId,
     runtime,
     async run(prompt, options) {
-      for (const pack of packsToLoad) {
-        if (pack.onInit) {
-          await pack.onInit(runtime);
+      if (!packsInitialized) {
+        for (const pack of packsToLoad) {
+          if (pack.onInit) {
+            await pack.onInit(runtime);
+          }
         }
+        packsInitialized = true;
       }
       if (options?.selectedContext) {
         runtime.sessionState.set("selectedContext", options.selectedContext);
       }
-      agentLoop = new AgentLoop({
+      if (runtime.messageStore) {
+        await runtime.messageStore.appendMessage({
+          sessionId: sessionId2,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          role: "user",
+          content: prompt,
+          step: runtime.step
+        });
+      }
+      let dynamicSystemPrompt = systemPrompt;
+      if (runtime.messageStore) {
+        try {
+          const assembled = await contextPipeline2.assemble({
+            runtime,
+            totalBudget: tokenBudgetTotal,
+            selectedContext: options?.selectedContext
+          });
+          if (assembled.content && assembled.content.trim().length > 0) {
+            dynamicSystemPrompt = systemPrompt + "\n\n<working-context>\nThe following is prior conversation history and project context from this session. Use it as background reference, but focus your full attention on the user's latest message.\n\n" + assembled.content + "\n</working-context>";
+          }
+          if (assembled.compressedHistory) {
+            runtime.sessionState.set("compressedHistory", assembled.compressedHistory);
+          }
+        } catch (err) {
+          if (config2.debug) {
+            console.error("[createAgent] Context pipeline assembly failed:", err);
+          }
+        }
+      }
+      const agentLoop = new AgentLoop({
         client: llmClient,
         toolRegistry,
         runtime,
         trace: trace2,
-        systemPrompt,
+        systemPrompt: dynamicSystemPrompt,
         maxSteps: effectiveMaxSteps,
         maxTokens: options?.tokenBudget ?? effectiveMaxTokens,
+        reasoningEffort: effectiveReasoningEffort,
         onText: config2.onStream,
         onToolCall: config2.onToolCall,
         onToolResult: config2.onToolResult,
-        // Pass budget config if provided
-        budgetConfig: config2.budgetConfig
+        budgetConfig: config2.budgetConfig,
+        debug: config2.debug
       });
-      return agentLoop.run(prompt);
+      activeAgentLoop = agentLoop;
+      const result = await agentLoop.run(prompt);
+      if (runtime.messageStore) {
+        const allMessages = agentLoop.getMessages();
+        const responseMessages = allMessages.filter((msg) => msg.role !== "user" || msg !== allMessages[0]);
+        for (const msg of responseMessages) {
+          const contentStr = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+          if (msg.role === "user" && contentStr === prompt) continue;
+          await runtime.messageStore.appendMessage({
+            sessionId: sessionId2,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            role: msg.role,
+            content: contentStr,
+            step: runtime.step
+          });
+        }
+      }
+      activeAgentLoop = null;
+      return result;
     },
     stop() {
-      agentLoop?.stop();
+      activeAgentLoop?.stop();
     },
     async destroy() {
       for (const pack of packsToLoad) {
@@ -56903,7 +57469,7 @@ function defineAgent(definition) {
     id,
     description,
     model: modelId,
-    temperature = 0.7,
+    temperature: explicitTemperature,
     maxTokens,
     system,
     prompt: buildPrompt,
@@ -56911,6 +57477,9 @@ function defineAgent(definition) {
     preProcess,
     postProcess
   } = definition;
+  const modelConfig = modelId ? getModel(modelId) : void 0;
+  const supportsTemperature = modelConfig?.capabilities.temperature !== false;
+  const temperature = explicitTemperature ?? (supportsTemperature ? 0.7 : void 0);
   const { jsonMode = true, maxRetries = 2 } = config2;
   return {
     id,
@@ -56931,11 +57500,15 @@ function defineAgent(definition) {
       while (attempts <= maxRetries) {
         attempts++;
         try {
+          const effectiveSystem = jsonMode ? `${system}
+
+IMPORTANT: You MUST respond with valid JSON only. No prose, no markdown, no explanations — just the JSON object.` : system;
           const result = await generateText({
             model,
-            system,
+            system: effectiveSystem,
             prompt: userPrompt,
-            temperature,
+            // Only pass temperature if model supports it
+            ...temperature !== void 0 && { temperature },
             maxOutputTokens: maxTokens,
             // Use JSON mode if enabled (OpenAI/compatible models)
             ...jsonMode && {
@@ -60002,6 +60575,252 @@ function resolveSimpleSource(source) {
   }
   return { ref: "state", path: source };
 }
+const PATHS = {
+  root: ".research-pilot",
+  notes: ".research-pilot/notes",
+  literature: ".research-pilot/literature",
+  data: ".research-pilot/data",
+  sessions: ".research-pilot/sessions",
+  cache: ".research-pilot/cache",
+  documentCache: ".research-pilot/cache/documents",
+  project: ".research-pilot/project.json"
+};
+function tokenize(text2) {
+  return new Set(
+    text2.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((word) => word.length > 2)
+    // Skip very short words
+  );
+}
+function jaccardSimilarity(a, b) {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection2 = 0;
+  for (const word of a) {
+    if (b.has(word)) intersection2++;
+  }
+  const union2 = a.size + b.size - intersection2;
+  return union2 > 0 ? intersection2 / union2 : 0;
+}
+function calculateMatchScore(queryTokens, paper) {
+  const titleTokens = tokenize(paper.title);
+  const titleScore = jaccardSimilarity(queryTokens, titleTokens);
+  const abstractTokens = tokenize(paper.abstract || "");
+  const abstractScore = jaccardSimilarity(queryTokens, abstractTokens);
+  const keywordTokens = tokenize((paper.searchKeywords || []).join(" "));
+  const keywordScore = jaccardSimilarity(queryTokens, keywordTokens);
+  const tagTokens = tokenize((paper.tags || []).join(" "));
+  const tagScore = jaccardSimilarity(queryTokens, tagTokens);
+  const weightedScore = titleScore * 0.4 + keywordScore * 0.3 + abstractScore * 0.2 + tagScore * 0.1;
+  return weightedScore;
+}
+function loadLocalPapers(projectPath2) {
+  const literaturePath = path$2.join(projectPath2, PATHS.literature);
+  if (!require$$1.existsSync(literaturePath)) {
+    return [];
+  }
+  const papers = [];
+  try {
+    const files = require$$1.readdirSync(literaturePath);
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      try {
+        const filePath = path$2.join(literaturePath, file);
+        const content = require$$1.readFileSync(filePath, "utf-8");
+        const paper = JSON.parse(content);
+        if (paper.type === "literature" && paper.title) {
+          papers.push(paper);
+        }
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return papers;
+}
+function searchLocalPapers(queries, projectPath2, minScore = 0.1, maxResults = 15) {
+  const papers = loadLocalPapers(projectPath2);
+  if (papers.length === 0 || queries.length === 0) {
+    return [];
+  }
+  const combinedQueryTokens = /* @__PURE__ */ new Set();
+  for (const query of queries) {
+    for (const token of tokenize(query)) {
+      combinedQueryTokens.add(token);
+    }
+  }
+  const matches = [];
+  for (const paper of papers) {
+    const matchScore = calculateMatchScore(combinedQueryTokens, paper);
+    if (matchScore >= minScore) {
+      matches.push({ paper, matchScore });
+    }
+  }
+  matches.sort((a, b) => b.matchScore - a.matchScore);
+  return matches.slice(0, maxResults);
+}
+function findExistingPaper(paper, projectPath2) {
+  const papers = loadLocalPapers(projectPath2);
+  if (paper.doi) {
+    const doiMatch = papers.find((p) => p.doi && p.doi === paper.doi);
+    if (doiMatch) return doiMatch;
+  }
+  const normalizedTitle = paper.title.toLowerCase().replace(/\s+/g, " ").trim();
+  const titleMatch = papers.find(
+    (p) => p.title.toLowerCase().replace(/\s+/g, " ").trim() === normalizedTitle
+  );
+  return titleMatch || null;
+}
+function escapeLatex(text2) {
+  return text2.replace(/&/g, "\\&").replace(/%/g, "\\%").replace(/#/g, "\\#").replace(/_/g, "\\_").replace(/\$/g, "\\$").replace(/\{/g, "\\{").replace(/\}/g, "\\}").replace(/~/g, "\\textasciitilde{}").replace(/\^/g, "\\textasciicircum{}");
+}
+function generateCiteKey$1(authors, year) {
+  const firstAuthor = authors[0] || "Unknown";
+  const lastName = firstAuthor.split(" ").pop()?.toLowerCase() || "unknown";
+  const cleanName = lastName.replace(/[^a-z0-9]/gi, "");
+  return `${cleanName}${year || "nd"}`;
+}
+function formatAuthors(authors) {
+  return authors.slice(0, 10).map((name15) => {
+    const parts = name15.trim().split(/\s+/);
+    if (parts.length === 1) return escapeLatex(parts[0]);
+    const lastName = parts.pop();
+    const firstNames = parts.join(" ");
+    return `${escapeLatex(lastName || "")}, ${escapeLatex(firstNames)}`;
+  }).join(" and ");
+}
+async function fetchDblpBibtex(dblpKey) {
+  try {
+    const cleanKey = dblpKey.replace(/^(https?:\/\/dblp\.org\/rec\/)?/, "");
+    const url = `https://dblp.org/rec/${cleanKey}.bib`;
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(1e4),
+      headers: {
+        "Accept": "text/plain"
+      }
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const bibtex = await response.text();
+    if (bibtex.includes("@") && bibtex.includes("{")) {
+      return bibtex.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function generateArxivBibtex(arxivId, paper) {
+  const citeKey = generateCiteKey$1(paper.authors, paper.year);
+  const authors = formatAuthors(paper.authors);
+  const title = escapeLatex(paper.title);
+  return `@article{${citeKey},
+  title = {${title}},
+  author = {${authors}},
+  journal = {arXiv preprint arXiv:${arxivId}},
+  year = {${paper.year || "n.d."}},
+  url = {https://arxiv.org/abs/${arxivId}},
+  note = {arXiv:${arxivId}}
+}`;
+}
+function generateBibtex(paper) {
+  if (paper.source === "arxiv" && paper.id) {
+    const arxivId = paper.id.includes("/") ? paper.id.split("/").pop() : paper.id;
+    return generateArxivBibtex(arxivId || paper.id, paper);
+  }
+  const citeKey = generateCiteKey$1(paper.authors, paper.year);
+  const authors = formatAuthors(paper.authors);
+  const title = escapeLatex(paper.title);
+  const hasVenue = paper.venue && paper.venue.trim().length > 0;
+  const entryType = hasVenue ? "inproceedings" : "article";
+  const lines = [
+    `@${entryType}{${citeKey},`,
+    `  title = {${title}},`,
+    `  author = {${authors}},`
+  ];
+  if (hasVenue) {
+    lines.push(`  booktitle = {${escapeLatex(paper.venue)}},`);
+  }
+  lines.push(`  year = {${paper.year || "n.d."}},`);
+  if (paper.doi) {
+    lines.push(`  doi = {${paper.doi}},`);
+  }
+  if (paper.url) {
+    lines.push(`  url = {${paper.url}},`);
+  }
+  const lastLine = lines[lines.length - 1];
+  lines[lines.length - 1] = lastLine.replace(/,$/, "");
+  lines.push("}");
+  return lines.join("\n");
+}
+async function getBibtex(paper) {
+  if (paper.source === "dblp" && paper.id) {
+    const fetched = await fetchDblpBibtex(paper.id);
+    if (fetched) return fetched;
+  }
+  return generateBibtex(paper);
+}
+function savePaper(title, opts, context2) {
+  if (!title) return { success: false, error: "Paper title is required." };
+  const firstAuthor = opts.authors?.[0]?.split(" ").pop()?.toLowerCase() ?? "unknown";
+  const citeKey = opts.citeKey ?? `${firstAuthor}${opts.year ?? "nd"}`;
+  const paper = {
+    id: crypto.randomUUID(),
+    type: "literature",
+    title,
+    authors: opts.authors ?? ["Unknown"],
+    abstract: opts.abstract ?? "",
+    year: opts.year,
+    venue: opts.venue,
+    url: opts.url,
+    citeKey,
+    tags: opts.tags ?? [],
+    pinned: false,
+    selectedForAI: false,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    provenance: {
+      source: opts.externalSource ? "agent" : "user",
+      sessionId: context2.sessionId,
+      agentId: opts.externalSource ? "literature-team" : void 0,
+      extractedFrom: opts.externalSource ? "agent-response" : "user-input"
+    },
+    // Search metadata fields
+    searchKeywords: opts.searchKeywords,
+    externalSource: opts.externalSource,
+    relevanceScore: opts.relevanceScore,
+    citationCount: opts.citationCount,
+    doi: opts.doi,
+    bibtex: opts.bibtex
+  };
+  const literaturePath = context2.projectPath ? path$2.join(context2.projectPath, PATHS.literature) : PATHS.literature;
+  require$$1.mkdirSync(literaturePath, { recursive: true });
+  const filePath = path$2.join(literaturePath, `${paper.id}.json`);
+  require$$1.writeFileSync(filePath, JSON.stringify(paper, null, 2));
+  return { success: true, paper, filePath };
+}
+function parseSavePaperArgs(raw) {
+  const flagPattern = /--(\w+)\s+"([^"]+)"|--(\w+)\s+(\S+)/g;
+  const flags = {};
+  let cleaned = raw;
+  let match2;
+  while ((match2 = flagPattern.exec(raw)) !== null) {
+    const key = match2[1] || match2[3];
+    const value = match2[2] || match2[4];
+    flags[key] = value;
+    cleaned = cleaned.replace(match2[0], "");
+  }
+  const title = cleaned.trim();
+  return {
+    title,
+    authors: flags.authors?.split(",").map((a) => a.trim()),
+    year: flags.year ? parseInt(flags.year, 10) : void 0,
+    abstract: flags.abstract,
+    venue: flags.venue,
+    url: flags.url,
+    citeKey: flags.citekey,
+    tags: flags.tags?.split(",").map((t) => t.trim())
+  };
+}
 const planner = defineAgent({
   id: "planner",
   description: "Query Planning Specialist for academic literature research",
@@ -60010,13 +60829,22 @@ Analyze research requests and create optimized search strategies.
 Generate 2-3 diverse search queries covering different aspects.
 Use academic terminology and consider synonyms, acronyms, and related concepts.
 
+DBLP-specific query syntax (use in dblpQueries only):
+- author:LastName — filter by author (e.g. "author:Bengio deep learning")
+- venue:CONF — filter by venue (e.g. "venue:NIPS attention mechanism")
+- Combine freely: "author:Vaswani venue:NIPS transformer"
+- These prefixes do NOT work on other sources, so keep searchQueries free of them.
+
+When the user mentions specific researchers, conferences, or journals, generate 1-2 dblpQueries that leverage author:/venue: syntax alongside regular searchQueries for other sources.
+
 Output JSON:
 {
   "originalRequest": "the user's original question",
   "searchQueries": ["query1", "query2", "query3"],
+  "dblpQueries": ["author:Name topic", "venue:CONF topic"] or null,
   "searchStrategy": {
     "focusAreas": ["area1", "area2"],
-    "suggestedSources": ["semantic_scholar", "arxiv", "openalex"],
+    "suggestedSources": ["semantic_scholar", "arxiv", "openalex", "dblp"],
     "timeRange": { "start": 2020, "end": 2024 } or null
   },
   "expectedTopics": ["topic1", "topic2"]
@@ -60033,15 +60861,22 @@ const reviewer = defineAgent({
   id: "reviewer",
   description: "Research Quality Reviewer who evaluates search results",
   system: `You are a Research Quality Reviewer who evaluates academic paper search results.
-Assess relevance (0-10 scale), analyze topic coverage, and decide if results are sufficient.
+You will receive both the original user research request and the search results.
+Assess relevance against the user's actual intent (0-10 scale), analyze topic coverage, and decide if results are sufficient.
 Approve if at least 3 relevant papers (score >= 7) AND coverage >= 0.7.
-Only suggest additionalQueries if not approved.
+If not approved, suggest additionalQueries that better target the user's original request — refine terminology, try synonyms, or narrow/broaden scope based on gaps.
+
+Papers may include source information indicating where they came from:
+- "local": Previously saved papers from the project's literature library (may already have high relevance)
+- Other sources: Newly discovered external papers
+
+IMPORTANT: Preserve all paper metadata including id, doi, source, venue, and citationCount in the relevantPapers output.
 
 Output JSON:
 {
   "approved": boolean,
   "relevantPapers": [
-    { "id": "...", "title": "...", "authors": [...], "abstract": "...", "year": number, "url": "...", "source": "...", "relevanceScore": number }
+    { "id": "...", "title": "...", "authors": [...], "abstract": "...", "year": number, "url": "...", "source": "...", "relevanceScore": number, "doi": "..." or null, "venue": "..." or null, "citationCount": number or null }
   ],
   "confidence": number,
   "coverage": {
@@ -60053,11 +60888,21 @@ Output JSON:
   "additionalQueries": ["query1"] or null
 }`,
   prompt: (input) => {
-    const results = input;
-    const papers = results?.papers ?? [];
-    const queries = results?.queriesUsed ?? [];
-    const paperSummaries = papers.slice(0, 15).map((p, i) => `Paper ${i + 1}: "${p.title}" (${p.year}) - ${p.abstract?.slice(0, 200) ?? ""}...`).join("\n");
-    return `Review these ${papers.length} papers:
+    const data = input;
+    const papers = data?.papers ?? [];
+    const queries = data?.queriesUsed ?? [];
+    const userRequest = data?.userRequest ?? "";
+    const localCount = papers.filter((p) => p.source === "local").length;
+    const sourceInfo = localCount > 0 ? ` (${localCount} from local library)` : "";
+    const paperSummaries = papers.slice(0, 15).map((p, i) => {
+      const sourceTag = p.source ? ` [${p.source}]` : "";
+      const doiTag = p.doi ? ` doi:${p.doi}` : "";
+      return `Paper ${i + 1} (id: ${p.id})${sourceTag}${doiTag}: "${p.title}" (${p.year}) - ${p.abstract?.slice(0, 200) ?? ""}...`;
+    }).join("\n");
+    return `Original user research request:
+"${userRequest}"
+
+Review these ${papers.length} papers${sourceInfo} against the user's request:
 
 ${paperSummaries}
 
@@ -60068,15 +60913,28 @@ const summarizer = defineAgent({
   id: "summarizer",
   description: "Research Synthesizer who creates comprehensive summaries",
   system: `You are a Research Synthesis Specialist who creates comprehensive literature review summaries.
-Create an insightful, well-organized summary with overview, top papers, themes, key findings, and research gaps.
+You will receive the original user research request along with the reviewed papers.
+Create an insightful, well-organized summary that directly addresses the user's research question.
+Focus on overview, top papers, themes, key findings, and research gaps relevant to the user's intent.
 Be objective and scholarly in tone.
+
+Papers may come from different sources:
+- "local": Previously saved papers from the project's literature library
+- Other sources (semantic_scholar, arxiv, openalex, dblp): Newly discovered external papers
+
+Include source attribution in the overview mentioning how many papers came from the local library vs external sources.
 
 Output JSON:
 {
   "title": "string",
   "overview": "string",
+  "sourceAttribution": {
+    "localPapers": number,
+    "externalPapers": number,
+    "totalPapers": number
+  },
   "papers": [
-    { "title": "...", "authors": "...", "year": number, "summary": "...", "url": "..." }
+    { "title": "...", "authors": "...", "year": number, "summary": "...", "url": "...", "source": "..." }
   ],
   "themes": [
     { "name": "...", "papers": ["paper1", "paper2"], "insight": "..." }
@@ -60085,33 +60943,44 @@ Output JSON:
   "researchGaps": ["gap1", "gap2"]
 }`,
   prompt: (input) => {
-    const review = input;
-    const papers = review?.relevantPapers ?? [];
-    const topics = review?.coverage?.coveredTopics ?? [];
-    const paperDetails = papers.slice(0, 12).map((p, i) => `Paper ${i + 1}: "${p.title}" by ${(p.authors ?? []).slice(0, 3).join(", ")} (${p.year})
+    const data = input;
+    const papers = data?.relevantPapers ?? [];
+    const topics = data?.coverage?.coveredTopics ?? [];
+    const userRequest = data?.userRequest ?? "";
+    const localCount = papers.filter((p) => p.source === "local").length;
+    const externalCount = papers.length - localCount;
+    const paperDetails = papers.slice(0, 12).map((p, i) => `Paper ${i + 1}: "${p.title}" by ${(p.authors ?? []).slice(0, 3).join(", ")} (${p.year}) [source: ${p.source ?? "unknown"}]
 Abstract: ${p.abstract?.slice(0, 350) ?? ""}`).join("\n\n");
-    return `Create a literature review summary from these papers:
+    const sourceInfo = localCount > 0 ? `
+
+Source breakdown: ${localCount} from local library, ${externalCount} from external sources.` : "";
+    return `Original user research request:
+"${userRequest}"
+
+Create a literature review summary from these papers that addresses the user's request:
 
 ${paperDetails}
 
-Covered topics: ${topics.join(", ")}`;
+Covered topics: ${topics.join(", ")}${sourceInfo}`;
   }
 });
-function createSearcherAgent() {
+function createSearcherAgent(projectPath2) {
   return {
     id: "searcher",
     kind: "tool-agent",
     async run(input) {
-      const { queries, sources = ["semantic_scholar", "arxiv", "openalex"] } = input;
+      const { queries, dblpQueries, sources = ["semantic_scholar", "arxiv", "openalex", "dblp"] } = input;
       const startTime = Date.now();
-      if (queries.length === 0) {
+      if (queries.length === 0 && (!dblpQueries || dblpQueries.length === 0)) {
         const metadata2 = {
           sourcesTried: [],
           sourcesSucceeded: [],
           sourcesFailed: [],
           totalDurationMs: 0,
           allSourcesSucceeded: true,
-          hasResults: false
+          hasResults: false,
+          localPapersFound: 0,
+          externalPapersFound: 0
         };
         return { output: { papers: [], totalFound: 0, queriesUsed: [], metadata: metadata2 } };
       }
@@ -60119,9 +60988,42 @@ function createSearcherAgent() {
       const sourcesTried = [];
       const sourcesSucceeded = [];
       const sourcesFailed = [];
-      for (const query of queries) {
-        for (const source of sources) {
-          if (!sourcesTried.includes(source)) sourcesTried.push(source);
+      let localPapersFound = 0;
+      if (projectPath2) {
+        try {
+          const localMatches = searchLocalPapers(queries, projectPath2);
+          localPapersFound = localMatches.length;
+          if (localMatches.length > 0) {
+            console.log(`  [Searcher] Found ${localMatches.length} papers from local library`);
+            for (const match2 of localMatches) {
+              const lit = match2.paper;
+              allPapers.push({
+                id: lit.id,
+                title: lit.title,
+                authors: lit.authors,
+                abstract: lit.abstract || "",
+                year: lit.year || 0,
+                venue: lit.venue || null,
+                citationCount: lit.citationCount ?? null,
+                url: lit.url || "",
+                source: "local",
+                doi: lit.doi || null,
+                pdfUrl: null,
+                relevanceScore: lit.relevanceScore ?? null
+              });
+            }
+            if (!sourcesTried.includes("local")) sourcesTried.push("local");
+            if (!sourcesSucceeded.includes("local")) sourcesSucceeded.push("local");
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          console.log(`  [Searcher] Local lookup failed: ${msg}`);
+        }
+      }
+      for (const source of sources) {
+        if (!sourcesTried.includes(source)) sourcesTried.push(source);
+        const sourceQueries = source === "dblp" && dblpQueries && dblpQueries.length > 0 ? dblpQueries : queries;
+        for (const query of sourceQueries) {
           try {
             const papers = await searchSource(source, query, 8);
             allPapers.push(...papers);
@@ -60133,7 +61035,8 @@ function createSearcherAgent() {
           }
         }
       }
-      const uniquePapers = deduplicatePapers(allPapers);
+      const uniquePapers = deduplicatePapersPreferLocal(allPapers);
+      const externalPapersFound = uniquePapers.filter((p) => p.source !== "local").length;
       const totalDurationMs = Date.now() - startTime;
       const metadata = {
         sourcesTried,
@@ -60141,7 +61044,9 @@ function createSearcherAgent() {
         sourcesFailed,
         totalDurationMs,
         allSourcesSucceeded: sourcesFailed.length === 0,
-        hasResults: uniquePapers.length > 0
+        hasResults: uniquePapers.length > 0,
+        localPapersFound,
+        externalPapersFound
       };
       return {
         output: { papers: uniquePapers, totalFound: uniquePapers.length, queriesUsed: queries, metadata }
@@ -60163,6 +61068,9 @@ async function searchSource(source, query, limit) {
     case "openalex":
       url = `https://api.openalex.org/works?search=${encodedQuery}&per-page=${limit}`;
       break;
+    case "dblp":
+      url = `https://dblp.org/search/publ/api?q=${encodedQuery}&format=json&h=${limit}`;
+      break;
     default:
       return [];
   }
@@ -60170,7 +61078,9 @@ async function searchSource(source, query, limit) {
   if (!response.ok) return [];
   if (source === "arxiv") return parseArxiv(await response.text());
   const data = await response.json();
-  return source === "semantic_scholar" ? parseSemanticScholar(data) : parseOpenAlex(data);
+  if (source === "semantic_scholar") return parseSemanticScholar(data);
+  if (source === "dblp") return parseDblp(data);
+  return parseOpenAlex(data);
 }
 function parseSemanticScholar(data) {
   return (data.data || []).map((p) => ({
@@ -60249,21 +61159,55 @@ function parseOpenAlex(data) {
     };
   });
 }
-function deduplicatePapers(papers) {
+function parseDblp(data) {
+  const hits = data?.result?.hits?.hit ?? [];
+  return hits.map((h) => {
+    const info = h.info ?? {};
+    const rawAuthors = info.authors;
+    let authors = [];
+    if (rawAuthors?.author) {
+      authors = Array.isArray(rawAuthors.author) ? rawAuthors.author.slice(0, 20).map((a) => a.text) : [rawAuthors.author.text];
+    }
+    return {
+      id: String(info["@key"] ?? h["@id"] ?? ""),
+      title: String(info.title ?? "Unknown"),
+      authors,
+      abstract: "",
+      // DBLP does not provide abstracts
+      year: Number(info.year) || 0,
+      venue: info.venue ?? null,
+      citationCount: null,
+      url: String(info.ee ?? info.url ?? `https://dblp.org/rec/${info["@key"]}`),
+      source: "dblp",
+      doi: info.doi ?? null,
+      pdfUrl: null,
+      relevanceScore: null
+    };
+  });
+}
+function deduplicatePapersPreferLocal(papers) {
   const seen = /* @__PURE__ */ new Map();
   for (const paper of papers) {
     const key = paper.doi || paper.title.toLowerCase().replace(/\s+/g, " ").trim();
-    if (!seen.has(key) || (paper.citationCount || 0) > (seen.get(key).citationCount || 0)) {
+    const existing = seen.get(key);
+    if (!existing) {
       seen.set(key, paper);
+    } else if (paper.source === "local" && existing.source !== "local") {
+      seen.set(key, paper);
+    } else if (paper.source !== "local" && existing.source === "local") ;
+    else {
+      if ((paper.citationCount || 0) > (existing.citationCount || 0)) {
+        seen.set(key, paper);
+      }
     }
   }
   return Array.from(seen.values());
 }
 function createLiteratureTeam(config2) {
-  const { apiKey, model = "gpt-4o", maxReviewIterations = 2 } = config2;
+  const { apiKey, model = "gpt-5.2", maxReviewIterations = 2, projectPath: projectPath2, sessionId: sessionId2 = "default" } = config2;
   if (!apiKey) throw new Error("API key is required");
   const languageModel = getLanguageModelByModelId(model, { apiKey });
-  const searcherAgent = createSearcherAgent();
+  const searcherAgent = createSearcherAgent(projectPath2);
   const agentCtx = {
     getLanguageModel: () => languageModel
   };
@@ -60278,9 +61222,11 @@ function createLiteratureTeam(config2) {
     return async (input) => {
       const data = input;
       const queries = data.additionalQueries ?? data.searchQueries ?? data.queries ?? [];
+      const dblpQueries = data.dblpQueries ?? void 0;
       const searcherInput = {
         queries: Array.isArray(queries) ? queries : [],
-        sources: data.searchStrategy?.suggestedSources ?? data.sources ?? ["semantic_scholar", "arxiv", "openalex"]
+        dblpQueries: Array.isArray(dblpQueries) ? dblpQueries : void 0,
+        sources: data.searchStrategy?.suggestedSources ?? data.sources ?? ["semantic_scholar", "arxiv", "openalex", "dblp"]
       };
       const result = await searcherAgent.run(searcherInput);
       return result.output;
@@ -60301,7 +61247,11 @@ function createLiteratureTeam(config2) {
       simpleStep("searcher").from("plan").to("search"),
       loop(
         seq(
-          simpleStep("reviewer").from("search").to("review"),
+          // Inject userRequest from initial input so reviewer knows the original intent
+          simpleStep("reviewer").from((s) => {
+            const search = s.search;
+            return { ...search, userRequest: s.userRequest ?? "" };
+          }).to("review"),
           simpleBranch({
             if: (s) => {
               const state = s;
@@ -60314,7 +61264,11 @@ function createLiteratureTeam(config2) {
         { type: "field-eq", path: "review.approved", value: true },
         { maxIters: maxReviewIterations }
       ),
-      simpleStep("summarizer").from("review").to("summary")
+      // Inject userRequest so summarizer can address the original question
+      simpleStep("summarizer").from((s) => {
+        const review = s.review;
+        return { ...review, userRequest: s.userRequest ?? "" };
+      }).to("summary")
     ),
     defaults: {
       concurrency: 1,
@@ -60325,11 +61279,93 @@ function createLiteratureTeam(config2) {
   return {
     runtime,
     async research(request) {
+      const state = runtime.getState();
+      state.put("userRequest", request, void 0, "system");
       const result = await runtime.run({ userRequest: request });
       if (result.success && result.finalState) {
         const stateData = result.finalState["literature"];
         const summary = stateData?.summary;
-        return { success: true, summary, steps: result.steps, durationMs: result.durationMs };
+        const review = stateData?.review;
+        let savedPapers = 0;
+        let localPapersUsed = 0;
+        let externalPapersUsed = 0;
+        const relevantPapers = review?.relevantPapers || [];
+        for (const paper of relevantPapers) {
+          if (paper.source === "local") {
+            localPapersUsed++;
+          } else {
+            externalPapersUsed++;
+          }
+        }
+        if (projectPath2 && relevantPapers.length > 0) {
+          const searchKeywords = request.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length > 2).slice(0, 10);
+          const cliContext = {
+            sessionId: sessionId2,
+            projectPath: projectPath2
+          };
+          for (const paper of relevantPapers) {
+            if (paper.source === "local") continue;
+            if (paper.relevanceScore < 7) continue;
+            const existing = findExistingPaper(
+              { doi: paper.doi, title: paper.title },
+              projectPath2
+            );
+            if (existing) {
+              console.log(`  [Auto-save] Skipping "${paper.title.slice(0, 50)}..." (already exists)`);
+              continue;
+            }
+            let bibtex;
+            try {
+              const paperMeta = {
+                id: paper.id,
+                title: paper.title,
+                authors: paper.authors,
+                year: paper.year,
+                venue: paper.venue,
+                url: paper.url,
+                doi: paper.doi,
+                source: paper.source
+              };
+              bibtex = await getBibtex(paperMeta);
+            } catch {
+            }
+            const saveResult = savePaper(
+              paper.title,
+              {
+                authors: paper.authors,
+                year: paper.year,
+                abstract: paper.abstract,
+                venue: paper.venue || void 0,
+                url: paper.url,
+                tags: [],
+                // New search metadata fields
+                searchKeywords,
+                externalSource: paper.source,
+                relevanceScore: paper.relevanceScore,
+                citationCount: paper.citationCount ?? void 0,
+                doi: paper.doi || void 0,
+                bibtex
+              },
+              cliContext
+            );
+            if (saveResult.success) {
+              savedPapers++;
+              console.log(`  [Auto-save] Saved "${paper.title.slice(0, 50)}..." (score: ${paper.relevanceScore})`);
+            }
+          }
+          if (savedPapers > 0) {
+            console.log(`  [Auto-save] Saved ${savedPapers} papers to local library`);
+          }
+        }
+        return {
+          success: true,
+          summary,
+          steps: result.steps,
+          durationMs: result.durationMs,
+          savedPapers,
+          localPapersUsed,
+          externalPapersUsed
+        };
       }
       return { success: false, error: result.error, steps: result.steps, durationMs: result.durationMs };
     }
@@ -60446,7 +61482,7 @@ ${sampleData}${questionStr}`;
   }
 });
 function createDataTeam(config2) {
-  const { apiKey, model = "gpt-4o" } = config2;
+  const { apiKey, model = "gpt-5.2" } = config2;
   if (!apiKey) throw new Error("API key is required");
   const languageModel = getLanguageModelByModelId(model, { apiKey });
   const schemaInferrer = createSchemaInferrer();
@@ -60525,19 +61561,25 @@ function emitTodo(cb, item) {
   if (!cb) return;
   cb("todo-update", { success: true, item });
 }
-function createSubagentTools(apiKey, onToolResult) {
+function createSubagentTools(apiKey, model, onToolResult, projectPath2, sessionId2) {
   let literatureTeam = null;
   let dataTeam = null;
   const literatureSearchTool = defineTool({
     name: "literature-search",
-    description: "Search academic papers on a topic using a multi-agent literature research team. Returns a structured summary with papers, themes, key findings, and research gaps.",
+    description: "Search academic papers on a topic using a multi-agent literature research team. Returns a structured summary with papers, themes, key findings, and research gaps. Also auto-saves high-relevance papers to the local library for future searches. IMPORTANT: Always include relevant context from the conversation to help the search planner generate better queries.",
     parameters: {
-      query: { type: "string", description: "The research topic or question to search for", required: true }
+      query: { type: "string", description: "The research topic or question to search for", required: true },
+      context: { type: "string", description: "Additional context from the conversation that helps refine the search (e.g. researcher names, institutions, specific fields, paper titles mentioned by the user)", required: false }
     },
     execute: async (input) => {
       try {
         if (!literatureTeam) {
-          literatureTeam = createLiteratureTeam({ apiKey });
+          literatureTeam = createLiteratureTeam({
+            apiKey,
+            model,
+            projectPath: projectPath2,
+            sessionId: sessionId2 || "default"
+          });
         }
         const stepIds = Object.keys(LIT_STEPS);
         for (const stepId of stepIds) {
@@ -60578,17 +61620,31 @@ function createSubagentTools(apiKey, onToolResult) {
             ));
           }
         });
-        const result = await literatureTeam.research(input.query);
+        const searchRequest = input.context ? `${input.query}
+
+Additional context: ${input.context}` : input.query;
+        const result = await literatureTeam.research(searchRequest);
         unsub1();
         unsub2();
         unsub3();
         if (result.success) {
+          if (result.savedPapers && result.savedPapers > 0) {
+            emitTodo(onToolResult, makeTodoItem(
+              "lit-save",
+              `Saved ${result.savedPapers} papers to library`,
+              "done"
+            ));
+          }
           return {
             success: true,
             data: {
               summary: result.summary,
               steps: result.steps,
-              durationMs: result.durationMs
+              durationMs: result.durationMs,
+              // Local paper caching stats
+              savedPapers: result.savedPapers,
+              localPapersUsed: result.localPapersUsed,
+              externalPapersUsed: result.externalPapersUsed
             }
           };
         }
@@ -60609,7 +61665,7 @@ function createSubagentTools(apiKey, onToolResult) {
     execute: async (input) => {
       try {
         if (!dataTeam) {
-          dataTeam = createDataTeam({ apiKey });
+          dataTeam = createDataTeam({ apiKey, model });
         }
         const stepIds = Object.keys(DATA_STEPS);
         for (const stepId of stepIds) {
@@ -60673,62 +61729,284 @@ function createSubagentTools(apiKey, onToolResult) {
   });
   return { literatureSearchTool, dataAnalyzeTool };
 }
-const PATHS = {
-  root: ".research-pilot",
-  notes: ".research-pilot/notes",
-  literature: ".research-pilot/literature",
-  data: ".research-pilot/data",
-  sessions: ".research-pilot/sessions",
-  project: ".research-pilot/project.json"
-};
-const SYSTEM_PROMPT = `You are Research Pilot, an AI research assistant that helps users manage their research projects.
+function saveNote(title, content, tags2, context2, fromLast = false, messageId) {
+  if (!title) return { success: false, error: "Note title is required." };
+  if (!content) return { success: false, error: "Note content is required." };
+  const provenance = {
+    source: "user",
+    sessionId: context2.sessionId,
+    extractedFrom: fromLast ? "agent-response" : "user-input"
+  };
+  if (messageId) provenance.messageId = messageId;
+  const note = {
+    id: crypto.randomUUID(),
+    type: "note",
+    title,
+    content,
+    tags: tags2,
+    pinned: false,
+    selectedForAI: false,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    provenance
+  };
+  require$$1.mkdirSync(PATHS.notes, { recursive: true });
+  const filePath = `${PATHS.notes}/${note.id}.json`;
+  require$$1.writeFileSync(filePath, JSON.stringify(note, null, 2));
+  return { success: true, note, filePath };
+}
+function createSaveNoteTool(sessionId2, projectPath2) {
+  return defineTool({
+    name: "save-note",
+    description: "Save content as a research note. Creates a proper note entity that appears in the Notes list. Use this instead of write when saving research notes, summaries, or extracted insights.",
+    parameters: {
+      title: {
+        type: "string",
+        description: "Title of the note",
+        required: true
+      },
+      content: {
+        type: "string",
+        description: "Content of the note (markdown supported)",
+        required: true
+      },
+      tags: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional tags for categorization",
+        required: false
+      }
+    },
+    execute: async (input) => {
+      const { title, content, tags: tags2 = [] } = input;
+      const context2 = {
+        sessionId: sessionId2
+      };
+      const result = saveNote(title, content, tags2, context2, false);
+      if (result.success) {
+        return {
+          success: true,
+          data: {
+            id: result.note.id,
+            title: result.note.title,
+            filePath: result.filePath,
+            tags: result.note.tags
+          }
+        };
+      } else {
+        return {
+          success: false,
+          error: result.error || "Failed to save note"
+        };
+      }
+    }
+  });
+}
+function createSavePaperTool(sessionId2, projectPath2) {
+  return defineTool({
+    name: "save-paper",
+    description: "Save a literature reference (paper, article). Creates a proper literature entity that appears in the Literature list. Use this when saving paper metadata from search results.",
+    parameters: {
+      title: {
+        type: "string",
+        description: "Title of the paper",
+        required: true
+      },
+      authors: {
+        type: "array",
+        items: { type: "string" },
+        description: "List of author names",
+        required: true
+      },
+      abstract: {
+        type: "string",
+        description: "Abstract or summary of the paper",
+        required: true
+      },
+      year: {
+        type: "number",
+        description: "Publication year",
+        required: false
+      },
+      venue: {
+        type: "string",
+        description: "Publication venue (journal, conference)",
+        required: false
+      },
+      url: {
+        type: "string",
+        description: "URL to the paper",
+        required: false
+      },
+      citeKey: {
+        type: "string",
+        description: "Citation key (e.g., smith2024deep). If not provided, one will be generated.",
+        required: false
+      }
+    },
+    execute: async (input) => {
+      const { title, authors, abstract, year, venue, url, citeKey } = input;
+      const generatedCiteKey = citeKey || generateCiteKey(authors, year, title);
+      const result = savePaper({
+        title,
+        authors,
+        abstract,
+        year,
+        venue,
+        url,
+        citeKey: generatedCiteKey,
+        projectPath: projectPath2,
+        sessionId: sessionId2
+      });
+      if (result.success) {
+        return {
+          success: true,
+          data: {
+            id: result.paper.id,
+            title: result.paper.title,
+            citeKey: result.paper.citeKey,
+            filePath: result.filePath
+          }
+        };
+      } else {
+        return {
+          success: false,
+          error: result.error || "Failed to save paper"
+        };
+      }
+    }
+  });
+}
+function generateCiteKey(authors, year, title) {
+  const firstAuthor = authors[0] || "unknown";
+  const lastName = firstAuthor.split(/\s+/).pop()?.toLowerCase() || "unknown";
+  const yearStr = year?.toString() || "nd";
+  const titleWords = (title || "").toLowerCase().split(/\s+/);
+  const stopWords = /* @__PURE__ */ new Set(["a", "an", "the", "on", "in", "of", "for", "to", "and", "with"]);
+  const firstWord = titleWords.find((w) => w.length > 2 && !stopWords.has(w)) || "paper";
+  return `${lastName}${yearStr}${firstWord}`;
+}
+const SYSTEM_PROMPT = `You are Research Pilot, an AI research assistant. You are an execution agent that takes action via tools, not only an advisor. Your long-term memory is the project directory on disk. You must use tools to read and write project files so the next session can resume reliably.
 
-## Your Capabilities
+## 0) Available Tools
 
-1. **Research Assistance**: Answer questions, synthesize information, help with analysis
-2. **File Access**: You can read and search research entities using the file tools
-3. **Context Awareness**: Pinned and selected entities are automatically included in your context
+Tools: read, write, edit, glob, grep, convert_to_markdown, literature-search, data-analyze, save-note, save-paper, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
 
-## File Storage Conventions
+Sub-agents: **literature-search** (academic paper search), **data-analyze** (dataset analysis: JSON/CSV/TSV).
+Document conversion: **convert_to_markdown** — converts PDF, Word, Excel, PowerPoint, images (with OCR), audio, HTML, and more to markdown text. Use this to extract content from document files. Pass file:// URI, e.g. \`convert_to_markdown({ uri: "file:///path/to/document.pdf" })\`.
+Entity saving: **save-note** (creates note in Notes list), **save-paper** (creates literature entry in Literature list). Use these instead of write when saving research notes or paper references — they create proper entities visible in the UI.
+File storage: notes=${PATHS.notes}, literature=${PATHS.literature}, data=${PATHS.data}.
+Do NOT search the web manually — delegate to literature-search.
+IMPORTANT: When calling literature-search, ALWAYS pass the \`context\` parameter with relevant conversation background (user's research goals, mentioned researchers, specific fields, paper titles). This dramatically improves search quality.
 
-Research entities are stored as JSON files:
-- Notes: ${PATHS.notes}/<id>.json
-- Literature: ${PATHS.literature}/<id>.json
-- Data: ${PATHS.data}/<id>.json
+### Operating Loop
 
-## Using File Tools
+Every turn: (1) classify intent → (2) produce the deliverable (rewrite, patch, analysis, plan) → (3) use tools only to verify or fill gaps the deliverable needs. Default to action, not exploration.
 
-To list entities: glob("${PATHS.notes}/*.json")
-To read an entity: read("${PATHS.notes}/<id>.json")
-To search: grep("search term", "${PATHS.notes}")
+## 1) Core Principles
 
-## Subagent Tools
+1. Truth first: never fabricate citations, sources, file contents, or tool results.
+2. Disk memory first: anything that matters in future sessions must be written to project files.
+3. Tools for facts, inference for judgment: use tools to verify project content or external facts. For interpretive judgment (e.g., "this term is ambiguous," "a reviewer would read this as X"), infer directly and label assumptions. Do not hide behind tool calls to avoid making a judgment call.
+4. Low friction: minimize verbosity and tool calls, but do not sacrifice checkable specificity. Every answer must include a concrete deliverable (rewrite / patch / metrics / next action). If concise conflicts with specificity, choose specificity.
+5. Focus: your latest user message is the current request — give it your full, deep attention. Prior conversation in <working-context> is background only.
 
-For research tasks requiring external knowledge:
-- **literature-search**: Search academic papers on a topic. Input: { query: "..." }
-  Returns structured summary with papers, themes, key findings, and research gaps.
-- **data-analyze**: Analyze a dataset file. Input: { filePath: "...", question?: "..." }
-  Returns schema, quality assessment, insights, and visualization suggestions.
+### Precedence order (conflict resolver)
 
-Use these tools when the user asks to research a topic or analyze data.
-Do NOT attempt to search the web manually — use literature-search instead.
+1. Truth / non-fabrication
+2. User's explicit request
+3. File safety (no destructive ops without consent)
+4. Project continuity (disk-backed state)
+5. Efficiency / conciseness
 
-## Best Practices
+## 2) 3-Tier Intent Classification
 
-- Be concise and focused
-- When providing insights worth saving, remind users about /save-note --from-last
-- Use glob/read to access entity content
-- Cite sources when discussing literature
+| Tier | Examples | Required Actions |
+|------|----------|-----------------|
+| Tier 1a: Direct operation | "read my notes", "search for X" | Minimal tool chain: glob/grep to locate, then read |
+| Tier 1b: Factual lookup | "who is X", "what has X published" | Check project files first (grep/read); literature-search only for external academic facts |
+| Tier 2: Project resume | "continue", "where are we", "what's next" | Read entities + todo list + recent context |
+| Tier 3: General advice | "how to structure a literature review" | No tool calls needed, but must include a concrete example (a rewritten sentence, a minimal plan, or a checklist tied to the user's text) |
 
-## Task Planning
+If Tier 1 needs only the target file, do NOT escalate to Tier 2.
+Escalate to Tier 2 ONLY if user explicitly asks for continuity or Tier 1 cannot complete without project state (verified by tool failure).
+Multi-intent: split into subtasks, execute cheapest tier first.
 
-For non-trivial requests that require multiple steps (research, multi-file
-analysis, complex synthesis, comparative work):
-1. Create a plan of up to 10 tasks using todo-add BEFORE starting work
-2. Update each task to in_progress as you begin it (todo-update)
-3. Mark each task done when finished (todo-complete)
+## 3) Task Loop & Tool Efficiency
 
-Skip planning for simple conversational questions or single-step answers.`;
+Call todo-add at the start if request requires 2+ tool calls OR multiple steps.
+Create 2-5 tasks by default. Expand to 6-10 only for long multi-phase work.
+Keep exactly one in_progress. Mark done promptly.
+Max 10 active tasks; chunk larger work into phases.
+Skip for single-step answers or simple conversation.
+Batch reads: 1-3 reads upfront, then think, then 1 write/edit. No interleaved read-edit cycles unless necessary.
+
+## 4) Intent Gating (hard rules)
+
+Before producing a final answer, if any condition applies, call the required tool first.
+
+| Condition | Required Tool |
+|-----------|--------------|
+| Answer depends on project files | read / glob / grep |
+| "Is this novel?" / "related work" / "find papers" | literature-search |
+| "Analyze this data" / "visualize" | data-analyze |
+| Question about a person / researcher / PI | grep project files first; literature-search only for external academic background |
+| Unsure about a project-internal fact | read / grep |
+| Unsure about an external academic fact or citation | literature-search |
+| General / engineering knowledge you're confident about | No tool needed — mark as unverified if uncertain |
+| Task has 3+ ordered steps | todo-add |
+| About to say "I don't have information" about an external fact or reference | search first — but for judgments on clarity, ambiguity, or reviewability, proceed directly with labeled assumptions |
+
+### Quality Gate (hard)
+
+Before finalizing any answer, check: (a) does it contain a concrete deliverable? (b) for technical methods, does it include at least two of: inputs/outputs, deployment form, baselines, metrics, overhead path? (c) did you make minimal assumptions instead of asking broad questions? (d) did you specify a next action? If any check fails, rewrite before outputting.
+
+## 5) Anti-Loop Rule
+
+Search default: 2 rounds per topic. Allow a 3rd round only if the user explicitly asks for thoroughness or the first round returned low-quality results. Each round must use a differentiated query.
+
+If blocked after max retries (3 for searches, 2 for reads):
+1. Return partial output with what you DO have.
+2. List missing items explicitly.
+3. Propose the smallest next step (not a 10-step plan).
+
+## 6) Editing and Citation Rules
+
+- Read before Edit/Write (hard rule). Verify content before modifying.
+- Write for new files only. Edit for existing files.
+- After Edit, re-read to verify only for: multi-replace edits, config/code files, or user-authored content. Skip re-read for simple note appends.
+- Do not change user's core claims unless explicitly asked.
+- Never fabricate references. Use literature-search before citing.
+- If unverifiable, say so explicitly.
+
+## 7) Technical Critique Protocol
+
+Activate this protocol ONLY when user intent is critique/review (keywords: evaluate, review, critique, assess, 评价, 评审, 批评, "这个做法有问题吗"). Otherwise do not force this structure.
+
+Your critique must cover these elements (headings optional, elements mandatory):
+- **Verdict**: Is the overall direction sound? 1-2 sentences.
+- **Gaps**: What is missing or underspecified? For each gap, explain why it matters.
+- **Failure modes**: Concrete breakage in practice — reference specific APIs, protocols, data structures, or known failure patterns.
+- **Terminology/definition ambiguities**: Identify 1-2 terms that a reviewer would misread or that have domain-specific meanings the text does not clarify. Name the term, explain the confusion.
+- **Actionable fixes**: For each issue, state what to change, how to verify (experiment, formal argument, or benchmark), and provide at least one drop-in rewrite the user can paste directly. Give two alternatives if two plausible interpretations exist.
+
+Each element must include at least one checkable noun (metric, baseline, deployment form, overhead path, API, or data structure).
+
+Hard rules:
+- No "strengths and weaknesses" or "pros and cons" template. No restating the proposal with praise.
+- 3 deep technical points beat 10 surface observations.
+- Ground every claim in concrete technical detail.
+- If the user has declared a role (e.g., reviewer), adopt that perspective fully.
+- If your critique could apply to any ML method or any system, it is too generic. Rewrite with baselines, metrics, and deployment constraints specific to the proposal.
+- Ask at most 2 clarifying questions, only if the answers would change the solution form. Otherwise proceed with labeled assumptions.
+
+## 8) Communication Style
+
+- Reply in the language of the user's latest message unless the user requests otherwise. Keep standard technical terms in English (e.g., "executor", "callback group", "ROS2").
+- Depth over breadth. Minimize filler.
+- After tool work: structured analysis with conclusions + next actions.
+- When choices needed: present 2-3 concrete options, no vague questions.
+- When insights worth saving: remind user they can save as note.`;
 function loadEntitiesFromDisk(dir) {
   if (!require$$1.existsSync(dir)) return [];
   const entities = [];
@@ -60818,19 +62096,33 @@ ${m.content}`;
     }
   }));
 }
-function createCoordinator(config2) {
-  const { apiKey, model, projectPath: projectPath2 = process.cwd(), debug = false, onStream, onToolResult } = config2;
-  const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(apiKey, onToolResult);
+async function createCoordinator(config2) {
+  const { apiKey, model, projectPath: projectPath2 = process.cwd(), debug = false, sessionId: sessionId2, onStream, onToolCall, onToolResult } = config2;
+  const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(
+    apiKey,
+    model,
+    onToolResult,
+    projectPath2,
+    sessionId2
+  );
+  const saveNoteTool = createSaveNoteTool(sessionId2 || crypto.randomUUID());
+  const savePaperTool = createSavePaperTool(sessionId2 || crypto.randomUUID(), projectPath2);
+  const documentsPack = await packs.documents({ timeout: 9e4 });
   const subagentPack = definePack({
     id: "subagents",
-    description: "Literature search and data analysis subagent tools",
-    tools: [literatureSearchTool, dataAnalyzeTool]
+    description: "Literature search, data analysis, and entity saving tools",
+    tools: [literatureSearchTool, dataAnalyzeTool, saveNoteTool, savePaperTool]
   });
   const agent = createAgent({
     apiKey,
     model,
     projectPath: projectPath2,
+    reasoningEffort: "high",
     identity: SYSTEM_PROMPT,
+    constraints: [
+      "For multi-step work, briefly state intent before acting",
+      "Ask for clarification when instructions are ambiguous"
+    ],
     packs: [
       packs.safe(),
       // read, write, edit, glob, grep
@@ -60838,18 +62130,25 @@ function createCoordinator(config2) {
       // memory storage (pinned phase reads from here)
       packs.todo(),
       // todo-add, todo-update, todo-complete, todo-remove
+      packs.sessionHistory(),
+      // messageStore for cross-turn history persistence
       packs.contextPipeline(),
       // ctx-expand, history compression, 5-phase assembly
+      documentsPack,
+      // convert_to_markdown for PDF, Word, Excel, PPT, images
       subagentPack
       // literature-search, data-analyze
     ],
     onStream,
-    onToolResult,
-    ...debug && {
-      onToolCall: (name15, args) => {
+    onToolCall: (name15, args) => {
+      onToolCall?.(name15, args);
+      if (debug) {
         console.log(`  [Tool] ${name15}(${JSON.stringify(args).slice(0, 80)}...)`);
       }
-    }
+    },
+    onToolResult,
+    sessionId: sessionId2,
+    debug
   });
   return {
     agent,
@@ -60884,32 +62183,6 @@ function createCoordinator(config2) {
       await agent.destroy();
     }
   };
-}
-function saveNote(title, content, tags2, context2, fromLast = false, messageId) {
-  if (!title) return { success: false, error: "Note title is required." };
-  if (!content) return { success: false, error: "Note content is required." };
-  const provenance = {
-    source: "user",
-    sessionId: context2.sessionId,
-    extractedFrom: fromLast ? "agent-response" : "user-input"
-  };
-  if (messageId) provenance.messageId = messageId;
-  const note = {
-    id: crypto.randomUUID(),
-    type: "note",
-    title,
-    content,
-    tags: tags2,
-    pinned: false,
-    selectedForAI: false,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    provenance
-  };
-  require$$1.mkdirSync(PATHS.notes, { recursive: true });
-  const filePath = `${PATHS.notes}/${note.id}.json`;
-  require$$1.writeFileSync(filePath, JSON.stringify(note, null, 2));
-  return { success: true, note, filePath };
 }
 function findEntityFile$2(entityId) {
   const dirs = [PATHS.notes, PATHS.literature, PATHS.data];
@@ -61230,59 +62503,6 @@ function searchEntities(projectPath2, query) {
   }
   return results;
 }
-function savePaper(title, opts, context2) {
-  if (!title) return { success: false, error: "Paper title is required." };
-  const firstAuthor = opts.authors?.[0]?.split(" ").pop()?.toLowerCase() ?? "unknown";
-  const citeKey = opts.citeKey ?? `${firstAuthor}${opts.year ?? "nd"}`;
-  const paper = {
-    id: crypto.randomUUID(),
-    type: "literature",
-    title,
-    authors: opts.authors ?? ["Unknown"],
-    abstract: opts.abstract ?? "",
-    year: opts.year,
-    venue: opts.venue,
-    url: opts.url,
-    citeKey,
-    tags: opts.tags ?? [],
-    pinned: false,
-    selectedForAI: false,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    provenance: {
-      source: "user",
-      sessionId: context2.sessionId,
-      extractedFrom: "user-input"
-    }
-  };
-  require$$1.mkdirSync(PATHS.literature, { recursive: true });
-  const filePath = `${PATHS.literature}/${paper.id}.json`;
-  require$$1.writeFileSync(filePath, JSON.stringify(paper, null, 2));
-  return { success: true, paper, filePath };
-}
-function parseSavePaperArgs(raw) {
-  const flagPattern = /--(\w+)\s+"([^"]+)"|--(\w+)\s+(\S+)/g;
-  const flags = {};
-  let cleaned = raw;
-  let match2;
-  while ((match2 = flagPattern.exec(raw)) !== null) {
-    const key = match2[1] || match2[3];
-    const value = match2[2] || match2[4];
-    flags[key] = value;
-    cleaned = cleaned.replace(match2[0], "");
-  }
-  const title = cleaned.trim();
-  return {
-    title,
-    authors: flags.authors?.split(",").map((a) => a.trim()),
-    year: flags.year ? parseInt(flags.year, 10) : void 0,
-    abstract: flags.abstract,
-    venue: flags.venue,
-    url: flags.url,
-    citeKey: flags.citekey,
-    tags: flags.tags?.split(",").map((t) => t.trim())
-  };
-}
 function saveData(name15, opts, context2) {
   if (!name15) return { success: false, error: "Data name is required." };
   if (!opts.filePath) return { success: false, error: "File path is required (--path)." };
@@ -61399,6 +62619,61 @@ function parseMentions(message) {
   });
   return { cleanMessage, mentions };
 }
+function getCacheKey(filePath, mtime) {
+  const hash = crypto$2.createHash("sha256").update(`${filePath}:${mtime}`).digest("hex").slice(0, 16);
+  const name15 = path$2.basename(filePath).replace(/[^a-zA-Z0-9.-]/g, "_");
+  return `${name15}-${hash}.json`;
+}
+function ensureCacheDir(projectPath2) {
+  const cacheDir = path$2.join(projectPath2, PATHS.documentCache);
+  if (!require$$1.existsSync(cacheDir)) {
+    require$$1.mkdirSync(cacheDir, { recursive: true });
+  }
+  return cacheDir;
+}
+function getCachedMarkdown(filePath, projectPath2) {
+  try {
+    const stat = require$$1.statSync(filePath);
+    const mtime = stat.mtimeMs;
+    const cacheDir = path$2.join(projectPath2, PATHS.documentCache);
+    const cacheKey = getCacheKey(filePath, mtime);
+    const cachePath = path$2.join(cacheDir, cacheKey);
+    if (!require$$1.existsSync(cachePath)) {
+      return null;
+    }
+    const entry = JSON.parse(require$$1.readFileSync(cachePath, "utf-8"));
+    if (entry.sourcePath !== filePath || entry.sourceMtime !== mtime) {
+      return null;
+    }
+    return entry.markdown;
+  } catch {
+    return null;
+  }
+}
+function setCachedMarkdown(filePath, markdown, projectPath2) {
+  try {
+    const stat = require$$1.statSync(filePath);
+    const mtime = stat.mtimeMs;
+    const cacheDir = ensureCacheDir(projectPath2);
+    const cacheKey = getCacheKey(filePath, mtime);
+    const cachePath = path$2.join(cacheDir, cacheKey);
+    const entry = {
+      sourcePath: filePath,
+      sourceMtime: mtime,
+      markdown,
+      cachedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    require$$1.writeFileSync(cachePath, JSON.stringify(entry, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("[document-cache] Failed to cache markdown:", err);
+  }
+}
+function fileUriToPath(uri) {
+  if (!uri.startsWith("file://")) {
+    return null;
+  }
+  return decodeURIComponent(uri.slice(7));
+}
 const MAX_CONTENT_BYTES = 10 * 1024;
 async function resolveMentions(mentions, projectPath2) {
   return Promise.all(mentions.map((ref) => resolveOne(ref, projectPath2)));
@@ -61451,10 +62726,31 @@ function resolveEntity(ref, dir, entityType) {
   }
   return { ref, label: ref.raw, content: "", error: `Could not resolve: ${ref.raw}` };
 }
+const DOCUMENT_EXTENSIONS = /* @__PURE__ */ new Set([".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".epub"]);
 function resolveFile(ref, projectPath2) {
   const filePath = path$2.resolve(projectPath2, ref.key);
   if (!require$$1.existsSync(filePath)) {
     return { ref, label: `file: ${ref.key}`, content: "", error: `File not found: ${ref.key}` };
+  }
+  const ext2 = ref.key.toLowerCase().match(/\.[^.]+$/)?.[0] || "";
+  if (DOCUMENT_EXTENSIONS.has(ext2)) {
+    const absPath = filePath.startsWith("/") ? filePath : path$2.resolve(process.cwd(), filePath);
+    const cached2 = getCachedMarkdown(absPath, projectPath2);
+    if (cached2) {
+      return {
+        ref,
+        label: `file: ${ref.key}`,
+        content: `[Document: ${ref.key}]
+
+${cached2}`
+      };
+    }
+    const content = `[Document file: ${ref.key}]
+Path: ${absPath}
+Type: ${ext2.slice(1).toUpperCase()}
+
+To read this document, use the convert_to_markdown tool with URI: file://${absPath}`;
+    return { ref, label: `file: ${ref.key}`, content };
   }
   try {
     const buf = require$$1.readFileSync(filePath);
@@ -61580,10 +62876,22 @@ function getCandidates(projectPath2, typeFilter, query) {
   return candidates;
 }
 let coordinator = null;
+let currentModel = "gpt-5.2";
 let projectPath = "";
 let sessionId = crypto.randomUUID();
+let memoryInitPromise = null;
+async function getMemoryStorage() {
+  if (!projectPath) return null;
+  if (!memoryInitPromise) {
+    const storage = new FileMemoryStorage(projectPath);
+    memoryInitPromise = storage.init().then(() => {
+      return storage;
+    });
+  }
+  return memoryInitPromise;
+}
 function initializeProject(path2) {
-  const dirs = [PATHS.root, PATHS.notes, PATHS.literature, PATHS.data, PATHS.sessions];
+  const dirs = [PATHS.root, PATHS.notes, PATHS.literature, PATHS.data, PATHS.sessions, PATHS.cache, PATHS.documentCache];
   for (const dir of dirs) {
     const fullPath = path$2.join(path2, dir);
     if (!require$$1.existsSync(fullPath)) {
@@ -61617,41 +62925,296 @@ function loadOrCreateSessionId(path2) {
   require$$1.writeFileSync(sessionFile, JSON.stringify({ sessionId: newId }));
   return newId;
 }
-function ensureCoordinator(win) {
+async function ensureCoordinator(win, model) {
+  const requestedModel = model || currentModel;
+  if (coordinator && requestedModel !== currentModel) {
+    coordinator.destroy().catch(() => {
+    });
+    coordinator = null;
+  }
+  currentModel = requestedModel;
   if (!coordinator) {
     const apiKey = process.env.OPENAI_API_KEY || "";
-    coordinator = createCoordinator({
+    win.webContents.send("agent:activity", {
+      type: "system",
+      summary: "Initializing agent (first run may take 1-2 minutes for document processing setup)..."
+    });
+    coordinator = await createCoordinator({
       apiKey,
+      model: currentModel,
       projectPath,
+      sessionId,
+      debug: true,
       onStream: (chunk) => {
         win.webContents.send("agent:stream-chunk", chunk);
       },
-      onToolResult: (tool2, result) => {
+      onToolCall: (tool2, args) => {
+        const summary = formatToolCallSummary(tool2, args);
+        win.webContents.send("agent:activity", {
+          type: "tool-call",
+          tool: tool2,
+          summary
+        });
+      },
+      onToolResult: (tool2, result, args) => {
         if (tool2.startsWith("todo-") && result && typeof result === "object" && "success" in result) {
-          const r = result;
-          if (r.success && r.item) {
-            win.webContents.send("agent:todo-update", r.item);
+          const r2 = result;
+          if (r2.success && r2.item) {
+            win.webContents.send("agent:todo-update", r2.item);
           }
         }
         if ((tool2 === "write" || tool2 === "edit") && result && typeof result === "object" && "success" in result) {
-          const r = result;
-          if (r.success && r.data?.path) {
-            win.webContents.send("agent:file-created", r.data.path);
+          const r2 = result;
+          if (r2.success && r2.data?.path) {
+            win.webContents.send("agent:file-created", r2.data.path);
           }
         }
+        if (tool2 === "convert_to_markdown" && result && typeof result === "object" && "success" in result) {
+          const r2 = result;
+          if (r2.success && r2.data?.content && args && typeof args === "object" && "uri" in args) {
+            const uri = args.uri;
+            const filePath = fileUriToPath(uri);
+            if (filePath && projectPath) {
+              setCachedMarkdown(filePath, r2.data.content, projectPath);
+            }
+          }
+        }
+        if ((tool2 === "save-note" || tool2 === "save-paper") && result && typeof result === "object" && "success" in result) {
+          const r2 = result;
+          if (r2.success) {
+            win.webContents.send("agent:entity-created", {
+              type: tool2 === "save-note" ? "note" : "literature",
+              id: r2.data?.id,
+              title: r2.data?.title
+            });
+          }
+        }
+        const r = result;
+        const success = r?.success !== false;
+        const error = !success ? r?.error || "Unknown error" : void 0;
+        const summary = formatToolResultSummary(tool2, result, args);
+        win.webContents.send("agent:activity", {
+          type: "tool-result",
+          tool: tool2,
+          summary,
+          success,
+          error
+        });
       }
+    });
+    win.webContents.send("agent:activity", {
+      type: "system",
+      summary: "Agent ready"
     });
   }
   return coordinator;
 }
+function getFileName(path2) {
+  if (!path2) return "";
+  return path2.split("/").pop() || path2;
+}
+function formatToolCallSummary(tool2, args) {
+  const a = args;
+  switch (tool2) {
+    case "literature-search": {
+      const query = a?.query || "";
+      return `Search: ${query.slice(0, 40)}${query.length > 40 ? "..." : ""}`;
+    }
+    case "data-analyze": {
+      const file = getFileName(a?.filePath || "");
+      return `Analyze: ${file || "data"}`;
+    }
+    case "read": {
+      const file = getFileName(a?.path || a?.file || "");
+      return `Read ${file}`;
+    }
+    case "write": {
+      const file = getFileName(a?.path || a?.file || "");
+      return `Write ${file}`;
+    }
+    case "edit": {
+      const file = getFileName(a?.path || a?.file || "");
+      return `Edit ${file}`;
+    }
+    case "glob": {
+      const pattern = a?.pattern || "";
+      return `Glob ${pattern}`;
+    }
+    case "grep": {
+      const pattern = a?.pattern || "";
+      return `Grep "${pattern.slice(0, 30)}${pattern.length > 30 ? "..." : ""}"`;
+    }
+    case "bash": {
+      const cmd = a?.command || "";
+      const shortCmd = cmd.split("\n")[0].slice(0, 40);
+      return `Run: ${shortCmd}${cmd.length > 40 ? "..." : ""}`;
+    }
+    case "memory-put":
+    case "ctx-set": {
+      const key = a?.key || "";
+      return key ? `Store: ${key.slice(0, 40)}` : "Store memory";
+    }
+    case "memory-get":
+    case "ctx-get": {
+      const key = a?.key || a?.query || "";
+      return key ? `Recall: ${key.slice(0, 40)}` : "Recall memory";
+    }
+    case "ctx-expand": {
+      const seg = a?.segment || a?.query || "";
+      return `Expand: ${seg.slice(0, 40)}`;
+    }
+    case "fetch": {
+      const url = a?.url || "";
+      try {
+        const u = new URL(url);
+        return `Fetch: ${u.hostname}`;
+      } catch {
+        return `Fetch: ${url.slice(0, 40)}`;
+      }
+    }
+    case "convert_to_markdown": {
+      const uri = a?.uri || "";
+      const filename = getFileName(uri);
+      return `Convert: ${filename}`;
+    }
+    case "save-note": {
+      const title = a?.title || "note";
+      return `Save note: ${title.slice(0, 35)}`;
+    }
+    case "save-paper": {
+      const title = a?.title || "paper";
+      return `Save paper: ${title.slice(0, 35)}`;
+    }
+    default:
+      if (tool2.startsWith("todo-")) {
+        const action = tool2.replace("todo-", "");
+        const subject = a?.subject || a?.id || "";
+        return subject ? `Task ${action}: ${subject.slice(0, 40)}` : `Task ${action}`;
+      }
+      return tool2;
+  }
+}
+function formatToolResultSummary(tool2, result, args) {
+  const r = result;
+  const a = args;
+  const success = r?.success !== false;
+  if (!success) {
+    const error = r?.error || "failed";
+    return `Failed: ${error.slice(0, 50)}`;
+  }
+  switch (tool2) {
+    case "literature-search": {
+      const data = r?.data;
+      const local = data?.localPapersUsed;
+      const external = data?.externalPapersUsed;
+      const saved = data?.savedPapers;
+      let summary = "Search done";
+      if (typeof local === "number" && typeof external === "number") {
+        summary = `Found ${local + external} papers`;
+        if (local > 0) summary += ` (${local} local)`;
+      }
+      if (saved && saved > 0) summary += `, saved ${saved}`;
+      return summary;
+    }
+    case "read": {
+      const data = r?.data;
+      const content = data?.content || "";
+      const lines = content.split("\n").length;
+      const file = getFileName(a?.path || a?.file || "");
+      return `Read ${file} (${lines} lines)`;
+    }
+    case "write": {
+      const data = r?.data;
+      const file = getFileName(data?.path || a?.path || "");
+      return `Wrote ${file}`;
+    }
+    case "edit": {
+      const file = getFileName(a?.path || a?.file || "");
+      return `Edited ${file}`;
+    }
+    case "bash": {
+      const cmd = a?.command || "";
+      const shortCmd = cmd.split(/[\n|&;]/)[0].trim().slice(0, 25);
+      const data = r?.data;
+      const output = data?.output || data?.stdout || "";
+      const lines = output.split("\n").filter(Boolean).length;
+      return lines > 0 ? `${shortCmd}: ${lines} lines` : `${shortCmd}: done`;
+    }
+    case "memory-put":
+    case "ctx-set": {
+      const key = a?.key || "";
+      return key ? `Stored "${key.slice(0, 30)}"` : "Stored memory";
+    }
+    case "memory-get":
+    case "ctx-get": {
+      const key = a?.key || a?.query || "";
+      const data = r?.data;
+      const value = data?.value || data?.content;
+      const keyPart = key ? `"${key.slice(0, 25)}"` : "memory";
+      return value ? `Recalled ${keyPart}` : `${keyPart}: not found`;
+    }
+    case "ctx-expand": {
+      const seg = a?.segment || a?.query || "";
+      return seg ? `Expanded "${seg.slice(0, 30)}"` : "Expanded context";
+    }
+    case "glob": {
+      const pattern = a?.pattern || "";
+      const data = r?.data;
+      const files = data?.files || data?.matches || [];
+      return `${pattern}: ${files.length} files`;
+    }
+    case "grep": {
+      const pattern = a?.pattern || "";
+      const data = r?.data;
+      const matches = data?.matches || data?.results || [];
+      return `"${pattern.slice(0, 20)}": ${matches.length} matches`;
+    }
+    case "fetch": {
+      const url = a?.url || "";
+      try {
+        const u = new URL(url);
+        return `Fetched ${u.hostname}`;
+      } catch {
+        return "Fetched URL";
+      }
+    }
+    case "convert_to_markdown": {
+      const uri = a?.uri || "";
+      const file = getFileName(uri);
+      return `Converted ${file}`;
+    }
+    case "save-note": {
+      const data = r?.data;
+      const title = data?.title || "";
+      return title ? `Saved note: ${title.slice(0, 30)}` : "Saved note";
+    }
+    case "save-paper": {
+      const data = r?.data;
+      const title = data?.title || "";
+      return title ? `Saved paper: ${title.slice(0, 30)}` : "Saved paper";
+    }
+    default:
+      if (tool2.startsWith("todo-")) {
+        const action = tool2.replace("todo-", "");
+        const data = r?.data;
+        const item = data ?? r?.item ?? r;
+        const subject = item?.subject || item?.id || "";
+        if (action === "add") return subject ? `Task added: ${subject.slice(0, 35)}` : "Task added";
+        if (action === "complete") return subject ? `Task done: ${subject.slice(0, 35)}` : "Task done";
+        if (action === "remove") return subject ? `Task removed: ${subject.slice(0, 35)}` : "Task removed";
+        return subject ? `Task updated: ${subject.slice(0, 35)}` : "Task updated";
+      }
+      return `${tool2}: done`;
+  }
+}
 function registerIpcHandlers(win) {
-  electron.ipcMain.handle("agent:send", async (_e, message, rawMentions) => {
+  electron.ipcMain.handle("agent:send", async (_e, message, rawMentions, model) => {
     if (!projectPath) {
       const errResult = { success: false, error: "No project folder selected. Please select a folder first." };
       win.webContents.send("agent:done", errResult);
       return errResult;
     }
-    const coord = ensureCoordinator(win);
+    const coord = await ensureCoordinator(win, model);
     win.webContents.send("agent:todo-clear");
     let mentions = [];
     if (rawMentions) {
@@ -61690,6 +63253,20 @@ function registerIpcHandlers(win) {
     if (!projectPath) return { success: false, error: "No project folder selected." };
     return deleteEntity(id);
   });
+  electron.ipcMain.handle("cmd:rename-note", (_e, id, newTitle) => {
+    if (!projectPath) return { success: false, error: "No project folder selected." };
+    const filePath = path$2.join(projectPath, PATHS.notes, `${id}.json`);
+    if (!require$$1.existsSync(filePath)) return { success: false, error: "Note not found." };
+    try {
+      const note = JSON.parse(require$$1.readFileSync(filePath, "utf-8"));
+      note.title = newTitle;
+      note.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      require$$1.writeFileSync(filePath, JSON.stringify(note, null, 2));
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
   electron.ipcMain.handle("cmd:save-note", (_e, title, content, messageId) => {
     if (!projectPath) return { success: false, error: "No project folder selected." };
     return saveNote(title, content, [], { sessionId }, false, messageId);
@@ -61723,6 +63300,47 @@ function registerIpcHandlers(win) {
   electron.ipcMain.handle("cmd:get-pinned", () => {
     if (!projectPath) return [];
     return getPinned();
+  });
+  electron.ipcMain.handle("cmd:list-memory", async () => {
+    const storage = await getMemoryStorage();
+    if (!storage) return [];
+    const { items } = await storage.list({ status: "active", limit: 200 });
+    return items.filter((item) => item.namespace !== "research").map((item) => ({
+      id: item.id,
+      type: "memory",
+      title: item.key,
+      pinned: item.tags.includes("pinned"),
+      selectedForAI: item.tags.includes("selected"),
+      namespace: item.namespace,
+      valueText: item.valueText,
+      createdAt: item.createdAt
+    }));
+  });
+  electron.ipcMain.handle("cmd:memory-pin", async (_e, id) => {
+    const storage = await getMemoryStorage();
+    if (!storage) return null;
+    const { items } = await storage.list({ status: "active", limit: 500 });
+    const item = items.find((i) => i.id === id);
+    if (!item) return null;
+    const newTags = item.tags.includes("pinned") ? item.tags.filter((t) => t !== "pinned") : [...item.tags, "pinned"];
+    return storage.update(item.namespace, item.key, { tags: newTags });
+  });
+  electron.ipcMain.handle("cmd:memory-select", async (_e, id) => {
+    const storage = await getMemoryStorage();
+    if (!storage) return null;
+    const { items } = await storage.list({ status: "active", limit: 500 });
+    const item = items.find((i) => i.id === id);
+    if (!item) return null;
+    const newTags = item.tags.includes("selected") ? item.tags.filter((t) => t !== "selected") : [...item.tags, "selected"];
+    return storage.update(item.namespace, item.key, { tags: newTags });
+  });
+  electron.ipcMain.handle("cmd:memory-delete", async (_e, id) => {
+    const storage = await getMemoryStorage();
+    if (!storage) return false;
+    const { items } = await storage.list({ status: "active", limit: 500 });
+    const item = items.find((i) => i.id === id);
+    if (!item) return false;
+    return storage.delete(item.namespace, item.key);
   });
   electron.ipcMain.handle("mention:candidates", (_e, query, type) => {
     if (!projectPath) return [];
@@ -61824,6 +63442,7 @@ function registerIpcHandlers(win) {
         await coordinator.destroy();
         coordinator = null;
       }
+      memoryInitPromise = null;
       sessionId = loadOrCreateSessionId(projectPath);
       return { projectPath, sessionId };
     }

@@ -56,7 +56,9 @@ function emitTodo(cb: ToolResultCallback | undefined, item: TodoItem): void {
 export function createSubagentTools(
   apiKey: string,
   model?: string,
-  onToolResult?: ToolResultCallback
+  onToolResult?: ToolResultCallback,
+  projectPath?: string,
+  sessionId?: string
 ): {
   literatureSearchTool: Tool
   dataAnalyzeTool: Tool
@@ -66,7 +68,7 @@ export function createSubagentTools(
 
   const literatureSearchTool = defineTool({
     name: 'literature-search',
-    description: 'Search academic papers on a topic using a multi-agent literature research team. Returns a structured summary with papers, themes, key findings, and research gaps. IMPORTANT: Always include relevant context from the conversation to help the search planner generate better queries.',
+    description: 'Search academic papers on a topic using a multi-agent literature research team. Returns a structured summary with papers, themes, key findings, and research gaps. Also auto-saves high-relevance papers to the local library for future searches. IMPORTANT: Always include relevant context from the conversation to help the search planner generate better queries.',
     parameters: {
       query: { type: 'string', description: 'The research topic or question to search for', required: true },
       context: { type: 'string', description: 'Additional context from the conversation that helps refine the search (e.g. researcher names, institutions, specific fields, paper titles mentioned by the user)', required: false }
@@ -74,7 +76,12 @@ export function createSubagentTools(
     execute: async (input: { query: string; context?: string }) => {
       try {
         if (!literatureTeam) {
-          literatureTeam = createLiteratureTeam({ apiKey, model })
+          literatureTeam = createLiteratureTeam({
+            apiKey,
+            model,
+            projectPath,
+            sessionId: sessionId || 'default'
+          })
         }
 
         // Emit initial todo items so the panel shows what's happening
@@ -124,12 +131,25 @@ export function createSubagentTools(
         unsub3()
 
         if (result.success) {
+          // Emit activity log for auto-saved papers
+          if (result.savedPapers && result.savedPapers > 0) {
+            emitTodo(onToolResult, makeTodoItem(
+              'lit-save',
+              `Saved ${result.savedPapers} papers to library`,
+              'done'
+            ))
+          }
+
           return {
             success: true,
             data: {
               summary: result.summary,
               steps: result.steps,
-              durationMs: result.durationMs
+              durationMs: result.durationMs,
+              // Local paper caching stats
+              savedPapers: result.savedPapers,
+              localPapersUsed: result.localPapersUsed,
+              externalPapersUsed: result.externalPapersUsed
             }
           }
         }

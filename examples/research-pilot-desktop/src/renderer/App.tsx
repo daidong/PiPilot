@@ -9,6 +9,7 @@ import { useSessionStore } from './stores/session-store'
 import { useEntityStore } from './stores/entity-store'
 import { useUIStore } from './stores/ui-store'
 import { useProgressStore } from './stores/progress-store'
+import { useActivityStore } from './stores/activity-store'
 
 const api = (window as any).api
 
@@ -91,6 +92,14 @@ export default function App() {
     })
     const unsub4 = api.onTodoClear(() => {
       useProgressStore.getState().clear()
+      useActivityStore.getState().clear()
+    })
+    const unsubActivity = api.onActivity((event: any) => {
+      useActivityStore.getState().push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: new Date().toISOString(),
+        ...event
+      })
     })
 
     const unsub1 = api.onStreamChunk((chunk: string) => appendChunk(chunk))
@@ -109,6 +118,10 @@ export default function App() {
     const unsub5 = api.onFileCreated((path: string) => {
       useUIStore.getState().addWorkingFile(path)
     })
+    const unsub6 = api.onEntityCreated(() => {
+      // Refresh entity lists when agent creates notes/papers
+      refreshEntities()
+    })
 
     return () => {
       unsub1()
@@ -116,6 +129,8 @@ export default function App() {
       unsub3()
       unsub4()
       unsub5()
+      unsub6()
+      unsubActivity()
     }
   }, [hasProject])
 

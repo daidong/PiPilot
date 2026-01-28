@@ -1,5 +1,6 @@
 import React from 'react'
 import { ProgressSteps } from '../right/ProgressSteps'
+import { ActivityLog } from '../right/ActivityLog'
 import { WorkingFolder } from '../right/WorkingFolder'
 import { ContextChips } from '../right/ContextChips'
 
@@ -16,6 +17,7 @@ export function RightSidebar() {
         <WorkingFolder />
         <ContextChips />
         <ProgressSteps />
+        <ActivityLog />
       </div>
     </aside>
   )

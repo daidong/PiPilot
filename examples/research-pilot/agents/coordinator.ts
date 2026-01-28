@@ -12,6 +12,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { createAgent, packs, definePack } from '../../../src/index.js'
 import { createSubagentTools } from './subagent-tools.js'
+import { createSaveNoteTool, createSavePaperTool } from '../tools/entity-tools.js'
 import type { Agent } from '../../../src/types/agent.js'
 import type { Runtime } from '../../../src/types/runtime.js'
 import type { ContextSelection } from '../../../src/types/context-pipeline.js'
@@ -26,11 +27,14 @@ const SYSTEM_PROMPT = `You are Research Pilot, an AI research assistant. You are
 
 ## 0) Available Tools
 
-Tools: read, write, edit, glob, grep, literature-search, data-analyze, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
+Tools: read, write, edit, glob, grep, convert_to_markdown, literature-search, data-analyze, save-note, save-paper, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
 
 Sub-agents: **literature-search** (academic paper search), **data-analyze** (dataset analysis: JSON/CSV/TSV).
+Document conversion: **convert_to_markdown** — converts PDF, Word, Excel, PowerPoint, images (with OCR), audio, HTML, and more to markdown text. Use this to extract content from document files. Pass file:// URI, e.g. \`convert_to_markdown({ uri: "file:///path/to/document.pdf" })\`.
+Entity saving: **save-note** (creates note in Notes list), **save-paper** (creates literature entry in Literature list). Use these instead of write when saving research notes or paper references — they create proper entities visible in the UI.
 File storage: notes=${PATHS.notes}, literature=${PATHS.literature}, data=${PATHS.data}.
 Do NOT search the web manually — delegate to literature-search.
+IMPORTANT: When calling literature-search, ALWAYS pass the \`context\` parameter with relevant conversation background (user's research goals, mentioned researchers, specific fields, paper titles). This dramatically improves search quality.
 
 ### Operating Loop
 
@@ -274,25 +278,38 @@ export interface CoordinatorConfig {
   sessionId?: string
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown) => void
-  onToolResult?: (tool: string, result: unknown) => void
+  onToolResult?: (tool: string, result: unknown, args?: unknown) => void
 }
 
-export function createCoordinator(config: CoordinatorConfig): {
+export async function createCoordinator(config: CoordinatorConfig): Promise<{
   agent: Agent
   chat: (message: string, mentions?: ResolvedMention[]) => Promise<{ success: boolean; response?: string; error?: string }>
   destroy: () => Promise<void>
-} {
+}> {
   const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, onStream, onToolCall, onToolResult } = config
 
-  // Create subagent tools with the coordinator's API key and onToolResult
-  // so the team pipeline can emit progress updates to the desktop app's panel
-  const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(apiKey, model, onToolResult)
+  // Create subagent tools with the coordinator's API key, onToolResult, and projectPath
+  // so the team pipeline can emit progress updates and save papers to the local library
+  const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(
+    apiKey,
+    model,
+    onToolResult,
+    projectPath,
+    sessionId
+  )
+
+  // Create entity tools for saving notes and papers to the project
+  const saveNoteTool = createSaveNoteTool(sessionId || crypto.randomUUID(), projectPath)
+  const savePaperTool = createSavePaperTool(sessionId || crypto.randomUUID(), projectPath)
+
+  // Initialize MarkItDown MCP pack for document processing (PDF, Word, Excel, PPT, images)
+  const documentsPack = await packs.documents({ timeout: 90000 })
 
   const subagentPack = definePack({
     id: 'subagents',
     name: 'Subagent Tools',
-    description: 'Literature search and data analysis subagent tools',
-    tools: [literatureSearchTool, dataAnalyzeTool]
+    description: 'Literature search, data analysis, and entity saving tools',
+    tools: [literatureSearchTool, dataAnalyzeTool, saveNoteTool, savePaperTool]
   })
 
   const agent = createAgent({
@@ -311,6 +328,7 @@ export function createCoordinator(config: CoordinatorConfig): {
       packs.todo(),           // todo-add, todo-update, todo-complete, todo-remove
       packs.sessionHistory(), // messageStore for cross-turn history persistence
       packs.contextPipeline(), // ctx-expand, history compression, 5-phase assembly
+      documentsPack,          // convert_to_markdown for PDF, Word, Excel, PPT, images
       subagentPack             // literature-search, data-analyze
     ],
     onStream,

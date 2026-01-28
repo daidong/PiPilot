@@ -237,6 +237,8 @@ export function createStdioMCPProvider(options: {
   toolPrefix?: string
   /** Request timeout in ms. Default: 30000. Increase for slow-starting servers like MarkItDown. */
   timeout?: number
+  /** Server startup timeout in ms. Default: 10000. Increase for servers that need time to initialize (e.g., MarkItDown Python venv). */
+  startTimeout?: number
 }): MCPProvider {
   return new MCPProvider({
     id: options.id,
@@ -251,7 +253,8 @@ export function createStdioMCPProvider(options: {
           args: options.args,
           cwd: options.cwd,
           env: options.env,
-          timeout: options.timeout
+          timeout: options.timeout,
+          startTimeout: options.startTimeout
         },
         toolPrefix: options.toolPrefix
       }

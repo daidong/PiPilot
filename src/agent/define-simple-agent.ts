@@ -20,6 +20,7 @@
 
 import { generateText, type LanguageModel } from 'ai'
 import type { TokenUsage } from '../llm/provider.types.js'
+import { getModel } from '../llm/models.js'
 
 // ============================================================================
 // Types
@@ -188,7 +189,7 @@ export function defineAgent(definition: AgentDefinition): Agent {
     id,
     description,
     model: modelId,
-    temperature = 0.7,
+    temperature: explicitTemperature,
     maxTokens,
     system,
     prompt: buildPrompt,
@@ -196,6 +197,11 @@ export function defineAgent(definition: AgentDefinition): Agent {
     preProcess,
     postProcess
   } = definition
+
+  // Check if model supports temperature, use default only if supported
+  const modelConfig = modelId ? getModel(modelId) : undefined
+  const supportsTemperature = modelConfig?.capabilities.temperature !== false
+  const temperature = explicitTemperature ?? (supportsTemperature ? 0.7 : undefined)
 
   const { jsonMode = true, maxRetries = 2 } = config
 
@@ -229,12 +235,18 @@ export function defineAgent(definition: AgentDefinition): Agent {
         attempts++
 
         try {
+          // Reinforce JSON output instruction when jsonMode is enabled
+          const effectiveSystem = jsonMode
+            ? `${system}\n\nIMPORTANT: You MUST respond with valid JSON only. No prose, no markdown, no explanations — just the JSON object.`
+            : system
+
           // Call LLM (SDK 6: maxOutputTokens instead of maxTokens)
           const result = await generateText({
             model,
-            system,
+            system: effectiveSystem,
             prompt: userPrompt,
-            temperature,
+            // Only pass temperature if model supports it
+            ...(temperature !== undefined && { temperature }),
             maxOutputTokens: maxTokens,
             // Use JSON mode if enabled (OpenAI/compatible models)
             ...(jsonMode && {

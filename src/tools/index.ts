@@ -1,15 +1,15 @@
 /**
- * Tools - 内置工具导出
+ * Tools - Built-in tool exports
  *
- * 分层架构：
- * - safeTools: 核心安全工具（默认启用）
- * - execTools: 执行能力（需显式启用）
- * - networkTools: 网络能力（需显式启用）
- * - computeTools: 计算能力（需显式启用）
- * - browserTools: 浏览器自动化（需显式启用）
+ * Layered architecture:
+ * - safeTools: Core safe tools (enabled by default)
+ * - execTools: Execution capability (requires explicit enable)
+ * - networkTools: Network capability (requires explicit enable)
+ * - computeTools: Compute capability (requires explicit enable)
+ * - browserTools: Browser automation (requires explicit enable)
  */
 
-// ============ 工具导出 ============
+// ============ Tool exports ============
 
 export { read } from './read.js'
 export { write } from './write.js'
@@ -32,7 +32,7 @@ export { todoUpdate } from './todo-update.js'
 export { todoComplete } from './todo-complete.js'
 export { todoRemove } from './todo-remove.js'
 
-// ============ 类型导出 ============
+// ============ Type exports ============
 
 export type { ReadInput, ReadOutput } from './read.js'
 export type { WriteInput, WriteOutput } from './write.js'
@@ -55,7 +55,7 @@ export type { TodoUpdateInput, TodoUpdateOutput } from './todo-update.js'
 export type { TodoCompleteInput, TodoCompleteOutput } from './todo-complete.js'
 export type { TodoRemoveInput, TodoRemoveOutput } from './todo-remove.js'
 
-// ============ 分层工具集 ============
+// ============ Layered tool sets ============
 
 import type { Tool } from '../types/tool.js'
 import { read } from './read.js'
@@ -80,14 +80,14 @@ import { todoComplete } from './todo-complete.js'
 import { todoRemove } from './todo-remove.js'
 
 /**
- * 安全核心工具（默认启用）
+ * Safe core tools (enabled by default)
  *
- * 特点：
- * - 无外部依赖
- * - 沙箱内运行
- * - 可审计
+ * Properties:
+ * - No external dependencies
+ * - Runs within sandbox
+ * - Auditable
  *
- * 包含：ctx-get, read, write, edit, glob, grep
+ * Contains: ctx-get, ctx-expand, read, write, edit, glob, grep
  */
 export const safeTools: Tool<any, any>[] = [
   ctxGet,
@@ -100,30 +100,30 @@ export const safeTools: Tool<any, any>[] = [
 ]
 
 /**
- * 执行能力工具（需显式启用）
+ * Execution capability tools (requires explicit enable)
  *
- * 风险等级：高
- * 包含：bash
+ * Risk level: high
+ * Contains: bash
  */
 export const execTools: Tool<any, any>[] = [
   bash
 ]
 
 /**
- * 网络能力工具（需显式启用）
+ * Network capability tools (requires explicit enable)
  *
- * 风险等级：中
- * 包含：fetch
+ * Risk level: elevated
+ * Contains: fetch
  */
 export const networkTools: Tool<any, any>[] = [
   fetchTool
 ]
 
 /**
- * 计算能力工具（需显式启用）
+ * Compute capability tools (requires explicit enable)
  *
- * 风险等级：中（成本型）
- * 包含：llm-call, llm-expand, llm-filter
+ * Risk level: elevated (cost-based)
+ * Contains: llm-call, llm-expand, llm-filter
  */
 export const computeTools: Tool<any, any>[] = [
   llmCall,
@@ -132,10 +132,10 @@ export const computeTools: Tool<any, any>[] = [
 ]
 
 /**
- * 浏览器自动化工具（需显式启用）
+ * Browser automation tools (requires explicit enable)
  *
- * 风险等级：中
- * 包含：browser, browse
+ * Risk level: elevated
+ * Contains: browser, browse
  */
 export const browserTools: Tool<any, any>[] = [
   browser,
@@ -181,19 +181,19 @@ export const builtinTools: Tool<any, any>[] = [
 ]
 
 /**
- * 获取工具 by name
+ * Get a builtin tool by name
  */
 export function getBuiltinTool(name: string): Tool | undefined {
   return builtinTools.find(t => t.name === name)
 }
 
 /**
- * 工具风险等级
+ * Tool risk level
  */
 export type ToolRiskLevel = 'safe' | 'elevated' | 'high'
 
 /**
- * 工具元信息
+ * Tool metadata
  */
 export interface ToolMeta {
   name: string
@@ -204,7 +204,7 @@ export interface ToolMeta {
 }
 
 /**
- * 内置工具元信息
+ * Built-in tool metadata
  */
 export const toolMeta: Record<string, ToolMeta> = {
   'ctx-get': {
@@ -226,84 +226,84 @@ export const toolMeta: Record<string, ToolMeta> = {
     riskLevel: 'safe',
     category: 'safe',
     requiresExplicitEnable: false,
-    description: '读取文件内容'
+    description: 'Read file contents'
   },
   write: {
     name: 'write',
     riskLevel: 'safe',
     category: 'safe',
     requiresExplicitEnable: false,
-    description: '写入文件'
+    description: 'Write file contents'
   },
   edit: {
     name: 'edit',
     riskLevel: 'safe',
     category: 'safe',
     requiresExplicitEnable: false,
-    description: '编辑文件'
+    description: 'Edit file contents'
   },
   glob: {
     name: 'glob',
     riskLevel: 'safe',
     category: 'safe',
     requiresExplicitEnable: false,
-    description: '文件模式匹配'
+    description: 'File pattern matching'
   },
   grep: {
     name: 'grep',
     riskLevel: 'safe',
     category: 'safe',
     requiresExplicitEnable: false,
-    description: '内容搜索'
+    description: 'Content search'
   },
   bash: {
     name: 'bash',
     riskLevel: 'high',
     category: 'exec',
     requiresExplicitEnable: true,
-    description: '执行 shell 命令'
+    description: 'Execute shell commands'
   },
   fetch: {
     name: 'fetch',
     riskLevel: 'elevated',
     category: 'network',
     requiresExplicitEnable: true,
-    description: 'HTTP 请求'
+    description: 'HTTP requests'
   },
   'llm-call': {
     name: 'llm-call',
     riskLevel: 'elevated',
     category: 'compute',
     requiresExplicitEnable: true,
-    description: 'LLM 子调用'
+    description: 'LLM sub-call'
   },
   'llm-expand': {
     name: 'llm-expand',
     riskLevel: 'elevated',
     category: 'compute',
     requiresExplicitEnable: true,
-    description: 'LLM 文本扩展（查询重写、同义词、多角度重述）'
+    description: 'LLM text expansion (query rewriting, synonyms, rephrasing)'
   },
   'llm-filter': {
     name: 'llm-filter',
     riskLevel: 'elevated',
     category: 'compute',
     requiresExplicitEnable: true,
-    description: 'LLM 相关性过滤（评分与筛选）'
+    description: 'LLM relevance filtering (scoring and selection)'
   },
   browser: {
     name: 'browser',
     riskLevel: 'elevated',
     category: 'browser',
     requiresExplicitEnable: true,
-    description: '浏览器操作'
+    description: 'Browser operations'
   },
   browse: {
     name: 'browse',
     riskLevel: 'elevated',
     category: 'browser',
     requiresExplicitEnable: true,
-    description: '浏览网页'
+    description: 'Browse web pages'
   },
   'memory-put': {
     name: 'memory-put',
@@ -357,14 +357,14 @@ export const toolMeta: Record<string, ToolMeta> = {
 }
 
 /**
- * 按风险等级获取工具
+ * Get tools by risk level
  */
 export function getToolsByRiskLevel(level: ToolRiskLevel): Tool[] {
   return builtinTools.filter(t => toolMeta[t.name]?.riskLevel === level)
 }
 
 /**
- * 按类别获取工具
+ * Get tools by category
  */
 export function getToolsByCategory(category: ToolMeta['category']): Tool[] {
   return builtinTools.filter(t => toolMeta[t.name]?.category === category)

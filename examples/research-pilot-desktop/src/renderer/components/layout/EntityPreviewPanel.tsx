@@ -1,13 +1,15 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { X, Pin, CheckSquare, StickyNote, BookOpen, Database, Trash2 } from 'lucide-react'
+import remarkGfm from 'remark-gfm'
+import { X, Pin, CheckSquare, StickyNote, BookOpen, Database, Brain, Trash2, Pencil } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
 
 const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={16} className="text-yellow-500" />,
   paper: <BookOpen size={16} className="text-blue-500" />,
-  data: <Database size={16} className="text-green-500" />
+  data: <Database size={16} className="text-green-500" />,
+  memory: <Brain size={16} className="text-purple-500" />
 }
 
 export function EntityPreviewPanel() {
@@ -16,7 +18,16 @@ export function EntityPreviewPanel() {
   const togglePin = useEntityStore((s) => s.togglePin)
   const toggleSelect = useEntityStore((s) => s.toggleSelect)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
+  const renameNote = useEntityStore((s) => s.renameNote)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+
+  // Reset editing state when entity changes
+  useEffect(() => {
+    setEditing(false)
+    setEditTitle(entity?.title ?? '')
+  }, [entity?.id])
 
   if (!entity) return null
 
@@ -30,16 +41,54 @@ export function EntityPreviewPanel() {
     closePreview()
   }
 
-  const content = entity.content || entity.abstract || entity.filePath || 'No content available.'
+  const startEditing = () => {
+    setEditTitle(entity.title)
+    setEditing(true)
+  }
+
+  const commitRename = async () => {
+    const trimmed = editTitle.trim()
+    if (trimmed && trimmed !== entity.title) {
+      await renameNote(entity.id, trimmed)
+    }
+    setEditing(false)
+  }
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+    if (e.key === 'Escape') { setEditing(false) }
+  }
+
+  const content = entity.content || entity.abstract || entity.valueText || entity.filePath || 'No content available.'
 
   return (
     <div className="w-[480px] flex flex-col border-l t-border t-bg-base pt-10 shrink-0">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b t-border">
         {typeIcons[entity.type] || null}
-        <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
+        {editing ? (
+          <input
+            autoFocus
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={handleRenameKeyDown}
+            className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-orange-400 outline-none min-w-0"
+          />
+        ) : (
+          <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
+        )}
 
         <div className="flex items-center gap-1">
+          {entity.type === 'note' && !editing && (
+            <button
+              onClick={startEditing}
+              className="p-1 rounded transition-colors t-text-muted hover:text-orange-400"
+              title="Rename note"
+            >
+              <Pencil size={14} />
+            </button>
+          )}
           <button
             onClick={() => togglePin(entity.id)}
             className={`p-1 rounded transition-colors ${entity.pinned ? 'text-orange-400' : 't-text-muted t-bg-hover'}`}
@@ -83,6 +132,13 @@ export function EntityPreviewPanel() {
         </div>
       )}
 
+      {entity.type === 'memory' && (
+        <div className="px-4 py-2 border-b t-border text-xs t-text-secondary space-y-1">
+          {entity.namespace && <p>Namespace: <code className="t-bg-surface px-1 rounded">{entity.namespace}</code></p>}
+          {entity.createdAt && <p>Created: {new Date(entity.createdAt).toLocaleString()}</p>}
+        </div>
+      )}
+
       {entity.type === 'data' && entity.schema && (
         <div className="px-4 py-2 border-b t-border text-xs t-text-secondary">
           <p>File: {entity.name}</p>
@@ -92,8 +148,10 @@ export function EntityPreviewPanel() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
-        <div className="prose prose-sm max-w-none t-text">
-          <ReactMarkdown>{typeof content === 'string' ? content : JSON.stringify(content, null, 2)}</ReactMarkdown>
+        <div className="md-prose" style={{ color: 'var(--color-text)' }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {typeof content === 'string' ? content : JSON.stringify(content, null, 2)}
+          </ReactMarkdown>
         </div>
       </div>
     </div>

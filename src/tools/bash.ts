@@ -1,5 +1,5 @@
 /**
- * bash - 执行命令工具
+ * bash - Command execution tool
  */
 
 import { defineTool } from '../factories/define-tool.js'
@@ -19,21 +19,21 @@ export interface BashOutput {
 
 export const bash: Tool<BashInput, BashOutput> = defineTool({
   name: 'bash',
-  description: '执行 bash 命令。用于运行系统命令、构建脚本等。',
+  description: 'Execute bash commands. Used to run system commands, build scripts, etc.',
   parameters: {
     command: {
       type: 'string',
-      description: '要执行的命令',
+      description: 'Command to execute',
       required: true
     },
     cwd: {
       type: 'string',
-      description: '工作目录（相对于项目根目录）',
+      description: 'Working directory (relative to project root)',
       required: false
     },
     timeout: {
       type: 'number',
-      description: '超时时间（毫秒），默认 60000',
+      description: 'Timeout in milliseconds, defaults to 60000',
       required: false,
       default: 60000
     }

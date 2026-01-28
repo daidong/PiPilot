@@ -1,7 +1,7 @@
 "use strict";
 const electron = require("electron");
 const api = {
-  sendMessage: (message, rawMentions) => electron.ipcRenderer.invoke("agent:send", message, rawMentions),
+  sendMessage: (message, rawMentions, model) => electron.ipcRenderer.invoke("agent:send", message, rawMentions, model),
   onStreamChunk: (cb) => {
     const handler = (_, chunk) => cb(chunk);
     electron.ipcRenderer.on("agent:stream-chunk", handler);
@@ -17,6 +17,7 @@ const api = {
   listData: () => electron.ipcRenderer.invoke("cmd:list-data"),
   search: (query) => electron.ipcRenderer.invoke("cmd:search", query),
   deleteEntity: (id) => electron.ipcRenderer.invoke("cmd:delete", id),
+  renameNote: (id, newTitle) => electron.ipcRenderer.invoke("cmd:rename-note", id, newTitle),
   saveNote: (title, content, messageId) => electron.ipcRenderer.invoke("cmd:save-note", title, content, messageId),
   savePaper: (argsStr) => electron.ipcRenderer.invoke("cmd:save-paper", argsStr),
   saveData: (argsStr) => electron.ipcRenderer.invoke("cmd:save-data", argsStr),
@@ -25,6 +26,10 @@ const api = {
   clearSelections: () => electron.ipcRenderer.invoke("cmd:clear-selections"),
   togglePin: (id) => electron.ipcRenderer.invoke("cmd:pin", id),
   getPinned: () => electron.ipcRenderer.invoke("cmd:get-pinned"),
+  listMemory: () => electron.ipcRenderer.invoke("cmd:list-memory"),
+  toggleMemoryPin: (id) => electron.ipcRenderer.invoke("cmd:memory-pin", id),
+  toggleMemorySelect: (id) => electron.ipcRenderer.invoke("cmd:memory-select", id),
+  deleteMemory: (id) => electron.ipcRenderer.invoke("cmd:memory-delete", id),
   getCandidates: (partial, type) => electron.ipcRenderer.invoke("mention:candidates", partial, type),
   onTodoUpdate: (cb) => {
     const handler = (_, item) => cb(item);
@@ -35,6 +40,16 @@ const api = {
     const handler = () => cb();
     electron.ipcRenderer.on("agent:todo-clear", handler);
     return () => electron.ipcRenderer.removeListener("agent:todo-clear", handler);
+  },
+  onActivity: (cb) => {
+    const handler = (_, event) => cb(event);
+    electron.ipcRenderer.on("agent:activity", handler);
+    return () => electron.ipcRenderer.removeListener("agent:activity", handler);
+  },
+  onEntityCreated: (cb) => {
+    const handler = (_, info) => cb(info);
+    electron.ipcRenderer.on("agent:entity-created", handler);
+    return () => electron.ipcRenderer.removeListener("agent:entity-created", handler);
   },
   onFileCreated: (cb) => {
     const handler = (_, path) => cb(path);

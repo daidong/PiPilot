@@ -15,6 +15,8 @@ export const PATHS = {
   literature: '.research-pilot/literature',
   data: '.research-pilot/data',
   sessions: '.research-pilot/sessions',
+  cache: '.research-pilot/cache',
+  documentCache: '.research-pilot/cache/documents',
   project: '.research-pilot/project.json'
 } as const
 
@@ -78,6 +80,19 @@ export interface Literature extends ResearchEntity {
   venue?: string
   url?: string
   citeKey: string
+  // Search metadata (added for local paper caching)
+  /** Terms that led to this paper being discovered */
+  searchKeywords?: string[]
+  /** Source where paper was found: 'semantic_scholar' | 'arxiv' | 'openalex' | 'dblp' | 'local' */
+  externalSource?: string
+  /** Relevance score from reviewer (0-10) */
+  relevanceScore?: number
+  /** Citation count if available from source */
+  citationCount?: number
+  /** Digital Object Identifier for deduplication */
+  doi?: string
+  /** Full BibTeX entry for citation export */
+  bibtex?: string
 }
 
 /**

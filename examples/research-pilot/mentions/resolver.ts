@@ -9,6 +9,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join, resolve } from 'path'
 import type { MentionRef } from './parser.js'
 import { PATHS, Entity, Note, Literature, DataAttachment } from '../types.js'
+import { getCachedMarkdown } from './document-cache.js'
 
 const MAX_CONTENT_BYTES = 10 * 1024 // 10KB cap
 
@@ -97,11 +98,37 @@ function resolveEntity(
   return { ref, label: ref.raw, content: '', error: `Could not resolve: ${ref.raw}` }
 }
 
+// File extensions that require document conversion (binary formats)
+const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt', '.epub'])
+
 function resolveFile(ref: MentionRef, projectPath: string): ResolvedMention {
   const filePath = resolve(projectPath, ref.key)
   if (!existsSync(filePath)) {
     return { ref, label: `file: ${ref.key}`, content: '', error: `File not found: ${ref.key}` }
   }
+
+  // Check if this is a document that needs conversion
+  const ext = ref.key.toLowerCase().match(/\.[^.]+$/)?.[0] || ''
+  if (DOCUMENT_EXTENSIONS.has(ext)) {
+    const absPath = filePath.startsWith('/') ? filePath : resolve(process.cwd(), filePath)
+
+    // Check if we have a cached markdown version
+    const cached = getCachedMarkdown(absPath, projectPath)
+    if (cached) {
+      // Return cached markdown directly - no need to call convert_to_markdown
+      return {
+        ref,
+        label: `file: ${ref.key}`,
+        content: `[Document: ${ref.key}]\n\n${cached}`
+      }
+    }
+
+    // No cache - instruct coordinator to use convert_to_markdown
+    const content = `[Document file: ${ref.key}]\nPath: ${absPath}\nType: ${ext.slice(1).toUpperCase()}\n\nTo read this document, use the convert_to_markdown tool with URI: file://${absPath}`
+    return { ref, label: `file: ${ref.key}`, content }
+  }
+
+  // For text files, read content directly
   try {
     const buf = readFileSync(filePath)
     const content = buf.slice(0, MAX_CONTENT_BYTES).toString('utf-8')

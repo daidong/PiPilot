@@ -40,6 +40,9 @@ export interface ElectronAPI {
   // Activity feed
   onActivity: (cb: (event: any) => void) => () => void
 
+  // Entity creation notifications
+  onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
+
   // File tracking
   onFileCreated: (cb: (path: string) => void) => () => void
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
@@ -109,6 +112,12 @@ const api: ElectronAPI = {
     const handler = (_: any, event: any) => cb(event)
     ipcRenderer.on('agent:activity', handler)
     return () => ipcRenderer.removeListener('agent:activity', handler)
+  },
+
+  onEntityCreated: (cb) => {
+    const handler = (_: any, info: { type: string; id: string; title: string }) => cb(info)
+    ipcRenderer.on('agent:entity-created', handler)
+    return () => ipcRenderer.removeListener('agent:entity-created', handler)
   },
 
   onFileCreated: (cb) => {

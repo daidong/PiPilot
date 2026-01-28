@@ -230,6 +230,7 @@ export class MCPClient extends EventEmitter {
       return new StdioTransport({
         stdio: transport,
         timeout: transport.timeout ?? this.config.connectTimeout,
+        startTimeout: transport.startTimeout,
         debug: this.config.debug
       })
     } else if (transport.type === 'http') {

@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useState } from 'react'
-import { StickyNote, BookOpen, Database, Upload, MessageSquare, Trash2 } from 'lucide-react'
+import { StickyNote, BookOpen, Database, Brain, Upload, MessageSquare, Trash2 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
@@ -7,7 +7,8 @@ import { useChatStore } from '../../stores/chat-store'
 const tabs = [
   { key: 'notes' as const, label: 'Notes', icon: StickyNote },
   { key: 'data' as const, label: 'Data', icon: Database },
-  { key: 'papers' as const, label: 'Papers', icon: BookOpen }
+  { key: 'papers' as const, label: 'Papers', icon: BookOpen },
+  { key: 'memory' as const, label: 'Mem', icon: Brain }
 ]
 
 function EntityRow({ entity }: { entity: EntityItem }) {
@@ -31,12 +32,10 @@ function EntityRow({ entity }: { entity: EntityItem }) {
     e.stopPropagation()
     if (!confirmDelete) {
       setConfirmDelete(true)
-      // Auto-reset after 2 seconds if not confirmed
       setTimeout(() => setConfirmDelete(false), 2000)
       return
     }
     await deleteEntity(entity.id)
-    // Close preview if this entity was being previewed
     if (previewEntity?.id === entity.id) closePreview()
     setConfirmDelete(false)
   }
@@ -94,7 +93,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, papers, data, refreshAll } = useEntityStore()
+  const { notes, papers, data, memory, refreshAll } = useEntityStore()
 
   useEffect(() => {
     refreshAll()
@@ -103,7 +102,8 @@ export function EntityTabs() {
   const entities: Record<string, EntityItem[]> = {
     notes,
     papers,
-    data
+    data,
+    memory
   }
 
   const items = entities[leftTab] || []
@@ -142,17 +142,19 @@ export function EntityTabs() {
         ))}
       </div>
 
-      {/* Drop zone */}
-      <div
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
-      >
-        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
-        <p className="text-xs t-text-muted">
-          Drop files here to add {leftTab}
-        </p>
-      </div>
+      {/* Drop zone (hidden for memory tab) */}
+      {leftTab !== 'memory' && (
+        <div
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
+        >
+          <Upload size={16} className="mx-auto mb-1 t-text-muted" />
+          <p className="text-xs t-text-muted">
+            Drop files here to add {leftTab}
+          </p>
+        </div>
+      )}
 
       {/* Entity list */}
       <div className="px-1 py-2 space-y-0.5">

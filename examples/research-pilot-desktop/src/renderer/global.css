@@ -30,11 +30,17 @@ html.dark {
   --color-text: #f5f5f5;
   --color-text-secondary: #a3a3a3;
   --color-text-muted: #525252;
-  --color-bubble-user: rgba(234, 88, 12, 0.8);
+  --color-bubble-user: rgba(154, 52, 18, 0.92);
   --color-bubble-assistant: #262626;
   --color-input-bg: #171717;
   --color-input-border: #404040;
   --color-input-focus: rgba(249, 115, 22, 0.5);
+  /* Accent colors for markdown elements */
+  --color-accent: #f97316;
+  --color-accent-soft: #fb923c;
+  --color-code-text: #fbbf24;
+  --color-code-bg: rgba(251, 191, 36, 0.08);
+  --color-code-border: rgba(251, 191, 36, 0.2);
   color-scheme: dark;
 }
 
@@ -48,11 +54,17 @@ html.light {
   --color-text: #171717;
   --color-text-secondary: #525252;
   --color-text-muted: #a3a3a3;
-  --color-bubble-user: rgba(234, 88, 12, 0.85);
+  --color-bubble-user: rgba(154, 52, 18, 0.88);
   --color-bubble-assistant: #f5f5f5;
   --color-input-bg: #ffffff;
   --color-input-border: #d4d4d4;
   --color-input-focus: rgba(249, 115, 22, 0.4);
+  /* Accent colors for markdown elements */
+  --color-accent: #ea580c;
+  --color-accent-soft: #f97316;
+  --color-code-text: #b45309;
+  --color-code-bg: rgba(180, 83, 9, 0.08);
+  --color-code-border: rgba(180, 83, 9, 0.2);
   color-scheme: light;
 }
 
@@ -82,11 +94,13 @@ body {
 }
 
 /* Markdown prose styling inside assistant bubbles */
+/* Compact layout inspired by chat interfaces, warm orange accent */
 .md-prose {
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.5;
 }
 .md-prose p {
-  margin: 0.4em 0;
+  margin: 0.3em 0;
 }
 .md-prose p:first-child {
   margin-top: 0;
@@ -94,33 +108,40 @@ body {
 .md-prose p:last-child {
   margin-bottom: 0;
 }
+/* Headers: compact margins, h3 uses accent color for hierarchy */
 .md-prose h1, .md-prose h2, .md-prose h3, .md-prose h4 {
   font-weight: 600;
-  margin: 0.8em 0 0.3em;
+  margin: 0.6em 0 0.25em;
 }
-.md-prose h1 { font-size: 1.25em; }
+.md-prose h1 { font-size: 1.2em; }
 .md-prose h2 { font-size: 1.1em; }
-.md-prose h3 { font-size: 1em; }
+.md-prose h3 { font-size: 1em; color: var(--color-accent-soft); }
+.md-prose h4 { font-size: 0.95em; color: var(--color-text-secondary); }
+/* Lists: very compact for chat readability */
 .md-prose ul, .md-prose ol {
-  margin: 0.4em 0;
-  padding-left: 1.4em;
+  margin: 0.25em 0;
+  padding-left: 1.3em;
 }
 .md-prose li {
-  margin: 0.15em 0;
+  margin: 2px 0;
 }
 .md-prose ul { list-style-type: disc; }
 .md-prose ol { list-style-type: decimal; }
+/* Inline code: semi-transparent bg + accent text + thin border (tech feel) */
 .md-prose code {
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Fira Code', monospace;
   font-size: 0.85em;
-  padding: 0.15em 0.35em;
+  padding: 0.1em 0.35em;
   border-radius: 4px;
-  background: var(--color-bg-hover);
+  color: var(--color-code-text);
+  background: var(--color-code-bg);
+  border: 1px solid var(--color-code-border);
 }
+/* Code blocks: darker bg, clean border */
 .md-prose pre {
-  margin: 0.6em 0;
-  padding: 0.75em 1em;
-  border-radius: 8px;
+  margin: 0.5em 0;
+  padding: 0.65em 0.9em;
+  border-radius: 6px;
   overflow-x: auto;
   background: var(--color-bg-base) !important;
   border: 1px solid var(--color-border);
@@ -128,23 +149,28 @@ body {
 .md-prose pre code {
   padding: 0;
   background: none;
+  border: none;
+  color: var(--color-text);
   font-size: 0.82em;
-  line-height: 1.5;
+  line-height: 1.45;
 }
+/* Blockquote: orange left border + subtle bg */
 .md-prose blockquote {
-  margin: 0.5em 0;
-  padding: 0.2em 0.8em;
-  border-left: 3px solid var(--color-text-muted);
+  margin: 0.4em 0;
+  padding: 0.15em 0.75em;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-bg-hover);
   color: var(--color-text-secondary);
 }
+/* Tables: compact */
 .md-prose table {
   width: 100%;
   border-collapse: collapse;
-  margin: 0.5em 0;
+  margin: 0.4em 0;
   font-size: 0.9em;
 }
 .md-prose th, .md-prose td {
-  padding: 0.35em 0.6em;
+  padding: 0.3em 0.5em;
   border: 1px solid var(--color-border);
   text-align: left;
 }
@@ -152,18 +178,32 @@ body {
   font-weight: 600;
   background: var(--color-bg-hover);
 }
+/* Links: accent color */
 .md-prose a {
-  color: #f97316;
+  color: var(--color-accent);
   text-decoration: underline;
+  text-decoration-color: var(--color-code-border);
+  text-underline-offset: 2px;
+}
+.md-prose a:hover {
+  text-decoration-color: var(--color-accent);
 }
 .md-prose hr {
   border: none;
   border-top: 1px solid var(--color-border);
-  margin: 0.8em 0;
+  margin: 0.6em 0;
 }
 .md-prose img {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: 6px;
+}
+/* Strong/emphasis */
+.md-prose strong {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.md-prose em {
+  font-style: italic;
 }
 
 /* Scrollbar styling */

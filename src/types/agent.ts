@@ -78,7 +78,7 @@ export interface AgentConfig {
   /** 工具调用处理器 */
   onToolCall?: (tool: string, input: unknown) => void
   /** 工具结果处理器 */
-  onToolResult?: (tool: string, result: unknown) => void
+  onToolResult?: (tool: string, result: unknown, args?: unknown) => void
   /** Persistent session ID (reuse across restarts for history continuity) */
   sessionId?: string
 }

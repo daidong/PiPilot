@@ -25,6 +25,8 @@ export interface MCPStdioConfig {
   env?: Record<string, string>
   /** 请求超时（毫秒）。Default: 30000. Increase for slow-starting servers. */
   timeout?: number
+  /** 启动超时（毫秒）。Default: 10000. Increase for servers that need time to initialize (e.g., MarkItDown Python venv). */
+  startTimeout?: number
 }
 
 /**

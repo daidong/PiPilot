@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
-type LeftTab = 'notes' | 'data' | 'papers'
+type LeftTab = 'notes' | 'data' | 'papers' | 'memory'
 
 export interface WorkingFile {
   path: string
@@ -52,9 +52,9 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  theme: 'dark',
+  theme: 'light',
   leftTab: 'notes',
-  selectedModel: 'gpt-4o',
+  selectedModel: 'gpt-5.2',
   isIdle: true,
   rightSidebarCollapsed: false,
   leftSidebarCollapsed: false,

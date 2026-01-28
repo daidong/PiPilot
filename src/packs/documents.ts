@@ -11,8 +11,10 @@ import type { Pack } from '../types/pack.js'
 export interface DocumentsPackOptions {
   /** Tool name prefix. Default: none */
   toolPrefix?: string
-  /** Request timeout in ms. Default: 60000 (MarkItDown needs time to init Python venv) */
+  /** Request timeout in ms. Default: 60000 */
   timeout?: number
+  /** Server startup timeout in ms. Default: 120000 (MarkItDown needs time to init Python venv on first run) */
+  startTimeout?: number
 }
 
 /**
@@ -33,7 +35,7 @@ export interface DocumentsPackOptions {
  * ```
  */
 export async function documents(options: DocumentsPackOptions = {}): Promise<Pack> {
-  const { toolPrefix, timeout = 60000 } = options
+  const { toolPrefix, timeout = 60000, startTimeout = 120000 } = options
 
   const provider = createStdioMCPProvider({
     id: 'markitdown',
@@ -41,7 +43,8 @@ export async function documents(options: DocumentsPackOptions = {}): Promise<Pac
     command: 'npx',
     args: ['-y', 'markitdown-mcp-npx'],
     toolPrefix,
-    timeout  // MarkItDown needs extra time to initialize Python venv
+    timeout,
+    startTimeout  // MarkItDown needs extra time to initialize Python venv on first run
   })
 
   const packs = await provider.createPacks()

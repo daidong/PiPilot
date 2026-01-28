@@ -73,7 +73,8 @@ function SelectionBookmark() {
     if (saveState !== 'idle' || !selectedText) return
     setSaveState('saving')
     try {
-      const title = `Selection — ${new Date().toLocaleString()}`
+      const first = selectedText.split(/[.!?\n]/)[0].trim()
+      const title = first.length > 60 ? first.slice(0, 57) + '…' : first || 'Untitled selection'
       await api.saveNote(title, selectedText, selectedMsgId || undefined)
       setSaveState('saved')
       if (selectedMsgId) markSaved(selectedMsgId)
@@ -134,7 +135,8 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
     if (saveState !== 'idle') return
     setSaveState('saving')
     try {
-      const title = `Note from ${new Date(msg.timestamp).toLocaleString()}`
+      const first = msg.content.replace(/^#+\s*/, '').split(/[.!?\n]/)[0].trim()
+      const title = first.length > 60 ? first.slice(0, 57) + '…' : first || 'Untitled note'
       await api.saveNote(title, msg.content, msg.id)
       setSaveState('saved')
       markSaved(msg.id)
@@ -157,13 +159,9 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
         }}
         data-msg-id={msg.id}
       >
-        {isUser ? (
-          <p className="leading-relaxed">{msg.content}</p>
-        ) : (
-          <div className="md-prose" style={{ color: 'var(--color-text)' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-          </div>
-        )}
+        <div className="md-prose" style={{ color: isUser ? 'inherit' : 'var(--color-text)' }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+        </div>
 
         {!isUser && (
           <button

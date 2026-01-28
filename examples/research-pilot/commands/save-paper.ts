@@ -9,6 +9,7 @@
  */
 
 import { writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import { PATHS, Literature, CLIContext } from '../types.js'
 
 export interface SavePaperResult {
@@ -31,6 +32,13 @@ export function savePaper(
     url?: string
     citeKey?: string
     tags?: string[]
+    // New search metadata fields for local paper caching
+    searchKeywords?: string[]
+    externalSource?: string
+    relevanceScore?: number
+    citationCount?: number
+    doi?: string
+    bibtex?: string
   },
   context: CLIContext
 ): SavePaperResult {
@@ -56,14 +64,27 @@ export function savePaper(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     provenance: {
-      source: 'user',
+      source: opts.externalSource ? 'agent' : 'user',
       sessionId: context.sessionId,
-      extractedFrom: 'user-input'
-    }
+      agentId: opts.externalSource ? 'literature-team' : undefined,
+      extractedFrom: opts.externalSource ? 'agent-response' : 'user-input'
+    },
+    // Search metadata fields
+    searchKeywords: opts.searchKeywords,
+    externalSource: opts.externalSource,
+    relevanceScore: opts.relevanceScore,
+    citationCount: opts.citationCount,
+    doi: opts.doi,
+    bibtex: opts.bibtex
   }
 
-  mkdirSync(PATHS.literature, { recursive: true })
-  const filePath = `${PATHS.literature}/${paper.id}.json`
+  // Use projectPath if provided, otherwise fall back to relative path
+  const literaturePath = context.projectPath
+    ? join(context.projectPath, PATHS.literature)
+    : PATHS.literature
+
+  mkdirSync(literaturePath, { recursive: true })
+  const filePath = join(literaturePath, `${paper.id}.json`)
   writeFileSync(filePath, JSON.stringify(paper, null, 2))
 
   return { success: true, paper, filePath }

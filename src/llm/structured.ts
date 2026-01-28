@@ -241,7 +241,8 @@ export async function generateStructured<T>(
       const baseOptions = {
         model,
         system: currentSystem,
-        temperature,
+        // Only pass temperature if explicitly set (some models like reasoning models don't support it)
+        ...(temperature !== undefined && { temperature }),
         maxOutputTokens: maxTokens,
         abortSignal,
         // AI SDK v6 stable output API
