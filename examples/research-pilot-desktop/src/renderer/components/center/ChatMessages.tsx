@@ -149,8 +149,8 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} group`}>
       <div
-        className={`relative max-w-[80%] rounded-2xl px-4 py-3 text-sm ${
-          isUser ? 'text-white' : 't-text assistant-bubble'
+        className={`relative max-w-[80%] rounded-2xl px-4 py-3 text-sm t-text ${
+          !isUser ? 'assistant-bubble' : ''
         }${!isUser && isSaved ? ' border-l-2 border-green-500' : ''}`}
         style={{
           background: isUser
@@ -159,7 +159,7 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
         }}
         data-msg-id={msg.id}
       >
-        <div className="md-prose" style={{ color: isUser ? 'inherit' : 'var(--color-text)' }}>
+        <div className="md-prose" style={{ color: 'var(--color-text)' }}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
         </div>
 

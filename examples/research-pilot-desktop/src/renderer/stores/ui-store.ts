@@ -47,6 +47,8 @@ interface UIState {
   setIdle: (idle: boolean) => void
   toggleRightSidebar: () => void
   addWorkingFile: (path: string) => void
+  setWorkingFiles: (paths: string[]) => void
+  clearWorkingFiles: () => void
   openPreview: (entity: EntityItem) => void
   closePreview: () => void
 }
@@ -69,12 +71,31 @@ export const useUIStore = create<UIState>((set) => ({
   toggleRightSidebar: () => set((s) => ({ rightSidebarCollapsed: !s.rightSidebarCollapsed })),
   addWorkingFile: (path) =>
     set((s) => {
+      // Skip if already exists (check first to avoid unnecessary state updates)
+      if (s.workingFiles.some((f) => f.path === path)) {
+        return s
+      }
       const name = path.split('/').pop() || path
-      const existing = s.workingFiles.filter((f) => f.path !== path)
       return {
-        workingFiles: [{ path, name, accessedAt: Date.now() }, ...existing]
+        workingFiles: [{ path, name, accessedAt: Date.now() }, ...s.workingFiles]
       }
     }),
+  setWorkingFiles: (paths) =>
+    set(() => {
+      // Deduplicate by path, keeping first occurrence
+      const seen = new Set<string>()
+      const files: WorkingFile[] = []
+      const now = Date.now()
+      for (const path of paths) {
+        if (!seen.has(path)) {
+          seen.add(path)
+          const name = path.split('/').pop() || path
+          files.push({ path, name, accessedAt: now })
+        }
+      }
+      return { workingFiles: files }
+    }),
+  clearWorkingFiles: () => set({ workingFiles: [] }),
   openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true }),
   closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false })
 }))

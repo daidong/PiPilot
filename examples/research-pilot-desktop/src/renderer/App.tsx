@@ -82,9 +82,7 @@ export default function App() {
 
     // Load project root files into working folder
     api.listRootFiles().then((files: { path: string; name: string }[]) => {
-      for (const f of files) {
-        useUIStore.getState().addWorkingFile(f.path)
-      }
+      useUIStore.getState().setWorkingFiles(files.map((f) => f.path))
     })
 
     const unsub3 = api.onTodoUpdate((item: any) => {

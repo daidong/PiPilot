@@ -1,21 +1,24 @@
-import React, { useState } from 'react'
-import { FileText, ChevronDown, ChevronUp } from 'lucide-react'
+import React from 'react'
+import { FileText } from 'lucide-react'
 import { useUIStore, type WorkingFile } from '../../stores/ui-store'
 
 const api = (window as any).api
-const MAX_VISIBLE = 5
+
+// Each row is ~24px (py-1 = 4px * 2 + text ~16px), show max 5
+const MAX_HEIGHT = 120
 
 export function WorkingFolder() {
   const workingFiles = useUIStore((s) => s.workingFiles)
-  const [expanded, setExpanded] = useState(false)
-
-  const visibleFiles = expanded ? workingFiles : workingFiles.slice(0, MAX_VISIBLE)
-  const hiddenCount = workingFiles.length - MAX_VISIBLE
 
   return (
     <div>
       <h3 className="text-xs font-semibold t-text-muted uppercase tracking-wider mb-2">
         Working Folder
+        {workingFiles.length > 0 && (
+          <span className="ml-1.5 text-[10px] t-text-muted font-normal">
+            ({workingFiles.length})
+          </span>
+        )}
       </h3>
 
       {workingFiles.length === 0 ? (
@@ -28,29 +31,13 @@ export function WorkingFolder() {
           </p>
         </div>
       ) : (
-        <div className="space-y-1">
-          {visibleFiles.map((f) => (
+        <div
+          className="space-y-1 overflow-y-auto"
+          style={{ maxHeight: MAX_HEIGHT }}
+        >
+          {workingFiles.map((f) => (
             <FileRow key={f.path} file={f} />
           ))}
-
-          {hiddenCount > 0 && (
-            <button
-              onClick={() => setExpanded(!expanded)}
-              className="flex items-center gap-1 w-full px-2 py-1.5 text-xs t-text-muted hover:t-text-secondary transition-colors"
-            >
-              {expanded ? (
-                <>
-                  <ChevronUp size={12} />
-                  Show less
-                </>
-              ) : (
-                <>
-                  <ChevronDown size={12} />
-                  {hiddenCount} more file{hiddenCount > 1 ? 's' : ''}
-                </>
-              )}
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -84,9 +71,9 @@ function FileRow({ file }: { file: WorkingFile }) {
   return (
     <button
       onClick={handleClick}
-      className="flex items-center gap-2 px-2 py-1.5 rounded-md t-bg-hover transition-colors text-sm w-full text-left cursor-pointer"
+      className="flex items-center gap-1.5 px-2 py-1 rounded t-bg-hover transition-colors text-xs w-full text-left cursor-pointer"
     >
-      <FileText size={13} className="t-text-muted shrink-0" />
+      <FileText size={11} className="t-text-muted shrink-0" />
       <span className="t-text-secondary truncate">{file.name}</span>
     </button>
   )
