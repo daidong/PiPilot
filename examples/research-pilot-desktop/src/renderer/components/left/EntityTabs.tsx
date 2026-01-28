@@ -126,7 +126,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
     <div>
       <div
         ref={rowRef}
-        className="group flex items-center gap-2 px-3 py-2 rounded-lg t-bg-hover transition-colors cursor-pointer"
+        className="group flex items-center gap-1.5 px-2 py-1 rounded t-bg-hover transition-colors cursor-pointer"
         onClick={() => openPreview(entity)}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
@@ -139,10 +139,10 @@ function EntityRow({ entity }: { entity: EntityItem }) {
             onMouseLeave={handleMouseLeave}
           />
         )}
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+        <span className={`w-1 h-1 rounded-full shrink-0 ${
           entity.pinned ? 'bg-orange-400' : entity.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
         }`} />
-        <span className="text-sm t-text truncate flex-1">{entity.title}</span>
+        <span className="text-xs t-text truncate flex-1">{entity.title}</span>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={(e) => { e.stopPropagation(); togglePin(entity.id) }}
@@ -172,11 +172,11 @@ function EntityRow({ entity }: { entity: EntityItem }) {
       {messageId && (
         <button
           onClick={handleProvenanceClick}
-          className="flex items-center gap-1.5 ml-6 pl-3 py-0.5 text-[11px] t-text-muted hover:text-orange-400 transition-colors border-l t-border"
+          className="flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-orange-400 transition-colors border-l t-border"
           title="Scroll to source message"
         >
-          <MessageSquare size={10} />
-          <span>from chat reply</span>
+          <MessageSquare size={9} />
+          <span>from chat</span>
         </button>
       )}
     </div>

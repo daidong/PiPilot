@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { StickyNote, BookOpen, Database, FileText, AtSign } from 'lucide-react'
+import React, { useEffect, useState, useMemo } from 'react'
+import { StickyNote, BookOpen, Database, FileText, AtSign, Brain } from 'lucide-react'
 
 const api = (window as any).api
 
@@ -18,16 +18,45 @@ interface Props {
 }
 
 const typeIcons: Record<string, React.ReactNode> = {
-  note: <StickyNote size={14} className="text-yellow-500" />,
-  paper: <BookOpen size={14} className="text-blue-500" />,
-  data: <Database size={14} className="text-green-500" />,
-  file: <FileText size={14} className="t-text-secondary" />
+  note: <StickyNote size={13} className="text-yellow-500" />,
+  paper: <BookOpen size={13} className="text-blue-500" />,
+  data: <Database size={13} className="text-green-500" />,
+  memory: <Brain size={13} className="text-purple-500" />,
+  file: <FileText size={13} className="t-text-secondary" />
 }
+
+const typeLabels: Record<string, string> = {
+  note: 'Notes',
+  paper: 'Papers',
+  data: 'Data',
+  memory: 'Memory',
+  file: 'Files'
+}
+
+const typeOrder = ['note', 'paper', 'data', 'memory', 'file']
 
 export function MentionPopover({ query, onSelect, onClose }: Props) {
   const [candidates, setCandidates] = useState<MentionCandidate[]>([])
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [loading, setLoading] = useState(true)
+
+  // Group candidates by type
+  const grouped = useMemo(() => {
+    const groups: Record<string, MentionCandidate[]> = {}
+    for (const c of candidates) {
+      if (!groups[c.type]) groups[c.type] = []
+      groups[c.type].push(c)
+    }
+    // Return in defined order
+    return typeOrder
+      .filter((t) => groups[t]?.length > 0)
+      .map((t) => ({ type: t, items: groups[t] }))
+  }, [candidates])
+
+  // Flat list for keyboard navigation
+  const flatList = useMemo(() => {
+    return grouped.flatMap((g) => g.items)
+  }, [grouped])
 
   useEffect(() => {
     setLoading(true)
@@ -50,61 +79,78 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
       } else if (e.key === 'ArrowDown') {
         e.preventDefault()
         e.stopPropagation()
-        setSelectedIdx((s) => Math.min(s + 1, candidates.length - 1))
+        setSelectedIdx((s) => Math.min(s + 1, flatList.length - 1))
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
         e.stopPropagation()
         setSelectedIdx((s) => Math.max(s - 1, 0))
       } else if (e.key === 'Enter' || e.key === 'Tab') {
-        if (candidates[selectedIdx]) {
+        if (flatList[selectedIdx]) {
           e.preventDefault()
           e.stopPropagation()
-          const c = candidates[selectedIdx]
+          const c = flatList[selectedIdx]
           onSelect(`@${c.type}:${c.value}`)
         }
       }
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [candidates, selectedIdx, onSelect, onClose])
+  }, [flatList, selectedIdx, onSelect, onClose])
+
+  // Track flat index for rendering
+  let flatIndex = -1
 
   return (
     <div
-      className="absolute z-50 w-72 max-h-56 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
+      className="absolute z-50 w-72 max-h-64 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
       style={{ bottom: '100%', left: 48, marginBottom: 8 }}
     >
-      <div className="px-3 py-2 border-b t-border flex items-center gap-2 text-xs t-text-secondary">
-        <AtSign size={12} />
-        <span>Mention an entity{query ? `: "${query}"` : ''}</span>
+      <div className="px-3 py-1.5 border-b t-border flex items-center gap-2 text-xs t-text-secondary">
+        <AtSign size={11} />
+        <span>Mention{query ? `: "${query}"` : ''}</span>
       </div>
 
       {loading ? (
         <div className="px-3 py-3 text-xs t-text-muted">Loading...</div>
-      ) : candidates.length === 0 ? (
+      ) : flatList.length === 0 ? (
         <div className="px-3 py-3 text-xs t-text-muted">
           {query
-            ? `No matches for "${query}". Try @note:, @paper:, @data:, or @file:`
+            ? `No matches for "${query}"`
             : 'Type to search notes, papers, data, or files'}
         </div>
       ) : (
-        candidates.map((c, i) => (
-          <button
-            key={`${c.type}-${c.value}`}
-            onMouseDown={(e) => {
-              e.preventDefault()
-              onSelect(`@${c.type}:${c.value}`)
-            }}
-            className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left transition-colors ${
-              i === selectedIdx ? 't-bg-elevated t-text' : 't-text-secondary t-bg-hover'
-            }`}
-          >
-            {typeIcons[c.type] || <AtSign size={14} className="t-text-muted" />}
-            <span className="truncate flex-1">{c.label}</span>
-            {c.detail && (
-              <span className="text-xs t-text-muted truncate max-w-[80px]">{c.detail}</span>
-            )}
-            <span className="text-xs t-text-muted">{c.type}</span>
-          </button>
+        grouped.map((group) => (
+          <div key={group.type}>
+            {/* Category header */}
+            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider t-text-muted t-bg-base sticky top-0 flex items-center gap-1.5">
+              {typeIcons[group.type]}
+              {typeLabels[group.type] || group.type}
+              <span className="font-normal">({group.items.length})</span>
+            </div>
+            {/* Items in category */}
+            {group.items.map((c) => {
+              flatIndex++
+              const idx = flatIndex
+              return (
+                <button
+                  key={`${c.type}-${c.value}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    onSelect(`@${c.type}:${c.value}`)
+                  }}
+                  onMouseEnter={() => setSelectedIdx(idx)}
+                  className={`flex items-center gap-1.5 w-full px-3 py-1 text-xs text-left transition-colors ${
+                    idx === selectedIdx ? 't-bg-elevated t-text' : 't-text-secondary t-bg-hover'
+                  }`}
+                >
+                  <span className="truncate flex-1">{c.label}</span>
+                  {c.detail && (
+                    <span className="text-[10px] t-text-muted truncate max-w-[60px]">{c.detail}</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
         ))
       )}
     </div>
