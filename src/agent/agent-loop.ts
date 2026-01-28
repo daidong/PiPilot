@@ -52,12 +52,17 @@ export interface AgentLoopConfig {
   maxTokens?: number
   /** Temperature */
   temperature?: number
+  /** Reasoning effort for reasoning models (low, medium, high) */
+  reasoningEffort?: 'low' | 'medium' | 'high'
   /** Streaming text callback */
   onText?: (text: string) => void
   /** Tool call callback */
   onToolCall?: (tool: string, input: unknown) => void
   /** Tool result callback */
   onToolResult?: (tool: string, result: unknown) => void
+
+  /** Enable debug logging (prints full LLM payload to stderr) */
+  debug?: boolean
 
   /**
    * Token budget configuration (optional)
@@ -197,6 +202,17 @@ export class AgentLoop {
 
         let llmError: Error | undefined
 
+        // Debug: log full LLM payload to stderr
+        if (this.config.debug) {
+          console.error('[AgentLoop:debug] === LLM Request Payload ===')
+          console.error('[AgentLoop:debug] System prompt length:', systemPrompt.length)
+          console.error('[AgentLoop:debug] System prompt:\n', systemPrompt)
+          console.error('[AgentLoop:debug] Messages count:', messagesToSend.length)
+          console.error('[AgentLoop:debug] Messages:\n', JSON.stringify(messagesToSend, null, 2))
+          console.error('[AgentLoop:debug] Tools:', tools.map(t => t.name).join(', '))
+          console.error('[AgentLoop:debug] === End Payload ===')
+        }
+
         const response = await streamWithCallbacks(
           this.client,
           {
@@ -204,7 +220,8 @@ export class AgentLoop {
             messages: messagesToSend,
             tools,
             maxTokens: this.config.maxTokens,
-            temperature: this.config.temperature
+            temperature: this.config.temperature,
+            reasoningEffort: this.config.reasoningEffort
           },
           {
             onText: (text) => {

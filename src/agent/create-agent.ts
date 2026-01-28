@@ -19,6 +19,13 @@ import { createLLMClient, detectProviderFromApiKey } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
 import { packs } from '../packs/index.js'
 import {
+  createContextPipeline,
+  createSessionPhase,
+  createIndexPhase,
+  createPinnedPhase,
+  createSelectedPhase
+} from '../context/index.js'
+import {
   tryLoadConfig,
   normalizePackConfigs,
   type AgentYAMLConfig
@@ -176,6 +183,9 @@ export interface CreateAgentOptions extends AgentConfig {
    * When enabled, uses smart context selection to optimize token usage.
    */
   budgetConfig?: BudgetConfig
+
+  /** Enable debug logging (prints full LLM payload to stderr) */
+  debug?: boolean
 }
 
 /**
@@ -189,7 +199,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   }
 
   const agentId = generateId()
-  const sessionId = generateId()
+  const sessionId = config.sessionId ?? generateId()
 
   // 合并配置：参数 > YAML 配置 > 默认值
   // Let the LLM layer use model-specific defaults if not specified
@@ -202,6 +212,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   const effectiveMaxSteps = config.maxSteps
     ?? yamlConfig?.maxSteps
     ?? 30
+
+  const effectiveReasoningEffort = config.reasoningEffort
+    ?? (yamlConfig?.model as any)?.reasoningEffort
 
   const effectiveModel = config.model
     ?? yamlConfig?.model?.default
@@ -354,19 +367,32 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
 
   const systemPrompt = compiledPrompt.render()
 
-  // 创建 AgentLoop
-  let agentLoop: AgentLoop | null = null
+  // Context pipeline for budget-controlled context assembly
+  const contextPipeline = createContextPipeline({
+    phases: [
+      createPinnedPhase(),
+      createSelectedPhase(),
+      createSessionPhase({ maxMessages: 100, includeToolMessages: false }),
+      createIndexPhase()
+    ]
+  })
+
+  let packsInitialized = false
+  let activeAgentLoop: AgentLoop | null = null
 
   const agent: Agent = {
     id: agentId,
     runtime,
 
     async run(prompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
-      // 初始化 Packs
-      for (const pack of packsToLoad) {
-        if (pack.onInit) {
-          await pack.onInit(runtime)
+      // Initialize packs only once
+      if (!packsInitialized) {
+        for (const pack of packsToLoad) {
+          if (pack.onInit) {
+            await pack.onInit(runtime)
+          }
         }
+        packsInitialized = true
       }
 
       // Store selected context in session state for phases to access
@@ -374,26 +400,93 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         runtime.sessionState.set('selectedContext', options.selectedContext)
       }
 
-      agentLoop = new AgentLoop({
+      // Save user message to messageStore BEFORE assembly
+      if (runtime.messageStore) {
+        await runtime.messageStore.appendMessage({
+          sessionId,
+          timestamp: new Date().toISOString(),
+          role: 'user',
+          content: prompt,
+          step: runtime.step
+        })
+      }
+
+      // Assemble budget-controlled history from messageStore via context pipeline
+      let dynamicSystemPrompt = systemPrompt
+      if (runtime.messageStore) {
+        try {
+          const assembled = await contextPipeline.assemble({
+            runtime,
+            totalBudget: tokenBudgetTotal,
+            selectedContext: options?.selectedContext
+          })
+
+          if (assembled.content && assembled.content.trim().length > 0) {
+            // Assembled content already has section headers from each phase
+            // (e.g. ## Pinned Context, ## Selected Context, ## Conversation, etc.)
+            dynamicSystemPrompt = systemPrompt + '\n\n' + assembled.content
+          }
+
+          // Store compressed history on runtime for ctx-expand to use
+          if (assembled.compressedHistory) {
+            runtime.sessionState.set('compressedHistory', assembled.compressedHistory)
+          }
+        } catch (err) {
+          // Pipeline failure is non-fatal; proceed without history
+          if (config.debug) {
+            console.error('[createAgent] Context pipeline assembly failed:', err)
+          }
+        }
+      }
+
+      // Create a FRESH AgentLoop each turn with budget-controlled history in the system prompt
+      const agentLoop = new AgentLoop({
         client: llmClient,
         toolRegistry,
         runtime,
         trace,
-        systemPrompt,
+        systemPrompt: dynamicSystemPrompt,
         maxSteps: effectiveMaxSteps,
         maxTokens: options?.tokenBudget ?? effectiveMaxTokens,
+        reasoningEffort: effectiveReasoningEffort,
         onText: config.onStream,
         onToolCall: config.onToolCall,
         onToolResult: config.onToolResult,
-        // Pass budget config if provided
-        budgetConfig: config.budgetConfig
+        budgetConfig: config.budgetConfig,
+        debug: config.debug
       })
 
-      return agentLoop.run(prompt)
+      activeAgentLoop = agentLoop
+
+      const result = await agentLoop.run(prompt)
+
+      // Persist assistant + tool messages from this turn to messageStore
+      if (runtime.messageStore) {
+        const allMessages = agentLoop.getMessages()
+        // Skip the first message (user prompt) since we already saved it
+        const responseMessages = allMessages.filter(msg => msg.role !== 'user' || msg !== allMessages[0])
+        for (const msg of responseMessages) {
+          const contentStr = typeof msg.content === 'string'
+            ? msg.content
+            : JSON.stringify(msg.content)
+          // Skip if this is the user message we already saved
+          if (msg.role === 'user' && contentStr === prompt) continue
+          await runtime.messageStore.appendMessage({
+            sessionId,
+            timestamp: new Date().toISOString(),
+            role: msg.role as 'user' | 'assistant' | 'tool',
+            content: contentStr,
+            step: runtime.step
+          })
+        }
+      }
+
+      activeAgentLoop = null
+      return result
     },
 
     stop(): void {
-      agentLoop?.stop()
+      activeAgentLoop?.stop()
     },
 
     async destroy(): Promise<void> {

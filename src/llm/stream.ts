@@ -301,7 +301,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
      * 流式生成
      */
     async *stream(options: StreamOptions): AsyncGenerator<StreamEvent> {
-      const { system, messages, tools, maxTokens, temperature, stopSequences } =
+      const { system, messages, tools, maxTokens, temperature, stopSequences, reasoningEffort } =
         options
 
       const streamOptions: Parameters<typeof streamText>[0] = {
@@ -312,12 +312,19 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
         stopSequences
       }
 
-      // 只在模型支持时添加温度
+      // Only add temperature when model supports it
       if (modelConfig?.capabilities.temperature && temperature !== undefined) {
         streamOptions.temperature = temperature
       }
 
-      // 只在模型支持时添加工具
+      // Pass reasoning effort for reasoning models via providerOptions
+      if (modelConfig?.capabilities.reasoning && reasoningEffort) {
+        streamOptions.providerOptions = {
+          openai: { reasoningEffort }
+        }
+      }
+
+      // Only add tools when model supports them
       // SDK 6: strict mode defaults to false per tool, no need to configure globally
       if (tools && tools.length > 0 && supportsTools(clientConfig.model)) {
         streamOptions.tools = convertTools(tools)

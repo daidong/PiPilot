@@ -69,6 +69,8 @@ export interface AgentConfig {
   maxSteps?: number
   /** 最大 token 数 */
   maxTokens?: number
+  /** Reasoning effort for reasoning models (low, medium, high) */
+  reasoningEffort?: 'low' | 'medium' | 'high'
   /** 审批处理器 */
   onApprovalRequired?: (message: string, timeout?: number) => Promise<boolean>
   /** 流式输出处理器 */
@@ -77,6 +79,8 @@ export interface AgentConfig {
   onToolCall?: (tool: string, input: unknown) => void
   /** 工具结果处理器 */
   onToolResult?: (tool: string, result: unknown) => void
+  /** Persistent session ID (reuse across restarts for history continuity) */
+  sessionId?: string
 }
 
 /**
