@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { StickyNote, BookOpen, Database, Brain, Upload, MessageSquare, Trash2 } from 'lucide-react'
+import { StickyNote, BookOpen, Database, Upload, MessageSquare, Trash2 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
@@ -55,8 +55,7 @@ function HoverPreview({
 const tabs = [
   { key: 'notes' as const, label: 'Notes', icon: StickyNote },
   { key: 'data' as const, label: 'Data', icon: Database },
-  { key: 'papers' as const, label: 'Papers', icon: BookOpen },
-  { key: 'memory' as const, label: 'Mem', icon: Brain }
+  { key: 'papers' as const, label: 'Papers', icon: BookOpen }
 ]
 
 function EntityRow({ entity }: { entity: EntityItem }) {
@@ -186,7 +185,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, papers, data, memory, refreshAll } = useEntityStore()
+  const { notes, papers, data, refreshAll } = useEntityStore()
 
   useEffect(() => {
     refreshAll()
@@ -195,8 +194,7 @@ export function EntityTabs() {
   const entities: Record<string, EntityItem[]> = {
     notes,
     papers,
-    data,
-    memory
+    data
   }
 
   const items = entities[leftTab] || []
@@ -235,19 +233,17 @@ export function EntityTabs() {
         ))}
       </div>
 
-      {/* Drop zone (hidden for memory tab) */}
-      {leftTab !== 'memory' && (
-        <div
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
-        >
-          <Upload size={16} className="mx-auto mb-1 t-text-muted" />
-          <p className="text-xs t-text-muted">
-            Drop files here to add {leftTab}
-          </p>
-        </div>
-      )}
+      {/* Drop zone */}
+      <div
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
+      >
+        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
+        <p className="text-xs t-text-muted">
+          Drop files here to add {leftTab}
+        </p>
+      </div>
 
       {/* Entity list */}
       <div className="px-1 py-2 space-y-0.5">

@@ -46,19 +46,14 @@ function Chip({ entity, variant, onRemove }: {
 }
 
 export function ContextChips() {
-  const { pinned, selected, memory, togglePin, toggleSelect, refreshAll } = useEntityStore()
+  const { pinned, selected, togglePin, toggleSelect, refreshAll } = useEntityStore()
 
   useEffect(() => {
     refreshAll()
   }, [])
 
-  // Merge pinned memory items into the pinned list
-  const pinnedMemory = memory.filter((m) => m.pinned)
-  const allPinned = [...pinned, ...pinnedMemory]
-
-  // Merge selected memory items into the selected list
-  const selectedMemory = memory.filter((m) => m.selectedForAI)
-  const allSelected = [...selected, ...selectedMemory]
+  const allPinned = pinned
+  const allSelected = selected
 
   return (
     <div className="space-y-3">

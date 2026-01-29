@@ -2,8 +2,6 @@ import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 import { createCoordinator, type CoordinatorConfig } from '@research-pilot/agents/coordinator'
-import { FileMemoryStorage } from '../../../../src/core/memory-storage.js'
-import type { MemoryItem } from '../../../../src/types/memory.js'
 import {
   listNotes, listLiterature, listData,
   searchEntities, deleteEntity,
@@ -22,22 +20,6 @@ let currentModel = 'gpt-5.2'
 // Start with empty project path — user must select a folder
 let projectPath = ''
 let sessionId = crypto.randomUUID()
-let memoryStorage: FileMemoryStorage | null = null
-let memoryInitPromise: Promise<FileMemoryStorage> | null = null
-
-/** Get or create the memory storage instance for the current project */
-async function getMemoryStorage(): Promise<FileMemoryStorage | null> {
-  if (!projectPath) return null
-  if (!memoryInitPromise) {
-    const storage = new FileMemoryStorage(projectPath)
-    memoryInitPromise = storage.init().then(() => {
-      memoryStorage = storage
-      return storage
-    })
-  }
-  return memoryInitPromise
-}
-
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
   const dirs = [PATHS.root, PATHS.notes, PATHS.literature, PATHS.data, PATHS.sessions, PATHS.cache, PATHS.documentCache]
@@ -82,6 +64,13 @@ function loadOrCreateSessionId(path: string): string {
   return newId
 }
 
+/** Safely send an IPC message — no-op if the window has been destroyed. */
+function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
+  if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+    win.webContents.send(channel, ...args)
+  }
+}
+
 async function ensureCoordinator(win: BrowserWindow, model?: string) {
   const requestedModel = model || currentModel
   // Recreate coordinator if model changed
@@ -95,7 +84,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
     const apiKey = process.env.OPENAI_API_KEY || ''
 
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
-    win.webContents.send('agent:activity', {
+    safeSend(win, 'agent:activity', {
       type: 'system',
       summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...'
     })
@@ -107,12 +96,12 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
       sessionId,
       debug: true,
       onStream: (chunk: string) => {
-        win.webContents.send('agent:stream-chunk', chunk)
+        safeSend(win, 'agent:stream-chunk', chunk)
       },
       onToolCall: (tool: string, args: unknown) => {
         // Send activity event for tool invocation
         const summary = formatToolCallSummary(tool, args)
-        win.webContents.send('agent:activity', {
+        safeSend(win, 'agent:activity', {
           type: 'tool-call',
           tool,
           summary
@@ -122,7 +111,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
         if (tool.startsWith('todo-') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.item) {
-            win.webContents.send('agent:todo-update', r.item)
+            safeSend(win, 'agent:todo-update', r.item)
           }
         }
 
@@ -130,7 +119,15 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
         if ((tool === 'write' || tool === 'edit') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.data?.path) {
-            win.webContents.send('agent:file-created', r.data.path)
+            safeSend(win, 'agent:file-created', r.data.path)
+          }
+        }
+
+        // Track extracted markdown files created by convert_to_markdown
+        if (tool === 'convert_to_markdown' && result && typeof result === 'object' && 'success' in result) {
+          const r2 = result as any
+          if (r2.success && r2.data?.outputFile) {
+            safeSend(win, 'agent:file-created', r2.data.outputFile)
           }
         }
 
@@ -150,7 +147,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
         if ((tool === 'save-note' || tool === 'save-paper') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success) {
-            win.webContents.send('agent:entity-created', {
+            safeSend(win, 'agent:entity-created', {
               type: tool === 'save-note' ? 'note' : 'literature',
               id: r.data?.id,
               title: r.data?.title
@@ -163,7 +160,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
         const success = r?.success !== false
         const error = !success ? (r?.error || 'Unknown error') : undefined
         const summary = formatToolResultSummary(tool, result, args)
-        win.webContents.send('agent:activity', {
+        safeSend(win, 'agent:activity', {
           type: 'tool-result',
           tool,
           summary,
@@ -174,7 +171,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
     })
 
     // Notify UI that initialization is complete
-    win.webContents.send('agent:activity', {
+    safeSend(win, 'agent:activity', {
       type: 'system',
       summary: 'Agent ready'
     })
@@ -393,12 +390,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('agent:send', async (_e, message: string, rawMentions?: string, model?: string) => {
     if (!projectPath) {
       const errResult = { success: false, error: 'No project folder selected. Please select a folder first.' }
-      win.webContents.send('agent:done', errResult)
+      safeSend(win, 'agent:done', errResult)
       return errResult
     }
 
     const coord = await ensureCoordinator(win, model)
-    win.webContents.send('agent:todo-clear')
+    safeSend(win, 'agent:todo-clear')
     let mentions: any[] = []
     if (rawMentions) {
       const parsed = parseMentions(rawMentions)
@@ -408,11 +405,11 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
     try {
       const result = await coord.chat(message, mentions)
-      win.webContents.send('agent:done', result)
+      safeSend(win, 'agent:done', result)
       return result
     } catch (err: any) {
       const errResult = { success: false, error: err.message }
-      win.webContents.send('agent:done', errResult)
+      safeSend(win, 'agent:done', errResult)
       return errResult
     }
   })
@@ -492,59 +489,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('cmd:get-pinned', () => {
     if (!projectPath) return []
     return getPinned(projectPath)
-  })
-
-  // Memory items
-  ipcMain.handle('cmd:list-memory', async () => {
-    const storage = await getMemoryStorage()
-    if (!storage) return []
-    const { items } = await storage.list({ status: 'active', limit: 200 })
-    // Filter out 'research' namespace (entity-sync mirrors)
-    return items
-      .filter((item: MemoryItem) => item.namespace !== 'research')
-      .map((item: MemoryItem) => ({
-        id: item.id,
-        type: 'memory' as const,
-        title: item.key,
-        pinned: item.tags.includes('pinned'),
-        selectedForAI: item.tags.includes('selected'),
-        namespace: item.namespace,
-        valueText: item.valueText,
-        createdAt: item.createdAt
-      }))
-  })
-
-  ipcMain.handle('cmd:memory-pin', async (_e, id: string) => {
-    const storage = await getMemoryStorage()
-    if (!storage) return null
-    const { items } = await storage.list({ status: 'active', limit: 500 })
-    const item = items.find((i: MemoryItem) => i.id === id)
-    if (!item) return null
-    const newTags = item.tags.includes('pinned')
-      ? item.tags.filter((t: string) => t !== 'pinned')
-      : [...item.tags, 'pinned']
-    return storage.update(item.namespace, item.key, { tags: newTags })
-  })
-
-  ipcMain.handle('cmd:memory-select', async (_e, id: string) => {
-    const storage = await getMemoryStorage()
-    if (!storage) return null
-    const { items } = await storage.list({ status: 'active', limit: 500 })
-    const item = items.find((i: MemoryItem) => i.id === id)
-    if (!item) return null
-    const newTags = item.tags.includes('selected')
-      ? item.tags.filter((t: string) => t !== 'selected')
-      : [...item.tags, 'selected']
-    return storage.update(item.namespace, item.key, { tags: newTags })
-  })
-
-  ipcMain.handle('cmd:memory-delete', async (_e, id: string) => {
-    const storage = await getMemoryStorage()
-    if (!storage) return false
-    const { items } = await storage.list({ status: 'active', limit: 500 })
-    const item = items.find((i: MemoryItem) => i.id === id)
-    if (!item) return false
-    return storage.delete(item.namespace, item.key)
   })
 
   // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
@@ -659,8 +603,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         await coordinator.destroy()
         coordinator = null
       }
-      memoryStorage = null
-      memoryInitPromise = null
       // Reuse persistent session ID for this project folder
       sessionId = loadOrCreateSessionId(projectPath)
       return { projectPath, sessionId }

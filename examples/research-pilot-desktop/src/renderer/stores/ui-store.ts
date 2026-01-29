@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
-type LeftTab = 'notes' | 'data' | 'papers' | 'memory'
+type LeftTab = 'notes' | 'data' | 'papers'
 
 export interface WorkingFile {
   path: string
