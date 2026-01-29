@@ -180,6 +180,8 @@ export interface AssembledContext {
   excludedMessages: Message[]
   /** Compressed history (for ctx-expand) */
   compressedHistory?: CompressedHistory
+  /** Selected context content extracted for separate message injection */
+  selectedContent?: string
 }
 
 // ============ Pipeline Configuration ============
@@ -248,6 +250,12 @@ export interface ContextPipeline {
     totalBudget: number
     selectedContext?: ContextSelection[]
     messages?: Message[]
+    externalBudgets?: {
+      pinned?: number
+      selected?: number
+      session?: number
+      index?: number
+    }
   }): Promise<AssembledContext>
 
   /**

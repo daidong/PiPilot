@@ -18,7 +18,6 @@ export const MCPCategorySchema = z.enum([
   'dev-tools',
   'communication',
   'documents',
-  'browser',
   'memory',
   'other'
 ])
@@ -57,7 +56,6 @@ export const PermissionTypeSchema = z.enum([
   'network',
   'database',
   'api',
-  'browser',
   'system',
   'memory'
 ])
@@ -248,7 +246,6 @@ export const CATEGORY_ORDER: MCPCategory[] = [
   'dev-tools',
   'communication',
   'documents',
-  'browser',
   'memory',
   'other'
 ]

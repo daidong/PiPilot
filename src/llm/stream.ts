@@ -330,6 +330,18 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
         streamOptions.tools = convertTools(tools)
       }
 
+      // Debug: log exact request params to verify maxOutputTokens forwarding
+      if (typeof process !== 'undefined' && process.env?.AGENT_FOUNDRY_DEBUG_LLM) {
+        console.error('[LLM:debug] streamText params:', JSON.stringify({
+          maxOutputTokens: streamOptions.maxOutputTokens,
+          temperature: streamOptions.temperature,
+          toolCount: streamOptions.tools ? Object.keys(streamOptions.tools).length : 0,
+          systemLength: typeof streamOptions.system === 'string' ? streamOptions.system.length : 0,
+          messagesCount: streamOptions.messages?.length ?? 0,
+          providerOptions: streamOptions.providerOptions
+        }))
+      }
+
       try {
         const result = streamText(streamOptions)
 
@@ -440,6 +452,17 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       // SDK 6: strict mode defaults to false per tool
       if (tools && tools.length > 0 && supportsTools(clientConfig.model)) {
         generateOptions.tools = convertTools(tools)
+      }
+
+      // Debug: log exact request params to verify maxOutputTokens forwarding
+      if (typeof process !== 'undefined' && process.env?.AGENT_FOUNDRY_DEBUG_LLM) {
+        console.error('[LLM:debug] generateText params:', JSON.stringify({
+          maxOutputTokens: generateOptions.maxOutputTokens,
+          temperature: generateOptions.temperature,
+          toolCount: generateOptions.tools ? Object.keys(generateOptions.tools).length : 0,
+          systemLength: typeof generateOptions.system === 'string' ? generateOptions.system.length : 0,
+          messagesCount: generateOptions.messages?.length ?? 0
+        }))
       }
 
       const result = await generateText(generateOptions)

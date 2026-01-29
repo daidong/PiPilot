@@ -6,7 +6,6 @@
  * - execTools: Execution capability (requires explicit enable)
  * - networkTools: Network capability (requires explicit enable)
  * - computeTools: Compute capability (requires explicit enable)
- * - browserTools: Browser automation (requires explicit enable)
  */
 
 // ============ Tool exports ============
@@ -23,7 +22,6 @@ export { fetchTool } from './fetch.js'
 export { llmCall } from './llm-call.js'
 export { llmExpand } from './llm-expand.js'
 export { llmFilter } from './llm-filter.js'
-export { browser, browse } from './browser.js'
 export { memoryPut } from './memory-put.js'
 export { memoryUpdate } from './memory-update.js'
 export { memoryDelete } from './memory-delete.js'
@@ -46,7 +44,6 @@ export type { FetchInput, FetchOutput } from './fetch.js'
 export type { LLMCallInput, LLMCallOutput } from './llm-call.js'
 export type { LLMExpandInput, LLMExpandOutput } from './llm-expand.js'
 export type { LLMFilterInput, LLMFilterOutput } from './llm-filter.js'
-export type { BrowserInput, BrowserOutput, BrowseInput, BrowseOutput, SnapshotElement } from './browser.js'
 export type { MemoryPutInput, MemoryPutOutput } from './memory-put.js'
 export type { MemoryUpdateInput, MemoryUpdateOutput } from './memory-update.js'
 export type { MemoryDeleteInput, MemoryDeleteOutput } from './memory-delete.js'
@@ -70,7 +67,6 @@ import { fetchTool } from './fetch.js'
 import { llmCall } from './llm-call.js'
 import { llmExpand } from './llm-expand.js'
 import { llmFilter } from './llm-filter.js'
-import { browser, browse } from './browser.js'
 import { memoryPut } from './memory-put.js'
 import { memoryUpdate } from './memory-update.js'
 import { memoryDelete } from './memory-delete.js'
@@ -132,17 +128,6 @@ export const computeTools: Tool<any, any>[] = [
 ]
 
 /**
- * Browser automation tools (requires explicit enable)
- *
- * Risk level: elevated
- * Contains: browser, browse
- */
-export const browserTools: Tool<any, any>[] = [
-  browser,
-  browse
-]
-
-/**
  * Memory management tools (requires explicit enable)
  *
  * Risk level: safe
@@ -175,7 +160,6 @@ export const builtinTools: Tool<any, any>[] = [
   ...execTools,
   ...networkTools,
   ...computeTools,
-  ...browserTools,
   ...memoryTools,
   ...todoTools
 ]
@@ -198,7 +182,7 @@ export type ToolRiskLevel = 'safe' | 'elevated' | 'high'
 export interface ToolMeta {
   name: string
   riskLevel: ToolRiskLevel
-  category: 'safe' | 'exec' | 'network' | 'compute' | 'browser' | 'memory'
+  category: 'safe' | 'exec' | 'network' | 'compute' | 'memory'
   requiresExplicitEnable: boolean
   description: string
 }
@@ -290,20 +274,6 @@ export const toolMeta: Record<string, ToolMeta> = {
     category: 'compute',
     requiresExplicitEnable: true,
     description: 'LLM relevance filtering (scoring and selection)'
-  },
-  browser: {
-    name: 'browser',
-    riskLevel: 'elevated',
-    category: 'browser',
-    requiresExplicitEnable: true,
-    description: 'Browser operations'
-  },
-  browse: {
-    name: 'browse',
-    riskLevel: 'elevated',
-    category: 'browser',
-    requiresExplicitEnable: true,
-    description: 'Browse web pages'
   },
   'memory-put': {
     name: 'memory-put',

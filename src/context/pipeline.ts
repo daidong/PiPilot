@@ -111,11 +111,25 @@ export function createContextPipeline(config: ContextPipelineConfig = {}): Conte
     totalBudget: number
     selectedContext?: ContextSelection[]
     messages?: Message[]
+    externalBudgets?: {
+      pinned?: number
+      selected?: number
+      session?: number
+      index?: number
+    }
   }): Promise<AssembledContext> {
-    const { runtime, totalBudget, selectedContext } = options
+    const { runtime, totalBudget, selectedContext, externalBudgets } = options
 
-    // Calculate budget allocations
+    // Calculate budget allocations (use external budgets if provided by BudgetCoordinator)
     const allocations = calculateAllocations(totalBudget)
+
+    // Override with external budgets when coordinated
+    if (externalBudgets) {
+      if (externalBudgets.pinned !== undefined) allocations.set('pinned', externalBudgets.pinned)
+      if (externalBudgets.selected !== undefined) allocations.set('selected', externalBudgets.selected)
+      if (externalBudgets.session !== undefined) allocations.set('session', externalBudgets.session)
+      if (externalBudgets.index !== undefined) allocations.set('index', externalBudgets.index)
+    }
 
     // Get sorted phases
     const sortedPhases = getSortedPhases()
@@ -170,6 +184,13 @@ export function createContextPipeline(config: ContextPipelineConfig = {}): Conte
           actualTokens += frag.tokens
         }
 
+        // Log when content is trimmed to fit budget
+        if (actualTokens < phaseTokens) {
+          console.error(
+            `[Pipeline] Phase "${phase.id}" trimmed: ${phaseTokens} → ${actualTokens} tokens (budget: ${allocatedBudget}, fragments: ${fragments.length} → ${trimmedFragments.length})`
+          )
+        }
+
         phaseResults.push({
           phaseId: phase.id,
           fragments: trimmedFragments,
@@ -206,12 +227,19 @@ export function createContextPipeline(config: ContextPipelineConfig = {}): Conte
     const indexResult = phaseResults.find(r => r.phaseId === 'index')
     const compressedHistoryMeta = indexResult?.fragments[0]?.metadata
 
+    // Extract selected phase content separately for message injection (Change 5)
+    const selectedResult = phaseResults.find(r => r.phaseId === 'selected')
+    const selectedContent = selectedResult?.fragments
+      .map(f => f.content)
+      .join('\n\n') || undefined
+
     return {
       content,
       totalTokens: usedBudget,
       phases: phaseResults,
       excludedMessages,
-      compressedHistory: compressedHistoryMeta?.compressedHistory as AssembledContext['compressedHistory']
+      compressedHistory: compressedHistoryMeta?.compressedHistory as AssembledContext['compressedHistory'],
+      selectedContent
     }
   }
 

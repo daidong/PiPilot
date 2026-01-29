@@ -261,49 +261,6 @@ tools:
     providedBy: exec
     exampleUsage: 'bash({ command: "npm run build" })'
 
-  # ============================================================================
-  # Browser Tools
-  # ============================================================================
-  - name: browser
-    category: browser
-    description: "Browser automation operations"
-    useCases:
-      - Web scraping
-      - Screenshot generation
-      - Form filling
-      - E2E testing
-    keywords:
-      - browser
-      - web
-      - scrape
-      - screenshot
-      - automation
-      - 浏览器
-      - 网页
-      - 抓取
-    riskLevel: high
-    requiresApproval: true
-    providedBy: browser
-    exampleUsage: 'browser({ action: "navigate", url: "https://example.com" })'
-
-  - name: browse
-    category: browser
-    description: "Simplified web browsing tool"
-    useCases:
-      - Read web page content
-      - Extract web information
-    keywords:
-      - browse
-      - web
-      - page
-      - content
-      - 浏览
-      - 网页
-    riskLevel: elevated
-    requiresApproval: true
-    providedBy: browser
-    exampleUsage: 'browse({ url: "https://example.com" })'
-
 packs:
   - name: safe
     description: "Safe core toolkit: file operations, search"
@@ -366,16 +323,25 @@ packs:
       - 命令
       - 执行
 
-  - name: browser
-    description: "Browser toolkit: web automation"
+  - name: web
+    description: "Web search & fetch: Brave Search MCP + HTTP fetch"
     tools:
-      - browser
-      - browse
-    riskLevel: high
+      - brave_web_search
+      - brave_local_search
+      - brave_news_search
+      - brave_image_search
+      - brave_video_search
+      - brave_summarizer
+      - fetch
+    riskLevel: elevated
     keywords:
-      - browser
+      - search
       - web
-      - scrape
-      - automation
-      - 浏览器
+      - browse
+      - news
+      - brave
+      - fetch
+      - url
+      - 搜索
       - 网页
+

@@ -15,8 +15,7 @@ export const ToolCategorySchema = z.enum([
   'safe',
   'exec',
   'network',
-  'compute',
-  'browser'
+  'compute'
 ])
 
 export type ToolCategory = z.infer<typeof ToolCategorySchema>
@@ -88,6 +87,5 @@ export const PACK_ORDER: string[] = [
   'safe',
   'compute',
   'network',
-  'exec',
-  'browser'
+  'exec'
 ]

@@ -61,7 +61,7 @@ export type BuiltinPackName =
   | 'git'
   | 'exploration'
   | 'python'
-  | 'browser'
+  | 'web'
 
 /**
  * Pack 风险等级

@@ -12572,7 +12572,6 @@ const Check = createLucideIcon("Check", [["path", { d: "M20 6 9 17l-5-5", key: "
 const ChevronDown = createLucideIcon("ChevronDown", [
   ["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]
 ]);
-const ChevronUp = createLucideIcon("ChevronUp", [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]]);
 const CircleAlert = createLucideIcon("CircleAlert", [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
@@ -12786,12 +12785,28 @@ const useUIStore = create$1((set) => ({
   setIdle: (isIdle) => set({ isIdle }),
   toggleRightSidebar: () => set((s) => ({ rightSidebarCollapsed: !s.rightSidebarCollapsed })),
   addWorkingFile: (path2) => set((s) => {
+    if (s.workingFiles.some((f) => f.path === path2)) {
+      return s;
+    }
     const name2 = path2.split("/").pop() || path2;
-    const existing = s.workingFiles.filter((f) => f.path !== path2);
     return {
-      workingFiles: [{ path: path2, name: name2, accessedAt: Date.now() }, ...existing]
+      workingFiles: [{ path: path2, name: name2, accessedAt: Date.now() }, ...s.workingFiles]
     };
   }),
+  setWorkingFiles: (paths) => set(() => {
+    const seen2 = /* @__PURE__ */ new Set();
+    const files = [];
+    const now = Date.now();
+    for (const path2 of paths) {
+      if (!seen2.has(path2)) {
+        seen2.add(path2);
+        const name2 = path2.split("/").pop() || path2;
+        files.push({ path: path2, name: name2, accessedAt: now });
+      }
+    }
+    return { workingFiles: files };
+  }),
+  clearWorkingFiles: () => set({ workingFiles: [] }),
   openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true }),
   closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false })
 }));
@@ -12800,585 +12815,6 @@ const uiStore = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.definePrope
   SUPPORTED_MODELS,
   useUIStore
 }, Symbol.toStringTag, { value: "Module" }));
-const api$7 = window.api;
-const useEntityStore = create$1((set) => ({
-  notes: [],
-  papers: [],
-  data: [],
-  memory: [],
-  pinned: [],
-  selected: [],
-  refreshAll: async () => {
-    const [notes, papers, data, memory, pinned, selected] = await Promise.all([
-      api$7.listNotes(),
-      api$7.listLiterature(),
-      api$7.listData(),
-      api$7.listMemory(),
-      api$7.getPinned(),
-      api$7.getSelected()
-    ]);
-    const stamp = (items, type) => (items || []).map((i) => ({ ...i, type }));
-    set({
-      notes: stamp(notes, "note"),
-      papers: stamp(papers, "paper"),
-      data: stamp(data, "data"),
-      memory: memory || [],
-      pinned: pinned || [],
-      selected: selected || []
-    });
-  },
-  togglePin: async (id) => {
-    const state = useEntityStore.getState();
-    const isMemory = state.memory.some((m) => m.id === id);
-    if (isMemory) {
-      await api$7.toggleMemoryPin(id);
-      const memory = await api$7.listMemory();
-      set({ memory: memory || [] });
-      return;
-    }
-    await api$7.togglePin(id);
-    const pinned = await api$7.getPinned();
-    set({ pinned: pinned || [] });
-  },
-  toggleSelect: async (id) => {
-    const state = useEntityStore.getState();
-    const isMemory = state.memory.some((m) => m.id === id);
-    if (isMemory) {
-      await api$7.toggleMemorySelect(id);
-      const memory = await api$7.listMemory();
-      set({ memory: memory || [] });
-      return;
-    }
-    await api$7.toggleSelect(id);
-    const selected = await api$7.getSelected();
-    set({ selected: selected || [] });
-  },
-  renameNote: async (id, newTitle) => {
-    await api$7.renameNote(id, newTitle);
-    const notes = await api$7.listNotes();
-    set({ notes: notes || [] });
-  },
-  deleteEntity: async (id) => {
-    const state = useEntityStore.getState();
-    const isMemory = state.memory.some((m) => m.id === id);
-    if (isMemory) {
-      await api$7.deleteMemory(id);
-      const memory = await api$7.listMemory();
-      set({ memory: memory || [] });
-      return;
-    }
-    await api$7.deleteEntity(id);
-    const [notes, papers, data, pinned, selected] = await Promise.all([
-      api$7.listNotes(),
-      api$7.listLiterature(),
-      api$7.listData(),
-      api$7.getPinned(),
-      api$7.getSelected()
-    ]);
-    set({
-      notes: notes || [],
-      papers: papers || [],
-      data: data || [],
-      pinned: pinned || [],
-      selected: selected || []
-    });
-  }
-}));
-const scriptRel = /* @__PURE__ */ (function detectScriptRel() {
-  const relList = typeof document !== "undefined" && document.createElement("link").relList;
-  return relList && relList.supports && relList.supports("modulepreload") ? "modulepreload" : "preload";
-})();
-const assetsURL = function(dep, importerUrl) {
-  return new URL(dep, importerUrl).href;
-};
-const seen = {};
-const __vitePreload = function preload(baseModule, deps, importerUrl) {
-  let promise = Promise.resolve();
-  if (deps && deps.length > 0) {
-    let allSettled = function(promises$2) {
-      return Promise.all(promises$2.map((p) => Promise.resolve(p).then((value$1) => ({
-        status: "fulfilled",
-        value: value$1
-      }), (reason) => ({
-        status: "rejected",
-        reason
-      }))));
-    };
-    const links = document.getElementsByTagName("link");
-    const cspNonceMeta = document.querySelector("meta[property=csp-nonce]");
-    const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute("nonce");
-    promise = allSettled(deps.map((dep) => {
-      dep = assetsURL(dep, importerUrl);
-      if (dep in seen) return;
-      seen[dep] = true;
-      const isCss = dep.endsWith(".css");
-      const cssSelector = isCss ? '[rel="stylesheet"]' : "";
-      if (!!importerUrl) for (let i$1 = links.length - 1; i$1 >= 0; i$1--) {
-        const link$12 = links[i$1];
-        if (link$12.href === dep && (!isCss || link$12.rel === "stylesheet")) return;
-      }
-      else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) return;
-      const link2 = document.createElement("link");
-      link2.rel = isCss ? "stylesheet" : scriptRel;
-      if (!isCss) link2.as = "script";
-      link2.crossOrigin = "";
-      link2.href = dep;
-      if (cspNonce) link2.setAttribute("nonce", cspNonce);
-      document.head.appendChild(link2);
-      if (isCss) return new Promise((res, rej) => {
-        link2.addEventListener("load", res);
-        link2.addEventListener("error", () => rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`)));
-      });
-    }));
-  }
-  function handlePreloadError(err$2) {
-    const e$1 = new Event("vite:preloadError", { cancelable: true });
-    e$1.payload = err$2;
-    window.dispatchEvent(e$1);
-    if (!e$1.defaultPrevented) throw err$2;
-  }
-  return promise.then((res) => {
-    for (const item of res || []) {
-      if (item.status !== "rejected") continue;
-      handlePreloadError(item.reason);
-    }
-    return baseModule().catch(handlePreloadError);
-  });
-};
-const PAGE_SIZE = 20;
-const api$6 = window.api;
-let _sessionId = "";
-const useChatStore = create$1((set, get) => ({
-  messages: [],
-  streamingText: "",
-  isStreaming: false,
-  savedMessageIds: /* @__PURE__ */ new Set(),
-  hasMore: false,
-  isLoadingHistory: false,
-  _offset: 0,
-  scrollToMessageId: null,
-  send: async (text2) => {
-    const userMsg = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: text2,
-      timestamp: Date.now()
-    };
-    set((s) => ({
-      messages: [...s.messages, userMsg],
-      streamingText: "",
-      isStreaming: true
-    }));
-    if (_sessionId) {
-      api$6.saveMessage(_sessionId, userMsg).catch(() => {
-      });
-    }
-    try {
-      const { useUIStore: useUIStore2 } = await __vitePreload(async () => {
-        const { useUIStore: useUIStore3 } = await Promise.resolve().then(() => uiStore);
-        return { useUIStore: useUIStore3 };
-      }, true ? void 0 : void 0, import.meta.url);
-      const model = useUIStore2.getState().selectedModel;
-      await api$6.sendMessage(text2, void 0, model);
-    } catch {
-    }
-  },
-  appendChunk: (chunk) => {
-    set((s) => ({ streamingText: s.streamingText + chunk }));
-  },
-  finalize: (result) => {
-    const content2 = result.response || result.error || "No response";
-    const assistantMsg = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: content2,
-      timestamp: Date.now()
-    };
-    set((s) => ({
-      messages: [...s.messages, assistantMsg],
-      streamingText: "",
-      isStreaming: false
-    }));
-    if (_sessionId) {
-      api$6.saveMessage(_sessionId, assistantMsg).catch(() => {
-      });
-    }
-  },
-  clear: () => set({
-    messages: [],
-    streamingText: "",
-    isStreaming: false,
-    savedMessageIds: /* @__PURE__ */ new Set(),
-    hasMore: false,
-    isLoadingHistory: false,
-    _offset: 0,
-    scrollToMessageId: null
-  }),
-  markSaved: (messageId) => {
-    set((s) => {
-      const next = new Set(s.savedMessageIds);
-      next.add(messageId);
-      return { savedMessageIds: next };
-    });
-    if (_sessionId) {
-      api$6.markMessageSaved(_sessionId, messageId).catch(() => {
-      });
-    }
-  },
-  loadInitial: async (sessionId) => {
-    _sessionId = sessionId;
-    try {
-      const [count, messages, savedIds] = await Promise.all([
-        api$6.getMessageCount(sessionId),
-        api$6.loadMessages(sessionId, 0, PAGE_SIZE),
-        api$6.loadSavedMessageIds(sessionId)
-      ]);
-      set({
-        messages,
-        hasMore: count > PAGE_SIZE,
-        _offset: PAGE_SIZE,
-        savedMessageIds: new Set(savedIds || [])
-      });
-    } catch {
-    }
-  },
-  loadHistory: async () => {
-    const { hasMore, isLoadingHistory, _offset } = get();
-    if (!hasMore || isLoadingHistory || !_sessionId) return;
-    set({ isLoadingHistory: true });
-    try {
-      const [count, older] = await Promise.all([
-        api$6.getMessageCount(_sessionId),
-        api$6.loadMessages(_sessionId, _offset, PAGE_SIZE)
-      ]);
-      if (older.length > 0) {
-        set((s) => ({
-          messages: [...older, ...s.messages],
-          _offset: s._offset + older.length,
-          hasMore: s._offset + older.length < count,
-          isLoadingHistory: false
-        }));
-      } else {
-        set({ hasMore: false, isLoadingHistory: false });
-      }
-    } catch {
-      set({ isLoadingHistory: false });
-    }
-  },
-  requestScrollTo: (messageId) => {
-    set({ scrollToMessageId: messageId });
-    setTimeout(() => set({ scrollToMessageId: null }), 100);
-  }
-}));
-const tabs = [
-  { key: "notes", label: "Notes", icon: StickyNote },
-  { key: "data", label: "Data", icon: Database },
-  { key: "papers", label: "Papers", icon: BookOpen },
-  { key: "memory", label: "Mem", icon: Brain }
-];
-function EntityRow({ entity }) {
-  const togglePin = useEntityStore((s) => s.togglePin);
-  const toggleSelect = useEntityStore((s) => s.toggleSelect);
-  const deleteEntity = useEntityStore((s) => s.deleteEntity);
-  const openPreview = useUIStore((s) => s.openPreview);
-  const closePreview = useUIStore((s) => s.closePreview);
-  const previewEntity = useUIStore((s) => s.previewEntity);
-  const requestScrollTo = useChatStore((s) => s.requestScrollTo);
-  const [confirmDelete, setConfirmDelete] = reactExports.useState(false);
-  const messageId = entity.provenance?.messageId;
-  const handleProvenanceClick = (e) => {
-    e.stopPropagation();
-    if (messageId) requestScrollTo(messageId);
-  };
-  const handleDelete2 = async (e) => {
-    e.stopPropagation();
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      setTimeout(() => setConfirmDelete(false), 2e3);
-      return;
-    }
-    await deleteEntity(entity.id);
-    if (previewEntity?.id === entity.id) closePreview();
-    setConfirmDelete(false);
-  };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "div",
-      {
-        className: "group flex items-center gap-2 px-3 py-2 rounded-lg t-bg-hover transition-colors cursor-pointer",
-        onClick: () => openPreview(entity),
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `w-1.5 h-1.5 rounded-full shrink-0 ${entity.pinned ? "bg-orange-400" : entity.selectedForAI ? "bg-blue-400" : "t-bg-elevated"}` }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm t-text truncate flex-1", children: entity.title }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                onClick: (e) => {
-                  e.stopPropagation();
-                  togglePin(entity.id);
-                },
-                className: `text-xs px-1.5 py-0.5 rounded ${entity.pinned ? "text-orange-400" : "t-text-muted hover:text-orange-400"}`,
-                title: entity.pinned ? "Unpin" : "Pin",
-                children: "pin"
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                onClick: (e) => {
-                  e.stopPropagation();
-                  toggleSelect(entity.id);
-                },
-                className: `text-xs px-1.5 py-0.5 rounded ${entity.selectedForAI ? "text-blue-400" : "t-text-muted hover:text-blue-400"}`,
-                title: entity.selectedForAI ? "Deselect" : "Select",
-                children: "sel"
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                onClick: handleDelete2,
-                className: `text-xs px-1.5 py-0.5 rounded transition-colors ${confirmDelete ? "text-red-500" : "t-text-muted hover:text-red-400"}`,
-                title: confirmDelete ? "Click again to confirm" : "Delete",
-                children: /* @__PURE__ */ jsxRuntimeExports.jsx(Trash2, { size: 12 })
-              }
-            )
-          ] })
-        ]
-      }
-    ),
-    messageId && /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "button",
-      {
-        onClick: handleProvenanceClick,
-        className: "flex items-center gap-1.5 ml-6 pl-3 py-0.5 text-[11px] t-text-muted hover:text-orange-400 transition-colors border-l t-border",
-        title: "Scroll to source message",
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(MessageSquare, { size: 10 }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "from chat reply" })
-        ]
-      }
-    )
-  ] });
-}
-function EntityTabs() {
-  const leftTab = useUIStore((s) => s.leftTab);
-  const setLeftTab = useUIStore((s) => s.setLeftTab);
-  const { notes, papers, data, memory, refreshAll } = useEntityStore();
-  reactExports.useEffect(() => {
-    refreshAll();
-  }, []);
-  const entities = {
-    notes,
-    papers,
-    data,
-    memory
-  };
-  const items = entities[leftTab] || [];
-  const handleDragOver = reactExports.useCallback((e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-  }, []);
-  const handleDrop = reactExports.useCallback((e) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
-      console.log(`Dropped file: ${file.name} (${file.type}, ${file.size} bytes)`);
-    }
-  }, []);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex border-b t-border px-2", children: tabs.map(({ key, label, icon: Icon2 }) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "button",
-      {
-        onClick: () => setLeftTab(key),
-        className: `no-drag flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${leftTab === key ? "border-orange-400 t-text" : "border-transparent t-text-muted hover:t-text-secondary"}`,
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { size: 13 }),
-          label
-        ]
-      },
-      key
-    )) }),
-    leftTab !== "memory" && /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "div",
-      {
-        onDragOver: handleDragOver,
-        onDrop: handleDrop,
-        className: "mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40",
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(Upload, { size: 16, className: "mx-auto mb-1 t-text-muted" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs t-text-muted", children: [
-            "Drop files here to add ",
-            leftTab
-          ] })
-        ]
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-1 py-2 space-y-0.5", children: items.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "px-3 py-4 text-xs t-text-muted text-center", children: [
-      "No ",
-      leftTab,
-      " yet"
-    ] }) : items.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(EntityRow, { entity: e }, e.id)) })
-  ] });
-}
-const api$5 = window.api;
-const useSessionStore = create$1((set) => ({
-  sessionId: "",
-  projectPath: "",
-  hasProject: false,
-  init: async () => {
-    const session = await api$5.getCurrentSession();
-    set({
-      sessionId: session.sessionId,
-      projectPath: session.projectPath,
-      hasProject: !!session.projectPath
-    });
-  },
-  pickFolder: async () => {
-    const result = await api$5.pickFolder();
-    if (result) {
-      set({
-        sessionId: result.sessionId,
-        projectPath: result.projectPath,
-        hasProject: true
-      });
-      return true;
-    }
-    return false;
-  }
-}));
-function UserProfile() {
-  const projectPath = useSessionStore((s) => s.projectPath);
-  const pickFolder = useSessionStore((s) => s.pickFolder);
-  const refreshEntities = useEntityStore((s) => s.refreshAll);
-  const handlePickFolder = async () => {
-    const picked = await pickFolder();
-    if (picked) {
-      await refreshEntities();
-    }
-  };
-  const displayPath = projectPath ? projectPath.replace(/^.*\//, "") : "Click to open a project";
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
-    "button",
-    {
-      onClick: handlePickFolder,
-      className: "no-drag flex items-center gap-2 w-full text-left text-sm t-text-secondary hover:t-text transition-colors",
-      children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Folder, { size: 16, className: "shrink-0" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate", children: displayPath })
-      ]
-    }
-  );
-}
-const providers = [...new Set(SUPPORTED_MODELS.map((m) => m.provider))];
-const groupedModels = {};
-for (const p of providers) {
-  groupedModels[p] = SUPPORTED_MODELS.filter((m) => m.provider === p);
-}
-function ModelSelector() {
-  const selectedModel = useUIStore((s) => s.selectedModel);
-  const setModel = useUIStore((s) => s.setModel);
-  const [open, setOpen] = reactExports.useState(false);
-  const ref = reactExports.useRef(null);
-  const current = SUPPORTED_MODELS.find((m) => m.id === selectedModel);
-  reactExports.useEffect(() => {
-    if (!open) return;
-    const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-  reactExports.useEffect(() => {
-    if (!open) return;
-    const handler = (e) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open]);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { ref, className: "relative", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "button",
-      {
-        onClick: () => setOpen(!open),
-        className: "no-drag flex items-center gap-1.5 px-2 py-1.5 rounded-lg t-text-secondary text-xs font-medium t-bg-hover transition-colors",
-        title: "Select model",
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(Cpu, { size: 14 }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate max-w-[100px]", children: current?.label || selectedModel }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronDown, { size: 12, className: `transition-transform ${open ? "rotate-180" : ""}` })
-        ]
-      }
-    ),
-    open && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "absolute top-full left-0 mt-1 w-64 max-h-80 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl z-50", children: providers.map((provider) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider t-text-muted sticky top-0 t-bg-surface", children: provider }),
-      groupedModels[provider].map((model) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "button",
-        {
-          onClick: () => {
-            setModel(model.id);
-            setOpen(false);
-          },
-          className: `flex items-center gap-2 w-full px-3 py-2 text-sm text-left transition-colors t-bg-hover ${model.id === selectedModel ? "t-text" : "t-text-secondary"}`,
-          children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-4 shrink-0", children: model.id === selectedModel && /* @__PURE__ */ jsxRuntimeExports.jsx(Check, { size: 14, className: "text-orange-400" }) }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate", children: model.label })
-          ]
-        },
-        model.id
-      ))
-    ] }, provider)) })
-  ] });
-}
-function LeftSidebar() {
-  const theme = useUIStore((s) => s.theme);
-  const toggleTheme = useUIStore((s) => s.toggleTheme);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { className: "w-78 flex flex-col border-r t-border t-bg-base pt-10", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 pb-3 flex items-center justify-between", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx(ModelSelector, {}),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "button",
-        {
-          onClick: toggleTheme,
-          className: "no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors",
-          title: `Switch to ${theme === "dark" ? "light" : "dark"} mode`,
-          children: theme === "dark" ? /* @__PURE__ */ jsxRuntimeExports.jsx(Sun, { size: 16 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Moon, { size: 16 })
-        }
-      )
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex-1 overflow-y-auto", children: /* @__PURE__ */ jsxRuntimeExports.jsx(EntityTabs, {}) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "border-t t-border p-4", children: /* @__PURE__ */ jsxRuntimeExports.jsx(UserProfile, {}) })
-  ] });
-}
-function HeroIdle() {
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center gap-8 max-w-lg", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "relative w-20 h-20", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("svg", { viewBox: "0 0 80 80", className: "w-full h-full", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("defs", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("radialGradient", { id: "burst", cx: "50%", cy: "50%", r: "50%", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("stop", { offset: "0%", stopColor: "#fb923c" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("stop", { offset: "100%", stopColor: "#ea580c" })
-      ] }) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "path",
-        {
-          d: "M40 4 L46 28 L68 12 L52 34 L76 40 L52 46 L68 68 L46 52 L40 76 L34 52 L12 68 L28 46 L4 40 L28 34 L12 12 L34 28 Z",
-          fill: "url(#burst)"
-        }
-      )
-    ] }) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "h1",
-      {
-        className: "text-3xl font-bold text-center t-text",
-        style: { fontFamily: "'Playfair Display', serif" },
-        children: "What would you like to research?"
-      }
-    )
-  ] });
-}
 function ok$1() {
 }
 function unreachable() {
@@ -25957,6 +25393,656 @@ function remarkGfm(options) {
   fromMarkdownExtensions.push(gfmFromMarkdown());
   toMarkdownExtensions.push(gfmToMarkdown(settings));
 }
+const api$7 = window.api;
+const useEntityStore = create$1((set) => ({
+  notes: [],
+  papers: [],
+  data: [],
+  memory: [],
+  pinned: [],
+  selected: [],
+  refreshAll: async () => {
+    const [notes, papers, data, memory, pinned, selected] = await Promise.all([
+      api$7.listNotes(),
+      api$7.listLiterature(),
+      api$7.listData(),
+      api$7.listMemory(),
+      api$7.getPinned(),
+      api$7.getSelected()
+    ]);
+    const stamp = (items, type) => (items || []).map((i) => ({ ...i, type }));
+    set({
+      notes: stamp(notes, "note"),
+      papers: stamp(papers, "paper"),
+      data: stamp(data, "data"),
+      memory: memory || [],
+      pinned: pinned || [],
+      selected: selected || []
+    });
+  },
+  togglePin: async (id) => {
+    const state = useEntityStore.getState();
+    const isMemory = state.memory.some((m) => m.id === id);
+    if (isMemory) {
+      await api$7.toggleMemoryPin(id);
+      const memory = await api$7.listMemory();
+      set({ memory: memory || [] });
+      return;
+    }
+    await api$7.togglePin(id);
+    const pinned = await api$7.getPinned();
+    set({ pinned: pinned || [] });
+  },
+  toggleSelect: async (id) => {
+    const state = useEntityStore.getState();
+    const isMemory = state.memory.some((m) => m.id === id);
+    if (isMemory) {
+      await api$7.toggleMemorySelect(id);
+      const memory = await api$7.listMemory();
+      set({ memory: memory || [] });
+      return;
+    }
+    await api$7.toggleSelect(id);
+    const selected = await api$7.getSelected();
+    set({ selected: selected || [] });
+  },
+  renameNote: async (id, newTitle) => {
+    await api$7.renameNote(id, newTitle);
+    const notes = await api$7.listNotes();
+    set({ notes: notes || [] });
+  },
+  deleteEntity: async (id) => {
+    const state = useEntityStore.getState();
+    const isMemory = state.memory.some((m) => m.id === id);
+    if (isMemory) {
+      await api$7.deleteMemory(id);
+      const memory = await api$7.listMemory();
+      set({ memory: memory || [] });
+      return;
+    }
+    await api$7.deleteEntity(id);
+    const [notes, papers, data, pinned, selected] = await Promise.all([
+      api$7.listNotes(),
+      api$7.listLiterature(),
+      api$7.listData(),
+      api$7.getPinned(),
+      api$7.getSelected()
+    ]);
+    set({
+      notes: notes || [],
+      papers: papers || [],
+      data: data || [],
+      pinned: pinned || [],
+      selected: selected || []
+    });
+  }
+}));
+const scriptRel = /* @__PURE__ */ (function detectScriptRel() {
+  const relList = typeof document !== "undefined" && document.createElement("link").relList;
+  return relList && relList.supports && relList.supports("modulepreload") ? "modulepreload" : "preload";
+})();
+const assetsURL = function(dep, importerUrl) {
+  return new URL(dep, importerUrl).href;
+};
+const seen = {};
+const __vitePreload = function preload(baseModule, deps, importerUrl) {
+  let promise = Promise.resolve();
+  if (deps && deps.length > 0) {
+    let allSettled = function(promises$2) {
+      return Promise.all(promises$2.map((p) => Promise.resolve(p).then((value$1) => ({
+        status: "fulfilled",
+        value: value$1
+      }), (reason) => ({
+        status: "rejected",
+        reason
+      }))));
+    };
+    const links = document.getElementsByTagName("link");
+    const cspNonceMeta = document.querySelector("meta[property=csp-nonce]");
+    const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute("nonce");
+    promise = allSettled(deps.map((dep) => {
+      dep = assetsURL(dep, importerUrl);
+      if (dep in seen) return;
+      seen[dep] = true;
+      const isCss = dep.endsWith(".css");
+      const cssSelector = isCss ? '[rel="stylesheet"]' : "";
+      if (!!importerUrl) for (let i$1 = links.length - 1; i$1 >= 0; i$1--) {
+        const link$12 = links[i$1];
+        if (link$12.href === dep && (!isCss || link$12.rel === "stylesheet")) return;
+      }
+      else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) return;
+      const link2 = document.createElement("link");
+      link2.rel = isCss ? "stylesheet" : scriptRel;
+      if (!isCss) link2.as = "script";
+      link2.crossOrigin = "";
+      link2.href = dep;
+      if (cspNonce) link2.setAttribute("nonce", cspNonce);
+      document.head.appendChild(link2);
+      if (isCss) return new Promise((res, rej) => {
+        link2.addEventListener("load", res);
+        link2.addEventListener("error", () => rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`)));
+      });
+    }));
+  }
+  function handlePreloadError(err$2) {
+    const e$1 = new Event("vite:preloadError", { cancelable: true });
+    e$1.payload = err$2;
+    window.dispatchEvent(e$1);
+    if (!e$1.defaultPrevented) throw err$2;
+  }
+  return promise.then((res) => {
+    for (const item of res || []) {
+      if (item.status !== "rejected") continue;
+      handlePreloadError(item.reason);
+    }
+    return baseModule().catch(handlePreloadError);
+  });
+};
+const PAGE_SIZE = 20;
+const api$6 = window.api;
+let _sessionId = "";
+const useChatStore = create$1((set, get) => ({
+  messages: [],
+  streamingText: "",
+  isStreaming: false,
+  savedMessageIds: /* @__PURE__ */ new Set(),
+  hasMore: false,
+  isLoadingHistory: false,
+  _offset: 0,
+  scrollToMessageId: null,
+  send: async (text2) => {
+    const userMsg = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: text2,
+      timestamp: Date.now()
+    };
+    set((s) => ({
+      messages: [...s.messages, userMsg],
+      streamingText: "",
+      isStreaming: true
+    }));
+    if (_sessionId) {
+      api$6.saveMessage(_sessionId, userMsg).catch(() => {
+      });
+    }
+    try {
+      const { useUIStore: useUIStore2 } = await __vitePreload(async () => {
+        const { useUIStore: useUIStore3 } = await Promise.resolve().then(() => uiStore);
+        return { useUIStore: useUIStore3 };
+      }, true ? void 0 : void 0, import.meta.url);
+      const model = useUIStore2.getState().selectedModel;
+      await api$6.sendMessage(text2, void 0, model);
+    } catch {
+    }
+  },
+  appendChunk: (chunk) => {
+    set((s) => ({ streamingText: s.streamingText + chunk }));
+  },
+  finalize: (result) => {
+    const content2 = result.response || result.error || "No response";
+    const assistantMsg = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: content2,
+      timestamp: Date.now()
+    };
+    set((s) => ({
+      messages: [...s.messages, assistantMsg],
+      streamingText: "",
+      isStreaming: false
+    }));
+    if (_sessionId) {
+      api$6.saveMessage(_sessionId, assistantMsg).catch(() => {
+      });
+    }
+  },
+  clear: () => set({
+    messages: [],
+    streamingText: "",
+    isStreaming: false,
+    savedMessageIds: /* @__PURE__ */ new Set(),
+    hasMore: false,
+    isLoadingHistory: false,
+    _offset: 0,
+    scrollToMessageId: null
+  }),
+  markSaved: (messageId) => {
+    set((s) => {
+      const next = new Set(s.savedMessageIds);
+      next.add(messageId);
+      return { savedMessageIds: next };
+    });
+    if (_sessionId) {
+      api$6.markMessageSaved(_sessionId, messageId).catch(() => {
+      });
+    }
+  },
+  loadInitial: async (sessionId) => {
+    _sessionId = sessionId;
+    try {
+      const [count, messages, savedIds] = await Promise.all([
+        api$6.getMessageCount(sessionId),
+        api$6.loadMessages(sessionId, 0, PAGE_SIZE),
+        api$6.loadSavedMessageIds(sessionId)
+      ]);
+      set({
+        messages,
+        hasMore: count > PAGE_SIZE,
+        _offset: PAGE_SIZE,
+        savedMessageIds: new Set(savedIds || [])
+      });
+    } catch {
+    }
+  },
+  loadHistory: async () => {
+    const { hasMore, isLoadingHistory, _offset } = get();
+    if (!hasMore || isLoadingHistory || !_sessionId) return;
+    set({ isLoadingHistory: true });
+    try {
+      const [count, older] = await Promise.all([
+        api$6.getMessageCount(_sessionId),
+        api$6.loadMessages(_sessionId, _offset, PAGE_SIZE)
+      ]);
+      if (older.length > 0) {
+        set((s) => ({
+          messages: [...older, ...s.messages],
+          _offset: s._offset + older.length,
+          hasMore: s._offset + older.length < count,
+          isLoadingHistory: false
+        }));
+      } else {
+        set({ hasMore: false, isLoadingHistory: false });
+      }
+    } catch {
+      set({ isLoadingHistory: false });
+    }
+  },
+  requestScrollTo: (messageId) => {
+    set({ scrollToMessageId: messageId });
+    setTimeout(() => set({ scrollToMessageId: null }), 100);
+  }
+}));
+function HoverPreview({
+  entity,
+  anchorRect,
+  onMouseEnter,
+  onMouseLeave
+}) {
+  const content2 = entity.content || entity.abstract || entity.valueText || "";
+  if (!content2) return null;
+  const top = Math.min(anchorRect.top, window.innerHeight - 320);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "fixed z-50 w-80 max-h-72 overflow-y-auto rounded-lg border t-border t-bg-surface shadow-xl",
+      style: { left: 230, top },
+      onMouseEnter,
+      onMouseLeave,
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 py-2 border-b t-border", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h4", { className: "text-xs font-semibold t-text truncate", children: entity.title }),
+          entity.type === "paper" && entity.authors?.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-[11px] t-text-muted truncate mt-0.5", children: [
+            entity.authors.slice(0, 3).join(", "),
+            entity.authors.length > 3 ? " et al." : "",
+            entity.year ? ` (${entity.year})` : ""
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-2", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "md-prose text-xs", style: { color: "var(--color-text-secondary)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Markdown, { remarkPlugins: [remarkGfm], children: content2.length > 600 ? content2.slice(0, 600) + "…" : content2 }) }) })
+      ]
+    }
+  );
+}
+const tabs = [
+  { key: "notes", label: "Notes", icon: StickyNote },
+  { key: "data", label: "Data", icon: Database },
+  { key: "papers", label: "Papers", icon: BookOpen },
+  { key: "memory", label: "Mem", icon: Brain }
+];
+function EntityRow({ entity }) {
+  const togglePin = useEntityStore((s) => s.togglePin);
+  const toggleSelect = useEntityStore((s) => s.toggleSelect);
+  const deleteEntity = useEntityStore((s) => s.deleteEntity);
+  const openPreview = useUIStore((s) => s.openPreview);
+  const closePreview = useUIStore((s) => s.closePreview);
+  const previewEntity = useUIStore((s) => s.previewEntity);
+  const requestScrollTo = useChatStore((s) => s.requestScrollTo);
+  const [confirmDelete, setConfirmDelete] = reactExports.useState(false);
+  const [showHover, setShowHover] = reactExports.useState(false);
+  const [anchorRect, setAnchorRect] = reactExports.useState(null);
+  const rowRef = reactExports.useRef(null);
+  const showTimeoutRef = reactExports.useRef(null);
+  const hideTimeoutRef = reactExports.useRef(null);
+  const messageId = entity.provenance?.messageId;
+  const cancelHide = () => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+  };
+  const handleMouseEnter = () => {
+    cancelHide();
+    showTimeoutRef.current = window.setTimeout(() => {
+      if (rowRef.current) {
+        setAnchorRect(rowRef.current.getBoundingClientRect());
+        setShowHover(true);
+      }
+    }, 400);
+  };
+  const handleMouseLeave = () => {
+    if (showTimeoutRef.current) {
+      clearTimeout(showTimeoutRef.current);
+      showTimeoutRef.current = null;
+    }
+    hideTimeoutRef.current = window.setTimeout(() => {
+      setShowHover(false);
+    }, 300);
+  };
+  const handleProvenanceClick = (e) => {
+    e.stopPropagation();
+    if (messageId) requestScrollTo(messageId);
+  };
+  const handleDelete2 = async (e) => {
+    e.stopPropagation();
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      setTimeout(() => setConfirmDelete(false), 2e3);
+      return;
+    }
+    await deleteEntity(entity.id);
+    if (previewEntity?.id === entity.id) closePreview();
+    setConfirmDelete(false);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        ref: rowRef,
+        className: "group flex items-center gap-1.5 px-2 py-1 rounded t-bg-hover transition-colors cursor-pointer",
+        onClick: () => openPreview(entity),
+        onMouseEnter: handleMouseEnter,
+        onMouseLeave: handleMouseLeave,
+        children: [
+          showHover && anchorRect && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            HoverPreview,
+            {
+              entity,
+              anchorRect,
+              onMouseEnter: cancelHide,
+              onMouseLeave: handleMouseLeave
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `w-1 h-1 rounded-full shrink-0 ${entity.pinned ? "bg-orange-400" : entity.selectedForAI ? "bg-blue-400" : "t-bg-elevated"}` }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs t-text truncate flex-1", children: entity.title }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: (e) => {
+                  e.stopPropagation();
+                  togglePin(entity.id);
+                },
+                className: `text-xs px-1.5 py-0.5 rounded ${entity.pinned ? "text-orange-400" : "t-text-muted hover:text-orange-400"}`,
+                title: entity.pinned ? "Unpin" : "Pin",
+                children: "pin"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: (e) => {
+                  e.stopPropagation();
+                  toggleSelect(entity.id);
+                },
+                className: `text-xs px-1.5 py-0.5 rounded ${entity.selectedForAI ? "text-blue-400" : "t-text-muted hover:text-blue-400"}`,
+                title: entity.selectedForAI ? "Deselect" : "Select",
+                children: "sel"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: handleDelete2,
+                className: `text-xs px-1.5 py-0.5 rounded transition-colors ${confirmDelete ? "text-red-500" : "t-text-muted hover:text-red-400"}`,
+                title: confirmDelete ? "Click again to confirm" : "Delete",
+                children: /* @__PURE__ */ jsxRuntimeExports.jsx(Trash2, { size: 12 })
+              }
+            )
+          ] })
+        ]
+      }
+    ),
+    messageId && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "button",
+      {
+        onClick: handleProvenanceClick,
+        className: "flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-orange-400 transition-colors border-l t-border",
+        title: "Scroll to source message",
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(MessageSquare, { size: 9 }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "from chat" })
+        ]
+      }
+    )
+  ] });
+}
+function EntityTabs() {
+  const leftTab = useUIStore((s) => s.leftTab);
+  const setLeftTab = useUIStore((s) => s.setLeftTab);
+  const { notes, papers, data, memory, refreshAll } = useEntityStore();
+  reactExports.useEffect(() => {
+    refreshAll();
+  }, []);
+  const entities = {
+    notes,
+    papers,
+    data,
+    memory
+  };
+  const items = entities[leftTab] || [];
+  const handleDragOver = reactExports.useCallback((e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const handleDrop = reactExports.useCallback((e) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    for (const file of files) {
+      console.log(`Dropped file: ${file.name} (${file.type}, ${file.size} bytes)`);
+    }
+  }, []);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex border-b t-border px-2", children: tabs.map(({ key, label, icon: Icon2 }) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "button",
+      {
+        onClick: () => setLeftTab(key),
+        className: `no-drag flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${leftTab === key ? "border-orange-400 t-text" : "border-transparent t-text-muted hover:t-text-secondary"}`,
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(Icon2, { size: 13 }),
+          label
+        ]
+      },
+      key
+    )) }),
+    leftTab !== "memory" && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        onDragOver: handleDragOver,
+        onDrop: handleDrop,
+        className: "mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40",
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(Upload, { size: 16, className: "mx-auto mb-1 t-text-muted" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs t-text-muted", children: [
+            "Drop files here to add ",
+            leftTab
+          ] })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-1 py-2 space-y-0.5", children: items.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "px-3 py-4 text-xs t-text-muted text-center", children: [
+      "No ",
+      leftTab,
+      " yet"
+    ] }) : items.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(EntityRow, { entity: e }, e.id)) })
+  ] });
+}
+const api$5 = window.api;
+const useSessionStore = create$1((set) => ({
+  sessionId: "",
+  projectPath: "",
+  hasProject: false,
+  init: async () => {
+    const session = await api$5.getCurrentSession();
+    set({
+      sessionId: session.sessionId,
+      projectPath: session.projectPath,
+      hasProject: !!session.projectPath
+    });
+  },
+  pickFolder: async () => {
+    const result = await api$5.pickFolder();
+    if (result) {
+      set({
+        sessionId: result.sessionId,
+        projectPath: result.projectPath,
+        hasProject: true
+      });
+      return true;
+    }
+    return false;
+  }
+}));
+function UserProfile() {
+  const projectPath = useSessionStore((s) => s.projectPath);
+  const pickFolder = useSessionStore((s) => s.pickFolder);
+  const refreshEntities = useEntityStore((s) => s.refreshAll);
+  const handlePickFolder = async () => {
+    const picked = await pickFolder();
+    if (picked) {
+      await refreshEntities();
+    }
+  };
+  const displayPath = projectPath ? projectPath.replace(/^.*\//, "") : "Click to open a project";
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "button",
+    {
+      onClick: handlePickFolder,
+      className: "no-drag flex items-center gap-2 w-full text-left text-sm t-text-secondary hover:t-text transition-colors",
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Folder, { size: 16, className: "shrink-0" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate", children: displayPath })
+      ]
+    }
+  );
+}
+const providers = [...new Set(SUPPORTED_MODELS.map((m) => m.provider))];
+const groupedModels = {};
+for (const p of providers) {
+  groupedModels[p] = SUPPORTED_MODELS.filter((m) => m.provider === p);
+}
+function ModelSelector() {
+  const selectedModel = useUIStore((s) => s.selectedModel);
+  const setModel = useUIStore((s) => s.setModel);
+  const [open, setOpen] = reactExports.useState(false);
+  const ref = reactExports.useRef(null);
+  const current = SUPPORTED_MODELS.find((m) => m.id === selectedModel);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { ref, className: "relative", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "button",
+      {
+        onClick: () => setOpen(!open),
+        className: "no-drag flex items-center gap-1.5 px-2 py-1.5 rounded-lg t-text-secondary text-xs font-medium t-bg-hover transition-colors",
+        title: "Select model",
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(Cpu, { size: 14 }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate max-w-[100px]", children: current?.label || selectedModel }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronDown, { size: 12, className: `transition-transform ${open ? "rotate-180" : ""}` })
+        ]
+      }
+    ),
+    open && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "absolute top-full left-0 mt-1 w-64 max-h-80 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl z-50", children: providers.map((provider) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider t-text-muted sticky top-0 t-bg-surface", children: provider }),
+      groupedModels[provider].map((model) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "button",
+        {
+          onClick: () => {
+            setModel(model.id);
+            setOpen(false);
+          },
+          className: `flex items-center gap-2 w-full px-3 py-2 text-sm text-left transition-colors t-bg-hover ${model.id === selectedModel ? "t-text" : "t-text-secondary"}`,
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-4 shrink-0", children: model.id === selectedModel && /* @__PURE__ */ jsxRuntimeExports.jsx(Check, { size: 14, className: "text-orange-400" }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate", children: model.label })
+          ]
+        },
+        model.id
+      ))
+    ] }, provider)) })
+  ] });
+}
+function LeftSidebar() {
+  const theme = useUIStore((s) => s.theme);
+  const toggleTheme = useUIStore((s) => s.toggleTheme);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { className: "w-78 flex flex-col border-r t-border t-bg-base pt-10", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 pb-3 flex items-center justify-between", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(ModelSelector, {}),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: toggleTheme,
+          className: "no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors",
+          title: `Switch to ${theme === "dark" ? "light" : "dark"} mode`,
+          children: theme === "dark" ? /* @__PURE__ */ jsxRuntimeExports.jsx(Sun, { size: 16 }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Moon, { size: 16 })
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex-1 overflow-y-auto", children: /* @__PURE__ */ jsxRuntimeExports.jsx(EntityTabs, {}) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "border-t t-border p-4", children: /* @__PURE__ */ jsxRuntimeExports.jsx(UserProfile, {}) })
+  ] });
+}
+function HeroIdle() {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center gap-8 max-w-lg", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "relative w-20 h-20", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("svg", { viewBox: "0 0 80 80", className: "w-full h-full", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("defs", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("radialGradient", { id: "burst", cx: "50%", cy: "50%", r: "50%", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("stop", { offset: "0%", stopColor: "#fb923c" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("stop", { offset: "100%", stopColor: "#ea580c" })
+      ] }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "path",
+        {
+          d: "M40 4 L46 28 L68 12 L52 34 L76 40 L52 46 L68 68 L46 52 L40 76 L34 52 L12 68 L28 46 L4 40 L28 34 L12 12 L34 28 Z",
+          fill: "url(#burst)"
+        }
+      )
+    ] }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "h1",
+      {
+        className: "text-3xl font-bold text-center t-text",
+        style: { fontFamily: "'Playfair Display', serif" },
+        children: "What would you like to research?"
+      }
+    )
+  ] });
+}
 const api$4 = window.api;
 function SelectionBookmark() {
   const refreshAll = useEntityStore((s) => s.refreshAll);
@@ -26080,13 +26166,13 @@ function MessageBubble({ msg, isSaved }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: `flex ${isUser ? "justify-end" : "justify-start"} group`, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
-      className: `relative max-w-[80%] rounded-2xl px-4 py-3 text-sm ${isUser ? "text-white" : "t-text assistant-bubble"}${!isUser && isSaved ? " border-l-2 border-green-500" : ""}`,
+      className: `relative max-w-[80%] rounded-2xl px-4 py-3 text-sm t-text ${!isUser ? "assistant-bubble" : ""}${!isUser && isSaved ? " border-l-2 border-green-500" : ""}`,
       style: {
         background: isUser ? "var(--color-bubble-user)" : "var(--color-bubble-assistant)"
       },
       "data-msg-id": msg.id,
       children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "md-prose", style: { color: isUser ? "inherit" : "var(--color-text)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Markdown, { remarkPlugins: [remarkGfm], children: msg.content }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "md-prose", style: { color: "var(--color-text)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Markdown, { remarkPlugins: [remarkGfm], children: msg.content }) }),
         !isUser && /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
@@ -26098,6 +26184,26 @@ function MessageBubble({ msg, isSaved }) {
           }
         )
       ]
+    }
+  ) });
+}
+function ThinkingDots() {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "inline-flex gap-1 items-center", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce", style: { animationDelay: "0ms" } }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce", style: { animationDelay: "150ms" } }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce", style: { animationDelay: "300ms" } })
+  ] });
+}
+function ThinkingBubble() {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex justify-start", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      className: "rounded-2xl px-4 py-3 text-sm t-text-secondary",
+      style: { background: "var(--color-bubble-assistant)" },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(ThinkingDots, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs", children: "Thinking" })
+      ] })
     }
   ) });
 }
@@ -26128,6 +26234,7 @@ function ChatMessages() {
   const bottomRef = reactExports.useRef(null);
   const scrollContainerRef = reactExports.useRef(null);
   const [autoScroll, setAutoScroll] = reactExports.useState(true);
+  const isInitialMount = reactExports.useRef(true);
   const handleScroll = reactExports.useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -26149,7 +26256,12 @@ function ChatMessages() {
   }, [messages.length]);
   reactExports.useEffect(() => {
     if (autoScroll) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      if (isInitialMount.current) {
+        isInitialMount.current = false;
+        bottomRef.current?.scrollIntoView({ behavior: "instant" });
+      } else {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
     }
   }, [messages, streamingText, autoScroll]);
   reactExports.useEffect(() => {
@@ -26179,7 +26291,7 @@ function ChatMessages() {
             },
             msg.id
           )),
-          isStreaming && /* @__PURE__ */ jsxRuntimeExports.jsx(StreamingBubble, {}),
+          isStreaming && (streamingText ? /* @__PURE__ */ jsxRuntimeExports.jsx(StreamingBubble, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(ThinkingBubble, {})),
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: bottomRef })
         ]
       }
@@ -26188,15 +26300,35 @@ function ChatMessages() {
 }
 const api$3 = window.api;
 const typeIcons$2 = {
-  note: /* @__PURE__ */ jsxRuntimeExports.jsx(StickyNote, { size: 14, className: "text-yellow-500" }),
-  paper: /* @__PURE__ */ jsxRuntimeExports.jsx(BookOpen, { size: 14, className: "text-blue-500" }),
-  data: /* @__PURE__ */ jsxRuntimeExports.jsx(Database, { size: 14, className: "text-green-500" }),
-  file: /* @__PURE__ */ jsxRuntimeExports.jsx(FileText, { size: 14, className: "t-text-secondary" })
+  note: /* @__PURE__ */ jsxRuntimeExports.jsx(StickyNote, { size: 13, className: "text-yellow-500" }),
+  paper: /* @__PURE__ */ jsxRuntimeExports.jsx(BookOpen, { size: 13, className: "text-blue-500" }),
+  data: /* @__PURE__ */ jsxRuntimeExports.jsx(Database, { size: 13, className: "text-green-500" }),
+  memory: /* @__PURE__ */ jsxRuntimeExports.jsx(Brain, { size: 13, className: "text-purple-500" }),
+  file: /* @__PURE__ */ jsxRuntimeExports.jsx(FileText, { size: 13, className: "t-text-secondary" })
 };
+const typeLabels = {
+  note: "Notes",
+  paper: "Papers",
+  data: "Data",
+  memory: "Memory",
+  file: "Files"
+};
+const typeOrder = ["note", "paper", "data", "memory", "file"];
 function MentionPopover({ query, onSelect, onClose }) {
   const [candidates, setCandidates] = reactExports.useState([]);
   const [selectedIdx, setSelectedIdx] = reactExports.useState(0);
   const [loading, setLoading] = reactExports.useState(true);
+  const grouped = reactExports.useMemo(() => {
+    const groups = {};
+    for (const c of candidates) {
+      if (!groups[c.type]) groups[c.type] = [];
+      groups[c.type].push(c);
+    }
+    return typeOrder.filter((t) => groups[t]?.length > 0).map((t) => ({ type: t, items: groups[t] }));
+  }, [candidates]);
+  const flatList = reactExports.useMemo(() => {
+    return grouped.flatMap((g) => g.items);
+  }, [grouped]);
   reactExports.useEffect(() => {
     setLoading(true);
     api$3.getCandidates(query).then((result) => {
@@ -26217,53 +26349,68 @@ function MentionPopover({ query, onSelect, onClose }) {
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
         e.stopPropagation();
-        setSelectedIdx((s) => Math.min(s + 1, candidates.length - 1));
+        setSelectedIdx((s) => Math.min(s + 1, flatList.length - 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         e.stopPropagation();
         setSelectedIdx((s) => Math.max(s - 1, 0));
       } else if (e.key === "Enter" || e.key === "Tab") {
-        if (candidates[selectedIdx]) {
+        if (flatList[selectedIdx]) {
           e.preventDefault();
           e.stopPropagation();
-          const c = candidates[selectedIdx];
+          const c = flatList[selectedIdx];
           onSelect(`@${c.type}:${c.value}`);
         }
       }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [candidates, selectedIdx, onSelect, onClose]);
+  }, [flatList, selectedIdx, onSelect, onClose]);
+  let flatIndex = -1;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
-      className: "absolute z-50 w-72 max-h-56 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl",
+      className: "absolute z-50 w-72 max-h-64 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl",
       style: { bottom: "100%", left: 48, marginBottom: 8 },
       children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 py-2 border-b t-border flex items-center gap-2 text-xs t-text-secondary", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(AtSign, { size: 12 }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 py-1.5 border-b t-border flex items-center gap-2 text-xs t-text-secondary", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(AtSign, { size: 11 }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
-            "Mention an entity",
+            "Mention",
             query ? `: "${query}"` : ""
           ] })
         ] }),
-        loading ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-3 text-xs t-text-muted", children: "Loading..." }) : candidates.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-3 text-xs t-text-muted", children: query ? `No matches for "${query}". Try @note:, @paper:, @data:, or @file:` : "Type to search notes, papers, data, or files" }) : candidates.map((c, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "button",
-          {
-            onMouseDown: (e) => {
-              e.preventDefault();
-              onSelect(`@${c.type}:${c.value}`);
-            },
-            className: `flex items-center gap-2 w-full px-3 py-2 text-sm text-left transition-colors ${i === selectedIdx ? "t-bg-elevated t-text" : "t-text-secondary t-bg-hover"}`,
-            children: [
-              typeIcons$2[c.type] || /* @__PURE__ */ jsxRuntimeExports.jsx(AtSign, { size: 14, className: "t-text-muted" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate flex-1", children: c.label }),
-              c.detail && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs t-text-muted truncate max-w-[80px]", children: c.detail }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs t-text-muted", children: c.type })
-            ]
-          },
-          `${c.type}-${c.value}`
-        ))
+        loading ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-3 text-xs t-text-muted", children: "Loading..." }) : flatList.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 py-3 text-xs t-text-muted", children: query ? `No matches for "${query}"` : "Type to search notes, papers, data, or files" }) : grouped.map((group) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 py-1 text-[10px] font-semibold uppercase tracking-wider t-text-muted t-bg-base sticky top-0 flex items-center gap-1.5", children: [
+            typeIcons$2[group.type],
+            typeLabels[group.type] || group.type,
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "font-normal", children: [
+              "(",
+              group.items.length,
+              ")"
+            ] })
+          ] }),
+          group.items.map((c) => {
+            flatIndex++;
+            const idx = flatIndex;
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "button",
+              {
+                onMouseDown: (e) => {
+                  e.preventDefault();
+                  onSelect(`@${c.type}:${c.value}`);
+                },
+                onMouseEnter: () => setSelectedIdx(idx),
+                className: `flex items-center gap-1.5 w-full px-3 py-1 text-xs text-left transition-colors ${idx === selectedIdx ? "t-bg-elevated t-text" : "t-text-secondary t-bg-hover"}`,
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "truncate flex-1", children: c.label }),
+                  c.detail && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] t-text-muted truncate max-w-[60px]", children: c.detail })
+                ]
+              },
+              `${c.type}-${c.value}`
+            );
+          })
+        ] }, group.type))
       ]
     }
   );
@@ -26790,36 +26937,29 @@ function eventTextClass(event) {
   return "t-text-secondary";
 }
 const api$1 = window.api;
-const MAX_VISIBLE = 5;
+const MAX_HEIGHT = 120;
 function WorkingFolder() {
   const workingFiles = useUIStore((s) => s.workingFiles);
-  const [expanded, setExpanded] = reactExports.useState(false);
-  const visibleFiles = expanded ? workingFiles : workingFiles.slice(0, MAX_VISIBLE);
-  const hiddenCount = workingFiles.length - MAX_VISIBLE;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "text-xs font-semibold t-text-muted uppercase tracking-wider mb-2", children: "Working Folder" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("h3", { className: "text-xs font-semibold t-text-muted uppercase tracking-wider mb-2", children: [
+      "Working Folder",
+      workingFiles.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ml-1.5 text-[10px] t-text-muted font-normal", children: [
+        "(",
+        workingFiles.length,
+        ")"
+      ] })
+    ] }),
     workingFiles.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border t-border t-bg-surface px-3 py-4 text-center", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "mx-auto mb-2 w-10 h-10 rounded-lg t-bg-elevated flex items-center justify-center", children: /* @__PURE__ */ jsxRuntimeExports.jsx(FileText, { size: 18, className: "t-text-muted" }) }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs t-text-muted", children: "View and open files created during this task." })
-    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-1", children: [
-      visibleFiles.map((f) => /* @__PURE__ */ jsxRuntimeExports.jsx(FileRow, { file: f }, f.path)),
-      hiddenCount > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "button",
-        {
-          onClick: () => setExpanded(!expanded),
-          className: "flex items-center gap-1 w-full px-2 py-1.5 text-xs t-text-muted hover:t-text-secondary transition-colors",
-          children: expanded ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronUp, { size: 12 }),
-            "Show less"
-          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronDown, { size: 12 }),
-            hiddenCount,
-            " more file",
-            hiddenCount > 1 ? "s" : ""
-          ] })
-        }
-      )
-    ] })
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        className: "space-y-1 overflow-y-auto",
+        style: { maxHeight: MAX_HEIGHT },
+        children: workingFiles.map((f) => /* @__PURE__ */ jsxRuntimeExports.jsx(FileRow, { file: f }, f.path))
+      }
+    )
   ] });
 }
 function FileRow({ file }) {
@@ -26847,9 +26987,9 @@ function FileRow({ file }) {
     "button",
     {
       onClick: handleClick,
-      className: "flex items-center gap-2 px-2 py-1.5 rounded-md t-bg-hover transition-colors text-sm w-full text-left cursor-pointer",
+      className: "flex items-center gap-1.5 px-2 py-1 rounded t-bg-hover transition-colors text-xs w-full text-left cursor-pointer",
       children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(FileText, { size: 13, className: "t-text-muted shrink-0" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(FileText, { size: 11, className: "t-text-muted shrink-0" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "t-text-secondary truncate", children: file.name })
       ]
     }
@@ -27129,9 +27269,7 @@ function App() {
       useChatStore.getState().loadInitial(session.sessionId);
     });
     api.listRootFiles().then((files) => {
-      for (const f of files) {
-        useUIStore.getState().addWorkingFile(f.path);
-      }
+      useUIStore.getState().setWorkingFiles(files.map((f) => f.path));
     });
     const unsub3 = api.onTodoUpdate((item) => {
       useProgressStore.getState().upsertItem(item);

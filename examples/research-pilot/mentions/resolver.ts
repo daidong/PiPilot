@@ -123,8 +123,10 @@ function resolveFile(ref: MentionRef, projectPath: string): ResolvedMention {
       }
     }
 
-    // No cache - instruct coordinator to use convert_to_markdown
-    const content = `[Document file: ${ref.key}]\nPath: ${absPath}\nType: ${ext.slice(1).toUpperCase()}\n\nTo read this document, use the convert_to_markdown tool with URI: file://${absPath}`
+    // No cache - instruct coordinator to use convert_to_markdown.
+    // The framework auto-resolves relative file:// URIs against the working directory,
+    // so we just pass the filename.
+    const content = `[Document file: ${ref.key}]\nType: ${ext.slice(1).toUpperCase()}\n\nTo read this document, call: convert_to_markdown({ path: "${ref.key}" }), then use read to access the extracted .md file.`
     return { ref, label: `file: ${ref.key}`, content }
   }
 

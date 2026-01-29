@@ -4,6 +4,8 @@
  * 将 MCP 工具转换为 AgentFoundry 工具格式
  */
 
+import { resolve as resolvePath, basename } from 'node:path'
+import { existsSync } from 'node:fs'
 import type {
   Tool,
   ToolResult,
@@ -54,9 +56,13 @@ export function adaptMCPTool(
     name: toolName,
     description,
     parameters: convertJsonSchemaToParameters(mcpTool.inputSchema),
-    execute: async (input): Promise<ToolResult<MCPToolResultData>> => {
+    execute: async (rawInput): Promise<ToolResult<MCPToolResultData>> => {
       try {
-        // 设置超时
+        // Resolve file:// URIs: turn relative paths into absolute ones
+        // so MCP servers (which run as child processes) can find the file.
+        const input = normalizeFileUris(rawInput)
+
+        // Set up timeout
         const timeoutPromise = timeout
           ? new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('Tool execution timeout')), timeout)
@@ -196,6 +202,64 @@ function convertMCPResult(result: MCPToolResult): ToolResult<MCPToolResultData> 
     },
     error: result.isError ? text : undefined
   }
+}
+
+/**
+ * Normalize file:// URIs in tool input.
+ *
+ * MCP servers run as child processes and need absolute paths.
+ * LLMs often pass relative paths like "file:///report.pdf" or just "report.pdf".
+ * This resolves them against cwd so the server can find the file.
+ */
+function normalizeFileUris(input: unknown): unknown {
+  if (typeof input !== 'object' || input === null) return input
+
+  const obj = input as Record<string, unknown>
+  let changed = false
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === 'string' && value.startsWith('file://')) {
+      // Strip file:// prefix, then strip leading slashes to get the raw path
+      const raw = value.slice('file://'.length)
+      const filePath = raw.replace(/^\/+/, '') || raw
+
+      // Resolve to absolute: try the path as-is first, then basename against cwd
+      let absPath: string | null = null
+
+      // If it's already absolute and exists, use it
+      if (raw.startsWith('/') && existsSync(raw)) {
+        absPath = raw
+      }
+      // Try resolving as relative to cwd
+      if (!absPath) {
+        const fromCwd = resolvePath(process.cwd(), filePath)
+        if (existsSync(fromCwd)) {
+          absPath = fromCwd
+        }
+      }
+      // Try basename only against cwd
+      if (!absPath) {
+        const name = basename(filePath)
+        const fromBasename = resolvePath(process.cwd(), name)
+        if (existsSync(fromBasename)) {
+          absPath = fromBasename
+        }
+      }
+
+      if (absPath) {
+        const normalized = `file://${absPath}`
+        if (normalized !== value) {
+          result[key] = normalized
+          changed = true
+          continue
+        }
+      }
+    }
+    result[key] = value
+  }
+
+  return changed ? result : input
 }
 
 /**

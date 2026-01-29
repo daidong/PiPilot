@@ -98,6 +98,9 @@ For session history and memory:
 2. Use glob to find files by pattern
 3. Use grep to search for specific patterns
 4. Read files to understand implementation details
+5. When asked to read/review a specific file, read it directly — do NOT glob or grep first
+6. Only use grep when you need to FIND something whose location is unknown
+7. If a read result is truncated, re-read with offset/limit — never use grep to recover truncated content
     `.trim()
   })
 }

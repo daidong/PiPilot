@@ -406,9 +406,15 @@ export class ToolRegistry {
   }
 
   /**
-   * 生成工具 schema（用于 LLM function calling）
+   * Generate tool schemas for LLM function calling.
+   * Supports optional subset filtering and token budget limits.
    */
-  generateToolSchemas(): Array<{
+  generateToolSchemas(options?: {
+    /** Only include these tool names */
+    subset?: string[]
+    /** Maximum total tokens for all schemas (not yet enforced, reserved for future) */
+    maxTokens?: number
+  }): Array<{
     name: string
     description: string
     parameters: {
@@ -418,8 +424,12 @@ export class ToolRegistry {
     }
   }> {
     const schemas = []
+    const subset = options?.subset ? new Set(options.subset) : null
 
     for (const tool of this.tools.values()) {
+      // Skip tools not in subset (if subset specified)
+      if (subset && !subset.has(tool.name)) continue
+
       const properties: Record<string, unknown> = {}
       const required: string[] = []
 
@@ -450,6 +460,21 @@ export class ToolRegistry {
     }
 
     return schemas
+  }
+
+  /**
+   * Validate that a tool call targets a tool in the current allowed subset.
+   * Returns a structured error if the tool is not available.
+   */
+  validateSubset(toolName: string, allowedSubset: string[]): ToolResult | null {
+    const subsetSet = new Set(allowedSubset)
+    if (subsetSet.has(toolName)) {
+      return null // Valid
+    }
+    return {
+      success: false,
+      error: `Tool "${toolName}" is not available this round. Available tools: ${allowedSubset.join(', ')}`
+    }
   }
 
   /**

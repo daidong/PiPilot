@@ -65,7 +65,7 @@ export class MCPProvider implements ToolProvider {
 
       // 转换为 AgentFoundry 工具
       const tools = adaptMCPTools(mcpTools, client, {
-        prefix: serverConfig.toolPrefix ?? serverId,
+        prefix: serverConfig.toolPrefix ?? '',
         timeout: serverConfig.budgets?.timeoutMs,
         includeSource: true,
         sourceName: serverConfig.name

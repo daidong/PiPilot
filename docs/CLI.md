@@ -321,8 +321,8 @@ custom:
 | `repo` | Safe | Repository context sources |
 | `git` | Elevated | Git operations |
 | `exploration` | Safe | Code exploration guidelines |
-| `browser` | Elevated | Browser automation |
 | `python` | Elevated | Python execution |
+| `web` | Elevated | Web search & fetch (Brave Search MCP + fetch). Requires `BRAVE_API_KEY` |
 
 #### Memory & Context Packs
 

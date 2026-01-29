@@ -8,9 +8,9 @@
  * - Token budgeting, history compression, and ctx-expand come for free
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
-import { createAgent, packs, definePack } from '../../../src/index.js'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
+import { join, basename } from 'path'
+import { createAgent, packs, definePack, defineTool } from '../../../src/index.js'
 import { createSubagentTools } from './subagent-tools.js'
 import { createSaveNoteTool, createSavePaperTool } from '../tools/entity-tools.js'
 import type { Agent } from '../../../src/types/agent.js'
@@ -25,20 +25,44 @@ import { countTokens } from '../../../src/utils/tokenizer.js'
  */
 const SYSTEM_PROMPT = `You are Research Pilot, an AI research assistant. You are an execution agent that takes action via tools, not only an advisor. Your long-term memory is the project directory on disk. You must use tools to read and write project files so the next session can resume reliably.
 
-## 0) Available Tools
+## 0) Working Directory & File Paths
 
-Tools: read, write, edit, glob, grep, convert_to_markdown, literature-search, data-analyze, save-note, save-paper, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
+All file operations happen relative to the current working directory (the user's project folder). Always use **relative paths** (e.g. \`report.pdf\`, \`notes/summary.md\`). NEVER fabricate absolute paths like \`/mnt/data/\`, \`/tmp/\`, or \`/home/user/\` — you do not know the absolute path and must not guess it.
+
+For **convert_to_markdown**, pass the relative filename: \`convert_to_markdown({ path: "report.pdf" })\`. It saves the extracted text to a local .md file and returns the path. Then use \`read\` to access the content.
+
+## 1) Available Tools
+
+Tools: read, write, edit, glob, grep, convert_to_markdown, brave_web_search, fetch, literature-search, data-analyze, save-note, save-paper, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
+Note: ctx-get retrieves context from registered sources (memory, session history). Do NOT use ctx-get to discover tools — all available tools are listed here.
 
 Sub-agents: **literature-search** (academic paper search), **data-analyze** (dataset analysis: JSON/CSV/TSV).
-Document conversion: **convert_to_markdown** — converts PDF, Word, Excel, PowerPoint, images (with OCR), audio, HTML, and more to markdown text. Use this to extract content from document files. Pass file:// URI, e.g. \`convert_to_markdown({ uri: "file:///path/to/document.pdf" })\`.
+Web search: **brave_web_search** — general-purpose web search for non-academic queries (news, technology, events, tutorials, documentation, products, people bios). **fetch** — retrieve content from a specific URL.
+Document conversion: **convert_to_markdown** — converts PDF, Word, Excel, PowerPoint, images (with OCR), audio, HTML, etc. to markdown. Saves output to a local .md file and returns the path. Use \`read\` to access the content afterward. Example: \`convert_to_markdown({ path: "document.pdf" })\`.
 Entity saving: **save-note** (creates note in Notes list), **save-paper** (creates literature entry in Literature list). Use these instead of write when saving research notes or paper references — they create proper entities visible in the UI.
 File storage: notes=${PATHS.notes}, literature=${PATHS.literature}, data=${PATHS.data}.
-Do NOT search the web manually — delegate to literature-search.
+Use brave_web_search for general web queries and literature-search for academic paper search. Never use brave_web_search to find academic papers — always use literature-search for that.
 IMPORTANT: When calling literature-search, ALWAYS pass the \`context\` parameter with relevant conversation background (user's research goals, mentioned researchers, specific fields, paper titles). This dramatically improves search quality.
+
+### Tool Selection: literature-search vs brave_web_search
+
+| What you need | Use | Example query |
+|---|---|---|
+| Academic papers, citations, related work | literature-search | "Find papers on graph neural networks for drug discovery" |
+| General knowledge, current events, docs | brave_web_search | "What is the latest version of PyTorch?" |
+| News, tutorials, blog posts, product info | brave_web_search | "How does vLLM handle KV cache offloading?" |
+| A researcher's publications | literature-search | "Find papers by Yann LeCun on self-supervised learning" |
+| A researcher's bio, lab, affiliations | brave_web_search | "What university is Yann LeCun affiliated with?" |
+| Conference deadlines, CFPs | brave_web_search | "NeurIPS 2026 submission deadline" |
+| Read a specific URL | fetch | fetch({ url: "https://..." }) |
+
+Rule: if the answer lives in an academic database → literature-search. If it lives on a regular website → brave_web_search.
 
 ### Operating Loop
 
 Every turn: (1) classify intent → (2) produce the deliverable (rewrite, patch, analysis, plan) → (3) use tools only to verify or fill gaps the deliverable needs. Default to action, not exploration.
+IMPORTANT: Always end your turn with a text response summarizing what you did and any next steps. Never end on a bare tool call with no text — the user must see a final message.
+When a tool returns large content (e.g. document extraction), you may save it locally for reference, but always continue to complete the user's actual request in the same turn — do not stop after saving intermediate results.
 
 ## 1) Core Principles
 
@@ -85,8 +109,10 @@ Before producing a final answer, if any condition applies, call the required too
 | Condition | Required Tool |
 |-----------|--------------|
 | Answer depends on project files | read / glob / grep |
-| "Is this novel?" / "related work" / "find papers" | literature-search |
+| "Is this novel?" / "related work" / "find papers" | literature-search (NOT brave_web_search) |
 | "Analyze this data" / "visualize" | data-analyze |
+| General/technical web question (not academic papers) | brave_web_search |
+| Need to read content at a specific URL | fetch |
 | Question about a person / researcher / PI | grep project files first; literature-search only for external academic background |
 | Unsure about a project-internal fact | read / grep |
 | Unsure about an external academic fact or citation | literature-search |
@@ -305,6 +331,70 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // Initialize MarkItDown MCP pack for document processing (PDF, Word, Excel, PPT, images)
   const documentsPack = await packs.documents({ timeout: 90000 })
 
+  // Find the raw convert_to_markdown tool from the MCP pack
+  const rawConvertTool = documentsPack.tools?.find(t => t.name === 'convert_to_markdown')
+
+  // Wrapper: calls convert_to_markdown, saves full output to a local .md file,
+  // and returns just the file path + stats so the LLM can read it with offset/limit.
+  const convertToMarkdownTool = defineTool({
+    name: 'convert_to_markdown',
+    description: 'Convert a document (PDF, Word, Excel, PPT, images, etc.) to markdown. ' +
+      'Saves the extracted text to a local .md file and returns the file path. ' +
+      'Use the read tool with offset/limit to access the content afterward. ' +
+      'Pass a relative filename, e.g. convert_to_markdown({ path: "report.pdf" }).',
+    parameters: {
+      path: {
+        type: 'string',
+        description: 'Relative path to the document file (e.g. "report.pdf")',
+        required: true
+      }
+    },
+    execute: async (input: { path: string }, context) => {
+      if (!rawConvertTool) {
+        return { success: false, error: 'convert_to_markdown MCP tool not available' }
+      }
+
+      const fileName = input.path
+      const absPath = join(process.cwd(), fileName)
+      if (!existsSync(absPath)) {
+        return { success: false, error: `File not found: ${fileName}` }
+      }
+
+      // Call the underlying MCP tool with proper file:// URI
+      const uri = `file://${absPath}`
+      const result = await rawConvertTool.execute({ uri }, context)
+      if (!result.success) {
+        return result
+      }
+
+      // Extract text content from MCP result
+      const data = result.data as { text?: string } | undefined
+      const text = data?.text || ''
+      if (!text) {
+        return { success: false, error: 'No text extracted from document' }
+      }
+
+      // Write to local .md file
+      const outputName = basename(fileName, '.pdf') + '.extracted.md'
+      const outputPath = join(process.cwd(), outputName)
+      writeFileSync(outputPath, text, 'utf-8')
+      const lines = text.split('\n').length
+
+      return {
+        success: true,
+        data: {
+          outputFile: outputName,
+          lines,
+          bytes: text.length,
+          message: `Extracted ${lines} lines from ${fileName}. Use read tool to access: read({ path: "${outputName}" })`
+        }
+      }
+    }
+  })
+
+  // Initialize web pack for general-purpose web search (brave_web_search, fetch)
+  const webPack = await packs.web({ timeout: 30000 })
+
   const subagentPack = definePack({
     id: 'subagents',
     name: 'Subagent Tools',
@@ -328,7 +418,12 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       packs.todo(),           // todo-add, todo-update, todo-complete, todo-remove
       packs.sessionHistory(), // messageStore for cross-turn history persistence
       packs.contextPipeline(), // ctx-expand, history compression, 5-phase assembly
-      documentsPack,          // convert_to_markdown for PDF, Word, Excel, PPT, images
+      definePack({
+        id: 'documents-wrapper',
+        description: 'Document conversion (saves to local file)',
+        tools: [convertToMarkdownTool as any]
+      }),
+      webPack,                // brave_web_search, fetch for general web queries
       subagentPack             // literature-search, data-analyze
     ],
     onStream,
@@ -340,7 +435,21 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
     onToolResult,
     sessionId,
-    debug
+    debug,
+
+    // Budget management: research profile with dynamic output reserve
+    taskProfile: 'research',
+    outputReserveStrategy: {
+      intermediate: 4096,
+      final: 8192,
+      extended: 16384
+    },
+    budgetConfig: {
+      enabled: true,
+      modelId: model,
+      toolResultCap: 4096,
+      priorityTools: ['read', 'write', 'edit', 'grep', 'glob', 'literature-search']
+    }
   })
 
   return {

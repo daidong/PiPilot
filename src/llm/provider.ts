@@ -280,11 +280,15 @@ export function getModelDefaults(modelId: string): {
 } {
   const model = getModel(modelId)
   if (!model) {
-    return { maxTokens: 4096, temperature: 0.7 }
+    return { maxTokens: 16384, temperature: 0.7 }
   }
 
+  // Use a generous default for agentic use: tool calls often contain large
+  // payloads (e.g., full file rewrites). 4096 is too small and causes the
+  // Vercel AI SDK to silently drop incomplete tool call JSON.
+  const defaultMaxOutput = model.capabilities.reasoning ? 32768 : 16384
   return {
-    maxTokens: Math.min(model.limit.maxOutput, 4096),
+    maxTokens: Math.min(model.limit.maxOutput, defaultMaxOutput),
     temperature: model.capabilities.temperature ? 0.7 : undefined
   }
 }

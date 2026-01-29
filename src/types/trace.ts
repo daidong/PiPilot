@@ -44,6 +44,9 @@ export type TraceEventType =
   | 'llm.request'
   | 'llm.response'
   | 'budget.degradation'
+  | 'budget.retry'
+  | 'budget.profile'
+  | 'agent.toolLoopNudge'
 
 /**
  * Event correlation context for tracing

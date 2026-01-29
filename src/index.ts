@@ -156,6 +156,20 @@ export { ProviderRegistry } from './core/provider-registry.js'
 export { FileMemoryStorage, createMemoryStorage } from './core/memory-storage.js'
 export { FileMessageStore, createMessageStore } from './core/message-store.js'
 export { UnifiedBudgeter, createBudgeterForModel } from './core/unified-budgeter.js'
+export { BudgetCoordinator } from './core/budget-coordinator.js'
+export type {
+  BudgetSlots,
+  BudgetCoordinatorConfig,
+  DegradationAction,
+  DegradationResult,
+  OutputReserveStrategy,
+  RoundHint,
+  TaskProfile,
+  ProfileAllocations
+} from './core/budget-coordinator.js'
+export { SAFETY_MARGIN, HYSTERESIS, PROFILES, TOOL_GROUPS } from './core/budget-coordinator.js'
+export { compressToolResult, enforceToolResultBudget, isAlreadyCompressed, TOOL_RESULT_CAPS, TOOL_RESULT_TOTAL_BUDGET_RATIO } from './core/tool-result-compressor.js'
+export { StateSummarizer, isReferenceMessage, REFERENCE_MESSAGE_PREFIX, ACCUMULATED_FINDINGS_TAG } from './core/state-summarizer.js'
 export { ToolsetCompiler } from './core/toolset-compiler.js'
 export {
   generateRuntimeSnapshot,
@@ -206,14 +220,11 @@ export {
   llmCall,
   llmExpand,
   llmFilter,
-  browser,
-  browse,
   builtinTools,
   safeTools,
   execTools,
   networkTools,
   computeTools,
-  browserTools,
   toolMeta,
   getToolsByRiskLevel,
   getToolsByCategory
@@ -228,11 +239,6 @@ export type {
   LLMExpandOutput,
   LLMFilterInput,
   LLMFilterOutput,
-  BrowserInput,
-  BrowserOutput,
-  BrowseInput,
-  BrowseOutput,
-  SnapshotElement,
   CtxExpandInput,
   CtxExpandOutput,
   CtxExpandType
@@ -308,10 +314,10 @@ export {
   git,
   exploration,
   python,
-  browserPack,
   contextPipeline,
   contextPipelinePack,
   todo,
+  web,
   // 组合工厂
   minimal,
   standard,
@@ -327,6 +333,7 @@ export type {
   NetworkPackOptions,
   ComputePackOptions,
   ContextPipelinePackOptions,
+  WebPackOptions,
   PackRiskLevel,
   PackMeta
 } from './packs/index.js'

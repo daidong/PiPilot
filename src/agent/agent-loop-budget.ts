@@ -180,6 +180,12 @@ export class AgentLoopBudgetManager {
     let messagesExcluded = 0
 
     if (decision.level !== 'normal') {
+      console.error(
+        `[BudgetManager] Degradation level: ${decision.level} | ` +
+        `Estimated tokens — system: ${estimates.system.calibrated}, tools: ${estimates.tools.calibrated}, messages: ${estimates.messages.calibrated} | ` +
+        `Actions: ${decision.actions.map(a => a.type).join(', ')}`
+      )
+
       // Apply message selection if there's a reduce_messages action
       const reduceMessagesAction = decision.actions.find(
         a => a.type === 'reduce_messages'
@@ -197,18 +203,29 @@ export class AgentLoopBudgetManager {
         )
         finalMessages = result.messages as Message[]
         messagesExcluded = result.excludedCount
+        console.error(
+          `[BudgetManager] Messages compacted: ${messages.length} → ${finalMessages.length} (excluded ${messagesExcluded}, target: ${reduceMessagesAction.targetTokens} tokens)`
+        )
       }
 
       // Handle tool reduction if needed (future enhancement)
       const reduceToolsAction = decision.actions.find(a => a.type === 'reduce_tools')
       if (reduceToolsAction && reduceToolsAction.type === 'reduce_tools') {
+        const beforeCount = tools.length
         finalTools = this.reduceTools(tools, reduceToolsAction)
+        console.error(
+          `[BudgetManager] Tools reduced: ${beforeCount} → ${finalTools.length}`
+        )
       }
 
       // Handle system prompt reduction if needed (future enhancement)
       const reduceSystemAction = decision.actions.find(a => a.type === 'reduce_system')
       if (reduceSystemAction && reduceSystemAction.type === 'reduce_system') {
+        const beforeLen = systemPrompt.length
         finalSystemPrompt = this.reduceSystemPrompt(systemPrompt, reduceSystemAction)
+        console.error(
+          `[BudgetManager] System prompt trimmed: ${beforeLen} → ${finalSystemPrompt.length} chars`
+        )
       }
     }
 

@@ -748,7 +748,7 @@ Packs bundle tools, policies, context sources, and prompt fragments.
 | `git()` | Elevated | Git operations |
 | `exploration()` | Safe | Code exploration tools |
 | `python()` | Elevated | Python execution |
-| `browserPack()` | Elevated | Browser automation |
+| `web()` | Elevated | Web search & fetch (Brave Search MCP + fetch). Async: `await packs.web()`. Requires `BRAVE_API_KEY` |
 
 #### Memory Packs
 

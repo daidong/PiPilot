@@ -51,13 +51,23 @@ export class StdioTransport extends MCPTransport {
     }
 
     return new Promise<void>((resolve, reject) => {
+      let settled = false
+      const settle = (fn: () => void) => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timer)
+          fn()
+        }
+      }
+
       const timer = setTimeout(() => {
         this.stop().catch(() => {})
-        reject(new Error(`Start timeout after ${this.startTimeout}ms`))
+        settle(() => reject(new Error(`Start timeout after ${this.startTimeout}ms`)))
       }, this.startTimeout)
 
       try {
-        // 启动子进程
+
+        // Spawn child process
         this.process = spawn(this.stdioConfig.command, this.stdioConfig.args ?? [], {
           cwd: this.stdioConfig.cwd,
           env: {
@@ -67,31 +77,44 @@ export class StdioTransport extends MCPTransport {
           stdio: ['pipe', 'pipe', 'pipe']
         })
 
-        // 处理进程错误
+        // Handle process spawn errors (e.g., command not found)
         this.process.on('error', (error) => {
-          clearTimeout(timer)
           this.handleError(error)
-          reject(error)
+          settle(() => reject(error))
         })
 
-        // 处理进程退出
+        // Collect stderr for diagnostics
+        const stderrChunks: string[] = []
+
+        // Handle early exit before the process is ready
         this.process.on('exit', (code, signal) => {
           if (this.config.debug) {
             console.debug(`[MCP] Process exited with code ${code}, signal ${signal}`)
           }
+          if (!this.ready) {
+            // Process died before becoming ready
+            settle(() =>
+              reject(
+                new Error(
+                  `MCP server process exited with code ${code} before becoming ready` +
+                  (stderrChunks.length ? `\nstderr: ${stderrChunks.join('')}` : '')
+                )
+              )
+            )
+          }
           this.handleClose()
         })
-
-        // 处理 stderr
         if (this.process.stderr) {
           this.process.stderr.on('data', (data: Buffer) => {
+            const text = data.toString()
+            stderrChunks.push(text)
             if (this.config.debug) {
-              console.debug('[MCP] stderr:', data.toString())
+              console.debug('[MCP] stderr:', text)
             }
           })
         }
 
-        // 设置 stdout 读取
+        // Set up stdout reading
         if (this.process.stdout) {
           this.readline = createInterface({
             input: this.process.stdout,
@@ -107,10 +130,17 @@ export class StdioTransport extends MCPTransport {
           })
         }
 
-        // 标记就绪
-        this.ready = true
-        clearTimeout(timer)
-        resolve()
+        // Wait briefly to confirm the process doesn't exit immediately,
+        // then mark as ready. If the process dies within this window,
+        // the 'exit' handler above will reject the promise instead.
+        const readyDelay = 200 // ms
+        setTimeout(() => {
+          if (this.process && !this.process.killed && this.process.exitCode === null) {
+            this.ready = true
+            settle(() => resolve())
+          }
+          // If process already exited, the 'exit' handler will settle.
+        }, readyDelay)
       } catch (error) {
         clearTimeout(timer)
         reject(error)

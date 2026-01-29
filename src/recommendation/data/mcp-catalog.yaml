@@ -67,7 +67,7 @@ entries:
   # Search - Web information retrieval for real-time data access
   # ============================================================================
   - name: brave-search
-    package: "@modelcontextprotocol/server-brave-search"
+    package: "@brave/brave-search-mcp-server"
     description: "Brave Search API web search"
     category: search
     keywords:
@@ -97,12 +97,12 @@ entries:
         command: npx
         args:
           - "-y"
-          - "@modelcontextprotocol/server-brave-search"
+          - "@brave/brave-search-mcp-server@2.0.69"
     envVars:
       - BRAVE_API_KEY
     envVarDescriptions:
       BRAVE_API_KEY: "Brave Search API Key, get it at: https://brave.com/search/api/"
-    installCommand: "npx -y @modelcontextprotocol/server-brave-search"
+    installCommand: "npx -y @brave/brave-search-mcp-server@2.0.69"
     documentation: "https://github.com/modelcontextprotocol/servers"
     permissions:
       - type: api

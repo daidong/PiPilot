@@ -100,9 +100,6 @@ export type BuiltinToolName =
   | 'llm-call'
   | 'llm-expand'
   | 'llm-filter'
-  // 浏览器
-  | 'browser'
-  | 'browse'
 
 /**
  * 工具风险等级
@@ -112,4 +109,4 @@ export type ToolRiskLevel = 'safe' | 'elevated' | 'high'
 /**
  * 工具类别
  */
-export type ToolCategory = 'safe' | 'exec' | 'network' | 'compute' | 'browser'
+export type ToolCategory = 'safe' | 'exec' | 'network' | 'compute'

@@ -6,7 +6,7 @@
  * - exec: Execution capability (requires explicit enable)
  * - network: Network capability (requires explicit enable)
  * - compute: Compute capability (requires explicit enable)
- * - Domain Packs: git, exploration, python, browser, memory, docs
+ * - Domain Packs: git, exploration, python, memory, docs
  */
 
 // ============ Layered Core Packs ============
@@ -27,13 +27,14 @@ export type { ComputePackOptions } from './compute.js'
 export { git } from './git.js'
 export { exploration } from './exploration.js'
 export { python } from './python.js'
-export { browserPack } from './browser.js'
 export { kvMemory } from './kv-memory.js'
 export { sessionHistory } from './session-history.js'
 export { docs } from './docs.js'
 export { discovery } from './discovery.js'
 export { documents } from './documents.js'
 export type { DocumentsPackOptions } from './documents.js'
+export { web } from './web.js'
+export type { WebPackOptions } from './web.js'
 export { contextPipeline, contextPipelinePack } from './context-pipeline.js'
 export type { ContextPipelinePackOptions } from './context-pipeline.js'
 export { todo } from './todo.js'
@@ -50,12 +51,12 @@ import { compute, computeStandard } from './compute.js'
 import { git } from './git.js'
 import { exploration } from './exploration.js'
 import { python } from './python.js'
-import { browserPack } from './browser.js'
 import { kvMemory } from './kv-memory.js'
 import { sessionHistory } from './session-history.js'
 import { docs } from './docs.js'
 import { discovery } from './discovery.js'
 import { documents } from './documents.js'
+import { web } from './web.js'
 import { contextPipeline } from './context-pipeline.js'
 import { todo } from './todo.js'
 
@@ -117,12 +118,12 @@ export const packs = {
   git,
   exploration,
   python,
-  browser: browserPack,
   kvMemory,
   sessionHistory,
   docs,
   discovery,
   documents,
+  web,
   contextPipeline,
   todo,
 
@@ -194,12 +195,6 @@ export const packMeta: Record<string, PackMeta> = {
     requiresExplicitEnable: true,
     description: 'Python execution'
   },
-  browser: {
-    id: 'browser',
-    riskLevel: 'elevated',
-    requiresExplicitEnable: true,
-    description: 'Browser automation'
-  },
   'kv-memory': {
     id: 'kv-memory',
     riskLevel: 'safe',
@@ -229,6 +224,12 @@ export const packMeta: Record<string, PackMeta> = {
     riskLevel: 'safe',
     requiresExplicitEnable: false,
     description: 'Document processing via MarkItDown: PDF, Word, Excel, PPT, Images, Audio'
+  },
+  web: {
+    id: 'web',
+    riskLevel: 'elevated',
+    requiresExplicitEnable: true,
+    description: 'Web search & fetch via Brave Search MCP + built-in fetch tool'
   },
   'context-pipeline': {
     id: 'context-pipeline',
