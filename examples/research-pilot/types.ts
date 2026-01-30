@@ -180,3 +180,38 @@ export interface CLIContext {
   lastAgentResponse?: string
   debug?: boolean
 }
+
+// ============================================================================
+// Data Analysis Types (RFC-006)
+// ============================================================================
+
+/**
+ * Detailed column schema with per-column statistics from rich inference
+ */
+export interface ColumnSchemaDetailed {
+  name: string
+  /** pandas dtype string */
+  dtype: string
+  /** Fraction of missing values (0.0–1.0) */
+  missingRate: number
+  /** Most frequent values with counts (categorical columns) */
+  topKValues?: Array<{ value: string; count: number }>
+  min?: number
+  max?: number
+  mean?: number
+}
+
+/**
+ * Manifest describing all outputs produced by an analysis run
+ */
+export interface ResultsManifest {
+  outputs: Array<{
+    path: string
+    type: 'figure' | 'table' | 'data'
+    title: string
+    description?: string
+    tags?: string[]
+  }>
+  summary: Record<string, unknown>
+  warnings: string[]
+}

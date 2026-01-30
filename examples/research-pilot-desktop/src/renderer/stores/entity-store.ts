@@ -15,6 +15,7 @@ interface EntityState {
   data: EntityItem[]
   pinned: EntityItem[]
   selected: EntityItem[]
+  reset: () => void
   refreshAll: () => Promise<void>
   togglePin: (id: string) => Promise<void>
   toggleSelect: (id: string) => Promise<void>
@@ -30,6 +31,8 @@ export const useEntityStore = create<EntityState>((set) => ({
   data: [],
   pinned: [],
   selected: [],
+
+  reset: () => set({ notes: [], papers: [], data: [], pinned: [], selected: [] }),
 
   refreshAll: async () => {
     const [notes, papers, data, pinned, selected] = await Promise.all([

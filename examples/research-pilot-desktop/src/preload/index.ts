@@ -54,6 +54,8 @@ export interface ElectronAPI {
   // Session/Project
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
   pickFolder: () => Promise<{ projectPath: string; sessionId: string } | null>
+  closeProject: () => Promise<void>
+  onProjectClosed: (cb: () => void) => () => void
 
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
@@ -135,6 +137,12 @@ const api: ElectronAPI = {
 
   getCurrentSession: () => ipcRenderer.invoke('session:current'),
   pickFolder: () => ipcRenderer.invoke('project:pick-folder'),
+  closeProject: () => ipcRenderer.invoke('project:close'),
+  onProjectClosed: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('project:closed', handler)
+    return () => ipcRenderer.removeListener('project:closed', handler)
+  },
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),
   loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),

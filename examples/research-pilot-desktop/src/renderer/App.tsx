@@ -132,6 +132,14 @@ export default function App() {
     }
   }, [hasProject])
 
+  // Listen for menu-triggered Close Project
+  useEffect(() => {
+    const unsub = api.onProjectClosed(() => {
+      useSessionStore.getState().closeProject()
+    })
+    return unsub
+  }, [])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -140,6 +148,11 @@ export default function App() {
         useChatStore.getState().clear()
         useUIStore.getState().setIdle(true)
         useUIStore.getState().closePreview()
+      }
+      // Cmd+Shift+K → Close Project
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'K') {
+        e.preventDefault()
+        useSessionStore.getState().closeProject()
       }
       if (e.key === 'Escape' && previewEntity) {
         useUIStore.getState().closePreview()

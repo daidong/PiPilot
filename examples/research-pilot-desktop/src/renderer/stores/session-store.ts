@@ -1,4 +1,9 @@
 import { create } from 'zustand'
+import { useChatStore } from './chat-store'
+import { useProgressStore } from './progress-store'
+import { useActivityStore } from './activity-store'
+import { useUIStore } from './ui-store'
+import { useEntityStore } from './entity-store'
 
 interface SessionState {
   sessionId: string
@@ -6,6 +11,7 @@ interface SessionState {
   hasProject: boolean
   init: () => Promise<void>
   pickFolder: () => Promise<boolean>
+  closeProject: () => Promise<void>
 }
 
 const api = (window as any).api
@@ -35,5 +41,19 @@ export const useSessionStore = create<SessionState>((set) => ({
       return true
     }
     return false
+  },
+
+  closeProject: async () => {
+    // Tell main process to destroy coordinator + reset state
+    await api.closeProject()
+
+    // Reset all renderer stores (session store last — triggers FolderGate)
+    useChatStore.getState().clear()
+    useProgressStore.getState().clear()
+    useActivityStore.getState().clear()
+    useUIStore.getState().reset()
+    useEntityStore.getState().reset()
+
+    set({ sessionId: '', projectPath: '', hasProject: false })
   }
 }))

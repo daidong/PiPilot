@@ -1,5 +1,5 @@
 /**
- * PythonBridge - Python 长驻服务
+ * PythonBridge - Python long-running service and script executor
  */
 
 import { spawn, ChildProcess } from 'node:child_process'
@@ -8,27 +8,31 @@ import { createPythonError, classifyError } from '../core/errors.js'
 import type { AgentError } from '../core/errors.js'
 
 /**
- * PythonBridge 配置
+ * PythonBridge configuration
  */
 export interface PythonBridgeConfig {
-  /** Python 脚本路径 */
+  /** Path to the Python script */
   script: string
-  /** 模式：脚本（一次性）或服务（长驻） */
+  /** Mode: script (one-shot) or service (long-running) */
   mode?: 'script' | 'service'
-  /** 服务端口（服务模式） */
+  /** Service port (service mode only) */
   port?: number
-  /** Python 解释器 */
+  /** Python interpreter path */
   python?: string
-  /** 工作目录 */
+  /** Working directory */
   cwd?: string
-  /** 环境变量 */
+  /** Environment variables */
   env?: Record<string, string>
-  /** 启动超时（毫秒） */
+  /** Startup timeout in milliseconds (service mode) */
   startupTimeout?: number
+  /** Execution timeout in milliseconds (script mode, default 120000) */
+  executionTimeout?: number
+  /** Grace period before SIGKILL after SIGTERM (milliseconds, default 5000) */
+  gracePeriod?: number
 }
 
 /**
- * 调用结果
+ * Call result
  */
 export interface CallResult<T = unknown> {
   success: boolean
@@ -39,7 +43,7 @@ export interface CallResult<T = unknown> {
 }
 
 /**
- * Python 桥接
+ * Python bridge - executes Python scripts or communicates with long-running Python services
  */
 export class PythonBridge extends EventEmitter {
   private config: PythonBridgeConfig
@@ -49,6 +53,9 @@ export class PythonBridge extends EventEmitter {
     resolve: (result: CallResult) => void
     reject: (error: Error) => void
   }>()
+  /** Tracks active child processes for orphan cleanup */
+  private activeChildren = new Set<ChildProcess>()
+  private cleanupHandlersRegistered = false
 
   constructor(config: PythonBridgeConfig) {
     super()
@@ -56,12 +63,39 @@ export class PythonBridge extends EventEmitter {
       ...config,
       mode: config.mode ?? 'script',
       python: config.python ?? 'python3',
-      startupTimeout: config.startupTimeout ?? 30000
+      startupTimeout: config.startupTimeout ?? 30000,
+      executionTimeout: config.executionTimeout ?? 120000,
+      gracePeriod: config.gracePeriod ?? 5000
     }
   }
 
   /**
-   * 启动 Python 进程（服务模式）
+   * Register process-level cleanup handlers to kill orphan child processes
+   */
+  private registerCleanupHandlers(): void {
+    if (this.cleanupHandlersRegistered) return
+    this.cleanupHandlersRegistered = true
+
+    const cleanup = () => {
+      for (const child of this.activeChildren) {
+        try { child.kill('SIGKILL') } catch { /* already exited */ }
+      }
+      this.activeChildren.clear()
+    }
+
+    process.on('exit', cleanup)
+    process.on('SIGINT', () => {
+      cleanup()
+      process.exit(130)
+    })
+    process.on('SIGTERM', () => {
+      cleanup()
+      process.exit(143)
+    })
+  }
+
+  /**
+   * Start the Python process (service mode only)
    */
   async start(): Promise<void> {
     if (this.config.mode !== 'service') {
@@ -72,23 +106,27 @@ export class PythonBridge extends EventEmitter {
       throw new Error('Python bridge already started')
     }
 
+    this.registerCleanupHandlers()
+
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Python bridge startup timeout'))
       }, this.config.startupTimeout)
 
-      // 启动 Python 进程
+      // Spawn Python process
       this.process = spawn(this.config.python!, [this.config.script], {
         cwd: this.config.cwd,
         env: { ...process.env, ...this.config.env },
         stdio: ['pipe', 'pipe', 'pipe']
       })
 
-      // 处理标准输出
+      this.activeChildren.add(this.process)
+
+      // Handle stdout
       this.process.stdout?.on('data', (data: Buffer) => {
         const message = data.toString().trim()
 
-        // 检查启动消息
+        // Check for startup ready message
         if (message.includes('READY')) {
           clearTimeout(timeout)
           this.ready = true
@@ -97,7 +135,7 @@ export class PythonBridge extends EventEmitter {
           return
         }
 
-        // 处理响应
+        // Handle JSON responses
         try {
           const response = JSON.parse(message) as {
             id: string
@@ -125,25 +163,26 @@ export class PythonBridge extends EventEmitter {
         }
       })
 
-      // 处理标准错误
+      // Handle stderr
       this.process.stderr?.on('data', (data: Buffer) => {
         this.emit('error', data.toString())
       })
 
-      // 处理进程退出
+      // Handle process exit
       this.process.on('exit', (code) => {
         this.ready = false
+        if (this.process) this.activeChildren.delete(this.process)
         this.process = null
         this.emit('exit', code)
 
-        // 拒绝所有待处理的请求
+        // Reject all pending requests
         for (const [_, pending] of this.pending) {
           pending.reject(new Error('Python process exited'))
         }
         this.pending.clear()
       })
 
-      // 处理错误
+      // Handle spawn errors
       this.process.on('error', (error) => {
         clearTimeout(timeout)
         reject(error)
@@ -152,7 +191,7 @@ export class PythonBridge extends EventEmitter {
   }
 
   /**
-   * 停止 Python 进程
+   * Stop the Python process
    */
   async stop(): Promise<void> {
     if (!this.process) {
@@ -164,10 +203,10 @@ export class PythonBridge extends EventEmitter {
         resolve()
       })
 
-      // 发送退出命令
+      // Send exit command
       this.process?.stdin?.write(JSON.stringify({ type: 'exit' }) + '\n')
 
-      // 强制终止超时
+      // Force kill after timeout
       setTimeout(() => {
         this.process?.kill('SIGKILL')
         resolve()
@@ -176,7 +215,7 @@ export class PythonBridge extends EventEmitter {
   }
 
   /**
-   * 调用 Python 方法
+   * Call a Python method
    */
   async call<T = unknown>(method: string, params?: unknown): Promise<CallResult<T>> {
     if (this.config.mode === 'service') {
@@ -187,7 +226,7 @@ export class PythonBridge extends EventEmitter {
   }
 
   /**
-   * 服务模式调用
+   * Service mode call
    */
   private async callService<T>(method: string, params?: unknown): Promise<CallResult<T>> {
     if (!this.ready || !this.process) {
@@ -204,7 +243,7 @@ export class PythonBridge extends EventEmitter {
         reject(Object.assign(new Error('Call timeout'), { agentError }))
       }, 60000)
 
-      // 注册回调
+      // Register callback
       this.pending.set(id, {
         resolve: (result) => {
           clearTimeout(timeout)
@@ -216,16 +255,18 @@ export class PythonBridge extends EventEmitter {
         }
       })
 
-      // 发送请求
+      // Send request
       const request = JSON.stringify({ id, method, params })
       this.process?.stdin?.write(request + '\n')
     })
   }
 
   /**
-   * 脚本模式调用
+   * Script mode call — spawns a one-shot Python process with streaming and graceful timeout
    */
   private async callScript<T>(method: string, params?: unknown): Promise<CallResult<T>> {
+    this.registerCleanupHandlers()
+
     return new Promise((resolve, reject) => {
       const proc = spawn(this.config.python!, [
         this.config.script,
@@ -236,18 +277,52 @@ export class PythonBridge extends EventEmitter {
         env: { ...process.env, ...this.config.env }
       })
 
+      this.activeChildren.add(proc)
+
       let stdout = ''
       let stderr = ''
+      let timedOut = false
 
+      // Graceful timeout: SIGTERM first, then SIGKILL after grace period
+      const execTimeout = this.config.executionTimeout ?? 120000
+      const grace = this.config.gracePeriod ?? 5000
+      const timer = setTimeout(() => {
+        timedOut = true
+        proc.kill('SIGTERM')
+        setTimeout(() => {
+          if (!proc.killed) proc.kill('SIGKILL')
+        }, grace)
+      }, execTimeout)
+
+      // Stream stdout line-by-line
       proc.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString()
+        const chunk = data.toString()
+        stdout += chunk
+        for (const line of chunk.split('\n')) {
+          if (line.trim()) this.emit('stdout', line)
+        }
       })
 
+      // Stream stderr line-by-line
       proc.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString()
+        const chunk = data.toString()
+        stderr += chunk
+        for (const line of chunk.split('\n')) {
+          if (line.trim()) this.emit('stderr', line)
+        }
       })
 
       proc.on('exit', (code) => {
+        clearTimeout(timer)
+        this.activeChildren.delete(proc)
+
+        if (timedOut) {
+          const msg = `Python script timed out after ${execTimeout / 1000}s`
+          const agentError = createPythonError(msg)
+          resolve({ success: false, error: msg, agentError })
+          return
+        }
+
         if (code !== 0) {
           const agentError = createPythonError(stderr || `Process exited with code ${code}`, code ?? undefined)
           resolve({
@@ -267,13 +342,15 @@ export class PythonBridge extends EventEmitter {
       })
 
       proc.on('error', (error) => {
+        clearTimeout(timer)
+        this.activeChildren.delete(proc)
         reject(error)
       })
     })
   }
 
   /**
-   * 检查是否就绪
+   * Check if the service is ready
    */
   isReady(): boolean {
     return this.ready

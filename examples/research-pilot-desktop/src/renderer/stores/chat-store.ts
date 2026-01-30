@@ -100,7 +100,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  clear: () => set({
+  clear: () => {
+    _sessionId = ''
+    return set({
     messages: [],
     streamingText: '',
     isStreaming: false,
@@ -109,7 +111,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     isLoadingHistory: false,
     _offset: 0,
     scrollToMessageId: null
-  }),
+  })},
 
   markSaved: (messageId: string) => {
     set((s) => {

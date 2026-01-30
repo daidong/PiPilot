@@ -49,6 +49,7 @@ interface UIState {
   addWorkingFile: (path: string) => void
   setWorkingFiles: (paths: string[]) => void
   clearWorkingFiles: () => void
+  reset: () => void
   openPreview: (entity: EntityItem) => void
   closePreview: () => void
 }
@@ -96,6 +97,15 @@ export const useUIStore = create<UIState>((set) => ({
       return { workingFiles: files }
     }),
   clearWorkingFiles: () => set({ workingFiles: [] }),
+  reset: () =>
+    set({
+      leftTab: 'notes',
+      isIdle: true,
+      rightSidebarCollapsed: false,
+      leftSidebarCollapsed: false,
+      workingFiles: [],
+      previewEntity: null
+    }),
   openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true }),
   closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false })
 }))
