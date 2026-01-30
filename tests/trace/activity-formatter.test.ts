@@ -112,6 +112,23 @@ describe('createActivityFormatter', () => {
     })
   })
 
+  describe('lazy registry getter', () => {
+    it('resolves registry on each call', () => {
+      let registry: any = undefined
+      const fmt = createActivityFormatter({
+        toolRegistry: () => registry,
+      })
+
+      // Before registry is set, falls back to tool name
+      expect(fmt.formatToolCall('read', { path: 'a.ts' }).label).toBe('read')
+
+      // After registry is set, uses built-in formatter
+      registry = createMockRegistry([read])
+      const s = fmt.formatToolCall('read', { path: '/foo/a.ts' })
+      expect(s.label).toBe('Read a.ts')
+    })
+  })
+
   describe('fallback for unknown tools', () => {
     const fmt = createActivityFormatter()
 

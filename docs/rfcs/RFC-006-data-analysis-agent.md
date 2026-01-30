@@ -299,7 +299,7 @@ If this fails, the system returns a structured error:
 ```typescript
 {
   success: false,
-  error: 'missing_deps',
+  errorCategory: 'resource',  // Missing Python deps = unavailable resource
   details: {
     missing: ['pandas', 'seaborn'],  // parsed from ImportError
     installCommand: 'pip install pandas seaborn',
@@ -318,13 +318,13 @@ The pipeline supports up to 3 attempts with **error classification** based on RF
 
 #### Error Classification
 
-| Error Type | Category | Retryable? | Strategy |
+| Error Type | Category (RFC-005) | Retryable? | Strategy |
 |------------|----------|------------|----------|
-| `SyntaxError`, `NameError`, `TypeError` | `code_logic` | Yes | Pass error to LLM for self-repair |
-| `KeyError`, `ValueError` on data columns | `code_logic` | Yes | Pass error + schema reminder to LLM |
-| `ImportError` | `missing_deps` | **No** | Return structured error to user (see Section 6) |
-| `FileNotFoundError` on injected path vars | `framework_bug` | **No** | Log as internal error, do not retry |
-| `FileNotFoundError` on LLM-derived path | `code_logic` | Yes | Pass error + path rule reminder to LLM |
+| `SyntaxError`, `NameError`, `TypeError` | `execution` | Yes | Pass error to LLM for self-repair |
+| `KeyError`, `ValueError` on data columns | `execution` | Yes | Pass error + schema reminder to LLM |
+| `ImportError` | `resource` | **No** | Return structured error to user (see Section 6) |
+| `FileNotFoundError` on injected path vars | `unknown` | **No** | Log as internal error, do not retry |
+| `FileNotFoundError` on LLM-derived path | `execution` | Yes | Pass error + path rule reminder to LLM |
 | `MemoryError` | `resource` | **Degrade** | Retry with data sampling instruction |
 | Timeout (120s) | `timeout` | **Degrade** | Retry with reduced scope (sample data, fewer plots) |
 
@@ -332,16 +332,16 @@ The pipeline supports up to 3 attempts with **error classification** based on RF
 
 ```
 Attempt 1: Generate code → Execute → Classify result
-  If code_logic error  → Attempt 2 (with error context in prompt)
-  If resource/timeout  → Attempt 2 (with degradation instructions)
-  If missing_deps      → Stop, return to user
-  If framework_bug     → Stop, log error
+  If execution error       → Attempt 2 (with error context in prompt)
+  If resource/timeout      → Attempt 2 (with degradation instructions)
+  If resource (missing dep)→ Stop, return to user
+  If unknown (internal)    → Stop, log error
 
 Attempt 2: Same flow...
 Attempt 3: Last attempt → on failure, return failure with full error history
 ```
 
-On each retry for `code_logic` errors, the error from the previous attempt is appended to the user prompt:
+On each retry for `execution` errors, the error from the previous attempt is appended to the user prompt:
 
 ```
 PREVIOUS ATTEMPT FAILED with this error:
@@ -356,7 +356,7 @@ Fix the error and try a different approach if needed.
 Available columns: timestamp, tool_name, duration, status
 ```
 
-**Key change from original design:** Unrecoverable errors (`missing_deps`, `framework_bug`) are no longer retried, saving LLM calls and avoiding confusing retry loops for problems the LLM cannot fix.
+**Key change from original design:** Unrecoverable errors (`resource` for missing deps, `unknown` for internal bugs) are no longer retried, saving LLM calls and avoiding confusing retry loops for problems the LLM cannot fix. Error categories align with the RFC-005 `ErrorCategory` type.
 
 ### 8. Output Collection via Results Protocol
 
@@ -559,13 +559,13 @@ interface ResultsManifest {
   warnings: string[]
 }
 
-// Error categories for retry classification
-type ErrorCategory =
-  | 'code_logic'      // Retryable: syntax, name, type, key errors
-  | 'missing_deps'    // Not retryable: ImportError
-  | 'framework_bug'   // Not retryable: injected path broken
-  | 'resource'        // Degradable: MemoryError
-  | 'timeout'         // Degradable: execution exceeded time limit
+// Error categories — reuses RFC-005 ErrorCategory (src/core/errors.ts)
+// Relevant categories for data analysis:
+//   'execution'   — Retryable: Python syntax, name, type, key errors
+//   'resource'    — Not retryable (missing deps) or degradable (MemoryError)
+//   'timeout'     — Degradable: execution exceeded time limit
+//   'unknown'     — Not retryable: internal/framework errors
+type ErrorCategory = import('../../../src/core/errors.js').ErrorCategory
 
 // A single output file produced by the analysis
 interface OutputFile {
@@ -785,7 +785,7 @@ The coordinator synthesizes this into a user-facing response.
 
 **Problem:** The system assumes `python3`, `pandas`, `numpy`, `matplotlib`, and `seaborn` are available in the user's environment.
 
-**Mitigation (implemented):** Pre-flight dependency check runs `python3 -c "import pandas, numpy, matplotlib, seaborn"` before first execution. On failure, returns a structured `missing_deps` error with install instructions. This error is classified as non-retryable. See Section 6.
+**Mitigation (implemented):** Pre-flight dependency check runs `python3 -c "import pandas, numpy, matplotlib, seaborn"` before first execution. On failure, returns a structured error with `errorCategory: 'resource'` and install instructions. This error is classified as non-retryable. See Section 6.
 
 ### Issue 5: Large File Handling
 
@@ -882,9 +882,9 @@ Incorporated feedback covering 8 categories. Changes are listed in the reviewer'
 
 1. **Output collection protocol** — Replaced directory scanning with explicit `results.json` manifest written by `write_results()` helper (Section 5, 8)
 2. **Path injection hardening** — Added post-execution path validation (Section 5)
-3. **Retry strategy refinement** — Integrated RFC-005 error classification; stop retrying unrecoverable errors (`missing_deps`, `framework_bug`); degrade on resource/timeout errors (Section 7)
+3. **Retry strategy refinement** — Integrated RFC-005 error classification; stop retrying unrecoverable errors (`resource` for missing deps, `unknown` for internal bugs); degrade on resource/timeout errors (Section 7)
 4. **Timeout & process lifecycle** — Replaced `Promise.race` with SIGTERM → grace → SIGKILL protocol; mandatory orphan process prevention (Section 6)
 5. **Schema inference improvement** — Sampled 200-row inference with per-column dtype, missing rate, top-k, and numeric stats (Section 3)
 6. **Preview efficiency** — Adaptive summary replaces raw 50-line preview (Section 4)
-7. **Dependency management** — Pre-flight check with structured `missing_deps` error and install instructions (Section 6)
+7. **Dependency management** — Pre-flight check with structured `resource` error and install instructions (Section 6)
 8. **Security boundaries** — Path containment with `path.relative()`, network control design (default-off toggle), write restriction with post-run audit (Security Considerations)

@@ -23,6 +23,7 @@ const LIT_STEPS: Record<string, string> = {
 }
 
 const DATA_STEPS: Record<string, string> = {
+  preflight: 'Checking Python dependencies',
   codegen: 'Generating analysis code',
   execute: 'Running Python script',
   collect: 'Collecting results'
@@ -189,17 +190,29 @@ export function createSubagentTools(
           ))
         }
 
-        // Manual progress: codegen
-        emitTodo(onToolResult, makeTodoItem('data-codegen', DATA_STEPS.codegen, 'in_progress'))
+        // Manual progress: preflight → codegen
+        emitTodo(onToolResult, makeTodoItem('data-preflight', DATA_STEPS.preflight, 'in_progress'))
 
         const result = await dataAnalyzer.analyze({
           filePath: input.filePath,
           taskType: (input.taskType as 'analyze' | 'visualize' | 'transform' | 'model') || 'analyze',
-          instructions: input.instructions
+          instructions: input.instructions,
+          onStdout: (line) => {
+            // Forward streaming stdout as IPC events
+            if (onToolResult) {
+              onToolResult('data-stdout', { line, stream: 'stdout' })
+            }
+          },
+          onStderr: (line) => {
+            if (onToolResult) {
+              onToolResult('data-stderr', { line, stream: 'stderr' })
+            }
+          }
         })
 
-        // Mark codegen done, execute done
-        emitTodo(onToolResult, makeTodoItem('data-codegen', DATA_STEPS.codegen, 'done'))
+        // Mark preflight done, codegen done, execute/collect status
+        emitTodo(onToolResult, makeTodoItem('data-preflight', DATA_STEPS.preflight, result.errorCategory === 'resource' && result.attempts === 0 ? 'blocked' : 'done'))
+        emitTodo(onToolResult, makeTodoItem('data-codegen', DATA_STEPS.codegen, result.errorCategory === 'resource' && result.attempts === 0 ? 'blocked' : 'done'))
         emitTodo(onToolResult, makeTodoItem('data-execute', DATA_STEPS.execute, result.success ? 'done' : 'blocked'))
         emitTodo(onToolResult, makeTodoItem('data-collect', DATA_STEPS.collect, result.success ? 'done' : 'blocked'))
 
@@ -208,7 +221,8 @@ export function createSubagentTools(
             success: true,
             data: {
               stdout: result.stdout,
-              outputs: result.outputs.map(o => ({ name: o.name, category: o.category, path: o.path })),
+              outputs: result.outputs.map(o => ({ name: o.name, category: o.category, path: o.path, title: (o as { title?: string }).title })),
+              manifest: result.manifest ? { summary: result.manifest.summary, warnings: result.manifest.warnings } : undefined,
               attempts: result.attempts
             }
           }

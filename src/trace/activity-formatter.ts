@@ -19,8 +19,8 @@ export interface ToolActivityRule {
 }
 
 export interface ActivityFormatterOptions {
-  /** Tool registry to pull built-in labels from */
-  toolRegistry?: ToolRegistry
+  /** Tool registry to pull built-in labels from (or a getter for deferred access) */
+  toolRegistry?: ToolRegistry | (() => ToolRegistry | undefined)
   /** Custom rules for app-specific tools (checked first) */
   customRules?: ToolActivityRule[]
 }
@@ -37,7 +37,13 @@ function matchRule(rule: ToolActivityRule, toolName: string): boolean {
  * Priority: custom rules > tool.activity > fallback
  */
 export function createActivityFormatter(options?: ActivityFormatterOptions) {
-  const { toolRegistry, customRules = [] } = options ?? {}
+  const { toolRegistry: registryOpt, customRules = [] } = options ?? {}
+
+  /** Resolve the registry whether it's a value or a lazy getter */
+  function getRegistry(): ToolRegistry | undefined {
+    if (typeof registryOpt === 'function') return registryOpt()
+    return registryOpt
+  }
 
   function formatToolCall(tool: string, args: unknown): ActivitySummary {
     const a = (args ?? {}) as Record<string, unknown>
@@ -50,8 +56,9 @@ export function createActivityFormatter(options?: ActivityFormatterOptions) {
     }
 
     // 2. Check tool registry for built-in activity formatter
-    if (toolRegistry) {
-      const toolDef = toolRegistry.get(tool)
+    const registry = getRegistry()
+    if (registry) {
+      const toolDef = registry.get(tool)
       if (toolDef?.activity?.formatCall) {
         return toolDef.activity.formatCall(a)
       }
@@ -79,8 +86,9 @@ export function createActivityFormatter(options?: ActivityFormatterOptions) {
     }
 
     // 2. Check tool registry for built-in activity formatter
-    if (toolRegistry) {
-      const toolDef = toolRegistry.get(tool)
+    const registry = getRegistry()
+    if (registry) {
+      const toolDef = registry.get(tool)
       if (toolDef?.activity?.formatResult) {
         return toolDef.activity.formatResult(r, a)
       }

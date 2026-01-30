@@ -23,6 +23,8 @@ function getFileName(path: string): string {
 }
 
 const fmt = createActivityFormatter({
+  // Lazy getter: registry becomes available after coordinator is created
+  toolRegistry: () => coordinator?.agent?.runtime?.toolRegistry,
   customRules: [
     {
       match: 'literature-search',
@@ -71,6 +73,7 @@ let currentModel = 'gpt-5.2'
 // Start with empty project path — user must select a folder
 let projectPath = ''
 let sessionId = crypto.randomUUID()
+let isClosing = false
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
   const dirs = [PATHS.root, PATHS.notes, PATHS.literature, PATHS.data, PATHS.sessions, PATHS.cache, PATHS.documentCache]
@@ -123,6 +126,7 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
 }
 
 async function ensureCoordinator(win: BrowserWindow, model?: string) {
+  if (isClosing) throw new Error('Project is closing')
   const requestedModel = model || currentModel
   // Recreate coordinator if model changed
   if (coordinator && requestedModel !== currentModel) {
@@ -546,5 +550,37 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       return { projectPath, sessionId }
     }
     return null
+  })
+
+  // Close project: stop agent, destroy coordinator, reset state
+  ipcMain.handle('project:close', async () => {
+    isClosing = true
+    try {
+      // Stop any running agent
+      if (coordinator) {
+        try {
+          ;(coordinator as any).agent.stop()
+        } catch {
+          /* agent may not be running */
+        }
+      }
+
+      // Destroy coordinator (agent + MCP servers + subagents)
+      if (coordinator) {
+        try {
+          await coordinator.destroy()
+        } catch (err) {
+          console.error('[Close] coordinator.destroy() error:', err)
+        }
+        coordinator = null
+      }
+
+      // Reset main-process state
+      projectPath = ''
+      sessionId = crypto.randomUUID()
+      currentModel = 'gpt-5.2'
+    } finally {
+      isClosing = false
+    }
   })
 }

@@ -2,11 +2,13 @@
  * Data Analysis Module
  *
  * Python code execution powered data analysis.
- * Flow: read preview → infer schema → LLM codegen → execute Python → collect outputs → register entities
+ * Flow: preflight → rich schema inference → adaptive summary → LLM codegen
+ *       → execute Python (streaming) → collect outputs via manifest → register entities
  */
 
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'fs'
-import { join, basename, extname, resolve } from 'path'
+import { join, basename, extname, resolve, relative, dirname } from 'path'
+import { execFileSync } from 'child_process'
 import { generateText } from 'ai'
 
 import { getLanguageModelByModelId } from '../../../src/index.js'
@@ -15,34 +17,34 @@ import { executionFailureFeedback, formatFeedbackAsToolResult } from '../../../s
 import { createPythonError } from '../../../src/core/errors.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG } from '../../../src/core/retry.js'
 import { saveData } from '../commands/save-data.js'
-import type { CLIContext } from '../types.js'
+import type { CLIContext, ColumnSchemaDetailed, ResultsManifest } from '../types.js'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-interface ColumnSchema {
-  name: string
-  type: string
-}
-
 interface DataContext {
-  preview: string
-  schema: ColumnSchema[]
+  summary: string
+  schema: ColumnSchemaDetailed[]
   fileName: string
   rowCount: number
+  isStructured: boolean
 }
 
 interface AnalyzeInput {
   filePath: string
   taskType?: 'analyze' | 'visualize' | 'transform' | 'model'
   instructions: string
+  onStdout?: (line: string) => void
+  onStderr?: (line: string) => void
 }
 
 interface OutputFile {
   path: string
   name: string
   category: 'figures' | 'tables' | 'data'
+  title?: string
+  description?: string
 }
 
 export interface AnalyzeResult {
@@ -53,10 +55,37 @@ export interface AnalyzeResult {
   code?: string
   attempts: number
   error?: string
+  manifest?: ResultsManifest
+  errorCategory?: import('../../../src/core/errors.js').ErrorCategory
 }
 
 // ============================================================================
-// Prompts (inlined from academic-writing reference)
+// Dependency Preflight
+// ============================================================================
+
+let depsChecked = false
+
+function checkPythonDeps(): { ok: boolean; error?: string } {
+  if (depsChecked) return { ok: true }
+
+  try {
+    execFileSync('python3', ['-c', 'import pandas, numpy, matplotlib, seaborn'], {
+      timeout: 10000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    depsChecked = true
+    return { ok: true }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return {
+      ok: false,
+      error: `Missing Python dependencies. Install with: pip install pandas numpy matplotlib seaborn\n${msg}`
+    }
+  }
+}
+
+// ============================================================================
+// Prompts
 // ============================================================================
 
 const BASE_ANALYSIS_PROMPT = `You are an expert Python data analyst. You write clean, efficient Python code for data analysis tasks.
@@ -67,10 +96,23 @@ CRITICAL PATH RULES — you MUST follow these exactly:
     FIGURES_DIR — absolute path to save figures
     TABLES_DIR  — absolute path to save CSV tables
     DATA_DIR    — absolute path to save transformed data
+    RESULTS_FILE — absolute path to write the results manifest JSON
 - You MUST use DATA_FILE to read the input. Do NOT compute, derive, or hardcode any file path.
 - You MUST use FIGURES_DIR, TABLES_DIR, DATA_DIR for outputs. Use os.path.join(FIGURES_DIR, "name.png") etc.
 - Do NOT use os.path.dirname(__file__) or any path derivation logic. The paths are already absolute.
 - Do NOT save outputs to any other directory. Only use FIGURES_DIR, TABLES_DIR, DATA_DIR.
+
+RESULTS MANIFEST — you MUST call write_results() at the end of your script:
+- write_results() is pre-defined. Call it with a list of output dicts and an optional summary dict.
+- Each output dict: {"path": <full_path>, "type": "figure"|"table"|"data", "title": <short_title>, "description": <optional>, "tags": <optional list>}
+- Example:
+    write_results(
+        outputs=[
+            {"path": os.path.join(FIGURES_DIR, "scatter.png"), "type": "figure", "title": "X vs Y Scatter"},
+            {"path": os.path.join(TABLES_DIR, "stats.csv"), "type": "table", "title": "Summary Statistics"}
+        ],
+        summary={"correlation": 0.85, "n_rows": 1000}
+    )
 
 STRICT MINIMAL OUTPUT RULE — violation of this rule is a failure:
 - Generate ONLY the outputs the user explicitly asked for. NOTHING more.
@@ -134,25 +176,58 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
+
+def write_results(outputs=None, summary=None):
+    """Write the results manifest JSON. Call this at the end of your script."""
+    manifest = {
+        "outputs": outputs or [],
+        "summary": summary or {},
+        "warnings": []
+    }
+    with open(RESULTS_FILE, 'w') as f:
+        json.dump(manifest, f, indent=2, default=str)
+    print(f"Results manifest written to {RESULTS_FILE}")
 `
 
 // ============================================================================
-// Helper Functions
+// Schema Inference
 // ============================================================================
 
-/**
- * Read first N lines of a file for preview
- */
-function readDataPreview(filePath: string, maxLines = 50): string {
-  const content = readFileSync(filePath, 'utf-8')
-  const lines = content.split('\n')
-  return lines.slice(0, maxLines).join('\n')
+const SCHEMA_SCRIPT = join(dirname(new URL(import.meta.url).pathname), 'schema-inference.py')
+
+interface SchemaInferenceResult {
+  isStructured: boolean
+  rowCount: number
+  columns: ColumnSchemaDetailed[]
+  sampleRows?: unknown[][]
+  firstLines?: string[]
+  lineCount?: number
+  patterns?: { hasTimestamps: boolean; hasDelimiters: boolean; hasKeyValue: boolean }
+  error?: string
+  inferenceWarning?: string
 }
 
 /**
- * Infer column schema from file header/first row
+ * Run rich schema inference via the Python script. Falls back to TS-based inference on failure.
  */
-function inferDataSchema(filePath: string): { columns: ColumnSchema[]; rowCount: number } {
+function inferDataSchemaRich(filePath: string): SchemaInferenceResult {
+  try {
+    const output = execFileSync('python3', [SCHEMA_SCRIPT, filePath], {
+      timeout: 30000,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    return JSON.parse(output) as SchemaInferenceResult
+  } catch {
+    // Fallback: basic TS-based inference
+    return inferDataSchemaFallback(filePath)
+  }
+}
+
+/**
+ * Fallback TS-based schema inference (legacy logic)
+ */
+function inferDataSchemaFallback(filePath: string): SchemaInferenceResult {
   const ext = extname(filePath).toLowerCase()
   const content = readFileSync(filePath, 'utf-8')
   const lines = content.split('\n').filter(l => l.trim())
@@ -161,54 +236,109 @@ function inferDataSchema(filePath: string): { columns: ColumnSchema[]; rowCount:
     try {
       const parsed = JSON.parse(content)
       const rows = Array.isArray(parsed) ? parsed : [parsed]
-      if (rows.length === 0) return { columns: [], rowCount: 0 }
+      if (rows.length === 0) return { isStructured: true, rowCount: 0, columns: [] }
       const firstRow = rows[0]
-      const columns = Object.keys(firstRow).map(name => ({
+      const columns: ColumnSchemaDetailed[] = Object.keys(firstRow).map(name => ({
         name,
-        type: typeof firstRow[name]
+        dtype: typeof firstRow[name],
+        missingRate: 0
       }))
-      return { columns, rowCount: rows.length }
+      return { isStructured: true, rowCount: rows.length, columns }
     } catch {
-      // Malformed JSON — treat as unstructured text
-      return { columns: [], rowCount: lines.length }
+      return { isStructured: false, rowCount: lines.length, columns: [], firstLines: lines.slice(0, 20) }
     }
   }
 
-  // Only attempt CSV/TSV parsing for known tabular extensions
   if (ext === '.csv' || ext === '.tsv') {
     const delimiter = ext === '.tsv' ? '\t' : ','
-    if (lines.length < 1) return { columns: [], rowCount: 0 }
+    if (lines.length < 1) return { isStructured: true, rowCount: 0, columns: [] }
 
     const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^"|"$/g, ''))
-
-    // Infer types from first data row
     const firstDataLine = lines.length > 1 ? lines[1].split(delimiter).map(v => v.trim().replace(/^"|"$/g, '')) : []
-    const columns = headers.map((name, i) => {
+    const columns: ColumnSchemaDetailed[] = headers.map((name, i) => {
       const val = firstDataLine[i]
-      let type = 'string'
+      let dtype = 'object'
       if (val !== undefined && val !== '') {
-        if (!isNaN(Number(val))) type = 'number'
-        else if (val === 'true' || val === 'false') type = 'boolean'
+        if (!isNaN(Number(val))) dtype = 'float64'
+        else if (val === 'true' || val === 'false') dtype = 'bool'
       }
-      return { name, type }
+      return { name, dtype, missingRate: 0 }
     })
 
-    return { columns, rowCount: Math.max(0, lines.length - 1) }
+    return { isStructured: true, rowCount: Math.max(0, lines.length - 1), columns }
   }
 
-  // Unstructured files (.log, .txt, etc.) — no column schema, just line count
-  return { columns: [], rowCount: lines.length }
+  // Unstructured
+  return { isStructured: false, rowCount: lines.length, columns: [], firstLines: lines.slice(0, 20) }
 }
+
+// ============================================================================
+// Adaptive Summary
+// ============================================================================
+
+/**
+ * Build an LLM-friendly text summary from the rich schema inference result
+ */
+function buildAdaptiveSummary(schema: SchemaInferenceResult): string {
+  if (schema.isStructured && schema.columns.length > 0) {
+    const parts: string[] = []
+    parts.push(`Structured data: ${schema.rowCount} rows, ${schema.columns.length} columns\n`)
+    parts.push('Column details:')
+    for (const col of schema.columns) {
+      let line = `  - ${col.name} (${col.dtype}, ${(col.missingRate * 100).toFixed(1)}% missing)`
+      if (col.min !== undefined) {
+        line += ` | range: [${col.min}, ${col.max}] | mean: ${col.mean}`
+      }
+      if (col.topKValues && col.topKValues.length > 0) {
+        const top = col.topKValues.slice(0, 3).map(v => `"${v.value}"(${v.count})`).join(', ')
+        line += ` | top values: ${top}`
+      }
+      parts.push(line)
+    }
+
+    if (schema.sampleRows && schema.sampleRows.length > 0) {
+      parts.push('\nSample rows:')
+      const headers = schema.columns.map(c => c.name)
+      parts.push(`  ${headers.join(' | ')}`)
+      for (const row of schema.sampleRows) {
+        parts.push(`  ${row.map(v => v === null ? 'NA' : String(v)).join(' | ')}`)
+      }
+    }
+
+    return parts.join('\n')
+  }
+
+  // Unstructured
+  const parts: string[] = []
+  parts.push(`Unstructured text file: ${schema.lineCount ?? schema.rowCount} lines\n`)
+  if (schema.patterns) {
+    const flags: string[] = []
+    if (schema.patterns.hasTimestamps) flags.push('timestamps detected')
+    if (schema.patterns.hasDelimiters) flags.push('delimiters detected')
+    if (schema.patterns.hasKeyValue) flags.push('key=value pairs detected')
+    if (flags.length > 0) parts.push(`Detected patterns: ${flags.join(', ')}`)
+  }
+  if (schema.firstLines && schema.firstLines.length > 0) {
+    parts.push('\nFirst 20 lines:')
+    for (const line of schema.firstLines) {
+      parts.push(`  ${line}`)
+    }
+  }
+
+  return parts.join('\n')
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
 /**
  * Extract Python code from LLM response
  */
 function extractPythonCode(response: string): string | null {
-  // Try markdown code block first
   const blockMatch = response.match(/```python\s*\n([\s\S]*?)```/)
   if (blockMatch) return blockMatch[1].trim()
 
-  // Fallback: look for import statements as code start
   const lines = response.split('\n')
   const importIdx = lines.findIndex(l => l.startsWith('import ') || l.startsWith('from '))
   if (importIdx >= 0) {
@@ -220,35 +350,47 @@ function extractPythonCode(response: string): string | null {
 
 /**
  * Execute a Python script using the framework's PythonBridge (script mode).
- * Wraps with a 120s timeout since PythonBridge script mode has no built-in timeout.
+ * Timeout is handled by PythonBridge's built-in graceful timeout.
  */
-async function executeScript(scriptPath: string, cwd: string): Promise<{ success: boolean; stdout: string; error?: string }> {
+async function executeScript(
+  scriptPath: string,
+  cwd: string,
+  options?: {
+    onStdout?: (line: string) => void
+    onStderr?: (line: string) => void
+    executionTimeout?: number
+    gracePeriod?: number
+  }
+): Promise<{ success: boolean; stdout: string; error?: string }> {
   const bridge = new PythonBridge({
     script: scriptPath,
     mode: 'script',
     cwd,
-    env: { PYTHONDONTWRITEBYTECODE: '1' }
+    env: { PYTHONDONTWRITEBYTECODE: '1' },
+    executionTimeout: options?.executionTimeout ?? 120000,
+    gracePeriod: options?.gracePeriod ?? 5000
   })
 
-  const timeoutMs = 120000
-  const result = await Promise.race([
-    bridge.call<string>('run'),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Python script timed out after ${timeoutMs / 1000}s`)), timeoutMs)
-    )
-  ])
+  // Attach streaming callbacks if provided
+  if (options?.onStdout) {
+    bridge.on('stdout', options.onStdout)
+  }
+  if (options?.onStderr) {
+    bridge.on('stderr', options.onStderr)
+  }
+
+  const result = await bridge.call<string>('run')
 
   if (!result.success) {
     return { success: false, stdout: '', error: result.error || 'Script failed' }
   }
 
-  // PythonBridge returns stdout as data (string) on success
   const stdout = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? '')
   return { success: true, stdout }
 }
 
 /**
- * Collect output files from the output directories
+ * Collect output files from the output directories (fallback when no manifest)
  */
 function collectOutputs(outputBase: string): OutputFile[] {
   const outputs: OutputFile[] = []
@@ -271,6 +413,53 @@ function collectOutputs(outputBase: string): OutputFile[] {
 }
 
 /**
+ * Validate that an output path is within allowed directories
+ */
+function validateOutputPath(outputPath: string, allowedBase: string): boolean {
+  const rel = relative(allowedBase, outputPath)
+  return !rel.startsWith('..') && !rel.startsWith('/')
+}
+
+/**
+ * Collect outputs using the results manifest file, falling back to directory scan
+ */
+function collectOutputsFromManifest(
+  manifestPath: string,
+  runOutputBase: string
+): { outputs: OutputFile[]; manifest?: ResultsManifest } {
+  if (existsSync(manifestPath)) {
+    try {
+      const raw = readFileSync(manifestPath, 'utf-8')
+      const manifest = JSON.parse(raw) as ResultsManifest
+
+      const outputs: OutputFile[] = manifest.outputs
+        .filter(o => validateOutputPath(o.path, runOutputBase))
+        .map(o => {
+          const categoryMap: Record<string, OutputFile['category']> = {
+            figure: 'figures',
+            table: 'tables',
+            data: 'data'
+          }
+          return {
+            path: o.path,
+            name: basename(o.path),
+            category: categoryMap[o.type] || 'data',
+            title: o.title,
+            description: o.description
+          }
+        })
+
+      return { outputs, manifest }
+    } catch {
+      // Manifest exists but is malformed — fall through to directory scan
+    }
+  }
+
+  // Fallback: directory scan
+  return { outputs: collectOutputs(runOutputBase) }
+}
+
+/**
  * Build system prompt based on task type
  */
 function buildSystemPrompt(taskType: string): string {
@@ -285,35 +474,34 @@ function buildUserPrompt(
   instructions: string,
   context: DataContext,
   outputBase: string,
+  resultsFilePath: string,
   previousError?: string
 ): string {
-  const schemaStr = context.schema.length > 0
-    ? 'Schema:\n' + context.schema.map(c => `  - ${c.name} (${c.type})`).join('\n')
-    : 'This is an unstructured text file (not CSV). Parse it line-by-line as needed.'
+  let prompt = `Data file: ${context.fileName} (${context.rowCount} ${context.isStructured ? 'rows' : 'lines'})
 
-  let prompt = `Data file: ${context.fileName} (${context.rowCount} lines)
-
-${schemaStr}
-
-Data preview (first lines):
-\`\`\`
-${context.preview}
-\`\`\`
+${context.summary}
 
 The following variables are ALREADY DEFINED before your code runs — use them directly:
 - DATA_FILE  → read input with: pd.read_csv(DATA_FILE) or json.load(open(DATA_FILE))
 - FIGURES_DIR → save figures with: plt.savefig(os.path.join(FIGURES_DIR, "name.png"))
 - TABLES_DIR  → save tables with: df.to_csv(os.path.join(TABLES_DIR, "name.csv"))
 - DATA_DIR    → save data with: df.to_csv(os.path.join(DATA_DIR, "name.csv"))
+- RESULTS_FILE → call write_results() at the end (already defined)
 
 Do NOT derive or redefine any paths. They are absolute and correct.
+Remember to call write_results() at the very end of your script.
 
 Instructions: ${instructions}
 
 Write a complete Python script. Use DATA_FILE to load the data. Do NOT define your own paths.`
 
   if (previousError) {
-    prompt += `\n\nPREVIOUS ATTEMPT FAILED with this error:\n\`\`\`\n${previousError}\n\`\`\`\nFix the error and try a different approach if needed.`
+    prompt += `\n\nPREVIOUS ATTEMPT FAILED with this error:\n\`\`\`\n${previousError}\n\`\`\``
+    if (context.isStructured && context.schema.length > 0) {
+      prompt += `\n\nAvailable columns: ${context.schema.map(c => c.name).join(', ')}`
+      prompt += `\nRemember to call write_results() at the end.`
+    }
+    prompt += `\nFix the error and try a different approach if needed.`
   }
 
   return prompt
@@ -343,7 +531,19 @@ export function createDataAnalyzer(config: {
 
   return {
     async analyze(input: AnalyzeInput): Promise<AnalyzeResult> {
-      const { filePath, taskType = 'analyze', instructions } = input
+      const { filePath, taskType = 'analyze', instructions, onStdout, onStderr } = input
+
+      // Dependency preflight check
+      const depsResult = checkPythonDeps()
+      if (!depsResult.ok) {
+        return {
+          success: false,
+          outputs: [],
+          attempts: 0,
+          error: depsResult.error,
+          errorCategory: 'resource'
+        }
+      }
 
       // Resolve file path relative to projectPath
       const absPath = resolve(projectPath, filePath)
@@ -351,8 +551,7 @@ export function createDataAnalyzer(config: {
         return { success: false, outputs: [], attempts: 0, error: `File not found: ${filePath}` }
       }
 
-      // Create per-run output directory to isolate this analysis from previous runs.
-      // This prevents old outputs from being re-registered as new entities.
+      // Create per-run output directory
       const runId = `run_${Date.now()}`
       const runLabel = instructions.slice(0, 50).replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'analysis'
       const runOutputBase = join(outputBase, runId)
@@ -360,12 +559,21 @@ export function createDataAnalyzer(config: {
         mkdirSync(join(runOutputBase, sub), { recursive: true })
       }
 
-      // Read data preview and infer schema
-      const preview = readDataPreview(absPath)
-      const { columns, rowCount } = inferDataSchema(absPath)
-      const fileName = basename(absPath)
+      // Results manifest path for this run
+      const resultsFilePath = join(runOutputBase, `results_${runId}.json`)
 
-      const dataContext: DataContext = { preview, schema: columns, fileName, rowCount }
+      // Rich schema inference
+      const schemaResult = inferDataSchemaRich(absPath)
+      const fileName = basename(absPath)
+      const adaptiveSummary = buildAdaptiveSummary(schemaResult)
+
+      const dataContext: DataContext = {
+        summary: adaptiveSummary,
+        schema: schemaResult.columns,
+        fileName,
+        rowCount: schemaResult.rowCount,
+        isStructured: schemaResult.isStructured
+      }
       const systemPrompt = buildSystemPrompt(taskType)
 
       let previousError: string | undefined
@@ -373,8 +581,7 @@ export function createDataAnalyzer(config: {
       const retryBudget = new RetryBudget(DEFAULT_BUDGET_CONFIG)
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        // Build prompt and call LLM
-        const userPrompt = buildUserPrompt(instructions, dataContext, runOutputBase, previousError)
+        const userPrompt = buildUserPrompt(instructions, dataContext, runOutputBase, resultsFilePath, previousError)
 
         const result = await generateText({
           model: languageModel,
@@ -390,15 +597,14 @@ export function createDataAnalyzer(config: {
           continue
         }
 
-        // Prepend standard imports, data file path, and output directories.
-        // The "DO NOT MODIFY" block prevents the LLM-generated code from
-        // overriding these paths with its own derivation logic.
+        // Prepend standard imports, path variables, and write_results() helper
         const fullCode = `${CODE_TEMPLATE_HEADER}
 # ===== DO NOT MODIFY: Runtime-injected paths =====
 DATA_FILE = r"${absPath}"
 FIGURES_DIR = r"${join(runOutputBase, 'figures')}"
 TABLES_DIR = r"${join(runOutputBase, 'tables')}"
 DATA_DIR = r"${join(runOutputBase, 'data')}"
+RESULTS_FILE = r"${resultsFilePath}"
 for _d in [FIGURES_DIR, TABLES_DIR, DATA_DIR]:
     os.makedirs(_d, exist_ok=True)
 # ===== END runtime paths =====
@@ -410,16 +616,19 @@ ${code}`
         const scriptPath = join(scriptsDir, `analysis_${timestamp}.py`)
         writeFileSync(scriptPath, fullCode, 'utf-8')
 
-        // Execute via PythonBridge
-        const execResult = await executeScript(scriptPath, projectPath)
+        // Execute via PythonBridge with streaming
+        const execResult = await executeScript(scriptPath, projectPath, {
+          onStdout,
+          onStderr,
+          executionTimeout: 120000,
+          gracePeriod: 5000
+        })
 
         if (!execResult.success) {
-          // Build structured error feedback for the LLM
           const agentError = createPythonError(execResult.error || 'Script failed')
           const feedback = executionFailureFeedback(agentError)
           previousError = formatFeedbackAsToolResult(feedback)
 
-          // Check retry budget before continuing
           if (attempt < maxAttempts && retryBudget.canRetry(agentError.category, agentError.recoverability)) {
             retryBudget.record(agentError.category)
             continue
@@ -432,12 +641,13 @@ ${code}`
             outputs: [],
             code: fullCode,
             attempts: attempt,
-            error: `Python script failed after ${attempt} attempts: ${agentError.message}`
+            error: `Python script failed after ${attempt} attempts: ${agentError.message}`,
+            errorCategory: agentError.category
           }
         }
 
-        // Collect outputs only from this run's directory (not shared/old outputs)
-        const outputs = collectOutputs(runOutputBase)
+        // Collect outputs via manifest (with fallback to directory scan)
+        const { outputs, manifest } = collectOutputsFromManifest(resultsFilePath, runOutputBase)
 
         // Register each output as a DataAttachment entity
         const cliContext: CLIContext = {
@@ -454,12 +664,20 @@ ${code}`
             '.jpg': 'image/jpeg',
             '.jpeg': 'image/jpeg'
           }
+
+          // Find matching manifest entry for metadata
+          const manifestEntry = manifest?.outputs.find(o => basename(o.path) === output.name)
+
           saveData(
-            output.name,
+            output.title || output.name,
             {
               filePath: output.path,
               mimeType: mimeMap[ext] || 'application/octet-stream',
-              tags: [taskType, 'auto-generated'],
+              tags: [
+                taskType,
+                'auto-generated',
+                ...(manifestEntry?.tags || [])
+              ],
               runId,
               runLabel
             },
@@ -472,7 +690,8 @@ ${code}`
           stdout: execResult.stdout,
           outputs,
           code: fullCode,
-          attempts: attempt
+          attempts: attempt,
+          manifest
         }
       }
 
