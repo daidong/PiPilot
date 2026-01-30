@@ -29,6 +29,7 @@ import {
 } from '../../../src/agent/define-simple-agent.js'
 
 import { getLanguageModelByModelId } from '../../../src/index.js'
+import { loadPrompt } from './prompts/load.js'
 
 import { searchLocalPapers, findExistingPaper } from './local-paper-lookup.js'
 import { getBibtex, type PaperMetadata } from './bibtex-utils.js'
@@ -43,31 +44,7 @@ const planner = defineSimpleAgent({
   id: 'planner',
   description: 'Query Planning Specialist for academic literature research',
 
-  system: `You are a Query Planning Specialist for academic literature research.
-Analyze research requests and create optimized search strategies.
-Generate 2-3 diverse search queries covering different aspects.
-Use academic terminology and consider synonyms, acronyms, and related concepts.
-
-DBLP-specific query syntax (use in dblpQueries only):
-- author:LastName — filter by author (e.g. "author:Bengio deep learning")
-- venue:CONF — filter by venue (e.g. "venue:NIPS attention mechanism")
-- Combine freely: "author:Vaswani venue:NIPS transformer"
-- These prefixes do NOT work on other sources, so keep searchQueries free of them.
-
-When the user mentions specific researchers, conferences, or journals, generate 1-2 dblpQueries that leverage author:/venue: syntax alongside regular searchQueries for other sources.
-
-Output JSON:
-{
-  "originalRequest": "the user's original question",
-  "searchQueries": ["query1", "query2", "query3"],
-  "dblpQueries": ["author:Name topic", "venue:CONF topic"] or null,
-  "searchStrategy": {
-    "focusAreas": ["area1", "area2"],
-    "suggestedSources": ["semantic_scholar", "arxiv", "openalex", "dblp"],
-    "timeRange": { "start": 2020, "end": 2024 } or null
-  },
-  "expectedTopics": ["topic1", "topic2"]
-}`,
+  system: loadPrompt('literature-planner-system'),
 
   prompt: (input) => {
     const data = input as { userRequest?: string } | string
@@ -80,39 +57,7 @@ const reviewer = defineSimpleAgent({
   id: 'reviewer',
   description: 'Research Quality Reviewer who evaluates search results',
 
-  system: `You are a Research Quality Reviewer who evaluates academic paper search results.
-You will receive both the original user research request and the search results.
-Assess relevance against the user's actual intent (0-10 scale), analyze topic coverage, and decide if results are sufficient.
-Approve if at least 3 relevant papers (score >= 7) AND coverage >= 0.7.
-If not approved, suggest additionalQueries that better target the user's original request — refine terminology, try synonyms, or narrow/broaden scope based on gaps.
-
-Papers may include source information indicating where they came from:
-- "local": Previously saved papers from the project's literature library (may already have high relevance)
-- Other sources: Newly discovered external papers
-
-IMPORTANT: You MUST preserve ALL paper metadata in the relevantPapers output. Every paper MUST include ALL of these fields — copy them exactly from the input, using null for missing values:
-- id, title, authors (full array), abstract (complete text — do NOT truncate), year, url
-- source (e.g. "semantic_scholar", "arxiv", "openalex", "dblp", "local")
-- relevanceScore (your 0-10 rating)
-- doi (string or null), venue (string or null), citationCount (number or null)
-
-Do NOT shorten abstracts. Do NOT omit authors. Do NOT drop any field.
-
-Output JSON:
-{
-  "approved": boolean,
-  "relevantPapers": [
-    { "id": "...", "title": "...", "authors": ["author1", "author2", ...], "abstract": "full abstract text...", "year": number, "url": "...", "source": "...", "relevanceScore": number, "doi": "..." or null, "venue": "..." or null, "citationCount": number or null }
-  ],
-  "confidence": number,
-  "coverage": {
-    "score": number,
-    "coveredTopics": ["topic1", "topic2"],
-    "missingTopics": ["topic3"]
-  },
-  "issues": ["issue1", "issue2"],
-  "additionalQueries": ["query1"] or null
-}`,
+  system: loadPrompt('literature-reviewer-system'),
 
   prompt: (input) => {
     const data = input as { papers?: Array<{ id: string; title: string; year: number; abstract: string; source?: string; doi?: string | null; venue?: string | null; citationCount?: number | null }>; queriesUsed?: string[]; userRequest?: string }
@@ -144,36 +89,7 @@ const summarizer = defineSimpleAgent({
   id: 'summarizer',
   description: 'Research Synthesizer who creates comprehensive summaries',
 
-  system: `You are a Research Synthesis Specialist who creates comprehensive literature review summaries.
-You will receive the original user research request along with the reviewed papers.
-Create an insightful, well-organized summary that directly addresses the user's research question.
-Focus on overview, top papers, themes, key findings, and research gaps relevant to the user's intent.
-Be objective and scholarly in tone.
-
-Papers may come from different sources:
-- "local": Previously saved papers from the project's literature library
-- Other sources (semantic_scholar, arxiv, openalex, dblp): Newly discovered external papers
-
-Include source attribution in the overview mentioning how many papers came from the local library vs external sources.
-
-Output JSON:
-{
-  "title": "string",
-  "overview": "string",
-  "sourceAttribution": {
-    "localPapers": number,
-    "externalPapers": number,
-    "totalPapers": number
-  },
-  "papers": [
-    { "title": "...", "authors": "...", "year": number, "summary": "...", "url": "...", "source": "..." }
-  ],
-  "themes": [
-    { "name": "...", "papers": ["paper1", "paper2"], "insight": "..." }
-  ],
-  "keyFindings": ["finding1", "finding2"],
-  "researchGaps": ["gap1", "gap2"]
-}`,
+  system: loadPrompt('literature-summarizer-system'),
 
   prompt: (input) => {
     const data = input as {

@@ -19,10 +19,18 @@ export interface DeleteResult {
 }
 
 /**
+ * Resolve entity directory paths, optionally prefixed with projectPath
+ */
+function resolveEntityDirs(projectPath?: string): string[] {
+  const base = [PATHS.notes, PATHS.literature, PATHS.data]
+  return projectPath ? base.map(p => join(projectPath, p)) : base
+}
+
+/**
  * Find entity file by ID across all entity directories
  */
-function findEntityFile(entityId: string): string | null {
-  const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+function findEntityFile(entityId: string, projectPath?: string): string | null {
+  const dirs = resolveEntityDirs(projectPath)
 
   for (const dir of dirs) {
     if (!existsSync(dir)) continue
@@ -61,12 +69,12 @@ function getEntityTitle(entity: Entity): string {
 /**
  * Delete an entity by ID.
  */
-export function deleteEntity(entityId: string): DeleteResult {
+export function deleteEntity(entityId: string, projectPath?: string): DeleteResult {
   if (!entityId) {
     return { success: false, error: 'Entity ID is required.' }
   }
 
-  const filePath = findEntityFile(entityId)
+  const filePath = findEntityFile(entityId, projectPath)
   if (!filePath) {
     return { success: false, error: `Entity not found: ${entityId}` }
   }

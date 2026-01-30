@@ -8,6 +8,7 @@
  */
 
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
+import { join } from 'path'
 import { PATHS, DataAttachment, CLIContext } from '../types.js'
 
 export interface SaveDataResult {
@@ -64,8 +65,13 @@ export function saveData(
     }
   }
 
-  mkdirSync(PATHS.data, { recursive: true })
-  const metaPath = `${PATHS.data}/${data.id}.json`
+  // Use projectPath if provided, otherwise fall back to relative path
+  const dataPath = context.projectPath
+    ? join(context.projectPath, PATHS.data)
+    : PATHS.data
+
+  mkdirSync(dataPath, { recursive: true })
+  const metaPath = join(dataPath, `${data.id}.json`)
   writeFileSync(metaPath, JSON.stringify(data, null, 2))
 
   return { success: true, data, filePath: metaPath }

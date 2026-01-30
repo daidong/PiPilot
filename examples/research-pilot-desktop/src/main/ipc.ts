@@ -8,7 +8,7 @@ import {
   toggleSelect, getSelected, clearSelections,
   togglePin, getPinned
 } from '@research-pilot/commands/index'
-import { saveNote, getSaveNoteContent } from '@research-pilot/commands/save-note'
+import { saveNote } from '@research-pilot/commands/save-note'
 import { savePaper, parseSavePaperArgs } from '@research-pilot/commands/save-paper'
 import { saveData, parseSaveDataArgs } from '@research-pilot/commands/save-data'
 import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/mentions/index'
@@ -294,7 +294,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
   ipcMain.handle('cmd:search', (_e, query: string) => {
     if (!projectPath) return []
-    return searchEntities(query, projectPath)
+    return searchEntities(projectPath, query)
   })
   ipcMain.handle('cmd:delete', (_e, id: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
@@ -336,12 +336,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('cmd:save-paper', (_e, argsStr: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     const args = parseSavePaperArgs(argsStr)
-    return savePaper({ ...args, projectPath, sessionId })
+    return savePaper(args.title, args, { sessionId, projectPath })
   })
   ipcMain.handle('cmd:save-data', (_e, argsStr: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     const args = parseSaveDataArgs(argsStr)
-    return saveData({ ...args, projectPath, sessionId })
+    return saveData(args.name, args, { sessionId, projectPath })
   })
 
   // Commands - select/pin
@@ -475,7 +475,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     if (tab === 'papers') {
       // Save as a literature reference with content as abstract
       const title = fileName.replace(/\.\w+$/, '')
-      return savePaper(title, { authors: [], abstract: content, projectPath, sessionId })
+      return savePaper(title, { authors: [], abstract: content }, { sessionId, projectPath })
     }
 
     return { success: false, error: `Unknown tab: ${tab}` }

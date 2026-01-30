@@ -24,10 +24,18 @@ export interface SelectedEntity {
 }
 
 /**
+ * Resolve entity directory paths, optionally prefixed with projectPath
+ */
+function resolveEntityDirs(projectPath?: string): string[] {
+  const base = [PATHS.notes, PATHS.literature, PATHS.data]
+  return projectPath ? base.map(p => join(projectPath, p)) : base
+}
+
+/**
  * Find entity file by ID across all entity directories
  */
-function findEntityFile(entityId: string): string | null {
-  const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+function findEntityFile(entityId: string, projectPath?: string): string | null {
+  const dirs = resolveEntityDirs(projectPath)
 
   for (const dir of dirs) {
     if (!existsSync(dir)) continue
@@ -67,8 +75,8 @@ function getEntityTitle(entity: Entity): string {
 }
 
 /** Toggle selection for an entity by ID */
-export function toggleSelect(entityId: string): SelectResult {
-  const filePath = findEntityFile(entityId)
+export function toggleSelect(entityId: string, projectPath?: string): SelectResult {
+  const filePath = findEntityFile(entityId, projectPath)
   if (!filePath) {
     return { success: false, error: `Entity not found: ${entityId}` }
   }
@@ -92,8 +100,8 @@ export function toggleSelect(entityId: string): SelectResult {
 }
 
 /** List all selected entities */
-export function getSelected(): SelectedEntity[] {
-  const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+export function getSelected(projectPath?: string): SelectedEntity[] {
+  const dirs = resolveEntityDirs(projectPath)
   const selected: SelectedEntity[] = []
 
   for (const dir of dirs) {
@@ -122,8 +130,8 @@ export function getSelected(): SelectedEntity[] {
 }
 
 /** Clear all selections, returns count cleared */
-export function clearSelections(): number {
-  const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+export function clearSelections(projectPath?: string): number {
+  const dirs = resolveEntityDirs(projectPath)
   let count = 0
 
   for (const dir of dirs) {
@@ -150,44 +158,3 @@ export function clearSelections(): number {
   return count
 }
 
-/**
- * Handle /select command (legacy readline mode)
- */
-export async function handleSelect(args: string[]): Promise<void> {
-  if (args.includes('--list')) {
-    const selected = getSelected()
-    if (selected.length === 0) {
-      console.log('No entities selected for AI context.')
-      console.log('Use /select <id> to select entities.')
-      return
-    }
-    console.log('Selected entities for AI context:')
-    console.log('')
-    for (const item of selected) {
-      console.log(`  [${item.type}] ${item.id}... - ${item.title}`)
-    }
-    console.log('')
-    console.log(`Total: ${selected.length} selected`)
-    return
-  }
-
-  if (args.includes('--clear')) {
-    const count = clearSelections()
-    console.log(`✓ Cleared ${count} selection(s)`)
-    return
-  }
-
-  const entityId = args[0]
-  if (!entityId) {
-    console.log('Usage: /select <id> | /select --list | /select --clear')
-    return
-  }
-
-  const result = toggleSelect(entityId)
-  if (result.success) {
-    const status = result.selected ? 'selected for AI context' : 'removed from AI context'
-    console.log(`✓ ${result.entityType} "${result.title}" ${status}`)
-  } else {
-    console.log(result.error)
-  }
-}

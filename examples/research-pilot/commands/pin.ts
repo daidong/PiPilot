@@ -24,10 +24,18 @@ export interface PinnedEntity {
 }
 
 /**
+ * Resolve entity directory paths, optionally prefixed with projectPath
+ */
+function resolveEntityDirs(projectPath?: string): string[] {
+  const base = [PATHS.notes, PATHS.literature, PATHS.data]
+  return projectPath ? base.map(p => join(projectPath, p)) : base
+}
+
+/**
  * Find entity file by ID across all entity directories
  */
-function findEntityFile(entityId: string): string | null {
-  const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+function findEntityFile(entityId: string, projectPath?: string): string | null {
+  const dirs = resolveEntityDirs(projectPath)
 
   for (const dir of dirs) {
     if (!existsSync(dir)) continue
@@ -64,8 +72,8 @@ function getEntityTitle(entity: Entity): string {
 }
 
 /** Toggle pinned status for an entity by ID */
-export function togglePin(entityId: string): PinResult {
-  const filePath = findEntityFile(entityId)
+export function togglePin(entityId: string, projectPath?: string): PinResult {
+  const filePath = findEntityFile(entityId, projectPath)
   if (!filePath) {
     return { success: false, error: `Entity not found: ${entityId}` }
   }
@@ -89,8 +97,8 @@ export function togglePin(entityId: string): PinResult {
 }
 
 /** List all pinned entities */
-export function getPinned(): PinnedEntity[] {
-  const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+export function getPinned(projectPath?: string): PinnedEntity[] {
+  const dirs = resolveEntityDirs(projectPath)
   const pinned: PinnedEntity[] = []
 
   for (const dir of dirs) {
@@ -118,38 +126,3 @@ export function getPinned(): PinnedEntity[] {
   return pinned
 }
 
-/**
- * Handle /pin command (legacy readline mode)
- */
-export async function handlePin(args: string[]): Promise<void> {
-  if (args.includes('--list')) {
-    const pinned = getPinned()
-    if (pinned.length === 0) {
-      console.log('No entities pinned.')
-      console.log('Use /pin <id> to pin entities (always included in context).')
-      return
-    }
-    console.log('Pinned entities (always in context):')
-    console.log('')
-    for (const item of pinned) {
-      console.log(`  [${item.type}] ${item.id}... - ${item.title}`)
-    }
-    console.log('')
-    console.log(`Total: ${pinned.length} pinned`)
-    return
-  }
-
-  const entityId = args[0]
-  if (!entityId) {
-    console.log('Usage: /pin <id> | /pin --list')
-    return
-  }
-
-  const result = togglePin(entityId)
-  if (result.success) {
-    const status = result.pinned ? 'pinned (always in context)' : 'unpinned'
-    console.log(`✓ ${result.entityType} "${result.title}" ${status}`)
-  } else {
-    console.log(result.error)
-  }
-}

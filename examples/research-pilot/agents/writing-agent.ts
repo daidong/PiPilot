@@ -13,6 +13,7 @@ import {
 } from '../../../src/agent/define-simple-agent.js'
 
 import { getLanguageModelByModelId } from '../../../src/index.js'
+import { loadPrompt } from './prompts/load.js'
 
 /**
  * Writing Outliner - Creates structured outlines
@@ -21,31 +22,7 @@ export const writingOutliner = defineSimpleAgent({
   id: 'writing-outliner',
   description: 'Creates structured outlines for research documents',
 
-  system: `You are a Research Writing Specialist who creates clear, well-structured outlines.
-
-When given a topic and optional notes/literature, create an outline that:
-1. Has a logical flow from introduction to conclusion
-2. Identifies key sections and subsections
-3. Notes where citations would be appropriate
-4. Suggests word count estimates per section
-
-Output JSON:
-{
-  "title": "Proposed document title",
-  "type": "paper|report|review|proposal",
-  "sections": [
-    {
-      "heading": "Section heading",
-      "level": 1,
-      "description": "What this section covers",
-      "subsections": [...],
-      "suggestedWordCount": 500,
-      "citationsNeeded": ["topic1", "topic2"]
-    }
-  ],
-  "estimatedTotalWords": 3000,
-  "notes": "Additional suggestions for the author"
-}`,
+  system: loadPrompt('writing-outliner-system'),
 
   prompt: (input) => {
     const data = input as {
@@ -76,24 +53,7 @@ export const writingDrafter = defineSimpleAgent({
   id: 'writing-drafter',
   description: 'Drafts research document sections',
 
-  system: `You are a Research Writing Specialist who drafts clear, scholarly prose.
-
-When given a section outline and context, write content that:
-1. Is clear, concise, and academically appropriate
-2. Integrates citations naturally using [Author, Year] format
-3. Maintains logical flow between paragraphs
-4. Uses topic sentences effectively
-
-Output JSON:
-{
-  "sectionHeading": "The section heading",
-  "content": "The drafted content with [citations]...",
-  "wordCount": 500,
-  "citationsUsed": [
-    { "key": "Author2024", "context": "Where/how it was cited" }
-  ],
-  "suggestions": "Any notes for the author about this section"
-}`,
+  system: loadPrompt('writing-drafter-system'),
 
   prompt: (input) => {
     const data = input as {

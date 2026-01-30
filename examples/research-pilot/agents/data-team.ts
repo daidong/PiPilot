@@ -17,6 +17,7 @@ import { executionFailureFeedback, formatFeedbackAsToolResult } from '../../../s
 import { createPythonError } from '../../../src/core/errors.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG } from '../../../src/core/retry.js'
 import { saveData } from '../commands/save-data.js'
+import { loadPrompt } from './prompts/load.js'
 import type { CLIContext, ColumnSchemaDetailed, ResultsManifest } from '../types.js'
 
 // ============================================================================
@@ -88,106 +89,28 @@ function checkPythonDeps(): { ok: boolean; error?: string } {
 // Prompts
 // ============================================================================
 
-const BASE_ANALYSIS_PROMPT = `You are an expert Python data analyst. You write clean, efficient Python code for data analysis tasks.
+const BASE_ANALYSIS_PROMPT = loadPrompt('data-analysis-system')
 
-CRITICAL PATH RULES — you MUST follow these exactly:
-- The runtime pre-defines these variables before your code runs:
-    DATA_FILE  — absolute path to the input data file
-    FIGURES_DIR — absolute path to save figures
-    TABLES_DIR  — absolute path to save CSV tables
-    DATA_DIR    — absolute path to save transformed data
-    RESULTS_FILE — absolute path to write the results manifest JSON
-- You MUST use DATA_FILE to read the input. Do NOT compute, derive, or hardcode any file path.
-- You MUST use FIGURES_DIR, TABLES_DIR, DATA_DIR for outputs. Use os.path.join(FIGURES_DIR, "name.png") etc.
-- Do NOT use os.path.dirname(__file__) or any path derivation logic. The paths are already absolute.
-- Do NOT save outputs to any other directory. Only use FIGURES_DIR, TABLES_DIR, DATA_DIR.
-
-RESULTS MANIFEST — you MUST call write_results() at the end of your script:
-- write_results() is pre-defined. Call it with a list of output dicts and an optional summary dict.
-- Each output dict: {"path": <full_path>, "type": "figure"|"table"|"data", "title": <short_title>, "description": <optional>, "tags": <optional list>}
-- Example:
-    write_results(
-        outputs=[
-            {"path": os.path.join(FIGURES_DIR, "scatter.png"), "type": "figure", "title": "X vs Y Scatter"},
-            {"path": os.path.join(TABLES_DIR, "stats.csv"), "type": "table", "title": "Summary Statistics"}
-        ],
-        summary={"correlation": 0.85, "n_rows": 1000}
-    )
-
-STRICT MINIMAL OUTPUT RULE — violation of this rule is a failure:
-- Generate ONLY the outputs the user explicitly asked for. NOTHING more.
-- Count the nouns in the user's request: "a plot" = 1 figure, "two charts" = 2 figures.
-- If the user asks for "a plot", produce EXACTLY 1 PNG file. Not 2, not 5. ONE.
-- If the user asks for "statistics", produce EXACTLY 1 summary CSV. Not 10.
-- Do NOT generate summary tables, extra analyses, or supplementary files unless the user explicitly asks.
-- Do NOT save intermediate DataFrames as CSV.
-- Do NOT create "bonus" outputs like activity plots, summary CSVs, or top-N tables.
-- Before writing any plt.savefig() or df.to_csv(), ask yourself: "Did the user request this specific output?" If no, DELETE that code.
-- The number of output files must exactly match the number of outputs the user requested.
-
-Other rules:
-- Always use the standard imports provided in the template header
-- Save figures as PNG (use plt.savefig(), NOT plt.show())
-- Save tables as CSV files
-- Use descriptive filenames for all outputs
-- Print a summary of results to stdout
-- Handle missing data gracefully
-- Use tight_layout() for all matplotlib figures
-- Set figure DPI to 150 for good quality
-- Always close figures after saving (plt.close())
-`
-
-const TASK_INSTRUCTIONS: Record<string, string> = {
-  analyze: `Task: Statistical Analysis
-- Compute descriptive statistics (mean, median, std, quartiles)
-- Identify correlations between numeric columns
-- Detect outliers using IQR or z-score methods
-- Print key findings to stdout
-- Save summary statistics as a CSV table`,
-
-  visualize: `Task: Data Visualization
-- Create appropriate plots based on the data types and user instructions
-- Use matplotlib and seaborn for publication-quality figures
-- Add proper titles, axis labels, and legends
-- Use a clean style (seaborn whitegrid or similar)
-- Save each figure as a separate PNG file`,
-
-  transform: `Task: Data Transformation
-- Clean, reshape, or transform the data as instructed
-- Handle missing values, type conversions, and encoding issues
-- Save the transformed dataset as a CSV file
-- Print a summary of changes made`,
-
-  model: `Task: Statistical Modeling
-- Build appropriate statistical or machine learning models
-- Use sklearn or statsmodels as appropriate
-- Report model performance metrics
-- Save results summary as a CSV table
-- Print key metrics to stdout`
+/**
+ * Parse task instructions from the markdown file.
+ * The file uses ## headings as task keys with content below each.
+ */
+function parseTaskInstructions(raw: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  const sections = raw.split(/^## /m).filter(Boolean)
+  for (const section of sections) {
+    const newlineIdx = section.indexOf('\n')
+    if (newlineIdx === -1) continue
+    const key = section.slice(0, newlineIdx).trim()
+    const body = section.slice(newlineIdx + 1).trim()
+    result[key] = body
+  }
+  return result
 }
 
-const CODE_TEMPLATE_HEADER = `import os
-import json
-import pandas as pd
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import seaborn as sns
-import warnings
-warnings.filterwarnings('ignore')
+const TASK_INSTRUCTIONS: Record<string, string> = parseTaskInstructions(loadPrompt('data-analysis-tasks'))
 
-def write_results(outputs=None, summary=None):
-    """Write the results manifest JSON. Call this at the end of your script."""
-    manifest = {
-        "outputs": outputs or [],
-        "summary": summary or {},
-        "warnings": []
-    }
-    with open(RESULTS_FILE, 'w') as f:
-        json.dump(manifest, f, indent=2, default=str)
-    print(f"Results manifest written to {RESULTS_FILE}")
-`
+const CODE_TEMPLATE_HEADER = loadPrompt('data-code-template')
 
 // ============================================================================
 // Schema Inference
