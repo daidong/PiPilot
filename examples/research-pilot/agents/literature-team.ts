@@ -90,13 +90,19 @@ Papers may include source information indicating where they came from:
 - "local": Previously saved papers from the project's literature library (may already have high relevance)
 - Other sources: Newly discovered external papers
 
-IMPORTANT: Preserve all paper metadata including id, doi, source, venue, and citationCount in the relevantPapers output.
+IMPORTANT: You MUST preserve ALL paper metadata in the relevantPapers output. Every paper MUST include ALL of these fields — copy them exactly from the input, using null for missing values:
+- id, title, authors (full array), abstract (complete text — do NOT truncate), year, url
+- source (e.g. "semantic_scholar", "arxiv", "openalex", "dblp", "local")
+- relevanceScore (your 0-10 rating)
+- doi (string or null), venue (string or null), citationCount (number or null)
+
+Do NOT shorten abstracts. Do NOT omit authors. Do NOT drop any field.
 
 Output JSON:
 {
   "approved": boolean,
   "relevantPapers": [
-    { "id": "...", "title": "...", "authors": [...], "abstract": "...", "year": number, "url": "...", "source": "...", "relevanceScore": number, "doi": "..." or null, "venue": "..." or null, "citationCount": number or null }
+    { "id": "...", "title": "...", "authors": ["author1", "author2", ...], "abstract": "full abstract text...", "year": number, "url": "...", "source": "...", "relevanceScore": number, "doi": "..." or null, "venue": "..." or null, "citationCount": number or null }
   ],
   "confidence": number,
   "coverage": {
@@ -123,7 +129,10 @@ Output JSON:
       .map((p, i) => {
         const sourceTag = p.source ? ` [${p.source}]` : ''
         const doiTag = p.doi ? ` doi:${p.doi}` : ''
-        return `Paper ${i + 1} (id: ${p.id})${sourceTag}${doiTag}: "${p.title}" (${p.year}) - ${p.abstract?.slice(0, 200) ?? ''}...`
+        const venueTag = p.venue ? ` venue:${p.venue}` : ''
+        const citeTag = p.citationCount != null ? ` citations:${p.citationCount}` : ''
+        const authorsList = Array.isArray((p as any).authors) ? ` authors:${(p as any).authors.join(', ')}` : ''
+        return `Paper ${i + 1} (id: ${p.id})${sourceTag}${doiTag}${venueTag}${citeTag}${authorsList}: "${p.title}" (${p.year})\nAbstract: ${p.abstract ?? '(none)'}`
       })
       .join('\n')
 
@@ -344,7 +353,7 @@ async function searchSource(source: string, query: string, limit: number): Promi
 
   switch (source) {
     case 'semantic_scholar':
-      url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodedQuery}&limit=${limit}&fields=paperId,title,abstract,year,venue,citationCount,url,authors`
+      url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodedQuery}&limit=${limit}&fields=paperId,title,abstract,year,venue,citationCount,url,authors,externalIds`
       break
     case 'arxiv':
       url = `http://export.arxiv.org/api/query?search_query=all:${encodedQuery}&max_results=${limit}`
@@ -370,18 +379,23 @@ async function searchSource(source: string, query: string, limit: number): Promi
 }
 
 function parseSemanticScholar(data: { data?: Array<Record<string, unknown>> }): Paper[] {
-  return (data.data || []).map((p): Paper => ({
-    id: String(p.paperId || ''),
-    title: String(p.title || 'Unknown'),
-    authors: ((p.authors as Array<{ name: string }>) || []).slice(0, 20).map(a => a.name),
-    abstract: String(p.abstract || ''),
-    year: Number(p.year) || 0,
-    venue: (p.venue as string) ?? null,
-    citationCount: (p.citationCount as number) ?? null,
-    url: String(p.url || `https://www.semanticscholar.org/paper/${p.paperId}`),
-    source: 'semantic_scholar',
-    doi: null, pdfUrl: null, relevanceScore: null
-  }))
+  return (data.data || []).map((p): Paper => {
+    const externalIds = (p.externalIds as Record<string, string>) || {}
+    return {
+      id: String(p.paperId || ''),
+      title: String(p.title || 'Unknown'),
+      authors: ((p.authors as Array<{ name: string }>) || []).slice(0, 20).map(a => a.name),
+      abstract: String(p.abstract || ''),
+      year: Number(p.year) || 0,
+      venue: (p.venue as string) ?? null,
+      citationCount: (p.citationCount as number) ?? null,
+      url: String(p.url || `https://www.semanticscholar.org/paper/${p.paperId}`),
+      source: 'semantic_scholar',
+      doi: externalIds.DOI || null,
+      pdfUrl: null,
+      relevanceScore: null
+    }
+  })
 }
 
 function parseArxiv(xml: string): Paper[] {
@@ -433,7 +447,8 @@ function parseOpenAlex(data: { results?: Array<Record<string, unknown>> }): Pape
       venue: (w.primary_location as { source?: { display_name: string } })?.source?.display_name ?? null,
       citationCount: (w.cited_by_count as number) ?? null,
       url: String(w.id), source: 'openalex',
-      doi: null, pdfUrl: null, relevanceScore: null
+      doi: typeof w.doi === 'string' ? w.doi.replace('https://doi.org/', '') : null,
+      pdfUrl: null, relevanceScore: null
     }
   })
 }
@@ -705,8 +720,8 @@ export function createLiteratureTeam(config: {
                 source: paper.source
               }
               bibtex = await getBibtex(paperMeta)
-            } catch {
-              // BibTeX generation failed, save without it
+            } catch (err) {
+              console.log(`  [Auto-save] BibTeX generation failed for "${paper.title.slice(0, 40)}...": ${err instanceof Error ? err.message : String(err)}`)
             }
 
             // Save the paper

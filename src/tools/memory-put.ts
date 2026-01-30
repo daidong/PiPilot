@@ -90,6 +90,16 @@ export const memoryPut: Tool<MemoryPutInput, MemoryPutOutput> = defineTool({
       required: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const key = (a.key as string) || ''
+      return { label: key ? `Store: ${key.slice(0, 40)}` : 'Store memory', icon: 'memory' }
+    },
+    formatResult: (_r, a) => {
+      const key = (a?.key as string) || ''
+      return { label: key ? `Stored "${key.slice(0, 30)}"` : 'Stored memory', icon: 'memory' }
+    }
+  },
   execute: async (input, { runtime }) => {
     try {
       // Get memory storage from runtime

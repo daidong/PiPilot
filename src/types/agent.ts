@@ -119,6 +119,8 @@ export interface Agent {
   id: string
   /** Runtime instance (for advanced use: memory sync, session state, etc.) */
   runtime: Runtime
+  /** Ensure packs are initialized (idempotent, called automatically by run()) */
+  ensureInit: () => Promise<void>
   /** 运行 Agent */
   run: (prompt: string, options?: AgentRunOptions) => Promise<AgentRunResult>
   /** 停止运行 */

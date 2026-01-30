@@ -17,18 +17,16 @@ export interface ElectronAPI {
   savePaper: (argsStr: string) => Promise<any>
   saveData: (argsStr: string) => Promise<any>
 
+  // Agent control
+  stopAgent: () => Promise<void>
+  clearSessionMemory: () => Promise<void>
+
   // Select/Pin
   toggleSelect: (id: string) => Promise<any>
   getSelected: () => Promise<any>
   clearSelections: () => Promise<any>
   togglePin: (id: string) => Promise<any>
   getPinned: () => Promise<any>
-
-  // Memory
-  listMemory: () => Promise<any>
-  toggleMemoryPin: (id: string) => Promise<any>
-  toggleMemorySelect: (id: string) => Promise<any>
-  deleteMemory: (id: string) => Promise<any>
 
   // Mentions
   getCandidates: (partial: string, type?: string) => Promise<any>
@@ -46,7 +44,12 @@ export interface ElectronAPI {
   // File tracking
   onFileCreated: (cb: (path: string) => void) => () => void
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
+  readFileBinary: (path: string) => Promise<{ success: boolean; base64?: string; mime?: string; error?: string }>
+  resolvePath: (path: string) => Promise<{ success: boolean; absPath?: string; error?: string }>
   listRootFiles: () => Promise<{ path: string; name: string }[]>
+
+  // File drop
+  dropFile: (fileName: string, content: string, tab: string) => Promise<any>
 
   // Session/Project
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
@@ -84,16 +87,14 @@ const api: ElectronAPI = {
   savePaper: (argsStr) => ipcRenderer.invoke('cmd:save-paper', argsStr),
   saveData: (argsStr) => ipcRenderer.invoke('cmd:save-data', argsStr),
 
+  stopAgent: () => ipcRenderer.invoke('agent:stop'),
+  clearSessionMemory: () => ipcRenderer.invoke('agent:clear-memory'),
+
   toggleSelect: (id) => ipcRenderer.invoke('cmd:select', id),
   getSelected: () => ipcRenderer.invoke('cmd:get-selected'),
   clearSelections: () => ipcRenderer.invoke('cmd:clear-selections'),
   togglePin: (id) => ipcRenderer.invoke('cmd:pin', id),
   getPinned: () => ipcRenderer.invoke('cmd:get-pinned'),
-
-  listMemory: () => ipcRenderer.invoke('cmd:list-memory'),
-  toggleMemoryPin: (id) => ipcRenderer.invoke('cmd:memory-pin', id),
-  toggleMemorySelect: (id) => ipcRenderer.invoke('cmd:memory-select', id),
-  deleteMemory: (id) => ipcRenderer.invoke('cmd:memory-delete', id),
 
   getCandidates: (partial, type) => ipcRenderer.invoke('mention:candidates', partial, type),
 
@@ -126,7 +127,11 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:file-created', handler)
   },
   readFile: (path) => ipcRenderer.invoke('file:read', path),
+  readFileBinary: (path) => ipcRenderer.invoke('file:read-binary', path),
+  resolvePath: (path) => ipcRenderer.invoke('file:resolve-path', path),
   listRootFiles: () => ipcRenderer.invoke('file:list-root'),
+
+  dropFile: (fileName, content, tab) => ipcRenderer.invoke('file:drop', fileName, content, tab),
 
   getCurrentSession: () => ipcRenderer.invoke('session:current'),
   pickFolder: () => ipcRenderer.invoke('project:pick-folder'),

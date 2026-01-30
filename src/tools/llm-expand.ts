@@ -86,6 +86,16 @@ export const llmExpand: Tool<LLMExpandInput, LLMExpandOutput> = defineTool({
       required: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const text = (a.text as string) || ''
+      return { label: `Expand: ${text.slice(0, 35)}${text.length > 35 ? '...' : ''}`, icon: 'default' }
+    },
+    formatResult: (r) => {
+      const variations = (r.data as any)?.variations as unknown[] || []
+      return { label: `Expanded: ${variations.length} variations`, icon: 'default' }
+    }
+  },
 
   execute: async (input, { runtime }) => {
     const {

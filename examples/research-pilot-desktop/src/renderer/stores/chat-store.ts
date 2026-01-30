@@ -19,6 +19,7 @@ interface ChatState {
   _offset: number
 
   send: (text: string) => Promise<void>
+  stop: () => Promise<void>
   appendChunk: (chunk: string) => void
   finalize: (result: { success: boolean; response?: string; error?: string }) => void
   clear: () => void
@@ -69,6 +70,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch {
       // Error handled via agent:done event
     }
+  },
+
+  stop: async () => {
+    await api.stopAgent()
   },
 
   appendChunk: (chunk: string) => {

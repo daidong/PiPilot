@@ -113,6 +113,8 @@ export interface PolicyConfig {
 export interface BeforeResult {
   allowed: boolean
   reason?: string
+  /** The policy ID that denied the request (if allowed is false) */
+  policyId?: string
   input?: unknown
   transforms?: Transform[]
 }

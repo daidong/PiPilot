@@ -431,6 +431,16 @@ async function getMessagesInRange(
  */
 export const ctxExpand: Tool<CtxExpandInput, CtxExpandOutput> = defineTool({
   name: 'ctx-expand',
+  activity: {
+    formatCall: (a) => {
+      const seg = (a.ref as string) || (a.segment as string) || (a.query as string) || ''
+      return { label: `Expand: ${seg.slice(0, 40)}`, icon: 'memory' }
+    },
+    formatResult: (_r, a) => {
+      const seg = (a?.ref as string) || (a?.segment as string) || (a?.query as string) || ''
+      return { label: seg ? `Expanded "${seg.slice(0, 30)}"` : 'Expanded context', icon: 'memory' }
+    }
+  },
   description: `Expand compressed context from history index. Types: segment (by ID e.g. "seg-0"), message (range e.g. "last-10"), memory (key e.g. "project:rules"), search (keywords).`,
   parameters: {
     type: {

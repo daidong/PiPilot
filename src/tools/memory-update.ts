@@ -82,6 +82,16 @@ export const memoryUpdate: Tool<MemoryUpdateInput, MemoryUpdateOutput> = defineT
       required: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const key = (a.key as string) || ''
+      return { label: key ? `Update: ${key.slice(0, 40)}` : 'Update memory', icon: 'memory' }
+    },
+    formatResult: (_r, a) => {
+      const key = (a?.key as string) || ''
+      return { label: key ? `Updated "${key.slice(0, 30)}"` : 'Updated memory', icon: 'memory' }
+    }
+  },
   execute: async (input, { runtime }) => {
     try {
       // Get memory storage from runtime

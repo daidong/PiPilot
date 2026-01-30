@@ -62,6 +62,17 @@ export const todoAdd: Tool<TodoAddInput, TodoAddOutput> = defineTool({
       required: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const title = (a.title as string) || ''
+      return { label: title ? `Task add: ${title.slice(0, 40)}` : 'Task add', icon: 'task' }
+    },
+    formatResult: (r) => {
+      const item = (r.data as any)?.item ?? (r as any).item ?? r
+      const subject = (item?.title as string) || (item?.subject as string) || ''
+      return { label: subject ? `Task added: ${subject.slice(0, 35)}` : 'Task added', icon: 'task' }
+    }
+  },
   execute: async (input, { runtime }) => {
     try {
       const memoryStorage = runtime.memoryStorage

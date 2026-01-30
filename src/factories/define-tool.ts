@@ -3,6 +3,11 @@
  */
 
 import type { Tool, ToolConfig, ToolContext, ToolResult } from '../types/tool.js'
+import { classifyError } from '../core/errors.js'
+import type { AgentError } from '../core/errors.js'
+import { buildFeedback, formatFeedbackAsToolResult } from '../core/feedback.js'
+import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
+import type { RetryStrategy } from '../core/retry.js'
 
 /**
  * 定义工具
@@ -27,7 +32,8 @@ export function defineTool<TInput = unknown, TOutput = unknown>(
     name: config.name,
     description: config.description,
     parameters: config.parameters,
-    execute: config.execute
+    execute: config.execute,
+    ...(config.activity ? { activity: config.activity } : {})
   }
 }
 
@@ -81,17 +87,58 @@ export function withTimeout<TInput, TOutput>(
 }
 
 /**
- * 创建工具包装器，添加重试
+ * Create a tool wrapper with retry support.
+ *
+ * Uses the structured error system (RFC-005):
+ * - Classifies errors into categories (validation, execution, rate_limit, etc.)
+ * - Uses per-category retry strategies (executor_retry vs agent_retry)
+ * - Tracks retry budget to prevent infinite loops
+ * - Provides structured feedback in error messages
+ *
+ * Accepts either:
+ * - (tool, maxRetries, delayMs) — backwards compat
+ * - (tool, retryStrategy) — new API with full RetryStrategy
  */
 export function withRetry<TInput, TOutput>(
   tool: Tool<TInput, TOutput>,
-  maxRetries: number = 3,
+  maxRetriesOrStrategy: number | RetryStrategy = 3,
   delayMs: number = 1000
 ): Tool<TInput, TOutput> {
+  // Resolve params: new RetryStrategy or legacy (maxRetries, delayMs)
+  let maxRetries: number
+  let resolveBackoff: (category: AgentError, attempt: number) => number
+  let shouldRetryFn: ((error: AgentError, attempt: number, budget: RetryBudget) => boolean) | undefined
+  let feedbackBuilder: ((error: AgentError) => import('../core/feedback.js').ErrorFeedback) | undefined
+
+  if (typeof maxRetriesOrStrategy === 'object') {
+    const strat = maxRetriesOrStrategy
+    maxRetries = strat.maxAttempts - 1
+    shouldRetryFn = strat.shouldRetry
+    feedbackBuilder = strat.buildFeedback ? (err: AgentError) => strat.buildFeedback!(err) : undefined
+    resolveBackoff = (_err, attempt) => {
+      if (strat.backoff) return computeBackoff(strat.backoff, attempt)
+      // Fallback to legacy fields
+      const base = strat.backoffMs ?? delayMs
+      const mult = strat.backoffMultiplier ?? 2
+      return base * Math.pow(mult, attempt)
+    }
+  } else {
+    maxRetries = maxRetriesOrStrategy
+    resolveBackoff = (err, attempt) => {
+      const strategy = getStrategy(err.category)
+      if (strategy.backoff) return computeBackoff(strategy.backoff, attempt)
+      const base = strategy.backoffMs ?? delayMs
+      const mult = strategy.backoffMultiplier ?? 2
+      return base * Math.pow(mult, attempt)
+    }
+  }
+
   return {
     ...tool,
     execute: async (input: TInput, context: ToolContext): Promise<ToolResult<TOutput>> => {
       let lastError: string | undefined
+      let lastAgentError: AgentError | undefined
+      const budget = new RetryBudget(DEFAULT_BUDGET_CONFIG)
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
@@ -100,12 +147,39 @@ export function withRetry<TInput, TOutput>(
             return result
           }
           lastError = result.error
+          lastAgentError = classifyError(result.error || 'Unknown error', { toolName: tool.name })
+          lastAgentError.attempt = attempt + 1
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error)
+          lastAgentError = classifyError(error instanceof Error ? error : lastError, { toolName: tool.name })
+          lastAgentError.attempt = attempt + 1
         }
 
-        if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)))
+        // Check retry budget before continuing
+        if (attempt < maxRetries && lastAgentError) {
+          const canRetry = shouldRetryFn
+            ? shouldRetryFn(lastAgentError, attempt + 1, budget)
+            : budget.canRetry(lastAgentError.category, lastAgentError.recoverability)
+          if (!canRetry) {
+            break
+          }
+          budget.record(lastAgentError.category)
+
+          const backoffMs = resolveBackoff(lastAgentError, attempt)
+          if (backoffMs > 0) {
+            await new Promise(resolve => setTimeout(resolve, backoffMs))
+          }
+        }
+      }
+
+      // Return structured feedback in the error message
+      if (lastAgentError) {
+        const feedback = feedbackBuilder
+          ? feedbackBuilder(lastAgentError)
+          : buildFeedback(lastAgentError)
+        return {
+          success: false,
+          error: formatFeedbackAsToolResult(feedback)
         }
       }
 

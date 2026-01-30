@@ -86,6 +86,17 @@ export const llmFilter: Tool<LLMFilterInput, LLMFilterOutput> = defineTool({
       required: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const query = (a.query as string) || ''
+      const items = (a.items as unknown[]) || []
+      return { label: `Filter ${items.length} items: ${query.slice(0, 30)}`, icon: 'default' }
+    },
+    formatResult: (r) => {
+      const filtered = (r.data as any)?.filtered as unknown[] || (r.data as any)?.items as unknown[] || []
+      return { label: `Filtered: ${filtered.length} items`, icon: 'default' }
+    }
+  },
 
   execute: async (input, { runtime }) => {
     const { items, query, maxItems = 10, minScore = 5, criteria } = input

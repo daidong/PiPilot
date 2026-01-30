@@ -27,6 +27,10 @@ import {
 import type { StateSummarizer } from '../core/state-summarizer.js'
 import type { BudgetCoordinator, RoundHint } from '../core/budget-coordinator.js'
 import { compressToolResult } from '../core/tool-result-compressor.js'
+import { classifyError, sanitizeErrorContent } from '../core/errors.js'
+import type { ErrorCategory } from '../core/errors.js'
+import { buildFeedback, formatFeedbackAsToolResult, contextDropFeedback } from '../core/feedback.js'
+import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
 
 /**
  * LLM client type
@@ -106,6 +110,47 @@ export interface AgentLoopConfig {
 }
 
 /**
+ * Detect whether an error string is already structured feedback JSON
+ * from ToolRegistry (formatFeedbackAsToolResult output).
+ * Avoids re-classification which would lose validation/policy details.
+ */
+function isStructuredFeedback(error: string): boolean {
+  if (!error.startsWith('{"success":false')) return false
+  try {
+    const parsed = JSON.parse(error)
+    return parsed.success === false && parsed.error?.category !== undefined && parsed.guidance !== undefined
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Re-sanitize structured feedback JSON to enforce the "no raw external content" rule.
+ * Tools could inject unsanitized content into facts/guidance fields.
+ */
+function sanitizeStructuredFeedback(feedbackJson: string): string {
+  try {
+    const parsed = JSON.parse(feedbackJson)
+    // Sanitize guidance (framework text, but could be manipulated by a tool)
+    if (typeof parsed.guidance === 'string') {
+      parsed.guidance = sanitizeErrorContent(parsed.guidance, 512)
+    }
+    // Sanitize string values in facts.data
+    if (parsed.error?.data && typeof parsed.error.data === 'object') {
+      for (const [key, value] of Object.entries(parsed.error.data)) {
+        if (typeof value === 'string') {
+          parsed.error.data[key] = sanitizeErrorContent(value, 256)
+        }
+      }
+    }
+    return JSON.stringify(parsed)
+  } catch {
+    // If parsing fails, sanitize the entire string
+    return sanitizeErrorContent(feedbackJson, 1024)
+  }
+}
+
+/**
  * Agent execution loop
  */
 export class AgentLoop {
@@ -114,6 +159,18 @@ export class AgentLoop {
   private messages: Message[] = []
   private stopped = false
   private budgetManager: AgentLoopBudgetManager | null = null
+  /** Error category counts across the run (RFC-005) */
+  private errorCategoryCounts: Partial<Record<ErrorCategory, number>> = {}
+  /** Per-run retry budget shared across executor_retry and agent_retry (RFC-005) */
+  private retryBudget = new RetryBudget(DEFAULT_BUDGET_CONFIG)
+  /** Per-tool attempt tracker (RFC-005) */
+  private toolAttempts: Record<string, number> = {}
+  /** Retry counts by mode for budget summary (RFC-005) */
+  private retryByMode: { executor_retry: number; agent_retry: number } = { executor_retry: 0, agent_retry: 0 }
+  /** Tokens consumed by retries (RFC-005) — executor retries cost 0, agent retries cost tokens */
+  private retryTokenCost = 0
+  /** Whether previous round had tool errors (next LLM call is an agent_retry) */
+  private hadToolErrors = false
   /** Recently used tool names for subset selection (Change 4) */
   private recentTools: string[] = []
   /** Current tool subset (undefined = all tools) */
@@ -219,6 +276,7 @@ export class AgentLoop {
     let step = 0
     let finalOutput = ''
     let retryCount = 0
+    let transientRetryCount = 0
     let consecutiveToolRounds = 0
     let previousResponseText = ''
     let previousToolCallCount = 0
@@ -390,19 +448,53 @@ export class AgentLoop {
             || (typeof llmError === 'string' ? llmError : null)
             || `Unknown LLM error (finishReason: ${response.finishReason})`
 
-          // Detect context length overflow and retry with reduced messages
-          const isContextOverflow = errorMessage.includes('context_length_exceeded')
-            || errorMessage.includes('maximum context length')
-            || errorMessage.includes('too many tokens')
+          // Classify the error using the structured error system (RFC-005)
+          const classifiedError = classifyError(errorMessage, 'llm')
 
-          if (isContextOverflow && retryCount < 2) {
+          // Transient LLM errors (server 500, network blips): retry with backoff, no message changes
+          const isTransient = classifiedError.category === 'transient_network'
+            || classifiedError.category === 'rate_limit'
+            || classifiedError.category === 'timeout'
+          if (isTransient && transientRetryCount < 3) {
+            transientRetryCount++
+            const backoffMs = 1000 * Math.pow(2, transientRetryCount - 1) // 1s, 2s, 4s
+            console.error(`[AgentLoop] Transient LLM error (${classifiedError.category}), retrying ${transientRetryCount}/3 after ${backoffMs}ms...`)
+            this.config.trace.record({
+              type: 'error.retrying',
+              data: { category: classifiedError.category, attempt: transientRetryCount, maxAttempts: 3, mode: 'executor_retry', backoffMs }
+            })
+            await new Promise(resolve => setTimeout(resolve, backoffMs))
+            step--
+            continue
+          }
+
+          if (classifiedError.category === 'context_overflow' && retryCount < 2) {
             retryCount++
             // Halve the messages to reduce context size
-            const halfCount = Math.max(2, Math.floor(this.messages.length / 2))
+            const totalMsgs = this.messages.length
+            const halfCount = Math.max(2, Math.floor(totalMsgs / 2))
+            const droppedCount = totalMsgs - halfCount
             this.messages = this.messages.slice(-halfCount)
+
+            // Inject context-drop feedback so the LLM knows data was lost (RFC-005).
+            // This is an LLM-level event (no tool_use_id), so we use the assistant/user
+            // message channel with structured JSON content.
+            const dropFeedback = contextDropFeedback(
+              [`${droppedCount} earlier messages`],
+              'Context overflow — messages trimmed to fit token limit'
+            )
+            this.messages.push({
+              role: 'assistant',
+              content: 'Some earlier context was trimmed due to token limits.'
+            })
+            this.messages.push({
+              role: 'user',
+              content: formatFeedbackAsToolResult(dropFeedback)
+            })
+
             this.config.trace.record({
               type: 'budget.retry',
-              data: { retryCount, messagesKept: halfCount, error: errorMessage }
+              data: { retryCount, messagesKept: halfCount, droppedMessages: droppedCount, error: errorMessage }
             })
             // Don't increment step for retry
             step--
@@ -457,6 +549,13 @@ export class AgentLoop {
           }
         })
 
+        // RFC-005: If the previous round had tool errors, this LLM round is an
+        // agent_retry. Track token cost so the budget summary includes it.
+        if (this.hadToolErrors) {
+          this.retryTokenCost += (usage.promptTokens + usage.completionTokens)
+          this.hadToolErrors = false
+        }
+
         // Detect incomplete response: finishReason='length' with no usable content.
         // This happens when the model starts a large tool call but maxOutputTokens is
         // too small — the Vercel AI SDK silently drops incomplete tool call JSON.
@@ -474,9 +573,16 @@ export class AgentLoop {
               }
             })
             console.error(`[AgentLoop] Empty response with finishReason=length (outputTokens=${usage.completionTokens}). Retrying ${retryCount}/2 with halved messages.`)
-            // Reduce messages to free input budget, giving the model more room for output
-            const halfCount = Math.max(2, Math.floor(this.messages.length / 2))
-            this.messages = this.messages.slice(-halfCount)
+            // Reduce messages to free input budget, giving the model more room for output.
+            // Ensure we don't orphan tool results from their assistant tool_call messages.
+            let halfCount = Math.max(2, Math.floor(this.messages.length / 2))
+            let sliced = this.messages.slice(-halfCount)
+            // Walk forward past any leading tool messages (they need their preceding assistant)
+            while (sliced.length > 1 && sliced[0]?.role === 'tool') {
+              halfCount--
+              sliced = this.messages.slice(-halfCount)
+            }
+            this.messages = sliced
             step--
             continue
           }
@@ -536,7 +642,8 @@ export class AgentLoop {
             }
           }
 
-          const result = await this.config.toolRegistry.call(
+          // RFC-005: Execute tool with transparent executor_retry for transient errors
+          let result = await this.config.toolRegistry.call(
             toolUse.name,
             toolUse.input,
             {
@@ -545,6 +652,69 @@ export class AgentLoop {
               agentId: this.config.runtime.agentId
             }
           )
+
+          // Transparent executor retry loop (rate_limit, transient_network, timeout)
+          if (!result.success) {
+            const initialClassified = classifyError(result.error || 'Unknown error', { toolName: toolUse.name, stepId: step })
+            const strategy = getStrategy(initialClassified.category)
+
+            if (strategy.mode === 'executor_retry') {
+              let retryAttempt = 0
+              let lastCategory = initialClassified.category
+
+              while (
+                !result.success &&
+                retryAttempt < strategy.maxAttempts - 1
+              ) {
+                // Re-classify current error to catch category changes between retries
+                const currentError = classifyError(result.error || 'Unknown error', { toolName: toolUse.name, stepId: step })
+                const currentStrategy = getStrategy(currentError.category)
+
+                // Stop if the error is no longer executor-retryable
+                if (currentStrategy.mode !== 'executor_retry') break
+                if (!this.retryBudget.canRetry(currentError.category, currentError.recoverability)) break
+
+                this.retryBudget.record(currentError.category)
+                retryAttempt++
+                lastCategory = currentError.category
+                this.retryByMode.executor_retry++
+
+                this.config.trace.record({
+                  type: 'error.retrying',
+                  data: { tool: toolUse.name, category: currentError.category, attempt: retryAttempt, mode: 'executor_retry' }
+                })
+
+                // Backoff using the current error's strategy
+                const delay = computeBackoff(currentStrategy.backoff, retryAttempt - 1)
+                if (delay > 0) {
+                  await new Promise(resolve => setTimeout(resolve, delay))
+                }
+
+                result = await this.config.toolRegistry.call(
+                  toolUse.name,
+                  toolUse.input,
+                  {
+                    sessionId: this.config.runtime.sessionId,
+                    step,
+                    agentId: this.config.runtime.agentId
+                  }
+                )
+              }
+
+              // Emit recovered or exhausted
+              if (result.success && retryAttempt > 0) {
+                this.config.trace.record({
+                  type: 'error.recovered',
+                  data: { tool: toolUse.name, category: lastCategory, attempts: retryAttempt + 1, mode: 'executor_retry' }
+                })
+              } else if (!result.success && retryAttempt > 0) {
+                this.config.trace.record({
+                  type: 'error.exhausted',
+                  data: { tool: toolUse.name, category: lastCategory, attempts: retryAttempt + 1, mode: 'executor_retry' }
+                })
+              }
+            }
+          }
 
           this.config.onToolResult?.(toolUse.name, result, toolUse.input)
 
@@ -562,17 +732,70 @@ export class AgentLoop {
             )
           }
 
-          // Build tool result
-          // Note: JSON.stringify(undefined) returns undefined, not a string
-          // We need to handle this case to avoid null content errors
-          let resultContent = result.success
-            ? (result.data !== undefined ? JSON.stringify(result.data, null, 2) : '{"success": true}')
-            : `Error: ${result.error}`
+          // Build tool result content
+          let resultContent: string
+          if (result.success) {
+            resultContent = result.data !== undefined ? JSON.stringify(result.data, null, 2) : '{"success": true}'
+          } else {
+            const errorStr = result.error || 'Unknown error'
+            const attemptKey = `${toolUse.name}:${toolUse.id}`
+            this.toolAttempts[attemptKey] = (this.toolAttempts[attemptKey] || 0) + 1
+
+            // Determine category for budget tracking
+            let errorCategory: ErrorCategory = 'unknown'
+
+            if (isStructuredFeedback(errorStr)) {
+              // RFC-005: Pre-structured feedback from ToolRegistry — re-sanitize
+              // facts and guidance to enforce the "no raw external content" rule,
+              // then pass through to preserve validation/policy details.
+              resultContent = sanitizeStructuredFeedback(errorStr)
+
+              try {
+                const parsed = JSON.parse(errorStr)
+                errorCategory = parsed.error?.category ?? 'unknown'
+                this.config.trace.record({
+                  type: 'error.classified',
+                  data: { tool: toolUse.name, category: errorCategory, attempt: this.toolAttempts[attemptKey], preStructured: true }
+                })
+              } catch {
+                // Parsing failed — still use the sanitized string
+              }
+            } else {
+              // Classify raw error and build feedback
+              const classified = classifyError(errorStr, { toolName: toolUse.name, stepId: step })
+              classified.attempt = this.toolAttempts[attemptKey]
+              errorCategory = classified.category
+
+              this.config.trace.record({
+                type: 'error.classified',
+                data: { tool: toolUse.name, category: classified.category, source: classified.source, attempt: classified.attempt }
+              })
+
+              const feedback = buildFeedback(classified)
+              resultContent = formatFeedbackAsToolResult(feedback)
+            }
+
+            // RFC-005: Track agent-retry budget — the LLM seeing this error is an
+            // agent_retry attempt. Record it and append exhaustion guidance if needed.
+            this.retryByMode.agent_retry++
+            this.errorCategoryCounts[errorCategory] = (this.errorCategoryCounts[errorCategory] || 0) + 1
+
+            if (!this.retryBudget.canRetry(errorCategory, 'yes')) {
+              // Budget exhausted — append guidance telling the LLM to stop retrying
+              try {
+                const parsed = JSON.parse(resultContent)
+                parsed.guidance = (parsed.guidance || '') + ' RETRY BUDGET EXHAUSTED: Do not retry this tool. Try a different approach or report the failure.'
+                resultContent = JSON.stringify(parsed)
+              } catch {
+                resultContent += '\n[RETRY BUDGET EXHAUSTED: Do not retry this tool.]'
+              }
+            }
+            this.retryBudget.record(errorCategory)
+          }
 
           // Cap tool result to prevent context overflow
           const toolResultCap = this.config.budgetConfig?.toolResultCap
           if (toolResultCap && resultContent.length > toolResultCap * 3) {
-            // Use structured compression instead of blind truncation (Change 1)
             const compressed = compressToolResult(toolUse.name, resultContent, toolResultCap)
             resultContent = compressed.content
           }
@@ -590,6 +813,11 @@ export class AgentLoop {
           role: 'tool',
           content: toolResults
         })
+
+        // RFC-005: Track whether any tool errored — the next LLM round is an agent_retry
+        this.hadToolErrors = toolResults.some(
+          (tr: any) => tr.is_error === true
+        )
 
         // Circuit breaker: if TOOL_NOT_AVAILABLE happens in 2 consecutive rounds,
         // expand tool subset back to full (or L1 level) to let the model recover.
@@ -648,6 +876,22 @@ export class AgentLoop {
         finalOutput += '\n[Reached maximum steps limit]'
       }
 
+      // Emit error budget summary (RFC-005)
+      const totalErrors = Object.values(this.errorCategoryCounts).reduce((a, b) => a + (b || 0), 0)
+      const retryStats = this.retryBudget.stats()
+      if (totalErrors > 0 || retryStats.total > 0) {
+        this.config.trace.record({
+          type: 'error.budget_summary',
+          data: {
+            totalErrors,
+            byCategory: { ...this.errorCategoryCounts },
+            retries: retryStats,
+            byMode: { ...this.retryByMode },
+            tokensConsumedByRetries: this.retryTokenCost
+          }
+        })
+      }
+
       // Record completion
       this.config.trace.record({
         type: 'agent.complete',
@@ -664,6 +908,22 @@ export class AgentLoop {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error)
+
+      // Emit error budget summary (RFC-005)
+      const totalErrors2 = Object.values(this.errorCategoryCounts).reduce((a, b) => a + (b || 0), 0)
+      const retryStats2 = this.retryBudget.stats()
+      if (totalErrors2 > 0 || retryStats2.total > 0) {
+        this.config.trace.record({
+          type: 'error.budget_summary',
+          data: {
+            totalErrors: totalErrors2,
+            byCategory: { ...this.errorCategoryCounts },
+            retries: retryStats2,
+            byMode: { ...this.retryByMode },
+            tokensConsumedByRetries: this.retryTokenCost
+          }
+        })
+      }
 
       this.config.trace.record({
         type: 'agent.complete',

@@ -47,6 +47,11 @@ export type TraceEventType =
   | 'budget.retry'
   | 'budget.profile'
   | 'agent.toolLoopNudge'
+  | 'error.budget_summary'
+  | 'error.classified'
+  | 'error.retrying'
+  | 'error.recovered'
+  | 'error.exhausted'
 
 /**
  * Event correlation context for tracing

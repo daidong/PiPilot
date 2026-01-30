@@ -40,6 +40,16 @@ export const write: Tool<WriteInput, WriteOutput> = defineTool({
       required: true
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const file = (a.path as string)?.split('/').pop() || ''
+      return { label: `Write ${file}`, icon: 'file' }
+    },
+    formatResult: (r, a) => {
+      const file = ((r.data as any)?.path as string || (a?.path as string) || '').split('/').pop() || ''
+      return { label: `Wrote ${file}`, icon: 'file' }
+    }
+  },
   execute: async (input, { runtime }) => {
     // Check if file already exists
     const existsResult = await runtime.io.exists(input.path)

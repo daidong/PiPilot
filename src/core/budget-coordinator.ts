@@ -68,6 +68,8 @@ export interface BudgetSlots {
   stateSummary: number
   messages: number
   outputReserve: number
+  /** Session history budget — shares a pool with selectedContext */
+  sessionBudget: number
 }
 
 /**
@@ -157,6 +159,9 @@ export interface MeasuredComponents {
   packFragments: number
   /** Tokens for all tool schemas */
   toolSchemas: number
+  /** Actual tokens consumed by selected context (0 when nothing is selected).
+   *  Used for shared-pool reallocation: unused selected budget flows to session. */
+  actualSelectedTokens?: number
 }
 
 /**
@@ -221,9 +226,9 @@ export class BudgetCoordinator {
       contextWindow: config.contextWindow,
       outputReserve: config.outputReserve ?? 4096,
       outputReserveStrategy: config.outputReserveStrategy ?? {
-        intermediate: 4096,
+        intermediate: 16384,
         final: 4096,
-        extended: 4096
+        extended: 16384
       },
       toolResultCap: config.toolResultCap ?? 4096,
       modelId: config.modelId ?? '',
@@ -243,14 +248,18 @@ export class BudgetCoordinator {
   /**
    * Compute allocations given measured sizes of fixed components.
    *
-   * Algorithm:
-   * 1. Reserve outputReserve (never touched)
-   * 2. Subtract measured fixed costs (identity + packFragments + toolSchemas)
-   * 3. Allocate pinned from remaining (profile-based cap)
-   * 4. Allocate selected from remaining (profile-based percentage)
-   * 5. Allocate historyIndex from remaining (profile-based cap)
-   * 6. Allocate stateSummary from remaining (profile-based cap)
-   * 7. Allocate messages: everything left
+   * Uses shared-pool allocation so unused budget in high-priority slots
+   * flows to lower-priority peers within the same pool.
+   *
+   * Pools:
+   *   Pool A (small caps): pinned + historyIndex + stateSummary
+   *     – Each gets up to its profile cap; unused remainder is discarded
+   *       (these are small and don't benefit session).
+   *   Pool B (context recall): selected + session
+   *     – A combined pool sized by profile.selectedPct of remaining budget.
+   *     – selected has priority and can use up to its percentage cap.
+   *     – session gets the rest (minimum: profile.sessionCap as a floor).
+   *   Messages: everything left after all pools.
    */
   allocate(measured: MeasuredComponents): BudgetSlots {
     const profile = this.getProfile()
@@ -260,21 +269,29 @@ export class BudgetCoordinator {
     const fixedCost = measured.systemIdentity + measured.packFragments + measured.toolSchemas
     let remaining = Math.max(0, available - fixedCost)
 
-    // P2: Pinned memory
+    // Pool A — small fixed-cap slots
     const pinnedMemory = Math.min(profile.pinnedCap, remaining)
     remaining -= pinnedMemory
 
-    // P3: Selected context
-    const selectedContext = Math.min(Math.floor(remaining * profile.selectedPct), remaining)
-    remaining -= selectedContext
-
-    // P3: History index
     const historyIndex = Math.min(profile.historyIndexCap, remaining)
     remaining -= historyIndex
 
-    // P3: State summary
     const stateSummary = Math.min(profile.stateSummaryCap, remaining)
     remaining -= stateSummary
+
+    // Pool B — shared context-recall pool (selected + session)
+    // The pool gets the same total that selected alone used to get,
+    // plus a guaranteed session floor. Selected has first claim; the
+    // rest flows to session.
+    const selectedCap = Math.min(Math.floor(remaining * profile.selectedPct), remaining)
+    const poolB = selectedCap + profile.sessionCap
+    const actualPool = Math.min(poolB, remaining)
+
+    const actualSelected = measured.actualSelectedTokens ?? selectedCap
+    const selectedContext = Math.min(actualSelected, selectedCap)
+    const sessionBudget = Math.max(0, actualPool - selectedContext)
+
+    remaining -= actualPool
 
     // P4: Messages get everything left
     const messages = Math.max(0, remaining)
@@ -288,7 +305,8 @@ export class BudgetCoordinator {
       historyIndex,
       stateSummary,
       messages,
-      outputReserve: this.config.outputReserve
+      outputReserve: this.config.outputReserve,
+      sessionBudget
     }
   }
 
@@ -348,29 +366,40 @@ export class BudgetCoordinator {
 
     let pinnedMemory: number
     let selectedContext: number
+    let sessionBudget: number
     let historyIndex: number
     let stateSummary: number
 
+    const actualSelected = measured.actualSelectedTokens ?? 0
+
     if (level === 0) {
-      // Normal — standard allocation
+      // Normal — shared-pool allocation (same as allocate())
       pinnedMemory = Math.min(profile.pinnedCap, remaining)
       remaining -= pinnedMemory
-      selectedContext = Math.min(Math.floor(remaining * profile.selectedPct), remaining)
-      remaining -= selectedContext
       historyIndex = Math.min(profile.historyIndexCap, remaining)
       remaining -= historyIndex
       stateSummary = Math.min(profile.stateSummaryCap, remaining)
       remaining -= stateSummary
+
+      const selectedCap = Math.min(Math.floor(remaining * profile.selectedPct), remaining)
+      const poolB = Math.min(selectedCap + profile.sessionCap, remaining)
+      selectedContext = Math.min(actualSelected, selectedCap)
+      sessionBudget = Math.max(0, poolB - selectedContext)
+      remaining -= poolB
     } else if (level === 1) {
-      // Reduced: compress tool output, halve selected context
+      // Reduced: compress tool output, halve selected cap
       pinnedMemory = Math.min(profile.pinnedCap, remaining)
       remaining -= pinnedMemory
-      selectedContext = Math.min(Math.floor(remaining * profile.selectedPct * 0.5), remaining)
-      remaining -= selectedContext
       historyIndex = Math.min(profile.historyIndexCap, remaining)
       remaining -= historyIndex
       stateSummary = Math.min(profile.stateSummaryCap, remaining)
       remaining -= stateSummary
+
+      const selectedCap = Math.min(Math.floor(remaining * profile.selectedPct * 0.5), remaining)
+      const poolB = Math.min(selectedCap + profile.sessionCap, remaining)
+      selectedContext = Math.min(actualSelected, selectedCap)
+      sessionBudget = Math.max(0, poolB - selectedContext)
+      remaining -= poolB
 
       actions.push({
         type: 'compress_tool_output',
@@ -390,8 +419,11 @@ export class BudgetCoordinator {
       stateSummary = Math.min(profile.stateSummaryCap, remaining)
       remaining -= stateSummary
 
+      sessionBudget = Math.min(Math.floor(profile.sessionCap * 0.5), remaining)
+      remaining -= sessionBudget
+
       actions.push({ type: 'drop_selected' })
-      actions.push({ type: 'trim_session', params: { targetTokens: Math.floor(remaining * 0.5) } })
+      actions.push({ type: 'trim_session', params: { targetTokens: sessionBudget } })
       actions.push({
         type: 'trim_old_tool_results',
         params: { keepCount: 3, capTokens: 512 }
@@ -404,6 +436,7 @@ export class BudgetCoordinator {
       // Emergency (L3): strip almost everything
       pinnedMemory = 0
       selectedContext = 0
+      sessionBudget = 0
       historyIndex = 0
       stateSummary = 0
 
@@ -429,7 +462,8 @@ export class BudgetCoordinator {
         historyIndex,
         stateSummary,
         messages,
-        outputReserve: this.config.outputReserve
+        outputReserve: this.config.outputReserve,
+        sessionBudget
       },
       actions,
       toolSubset

@@ -14,6 +14,9 @@ import {
 } from 'ai'
 import { type ZodSchema, ZodError } from 'zod'
 import type { TokenUsage } from './provider.types.js'
+import { classifyError } from '../core/errors.js'
+import type { AgentError } from '../core/errors.js'
+import { RetryBudget, DEFAULT_BUDGET_CONFIG } from '../core/retry.js'
 
 // ============================================================================
 // Types
@@ -215,6 +218,7 @@ export async function generateStructured<T>(
   let lastError: unknown
   let lastRawText: string | undefined
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+  const budget = new RetryBudget(DEFAULT_BUDGET_CONFIG)
 
   // Build initial messages
   let currentPrompt = prompt
@@ -328,10 +332,15 @@ export async function generateStructured<T>(
         break
       }
 
-      // Don't retry if this was the last attempt
-      if (attempt >= retries) {
+      // Classify the error and check retry budget (RFC-005)
+      const agentError: AgentError = error instanceof ZodError
+        ? { category: 'malformed_output', source: { kind: 'llm' } as const, message: 'Schema validation failed', recoverability: 'yes' }
+        : classifyError(error instanceof Error ? error : String(error), 'llm')
+
+      if (attempt >= retries || !budget.canRetry(agentError.category, agentError.recoverability)) {
         break
       }
+      budget.record(agentError.category)
 
       // Apply repair strategy for next attempt with raw text and cause
       const errorCause = NoObjectGeneratedError.isInstance(error) ? error.cause : undefined

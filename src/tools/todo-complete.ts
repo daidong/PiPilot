@@ -30,6 +30,14 @@ export const todoComplete: Tool<TodoCompleteInput, TodoCompleteOutput> = defineT
       required: true
     }
   },
+  activity: {
+    formatCall: (a) => ({ label: `Task done: ${((a.id as string) || '').slice(0, 20)}`, icon: 'task' }),
+    formatResult: (r) => {
+      const item = (r.data as any)?.item ?? (r as any).item ?? r
+      const subject = (item?.title as string) || (item?.subject as string) || ''
+      return { label: subject ? `Task done: ${subject.slice(0, 35)}` : 'Task done', icon: 'task' }
+    }
+  },
   execute: async (input, { runtime }) => {
     try {
       const memoryStorage = runtime.memoryStorage

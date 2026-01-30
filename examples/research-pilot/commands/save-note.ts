@@ -46,7 +46,8 @@ export function saveNote(
   tags: string[],
   context: CLIContext,
   fromLast: boolean = false,
-  messageId?: string
+  messageId?: string,
+  pinned: boolean = false
 ): SaveNoteResult {
   if (!title) return { success: false, error: 'Note title is required.' }
   if (!content) return { success: false, error: 'Note content is required.' }
@@ -64,7 +65,7 @@ export function saveNote(
     title,
     content,
     tags,
-    pinned: false,
+    pinned,
     selectedForAI: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

@@ -13,6 +13,8 @@ import type {
   NextStep
 } from '../types/context.js'
 import type { Runtime } from '../types/runtime.js'
+import { classifyError } from '../core/errors.js'
+import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
 
 /**
  * Extract namespace from source ID
@@ -206,7 +208,14 @@ export function withContextTimeout<TParams, TData>(
 }
 
 /**
- * 创建带重试的上下文源
+ * Create a context source wrapper with retry support.
+ *
+ * Uses the structured error system (RFC-005):
+ * - Classifies errors to determine retry strategy
+ * - Uses RetryBudget to prevent infinite loops
+ * - Uses per-category backoff strategies
+ *
+ * Backwards compatible: accepts (source, maxRetries, delayMs) signature.
  */
 export function withContextRetry<TParams, TData>(
   source: ContextSource<TParams, TData>,
@@ -217,6 +226,7 @@ export function withContextRetry<TParams, TData>(
     ...source,
     fetch: async (params: TParams, runtime: Runtime): Promise<ContextResult<TData>> => {
       let lastResult: ContextResult<TData> | undefined
+      const budget = new RetryBudget(DEFAULT_BUDGET_CONFIG)
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         lastResult = await source.fetch(params, runtime)
@@ -225,8 +235,23 @@ export function withContextRetry<TParams, TData>(
           return lastResult
         }
 
+        // Classify the error and check retry budget
         if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)))
+          const agentError = classifyError(lastResult.error || 'Context fetch failed')
+          agentError.attempt = attempt + 1
+          if (!budget.canRetry(agentError.category, agentError.recoverability)) {
+            break
+          }
+          budget.record(agentError.category)
+
+          // Use strategy-appropriate backoff via computeBackoff
+          const strategy = getStrategy(agentError.category)
+          const backoffDelay = strategy.backoff
+            ? computeBackoff(strategy.backoff, attempt)
+            : (strategy.backoffMs
+              ? strategy.backoffMs * Math.pow(strategy.backoffMultiplier || 2, attempt)
+              : delayMs * (attempt + 1))
+          await new Promise(resolve => setTimeout(resolve, backoffDelay))
         }
       }
 

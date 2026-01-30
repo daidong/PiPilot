@@ -11,7 +11,9 @@ export type {
   ToolResult,
   Tool,
   ToolConfig,
-  BuiltinToolName
+  BuiltinToolName,
+  ActivitySummary,
+  ToolActivityFormat
 } from './tool.js'
 
 // Policy types

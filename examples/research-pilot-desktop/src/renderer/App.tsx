@@ -159,10 +159,12 @@ export default function App() {
       {/* Draggable title bar */}
       <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
 
-      {!leftCollapsed && <LeftSidebar />}
+      {!previewEntity && !leftCollapsed && <LeftSidebar />}
       <CenterPanel />
-      {previewEntity && <EntityPreviewPanel />}
-      {!rightCollapsed && <RightSidebar />}
+      {previewEntity
+        ? <EntityPreviewPanel />
+        : !rightCollapsed && <RightSidebar />
+      }
     </div>
   )
 }

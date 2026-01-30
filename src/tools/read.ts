@@ -28,6 +28,12 @@ export interface ReadOutput {
   bytes: number
 }
 
+/** Extract filename from a path */
+function getFileName(path: string): string {
+  if (!path) return ''
+  return path.split('/').pop() || path
+}
+
 export const read: Tool<ReadInput, ReadOutput> = defineTool({
   name: 'read',
   description: `Read file contents. Supports encoding, offset, and line limit. Large files are auto-truncated; use offset/limit to paginate.`,
@@ -52,6 +58,13 @@ export const read: Tool<ReadInput, ReadOutput> = defineTool({
       type: 'number',
       description: 'Maximum number of lines to read (subject to system hard limit)',
       required: false
+    }
+  },
+  activity: {
+    formatCall: (a) => ({ label: `Read ${getFileName(a.path as string)}`, icon: 'file' }),
+    formatResult: (r, a) => {
+      const lines = ((r.data as any)?.lines as number) ?? ((r.data as any)?.content as string)?.split('\n').length ?? 0
+      return { label: `Read ${getFileName(a?.path as string)} (${lines} lines)`, icon: 'file' }
     }
   },
   execute: async (input, { runtime }) => {

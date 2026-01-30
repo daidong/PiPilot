@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { StickyNote, BookOpen, Database, FileText, AtSign, Brain } from 'lucide-react'
+import { StickyNote, BookOpen, Database, FileText, AtSign } from 'lucide-react'
 
 const api = (window as any).api
 
@@ -21,7 +21,6 @@ const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={13} className="text-yellow-500" />,
   paper: <BookOpen size={13} className="text-blue-500" />,
   data: <Database size={13} className="text-green-500" />,
-  memory: <Brain size={13} className="text-purple-500" />,
   file: <FileText size={13} className="t-text-secondary" />
 }
 
@@ -29,11 +28,10 @@ const typeLabels: Record<string, string> = {
   note: 'Notes',
   paper: 'Papers',
   data: 'Data',
-  memory: 'Memory',
   file: 'Files'
 }
 
-const typeOrder = ['note', 'paper', 'data', 'memory', 'file']
+const typeOrder = ['note', 'paper', 'data', 'file']
 
 export function MentionPopover({ query, onSelect, onClose }: Props) {
   const [candidates, setCandidates] = useState<MentionCandidate[]>([])

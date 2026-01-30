@@ -104,6 +104,10 @@ export interface DataAttachment extends ResearchEntity {
   filePath: string
   mimeType?: string
   schema?: DataSchema
+  /** Groups auto-generated outputs under the same analysis run */
+  runId?: string
+  /** Human-readable label for the analysis run */
+  runLabel?: string
 }
 
 /**

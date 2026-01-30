@@ -31,6 +31,8 @@ export type FlowSpec =
   | BranchSpec
   | NoopSpec
   | SelectSpec
+  | RetrySpec
+  | FallbackSpec
 
 /**
  * Base specification shared by all flow nodes
@@ -248,6 +250,39 @@ export interface SelectSpec extends BaseSpec {
   branches: Record<string, FlowSpec>
   /** Default branch if selector returns unknown key */
   default?: FlowSpec
+}
+
+// ============================================================================
+// Retry Specification (RFC-005 Phase 3)
+// ============================================================================
+
+/**
+ * Retry a flow step with error feedback.
+ * On failure, classifies the error and either:
+ * - executor_retry: transparent re-execute with backoff (rate limits, transient)
+ * - agent_retry: inject error feedback into step's state for the agent to reason about
+ */
+export interface RetrySpec extends BaseSpec {
+  kind: 'retry'
+  /** The step to retry */
+  inner: FlowSpec
+  /** Maximum number of attempts (including the first) */
+  maxAttempts: number
+  /** Backoff delay in ms between attempts (default: 0 for agent_retry, 1000 for executor_retry) */
+  backoffMs?: number
+  /** Exponential backoff multiplier (default: 2) */
+  backoffMultiplier?: number
+}
+
+/**
+ * Fallback: try primary flow, on failure try fallback flow.
+ */
+export interface FallbackSpec extends BaseSpec {
+  kind: 'fallback'
+  /** Primary flow to attempt first */
+  primary: FlowSpec
+  /** Fallback flow to execute if primary fails */
+  fallback: FlowSpec
 }
 
 // ============================================================================

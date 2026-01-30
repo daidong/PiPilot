@@ -200,6 +200,9 @@ export interface CreateAgentOptions extends AgentConfig {
     final: number
     extended: number
   }
+
+  /** Number of consecutive tool-only rounds before injecting a "synthesize now" nudge (default: 7) */
+  toolLoopThreshold?: number
 }
 
 /**
@@ -453,20 +456,27 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   let packsInitialized = false
   let activeAgentLoop: AgentLoop | null = null
 
+  async function initPacks() {
+    if (!packsInitialized) {
+      for (const pack of packsToLoad) {
+        if (pack.onInit) {
+          await pack.onInit(runtime)
+        }
+      }
+      packsInitialized = true
+    }
+  }
+
   const agent: Agent = {
     id: agentId,
     runtime,
 
+    async ensureInit() {
+      await initPacks()
+    },
+
     async run(prompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
-      // Initialize packs only once
-      if (!packsInitialized) {
-        for (const pack of packsToLoad) {
-          if (pack.onInit) {
-            await pack.onInit(runtime)
-          }
-        }
-        packsInitialized = true
-      }
+      await initPacks()
 
       // Store selected context in session state for phases to access
       if (options?.selectedContext) {
@@ -494,18 +504,25 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
           const toolTokens = countTokens(JSON.stringify(toolSchemas))
           const packFragmentTokens = 0 // Pack fragments are already part of systemPrompt
 
-          // Get coordinated budget allocations
+          // Get coordinated budget allocations.
+          // Pass actual selected size so the shared selected+session pool
+          // can give unused selected budget to session automatically.
+          const actualSelectedTokens = options?.selectedContext?.length
+            ? countTokens(JSON.stringify(options.selectedContext))
+            : 0
+
           const slots = budgetCoordinator.allocate({
             systemIdentity: identityTokens,
             packFragments: packFragmentTokens,
-            toolSchemas: toolTokens
+            toolSchemas: toolTokens,
+            actualSelectedTokens
           })
 
           // Log budget allocation for visibility
           if (config.debug) {
             console.error('[Budget] Context window:', contextWindow, '| Model:', model)
             console.error('[Budget] Fixed costs — identity:', identityTokens, 'tools:', toolTokens, 'packFragments:', packFragmentTokens)
-            console.error('[Budget] Allocated slots — pinned:', slots.pinnedMemory, 'selected:', slots.selectedContext, 'index:', slots.historyIndex, 'messages:', slots.messages, 'outputReserve:', slots.outputReserve)
+            console.error('[Budget] Allocated slots — pinned:', slots.pinnedMemory, 'selected:', slots.selectedContext, 'session:', slots.sessionBudget, 'index:', slots.historyIndex, 'messages:', slots.messages, 'outputReserve:', slots.outputReserve)
           }
 
           const assembled = await contextPipeline.assemble({
@@ -515,10 +532,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
             externalBudgets: {
               pinned: slots.pinnedMemory,
               selected: slots.selectedContext,
-              // Give session phase a real budget so prior turn history is baked
-              // into the system prompt. Each turn creates a fresh AgentLoop, so
-              // without this the agent has no cross-turn memory.
-              session: Math.min(8000, Math.floor(slots.messages * 0.10)),
+              session: slots.sessionBudget,
               index: slots.historyIndex
             }
           })
@@ -586,7 +600,8 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         debug: config.debug,
         stateSummarizer,
         selectedContext: selectedContent,
-        budgetCoordinator
+        budgetCoordinator,
+        toolLoopThreshold: config.toolLoopThreshold
       })
 
       activeAgentLoop = agentLoop

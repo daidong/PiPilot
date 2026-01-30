@@ -48,6 +48,14 @@ export const glob: Tool<GlobInput, GlobOutput> = defineTool({
       items: { type: 'string' }
     }
   },
+  activity: {
+    formatCall: (a) => ({ label: `Glob ${(a.pattern as string) || ''}`, icon: 'search' }),
+    formatResult: (r, a) => {
+      const pattern = (a?.pattern as string) || ''
+      const files = (r.data as any)?.files as string[] || (r.data as any)?.matches as string[] || []
+      return { label: `${pattern}: ${files.length} files`, icon: 'search' }
+    }
+  },
   execute: async (input, { runtime }) => {
     const result = await runtime.io.glob(input.pattern, {
       cwd: input.cwd,

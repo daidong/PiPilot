@@ -69,6 +69,9 @@ export interface Tool<TInput = unknown, TOutput = unknown> {
 
   /** 执行函数 */
   execute: (input: TInput, context: ToolContext) => Promise<ToolResult<TOutput>>
+
+  /** Optional activity label formatters for UI display */
+  activity?: ToolActivityFormat
 }
 
 /**
@@ -79,6 +82,8 @@ export interface ToolConfig<TInput = unknown, TOutput = unknown> {
   description: string
   parameters: ParameterSchema
   execute: (input: TInput, context: ToolContext) => Promise<ToolResult<TOutput>>
+  /** Optional activity label formatters for UI display */
+  activity?: ToolActivityFormat
 }
 
 /**
@@ -100,6 +105,24 @@ export type BuiltinToolName =
   | 'llm-call'
   | 'llm-expand'
   | 'llm-filter'
+
+/**
+ * Activity summary for UI display when a tool is called or returns
+ */
+export interface ActivitySummary {
+  label: string
+  icon?: 'search' | 'file' | 'network' | 'memory' | 'task' | 'run' | 'edit' | 'default'
+}
+
+/**
+ * Optional activity label formatters for UI display
+ */
+export interface ToolActivityFormat {
+  /** Format a human-readable label when the tool is called */
+  formatCall?: (args: Record<string, unknown>) => ActivitySummary
+  /** Format a human-readable label when the tool returns */
+  formatResult?: (result: Record<string, unknown>, args?: Record<string, unknown>) => ActivitySummary
+}
 
 /**
  * 工具风险等级

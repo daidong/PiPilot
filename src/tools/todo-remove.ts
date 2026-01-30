@@ -28,6 +28,10 @@ export const todoRemove: Tool<TodoRemoveInput, TodoRemoveOutput> = defineTool({
       required: true
     }
   },
+  activity: {
+    formatCall: (a) => ({ label: `Task remove: ${((a.id as string) || '').slice(0, 20)}`, icon: 'task' }),
+    formatResult: () => ({ label: 'Task removed', icon: 'task' })
+  },
   execute: async (input, { runtime }) => {
     try {
       const memoryStorage = runtime.memoryStorage

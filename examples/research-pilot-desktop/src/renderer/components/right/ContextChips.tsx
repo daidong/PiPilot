@@ -1,26 +1,23 @@
 import React, { useEffect } from 'react'
-import { Pin, CheckSquare, X, StickyNote, BookOpen, Database, Brain } from 'lucide-react'
+import { Pin, CheckSquare, X, StickyNote, BookOpen, Database } from 'lucide-react'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 
 const typeColors: Record<string, string> = {
   note: 'bg-yellow-900/30 border-yellow-700/40 text-yellow-300',
   paper: 'bg-blue-900/30 border-blue-700/40 text-blue-300',
-  data: 'bg-green-900/30 border-green-700/40 text-green-300',
-  memory: 'bg-purple-900/30 border-purple-700/40 text-purple-300'
+  data: 'bg-green-900/30 border-green-700/40 text-green-300'
 }
 
 const typeColorsLight: Record<string, string> = {
   note: 'bg-yellow-50 border-yellow-300 text-yellow-800',
   paper: 'bg-blue-50 border-blue-300 text-blue-800',
-  data: 'bg-green-50 border-green-300 text-green-800',
-  memory: 'bg-purple-50 border-purple-300 text-purple-800'
+  data: 'bg-green-50 border-green-300 text-green-800'
 }
 
 const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={12} />,
   paper: <BookOpen size={12} />,
-  data: <Database size={12} />,
-  memory: <Brain size={12} />
+  data: <Database size={12} />
 }
 
 function Chip({ entity, variant, onRemove }: {

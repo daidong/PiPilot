@@ -10,12 +10,10 @@ export function CenterPanel() {
   const isIdle = useUIStore((s) => s.isIdle)
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore((s) => s.isStreaming)
-  const previewOpen = useUIStore((s) => !!s.previewEntity)
-
   const showHero = isIdle && messages.length === 0
 
   return (
-    <main className={`flex-1 flex flex-col min-w-0 pt-10 ${previewOpen ? 'max-w-[480px]' : ''}`}>
+    <main className="flex-1 flex flex-col min-w-0 pt-10">
       {showHero ? (
         <div className="flex-1 flex items-center justify-center">
           <HeroIdle />

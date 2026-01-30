@@ -38,6 +38,19 @@ export const bash: Tool<BashInput, BashOutput> = defineTool({
       default: 60000
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const cmd = (a.command as string) || ''
+      const short = (cmd.split('\n')[0] ?? '').slice(0, 40)
+      return { label: `Run: ${short}${cmd.length > 40 ? '...' : ''}`, icon: 'run' }
+    },
+    formatResult: (r, a) => {
+      const cmd = ((a?.command as string) || '').split(/[\n|&;]/)[0]?.trim().slice(0, 25) || ''
+      const output = (r.data as any)?.output as string || (r.data as any)?.stdout as string || ''
+      const lines = output.split('\n').filter(Boolean).length
+      return { label: lines > 0 ? `${cmd}: ${lines} lines` : `${cmd}: done`, icon: 'run' }
+    }
+  },
   execute: async (input, { runtime }) => {
     const result = await runtime.io.exec(input.command, {
       cwd: input.cwd,

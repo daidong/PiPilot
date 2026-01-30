@@ -10,7 +10,7 @@
 
 import { defineTool } from '../../../src/factories/define-tool.js'
 import { createLiteratureTeam } from './literature-team.js'
-import { createDataTeam } from './data-team.js'
+import { createDataAnalyzer } from './data-team.js'
 import type { Tool } from '../../../src/types/tool.js'
 import type { TodoItem } from '../../../src/types/todo.js'
 
@@ -23,8 +23,9 @@ const LIT_STEPS: Record<string, string> = {
 }
 
 const DATA_STEPS: Record<string, string> = {
-  schemaInferrer: 'Inferring dataset schema',
-  analyzer: 'Analyzing data'
+  codegen: 'Generating analysis code',
+  execute: 'Running Python script',
+  collect: 'Collecting results'
 }
 
 function makeTodoItem(id: string, title: string, status: TodoItem['status']): TodoItem {
@@ -64,7 +65,7 @@ export function createSubagentTools(
   dataAnalyzeTool: Tool
 } {
   let literatureTeam: ReturnType<typeof createLiteratureTeam> | null = null
-  let dataTeam: ReturnType<typeof createDataTeam> | null = null
+  let dataAnalyzer: ReturnType<typeof createDataAnalyzer> | null = null
 
   const literatureSearchTool = defineTool({
     name: 'literature-search',
@@ -163,18 +164,24 @@ export function createSubagentTools(
 
   const dataAnalyzeTool = defineTool({
     name: 'data-analyze',
-    description: 'Analyze a dataset file (JSON, CSV, TSV). Returns schema, quality assessment, insights, and visualization suggestions.',
+    description: 'Analyze a dataset file using Python code execution. Supports statistics, visualization (matplotlib/seaborn plots), data transformation, and modeling. Generated outputs (figures, tables) appear in the Data tab.',
     parameters: {
-      filePath: { type: 'string', description: 'Path to the data file to analyze', required: true },
-      question: { type: 'string', description: 'Optional specific question about the data', required: false }
+      filePath: { type: 'string', description: 'Relative path to the data file (CSV, JSON, TSV)', required: true },
+      taskType: { type: 'string', description: 'Type of analysis: analyze | visualize | transform | model (default: analyze)', required: false },
+      instructions: { type: 'string', description: 'What to do with the data (e.g. "compute correlations", "scatter plot of X vs Y")', required: true }
     },
-    execute: async (input: { filePath: string; question?: string }) => {
+    execute: async (input: { filePath: string; taskType?: string; instructions: string }) => {
       try {
-        if (!dataTeam) {
-          dataTeam = createDataTeam({ apiKey, model })
+        if (!dataAnalyzer) {
+          dataAnalyzer = createDataAnalyzer({
+            apiKey,
+            model,
+            projectPath: projectPath || process.cwd(),
+            sessionId
+          })
         }
 
-        // Emit initial todo items
+        // Emit initial todo items for progress tracking
         const stepIds = Object.keys(DATA_STEPS)
         for (const stepId of stepIds) {
           emitTodo(onToolResult, makeTodoItem(
@@ -182,46 +189,27 @@ export function createSubagentTools(
           ))
         }
 
-        // Subscribe to agent events
-        const rt = dataTeam.runtime
-        const unsub1 = rt.on('agent.started', ({ agentId }) => {
-          const label = DATA_STEPS[agentId]
-          if (label) {
-            emitTodo(onToolResult, makeTodoItem(
-              `data-${agentId}`, label, 'in_progress'
-            ))
-          }
-        })
-        const unsub2 = rt.on('agent.completed', ({ agentId }) => {
-          const label = DATA_STEPS[agentId]
-          if (label) {
-            emitTodo(onToolResult, makeTodoItem(
-              `data-${agentId}`, label, 'done'
-            ))
-          }
-        })
-        const unsub3 = rt.on('agent.failed', ({ agentId }) => {
-          const label = DATA_STEPS[agentId]
-          if (label) {
-            emitTodo(onToolResult, makeTodoItem(
-              `data-${agentId}`, label, 'blocked'
-            ))
-          }
+        // Manual progress: codegen
+        emitTodo(onToolResult, makeTodoItem('data-codegen', DATA_STEPS.codegen, 'in_progress'))
+
+        const result = await dataAnalyzer.analyze({
+          filePath: input.filePath,
+          taskType: (input.taskType as 'analyze' | 'visualize' | 'transform' | 'model') || 'analyze',
+          instructions: input.instructions
         })
 
-        const result = await dataTeam.analyze(input)
-
-        unsub1()
-        unsub2()
-        unsub3()
+        // Mark codegen done, execute done
+        emitTodo(onToolResult, makeTodoItem('data-codegen', DATA_STEPS.codegen, 'done'))
+        emitTodo(onToolResult, makeTodoItem('data-execute', DATA_STEPS.execute, result.success ? 'done' : 'blocked'))
+        emitTodo(onToolResult, makeTodoItem('data-collect', DATA_STEPS.collect, result.success ? 'done' : 'blocked'))
 
         if (result.success) {
           return {
             success: true,
             data: {
-              analysis: result.analysis,
-              steps: result.steps,
-              durationMs: result.durationMs
+              stdout: result.stdout,
+              outputs: result.outputs.map(o => ({ name: o.name, category: o.category, path: o.path })),
+              attempts: result.attempts
             }
           }
         }

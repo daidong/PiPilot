@@ -73,6 +73,26 @@ export const fetchTool: Tool<FetchInput, FetchOutput> = defineTool({
       default: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const url = (a.url as string) || ''
+      try {
+        const u = new URL(url)
+        return { label: `Fetch: ${u.hostname}`, icon: 'network' }
+      } catch {
+        return { label: `Fetch: ${url.slice(0, 40)}`, icon: 'network' }
+      }
+    },
+    formatResult: (_r, a) => {
+      const url = (a?.url as string) || ''
+      try {
+        const u = new URL(url)
+        return { label: `Fetched ${u.hostname}`, icon: 'network' }
+      } catch {
+        return { label: 'Fetched URL', icon: 'network' }
+      }
+    }
+  },
   execute: async (input, { runtime }) => {
     const { url, method = 'GET', headers = {}, body, timeout = 30000, raw = false } = input
 

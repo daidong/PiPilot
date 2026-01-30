@@ -32,7 +32,9 @@ export type {
   PredicateSpec,
   UntilSpec,
   WinnerSpec,
-  GateRuleSpec
+  GateRuleSpec,
+  RetrySpec,
+  FallbackSpec
 } from './ast.js'
 
 // Combinators
@@ -46,7 +48,9 @@ export {
   race,
   supervise,
   join,
-  transfer
+  transfer,
+  retry,
+  fallback
 } from './combinators.js'
 
 // Business-Semantic Until Conditions (preferred)
@@ -88,7 +92,9 @@ export type {
   LoopOptions,
   GateOptions,
   RaceOptions,
-  SuperviseOptions
+  SuperviseOptions,
+  RetryOptions,
+  FallbackOptions
 } from './combinators.js'
 
 // Reducers

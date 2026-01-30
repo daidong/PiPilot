@@ -188,7 +188,19 @@ function formatEntityContent(entity: Entity): string {
     const schema = data.schema?.columns
       ? `\nColumns: ${data.schema.columns.map(c => `${c.name} (${c.type})`).join(', ')}`
       : ''
-    return `Name: ${data.name}\nFile: ${data.filePath}${schema}`
+    // Include a content preview so the LLM sees actual file data, not just metadata
+    let preview = ''
+    try {
+      if (existsSync(data.filePath)) {
+        const buf = readFileSync(data.filePath)
+        const text = buf.slice(0, MAX_CONTENT_BYTES).toString('utf-8')
+        const truncated = buf.length > MAX_CONTENT_BYTES ? '\n...(truncated)' : ''
+        preview = `\n\n--- File Content Preview ---\n${text}${truncated}`
+      }
+    } catch {
+      // skip if unreadable
+    }
+    return `Name: ${data.name}\nFile path (for analysis tools): ${data.filePath}${schema}\n\nNOTE: This is a data entity. The actual data is in the file at the path above. Use that path to read/analyze the data.${preview}`
   }
   return JSON.stringify(entity, null, 2)
 }

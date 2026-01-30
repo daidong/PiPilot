@@ -163,6 +163,14 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       id: agentId,
       runtime,
 
+      async ensureInit() {
+        for (const pack of allPacks) {
+          if (pack.onInit) {
+            await pack.onInit(runtime)
+          }
+        }
+      },
+
       async run(prompt: string): Promise<AgentRunResult> {
         // 初始化 Packs
         for (const pack of allPacks) {

@@ -67,6 +67,13 @@ export const llmCall: Tool<LLMCallInput, LLMCallOutput> = defineTool({
       default: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const prompt = (a.prompt as string) || ''
+      return { label: `LLM call: ${prompt.slice(0, 35)}${prompt.length > 35 ? '...' : ''}`, icon: 'default' }
+    },
+    formatResult: () => ({ label: 'LLM call: done', icon: 'default' })
+  },
   execute: async (input, { runtime }) => {
     const {
       prompt,

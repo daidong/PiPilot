@@ -5,6 +5,7 @@
 import { defineTool } from '../factories/define-tool.js'
 import type { Tool, ParameterSchema } from '../types/tool.js'
 import { PythonBridge } from './bridge.js'
+import { buildFeedback, formatFeedbackAsToolResult } from '../core/feedback.js'
 
 /**
  * Python 工具配置
@@ -47,6 +48,11 @@ export function definePythonTool<TInput = unknown, TOutput = unknown>(
       const result = await bridge.call<TOutput>(config.method ?? 'main', input)
 
       if (!result.success) {
+        // Use structured feedback if agentError is available (RFC-005)
+        if (result.agentError) {
+          const feedback = buildFeedback(result.agentError)
+          return { success: false, error: formatFeedbackAsToolResult(feedback) }
+        }
         return { success: false, error: result.error }
       }
 
@@ -56,7 +62,7 @@ export function definePythonTool<TInput = unknown, TOutput = unknown>(
 }
 
 /**
- * Python 服务工具工厂
+ * Python service tool factory
  */
 export class PythonToolFactory {
   private bridge: PythonBridge
@@ -66,7 +72,7 @@ export class PythonToolFactory {
   }
 
   /**
-   * 创建工具
+   * Create a tool
    */
   create<TInput = unknown, TOutput = unknown>(config: {
     name: string
@@ -88,6 +94,10 @@ export class PythonToolFactory {
         const result = await bridge.call<TOutput>(config.method, input)
 
         if (!result.success) {
+          if (result.agentError) {
+            const feedback = buildFeedback(result.agentError)
+            return { success: false, error: formatFeedbackAsToolResult(feedback) }
+          }
           return { success: false, error: result.error }
         }
 

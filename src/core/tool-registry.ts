@@ -6,6 +6,9 @@ import type { Tool, ToolContext, ToolResult, ParameterSchema, ParameterDefinitio
 import type { PolicyEngine } from './policy-engine.js'
 import type { TraceCollector } from './trace-collector.js'
 import type { Runtime } from '../types/runtime.js'
+import { createValidationError } from './errors.js'
+import { toolValidationFeedback, policyDenialFeedback, formatFeedbackAsToolResult } from './feedback.js'
+import type { FeedbackContext, ToolSchemaSummary } from './feedback.js'
 
 /**
  * 工具调用信息
@@ -267,18 +270,28 @@ export class ToolRegistry {
     // ========== 参数校验 ==========
     const validation = validateInput(input, tool.parameters)
     if (!validation.valid) {
-      const errorMessages = validation.errors
-        .map(e => `${e.param}: ${e.message}`)
-        .join('; ')
+      const agentError = createValidationError(name, validation.errors)
+
+      // Build FeedbackContext with tool schema info
+      const toolSchema: ToolSchemaSummary = {
+        name,
+        params: Object.entries(tool.parameters).map(([pName, pDef]) => ({
+          name: pName,
+          type: pDef.type,
+          required: pDef.required !== false
+        }))
+      }
+      const feedbackCtx: FeedbackContext = { originalInput: input, toolSchema }
+      const feedback = toolValidationFeedback(name, validation.errors, feedbackCtx)
 
       this.config.trace.record({
         type: 'tool.validation_error',
-        data: { tool: name, errors: validation.errors }
+        data: { tool: name, errors: validation.errors, agentError }
       })
 
       return {
         success: false,
-        error: `Parameter validation failed: ${errorMessages}`
+        error: formatFeedbackAsToolResult(feedback)
       }
     }
 
@@ -298,11 +311,12 @@ export class ToolRegistry {
     const beforeResult = await this.config.policyEngine.evaluateBefore(policyContext)
 
     if (!beforeResult.allowed) {
-      const result: ToolResult = { success: false, error: beforeResult.reason }
+      const feedback = policyDenialFeedback(name, beforeResult.reason || 'Policy denied', beforeResult.policyId)
+      const result: ToolResult = { success: false, error: formatFeedbackAsToolResult(feedback) }
 
       this.config.trace.record({
         type: 'tool.result',
-        data: { tool: name, success: false, error: beforeResult.reason }
+        data: { tool: name, success: false, error: beforeResult.reason, category: 'policy_denied' }
       })
 
       return result

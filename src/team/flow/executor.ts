@@ -16,6 +16,8 @@ import type {
   GateSpec,
   RaceSpec,
   SuperviseSpec,
+  RetrySpec,
+  FallbackSpec,
   BranchSpec,
   NoopSpec,
   SelectSpec,
@@ -24,6 +26,9 @@ import type {
   PredicateSpec,
   UntilSpec
 } from './ast.js'
+import { classifyError } from '../../core/errors.js'
+import { buildFeedback } from '../../core/feedback.js'
+import { RetryBudget, DEFAULT_BUDGET_CONFIG } from '../../core/retry.js'
 import type { ReducerRegistry } from './reducers.js'
 import type { Blackboard } from '../state/blackboard.js'
 import { isIsolatedBlackboard, type IsolatedBlackboard } from '../state/isolated-blackboard.js'
@@ -161,6 +166,12 @@ export async function executeFlow(
         break
       case 'select':
         result = await executeSelect(spec, nodeId, ctx)
+        break
+      case 'retry':
+        result = await executeRetry(spec as RetrySpec, nodeId, ctx)
+        break
+      case 'fallback':
+        result = await executeFallback(spec as FallbackSpec, nodeId, ctx)
         break
       default:
         throw new Error(`Unknown flow node kind: ${(spec as FlowSpec).kind}`)
@@ -747,6 +758,109 @@ async function executeSelect(
   }
 
   return result.output
+}
+
+// ============================================================================
+// Retry & Fallback Executors (RFC-005 Phase 3)
+// ============================================================================
+
+async function executeRetry(
+  spec: RetrySpec,
+  nodeId: string,
+  ctx: ExecutionContext
+): Promise<unknown> {
+  const budget = new RetryBudget(DEFAULT_BUDGET_CONFIG)
+  const { maxAttempts, backoffMs = 0, backoffMultiplier = 2 } = spec
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const result = await executeFlow(spec.inner, { ...ctx })
+
+    if (result.success) {
+      // Clean up scoped error feedback on success
+      const innerStepId = spec.inner.id ?? spec.inner.kind
+      try { ctx.state.put(`${innerStepId}._errorFeedback`, undefined, { runId: ctx.runId, trace: ctx.trace }) } catch { /* ignore */ }
+
+      if (attempt > 1) {
+        ctx.trace.record({
+          type: 'flow.node.end',
+          runId: ctx.runId,
+          nodeId: `${nodeId}-retry`,
+          kind: 'retry',
+          ts: Date.now(),
+          success: true
+        })
+      }
+      return result.output
+    }
+
+    // Classify the error and check retry budget
+    const agentError = classifyError(result.error || 'Step failed', 'runtime')
+
+    ctx.trace.record({
+      type: 'flow.node.end',
+      runId: ctx.runId,
+      nodeId: `${nodeId}-attempt-${attempt}`,
+      kind: 'retry',
+      ts: Date.now(),
+      success: false,
+      error: agentError.message
+    })
+
+    if (attempt < maxAttempts && budget.canRetry(agentError.category, agentError.recoverability)) {
+      budget.record(agentError.category)
+
+      // Write scoped error feedback to state so the inner step's agent can see it
+      const innerStepId = spec.inner.id ?? spec.inner.kind
+      const feedback = buildFeedback(agentError)
+      try {
+        ctx.state.put(`${innerStepId}._errorFeedback`, feedback, { runId: ctx.runId, trace: ctx.trace })
+      } catch { /* ignore if state write fails */ }
+
+      // Backoff between attempts
+      if (backoffMs > 0) {
+        const delay = backoffMs * Math.pow(backoffMultiplier, attempt - 1)
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+      continue
+    }
+
+    // Exhausted retries
+    throw new Error(result.error ?? `Retry exhausted after ${attempt} attempts`)
+  }
+
+  throw new Error(`Retry exhausted after ${maxAttempts} attempts`)
+}
+
+async function executeFallback(
+  spec: FallbackSpec,
+  nodeId: string,
+  ctx: ExecutionContext
+): Promise<unknown> {
+  // Try primary
+  const primaryResult = await executeFlow(spec.primary, { ...ctx })
+
+  if (primaryResult.success) {
+    return primaryResult.output
+  }
+
+  // Primary failed — trace it and try fallback
+  ctx.trace.record({
+    type: 'flow.node.end',
+    runId: ctx.runId,
+    nodeId: `${nodeId}-primary`,
+    kind: 'fallback',
+    ts: Date.now(),
+    success: false,
+    error: primaryResult.error
+  })
+
+  const fallbackResult = await executeFlow(spec.fallback, { ...ctx })
+
+  if (fallbackResult.success) {
+    return fallbackResult.output
+  }
+
+  throw new Error(fallbackResult.error ?? 'Both primary and fallback flows failed')
 }
 
 // ============================================================================

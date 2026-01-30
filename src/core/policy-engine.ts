@@ -114,7 +114,7 @@ export class PolicyEngine {
           reason: decision.reason
         })
 
-        return { allowed: false, reason: decision.reason }
+        return { allowed: false, reason: decision.reason, policyId: policy.id }
       }
 
       if (decision.action === 'require_approval') {

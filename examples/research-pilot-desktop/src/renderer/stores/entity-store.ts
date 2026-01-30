@@ -40,7 +40,7 @@ export const useEntityStore = create<EntityState>((set) => ({
       api.getSelected()
     ])
     const stamp = (items: any[], type: EntityItem['type']) =>
-      (items || []).map((i: any) => ({ ...i, type }))
+      (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
     set({
       notes: stamp(notes, 'note'),
       papers: stamp(papers, 'paper'),
@@ -52,20 +52,44 @@ export const useEntityStore = create<EntityState>((set) => ({
 
   togglePin: async (id: string) => {
     await api.togglePin(id)
-    const pinned = await api.getPinned()
-    set({ pinned: pinned || [] })
+    const [notes, papers, data, pinned, selected] = await Promise.all([
+      api.listNotes(), api.listLiterature(), api.listData(),
+      api.getPinned(), api.getSelected()
+    ])
+    const stamp = (items: any[], type: EntityItem['type']) =>
+      (items || []).map((i: any) => ({ ...i, type }))
+    set({
+      notes: stamp(notes, 'note'), papers: stamp(papers, 'paper'),
+      data: stamp(data, 'data'), pinned: pinned || [], selected: selected || []
+    })
   },
 
   toggleSelect: async (id: string) => {
     await api.toggleSelect(id)
-    const selected = await api.getSelected()
-    set({ selected: selected || [] })
+    const [notes, papers, data, pinned, selected] = await Promise.all([
+      api.listNotes(), api.listLiterature(), api.listData(),
+      api.getPinned(), api.getSelected()
+    ])
+    const stamp = (items: any[], type: EntityItem['type']) =>
+      (items || []).map((i: any) => ({ ...i, type }))
+    set({
+      notes: stamp(notes, 'note'), papers: stamp(papers, 'paper'),
+      data: stamp(data, 'data'), pinned: pinned || [], selected: selected || []
+    })
   },
 
   renameNote: async (id: string, newTitle: string) => {
     await api.renameNote(id, newTitle)
-    const notes = await api.listNotes()
-    set({ notes: notes || [] })
+    const [notes, papers, data] = await Promise.all([
+      api.listNotes(), api.listLiterature(), api.listData()
+    ])
+    const stamp = (items: any[], type: EntityItem['type']) =>
+      (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
+    set({
+      notes: stamp(notes, 'note'),
+      papers: stamp(papers, 'paper'),
+      data: stamp(data, 'data')
+    })
   },
 
   deleteEntity: async (id: string) => {

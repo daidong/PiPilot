@@ -14,6 +14,57 @@ import { saveData, parseSaveDataArgs } from '@research-pilot/commands/save-data'
 import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/mentions/index'
 import { setCachedMarkdown, fileUriToPath } from '@research-pilot/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@research-pilot/types'
+import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
+
+/** Extract just the filename from a path */
+function getFileName(path: string): string {
+  if (!path) return ''
+  return path.split('/').pop() || path
+}
+
+const fmt = createActivityFormatter({
+  customRules: [
+    {
+      match: 'literature-search',
+      formatCall: (_, a) => ({ label: `Search: ${((a.query as string) || '').slice(0, 40)}${((a.query as string) || '').length > 40 ? '...' : ''}`, icon: 'search' }),
+      formatResult: (_, r) => {
+        const data = r.data as Record<string, unknown> | undefined
+        const local = (data?.localPapersUsed as number) ?? 0
+        const external = (data?.externalPapersUsed as number) ?? 0
+        const saved = (data?.savedPapers as number) ?? 0
+        let summary = `Found ${local + external} papers`
+        if (local > 0) summary += ` (${local} local)`
+        if (saved > 0) summary += `, saved ${saved}`
+        return { label: summary, icon: 'search' }
+      }
+    },
+    {
+      match: 'data-analyze',
+      formatCall: (_, a) => ({ label: `Analyze: ${getFileName((a.filePath as string) || '') || 'data'}`, icon: 'file' }),
+    },
+    {
+      match: 'convert_to_markdown',
+      formatCall: (_, a) => ({ label: `Convert: ${getFileName((a.uri as string) || '')}`, icon: 'file' }),
+      formatResult: (_, _r, a) => ({ label: `Converted ${getFileName((a?.uri as string) || '')}`, icon: 'file' }),
+    },
+    {
+      match: 'save-note',
+      formatCall: (_, a) => ({ label: `Save note: ${((a.title as string) || 'note').slice(0, 35)}`, icon: 'file' }),
+      formatResult: (_, r) => {
+        const title = ((r.data as any)?.title as string) || ''
+        return { label: title ? `Saved note: ${title.slice(0, 30)}` : 'Saved note', icon: 'file' }
+      }
+    },
+    {
+      match: 'save-paper',
+      formatCall: (_, a) => ({ label: `Save paper: ${((a.title as string) || 'paper').slice(0, 35)}`, icon: 'file' }),
+      formatResult: (_, r) => {
+        const title = ((r.data as any)?.title as string) || ''
+        return { label: title ? `Saved paper: ${title.slice(0, 30)}` : 'Saved paper', icon: 'file' }
+      }
+    },
+  ]
+})
 
 let coordinator: ReturnType<typeof createCoordinator> | null = null
 let currentModel = 'gpt-5.2'
@@ -100,7 +151,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
       },
       onToolCall: (tool: string, args: unknown) => {
         // Send activity event for tool invocation
-        const summary = formatToolCallSummary(tool, args)
+        const summary = fmt.formatToolCall(tool, args).label
         safeSend(win, 'agent:activity', {
           type: 'tool-call',
           tool,
@@ -159,7 +210,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
         const r = result as any
         const success = r?.success !== false
         const error = !success ? (r?.error || 'Unknown error') : undefined
-        const summary = formatToolResultSummary(tool, result, args)
+        const summary = fmt.formatToolResult(tool, result, args).label
         safeSend(win, 'agent:activity', {
           type: 'tool-result',
           tool,
@@ -179,211 +230,6 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
   return coordinator
 }
 
-/** Extract just the filename from a path */
-function getFileName(path: string): string {
-  if (!path) return ''
-  return path.split('/').pop() || path
-}
-
-/** Format a short summary for a tool call activity event */
-function formatToolCallSummary(tool: string, args: unknown): string {
-  const a = args as Record<string, unknown> | undefined
-  switch (tool) {
-    case 'literature-search': {
-      const query = (a?.query as string) || ''
-      return `Search: ${query.slice(0, 40)}${query.length > 40 ? '...' : ''}`
-    }
-    case 'data-analyze': {
-      const file = getFileName((a?.filePath as string) || '')
-      return `Analyze: ${file || 'data'}`
-    }
-    case 'read': {
-      const file = getFileName((a?.path as string) || (a?.file as string) || '')
-      return `Read ${file}`
-    }
-    case 'write': {
-      const file = getFileName((a?.path as string) || (a?.file as string) || '')
-      return `Write ${file}`
-    }
-    case 'edit': {
-      const file = getFileName((a?.path as string) || (a?.file as string) || '')
-      return `Edit ${file}`
-    }
-    case 'glob': {
-      const pattern = (a?.pattern as string) || ''
-      return `Glob ${pattern}`
-    }
-    case 'grep': {
-      const pattern = (a?.pattern as string) || ''
-      return `Grep "${pattern.slice(0, 30)}${pattern.length > 30 ? '...' : ''}"`
-    }
-    case 'bash': {
-      const cmd = (a?.command as string) || ''
-      // Show first meaningful part of command
-      const shortCmd = cmd.split('\n')[0].slice(0, 40)
-      return `Run: ${shortCmd}${cmd.length > 40 ? '...' : ''}`
-    }
-    case 'memory-put':
-    case 'ctx-set': {
-      const key = (a?.key as string) || ''
-      return key ? `Store: ${key.slice(0, 40)}` : 'Store memory'
-    }
-    case 'memory-get':
-    case 'ctx-get': {
-      const key = (a?.key as string) || (a?.query as string) || ''
-      return key ? `Recall: ${key.slice(0, 40)}` : 'Recall memory'
-    }
-    case 'ctx-expand': {
-      const seg = (a?.segment as string) || (a?.query as string) || ''
-      return `Expand: ${seg.slice(0, 40)}`
-    }
-    case 'fetch': {
-      const url = (a?.url as string) || ''
-      // Extract domain or filename
-      try {
-        const u = new URL(url)
-        return `Fetch: ${u.hostname}`
-      } catch {
-        return `Fetch: ${url.slice(0, 40)}`
-      }
-    }
-    case 'convert_to_markdown': {
-      const uri = (a?.uri as string) || ''
-      const filename = getFileName(uri)
-      return `Convert: ${filename}`
-    }
-    case 'save-note': {
-      const title = (a?.title as string) || 'note'
-      return `Save note: ${title.slice(0, 35)}`
-    }
-    case 'save-paper': {
-      const title = (a?.title as string) || 'paper'
-      return `Save paper: ${title.slice(0, 35)}`
-    }
-    default:
-      if (tool.startsWith('todo-')) {
-        const action = tool.replace('todo-', '')
-        const subject = (a?.subject as string) || (a?.id as string) || ''
-        return subject ? `Task ${action}: ${subject.slice(0, 40)}` : `Task ${action}`
-      }
-      return tool
-  }
-}
-
-/** Format a short summary for a tool result activity event */
-function formatToolResultSummary(tool: string, result: unknown, args?: unknown): string {
-  const r = result as Record<string, unknown> | undefined
-  const a = args as Record<string, unknown> | undefined
-  const success = r?.success !== false
-  if (!success) {
-    const error = (r?.error as string) || 'failed'
-    return `Failed: ${error.slice(0, 50)}`
-  }
-  switch (tool) {
-    case 'literature-search': {
-      const data = r?.data as Record<string, unknown> | undefined
-      const local = data?.localPapersUsed as number | undefined
-      const external = data?.externalPapersUsed as number | undefined
-      const saved = data?.savedPapers as number | undefined
-      let summary = 'Search done'
-      if (typeof local === 'number' && typeof external === 'number') {
-        summary = `Found ${local + external} papers`
-        if (local > 0) summary += ` (${local} local)`
-      }
-      if (saved && saved > 0) summary += `, saved ${saved}`
-      return summary
-    }
-    case 'read': {
-      const data = r?.data as Record<string, unknown> | undefined
-      const content = (data?.content as string) || ''
-      const lines = content.split('\n').length
-      const file = getFileName((a?.path as string) || (a?.file as string) || '')
-      return `Read ${file} (${lines} lines)`
-    }
-    case 'write': {
-      const data = r?.data as Record<string, unknown> | undefined
-      const file = getFileName((data?.path as string) || (a?.path as string) || '')
-      return `Wrote ${file}`
-    }
-    case 'edit': {
-      const file = getFileName((a?.path as string) || (a?.file as string) || '')
-      return `Edited ${file}`
-    }
-    case 'bash': {
-      const cmd = (a?.command as string) || ''
-      const shortCmd = cmd.split(/[\n|&;]/)[0].trim().slice(0, 25)
-      const data = r?.data as Record<string, unknown> | undefined
-      const output = (data?.output as string) || (data?.stdout as string) || ''
-      const lines = output.split('\n').filter(Boolean).length
-      return lines > 0 ? `${shortCmd}: ${lines} lines` : `${shortCmd}: done`
-    }
-    case 'memory-put':
-    case 'ctx-set': {
-      const key = (a?.key as string) || ''
-      return key ? `Stored "${key.slice(0, 30)}"` : 'Stored memory'
-    }
-    case 'memory-get':
-    case 'ctx-get': {
-      const key = (a?.key as string) || (a?.query as string) || ''
-      const data = r?.data as Record<string, unknown> | undefined
-      const value = data?.value || data?.content
-      const keyPart = key ? `"${key.slice(0, 25)}"` : 'memory'
-      return value ? `Recalled ${keyPart}` : `${keyPart}: not found`
-    }
-    case 'ctx-expand': {
-      const seg = (a?.segment as string) || (a?.query as string) || ''
-      return seg ? `Expanded "${seg.slice(0, 30)}"` : 'Expanded context'
-    }
-    case 'glob': {
-      const pattern = (a?.pattern as string) || ''
-      const data = r?.data as Record<string, unknown> | undefined
-      const files = (data?.files as string[]) || (data?.matches as string[]) || []
-      return `${pattern}: ${files.length} files`
-    }
-    case 'grep': {
-      const pattern = (a?.pattern as string) || ''
-      const data = r?.data as Record<string, unknown> | undefined
-      const matches = (data?.matches as unknown[]) || (data?.results as unknown[]) || []
-      return `"${pattern.slice(0, 20)}": ${matches.length} matches`
-    }
-    case 'fetch': {
-      const url = (a?.url as string) || ''
-      try {
-        const u = new URL(url)
-        return `Fetched ${u.hostname}`
-      } catch {
-        return 'Fetched URL'
-      }
-    }
-    case 'convert_to_markdown': {
-      const uri = (a?.uri as string) || ''
-      const file = getFileName(uri)
-      return `Converted ${file}`
-    }
-    case 'save-note': {
-      const data = r?.data as Record<string, unknown> | undefined
-      const title = (data?.title as string) || ''
-      return title ? `Saved note: ${title.slice(0, 30)}` : 'Saved note'
-    }
-    case 'save-paper': {
-      const data = r?.data as Record<string, unknown> | undefined
-      const title = (data?.title as string) || ''
-      return title ? `Saved paper: ${title.slice(0, 30)}` : 'Saved paper'
-    }
-    default:
-      if (tool.startsWith('todo-')) {
-        const action = tool.replace('todo-', '')
-        const data = r?.data as Record<string, unknown> | undefined
-        const item = (data ?? r?.item ?? r) as Record<string, unknown> | undefined
-        const subject = (item?.subject as string) || (item?.id as string) || ''
-        if (action === 'add') return subject ? `Task added: ${subject.slice(0, 35)}` : 'Task added'
-        if (action === 'complete') return subject ? `Task done: ${subject.slice(0, 35)}` : 'Task done'
-        if (action === 'remove') return subject ? `Task removed: ${subject.slice(0, 35)}` : 'Task removed'
-        return subject ? `Task updated: ${subject.slice(0, 35)}` : 'Task updated'
-      }
-      return `${tool}: done`
-  }
-}
 
 export function registerIpcHandlers(win: BrowserWindow): void {
   // Agent chat
@@ -414,6 +260,21 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
+  // Clear session memory
+  // Stop running agent
+  ipcMain.handle('agent:stop', () => {
+    if (coordinator) {
+      (coordinator as any).agent.stop()
+    }
+  })
+
+  // Clear session memory
+  ipcMain.handle('agent:clear-memory', async () => {
+    if (coordinator) {
+      await (coordinator as any).clearSessionMemory()
+    }
+  })
+
   // Commands - entities
   ipcMain.handle('cmd:list-notes', () => {
     if (!projectPath) return []
@@ -439,17 +300,27 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   // Commands - rename note
   ipcMain.handle('cmd:rename-note', (_e, id: string, newTitle: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const filePath = join(projectPath, PATHS.notes, `${id}.json`)
-    if (!existsSync(filePath)) return { success: false, error: 'Note not found.' }
-    try {
-      const note = JSON.parse(readFileSync(filePath, 'utf-8'))
-      note.title = newTitle
-      note.updatedAt = new Date().toISOString()
-      writeFileSync(filePath, JSON.stringify(note, null, 2))
-      return { success: true }
-    } catch (err: any) {
-      return { success: false, error: err.message }
+    // Search across all entity directories
+    const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+    for (const dir of dirs) {
+      const filePath = join(projectPath, dir, `${id}.json`)
+      if (!existsSync(filePath)) continue
+      try {
+        const entity = JSON.parse(readFileSync(filePath, 'utf-8'))
+        // Data entities use 'name', notes/papers use 'title'
+        if (entity.type === 'data') {
+          entity.name = newTitle
+        } else {
+          entity.title = newTitle
+        }
+        entity.updatedAt = new Date().toISOString()
+        writeFileSync(filePath, JSON.stringify(entity, null, 2))
+        return { success: true }
+      } catch (err: any) {
+        return { success: false, error: err.message }
+      }
     }
+    return { success: false, error: 'Entity not found.' }
   })
 
   // Commands - save
@@ -537,6 +408,73 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     } catch (err: any) {
       return { success: false, error: err.message }
     }
+  })
+
+  // Resolve a file path to an absolute path (for file:// URLs)
+  ipcMain.handle('file:resolve-path', (_e, filePath: string) => {
+    try {
+      const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+      if (!existsSync(absPath)) {
+        return { success: false, error: 'File not found' }
+      }
+      return { success: true, absPath }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Binary file reading (images, PDFs) — returns base64
+  ipcMain.handle('file:read-binary', (_e, filePath: string) => {
+    try {
+      const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+      if (!existsSync(absPath)) {
+        return { success: false, error: 'File not found' }
+      }
+      const buffer = readFileSync(absPath)
+      const base64 = buffer.toString('base64')
+      const ext = absPath.split('.').pop()?.toLowerCase() || ''
+      const mimeMap: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+        pdf: 'application/pdf'
+      }
+      const mime = mimeMap[ext] || 'application/octet-stream'
+      return { success: true, base64, mime, path: absPath }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Drop file handler — copies file into project and creates entity
+  ipcMain.handle('file:drop', async (_e, fileName: string, content: string, tab: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+
+    if (tab === 'notes') {
+      // Save text content as a note entity
+      const title = fileName.replace(/\.\w+$/, '')
+      return saveNote(title, content, [], { sessionId, projectPath, lastAgentResponse: '' }, false)
+    }
+
+    if (tab === 'data') {
+      // Write file into .research-pilot/data/ and register as data entity
+      const dataDir = join(projectPath, PATHS.data)
+      if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true })
+      const destPath = join(dataDir, fileName)
+      writeFileSync(destPath, content, 'utf-8')
+
+      const name = fileName.replace(/\.\w+$/, '')
+      const ext = fileName.split('.').pop()?.toLowerCase() || ''
+      const mimeMap: Record<string, string> = { csv: 'text/csv', tsv: 'text/tab-separated-values', json: 'application/json' }
+      return saveData(name, { filePath: destPath, mimeType: mimeMap[ext] }, { sessionId, projectPath })
+    }
+
+    if (tab === 'papers') {
+      // Save as a literature reference with content as abstract
+      const title = fileName.replace(/\.\w+$/, '')
+      return savePaper(title, { authors: [], abstract: content, projectPath, sessionId })
+    }
+
+    return { success: false, error: `Unknown tab: ${tab}` }
   })
 
   // Session - chat history persistence

@@ -178,6 +178,19 @@ export function createCtxGetTool(options: CreateCtxGetOptions = {}): Tool<CtxGet
   return defineTool({
     name: 'ctx-get',
     description: fullDescription,
+    activity: {
+      formatCall: (a) => {
+        const key = (a.source as string) || (a.key as string) || (a.query as string) || ''
+        return { label: key ? `Recall: ${key.slice(0, 40)}` : 'Recall memory', icon: 'memory' }
+      },
+      formatResult: (r, a) => {
+        const key = (a?.source as string) || (a?.key as string) || (a?.query as string) || ''
+        const data = (r.data as any)
+        const value = data?.value || data?.content || data?.rendered
+        const keyPart = key ? `"${key.slice(0, 25)}"` : 'memory'
+        return { label: value ? `Recalled ${keyPart}` : `${keyPart}: not found`, icon: 'memory' }
+      }
+    },
     parameters: {
       source: {
         type: 'string',

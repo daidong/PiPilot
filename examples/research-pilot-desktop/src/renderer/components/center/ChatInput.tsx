@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
-import { Send, Folder } from 'lucide-react'
+import { Send, Square, Folder } from 'lucide-react'
 import { useChatStore } from '../../stores/chat-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useSessionStore } from '../../stores/session-store'
@@ -31,6 +31,7 @@ export function ChatInput() {
   const [commandQuery, setCommandQuery] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const send = useChatStore((s) => s.send)
+  const stop = useChatStore((s) => s.stop)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const setIdle = useUIStore((s) => s.setIdle)
   const pickFolder = useSessionStore((s) => s.pickFolder)
@@ -162,7 +163,7 @@ export function ChatInput() {
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
@@ -261,13 +262,24 @@ export function ChatInput() {
           className="flex-1 bg-transparent text-sm t-text placeholder:t-text-muted resize-none outline-none"
         />
 
-        <button
-          onClick={handleSend}
-          disabled={!text.trim() || isStreaming}
-          className="shrink-0 p-1.5 rounded-lg bg-orange-500 text-white disabled:opacity-30 hover:bg-orange-400 transition-colors"
-        >
-          <Send size={16} />
-        </button>
+        {isStreaming ? (
+          <button
+            onClick={stop}
+            className="shrink-0 p-1.5 rounded-lg bg-red-500 text-white hover:bg-red-400 transition-colors"
+            title="Stop"
+          >
+            <Square size={16} />
+          </button>
+        ) : (
+          <button
+            onClick={handleSend}
+            disabled={!text.trim()}
+            className="shrink-0 p-1.5 rounded-lg bg-orange-500 text-white disabled:opacity-30 hover:bg-orange-400 transition-colors"
+            title="Send (Shift+Enter)"
+          >
+            <Send size={16} />
+          </button>
+        )}
       </div>
     </div>
   )

@@ -28,6 +28,8 @@ export function saveData(
     rowCount?: number
     columns?: Array<{ name: string; type: string; description?: string }>
     tags?: string[]
+    runId?: string
+    runLabel?: string
   },
   context: CLIContext
 ): SaveDataResult {
@@ -49,6 +51,8 @@ export function saveData(
       columns: opts.columns
     } : undefined,
     tags: opts.tags ?? [],
+    runId: opts.runId,
+    runLabel: opts.runLabel,
     pinned: false,
     selectedForAI: false,
     createdAt: new Date().toISOString(),

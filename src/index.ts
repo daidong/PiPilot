@@ -18,6 +18,8 @@ export type {
   ToolResult,
   ParameterSchema,
   ParameterDefinition,
+  ActivitySummary,
+  ToolActivityFormat,
 
   // Policy 相关类型
   Policy,
@@ -143,6 +145,61 @@ export type {
 // ============================================================================
 // 核心组件导出
 // ============================================================================
+
+// Error Feedback & Retry (RFC-005)
+export {
+  classifyError,
+  createValidationError,
+  createPythonError,
+  sanitizeErrorContent,
+  sanitizeDetails,
+  parsePythonTraceback,
+  inferSource,
+  getSourceKind
+} from './core/errors.js'
+export type {
+  ErrorCategory,
+  ErrorSource,
+  ErrorSourceKind,
+  Recoverability,
+  AgentError,
+  ClassifyErrorContext
+} from './core/errors.js'
+
+export {
+  buildFeedback,
+  toolValidationFeedback,
+  executionFailureFeedback,
+  policyDenialFeedback,
+  contextDropFeedback,
+  formatFeedbackAsToolResult
+} from './core/feedback.js'
+export type {
+  ErrorFeedback,
+  ErrorFacts,
+  FeedbackContext,
+  FeedbackBuilder,
+  ToolSchemaSummary
+} from './core/feedback.js'
+
+export {
+  RetryBudget,
+  DEFAULT_STRATEGIES,
+  DEFAULT_BUDGET_CONFIG,
+  getStrategy,
+  withExecutorRetry,
+  withRetry as withRetryExecutor,
+  computeBackoff,
+  defaultShouldRetry,
+  RetryPresets
+} from './core/retry.js'
+export type {
+  RetryMode,
+  RetryStrategy,
+  RetryBudgetConfig,
+  BackoffStrategy,
+  WithRetryOptions
+} from './core/retry.js'
 
 export { EventBus } from './core/event-bus.js'
 export { TraceCollector } from './core/trace-collector.js'
@@ -685,6 +742,8 @@ export {
   supervise,
   join,
   transfer,
+  retry,
+  fallback,
   until,
 
   // Flow execution
@@ -781,6 +840,8 @@ export type {
   GateSpec,
   RaceSpec,
   SuperviseSpec,
+  RetrySpec,
+  FallbackSpec,
   InputRef,
   StateRef,
   TransferSpec,
@@ -839,6 +900,13 @@ export type {
   // Format utility types
   FormatOptions
 } from './team/index.js'
+
+// ============================================================================
+// Activity Formatter 导出
+// ============================================================================
+
+export { createActivityFormatter } from './trace/activity-formatter.js'
+export type { ToolActivityRule, ActivityFormatterOptions } from './trace/activity-formatter.js'
 
 // ============================================================================
 // Context Pipeline 导出

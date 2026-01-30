@@ -4,6 +4,8 @@
 
 import { spawn, ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { createPythonError, classifyError } from '../core/errors.js'
+import type { AgentError } from '../core/errors.js'
 
 /**
  * PythonBridge 配置
@@ -32,6 +34,8 @@ export interface CallResult<T = unknown> {
   success: boolean
   data?: T
   error?: string
+  /** Structured error info (RFC-005) */
+  agentError?: AgentError
 }
 
 /**
@@ -105,11 +109,16 @@ export class PythonBridge extends EventEmitter {
           const pending = this.pending.get(response.id)
           if (pending) {
             this.pending.delete(response.id)
-            pending.resolve({
+            const callResult: CallResult = {
               success: response.success,
               data: response.data,
               error: response.error
-            })
+            }
+            // Attach structured error for failed service calls (RFC-005)
+            if (!response.success && response.error) {
+              callResult.agentError = createPythonError(response.error)
+            }
+            pending.resolve(callResult)
           }
         } catch {
           this.emit('output', message)
@@ -188,10 +197,11 @@ export class PythonBridge extends EventEmitter {
     return new Promise((resolve, reject) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
-      // 设置超时
+      // Set timeout — creates AgentError with category 'timeout' (RFC-005)
       const timeout = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error('Call timeout'))
+        const agentError = classifyError('Call timeout', 'python')
+        reject(Object.assign(new Error('Call timeout'), { agentError }))
       }, 60000)
 
       // 注册回调
@@ -239,9 +249,11 @@ export class PythonBridge extends EventEmitter {
 
       proc.on('exit', (code) => {
         if (code !== 0) {
+          const agentError = createPythonError(stderr || `Process exited with code ${code}`, code ?? undefined)
           resolve({
             success: false,
-            error: stderr || `Process exited with code ${code}`
+            error: stderr || `Process exited with code ${code}`,
+            agentError
           })
           return
         }

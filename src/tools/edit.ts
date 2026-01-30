@@ -52,6 +52,16 @@ export const edit: Tool<EditInput, EditOutput> = defineTool({
       default: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const file = (a.path as string)?.split('/').pop() || ''
+      return { label: `Edit ${file}`, icon: 'edit' }
+    },
+    formatResult: (_r, a) => {
+      const file = (a?.path as string)?.split('/').pop() || ''
+      return { label: `Edited ${file}`, icon: 'edit' }
+    }
+  },
   execute: async (input, { runtime }) => {
     // Use readFileForEdit to read the full file (bypasses autoLimitRead policy)
     // This ensures edits won't fail due to file truncation

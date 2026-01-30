@@ -28,6 +28,7 @@ export interface TodoUpdateInput {
 export interface TodoUpdateOutput {
   success: boolean
   item?: TodoItem
+
   error?: string
 }
 
@@ -69,6 +70,18 @@ export const todoUpdate: Tool<TodoUpdateInput, TodoUpdateOutput> = defineTool({
       type: 'array',
       description: 'New tags (replaces existing)',
       required: false
+    }
+  },
+  activity: {
+    formatCall: (a) => {
+      const id = (a.id as string) || ''
+      const title = (a.title as string) || ''
+      return { label: title ? `Task update: ${title.slice(0, 40)}` : `Task update: ${id.slice(0, 20)}`, icon: 'task' }
+    },
+    formatResult: (r) => {
+      const item = (r.data as any)?.item ?? (r as any).item ?? r
+      const subject = (item?.title as string) || (item?.subject as string) || ''
+      return { label: subject ? `Task updated: ${subject.slice(0, 35)}` : 'Task updated', icon: 'task' }
     }
   },
   execute: async (input, { runtime }) => {

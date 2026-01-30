@@ -15,6 +15,8 @@ import type {
   GateSpec,
   RaceSpec,
   SuperviseSpec,
+  RetrySpec,
+  FallbackSpec,
   InvokeSpec,
   StateRef,
   ItemsRef,
@@ -360,5 +362,84 @@ export const transfer = {
 
   /** Full context transfer (use with caution) */
   full: (): TransferSpec => ({ mode: 'full' })
+}
+
+// ============================================================================
+// Retry Combinator (RFC-005 Phase 3)
+// ============================================================================
+
+export interface RetryOptions {
+  /** Maximum attempts including the first (default: 3) */
+  maxAttempts?: number
+  /** Backoff delay in ms between attempts */
+  backoffMs?: number
+  /** Exponential backoff multiplier (default: 2) */
+  backoffMultiplier?: number
+  /** Human-readable name */
+  name?: string
+  /** Tags for filtering */
+  tags?: string[]
+}
+
+/**
+ * Retry a flow step on failure with error feedback.
+ *
+ * On each failure, the error is classified and scoped feedback
+ * is written to the step's state path `{stepId}._errorFeedback`.
+ * On success, the feedback is cleaned up.
+ *
+ * @example
+ * retry(
+ *   step(executor).in(state.path('plan')).out(state.path('result')),
+ *   { maxAttempts: 3 }
+ * )
+ */
+export function retry(
+  inner: FlowSpec,
+  options?: RetryOptions
+): RetrySpec {
+  return {
+    kind: 'retry',
+    inner,
+    maxAttempts: options?.maxAttempts ?? 3,
+    backoffMs: options?.backoffMs,
+    backoffMultiplier: options?.backoffMultiplier,
+    name: options?.name,
+    tags: options?.tags
+  }
+}
+
+// ============================================================================
+// Fallback Combinator (RFC-005 Phase 3)
+// ============================================================================
+
+export interface FallbackOptions {
+  /** Human-readable name */
+  name?: string
+  /** Tags for filtering */
+  tags?: string[]
+}
+
+/**
+ * Try primary flow first; if it fails, execute fallback flow.
+ *
+ * @example
+ * fallback(
+ *   step(primaryAnalyzer).in(state.initial()).out(state.path('result')),
+ *   step(simpleAnalyzer).in(state.initial()).out(state.path('result'))
+ * )
+ */
+export function fallback(
+  primary: FlowSpec,
+  fallbackFlow: FlowSpec,
+  options?: FallbackOptions
+): FallbackSpec {
+  return {
+    kind: 'fallback',
+    primary,
+    fallback: fallbackFlow,
+    name: options?.name,
+    tags: options?.tags
+  }
 }
 

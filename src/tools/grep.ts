@@ -61,6 +61,17 @@ export const grep: Tool<GrepInput, GrepOutput> = defineTool({
       default: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const pattern = (a.pattern as string) || ''
+      return { label: `Grep "${pattern.slice(0, 30)}${pattern.length > 30 ? '...' : ''}"`, icon: 'search' }
+    },
+    formatResult: (r, a) => {
+      const pattern = (a?.pattern as string) || ''
+      const matches = (r.data as any)?.matches as unknown[] || (r.data as any)?.results as unknown[] || []
+      return { label: `"${pattern.slice(0, 20)}": ${matches.length} matches`, icon: 'search' }
+    }
+  },
   execute: async (input, { runtime }) => {
     const limit = input.limit ?? 100
 

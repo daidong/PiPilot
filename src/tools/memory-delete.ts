@@ -51,6 +51,16 @@ export const memoryDelete: Tool<MemoryDeleteInput, MemoryDeleteOutput> = defineT
       required: false
     }
   },
+  activity: {
+    formatCall: (a) => {
+      const key = (a.key as string) || ''
+      return { label: key ? `Delete: ${key.slice(0, 40)}` : 'Delete memory', icon: 'memory' }
+    },
+    formatResult: (_r, a) => {
+      const key = (a?.key as string) || ''
+      return { label: key ? `Deleted "${key.slice(0, 30)}"` : 'Deleted memory', icon: 'memory' }
+    }
+  },
   execute: async (input, { runtime }) => {
     try {
       // Get memory storage from runtime

@@ -35,6 +35,9 @@ export interface DataListItem {
   rowCount?: number
   pinned: boolean
   selectedForAI: boolean
+  tags?: string[]
+  runId?: string
+  runLabel?: string
 }
 
 /** List all notes, returning structured data */
@@ -114,7 +117,10 @@ export function listData(projectPath: string): DataListItem[] {
         filePath: data.filePath,
         rowCount: data.schema?.rowCount,
         pinned: data.pinned,
-        selectedForAI: data.selectedForAI
+        selectedForAI: data.selectedForAI,
+        tags: data.tags,
+        runId: data.runId,
+        runLabel: data.runLabel
       })
     } catch {
       // Skip invalid files

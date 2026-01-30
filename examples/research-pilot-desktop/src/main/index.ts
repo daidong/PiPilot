@@ -1,7 +1,8 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell, protocol, net } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
+import { pathToFileURL } from 'url'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -33,6 +34,13 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  // Register custom protocol to serve local files (bypasses file:// CSP restrictions)
+  protocol.handle('local-file', (request) => {
+    // URL format: local-file:///absolute/path/to/file
+    const filePath = decodeURIComponent(new URL(request.url).pathname)
+    return net.fetch(pathToFileURL(filePath).toString())
+  })
+
   const win = createWindow()
   registerIpcHandlers(win)
 

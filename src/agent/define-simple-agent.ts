@@ -21,6 +21,8 @@
 import { generateText, type LanguageModel } from 'ai'
 import type { TokenUsage } from '../llm/provider.types.js'
 import { getModel } from '../llm/models.js'
+import { classifyError } from '../core/errors.js'
+import { RetryBudget, DEFAULT_BUDGET_CONFIG } from '../core/retry.js'
 
 // ============================================================================
 // Types
@@ -214,6 +216,7 @@ export function defineAgent(definition: AgentDefinition): Agent {
       const startTime = Date.now()
       let attempts = 0
       let lastError: Error | undefined
+      const retryBudget = new RetryBudget(DEFAULT_BUDGET_CONFIG)
 
       ctx.trace?.({
         type: 'agent.call.start',
@@ -310,14 +313,23 @@ export function defineAgent(definition: AgentDefinition): Agent {
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error))
 
-          if (attempts <= maxRetries) {
+          // Classify error and check retry budget (RFC-005)
+          const agentError = classifyError(lastError, 'llm')
+
+          if (attempts <= maxRetries && retryBudget.canRetry(agentError.category, agentError.recoverability)) {
+            retryBudget.record(agentError.category)
             ctx.trace?.({
               type: 'agent.retry',
               agentId: id,
               ts: Date.now(),
               attempt: attempts,
-              error: lastError.message
-            })
+              error: lastError.message,
+              errorCategory: agentError.category,
+              recoverability: agentError.recoverability
+            } as AgentTraceEvent & { errorCategory?: string; recoverability?: string })
+          } else {
+            // Budget exhausted or non-recoverable — break immediately
+            break
           }
         }
       }
