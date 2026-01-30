@@ -13,7 +13,7 @@ import {
 } from '../../../src/agent/define-simple-agent.js'
 
 import { getLanguageModelByModelId } from '../../../src/index.js'
-import { loadPrompt } from './prompts/load.js'
+import { loadPrompt } from './prompts/index.js'
 
 /**
  * Writing Outliner - Creates structured outlines

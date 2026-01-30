@@ -18,7 +18,7 @@ import type { ContextSelection } from '../../../src/types/context-pipeline.js'
 import { PATHS, Entity, Note, Literature, DataAttachment } from '../types.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { countTokens } from '../../../src/utils/tokenizer.js'
-import { loadPrompt } from './prompts/load.js'
+import { loadPrompt } from './prompts/index.js'
 
 /**
  * System prompt for the coordinator (loaded from prompts/coordinator-system.md)

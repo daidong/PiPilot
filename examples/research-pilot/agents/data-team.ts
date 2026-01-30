@@ -17,7 +17,7 @@ import { executionFailureFeedback, formatFeedbackAsToolResult } from '../../../s
 import { createPythonError } from '../../../src/core/errors.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG } from '../../../src/core/retry.js'
 import { saveData } from '../commands/save-data.js'
-import { loadPrompt } from './prompts/load.js'
+import { loadPrompt } from './prompts/index.js'
 import type { CLIContext, ColumnSchemaDetailed, ResultsManifest } from '../types.js'
 
 // ============================================================================

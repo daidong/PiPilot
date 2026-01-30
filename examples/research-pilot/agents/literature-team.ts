@@ -29,7 +29,7 @@ import {
 } from '../../../src/agent/define-simple-agent.js'
 
 import { getLanguageModelByModelId } from '../../../src/index.js'
-import { loadPrompt } from './prompts/load.js'
+import { loadPrompt } from './prompts/index.js'
 
 import { searchLocalPapers, findExistingPaper } from './local-paper-lookup.js'
 import { getBibtex, type PaperMetadata } from './bibtex-utils.js'
