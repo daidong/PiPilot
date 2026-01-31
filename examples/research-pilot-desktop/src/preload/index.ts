@@ -52,13 +52,14 @@ export interface ElectronAPI {
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
   readFileBinary: (path: string) => Promise<{ success: boolean; base64?: string; mime?: string; error?: string }>
   resolvePath: (path: string) => Promise<{ success: boolean; absPath?: string; error?: string }>
+  openFile: (path: string) => Promise<{ success: boolean; error?: string }>
   listRootFiles: () => Promise<{ path: string; name: string }[]>
 
   // File drop
   dropFile: (fileName: string, content: string, tab: string) => Promise<any>
 
   // Enrichment
-  enrichAllPapers: () => Promise<{ success: boolean; enriched: number; skipped: number; failed: number }>
+  enrichAllPapers: (paperIds?: string[]) => Promise<{ success: boolean; enriched: number; skipped: number; failed: number }>
   onEnrichProgress: (cb: (info: { paperId: string; status: string }) => void) => () => void
 
   // Session/Project
@@ -142,11 +143,12 @@ const api: ElectronAPI = {
   readFile: (path) => ipcRenderer.invoke('file:read', path),
   readFileBinary: (path) => ipcRenderer.invoke('file:read-binary', path),
   resolvePath: (path) => ipcRenderer.invoke('file:resolve-path', path),
+  openFile: (path) => ipcRenderer.invoke('file:open-external', path),
   listRootFiles: () => ipcRenderer.invoke('file:list-root'),
 
   dropFile: (fileName, content, tab) => ipcRenderer.invoke('file:drop', fileName, content, tab),
 
-  enrichAllPapers: () => ipcRenderer.invoke('cmd:enrich-papers'),
+  enrichAllPapers: (paperIds) => ipcRenderer.invoke('cmd:enrich-papers', paperIds),
   onEnrichProgress: (cb) => {
     const handler = (_: any, info: { paperId: string; status: string }) => cb(info)
     ipcRenderer.on('enrich:progress', handler)

@@ -4,6 +4,12 @@ import { useUIStore, type WorkingFile } from '../../stores/ui-store'
 
 const api = (window as any).api
 
+const EXTERNAL_EXTS = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg',
+  'pdf',
+  'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'
+])
+
 // Each row is ~24px (py-1 = 4px * 2 + text ~16px), show max 5
 const MAX_HEIGHT = 120
 
@@ -48,24 +54,26 @@ function FileRow({ file }: { file: WorkingFile }) {
   const openPreview = useUIStore((s) => s.openPreview)
 
   const handleClick = async () => {
-    try {
-      const result = await api.readFile(file.path)
-      if (result.success) {
-        openPreview({
-          id: file.path,
-          type: 'note',
-          title: file.name,
-          content: result.content,
-          tags: [],
-          pinned: false,
-          selectedForAI: false,
-          createdAt: new Date(file.accessedAt).toISOString(),
-          updatedAt: new Date(file.accessedAt).toISOString()
-        })
-      }
-    } catch {
-      // Silently ignore read errors
+    const ext = (file.name.split('.').pop() || '').toLowerCase()
+
+    // Binary files: open directly in system default app
+    if (EXTERNAL_EXTS.has(ext)) {
+      api.openFile(file.path)
+      return
     }
+
+    // Text-readable files: open in preview panel
+    openPreview({
+      id: file.path,
+      type: 'data',
+      title: file.name,
+      filePath: file.path,
+      tags: [],
+      pinned: false,
+      selectedForAI: false,
+      createdAt: new Date(file.accessedAt).toISOString(),
+      updatedAt: new Date(file.accessedAt).toISOString()
+    })
   }
 
   return (

@@ -391,8 +391,8 @@ If conversation history contains previous literature-search results with coverag
 
 1. You MUST provide a \`relevanceJustification\` for EVERY paper explaining WHY it received that score
 2. After scoring all papers, perform a FORCED RANKING: cut the bottom 30% — papers in the bottom 30% get excluded from relevantPapers even if their score is above threshold
-3. Auto-save threshold is **>= 8** (not 7). Only papers scoring 8+ are truly relevant
-4. Approve if at least 3 papers score >= 8 AND coverage >= 0.5. Prefer to APPROVE rather than requesting another search round — extra searches are expensive (2+ minutes each). Only request refinement if a CRITICAL sub-topic has ZERO relevant papers
+3. Auto-save threshold is **>= 7**. Papers scoring 7+ are saved to the local library
+4. Approve if at least 3 papers score >= 7 AND coverage >= 0.5. Prefer to APPROVE rather than requesting another search round — extra searches are expensive (2+ minutes each). Only request refinement if a CRITICAL sub-topic has ZERO relevant papers
 5. If not approved, suggest at most 2-3 **targeted refinement queries** for specific missing sub-topics — NOT broad re-searches. These queries run through the FULL search pipeline again, so be selective. CRITICAL: Your refinement queries MUST be DIFFERENT from the "Queries used" listed at the bottom — the system will reject duplicate queries. Use different terminology, synonyms, or narrower/broader scope to find what the original queries missed
 6. Track cumulative coverage across sub-topics
 

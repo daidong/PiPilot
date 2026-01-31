@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Pin, CheckSquare, StickyNote, BookOpen, Database, Trash2, Pencil, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
+import { X, Pin, CheckSquare, StickyNote, BookOpen, Database, Trash2, Pencil } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
 
@@ -12,8 +12,11 @@ const typeIcons: Record<string, React.ReactNode> = {
 }
 
 // File extension categories
-const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'])
-const PDF_EXTS = new Set(['pdf'])
+const EXTERNAL_EXTS = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg',
+  'pdf',
+  'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'
+])
 const CSV_EXTS = new Set(['csv', 'tsv'])
 const TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'xml', 'log', 'ini', 'toml', 'cfg'])
 
@@ -81,107 +84,6 @@ function CsvPreview({ content, separator }: { content: string; separator: string
   )
 }
 
-/** Shared zoom toolbar */
-function ZoomToolbar({ zoom, onZoomIn, onZoomOut, onReset }: {
-  zoom: number
-  onZoomIn: () => void
-  onZoomOut: () => void
-  onReset: () => void
-}) {
-  return (
-    <div className="flex items-center gap-1 px-3 py-1.5 border-b t-border shrink-0">
-      <button onClick={onZoomOut} className="p-1 rounded t-text-muted t-bg-hover" title="Zoom out (Ctrl -)">
-        <ZoomOut size={14} />
-      </button>
-      <span className="text-xs t-text-secondary w-12 text-center">{Math.round(zoom * 100)}%</span>
-      <button onClick={onZoomIn} className="p-1 rounded t-text-muted t-bg-hover" title="Zoom in (Ctrl +)">
-        <ZoomIn size={14} />
-      </button>
-      <button onClick={onReset} className="p-1 rounded t-text-muted t-bg-hover ml-1" title="Reset zoom (Ctrl 0)">
-        <RotateCcw size={13} />
-      </button>
-    </div>
-  )
-}
-
-/** Hook for zoom state + keyboard shortcuts */
-function useZoom(step = 0.2, min = 0.4, max = 3) {
-  const [zoom, setZoom] = useState(1)
-  const zoomIn = () => setZoom((z) => Math.min(z + step, max))
-  const zoomOut = () => setZoom((z) => Math.max(z - step, min))
-  const resetZoom = () => setZoom(1)
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return
-      if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomIn() }
-      if (e.key === '-') { e.preventDefault(); zoomOut() }
-      if (e.key === '0') { e.preventDefault(); resetZoom() }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [])
-
-  return { zoom, zoomIn, zoomOut, resetZoom }
-}
-
-/** Image preview with zoom — 100% = fit container width */
-function ImagePreview({ dataUrl }: { dataUrl: string }) {
-  const { zoom, zoomIn, zoomOut, resetZoom } = useZoom()
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [baseWidth, setBaseWidth] = useState<number>(0)
-  const [aspectRatio, setAspectRatio] = useState<number>(1)
-
-  // Measure container width as baseline for 100% zoom
-  useEffect(() => {
-    if (containerRef.current) {
-      setBaseWidth(containerRef.current.clientWidth - 32) // minus padding
-    }
-  }, [])
-
-  const handleLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = e.currentTarget
-    if (img.naturalWidth > 0) {
-      setAspectRatio(img.naturalHeight / img.naturalWidth)
-    }
-    // Also measure container if not yet set
-    if (!baseWidth && containerRef.current) {
-      setBaseWidth(containerRef.current.clientWidth - 32)
-    }
-  }, [baseWidth])
-
-  const displayWidth = baseWidth > 0 ? baseWidth * zoom : undefined
-
-  return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <ZoomToolbar zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
-      <div ref={containerRef} className="flex-1 overflow-auto min-h-0 p-4">
-        <div style={displayWidth ? { width: displayWidth, height: displayWidth * aspectRatio } : undefined}>
-          <img
-            src={dataUrl}
-            alt="Preview"
-            className="rounded"
-            onLoad={handleLoad}
-            style={{ width: '100%', height: '100%' }}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** PDF preview via custom local-file:// protocol + iframe */
-function PdfPreview({ absPath }: { absPath: string }) {
-  // Use registered custom protocol to serve the file
-  const src = `local-file:///${encodeURIComponent(absPath).replace(/%2F/g, '/')}`
-
-  return (
-    <div className="flex-1 min-h-0">
-      <iframe src={src} className="w-full h-full border-0" style={{ minHeight: '80vh' }} />
-    </div>
-  )
-}
-
 export function EntityPreviewPanel() {
   const entity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
@@ -195,9 +97,7 @@ export function EntityPreviewPanel() {
 
   // Loaded file content for data entities
   const [fileContent, setFileContent] = useState<string | null>(null)
-  const [binaryDataUrl, setBinaryDataUrl] = useState<string | null>(null)
-  const [pdfAbsPath, setPdfAbsPath] = useState<string | null>(null)
-  const [fileType, setFileType] = useState<'text' | 'image' | 'pdf' | 'csv' | null>(null)
+  const [fileType, setFileType] = useState<'text' | 'external' | 'csv' | null>(null)
   const [loading, setLoading] = useState(false)
 
   // Reset editing state when entity changes
@@ -209,8 +109,6 @@ export function EntityPreviewPanel() {
   // Load file content for data entities with a filePath
   useEffect(() => {
     setFileContent(null)
-    setBinaryDataUrl(null)
-    setPdfAbsPath(null)
     setFileType(null)
 
     if (!entity?.filePath) return
@@ -218,24 +116,8 @@ export function EntityPreviewPanel() {
     const ext = getExtension(entity.filePath)
     const api = (window as any).api
 
-    if (IMAGE_EXTS.has(ext)) {
-      setFileType('image')
-      setLoading(true)
-      api.readFileBinary(entity.filePath).then((res: any) => {
-        if (res.success && res.base64) {
-          setBinaryDataUrl(`data:${res.mime};base64,${res.base64}`)
-        }
-        setLoading(false)
-      })
-    } else if (PDF_EXTS.has(ext)) {
-      setFileType('pdf')
-      setLoading(true)
-      api.resolvePath(entity.filePath).then((res: any) => {
-        if (res.success && res.absPath) {
-          setPdfAbsPath(res.absPath)
-        }
-        setLoading(false)
-      })
+    if (EXTERNAL_EXTS.has(ext)) {
+      setFileType('external')
     } else if (CSV_EXTS.has(ext)) {
       setFileType('csv')
       setLoading(true)
@@ -302,16 +184,22 @@ export function EntityPreviewPanel() {
   const renderContent = () => {
     // If this is a data entity with a filePath, use the loaded file content
     if (entity.filePath && fileType) {
+      if (fileType === 'external') {
+        return (
+          <div className="flex flex-col items-center justify-center gap-3 py-12">
+            <p className="text-sm t-text-secondary">{getExtension(entity.filePath!).toUpperCase()} file</p>
+            <button
+              onClick={() => (window as any).api.openFile(entity.filePath)}
+              className="px-4 py-2 rounded bg-orange-500 hover:bg-orange-600 text-white text-sm"
+            >
+              Open in default app
+            </button>
+          </div>
+        )
+      }
+
       if (loading) {
         return <p className="text-xs t-text-muted animate-pulse">Loading file preview...</p>
-      }
-
-      if (fileType === 'image' && binaryDataUrl) {
-        return <ImagePreview dataUrl={binaryDataUrl} />
-      }
-
-      if (fileType === 'pdf' && pdfAbsPath) {
-        return <PdfPreview absPath={pdfAbsPath} />
       }
 
       if (fileType === 'csv' && fileContent) {

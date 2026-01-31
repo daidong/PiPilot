@@ -61,9 +61,15 @@ export const useEntityStore = create<EntityState>((set) => ({
     ])
     const stamp = (items: any[], type: EntityItem['type']) =>
       (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
+    const sortByYear = (items: EntityItem[]) => items.sort((a: any, b: any) => {
+      if (!a.year && !b.year) return 0
+      if (!a.year) return 1
+      if (!b.year) return -1
+      return b.year - a.year
+    })
     set({
       notes: stamp(notes, 'note'),
-      papers: stamp(papers, 'paper'),
+      papers: sortByYear(stamp(papers, 'paper')),
       data: stamp(data, 'data'),
       pinned: pinned || [],
       selected: selected || []

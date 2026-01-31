@@ -1,8 +1,7 @@
-import { app, BrowserWindow, shell, protocol, net, Menu } from 'electron'
+import { app, BrowserWindow, shell, Menu } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
-import { pathToFileURL } from 'url'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -24,6 +23,14 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // Open all external links in the system browser instead of navigating in-app
+  win.webContents.on('will-navigate', (event, url) => {
+    // Allow dev server reloads
+    if (is.dev && url.startsWith(process.env.ELECTRON_RENDERER_URL || '')) return
+    event.preventDefault()
+    shell.openExternal(url)
+  })
+
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -34,13 +41,6 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
-  // Register custom protocol to serve local files (bypasses file:// CSP restrictions)
-  protocol.handle('local-file', (request) => {
-    // URL format: local-file:///absolute/path/to/file
-    const filePath = decodeURIComponent(new URL(request.url).pathname)
-    return net.fetch(pathToFileURL(filePath).toString())
-  })
-
   const win = createWindow()
   registerIpcHandlers(win)
   buildMenu(win)

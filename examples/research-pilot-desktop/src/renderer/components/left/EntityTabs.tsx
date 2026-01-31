@@ -297,7 +297,7 @@ export function EntityTabs() {
       }
     })
     try {
-      await api.enrichAllPapers()
+      await api.enrichAllPapers(papers.map((p: any) => p.id))
       await refreshAll()
     } finally {
       unsub()
@@ -364,7 +364,6 @@ export function EntityTabs() {
             ) : (
               <RefreshCw size={12} />
             )}
-            Enrich
           </button>
         )}
       </div>

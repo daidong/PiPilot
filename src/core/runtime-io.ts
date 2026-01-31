@@ -176,6 +176,27 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
+   * Resolve a cwd option to a valid directory path.
+   * If the provided path is a file (not a directory), fall back to the project root.
+   */
+  private async resolveCwd(cwd: string | undefined): Promise<string> {
+    const projectRoot = await this.getProjectRoot()
+    if (!cwd) return projectRoot
+
+    const resolved = path.resolve(projectRoot, cwd)
+    try {
+      const stat = await fs.stat(resolved)
+      if (!stat.isDirectory()) {
+        return projectRoot
+      }
+    } catch {
+      // Path doesn't exist — fall back to project root
+      return projectRoot
+    }
+    return resolved
+  }
+
+  /**
    * 获取资源限制
    */
   getLimits(): Required<ResourceLimits> {
@@ -510,13 +531,14 @@ export class RuntimeIO implements IRuntimeIO {
     // 使用可能被 mutate 的输入
     const mutatedCommand = (result.input as { command: string })?.command ?? command
 
+    const execCwd = await this.resolveCwd(options?.cwd)
+
     return new Promise((resolve) => {
-      const cwd = options?.cwd ?? this.config.projectPath
       const timeout = Math.min(options?.timeout ?? this.limits.timeout, this.limits.timeout)
 
       // 使用 spawn 而不是 exec，通过 shell
       const child = spawn('sh', ['-c', mutatedCommand], {
-        cwd,
+        cwd: execCwd,
         env: { ...process.env, ...options?.env },
         timeout
       })
@@ -586,9 +608,7 @@ export class RuntimeIO implements IRuntimeIO {
     }
 
     try {
-      const cwd = options?.cwd
-        ? await this.resolvePath(options.cwd)
-        : await this.getProjectRoot()
+      const cwd = await this.resolveCwd(options?.cwd)
 
       // 合并用户 ignore 和默认 ignore
       const userIgnore = options?.ignore ?? []
@@ -638,9 +658,7 @@ export class RuntimeIO implements IRuntimeIO {
     }
 
     try {
-      const cwd = options?.cwd
-        ? await this.resolvePath(options.cwd)
-        : await this.getProjectRoot()
+      const cwd = await this.resolveCwd(options?.cwd)
 
       const limit = Math.min(options?.limit ?? 100, this.limits.maxResults)
       const ignoreCase = options?.ignoreCase ?? false

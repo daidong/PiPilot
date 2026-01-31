@@ -162,8 +162,16 @@ export function searchLocalPapers(
 }
 
 /**
+ * Normalize a DOI string for comparison: lowercase, strip URL prefix, trim.
+ */
+function normalizeDOI(doi: string): string {
+  return doi.toLowerCase().replace(/^https?:\/\/doi\.org\//, '').trim()
+}
+
+/**
  * Check if a paper already exists locally by DOI or title match.
- * Uses Levenshtein fuzzy matching (< 10% of title length) as fallback.
+ * Uses normalized DOI comparison, exact normalized title, Levenshtein fuzzy
+ * matching (< 10% of title length), and word-level Jaccard similarity as fallbacks.
  */
 export function findExistingPaper(
   paper: { doi?: string | null; title: string },
@@ -171,27 +179,50 @@ export function findExistingPaper(
 ): Literature | null {
   const papers = loadLocalPapers(projectPath)
 
-  // First try DOI match (exact)
+  // First try DOI match (normalized — handles case and URL prefix differences)
   if (paper.doi) {
-    const doiMatch = papers.find(p => p.doi && p.doi === paper.doi)
+    const normalizedInputDoi = normalizeDOI(paper.doi)
+    const doiMatch = papers.find(p => p.doi && normalizeDOI(p.doi) === normalizedInputDoi)
     if (doiMatch) return doiMatch
   }
 
   // Exact normalized title match
-  const normalizedTitle = paper.title.toLowerCase().replace(/\s+/g, ' ').trim()
+  const normalizedTitle = paper.title.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
   const titleMatch = papers.find(
-    p => p.title.toLowerCase().replace(/\s+/g, ' ').trim() === normalizedTitle
+    p => p.title.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim() === normalizedTitle
   )
   if (titleMatch) return titleMatch
 
   // Fuzzy title match: Levenshtein distance < 10% of title length
   const threshold = Math.max(3, Math.floor(normalizedTitle.length * 0.1))
   for (const p of papers) {
-    const pTitle = p.title.toLowerCase().replace(/\s+/g, ' ').trim()
+    const pTitle = p.title.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
     if (Math.abs(pTitle.length - normalizedTitle.length) > threshold) continue
     if (levenshteinDistance(normalizedTitle, pTitle) <= threshold) {
       return p
     }
+  }
+
+  // Word-level Jaccard similarity fallback (catches reworded/reordered titles)
+  const inputWords = new Set(normalizedTitle.split(' ').filter(w => w.length > 2))
+  if (inputWords.size > 0) {
+    let bestMatch: Literature | null = null
+    let bestScore = 0
+    for (const p of papers) {
+      const pTitle = p.title.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+      const pWords = new Set(pTitle.split(' ').filter(w => w.length > 2))
+      if (pWords.size === 0) continue
+      let intersection = 0
+      for (const w of inputWords) {
+        if (pWords.has(w)) intersection++
+      }
+      const score = intersection / (inputWords.size + pWords.size - intersection)
+      if (score > bestScore) {
+        bestScore = score
+        bestMatch = p
+      }
+    }
+    if (bestScore >= 0.85 && bestMatch) return bestMatch
   }
 
   return null

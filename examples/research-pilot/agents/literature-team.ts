@@ -6,7 +6,7 @@
  * - Planner receives filtered conversation history + local library state
  * - Searcher executes all query batches with rate limiting + circuit breaker
  * - Metadata enrichment fills missing DOI, abstract, venue, citationCount
- * - Reviewer uses stricter scoring (>= 8 threshold) with forced ranking
+ * - Reviewer uses stricter scoring (>= 7 threshold) with forced ranking
  * - Compressed result with coverage state returned to coordinator
  * - Full review saved to disk (.research-pilot/reviews/)
  *
@@ -178,11 +178,11 @@ const reviewer = defineSimpleAgent({
         const venueTag = p.venue ? ` venue:${p.venue}` : ''
         const citeTag = p.citationCount != null ? ` citations:${p.citationCount}` : ''
         const authorsList = Array.isArray((p as any).authors) ? ` authors:${(p as any).authors.join(', ')}` : ''
-        return `Paper ${i + 1} (id: ${p.id})${sourceTag}${doiTag}${venueTag}${citeTag}${authorsList}: "${p.title}" (${p.year})\nAbstract: ${p.abstract ?? '(none)'}`
+        return `Paper ${i + 1} (id: ${p.id})${sourceTag}${doiTag}${venueTag}${citeTag}${authorsList}: "${p.title}" (${p.year})\nAbstract: ${p.abstract || '(no abstract available — judge by title, venue, and authors)'}`
       })
       .join('\n')
 
-    let prompt = `Original user research request:\n"${userRequest}"\n\nReview these ${papers.length} papers${sourceInfo} against the user's request. Apply the STRICT scoring rubric (>= 8 for auto-save, forced ranking to cut bottom 30%):\n\n${paperSummaries}`
+    let prompt = `Original user research request:\n"${userRequest}"\n\nReview these ${papers.length} papers${sourceInfo} against the user's request. Apply the STRICT scoring rubric (>= 7 for auto-save, forced ranking to cut bottom 30%):\n\n${paperSummaries}`
 
     // Explicitly list queries already used so the reviewer avoids duplicates in additionalQueries
     prompt += `\n\n## Queries already executed (DO NOT repeat these in additionalQueries)\n${queries.map((q, i) => `${i + 1}. "${q}"`).join('\n')}`
@@ -941,7 +941,7 @@ export function createLiteratureTeam(config: {
         const plan = stateData?.plan as SearchPlan | undefined
         const searchMeta = (stateData?.search as { metadata?: SearchMetadata })?.metadata
 
-        // Auto-save high-relevance papers (score >= 8, up from 7)
+        // Auto-save relevant papers (score >= 7)
         let savedPapers = 0
         let localPapersUsed = 0
         let externalPapersUsed = 0
@@ -972,7 +972,7 @@ export function createLiteratureTeam(config: {
 
           for (const paper of relevantPapers) {
             if (paper.source === 'local') continue
-            if (paper.relevanceScore < 8) continue // v2: threshold raised from 7 to 8
+            if (paper.relevanceScore < 7) continue
 
             const existing = findExistingPaper(
               { doi: paper.doi, title: paper.title },

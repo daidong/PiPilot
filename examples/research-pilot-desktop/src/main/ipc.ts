@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { ipcMain, BrowserWindow, dialog, shell } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 import { createCoordinator, type CoordinatorConfig } from '@research-pilot/agents/coordinator'
@@ -378,18 +378,27 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Commands - enrich all papers
-  ipcMain.handle('cmd:enrich-papers', async () => {
+  ipcMain.handle('cmd:enrich-papers', async (_e, paperIds?: string[]) => {
     if (!projectPath) return { success: false, enriched: 0, skipped: 0, failed: 0 }
 
     // Load full Literature objects from disk (listLiterature only returns a subset of fields)
     const litDir = join(projectPath, PATHS.literature)
     if (!existsSync(litDir)) return { success: true, enriched: 0, skipped: 0, failed: 0 }
     const files = readdirSync(litDir).filter(f => f.endsWith('.json'))
-    const papers: any[] = []
+    const allPapers: any[] = []
     for (const file of files) {
       try {
-        papers.push(JSON.parse(readFileSync(join(litDir, file), 'utf-8')))
+        allPapers.push(JSON.parse(readFileSync(join(litDir, file), 'utf-8')))
       } catch { /* skip corrupt files */ }
+    }
+
+    // Respect the order provided by the renderer (e.g. sorted by year desc)
+    let papers: any[]
+    if (paperIds && paperIds.length > 0) {
+      const byId = new Map(allPapers.map(p => [p.id, p]))
+      papers = paperIds.map(id => byId.get(id)).filter(Boolean)
+    } else {
+      papers = allPapers
     }
     if (papers.length === 0) return { success: true, enriched: 0, skipped: 0, failed: 0 }
 
@@ -559,6 +568,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     } catch (err: any) {
       return { success: false, error: err.message }
     }
+  })
+
+  // Open a file in the system default application
+  ipcMain.handle('file:open-external', (_e, filePath: string) => {
+    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+    if (!existsSync(absPath)) return { success: false, error: 'File not found' }
+    shell.openPath(absPath)
+    return { success: true }
   })
 
   // Binary file reading (images, PDFs) — returns base64
