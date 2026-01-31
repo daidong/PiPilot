@@ -20,6 +20,12 @@ export interface ElectronAPI {
   // Agent control
   stopAgent: () => Promise<void>
   clearSessionMemory: () => Promise<void>
+  getRealtimeSnapshot: () => Promise<{
+    streamingText: string
+    isStreaming: boolean
+    progressItems: any[]
+    activityEvents: any[]
+  }>
 
   // Select/Pin
   toggleSelect: (id: string) => Promise<any>
@@ -50,6 +56,10 @@ export interface ElectronAPI {
 
   // File drop
   dropFile: (fileName: string, content: string, tab: string) => Promise<any>
+
+  // Enrichment
+  enrichAllPapers: () => Promise<{ success: boolean; enriched: number; skipped: number; failed: number }>
+  onEnrichProgress: (cb: (info: { paperId: string; status: string }) => void) => () => void
 
   // Session/Project
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
@@ -91,6 +101,7 @@ const api: ElectronAPI = {
 
   stopAgent: () => ipcRenderer.invoke('agent:stop'),
   clearSessionMemory: () => ipcRenderer.invoke('agent:clear-memory'),
+  getRealtimeSnapshot: () => ipcRenderer.invoke('agent:get-realtime-snapshot'),
 
   toggleSelect: (id) => ipcRenderer.invoke('cmd:select', id),
   getSelected: () => ipcRenderer.invoke('cmd:get-selected'),
@@ -134,6 +145,13 @@ const api: ElectronAPI = {
   listRootFiles: () => ipcRenderer.invoke('file:list-root'),
 
   dropFile: (fileName, content, tab) => ipcRenderer.invoke('file:drop', fileName, content, tab),
+
+  enrichAllPapers: () => ipcRenderer.invoke('cmd:enrich-papers'),
+  onEnrichProgress: (cb) => {
+    const handler = (_: any, info: { paperId: string; status: string }) => cb(info)
+    ipcRenderer.on('enrich:progress', handler)
+    return () => ipcRenderer.removeListener('enrich:progress', handler)
+  },
 
   getCurrentSession: () => ipcRenderer.invoke('session:current'),
   pickFolder: () => ipcRenderer.invoke('project:pick-folder'),

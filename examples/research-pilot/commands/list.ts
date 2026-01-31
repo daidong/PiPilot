@@ -23,9 +23,21 @@ export interface LiteratureListItem {
   abstract: string
   authors: string[]
   year?: number
+  venue?: string
+  url?: string
   citeKey: string
   pinned: boolean
   selectedForAI: boolean
+  doi?: string
+  citationCount?: number
+  pdfUrl?: string
+  bibtex?: string
+  externalSource?: string
+  relevanceScore?: number
+  enrichmentSource?: string
+  enrichedAt?: string
+  tags?: string[]
+  provenance?: Provenance
 }
 
 export interface DataListItem {
@@ -87,9 +99,21 @@ export function listLiterature(projectPath: string): LiteratureListItem[] {
         abstract: lit.abstract,
         authors: lit.authors,
         year: lit.year,
+        venue: lit.venue,
+        url: lit.url,
         citeKey: lit.citeKey,
         pinned: lit.pinned,
-        selectedForAI: lit.selectedForAI
+        selectedForAI: lit.selectedForAI,
+        doi: lit.doi,
+        citationCount: lit.citationCount,
+        pdfUrl: lit.pdfUrl,
+        bibtex: lit.bibtex,
+        externalSource: lit.externalSource,
+        relevanceScore: lit.relevanceScore,
+        enrichmentSource: lit.enrichmentSource,
+        enrichedAt: lit.enrichedAt,
+        tags: lit.tags,
+        provenance: lit.provenance
       })
     } catch {
       // Skip invalid files

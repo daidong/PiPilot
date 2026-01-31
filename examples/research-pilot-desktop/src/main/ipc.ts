@@ -9,12 +9,15 @@ import {
   togglePin, getPinned
 } from '@research-pilot/commands/index'
 import { saveNote } from '@research-pilot/commands/save-note'
-import { savePaper, parseSavePaperArgs } from '@research-pilot/commands/save-paper'
+import { savePaper, parseSavePaperArgs, updatePaperMetadata } from '@research-pilot/commands/save-paper'
+import { RateLimiter, CircuitBreaker, DEFAULT_SEARCHER_CONFIG } from '@research-pilot/agents/rate-limiter'
+import { enrichPapers, createEnrichmentConfig, countCoreFields, type PaperInput } from '@research-pilot/agents/metadata-enrichment'
 import { saveData, parseSaveDataArgs } from '@research-pilot/commands/save-data'
 import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/mentions/index'
 import { setCachedMarkdown, fileUriToPath } from '@research-pilot/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@research-pilot/types'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
+import { realtimeBuffer } from './realtime-buffer'
 
 /** Extract just the filename from a path */
 function getFileName(path: string): string {
@@ -31,14 +34,43 @@ const fmt = createActivityFormatter({
       formatCall: (_, a) => ({ label: `Search: ${((a.query as string) || '').slice(0, 40)}${((a.query as string) || '').length > 40 ? '...' : ''}`, icon: 'search' }),
       formatResult: (_, r) => {
         const data = r.data as Record<string, unknown> | undefined
+        // v2 compressed result format
+        const totalFound = (data?.totalPapersFound as number) ?? 0
+        const saved = (data?.papersAutoSaved as number) ?? 0
+        const coverage = data?.coverage as { score?: number } | undefined
+        if (totalFound > 0) {
+          let summary = `Found ${totalFound} papers`
+          if (coverage?.score != null) summary += ` (coverage: ${Math.round(coverage.score * 100)}%)`
+          if (saved > 0) summary += `, saved ${saved}`
+          return { label: summary, icon: 'search' }
+        }
+        // v1 fallback
         const local = (data?.localPapersUsed as number) ?? 0
         const external = (data?.externalPapersUsed as number) ?? 0
-        const saved = (data?.savedPapers as number) ?? 0
+        const savedV1 = (data?.savedPapers as number) ?? 0
         let summary = `Found ${local + external} papers`
         if (local > 0) summary += ` (${local} local)`
-        if (saved > 0) summary += `, saved ${saved}`
+        if (savedV1 > 0) summary += `, saved ${savedV1}`
         return { label: summary, icon: 'search' }
       }
+    },
+    // Sub-topic search progress (ACTIVITY, not PROGRESS)
+    {
+      match: 'lit-subtopic',
+      formatCall: (_, a) => ({ label: (a._summary as string) || 'Searching sub-topic', icon: 'search' }),
+      formatResult: (_, r) => ({ label: (r.data as string) || 'Search completed', icon: 'search' }),
+    },
+    // Metadata enrichment progress
+    {
+      match: 'lit-enrich',
+      formatCall: (_, a) => ({ label: (a._summary as string) || 'Enriching paper metadata', icon: 'search' }),
+      formatResult: (_, r) => ({ label: (r.data as string) || 'Enriched metadata', icon: 'search' }),
+    },
+    // Auto-save papers
+    {
+      match: 'lit-autosave',
+      formatCall: (_, a) => ({ label: (a._summary as string) || 'Saving papers', icon: 'file' }),
+      formatResult: (_, r) => ({ label: (r.data as string) || 'Saved papers', icon: 'file' }),
     },
     {
       match: 'data-analyze',
@@ -139,10 +171,9 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
     const apiKey = process.env.OPENAI_API_KEY || ''
 
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
-    safeSend(win, 'agent:activity', {
-      type: 'system',
-      summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...'
-    })
+    const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
+    realtimeBuffer.pushActivity(initEvent)
+    safeSend(win, 'agent:activity', initEvent)
 
     coordinator = await createCoordinator({
       apiKey,
@@ -151,21 +182,21 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
       sessionId,
       debug: true,
       onStream: (chunk: string) => {
+        realtimeBuffer.appendChunk(chunk)
         safeSend(win, 'agent:stream-chunk', chunk)
       },
       onToolCall: (tool: string, args: unknown) => {
         // Send activity event for tool invocation
         const summary = fmt.formatToolCall(tool, args).label
-        safeSend(win, 'agent:activity', {
-          type: 'tool-call',
-          tool,
-          summary
-        })
+        const event = { type: 'tool-call', tool, summary }
+        realtimeBuffer.pushActivity(event)
+        safeSend(win, 'agent:activity', event)
       },
       onToolResult: (tool: string, result: unknown, args?: unknown) => {
         if (tool.startsWith('todo-') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.item) {
+            realtimeBuffer.upsertProgressItem(r.item)
             safeSend(win, 'agent:todo-update', r.item)
           }
         }
@@ -215,21 +246,16 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
         const success = r?.success !== false
         const error = !success ? (r?.error || 'Unknown error') : undefined
         const summary = fmt.formatToolResult(tool, result, args).label
-        safeSend(win, 'agent:activity', {
-          type: 'tool-result',
-          tool,
-          summary,
-          success,
-          error
-        })
+        const actEvent = { type: 'tool-result', tool, summary, success, error }
+        realtimeBuffer.pushActivity(actEvent)
+        safeSend(win, 'agent:activity', actEvent)
       }
     })
 
     // Notify UI that initialization is complete
-    safeSend(win, 'agent:activity', {
-      type: 'system',
-      summary: 'Agent ready'
-    })
+    const readyEvent = { type: 'system', summary: 'Agent ready' }
+    realtimeBuffer.pushActivity(readyEvent)
+    safeSend(win, 'agent:activity', readyEvent)
   }
   return coordinator
 }
@@ -245,6 +271,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
 
     const coord = await ensureCoordinator(win, model)
+    realtimeBuffer.clearRun()
     safeSend(win, 'agent:todo-clear')
     let mentions: any[] = []
     if (rawMentions) {
@@ -255,16 +282,22 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
     try {
       const result = await coord.chat(message, mentions)
+      realtimeBuffer.finishStreaming()
       safeSend(win, 'agent:done', result)
       return result
     } catch (err: any) {
+      realtimeBuffer.finishStreaming()
       const errResult = { success: false, error: err.message }
       safeSend(win, 'agent:done', errResult)
       return errResult
     }
   })
 
-  // Clear session memory
+  // Realtime state recovery (renderer calls this on mount to restore lost state)
+  ipcMain.handle('agent:get-realtime-snapshot', () => {
+    return realtimeBuffer.getSnapshot()
+  })
+
   // Stop running agent
   ipcMain.handle('agent:stop', () => {
     if (coordinator) {
@@ -342,6 +375,107 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     const args = parseSaveDataArgs(argsStr)
     return saveData(args.name, args, { sessionId, projectPath })
+  })
+
+  // Commands - enrich all papers
+  ipcMain.handle('cmd:enrich-papers', async () => {
+    if (!projectPath) return { success: false, enriched: 0, skipped: 0, failed: 0 }
+
+    // Load full Literature objects from disk (listLiterature only returns a subset of fields)
+    const litDir = join(projectPath, PATHS.literature)
+    if (!existsSync(litDir)) return { success: true, enriched: 0, skipped: 0, failed: 0 }
+    const files = readdirSync(litDir).filter(f => f.endsWith('.json'))
+    const papers: any[] = []
+    for (const file of files) {
+      try {
+        papers.push(JSON.parse(readFileSync(join(litDir, file), 'utf-8')))
+      } catch { /* skip corrupt files */ }
+    }
+    if (papers.length === 0) return { success: true, enriched: 0, skipped: 0, failed: 0 }
+
+    const rateLimiter = new RateLimiter(DEFAULT_SEARCHER_CONFIG.rateLimits)
+    const circuitBreaker = new CircuitBreaker(DEFAULT_SEARCHER_CONFIG.circuitBreaker)
+    const config = createEnrichmentConfig(rateLimiter, circuitBreaker)
+    // Each paper gets its own enrichPapers() call; give generous budget
+    config.maxPapersToEnrich = 1
+    config.maxTimeMs = 60_000
+
+    let enriched = 0
+    let skipped = 0
+    let failed = 0
+
+    for (const paper of papers) {
+      const beforeFields = {
+        venue: paper.venue,
+        doi: paper.doi,
+        citationCount: paper.citationCount,
+        url: paper.url,
+        abstract: paper.abstract
+      }
+
+      const asPaperInput: PaperInput = {
+        title: paper.title || '',
+        authors: paper.authors,
+        year: paper.year,
+        venue: paper.venue,
+        abstract: paper.abstract,
+        doi: paper.doi,
+        citationCount: paper.citationCount,
+        url: paper.url,
+        pdfUrl: paper.pdfUrl,
+        source: paper.externalSource
+      }
+
+      // Skip papers already complete (5+ of 7 core fields)
+      if (countCoreFields(asPaperInput) >= 5) {
+        safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'skipped' })
+        skipped++
+        continue
+      }
+
+      safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'enriching' })
+
+      try {
+        await enrichPapers([asPaperInput], config)
+
+        // Check if any field actually changed on the PaperInput object
+        const hasNewData =
+          (asPaperInput.venue && asPaperInput.venue !== beforeFields.venue) ||
+          (asPaperInput.doi && asPaperInput.doi !== beforeFields.doi) ||
+          (asPaperInput.citationCount != null && asPaperInput.citationCount !== beforeFields.citationCount) ||
+          (asPaperInput.url && asPaperInput.url !== beforeFields.url) ||
+          (asPaperInput.abstract && asPaperInput.abstract !== beforeFields.abstract)
+
+        if (hasNewData) {
+          updatePaperMetadata(paper, {
+            authors: asPaperInput.authors,
+            year: asPaperInput.year,
+            abstract: asPaperInput.abstract,
+            venue: asPaperInput.venue ?? undefined,
+            url: asPaperInput.url,
+            citationCount: asPaperInput.citationCount ?? undefined,
+            doi: asPaperInput.doi ?? undefined,
+            pdfUrl: asPaperInput.pdfUrl ?? undefined,
+            enrichmentSource: (asPaperInput as any).enrichmentSource ?? undefined,
+            enrichedAt: (asPaperInput as any).enrichedAt ?? undefined
+          }, { sessionId, projectPath })
+          enriched++
+          safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'done' })
+        } else {
+          // APIs didn't return useful data for this paper
+          console.log(`[enrich] No new data found for: ${paper.title?.slice(0, 60)}`)
+          skipped++
+          safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'skipped' })
+        }
+      } catch (err) {
+        console.error(`[enrich] Error enriching "${paper.title?.slice(0, 60)}":`, err)
+        failed++
+        safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'failed' })
+      }
+    }
+
+    console.log(`[enrich] Done: ${enriched} enriched, ${skipped} skipped, ${failed} failed`)
+    return { success: true, enriched, skipped, failed }
   })
 
   // Commands - select/pin
@@ -576,6 +710,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       }
 
       // Reset main-process state
+      realtimeBuffer.reset()
       projectPath = ''
       sessionId = crypto.randomUUID()
       currentModel = 'gpt-5.2'

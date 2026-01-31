@@ -417,7 +417,28 @@ export function EntityPreviewPanel() {
           {entity.authors?.length > 0 && <p>Authors: {entity.authors.join(', ')}</p>}
           {entity.year && <p>Year: {entity.year}</p>}
           {entity.venue && <p>Venue: {entity.venue}</p>}
+          {entity.doi && <p>DOI: <a href={`https://doi.org/${entity.doi}`} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">{entity.doi}</a></p>}
+          {entity.citationCount != null && <p>Citations: {entity.citationCount}</p>}
+          {entity.url && <p>URL: <a href={entity.url} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline break-all">{entity.url}</a></p>}
+          {entity.pdfUrl && <p>PDF: <a href={entity.pdfUrl} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline break-all">{entity.pdfUrl}</a></p>}
           {entity.citeKey && <p>Cite key: <code className="t-bg-surface px-1 rounded">{entity.citeKey}</code></p>}
+          {entity.externalSource && <p>Source: {entity.externalSource}</p>}
+          {entity.relevanceScore != null && <p>Relevance: {entity.relevanceScore}/10</p>}
+          {entity.enrichmentSource && <p>Enriched via: {entity.enrichmentSource}</p>}
+          {entity.enrichedAt && <p>Enriched at: {new Date(entity.enrichedAt).toLocaleDateString()}</p>}
+          {entity.tags?.length > 0 && (
+            <p className="flex items-center gap-1 flex-wrap">
+              Tags: {entity.tags.map((t: string) => (
+                <span key={t} className="inline-block t-bg-surface px-1.5 py-0.5 rounded">{t}</span>
+              ))}
+            </p>
+          )}
+          {entity.bibtex && (
+            <details className="mt-1">
+              <summary className="cursor-pointer hover:text-orange-400">BibTeX</summary>
+              <pre className="mt-1 p-2 t-bg-surface rounded text-[11px] font-mono whitespace-pre-wrap break-all">{entity.bibtex}</pre>
+            </details>
+          )}
         </div>
       )}
 

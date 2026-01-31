@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { StickyNote, BookOpen, Database, Upload, MessageSquare, Trash2, Pin, Check, ChevronRight, ChevronDown, FileSpreadsheet, FlaskConical } from 'lucide-react'
+import { StickyNote, BookOpen, Database, Upload, MessageSquare, Trash2, Pin, Check, ChevronRight, ChevronDown, FileSpreadsheet, FlaskConical, Loader2, RefreshCw } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
@@ -96,6 +96,8 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   const togglePin = useEntityStore((s) => s.togglePin)
   const toggleSelect = useEntityStore((s) => s.toggleSelect)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
+  const enrichingPapers = useEntityStore((s) => s.enrichingPapers)
+  const isEnriching = enrichingPapers.has(entity.id)
   const openPreview = useUIStore((s) => s.openPreview)
   const closePreview = useUIStore((s) => s.closePreview)
   const previewEntity = useUIStore((s) => s.previewEntity)
@@ -182,9 +184,13 @@ function EntityRow({ entity }: { entity: EntityItem }) {
             confirmDelete={confirmDelete}
           />
         )}
-        <span className={`w-1 h-1 rounded-full shrink-0 ${
-          entity.pinned ? 'bg-orange-400' : entity.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
-        }`} />
+        {isEnriching ? (
+          <Loader2 size={10} className="shrink-0 text-orange-400 animate-spin" />
+        ) : (
+          <span className={`w-1 h-1 rounded-full shrink-0 ${
+            entity.pinned ? 'bg-orange-400' : entity.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
+          }`} />
+        )}
         <span className="text-xs t-text truncate">{entity.title}</span>
       </div>
       {messageId && (
@@ -273,11 +279,32 @@ function DataTreeView({ items }: { items: EntityItem[] }) {
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, papers, data, refreshAll } = useEntityStore()
+  const { notes, papers, data, refreshAll, setEnriching, clearEnriching, clearAllEnriching } = useEntityStore()
+  const [isEnrichingAll, setIsEnrichingAll] = useState(false)
 
   useEffect(() => {
     refreshAll()
   }, [])
+
+  const handleEnrichAll = useCallback(async () => {
+    const api = (window as any).api
+    setIsEnrichingAll(true)
+    const unsub = api.onEnrichProgress((info: { paperId: string; status: string }) => {
+      if (info.status === 'enriching') {
+        setEnriching(info.paperId)
+      } else {
+        clearEnriching(info.paperId)
+      }
+    })
+    try {
+      await api.enrichAllPapers()
+      await refreshAll()
+    } finally {
+      unsub()
+      clearAllEnriching()
+      setIsEnrichingAll(false)
+    }
+  }, [refreshAll, setEnriching, clearEnriching, clearAllEnriching])
 
   const entities: Record<string, EntityItem[]> = {
     notes,
@@ -325,6 +352,21 @@ export function EntityTabs() {
             {label}
           </button>
         ))}
+        {leftTab === 'papers' && (
+          <button
+            onClick={handleEnrichAll}
+            disabled={isEnrichingAll}
+            className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:text-orange-400 transition-colors disabled:opacity-50"
+            title="Enrich metadata for all papers"
+          >
+            {isEnrichingAll ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <RefreshCw size={12} />
+            )}
+            Enrich
+          </button>
+        )}
       </div>
 
       {/* Drop zone */}

@@ -15,6 +15,10 @@ interface EntityState {
   data: EntityItem[]
   pinned: EntityItem[]
   selected: EntityItem[]
+  enrichingPapers: Set<string>
+  setEnriching: (id: string) => void
+  clearEnriching: (id: string) => void
+  clearAllEnriching: () => void
   reset: () => void
   refreshAll: () => Promise<void>
   togglePin: (id: string) => Promise<void>
@@ -31,8 +35,21 @@ export const useEntityStore = create<EntityState>((set) => ({
   data: [],
   pinned: [],
   selected: [],
+  enrichingPapers: new Set<string>(),
 
-  reset: () => set({ notes: [], papers: [], data: [], pinned: [], selected: [] }),
+  setEnriching: (id: string) => set((state) => {
+    const next = new Set(state.enrichingPapers)
+    next.add(id)
+    return { enrichingPapers: next }
+  }),
+  clearEnriching: (id: string) => set((state) => {
+    const next = new Set(state.enrichingPapers)
+    next.delete(id)
+    return { enrichingPapers: next }
+  }),
+  clearAllEnriching: () => set({ enrichingPapers: new Set<string>() }),
+
+  reset: () => set({ notes: [], papers: [], data: [], pinned: [], selected: [], enrichingPapers: new Set<string>() }),
 
   refreshAll: async () => {
     const [notes, papers, data, pinned, selected] = await Promise.all([

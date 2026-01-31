@@ -17,7 +17,8 @@ export const PATHS = {
   sessions: '.research-pilot/sessions',
   cache: '.research-pilot/cache',
   documentCache: '.research-pilot/cache/documents',
-  project: '.research-pilot/project.json'
+  project: '.research-pilot/project.json',
+  reviews: '.research-pilot/reviews'
 } as const
 
 // ============================================================================
@@ -93,6 +94,12 @@ export interface Literature extends ResearchEntity {
   doi?: string
   /** Full BibTeX entry for citation export */
   bibtex?: string
+  /** Direct link to the PDF */
+  pdfUrl?: string
+  /** Which API source provided enrichment (e.g. 'crossref', 'semantic_scholar') */
+  enrichmentSource?: string
+  /** ISO timestamp of when metadata enrichment was performed */
+  enrichedAt?: string
 }
 
 /**
@@ -214,4 +221,104 @@ export interface ResultsManifest {
   }>
   summary: Record<string, unknown>
   warnings: string[]
+}
+
+// ============================================================================
+// Literature Search v2 Types (RFC-008)
+// ============================================================================
+
+/**
+ * Sub-topic within a search plan
+ */
+export interface SubTopic {
+  name: string
+  description: string
+  priority: 'high' | 'medium' | 'low'
+  expectedPaperCount: number
+}
+
+/**
+ * A batch of queries targeting a specific sub-topic
+ */
+export interface QueryBatch {
+  subTopic: string
+  queries: string[]
+  dblpQueries?: string[]
+  sources: string[]
+  priority: number
+}
+
+/**
+ * Full search plan produced by the planner
+ */
+export interface SearchPlan {
+  topic: string
+  subTopics: SubTopic[]
+  queryBatches: QueryBatch[]
+  targetPaperCount: number
+  minimumCoveragePerSubTopic: number
+}
+
+/**
+ * Coverage tracker for cumulative review across batches
+ */
+export interface CoverageTracker {
+  subTopics: Record<string, {
+    papersFound: number
+    targetMet: boolean
+    bestPaperScore: number
+    gaps: string[]
+  }>
+  totalRelevantPapers: number
+  totalMarginalPapers: number
+  coverageScore: number
+}
+
+/**
+ * Filtered message from coordinator conversation
+ */
+export interface FilteredMessage {
+  role: 'user' | 'assistant' | 'tool-result'
+  content: string
+  toolName?: string
+}
+
+/**
+ * Context assembled for the planner agent
+ */
+export interface PlannerContext {
+  request: string
+  conversationHistory: FilteredMessage[]
+  localLibrary: {
+    totalPapers: number
+    topicClusters: { topic: string; count: number; sampleTitles: string[] }[]
+  }
+}
+
+/**
+ * Compressed result returned from literature-search tool
+ */
+export interface LiteratureSearchResult {
+  success: boolean
+  data: {
+    briefSummary: string
+    coverage: {
+      score: number
+      subTopics: {
+        name: string
+        paperCount: number
+        covered: boolean
+        gaps: string[]
+      }[]
+      queriesExecuted: string[]
+    }
+    totalPapersFound: number
+    papersAutoSaved: number
+    fullReviewPath: string
+    paperListPath: string
+    durationMs: number
+    llmCallCount: number
+    apiCallCount: number
+    apiFailureCount: number
+  }
 }

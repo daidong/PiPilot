@@ -8,7 +8,7 @@
  *   /save-paper <title>   (minimal — only title required, rest defaults)
  */
 
-import { writeFileSync, mkdirSync } from 'fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { PATHS, Literature, CLIContext } from '../types.js'
 
@@ -88,6 +88,89 @@ export function savePaper(
   writeFileSync(filePath, JSON.stringify(paper, null, 2))
 
   return { success: true, paper, filePath }
+}
+
+/**
+ * Update an existing paper entity on disk, merging in any non-empty fields
+ * that are currently missing. Preserves user edits (only fills blanks).
+ */
+export function updatePaperMetadata(
+  existing: Literature,
+  enriched: {
+    authors?: string[]
+    year?: number
+    abstract?: string
+    venue?: string
+    url?: string
+    citationCount?: number
+    doi?: string
+    bibtex?: string
+    pdfUrl?: string
+    enrichmentSource?: string
+    enrichedAt?: string
+  },
+  context: CLIContext
+): SavePaperResult {
+  let changed = false
+
+  // Only fill fields that are missing or have placeholder values
+  if ((!existing.abstract || existing.abstract === '') && enriched.abstract) {
+    existing.abstract = enriched.abstract
+    changed = true
+  }
+  if ((!existing.venue) && enriched.venue) {
+    existing.venue = enriched.venue
+    changed = true
+  }
+  if ((!existing.year) && enriched.year) {
+    existing.year = enriched.year
+    changed = true
+  }
+  if ((!existing.url) && enriched.url) {
+    existing.url = enriched.url
+    changed = true
+  }
+  if ((!existing.doi) && enriched.doi) {
+    existing.doi = enriched.doi
+    changed = true
+  }
+  if ((!existing.citationCount) && enriched.citationCount) {
+    existing.citationCount = enriched.citationCount
+    changed = true
+  }
+  if ((!existing.bibtex) && enriched.bibtex) {
+    existing.bibtex = enriched.bibtex
+    changed = true
+  }
+  if ((!existing.pdfUrl) && enriched.pdfUrl) {
+    existing.pdfUrl = enriched.pdfUrl
+    changed = true
+  }
+  if (enriched.authors && enriched.authors.length > 0 &&
+      (existing.authors.length === 0 || (existing.authors.length === 1 && existing.authors[0] === 'Unknown'))) {
+    existing.authors = enriched.authors
+    changed = true
+  }
+  // Always update enrichment provenance if any field changed
+  if (changed) {
+    if (enriched.enrichmentSource) existing.enrichmentSource = enriched.enrichmentSource
+    existing.enrichedAt = enriched.enrichedAt || new Date().toISOString()
+  }
+
+  if (!changed) {
+    return { success: true, paper: existing }
+  }
+
+  existing.updatedAt = new Date().toISOString()
+
+  const literaturePath = context.projectPath
+    ? join(context.projectPath, PATHS.literature)
+    : PATHS.literature
+
+  const filePath = join(literaturePath, `${existing.id}.json`)
+  writeFileSync(filePath, JSON.stringify(existing, null, 2))
+
+  return { success: true, paper: existing, filePath }
 }
 
 /**
