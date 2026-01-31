@@ -188,7 +188,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     name: 'convert_to_markdown',
     description: 'Convert a document (PDF, Word, Excel, PPT, images, etc.) to markdown. ' +
       'Saves the extracted text to a local .md file and returns the file path. ' +
-      'Use the read tool with offset/limit to access the content afterward. ' +
+      'Returns a preview (head/tail/outline) so you can navigate with read({ path, offset, limit }) for specific sections. ' +
       'Pass a relative filename, e.g. convert_to_markdown({ path: "report.pdf" }).',
     parameters: {
       path: {
@@ -226,7 +226,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       const outputName = basename(fileName, '.pdf') + '.extracted.md'
       const outputPath = join(process.cwd(), outputName)
       writeFileSync(outputPath, text, 'utf-8')
-      const lines = text.split('\n').length
+      const allLines = text.split('\n')
+      const lines = allLines.length
+
+      // Build structural preview so the LLM can navigate without blind grep
+      const headings = allLines
+        .map((l, i) => ({ line: i + 1, text: l }))
+        .filter(({ text: t }) => /^#{1,4}\s/.test(t))
+      const head = allLines.slice(0, 30).join('\n')
+      const tail = lines > 60 ? allLines.slice(-30).join('\n') : ''
 
       return {
         success: true,
@@ -234,7 +242,12 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           outputFile: outputName,
           lines,
           bytes: text.length,
-          message: `Extracted ${lines} lines from ${fileName}. Use read tool to access: read({ path: "${outputName}" })`
+          head,
+          tail: tail || undefined,
+          headings: headings.length > 0
+            ? headings.map(h => `L${h.line}: ${h.text}`).join('\n')
+            : undefined,
+          message: `Extracted ${lines} lines. Head/tail preview and outline included in result. Use read({ path: "${outputName}", offset, limit }) for specific sections. Do NOT grep for structure — use the preview.`
         }
       }
     }
