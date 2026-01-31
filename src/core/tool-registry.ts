@@ -328,12 +328,13 @@ export class ToolRegistry {
     // 记录工具调用
     const spanId = this.config.trace.startSpan('tool.call', { tool: name, input: mutatedInput })
 
-    // 构建工具上下文
+    // Build tool context
     const toolContext: ToolContext = {
       runtime: this.config.runtime,
       sessionId: context?.sessionId ?? this.config.runtime.sessionId,
       step: context?.step ?? this.config.runtime.step,
-      agentId: context?.agentId ?? this.config.runtime.agentId
+      agentId: context?.agentId ?? this.config.runtime.agentId,
+      messages: context?.messages
     }
 
     let result: ToolResult

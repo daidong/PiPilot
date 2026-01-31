@@ -167,7 +167,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     model,
     onToolResult,
     projectPath,
-    sessionId
+    sessionId,
+    onToolCall
   )
 
   // Create entity tools for saving, updating notes and papers

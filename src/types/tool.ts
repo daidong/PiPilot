@@ -24,14 +24,16 @@ export type ParameterSchema = Record<string, ParameterDefinition>
  * 工具执行上下文
  */
 export interface ToolContext {
-  /** 运行时实例 */
+  /** Runtime instance */
   runtime: Runtime
-  /** 会话 ID */
+  /** Session ID */
   sessionId: string
-  /** 当前步骤号 */
+  /** Current step number */
   step: number
-  /** 代理 ID */
+  /** Agent ID */
   agentId: string
+  /** Current conversation messages (optional, for tools that need conversation context) */
+  messages?: unknown[]
 }
 
 /**

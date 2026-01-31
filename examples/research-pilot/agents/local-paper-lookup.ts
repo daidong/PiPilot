@@ -162,7 +162,8 @@ export function searchLocalPapers(
 }
 
 /**
- * Check if a paper already exists locally by DOI or title match
+ * Check if a paper already exists locally by DOI or title match.
+ * Uses Levenshtein fuzzy matching (< 10% of title length) as fallback.
  */
 export function findExistingPaper(
   paper: { doi?: string | null; title: string },
@@ -176,11 +177,100 @@ export function findExistingPaper(
     if (doiMatch) return doiMatch
   }
 
-  // Fallback to title match (normalized)
+  // Exact normalized title match
   const normalizedTitle = paper.title.toLowerCase().replace(/\s+/g, ' ').trim()
   const titleMatch = papers.find(
     p => p.title.toLowerCase().replace(/\s+/g, ' ').trim() === normalizedTitle
   )
+  if (titleMatch) return titleMatch
 
-  return titleMatch || null
+  // Fuzzy title match: Levenshtein distance < 10% of title length
+  const threshold = Math.max(3, Math.floor(normalizedTitle.length * 0.1))
+  for (const p of papers) {
+    const pTitle = p.title.toLowerCase().replace(/\s+/g, ' ').trim()
+    if (Math.abs(pTitle.length - normalizedTitle.length) > threshold) continue
+    if (levenshteinDistance(normalizedTitle, pTitle) <= threshold) {
+      return p
+    }
+  }
+
+  return null
+}
+
+/**
+ * Scan local library and group papers by keyword overlap.
+ * Returns topic clusters with counts and sample titles.
+ */
+export function scanLocalLibrary(projectPath: string): {
+  totalPapers: number
+  topicClusters: { topic: string; count: number; sampleTitles: string[] }[]
+} {
+  const papers = loadLocalPapers(projectPath)
+  if (papers.length === 0) {
+    return { totalPapers: 0, topicClusters: [] }
+  }
+
+  // Group papers by their searchKeywords
+  const topicMap = new Map<string, Literature[]>()
+
+  for (const paper of papers) {
+    const keywords = paper.searchKeywords || []
+    if (keywords.length === 0) {
+      // Use tokenized title words as fallback topics
+      const titleWords = paper.title.toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .filter(w => w.length > 3)
+        .slice(0, 3)
+      for (const w of titleWords) {
+        if (!topicMap.has(w)) topicMap.set(w, [])
+        topicMap.get(w)!.push(paper)
+      }
+    } else {
+      // Use search keywords as topic keys
+      const topicKey = keywords.slice(0, 5).join(' ')
+      if (!topicMap.has(topicKey)) topicMap.set(topicKey, [])
+      topicMap.get(topicKey)!.push(paper)
+    }
+  }
+
+  // Merge small clusters and build result
+  const clusters = Array.from(topicMap.entries())
+    .filter(([, papers]) => papers.length >= 2) // Only clusters with 2+ papers
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 10) // Top 10 clusters
+    .map(([topic, papers]) => ({
+      topic,
+      count: papers.length,
+      sampleTitles: papers.slice(0, 3).map(p => p.title)
+    }))
+
+  return { totalPapers: papers.length, topicClusters: clusters }
+}
+
+/**
+ * Simple Levenshtein distance implementation.
+ */
+function levenshteinDistance(a: string, b: string): number {
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+
+  // Use two-row optimization to save memory
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  let curr = new Array<number>(b.length + 1)
+
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      curr[j] = Math.min(
+        prev[j] + 1,      // deletion
+        curr[j - 1] + 1,  // insertion
+        prev[j - 1] + cost // substitution
+      )
+    }
+    ;[prev, curr] = [curr, prev]
+  }
+
+  return prev[b.length]
 }

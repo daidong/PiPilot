@@ -649,7 +649,8 @@ export class AgentLoop {
             {
               sessionId: this.config.runtime.sessionId,
               step,
-              agentId: this.config.runtime.agentId
+              agentId: this.config.runtime.agentId,
+              messages: this.messages
             }
           )
 
@@ -696,7 +697,8 @@ export class AgentLoop {
                   {
                     sessionId: this.config.runtime.sessionId,
                     step,
-                    agentId: this.config.runtime.agentId
+                    agentId: this.config.runtime.agentId,
+                    messages: this.messages
                   }
                 )
               }

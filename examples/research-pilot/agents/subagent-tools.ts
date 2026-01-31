@@ -1,17 +1,20 @@
 /**
- * Subagent Tools
+ * Subagent Tools v2 (RFC-008)
  *
  * Factory that creates custom tools wrapping the literature and data teams.
  * The coordinator passes its API key and onToolResult callback at creation time.
  *
- * Each tool emits synthetic todo-update events so the desktop app's
- * right panel can show real-time progress of the multi-agent pipeline.
+ * v2 changes:
+ * - Per-turn invocation counter (max 2 literature-search calls per turn)
+ * - Pass coordinator messages to literature team for filtered passthrough
+ * - Sub-topic progress broadcast after planner completes
+ * - Return compressed LiteratureSearchResult instead of full summary
  */
 
 import { defineTool } from '../../../src/factories/define-tool.js'
-import { createLiteratureTeam } from './literature-team.js'
+import { createLiteratureTeam, type SearcherActivityCallback } from './literature-team.js'
 import { createDataAnalyzer } from './data-team.js'
-import type { Tool } from '../../../src/types/tool.js'
+import type { Tool, ToolContext } from '../../../src/types/tool.js'
 import type { TodoItem } from '../../../src/types/todo.js'
 
 // Agent-step labels displayed in the progress panel
@@ -50,9 +53,32 @@ type ToolResultCallback = (tool: string, result: unknown) => void
 
 function emitTodo(cb: ToolResultCallback | undefined, item: TodoItem): void {
   if (!cb) return
-  // The IPC layer in ipc.ts filters for tool names starting with 'todo-'
-  // and looks for { success: true, item: TodoItem }
   cb('todo-update', { success: true, item })
+}
+
+/**
+ * Emit an activity event (appears in the Activity log, not the PROGRESS/todo panel).
+ * Uses the tool-call → tool-result merge pattern in the activity store:
+ *   onToolCall  → type: 'tool-call' (spinner)
+ *   onToolResult → type: 'tool-result' (checkmark or error), merges into the call
+ */
+function emitActivityStart(
+  callCb: ((tool: string, args: unknown) => void) | undefined,
+  toolName: string,
+  args: { _summary: string }
+): void {
+  if (!callCb) return
+  callCb(toolName, args)
+}
+
+function emitActivityDone(
+  resultCb: ToolResultCallback | undefined,
+  toolName: string,
+  summary: string,
+  success: boolean = true
+): void {
+  if (!resultCb) return
+  resultCb(toolName, { success, data: summary, error: success ? undefined : summary })
 }
 
 export function createSubagentTools(
@@ -60,7 +86,8 @@ export function createSubagentTools(
   model?: string,
   onToolResult?: ToolResultCallback,
   projectPath?: string,
-  sessionId?: string
+  sessionId?: string,
+  onToolCall?: (tool: string, args: unknown) => void
 ): {
   literatureSearchTool: Tool
   dataAnalyzeTool: Tool
@@ -68,21 +95,60 @@ export function createSubagentTools(
   let literatureTeam: ReturnType<typeof createLiteratureTeam> | null = null
   let dataAnalyzer: ReturnType<typeof createDataAnalyzer> | null = null
 
+  // Per-turn invocation counter for literature-search (RFC-008 §3.3)
+  let litInvocationCount = 0
+  let lastLitTurnStep = -1
+
   const literatureSearchTool = defineTool({
     name: 'literature-search',
-    description: 'Search academic papers on a topic using a multi-agent literature research team. Returns a structured summary with papers, themes, key findings, and research gaps. Also auto-saves high-relevance papers to the local library for future searches. IMPORTANT: Always include relevant context from the conversation to help the search planner generate better queries.',
+    description: 'Search academic papers on a topic using a multi-agent literature research team. The team internally plans sub-topics, searches multiple sources, reviews/scores papers, and refines coverage — all in a SINGLE call. Returns a compressed result with coverage state, paper counts, and disk paths to full review. Do NOT call this tool multiple times for the same study — one call already runs a comprehensive multi-round search with internal refinement. Only call again if the user explicitly asks for additional searching or a completely different topic.',
     parameters: {
       query: { type: 'string', description: 'The research topic or question to search for', required: true },
       context: { type: 'string', description: 'Additional context from the conversation that helps refine the search (e.g. researcher names, institutions, specific fields, paper titles mentioned by the user)', required: false }
     },
-    execute: async (input: { query: string; context?: string }) => {
+    execute: async (input: { query: string; context?: string }, toolContext?: ToolContext) => {
       try {
-        if (!literatureTeam) {
+        // Per-turn invocation limit (RFC-008 §3.3)
+        const currentStep = toolContext?.step ?? 0
+        if (currentStep !== lastLitTurnStep) {
+          // New turn — reset counter
+          litInvocationCount = 0
+          lastLitTurnStep = currentStep
+        }
+        litInvocationCount++
+
+        if (litInvocationCount > 2) {
+          return {
+            success: false,
+            error: 'Already ran 2 literature searches this turn. Review existing results first. Use a single comprehensive query instead of multiple narrow ones.'
+          }
+        }
+
+        // Get coordinator messages from tool context for filtered passthrough
+        const coordinatorMessages = toolContext?.messages
+
+        // Always create a fresh team per invocation so runtime state doesn't leak
+        // between calls. The planner gets conversation context via filtered messages.
+        {
+          const searcherActivity: SearcherActivityCallback = (phase, detail) => {
+            if (phase === 'search-batch-start') {
+              emitActivityStart(onToolCall, 'lit-subtopic', { _summary: detail })
+            } else if (phase === 'search-batch-done') {
+              emitActivityDone(onToolResult, 'lit-subtopic', detail)
+            } else if (phase === 'enrich-start') {
+              emitActivityStart(onToolCall, 'lit-enrich', { _summary: detail })
+            } else if (phase === 'enrich-done') {
+              emitActivityDone(onToolResult, 'lit-enrich', detail)
+            }
+          }
+
           literatureTeam = createLiteratureTeam({
             apiKey,
             model,
             projectPath,
-            sessionId: sessionId || 'default'
+            sessionId: sessionId || 'default',
+            messages: coordinatorMessages as unknown[] | undefined,
+            onSearcherActivity: searcherActivity
           })
         }
 
@@ -94,7 +160,9 @@ export function createSubagentTools(
           ))
         }
 
-        // Subscribe to agent events for real-time progress
+        // Subscribe to agent events for real-time progress (PROGRESS panel)
+        // Sub-topic and enrichment activity events are now emitted from inside the
+        // searcher via onSearcherActivity callback — not from agent lifecycle events.
         const rt = literatureTeam.runtime
         const unsub1 = rt.on('agent.started', ({ agentId }) => {
           const label = LIT_STEPS[agentId]
@@ -110,6 +178,12 @@ export function createSubagentTools(
             emitTodo(onToolResult, makeTodoItem(
               `lit-${agentId}`, label, 'done'
             ))
+          }
+
+          // Emit activity for refinement queries from reviewer (second searcher run)
+          if (agentId === 'reviewer') {
+            // nothing extra needed — the searcher's onActivity callback will emit
+            // per-batch activity items for refinement queries too
           }
         })
         const unsub3 = rt.on('agent.failed', ({ agentId }) => {
@@ -133,22 +207,27 @@ export function createSubagentTools(
         unsub3()
 
         if (result.success) {
-          // Emit activity log for auto-saved papers
+          // Emit auto-saved papers to ACTIVITY log
           if (result.savedPapers && result.savedPapers > 0) {
-            emitTodo(onToolResult, makeTodoItem(
-              'lit-save',
-              `Saved ${result.savedPapers} papers to library`,
-              'done'
-            ))
+            emitActivityStart(onToolCall, 'lit-autosave', { _summary: `Auto-saving ${result.savedPapers} papers to library` })
+            emitActivityDone(onToolResult, 'lit-autosave', `Saved ${result.savedPapers} papers to library`)
           }
 
+          // Return compressed result (RFC-008 §3.2g)
+          if (result.result) {
+            return {
+              success: true,
+              data: result.result.data
+            }
+          }
+
+          // Fallback to v1 format if result.result not available
           return {
             success: true,
             data: {
               summary: result.summary,
               steps: result.steps,
               durationMs: result.durationMs,
-              // Local paper caching stats
               savedPapers: result.savedPapers,
               localPapersUsed: result.localPapersUsed,
               externalPapersUsed: result.externalPapersUsed
@@ -198,7 +277,6 @@ export function createSubagentTools(
           taskType: (input.taskType as 'analyze' | 'visualize' | 'transform' | 'model') || 'analyze',
           instructions: input.instructions,
           onStdout: (line) => {
-            // Forward streaming stdout as IPC events
             if (onToolResult) {
               onToolResult('data-stdout', { line, stream: 'stdout' })
             }

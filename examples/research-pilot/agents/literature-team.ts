@@ -1,13 +1,16 @@
 /**
- * Literature Research Team
+ * Literature Research Team v2 (RFC-008)
  *
- * Self-contained reimplementation using the AgentFoundry Team module.
- * Flow: planner → [local lookup] → searcher → loop(reviewer → searcher) → summarizer
+ * Major changes from v1:
+ * - Planner generates a full SearchPlan with sub-topics and query batches
+ * - Planner receives filtered conversation history + local library state
+ * - Searcher executes all query batches with rate limiting + circuit breaker
+ * - Metadata enrichment fills missing DOI, abstract, venue, citationCount
+ * - Reviewer uses stricter scoring (>= 8 threshold) with forced ranking
+ * - Compressed result with coverage state returned to coordinator
+ * - Full review saved to disk (.research-pilot/reviews/)
  *
- * Local Paper Caching:
- * - Pre-search: Checks local papers first before querying external APIs
- * - Post-review: Auto-saves high-relevance papers (score >= 7) to local library
- * - Attribution: Tracks papers from local vs external sources in summary
+ * Flow: planner → searcher (all batches) → loop(reviewer → searcher) → summarizer
  */
 
 import {
@@ -31,10 +34,73 @@ import {
 import { getLanguageModelByModelId } from '../../../src/index.js'
 import { loadPrompt } from './prompts/index.js'
 
-import { searchLocalPapers, findExistingPaper } from './local-paper-lookup.js'
+import { searchLocalPapers, findExistingPaper, scanLocalLibrary } from './local-paper-lookup.js'
 import { getBibtex, type PaperMetadata } from './bibtex-utils.js'
-import { savePaper } from '../commands/save-paper.js'
-import type { CLIContext } from '../types.js'
+import { savePaper, updatePaperMetadata } from '../commands/save-paper.js'
+import { RateLimiter, CircuitBreaker, DEFAULT_SEARCHER_CONFIG } from './rate-limiter.js'
+import { enrichPapers, createEnrichmentConfig, type PaperInput } from './metadata-enrichment.js'
+import type {
+  CLIContext,
+  SearchPlan,
+  QueryBatch,
+  PlannerContext,
+  FilteredMessage,
+  LiteratureSearchResult,
+  CoverageTracker
+} from '../types.js'
+import { PATHS } from '../types.js'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
+
+// ============================================================================
+// Conversation Filter (mechanical, no LLM)
+// ============================================================================
+
+/**
+ * Filter coordinator messages to extract only user messages and
+ * literature-search tool call results. This provides the planner
+ * with focused context about what the user wants and what was already found.
+ */
+export function filterConversationForPlanner(messages: unknown[]): FilteredMessage[] {
+  const filtered: FilteredMessage[] = []
+
+  for (const msg of messages) {
+    const m = msg as { role?: string; content?: unknown }
+    if (!m.role) continue
+
+    if (m.role === 'user' && typeof m.content === 'string') {
+      // Skip system injections
+      if (m.content.startsWith('[REFERENCE MATERIAL]')) continue
+      if (m.content.startsWith('<accumulated-findings>')) continue
+      if (m.content.startsWith('[System Notice]')) continue
+      filtered.push({ role: 'user', content: m.content })
+    }
+
+    // Tool results: look for literature-search results
+    if (m.role === 'tool' && Array.isArray(m.content)) {
+      for (const block of m.content) {
+        const b = block as { type?: string; content?: string; tool_use_id?: string }
+        if (b.type === 'tool_result' && b.content) {
+          try {
+            const parsed = JSON.parse(b.content)
+            // Check if this looks like a literature-search result
+            if (parsed.data?.coverage || parsed.data?.summary || parsed.summary) {
+              filtered.push({
+                role: 'tool-result',
+                content: b.content,
+                toolName: 'literature-search'
+              })
+            }
+          } catch {
+            // Not JSON, skip
+          }
+        }
+      }
+    }
+  }
+
+  return filtered
+}
 
 // ============================================================================
 // Agent Definitions
@@ -42,35 +108,70 @@ import type { CLIContext } from '../types.js'
 
 const planner = defineSimpleAgent({
   id: 'planner',
-  description: 'Query Planning Specialist for academic literature research',
+  description: 'Search Plan Specialist for academic literature research',
 
   system: loadPrompt('literature-planner-system'),
 
   prompt: (input) => {
-    const data = input as { userRequest?: string } | string
-    const request = typeof data === 'string' ? data : data?.userRequest ?? ''
-    return `Analyze this research request and create a search strategy:\n\n"${request}"`
+    const data = input as { plannerContext?: PlannerContext; userRequest?: string } | string
+    if (typeof data === 'string') {
+      return `Create a comprehensive search plan for this research request:\n\n"${data}"`
+    }
+
+    const ctx = (data as { plannerContext?: PlannerContext }).plannerContext
+    if (!ctx) {
+      const request = (data as { userRequest?: string }).userRequest ?? ''
+      return `Create a comprehensive search plan for this research request:\n\n"${request}"`
+    }
+
+    // Build a rich prompt with conversation history and local library state
+    let prompt = `Create a comprehensive search plan for this research request:\n\n"${ctx.request}"`
+
+    if (ctx.conversationHistory.length > 0) {
+      prompt += '\n\n## Previous conversation context\n'
+      for (const msg of ctx.conversationHistory) {
+        if (msg.role === 'user') {
+          prompt += `\n[User]: ${msg.content}`
+        } else if (msg.role === 'tool-result') {
+          prompt += `\n[Previous literature-search result]: ${msg.content}`
+        }
+      }
+    }
+
+    if (ctx.localLibrary.totalPapers > 0) {
+      prompt += `\n\n## Local library state\n`
+      prompt += `Total papers already saved: ${ctx.localLibrary.totalPapers}\n`
+      for (const cluster of ctx.localLibrary.topicClusters) {
+        prompt += `- "${cluster.topic}": ${cluster.count} papers (e.g. ${cluster.sampleTitles.slice(0, 2).join(', ')})\n`
+      }
+    }
+
+    return prompt
   }
 })
 
 const reviewer = defineSimpleAgent({
   id: 'reviewer',
-  description: 'Research Quality Reviewer who evaluates search results',
+  description: 'Research Quality Reviewer with strict scoring rubric',
 
   system: loadPrompt('literature-reviewer-system'),
 
   prompt: (input) => {
-    const data = input as { papers?: Array<{ id: string; title: string; year: number; abstract: string; source?: string; doi?: string | null; venue?: string | null; citationCount?: number | null }>; queriesUsed?: string[]; userRequest?: string }
+    const data = input as {
+      papers?: Array<{ id: string; title: string; year: number; abstract: string; source?: string; doi?: string | null; venue?: string | null; citationCount?: number | null }>
+      queriesUsed?: string[]
+      userRequest?: string
+      metadata?: { apiCallCount?: number; totalDurationMs?: number }
+    }
     const papers = data?.papers ?? []
     const queries = data?.queriesUsed ?? []
     const userRequest = data?.userRequest ?? ''
 
-    // Count local vs external papers
     const localCount = papers.filter(p => p.source === 'local').length
     const sourceInfo = localCount > 0 ? ` (${localCount} from local library)` : ''
 
     const paperSummaries = papers
-      .slice(0, 15)
+      .slice(0, 20)
       .map((p, i) => {
         const sourceTag = p.source ? ` [${p.source}]` : ''
         const doiTag = p.doi ? ` doi:${p.doi}` : ''
@@ -81,7 +182,12 @@ const reviewer = defineSimpleAgent({
       })
       .join('\n')
 
-    return `Original user research request:\n"${userRequest}"\n\nReview these ${papers.length} papers${sourceInfo} against the user's request:\n\n${paperSummaries}\n\nQueries used: ${queries.join(', ')}`
+    let prompt = `Original user research request:\n"${userRequest}"\n\nReview these ${papers.length} papers${sourceInfo} against the user's request. Apply the STRICT scoring rubric (>= 8 for auto-save, forced ranking to cut bottom 30%):\n\n${paperSummaries}`
+
+    // Explicitly list queries already used so the reviewer avoids duplicates in additionalQueries
+    prompt += `\n\n## Queries already executed (DO NOT repeat these in additionalQueries)\n${queries.map((q, i) => `${i + 1}. "${q}"`).join('\n')}`
+
+    return prompt
   }
 })
 
@@ -94,19 +200,18 @@ const summarizer = defineSimpleAgent({
   prompt: (input) => {
     const data = input as {
       relevantPapers?: Array<{ title: string; authors: string[]; year: number; abstract: string; source?: string }>
-      coverage?: { coveredTopics?: string[] }
+      coverage?: { coveredTopics?: string[]; score?: number; missingTopics?: string[] }
       userRequest?: string
     }
     const papers = data?.relevantPapers ?? []
-    const topics = data?.coverage?.coveredTopics ?? []
+    const coverage = data?.coverage
     const userRequest = data?.userRequest ?? ''
 
-    // Count papers by source
     const localCount = papers.filter(p => p.source === 'local').length
     const externalCount = papers.length - localCount
 
     const paperDetails = papers
-      .slice(0, 12)
+      .slice(0, 15)
       .map((p, i) => `Paper ${i + 1}: "${p.title}" by ${(p.authors ?? []).slice(0, 3).join(', ')} (${p.year}) [source: ${p.source ?? 'unknown'}]\nAbstract: ${p.abstract?.slice(0, 350) ?? ''}`)
       .join('\n\n')
 
@@ -114,12 +219,16 @@ const summarizer = defineSimpleAgent({
       ? `\n\nSource breakdown: ${localCount} from local library, ${externalCount} from external sources.`
       : ''
 
-    return `Original user research request:\n"${userRequest}"\n\nCreate a literature review summary from these papers that addresses the user's request:\n\n${paperDetails}\n\nCovered topics: ${topics.join(', ')}${sourceInfo}`
+    const coverageInfo = coverage
+      ? `\n\nCoverage score: ${coverage.score ?? 'N/A'}\nCovered topics: ${(coverage.coveredTopics ?? []).join(', ')}\nMissing topics: ${(coverage.missingTopics ?? []).join(', ')}`
+      : ''
+
+    return `Original user research request:\n"${userRequest}"\n\nCreate a literature review summary from these papers that addresses the user's request:\n\n${paperDetails}${sourceInfo}${coverageInfo}`
   }
 })
 
 // ============================================================================
-// Searcher Agent (Tool-based, no LLM)
+// Searcher Agent (Tool-based, no LLM) — v2 with rate limiting
 // ============================================================================
 
 interface Paper {
@@ -144,9 +253,10 @@ interface SearchMetadata {
   totalDurationMs: number
   allSourcesSucceeded: boolean
   hasResults: boolean
-  // Local paper caching stats
   localPapersFound: number
   externalPapersFound: number
+  apiCallCount: number
+  apiFailureCount: number
 }
 
 interface SearchResults {
@@ -156,40 +266,70 @@ interface SearchResults {
   metadata: SearchMetadata
 }
 
-function createSearcherAgent(projectPath?: string) {
+/** Callback for emitting real-time activity events from inside the searcher */
+export type SearcherActivityCallback = (phase: 'search-batch-start' | 'search-batch-done' | 'enrich-start' | 'enrich-done', detail: string) => void
+
+function createSearcherAgent(
+  projectPath?: string,
+  rateLimiter?: RateLimiter,
+  circuitBreaker?: CircuitBreaker,
+  onActivity?: SearcherActivityCallback
+) {
   return {
     id: 'searcher',
     kind: 'tool-agent' as const,
 
-    async run(input: { queries: string[]; dblpQueries?: string[]; sources: string[] }): Promise<{ output: SearchResults }> {
-      const { queries, dblpQueries, sources = ['semantic_scholar', 'arxiv', 'openalex', 'dblp'] } = input
+    async run(input: {
+      queries?: string[]
+      dblpQueries?: string[]
+      sources?: string[]
+      queryBatches?: QueryBatch[]
+    }): Promise<{ output: SearchResults }> {
       const startTime = Date.now()
-
-      if (queries.length === 0 && (!dblpQueries || dblpQueries.length === 0)) {
-        const metadata: SearchMetadata = {
-          sourcesTried: [], sourcesSucceeded: [], sourcesFailed: [],
-          totalDurationMs: 0, allSourcesSucceeded: true, hasResults: false,
-          localPapersFound: 0, externalPapersFound: 0
-        }
-        return { output: { papers: [], totalFound: 0, queriesUsed: [], metadata } }
-      }
-
+      const config = DEFAULT_SEARCHER_CONFIG
       const allPapers: Paper[] = []
       const sourcesTried: string[] = []
       const sourcesSucceeded: string[] = []
       const sourcesFailed: string[] = []
       let localPapersFound = 0
+      let apiCallCount = 0
+      let apiFailureCount = 0
+      const allQueriesUsed: string[] = []
 
-      // Step 1: Search local papers first (if projectPath is provided)
+      // Determine what to search: either queryBatches (v2) or flat queries (v1 compat)
+      const flatQueries = input.queries ?? []
+      const fallbackName = flatQueries.length > 0
+        ? flatQueries[0].slice(0, 60) + (flatQueries[0].length > 60 ? '...' : '')
+        : 'Search'
+      const batches: QueryBatch[] = input.queryBatches ?? [{
+        subTopic: fallbackName,
+        queries: flatQueries,
+        dblpQueries: input.dblpQueries,
+        sources: input.sources ?? ['semantic_scholar', 'arxiv', 'openalex', 'dblp'],
+        priority: 1
+      }]
+
+      // Sort batches by priority (lower number = higher priority)
+      batches.sort((a, b) => a.priority - b.priority)
+
+      if (batches.every(b => b.queries.length === 0 && (!b.dblpQueries || b.dblpQueries.length === 0))) {
+        const metadata: SearchMetadata = {
+          sourcesTried: [], sourcesSucceeded: [], sourcesFailed: [],
+          totalDurationMs: 0, allSourcesSucceeded: true, hasResults: false,
+          localPapersFound: 0, externalPapersFound: 0, apiCallCount: 0, apiFailureCount: 0
+        }
+        return { output: { papers: [], totalFound: 0, queriesUsed: [], metadata } }
+      }
+
+      // Step 1: Search local papers first
       if (projectPath) {
         try {
-          const localMatches = searchLocalPapers(queries, projectPath)
+          const allQueries = batches.flatMap(b => b.queries)
+          const localMatches = searchLocalPapers(allQueries, projectPath)
           localPapersFound = localMatches.length
 
           if (localMatches.length > 0) {
             console.log(`  [Searcher] Found ${localMatches.length} papers from local library`)
-
-            // Convert local papers to Paper format
             for (const match of localMatches) {
               const lit = match.paper
               allPapers.push({
@@ -207,7 +347,6 @@ function createSearcherAgent(projectPath?: string) {
                 relevanceScore: lit.relevanceScore ?? null
               })
             }
-
             if (!sourcesTried.includes('local')) sourcesTried.push('local')
             if (!sourcesSucceeded.includes('local')) sourcesSucceeded.push('local')
           }
@@ -217,29 +356,97 @@ function createSearcherAgent(projectPath?: string) {
         }
       }
 
-      // Step 2: Search external APIs
-      for (const source of sources) {
-        if (!sourcesTried.includes(source)) sourcesTried.push(source)
-        // Use DBLP-specific queries for DBLP if available, otherwise generic queries
-        const sourceQueries = (source === 'dblp' && dblpQueries && dblpQueries.length > 0)
-          ? dblpQueries
-          : queries
-        for (const query of sourceQueries) {
-          try {
-            const papers = await searchSource(source, query, 8)
-            allPapers.push(...papers)
-            if (!sourcesSucceeded.includes(source)) sourcesSucceeded.push(source)
-          } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error)
-            console.log(`  [Searcher] ${source} failed: ${msg}`)
-            if (!sourcesFailed.includes(source)) sourcesFailed.push(source)
-          }
+      // Step 2: Execute query batches — parallelize sources within each batch
+      for (const batch of batches) {
+        // Check session timeout
+        if (Date.now() - startTime > config.maxTimeMs) {
+          console.log('  [Searcher] Session timeout reached, stopping search')
+          break
         }
+
+        // Check global API call cap
+        if (apiCallCount >= config.maxTotalApiCalls) {
+          console.log('  [Searcher] Global API call cap reached, stopping search')
+          break
+        }
+
+        onActivity?.('search-batch-start', `Searching: ${batch.subTopic}`)
+
+        // Build all (source, query) pairs for this batch, then run them concurrently per-source
+        const sourcePromises: Promise<void>[] = []
+
+        for (const source of batch.sources) {
+          if (!sourcesTried.includes(source)) sourcesTried.push(source)
+
+          if (circuitBreaker && !circuitBreaker.isAllowed(source)) {
+            console.log(`  [Searcher] Circuit breaker open for ${source}, skipping`)
+            if (!sourcesFailed.includes(source)) sourcesFailed.push(source)
+            continue
+          }
+
+          const sourceQueries = (source === 'dblp' && batch.dblpQueries && batch.dblpQueries.length > 0)
+            ? batch.dblpQueries
+            : batch.queries
+
+          // Run all queries for this source sequentially (rate-limited), but run sources in parallel
+          const sourceWork = async () => {
+            for (const query of sourceQueries) {
+              if (apiCallCount >= config.maxTotalApiCalls) break
+              if (Date.now() - startTime > config.maxTimeMs) break
+
+              try {
+                if (rateLimiter) await rateLimiter.acquire(source)
+
+                apiCallCount++
+                const papers = await searchSource(source, query, 8)
+                allPapers.push(...papers)
+                allQueriesUsed.push(query)
+
+                if (rateLimiter) rateLimiter.release(source)
+                if (circuitBreaker) circuitBreaker.recordSuccess(source)
+                if (!sourcesSucceeded.includes(source)) sourcesSucceeded.push(source)
+              } catch (error) {
+                if (rateLimiter) rateLimiter.release(source)
+                if (circuitBreaker) circuitBreaker.recordFailure(source)
+                apiFailureCount++
+
+                const msg = error instanceof Error ? error.message : String(error)
+                console.log(`  [Searcher] ${source} failed for "${query.slice(0, 40)}...": ${msg}`)
+                if (!sourcesFailed.includes(source)) sourcesFailed.push(source)
+              }
+            }
+          }
+
+          sourcePromises.push(sourceWork())
+        }
+
+        // Wait for all sources in this batch to complete (parallel across sources)
+        await Promise.all(sourcePromises)
+        onActivity?.('search-batch-done', `Done: ${batch.subTopic}`)
       }
 
       // Step 3: Deduplicate (keeps local papers, skips external duplicates)
       const uniquePapers = deduplicatePapersPreferLocal(allPapers)
       const externalPapersFound = uniquePapers.filter(p => p.source !== 'local').length
+
+      // Step 4: Metadata enrichment (non-LLM) — reduced time budget for responsiveness
+      if (rateLimiter && circuitBreaker && uniquePapers.length > 0) {
+        onActivity?.('enrich-start', `Enriching ${uniquePapers.length} papers metadata`)
+        try {
+          const enrichConfig = createEnrichmentConfig(rateLimiter, circuitBreaker)
+          // Use shorter time budget to avoid blocking the pipeline
+          enrichConfig.maxTimeMs = 15_000
+          enrichConfig.maxPapersToEnrich = 20
+          const enrichStats = await enrichPapers(uniquePapers as PaperInput[], enrichConfig)
+          console.log(`  [Searcher] Enriched ${enrichStats.enriched} papers (${enrichStats.skipped} skipped, ${enrichStats.failed} failed)`)
+          apiCallCount += enrichStats.enriched * 2
+          onActivity?.('enrich-done', `Enriched ${enrichStats.enriched} papers`)
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error)
+          console.log(`  [Searcher] Metadata enrichment failed: ${msg}`)
+          onActivity?.('enrich-done', `Enrichment failed: ${msg}`)
+        }
+      }
 
       const totalDurationMs = Date.now() - startTime
       const metadata: SearchMetadata = {
@@ -248,11 +455,18 @@ function createSearcherAgent(projectPath?: string) {
         allSourcesSucceeded: sourcesFailed.length === 0,
         hasResults: uniquePapers.length > 0,
         localPapersFound,
-        externalPapersFound
+        externalPapersFound,
+        apiCallCount,
+        apiFailureCount
       }
 
       return {
-        output: { papers: uniquePapers, totalFound: uniquePapers.length, queriesUsed: queries, metadata }
+        output: {
+          papers: uniquePapers,
+          totalFound: uniquePapers.length,
+          queriesUsed: [...new Set(allQueriesUsed)],
+          metadata
+        }
       }
     }
   }
@@ -264,7 +478,7 @@ function createSearcherAgent(projectPath?: string) {
 
 async function searchSource(source: string, query: string, limit: number): Promise<Paper[]> {
   const encodedQuery = encodeURIComponent(query)
-  const timeoutMs = source === 'arxiv' ? 60000 : 15000
+  const timeoutMs = source === 'arxiv' ? 20000 : 15000
   let url: string
 
   switch (source) {
@@ -373,7 +587,6 @@ function parseDblp(data: { result?: { hits?: { hit?: Array<Record<string, unknow
   const hits = data?.result?.hits?.hit ?? []
   return hits.map((h): Paper => {
     const info = (h.info ?? {}) as Record<string, unknown>
-    // Authors can be a single object or an array
     const rawAuthors = info.authors as { author: { text: string } | Array<{ text: string }> } | undefined
     let authors: string[] = []
     if (rawAuthors?.author) {
@@ -398,20 +611,8 @@ function parseDblp(data: { result?: { hits?: { hit?: Array<Record<string, unknow
   })
 }
 
-function deduplicatePapers(papers: Paper[]): Paper[] {
-  const seen = new Map<string, Paper>()
-  for (const paper of papers) {
-    const key = paper.doi || paper.title.toLowerCase().replace(/\s+/g, ' ').trim()
-    if (!seen.has(key) || (paper.citationCount || 0) > (seen.get(key)!.citationCount || 0)) {
-      seen.set(key, paper)
-    }
-  }
-  return Array.from(seen.values())
-}
-
 /**
  * Deduplicate papers, preferring local copies over external duplicates.
- * This ensures we keep cached metadata (relevance scores, etc.) from local papers.
  */
 function deduplicatePapersPreferLocal(papers: Paper[]): Paper[] {
   const seen = new Map<string, Paper>()
@@ -421,16 +622,12 @@ function deduplicatePapersPreferLocal(papers: Paper[]): Paper[] {
     const existing = seen.get(key)
 
     if (!existing) {
-      // First time seeing this paper
       seen.set(key, paper)
     } else if (paper.source === 'local' && existing.source !== 'local') {
-      // Prefer local over external (keep local copy)
       seen.set(key, paper)
     } else if (paper.source !== 'local' && existing.source === 'local') {
-      // Keep existing local copy, skip external duplicate
-      // (do nothing)
+      // Keep existing local copy
     } else {
-      // Both same type: prefer one with more citations
       if ((paper.citationCount || 0) > (existing.citationCount || 0)) {
         seen.set(key, paper)
       }
@@ -438,6 +635,65 @@ function deduplicatePapersPreferLocal(papers: Paper[]): Paper[] {
   }
 
   return Array.from(seen.values())
+}
+
+// ============================================================================
+// Review Output Saving
+// ============================================================================
+
+/**
+ * Save the full review and paper list to disk.
+ */
+function saveReviewToDisk(
+  projectPath: string,
+  reviewId: string,
+  summary: unknown,
+  papers: unknown[],
+  coverage: unknown
+): { reviewPath: string; paperListPath: string } {
+  const reviewsDir = join(projectPath, PATHS.reviews)
+  if (!existsSync(reviewsDir)) {
+    mkdirSync(reviewsDir, { recursive: true })
+  }
+
+  const reviewPath = join(reviewsDir, `${reviewId}.md`)
+  const paperListPath = join(reviewsDir, `${reviewId}-papers.json`)
+
+  // Write full review as markdown
+  const summaryData = summary as Record<string, unknown> | undefined
+  let markdown = `# Literature Review: ${summaryData?.title ?? 'Untitled'}\n\n`
+  markdown += `Generated: ${new Date().toISOString()}\n\n`
+  markdown += `## Overview\n\n${summaryData?.overview ?? ''}\n\n`
+
+  const themes = (summaryData?.themes as Array<{ name: string; insight: string; papers: string[] }>) ?? []
+  if (themes.length > 0) {
+    markdown += `## Themes\n\n`
+    for (const theme of themes) {
+      markdown += `### ${theme.name}\n\n${theme.insight}\n\nPapers: ${theme.papers.join(', ')}\n\n`
+    }
+  }
+
+  const findings = (summaryData?.keyFindings as string[]) ?? []
+  if (findings.length > 0) {
+    markdown += `## Key Findings\n\n`
+    for (const f of findings) markdown += `- ${f}\n`
+    markdown += '\n'
+  }
+
+  const gaps = (summaryData?.researchGaps as string[]) ?? []
+  if (gaps.length > 0) {
+    markdown += `## Research Gaps\n\n`
+    for (const g of gaps) markdown += `- ${g}\n`
+    markdown += '\n'
+  }
+
+  writeFileSync(reviewPath, markdown, 'utf-8')
+  writeFileSync(paperListPath, JSON.stringify({ papers, coverage }, null, 2), 'utf-8')
+
+  return {
+    reviewPath: join(PATHS.reviews, `${reviewId}.md`),
+    paperListPath: join(PATHS.reviews, `${reviewId}-papers.json`)
+  }
 }
 
 // ============================================================================
@@ -450,12 +706,27 @@ export function createLiteratureTeam(config: {
   maxReviewIterations?: number
   projectPath?: string
   sessionId?: string
+  messages?: unknown[]
+  onSearcherActivity?: SearcherActivityCallback
 }) {
-  const { apiKey, model = 'gpt-5.2', maxReviewIterations = 2, projectPath, sessionId = 'default' } = config
+  const {
+    apiKey,
+    model = 'gpt-5.2',
+    maxReviewIterations = 2,
+    projectPath,
+    sessionId = 'default',
+    messages: coordinatorMessages,
+    onSearcherActivity
+  } = config
   if (!apiKey) throw new Error('API key is required')
 
   const languageModel = getLanguageModelByModelId(model, { apiKey })
-  const searcherAgent = createSearcherAgent(projectPath)
+
+  // Create shared rate limiter and circuit breaker
+  const rateLimiter = new RateLimiter(DEFAULT_SEARCHER_CONFIG.rateLimits)
+  const circuitBreakerInstance = new CircuitBreaker(DEFAULT_SEARCHER_CONFIG.circuitBreaker)
+
+  const searcherAgent = createSearcherAgent(projectPath, rateLimiter, circuitBreakerInstance, onSearcherActivity)
 
   const agentCtx: AgentContext = {
     getLanguageModel: () => languageModel
@@ -469,6 +740,9 @@ export function createLiteratureTeam(config: {
     }
   }
 
+  // Track all queries used across rounds to prevent duplicate searches
+  const allQueriesUsedAcrossRounds = new Set<string>()
+
   const createSearcherRunner = () => {
     return async (input: unknown) => {
       const data = input as {
@@ -478,22 +752,95 @@ export function createLiteratureTeam(config: {
         additionalQueries?: string[] | null
         queries?: string[]
         sources?: string[]
+        queryBatches?: QueryBatch[]
+        // From reviewer output
+        coverage?: { missingTopics?: string[]; gaps?: string[] }
       }
+
+      // v2: Use queryBatches if available
+      if (data.queryBatches && data.queryBatches.length > 0) {
+        // Dedup queries against previous rounds
+        for (const batch of data.queryBatches) {
+          batch.queries = batch.queries.filter(q => {
+            const normalized = q.toLowerCase().trim()
+            if (allQueriesUsedAcrossRounds.has(normalized)) {
+              console.log(`  [Searcher] Skipping duplicate query: "${q.slice(0, 50)}..."`)
+              return false
+            }
+            return true
+          })
+        }
+        // Remove empty batches
+        const nonEmptyBatches = data.queryBatches.filter(b => b.queries.length > 0)
+        if (nonEmptyBatches.length === 0) {
+          console.log('  [Searcher] All queries were duplicates, skipping search round')
+          return { papers: [], totalFound: 0, queriesUsed: [], metadata: {
+            sourcesTried: [], sourcesSucceeded: [], sourcesFailed: [],
+            totalDurationMs: 0, allSourcesSucceeded: true, hasResults: false,
+            localPapersFound: 0, externalPapersFound: 0, apiCallCount: 0, apiFailureCount: 0
+          }}
+        }
+        const result = await searcherAgent.run({ queryBatches: nonEmptyBatches })
+        // Track used queries
+        for (const q of result.output.queriesUsed) {
+          allQueriesUsedAcrossRounds.add(q.toLowerCase().trim())
+        }
+        return result.output
+      }
+
+      // v1 compat / reviewer refinement: wrap flat queries in a proper batch
       const queries = data.additionalQueries ?? data.searchQueries ?? data.queries ?? []
       const dblpQueries = data.dblpQueries ?? undefined
-      const searcherInput = {
-        queries: Array.isArray(queries) ? queries : [],
-        dblpQueries: Array.isArray(dblpQueries) ? dblpQueries : undefined,
-        sources: data.searchStrategy?.suggestedSources ?? data.sources ?? ['semantic_scholar', 'arxiv', 'openalex', 'dblp']
+      let queryList = Array.isArray(queries) ? queries : []
+      const sources = data.searchStrategy?.suggestedSources ?? data.sources ?? ['semantic_scholar', 'arxiv', 'openalex', 'dblp']
+
+      // Mechanical dedup: filter out queries already used in previous rounds
+      queryList = queryList.filter(q => {
+        const normalized = q.toLowerCase().trim()
+        if (allQueriesUsedAcrossRounds.has(normalized)) {
+          console.log(`  [Searcher] Skipping duplicate query: "${q.slice(0, 50)}..."`)
+          return false
+        }
+        return true
+      })
+
+      if (queryList.length === 0) {
+        console.log('  [Searcher] All refinement queries were duplicates, skipping search round')
+        return { papers: [], totalFound: 0, queriesUsed: [], metadata: {
+          sourcesTried: [], sourcesSucceeded: [], sourcesFailed: [],
+          totalDurationMs: 0, allSourcesSucceeded: true, hasResults: false,
+          localPapersFound: 0, externalPapersFound: 0, apiCallCount: 0, apiFailureCount: 0
+        }}
       }
-      const result = await searcherAgent.run(searcherInput)
+
+      // Build a meaningful sub-topic name from coverage gaps or first query
+      const gaps = data.coverage?.missingTopics ?? data.coverage?.gaps ?? []
+      const subTopicName = gaps.length > 0
+        ? `Refinement: ${gaps.slice(0, 2).join(', ').slice(0, 60)}`
+        : queryList.length > 0
+          ? `Refinement: ${queryList[0].slice(0, 60)}${queryList[0].length > 60 ? '...' : ''}`
+          : 'Refinement search'
+
+      const batch: QueryBatch = {
+        subTopic: subTopicName,
+        queries: queryList,
+        dblpQueries: Array.isArray(dblpQueries) ? dblpQueries : undefined,
+        sources,
+        priority: 1
+      }
+
+      const result = await searcherAgent.run({ queryBatches: [batch] })
+      // Track used queries
+      for (const q of result.output.queriesUsed) {
+        allQueriesUsedAcrossRounds.add(q.toLowerCase().trim())
+      }
       return result.output
     }
   }
 
   const team = defineTeam({
     id: 'literature-research',
-    name: 'Literature Research Team',
+    name: 'Literature Research Team v2',
     agents: {
       planner: agentHandle('planner', planner, { runner: createLLMRunner(planner) }),
       searcher: agentHandle('searcher', searcherAgent, { runner: createSearcherRunner() }),
@@ -506,7 +853,6 @@ export function createLiteratureTeam(config: {
       simpleStep('searcher').from('plan').to('search'),
       loop(
         seq(
-          // Inject userRequest from initial input so reviewer knows the original intent
           simpleStep('reviewer').from((s: Record<string, unknown>) => {
             const search = s.search as Record<string, unknown> | undefined
             return { ...search, userRequest: (s.userRequest as string) ?? '' }
@@ -524,7 +870,6 @@ export function createLiteratureTeam(config: {
         { type: 'field-eq', path: 'review.approved', value: true },
         { maxIters: maxReviewIterations }
       ),
-      // Inject userRequest so summarizer can address the original question
       simpleStep('summarizer').from((s: Record<string, unknown>) => {
         const review = s.review as Record<string, unknown> | undefined
         return { ...review, userRequest: (s.userRequest as string) ?? '' }
@@ -544,6 +889,7 @@ export function createLiteratureTeam(config: {
     async research(request: string): Promise<{
       success: boolean
       summary?: unknown
+      result?: LiteratureSearchResult
       error?: string
       steps: number
       durationMs: number
@@ -551,11 +897,26 @@ export function createLiteratureTeam(config: {
       localPapersUsed?: number
       externalPapersUsed?: number
     }> {
-      // Pre-seed userRequest into state so all agents can access it via from() transforms
+      const sessionStartTime = Date.now()
+
+      // Build planner context with filtered conversation and local library
+      const plannerContext: PlannerContext = {
+        request,
+        conversationHistory: coordinatorMessages
+          ? filterConversationForPlanner(coordinatorMessages)
+          : [],
+        localLibrary: projectPath
+          ? scanLocalLibrary(projectPath)
+          : { totalPapers: 0, topicClusters: [] }
+      }
+
+      // Pre-seed state
       const state = runtime.getState()
       state.put('userRequest', request, undefined, 'system')
+      state.put('plannerContext', plannerContext, undefined, 'system')
 
-      const result = await runtime.run({ userRequest: request })
+      // Override initial input to include plannerContext
+      const result = await runtime.run({ userRequest: request, plannerContext })
 
       if (result.success && result.finalState) {
         const stateData = result.finalState['literature'] as Record<string, unknown> | undefined
@@ -570,13 +931,17 @@ export function createLiteratureTeam(config: {
             url?: string
             source: string
             relevanceScore: number
+            relevanceJustification?: string
             doi?: string | null
             venue?: string | null
             citationCount?: number | null
           }>
+          coverage?: { score?: number; coveredTopics?: string[]; missingTopics?: string[]; gaps?: string[] }
         } | undefined
+        const plan = stateData?.plan as SearchPlan | undefined
+        const searchMeta = (stateData?.search as { metadata?: SearchMetadata })?.metadata
 
-        // Auto-save high-relevance papers (score >= 7) to local library
+        // Auto-save high-relevance papers (score >= 8, up from 7)
         let savedPapers = 0
         let localPapersUsed = 0
         let externalPapersUsed = 0
@@ -591,9 +956,7 @@ export function createLiteratureTeam(config: {
           }
         }
 
-        // Only save if projectPath is provided
         if (projectPath && relevantPapers.length > 0) {
-          // Extract search keywords from the request (simple tokenization)
           const searchKeywords = request
             .toLowerCase()
             .replace(/[^\w\s]/g, ' ')
@@ -608,21 +971,35 @@ export function createLiteratureTeam(config: {
           }
 
           for (const paper of relevantPapers) {
-            // Only save high-relevance external papers (not already local)
             if (paper.source === 'local') continue
-            if (paper.relevanceScore < 7) continue
+            if (paper.relevanceScore < 8) continue // v2: threshold raised from 7 to 8
 
-            // Check if paper already exists locally
             const existing = findExistingPaper(
               { doi: paper.doi, title: paper.title },
               projectPath
             )
             if (existing) {
-              console.log(`  [Auto-save] Skipping "${paper.title.slice(0, 50)}..." (already exists)`)
+              // Update existing paper with any enriched metadata that's missing
+              const updateResult = updatePaperMetadata(
+                existing,
+                {
+                  authors: paper.authors,
+                  year: paper.year,
+                  abstract: paper.abstract,
+                  venue: paper.venue || undefined,
+                  url: paper.url,
+                  citationCount: paper.citationCount ?? undefined,
+                  doi: paper.doi || undefined,
+                  bibtex: undefined // will be fetched below only for new papers
+                },
+                cliContext
+              )
+              if (updateResult.filePath) {
+                console.log(`  [Auto-save] Updated metadata for "${paper.title.slice(0, 50)}..."`)
+              }
               continue
             }
 
-            // Generate BibTeX for the paper
             let bibtex: string | undefined
             try {
               const paperMeta: PaperMetadata = {
@@ -640,7 +1017,6 @@ export function createLiteratureTeam(config: {
               console.log(`  [Auto-save] BibTeX generation failed for "${paper.title.slice(0, 40)}...": ${err instanceof Error ? err.message : String(err)}`)
             }
 
-            // Save the paper
             const saveResult = savePaper(
               paper.title,
               {
@@ -650,7 +1026,6 @@ export function createLiteratureTeam(config: {
                 venue: paper.venue || undefined,
                 url: paper.url,
                 tags: [],
-                // New search metadata fields
                 searchKeywords,
                 externalSource: paper.source,
                 relevanceScore: paper.relevanceScore,
@@ -672,9 +1047,69 @@ export function createLiteratureTeam(config: {
           }
         }
 
+        // Build coverage tracker
+        const coverageData = review?.coverage
+        const coverageSubTopics = (plan?.subTopics ?? []).map(st => {
+          const papersInTopic = relevantPapers.filter(p =>
+            p.title.toLowerCase().includes(st.name.toLowerCase()) ||
+            (p.abstract && p.abstract.toLowerCase().includes(st.name.toLowerCase()))
+          )
+          return {
+            name: st.name,
+            paperCount: papersInTopic.length,
+            covered: papersInTopic.length >= (plan?.minimumCoveragePerSubTopic ?? 3),
+            gaps: (coverageData?.gaps ?? []).filter(g =>
+              g.toLowerCase().includes(st.name.toLowerCase())
+            )
+          }
+        })
+
+        const coverageScore = coverageData?.score ?? (
+          coverageSubTopics.length > 0
+            ? coverageSubTopics.filter(st => st.covered).length / coverageSubTopics.length
+            : 0
+        )
+
+        // Save full review to disk
+        let fullReviewPath = ''
+        let paperListPath = ''
+        if (projectPath) {
+          const reviewId = `review-${Date.now()}`
+          const paths = saveReviewToDisk(projectPath, reviewId, summary, relevantPapers, {
+            score: coverageScore,
+            subTopics: coverageSubTopics
+          })
+          fullReviewPath = paths.reviewPath
+          paperListPath = paths.paperListPath
+        }
+
+        // Build compressed result
+        const searchResult: LiteratureSearchResult = {
+          success: true,
+          data: {
+            briefSummary: typeof (summary as any)?.overview === 'string'
+              ? (summary as any).overview.slice(0, 500)
+              : `Found ${relevantPapers.length} relevant papers across ${coverageSubTopics.length} sub-topics.`,
+            coverage: {
+              score: coverageScore,
+              subTopics: coverageSubTopics,
+              queriesExecuted: (stateData?.search as { queriesUsed?: string[] })?.queriesUsed ?? []
+            },
+            totalPapersFound: relevantPapers.length,
+            papersAutoSaved: savedPapers,
+            fullReviewPath,
+            paperListPath,
+            durationMs: Date.now() - sessionStartTime,
+            llmCallCount: result.steps, // approximate: each step is roughly one LLM call
+            apiCallCount: searchMeta?.apiCallCount ?? 0,
+            apiFailureCount: searchMeta?.apiFailureCount ?? 0
+          }
+        }
+
         return {
           success: true,
           summary,
+          result: searchResult,
           steps: result.steps,
           durationMs: result.durationMs,
           savedPapers,

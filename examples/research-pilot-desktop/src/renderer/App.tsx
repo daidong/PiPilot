@@ -75,6 +75,30 @@ export default function App() {
 
     refreshEntities()
 
+    // Recover real-time state that may have been lost during a renderer remount
+    api.getRealtimeSnapshot().then((snapshot: any) => {
+      if (snapshot && (snapshot.isStreaming || snapshot.streamingText)) {
+        useChatStore.setState({
+          streamingText: snapshot.streamingText,
+          isStreaming: snapshot.isStreaming,
+        })
+      }
+      if (snapshot && snapshot.progressItems?.length > 0) {
+        useProgressStore.setState({ items: snapshot.progressItems })
+      }
+      if (snapshot && snapshot.activityEvents?.length > 0) {
+        // Replay activity events through the store's push method to preserve merge logic
+        const store = useActivityStore.getState()
+        for (const evt of snapshot.activityEvents) {
+          store.push({
+            id: evt.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            timestamp: evt.timestamp || new Date().toISOString(),
+            ...evt,
+          })
+        }
+      }
+    })
+
     // Load chat history from previous session
     api.getCurrentSession().then((session: { sessionId: string }) => {
       useChatStore.getState().loadInitial(session.sessionId)
