@@ -13,6 +13,7 @@ export interface ElectronAPI {
   search: (query: string) => Promise<any>
   deleteEntity: (id: string) => Promise<any>
   renameNote: (id: string, newTitle: string) => Promise<any>
+  updateEntity: (id: string, updates: { title?: string; content?: string }) => Promise<any>
   saveNote: (title: string, content: string, messageId?: string) => Promise<any>
   savePaper: (argsStr: string) => Promise<any>
   saveData: (argsStr: string) => Promise<any>
@@ -96,6 +97,7 @@ const api: ElectronAPI = {
   search: (query) => ipcRenderer.invoke('cmd:search', query),
   deleteEntity: (id) => ipcRenderer.invoke('cmd:delete', id),
   renameNote: (id, newTitle) => ipcRenderer.invoke('cmd:rename-note', id, newTitle),
+  updateEntity: (id, updates) => ipcRenderer.invoke('cmd:update-entity', id, updates),
   saveNote: (title, content, messageId) => ipcRenderer.invoke('cmd:save-note', title, content, messageId),
   savePaper: (argsStr) => ipcRenderer.invoke('cmd:save-paper', argsStr),
   saveData: (argsStr) => ipcRenderer.invoke('cmd:save-data', argsStr),

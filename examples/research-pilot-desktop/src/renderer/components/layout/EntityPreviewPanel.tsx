@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { X, Pin, CheckSquare, StickyNote, BookOpen, Database, Trash2, Pencil } from 'lucide-react'
@@ -90,10 +90,12 @@ export function EntityPreviewPanel() {
   const togglePin = useEntityStore((s) => s.togglePin)
   const toggleSelect = useEntityStore((s) => s.toggleSelect)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
-  const renameNote = useEntityStore((s) => s.renameNote)
+  const updateEntity = useEntityStore((s) => s.updateEntity)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState('')
+  const [editContent, setEditContent] = useState('')
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Loaded file content for data entities
   const [fileContent, setFileContent] = useState<string | null>(null)
@@ -104,7 +106,17 @@ export function EntityPreviewPanel() {
   useEffect(() => {
     setEditing(false)
     setEditTitle(entity?.title ?? '')
+    setEditContent('')
   }, [entity?.id])
+
+  // Auto-resize textarea when editing
+  useEffect(() => {
+    if (editing && textareaRef.current) {
+      const ta = textareaRef.current
+      ta.style.height = 'auto'
+      ta.style.height = ta.scrollHeight + 'px'
+    }
+  }, [editing, editContent])
 
   // Load file content for data entities with a filePath
   useEffect(() => {
@@ -162,22 +174,38 @@ export function EntityPreviewPanel() {
     closePreview()
   }
 
-  const startEditing = () => {
-    setEditTitle(entity.title)
-    setEditing(true)
+  const getEntityContent = (): string => {
+    return entity.content || entity.abstract || entity.valueText || ''
   }
 
-  const commitRename = async () => {
-    const trimmed = editTitle.trim()
-    if (trimmed && trimmed !== entity.title) {
-      await renameNote(entity.id, trimmed)
+  const toggleEditing = async () => {
+    if (editing) {
+      // Exiting edit mode — save changes
+      const updates: { title?: string; content?: string } = {}
+      const trimmedTitle = editTitle.trim()
+      if (trimmedTitle && trimmedTitle !== entity.title) {
+        updates.title = trimmedTitle
+      }
+      if (editContent !== getEntityContent()) {
+        updates.content = editContent
+      }
+      if (Object.keys(updates).length > 0) {
+        await updateEntity(entity.id, updates)
+        // Update the preview entity in UI store so content refreshes immediately
+        useUIStore.getState().openPreview({
+          ...entity,
+          title: updates.title ?? entity.title,
+          content: entity.type === 'paper' ? entity.content : (updates.content ?? entity.content),
+          abstract: entity.type === 'paper' ? (updates.content ?? entity.abstract) : entity.abstract
+        })
+      }
+      setEditing(false)
+    } else {
+      // Entering edit mode
+      setEditTitle(entity.title)
+      setEditContent(getEntityContent())
+      setEditing(true)
     }
-    setEditing(false)
-  }
-
-  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') { e.preventDefault(); commitRename() }
-    if (e.key === 'Escape') { setEditing(false) }
   }
 
   // Determine what to render in the content area
@@ -228,6 +256,18 @@ export function EntityPreviewPanel() {
     }
 
     // Non-data entities or data entities without filePath: use existing content fields
+    if (editing) {
+      return (
+        <textarea
+          ref={textareaRef}
+          value={editContent}
+          onChange={(e) => setEditContent(e.target.value)}
+          className="w-full min-h-[200px] text-sm t-text bg-transparent outline-none resize-none font-mono leading-relaxed"
+          placeholder="Enter content..."
+        />
+      )
+    }
+
     const content = entity.content || entity.abstract || entity.valueText || 'No content available.'
     return (
       <div className="md-prose" style={{ color: 'var(--color-text)' }}>
@@ -248,8 +288,6 @@ export function EntityPreviewPanel() {
             autoFocus
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={handleRenameKeyDown}
             className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-orange-400 outline-none min-w-0"
           />
         ) : (
@@ -257,15 +295,13 @@ export function EntityPreviewPanel() {
         )}
 
         <div className="flex items-center gap-1">
-          {!editing && (
-            <button
-              onClick={startEditing}
-              className="p-1 rounded transition-colors t-text-muted hover:text-orange-400"
-              title="Rename"
-            >
-              <Pencil size={14} />
-            </button>
-          )}
+          <button
+            onClick={toggleEditing}
+            className={`p-1 rounded transition-colors ${editing ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
+            title={editing ? 'Save changes' : 'Edit'}
+          >
+            <Pencil size={14} />
+          </button>
           <button
             onClick={() => togglePin(entity.id)}
             className={`p-1 rounded transition-colors ${entity.pinned ? 'text-orange-400' : 't-text-muted t-bg-hover'}`}

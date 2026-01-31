@@ -196,55 +196,10 @@ export const builtinModels: ModelConfig[] = [
     limit: { maxContext: 200000, maxOutput: 100000 }
   },
 
-  // Anthropic Models
+  // Anthropic Models — Claude 4.5
   {
-    id: 'claude-3-5-sonnet-20241022',
-    name: 'Claude 3.5 Sonnet',
-    providerID: 'anthropic',
-    api: 'chat',
-    capabilities: {
-      temperature: true,
-      reasoning: false,
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 3, output: 15 },
-    limit: { maxContext: 200000, maxOutput: 8192 }
-  },
-  {
-    id: 'claude-3-5-haiku-20241022',
-    name: 'Claude 3.5 Haiku',
-    providerID: 'anthropic',
-    api: 'chat',
-    capabilities: {
-      temperature: true,
-      reasoning: false,
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 0.8, output: 4 },
-    limit: { maxContext: 200000, maxOutput: 8192 }
-  },
-  {
-    id: 'claude-3-opus-20240229',
-    name: 'Claude 3 Opus',
-    providerID: 'anthropic',
-    api: 'chat',
-    capabilities: {
-      temperature: true,
-      reasoning: false,
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 15, output: 75 },
-    limit: { maxContext: 200000, maxOutput: 4096 }
-  },
-  {
-    id: 'claude-opus-4-20250514',
-    name: 'Claude Opus 4',
+    id: 'claude-opus-4-5-20251101',
+    name: 'Claude Opus 4.5',
     providerID: 'anthropic',
     api: 'chat',
     capabilities: {
@@ -254,12 +209,12 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 15, output: 75 },
-    limit: { maxContext: 200000, maxOutput: 32000 }
+    cost: { input: 5, output: 25 },
+    limit: { maxContext: 200000, maxOutput: 64000 }
   },
   {
-    id: 'claude-sonnet-4-20250514',
-    name: 'Claude Sonnet 4',
+    id: 'claude-sonnet-4-5-20250929',
+    name: 'Claude Sonnet 4.5',
     providerID: 'anthropic',
     api: 'chat',
     capabilities: {
@@ -270,7 +225,22 @@ export const builtinModels: ModelConfig[] = [
       output: ['text']
     },
     cost: { input: 3, output: 15 },
-    limit: { maxContext: 200000, maxOutput: 16000 }
+    limit: { maxContext: 200000, maxOutput: 64000 }
+  },
+  {
+    id: 'claude-haiku-4-5-20251001',
+    name: 'Claude Haiku 4.5',
+    providerID: 'anthropic',
+    api: 'chat',
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 1, output: 5 },
+    limit: { maxContext: 200000, maxOutput: 64000 }
   },
 
   // DeepSeek Models

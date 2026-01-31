@@ -319,8 +319,13 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 
       // Pass reasoning effort for reasoning models via providerOptions
       if (modelConfig?.capabilities.reasoning && reasoningEffort) {
-        streamOptions.providerOptions = {
-          openai: { reasoningEffort }
+        if (clientConfig.provider === 'anthropic') {
+          // Anthropic uses 'thinking' with a budget token approach
+          // reasoningEffort is not directly supported; skip for now
+        } else {
+          streamOptions.providerOptions = {
+            openai: { reasoningEffort }
+          }
         }
       }
 

@@ -29,6 +29,10 @@ export const SUPPORTED_MODELS: ModelOption[] = [
   { id: 'gpt-4o', label: 'GPT-4o', provider: 'OpenAI' },
   { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'OpenAI' },
   { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', provider: 'OpenAI' },
+  // Anthropic Claude 4.5
+  { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Anthropic' },
+  { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Anthropic' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'Anthropic' },
 ]
 
 interface UIState {

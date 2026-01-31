@@ -18,7 +18,7 @@ import { AgentLoop } from './agent-loop.js'
 import { BudgetCoordinator } from '../core/budget-coordinator.js'
 import { StateSummarizer } from '../core/state-summarizer.js'
 import { countTokens } from '../utils/tokenizer.js'
-import { createLLMClient, detectProviderFromApiKey } from '../llm/index.js'
+import { createLLMClient, detectProviderFromApiKey, getModel } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
 import { packs } from '../packs/index.js'
 import {
@@ -56,17 +56,28 @@ function createSessionState(): SessionState {
 }
 
 /**
- * 根据 API 密钥自动检测 Provider 和默认模型
+ * Detect provider and model.
+ * When a preferred model is specified, derive the provider from the model
+ * registry so that e.g. "claude-sonnet-4-20250514" correctly resolves to
+ * the "anthropic" provider regardless of which API key was passed in.
+ * Falls back to API-key-based detection when no model is specified.
  */
 function detectProviderAndModel(apiKey: string, preferredModel?: string): { provider: ProviderID; model: string } {
-  const provider = detectProviderFromApiKey(apiKey)
+  // If a model is explicitly requested, trust the model registry for the provider
+  if (preferredModel) {
+    const modelConfig = getModel(preferredModel)
+    if (modelConfig) {
+      return { provider: modelConfig.providerID, model: preferredModel }
+    }
+  }
 
+  // Fallback: detect from API key
+  const provider = detectProviderFromApiKey(apiKey)
   if (provider) {
-    const model = preferredModel || (provider === 'openai' ? 'gpt-5.2' : 'claude-3-5-sonnet-20241022')
+    const model = preferredModel || (provider === 'openai' ? 'gpt-5.2' : 'claude-sonnet-4-5-20250929')
     return { provider, model }
   }
 
-  // 默认使用 OpenAI
   return {
     provider: 'openai',
     model: preferredModel || 'gpt-5.2'
@@ -378,9 +389,18 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     policyEngine.registerAll(config.policies)
   }
 
-  // 创建 LLM 客户端
-  const apiKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
-  const { provider, model } = detectProviderAndModel(apiKey, effectiveModel)
+  // Detect provider from model config (preferred) or API key
+  const fallbackKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
+  const { provider, model } = detectProviderAndModel(fallbackKey, effectiveModel)
+
+  // Resolve the correct API key for the detected provider
+  const providerKeyMap: Record<string, string | undefined> = {
+    openai: config.apiKey || process.env['OPENAI_API_KEY'],
+    anthropic: process.env['ANTHROPIC_API_KEY'],
+    deepseek: process.env['DEEPSEEK_API_KEY'],
+    google: process.env['GOOGLE_API_KEY']
+  }
+  const apiKey = providerKeyMap[provider] || fallbackKey
 
   const llmClient = createLLMClient({
     provider,

@@ -168,7 +168,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
   currentModel = requestedModel
 
   if (!coordinator) {
-    const apiKey = process.env.OPENAI_API_KEY || ''
+    const apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || ''
 
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
     const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
@@ -349,6 +349,39 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           entity.name = newTitle
         } else {
           entity.title = newTitle
+        }
+        entity.updatedAt = new Date().toISOString()
+        writeFileSync(filePath, JSON.stringify(entity, null, 2))
+        return { success: true }
+      } catch (err: any) {
+        return { success: false, error: err.message }
+      }
+    }
+    return { success: false, error: 'Entity not found.' }
+  })
+
+  // Commands - update entity (title + content)
+  ipcMain.handle('cmd:update-entity', (_e, id: string, updates: { title?: string; content?: string }) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
+    for (const dir of dirs) {
+      const filePath = join(projectPath, dir, `${id}.json`)
+      if (!existsSync(filePath)) continue
+      try {
+        const entity = JSON.parse(readFileSync(filePath, 'utf-8'))
+        if (updates.title !== undefined) {
+          if (entity.type === 'data') {
+            entity.name = updates.title
+          } else {
+            entity.title = updates.title
+          }
+        }
+        if (updates.content !== undefined) {
+          if (entity.type === 'paper') {
+            entity.abstract = updates.content
+          } else {
+            entity.content = updates.content
+          }
         }
         entity.updatedAt = new Date().toISOString()
         writeFileSync(filePath, JSON.stringify(entity, null, 2))

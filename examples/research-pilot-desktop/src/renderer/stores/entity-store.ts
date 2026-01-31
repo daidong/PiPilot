@@ -24,6 +24,7 @@ interface EntityState {
   togglePin: (id: string) => Promise<void>
   toggleSelect: (id: string) => Promise<void>
   renameNote: (id: string, newTitle: string) => Promise<void>
+  updateEntity: (id: string, updates: { title?: string; content?: string }) => Promise<void>
   deleteEntity: (id: string) => Promise<void>
 }
 
@@ -106,6 +107,20 @@ export const useEntityStore = create<EntityState>((set) => ({
 
   renameNote: async (id: string, newTitle: string) => {
     await api.renameNote(id, newTitle)
+    const [notes, papers, data] = await Promise.all([
+      api.listNotes(), api.listLiterature(), api.listData()
+    ])
+    const stamp = (items: any[], type: EntityItem['type']) =>
+      (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
+    set({
+      notes: stamp(notes, 'note'),
+      papers: stamp(papers, 'paper'),
+      data: stamp(data, 'data')
+    })
+  },
+
+  updateEntity: async (id: string, updates: { title?: string; content?: string }) => {
+    await api.updateEntity(id, updates)
     const [notes, papers, data] = await Promise.all([
       api.listNotes(), api.listLiterature(), api.listData()
     ])
