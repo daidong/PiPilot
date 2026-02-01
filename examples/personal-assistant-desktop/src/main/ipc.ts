@@ -13,6 +13,8 @@ import { saveDoc } from '@personal-assistant/commands/save-doc'
 import { parseMentions, resolveMentions, getCandidates } from '@personal-assistant/mentions/index'
 import { setCachedMarkdown, fileUriToPath } from '@personal-assistant/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@personal-assistant/types'
+import { Scheduler } from '@personal-assistant/scheduler/scheduler'
+import { NotificationStore } from '@personal-assistant/scheduler/notifications'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
 import { realtimeBuffer } from './realtime-buffer'
 
@@ -51,6 +53,8 @@ const fmt = createActivityFormatter({
 })
 
 let coordinator: ReturnType<typeof createCoordinator> | null = null
+let scheduler: Scheduler | null = null
+let notificationStore: NotificationStore | null = null
 let currentModel = 'gpt-5.2'
 // Start with empty project path — user must select a folder
 let projectPath = ''
@@ -125,6 +129,34 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
     const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
     realtimeBuffer.pushActivity(initEvent)
     safeSend(win, 'agent:activity', initEvent)
+
+    // Initialize notification store and scheduler before coordinator
+    if (!notificationStore) {
+      notificationStore = new NotificationStore(projectPath)
+    }
+    if (!scheduler) {
+      scheduler = new Scheduler({
+        projectPath,
+        onTrigger: async (task) => {
+          try {
+            const coord = await coordinator
+            if (!coord) return
+            const result = await coord.chat(`[SCHEDULED: ${task.id}] ${task.instruction}`)
+            if (result.success && result.response && notificationStore) {
+              const n = notificationStore.add({
+                type: 'info',
+                title: task.instruction.slice(0, 60),
+                body: result.response.slice(0, 500),
+                scheduledTaskId: task.id
+              })
+              safeSend(win, 'notification:new', notificationStore.list())
+            }
+          } catch (err) {
+            console.error(`[Scheduler] onTrigger error for ${task.id}:`, err)
+          }
+        }
+      })
+    }
 
     coordinator = await createCoordinator({
       apiKey,
@@ -203,6 +235,9 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
         safeSend(win, 'agent:activity', actEvent)
       }
     })
+
+    // Start scheduler after coordinator is ready
+    scheduler?.start()
 
     // Notify UI that initialization is complete
     const readyEvent = { type: 'system', summary: 'Agent ready' }
@@ -479,6 +514,20 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return { success: false, error: `Unknown tab: ${tab}` }
   })
 
+  // Notifications
+  ipcMain.handle('notification:list', () => {
+    return notificationStore?.list() ?? []
+  })
+  ipcMain.handle('notification:mark-read', (_e, id: string) => {
+    notificationStore?.markRead(id)
+  })
+  ipcMain.handle('notification:mark-all-read', () => {
+    notificationStore?.markAllRead()
+  })
+  ipcMain.handle('notification:unread-count', () => {
+    return notificationStore?.unreadCount() ?? 0
+  })
+
   // Session - chat history persistence
   ipcMain.handle('session:save-message', (_e, sid: string, msg: any) => {
     if (!projectPath) return
@@ -562,6 +611,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
           /* agent may not be running */
         }
       }
+
+      // Stop scheduler
+      if (scheduler) {
+        scheduler.stop()
+        scheduler = null
+      }
+      notificationStore = null
 
       // Destroy coordinator (agent + MCP servers + subagents)
       if (coordinator) {

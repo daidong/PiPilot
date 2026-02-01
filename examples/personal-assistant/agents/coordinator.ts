@@ -343,13 +343,6 @@ _(none yet)_
     }),
     webPack,                // brave_web_search, fetch for general web queries
     entityPack,             // save-note, save-doc, update-note
-    packs.memorySearch({    // BM25 full-text search over memory files
-      dirs: [join(projectPath, PATHS.memory)],
-      extraFiles: [
-        join(projectPath, PATHS.memoryFile),
-        join(projectPath, PATHS.userProfile)
-      ]
-    })
   ]
 
   // Add SQLite pack if available
@@ -394,7 +387,18 @@ _(none yet)_
                       'sqlite_read_query', 'sqlite_list_tables']
     },
 
-    toolLoopThreshold: 15
+    toolLoopThreshold: 15,
+
+    // Pre-compaction flush: save important context to daily log before compaction
+    onPreCompaction: async (agentRef) => {
+      const today = new Date().toISOString().slice(0, 10)
+      const logPath = `${PATHS.memory}/${today}.md`
+      await agentRef.run(
+        '[SYSTEM] Context approaching limit. Review the conversation and write any ' +
+        'important context, decisions, facts, or preferences to today\'s daily log ' +
+        `(${logPath}) before compaction occurs. Use edit() to append to the file.`
+      )
+    }
   })
 
   // Initialize packs eagerly so memoryStorage is available before first run()

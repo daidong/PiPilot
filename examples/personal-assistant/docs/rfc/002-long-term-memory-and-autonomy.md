@@ -1,9 +1,11 @@
 # RFC-002: Long-Term Memory & Autonomous Behavior
 
-**Status**: Draft
+**Status**: Implemented (Phases A–D), Phase E deferred
 **Author**: Captain
 **Date**: 2026-02-01
 **Depends on**: RFC-001 (Personal Assistant Desktop App)
+
+> **Implementation note (2026-02-01)**: Phases A–D are implemented and verified. During implementation review, we removed 5 agent-facing tools (`memory_search`, `memory_get`, `schedule-add`, `schedule-list`, `schedule-remove`) that were redundant with existing `read`/`write`/`edit`/`grep` capabilities. The framework-level `packs.memorySearch()` pack and `MemoryIndex` engine exist but are **not wired into the personal-assistant coordinator** — at the current data scale (~1 MB/year), `grep` over `memory/` is sufficient. The scheduler backend runs autonomously in the Electron main process; the agent manages `scheduled-tasks.json` via `read`/`write` with prompt instructions. See sections 5, 8, and 9 for updated details.
 
 ## 1. Motivation
 
@@ -208,6 +210,8 @@ This integrates cleanly with RFC-001's existing `buildEntitySelections()` — bo
 ---
 
 ## 5. Memory Search — `packs.memorySearch()`
+
+> **Implementation decision**: The `packs.memorySearch()` framework pack and `MemoryIndex` engine are implemented at the framework level (see `src/packs/memory-search.ts`, `src/core/memory-index.ts`). However, the personal-assistant coordinator **does not use them**. At the current data scale (~1–2 KB/day, ~1 MB/year of daily logs), `grep` on `memory/` achieves equivalent results with zero additional infrastructure. The `memory_search` and `memory_get` tools were removed from the coordinator's tool set because they are redundant with the existing `grep` and `read` tools. When the memory corpus grows to 100+ MB, `packs.memorySearch()` can be re-enabled with a one-line change.
 
 ### 5.1 Why a Framework-Level Pack
 
@@ -782,22 +786,11 @@ interface ScheduledTask {
 
 **Storage:** `scheduled-tasks.json` in `.personal-assistant/` (Markdown not needed here — this is structured config, not knowledge).
 
-### 8.2 Scheduler Tools
+### 8.2 Schedule Management — No New Tools
 
-```typescript
-'schedule-add': {
-  parameters: {
-    schedule: string,       // cron expression
-    instruction: string,    // what to do
-  }
-}
+> **Implementation decision**: Dedicated schedule tools (`schedule-add`, `schedule-list`, `schedule-remove`) were implemented and then removed. The agent manages `scheduled-tasks.json` using existing `read`/`write` tools with prompt instructions. This avoids adding 3 tools to the LLM's tool set for operations that are simple JSON file reads/writes. The system prompt (section 9) documents the JSON format and cron syntax.
 
-'schedule-list': {}         // returns all active schedules
-
-'schedule-remove': {
-  parameters: { id: string }
-}
-```
+The scheduler backend (cron matcher, task persistence, execution loop) runs autonomously in the Electron main process. The agent's role is limited to reading and editing the JSON config file when the user asks to manage schedules.
 
 ### 8.3 Execution Model
 
@@ -838,43 +831,36 @@ These are created automatically on first launch. The user can disable or modify 
 
 ## 9. System Prompt Additions
 
-RFC-002 adds these sections to the coordinator's system prompt (extending RFC-001's prompt):
+RFC-002 adds these sections to the coordinator's system prompt (extending RFC-001's prompt). Note: no tool-specific instructions are needed — all operations use existing `read`/`write`/`edit`/`grep` tools.
 
 ```markdown
-## Memory Management
+## Long-Term Memory (Daily Logs)
 
-You maintain your own memory as Markdown files:
-- **Daily log**: Append notes to `memory/YYYY-MM-DD.md` throughout the conversation
-- **MEMORY.md**: Curated long-term knowledge (updated during heartbeat, not during chat)
-- **USER.md**: User profile (updated only when identity info changes)
+Three memory files are auto-loaded into your context every turn:
+- `.personal-assistant/USER.md` — user identity/profile
+- `.personal-assistant/MEMORY.md` — consolidated long-term memory (heartbeat-maintained, do NOT edit during chat)
+- `.personal-assistant/memory/YYYY-MM-DD.md` — daily log (today + yesterday)
 
-### When to write to the daily log
-- User states a preference or corrects you
-- An important decision or outcome occurs
-- You discover a fact about the user, their work, or their relationships
-- The conversation covers a significant topic worth remembering
+### When to write a daily log entry
+Write an entry whenever the user shares: preferences, corrections, decisions, important facts,
+people/projects/deadlines, or explicitly says "remember this".
 
-### Format for daily log entries
-```
-## HH:MM — Brief topic title
-- Key point 1
-- Key point 2
-```
+### Daily log format
+## HH:MM — Brief topic
+- Key point
+- Another key point
 
-### When to search memory
-- User references something from a past conversation
-- You need context about a person, project, or preference
-- Before making assumptions — check if you already know the answer
-
-### Memory search
-Use memory_search({ query }) to find relevant past context.
-Use memory_get({ path, from, lines }) to read specific sections of memory files.
+### Searching past memory
+Use `grep` on the `.personal-assistant/memory/` directory for specific keywords.
+MEMORY.md and USER.md are already in context every turn.
 
 ## Scheduled Tasks
-You can create scheduled tasks that run automatically:
-- schedule-add({ schedule: "cron expr", instruction: "what to do" })
-- schedule-list() to see active schedules
-- schedule-remove({ id }) to cancel a schedule
+
+A background scheduler runs cron-based tasks automatically. The schedule is stored in
+`.personal-assistant/scheduled-tasks.json` as a JSON array. To manage schedules: use `read`
+to view the file, `write` to update it (preserve the full JSON array).
+
+The `schedule` field is a 5-field cron expression: minute hour day-of-month month day-of-week.
 ```
 
 ---
@@ -954,61 +940,53 @@ Target: **< 50 MB per year** (Markdown is more compact than SQLite for text data
 
 ## 14. Framework Changes Summary
 
-| Change | Scope | Files |
-|--------|-------|-------|
-| **`packs.memorySearch()`** | New pack — hybrid FTS5+vector search over Markdown files | `src/packs/memory-search.ts` |
-| **`MemoryIndex` engine** | Core indexing engine: SQLite FTS5, embedding cache, file watcher, incremental sync | `src/core/memory-index.ts` |
-| **`EmbeddingProvider`** | Pluggable embedding interface + OpenAI/local implementations | `src/core/embedding-provider.ts` |
-| **`onPreCompaction` hook** | New callback in agent config — silent turn before compaction | `src/agent/agent-loop.ts` |
-| **Pack export** | Add `memorySearch` to pack namespace | `src/packs/index.ts` |
-| **Dependency** | `better-sqlite3` for in-process SQLite with FTS5 | `package.json` |
-| **Optional dependency** | `chokidar` for file watching (can fall back to `fs.watch`) | `package.json` (peer dep) |
+| Change | Scope | Files | Used by personal-assistant? |
+|--------|-------|-------|-----------------------------|
+| **`packs.memorySearch()`** | New pack — BM25 FTS5 search over Markdown files | `src/packs/memory-search.ts` | **No** — `grep` is sufficient at current scale |
+| **`MemoryIndex` engine** | Core indexing engine: SQLite FTS5, file watcher, incremental sync | `src/core/memory-index.ts` | No (available for future use) |
+| **`onPreCompaction` hook** | New callback in agent config — silent turn before compaction | `src/agent/agent-loop.ts` | **Yes** |
+| **Pack export** | Add `memorySearch` to pack namespace | `src/packs/index.ts` | No |
+| **Dependency** | `better-sqlite3` for in-process SQLite with FTS5 | `package.json` | No (framework-level only) |
 
-**3 new files, 2 modified files, 1-2 new dependencies.** Everything else — daily logs, MEMORY.md, USER.md, bootstrap injection, heartbeat consolidation, scheduler — is application-layer code using existing AgentFoundry primitives (primarily the `safe` pack's read/write/edit tools).
+**2 new files, 2 modified files, 1 new dependency at framework level.** The personal-assistant only uses the `onPreCompaction` hook from the framework changes. Everything else — daily logs, MEMORY.md, USER.md, bootstrap injection, heartbeat consolidation, scheduler, notifications — is application-layer code using existing AgentFoundry primitives (the `safe` pack's `read`/`write`/`edit`/`grep` tools).
+
+**Zero new tools exposed to the LLM.** This is a deliberate design choice: tools have a real cost (token overhead for schema, decision complexity for the model, maintenance burden). At the personal-assistant's current data scale, existing tools cover all memory and scheduling operations.
 
 ---
 
 ## 15. Implementation Phases
 
-### Phase A: Memory Files + Bootstrap Injection
+### Phase A: Memory Files + Bootstrap Injection — DONE
 
 - Create `MEMORY.md`, `USER.md`, `memory/` directory structure on first launch
 - Add `buildBootstrapSelections()` to coordinator's context assembly
 - Update system prompt with memory management instructions
 - Agent writes daily logs via existing `write`/`edit` tools
-- Agent updates MEMORY.md/USER.md via existing `edit` tool
+- Agent updates USER.md via existing `edit` tool; MEMORY.md is heartbeat-maintained
 - **No framework changes. No new tools. Just files + prompt engineering.**
 
-### Phase B: Memory Search Pack — BM25 Only (Framework)
+### Phase B: Memory Search Pack — BM25 Only (Framework) — DONE (not wired)
 
-- Add `better-sqlite3` dependency to framework
-- Create `src/core/memory-index.ts`:
-  - SQLite schema (meta, files, chunks, chunks_fts)
-  - `sync()` — incremental file scanning, hash comparison, chunking, FTS5 indexing
-  - `search()` — BM25-only search via FTS5 MATCH + bm25() ranking
-  - `get()` — read specific lines from a file
-  - Reuse `chunkDocument()`, `computeHash()`, `tokenize()` from `docs-indexer.ts`
-- Create `src/packs/memory-search.ts`:
-  - Wraps MemoryIndex as a pack with `memory_search` + `memory_get` tools
-  - File watcher (chokidar or fs.watch with debounce) for auto-reindex
-  - Pack lifecycle: init → sync → watch; destroy → close watcher + DB
-- Export from `src/packs/index.ts`
-- Wire into personal-assistant coordinator
-- **BM25-only is already very useful** — handles exact names, dates, code, keywords
+- Added `better-sqlite3` dependency to framework
+- Created `src/core/memory-index.ts` (SQLite FTS5 index, file watcher, incremental sync)
+- Created `src/packs/memory-search.ts` (`memory_search` + `memory_get` tools)
+- Exported from `src/packs/index.ts`
+- **Not wired into personal-assistant coordinator** — `grep` on `memory/` is sufficient at current scale. Available for re-enablement when corpus exceeds ~100 MB.
 
-### Phase C: Pre-Compaction Flush (Framework)
+### Phase C: Pre-Compaction Flush (Framework) — DONE
 
-- Add `onPreCompaction` hook to agent loop in `src/agent/agent-loop.ts`
-- Trigger: when token estimate crosses `contextWindow - reserveTokensFloor - softThresholdTokens`
-- One flush per compaction cycle
-- Wire coordinator to use it: silent turn saves context to daily log before compaction
+- Added `onPreCompaction` hook to agent loop in `src/agent/agent-loop.ts`
+- Added `onPreCompaction` to `AgentConfig` type in `src/types/agent.ts`
+- Coordinator uses it: silent turn saves context to daily log before compaction
 
-### Phase D: Heartbeat + Scheduler (Application)
+### Phase D: Heartbeat + Scheduler (Application) — DONE
 
-- Implement scheduler in Electron main process (cron-based, persisted to `scheduled-tasks.json`)
-- `schedule-add`, `schedule-list`, `schedule-remove` tools (application-layer, defined via `defineTool`)
-- Built-in heartbeat task: nightly review of daily logs → curate MEMORY.md
-- Notification system (badge + panel)
+- Scheduler engine in `scheduler/scheduler.ts`: built-in 5-field cron matcher (no dependencies), 60s polling, persistence to `scheduled-tasks.json`, 3 default tasks seeded on init
+- Notification store in `scheduler/notifications.ts`: FIFO eviction at 100, persistence to `notifications.json`
+- Scheduler runs in Electron main process, fires `coordinator.chat()` on trigger, creates notifications
+- Desktop UI: NotificationPanel in right sidebar, bell icon with unread badge in left sidebar
+- IPC: `notification:list`, `notification:mark-read`, `notification:mark-all-read`, `notification:unread-count`
+- **No new agent tools** — agent manages `scheduled-tasks.json` via `read`/`write` with prompt instructions
 
 ### Phase E: Embedding Search — Hybrid Mode (Framework)
 

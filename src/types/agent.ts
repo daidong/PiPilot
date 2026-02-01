@@ -81,6 +81,8 @@ export interface AgentConfig {
   onToolResult?: (tool: string, result: unknown, args?: unknown) => void
   /** Persistent session ID (reuse across restarts for history continuity) */
   sessionId?: string
+  /** Pre-compaction callback — fired once per run() when context usage >= 80% */
+  onPreCompaction?: (agent: Agent) => Promise<void>
 }
 
 /**

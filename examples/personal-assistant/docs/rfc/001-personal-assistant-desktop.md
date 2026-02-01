@@ -1,6 +1,6 @@
 # RFC-001: Personal Assistant Desktop App
 
-**Status**: Draft
+**Status**: Implemented
 **Author**: Captain
 **Date**: 2026-02-01
 
@@ -293,57 +293,23 @@ export interface CoordinatorConfig {
 }
 
 export async function createCoordinator(config: CoordinatorConfig) {
-  const { projectPath = process.cwd() } = config
-  const documentsPack = await packs.documents({ timeout: 90000 })
-  const webPack = await packs.web({ timeout: 30000 })
-
-  // Email database (optional)
-  let sqlitePack: Pack | null = null
-  try {
-    if (config.emailDbPath) {
-      sqlitePack = await packs.sqlite({
-        dbPath: config.emailDbPath,
-        toolPrefix: 'sqlite'
-      })
-    }
-  } catch (err) {
-    console.warn('SQLite pack unavailable:', err)
-  }
-
-  // Create memory directories on first run (empty in v1).
-  // RFC-002 will populate MEMORY.md, USER.md, and daily logs in memory/.
-  ensureDir(join(projectPath, PATHS.memory))
+  // Seeds MEMORY.md, USER.md, memory/ directory on first run
+  // Builds bootstrap selections (USER.md, MEMORY.md, today/yesterday logs) every turn
+  // Uses onPreCompaction hook to flush context to daily log before compaction
 
   const agent = createAgent({
-    apiKey,
-    model,
-    projectPath,
-    reasoningEffort: 'high',
-    identity: SYSTEM_PROMPT,
-    constraints: [...],
     packs: [
       packs.safe(),               // read, write, edit, glob, grep
-      packs.kvMemory(),           // session memory
+      packs.kvMemory(),           // session memory (ephemeral)
       packs.todo(),               // task tracking
-      packs.sessionHistory(),     // cross-turn history
+      packs.sessionHistory(),     // cross-turn history persistence
       packs.contextPipeline(),    // pinned/selected context, compression
-      definePack({                // convert_to_markdown wrapper
-        id: 'documents-wrapper',
-        tools: [convertToMarkdownTool]
-      }),
+      documentsPack,              // convert_to_markdown wrapper
       webPack,                    // brave_web_search, fetch
-      ...(sqlitePack ? [sqlitePack] : []),  // sqlite tools (if available)
-      entityToolsPack,            // save-note, save-doc, update-note
-      // RFC-002: packs.memorySearch() will be added here (hybrid FTS5+vector search over memory/*.md)
+      ...(sqlitePack ? [sqlitePack] : []),  // sqlite tools (if email DB available)
+      entityPack,                 // save-note, save-doc, update-note
     ],
-    budgetConfig: {
-      enabled: true,
-      modelId: model,
-      toolResultCap: 4096,
-      priorityTools: ['read', 'write', 'edit', 'grep', 'glob',
-                      'sqlite_read_query', 'sqlite_list_tables']
-    },
-    toolLoopThreshold: 15
+    // ...
   })
 
   return { agent, chat, clearSessionMemory, destroy }
@@ -354,18 +320,20 @@ export async function createCoordinator(config: CoordinatorConfig) {
 
 | Tool | Source | Purpose |
 |---|---|---|
-| `read`, `write`, `edit`, `glob`, `grep` | safe pack | File operations |
-| `memory-put`, `memory-update`, `memory-delete` | kvMemory | Persistent preferences |
+| `read`, `write`, `edit`, `glob`, `grep` | safe pack | File operations (including memory files, scheduled-tasks.json) |
+| `memory-put`, `memory-update`, `memory-delete` | kvMemory | Session memory (ephemeral scratchpad) |
 | `todo-add/update/complete/remove` | todo | Task tracking |
 | `ctx-get`, `ctx-expand` | contextPipeline | Context retrieval |
 | `convert_to_markdown` | documents (wrapper) | PDF/Word/Excel → markdown |
 | `brave_web_search`, `fetch` | web | Web lookup |
-| `sqlite_read_query` | sqlite | SELECT queries on email DB |
-| `sqlite_list_tables` | sqlite | Schema discovery |
-| `sqlite_describe_table` | sqlite | Column info |
-| `save-note` | entity-tools | Create note entity |
-| `save-doc` | entity-tools | Create doc entity |
+| `sqlite_read_query` | sqlite (conditional) | SELECT queries on email DB |
+| `sqlite_list_tables` | sqlite (conditional) | Schema discovery |
+| `sqlite_describe_table` | sqlite (conditional) | Column info |
+| `save-note` | entity-tools | Create note entity (triggers IPC refresh) |
+| `save-doc` | entity-tools | Create doc entity (triggers IPC refresh) |
 | `update-note` | entity-tools | Update existing note |
+
+> **Design principle**: No RFC-002 features required new agent tools. Memory management (`MEMORY.md`, `USER.md`, daily logs) and schedule management (`scheduled-tasks.json`) use the existing `safe` pack tools with prompt instructions.
 
 ### 6.3 System Prompt (Key Sections)
 
@@ -439,31 +407,22 @@ chat(message, mentions):
   - agent.run(augmentedMessage, { selectedContext })
 ```
 
-### 6.5 Conversation Lifecycle Hooks
+### 6.5 Conversation Lifecycle & Memory Integration
 
-The `chat()` function exposes two hook points for RFC-002 (no-op in v1):
+> **Updated**: RFC-002 implemented bootstrap injection directly in `chat()` via `buildBootstrapSelections()` — no hook abstraction was needed.
 
 ```typescript
 chat(message, mentions):
-  // --- pre-hook: inject bootstrap memory files (RFC-002) ---
-  // In v1 this is a no-op. RFC-002 adds buildBootstrapSelections()
-  // which reads MEMORY.md, USER.md, and today/yesterday daily logs.
-  const bootstrapSelections = await onBeforeChat?.(message) ?? []
+  const entitySelections = buildEntitySelections(projectPath, debug)
+  const mentionSelections = buildMentionSelections(mentions)
+  const bootstrapSelections = buildBootstrapSelections(projectPath)  // RFC-002: USER.md, MEMORY.md, today/yesterday logs
 
-  const result = await agent.run(augmentedMessage, {
-    selectedContext: [...entitySelections, ...bootstrapSelections]
-  })
-
-  // --- post-hook: append to daily log (RFC-002) ---
-  // In v1 this is a no-op. RFC-002 relies on the agent writing to daily logs
-  // during conversation (via system prompt instructions), not post-hooks.
-  // This hook is reserved for future use (e.g., auto-summary on conversation end).
-  await onAfterChat?.(message, result)
-
+  const selectedContext = [...entitySelections, ...bootstrapSelections, ...mentionSelections]
+  const result = await agent.run(augmentedMessage, { selectedContext })
   return result
 ```
 
-In v1, `onBeforeChat` and `onAfterChat` are not implemented — they're just comments marking where RFC-002 will plug in. No actual hook plumbing is needed yet.
+The agent writes to daily logs during conversation via prompt instructions (using `edit`/`write` tools). The `onPreCompaction` framework hook triggers a silent flush to the daily log before context compaction.
 
 ---
 
@@ -729,15 +688,17 @@ export BRAVE_API_KEY=BSA-xxx               # for web search (optional)
 
 ## 14. Forward Compatibility with RFC-002
 
-RFC-002 (Long-Term Memory & Autonomous Behavior) will add Markdown-based memory files, a search index, and scheduled actions on top of this foundation. To make that upgrade smooth, RFC-001 includes these lightweight preparations:
+RFC-002 (Long-Term Memory & Autonomous Behavior) has been implemented on top of this foundation. The upgrade was purely additive — no RFC-001 code was thrown away.
 
-| Preparation | What we do in v1 | What RFC-002 adds |
-|-------------|-------------------|-------------------|
-| `PATHS.memory`, `PATHS.memoryFile`, `PATHS.userProfile` | Path constants defined, `memory/` directory created empty on first launch | Agent writes `MEMORY.md`, `USER.md`, and daily logs into these paths |
-| `CoordinatorConfig` | Includes `projectPath` used to derive memory paths | No config change needed — paths derived from `projectPath` |
-| Pack slot comment | `// RFC-002: packs.memorySearch() will be added here` in packs array | `packs.memorySearch()` inserted (hybrid FTS5+vector search over `.md` files) |
-| Context assembly comment | `// RFC-002: buildBootstrapSelections()` in chat flow | Injects `MEMORY.md` + `USER.md` + today/yesterday logs as pinned context |
-| Lifecycle hook comments | `onBeforeChat` / `onAfterChat` documented but not implemented | `onBeforeChat` returns bootstrap selections; `onAfterChat` reserved for future use |
-| `safe` pack tools | Agent has `read`/`write`/`edit`/`glob`/`grep` | Agent uses these same tools to manage memory files — no new memory-specific tools needed |
+| RFC-001 preparation | What RFC-002 actually did |
+|---------------------|---------------------------|
+| `PATHS.memory`, `PATHS.memoryFile`, `PATHS.userProfile` defined, `memory/` created empty | Agent writes `MEMORY.md`, `USER.md`, daily logs. Added `PATHS.scheduledTasks`, `PATHS.notifications`. |
+| `CoordinatorConfig` includes `projectPath` | No config change needed — paths derived from `projectPath` |
+| Pack slot comment for `memorySearch` | `packs.memorySearch()` built at framework level but **not wired in** — `grep` is sufficient at current scale |
+| Context assembly comment for bootstrap | `buildBootstrapSelections()` implemented — injects USER.md, MEMORY.md, today/yesterday logs every turn |
+| `safe` pack tools | Agent uses `read`/`write`/`edit`/`grep` for all memory and schedule operations — **zero new agent tools** |
+| — | Added `onPreCompaction` hook (framework) — silent turn saves context to daily log before compaction |
+| — | Added scheduler engine + notification store (application layer, Electron main process) |
+| — | Added NotificationPanel + bell badge in desktop UI |
 
-**No code in v1 is thrown away by RFC-002.** The upgrade path is purely additive. The key insight: RFC-002's memory system reuses the existing `safe` pack tools to read/write Markdown files. The only new framework component is `packs.memorySearch()` for indexed retrieval.
+**Key outcome**: RFC-002 added zero new tools to the LLM's tool set. All memory and scheduling operations use existing `safe` pack tools with prompt instructions. This validates RFC-001's design principle that the `safe` pack provides sufficient primitives for higher-level capabilities.

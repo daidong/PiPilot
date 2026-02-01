@@ -107,6 +107,9 @@ export interface AgentLoopConfig {
 
   /** Budget coordinator for dynamic output reserve (Change 2) */
   budgetCoordinator?: BudgetCoordinator
+
+  /** Pre-compaction flush callback — fired once per run() when usage >= 80% */
+  onPreCompaction?: () => Promise<void>
 }
 
 /**
@@ -179,6 +182,8 @@ export class AgentLoop {
   private toolNudgeInjected = false
   /** Circuit breaker: consecutive rounds with TOOL_NOT_AVAILABLE errors */
   private toolNotAvailableStreak = 0
+  /** Whether onPreCompaction has already fired this run */
+  private preCompactionFlushed = false
 
   constructor(config: AgentLoopConfig) {
     this.config = config
@@ -591,6 +596,19 @@ export class AgentLoop {
         // Calibrate budget manager with actual usage
         if (this.budgetManager && estimates) {
           this.budgetManager.calibrate(estimates, usage)
+        }
+
+        // Pre-compaction flush: fire once when usage reaches 80% of context window
+        if (
+          !this.preCompactionFlushed &&
+          this.config.onPreCompaction &&
+          this.config.budgetCoordinator
+        ) {
+          const usageRatio = this.config.budgetCoordinator.computeUsage(usage.promptTokens)
+          if (usageRatio >= 0.80) {
+            this.preCompactionFlushed = true
+            await this.config.onPreCompaction()
+          }
         }
 
         // Store for next round's hint detection

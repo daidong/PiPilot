@@ -19,8 +19,43 @@ export const PATHS = {
   project: '.personal-assistant/project.json',
   memory: '.personal-assistant/memory',
   memoryFile: '.personal-assistant/MEMORY.md',
-  userProfile: '.personal-assistant/USER.md'
+  userProfile: '.personal-assistant/USER.md',
+  scheduledTasks: '.personal-assistant/scheduled-tasks.json',
+  notifications: '.personal-assistant/notifications.json'
 } as const
+
+// ============================================================================
+// Scheduler Types
+// ============================================================================
+
+/**
+ * A scheduled task persisted to disk
+ */
+export interface ScheduledTask {
+  id: string
+  /** Cron expression e.g. "0 2 * * *" */
+  schedule: string
+  /** What the agent should do when this fires */
+  instruction: string
+  enabled: boolean
+  lastRunAt?: string
+  nextRunAt?: string
+  createdBy: 'user' | 'agent' | 'system'
+  createdAt: string
+}
+
+/**
+ * A notification from scheduled/proactive agent actions
+ */
+export interface AgentNotification {
+  id: string
+  type: 'info' | 'alert' | 'reminder'
+  title: string
+  body: string
+  scheduledTaskId?: string
+  createdAt: string
+  readAt?: string
+}
 
 // ============================================================================
 // Base Entity Types

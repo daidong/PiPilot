@@ -63,6 +63,13 @@ export interface ElectronAPI {
   closeProject: () => Promise<void>
   onProjectClosed: (cb: () => void) => () => void
 
+  // Notifications
+  listNotifications: () => Promise<any[]>
+  markNotificationRead: (id: string) => Promise<void>
+  markAllNotificationsRead: () => Promise<void>
+  getUnreadCount: () => Promise<number>
+  onNotification: (cb: (notifications: any[]) => void) => () => void
+
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
   loadMessages: (sessionId: string, offset: number, limit: number) => Promise<any[]>
@@ -149,6 +156,16 @@ const api: ElectronAPI = {
     const handler = () => cb()
     ipcRenderer.on('project:closed', handler)
     return () => ipcRenderer.removeListener('project:closed', handler)
+  },
+
+  listNotifications: () => ipcRenderer.invoke('notification:list'),
+  markNotificationRead: (id) => ipcRenderer.invoke('notification:mark-read', id),
+  markAllNotificationsRead: () => ipcRenderer.invoke('notification:mark-all-read'),
+  getUnreadCount: () => ipcRenderer.invoke('notification:unread-count'),
+  onNotification: (cb) => {
+    const handler = (_: any, notifications: any[]) => cb(notifications)
+    ipcRenderer.on('notification:new', handler)
+    return () => ipcRenderer.removeListener('notification:new', handler)
   },
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),

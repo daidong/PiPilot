@@ -1,6 +1,7 @@
 import React from 'react'
 import { ProgressSteps } from '../right/ProgressSteps'
 import { ActivityLog } from '../right/ActivityLog'
+import { NotificationPanel } from '../right/NotificationPanel'
 import { WorkingFolder } from '../right/WorkingFolder'
 import { ContextChips } from '../right/ContextChips'
 
@@ -14,6 +15,7 @@ export function RightSidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <NotificationPanel />
         <WorkingFolder />
         <ContextChips />
         <ProgressSteps />
