@@ -127,6 +127,38 @@ function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[
     }))
 }
 
+/**
+ * Build ContextSelection[] from bootstrap memory files (USER.md, MEMORY.md, daily logs).
+ * These are injected as pinned context every turn so the agent always has memory access.
+ */
+function buildBootstrapSelections(projectPath: string): ContextSelection[] {
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+
+  const files = [
+    { path: PATHS.userProfile, maxChars: 5000 },
+    { path: PATHS.memoryFile, maxChars: 20000 },
+    { path: `${PATHS.memory}/${fmt(today)}.md`, maxChars: 10000 },
+    { path: `${PATHS.memory}/${fmt(yesterday)}.md`, maxChars: 10000 },
+  ]
+
+  return files
+    .filter(f => existsSync(join(projectPath, f.path)))
+    .map(f => ({
+      type: 'custom' as const,
+      ref: `bootstrap:${f.path}`,
+      resolve: async () => {
+        let content = readFileSync(join(projectPath, f.path), 'utf-8')
+        if (content.length > f.maxChars) {
+          content = content.slice(0, f.maxChars) + '\n\n_(truncated)_'
+        }
+        return { source: `bootstrap:${f.path}`, content, tokens: countTokens(content) }
+      }
+    }))
+}
+
 // ============================================================================
 // Coordinator
 // ============================================================================
@@ -257,6 +289,40 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     mkdirSync(memoryDir, { recursive: true })
   }
 
+  // Seed MEMORY.md if it doesn't exist
+  const memoryFilePath = join(projectPath, PATHS.memoryFile)
+  if (!existsSync(memoryFilePath)) {
+    writeFileSync(memoryFilePath, `# Long-Term Memory
+
+## Preferences
+_(none yet)_
+
+## Corrections
+_(none yet)_
+
+## Relationships
+_(none yet)_
+
+## Work
+_(none yet)_
+
+## Workflows
+_(none yet)_
+`, 'utf-8')
+  }
+
+  // Seed USER.md if it doesn't exist
+  const userProfilePath = join(projectPath, PATHS.userProfile)
+  if (!existsSync(userProfilePath)) {
+    writeFileSync(userProfilePath, `# User Profile
+
+- **Name:** _(unknown)_
+- **Role:** _(unknown)_
+- **Timezone:** _(unknown)_
+- **Languages:** _(unknown)_
+`, 'utf-8')
+  }
+
   const entityPack = definePack({
     id: 'entity-tools',
     name: 'Entity Tools',
@@ -365,9 +431,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // Build context selections directly from disk (no kvMemory middleman)
         const entitySelections = buildEntitySelections(projectPath, debug)
         const mentionSelections = buildMentionSelections(mentions)
-        // RFC-002: buildBootstrapSelections() will be added here
-        // (injects MEMORY.md, USER.md, today/yesterday daily logs as pinned context)
-        const bootstrapSelections: ContextSelection[] = []
+        const bootstrapSelections = buildBootstrapSelections(projectPath)
 
         const selectedContext = [...entitySelections, ...bootstrapSelections, ...mentionSelections]
 
