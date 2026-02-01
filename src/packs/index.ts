@@ -33,6 +33,8 @@ export { docs } from './docs.js'
 export { discovery } from './discovery.js'
 export { documents } from './documents.js'
 export type { DocumentsPackOptions } from './documents.js'
+export { sqlite } from './sqlite.js'
+export type { SqlitePackOptions } from './sqlite.js'
 export { web } from './web.js'
 export type { WebPackOptions } from './web.js'
 export { contextPipeline, contextPipelinePack } from './context-pipeline.js'
@@ -56,6 +58,7 @@ import { sessionHistory } from './session-history.js'
 import { docs } from './docs.js'
 import { discovery } from './discovery.js'
 import { documents } from './documents.js'
+import { sqlite } from './sqlite.js'
 import { web } from './web.js'
 import { contextPipeline } from './context-pipeline.js'
 import { todo } from './todo.js'
@@ -123,6 +126,7 @@ export const packs = {
   docs,
   discovery,
   documents,
+  sqlite,
   web,
   contextPipeline,
   todo,
@@ -224,6 +228,12 @@ export const packMeta: Record<string, PackMeta> = {
     riskLevel: 'safe',
     requiresExplicitEnable: false,
     description: 'Document processing via MarkItDown: PDF, Word, Excel, PPT, Images, Audio'
+  },
+  sqlite: {
+    id: 'sqlite',
+    riskLevel: 'elevated',
+    requiresExplicitEnable: true,
+    description: 'SQLite database access via MCP: read_query, write_query, create_table, list_tables, describe_table'
   },
   web: {
     id: 'web',
