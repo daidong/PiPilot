@@ -342,7 +342,14 @@ _(none yet)_
       tools: [convertToMarkdownTool as any]
     }),
     webPack,                // brave_web_search, fetch for general web queries
-    entityPack              // save-note, save-doc, update-note
+    entityPack,             // save-note, save-doc, update-note
+    packs.memorySearch({    // BM25 full-text search over memory files
+      dirs: [join(projectPath, PATHS.memory)],
+      extraFiles: [
+        join(projectPath, PATHS.memoryFile),
+        join(projectPath, PATHS.userProfile)
+      ]
+    })
   ]
 
   // Add SQLite pack if available

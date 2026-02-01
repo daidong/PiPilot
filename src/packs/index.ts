@@ -40,6 +40,8 @@ export type { WebPackOptions } from './web.js'
 export { contextPipeline, contextPipelinePack } from './context-pipeline.js'
 export type { ContextPipelinePackOptions } from './context-pipeline.js'
 export { todo } from './todo.js'
+export { memorySearch } from './memory-search.js'
+export type { MemorySearchPackOptions } from './memory-search.js'
 
 // ============ Composite & Factory ============
 
@@ -62,6 +64,7 @@ import { sqlite } from './sqlite.js'
 import { web } from './web.js'
 import { contextPipeline } from './context-pipeline.js'
 import { todo } from './todo.js'
+import { memorySearch } from './memory-search.js'
 
 /**
  * Create minimal safe pack (core safe tools only)
@@ -130,6 +133,7 @@ export const packs = {
   web,
   contextPipeline,
   todo,
+  memorySearch,
 
   // Composite factories
   minimal,
@@ -252,5 +256,11 @@ export const packMeta: Record<string, PackMeta> = {
     riskLevel: 'safe',
     requiresExplicitEnable: false,
     description: 'Task tracking: todo-add, todo-update, todo-complete, todo-remove + todo.list, todo.get'
+  },
+  'memory-search': {
+    id: 'memory-search',
+    riskLevel: 'safe',
+    requiresExplicitEnable: false,
+    description: 'Full-text search over markdown memory files using BM25: memory_search, memory_get'
   }
 }
