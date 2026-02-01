@@ -1,10 +1,31 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { StickyNote, FileText, Upload, MessageSquare, Trash2, Pin, Check } from 'lucide-react'
+import { StickyNote, FileText, Upload, MessageSquare, Trash2, Pin, Check, FileSpreadsheet, FileImage, Presentation, FileCode, File } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
+
+/** File type icon for doc entities based on extension */
+function DocFileIcon({ filePath, className, size }: { filePath?: string; className?: string; size?: number }) {
+  const ext = filePath?.split('.').pop()?.toLowerCase() || ''
+  const s = size ?? 12
+  const props = { size: s, className }
+  switch (ext) {
+    case 'pdf':
+      return <FileText {...props} />
+    case 'xlsx': case 'xls': case 'csv':
+      return <FileSpreadsheet {...props} />
+    case 'pptx': case 'ppt':
+      return <Presentation {...props} />
+    case 'jpg': case 'jpeg': case 'png': case 'gif': case 'webp': case 'svg':
+      return <FileImage {...props} />
+    case 'html': case 'htm': case 'json': case 'xml': case 'md': case 'txt':
+      return <FileCode {...props} />
+    default:
+      return <File {...props} />
+  }
+}
 
 // Hover preview tooltip with pin/select/delete actions
 function HoverPreview({
@@ -171,7 +192,15 @@ function EntityRow({ entity }: { entity: EntityItem }) {
         <span className={`w-1 h-1 rounded-full shrink-0 ${
           entity.pinned ? 'bg-orange-400' : entity.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
         }`} />
-        <span className="text-xs t-text truncate">{entity.title}</span>
+        {entity.type === 'doc' && (
+          <DocFileIcon filePath={entity.filePath} className="shrink-0 t-text-muted" size={12} />
+        )}
+        <div className="min-w-0 flex-1">
+          <span className="text-xs t-text truncate block">{entity.title}</span>
+          {entity.type === 'doc' && entity.description && (
+            <span className="text-[10px] t-text-muted truncate block">{entity.description}</span>
+          )}
+        </div>
       </div>
       {messageId && (
         <button
@@ -214,8 +243,11 @@ export function EntityTabs() {
     const files = Array.from(e.dataTransfer.files)
     for (const file of files) {
       try {
-        const content = await file.text()
-        await api.dropFile(file.name, content, leftTab)
+        const buffer = await file.arrayBuffer()
+        const base64 = btoa(
+          new Uint8Array(buffer).reduce((s, b) => s + String.fromCharCode(b), '')
+        )
+        await api.dropFile(file.name, base64, leftTab)
       } catch (err) {
         console.error(`Failed to drop file ${file.name}:`, err)
       }

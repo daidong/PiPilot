@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
-import { defineTool } from '../../../src/factories/define-tool.js'
+import { defineTool } from '@framework/factories/define-tool.js'
 import { saveNote } from '../commands/save-note.js'
 import { saveDoc } from '../commands/save-doc.js'
 import { togglePin } from '../commands/pin.js'

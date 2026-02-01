@@ -15,6 +15,7 @@ const SLASH_COMMANDS = [
   { name: '/search', description: 'Search entities', args: '<query>' },
   { name: '/select', description: 'Select entity for AI context', args: '<id>' },
   { name: '/pin', description: 'Pin entity (always in context)', args: '<id>' },
+  { name: '/clear', description: 'Clear all AI selections' },
   { name: '/delete', description: 'Delete an entity', args: '<id>' },
   { name: '/help', description: 'Show available commands' }
 ]
@@ -116,6 +117,12 @@ export function ChatInput() {
           if (!rest) { result = 'Usage: `/pin <id>`'; break }
           const r = await api.togglePin(rest)
           result = r ? `Toggled pin for \`${rest}\`` : `Entity not found: \`${rest}\``
+          refreshEntities()
+          break
+        }
+        case '/clear': {
+          await api.clearSelections()
+          result = 'All selections cleared.'
           refreshEntities()
           break
         }

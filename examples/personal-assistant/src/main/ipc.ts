@@ -491,24 +491,58 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Drop file handler — copies file into project and creates entity
-  ipcMain.handle('file:drop', async (_e, fileName: string, content: string, tab: string) => {
+  // Content arrives as base64-encoded binary data from the renderer
+  ipcMain.handle('file:drop', async (_e, fileName: string, base64Content: string, tab: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
 
+    const binaryBuffer = Buffer.from(base64Content, 'base64')
+
     if (tab === 'notes') {
-      // Save text content as a note entity
+      // Notes are text — decode as UTF-8
+      const textContent = binaryBuffer.toString('utf-8')
       const title = fileName.replace(/\.\w+$/, '')
-      return saveNote(title, content, [], { sessionId, projectPath, lastAgentResponse: '' }, false)
+      return saveNote(title, textContent, [], { sessionId, projectPath, lastAgentResponse: '' }, false)
     }
 
     if (tab === 'docs') {
-      // Write file into .personal-assistant/docs/ and register as doc entity
+      // Write original binary file to docs/ directory
       const docsDir = join(projectPath, PATHS.docs)
       if (!existsSync(docsDir)) mkdirSync(docsDir, { recursive: true })
       const destPath = join(docsDir, fileName)
-      writeFileSync(destPath, content, 'utf-8')
+      writeFileSync(destPath, binaryBuffer)
 
       const title = fileName.replace(/\.\w+$/, '')
-      return saveDoc(title, { filePath: destPath, content }, { sessionId, projectPath })
+
+      // Auto-convert supported formats via MarkItDown (PDF, Word, Excel, PPT, etc.)
+      const convertExts = new Set(['pdf', 'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'html', 'htm', 'rtf', 'csv'])
+      const ext = fileName.split('.').pop()?.toLowerCase() || ''
+      let extractedContent: string | undefined
+
+      if (convertExts.has(ext)) {
+        try {
+          const coord = await coordinator
+          if (coord) {
+            const result = await coord.chat(
+              `Convert the document "${fileName}" to markdown using convert_to_markdown. ` +
+              `Do not summarize — just convert and confirm the output file path.`
+            )
+            if (result.success && result.response) {
+              // Try to read the extracted .md file
+              const extractedPath = join(projectPath, fileName.replace(/\.\w+$/, '') + '.extracted.md')
+              if (existsSync(extractedPath)) {
+                extractedContent = readFileSync(extractedPath, 'utf-8')
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(`[file:drop] MarkItDown conversion failed for ${fileName}:`, err)
+        }
+      }
+
+      return saveDoc(title, {
+        filePath: destPath,
+        content: extractedContent
+      }, { sessionId, projectPath })
     }
 
     return { success: false, error: `Unknown tab: ${tab}` }

@@ -8,7 +8,8 @@
     "skipLibCheck": true,
     "outDir": "./dist",
     "paths": {
-      "@personal-assistant/*": ["../personal-assistant/*"]
+      "@personal-assistant/*": ["./src/agent/*"],
+      "@framework/*": ["../../src/*"]
     }
   },
   "include": ["src/main/**/*", "src/preload/**/*", "electron.vite.config.ts"]

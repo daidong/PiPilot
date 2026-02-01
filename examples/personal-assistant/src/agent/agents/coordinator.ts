@@ -10,13 +10,13 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, basename } from 'path'
-import { createAgent, packs, definePack, defineTool } from '../../../src/index.js'
+import { createAgent, packs, definePack, defineTool } from '@framework/index.js'
 import { createSaveNoteTool, createSaveDocTool, createUpdateNoteTool } from '../tools/entity-tools.js'
-import type { Agent } from '../../../src/types/agent.js'
-import type { ContextSelection } from '../../../src/types/context-pipeline.js'
+import type { Agent } from '@framework/types/agent.js'
+import type { ContextSelection } from '@framework/types/context-pipeline.js'
 import { PATHS, Entity, Note, Doc } from '../types.js'
 import type { ResolvedMention } from '../mentions/index.js'
-import { countTokens } from '../../../src/utils/tokenizer.js'
+import { countTokens } from '@framework/utils/tokenizer.js'
 import { loadPrompt } from './prompts/index.js'
 
 /**

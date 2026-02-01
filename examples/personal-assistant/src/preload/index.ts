@@ -55,7 +55,8 @@ export interface ElectronAPI {
   listRootFiles: () => Promise<{ path: string; name: string }[]>
 
   // File drop
-  dropFile: (fileName: string, content: string, tab: string) => Promise<any>
+  /** Drop a file into the project. content is base64-encoded binary data. */
+  dropFile: (fileName: string, base64Content: string, tab: string) => Promise<any>
 
   // Session/Project
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>

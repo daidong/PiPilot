@@ -1,152 +1,100 @@
-# Personal Email Assistant
+# Personal Assistant
 
-A single-agent example that reads emails from a local SQLite database via MCP server.
+An Electron desktop app built on AgentFoundry. Features a persistent AI assistant with long-term memory, scheduled tasks, document management, and a three-panel UI.
+
+## Project Structure
+
+```
+src/
+├── agent/                  # Agent layer (coordinator, tools, types)
+│   ├── agents/             # Coordinator agent + system prompt
+│   ├── commands/           # Entity CRUD commands (notes, docs, search)
+│   ├── mentions/           # @-mention parser and resolver
+│   ├── scheduler/          # Cron scheduler + notification store
+│   ├── tools/              # Custom agent tools (entity-tools)
+│   └── types.ts            # Shared types (entities, scheduler, paths)
+├── main/                   # Electron main process (IPC, lifecycle)
+├── preload/                # Context bridge (renderer ↔ main)
+└── renderer/               # React UI (three-panel layout)
+    ├── components/
+    │   ├── center/         # Chat, input, commands, mentions
+    │   ├── layout/         # Sidebar shells, panels
+    │   ├── left/           # Entity tabs, model selector
+    │   └── right/          # Activity log, notifications, context
+    └── stores/             # Zustand stores
+docs/rfc/                   # Design documents
+```
 
 ## Features
 
-- **Email Database Access**: Read-only access via `mcp-server-sqlite-npx` with `--readonly` flag
-- **Attachment Analysis**: Process PDF, Word, Excel, images via `documents` pack (MarkItDown)
-- **Schema Auto-Discovery**: Discovers database structure before querying
-- **Persistent Memory**: Stores user preferences via `kv-memory` pack
-- **Knowledge Base**: Searches local documents via `docs` pack
-- **Interactive REPL**: Multi-turn conversation with streaming output
+### Agent Capabilities
+- **Coordinator Agent**: Single LLM agent with tools for file ops, web search, email DB, document conversion, entity management
+- **Long-Term Memory** (RFC-002): Daily logs, USER.md, MEMORY.md — auto-injected every turn as bootstrap context
+- **Scheduled Tasks** (RFC-002): Cron-based scheduler with heartbeat (2 AM), morning briefing (8 AM weekdays), Monday review (9 AM)
+- **Pre-Compaction Flush**: Saves conversation context to daily log before context window compaction
+- **Email Database**: Optional SQLite read access for email/calendar queries
+- **Document Conversion**: PDF/Word/Excel/PPT via MarkItDown MCP, with drag-drop auto-conversion
 
-## Architecture
+### Desktop UI
+- **Three-Panel Layout**: Left (entities + model selector), Center (chat), Right (activity + notifications + context)
+- **Entity Management**: Notes and Docs with pin/select/delete, hover preview, provenance tracking
+- **@-Mentions**: Reference entities, files, URLs inline in chat
+- **Slash Commands**: `/save-note`, `/save-doc`, `/search`, `/select`, `/pin`, `/clear`, `/delete`, `/help`
+- **Notifications**: Bell icon with unread badge, notification panel from scheduled task results
+- **Drag & Drop**: Drop files into Notes (text) or Docs (binary + auto-convert)
+- **Model Selector**: Switch between OpenAI models at runtime
+- **Session Persistence**: Chat history saved to disk, restorable across restarts
 
-```
-+----------------------------------------------------+
-|              Personal Assistant Agent               |
-+----------------------------------------------------+
-|  SQLite MCP Server                                 |
-|  - Package: mcp-server-sqlite-npx                  |
-|  - Tools:                                          |
-|    - sqlite_list_tables                            |
-|    - sqlite_describe_table                         |
-|    - sqlite_read_query                             |
-|  - Read-only enforced via prompt constraints       |
-+----------------------------------------------------+
-|  MarkItDown MCP Server (documents pack)            |
-|  - Package: markitdown-mcp-npx                     |
-|  - Supports: PDF, Word, Excel, PPT, Images, Audio  |
-+----------------------------------------------------+
-|  Built-in Packs                                    |
-|  - safe       (read, write, edit, glob, grep)      |
-|  - kv-memory  (memory-put, memory-update, ...)     |
-|  - docs       (docs.index, docs.search, ...)       |
-+----------------------------------------------------+
-```
+### Framework Packs Used
+| Pack | Tools |
+|------|-------|
+| `safe` | read, write, edit, glob, grep |
+| `kvMemory` | memory-put, memory-update, memory-delete |
+| `todo` | todo-add, todo-update, todo-complete, todo-remove |
+| `sessionHistory` | Cross-turn history persistence |
+| `contextPipeline` | ctx-get, ctx-expand |
+| `documents` | convert_to_markdown (MarkItDown MCP) |
+| `web` | brave_web_search, fetch |
+| `sqlite` (optional) | sqlite_read_query, sqlite_list_tables, sqlite_describe_table |
+
+Custom tools: `save-note`, `save-doc`, `update-note` (trigger IPC entity refresh).
 
 ## Quick Start
 
 ```bash
-export OPENAI_API_KEY=sk-xxx
-npx tsx examples/personal-assistant/index.ts
+# From the repository root
+cd examples/personal-assistant
+npm install
+npm run dev        # Start in dev mode (hot reload)
+npm run build      # Production build
 ```
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | - | OpenAI API key |
-| `EMAIL_DB_PATH` | No | `~/Library/Application Support/ChatMail/local-email.db` | Path to SQLite database |
-| `KNOWLEDGE_PATH` | No | - | Path to knowledge base directory |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `EMAIL_DB_PATH` | No | Path to SQLite email database |
 
-## CLI Options
+## Data Storage
 
-```bash
-npx tsx examples/personal-assistant/index.ts --debug  # Enable debug logging
-```
-
-## SQLite MCP Integration
-
-This example uses the SQLite MCP server which is now integrated into AgentFoundry's MCP catalog:
-
-```yaml
-# From src/recommendation/data/mcp-catalog.yaml
-- name: sqlite
-  package: "mcp-server-sqlite-npx"
-  description: "SQLite database operations for local databases"
-  category: database
-  riskLevel: elevated
-  configTemplate:
-    type: simple
-    transport:
-      type: stdio
-      command: npx
-      args: ["-y", "mcp-server-sqlite-npx", "${SQLITE_DB_PATH}"]
-```
-
-### Programmatic Usage (this example)
-
-```typescript
-import { createStdioMCPProvider } from 'agent-foundry'
-
-const sqliteProvider = createStdioMCPProvider({
-  id: 'sqlite',
-  name: 'SQLite Email Database',
-  command: 'npx',
-  args: ['-y', 'mcp-server-sqlite-npx', '/path/to/database.db'],
-  toolPrefix: 'sqlite'
-})
-
-const packs = await sqliteProvider.createPacks()
-```
-
-### Alternative: agent.yaml Configuration
-
-You can also configure SQLite MCP via `agent.yaml`:
-
-```yaml
-# agent.yaml
-mcp:
-  - id: sqlite
-    name: SQLite Database
-    transport:
-      type: stdio
-      command: npx
-      args: ["-y", "mcp-server-sqlite-npx", "${SQLITE_DB_PATH}"]
-```
-
-Then set the environment variable:
-```bash
-export SQLITE_DB_PATH=/path/to/your/database.db
-```
-
-## Example Usage
+All data lives in `.personal-assistant/` within the opened project folder:
 
 ```
-You: What tables are in my email database?
-Assistant: [Calls sqlite_list_tables, sqlite_describe_table]
-
-You: Show me emails from this week
-Assistant: [Executes SQL query with date filter]
-
-You: Analyze the PDF attachment at ~/Downloads/report.pdf
-Assistant: [Uses MarkItDown to extract and summarize content]
-
-You: Remember that I prefer brief responses
-Assistant: [Stores preference using memory-put]
+.personal-assistant/
+├── USER.md                    # User profile (identity, preferences)
+├── MEMORY.md                  # Consolidated long-term memory (heartbeat-maintained)
+├── memory/                    # Daily logs (YYYY-MM-DD.md)
+├── notes/                     # Note entities (JSON)
+├── docs/                      # Document entities (JSON + original files)
+├── sessions/                  # Chat history (JSONL per session)
+├── scheduled-tasks.json       # Cron schedule config
+├── notifications.json         # Notification history
+├── cache/                     # Document conversion cache
+└── project.json               # Project config
 ```
 
-## Comparison with Other Examples
+## Design Documents
 
-| Example | Architecture | Use Case |
-|---------|-------------|----------|
-| `personal-assistant` | Single Agent + MCP | Interactive CLI assistant |
-| `literature-agent` | Multi-Agent Team | Research workflow with multiple specialized agents |
-| `dataanalysis-agent` | Multi-Agent Team | Data analysis pipeline |
-
-## Key Components
-
-- **createAgent()**: Single-agent factory from AgentFoundry
-- **createStdioMCPProvider()**: Connects to local MCP server (matches catalog entry)
-- **mergePacks()**: Combines multiple packs into one
-
-## Security
-
-- SQLite MCP server runs locally via `npx mcp-server-sqlite-npx`
-- Read-only access is enforced via agent prompt constraints
-- Agent is instructed to only execute SELECT queries (no INSERT/UPDATE/DELETE)
-- Memory stored locally in `.agent-foundry/memory/`
-- Database access is limited to the specified path
-- Document processing (MarkItDown) is read-only for local files
+- [RFC-001: Personal Assistant Desktop App](docs/rfc/001-personal-assistant-desktop.md)
+- [RFC-002: Long-Term Memory & Autonomy](docs/rfc/002-long-term-memory-and-autonomy.md)

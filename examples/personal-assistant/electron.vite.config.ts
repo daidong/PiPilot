@@ -7,7 +7,8 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {
-        '@personal-assistant': resolve(__dirname, '../personal-assistant')
+        '@personal-assistant': resolve(__dirname, 'src/agent'),
+        '@framework': resolve(__dirname, '../../src')
       }
     }
   },

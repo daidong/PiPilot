@@ -17,6 +17,8 @@ export interface MemorySearchPackOptions {
   dirs: string[]
   /** Extra individual files to index (absolute paths) */
   extraFiles?: string[]
+  /** Custom path for the SQLite index file. Defaults to <projectPath>/.agent-foundry/memory-search.db */
+  indexPath?: string
 }
 
 const MEMORY_INDEX_KEY = '__memoryIndex'
@@ -38,15 +40,26 @@ const memorySearchTool = defineTool({
       type: 'number',
       description: 'Maximum number of results (default: 10)',
       required: false
+    },
+    source: {
+      type: 'string',
+      description: 'Filter results by source directory path substring (e.g. "memory" to match only daily logs). Optional — searches all indexed files by default.',
+      required: false
     }
   },
-  execute: async (input: { query: string; limit?: number }, context) => {
+  execute: async (input: { query: string; limit?: number; source?: string }, context) => {
     const index = getIndex(context.runtime)
     if (!index) {
       return { success: false, error: 'Memory index not initialized' }
     }
 
-    const results = index.search(input.query, input.limit ?? 10)
+    let results = index.search(input.query, (input.limit ?? 10) * (input.source ? 3 : 1))
+    if (input.source) {
+      results = results.filter(r => r.path.includes(input.source!))
+      results = results.slice(0, input.limit ?? 10)
+    } else {
+      results = results.slice(0, input.limit ?? 10)
+    }
     return {
       success: true,
       data: {
@@ -59,11 +72,11 @@ const memorySearchTool = defineTool({
 
 const memoryGetTool = defineTool({
   name: 'memory_get',
-  description: 'Read content from a specific memory file, optionally by line range. Use after memory_search to read full context around a match.',
+  description: 'Read content from a specific memory file, optionally by line range. Use after memory_search to read full context around a match. Accepts absolute or relative paths.',
   parameters: {
     path: {
       type: 'string',
-      description: 'Absolute file path (from memory_search results)',
+      description: 'File path — absolute (from memory_search results) or relative to project root',
       required: true
     },
     startLine: {
@@ -83,7 +96,12 @@ const memoryGetTool = defineTool({
       return { success: false, error: 'Memory index not initialized' }
     }
 
-    const content = index.get(input.path, input.startLine, input.endLine)
+    // Resolve relative paths against project root
+    const { resolve } = require('path')
+    const projectPath = (context.runtime as any).projectPath || process.cwd()
+    const absPath = resolve(projectPath, input.path)
+
+    const content = index.get(absPath, input.startLine, input.endLine)
     if (content === null) {
       return { success: false, error: `File not found: ${input.path}` }
     }
@@ -110,7 +128,7 @@ export function memorySearch(options: MemorySearchPackOptions): Pack {
 
     async onInit(runtime: Runtime) {
       const projectPath = (runtime as any).projectPath || process.cwd()
-      const dbPath = join(projectPath, '.agent-foundry', 'memory-search.db')
+      const dbPath = options.indexPath ?? join(projectPath, '.agent-foundry', 'memory-search.db')
 
       const index = new MemoryIndex(dbPath, options.dirs, options.extraFiles ?? [])
       await index.init()
