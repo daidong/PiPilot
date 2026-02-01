@@ -27,7 +27,6 @@ import * as os from 'node:os'
 
 import {
   createAgent,
-  createStdioMCPProvider,
   packs,
   mergePacks,
   type Agent,
@@ -180,28 +179,15 @@ export async function createPersonalAssistant(config: PersonalAssistantConfig): 
     console.log('')
   }
 
-  // Create MCP provider for SQLite
-  const sqliteProvider = createStdioMCPProvider({
-    id: 'sqlite',
-    name: 'SQLite Email Database',
-    command: 'npx',
-    args: ['-y', 'mcp-server-sqlite-npx', dbPath],
-    toolPrefix: 'sqlite'
-  })
+  // Connect MCP-based packs (sqlite, documents)
+  const optionalPacks: Pack[] = []
 
-  // Connect MCP providers and get packs
-  let mcpPacks: Pack[] = []
-
-  // SQLite MCP for email database (read-only)
+  // SQLite MCP for email database
   try {
-    if (debug) {
-      console.log('[Debug] Connecting to SQLite MCP server...')
-    }
-    const sqlitePacks = await sqliteProvider.createPacks()
-    mcpPacks.push(...sqlitePacks)
-    if (debug) {
-      console.log(`[Debug] SQLite MCP connected, got ${sqlitePacks.length} pack(s)`)
-    }
+    if (debug) console.log('[Debug] Connecting to SQLite MCP server...')
+    const sqlitePack = await packs.sqlite({ dbPath, toolPrefix: 'sqlite' })
+    optionalPacks.push(sqlitePack)
+    if (debug) console.log('[Debug] SQLite MCP connected')
   } catch (error) {
     console.error('Warning: Failed to connect to SQLite MCP server:', error)
     console.error('The agent will work without email database access.')
@@ -210,31 +196,22 @@ export async function createPersonalAssistant(config: PersonalAssistantConfig): 
 
   // Documents pack (MarkItDown) for attachment analysis
   try {
-    if (debug) {
-      console.log('[Debug] Loading documents pack (MarkItDown)...')
-    }
+    if (debug) console.log('[Debug] Loading documents pack (MarkItDown)...')
     const documentsPack = await packs.documents({ toolPrefix: 'doc' })
-    mcpPacks.push(documentsPack)
-    if (debug) {
-      console.log('[Debug] Documents pack loaded')
-    }
+    optionalPacks.push(documentsPack)
+    if (debug) console.log('[Debug] Documents pack loaded')
   } catch (error) {
     console.error('Warning: Failed to load documents pack:', error)
     console.error('The agent will work without document processing capabilities.')
   }
 
-  // Merge all packs:
-  // - safe: basic file operations
-  // - kvMemory: provides memory-put, memory-delete tools for storing pinned items
-  // - sessionHistory: conversation history viewing
-  // - contextPipeline: CRITICAL - enables pinned phase and ctx-expand tool
-  // - MCP packs: sqlite, markitdown
+  // Merge all packs
   const allPacks = mergePacks(
-    packs.safe(),
-    packs.kvMemory(),           // Provides memory-put for storing pinned items
-    packs.sessionHistory(),     // Provides session.messages, session.trace
-    packs.contextPipeline(),    // CRITICAL: Enables pinned phase + ctx-expand tool
-    ...mcpPacks
+    packs.safe(),               // read, write, edit, glob, grep
+    packs.kvMemory(),           // memory-put for storing pinned items
+    packs.sessionHistory(),     // session.messages, session.trace
+    packs.contextPipeline(),    // pinned phase + ctx-expand tool
+    ...optionalPacks            // sqlite, documents (if available)
   )
 
   if (debug) {
@@ -309,7 +286,6 @@ export async function createPersonalAssistant(config: PersonalAssistantConfig): 
   const cleanup = async () => {
     try {
       await agent.destroy()
-      await sqliteProvider.destroy()
     } catch (error) {
       console.error('Cleanup error:', error)
     }
