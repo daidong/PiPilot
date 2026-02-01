@@ -5,6 +5,7 @@ import { registerIpcHandlers } from './ipc'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
+    title: 'Personal Assistant',
     width: 1400,
     height: 900,
     minWidth: 900,
