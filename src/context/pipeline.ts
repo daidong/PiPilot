@@ -50,53 +50,63 @@ export function createContextPipeline(config: ContextPipelineConfig = {}): Conte
   }
 
   /**
-   * Calculate budget allocations for all phases
+   * Calculate budget allocations for all phases.
+   *
+   * Two-pass approach:
+   *   1. Satisfy minTokens guarantees for all phases
+   *   2. Distribute surplus by priority (higher priority phases get surplus first)
    */
   function calculateAllocations(totalBudget: number): Map<string, number> {
     const allocations = new Map<string, number>()
     const sortedPhases = getSortedPhases()
 
-    // First pass: calculate reserved and fixed budgets
-    let reservedTotal = 0
+    // Pass 1: Satisfy minimum guarantees and categorize phases
+    let minTotal = 0
     const reservedPhases: ContextPhase[] = []
     const percentagePhases: ContextPhase[] = []
     const remainingPhases: ContextPhase[] = []
 
     for (const phase of sortedPhases) {
       const budget = phase.budget
+      const minGuarantee = budget.minTokens ?? 0
 
       if (budget.type === 'reserved' || budget.type === 'fixed') {
-        const tokens = budget.tokens ?? 0
+        const tokens = Math.max(budget.tokens ?? 0, minGuarantee)
         allocations.set(phase.id, tokens)
-        reservedTotal += tokens
+        minTotal += tokens
         reservedPhases.push(phase)
       } else if (budget.type === 'percentage') {
+        // Start with min guarantee; percentage share added in pass 2
+        allocations.set(phase.id, minGuarantee)
+        minTotal += minGuarantee
         percentagePhases.push(phase)
       } else if (budget.type === 'remaining') {
+        allocations.set(phase.id, minGuarantee)
+        minTotal += minGuarantee
         remainingPhases.push(phase)
       }
     }
 
-    // Calculate available budget after reserved allocations
-    const availableAfterReserved = Math.max(0, totalBudget - reservedTotal)
+    // Pass 2: Distribute surplus by priority
+    const surplus = Math.max(0, totalBudget - minTotal)
 
-    // Second pass: calculate percentage budgets
+    // Percentage phases get their share of the surplus
     let percentageTotal = 0
     for (const phase of percentagePhases) {
       const percentage = phase.budget.value ?? 0
-      const tokens = Math.floor(availableAfterReserved * (percentage / 100))
-      allocations.set(phase.id, tokens)
-      percentageTotal += tokens
+      const share = Math.floor(surplus * (percentage / 100))
+      const current = allocations.get(phase.id) ?? 0
+      allocations.set(phase.id, current + share)
+      percentageTotal += share
     }
 
-    // Third pass: distribute remaining budget
-    const remainingBudget = Math.max(0, availableAfterReserved - percentageTotal)
-
+    // Remaining phases split what's left
+    const leftover = Math.max(0, surplus - percentageTotal)
     if (remainingPhases.length > 0) {
-      // If multiple 'remaining' phases, distribute equally
-      const perPhase = Math.floor(remainingBudget / remainingPhases.length)
+      const perPhase = Math.floor(leftover / remainingPhases.length)
       for (const phase of remainingPhases) {
-        allocations.set(phase.id, perPhase)
+        const current = allocations.get(phase.id) ?? 0
+        allocations.set(phase.id, current + perPhase)
       }
     }
 
@@ -334,8 +344,8 @@ export const PHASE_PRIORITIES = {
  */
 export const DEFAULT_BUDGETS = {
   system: createBudget('reserved', 2000),
-  pinned: createBudget('reserved', 2000),
-  selected: createBudget('percentage', 30),
-  session: createBudget('remaining'),
-  index: createBudget('fixed', 500)
+  pinned: { type: 'reserved' as const, tokens: Infinity, minTokens: 2000 },
+  selected: { type: 'percentage' as const, value: 30, minTokens: 0 },
+  session: { type: 'remaining' as const, minTokens: 0 },
+  index: { type: 'fixed' as const, tokens: 500, minTokens: 500 }
 } as const

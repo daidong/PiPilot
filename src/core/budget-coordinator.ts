@@ -108,9 +108,42 @@ export type RoundHint = 'intermediate' | 'final' | 'extended'
 export type TaskProfile = 'research' | 'coding' | 'conversation' | 'writing' | 'auto'
 
 /**
- * Profile-based allocation parameters
+ * Elastic profile slot: min guarantee, max cap, priority weight
  */
-export interface ProfileAllocations {
+export interface ElasticProfileSlot {
+  /** Minimum guaranteed tokens */
+  min: number
+  /** Maximum allowed tokens (Infinity = no cap) */
+  max: number
+  /** Priority weight for surplus distribution (higher = gets more surplus) */
+  weight: number
+}
+
+/**
+ * Elastic profile slot with percentage-based max
+ */
+export interface ElasticProfileSlotPct {
+  min: number
+  /** Max expressed as fraction of remaining pool (0-1) */
+  maxPct: number
+  weight: number
+}
+
+/**
+ * Elastic profile: min/max/weight per slot
+ */
+export interface ElasticProfile {
+  pinned: ElasticProfileSlot
+  selected: ElasticProfileSlotPct
+  session: ElasticProfileSlot
+  historyIndex: ElasticProfileSlot
+  stateSummary: ElasticProfileSlot
+}
+
+/**
+ * Legacy profile format (backward compat)
+ */
+export interface LegacyProfileAllocations {
   pinnedCap: number
   selectedPct: number
   sessionCap: number
@@ -118,15 +151,75 @@ export interface ProfileAllocations {
   stateSummaryCap: number
 }
 
+/** Union type: either new elastic or legacy format */
+export type ProfileAllocations = ElasticProfile | LegacyProfileAllocations
+
 /**
- * Pre-defined allocation profiles
+ * Check if a profile is legacy format
  */
-export const PROFILES: Record<TaskProfile, ProfileAllocations> = {
-  research:     { pinnedCap: 2000, selectedPct: 0.30, sessionCap: 10000, historyIndexCap: 500, stateSummaryCap: 2000 },
-  coding:       { pinnedCap: 4000, selectedPct: 0.25, sessionCap: 6000,  historyIndexCap: 300, stateSummaryCap: 1500 },
-  conversation: { pinnedCap: 1000, selectedPct: 0.10, sessionCap: 12000, historyIndexCap: 800, stateSummaryCap: 500 },
-  writing:      { pinnedCap: 1500, selectedPct: 0.15, sessionCap: 8000,  historyIndexCap: 200, stateSummaryCap: 1000 },
-  auto:         { pinnedCap: 3000, selectedPct: 0.20, sessionCap: 8000,  historyIndexCap: 500, stateSummaryCap: 2000 },
+function isLegacyProfile(p: ProfileAllocations): p is LegacyProfileAllocations {
+  return 'pinnedCap' in p
+}
+
+/**
+ * Convert legacy profile to elastic format (min === max for identical behavior)
+ */
+export function normalizeLegacyProfile(p: LegacyProfileAllocations): ElasticProfile {
+  return {
+    pinned:       { min: p.pinnedCap, max: p.pinnedCap, weight: 5 },
+    selected:     { min: 0, maxPct: p.selectedPct, weight: 4 },
+    session:      { min: p.sessionCap, max: p.sessionCap, weight: 3 },
+    historyIndex: { min: p.historyIndexCap, max: p.historyIndexCap, weight: 1 },
+    stateSummary: { min: p.stateSummaryCap, max: p.stateSummaryCap, weight: 1 },
+  }
+}
+
+/**
+ * Normalize any profile to ElasticProfile
+ */
+function normalizeProfile(p: ProfileAllocations): ElasticProfile {
+  return isLegacyProfile(p) ? normalizeLegacyProfile(p) : p
+}
+
+/**
+ * Pre-defined allocation profiles (elastic format)
+ */
+export const PROFILES: Record<TaskProfile, ElasticProfile> = {
+  research: {
+    pinned:       { min: 2000,  max: Infinity, weight: 5 },
+    selected:     { min: 0,     maxPct: 0.30,  weight: 4 },
+    session:      { min: 10000, max: 40000,    weight: 3 },
+    historyIndex: { min: 500,   max: 2000,     weight: 1 },
+    stateSummary: { min: 2000,  max: 5000,     weight: 1 },
+  },
+  coding: {
+    pinned:       { min: 4000,  max: Infinity, weight: 5 },
+    selected:     { min: 0,     maxPct: 0.25,  weight: 4 },
+    session:      { min: 6000,  max: 30000,    weight: 3 },
+    historyIndex: { min: 300,   max: 1500,     weight: 1 },
+    stateSummary: { min: 1500,  max: 4000,     weight: 1 },
+  },
+  conversation: {
+    pinned:       { min: 1000,  max: Infinity, weight: 3 },
+    selected:     { min: 0,     maxPct: 0.10,  weight: 2 },
+    session:      { min: 12000, max: 50000,    weight: 5 },
+    historyIndex: { min: 800,   max: 3000,     weight: 1 },
+    stateSummary: { min: 500,   max: 2000,     weight: 1 },
+  },
+  writing: {
+    pinned:       { min: 1500,  max: Infinity, weight: 4 },
+    selected:     { min: 0,     maxPct: 0.15,  weight: 3 },
+    session:      { min: 8000,  max: 35000,    weight: 3 },
+    historyIndex: { min: 200,   max: 1000,     weight: 1 },
+    stateSummary: { min: 1000,  max: 3000,     weight: 1 },
+  },
+  auto: {
+    pinned:       { min: 3000,  max: Infinity, weight: 5 },
+    selected:     { min: 0,     maxPct: 0.20,  weight: 4 },
+    session:      { min: 8000,  max: 40000,    weight: 3 },
+    historyIndex: { min: 500,   max: 2000,     weight: 1 },
+    stateSummary: { min: 2000,  max: 5000,     weight: 1 },
+  },
 }
 
 /**
@@ -239,27 +332,22 @@ export class BudgetCoordinator {
   }
 
   /**
-   * Get the resolved profile allocations for the current task profile
+   * Get the resolved elastic profile for the current task profile
    */
-  private getProfile(): ProfileAllocations {
-    return PROFILES[this.taskProfile]
+  private getProfile(): ElasticProfile {
+    const raw = PROFILES[this.taskProfile]
+    return normalizeProfile(raw)
   }
 
   /**
-   * Compute allocations given measured sizes of fixed components.
+   * Compute allocations using elastic budget: min guarantees + weighted surplus.
    *
-   * Uses shared-pool allocation so unused budget in high-priority slots
-   * flows to lower-priority peers within the same pool.
-   *
-   * Pools:
-   *   Pool A (small caps): pinned + historyIndex + stateSummary
-   *     – Each gets up to its profile cap; unused remainder is discarded
-   *       (these are small and don't benefit session).
-   *   Pool B (context recall): selected + session
-   *     – A combined pool sized by profile.selectedPct of remaining budget.
-   *     – selected has priority and can use up to its percentage cap.
-   *     – session gets the rest (minimum: profile.sessionCap as a floor).
-   *   Messages: everything left after all pools.
+   * Algorithm:
+   *   1. Deduct fixed costs (identity + tools + pack fragments)
+   *   2. Satisfy minimum guarantees for each slot
+   *   3. Distribute surplus by priority weight — higher weight slots grow first
+   *   4. Clamp each slot at its max (Infinity = no cap)
+   *   5. Messages get whatever remains
    */
   allocate(measured: MeasuredComponents): BudgetSlots {
     const profile = this.getProfile()
@@ -267,43 +355,93 @@ export class BudgetCoordinator {
 
     // P1: Fixed costs (never cut)
     const fixedCost = measured.systemIdentity + measured.packFragments + measured.toolSchemas
-    let remaining = Math.max(0, available - fixedCost)
+    const pool = Math.max(0, available - fixedCost)
 
-    // Pool A — small fixed-cap slots
-    const pinnedMemory = Math.min(profile.pinnedCap, remaining)
-    remaining -= pinnedMemory
+    // Resolve max for selected (percentage-based)
+    const selectedMax = Math.floor(pool * profile.selected.maxPct)
 
-    const historyIndex = Math.min(profile.historyIndexCap, remaining)
-    remaining -= historyIndex
+    // Slot definitions: [key, min, max, weight]
+    // Messages participates in elastic allocation with min guarantee of 4000
+    type SlotKey = 'pinned' | 'selected' | 'session' | 'historyIndex' | 'stateSummary' | 'messages'
+    const slots: { key: SlotKey; min: number; max: number; weight: number }[] = [
+      { key: 'pinned',       min: profile.pinned.min,       max: profile.pinned.max,       weight: profile.pinned.weight },
+      { key: 'selected',     min: profile.selected.min,     max: selectedMax,               weight: profile.selected.weight },
+      { key: 'session',      min: profile.session.min,      max: profile.session.max,       weight: profile.session.weight },
+      { key: 'historyIndex', min: profile.historyIndex.min, max: profile.historyIndex.max, weight: profile.historyIndex.weight },
+      { key: 'stateSummary', min: profile.stateSummary.min, max: profile.stateSummary.max, weight: profile.stateSummary.weight },
+      { key: 'messages',     min: 4000,                     max: Infinity,                  weight: 2 },
+    ]
 
-    const stateSummary = Math.min(profile.stateSummaryCap, remaining)
-    remaining -= stateSummary
+    // Allocate minimums
+    const alloc: Record<SlotKey, number> = { pinned: 0, selected: 0, session: 0, historyIndex: 0, stateSummary: 0, messages: 0 }
+    let guaranteedTotal = 0
+    for (const s of slots) {
+      const m = Math.min(s.min, pool) // don't exceed pool
+      alloc[s.key] = m
+      guaranteedTotal += m
+    }
 
-    // Pool B — shared context-recall pool (selected + session)
-    // The pool gets the same total that selected alone used to get,
-    // plus a guaranteed session floor. Selected has first claim; the
-    // rest flows to session.
-    const selectedCap = Math.min(Math.floor(remaining * profile.selectedPct), remaining)
-    const poolB = selectedCap + profile.sessionCap
-    const actualPool = Math.min(poolB, remaining)
+    // Scale down minimums if they exceed pool
+    if (guaranteedTotal > pool) {
+      const scale = pool / guaranteedTotal
+      guaranteedTotal = 0
+      for (const s of slots) {
+        alloc[s.key] = Math.floor(alloc[s.key] * scale)
+        guaranteedTotal += alloc[s.key]
+      }
+    }
 
-    const actualSelected = measured.actualSelectedTokens ?? selectedCap
-    const selectedContext = Math.min(actualSelected, selectedCap)
-    const sessionBudget = Math.max(0, actualPool - selectedContext)
+    // Distribute surplus iteratively
+    let surplus = pool - guaranteedTotal
+    const capped = new Set<SlotKey>()
 
-    remaining -= actualPool
+    // Iterate until surplus exhausted or all slots capped (max 10 rounds)
+    for (let round = 0; round < 10 && surplus > 0; round++) {
+      const uncapped = slots.filter(s => !capped.has(s.key))
+      if (uncapped.length === 0) break
 
-    // P4: Messages get everything left
-    const messages = Math.max(0, remaining)
+      const totalWeight = uncapped.reduce((sum, s) => sum + s.weight, 0)
+      if (totalWeight === 0) break
+
+      let distributed = 0
+      for (const s of uncapped) {
+        const share = Math.floor(surplus * s.weight / totalWeight)
+        const newVal = alloc[s.key] + share
+        if (newVal >= s.max) {
+          distributed += s.max - alloc[s.key]
+          alloc[s.key] = s.max
+          capped.add(s.key)
+        } else {
+          distributed += share
+          alloc[s.key] = newVal
+        }
+      }
+      surplus -= distributed
+      if (distributed === 0) break
+    }
+
+    // If selected has actual measured tokens, use the lesser of actual vs allocated
+    const actualSelected = measured.actualSelectedTokens
+    const selectedContext = actualSelected !== undefined
+      ? Math.min(actualSelected, alloc.selected)
+      : alloc.selected
+
+    // Unused selected budget flows to session (up to session max)
+    const selectedUnused = alloc.selected - selectedContext
+    const sessionBudget = Math.min(alloc.session + selectedUnused, profile.session.max)
+
+    // Recalculate messages: starts from elastic allocation, plus any leftover from selected→session overflow
+    const selectedSessionOverflow = selectedUnused - (sessionBudget - alloc.session)
+    const messages = alloc.messages + Math.max(0, selectedSessionOverflow)
 
     return {
       systemIdentity: measured.systemIdentity,
       packFragments: measured.packFragments,
       toolSchemas: measured.toolSchemas,
-      pinnedMemory,
+      pinnedMemory: alloc.pinned,
       selectedContext,
-      historyIndex,
-      stateSummary,
+      historyIndex: alloc.historyIndex,
+      stateSummary: alloc.stateSummary,
       messages,
       outputReserve: this.config.outputReserve,
       sessionBudget
@@ -360,7 +498,7 @@ export class BudgetCoordinator {
     const profile = this.getProfile()
     const available = this.config.contextWindow - this.config.outputReserve
     const fixedCost = measured.systemIdentity + measured.packFragments + measured.toolSchemas
-    let remaining = Math.max(0, available - fixedCost)
+    const pool = Math.max(0, available - fixedCost)
     const actions: DegradationAction[] = []
     let toolSubset: string[] | undefined
 
@@ -371,55 +509,58 @@ export class BudgetCoordinator {
     let stateSummary: number
 
     const actualSelected = measured.actualSelectedTokens ?? 0
+    const selectedMax = Math.floor(pool * profile.selected.maxPct)
 
     if (level === 0) {
-      // Normal — shared-pool allocation (same as allocate())
-      pinnedMemory = Math.min(profile.pinnedCap, remaining)
-      remaining -= pinnedMemory
-      historyIndex = Math.min(profile.historyIndexCap, remaining)
-      remaining -= historyIndex
-      stateSummary = Math.min(profile.stateSummaryCap, remaining)
-      remaining -= stateSummary
-
-      const selectedCap = Math.min(Math.floor(remaining * profile.selectedPct), remaining)
-      const poolB = Math.min(selectedCap + profile.sessionCap, remaining)
-      selectedContext = Math.min(actualSelected, selectedCap)
-      sessionBudget = Math.max(0, poolB - selectedContext)
-      remaining -= poolB
+      // Normal — use elastic allocation
+      const slots = this.allocate(measured)
+      return {
+        level,
+        slots,
+        actions,
+        toolSubset
+      }
     } else if (level === 1) {
-      // Reduced: compress tool output, halve selected cap
-      pinnedMemory = Math.min(profile.pinnedCap, remaining)
-      remaining -= pinnedMemory
-      historyIndex = Math.min(profile.historyIndexCap, remaining)
+      // Reduced: halve maxes, compress tool output
+      pinnedMemory = Math.min(Math.floor(profile.pinned.max === Infinity ? pool : profile.pinned.max / 2), pool)
+      pinnedMemory = Math.max(profile.pinned.min, pinnedMemory)
+      let remaining = pool - pinnedMemory
+
+      historyIndex = Math.min(profile.historyIndex.min, remaining)
       remaining -= historyIndex
-      stateSummary = Math.min(profile.stateSummaryCap, remaining)
+
+      stateSummary = Math.min(profile.stateSummary.min, remaining)
       remaining -= stateSummary
 
-      const selectedCap = Math.min(Math.floor(remaining * profile.selectedPct * 0.5), remaining)
-      const poolB = Math.min(selectedCap + profile.sessionCap, remaining)
-      selectedContext = Math.min(actualSelected, selectedCap)
-      sessionBudget = Math.max(0, poolB - selectedContext)
-      remaining -= poolB
+      const halvedSelectedMax = Math.floor(selectedMax * 0.5)
+      selectedContext = Math.min(actualSelected, halvedSelectedMax, remaining)
+      remaining -= selectedContext
+
+      sessionBudget = Math.min(profile.session.max, remaining)
+      sessionBudget = Math.max(0, sessionBudget)
+      remaining -= sessionBudget
 
       actions.push({
         type: 'compress_tool_output',
         params: {
           toolCaps: { read: 2000, grep: 1500, glob: 500, bash: 1500, fetch: 1500, _default: 2000 },
-          totalBudget: Math.floor((available - fixedCost) * 0.35)
+          totalBudget: Math.floor(pool * 0.35)
         }
       })
       actions.push({ type: 'trim_selected', params: { targetTokens: selectedContext } })
     } else if (level === 2) {
-      // Minimal: drop selected, halve session, compress old tool results, reduce tools
-      pinnedMemory = Math.min(Math.floor(profile.pinnedCap * 0.5), remaining)
-      remaining -= pinnedMemory
+      // Minimal: collapse to mins
+      pinnedMemory = Math.min(profile.pinned.min, pool)
+      let remaining = pool - pinnedMemory
+
       selectedContext = 0
-      historyIndex = Math.min(Math.floor(profile.historyIndexCap * 0.5), remaining)
+      historyIndex = Math.min(profile.historyIndex.min, remaining)
       remaining -= historyIndex
-      stateSummary = Math.min(profile.stateSummaryCap, remaining)
+
+      stateSummary = Math.min(profile.stateSummary.min, remaining)
       remaining -= stateSummary
 
-      sessionBudget = Math.min(Math.floor(profile.sessionCap * 0.5), remaining)
+      sessionBudget = Math.min(profile.session.min, remaining)
       remaining -= sessionBudget
 
       actions.push({ type: 'drop_selected' })
@@ -430,10 +571,9 @@ export class BudgetCoordinator {
       })
       actions.push({ type: 'reduce_tools' })
 
-      // Tool subset: core + recently used tools (caller fills in recent)
       toolSubset = [...(TOOL_GROUPS.core ?? [])]
     } else {
-      // Emergency (L3): strip almost everything
+      // Emergency (L3): zero all slots
       pinnedMemory = 0
       selectedContext = 0
       sessionBudget = 0
@@ -445,11 +585,11 @@ export class BudgetCoordinator {
         params: { capTokens: 2048 }
       })
 
-      // Core tools only
       toolSubset = [...(TOOL_GROUPS.core ?? [])]
     }
 
-    const messages = Math.max(0, remaining)
+    const usedBySlots = pinnedMemory + selectedContext + sessionBudget + historyIndex + stateSummary
+    const messages = Math.max(0, pool - usedBySlots)
 
     return {
       level,

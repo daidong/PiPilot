@@ -222,7 +222,12 @@ export type {
   OutputReserveStrategy,
   RoundHint,
   TaskProfile,
-  ProfileAllocations
+  ProfileAllocations,
+  ElasticProfile,
+  ElasticProfileSlot,
+  ElasticProfileSlotPct,
+  LegacyProfileAllocations,
+  normalizeLegacyProfile
 } from './core/budget-coordinator.js'
 export { SAFETY_MARGIN, HYSTERESIS, PROFILES, TOOL_GROUPS } from './core/budget-coordinator.js'
 export { compressToolResult, enforceToolResultBudget, isAlreadyCompressed, TOOL_RESULT_CAPS, TOOL_RESULT_TOTAL_BUDGET_RATIO } from './core/tool-result-compressor.js'

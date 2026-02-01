@@ -28,6 +28,8 @@ export interface PhaseBudget {
   tokens?: number
   /** Percentage value 0-100 (for 'percentage' type) */
   value?: number
+  /** Minimum guaranteed tokens (for elastic allocation without BudgetCoordinator) */
+  minTokens?: number
 }
 
 // ============ Context Fragment ============
