@@ -4,12 +4,10 @@ import { useChatStore } from '../../stores/chat-store'
 import { HeroIdle } from '../center/HeroIdle'
 import { ChatMessages } from '../center/ChatMessages'
 import { ChatInput } from '../center/ChatInput'
-import { ProgressCard } from '../center/ProgressCard'
 
 export function CenterPanel() {
   const isIdle = useUIStore((s) => s.isIdle)
   const messages = useChatStore((s) => s.messages)
-  const isStreaming = useChatStore((s) => s.isStreaming)
   const showHero = isIdle && messages.length === 0
 
   return (
@@ -21,7 +19,6 @@ export function CenterPanel() {
       ) : (
         <div className="flex-1 min-h-0 px-6 py-4">
           <ChatMessages />
-          {isStreaming && <ProgressCard />}
         </div>
       )}
 

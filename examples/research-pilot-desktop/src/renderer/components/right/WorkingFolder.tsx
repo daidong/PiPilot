@@ -1,6 +1,7 @@
 import React from 'react'
 import { FileText } from 'lucide-react'
 import { useUIStore, type WorkingFile } from '../../stores/ui-store'
+import { useEntityStore } from '../../stores/entity-store'
 
 const api = (window as any).api
 
@@ -52,6 +53,10 @@ export function WorkingFolder() {
 
 function FileRow({ file }: { file: WorkingFile }) {
   const openPreview = useUIStore((s) => s.openPreview)
+  // Look up the real data entity by filePath so we use its actual UUID
+  const dataEntity = useEntityStore((s) =>
+    s.data.find((d) => d.filePath === file.path)
+  )
 
   const handleClick = async () => {
     const ext = (file.name.split('.').pop() || '').toLowerCase()
@@ -62,7 +67,18 @@ function FileRow({ file }: { file: WorkingFile }) {
       return
     }
 
-    // Text-readable files: open in preview panel
+    // If a registered data entity exists, use its real id so pin/select works
+    if (dataEntity) {
+      openPreview({
+        ...dataEntity,
+        type: 'data',
+        title: dataEntity.title || dataEntity.name || file.name,
+        filePath: file.path
+      })
+      return
+    }
+
+    // Fallback for files not yet registered as entities
     openPreview({
       id: file.path,
       type: 'data',

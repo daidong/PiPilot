@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useChatStore, type ChatMessage } from '../../stores/chat-store'
 import { useEntityStore } from '../../stores/entity-store'
+import { useActivityStore } from '../../stores/activity-store'
 import { Bookmark, BookmarkCheck, Loader2 } from 'lucide-react'
 
 const api = (window as any).api
@@ -202,10 +203,14 @@ function ThinkingDots() {
 }
 
 function ThinkingBubble() {
+  const events = useActivityStore((s) => s.events)
+  const latest = [...events].reverse().find(e => e.type === 'tool-call') || events[events.length - 1]
+  const activity = latest?.summary || ''
+
   return (
-    <div className="flex justify-start">
+    <div className="flex items-center gap-3">
       <div
-        className="rounded-2xl px-4 py-3 text-sm t-text-secondary"
+        className="rounded-2xl px-4 py-3 text-sm t-text-secondary shrink-0"
         style={{ background: 'var(--color-bubble-assistant)' }}
       >
         <div className="flex items-center gap-2">
@@ -213,6 +218,13 @@ function ThinkingBubble() {
           <span className="text-xs">Thinking</span>
         </div>
       </div>
+      {activity && (
+        <div className="flex-1 flex items-center gap-2 min-w-0">
+          <div className="flex-1 h-px border-t t-border" />
+          <span className="text-xs t-text-muted whitespace-nowrap truncate max-w-[60%] animate-pulse">{activity}</span>
+          <div className="flex-1 h-px border-t t-border" />
+        </div>
+      )}
     </div>
   )
 }

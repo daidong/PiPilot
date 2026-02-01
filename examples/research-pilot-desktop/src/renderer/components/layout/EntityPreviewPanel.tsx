@@ -85,12 +85,22 @@ function CsvPreview({ content, separator }: { content: string; separator: string
 }
 
 export function EntityPreviewPanel() {
-  const entity = useUIStore((s) => s.previewEntity)
+  const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
   const togglePin = useEntityStore((s) => s.togglePin)
   const toggleSelect = useEntityStore((s) => s.toggleSelect)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const updateEntity = useEntityStore((s) => s.updateEntity)
+  // Derive live pinned/selected state from entity store instead of stale snapshot
+  const pinnedIds = useEntityStore((s) => s.pinned)
+  const selectedIds = useEntityStore((s) => s.selected)
+  const entity = rawEntity
+    ? {
+        ...rawEntity,
+        pinned: pinnedIds.some((p) => p.id === rawEntity.id),
+        selectedForAI: selectedIds.some((p) => p.id === rawEntity.id)
+      }
+    : null
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState('')

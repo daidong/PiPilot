@@ -663,11 +663,22 @@ export class RuntimeIO implements IRuntimeIO {
       const limit = Math.min(options?.limit ?? 100, this.limits.maxResults)
       const ignoreCase = options?.ignoreCase ?? false
 
-      // 构建 grep 参数数组（防止命令注入）
+      // Convert Perl regex shortcuts to POSIX equivalents
+      // BSD grep (macOS) does not support \s, \d, \w etc.
+      const perlToPosixRegex = (p: string): string =>
+        p
+          .replace(/\\s/g, '[[:space:]]')
+          .replace(/\\S/g, '[^[:space:]]')
+          .replace(/\\d/g, '[[:digit:]]')
+          .replace(/\\D/g, '[^[:digit:]]')
+          .replace(/\\w/g, '[[:alnum:]_]')
+          .replace(/\\W/g, '[^[:alnum:]_]')
+
+      // Build grep args array (prevents command injection)
       const args: string[] = [
-        '-rn',                              // 递归 + 行号
-        '--color=never',                    // 禁用颜色
-        `-m`, String(limit),                // 源头限量
+        '-rnE',                             // recursive + line numbers + extended regex
+        '--color=never',                    // disable color
+        `-m`, String(limit),                // limit matches per file
         ...DEFAULT_IGNORE_PATTERNS.flatMap(p => ['--exclude-dir', p.replace('**/', '').replace('/**', '')])
       ]
 
@@ -679,8 +690,8 @@ export class RuntimeIO implements IRuntimeIO {
         args.push(`--include=*.${options.type}`)
       }
 
-      // 添加 pattern 和搜索路径
-      args.push('-e', pattern, '.')
+      // Add pattern and search path
+      args.push('-e', perlToPosixRegex(pattern), '.')
 
       return new Promise((resolve) => {
         const child = spawn('grep', args, {
