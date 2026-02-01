@@ -55,7 +55,7 @@ function FileRow({ file }: { file: WorkingFile }) {
   const openPreview = useUIStore((s) => s.openPreview)
   // Look up the real data entity by filePath so we use its actual UUID
   const dataEntity = useEntityStore((s) =>
-    s.data.find((d) => d.filePath === file.path)
+    [...s.notes, ...s.docs].find((d) => d.filePath === file.path)
   )
 
   const handleClick = async () => {

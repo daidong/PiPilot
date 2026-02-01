@@ -8,10 +8,12 @@
  * - Token budgeting, history compression, and ctx-expand come for free
  */
 
+import os from 'os'
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, basename } from 'path'
 import { createAgent, packs, definePack, defineTool } from '@framework/index.js'
 import { createSaveNoteTool, createSaveDocTool, createUpdateNoteTool } from '../tools/entity-tools.js'
+import { createCalendarTool } from '../tools/calendar-tool.js'
 import type { Agent } from '@framework/types/agent.js'
 import type { ContextSelection } from '@framework/types/context-pipeline.js'
 import { PATHS, Entity, Note, Doc } from '../types.js'
@@ -183,7 +185,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   clearSessionMemory: () => Promise<void>
   destroy: () => Promise<void>
 }> {
-  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, emailDbPath, onStream, onToolCall, onToolResult } = config
+  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, onStream, onToolCall, onToolResult } = config
+  // Resolve ~ to the user's home directory (dotenv / Node don't expand shell tilde)
+  const emailDbPath = config.emailDbPath?.replace(/^~(?=\/|$)/, os.homedir())
 
   // Create entity tools for saving, updating notes and docs
   const saveNoteTool = createSaveNoteTool(sessionId || crypto.randomUUID(), projectPath)
@@ -277,9 +281,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     try {
       sqlitePack = await packs.sqlite({ dbPath: emailDbPath, toolPrefix: 'sqlite' })
     } catch (err) {
-      if (debug) {
-        console.warn(`[Coordinator] Failed to initialize SQLite pack for ${emailDbPath}:`, err)
-      }
+      console.warn(`[Coordinator] Failed to initialize SQLite pack for "${emailDbPath}":`, err)
     }
   }
 
@@ -327,7 +329,7 @@ _(none yet)_
     id: 'entity-tools',
     name: 'Entity Tools',
     description: 'Note and document saving tools',
-    tools: [saveNoteTool, saveDocTool, updateNoteTool]
+    tools: [saveNoteTool, saveDocTool, updateNoteTool, createCalendarTool()]
   })
 
   const agentPacks = [

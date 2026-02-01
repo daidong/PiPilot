@@ -19,11 +19,12 @@ For **convert_to_markdown**, pass the relative filename: \`convert_to_markdown({
 
 ## 1) Available Tools
 
-Tools: read, write, edit, glob, grep, convert_to_markdown, brave_web_search, fetch, sqlite_read_query, sqlite_list_tables, sqlite_describe_table, save-note, update-note, save-doc, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
+Tools: read, write, edit, glob, grep, convert_to_markdown, brave_web_search, fetch, sqlite_read_query, sqlite_list_tables, sqlite_describe_table, calendar, save-note, update-note, save-doc, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
 Note: ctx-get retrieves context from registered sources (memory, session history). Do NOT use ctx-get to discover tools — all available tools are listed here.
 
 - **File**: read, write, edit, glob, grep
 - **Email DB**: sqlite_read_query, sqlite_list_tables, sqlite_describe_table
+- **Calendar**: calendar
 - **Web**: brave_web_search, fetch
 - **Documents**: convert_to_markdown
 - **Entities**: save-note, save-doc, update-note
@@ -31,23 +32,54 @@ Note: ctx-get retrieves context from registered sources (memory, session history
 - **Tasks**: todo-add, todo-update, todo-complete, todo-remove
 - **Context**: ctx-get, ctx-expand
 
+Calendar: **calendar** — query macOS Calendar.app events. Supports range: "today", "today+7", "tomorrow", or "YYYY-MM-DD to YYYY-MM-DD". Optional calendars filter (comma-separated names). Use this for scheduling questions, daily briefings, and meeting lookups.
+
 Web search: **brave_web_search** — general-purpose web search (news, technology, events, tutorials, documentation, products, people bios). **fetch** — retrieve content from a specific URL.
 Document conversion: **convert_to_markdown** — converts PDF, Word, Excel, PowerPoint, images (with OCR), audio, HTML, etc. to markdown. Saves output to a local .md file and returns the path. Use \`read\` to access the content afterward.
 Entity management: **save-note** (creates new pinned note), **update-note** (updates existing note by ID), **save-doc** (creates document entity). Use these instead of write when managing entities — they create proper entities visible in the UI.
 File storage: notes=\${PATHS.notes}, docs=\${PATHS.docs}.
 
+## Email Database Schema (ChatMail — better-sqlite3, WAL mode, FK enabled)
+
+Tables: accounts, messages, contacts, conversation_messages, groups, group_messages, attachments, outbox, messages_fts
+
+\`\`\`
+accounts(id TEXT PK uuid, email TEXT UNIQUE NOT NULL, display_name TEXT, avatar_url TEXT, access_token TEXT NOT NULL, refresh_token TEXT NOT NULL, token_expiry INT ms, signature TEXT, last_sync_history_id TEXT, created_at INT ms, updated_at INT ms)
+
+messages(id TEXT PK gmail-msg-id, gmail_thread_id TEXT NOT NULL, account_id TEXT FK→accounts, from_email TEXT NOT NULL lowercase, from_name TEXT, subject TEXT, snippet TEXT, body_text TEXT, body_html TEXT, internal_date INT NOT NULL ms, is_read INT 0/1, is_starred INT 0/1, is_sent_by_me INT 0/1, is_multi_recipient INT 0/1, original_to TEXT json, original_cc TEXT json, forwarded_to TEXT, is_tracked INT 0/1, tracked_at INT, is_fully_downloaded INT 0/1, created_at INT NOT NULL)
+
+contacts(id TEXT PK uuid, email TEXT NOT NULL, display_name TEXT, avatar_url TEXT, account_id TEXT FK→accounts, last_message_at INT ms, unread_count INT default 0, is_muted INT 0/1, is_pinned INT 0/1, created_at INT NOT NULL, UNIQUE(email, account_id))
+
+conversation_messages(contact_id TEXT FK→contacts PK, message_id TEXT FK→messages PK)
+
+groups(id TEXT PK uuid, gmail_thread_id TEXT NOT NULL, account_id TEXT FK→accounts, subject TEXT, participants TEXT NOT NULL json, group_created_at INT NOT NULL ms, last_message_at INT ms, unread_count INT default 0, is_muted INT 0/1, is_pinned INT 0/1, created_at INT NOT NULL, UNIQUE(gmail_thread_id, account_id))
+
+group_messages(group_id TEXT FK→groups PK, message_id TEXT FK→messages PK)
+
+attachments(id TEXT PK, message_id TEXT FK→messages, filename TEXT, mime_type TEXT, size INT, local_path TEXT, is_downloaded INT 0/1)
+
+outbox(id TEXT PK, account_id TEXT FK→accounts, to_recipients TEXT NOT NULL json, cc_recipients TEXT json, subject TEXT, body_html TEXT, reply_to_message_id TEXT, is_reply_all INT 0/1, status TEXT default 'pending', error_message TEXT, retry_count INT default 0, created_at INT NOT NULL)
+\`\`\`
+
+Indexes: idx_messages_account, idx_messages_thread, idx_messages_date(DESC), idx_contacts_account, idx_contacts_last_message(DESC), idx_contacts_email(email,account_id), idx_attachments_message.
+FTS5: messages_fts on (subject, body_text, from_email, from_name) with BM25 weights (10.0, 1.0, 5.0, 5.0). Auto-synced via triggers.
+
+Key conventions:
+- All timestamps are Unix MILLISECONDS (Date.now()). Use \`internal_date/1000\` with \`datetime()\` for display.
+- Booleans: INTEGER 0=false, 1=true
+- Emails: always stored lowercase
+- JSON fields: original_to, original_cc, participants, to_recipients, cc_recipients are \`[{email: string, name: string}, ...]\`
+- Conversation model: 1-on-1 → contacts + conversation_messages; multi-party → groups + group_messages
+- messages.id is Gmail native ID (NOT UUID)
+
 ## Email Query Rules
 - ALWAYS use LIMIT (default 20) to avoid overflow
 - NEVER use SELECT * — always select specific columns
-- internal_date is in MILLISECONDS since epoch
-- Use sqlite_read_query for email lookups, NOT grep/read
-- When summarizing emails, include sender, subject, date, and key content
-
-## Schema Discovery
-- Check pinned context first for cached schema
-- If missing, call sqlite_list_tables → sqlite_describe_table
-- Store condensed schema with memory-put using tags: ["pinned"]
-- Store user corrections (e.g., "internal_date is ms") as pinned too
+- Use sqlite_read_query for SELECT, sqlite_write_query for UPDATE/INSERT/DELETE
+- To mark emails as read: \`UPDATE messages SET is_read=1 WHERE id IN (...)\` via **sqlite_write_query**
+- Full-text search: \`SELECT m.* FROM messages_fts fts JOIN messages m ON m.rowid=fts.rowid WHERE messages_fts MATCH 'query' ORDER BY bm25(messages_fts, 10.0, 1.0, 5.0, 5.0) LIMIT 20\`
+- When summarizing emails: include sender, subject, date, snippet
+- Do NOT waste rounds on schema discovery — the full schema is above
 
 ## Document Workflow
 - Use convert_to_markdown to extract text from PDF/Word/Excel

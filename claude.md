@@ -53,8 +53,14 @@ docs/
 ├── TEAM.md          # Multi-agent team documentation
 └── AGENT_DEV_GUIDE.md  # **READ THIS when building apps on AgentFoundry**
 examples/
-├── literature-agent/   # Multi-agent literature search
-└── research-pilot/     # Research assistant (context pipeline demo)
+├── literature-agent/      # Multi-agent literature search
+├── personal-assistant/    # Electron desktop assistant (memory, scheduler, notifications)
+│   ├── src/agent/         # Agent layer (coordinator, tools, commands, mentions, scheduler, types)
+│   ├── src/main/          # Electron main process (IPC, lifecycle)
+│   ├── src/preload/       # Context bridge (renderer ↔ main)
+│   ├── src/renderer/      # React UI (three-panel layout, Zustand stores)
+│   └── docs/rfc/          # RFC-001 (desktop app), RFC-002 (memory & autonomy)
+└── research-pilot/        # Research assistant (context pipeline demo)
 ```
 
 ## Key Concepts

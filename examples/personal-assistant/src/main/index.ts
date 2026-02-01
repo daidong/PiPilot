@@ -1,5 +1,10 @@
 import { app, BrowserWindow, shell, Menu } from 'electron'
 import { join } from 'path'
+import { configDotenv } from 'dotenv'
+
+// electron-vite only injects VITE_/MAIN_VITE_ prefixed vars, so we load .env manually
+// for custom vars like EMAIL_DB_PATH. configDotenv won't override existing vars.
+configDotenv({ path: join(__dirname, '../../.env') })
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
 

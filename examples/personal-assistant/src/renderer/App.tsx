@@ -1,4 +1,5 @@
-import React, { useEffect } from 'react'
+import React, { Component, useEffect } from 'react'
+import type { ErrorInfo, ReactNode } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
@@ -73,7 +74,7 @@ export default function App() {
   useEffect(() => {
     if (!hasProject) return
 
-    refreshEntities()
+    refreshEntities().catch(() => {})
 
     // Recover real-time state that may have been lost during a renderer remount
     api.getRealtimeSnapshot().then((snapshot: any) => {
@@ -127,7 +128,7 @@ export default function App() {
     const unsub1 = api.onStreamChunk((chunk: string) => appendChunk(chunk))
     const unsub2 = api.onAgentDone((result: any) => {
       finalize(result)
-      refreshEntities()
+      refreshEntities().catch(() => {})
 
       // Extract file paths from agent response and add to working files
       const text = result.response || ''
@@ -142,7 +143,7 @@ export default function App() {
     })
     const unsub6 = api.onEntityCreated(() => {
       // Refresh entity lists when agent creates notes/docs
-      refreshEntities()
+      refreshEntities().catch(() => {})
     })
 
     return () => {
@@ -203,5 +204,39 @@ export default function App() {
         : !rightCollapsed && <RightSidebar />
       }
     </div>
+  )
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false }
+  static getDerivedStateFromError() { return { hasError: true } }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[ErrorBoundary]', error, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex h-screen w-screen items-center justify-center t-bg-base t-text">
+          <div className="text-center">
+            <p className="text-lg font-medium mb-2">Something went wrong</p>
+            <button
+              className="px-4 py-2 rounded bg-orange-500 text-white text-sm"
+              onClick={() => this.setState({ hasError: false })}
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+export function AppWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   )
 }

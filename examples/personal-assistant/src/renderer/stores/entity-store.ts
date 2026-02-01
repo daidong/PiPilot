@@ -34,20 +34,24 @@ export const useEntityStore = create<EntityState>((set) => ({
   reset: () => set({ notes: [], docs: [], pinned: [], selected: [] }),
 
   refreshAll: async () => {
-    const [notes, docs, pinned, selected] = await Promise.all([
-      api.listNotes(),
-      api.listDocs(),
-      api.getPinned(),
-      api.getSelected()
-    ])
-    const stamp = (items: any[], type: EntityItem['type']) =>
-      (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
-    set({
-      notes: stamp(notes, 'note'),
-      docs: stamp(docs, 'doc'),
-      pinned: pinned || [],
-      selected: selected || []
-    })
+    try {
+      const [notes, docs, pinned, selected] = await Promise.all([
+        api.listNotes(),
+        api.listDocs(),
+        api.getPinned(),
+        api.getSelected()
+      ])
+      const stamp = (items: any[], type: EntityItem['type']) =>
+        (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
+      set({
+        notes: stamp(notes, 'note'),
+        docs: stamp(docs, 'doc'),
+        pinned: pinned || [],
+        selected: selected || []
+      })
+    } catch (err) {
+      console.warn('[entity-store] refreshAll failed:', err)
+    }
   },
 
   togglePin: async (id: string) => {
