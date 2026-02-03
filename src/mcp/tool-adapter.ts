@@ -57,32 +57,54 @@ export function adaptMCPTool(
     description,
     parameters: convertJsonSchemaToParameters(mcpTool.inputSchema),
     execute: async (rawInput): Promise<ToolResult<MCPToolResultData>> => {
-      try {
-        // Resolve file:// URIs: turn relative paths into absolute ones
-        // so MCP servers (which run as child processes) can find the file.
-        const input = normalizeFileUris(rawInput)
+      // Resolve file:// URIs: turn relative paths into absolute ones
+      // so MCP servers (which run as child processes) can find the file.
+      const input = normalizeFileUris(rawInput)
 
-        // Set up timeout
-        const timeoutPromise = timeout
-          ? new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Tool execution timeout')), timeout)
-            )
-          : null
+      const maxRetries = 3
 
-        const executePromise = client.callTool(mcpTool.name, input)
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          // Set up timeout
+          const timeoutPromise = timeout
+            ? new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Tool execution timeout')), timeout)
+              )
+            : null
 
-        const result = timeoutPromise
-          ? await Promise.race([executePromise, timeoutPromise])
-          : await executePromise
+          const executePromise = client.callTool(mcpTool.name, input)
 
-        // 转换 MCP 结果为 AgentFoundry 格式
-        return convertMCPResult(result)
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : String(error)
+          const result = timeoutPromise
+            ? await Promise.race([executePromise, timeoutPromise])
+            : await executePromise
+
+          // Check for rate limit errors in the MCP response
+          const resultObj = convertMCPResult(result)
+          if (!resultObj.success && isRateLimitError(resultObj.error)) {
+            if (attempt < maxRetries) {
+              const delayMs = 1000 * Math.pow(2, attempt) // 1s, 2s, 4s
+              await sleep(delayMs)
+              continue
+            }
+          }
+
+          return resultObj
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error)
+          if (isRateLimitError(errMsg) && attempt < maxRetries) {
+            const delayMs = 1000 * Math.pow(2, attempt)
+            await sleep(delayMs)
+            continue
+          }
+          return {
+            success: false,
+            error: errMsg
+          }
         }
       }
+
+      // Should not reach here, but just in case
+      return { success: false, error: 'Max retries exceeded' }
     }
   }
 }
@@ -260,6 +282,21 @@ function normalizeFileUris(input: unknown): unknown {
   }
 
   return changed ? result : input
+}
+
+/**
+ * Check if an error message indicates a rate limit (HTTP 429).
+ */
+function isRateLimitError(msg: string | undefined): boolean {
+  if (!msg) return false
+  return msg.includes('429') || msg.includes('rate limit') || msg.includes('RATE_LIMITED')
+}
+
+/**
+ * Sleep for the given number of milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 /**

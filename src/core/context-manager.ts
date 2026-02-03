@@ -260,7 +260,15 @@ export class ContextManager {
     }
 
     rendered += `\n## Available Namespaces\n${namespaces.map(ns => `- ${ns}.*`).join('\n')}\n`
-    rendered += `\n## Help\nUse \`ctx.get("ctx.catalog")\` to list all available sources.`
+
+    const hasCatalog = this.sources.has('ctx.catalog')
+    if (hasCatalog) {
+      rendered += `\n## Help\nUse \`ctx.get("ctx.catalog")\` to list all available sources.`
+    }
+
+    const fallbackSuggestion = hasCatalog
+      ? 'Use ctx.get("ctx.catalog") to see available sources'
+      : `Available namespaces: ${namespaces.map(ns => `${ns}.*`).join(', ')}`
 
     return {
       success: false,
@@ -271,7 +279,7 @@ export class ContextManager {
         complete: true,
         suggestions: similar.length > 0
           ? [`Try: ctx.get("${similar[0]}")`]
-          : ['Use ctx.get("ctx.catalog") to see available sources']
+          : [fallbackSuggestion]
       },
       kindEcho: {
         source: sourceId,
@@ -532,8 +540,10 @@ export class ContextManager {
       lines.push('')
     }
 
-    lines.push('## Help')
-    lines.push('- Use `ctx.get("ctx.catalog")` for detailed listing')
+    if (this.sources.has('ctx.catalog')) {
+      lines.push('## Help')
+      lines.push('- Use `ctx.get("ctx.catalog")` for detailed listing')
+    }
     lines.push('- Use `ctx.get("ctx.describe", { id: "..." })` for full documentation')
 
     return lines.join('\n')

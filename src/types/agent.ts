@@ -71,6 +71,8 @@ export interface AgentConfig {
   maxTokens?: number
   /** Reasoning effort for reasoning models (low, medium, high) */
   reasoningEffort?: 'low' | 'medium' | 'high'
+  /** Hard stop after this many consecutive tool-only rounds (default: threshold * 2) */
+  maxConsecutiveToolRounds?: number
   /** 审批处理器 */
   onApprovalRequired?: (message: string, timeout?: number) => Promise<boolean>
   /** 流式输出处理器 */

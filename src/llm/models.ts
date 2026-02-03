@@ -27,36 +27,6 @@ export const builtinModels: ModelConfig[] = [
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
   {
-    id: 'gpt-5.1',
-    name: 'GPT-5.1',
-    providerID: 'openai',
-    api: 'chat',
-    capabilities: {
-      temperature: false,
-      reasoning: true,     // Uses Responses API
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 2.5, output: 10 },
-    limit: { maxContext: 128000, maxOutput: 16384 }
-  },
-  {
-    id: 'gpt-5.1-mini',
-    name: 'GPT-5.1 Mini',
-    providerID: 'openai',
-    api: 'chat',
-    capabilities: {
-      temperature: false,
-      reasoning: true,     // Uses Responses API
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 0.3, output: 1.2 },
-    limit: { maxContext: 128000, maxOutput: 16384 }
-  },
-  {
     id: 'gpt-5-mini',
     name: 'GPT-5 Mini',
     providerID: 'openai',
@@ -102,36 +72,6 @@ export const builtinModels: ModelConfig[] = [
     },
     cost: { input: 2.5, output: 10 },
     limit: { maxContext: 128000, maxOutput: 16384 }
-  },
-  {
-    id: 'gpt-4o-mini',
-    name: 'GPT-4o Mini',
-    providerID: 'openai',
-    api: 'chat',
-    capabilities: {
-      temperature: true,
-      reasoning: false,    // Uses Chat Completions API
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 0.15, output: 0.6 },
-    limit: { maxContext: 128000, maxOutput: 16384 }
-  },
-  {
-    id: 'gpt-4-turbo',
-    name: 'GPT-4 Turbo',
-    providerID: 'openai',
-    api: 'chat',
-    capabilities: {
-      temperature: true,
-      reasoning: false,    // Uses Chat Completions API
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 10, output: 30 },
-    limit: { maxContext: 128000, maxOutput: 4096 }
   },
 
   // OpenAI Models - Reasoning (Responses API)

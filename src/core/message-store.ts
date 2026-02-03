@@ -153,8 +153,12 @@ export class FileMessageStore implements MessageStore {
     const line = JSON.stringify(message) + '\n'
     await fs.appendFile(messagesPath, line, 'utf-8')
 
-    // Update session index
-    await this.indexMessage(sessionId, message)
+    // Update session index (non-fatal — message is already persisted)
+    try {
+      await this.indexMessage(sessionId, message)
+    } catch (err) {
+      console.warn('[MessageStore] indexMessage failed (non-fatal):', err)
+    }
 
     // Update session metadata
     await this.updateSessionMeta(sessionId, message)
@@ -188,13 +192,13 @@ export class FileMessageStore implements MessageStore {
       index.messageLines[message.id] = 0
     }
 
-    // Index keywords
+    // Index keywords (use Object.hasOwn to avoid prototype collisions like "constructor")
     for (const keyword of message.keywords) {
-      if (!index.keywords[keyword]) {
+      if (!Object.hasOwn(index.keywords, keyword) || !Array.isArray(index.keywords[keyword])) {
         index.keywords[keyword] = []
       }
-      if (!index.keywords[keyword].includes(message.id)) {
-        index.keywords[keyword].push(message.id)
+      if (!index.keywords[keyword]!.includes(message.id)) {
+        index.keywords[keyword]!.push(message.id)
       }
     }
 
@@ -346,7 +350,8 @@ export class FileMessageStore implements MessageStore {
       const messageScores: Map<string, number> = new Map()
 
       for (const keyword of queryKeywords) {
-        const matchingIds = index.keywords[keyword] ?? []
+        const raw = index.keywords[keyword]
+        const matchingIds = Array.isArray(raw) ? raw : []
         for (const id of matchingIds) {
           messageScores.set(id, (messageScores.get(id) ?? 0) + 1)
         }
@@ -523,7 +528,8 @@ export class FileMessageStore implements MessageStore {
       const messageMatches: Map<string, { score: number; keywords: string[] }> = new Map()
 
       for (const keyword of queryKeywords) {
-        const matchingIds = index.keywords[keyword] ?? []
+        const raw = index.keywords[keyword]
+        const matchingIds = Array.isArray(raw) ? raw : []
         for (const id of matchingIds) {
           const existing = messageMatches.get(id) ?? { score: 0, keywords: [] }
           existing.score += 1

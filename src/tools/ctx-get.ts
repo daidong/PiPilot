@@ -100,7 +100,7 @@ function extractSourceInfo(source: ContextSource): SourceInfo {
  */
 function generateSourceCatalog(sources: SourceInfo[]): string {
   if (sources.length === 0) {
-    return 'Use ctx.catalog to discover available sources'
+    return 'No context sources registered'
   }
 
   const lines: string[] = ['Available sources:']
@@ -119,12 +119,22 @@ function generateSourceCatalog(sources: SourceInfo[]): string {
 /**
  * Generate dynamic description based on registered sources
  */
-function generateDescription(namespaces: string[]): string {
+function generateDescription(namespaces: string[], sourceIds: string[]): string {
   const nsListStr = namespaces.length > 0
     ? namespaces.map(ns => `${ns}.*`).join(', ')
     : 'repo.*, session.*'
 
-  return `Get context from registered sources. Namespaces: ${nsListStr}. Discovery: ctx.catalog (list sources), ctx.describe (source docs). Workflow: index → search → open.`
+  const hasCatalog = sourceIds.includes('ctx.catalog')
+  const hasDescribe = sourceIds.includes('ctx.describe')
+  const discoveryParts: string[] = []
+  if (hasCatalog) discoveryParts.push('ctx.catalog (list sources)')
+  if (hasDescribe) discoveryParts.push('ctx.describe (source docs)')
+
+  const discoveryStr = discoveryParts.length > 0
+    ? ` Discovery: ${discoveryParts.join(', ')}.`
+    : ''
+
+  return `Get context from registered sources. Namespaces: ${nsListStr}.${discoveryStr} Workflow: index → search → open.`
 }
 
 /**
@@ -163,16 +173,21 @@ export function createCtxGetTool(options: CreateCtxGetOptions = {}): Tool<CtxGet
     : undefined
 
   // Generate description with embedded catalog
-  const namespaces = [...new Set(sourceInfos.map(s => s.id.split('.')[0]!))]
-  const baseDescription = generateDescription(namespaces)
+  const sourceIds = sourceInfos.map(s => s.id)
+  const namespaces = [...new Set(sourceIds.map(id => id.split('.')[0]!))]
+  const baseDescription = generateDescription(namespaces, sourceIds)
 
   // Add source catalog to description (limited to maxSourcesInDescription)
   const catalogSources = sourceInfos.slice(0, maxSourcesInDescription)
   const sourceCatalog = generateSourceCatalog(catalogSources)
   const hasMore = sourceInfos.length > maxSourcesInDescription
 
+  const hasCatalog = sourceIds.includes('ctx.catalog')
+  const truncationHint = hasMore && hasCatalog
+    ? `\n\nUse ctx.get("ctx.catalog") for full list.`
+    : ''
   const fullDescription = hasMore
-    ? `${baseDescription}\n\n## Source Catalog (${catalogSources.length} of ${sourceInfos.length})\n${sourceCatalog}\n\nUse ctx.get("ctx.catalog") for full list.`
+    ? `${baseDescription}\n\n## Source Catalog (${catalogSources.length} of ${sourceInfos.length})\n${sourceCatalog}${truncationHint}`
     : `${baseDescription}\n\n## Source Catalog\n${sourceCatalog}`
 
   return defineTool({
@@ -196,7 +211,7 @@ export function createCtxGetTool(options: CreateCtxGetOptions = {}): Tool<CtxGet
         type: 'string',
         description: 'Context source ID. ' + (sourceEnum
           ? `Available: ${sourceEnum.slice(0, 10).join(', ')}${sourceEnum.length > 10 ? ` (+${sourceEnum.length - 10} more)` : ''}`
-          : 'Use ctx.catalog to discover available sources'),
+          : 'No context sources registered'),
         required: true,
         ...(sourceEnum ? { enum: sourceEnum } : {})
       },

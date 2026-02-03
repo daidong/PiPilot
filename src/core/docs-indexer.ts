@@ -452,7 +452,8 @@ export class FileDocsIndexer implements DocsIndexer {
     const docScores: Map<string, { score: number; keywords: string[] }> = new Map()
 
     for (const keyword of queryKeywords) {
-      const matchingDocIds = index.keywords[keyword] ?? []
+      const rawDocIds = index.keywords[keyword]
+      const matchingDocIds = Array.isArray(rawDocIds) ? rawDocIds : []
       for (const docId of matchingDocIds) {
         const existing = docScores.get(docId) ?? { score: 0, keywords: [] }
         existing.score += 1

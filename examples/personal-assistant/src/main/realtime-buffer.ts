@@ -57,6 +57,11 @@ class RealtimeBuffer {
     this.activityEvents = []
   }
 
+  /** Return current progress items (for orphaned-todo cleanup) */
+  getProgressItems(): any[] {
+    return [...this.progressItems]
+  }
+
   /** Return a snapshot the renderer can use to hydrate stores */
   getSnapshot(): RealtimeSnapshot {
     return {

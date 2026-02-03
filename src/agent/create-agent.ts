@@ -215,6 +215,9 @@ export interface CreateAgentOptions extends AgentConfig {
   /** Number of consecutive tool-only rounds before injecting a "synthesize now" nudge (default: 7) */
   toolLoopThreshold?: number
 
+  /** Hard stop after this many consecutive tool-only rounds (default: threshold * 2) */
+  maxConsecutiveToolRounds?: number
+
   /** Pre-compaction callback — fired once per run() when context usage >= 80% */
   onPreCompaction?: (agent: Agent) => Promise<void>
 }
@@ -625,6 +628,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         selectedContext: selectedContent,
         budgetCoordinator,
         toolLoopThreshold: config.toolLoopThreshold,
+        maxConsecutiveToolRounds: config.maxConsecutiveToolRounds,
         onPreCompaction: config.onPreCompaction
           ? () => config.onPreCompaction!(agent)
           : undefined

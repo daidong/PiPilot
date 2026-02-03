@@ -151,7 +151,8 @@ export function classifyError(
   } else if (lowerMsg.includes('file not found') || lowerMsg.includes('enoent') || lowerMsg.includes('no such file') || lowerMsg.includes('disk full') || lowerMsg.includes('enospc')) {
     category = 'resource'
   } else if (lowerMsg.includes('econnrefused') || lowerMsg.includes('enotfound') || lowerMsg.includes('network') || lowerMsg.includes('dns')
-      || lowerMsg.includes('server_error') || lowerMsg.includes('internal server error') || lowerMsg.includes('500')) {
+      || lowerMsg.includes('server_error') || lowerMsg.includes('internal server error') || lowerMsg.includes('500')
+      || lowerMsg.includes('terminated') || lowerMsg.includes('econnreset') || lowerMsg.includes('und_err_socket') || lowerMsg.includes('socket hang up')) {
     category = 'transient_network'
     source = { kind: 'network' }
   } else if (source.kind === 'python' || lowerMsg.includes('traceback') || lowerMsg.includes('syntaxerror') || lowerMsg.includes('exception')) {

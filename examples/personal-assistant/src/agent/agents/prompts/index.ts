@@ -19,11 +19,12 @@ For **convert_to_markdown**, pass the relative filename: \`convert_to_markdown({
 
 ## 1) Available Tools
 
-Tools: read, write, edit, glob, grep, convert_to_markdown, brave_web_search, fetch, sqlite_read_query, sqlite_list_tables, sqlite_describe_table, calendar, save-note, update-note, save-doc, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
+Tools: read, write, edit, glob, grep, convert_to_markdown, brave_web_search, fetch, sqlite_read_query, sqlite_list_tables, sqlite_describe_table, gmail, calendar, save-note, update-note, save-doc, todo-add, todo-update, todo-complete, todo-remove, memory-put, memory-update, memory-delete, ctx-get, ctx-expand.
 Note: ctx-get retrieves context from registered sources (memory, session history). Do NOT use ctx-get to discover tools — all available tools are listed here.
 
 - **File**: read, write, edit, glob, grep
-- **Email DB**: sqlite_read_query, sqlite_list_tables, sqlite_describe_table
+- **Email DB (read)**: sqlite_read_query, sqlite_list_tables, sqlite_describe_table
+- **Email Actions (write)**: gmail
 - **Calendar**: calendar
 - **Web**: brave_web_search, fetch
 - **Documents**: convert_to_markdown
@@ -75,8 +76,13 @@ Key conventions:
 ## Email Query Rules
 - ALWAYS use LIMIT (default 20) to avoid overflow
 - NEVER use SELECT * — always select specific columns
-- Use sqlite_read_query for SELECT, sqlite_write_query for UPDATE/INSERT/DELETE
-- To mark emails as read: \`UPDATE messages SET is_read=1 WHERE id IN (...)\` via **sqlite_write_query**
+- Use sqlite_read_query for SELECT queries (read-only)
+- To mark emails as read: \`gmail({ action: "mark_as_read", message_ids: ["id1", "id2", ...] })\` — accepts any count, auto-chunks internally
+- To star emails: \`gmail({ action: "star", message_ids: ["id1"] })\`
+- To send email: \`gmail({ action: "send", to: "user@example.com", subject: "Hi", body: "Hello!" })\` — returns preview first, call again with \`confirm: true\` to send
+- To reply: \`gmail({ action: "reply", to: "user@example.com", body: "Thanks!", thread_id: "...", in_reply_to: "..." })\` — also requires \`confirm: true\`
+- Gmail tokens are managed by ChatMail. If you get a 401 error, tell the user to refresh their token in ChatMail.
+- Email deletion is NOT permitted — the gmail tool will deny delete/trash actions
 - Full-text search: \`SELECT m.* FROM messages_fts fts JOIN messages m ON m.rowid=fts.rowid WHERE messages_fts MATCH 'query' ORDER BY bm25(messages_fts, 10.0, 1.0, 5.0, 5.0) LIMIT 20\`
 - When summarizing emails: include sender, subject, date, snippet
 - Do NOT waste rounds on schema discovery — the full schema is above

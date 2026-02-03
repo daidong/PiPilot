@@ -403,7 +403,8 @@ export class FileMemoryStorage implements MemoryStorage {
     const candidateKeys = new Map<string, string[]>()
 
     for (const token of queryTokens) {
-      const keys = this.index!.keywords[token] ?? []
+      const rawKeys = this.index!.keywords[token]
+      const keys = Array.isArray(rawKeys) ? rawKeys : []
       for (const key of keys) {
         const matched = candidateKeys.get(key) ?? []
         matched.push(token)
@@ -576,7 +577,7 @@ export class FileMemoryStorage implements MemoryStorage {
     const keywords = tokenize(textToIndex)
 
     for (const keyword of keywords) {
-      if (!this.index!.keywords[keyword]) {
+      if (!Object.hasOwn(this.index!.keywords, keyword) || !Array.isArray(this.index!.keywords[keyword])) {
         this.index!.keywords[keyword] = []
       }
       const kwKeys = this.index!.keywords[keyword]!
@@ -587,7 +588,7 @@ export class FileMemoryStorage implements MemoryStorage {
 
     // Index tags
     for (const tag of item.tags) {
-      if (!this.index!.tags[tag]) {
+      if (!Object.hasOwn(this.index!.tags, tag)) {
         this.index!.tags[tag] = []
       }
       const tagKeys = this.index!.tags[tag]!
@@ -597,7 +598,7 @@ export class FileMemoryStorage implements MemoryStorage {
     }
 
     // Index namespace
-    if (!this.index!.namespaces[item.namespace]) {
+    if (!Object.hasOwn(this.index!.namespaces, item.namespace)) {
       this.index!.namespaces[item.namespace] = []
     }
     const nsKeys = this.index!.namespaces[item.namespace]!

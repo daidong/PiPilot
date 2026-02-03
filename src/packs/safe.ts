@@ -61,8 +61,8 @@ export function safe(): Pack {
 
 ### Context Retrieval
 - **ctx-get**: Unified context entry point for structured information
-  - Available sources: session.*, memory.*, docs.*, ctx.*
-  - Use ctx.get("ctx.catalog") to list all sources
+  - Available sources depend on registered packs (session.*, memory.*, docs.*, etc.)
+  - Source IDs are listed in the ctx-get tool description
 
 ### File Operations
 - **read**: Read file content with pagination

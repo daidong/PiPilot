@@ -76,6 +76,9 @@ export interface AgentLoopConfig {
   /** Custom nudge message factory. Return null to skip. */
   onToolLoopNudge?: (rounds: number) => string | null
 
+  /** Hard stop after this many consecutive tool-only rounds (default: threshold * 2) */
+  maxConsecutiveToolRounds?: number
+
   /**
    * Token budget configuration (optional)
    * When enabled, uses smart budget management to optimize context
@@ -417,13 +420,20 @@ export class AgentLoop {
               this.config.onText?.(text)
             },
             onToolCall: (tc) => {
+              // Ensure input is always a plain object — the Anthropic API
+              // rejects tool_use blocks where input is a string or other
+              // non-dict type.  LLMs occasionally produce malformed args
+              // (e.g. a raw JSON string instead of an object).
+              const safeInput = (tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args))
+                ? tc.args
+                : { _raw: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args) }
               toolCalls.push({
                 type: 'tool_use',
                 id: tc.toolCallId,
                 name: tc.toolName,
-                input: tc.args
+                input: safeInput
               })
-              this.config.onToolCall?.(tc.toolName, tc.args)
+              this.config.onToolCall?.(tc.toolName, safeInput)
             },
             onFinish: (result) => {
               usage = result.usage
@@ -881,6 +891,17 @@ export class AgentLoop {
               data: { consecutiveToolRounds }
             })
           }
+        }
+
+        // Hard stop: too many consecutive tool-only rounds
+        const hardLimit = this.config.maxConsecutiveToolRounds ?? (threshold * 2)
+        if (consecutiveToolRounds >= hardLimit) {
+          finalOutput += '\n[Stopped: too many consecutive tool calls without a response]'
+          this.config.trace.record({
+            type: 'agent.toolLoopHardStop',
+            data: { consecutiveToolRounds }
+          })
+          break
         }
 
         // Check if reached max_tokens
