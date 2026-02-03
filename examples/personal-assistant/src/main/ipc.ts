@@ -56,6 +56,7 @@ let coordinator: ReturnType<typeof createCoordinator> | null = null
 let scheduler: Scheduler | null = null
 let notificationStore: NotificationStore | null = null
 let currentModel = 'gpt-5.2'
+let currentReasoningEffort: 'high' | 'medium' | 'low' = 'medium'
 // Start with empty project path — user must select a folder
 let projectPath = ''
 let sessionId = crypto.randomUUID()
@@ -112,15 +113,17 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
   }
 }
 
-async function ensureCoordinator(win: BrowserWindow, model?: string) {
+async function ensureCoordinator(win: BrowserWindow, model?: string, reasoningEffort?: string) {
   if (isClosing) throw new Error('Project is closing')
   const requestedModel = model || currentModel
-  // Recreate coordinator if model changed
-  if (coordinator && requestedModel !== currentModel) {
+  const requestedEffort = (reasoningEffort as any) || currentReasoningEffort
+  // Recreate coordinator if model or reasoning effort changed
+  if (coordinator && (requestedModel !== currentModel || requestedEffort !== currentReasoningEffort)) {
     coordinator.destroy().catch(() => {})
     coordinator = null
   }
   currentModel = requestedModel
+  currentReasoningEffort = requestedEffort
 
   if (!coordinator) {
     const apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || ''
@@ -146,7 +149,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
               const n = notificationStore.add({
                 type: 'info',
                 title: task.instruction.slice(0, 60),
-                body: result.response.slice(0, 500),
+                body: result.response,
                 scheduledTaskId: task.id
               })
               safeSend(win, 'notification:new', notificationStore.list())
@@ -161,6 +164,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
     coordinator = await createCoordinator({
       apiKey,
       model: currentModel,
+      reasoningEffort: currentReasoningEffort,
       projectPath,
       sessionId,
       emailDbPath: process.env.EMAIL_DB_PATH,
@@ -269,6 +273,17 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
     try {
       const result = await coord.chat(message, mentions)
+
+      // Auto-complete any orphaned in-progress todos (prevents permanent spinners)
+      const progressItems = realtimeBuffer.getProgressItems()
+      for (const item of progressItems) {
+        if (item.status === 'in_progress') {
+          const completed = { ...item, status: 'done' as const, completedAt: new Date().toISOString() }
+          realtimeBuffer.upsertProgressItem(completed)
+          safeSend(win, 'agent:todo-update', completed)
+        }
+      }
+
       realtimeBuffer.finishStreaming()
       safeSend(win, 'agent:done', result)
       return result
@@ -548,6 +563,23 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return { success: false, error: `Unknown tab: ${tab}` }
   })
 
+  // Preferences persistence
+  ipcMain.handle('prefs:load', () => {
+    if (!projectPath) return null
+    const file = join(projectPath, PATHS.root, 'preferences.json')
+    if (!existsSync(file)) return null
+    try { return JSON.parse(readFileSync(file, 'utf-8')) } catch { return null }
+  })
+  ipcMain.handle('prefs:save', (_e, prefs: { selectedModel?: string; reasoningEffort?: string }) => {
+    if (!projectPath) return
+    const file = join(projectPath, PATHS.root, 'preferences.json')
+    const data = { ...prefs, updatedAt: new Date().toISOString() }
+    writeFileSync(file, JSON.stringify(data, null, 2))
+    // Update main-process state so next coordinator creation uses it
+    if (prefs.selectedModel) currentModel = prefs.selectedModel
+    if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort as any
+  })
+
   // Notifications
   ipcMain.handle('notification:list', () => {
     return notificationStore?.list() ?? []
@@ -628,6 +660,15 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       }
       // Reuse persistent session ID for this project folder
       sessionId = loadOrCreateSessionId(projectPath)
+      // Restore persisted model + reasoning preferences
+      const prefsFile = join(projectPath, PATHS.root, 'preferences.json')
+      if (existsSync(prefsFile)) {
+        try {
+          const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
+          if (prefs.selectedModel) currentModel = prefs.selectedModel
+          if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort
+        } catch { /* ignore corrupt file */ }
+      }
       return { projectPath, sessionId }
     }
     return null

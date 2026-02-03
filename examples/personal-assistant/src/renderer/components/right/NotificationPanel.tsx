@@ -1,6 +1,7 @@
 import React from 'react'
 import { Bell, CheckCheck } from 'lucide-react'
 import { useNotificationStore, type Notification } from '../../stores/notification-store'
+import { useUIStore } from '../../stores/ui-store'
 
 export function NotificationPanel() {
   const notifications = useNotificationStore((s) => s.notifications)
@@ -67,7 +68,15 @@ function NotificationRow({ notification, onRead }: { notification: Notification;
 
   return (
     <button
-      onClick={() => isUnread && onRead(notification.id)}
+      onClick={() => {
+        if (isUnread) onRead(notification.id)
+        useUIStore.getState().openPreview({
+          id: notification.id,
+          type: 'note' as const,
+          title: notification.title,
+          content: notification.body,
+        })
+      }}
       className={`w-full text-left rounded-md px-2 py-1.5 transition-colors ${
         isUnread ? 't-bg-hover' : 'opacity-60'
       }`}

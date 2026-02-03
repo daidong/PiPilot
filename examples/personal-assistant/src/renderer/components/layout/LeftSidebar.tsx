@@ -5,6 +5,7 @@ import { useNotificationStore } from '../../stores/notification-store'
 import { EntityTabs } from '../left/EntityTabs'
 import { UserProfile } from '../left/UserProfile'
 import { ModelSelector } from '../left/ModelSelector'
+import { ReasoningToggle } from '../left/ReasoningToggle'
 
 export function LeftSidebar() {
   const theme = useUIStore((s) => s.theme)
@@ -16,19 +17,16 @@ export function LeftSidebar() {
       <div className="px-4 pb-3 flex items-center justify-between">
         <ModelSelector />
         <div className="flex items-center gap-1">
-          <div className="relative">
-            <button
-              className="no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
-              title="Notifications"
-            >
-              <Bell size={16} />
-            </button>
-            {unreadCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 flex items-center justify-center text-[10px] font-medium rounded-full bg-blue-500 text-white">
-                {unreadCount > 99 ? '99+' : unreadCount}
-              </span>
-            )}
-          </div>
+          <ReasoningToggle />
+          <button
+            onClick={() => useNotificationStore.getState().load()}
+            className={`no-drag p-1.5 rounded-lg t-bg-hover transition-colors ${
+              unreadCount > 0 ? 'text-blue-400' : 't-text-muted'
+            }`}
+            title="Notifications"
+          >
+            <Bell size={16} />
+          </button>
           <button
             onClick={() => (window as any).api.clearSessionMemory()}
             className="no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
