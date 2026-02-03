@@ -14,6 +14,8 @@ import { join, basename } from 'path'
 import { createAgent, packs, definePack, defineTool } from '@framework/index.js'
 import { createSaveNoteTool, createSaveDocTool, createUpdateNoteTool } from '../tools/entity-tools.js'
 import { createCalendarTool } from '../tools/calendar-tool.js'
+import { createGmailTool } from '../tools/gmail-tool.js'
+import { noGmailDelete } from '../policies/no-gmail-delete.js'
 import type { Agent } from '@framework/types/agent.js'
 import type { ContextSelection } from '@framework/types/context-pipeline.js'
 import { PATHS, Entity, Note, Doc } from '../types.js'
@@ -174,6 +176,8 @@ export interface CoordinatorConfig {
   sessionId?: string
   /** Optional path to a SQLite database for email/calendar access */
   emailDbPath?: string
+  /** Reasoning effort level for GPT-5 models ('high' | 'medium' | 'low') */
+  reasoningEffort?: 'high' | 'medium' | 'low'
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown) => void
@@ -185,7 +189,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   clearSessionMemory: () => Promise<void>
   destroy: () => Promise<void>
 }> {
-  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, onStream, onToolCall, onToolResult } = config
+  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, reasoningEffort = 'high', onStream, onToolCall, onToolResult } = config
   // Resolve ~ to the user's home directory (dotenv / Node don't expand shell tilde)
   const emailDbPath = config.emailDbPath?.replace(/^~(?=\/|$)/, os.homedir())
 
@@ -325,6 +329,9 @@ _(none yet)_
 `, 'utf-8')
   }
 
+  // Gmail tool for write operations (mark read, star, send, reply)
+  const gmailTool = emailDbPath ? createGmailTool(emailDbPath) : null
+
   const entityPack = definePack({
     id: 'entity-tools',
     name: 'Entity Tools',
@@ -352,11 +359,22 @@ _(none yet)_
     agentPacks.push(sqlitePack)
   }
 
+  // Add Gmail tool pack if email DB is available
+  if (gmailTool) {
+    agentPacks.push(definePack({
+      id: 'gmail-tools',
+      name: 'Gmail Tools',
+      description: 'Gmail write operations (mark read, star, send, reply)',
+      tools: [gmailTool],
+      policies: [noGmailDelete]
+    }))
+  }
+
   const agent = createAgent({
     apiKey,
     model,
     projectPath,
-    reasoningEffort: 'high',
+    reasoningEffort,
     identity: SYSTEM_PROMPT,
     constraints: [
       'For multi-step work, briefly state intent before acting',
@@ -390,6 +408,7 @@ _(none yet)_
     },
 
     toolLoopThreshold: 15,
+    maxConsecutiveToolRounds: 20,
 
     // Pre-compaction flush: save important context to daily log before compaction
     onPreCompaction: async (agentRef) => {

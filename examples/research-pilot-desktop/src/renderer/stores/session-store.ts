@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { useChatStore } from './chat-store'
 import { useProgressStore } from './progress-store'
 import { useActivityStore } from './activity-store'
-import { useUIStore } from './ui-store'
+import { useUIStore, hydratePreferences } from './ui-store'
 import { useEntityStore } from './entity-store'
 
 interface SessionState {
@@ -28,6 +28,9 @@ export const useSessionStore = create<SessionState>((set) => ({
       projectPath: session.projectPath,
       hasProject: !!session.projectPath
     })
+    if (session.projectPath) {
+      await hydratePreferences()
+    }
   },
 
   pickFolder: async () => {
@@ -38,6 +41,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         projectPath: result.projectPath,
         hasProject: true
       })
+      await hydratePreferences()
       return true
     }
     return false

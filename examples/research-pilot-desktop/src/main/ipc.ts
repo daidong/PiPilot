@@ -102,6 +102,7 @@ const fmt = createActivityFormatter({
 
 let coordinator: ReturnType<typeof createCoordinator> | null = null
 let currentModel = 'gpt-5.2'
+let currentReasoningEffort: 'high' | 'medium' | 'low' = 'medium'
 // Start with empty project path — user must select a folder
 let projectPath = ''
 let sessionId = crypto.randomUUID()
@@ -157,15 +158,17 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
   }
 }
 
-async function ensureCoordinator(win: BrowserWindow, model?: string) {
+async function ensureCoordinator(win: BrowserWindow, model?: string, reasoningEffort?: string) {
   if (isClosing) throw new Error('Project is closing')
   const requestedModel = model || currentModel
-  // Recreate coordinator if model changed
-  if (coordinator && requestedModel !== currentModel) {
+  const requestedEffort = (reasoningEffort as any) || currentReasoningEffort
+  // Recreate coordinator if model or reasoning effort changed
+  if (coordinator && (requestedModel !== currentModel || requestedEffort !== currentReasoningEffort)) {
     coordinator.destroy().catch(() => {})
     coordinator = null
   }
   currentModel = requestedModel
+  currentReasoningEffort = requestedEffort
 
   if (!coordinator) {
     const apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || ''
@@ -178,6 +181,7 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
     coordinator = await createCoordinator({
       apiKey,
       model: currentModel,
+      reasoningEffort: currentReasoningEffort,
       projectPath,
       sessionId,
       debug: true,
@@ -665,6 +669,22 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return { success: false, error: `Unknown tab: ${tab}` }
   })
 
+  // Preferences persistence
+  ipcMain.handle('prefs:load', () => {
+    if (!projectPath) return null
+    const file = join(projectPath, PATHS.root, 'preferences.json')
+    if (!existsSync(file)) return null
+    try { return JSON.parse(readFileSync(file, 'utf-8')) } catch { return null }
+  })
+  ipcMain.handle('prefs:save', (_e, prefs: { selectedModel?: string; reasoningEffort?: string }) => {
+    if (!projectPath) return
+    const file = join(projectPath, PATHS.root, 'preferences.json')
+    const data = { ...prefs, updatedAt: new Date().toISOString() }
+    writeFileSync(file, JSON.stringify(data, null, 2))
+    if (prefs.selectedModel) currentModel = prefs.selectedModel
+    if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort as any
+  })
+
   // Session - chat history persistence
   ipcMain.handle('session:save-message', (_e, sid: string, msg: any) => {
     if (!projectPath) return
@@ -731,6 +751,15 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       }
       // Reuse persistent session ID for this project folder
       sessionId = loadOrCreateSessionId(projectPath)
+      // Restore persisted model + reasoning preferences
+      const prefsFile = join(projectPath, PATHS.root, 'preferences.json')
+      if (existsSync(prefsFile)) {
+        try {
+          const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
+          if (prefs.selectedModel) currentModel = prefs.selectedModel
+          if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort
+        } catch { /* ignore corrupt file */ }
+      }
       return { projectPath, sessionId }
     }
     return null

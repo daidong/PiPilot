@@ -147,6 +147,8 @@ export interface CoordinatorConfig {
   debug?: boolean
   /** Persistent session ID for history continuity across restarts */
   sessionId?: string
+  /** Reasoning effort level for GPT-5 models ('high' | 'medium' | 'low') */
+  reasoningEffort?: 'high' | 'medium' | 'low'
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown) => void
@@ -158,7 +160,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   clearSessionMemory: () => Promise<void>
   destroy: () => Promise<void>
 }> {
-  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, onStream, onToolCall, onToolResult } = config
+  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, reasoningEffort = 'high', onStream, onToolCall, onToolResult } = config
 
   // Create subagent tools with the coordinator's API key, onToolResult, and projectPath
   // so the team pipeline can emit progress updates and save papers to the local library
@@ -267,7 +269,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     apiKey,
     model,
     projectPath,
-    reasoningEffort: 'high',
+    reasoningEffort,
     identity: SYSTEM_PROMPT,
     constraints: [
       'For multi-step work, briefly state intent before acting',

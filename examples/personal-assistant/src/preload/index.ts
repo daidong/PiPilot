@@ -71,6 +71,10 @@ export interface ElectronAPI {
   getUnreadCount: () => Promise<number>
   onNotification: (cb: (notifications: any[]) => void) => () => void
 
+  // Preferences
+  loadPreferences: () => Promise<{ selectedModel?: string; reasoningEffort?: string } | null>
+  savePreferences: (prefs: { selectedModel?: string; reasoningEffort?: string }) => Promise<void>
+
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
   loadMessages: (sessionId: string, offset: number, limit: number) => Promise<any[]>
@@ -168,6 +172,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('notification:new', handler)
     return () => ipcRenderer.removeListener('notification:new', handler)
   },
+
+  loadPreferences: () => ipcRenderer.invoke('prefs:load'),
+  savePreferences: (prefs) => ipcRenderer.invoke('prefs:save', prefs),
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),
   loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),

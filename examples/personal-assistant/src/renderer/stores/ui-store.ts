@@ -3,6 +3,9 @@ import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
 type LeftTab = 'notes' | 'docs'
+export type ReasoningEffort = 'high' | 'medium' | 'low'
+
+export const GPT5_REASONING_MODELS = ['gpt-5.2', 'gpt-5-mini', 'gpt-5-nano']
 
 export interface WorkingFile {
   path: string
@@ -19,16 +22,11 @@ export interface ModelOption {
 }
 
 export const SUPPORTED_MODELS: ModelOption[] = [
-  // GPT-5.x
+  // GPT
   { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'OpenAI' },
-  { id: 'gpt-5.1', label: 'GPT-5.1', provider: 'OpenAI' },
-  { id: 'gpt-5.1-mini', label: 'GPT-5.1 Mini', provider: 'OpenAI' },
   { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'OpenAI' },
   { id: 'gpt-5-nano', label: 'GPT-5 Nano', provider: 'OpenAI' },
-  // GPT-4
   { id: 'gpt-4o', label: 'GPT-4o', provider: 'OpenAI' },
-  { id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'OpenAI' },
-  { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', provider: 'OpenAI' },
   // Anthropic Claude 4.5
   { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Anthropic' },
   { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Anthropic' },
@@ -43,7 +41,9 @@ interface UIState {
   rightSidebarCollapsed: boolean
   leftSidebarCollapsed: boolean
   workingFiles: WorkingFile[]
+  reasoningEffort: ReasoningEffort
   previewEntity: EntityItem | null
+  setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
   setLeftTab: (tab: LeftTab) => void
@@ -66,12 +66,24 @@ export const useUIStore = create<UIState>((set) => ({
   rightSidebarCollapsed: false,
   leftSidebarCollapsed: false,
   workingFiles: [],
+  reasoningEffort: 'medium',
   previewEntity: null,
 
+  setReasoningEffort: (reasoningEffort) => {
+    set({ reasoningEffort })
+    const api = (window as any).api
+    const model = useUIStore.getState().selectedModel
+    api?.savePreferences?.({ selectedModel: model, reasoningEffort })
+  },
   setTheme: (theme) => set({ theme }),
   toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
   setLeftTab: (leftTab) => set({ leftTab }),
-  setModel: (selectedModel) => set({ selectedModel }),
+  setModel: (selectedModel) => {
+    set({ selectedModel })
+    const api = (window as any).api
+    const effort = useUIStore.getState().reasoningEffort
+    api?.savePreferences?.({ selectedModel, reasoningEffort: effort })
+  },
   setIdle: (isIdle) => set({ isIdle }),
   toggleRightSidebar: () => set((s) => ({ rightSidebarCollapsed: !s.rightSidebarCollapsed })),
   addWorkingFile: (path) =>
@@ -111,3 +123,14 @@ export const useUIStore = create<UIState>((set) => ({
   openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true }),
   closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false })
 }))
+
+/** Load persisted model + reasoning preferences from disk. Call after project path is set. */
+export async function hydratePreferences(): Promise<void> {
+  const api = (window as any).api
+  const prefs = await api?.loadPreferences?.()
+  if (!prefs) return
+  const updates: Partial<{ selectedModel: string; reasoningEffort: ReasoningEffort }> = {}
+  if (prefs.selectedModel) updates.selectedModel = prefs.selectedModel
+  if (prefs.reasoningEffort) updates.reasoningEffort = prefs.reasoningEffort
+  if (Object.keys(updates).length > 0) useUIStore.setState(updates)
+}
