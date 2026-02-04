@@ -77,7 +77,8 @@ function formatSystemWithCacheControl(
 function convertMessages(messages: Message[], provider?: ProviderID): ModelMessage[] {
   // For Anthropic, we cache the first N user/assistant messages (stable history)
   // These are typically older turns that won't change
-  const CACHE_FIRST_N_MESSAGES = 4
+  // Extended to 8 messages for better cache hit rate in multi-turn conversations
+  const CACHE_FIRST_N_MESSAGES = 8
 
   return messages.map((msg, index): ModelMessage => {
     // Determine if this message should be cached (Anthropic only, early messages)
