@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { Pin, CheckSquare, X, StickyNote, FileText } from 'lucide-react'
+import { Bookmark, Layers, X, StickyNote, FileText } from 'lucide-react'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 
 const typeColors: Record<string, string> = {
@@ -19,7 +19,7 @@ const typeIcons: Record<string, React.ReactNode> = {
 
 function Chip({ entity, variant, onRemove }: {
   entity: EntityItem
-  variant: 'pinned' | 'selected'
+  variant: 'projectCard' | 'workingSet'
   onRemove: () => void
 }) {
   const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
@@ -30,7 +30,7 @@ function Chip({ entity, variant, onRemove }: {
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${color}`}>
       {typeIcons[entity.type]}
       <span className="truncate max-w-[120px]">{entity.title}</span>
-      {variant === 'pinned' && <Pin size={10} className="opacity-60" />}
+      {variant === 'projectCard' && <Bookmark size={10} className="opacity-60" />}
       <button onClick={onRemove} className="opacity-50 hover:opacity-100 transition-opacity">
         <X size={10} />
       </button>
@@ -39,42 +39,44 @@ function Chip({ entity, variant, onRemove }: {
 }
 
 export function ContextChips() {
-  const { pinned, selected, togglePin, toggleSelect, refreshAll } = useEntityStore()
+  // RFC-009: Using new naming (projectCards, workingSet) with legacy alias support
+  const { projectCards, workingSet, toggleProjectCard, toggleWorkingSet, refreshAll } = useEntityStore()
 
   useEffect(() => {
     refreshAll()
   }, [])
 
-  const allPinned = pinned
-  const allSelected = selected
-
   return (
     <div className="space-y-3">
+      {/* RFC-009: Project Cards (formerly Pinned) - long-term memory */}
       <div>
         <h3 className="text-xs font-semibold t-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
-          <Pin size={10} /> Pinned
+          <Bookmark size={10} /> Project Cards
+          <span className="text-[10px] font-normal opacity-70">(long-term)</span>
         </h3>
-        {allPinned.length === 0 ? (
-          <p className="text-xs t-text-muted">No pinned entities</p>
+        {projectCards.length === 0 ? (
+          <p className="text-xs t-text-muted">No project cards</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {allPinned.map((e) => (
-              <Chip key={e.id} entity={e} variant="pinned" onRemove={() => togglePin(e.id)} />
+            {projectCards.map((e) => (
+              <Chip key={e.id} entity={e} variant="projectCard" onRemove={() => toggleProjectCard(e.id)} />
             ))}
           </div>
         )}
       </div>
 
+      {/* RFC-009: Working Set (formerly Selected) - session context */}
       <div>
         <h3 className="text-xs font-semibold t-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
-          <CheckSquare size={10} /> Selected
+          <Layers size={10} /> Working Set
+          <span className="text-[10px] font-normal opacity-70">(this session)</span>
         </h3>
-        {allSelected.length === 0 ? (
-          <p className="text-xs t-text-muted">No selected entities</p>
+        {workingSet.length === 0 ? (
+          <p className="text-xs t-text-muted">No items in working set</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {allSelected.map((e) => (
-              <Chip key={e.id} entity={e} variant="selected" onRemove={() => toggleSelect(e.id)} />
+            {workingSet.map((e) => (
+              <Chip key={e.id} entity={e} variant="workingSet" onRemove={() => toggleWorkingSet(e.id)} />
             ))}
           </div>
         )}

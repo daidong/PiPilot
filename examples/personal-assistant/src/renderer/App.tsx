@@ -117,7 +117,8 @@ export default function App() {
     const unsub4 = api.onTodoClear(() => {
       useProgressStore.getState().clear()
       useActivityStore.getState().clear()
-      useUsageStore.getState().resetRun()
+      // Don't reset usage here - we want to accumulate across runs
+      // Usage is reset when a NEW run starts, not when the old one ends
     })
     const unsubActivity = api.onActivity((event: any) => {
       useActivityStore.getState().push({

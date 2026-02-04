@@ -88,18 +88,6 @@ export interface MigrationOptions {
    * If not provided, only deterministic summaries are generated
    */
   llmSummarize?: (prompt: string) => Promise<string>
-
-  /**
-   * Dry run - don't actually modify entities
-   * Default: false
-   */
-  dryRun?: boolean
-
-  /**
-   * Mark migrated legacy-pinned items for review
-   * Default: true
-   */
-  markForReview?: boolean
 }
 
 // ============ Migration Logic ============
@@ -156,9 +144,7 @@ export async function migrateEntity(
 ): Promise<{ entity: MemoryEntity; result: MigrationResult }> {
   const {
     generateSummaryCards = true,
-    llmSummarize,
-    dryRun = false,
-    markForReview = true
+    llmSummarize
   } = options
 
   const changes: string[] = []
@@ -181,13 +167,6 @@ export async function migrateEntity(
         migrated.projectCard = legacyChanges.projectCard
         if (entity.pinned) {
           changes.push('pinned=true → projectCard=true')
-
-          // Mark for review if it was a legacy pinned item
-          if (markForReview && !dryRun) {
-            migrated._legacyPinned = true
-            migrated._needsReview = true
-            changes.push('Marked for review (legacy pinned)')
-          }
         }
       }
 

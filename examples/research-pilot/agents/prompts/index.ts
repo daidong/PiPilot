@@ -223,8 +223,22 @@ Use memory-put with namespace="session" to store SHORT critical facts for this c
 - Memory is ALWAYS visible to you in every turn — do not re-read it
 - Do NOT store large content — use save-note for that
 
-## 11) Notes (Persistent Research Notes)
-Every note you create is **automatically pinned** and visible in your context every turn.
+## 11) Notes & Memory Model (RFC-009)
+
+Notes are saved as entities. Mark important ones as **Project Cards** for long-term memory.
+
+### Memory Model
+
+- **Project Cards**: Long-term memory. Core decisions, constraints, key findings.
+  Toggle with \`/project <id>\`. Always considered for context (budget permitting).
+  These persist across sessions and represent your research foundation.
+
+- **WorkingSet**: Runtime selection. Current task focus, mentioned entities.
+  Use \`@mention\` to include entities in the current turn's context.
+  Session-scoped — WorkingSet is rebuilt each turn based on relevance.
+
+- **Session Memory**: Short-term facts. Cleared on restart.
+  Stored via memory-put with namespace="session".
 
 ### Create responsibly
 - Only create notes for valuable persistent artifacts: research summaries, key findings, methodology decisions, conclusions
@@ -232,7 +246,7 @@ Every note you create is **automatically pinned** and visible in your context ev
 - Keep notes concise and easy to read — humans have to read these
 
 ### Update, don't duplicate
-- All your notes are pinned, so you can SEE them in context. Before calling save-note, check if a note on the same topic already exists.
+- Project Cards appear in your context. Before calling save-note, check if a note on the same topic already exists.
 - If one exists, use **update-note** with its ID to revise the content — do NOT create a second note
 - When the research focus shifts, update existing notes or create new notes to reflect the new direction`,
 

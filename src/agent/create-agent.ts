@@ -27,8 +27,9 @@ import {
   createContextPipeline,
   createSessionPhase,
   createIndexPhase,
-  createPinnedPhase,
-  createSelectedPhase
+  createProjectCardsPhase,
+  createSelectedPhase,
+  createStateSummaryPhase
 } from '../context/index.js'
 import {
   tryLoadConfig,
@@ -480,13 +481,14 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
 
   const systemPrompt = compiledPrompt.render()
 
-  // Context pipeline for budget-controlled context assembly
+  // Context pipeline for budget-controlled context assembly (RFC-009)
   const contextPipeline = createContextPipeline({
     phases: [
-      createPinnedPhase(),
-      createSelectedPhase(),
-      createSessionPhase({ maxMessages: 100, includeToolMessages: false }),
-      createIndexPhase()
+      createProjectCardsPhase(),                                              // Priority 90: Long-term memory (Project Cards)
+      createSelectedPhase(),                                                  // Priority 80: Explicitly selected entities
+      createStateSummaryPhase(),                                              // Priority 60: Session state summaries
+      createSessionPhase({ maxMessages: 100, includeToolMessages: false }),   // Priority 50: Conversation history
+      createIndexPhase()                                                      // Priority 30: Entity index hints
     ]
   })
 

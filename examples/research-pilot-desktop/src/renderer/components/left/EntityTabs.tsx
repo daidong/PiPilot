@@ -1,32 +1,35 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { StickyNote, BookOpen, Database, Upload, MessageSquare, Trash2, Pin, Check, ChevronRight, ChevronDown, FileSpreadsheet, FlaskConical, Loader2, RefreshCw } from 'lucide-react'
+import { StickyNote, BookOpen, Database, Upload, MessageSquare, Trash2, Bookmark, Layers, ChevronRight, ChevronDown, FileSpreadsheet, FlaskConical, Loader2, RefreshCw } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
 
-// Hover preview tooltip with pin/select/delete actions
+// Hover preview tooltip with project card/working set/delete actions (RFC-009)
 function HoverPreview({
   entity,
   anchorRect,
   onMouseEnter,
   onMouseLeave,
-  onPin,
-  onSelect,
+  onProjectCard,
+  onWorkingSet,
   onDelete,
-  confirmDelete
+  confirmDelete,
+  isInWorkingSet
 }: {
   entity: EntityItem
   anchorRect: DOMRect
   onMouseEnter: () => void
   onMouseLeave: () => void
-  onPin: () => void
-  onSelect: () => void
+  onProjectCard: () => void
+  onWorkingSet: () => void
   onDelete: () => void
   confirmDelete: boolean
+  isInWorkingSet: boolean
 }) {
   const content = entity.content || entity.abstract || entity.valueText || ''
+  const isProjectCard = entity.pinned || entity.projectCard
 
   // Position to the right of the sidebar (fixed position)
   // Left sidebar is ~220px, so position preview at ~230px from left
@@ -50,19 +53,21 @@ function HoverPreview({
           )}
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
+          {/* RFC-009: Project Card toggle */}
           <button
-            onClick={(e) => { e.stopPropagation(); onPin() }}
-            className={`p-1 rounded ${entity.pinned ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
-            title={entity.pinned ? 'Unpin' : 'Pin'}
+            onClick={(e) => { e.stopPropagation(); onProjectCard() }}
+            className={`p-1 rounded ${isProjectCard ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
+            title={isProjectCard ? 'Remove from Project Cards' : 'Add to Project Cards'}
           >
-            <Pin size={13} />
+            <Bookmark size={13} />
           </button>
+          {/* RFC-009: Working Set toggle */}
           <button
-            onClick={(e) => { e.stopPropagation(); onSelect() }}
-            className={`p-1 rounded ${entity.selectedForAI ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
-            title={entity.selectedForAI ? 'Deselect' : 'Select'}
+            onClick={(e) => { e.stopPropagation(); onWorkingSet() }}
+            className={`p-1 rounded ${isInWorkingSet ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
+            title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
           >
-            <Check size={13} />
+            <Layers size={13} />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete() }}
@@ -92,9 +97,10 @@ const tabs = [
   { key: 'papers' as const, label: 'Papers', icon: BookOpen }
 ]
 
-function EntityRow({ entity }: { entity: EntityItem }) {
-  const togglePin = useEntityStore((s) => s.togglePin)
-  const toggleSelect = useEntityStore((s) => s.toggleSelect)
+function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetIds: Set<string> }) {
+  // RFC-009: Use new method names
+  const toggleProjectCard = useEntityStore((s) => s.toggleProjectCard)
+  const toggleWorkingSet = useEntityStore((s) => s.toggleWorkingSet)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const enrichingPapers = useEntityStore((s) => s.enrichingPapers)
   const isEnriching = enrichingPapers.has(entity.id)
@@ -111,6 +117,8 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   const confirmResetRef = useRef<number | null>(null)
 
   const messageId = entity.provenance?.messageId as string | undefined
+  const isProjectCard = entity.pinned || entity.projectCard
+  const isInWorkingSet = workingSetIds.has(entity.id)
 
   const cancelHide = () => {
     if (hideTimeoutRef.current) {
@@ -178,17 +186,19 @@ function EntityRow({ entity }: { entity: EntityItem }) {
             anchorRect={anchorRect}
             onMouseEnter={cancelHide}
             onMouseLeave={handleMouseLeave}
-            onPin={() => togglePin(entity.id)}
-            onSelect={() => toggleSelect(entity.id)}
+            onProjectCard={() => toggleProjectCard(entity.id)}
+            onWorkingSet={() => toggleWorkingSet(entity.id)}
             onDelete={handleDelete}
             confirmDelete={confirmDelete}
+            isInWorkingSet={isInWorkingSet}
           />
         )}
         {isEnriching ? (
           <Loader2 size={10} className="shrink-0 text-orange-400 animate-spin" />
         ) : (
+          /* RFC-009: Status dot - orange for Project Card, blue for Working Set */
           <span className={`w-1 h-1 rounded-full shrink-0 ${
-            entity.pinned ? 'bg-orange-400' : entity.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
+            isProjectCard ? 'bg-orange-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
           }`} />
         )}
         <span className="text-xs t-text truncate">{entity.title}</span>
@@ -207,7 +217,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   )
 }
 
-function DataTreeView({ items }: { items: EntityItem[] }) {
+function DataTreeView({ items, workingSetIds }: { items: EntityItem[]; workingSetIds: Set<string> }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const openPreview = useUIStore((s) => s.openPreview)
 
@@ -241,7 +251,7 @@ function DataTreeView({ items }: { items: EntityItem[] }) {
       {topLevel.map((e) => (
         <div key={e.id} className="flex items-center gap-1">
           <FileSpreadsheet size={13} className="shrink-0 t-text-muted ml-2" />
-          <div className="flex-1 min-w-0"><EntityRow entity={e} /></div>
+          <div className="flex-1 min-w-0"><EntityRow entity={e} workingSetIds={workingSetIds} /></div>
         </div>
       ))}
       {Array.from(grouped.entries()).map(([runId, children]) => {
@@ -266,7 +276,7 @@ function DataTreeView({ items }: { items: EntityItem[] }) {
             </div>
             {isOpen && (
               <div className="pl-4">
-                {children.map((e) => <EntityRow key={e.id} entity={e} />)}
+                {children.map((e) => <EntityRow key={e.id} entity={e} workingSetIds={workingSetIds} />)}
               </div>
             )}
           </div>
@@ -279,12 +289,16 @@ function DataTreeView({ items }: { items: EntityItem[] }) {
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, papers, data, refreshAll, setEnriching, clearEnriching, clearAllEnriching } = useEntityStore()
+  // RFC-009: Get workingSet for status dot logic
+  const { notes, papers, data, workingSet, refreshAll, setEnriching, clearEnriching, clearAllEnriching } = useEntityStore()
   const [isEnrichingAll, setIsEnrichingAll] = useState(false)
 
   useEffect(() => {
     refreshAll()
   }, [])
+
+  // RFC-009: Create Set of working set IDs for efficient lookup
+  const workingSetIds = new Set(workingSet.map(e => e.id))
 
   const handleEnrichAll = useCallback(async () => {
     const api = (window as any).api
@@ -387,9 +401,9 @@ export function EntityTabs() {
             No {leftTab} yet
           </p>
         ) : leftTab === 'data' ? (
-          <DataTreeView items={items} />
+          <DataTreeView items={items} workingSetIds={workingSetIds} />
         ) : (
-          items.map((e) => <EntityRow key={e.id} entity={e} />)
+          items.map((e) => <EntityRow key={e.id} entity={e} workingSetIds={workingSetIds} />)
         )}
       </div>
     </div>

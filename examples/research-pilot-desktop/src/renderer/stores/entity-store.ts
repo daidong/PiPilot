@@ -4,8 +4,9 @@ export interface EntityItem {
   id: string
   type: 'note' | 'paper' | 'data'
   title: string
-  pinned?: boolean
-  selectedForAI?: boolean
+  pinned?: boolean           // Legacy field, kept for backward compatibility
+  projectCard?: boolean      // RFC-009: New field for Project Cards
+  selectedForAI?: boolean    // Legacy field, kept for backward compatibility (not used in RFC-009)
   [key: string]: any
 }
 
@@ -13,6 +14,9 @@ interface EntityState {
   notes: EntityItem[]
   papers: EntityItem[]
   data: EntityItem[]
+  projectCards: EntityItem[]   // RFC-009: Renamed from pinned
+  workingSet: EntityItem[]     // RFC-009: Renamed from selected
+  // Legacy aliases
   pinned: EntityItem[]
   selected: EntityItem[]
   enrichingPapers: Set<string>
@@ -21,6 +25,9 @@ interface EntityState {
   clearAllEnriching: () => void
   reset: () => void
   refreshAll: () => Promise<void>
+  toggleProjectCard: (id: string) => Promise<void>   // RFC-009: Renamed from togglePin
+  toggleWorkingSet: (id: string) => Promise<void>    // RFC-009: Renamed from toggleSelect
+  // Legacy aliases
   togglePin: (id: string) => Promise<void>
   toggleSelect: (id: string) => Promise<void>
   renameNote: (id: string, newTitle: string) => Promise<void>
@@ -30,12 +37,15 @@ interface EntityState {
 
 const api = (window as any).api
 
-export const useEntityStore = create<EntityState>((set) => ({
+export const useEntityStore = create<EntityState>((set, get) => ({
   notes: [],
   papers: [],
   data: [],
-  pinned: [],
-  selected: [],
+  projectCards: [],   // RFC-009
+  workingSet: [],     // RFC-009
+  // Legacy aliases pointing to the same data
+  get pinned() { return get().projectCards },
+  get selected() { return get().workingSet },
   enrichingPapers: new Set<string>(),
 
   setEnriching: (id: string) => set((state) => {
@@ -50,15 +60,15 @@ export const useEntityStore = create<EntityState>((set) => ({
   }),
   clearAllEnriching: () => set({ enrichingPapers: new Set<string>() }),
 
-  reset: () => set({ notes: [], papers: [], data: [], pinned: [], selected: [], enrichingPapers: new Set<string>() }),
+  reset: () => set({ notes: [], papers: [], data: [], projectCards: [], workingSet: [], enrichingPapers: new Set<string>() }),
 
   refreshAll: async () => {
-    const [notes, papers, data, pinned, selected] = await Promise.all([
+    const [notes, papers, data, projectCards, workingSet] = await Promise.all([
       api.listNotes(),
       api.listLiterature(),
       api.listData(),
-      api.getPinned(),
-      api.getSelected()
+      api.getPinned(),      // Backend still uses legacy name
+      api.getSelected()     // Backend still uses legacy name
     ])
     const stamp = (items: any[], type: EntityItem['type']) =>
       (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
@@ -72,14 +82,15 @@ export const useEntityStore = create<EntityState>((set) => ({
       notes: stamp(notes, 'note'),
       papers: sortByYear(stamp(papers, 'paper')),
       data: stamp(data, 'data'),
-      pinned: pinned || [],
-      selected: selected || []
+      projectCards: projectCards || [],
+      workingSet: workingSet || []
     })
   },
 
-  togglePin: async (id: string) => {
-    await api.togglePin(id)
-    const [notes, papers, data, pinned, selected] = await Promise.all([
+  // RFC-009: Primary method names
+  toggleProjectCard: async (id: string) => {
+    await api.togglePin(id)  // Backend still uses legacy name
+    const [notes, papers, data, projectCards, workingSet] = await Promise.all([
       api.listNotes(), api.listLiterature(), api.listData(),
       api.getPinned(), api.getSelected()
     ])
@@ -87,13 +98,13 @@ export const useEntityStore = create<EntityState>((set) => ({
       (items || []).map((i: any) => ({ ...i, type }))
     set({
       notes: stamp(notes, 'note'), papers: stamp(papers, 'paper'),
-      data: stamp(data, 'data'), pinned: pinned || [], selected: selected || []
+      data: stamp(data, 'data'), projectCards: projectCards || [], workingSet: workingSet || []
     })
   },
 
-  toggleSelect: async (id: string) => {
-    await api.toggleSelect(id)
-    const [notes, papers, data, pinned, selected] = await Promise.all([
+  toggleWorkingSet: async (id: string) => {
+    await api.toggleSelect(id)  // Backend still uses legacy name
+    const [notes, papers, data, projectCards, workingSet] = await Promise.all([
       api.listNotes(), api.listLiterature(), api.listData(),
       api.getPinned(), api.getSelected()
     ])
@@ -101,9 +112,13 @@ export const useEntityStore = create<EntityState>((set) => ({
       (items || []).map((i: any) => ({ ...i, type }))
     set({
       notes: stamp(notes, 'note'), papers: stamp(papers, 'paper'),
-      data: stamp(data, 'data'), pinned: pinned || [], selected: selected || []
+      data: stamp(data, 'data'), projectCards: projectCards || [], workingSet: workingSet || []
     })
   },
+
+  // Legacy aliases
+  togglePin: async (id: string) => { return get().toggleProjectCard(id) },
+  toggleSelect: async (id: string) => { return get().toggleWorkingSet(id) },
 
   renameNote: async (id: string, newTitle: string) => {
     await api.renameNote(id, newTitle)
@@ -135,7 +150,7 @@ export const useEntityStore = create<EntityState>((set) => ({
 
   deleteEntity: async (id: string) => {
     await api.deleteEntity(id)
-    const [notes, papers, data, pinned, selected] = await Promise.all([
+    const [notes, papers, data, projectCards, workingSet] = await Promise.all([
       api.listNotes(),
       api.listLiterature(),
       api.listData(),
@@ -146,8 +161,8 @@ export const useEntityStore = create<EntityState>((set) => ({
       notes: notes || [],
       papers: papers || [],
       data: data || [],
-      pinned: pinned || [],
-      selected: selected || []
+      projectCards: projectCards || [],
+      workingSet: workingSet || []
     })
   }
 }))

@@ -79,8 +79,11 @@ function formatEntityForContext(entity: Entity): string {
 }
 
 /**
- * Build ContextSelection[] from disk entities that are selected (non-pinned).
- * Pinned entities are synced to memoryStorage separately for the framework's pinned-phase.
+ * Build ContextSelection[] from disk entities.
+ * Project Cards (formerly pinned) are synced to memoryStorage separately for the framework's project-cards-phase.
+ * WorkingSet is built at runtime from @mentions and explicit selections, not from entity fields.
+ *
+ * RFC-009: selectedForAI field is no longer used - WorkingSet is runtime-only.
  */
 function buildEntitySelections(projectPath: string, debug: boolean): ContextSelection[] {
   const allEntities: Entity[] = [
@@ -89,38 +92,26 @@ function buildEntitySelections(projectPath: string, debug: boolean): ContextSele
     ...loadEntitiesFromDisk(join(projectPath, PATHS.data))
   ]
 
-  // Pinned entities are handled via syncPinnedToMemoryStorage() → pinned-phase
-  const selected = allEntities.filter(e => e.selectedForAI && !e.pinned)
+  // Project Cards are handled via syncProjectCardsToMemoryStorage() → project-cards-phase
+  // RFC-009: WorkingSet is runtime-only, not derived from selectedForAI field
+  const projectCards = allEntities.filter(e => e.pinned || e.projectCard)
 
   if (debug) {
-    const pinned = allEntities.filter(e => e.pinned)
-    console.log(`[Context] Entities: ${allEntities.length} total, ${pinned.length} pinned (via memoryStorage), ${selected.length} selected`)
+    console.log(`[Context] Entities: ${allEntities.length} total, ${projectCards.length} project cards (via memoryStorage)`)
   }
 
-  const toSelection = (entity: Entity, source: string): ContextSelection => ({
-    type: 'custom' as const,
-    ref: `${entity.type}:${entity.id}`,
-    resolve: async () => {
-      const content = formatEntityForContext(entity)
-      return {
-        source,
-        content,
-        tokens: countTokens(content)
-      }
-    }
-  })
-
-  // Only return non-pinned selected entities (pinned come through pinned-phase)
-  return [
-    ...selected.map(e => toSelection(e, `selected:${e.type}.${e.id}`))
-  ]
+  // RFC-009: No longer returning selected entities here.
+  // WorkingSet is built from @mentions and explicit UI selections at runtime.
+  return []
 }
 
 /**
- * Sync pinned entities from disk to memoryStorage so the framework's pinned-phase can find them.
- * This gives pinned items reserved (infinite) budget instead of the 30% trimmable selected-phase budget.
+ * Sync Project Cards (long-term memory entities) from disk to memoryStorage.
+ * RFC-009: Renamed from syncPinnedToMemoryStorage. Project Cards get reserved (infinite) budget.
+ *
+ * Supports both legacy 'pinned' field and new 'projectCard' field for backward compatibility.
  */
-async function syncPinnedToMemoryStorage(
+async function syncProjectCardsToMemoryStorage(
   projectPath: string,
   memoryStorage: any,
   debug: boolean
@@ -130,15 +121,16 @@ async function syncPinnedToMemoryStorage(
     ...loadEntitiesFromDisk(join(projectPath, PATHS.literature)),
     ...loadEntitiesFromDisk(join(projectPath, PATHS.data))
   ]
-  const pinned = allEntities.filter(e => e.pinned)
+  // Support both legacy 'pinned' and new 'projectCard' fields
+  const projectCards = allEntities.filter(e => e.pinned || e.projectCard)
 
-  // Get existing pinned items in memoryStorage to detect removals
-  const existing = await memoryStorage.list({ namespace: 'pinned', tags: ['pinned'], status: 'active' })
+  // Get existing project-card items in memoryStorage to detect removals
+  const existing = await memoryStorage.list({ namespace: 'pinned', tags: ['project-card'], status: 'active' })
   const existingKeys = new Set(existing.items.map((i: any) => i.key))
 
-  // Upsert current pinned entities
+  // Upsert current project card entities
   const currentKeys = new Set<string>()
-  for (const entity of pinned) {
+  for (const entity of projectCards) {
     // Memory keys must start with a letter; use {type}.{uuid} format
     const key = `${entity.type}.${entity.id.toLowerCase()}`
     currentKeys.add(key)
@@ -148,20 +140,20 @@ async function syncPinnedToMemoryStorage(
       key,
       value: { entityId: entity.id, type: entity.type, title: entity.title },
       valueText: content,
-      tags: ['pinned', entity.type],
+      tags: ['project-card', entity.type],
       overwrite: true
     })
   }
 
-  // Remove items that are no longer pinned
+  // Remove items that are no longer project cards
   for (const oldKey of existingKeys) {
     if (!currentKeys.has(oldKey)) {
-      await memoryStorage.delete('pinned', oldKey, 'unpinned')
+      await memoryStorage.delete('pinned', oldKey, 'removed-from-project-cards')
     }
   }
 
   if (debug) {
-    console.log(`[Context] Synced ${pinned.length} pinned entities to memoryStorage`)
+    console.log(`[Context] Synced ${projectCards.length} project cards to memoryStorage`)
   }
 }
 
@@ -416,30 +408,22 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     async chat(message: string, mentions?: ResolvedMention[]) {
       try {
-        // Sync pinned entities to memoryStorage for framework's pinned-phase (reserved ∞ budget)
+        // RFC-009: Sync project cards to memoryStorage for framework's project-cards-phase (reserved ∞ budget)
         const storage = (agent.runtime as any).memoryStorage
         if (storage) {
-          await syncPinnedToMemoryStorage(projectPath, storage, debug)
+          await syncProjectCardsToMemoryStorage(projectPath, storage, debug)
         }
 
-        // Build context selections (non-pinned only, pinned come through pinned-phase now)
-        const entitySelections = buildEntitySelections(projectPath, debug)
+        // RFC-009: WorkingSet is built from @mentions at runtime, not from entity fields
         const mentionSelections = buildMentionSelections(mentions)
-        const selectedContext = [...entitySelections, ...mentionSelections]
-
-        // Build session memory context for injection
-        const sessionMemoryCtx = await buildSessionMemoryContext()
+        const selectedContext = [...mentionSelections]
 
         if (debug) {
-          console.log(`[Chat] Sending message to agent (${entitySelections.length} entity, ${mentionSelections.length} mention selections, sessionMemory=${sessionMemoryCtx.length > 0})...`)
+          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention selections)...`)
         }
 
-        // Prepend session memory to message so agent always sees it
-        const augmentedMessage = sessionMemoryCtx
-          ? `${sessionMemoryCtx}\n\n---\n\n${message}`
-          : message
-
-        const result = await agent.run(augmentedMessage, {
+        // RFC-009: Session memory is now budgeted via state-summary-phase, no prefix injection needed
+        const result = await agent.run(message, {
           ...(selectedContext.length > 0 && { selectedContext })
         })
 

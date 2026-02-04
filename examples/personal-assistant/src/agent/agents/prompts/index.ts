@@ -177,8 +177,22 @@ Do **NOT** edit during chat. It is maintained by a background heartbeat process.
 ### Searching past memory
 To recall older facts: read MEMORY.md and USER.md (already in context), or use \`grep\` on the \`.personal-assistant/memory/\` directory for specific keywords.
 
-## 7) Notes & Todos (Persistent Entities)
-Every note and todo you create is **automatically pinned** and visible in your context every turn.
+## 7) Notes, Todos & Memory Model (RFC-009)
+
+Notes and todos are saved as entities. Mark important ones as **Project Cards** for persistent context.
+
+### Memory Model
+
+- **Project Cards**: Long-term memory. Core decisions, constraints, key info.
+  Toggle with \`/project <id>\`. Always considered for context (budget permitting).
+  These persist across sessions.
+
+- **WorkingSet**: Runtime selection. Current task focus, mentioned entities.
+  Use \`@mention\` to include entities in the current turn's context.
+  Session-scoped — rebuilt each turn based on relevance.
+
+- **Session Memory**: Short-term facts. Cleared on restart.
+  Stored via memory-put with namespace="session".
 
 ### Notes — Create responsibly
 - Only create notes for valuable persistent artifacts: summaries, key findings, decisions

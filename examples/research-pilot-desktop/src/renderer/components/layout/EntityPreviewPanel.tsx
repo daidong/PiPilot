@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Pin, CheckSquare, StickyNote, BookOpen, Database, Trash2, Pencil } from 'lucide-react'
+import { X, Bookmark, Layers, StickyNote, BookOpen, Database, Trash2, Pencil } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
 
@@ -87,19 +87,23 @@ function CsvPreview({ content, separator }: { content: string; separator: string
 export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
-  const togglePin = useEntityStore((s) => s.togglePin)
-  const toggleSelect = useEntityStore((s) => s.toggleSelect)
+  // RFC-009: Use new method names
+  const toggleProjectCard = useEntityStore((s) => s.toggleProjectCard)
+  const toggleWorkingSet = useEntityStore((s) => s.toggleWorkingSet)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const updateEntity = useEntityStore((s) => s.updateEntity)
-  // Derive live pinned/selected state from entity store instead of stale snapshot
-  const pinnedIds = useEntityStore((s) => s.pinned)
-  const selectedIds = useEntityStore((s) => s.selected)
+  // RFC-009: Derive live project card/working set state from entity store
+  const projectCardsIds = useEntityStore((s) => s.projectCards)
+  const workingSetIds = useEntityStore((s) => s.workingSet)
+  // RFC-009: Check both legacy 'pinned' and new 'projectCard' fields
+  const isProjectCard = rawEntity
+    ? rawEntity.pinned || rawEntity.projectCard || projectCardsIds.some((p) => p.id === rawEntity.id)
+    : false
+  const isInWorkingSet = rawEntity
+    ? workingSetIds.some((p) => p.id === rawEntity.id)
+    : false
   const entity = rawEntity
-    ? {
-        ...rawEntity,
-        pinned: pinnedIds.some((p) => p.id === rawEntity.id),
-        selectedForAI: selectedIds.some((p) => p.id === rawEntity.id)
-      }
+    ? { ...rawEntity }
     : null
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -312,19 +316,21 @@ export function EntityPreviewPanel() {
           >
             <Pencil size={14} />
           </button>
+          {/* RFC-009: Project Card toggle */}
           <button
-            onClick={() => togglePin(entity.id)}
-            className={`p-1 rounded transition-colors ${entity.pinned ? 'text-orange-400' : 't-text-muted t-bg-hover'}`}
-            title={entity.pinned ? 'Unpin' : 'Pin'}
+            onClick={() => toggleProjectCard(entity.id)}
+            className={`p-1 rounded transition-colors ${isProjectCard ? 'text-orange-400' : 't-text-muted t-bg-hover'}`}
+            title={isProjectCard ? 'Remove from Project Cards' : 'Mark as Project Card'}
           >
-            <Pin size={14} />
+            <Bookmark size={14} />
           </button>
+          {/* RFC-009: Working Set toggle */}
           <button
-            onClick={() => toggleSelect(entity.id)}
-            className={`p-1 rounded transition-colors ${entity.selectedForAI ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
-            title={entity.selectedForAI ? 'Deselect' : 'Select for AI'}
+            onClick={() => toggleWorkingSet(entity.id)}
+            className={`p-1 rounded transition-colors ${isInWorkingSet ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
+            title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
           >
-            <CheckSquare size={14} />
+            <Layers size={14} />
           </button>
           <button
             onClick={handleDelete}

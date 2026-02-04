@@ -16,7 +16,7 @@
 import type { ContextPhase, ContextFragment, AssemblyContext } from '../../types/context-pipeline.js'
 import type { MemoryItem } from '../../types/memory.js'
 import type { EntityShape } from '../../types/memory-entity.js'
-import { PHASE_PRIORITIES, DEFAULT_BUDGETS } from '../pipeline.js'
+import { PHASE_PRIORITIES } from '../pipeline.js'
 import { countTokens } from '../../utils/tokenizer.js'
 
 /**
@@ -47,7 +47,10 @@ export function createProjectCardsPhase(config: ProjectCardsPhaseConfig = {}): C
   return {
     id: 'project-cards',
     priority: PHASE_PRIORITIES.pinned, // Same priority as old pinned phase
-    budget: DEFAULT_BUDGETS.pinned,    // Same budget as old pinned phase
+    // RFC-009: Project Cards have reserved budget with generous cap
+    // These are core decisions/constraints - give them room
+    // Shape degradation handles overflow if needed
+    budget: { type: 'reserved' as const, tokens: 8000, minTokens: 4000 },
 
     async assemble(ctx: AssemblyContext): Promise<ContextFragment[]> {
       const { runtime } = ctx

@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { StickyNote, FileText, Upload, MessageSquare, Trash2, Pin, Check, FileSpreadsheet, FileImage, Presentation, FileCode, File, CheckSquare, Eye, EyeOff } from 'lucide-react'
+import { StickyNote, FileText, Upload, MessageSquare, Trash2, Bookmark, Layers, Check, FileSpreadsheet, FileImage, Presentation, FileCode, File, CheckSquare, Eye, EyeOff } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
@@ -27,27 +27,30 @@ function DocFileIcon({ filePath, className, size }: { filePath?: string; classNa
   }
 }
 
-// Hover preview tooltip with pin/select/delete actions
+// Hover preview tooltip with project card/working set/delete actions (RFC-009)
 function HoverPreview({
   entity,
   anchorRect,
   onMouseEnter,
   onMouseLeave,
-  onPin,
-  onSelect,
+  onProjectCard,
+  onWorkingSet,
   onDelete,
-  confirmDelete
+  confirmDelete,
+  isInWorkingSet
 }: {
   entity: EntityItem
   anchorRect: DOMRect
   onMouseEnter: () => void
   onMouseLeave: () => void
-  onPin: () => void
-  onSelect: () => void
+  onProjectCard: () => void
+  onWorkingSet: () => void
   onDelete: () => void
   confirmDelete: boolean
+  isInWorkingSet: boolean
 }) {
   const content = entity.content || entity.description || ''
+  const isProjectCard = entity.pinned || entity.projectCard
 
   const top = Math.min(anchorRect.top, window.innerHeight - 320)
 
@@ -63,19 +66,21 @@ function HoverPreview({
           <h4 className="text-xs font-semibold t-text truncate">{entity.title}</h4>
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
+          {/* RFC-009: Project Card toggle */}
           <button
-            onClick={(e) => { e.stopPropagation(); onPin() }}
-            className={`p-1 rounded ${entity.pinned ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
-            title={entity.pinned ? 'Unpin' : 'Pin'}
+            onClick={(e) => { e.stopPropagation(); onProjectCard() }}
+            className={`p-1 rounded ${isProjectCard ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
+            title={isProjectCard ? 'Remove from Project Cards' : 'Add to Project Cards'}
           >
-            <Pin size={13} />
+            <Bookmark size={13} />
           </button>
+          {/* RFC-009: Working Set toggle */}
           <button
-            onClick={(e) => { e.stopPropagation(); onSelect() }}
-            className={`p-1 rounded ${entity.selectedForAI ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
-            title={entity.selectedForAI ? 'Deselect' : 'Select'}
+            onClick={(e) => { e.stopPropagation(); onWorkingSet() }}
+            className={`p-1 rounded ${isInWorkingSet ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
+            title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
           >
-            <Check size={13} />
+            <Layers size={13} />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete() }}
@@ -105,9 +110,10 @@ const tabs = [
   { key: 'docs' as const, label: 'Docs', icon: FileText }
 ]
 
-function EntityRow({ entity }: { entity: EntityItem }) {
-  const togglePin = useEntityStore((s) => s.togglePin)
-  const toggleSelect = useEntityStore((s) => s.toggleSelect)
+function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetIds: Set<string> }) {
+  // RFC-009: Use new method names with legacy aliases
+  const toggleProjectCard = useEntityStore((s) => s.toggleProjectCard)
+  const toggleWorkingSet = useEntityStore((s) => s.toggleWorkingSet)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const openPreview = useUIStore((s) => s.openPreview)
   const closePreview = useUIStore((s) => s.closePreview)
@@ -122,6 +128,8 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   const confirmResetRef = useRef<number | null>(null)
 
   const messageId = entity.provenance?.messageId as string | undefined
+  const isProjectCard = entity.pinned || entity.projectCard
+  const isInWorkingSet = workingSetIds.has(entity.id)
 
   const cancelHide = () => {
     if (hideTimeoutRef.current) {
@@ -184,14 +192,16 @@ function EntityRow({ entity }: { entity: EntityItem }) {
             anchorRect={anchorRect}
             onMouseEnter={cancelHide}
             onMouseLeave={handleMouseLeave}
-            onPin={() => togglePin(entity.id)}
-            onSelect={() => toggleSelect(entity.id)}
+            onProjectCard={() => toggleProjectCard(entity.id)}
+            onWorkingSet={() => toggleWorkingSet(entity.id)}
             onDelete={handleDelete}
             confirmDelete={confirmDelete}
+            isInWorkingSet={isInWorkingSet}
           />
         )}
+        {/* RFC-009: Status dot - orange for Project Card, blue for Working Set */}
         <span className={`w-1 h-1 rounded-full shrink-0 ${
-          entity.pinned ? 'bg-orange-400' : entity.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
+          isProjectCard ? 'bg-orange-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
         }`} />
         {entity.type === 'doc' && (
           <DocFileIcon filePath={entity.filePath} className="shrink-0 t-text-muted" size={12} />
@@ -217,10 +227,11 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   )
 }
 
-function TodoRow({ todo }: { todo: EntityItem }) {
+function TodoRow({ todo, workingSetIds }: { todo: EntityItem; workingSetIds: Set<string> }) {
   const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
-  const togglePin = useEntityStore((s) => s.togglePin)
-  const toggleSelect = useEntityStore((s) => s.toggleSelect)
+  // RFC-009: Use new method names
+  const toggleProjectCard = useEntityStore((s) => s.toggleProjectCard)
+  const toggleWorkingSet = useEntityStore((s) => s.toggleWorkingSet)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const openPreview = useUIStore((s) => s.openPreview)
   const closePreview = useUIStore((s) => s.closePreview)
@@ -236,6 +247,8 @@ function TodoRow({ todo }: { todo: EntityItem }) {
 
   const messageId = todo.provenance?.messageId as string | undefined
   const isCompleted = todo.status === 'completed'
+  const isProjectCard = todo.pinned || todo.projectCard
+  const isInWorkingSet = workingSetIds.has(todo.id)
 
   const cancelHide = () => {
     if (hideTimeoutRef.current) {
@@ -303,10 +316,11 @@ function TodoRow({ todo }: { todo: EntityItem }) {
             anchorRect={anchorRect}
             onMouseEnter={cancelHide}
             onMouseLeave={handleMouseLeave}
-            onPin={() => togglePin(todo.id)}
-            onSelect={() => toggleSelect(todo.id)}
+            onProjectCard={() => toggleProjectCard(todo.id)}
+            onWorkingSet={() => toggleWorkingSet(todo.id)}
             onDelete={handleDelete}
             confirmDelete={confirmDelete}
+            isInWorkingSet={isInWorkingSet}
           />
         )}
         {/* Checkbox for completion */}
@@ -321,8 +335,9 @@ function TodoRow({ todo }: { todo: EntityItem }) {
         >
           {isCompleted && <Check size={10} strokeWidth={3} />}
         </button>
+        {/* RFC-009: Status dot - orange for Project Card, blue for Working Set */}
         <span className={`w-1 h-1 rounded-full shrink-0 ${
-          todo.pinned ? 'bg-orange-400' : todo.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
+          isProjectCard ? 'bg-orange-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
         }`} />
         <div className="min-w-0 flex-1">
           <span className={`text-xs truncate block ${
@@ -349,12 +364,16 @@ function TodoRow({ todo }: { todo: EntityItem }) {
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, docs, todos, refreshAll } = useEntityStore()
+  // RFC-009: Get workingSet for status dot logic
+  const { notes, docs, todos, workingSet, refreshAll } = useEntityStore()
   const [showCompleted, setShowCompleted] = useState(false)
 
   useEffect(() => {
     refreshAll()
   }, [])
+
+  // RFC-009: Create Set of working set IDs for efficient lookup
+  const workingSetIds = new Set(workingSet.map(e => e.id))
 
   // Filter todos based on showCompleted state
   const filteredTodos = showCompleted
@@ -449,9 +468,9 @@ export function EntityTabs() {
               : `No ${leftTab} yet`}
           </p>
         ) : leftTab === 'todos' ? (
-          items.map((e) => <TodoRow key={e.id} todo={e} />)
+          items.map((e) => <TodoRow key={e.id} todo={e} workingSetIds={workingSetIds} />)
         ) : (
-          items.map((e) => <EntityRow key={e.id} entity={e} />)
+          items.map((e) => <EntityRow key={e.id} entity={e} workingSetIds={workingSetIds} />)
         )}
       </div>
     </div>

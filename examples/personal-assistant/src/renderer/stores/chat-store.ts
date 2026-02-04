@@ -58,6 +58,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: true
     }))
 
+    // Reset run stats for this new conversation turn
+    const { useUsageStore } = await import('./usage-store')
+    useUsageStore.getState().resetRun()
+
     // Persist user message
     if (_sessionId) {
       api.saveMessage(_sessionId, userMsg).catch(() => {})

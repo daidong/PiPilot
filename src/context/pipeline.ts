@@ -135,10 +135,15 @@ export function createContextPipeline(config: ContextPipelineConfig = {}): Conte
 
     // Override with external budgets when coordinated
     if (externalBudgets) {
+      // Legacy phase names
       if (externalBudgets.pinned !== undefined) allocations.set('pinned', externalBudgets.pinned)
       if (externalBudgets.selected !== undefined) allocations.set('selected', externalBudgets.selected)
       if (externalBudgets.session !== undefined) allocations.set('session', externalBudgets.session)
       if (externalBudgets.index !== undefined) allocations.set('index', externalBudgets.index)
+      // RFC-009 phase names (new)
+      if ((externalBudgets as any).project !== undefined) allocations.set('project-cards', (externalBudgets as any).project)
+      if ((externalBudgets as any).working !== undefined) allocations.set('workingset', (externalBudgets as any).working)
+      if ((externalBudgets as any).stateSummary !== undefined) allocations.set('state-summary', (externalBudgets as any).stateSummary)
     }
 
     // Get sorted phases
@@ -330,22 +335,38 @@ export function createBudget(
 
 /**
  * Default phase priorities
+ *
+ * RFC-009 introduces new phase names:
+ * - 'project-cards' (alias for 'pinned') - long-term memory, persistent across sessions
+ * - 'workingset' - runtime selection for current session/task
+ * - 'state-summary' - session state summaries
  */
 export const PHASE_PRIORITIES = {
   system: 100,
   pinned: 90,
+  'project-cards': 90,    // RFC-009 alias for pinned
   selected: 80,
+  workingset: 70,         // RFC-009: runtime working set
+  'state-summary': 60,    // RFC-009: session state summaries
   session: 50,
   index: 30
 } as const
 
 /**
  * Default phase budgets
+ *
+ * RFC-009 introduces new phases with their own budgets:
+ * - project-cards: same as pinned (reserved, high priority)
+ * - workingset: percentage-based for runtime selection
+ * - state-summary: fixed budget for session state
  */
 export const DEFAULT_BUDGETS = {
   system: createBudget('reserved', 2000),
   pinned: { type: 'reserved' as const, tokens: Infinity, minTokens: 2000 },
+  'project-cards': { type: 'reserved' as const, tokens: Infinity, minTokens: 2000 },  // RFC-009 alias
   selected: { type: 'percentage' as const, value: 30, minTokens: 0 },
+  workingset: { type: 'percentage' as const, value: 25, minTokens: 0 },               // RFC-009
+  'state-summary': { type: 'fixed' as const, tokens: 1000, minTokens: 500 },          // RFC-009
   session: { type: 'remaining' as const, minTokens: 0 },
   index: { type: 'fixed' as const, tokens: 500, minTokens: 500 }
 } as const
