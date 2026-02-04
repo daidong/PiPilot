@@ -249,6 +249,39 @@ export {
   createTokenEstimator
 } from './core/token-estimator.js'
 
+// Summary Card (RFC-009)
+export {
+  generateSummaryCard,
+  generateContentHash,
+  needsRegeneration,
+  renderFullShape,
+  renderExcerptShape,
+  renderCardShape,
+  renderIndexLineShape,
+  renderEntityShape,
+  estimateShapeTokens
+} from './core/summary-card.js'
+export type {
+  SummaryCardResult,
+  GenerateSummaryCardOptions,
+  EntityShapeOptions
+} from './core/summary-card.js'
+
+// Entity Migration (RFC-009)
+export {
+  needsMigration,
+  migrateEntity,
+  migrateEntities,
+  createMigrationReport,
+  getMigrationStatus
+} from './core/entity-migration.js'
+export type {
+  LegacyEntity,
+  MigrationResult,
+  BatchMigrationResult,
+  MigrationOptions
+} from './core/entity-migration.js'
+
 // Token Tracking
 export {
   TokenTracker,
@@ -955,6 +988,7 @@ export type { ContextPipelineConfig } from './context/index.js'
 export {
   createSystemPhase,
   createPinnedPhase,
+  createProjectCardsPhase,
   createSelectedPhase,
   createSessionPhase,
   createIndexPhase
@@ -962,6 +996,7 @@ export {
 export type {
   SystemPhaseConfig,
   PinnedPhaseConfig,
+  ProjectCardsPhaseConfig,
   SelectedPhaseConfig,
   SessionPhaseConfig,
   IndexPhaseConfig

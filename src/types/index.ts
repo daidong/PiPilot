@@ -173,3 +173,29 @@ export type {
   ContextPipeline,
   RuntimeWithCompressor
 } from './context-pipeline.js'
+
+// Memory Entity types (RFC-009)
+export type {
+  EntityProvenance,
+  EntityLink,
+  SummaryCardMethod,
+  SummaryCardConfig,
+  MemoryEntityType,
+  MemoryEntity,
+  CreateEntityOptions,
+  UpdateEntityOptions,
+  WorkingSetSource,
+  EntityShape,
+  WorkingSetItem,
+  WorkingSetPlan,
+  LegacyEntityFields
+} from './memory-entity.js'
+
+export {
+  DEFAULT_SUMMARY_CARD_CONFIG,
+  MAX_SUMMARY_CARD_TOKENS,
+  hasLegacyFields,
+  migrateLegacyFields,
+  isValidSummaryCard,
+  isValidEntityType
+} from './memory-entity.js'
