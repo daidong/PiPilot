@@ -166,6 +166,7 @@ export const DEFAULT_STRATEGIES: Record<ErrorCategory, RetryStrategy> = {
   execution:         { mode: 'agent_retry',    maxAttempts: 3 },
   timeout:           { mode: 'executor_retry', maxAttempts: 2, backoff: { type: 'exponential', baseMs: 1000, multiplier: 2 }, backoffMs: 1000, backoffMultiplier: 2 },
   rate_limit:        { mode: 'executor_retry', maxAttempts: 5, backoff: { type: 'exponential', baseMs: 2000, multiplier: 2 }, backoffMs: 2000, backoffMultiplier: 2 },
+  server_overload:   { mode: 'executor_retry', maxAttempts: 5, backoff: { type: 'exponential', baseMs: 3000, multiplier: 2, maxMs: 30000 } },
   auth:              { mode: 'agent_retry',    maxAttempts: 1 },
   policy_denied:     { mode: 'agent_retry',    maxAttempts: 1 },
   context_overflow:  { mode: 'agent_retry',    maxAttempts: 2 },
@@ -184,7 +185,8 @@ export const DEFAULT_BUDGET_CONFIG: RetryBudgetConfig = {
   perCategory: {
     auth: 1,
     policy_denied: 1,
-    rate_limit: 5
+    rate_limit: 5,
+    server_overload: 5
   }
 }
 

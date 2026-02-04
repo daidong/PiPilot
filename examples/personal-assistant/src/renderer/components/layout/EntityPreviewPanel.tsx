@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Pin, CheckSquare, StickyNote, FileText, Trash2, Pencil } from 'lucide-react'
+import { X, Pin, CheckSquare, StickyNote, FileText, Trash2, Pencil, Check, Square } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
 
 const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={16} className="text-yellow-500" />,
+  todo: <CheckSquare size={16} className="text-green-500" />,
   doc: <FileText size={16} className="text-blue-500" />
 }
 
@@ -88,13 +89,18 @@ export function EntityPreviewPanel() {
   const closePreview = useUIStore((s) => s.closePreview)
   const togglePin = useEntityStore((s) => s.togglePin)
   const toggleSelect = useEntityStore((s) => s.toggleSelect)
+  const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const updateEntity = useEntityStore((s) => s.updateEntity)
   const pinnedIds = useEntityStore((s) => s.pinned)
   const selectedIds = useEntityStore((s) => s.selected)
+  const todos = useEntityStore((s) => s.todos)
+  // For todos, get fresh status from store
+  const freshTodo = rawEntity?.type === 'todo' ? todos.find((t) => t.id === rawEntity.id) : null
   const entity = rawEntity
     ? {
         ...rawEntity,
+        ...(freshTodo && { status: freshTodo.status, completedAt: freshTodo.completedAt }),
         pinned: pinnedIds.some((p) => p.id === rawEntity.id),
         selectedForAI: selectedIds.some((p) => p.id === rawEntity.id)
       }
@@ -333,6 +339,33 @@ export function EntityPreviewPanel() {
           </button>
         </div>
       </div>
+
+      {/* Status row for todos */}
+      {entity.type === 'todo' && (
+        <div className="px-4 py-3 border-b t-border flex items-center gap-3">
+          <button
+            onClick={() => toggleTodoComplete(entity.id)}
+            className={`flex items-center justify-center w-6 h-6 rounded border-2 transition-colors ${
+              entity.status === 'completed'
+                ? 'bg-green-500 border-green-500 text-white'
+                : 't-border hover:border-green-400'
+            }`}
+            title={entity.status === 'completed' ? 'Mark as pending' : 'Mark as completed'}
+          >
+            {entity.status === 'completed' && <Check size={14} strokeWidth={3} />}
+          </button>
+          <div className="text-sm">
+            <span className={entity.status === 'completed' ? 't-text-muted' : 't-text'}>
+              {entity.status === 'completed' ? 'Completed' : 'Pending'}
+            </span>
+            {entity.completedAt && (
+              <span className="text-xs t-text-muted ml-2">
+                {new Date(entity.completedAt).toLocaleString()}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Metadata row for docs */}
       {entity.type === 'doc' && (entity.filePath || entity.mimeType || entity.description || entity.tags?.length > 0) && (

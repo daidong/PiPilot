@@ -21,7 +21,7 @@ import type {
   ToolCallEvent,
   FinishEvent,
   ErrorEvent,
-  TokenUsage,
+  DetailedTokenUsage,
   Message,
   ContentBlock,
   ToolUseContent,
@@ -375,20 +375,57 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
               const usage = await result.usage
               const text = await result.text
               const toolCalls = (await result.toolCalls) || []
+              // Access experimental_providerMetadata safely (may not be in type defs)
+              const providerMeta = await (result as any).experimental_providerMetadata
 
               // SDK 6: inputTokens/outputTokens instead of promptTokens/completionTokens
               const inputTokens = usage?.inputTokens ?? 0
               const outputTokens = usage?.outputTokens ?? 0
 
+              // Extract cache tokens from provider metadata
+              // Anthropic: cacheCreationInputTokens, cacheReadInputTokens
+              // OpenAI: cachedTokens (prompt caching beta)
+              let cacheCreationInputTokens = 0
+              let cacheReadInputTokens = 0
+              let reasoningTokens = 0
+
+              if (providerMeta) {
+                // Anthropic cache tokens
+                const anthropicMeta = providerMeta.anthropic as Record<string, unknown> | undefined
+                if (anthropicMeta) {
+                  cacheCreationInputTokens = (anthropicMeta.cacheCreationInputTokens as number) ?? 0
+                  cacheReadInputTokens = (anthropicMeta.cacheReadInputTokens as number) ?? 0
+                }
+
+                // OpenAI cache tokens (prompt caching beta)
+                const openaiMeta = providerMeta.openai as Record<string, unknown> | undefined
+                if (openaiMeta) {
+                  // OpenAI reports cached tokens directly
+                  cacheReadInputTokens = (openaiMeta.cachedTokens as number) ?? cacheReadInputTokens
+                }
+
+                // Google cache tokens
+                const googleMeta = providerMeta.google as Record<string, unknown> | undefined
+                if (googleMeta) {
+                  cacheReadInputTokens = (googleMeta.cachedContentTokenCount as number) ?? cacheReadInputTokens
+                }
+              }
+
+              // Build detailed usage with cache info
+              const detailedUsage: DetailedTokenUsage = {
+                promptTokens: inputTokens,
+                completionTokens: outputTokens,
+                totalTokens: inputTokens + outputTokens,
+                cacheCreationInputTokens: cacheCreationInputTokens > 0 ? cacheCreationInputTokens : undefined,
+                cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
+                reasoningTokens: reasoningTokens > 0 ? reasoningTokens : undefined
+              }
+
               yield {
                 type: 'finish',
                 data: {
                   finishReason: event.finishReason,
-                  usage: {
-                    promptTokens: inputTokens,
-                    completionTokens: outputTokens,
-                    totalTokens: inputTokens + outputTokens
-                  },
+                  usage: detailedUsage,
                   text,
                   toolCalls: toolCalls.map((tc: { toolCallId: string; toolName: string; input: unknown }) => ({
                     type: 'tool_use' as const,
@@ -494,16 +531,37 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       const inputTokens = result.usage?.inputTokens ?? 0
       const outputTokens = result.usage?.outputTokens ?? 0
 
+      // Extract cache tokens from provider metadata (may not be in type defs)
+      const providerMeta = (result as any).experimental_providerMetadata
+      let cacheCreationInputTokens = 0
+      let cacheReadInputTokens = 0
+
+      if (providerMeta) {
+        const anthropicMeta = providerMeta.anthropic as Record<string, unknown> | undefined
+        if (anthropicMeta) {
+          cacheCreationInputTokens = (anthropicMeta.cacheCreationInputTokens as number) ?? 0
+          cacheReadInputTokens = (anthropicMeta.cacheReadInputTokens as number) ?? 0
+        }
+        const openaiMeta = providerMeta.openai as Record<string, unknown> | undefined
+        if (openaiMeta) {
+          cacheReadInputTokens = (openaiMeta.cachedTokens as number) ?? cacheReadInputTokens
+        }
+      }
+
+      const detailedUsage: DetailedTokenUsage = {
+        promptTokens: inputTokens,
+        completionTokens: outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cacheCreationInputTokens: cacheCreationInputTokens > 0 ? cacheCreationInputTokens : undefined,
+        cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined
+      }
+
       return {
         id: result.response?.id ?? crypto.randomUUID(),
         text: result.text,
         toolCalls,
         finishReason,
-        usage: {
-          promptTokens: inputTokens,
-          completionTokens: outputTokens,
-          totalTokens: inputTokens + outputTokens
-        }
+        usage: detailedUsage
       }
     },
 
@@ -555,7 +613,7 @@ export interface StreamCallbacks {
   onFinish?: (result: {
     text: string
     toolCalls: ToolUseContent[]
-    usage: TokenUsage
+    usage: DetailedTokenUsage
   }) => void
   onError?: (error: Error) => void
 }
@@ -570,7 +628,7 @@ export async function streamWithCallbacks(
 ): Promise<CompletionResponse> {
   let finalText = ''
   const toolCalls: ToolUseContent[] = []
-  let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+  let usage: DetailedTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
   let finishReason: CompletionResponse['finishReason'] = 'stop'
 
   for await (const event of client.stream(options)) {

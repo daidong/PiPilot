@@ -11,6 +11,7 @@ import { useEntityStore } from './stores/entity-store'
 import { useUIStore } from './stores/ui-store'
 import { useProgressStore } from './stores/progress-store'
 import { useActivityStore } from './stores/activity-store'
+import { useUsageStore, type UsageEvent } from './stores/usage-store'
 
 const api = (window as any).api
 
@@ -116,6 +117,7 @@ export default function App() {
     const unsub4 = api.onTodoClear(() => {
       useProgressStore.getState().clear()
       useActivityStore.getState().clear()
+      useUsageStore.getState().resetRun()
     })
     const unsubActivity = api.onActivity((event: any) => {
       useActivityStore.getState().push({
@@ -137,6 +139,19 @@ export default function App() {
       while ((match = filePathRegex.exec(text)) !== null) {
         useUIStore.getState().addWorkingFile(match[1])
       }
+
+      // Complete usage tracking for this run
+      if (result.usage) {
+        useUsageStore.getState().completeRun({
+          totalTokens: result.usage.tokens?.totalTokens ?? 0,
+          totalCost: result.usage.cost?.totalCost ?? 0,
+          cacheHitRate: result.usage.cacheHitRate ?? 0,
+          callCount: result.usage.callCount ?? 0
+        })
+      }
+    })
+    const unsubUsage = api.onUsage((event: UsageEvent) => {
+      useUsageStore.getState().recordCall(event)
     })
     const unsub5 = api.onFileCreated((path: string) => {
       useUIStore.getState().addWorkingFile(path)
@@ -154,6 +169,7 @@ export default function App() {
       unsub5()
       unsub6()
       unsubActivity()
+      unsubUsage()
     }
   }, [hasProject])
 

@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rea
 import { join, resolve, isAbsolute } from 'path'
 import { createCoordinator, type CoordinatorConfig } from '@personal-assistant/agents/coordinator'
 import {
-  listNotes, listDocs,
+  listNotes, listDocs, listTodos,
   searchEntities, deleteEntity,
   toggleSelect, getSelected, clearSelections,
-  togglePin, getPinned
+  togglePin, getPinned,
+  toggleTodoComplete
 } from '@personal-assistant/commands/index'
 import { saveNote } from '@personal-assistant/commands/save-note'
 import { saveDoc } from '@personal-assistant/commands/save-doc'
@@ -64,7 +65,7 @@ let isClosing = false
 
 /** Initialize .personal-assistant directory structure in the project folder */
 function initializeProject(path: string): void {
-  const dirs = [PATHS.root, PATHS.notes, PATHS.docs, PATHS.memory, PATHS.sessions, PATHS.cache, PATHS.documentCache]
+  const dirs = [PATHS.root, PATHS.notes, PATHS.docs, PATHS.todos, PATHS.memory, PATHS.sessions, PATHS.cache, PATHS.documentCache]
 
   for (const dir of dirs) {
     const fullPath = join(path, dir)
@@ -113,17 +114,15 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
   }
 }
 
-async function ensureCoordinator(win: BrowserWindow, model?: string, reasoningEffort?: string) {
+async function ensureCoordinator(win: BrowserWindow, model?: string) {
   if (isClosing) throw new Error('Project is closing')
   const requestedModel = model || currentModel
-  const requestedEffort = (reasoningEffort as any) || currentReasoningEffort
-  // Recreate coordinator if model or reasoning effort changed
-  if (coordinator && (requestedModel !== currentModel || requestedEffort !== currentReasoningEffort)) {
+  // Recreate coordinator if model changed (reasoning effort changes handled by prefs:save)
+  if (coordinator && requestedModel !== currentModel) {
     coordinator.destroy().catch(() => {})
     coordinator = null
   }
   currentModel = requestedModel
-  currentReasoningEffort = requestedEffort
 
   if (!coordinator) {
     const apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || ''
@@ -217,12 +216,14 @@ async function ensureCoordinator(win: BrowserWindow, model?: string, reasoningEf
           }
         }
 
-        // Notify UI to refresh entity lists when notes or docs are saved
+        // Notify UI to refresh entity lists when notes, todos, or docs are saved
         if ((tool === 'save-note' || tool === 'save-doc') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success) {
+            // save-note can create either 'note' or 'todo' based on type parameter
+            const entityType = r.data?.type || (tool === 'save-note' ? 'note' : 'doc')
             safeSend(win, 'agent:entity-created', {
-              type: tool === 'save-note' ? 'note' : 'doc',
+              type: entityType,
               id: r.data?.id,
               title: r.data?.title
             })
@@ -237,6 +238,20 @@ async function ensureCoordinator(win: BrowserWindow, model?: string, reasoningEf
         const actEvent = { type: 'tool-result', tool, summary, success, error }
         realtimeBuffer.pushActivity(actEvent)
         safeSend(win, 'agent:activity', actEvent)
+      },
+
+      // Token usage tracking
+      onUsage: (usage: any, cost: any) => {
+        const usageEvent = {
+          promptTokens: usage.promptTokens ?? 0,
+          completionTokens: usage.completionTokens ?? 0,
+          cachedTokens: usage.cacheReadInputTokens ?? 0,
+          cost: cost.totalCost ?? 0,
+          cacheHitRate: usage.promptTokens > 0
+            ? (usage.cacheReadInputTokens ?? 0) / usage.promptTokens
+            : 0
+        }
+        safeSend(win, 'agent:usage', usageEvent)
       }
     })
 
@@ -323,6 +338,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     if (!projectPath) return []
     return listDocs(projectPath)
   })
+  ipcMain.handle('cmd:list-todos', () => {
+    if (!projectPath) return []
+    return listTodos(projectPath)
+  })
+  ipcMain.handle('cmd:toggle-todo-complete', (_e, id: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return toggleTodoComplete(id, projectPath)
+  })
   ipcMain.handle('cmd:search', (_e, query: string) => {
     if (!projectPath) return []
     return searchEntities(projectPath, query)
@@ -336,7 +359,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle('cmd:rename-note', (_e, id: string, newTitle: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     // Search across all entity directories
-    const dirs = [PATHS.notes, PATHS.docs]
+    const dirs = [PATHS.notes, PATHS.todos, PATHS.docs]
     for (const dir of dirs) {
       const filePath = join(projectPath, dir, `${id}.json`)
       if (!existsSync(filePath)) continue
@@ -356,7 +379,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   // Commands - update entity (title + content)
   ipcMain.handle('cmd:update-entity', (_e, id: string, updates: { title?: string; content?: string }) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const dirs = [PATHS.notes, PATHS.docs]
+    const dirs = [PATHS.notes, PATHS.todos, PATHS.docs]
     for (const dir of dirs) {
       const filePath = join(projectPath, dir, `${id}.json`)
       if (!existsSync(filePath)) continue
@@ -575,9 +598,46 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const file = join(projectPath, PATHS.root, 'preferences.json')
     const data = { ...prefs, updatedAt: new Date().toISOString() }
     writeFileSync(file, JSON.stringify(data, null, 2))
-    // Update main-process state so next coordinator creation uses it
+    // Invalidate coordinator if model or reasoning effort changed so it gets recreated
+    const modelChanged = prefs.selectedModel && prefs.selectedModel !== currentModel
+    const effortChanged = prefs.reasoningEffort && prefs.reasoningEffort !== currentReasoningEffort
     if (prefs.selectedModel) currentModel = prefs.selectedModel
     if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort as any
+    if ((modelChanged || effortChanged) && coordinator) {
+      coordinator.destroy().catch(() => {})
+      coordinator = null
+    }
+  })
+
+  // Open working folder with specified app
+  ipcMain.handle('folder:open-with', async (_e, app: 'finder' | 'zed' | 'cursor' | 'vscode') => {
+    if (!projectPath) return { success: false, error: 'No project open' }
+
+    const { exec } = await import('child_process')
+    const { promisify } = await import('util')
+    const execAsync = promisify(exec)
+
+    try {
+      switch (app) {
+        case 'finder':
+          await execAsync(`open "${projectPath}"`)
+          break
+        case 'zed':
+          await execAsync(`zed "${projectPath}"`)
+          break
+        case 'cursor':
+          await execAsync(`cursor "${projectPath}"`)
+          break
+        case 'vscode':
+          await execAsync(`code "${projectPath}"`)
+          break
+        default:
+          return { success: false, error: `Unknown app: ${app}` }
+      }
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to open folder' }
+    }
   })
 
   // Notifications

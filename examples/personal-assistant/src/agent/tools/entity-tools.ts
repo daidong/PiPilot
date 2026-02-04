@@ -11,26 +11,33 @@ import { defineTool } from '@framework/factories/define-tool.js'
 import { saveNote } from '../commands/save-note.js'
 import { saveDoc } from '../commands/save-doc.js'
 import { togglePin } from '../commands/pin.js'
-import { PATHS, Entity, Note } from '../types.js'
+import { toggleTodoComplete } from '../commands/toggle-todo-complete.js'
+import { PATHS, Entity, Note, Todo } from '../types.js'
 import type { CLIContext } from '../types.js'
 
 /**
- * Create a save-note tool that properly saves notes as JSON entities
+ * Create a save-note tool that properly saves notes or todos as JSON entities
  */
 export function createSaveNoteTool(sessionId: string, projectPath: string) {
   return defineTool({
     name: 'save-note',
-    description: 'Save content as a note. Creates a proper note entity that appears in the Notes list. Use this instead of write when saving notes, summaries, or extracted insights.',
+    description: 'Save content as a note or todo. Creates a proper entity that appears in the Notes or Todos list. Use type="todo" for actionable tasks the user needs to track.',
     parameters: {
       title: {
         type: 'string',
-        description: 'Title of the note',
+        description: 'Title of the note or todo',
         required: true
       },
       content: {
         type: 'string',
-        description: 'Content of the note (markdown supported)',
+        description: 'Content of the note or description of the todo (markdown supported)',
         required: true
+      },
+      type: {
+        type: 'string',
+        enum: ['note', 'todo'],
+        description: 'Entity type: "note" for information, "todo" for actionable tasks',
+        required: false
       },
       tags: {
         type: 'array',
@@ -40,9 +47,10 @@ export function createSaveNoteTool(sessionId: string, projectPath: string) {
       },
     },
     execute: async (input) => {
-      const { title, content, tags = [] } = input as {
+      const { title, content, type = 'note', tags = [] } = input as {
         title: string
         content: string
+        type?: 'note' | 'todo'
         tags?: string[]
       }
       // All agent-created notes are pinned by default
@@ -53,16 +61,18 @@ export function createSaveNoteTool(sessionId: string, projectPath: string) {
         projectPath
       }
 
-      const result = saveNote(title, content, tags, context, false, undefined, pinned)
+      const result = saveNote(title, content, tags, context, false, undefined, pinned, type)
 
       if (result.success) {
         return {
           success: true,
           data: {
             id: result.note!.id,
+            type: result.note!.type,
             title: result.note!.title,
             filePath: result.filePath,
-            tags: result.note!.tags
+            tags: result.note!.tags,
+            ...(type === 'todo' && { status: (result.note as Todo).status })
           }
         }
       } else {
@@ -278,6 +288,41 @@ export function createTogglePinTool() {
         }
       } else {
         return { success: false, error: result.error }
+      }
+    }
+  })
+}
+
+/**
+ * Create a toggle-complete tool that toggles todo completion status
+ */
+export function createToggleCompleteTool(projectPath: string) {
+  return defineTool({
+    name: 'toggle-complete',
+    description: 'Toggle a todo between pending and completed status. Use this when the user completes a task or wants to reopen a completed one.',
+    parameters: {
+      id: {
+        type: 'string',
+        description: 'ID of the todo to toggle (full UUID or prefix)',
+        required: true
+      }
+    },
+    execute: async (input) => {
+      const { id } = input as { id: string }
+      const result = toggleTodoComplete(id, projectPath)
+
+      if (result.success && result.todo) {
+        return {
+          success: true,
+          data: {
+            id: result.todo.id,
+            title: result.todo.title,
+            status: result.todo.status,
+            completedAt: result.todo.completedAt
+          }
+        }
+      } else {
+        return { success: false, error: result.error || 'Failed to toggle todo' }
       }
     }
   })

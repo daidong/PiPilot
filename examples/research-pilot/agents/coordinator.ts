@@ -2,7 +2,8 @@
  * Coordinator Agent
  *
  * Main chat agent using the framework's context pipeline:
- * - Pinned/selected entities loaded directly from disk as ContextSelections
+ * - Pinned entities synced to memoryStorage → framework's pinned-phase (reserved ∞ budget)
+ * - Selected (non-pinned) entities loaded as ContextSelections → selected-phase (30% budget)
  * - @-mentions passed as selectedContext for the selected phase
  * - Session memory (ephemeral) via kvMemory namespace="session"
  * - Token budgeting, history compression, and ctx-expand come for free
@@ -78,8 +79,8 @@ function formatEntityForContext(entity: Entity): string {
 }
 
 /**
- * Build ContextSelection[] from disk entities that are pinned or selected.
- * Reads directly from disk — no kvMemory middleman.
+ * Build ContextSelection[] from disk entities that are selected (non-pinned).
+ * Pinned entities are synced to memoryStorage separately for the framework's pinned-phase.
  */
 function buildEntitySelections(projectPath: string, debug: boolean): ContextSelection[] {
   const allEntities: Entity[] = [
@@ -88,11 +89,12 @@ function buildEntitySelections(projectPath: string, debug: boolean): ContextSele
     ...loadEntitiesFromDisk(join(projectPath, PATHS.data))
   ]
 
-  const pinned = allEntities.filter(e => e.pinned)
+  // Pinned entities are handled via syncPinnedToMemoryStorage() → pinned-phase
   const selected = allEntities.filter(e => e.selectedForAI && !e.pinned)
 
   if (debug) {
-    console.log(`[Context] Entities: ${allEntities.length} total, ${pinned.length} pinned, ${selected.length} selected`)
+    const pinned = allEntities.filter(e => e.pinned)
+    console.log(`[Context] Entities: ${allEntities.length} total, ${pinned.length} pinned (via memoryStorage), ${selected.length} selected`)
   }
 
   const toSelection = (entity: Entity, source: string): ContextSelection => ({
@@ -108,10 +110,59 @@ function buildEntitySelections(projectPath: string, debug: boolean): ContextSele
     }
   })
 
+  // Only return non-pinned selected entities (pinned come through pinned-phase)
   return [
-    ...pinned.map(e => toSelection(e, `pinned:${e.type}.${e.id}`)),
     ...selected.map(e => toSelection(e, `selected:${e.type}.${e.id}`))
   ]
+}
+
+/**
+ * Sync pinned entities from disk to memoryStorage so the framework's pinned-phase can find them.
+ * This gives pinned items reserved (infinite) budget instead of the 30% trimmable selected-phase budget.
+ */
+async function syncPinnedToMemoryStorage(
+  projectPath: string,
+  memoryStorage: any,
+  debug: boolean
+): Promise<void> {
+  const allEntities: Entity[] = [
+    ...loadEntitiesFromDisk(join(projectPath, PATHS.notes)),
+    ...loadEntitiesFromDisk(join(projectPath, PATHS.literature)),
+    ...loadEntitiesFromDisk(join(projectPath, PATHS.data))
+  ]
+  const pinned = allEntities.filter(e => e.pinned)
+
+  // Get existing pinned items in memoryStorage to detect removals
+  const existing = await memoryStorage.list({ namespace: 'pinned', tags: ['pinned'], status: 'active' })
+  const existingKeys = new Set(existing.items.map((i: any) => i.key))
+
+  // Upsert current pinned entities
+  const currentKeys = new Set<string>()
+  for (const entity of pinned) {
+    // Memory keys must start with a letter; use {type}.{uuid} format
+    const key = `${entity.type}.${entity.id.toLowerCase()}`
+    currentKeys.add(key)
+    const content = formatEntityForContext(entity)
+    await memoryStorage.put({
+      namespace: 'pinned',
+      key,
+      value: { entityId: entity.id, type: entity.type, title: entity.title },
+      valueText: content,
+      tags: ['pinned', entity.type],
+      overwrite: true
+    })
+  }
+
+  // Remove items that are no longer pinned
+  for (const oldKey of existingKeys) {
+    if (!currentKeys.has(oldKey)) {
+      await memoryStorage.delete('pinned', oldKey, 'unpinned')
+    }
+  }
+
+  if (debug) {
+    console.log(`[Context] Synced ${pinned.length} pinned entities to memoryStorage`)
+  }
 }
 
 /**
@@ -152,6 +203,8 @@ export interface CoordinatorConfig {
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown) => void
+  /** Callback fired after each LLM call with token usage and cost info */
+  onUsage?: (usage: any, cost: any) => void
 }
 
 export async function createCoordinator(config: CoordinatorConfig): Promise<{
@@ -160,7 +213,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   clearSessionMemory: () => Promise<void>
   destroy: () => Promise<void>
 }> {
-  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, reasoningEffort = 'high', onStream, onToolCall, onToolResult } = config
+  const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, reasoningEffort = 'high', onStream, onToolCall, onToolResult, onUsage } = config
 
   // Create subagent tools with the coordinator's API key, onToolResult, and projectPath
   // so the team pipeline can emit progress updates and save papers to the local library
@@ -277,6 +330,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     ],
     packs: [
       packs.safe(),           // read, write, edit, glob, grep
+      packs.exec({ approvalMode: 'none', denyPatterns: [] }),  // bash execution (fully trusted for personal use)
       packs.kvMemory(),       // session memory (ephemeral scratchpad via namespace=session)
       packs.todo(),           // todo-add, todo-update, todo-complete, todo-remove
       packs.sessionHistory(), // messageStore for cross-turn history persistence
@@ -315,7 +369,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
 
     // Research agents need many consecutive tool rounds (fetch, search, save)
-    toolLoopThreshold: 15
+    toolLoopThreshold: 15,
+
+    // Research tasks often require many steps (search, fetch, analyze, save)
+    maxSteps: 100,
+
+    // Token usage tracking
+    onUsage
   })
 
   // Initialize packs eagerly so memoryStorage is available before first run()
@@ -356,7 +416,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     async chat(message: string, mentions?: ResolvedMention[]) {
       try {
-        // Build context selections directly from disk (no kvMemory middleman)
+        // Sync pinned entities to memoryStorage for framework's pinned-phase (reserved ∞ budget)
+        const storage = (agent.runtime as any).memoryStorage
+        if (storage) {
+          await syncPinnedToMemoryStorage(projectPath, storage, debug)
+        }
+
+        // Build context selections (non-pinned only, pinned come through pinned-phase now)
         const entitySelections = buildEntitySelections(projectPath, debug)
         const mentionSelections = buildMentionSelections(mentions)
         const selectedContext = [...entitySelections, ...mentionSelections]

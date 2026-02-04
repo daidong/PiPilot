@@ -4,6 +4,7 @@ import { ActivityLog } from '../right/ActivityLog'
 import { NotificationPanel } from '../right/NotificationPanel'
 import { WorkingFolder } from '../right/WorkingFolder'
 import { ContextChips } from '../right/ContextChips'
+import { TokenUsage } from '../right/TokenUsage'
 
 export function RightSidebar() {
   return (
@@ -15,6 +16,7 @@ export function RightSidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <TokenUsage />
         <NotificationPanel />
         <WorkingFolder />
         <ContextChips />

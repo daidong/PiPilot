@@ -59,7 +59,11 @@ export function adaptMCPTool(
     execute: async (rawInput): Promise<ToolResult<MCPToolResultData>> => {
       // Resolve file:// URIs: turn relative paths into absolute ones
       // so MCP servers (which run as child processes) can find the file.
-      const input = normalizeFileUris(rawInput)
+      const normalized = normalizeFileUris(rawInput)
+
+      // Strip optional params with invalid enum values or empty/null values
+      // to prevent MCP validation errors from LLM-generated inputs
+      const input = sanitizeInput(normalized, mcpTool.inputSchema)
 
       const maxRetries = 3
 
@@ -224,6 +228,52 @@ function convertMCPResult(result: MCPToolResult): ToolResult<MCPToolResultData> 
     },
     error: result.isError ? text : undefined
   }
+}
+
+/**
+ * Sanitize tool input: strip optional parameters that have invalid enum values
+ * or are null/undefined/empty-string. This prevents MCP validation errors caused
+ * by LLMs generating bad values for optional fields.
+ */
+function sanitizeInput(
+  input: unknown,
+  schema: MCPToolDefinition['inputSchema']
+): unknown {
+  if (typeof input !== 'object' || input === null || !schema.properties) return input
+
+  const obj = input as Record<string, unknown>
+  const required = new Set(schema.required ?? [])
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(obj)) {
+    const propSchema = schema.properties[key] as MCPPropertySchema | undefined
+
+    // Keep unknown keys as-is (pass through)
+    if (!propSchema) {
+      result[key] = value
+      continue
+    }
+
+    // Always keep required fields
+    if (required.has(key)) {
+      result[key] = value
+      continue
+    }
+
+    // Drop optional fields that are null, undefined, or empty string
+    if (value === null || value === undefined || value === '') {
+      continue
+    }
+
+    // Drop optional fields with invalid enum values
+    if (propSchema.enum && !propSchema.enum.includes(value)) {
+      continue
+    }
+
+    result[key] = value
+  }
+
+  return result
 }
 
 /**

@@ -1,10 +1,19 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+export interface UsageEvent {
+  promptTokens: number
+  completionTokens: number
+  cachedTokens: number
+  cost: number
+  cacheHitRate: number
+}
+
 export interface ElectronAPI {
   // Agent
   sendMessage: (message: string, rawMentions?: string, model?: string) => Promise<any>
   onStreamChunk: (cb: (chunk: string) => void) => () => void
   onAgentDone: (cb: (result: any) => void) => () => void
+  onUsage: (cb: (event: UsageEvent) => void) => () => void
 
   // Entity commands
   listNotes: () => Promise<any>
@@ -70,8 +79,11 @@ export interface ElectronAPI {
   onProjectClosed: (cb: () => void) => () => void
 
   // Preferences
-  loadPreferences: () => Promise<{ selectedModel?: string; reasoningEffort?: string } | null>
-  savePreferences: (prefs: { selectedModel?: string; reasoningEffort?: string }) => Promise<void>
+  loadPreferences: () => Promise<{ selectedModel?: string; reasoningEffort?: string; theme?: string } | null>
+  savePreferences: (prefs: { selectedModel?: string; reasoningEffort?: string; theme?: string }) => Promise<void>
+
+  // Folder operations
+  openFolderWith: (app: 'finder' | 'zed' | 'cursor' | 'vscode') => Promise<{ success: boolean; error?: string }>
 
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
@@ -93,6 +105,11 @@ const api: ElectronAPI = {
     const handler = (_: any, result: any) => cb(result)
     ipcRenderer.on('agent:done', handler)
     return () => ipcRenderer.removeListener('agent:done', handler)
+  },
+  onUsage: (cb) => {
+    const handler = (_: any, event: UsageEvent) => cb(event)
+    ipcRenderer.on('agent:usage', handler)
+    return () => ipcRenderer.removeListener('agent:usage', handler)
   },
 
   listNotes: () => ipcRenderer.invoke('cmd:list-notes'),
@@ -172,6 +189,8 @@ const api: ElectronAPI = {
 
   loadPreferences: () => ipcRenderer.invoke('prefs:load'),
   savePreferences: (prefs) => ipcRenderer.invoke('prefs:save', prefs),
+
+  openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app),
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),
   loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),

@@ -158,17 +158,15 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
   }
 }
 
-async function ensureCoordinator(win: BrowserWindow, model?: string, reasoningEffort?: string) {
+async function ensureCoordinator(win: BrowserWindow, model?: string) {
   if (isClosing) throw new Error('Project is closing')
   const requestedModel = model || currentModel
-  const requestedEffort = (reasoningEffort as any) || currentReasoningEffort
-  // Recreate coordinator if model or reasoning effort changed
-  if (coordinator && (requestedModel !== currentModel || requestedEffort !== currentReasoningEffort)) {
+  // Recreate coordinator if model changed (reasoning effort changes handled by prefs:save)
+  if (coordinator && requestedModel !== currentModel) {
     coordinator.destroy().catch(() => {})
     coordinator = null
   }
   currentModel = requestedModel
-  currentReasoningEffort = requestedEffort
 
   if (!coordinator) {
     const apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || ''
@@ -253,6 +251,20 @@ async function ensureCoordinator(win: BrowserWindow, model?: string, reasoningEf
         const actEvent = { type: 'tool-result', tool, summary, success, error }
         realtimeBuffer.pushActivity(actEvent)
         safeSend(win, 'agent:activity', actEvent)
+      },
+
+      // Token usage tracking
+      onUsage: (usage: any, cost: any) => {
+        const usageEvent = {
+          promptTokens: usage.promptTokens ?? 0,
+          completionTokens: usage.completionTokens ?? 0,
+          cachedTokens: usage.cacheReadInputTokens ?? 0,
+          cost: cost.totalCost ?? 0,
+          cacheHitRate: usage.promptTokens > 0
+            ? (usage.cacheReadInputTokens ?? 0) / usage.promptTokens
+            : 0
+        }
+        safeSend(win, 'agent:usage', usageEvent)
       }
     })
 
@@ -681,8 +693,46 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     const file = join(projectPath, PATHS.root, 'preferences.json')
     const data = { ...prefs, updatedAt: new Date().toISOString() }
     writeFileSync(file, JSON.stringify(data, null, 2))
+    // Invalidate coordinator if model or reasoning effort changed so it gets recreated
+    const modelChanged = prefs.selectedModel && prefs.selectedModel !== currentModel
+    const effortChanged = prefs.reasoningEffort && prefs.reasoningEffort !== currentReasoningEffort
     if (prefs.selectedModel) currentModel = prefs.selectedModel
     if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort as any
+    if ((modelChanged || effortChanged) && coordinator) {
+      coordinator.destroy().catch(() => {})
+      coordinator = null
+    }
+  })
+
+  // Open working folder with specified app
+  ipcMain.handle('folder:open-with', async (_e, app: 'finder' | 'zed' | 'cursor' | 'vscode') => {
+    if (!projectPath) return { success: false, error: 'No project open' }
+
+    const { exec } = await import('child_process')
+    const { promisify } = await import('util')
+    const execAsync = promisify(exec)
+
+    try {
+      switch (app) {
+        case 'finder':
+          await execAsync(`open "${projectPath}"`)
+          break
+        case 'zed':
+          await execAsync(`zed "${projectPath}"`)
+          break
+        case 'cursor':
+          await execAsync(`cursor "${projectPath}"`)
+          break
+        case 'vscode':
+          await execAsync(`code "${projectPath}"`)
+          break
+        default:
+          return { success: false, error: `Unknown app: ${app}` }
+      }
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to open folder' }
+    }
   })
 
   // Session - chat history persistence

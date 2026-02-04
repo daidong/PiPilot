@@ -31,7 +31,7 @@ export interface GrepOutput {
 
 export const grep: Tool<GrepInput, GrepOutput> = defineTool({
   name: 'grep',
-  description: `Search file contents using regular expressions. Auto-excludes node_modules, .git, dist, etc. Results may be truncated.`,
+  description: `Search for a pattern across MULTIPLE files. Use grep to FIND which files contain a pattern. Do NOT grep a file you already read — you have its content. Auto-excludes node_modules, .git, dist. Results may be truncated.`,
   parameters: {
     pattern: {
       type: 'string',

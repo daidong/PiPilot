@@ -40,6 +40,9 @@ export type {
 
   // 请求/响应类型
   TokenUsage,
+  DetailedTokenUsage,
+  TokenCost,
+  UsageSummary,
   LLMToolDefinition,
   StreamOptions,
   GenerateOptions,
@@ -135,3 +138,16 @@ export {
   type SourceStats,
   type SourceQueryResult
 } from './schema-utils.js'
+
+// ============================================================================
+// Cost Calculator
+// ============================================================================
+
+export {
+  calculateCost,
+  aggregateCosts,
+  aggregateUsage,
+  calculateCacheHitRate,
+  formatCost,
+  formatTokens
+} from './cost-calculator.js'

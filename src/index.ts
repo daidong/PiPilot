@@ -249,6 +249,18 @@ export {
   createTokenEstimator
 } from './core/token-estimator.js'
 
+// Token Tracking
+export {
+  TokenTracker,
+  createTokenTracker
+} from './core/token-tracker.js'
+export type {
+  TokenTrackerConfig,
+  UsageEventType,
+  UsageEvent,
+  UsageEventHandler
+} from './core/token-tracker.js'
+
 // ============================================================================
 // Utility exports
 // ============================================================================
@@ -437,6 +449,9 @@ export type {
 
   // 请求/响应类型
   TokenUsage,
+  DetailedTokenUsage,
+  TokenCost,
+  UsageSummary,
   LLMToolDefinition,
   StreamOptions,
   GenerateOptions,
@@ -480,6 +495,16 @@ export {
   createLLMClient,
   createLLMClientFromModelId,
   streamWithCallbacks
+} from './llm/index.js'
+
+// Cost Calculator
+export {
+  calculateCost,
+  aggregateCosts,
+  aggregateUsage,
+  calculateCacheHitRate,
+  formatCost,
+  formatTokens
 } from './llm/index.js'
 
 // Structured Output (contract-first LLM calls)

@@ -18,6 +18,8 @@ function getEntityTitle(entity: Entity): string {
   switch (entity.type) {
     case 'note':
       return entity.title
+    case 'todo':
+      return entity.title
     case 'doc':
       return entity.title
     default:
@@ -32,6 +34,7 @@ export function searchEntities(projectPath: string, query: string): SearchResult
 
   const dirs = [
     { path: PATHS.notes, type: 'note' },
+    { path: PATHS.todos, type: 'todo' },
     { path: PATHS.docs, type: 'doc' }
   ]
 
@@ -48,6 +51,14 @@ export function searchEntities(projectPath: string, query: string): SearchResult
         let match: string | null = null
 
         if (entity.type === 'note') {
+          if (entity.title.toLowerCase().includes(queryLower)) {
+            match = `title: ${entity.title}`
+          } else if (entity.content.toLowerCase().includes(queryLower)) {
+            match = `content: ...${entity.content.toLowerCase().indexOf(queryLower)}...`
+          } else if (entity.tags.some(t => t.toLowerCase().includes(queryLower))) {
+            match = `tag: ${entity.tags.find(t => t.toLowerCase().includes(queryLower))}`
+          }
+        } else if (entity.type === 'todo') {
           if (entity.title.toLowerCase().includes(queryLower)) {
             match = `title: ${entity.title}`
           } else if (entity.content.toLowerCase().includes(queryLower)) {

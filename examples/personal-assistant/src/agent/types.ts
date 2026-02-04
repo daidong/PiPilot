@@ -13,6 +13,7 @@ export const PATHS = {
   root: '.personal-assistant',
   notes: '.personal-assistant/notes',
   docs: '.personal-assistant/docs',
+  todos: '.personal-assistant/todos',
   sessions: '.personal-assistant/sessions',
   cache: '.personal-assistant/cache',
   documentCache: '.personal-assistant/cache/documents',
@@ -106,6 +107,17 @@ export interface Note extends BaseEntity {
 }
 
 /**
+ * Todo - Trackable task items
+ */
+export interface Todo extends BaseEntity {
+  type: 'todo'
+  title: string
+  content: string
+  status: 'pending' | 'completed'
+  completedAt?: string
+}
+
+/**
  * Doc - Document references (files, converted docs, etc.)
  */
 export interface Doc extends BaseEntity {
@@ -120,7 +132,7 @@ export interface Doc extends BaseEntity {
 /**
  * Union type for all entity types
  */
-export type Entity = Note | Doc
+export type Entity = Note | Todo | Doc
 
 // ============================================================================
 // Project Configuration

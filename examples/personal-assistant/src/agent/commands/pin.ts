@@ -27,7 +27,7 @@ export interface PinnedEntity {
  * Resolve entity directory paths, optionally prefixed with projectPath
  */
 function resolveEntityDirs(projectPath?: string): string[] {
-  const base = [PATHS.notes, PATHS.docs]
+  const base = [PATHS.notes, PATHS.todos, PATHS.docs]
   return projectPath ? base.map(p => join(projectPath, p)) : base
 }
 
@@ -65,6 +65,7 @@ function findEntityFile(entityId: string, projectPath?: string): string | null {
 function getEntityTitle(entity: Entity): string {
   switch (entity.type) {
     case 'note': return entity.title
+    case 'todo': return entity.title
     case 'doc': return entity.title
     default: return '(unknown)'
   }

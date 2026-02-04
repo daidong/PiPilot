@@ -7,6 +7,7 @@ import type { Policy } from './policy.js'
 import type { TraceEvent } from './trace.js'
 import type { ContextSelection } from './context-pipeline.js'
 import type { Runtime } from './runtime.js'
+import type { UsageSummary } from '../llm/provider.types.js'
 
 /**
  * 模型配置
@@ -103,6 +104,8 @@ export interface AgentRunResult {
   trace: TraceEvent[]
   /** 总耗时（毫秒） */
   durationMs: number
+  /** Token usage and cost summary */
+  usage?: UsageSummary
 }
 
 /**

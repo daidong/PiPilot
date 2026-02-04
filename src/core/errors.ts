@@ -17,6 +17,7 @@ export type ErrorCategory =
   | 'execution'          // Tool/script runtime failure — agent can try different approach
   | 'timeout'            // Operation exceeded time limit
   | 'rate_limit'         // API rate limit — executor retry (no LLM)
+  | 'server_overload'    // API server at capacity (HTTP 529) — executor retry
   | 'auth'               // Authentication/permission error — not recoverable
   | 'policy_denied'      // Framework policy blocked the call — maybe recoverable with different approach
   | 'context_overflow'   // Token limit exceeded
@@ -85,6 +86,7 @@ const RECOVERABILITY_MAP: Record<ErrorCategory, Recoverability> = {
   execution: 'yes',
   timeout: 'maybe',
   rate_limit: 'yes',
+  server_overload: 'yes',
   auth: 'no',
   policy_denied: 'maybe',
   context_overflow: 'maybe',
@@ -139,6 +141,14 @@ export function classifyError(
   } else if (lowerMsg.includes('rate limit') || lowerMsg.includes('429') || lowerMsg.includes('too many requests')) {
     category = 'rate_limit'
     source = { kind: 'network' }
+  } else if (
+    lowerMsg.includes('overloaded') ||
+    lowerMsg.includes('529') ||
+    lowerMsg.includes('overloaded_error') ||
+    lowerMsg.includes('server is at capacity')
+  ) {
+    category = 'server_overload'
+    source = { kind: 'llm' }
   } else if (lowerMsg.includes('timeout') || lowerMsg.includes('timed out')) {
     category = 'timeout'
   } else if (lowerMsg.includes('unauthorized') || lowerMsg.includes('401') || lowerMsg.includes('403') || lowerMsg.includes('authentication')) {

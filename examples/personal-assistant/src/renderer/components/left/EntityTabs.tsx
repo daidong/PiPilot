@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { StickyNote, FileText, Upload, MessageSquare, Trash2, Pin, Check, FileSpreadsheet, FileImage, Presentation, FileCode, File } from 'lucide-react'
+import { StickyNote, FileText, Upload, MessageSquare, Trash2, Pin, Check, FileSpreadsheet, FileImage, Presentation, FileCode, File, CheckSquare, Eye, EyeOff } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
@@ -100,6 +100,7 @@ function HoverPreview({
 }
 
 const tabs = [
+  { key: 'todos' as const, label: 'Todos', icon: CheckSquare },
   { key: 'notes' as const, label: 'Notes', icon: StickyNote },
   { key: 'docs' as const, label: 'Docs', icon: FileText }
 ]
@@ -216,21 +217,160 @@ function EntityRow({ entity }: { entity: EntityItem }) {
   )
 }
 
+function TodoRow({ todo }: { todo: EntityItem }) {
+  const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
+  const togglePin = useEntityStore((s) => s.togglePin)
+  const toggleSelect = useEntityStore((s) => s.toggleSelect)
+  const deleteEntity = useEntityStore((s) => s.deleteEntity)
+  const openPreview = useUIStore((s) => s.openPreview)
+  const closePreview = useUIStore((s) => s.closePreview)
+  const previewEntity = useUIStore((s) => s.previewEntity)
+  const requestScrollTo = useChatStore((s) => s.requestScrollTo)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [showHover, setShowHover] = useState(false)
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const showTimeoutRef = useRef<number | null>(null)
+  const hideTimeoutRef = useRef<number | null>(null)
+  const confirmResetRef = useRef<number | null>(null)
+
+  const messageId = todo.provenance?.messageId as string | undefined
+  const isCompleted = todo.status === 'completed'
+
+  const cancelHide = () => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current)
+      hideTimeoutRef.current = null
+    }
+  }
+
+  const handleMouseEnter = () => {
+    cancelHide()
+    showTimeoutRef.current = window.setTimeout(() => {
+      if (rowRef.current) {
+        setAnchorRect(rowRef.current.getBoundingClientRect())
+        setShowHover(true)
+      }
+    }, 400)
+  }
+
+  const handleMouseLeave = () => {
+    if (showTimeoutRef.current) {
+      clearTimeout(showTimeoutRef.current)
+      showTimeoutRef.current = null
+    }
+    if (confirmDelete) return
+    hideTimeoutRef.current = window.setTimeout(() => {
+      setShowHover(false)
+    }, 300)
+  }
+
+  const handleCheckboxClick = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    await toggleTodoComplete(todo.id)
+  }
+
+  const handleProvenanceClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (messageId) requestScrollTo(messageId)
+  }
+
+  const handleDelete = async () => {
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      confirmResetRef.current = window.setTimeout(() => setConfirmDelete(false), 3000)
+      return
+    }
+    if (confirmResetRef.current) clearTimeout(confirmResetRef.current)
+    setShowHover(false)
+    await deleteEntity(todo.id)
+    if (previewEntity?.id === todo.id) closePreview()
+    setConfirmDelete(false)
+  }
+
+  return (
+    <div>
+      <div
+        ref={rowRef}
+        className="flex items-center gap-1.5 px-2 py-1 rounded t-bg-hover transition-colors cursor-pointer"
+        onClick={() => openPreview(todo)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        {showHover && anchorRect && (
+          <HoverPreview
+            entity={todo}
+            anchorRect={anchorRect}
+            onMouseEnter={cancelHide}
+            onMouseLeave={handleMouseLeave}
+            onPin={() => togglePin(todo.id)}
+            onSelect={() => toggleSelect(todo.id)}
+            onDelete={handleDelete}
+            confirmDelete={confirmDelete}
+          />
+        )}
+        {/* Checkbox for completion */}
+        <button
+          onClick={handleCheckboxClick}
+          className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+            isCompleted
+              ? 'bg-green-500 border-green-500 text-white'
+              : 't-border hover:border-green-400'
+          }`}
+          title={isCompleted ? 'Mark as pending' : 'Mark as completed'}
+        >
+          {isCompleted && <Check size={10} strokeWidth={3} />}
+        </button>
+        <span className={`w-1 h-1 rounded-full shrink-0 ${
+          todo.pinned ? 'bg-orange-400' : todo.selectedForAI ? 'bg-blue-400' : 't-bg-elevated'
+        }`} />
+        <div className="min-w-0 flex-1">
+          <span className={`text-xs truncate block ${
+            isCompleted ? 'line-through t-text-muted' : 't-text'
+          }`}>
+            {todo.title}
+          </span>
+        </div>
+      </div>
+      {messageId && (
+        <button
+          onClick={handleProvenanceClick}
+          className="flex items-center gap-1 ml-6 pl-2 py-0.5 text-[10px] t-text-muted hover:text-orange-400 transition-colors border-l t-border"
+          title="Scroll to source message"
+        >
+          <MessageSquare size={9} />
+          <span>from chat</span>
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, docs, refreshAll } = useEntityStore()
+  const { notes, docs, todos, refreshAll } = useEntityStore()
+  const [showCompleted, setShowCompleted] = useState(false)
 
   useEffect(() => {
     refreshAll()
   }, [])
 
+  // Filter todos based on showCompleted state
+  const filteredTodos = showCompleted
+    ? todos
+    : todos.filter((t) => t.status !== 'completed')
+
   const entities: Record<string, EntityItem[]> = {
+    todos: filteredTodos,
     notes,
     docs
   }
 
   const items = entities[leftTab] || []
+
+  // Count completed todos for display
+  const completedCount = todos.filter((t) => t.status === 'completed').length
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -275,24 +415,41 @@ export function EntityTabs() {
         ))}
       </div>
 
-      {/* Drop zone */}
-      <div
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
-      >
-        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
-        <p className="text-xs t-text-muted">
-          Drop files here to add {leftTab}
-        </p>
-      </div>
+      {/* Show completed toggle for todos tab */}
+      {leftTab === 'todos' && completedCount > 0 && (
+        <button
+          onClick={() => setShowCompleted(!showCompleted)}
+          className="flex items-center gap-1.5 mx-2 mt-2 px-2 py-1 text-xs t-text-muted hover:t-text transition-colors rounded t-bg-hover"
+        >
+          {showCompleted ? <EyeOff size={12} /> : <Eye size={12} />}
+          <span>{showCompleted ? 'Hide' : 'Show'} completed ({completedCount})</span>
+        </button>
+      )}
+
+      {/* Drop zone - only for notes and docs */}
+      {leftTab !== 'todos' && (
+        <div
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
+        >
+          <Upload size={16} className="mx-auto mb-1 t-text-muted" />
+          <p className="text-xs t-text-muted">
+            Drop files here to add {leftTab}
+          </p>
+        </div>
+      )}
 
       {/* Entity list */}
       <div className="px-1 py-2 space-y-0.5">
         {items.length === 0 ? (
           <p className="px-3 py-4 text-xs t-text-muted text-center">
-            No {leftTab} yet
+            {leftTab === 'todos'
+              ? (showCompleted ? 'No todos yet' : 'No pending todos')
+              : `No ${leftTab} yet`}
           </p>
+        ) : leftTab === 'todos' ? (
+          items.map((e) => <TodoRow key={e.id} todo={e} />)
         ) : (
           items.map((e) => <EntityRow key={e.id} entity={e} />)
         )}

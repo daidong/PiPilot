@@ -36,7 +36,7 @@ function getFileName(path: string): string {
 
 export const read: Tool<ReadInput, ReadOutput> = defineTool({
   name: 'read',
-  description: `Read file contents. Supports encoding, offset, and line limit. Large files are auto-truncated; use offset/limit to paginate.`,
+  description: `Read file contents. Auto-truncates at system limit. For most files (<500 lines), read the ENTIRE file at once (no offset/limit). Only use offset/limit when you need to re-examine a specific section of a file you already read.`,
   parameters: {
     path: {
       type: 'string',

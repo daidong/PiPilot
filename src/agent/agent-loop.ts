@@ -9,7 +9,8 @@ import type {
   ContentBlock,
   ToolUseContent,
   LLMToolDefinition,
-  TokenUsage
+  DetailedTokenUsage,
+  TokenCost
 } from '../llm/index.js'
 import {
   createLLMClient,
@@ -28,6 +29,7 @@ import type { StateSummarizer } from '../core/state-summarizer.js'
 import type { BudgetCoordinator, RoundHint } from '../core/budget-coordinator.js'
 import { compressToolResult } from '../core/tool-result-compressor.js'
 import { classifyError, sanitizeErrorContent } from '../core/errors.js'
+import { TokenTracker } from '../core/token-tracker.js'
 import type { ErrorCategory } from '../core/errors.js'
 import { buildFeedback, formatFeedbackAsToolResult, contextDropFeedback } from '../core/feedback.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
@@ -113,6 +115,12 @@ export interface AgentLoopConfig {
 
   /** Pre-compaction flush callback — fired once per run() when usage >= 80% */
   onPreCompaction?: () => Promise<void>
+
+  /** Token tracker for usage and cost tracking */
+  tokenTracker?: TokenTracker
+
+  /** Callback fired after each LLM call with usage and cost info */
+  onUsage?: (usage: DetailedTokenUsage, cost: TokenCost) => void
 }
 
 /**
@@ -248,7 +256,11 @@ export class AgentLoop {
    */
   async run(userPrompt: string): Promise<AgentRunResult> {
     const startTime = Date.now()
+    const runId = crypto.randomUUID()
     this.stopped = false
+
+    // Start token tracking
+    this.config.tokenTracker?.startRun(runId)
 
     // Record start
     this.config.trace.record({
@@ -366,7 +378,7 @@ export class AgentLoop {
         // Use streaming API
         const toolCalls: ToolUseContent[] = []
         let responseText = ''
-        let usage: TokenUsage = {
+        let usage: DetailedTokenUsage = {
           promptTokens: 0,
           completionTokens: 0,
           totalTokens: 0
@@ -437,6 +449,26 @@ export class AgentLoop {
             },
             onFinish: (result) => {
               usage = result.usage
+
+              // Record usage with token tracker
+              if (this.config.tokenTracker) {
+                // Get modelId from budgetConfig (set by create-agent) or llmConfig
+                const modelId = this.config.budgetConfig?.modelId || this.config.llmConfig?.model || ''
+                const cost = this.config.tokenTracker.recordCall(modelId, usage)
+                this.config.onUsage?.(usage, cost)
+
+                // Record trace event for usage
+                this.config.trace.record({
+                  type: 'usage.call',
+                  data: {
+                    modelId,
+                    promptTokens: usage.promptTokens,
+                    completionTokens: usage.completionTokens,
+                    cachedTokens: usage.cacheReadInputTokens ?? 0,
+                    cost: cost.totalCost
+                  }
+                })
+              }
             },
             onError: (error) => {
               llmError = error
@@ -466,10 +498,11 @@ export class AgentLoop {
           // Classify the error using the structured error system (RFC-005)
           const classifiedError = classifyError(errorMessage, 'llm')
 
-          // Transient LLM errors (server 500, network blips): retry with backoff, no message changes
+          // Transient LLM errors (server 500, network blips, overloaded): retry with backoff, no message changes
           const isTransient = classifiedError.category === 'transient_network'
             || classifiedError.category === 'rate_limit'
             || classifiedError.category === 'timeout'
+            || classifiedError.category === 'server_overload'
           if (isTransient && transientRetryCount < 3) {
             transientRetryCount++
             const backoffMs = 1000 * Math.pow(2, transientRetryCount - 1) // 1s, 2s, 4s
@@ -526,6 +559,9 @@ export class AgentLoop {
             }
           })
 
+          // Complete token tracking on early error exit
+          const usageSummary = this.config.tokenTracker?.completeRun()
+
           // Record completion with error
           this.config.trace.record({
             type: 'agent.complete',
@@ -538,7 +574,8 @@ export class AgentLoop {
             error: errorMessage,
             steps: step,
             trace: this.config.trace.getEvents(),
-            durationMs: Date.now() - startTime
+            durationMs: Date.now() - startTime,
+            usage: usageSummary
           }
         }
 
@@ -933,6 +970,9 @@ export class AgentLoop {
         })
       }
 
+      // Complete token tracking and get usage summary
+      const usageSummary = this.config.tokenTracker?.completeRun()
+
       // Record completion
       this.config.trace.record({
         type: 'agent.complete',
@@ -944,7 +984,8 @@ export class AgentLoop {
         output: finalOutput,
         steps: step,
         trace: this.config.trace.getEvents(),
-        durationMs: Date.now() - startTime
+        durationMs: Date.now() - startTime,
+        usage: usageSummary
       }
     } catch (error) {
       const errorMessage =
@@ -966,6 +1007,9 @@ export class AgentLoop {
         })
       }
 
+      // Complete token tracking even on error
+      const usageSummary = this.config.tokenTracker?.completeRun()
+
       this.config.trace.record({
         type: 'agent.complete',
         data: { steps: step, success: false, error: errorMessage }
@@ -977,7 +1021,8 @@ export class AgentLoop {
         error: errorMessage,
         steps: step,
         trace: this.config.trace.getEvents(),
-        durationMs: Date.now() - startTime
+        durationMs: Date.now() - startTime,
+        usage: usageSummary
       }
     }
   }

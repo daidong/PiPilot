@@ -108,6 +108,27 @@ Max 10 active tasks; chunk larger work into phases.
 Skip for single-step answers or simple conversation.
 Batch reads: 1-3 reads upfront, then think, then 1 write/edit. No interleaved read-edit cycles unless necessary.
 
+### Tool Selection Efficiency (CRITICAL)
+
+**Read vs Grep decision tree:**
+- If you need the FULL content of a specific file → use \`read\` (no grep needed afterward)
+- If you need to FIND which files contain a pattern → use \`grep\` (then read the specific matches)
+- NEVER grep a file you just read — you already have the content
+- NEVER read the same file twice in one turn — cache mentally
+
+**Read pagination rules:**
+- Files under 500 lines: read the ENTIRE file at once (no offset/limit)
+- Files over 500 lines: read full first, then use offset/limit only if you need to re-examine a specific section
+- Do NOT preemptively paginate — large file truncation is automatic
+
+**Edit rules:**
+- old_string must be UNIQUE in the file (include 3-5 lines of context if needed)
+- If a pattern appears multiple times, include surrounding lines to disambiguate
+- Read file ONCE before editing — do not re-read between edits unless edit failed
+
+**One-turn file cache:**
+Within a single turn, track which files you've read. If you need info from a file you already read, use your memory of its content — do NOT call read/grep again.
+
 ## 4) Intent Gating (hard rules)
 
 Before producing a final answer, if any condition applies, call the required tool first.

@@ -210,7 +210,7 @@ export interface StepFinishEvent extends StreamEvent {
   data: {
     stepIndex: number
     finishReason: string
-    usage: TokenUsage
+    usage: DetailedTokenUsage
   }
 }
 
@@ -221,7 +221,7 @@ export interface FinishEvent extends StreamEvent {
   type: 'finish'
   data: {
     finishReason: string
-    usage: TokenUsage
+    usage: DetailedTokenUsage
     text: string
     toolCalls: ToolUseContent[]
   }
@@ -244,6 +244,52 @@ export interface TokenUsage {
   promptTokens: number
   completionTokens: number
   totalTokens: number
+}
+
+/**
+ * Detailed token usage including cache information
+ */
+export interface DetailedTokenUsage extends TokenUsage {
+  /** Tokens written to cache (cache creation) */
+  cacheCreationInputTokens?: number
+  /** Tokens read from cache (discounted) */
+  cacheReadInputTokens?: number
+  /** Reasoning/thinking tokens (for reasoning models) */
+  reasoningTokens?: number
+}
+
+/**
+ * Cost breakdown for token usage
+ */
+export interface TokenCost {
+  /** Cost for prompt tokens (USD) */
+  promptCost: number
+  /** Cost for completion tokens (USD) */
+  completionCost: number
+  /** Cost for cached read tokens (discounted) */
+  cachedReadCost: number
+  /** Cost for cache creation tokens */
+  cacheCreationCost: number
+  /** Total cost (USD) */
+  totalCost: number
+  /** Model ID used for calculation */
+  modelId: string
+}
+
+/**
+ * Aggregated usage summary for a run
+ */
+export interface UsageSummary {
+  /** Detailed token usage */
+  tokens: DetailedTokenUsage
+  /** Cost breakdown */
+  cost: TokenCost
+  /** Number of LLM calls */
+  callCount: number
+  /** Cache hit rate (0-1) */
+  cacheHitRate: number
+  /** Run duration in milliseconds */
+  durationMs: number
 }
 
 /**
@@ -301,6 +347,6 @@ export interface CompletionResponse {
   toolCalls: ToolUseContent[]
   /** 完成原因 */
   finishReason: 'stop' | 'tool-calls' | 'length' | 'content-filter' | 'error'
-  /** Token 使用情况 */
-  usage: TokenUsage
+  /** Token 使用情况 (with cache info when available) */
+  usage: DetailedTokenUsage
 }

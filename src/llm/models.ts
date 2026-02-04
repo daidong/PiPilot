@@ -27,6 +27,21 @@ export const builtinModels: ModelConfig[] = [
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
   {
+    id: 'gpt-5.1',
+    name: 'GPT-5.1',
+    providerID: 'openai',
+    api: 'chat',
+    capabilities: {
+      temperature: false,  // GPT-5.1 does not support temperature
+      reasoning: true,     // Uses Responses API
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 2.5, output: 10 },
+    limit: { maxContext: 128000, maxOutput: 16384 }
+  },
+  {
     id: 'gpt-5-mini',
     name: 'GPT-5 Mini',
     providerID: 'openai',

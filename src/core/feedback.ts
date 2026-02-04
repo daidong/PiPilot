@@ -72,6 +72,7 @@ const GUIDANCE_TEMPLATES: Record<string, string> = {
   execution: 'The code or command failed at runtime. Review the error details, fix the issue, and try again with a corrected approach.',
   timeout: 'The operation timed out. Consider simplifying the request, reducing data size, or breaking it into smaller steps.',
   rate_limit: 'Rate limited. This will be retried automatically. No action needed.',
+  server_overload: 'The API server is currently at capacity. This often happens with high-demand models like Claude Opus. Wait a moment and retry, or consider switching to a faster model (e.g., Claude Sonnet) for this request.',
   auth: 'Authentication failed. This cannot be fixed by retrying. Report this to the user.',
   policy_denied: 'This operation was blocked by a security policy. Try a different approach or different parameters.',
   context_overflow: 'The context is too large. Reduce the amount of data being processed or summarize intermediate results.',

@@ -53,6 +53,10 @@ export type TraceEventType =
   | 'error.retrying'
   | 'error.recovered'
   | 'error.exhausted'
+  | 'usage.call'
+  | 'usage.step'
+  | 'usage.run'
+  | 'usage.warning'
 
 /**
  * Event correlation context for tracing

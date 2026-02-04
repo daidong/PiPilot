@@ -15,6 +15,8 @@ import { PolicyEngine } from '../core/policy-engine.js'
 import { ContextManager } from '../core/context-manager.js'
 import { PromptCompiler } from '../core/prompt-compiler.js'
 import { AgentLoop } from './agent-loop.js'
+import { TokenTracker, createTokenTracker, type TokenTrackerConfig } from '../core/token-tracker.js'
+import type { DetailedTokenUsage, TokenCost } from '../llm/provider.types.js'
 import { BudgetCoordinator } from '../core/budget-coordinator.js'
 import { StateSummarizer } from '../core/state-summarizer.js'
 import { countTokens } from '../utils/tokenizer.js'
@@ -220,6 +222,15 @@ export interface CreateAgentOptions extends AgentConfig {
 
   /** Pre-compaction callback — fired once per run() when context usage >= 80% */
   onPreCompaction?: (agent: Agent) => Promise<void>
+
+  /** Token tracker for usage and cost tracking */
+  tokenTracker?: TokenTracker
+
+  /** Token tracker configuration (used to create tracker if tokenTracker not provided) */
+  tokenTrackerConfig?: TokenTrackerConfig
+
+  /** Callback fired after each LLM call with usage and cost info */
+  onUsage?: (usage: DetailedTokenUsage, cost: TokenCost) => void
 }
 
 /**
@@ -609,6 +620,10 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         }
       }
 
+      // Create token tracker for usage tracking
+      const tokenTracker = config.tokenTracker
+        ?? (config.onUsage ? createTokenTracker(config.tokenTrackerConfig) : undefined)
+
       // Create a FRESH AgentLoop each turn with budget-controlled history in the system prompt
       const agentLoop = new AgentLoop({
         client: llmClient,
@@ -631,7 +646,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         maxConsecutiveToolRounds: config.maxConsecutiveToolRounds,
         onPreCompaction: config.onPreCompaction
           ? () => config.onPreCompaction!(agent)
-          : undefined
+          : undefined,
+        tokenTracker,
+        onUsage: config.onUsage
       })
 
       activeAgentLoop = agentLoop
