@@ -36,11 +36,65 @@ import { getModel } from './models.js'
 import type { ProviderSDKConfig, ProviderID } from './provider.types.js'
 
 /**
- * 将框架消息转换为 Vercel AI SDK 消息格式
+ * Anthropic cache control metadata for prompt caching
+ * Requires ≥1024 tokens to be effective
  */
-function convertMessages(messages: Message[]): ModelMessage[] {
-  return messages.map((msg): ModelMessage => {
+const ANTHROPIC_CACHE_CONTROL = {
+  anthropic: { cacheControl: { type: 'ephemeral' as const } }
+}
+
+/**
+ * Format system prompt with cache control for Anthropic
+ * Uses providerOptions to mark system prompt for caching
+ *
+ * Note: AI SDK types are restrictive, but Anthropic provider
+ * does accept providerOptions on text parts at runtime
+ */
+function formatSystemWithCacheControl(
+  system: string | undefined,
+  provider: ProviderID
+): Parameters<typeof streamText>[0]['system'] {
+  if (!system) return undefined
+
+  // Only apply cache control for Anthropic provider
+  // The system prompt is typically >1024 tokens in agent scenarios
+  if (provider === 'anthropic') {
+    // Cast to any to work around strict typing - runtime accepts this format
+    return [{
+      type: 'text',
+      text: system,
+      providerOptions: ANTHROPIC_CACHE_CONTROL
+    }] as unknown as Parameters<typeof streamText>[0]['system']
+  }
+
+  return system
+}
+
+/**
+ * 将框架消息转换为 Vercel AI SDK 消息格式
+ * For Anthropic: marks early stable messages with cache_control
+ */
+function convertMessages(messages: Message[], provider?: ProviderID): ModelMessage[] {
+  // For Anthropic, we cache the first N user/assistant messages (stable history)
+  // These are typically older turns that won't change
+  const CACHE_FIRST_N_MESSAGES = 4
+
+  return messages.map((msg, index): ModelMessage => {
+    // Determine if this message should be cached (Anthropic only, early messages)
+    const shouldCache = provider === 'anthropic' && index < CACHE_FIRST_N_MESSAGES
+
     if (typeof msg.content === 'string') {
+      // For cached messages, use array format with providerOptions
+      if (shouldCache && (msg.role === 'user' || msg.role === 'assistant')) {
+        return {
+          role: msg.role,
+          content: [{
+            type: 'text',
+            text: msg.content,
+            providerOptions: ANTHROPIC_CACHE_CONTROL
+          }]
+        } as ModelMessage
+      }
       return {
         role: msg.role as 'user' | 'assistant' | 'system',
         content: msg.content
@@ -58,16 +112,20 @@ function convertMessages(messages: Message[]): ModelMessage[] {
       // 构建内容数组，包含文本和工具调用
       // SDK 6: ToolCallPart uses 'input' instead of 'args'
       const content: Array<
-        | { type: 'text'; text: string }
+        | { type: 'text'; text: string; providerOptions?: Record<string, unknown> }
         | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
       > = []
 
-      // 添加文本块
+      // 添加文本块 (with cache control if applicable)
       for (const block of textBlocks) {
-        content.push({
+        const textPart: { type: 'text'; text: string; providerOptions?: Record<string, unknown> } = {
           type: 'text',
           text: (block as { text: string }).text
-        })
+        }
+        if (shouldCache) {
+          textPart.providerOptions = ANTHROPIC_CACHE_CONTROL
+        }
+        content.push(textPart)
       }
 
       // 添加工具调用
@@ -87,8 +145,8 @@ function convertMessages(messages: Message[]): ModelMessage[] {
         }
       }
 
-      // 如果只有文本块，返回简单字符串
-      if (toolCallBlocks.length === 0) {
+      // 如果只有文本块且需要缓存，保持数组格式
+      if (toolCallBlocks.length === 0 && !shouldCache) {
         return {
           role: 'assistant',
           content: textBlocks.map(b => (b as { text: string }).text).join('')
@@ -98,7 +156,7 @@ function convertMessages(messages: Message[]): ModelMessage[] {
       return {
         role: 'assistant',
         content
-      }
+      } as ModelMessage
     }
 
     if (msg.role === 'tool') {
@@ -119,11 +177,22 @@ function convertMessages(messages: Message[]): ModelMessage[] {
       }
     }
 
-    // User 或 System 消息
+    // User 消息 (with cache control if applicable)
     const textContent = blocks
       .filter(b => b.type === 'text')
       .map(b => (b as { text: string }).text)
       .join('')
+
+    if (shouldCache && msg.role === 'user') {
+      return {
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: textContent,
+          providerOptions: ANTHROPIC_CACHE_CONTROL
+        }]
+      } as ModelMessage
+    }
 
     return {
       role: msg.role as 'user' | 'system',
@@ -306,8 +375,10 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 
       const streamOptions: Parameters<typeof streamText>[0] = {
         model: languageModel,
-        system,
-        messages: convertMessages(messages),
+        // Use cache control for system prompt on Anthropic
+        system: formatSystemWithCacheControl(system, clientConfig.provider),
+        // Pass provider for message caching
+        messages: convertMessages(messages, clientConfig.provider),
         maxOutputTokens: maxTokens ?? defaults.maxTokens,
         stopSequences
       }
@@ -479,8 +550,10 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 
       const generateOptions: Parameters<typeof generateText>[0] = {
         model: languageModel,
-        system,
-        messages: convertMessages(messages),
+        // Use cache control for system prompt on Anthropic
+        system: formatSystemWithCacheControl(system, clientConfig.provider),
+        // Pass provider for message caching
+        messages: convertMessages(messages, clientConfig.provider),
         maxOutputTokens: maxTokens ?? defaults.maxTokens,
         stopSequences
       }

@@ -135,6 +135,8 @@ export function getLanguageModel(options: ProviderOptions): LanguageModel {
     }
     case 'anthropic': {
       const sdk = getAnthropicSDK(config)
+      // Prompt caching is enabled via message-level providerOptions
+      // in stream.ts convertMessages function
       return sdk(model)
     }
     case 'deepseek': {
