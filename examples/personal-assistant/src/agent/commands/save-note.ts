@@ -16,8 +16,26 @@ export interface SaveNoteResult {
 }
 
 /**
- * Save a note or todo programmatically.
+ * Generate a simple summary card for an entity (deterministic)
+ */
+function generateSimpleSummaryCard(title: string, content: string, type: 'note' | 'todo'): string {
+  const typeLabel = type === 'todo' ? 'Todo' : 'Note'
+  const preview = content.length > 200 ? content.slice(0, 200) + '...' : content
+  return `**${typeLabel}: ${title}**\n${preview}`
+}
+
+/**
+ * Save a note or todo programmatically (RFC-009 compatible).
  * Returns structured result instead of console.log.
+ *
+ * @param title - Note/todo title
+ * @param content - Note/todo content
+ * @param tags - Tags for categorization
+ * @param context - CLI context with session info
+ * @param fromLast - Whether content was extracted from last agent response
+ * @param messageId - Optional message ID for provenance
+ * @param projectCard - Whether this is a Project Card (long-term memory)
+ * @param type - Entity type ('note' or 'todo')
  */
 export function saveNote(
   title: string,
@@ -26,7 +44,7 @@ export function saveNote(
   context: CLIContext,
   fromLast: boolean = false,
   messageId?: string,
-  pinned: boolean = false,
+  projectCard: boolean = false,
   type: 'note' | 'todo' = 'note'
 ): SaveNoteResult {
   if (!title) return { success: false, error: 'Note title is required.' }
@@ -39,12 +57,16 @@ export function saveNote(
   }
   if (messageId) provenance.messageId = messageId
 
+  // Generate simple summary card (deterministic for short content)
+  const summaryCard = generateSimpleSummaryCard(title, content, type)
+
   const baseEntity = {
     id: crypto.randomUUID(),
     title,
     tags,
-    pinned,
-    selectedForAI: false,
+    projectCard,
+    summaryCard,
+    summaryCardMethod: 'deterministic' as const,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     provenance
