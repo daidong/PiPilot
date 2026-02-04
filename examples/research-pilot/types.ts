@@ -42,17 +42,48 @@ export interface Provenance {
 }
 
 /**
- * Base interface for all research entities
+ * Summary card generation method
+ */
+export type SummaryCardMethod = 'deterministic' | 'llm' | 'user'
+
+/**
+ * Base interface for all research entities (RFC-009)
  */
 export interface ResearchEntity {
   id: string
   createdAt: string
   updatedAt: string
   tags: string[]
-  /** Auto-include in every context (pinned phase) */
-  pinned: boolean
-  /** User-selected for current request (selected phase) */
-  selectedForAI: boolean
+
+  /**
+   * Project Card flag - marks entity for long-term memory inclusion
+   * Replaces old 'pinned' field. Project Cards represent core decisions
+   * and constraints that should persist across sessions.
+   */
+  projectCard: boolean
+
+  /**
+   * Summary card content (≤300 tokens)
+   * Used for context assembly and retrieval.
+   */
+  summaryCard?: string
+
+  /**
+   * Method used to generate the summary card
+   */
+  summaryCardMethod?: SummaryCardMethod
+
+  /**
+   * Hash of content for summary card change detection
+   */
+  summaryCardHash?: string
+
+  // Legacy fields (deprecated, for migration)
+  /** @deprecated Use projectCard instead */
+  pinned?: boolean
+  /** @deprecated Selection is now runtime-only (WorkingSet) */
+  selectedForAI?: boolean
+
   provenance: Provenance
 }
 

@@ -1,26 +1,30 @@
 /**
- * /pin Command Handler
+ * /project Command Handler (RFC-009)
  *
- * Toggle pinned status for an entity.
- * Pinned entities are always included in context (pinned phase).
+ * Toggle Project Card status for an entity.
+ * Project Cards represent core decisions and constraints for long-term memory.
+ *
+ * Renamed from /pin to /project to reflect new semantics.
+ * Legacy /pin command is aliased for backward compatibility.
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { PATHS, Entity } from '../types.js'
 
-export interface PinResult {
+export interface ProjectCardResult {
   success: boolean
   entityType?: string
   title?: string
-  pinned?: boolean
+  projectCard?: boolean
   error?: string
 }
 
-export interface PinnedEntity {
+export interface ProjectCardEntity {
   type: string
   id: string
   title: string
+  summaryCard?: string
 }
 
 /**
@@ -71,8 +75,13 @@ function getEntityTitle(entity: Entity): string {
   }
 }
 
-/** Toggle pinned status for an entity by ID */
-export function togglePin(entityId: string, projectPath?: string): PinResult {
+/**
+ * Toggle Project Card status for an entity by ID
+ *
+ * @param entityId - Entity ID (full or partial)
+ * @param projectPath - Optional project path
+ */
+export function toggleProjectCard(entityId: string, projectPath?: string): ProjectCardResult {
   const filePath = findEntityFile(entityId, projectPath)
   if (!filePath) {
     return { success: false, error: `Entity not found: ${entityId}` }
@@ -81,25 +90,37 @@ export function togglePin(entityId: string, projectPath?: string): PinResult {
   try {
     const content = readFileSync(filePath, 'utf-8')
     const entity = JSON.parse(content) as Entity
-    entity.pinned = !entity.pinned
+
+    // Toggle projectCard status
+    entity.projectCard = !entity.projectCard
     entity.updatedAt = new Date().toISOString()
+
+    // Migrate legacy field if present
+    if ('pinned' in entity) {
+      delete (entity as Record<string, unknown>).pinned
+    }
+
     writeFileSync(filePath, JSON.stringify(entity, null, 2))
 
     return {
       success: true,
       entityType: entity.type,
       title: getEntityTitle(entity),
-      pinned: entity.pinned
+      projectCard: entity.projectCard
     }
   } catch (error) {
     return { success: false, error: `Failed to update entity: ${error}` }
   }
 }
 
-/** List all pinned entities */
-export function getPinned(projectPath?: string): PinnedEntity[] {
+/**
+ * List all Project Card entities
+ *
+ * @param projectPath - Optional project path
+ */
+export function getProjectCards(projectPath?: string): ProjectCardEntity[] {
   const dirs = resolveEntityDirs(projectPath)
-  const pinned: PinnedEntity[] = []
+  const projectCards: ProjectCardEntity[] = []
 
   for (const dir of dirs) {
     if (!existsSync(dir)) continue
@@ -110,11 +131,16 @@ export function getPinned(projectPath?: string): PinnedEntity[] {
         const filePath = join(dir, file)
         const content = readFileSync(filePath, 'utf-8')
         const entity = JSON.parse(content) as Entity
-        if (entity.pinned) {
-          pinned.push({
+
+        // Check for projectCard or legacy pinned
+        const isProjectCard = entity.projectCard || (entity as Record<string, unknown>).pinned === true
+
+        if (isProjectCard) {
+          projectCards.push({
             type: entity.type,
             id: entity.id.slice(0, 8),
-            title: getEntityTitle(entity)
+            title: getEntityTitle(entity),
+            summaryCard: entity.summaryCard
           })
         }
       } catch {
@@ -123,6 +149,11 @@ export function getPinned(projectPath?: string): PinnedEntity[] {
     }
   }
 
-  return pinned
+  return projectCards
 }
 
+// Legacy aliases for backward compatibility
+export const togglePin = toggleProjectCard
+export const getPinned = getProjectCards
+export type PinResult = ProjectCardResult
+export type PinnedEntity = ProjectCardEntity
