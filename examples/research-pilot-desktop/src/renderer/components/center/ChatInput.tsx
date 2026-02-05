@@ -274,7 +274,7 @@ export function ChatInput() {
           <button
             onClick={handleSend}
             disabled={!text.trim()}
-            className="shrink-0 p-1.5 rounded-lg bg-orange-500 text-white disabled:opacity-30 hover:bg-orange-400 transition-colors"
+            className="shrink-0 p-1.5 rounded-lg bg-teal-500 text-white disabled:opacity-30 hover:bg-teal-400 transition-colors"
             title="Send (Shift+Enter)"
           >
             <Send size={16} />

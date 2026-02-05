@@ -10,13 +10,29 @@
  * the caller should reduce tools/system first.
  */
 
-import type { Message } from '../types/session.js'
 import { countTokens } from '../utils/tokenizer.js'
 
 /**
  * Selection strategy
  */
 export type SelectionStrategy = 'recent-first' | 'important-first'
+
+/**
+ * Message-like shape for selection.
+ * Supports both session-store messages (string content)
+ * and live LLM messages (string or structured content).
+ */
+export interface MessageLike {
+  role: string
+  content: string | unknown
+  toolCall?: {
+    result?: {
+      success?: boolean
+      error?: string
+    }
+  }
+  tokens?: number
+}
 
 /**
  * Selection options
@@ -39,7 +55,7 @@ export interface MessageSelectionOptions {
  */
 export interface MessageSelectionResult {
   /** Selected messages in original order */
-  messages: Message[]
+  messages: MessageLike[]
   /** Total tokens used */
   totalTokens: number
   /** Number of messages excluded */
@@ -69,7 +85,7 @@ export class InsufficientBudgetError extends Error {
 /**
  * Calculate importance score for a message
  */
-function calculateImportance(message: Message, index: number, total: number): number {
+function calculateImportance(message: MessageLike, index: number, total: number): number {
   let score = 0
 
   // Recency bonus (0-50 points)
@@ -97,7 +113,7 @@ function calculateImportance(message: Message, index: number, total: number): nu
   }
 
   // Content length penalty (very long messages are less valuable per token)
-  const tokens = message.tokens ?? countTokens(message.content)
+  const tokens = message.tokens ?? countTokens(contentToString(message.content))
   if (tokens > 2000) {
     score -= 10
   }
@@ -108,13 +124,13 @@ function calculateImportance(message: Message, index: number, total: number): nu
 /**
  * Get token count for a message, using cached value or calculating
  */
-function getMessageTokens(message: Message): number {
+function getMessageTokens(message: MessageLike): number {
   if (message.tokens !== undefined) {
     return message.tokens
   }
 
   // Calculate tokens for content
-  let tokens = countTokens(message.content)
+  let tokens = countTokens(contentToString(message.content))
 
   // Add tokens for tool call if present
   if (message.toolCall) {
@@ -122,6 +138,18 @@ function getMessageTokens(message: Message): number {
   }
 
   return tokens
+}
+
+/**
+ * Normalize content to string for token estimation.
+ */
+function contentToString(content: unknown): string {
+  if (typeof content === 'string') return content
+  try {
+    return JSON.stringify(content)
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -134,7 +162,7 @@ export class AdaptiveMessageSelector {
    * @throws InsufficientBudgetError if budget cannot fit minimum required messages
    */
   select(
-    messages: Message[],
+    messages: MessageLike[],
     options: MessageSelectionOptions
   ): MessageSelectionResult {
     const {
@@ -234,7 +262,7 @@ export class AdaptiveMessageSelector {
    * Select messages using recent-first strategy
    */
   private selectRecentFirst(
-    messages: Message[],
+    messages: MessageLike[],
     budget: number,
     firstUserIndex: number,
     _lastUserIndex: number
@@ -273,7 +301,7 @@ export class AdaptiveMessageSelector {
    * Select messages using important-first strategy
    */
   private selectImportantFirst(
-    messages: Message[],
+    messages: MessageLike[],
     budget: number,
     firstUserIndex: number,
     lastUserIndex: number
@@ -327,7 +355,7 @@ export class AdaptiveMessageSelector {
   /**
    * Estimate how many messages can fit in budget
    */
-  estimateCapacity(messages: Message[], budget: number): number {
+  estimateCapacity(messages: MessageLike[], budget: number): number {
     let count = 0
     let usedTokens = 0
 

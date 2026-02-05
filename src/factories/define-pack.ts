@@ -7,6 +7,7 @@ import type { Tool } from '../types/tool.js'
 import type { Policy } from '../types/policy.js'
 import type { ContextSource } from '../types/context.js'
 import type { Runtime } from '../types/runtime.js'
+import type { Skill, SkillLoadingConfig } from '../types/skill.js'
 
 /**
  * 定义 Pack
@@ -21,17 +22,60 @@ export function definePack(config: PackConfig): Pack {
     throw new Error('Pack description is required')
   }
 
+  // Warn if using deprecated promptFragment when skills are available
+  if (config.promptFragment && config.skills && config.skills.length > 0) {
+    console.warn(
+      `[definePack] Pack "${config.id}" uses both promptFragment and skills. ` +
+      'Consider migrating promptFragment content to skills for token optimization.'
+    )
+  }
+
+  // Build default skillLoadingConfig if skills provided but no config
+  let skillLoadingConfig = config.skillLoadingConfig
+  if (config.skills && config.skills.length > 0 && !skillLoadingConfig) {
+    skillLoadingConfig = buildDefaultSkillLoadingConfig(config.skills)
+  }
+
   return {
     id: config.id,
     description: config.description,
     tools: config.tools ?? [],
     policies: config.policies ?? [],
     contextSources: config.contextSources ?? [],
+    skills: config.skills ?? [],
+    skillLoadingConfig,
     promptFragment: config.promptFragment,
     dependencies: config.dependencies ?? [],
     onInit: config.onInit,
     onDestroy: config.onDestroy
   }
+}
+
+/**
+ * Build default skill loading config based on skill definitions
+ */
+function buildDefaultSkillLoadingConfig(skills: Skill[]): SkillLoadingConfig {
+  const config: SkillLoadingConfig = {
+    eager: [],
+    lazy: [],
+    onDemand: []
+  }
+
+  for (const skill of skills) {
+    switch (skill.loadingStrategy) {
+      case 'eager':
+        config.eager!.push(skill.id)
+        break
+      case 'lazy':
+        config.lazy!.push(skill.id)
+        break
+      case 'on-demand':
+        config.onDemand!.push(skill.id)
+        break
+    }
+  }
+
+  return config
 }
 
 /**
@@ -44,6 +88,12 @@ export function mergePacks(...packs: Pack[]): Pack {
     tools: [],
     policies: [],
     contextSources: [],
+    skills: [],
+    skillLoadingConfig: {
+      eager: [],
+      lazy: [],
+      onDemand: []
+    },
     promptFragment: '',
     dependencies: []
   }
@@ -51,6 +101,7 @@ export function mergePacks(...packs: Pack[]): Pack {
   const toolNames = new Set<string>()
   const policyIds = new Set<string>()
   const sourceIds = new Set<string>()
+  const skillIds = new Set<string>()
 
   for (const pack of packs) {
     // 合并工具（去重）
@@ -74,6 +125,33 @@ export function mergePacks(...packs: Pack[]): Pack {
       if (!sourceIds.has(source.id)) {
         sourceIds.add(source.id)
         merged.contextSources!.push(source)
+      }
+    }
+
+    // 合并 Skills（去重）
+    for (const skill of pack.skills ?? []) {
+      if (!skillIds.has(skill.id)) {
+        skillIds.add(skill.id)
+        merged.skills!.push(skill)
+      }
+    }
+
+    // 合并 skill loading config
+    if (pack.skillLoadingConfig) {
+      for (const id of pack.skillLoadingConfig.eager ?? []) {
+        if (!merged.skillLoadingConfig!.eager!.includes(id)) {
+          merged.skillLoadingConfig!.eager!.push(id)
+        }
+      }
+      for (const id of pack.skillLoadingConfig.lazy ?? []) {
+        if (!merged.skillLoadingConfig!.lazy!.includes(id)) {
+          merged.skillLoadingConfig!.lazy!.push(id)
+        }
+      }
+      for (const id of pack.skillLoadingConfig.onDemand ?? []) {
+        if (!merged.skillLoadingConfig!.onDemand!.includes(id)) {
+          merged.skillLoadingConfig!.onDemand!.push(id)
+        }
       }
     }
 
@@ -124,18 +202,48 @@ export function extendPack(
     tools?: Tool[]
     policies?: Policy[]
     contextSources?: ContextSource[]
+    skills?: Skill[]
+    skillLoadingConfig?: SkillLoadingConfig
     promptFragment?: string
     dependencies?: string[]
     onInit?: (runtime: Runtime) => Promise<void>
     onDestroy?: (runtime: Runtime) => Promise<void>
   }
 ): Pack {
+  // Merge skills with deduplication
+  const skillIds = new Set((base.skills ?? []).map(s => s.id))
+  const mergedSkills = [...(base.skills ?? [])]
+  for (const skill of extension.skills ?? []) {
+    if (!skillIds.has(skill.id)) {
+      skillIds.add(skill.id)
+      mergedSkills.push(skill)
+    }
+  }
+
+  // Merge skill loading configs
+  const mergedSkillLoadingConfig: SkillLoadingConfig = {
+    eager: [
+      ...(base.skillLoadingConfig?.eager ?? []),
+      ...(extension.skillLoadingConfig?.eager ?? [])
+    ].filter((v, i, a) => a.indexOf(v) === i),
+    lazy: [
+      ...(base.skillLoadingConfig?.lazy ?? []),
+      ...(extension.skillLoadingConfig?.lazy ?? [])
+    ].filter((v, i, a) => a.indexOf(v) === i),
+    onDemand: [
+      ...(base.skillLoadingConfig?.onDemand ?? []),
+      ...(extension.skillLoadingConfig?.onDemand ?? [])
+    ].filter((v, i, a) => a.indexOf(v) === i)
+  }
+
   const extended: Pack = {
     id: extension.id ?? base.id,
     description: extension.description ?? base.description,
     tools: [...(base.tools ?? []), ...(extension.tools ?? [])],
     policies: [...(base.policies ?? []), ...(extension.policies ?? [])],
     contextSources: [...(base.contextSources ?? []), ...(extension.contextSources ?? [])],
+    skills: mergedSkills,
+    skillLoadingConfig: mergedSkillLoadingConfig,
     promptFragment: [base.promptFragment, extension.promptFragment].filter(Boolean).join('\n\n'),
     dependencies: [...new Set([...(base.dependencies ?? []), ...(extension.dependencies ?? [])])]
   }
@@ -168,15 +276,32 @@ export function filterPack(
     tools?: (tool: Tool) => boolean
     policies?: (policy: Policy) => boolean
     contextSources?: (source: ContextSource) => boolean
+    skills?: (skill: Skill) => boolean
   }
 ): Pack {
+  const filteredSkills = filter.skills
+    ? (pack.skills ?? []).filter(filter.skills)
+    : pack.skills
+
+  // Update skill loading config to only include filtered skill ids
+  const filteredSkillIds = new Set((filteredSkills ?? []).map(s => s.id))
+  const filteredSkillLoadingConfig: SkillLoadingConfig | undefined = pack.skillLoadingConfig
+    ? {
+        eager: (pack.skillLoadingConfig.eager ?? []).filter(id => filteredSkillIds.has(id)),
+        lazy: (pack.skillLoadingConfig.lazy ?? []).filter(id => filteredSkillIds.has(id)),
+        onDemand: (pack.skillLoadingConfig.onDemand ?? []).filter(id => filteredSkillIds.has(id))
+      }
+    : undefined
+
   return {
     ...pack,
     tools: filter.tools ? (pack.tools ?? []).filter(filter.tools) : pack.tools,
     policies: filter.policies ? (pack.policies ?? []).filter(filter.policies) : pack.policies,
     contextSources: filter.contextSources
       ? (pack.contextSources ?? []).filter(filter.contextSources)
-      : pack.contextSources
+      : pack.contextSources,
+    skills: filteredSkills,
+    skillLoadingConfig: filteredSkillLoadingConfig
   }
 }
 

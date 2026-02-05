@@ -14,6 +14,8 @@ import { ToolRegistry } from '../core/tool-registry.js'
 import { PolicyEngine } from '../core/policy-engine.js'
 import { ContextManager } from '../core/context-manager.js'
 import { PromptCompiler } from '../core/prompt-compiler.js'
+import { SkillManager } from '../skills/skill-manager.js'
+import { globalSkillRegistry } from '../skills/skill-registry.js'
 import { AgentLoop } from './agent-loop.js'
 import { TokenTracker, createTokenTracker, type TokenTrackerConfig } from '../core/token-tracker.js'
 import type { DetailedTokenUsage, TokenCost } from '../llm/provider.types.js'
@@ -399,6 +401,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     packsToLoad = [packs.standard()]
   }
 
+  // 创建 SkillManager（懒加载程序性知识）
+  const skillManager = new SkillManager({ debug: config.debug })
+
   for (const pack of packsToLoad) {
     // 注册工具
     if (pack.tools) {
@@ -414,7 +419,43 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     if (pack.contextSources) {
       contextManager.registerAll(pack.contextSources)
     }
+
+    // 注册 Skills（如果 pack 定义了 skills）
+    // Phase 1.3: Apply skillLoadingConfig to override individual skill strategies
+    if (pack.skills && pack.skills.length > 0) {
+      const skillsWithConfig = pack.skills.map(skill => {
+        if (pack.skillLoadingConfig) {
+          if (pack.skillLoadingConfig.eager?.includes(skill.id)) {
+            return { ...skill, loadingStrategy: 'eager' as const }
+          }
+          if (pack.skillLoadingConfig.onDemand?.includes(skill.id)) {
+            return { ...skill, loadingStrategy: 'on-demand' as const }
+          }
+          if (pack.skillLoadingConfig.lazy?.includes(skill.id)) {
+            return { ...skill, loadingStrategy: 'lazy' as const }
+          }
+        }
+        return skill
+      })
+
+      skillManager.registerAll(skillsWithConfig)
+
+      // Phase 3.2: Sync to globalSkillRegistry for discovery/recommendation
+      globalSkillRegistry.registerAll(skillsWithConfig)
+
+      // Load eager skills immediately
+      if (pack.skillLoadingConfig?.eager) {
+        for (const skillId of pack.skillLoadingConfig.eager) {
+          skillManager.loadFully(skillId)
+        }
+      }
+    }
   }
+
+  // 将 SkillManager 添加到 runtime
+  ;(runtime as any).skillManager = skillManager
+  // Phase 3.2: Add skillRegistry to runtime for skill discovery
+  ;(runtime as any).skillRegistry = globalSkillRegistry
 
   // 注册额外策略
   if (config.policies) {
@@ -483,17 +524,25 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     ...config.budgetConfig
   }
 
-  // 编译系统提示
+  // Prompt compiler (will be used to recompile each run for skill updates)
   const promptCompiler = new PromptCompiler()
-  const compiledPrompt = promptCompiler.compileSimple({
-    identity: effectiveIdentity,
-    tools: toolRegistry,
-    contextSources: contextManager,
-    constraints: effectiveConstraints,
-    initialContext: config.initialContext
-  }, tokenBudget)
 
-  const systemPrompt = compiledPrompt.render()
+  // Helper to compile system prompt with current skill state
+  // Phase 1.1: Recompile every run() to pick up lazy-loaded skills
+  function compileSystemPrompt(): string {
+    const compiledPrompt = promptCompiler.compileSimple({
+      identity: effectiveIdentity,
+      tools: toolRegistry,
+      contextSources: contextManager,
+      constraints: effectiveConstraints,
+      initialContext: config.initialContext,
+      skillManager
+    }, tokenBudget)
+    return compiledPrompt.render()
+  }
+
+  // Initial compilation (for first run)
+  let systemPrompt = compileSystemPrompt()
 
   // Context pipeline for budget-controlled context assembly (RFC-009)
   const workingSetPhase = createWorkingSetPhase()
@@ -538,6 +587,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     async run(prompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
       await initPacks()
 
+      // Phase 1.1: Recompile system prompt to pick up lazy-loaded skills from previous runs
+      systemPrompt = compileSystemPrompt()
+
       // Per-run IO guard state (used to prevent redundant read calls)
       runtime.sessionState.set('ioGuard', {
         readHistory: new Map<string, { revision: number; count: number; lastAt: number }>(),
@@ -572,9 +624,11 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
 
       // Assemble budget-controlled history from messageStore via context pipeline
       const extraInstructions = options?.additionalInstructions?.trim()
-      let dynamicSystemPrompt = extraInstructions
-        ? systemPrompt + '\n\n## Task Modules\n' + extraInstructions
-        : systemPrompt
+      const taskModulesBlock = extraInstructions
+        ? '\n\n## Task Modules\n' + extraInstructions
+        : ''
+      let workingContextBlock = ''
+      let dynamicSystemPrompt = systemPrompt + taskModulesBlock
       if (runtime.messageStore) {
         try {
           // Measure fixed costs for BudgetCoordinator
@@ -601,6 +655,13 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
           if (config.debug) {
             console.error('[Budget] Context window:', contextWindow, '| Model:', model)
             console.error('[Budget] Fixed costs — identity:', identityTokens, 'tools:', toolTokens, 'packFragments:', packFragmentTokens)
+
+            // Log skills usage if skillManager exists
+            const skillStats = (runtime as any).skillManager?.getStats?.()
+            if (skillStats && skillStats.total > 0) {
+              console.error(`[Budget] Skills — registered: ${skillStats.total} (eager: ${skillStats.byStrategy.eager}, lazy: ${skillStats.byStrategy.lazy}, on-demand: ${skillStats.byStrategy['on-demand']}) | loaded: ${skillStats.fullyLoaded}/${skillStats.total} | tokens: ${skillStats.tokenUsage.current}/${skillStats.tokenUsage.maxPotential}`)
+            }
+
             console.error('[Budget] Allocated slots — project:', slots.projectCards, 'working:', slots.workingSet, 'selected:', slots.selectedContext, 'state:', slots.stateSummary, 'session:', slots.sessionBudget, 'index:', slots.historyIndex, 'messages:', slots.messages, 'outputReserve:', slots.outputReserve)
           }
 
@@ -630,7 +691,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
           if (assembled.content && assembled.content.trim().length > 0) {
             // Wrap assembled context in <working-context> tags so the LLM
             // treats prior history as background, not the current request.
-            dynamicSystemPrompt = dynamicSystemPrompt + '\n\n<working-context>\nThe following is prior conversation history and project context from this session. Use it as background reference, but focus your full attention on the user\'s latest message.\n\n' + assembled.content + '\n</working-context>'
+            workingContextBlock = '\n\n<working-context>\nThe following is prior conversation history and project context from this session. Use it as background reference, but focus your full attention on the user\'s latest message.\n\n' + assembled.content + '\n</working-context>'
           }
 
           // Store compressed history on runtime for ctx-expand to use
@@ -664,6 +725,10 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         }
       }
 
+      // Helper to rebuild system prompt with current skill state (for mid-run updates)
+      const buildSystemPromptForRun = () => compileSystemPrompt() + taskModulesBlock + workingContextBlock
+      dynamicSystemPrompt = buildSystemPromptForRun()
+
       // Create token tracker for usage tracking
       const tokenTracker = config.tokenTracker
         ?? (config.onUsage ? createTokenTracker(config.tokenTrackerConfig) : undefined)
@@ -675,6 +740,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         runtime,
         trace,
         systemPrompt: dynamicSystemPrompt,
+        systemPromptBuilder: buildSystemPromptForRun,
         maxSteps: effectiveMaxSteps,
         maxTokens: options?.tokenBudget ?? effectiveMaxTokens,
         reasoningEffort: effectiveReasoningEffort,
@@ -692,7 +758,8 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
           ? () => config.onPreCompaction!(agent)
           : undefined,
         tokenTracker,
-        onUsage: config.onUsage
+        onUsage: config.onUsage,
+        errorStrikePolicy: config.errorStrikePolicy
       })
 
       activeAgentLoop = agentLoop
@@ -720,6 +787,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         }
       }
 
+      // Phase 3.3: Clean up expired skills (TTL-based downgrading)
+      skillManager.cleanup()
+
       activeAgentLoop = null
       return result
     },
@@ -742,6 +812,8 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       toolRegistry.clear()
       contextManager.clear()
       policyEngine.clear()
+      // Phase 3.2: Clear global skill registry
+      globalSkillRegistry.clear()
     }
   }
 

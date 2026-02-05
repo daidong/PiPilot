@@ -111,6 +111,49 @@ export {
 } from './factories/define-pack.js'
 
 // ============================================================================
+// Skills 导出
+// ============================================================================
+
+export {
+  // Factory functions
+  defineSkill,
+  extendSkill,
+  mergeSkills,
+
+  // Core classes
+  SkillManager,
+  SkillRegistry,
+  globalSkillRegistry,
+
+  // Built-in skills
+  llmComputeSkill,
+  gitWorkflowSkill,
+  contextRetrievalSkill,
+  builtinSkills,
+  skillsById,
+  getBuiltinSkill
+} from './skills/index.js'
+
+export type {
+  // Skill types (also exported from types/index.ts)
+  // Phase 3.1: SkillScripts removed (dead code)
+  Skill,
+  SkillConfig,
+  SkillInstructions,
+  SkillTokenEstimates,
+  SkillLoadingStrategy,
+  SkillLoadingConfig,
+  SkillState,
+  LoadedSkillContent,
+  SkillManagerEvents,
+
+  // Manager types
+  SkillManagerOptions,
+  SkillQuery,
+  SkillMatch
+} from './skills/index.js'
+
+// ============================================================================
 // Agent 导出
 // ============================================================================
 
@@ -239,6 +282,13 @@ export {
   renderSnapshot,
   validateSnapshot
 } from './core/runtime-snapshot.js'
+export {
+  loadUsageTotals,
+  updateUsageTotals,
+  resetUsageTotals,
+  getUsageTotalsPath,
+  type UsageTotalsFile
+} from './core/usage-totals.js'
 export {
   AdaptiveMessageSelector,
   createMessageSelector,

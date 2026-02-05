@@ -89,7 +89,7 @@ export function CommandPopover({ query, commands, onSelect, onClose }: Props) {
             i === selectedIdx ? 't-bg-elevated' : 't-bg-hover'
           }`}
         >
-          <code className="text-sm text-orange-500 shrink-0">{cmd.name}</code>
+          <code className="text-sm text-blue-500 shrink-0">{cmd.name}</code>
           <div className="flex-1 min-w-0">
             <p className="text-xs t-text-secondary truncate">{cmd.description}</p>
             {cmd.args && (

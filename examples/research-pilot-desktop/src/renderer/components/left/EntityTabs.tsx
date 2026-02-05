@@ -56,7 +56,7 @@ function HoverPreview({
           {/* RFC-009: Project Card toggle */}
           <button
             onClick={(e) => { e.stopPropagation(); onProjectCard() }}
-            className={`p-1 rounded ${isProjectCard ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
+            className={`p-1 rounded ${isProjectCard ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
             title={isProjectCard ? 'Remove from Project Cards' : 'Add to Project Cards'}
           >
             <Bookmark size={13} />
@@ -64,7 +64,7 @@ function HoverPreview({
           {/* RFC-009: Working Set toggle */}
           <button
             onClick={(e) => { e.stopPropagation(); onWorkingSet() }}
-            className={`p-1 rounded ${isInWorkingSet ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
+            className={`p-1 rounded ${isInWorkingSet ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
             title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
           >
             <Layers size={13} />
@@ -194,11 +194,11 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
           />
         )}
         {isEnriching ? (
-          <Loader2 size={10} className="shrink-0 text-orange-400 animate-spin" />
+          <Loader2 size={10} className="shrink-0 text-teal-400 animate-spin" />
         ) : (
-          /* RFC-009: Status dot - orange for Project Card, blue for Working Set */
+          /* RFC-009: Status dot - teal for Project Card and Working Set */
           <span className={`w-1 h-1 rounded-full shrink-0 ${
-            isProjectCard ? 'bg-orange-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
+            isProjectCard ? 'bg-teal-400' : isInWorkingSet ? 'bg-teal-400' : 't-bg-elevated'
           }`} />
         )}
         <span className="text-xs t-text truncate">{entity.title}</span>
@@ -206,7 +206,7 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
       {messageId && (
         <button
           onClick={handleProvenanceClick}
-          className="flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-orange-400 transition-colors border-l t-border"
+          className="flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-teal-400 transition-colors border-l t-border"
           title="Scroll to source message"
         >
           <MessageSquare size={9} />
@@ -358,7 +358,7 @@ export function EntityTabs() {
             onClick={() => setLeftTab(key)}
             className={`no-drag flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
               leftTab === key
-                ? 'border-orange-400 t-text'
+                ? 'border-teal-400 t-text'
                 : 'border-transparent t-text-muted hover:t-text-secondary'
             }`}
           >
@@ -370,7 +370,7 @@ export function EntityTabs() {
           <button
             onClick={handleEnrichAll}
             disabled={isEnrichingAll}
-            className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:text-orange-400 transition-colors disabled:opacity-50"
+            className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:text-teal-400 transition-colors disabled:opacity-50"
             title="Enrich metadata for all papers"
           >
             {isEnrichingAll ? (
@@ -386,7 +386,7 @@ export function EntityTabs() {
       <div
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
+        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-teal-400/40"
       >
         <Upload size={16} className="mx-auto mb-1 t-text-muted" />
         <p className="text-xs t-text-muted">

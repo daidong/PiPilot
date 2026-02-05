@@ -6,6 +6,7 @@ import type { AgentDefinition } from '../types/agent.js'
 import type { ToolRegistry } from './tool-registry.js'
 import type { ContextManager } from './context-manager.js'
 import type { TokenBudget } from './token-budget.js'
+import type { SkillManager } from '../skills/skill-manager.js'
 import { countTokens, truncateToTokens } from '../utils/tokenizer.js'
 
 /**
@@ -112,7 +113,8 @@ export class PromptCompiler {
     agent: AgentDefinition,
     toolRegistry: ToolRegistry,
     contextManager: ContextManager,
-    tokenBudget: TokenBudget
+    tokenBudget: TokenBudget,
+    skillManager?: SkillManager
   ): CompiledPrompt {
     const sections: PromptSection[] = []
 
@@ -157,7 +159,20 @@ ${agent.contextGuide ?? ''}`
       }
     }
 
-    // 5. Constraints（永不裁剪）
+    // 5. Skill Sections（可裁剪，懒加载的程序性知识）
+    // Phase 1.5: Use skillSection.id directly (SkillManager already adds skill: prefix)
+    if (skillManager) {
+      const skillSections = skillManager.getPromptSections()
+      for (const skillSection of skillSections) {
+        sections.push({
+          id: skillSection.id,
+          content: skillSection.content,
+          protected: skillSection.protected
+        })
+      }
+    }
+
+    // 6. Constraints（永不裁剪）
     if (agent.constraints.length > 0) {
       const constraintsSection = `## Constraints
 
@@ -186,6 +201,8 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
     additionalInstructions?: string
     /** Pre-loaded context to include in system prompt */
     initialContext?: string
+    /** Skill manager for lazy-loaded procedural knowledge */
+    skillManager?: SkillManager
   }, tokenBudget: TokenBudget): CompiledPrompt {
     const sections: PromptSection[] = []
 
@@ -220,6 +237,19 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
         content: `## Pre-loaded Context\n\n${config.initialContext.trim()}`,
         protected: false  // Can be truncated if too large
       })
+    }
+
+    // Skill sections (lazy-loaded procedural knowledge)
+    // Phase 1.5: Use skillSection.id directly (SkillManager already adds skill: prefix)
+    if (config.skillManager) {
+      const skillSections = config.skillManager.getPromptSections()
+      for (const skillSection of skillSections) {
+        sections.push({
+          id: skillSection.id,
+          content: skillSection.content,
+          protected: skillSection.protected
+        })
+      }
     }
 
     if (config.constraints && config.constraints.length > 0) {

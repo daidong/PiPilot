@@ -95,6 +95,15 @@ export interface AgentConfig {
       writeSummary?: boolean
     }
   }
+  /**
+   * Error strike policy (3-strike protocol by default)
+   * - After warnAfter strikes: advise alternate approach
+   * - After disableAfter strikes: block same tool+args+category call
+   */
+  errorStrikePolicy?: {
+    warnAfter?: number
+    disableAfter?: number
+  }
 }
 
 /**

@@ -173,7 +173,7 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
                 ? 'opacity-100 text-green-500'
                 : saveState === 'saving'
                   ? 'opacity-100 t-text-muted'
-                  : 'opacity-0 group-hover:opacity-100 t-text-muted hover:text-orange-400'
+                  : 'opacity-0 group-hover:opacity-100 t-text-muted hover:text-blue-400'
             }`}
             title={saveState === 'saved' ? 'Saved as note' : 'Save entire message as note'}
           >
@@ -195,9 +195,9 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
 function ThinkingDots() {
   return (
     <span className="inline-flex gap-1 items-center">
-      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '300ms' }} />
     </span>
   )
 }
@@ -242,7 +242,7 @@ function StreamingBubble() {
         <div className="md-prose" style={{ color: 'var(--color-text)' }}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
         </div>
-        <span className="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-0.5 align-text-bottom" />
+        <span className="inline-block w-1.5 h-4 bg-blue-400 animate-pulse ml-0.5 align-text-bottom" />
       </div>
     </div>
   )
@@ -308,8 +308,8 @@ export function ChatMessages() {
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       // Brief highlight flash
-      el.classList.add('ring-2', 'ring-orange-400')
-      setTimeout(() => el.classList.remove('ring-2', 'ring-orange-400'), 1500)
+      el.classList.add('ring-2', 'ring-blue-400')
+      setTimeout(() => el.classList.remove('ring-2', 'ring-blue-400'), 1500)
     }
   }, [scrollToMessageId])
 

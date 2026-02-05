@@ -8,6 +8,8 @@ import type { TokenBudget } from '../core/token-budget.js'
 import type { ToolRegistry } from '../core/tool-registry.js'
 import type { PolicyEngine } from '../core/policy-engine.js'
 import type { ContextManager } from '../core/context-manager.js'
+import type { SkillManager } from '../skills/skill-manager.js'
+import type { SkillRegistry } from '../skills/skill-registry.js'
 import type { MemoryStorage } from './memory.js'
 import type { EntityIndex, WorkingSetResolvedEntity } from './memory-entity.js'
 import type { MessageStore } from './session.js'
@@ -232,6 +234,18 @@ export interface Runtime {
   workingSetTracker?: {
     recordUsage: (entityId: string, useType: 'mention' | 'tool-access' | 'update') => void
   }
+
+  /**
+   * Skill manager for lazy-loaded procedural knowledge.
+   * Skills are loaded on-demand when associated tools are used.
+   */
+  skillManager?: SkillManager
+
+  /**
+   * Phase 3.2: Global skill registry for skill discovery and recommendations.
+   * Provides query and matching capabilities across all registered skills.
+   */
+  skillRegistry?: SkillRegistry
 }
 
 /**

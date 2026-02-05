@@ -36,6 +36,7 @@ Agent Foundry is built on three orthogonal axes:
 - [Tools](#tools)
 - [Policies](#policies)
 - [Context Sources](#context-sources)
+- [Skills](#skills)
 - [Packs](#packs)
 - [MCP Integration](#mcp-integration)
 - [Multi-Agent Teams](#multi-agent-teams)
@@ -718,9 +719,75 @@ const projectInfo = defineContextSource({
 })
 ```
 
+## Skills
+
+Skills are **lazily-loaded procedural knowledge** that optimize token usage. Unlike tools (which execute operations), skills provide guidance, examples, and best practices that load on-demand.
+
+### Why Skills?
+
+| Without Skills | With Skills | Savings |
+|----------------|-------------|---------|
+| ~2000 tokens (always loaded) | ~500 tokens (initial) | 75% |
+| All guidance in tool descriptions | Progressive disclosure | On-demand |
+
+### Quick Start
+
+```typescript
+import { defineSkill, SkillManager } from 'agent-foundry'
+
+const mySkill = defineSkill({
+  id: 'my-skill',
+  name: 'My Skill',
+  shortDescription: 'Brief description (<100 chars)',
+
+  instructions: {
+    summary: 'Concise overview (~100 tokens)',      // Always loaded
+    procedures: 'Detailed step-by-step guide',      // Loaded on use
+    examples: 'Usage examples with code',           // Loaded on use
+    troubleshooting: 'Common issues and solutions'  // Loaded on use
+  },
+
+  tools: ['tool-a', 'tool-b'],  // Triggers loading when these tools are used
+  loadingStrategy: 'lazy',       // 'eager' | 'lazy' | 'on-demand'
+  tags: ['category1', 'category2']
+})
+
+// Register and use
+const manager = new SkillManager()
+manager.register(mySkill)
+manager.onToolUsed('tool-a')  // Triggers full loading
+```
+
+### Loading Strategies
+
+| Strategy | When Loaded | Use Case |
+|----------|-------------|----------|
+| `eager` | At registration | Critical, always-needed skills |
+| `lazy` | On first tool use | Most skills (default) |
+| `on-demand` | Explicit `loadOnDemand()` call | Specialized, rarely-needed skills |
+
+### Built-in Skills
+
+| Skill | Description | Tools |
+|-------|-------------|-------|
+| `llm-compute-skill` | LLM sub-computations | llm-call, llm-expand, llm-filter |
+| `git-workflow-skill` | Git operations guide | bash |
+| `context-retrieval-skill` | Context source usage | ctx-get |
+
+### App-Specific Skills
+
+Skills can be defined per-application for domain-specific guidance:
+
+| App | Skills | Token Savings |
+|-----|--------|---------------|
+| research-pilot | academic-writing, literature, data-analysis | 89-97% |
+| personal-assistant | gmail, calendar | 72-88% |
+
+For comprehensive documentation, see [Skills Guide](docs/SKILLS.md).
+
 ## Packs
 
-Packs bundle tools, policies, context sources, and prompt fragments.
+Packs bundle tools, policies, context sources, and skills.
 
 ### Available Packs
 
@@ -1238,6 +1305,11 @@ src/
 ├── tools/           # Built-in tools (read, write, edit, bash, glob, grep, fetch)
 ├── policies/        # Built-in policies
 ├── context-sources/ # Built-in context sources (repo-index, repo-search, session-history)
+├── skills/          # Skills system (lazy-loaded procedural knowledge)
+│   ├── define-skill.ts   # Skill factory functions
+│   ├── skill-manager.ts  # Lifecycle and loading management
+│   ├── skill-registry.ts # Discovery and querying
+│   └── builtin/          # Built-in skills
 ├── llm/             # LLM integration (Vercel AI SDK)
 ├── mcp/             # Model Context Protocol support
 ├── cli/             # CLI commands and init wizard
@@ -1261,6 +1333,7 @@ src/
 - [CLI Reference](docs/CLI.md) - CLI commands and options
 - [MCP Guide](docs/MCP-GUIDE.md) - MCP integration guide
 - [Providers](docs/PROVIDERS.md) - Provider plugin system
+- [Skills Guide](docs/SKILLS.md) - Lazy-loaded procedural knowledge system
 - [Multi-Agent Teams](docs/TEAM.md) - Multi-agent collaboration system
 - [Schema Coercion](docs/SCHEMA-COERCION.md) - OpenAI Responses API compatibility
 - [Agent Dev Guide](docs/AGENT_DEV_GUIDE.md) - Guide for building apps on AgentFoundry

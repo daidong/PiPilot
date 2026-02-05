@@ -12,7 +12,7 @@
  * - Decision logging for debugging
  */
 
-import type { Message } from '../types/session.js'
+import type { MessageLike } from '../core/adaptive-message-selector.js'
 import type { LLMToolDefinition, TokenUsage } from '../llm/index.js'
 import {
   UnifiedBudgeter,
@@ -76,7 +76,7 @@ export interface PreparedContext {
   /** Optimized tool schemas */
   tools: LLMToolDefinition[]
   /** Selected messages */
-  messages: Message[]
+  messages: MessageLike[]
   /** Budget decision made */
   decision: BudgetDecision
   /** Token estimates used */
@@ -159,7 +159,7 @@ export class AgentLoopBudgetManager {
   prepareContext(params: {
     systemPrompt: string
     tools: LLMToolDefinition[]
-    messages: Message[]
+    messages: MessageLike[]
   }): PreparedContext {
     const { systemPrompt, tools, messages } = params
 
@@ -193,7 +193,7 @@ export class AgentLoopBudgetManager {
 
       if (reduceMessagesAction && reduceMessagesAction.type === 'reduce_messages') {
         const result = this.messageSelector.select(
-          this.toLLMMessages(messages) as Message[],
+          messages,
           {
             budget: reduceMessagesAction.targetTokens,
             strategy: this.config.messageStrategy ?? 'recent-first',
@@ -201,7 +201,7 @@ export class AgentLoopBudgetManager {
             includeFirstUser: true
           }
         )
-        finalMessages = result.messages as Message[]
+        finalMessages = result.messages as MessageLike[]
         messagesExcluded = result.excludedCount
         console.error(
           `[BudgetManager] Messages compacted: ${messages.length} → ${finalMessages.length} (excluded ${messagesExcluded}, target: ${reduceMessagesAction.targetTokens} tokens)`
@@ -279,7 +279,7 @@ export class AgentLoopBudgetManager {
   private estimateAll(
     systemPrompt: string,
     tools: LLMToolDefinition[],
-    messages: Message[]
+    messages: MessageLike[]
   ): BlockEstimates {
     return {
       system: this.estimator.estimateSystem(systemPrompt),
@@ -291,7 +291,7 @@ export class AgentLoopBudgetManager {
   /**
    * Convert messages to LLM format for estimation
    */
-  private toLLMMessages(messages: Message[]): LLMMessage[] {
+  private toLLMMessages(messages: MessageLike[]): LLMMessage[] {
     return messages.map(msg => ({
       role: msg.role,
       content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)

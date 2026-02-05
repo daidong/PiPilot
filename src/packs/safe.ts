@@ -6,6 +6,11 @@
  * - 沙箱内运行
  * - 可审计
  * - 默认启用
+ *
+ * Migration to Skills:
+ * - Set useSkills: true to use lazy-loaded skills instead of promptFragment
+ * - Skills reduce initial token usage by ~60% (50 vs 120 tokens)
+ * - Skills load automatically when ctx-get tool is first used
  */
 
 import { definePack } from '../factories/define-pack.js'
@@ -14,6 +19,19 @@ import { read, write, edit, glob, grep, ctxGet } from '../tools/index.js'
 import { noSecretFiles } from '../policies/no-secret-files.js'
 import { normalizePathsPolicies } from '../policies/normalize-paths.js'
 import { autoLimitRead, autoLimitGrep, autoLimitGlob } from '../policies/auto-limit.js'
+import { contextRetrievalSkill } from '../skills/builtin/index.js'
+
+/**
+ * Safe Pack options
+ */
+export interface SafePackOptions {
+  /**
+   * Use Skills instead of promptFragment for token optimization
+   * When true, uses lazy-loaded contextRetrievalSkill instead of inline promptFragment
+   * @default true
+   */
+  useSkills?: boolean
+}
 
 /**
  * Safe Pack - 安全核心工具包
@@ -30,32 +48,53 @@ import { autoLimitRead, autoLimitGrep, autoLimitGlob } from '../policies/auto-li
  * - bash: 执行能力（移至 execPack）
  * - fetch: 网络能力（移至 networkPack）
  * - llm_call: LLM 调用（移至 computePack）
+ *
+ * @param options - Configuration options
+ * @param options.useSkills - Use lazy-loaded skill instead of promptFragment (default: true)
  */
-export function safe(): Pack {
+export function safe(options: SafePackOptions = {}): Pack {
+  const { useSkills = true } = options
+
+  const tools = [
+    ctxGet as any,
+    read as any,
+    write as any,
+    edit as any,
+    glob as any,
+    grep as any
+  ]
+
+  const policies = [
+    // Guard: 禁止访问敏感文件
+    ...noSecretFiles,
+    // Mutate: 路径规范化
+    ...normalizePathsPolicies,
+    // Mutate: 自动限制输出大小
+    autoLimitRead,
+    autoLimitGrep,
+    autoLimitGlob
+  ]
+
+  // Skills-based approach: lazy loading for token optimization
+  if (useSkills) {
+    return definePack({
+      id: 'safe',
+      description: '安全核心工具包：ctx-get, read, write, edit, glob, grep',
+      tools,
+      policies,
+      skills: [contextRetrievalSkill],
+      skillLoadingConfig: {
+        lazy: ['context-retrieval-skill'] // Loads when ctx-get tool is first used
+      }
+    })
+  }
+
+  // Legacy promptFragment approach (for backward compatibility)
   return definePack({
     id: 'safe',
     description: '安全核心工具包：ctx-get, read, write, edit, glob, grep',
-
-    tools: [
-      ctxGet as any,
-      read as any,
-      write as any,
-      edit as any,
-      glob as any,
-      grep as any
-    ],
-
-    policies: [
-      // Guard: 禁止访问敏感文件
-      ...noSecretFiles,
-      // Mutate: 路径规范化
-      ...normalizePathsPolicies,
-      // Mutate: 自动限制输出大小
-      autoLimitRead,
-      autoLimitGrep,
-      autoLimitGlob
-    ],
-
+    tools,
+    policies,
     promptFragment: `
 ## Core Tools Guide
 

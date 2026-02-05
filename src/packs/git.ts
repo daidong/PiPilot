@@ -1,5 +1,10 @@
 /**
  * git - Git 操作包
+ *
+ * Migration to Skills:
+ * - Set useSkills: true to use lazy-loaded skills instead of promptFragment
+ * - Skills reduce initial token usage by ~75% (50 vs 200 tokens)
+ * - Skills load automatically when git_* tools are first used
  */
 
 import { definePack } from '../factories/define-pack.js'
@@ -7,6 +12,19 @@ import type { Pack } from '../types/pack.js'
 import { defineTool } from '../factories/define-tool.js'
 import { defineGuardPolicy } from '../factories/define-policy.js'
 import type { Tool } from '../types/tool.js'
+import { gitWorkflowSkill } from '../skills/builtin/index.js'
+
+/**
+ * Git Pack options
+ */
+export interface GitPackOptions {
+  /**
+   * Use Skills instead of promptFragment for token optimization
+   * When true, uses lazy-loaded gitWorkflowSkill instead of inline promptFragment
+   * @default true
+   */
+  useSkills?: boolean
+}
 
 /**
  * Git status 工具
@@ -200,8 +218,39 @@ const noForcePush = defineGuardPolicy({
 
 /**
  * Git Pack
+ *
+ * Provides Git operations with optional Skills-based guidance.
+ *
+ * @param options - Configuration options
+ * @param options.useSkills - Use lazy-loaded skill instead of promptFragment (default: true)
  */
-export function git(): Pack {
+export function git(options: GitPackOptions = {}): Pack {
+  const { useSkills = true } = options
+
+  // Skills-based approach: lazy loading for token optimization
+  if (useSkills) {
+    return definePack({
+      id: 'git',
+      description: 'Git 操作包：git.status, git.diff, git.add, git.commit, git.log',
+
+      tools: [
+        gitStatus,
+        gitDiff,
+        gitAdd,
+        gitCommit,
+        gitLog
+      ],
+
+      policies: [noForcePush],
+
+      skills: [gitWorkflowSkill],
+      skillLoadingConfig: {
+        lazy: ['git-workflow-skill'] // Loads when git_* tools are first used
+      }
+    })
+  }
+
+  // Legacy promptFragment approach (for backward compatibility)
   return definePack({
     id: 'git',
     description: 'Git 操作包：git.status, git.diff, git.add, git.commit, git.log',

@@ -13,6 +13,8 @@ import { ToolRegistry } from '../core/tool-registry.js'
 import { PolicyEngine } from '../core/policy-engine.js'
 import { ContextManager } from '../core/context-manager.js'
 import { PromptCompiler } from '../core/prompt-compiler.js'
+import { SkillManager } from '../skills/skill-manager.js'
+import { globalSkillRegistry } from '../skills/skill-registry.js'
 import { AgentLoop } from './agent-loop.js'
 import { createLLMClient, getModel } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
@@ -124,11 +126,46 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     // 合并 Packs
     const allPacks = [...definition.packs, ...(config.packs ?? [])]
 
+    // Phase 1.4: Create SkillManager for lazy-loaded procedural knowledge
+    const skillManager = new SkillManager()
+
     for (const pack of allPacks) {
       if (pack.tools) toolRegistry.registerAll(pack.tools)
       if (pack.policies) policyEngine.registerAll(pack.policies)
       if (pack.contextSources) contextManager.registerAll(pack.contextSources)
+
+      // Register Skills with skillLoadingConfig support
+      if (pack.skills && pack.skills.length > 0) {
+        const skillsWithConfig = pack.skills.map(skill => {
+          if (pack.skillLoadingConfig) {
+            if (pack.skillLoadingConfig.eager?.includes(skill.id)) {
+              return { ...skill, loadingStrategy: 'eager' as const }
+            }
+            if (pack.skillLoadingConfig.onDemand?.includes(skill.id)) {
+              return { ...skill, loadingStrategy: 'on-demand' as const }
+            }
+            if (pack.skillLoadingConfig.lazy?.includes(skill.id)) {
+              return { ...skill, loadingStrategy: 'lazy' as const }
+            }
+          }
+          return skill
+        })
+
+        skillManager.registerAll(skillsWithConfig)
+        globalSkillRegistry.registerAll(skillsWithConfig)
+
+        // Load eager skills immediately
+        if (pack.skillLoadingConfig?.eager) {
+          for (const skillId of pack.skillLoadingConfig.eager) {
+            skillManager.loadFully(skillId)
+          }
+        }
+      }
     }
+
+    // Add SkillManager to runtime
+    ;(runtime as any).skillManager = skillManager
+    ;(runtime as any).skillRegistry = globalSkillRegistry
 
     // 注册定义级别的策略
     if (definition.policies) {
@@ -156,16 +193,22 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     // 将 LLM 客户端添加到 runtime（供工具内 LLM 调用使用）
     ;(runtime as any).llmClient = llmClient
 
-    // 编译系统提示
+    // 编译系统提示 (Phase 1.4: Include skillManager)
     const promptCompiler = new PromptCompiler()
-    const compiledPrompt = promptCompiler.compile(
-      definition,
-      toolRegistry,
-      contextManager,
-      tokenBudget
-    )
 
-    const systemPrompt = compiledPrompt.render()
+    // Helper to compile system prompt with current skill state
+    function compileSystemPrompt(): string {
+      const compiledPrompt = promptCompiler.compile(
+        definition,
+        toolRegistry,
+        contextManager,
+        tokenBudget,
+        skillManager
+      )
+      return compiledPrompt.render()
+    }
+
+    let systemPrompt = compileSystemPrompt()
 
     // 创建 AgentLoop
     let agentLoop: AgentLoop | null = null
@@ -190,12 +233,16 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
           }
         }
 
+        // Phase 1.4: Recompile system prompt to pick up lazy-loaded skills
+        systemPrompt = compileSystemPrompt()
+
         agentLoop = new AgentLoop({
           client: llmClient,
           toolRegistry,
           runtime,
           trace,
           systemPrompt,
+          systemPromptBuilder: compileSystemPrompt,
           maxSteps: definition.maxSteps ?? config.maxSteps ?? 30,
           maxTokens: definition.model?.maxTokens ?? config.maxTokens,
           onText: config.onStream,
@@ -203,7 +250,12 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
           onToolResult: config.onToolResult
         })
 
-        return agentLoop.run(prompt)
+        const result = await agentLoop.run(prompt)
+
+        // Phase 3.3: Clean up expired skills (TTL-based downgrading)
+        skillManager.cleanup()
+
+        return result
       },
 
       stop(): void {
@@ -222,6 +274,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
         toolRegistry.clear()
         contextManager.clear()
         policyEngine.clear()
+        globalSkillRegistry.clear()
       }
     }
 

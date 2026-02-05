@@ -52,6 +52,20 @@ export type {
   BuiltinPackName
 } from './pack.js'
 
+// Skill types
+// Phase 3.1: SkillScripts removed (dead code)
+export type {
+  Skill,
+  SkillConfig,
+  SkillInstructions,
+  SkillTokenEstimates,
+  SkillLoadingStrategy,
+  SkillLoadingConfig,
+  SkillState,
+  LoadedSkillContent,
+  SkillManagerEvents
+} from './skill.js'
+
 // Provider types
 export type {
   ProviderPermissions,

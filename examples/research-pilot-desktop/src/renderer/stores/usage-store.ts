@@ -4,12 +4,10 @@
  * Tracks token usage and costs for:
  * - Current run (resets when new run starts)
  * - Session totals (accumulates within app session)
- * - All-time totals (persisted to localStorage, survives app restarts)
+ * - All-time totals (persisted by framework tracing, survives app restarts)
  */
 
 import { create } from 'zustand'
-
-const STORAGE_KEY = 'research-pilot:usage-totals'
 
 /**
  * Usage event from agent:usage IPC
@@ -33,15 +31,16 @@ export interface RunSummary {
 }
 
 /**
- * Persisted totals structure
+ * Persisted totals structure (from framework usage file)
  */
 interface PersistedTotals {
-  tokens: number
-  promptTokens: number
-  cachedTokens: number
-  cost: number
-  calls: number
-  lastUpdated: string
+  totals: {
+    tokens: number
+    promptTokens: number
+    cachedTokens: number
+    cost: number
+    calls: number
+  }
 }
 
 interface UsageState {
@@ -56,7 +55,7 @@ interface UsageState {
   sessionCost: number
   sessionCalls: number
 
-  // All-time totals (persisted to localStorage)
+  // All-time totals (persisted by framework)
   allTimeTokens: number
   allTimePromptTokens: number
   allTimeCachedTokens: number
@@ -68,40 +67,23 @@ interface UsageState {
   completeRun: (summary: RunSummary) => void
   resetRun: () => void
   resetSession: () => void
-  loadPersisted: () => void
+  loadPersisted: () => Promise<void>
   resetAllTime: () => void
 }
 
-/**
- * Load persisted totals from localStorage
- */
-function loadFromStorage(): PersistedTotals | null {
+const api = (window as any).api
+
+async function loadFromFramework(): Promise<PersistedTotals | null> {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      return JSON.parse(stored)
-    }
+    const data = await api?.getUsageTotals?.()
+    return data ?? null
   } catch (e) {
     console.warn('[usage-store] Failed to load persisted totals:', e)
-  }
-  return null
-}
-
-/**
- * Save totals to localStorage
- */
-function saveToStorage(totals: PersistedTotals): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(totals))
-  } catch (e) {
-    console.warn('[usage-store] Failed to save totals:', e)
+    return null
   }
 }
 
 export const useUsageStore = create<UsageState>((set, get) => {
-  // Load persisted data on store creation
-  const persisted = loadFromStorage()
-
   return {
     // Current run
     runTokens: 0,
@@ -109,17 +91,17 @@ export const useUsageStore = create<UsageState>((set, get) => {
     runCacheHitRate: 0,
     runCallCount: 0,
 
-    // Session totals (start from persisted values if available)
-    sessionTokens: persisted?.tokens ?? 0,
-    sessionCost: persisted?.cost ?? 0,
-    sessionCalls: persisted?.calls ?? 0,
+    // Session totals (start at zero; hydrated after project load)
+    sessionTokens: 0,
+    sessionCost: 0,
+    sessionCalls: 0,
 
-    // All-time totals (from persistence)
-    allTimeTokens: persisted?.tokens ?? 0,
-    allTimePromptTokens: persisted?.promptTokens ?? 0,
-    allTimeCachedTokens: persisted?.cachedTokens ?? 0,
-    allTimeCost: persisted?.cost ?? 0,
-    allTimeCalls: persisted?.calls ?? 0,
+    // All-time totals (from framework persistence)
+    allTimeTokens: 0,
+    allTimePromptTokens: 0,
+    allTimeCachedTokens: 0,
+    allTimeCost: 0,
+    allTimeCalls: 0,
 
     recordCall: (event: UsageEvent) => set((state) => {
       const newTokens = event.promptTokens + event.completionTokens
@@ -138,16 +120,6 @@ export const useUsageStore = create<UsageState>((set, get) => {
         allTimeCost: state.allTimeCost + event.cost,
         allTimeCalls: state.allTimeCalls + 1
       }
-
-      // Persist all-time totals
-      saveToStorage({
-        tokens: newState.allTimeTokens,
-        promptTokens: newState.allTimePromptTokens,
-        cachedTokens: newState.allTimeCachedTokens,
-        cost: newState.allTimeCost,
-        calls: newState.allTimeCalls,
-        lastUpdated: new Date().toISOString()
-      })
 
       return newState
     }),
@@ -177,26 +149,26 @@ export const useUsageStore = create<UsageState>((set, get) => {
     }),
 
     // Load persisted totals (called on app start)
-    loadPersisted: () => {
-      const persisted = loadFromStorage()
-      if (persisted) {
+    loadPersisted: async () => {
+      const persisted = await loadFromFramework()
+      if (persisted?.totals) {
         set({
-          allTimeTokens: persisted.tokens,
-          allTimePromptTokens: persisted.promptTokens ?? 0,
-          allTimeCachedTokens: persisted.cachedTokens ?? 0,
-          allTimeCost: persisted.cost,
-          allTimeCalls: persisted.calls,
+          allTimeTokens: persisted.totals.tokens ?? 0,
+          allTimePromptTokens: persisted.totals.promptTokens ?? 0,
+          allTimeCachedTokens: persisted.totals.cachedTokens ?? 0,
+          allTimeCost: persisted.totals.cost ?? 0,
+          allTimeCalls: persisted.totals.calls ?? 0,
           // Also restore to session totals
-          sessionTokens: persisted.tokens,
-          sessionCost: persisted.cost,
-          sessionCalls: persisted.calls
+          sessionTokens: persisted.totals.tokens ?? 0,
+          sessionCost: persisted.totals.cost ?? 0,
+          sessionCalls: persisted.totals.calls ?? 0
         })
       }
     },
 
     // Reset all-time totals (user-initiated)
     resetAllTime: () => {
-      localStorage.removeItem(STORAGE_KEY)
+      api?.resetUsageTotals?.().catch?.(() => {})
       set({
         runTokens: 0,
         runCost: 0,

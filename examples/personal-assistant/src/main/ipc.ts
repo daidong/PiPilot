@@ -17,6 +17,7 @@ import { PATHS, type ProjectConfig } from '@personal-assistant/types'
 import { Scheduler } from '@personal-assistant/scheduler/scheduler'
 import { NotificationStore } from '@personal-assistant/scheduler/notifications'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
+import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
 import { realtimeBuffer } from './realtime-buffer'
 
 /** Extract just the filename from a path */
@@ -608,6 +609,18 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       coordinator.destroy().catch(() => {})
       coordinator = null
     }
+  })
+
+  // Usage totals (framework persistence)
+  ipcMain.handle('usage:get-totals', () => {
+    if (!projectPath) return null
+    const baseDir = join(projectPath, '.agentfoundry')
+    return loadUsageTotals(baseDir)
+  })
+  ipcMain.handle('usage:reset-totals', () => {
+    if (!projectPath) return null
+    const baseDir = join(projectPath, '.agentfoundry')
+    return resetUsageTotals(baseDir)
   })
 
   // Open working folder with specified app

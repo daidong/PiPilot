@@ -3,9 +3,10 @@
  */
 
 import { mkdirSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import type { TraceEvent, TraceEventType, TraceFilter, EventCorrelation } from '../types/trace.js'
 import type { UsageSummary } from '../llm/provider.types.js'
+import { updateUsageTotals } from './usage-totals.js'
 
 /**
  * Generate unique ID
@@ -329,6 +330,11 @@ export class TraceCollector {
         }
         const summaryPath = join(dir, `trace-${this.runId}.summary.json`)
         writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf-8')
+      }
+
+      if (this.usageSummary) {
+        const baseDir = basename(dir) === 'traces' ? dirname(dir) : dir
+        updateUsageTotals(baseDir, this.runId, this.usageSummary)
       }
     } catch (error) {
       // Do not fail agent execution if tracing export fails

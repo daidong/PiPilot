@@ -32,7 +32,7 @@ import { compressToolResult } from '../core/tool-result-compressor.js'
 import { classifyError, sanitizeErrorContent } from '../core/errors.js'
 import { TokenTracker } from '../core/token-tracker.js'
 import type { ErrorCategory } from '../core/errors.js'
-import { buildFeedback, formatFeedbackAsToolResult, contextDropFeedback } from '../core/feedback.js'
+import { buildFeedback, formatFeedbackAsToolResult, contextDropFeedback, policyDenialFeedback } from '../core/feedback.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
 
 /**
@@ -56,6 +56,8 @@ export interface AgentLoopConfig {
   trace: TraceCollector
   /** System prompt */
   systemPrompt: string
+  /** Optional builder to refresh system prompt between rounds */
+  systemPromptBuilder?: () => string
   /** Maximum steps */
   maxSteps: number
   /** Maximum tokens for generation */
@@ -122,6 +124,18 @@ export interface AgentLoopConfig {
 
   /** Callback fired after each LLM call with usage and cost info */
   onUsage?: (usage: DetailedTokenUsage, cost: TokenCost) => void
+
+  /**
+   * Error strike policy (3-strike protocol by default)
+   * - After warnAfter strikes: advise alternate approach
+   * - After disableAfter strikes: disable tool for this run
+   */
+  errorStrikePolicy?: {
+    /** Number of failures before warning (default: 2) */
+    warnAfter?: number
+    /** Number of failures before disabling tool (default: 3) */
+    disableAfter?: number
+  }
 }
 
 /**
@@ -166,6 +180,47 @@ function sanitizeStructuredFeedback(feedbackJson: string): string {
 }
 
 /**
+ * Append guidance to a structured tool-result JSON string if possible,
+ * otherwise append a plain-text note.
+ */
+function appendGuidance(resultContent: string, extraGuidance: string): string {
+  try {
+    const parsed = JSON.parse(resultContent)
+    if (parsed && typeof parsed === 'object') {
+      const existing = typeof parsed.guidance === 'string' ? parsed.guidance : ''
+      parsed.guidance = existing ? `${existing}\n${extraGuidance}` : extraGuidance
+      return JSON.stringify(parsed)
+    }
+  } catch {
+    // fall through to plain-text append
+  }
+  return `${resultContent}\n${extraGuidance}`
+}
+
+/**
+ * Stable stringify for tool input arguments.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return String(value)
+  if (typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) {
+    return `[${value.map(v => stableStringify(v)).join(',')}]`
+  }
+  const obj = value as Record<string, unknown>
+  const keys = Object.keys(obj).sort()
+  const entries = keys.map(k => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+  return `{${entries.join(',')}}`
+}
+
+function buildArgKey(input: unknown): string {
+  return stableStringify(input)
+}
+
+function strikeKey(toolName: string, argKey: string, category: ErrorCategory): string {
+  return `${toolName}::${category}::${argKey}`
+}
+
+/**
  * Agent execution loop
  */
 export class AgentLoop {
@@ -194,6 +249,10 @@ export class AgentLoop {
   private toolNudgeInjected = false
   /** Circuit breaker: consecutive rounds with TOOL_NOT_AVAILABLE errors */
   private toolNotAvailableStreak = 0
+  /** Per-signature consecutive failure streaks (3-strike protocol) */
+  private toolErrorStreaks: Record<string, number> = {}
+  /** Last error category per tool+args signature (for pre-block checks) */
+  private lastErrorByArgs: Record<string, { category: ErrorCategory }> = {}
   /** Whether onPreCompaction has already fired this run */
   private preCompactionFlushed = false
 
@@ -320,6 +379,13 @@ export class AgentLoop {
     let consecutiveToolRounds = 0
     let previousResponseText = ''
     let previousToolCallCount = 0
+    const strikePolicy = {
+      warnAfter: this.config.errorStrikePolicy?.warnAfter ?? 2,
+      disableAfter: this.config.errorStrikePolicy?.disableAfter ?? 3
+    }
+    if (strikePolicy.disableAfter < strikePolicy.warnAfter) {
+      strikePolicy.disableAfter = strikePolicy.warnAfter
+    }
 
     try {
       while (step < this.config.maxSteps && !this.stopped) {
@@ -334,7 +400,9 @@ export class AgentLoop {
         })
 
         // Prepare context (with optional budget management)
-        let systemPrompt = this.config.systemPrompt
+        let systemPrompt = this.config.systemPromptBuilder
+          ? this.config.systemPromptBuilder()
+          : this.config.systemPrompt
         let tools = this.config.toolRegistry.generateToolSchemas(
           this.activeToolSubset ? { subset: this.activeToolSubset } : undefined
         ) as LLMToolDefinition[]
@@ -355,6 +423,7 @@ export class AgentLoop {
         if (this.activeToolSubset) {
           subsetConstraint = `\n\nOnly the following tools are available for this round: ${this.activeToolSubset.join(', ')}. Do not attempt to call unlisted tools.`
         }
+        // Note: repeated failure handling is enforced per tool+args signature (3-strike protocol)
 
         if (this.budgetManager) {
           const prepared = this.budgetManager.prepareContext({
@@ -742,6 +811,33 @@ export class AgentLoop {
               continue
             }
           }
+          // Check repeated failure signature block (3-strike protocol)
+          const argKey = buildArgKey(toolUse.input)
+          const lastError = this.lastErrorByArgs[`${toolUse.name}::${argKey}`]
+          if (lastError) {
+            const signature = strikeKey(toolUse.name, argKey, lastError.category)
+            const strikes = this.toolErrorStreaks[signature] ?? 0
+            if (strikes >= strikePolicy.disableAfter) {
+              const feedback = policyDenialFeedback(
+                toolUse.name,
+                'Repeated failure with the same parameters. Change parameters or use a different tool.',
+                'error-strike'
+              )
+              const resultContent = formatFeedbackAsToolResult(feedback)
+              this.config.onToolResult?.(toolUse.name, { success: false, error: feedback }, toolUse.input)
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: resultContent,
+                is_error: true
+              })
+              this.config.trace.record({
+                type: 'error.classified',
+                data: { tool: toolUse.name, category: 'policy_denied', source: 'error-strike', attempt: this.toolAttempts[`${toolUse.name}:${toolUse.id}`] ?? 0 }
+              })
+              continue
+            }
+          }
 
           // RFC-005: Execute tool with transparent executor_retry for transient errors
           let result = await this.config.toolRegistry.call(
@@ -821,6 +917,11 @@ export class AgentLoop {
 
           this.config.onToolResult?.(toolUse.name, result, toolUse.input)
 
+          // Notify skill manager of tool usage (triggers lazy loading of associated skills)
+          if (this.config.runtime.skillManager) {
+            this.config.runtime.skillManager.onToolUsed(toolUse.name)
+          }
+
           // Update state summarizer (Change 3)
           if (this.config.stateSummarizer) {
             const args = (typeof toolUse.input === 'object' && toolUse.input !== null)
@@ -838,6 +939,18 @@ export class AgentLoop {
           // Build tool result content
           let resultContent: string
           if (result.success) {
+            // Reset error streaks for this tool+args on success (3-strike protocol)
+            const argKey = buildArgKey(toolUse.input)
+            const prefix = `${toolUse.name}::`
+            const lastKey = `${toolUse.name}::${argKey}`
+            if (this.lastErrorByArgs[lastKey]) {
+              delete this.lastErrorByArgs[lastKey]
+            }
+            for (const key of Object.keys(this.toolErrorStreaks)) {
+              if (key.startsWith(prefix) && key.endsWith(`::${argKey}`)) {
+                delete this.toolErrorStreaks[key]
+              }
+            }
             resultContent = result.data !== undefined ? JSON.stringify(result.data, null, 2) : '{"success": true}'
           } else {
             const errorStr = result.error || 'Unknown error'
@@ -894,6 +1007,36 @@ export class AgentLoop {
               }
             }
             this.retryBudget.record(errorCategory)
+            // 3-strike protocol: warn after N failures, disable after M failures (per tool)
+            const strikeEligible = !['rate_limit', 'server_overload', 'transient_network', 'timeout'].includes(errorCategory)
+            if (strikeEligible) {
+              const argKey = buildArgKey(toolUse.input)
+              const signature = strikeKey(toolUse.name, argKey, errorCategory)
+              const prev = this.toolErrorStreaks[signature] ?? 0
+              const next = prev + 1
+              this.toolErrorStreaks[signature] = next
+              this.lastErrorByArgs[`${toolUse.name}::${argKey}`] = { category: errorCategory }
+
+              if (next === strikePolicy.warnAfter) {
+                resultContent = appendGuidance(
+                  resultContent,
+                  `STRIKE ${next}: This exact call failed multiple times. Do not retry with the same parameters. Change parameters or use a different tool.`
+                )
+                this.config.trace.record({
+                  type: 'error.retrying',
+                  data: { tool: toolUse.name, category: errorCategory, attempt: next, mode: 'agent_retry', strike: 'warn' }
+                })
+              } else if (next >= strikePolicy.disableAfter) {
+                resultContent = appendGuidance(
+                  resultContent,
+                  `STRIKE ${next}: This exact call is now blocked for this run. Change parameters or use a different tool, or ask the user for help.`
+                )
+                this.config.trace.record({
+                  type: 'error.exhausted',
+                  data: { tool: toolUse.name, category: errorCategory, attempt: next, mode: 'agent_retry', strike: 'disable' }
+                })
+              }
+            }
           }
 
           // Cap tool result to prevent context overflow

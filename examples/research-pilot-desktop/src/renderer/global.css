@@ -34,13 +34,13 @@ html.dark {
   --color-bubble-assistant: #262626;
   --color-input-bg: #171717;
   --color-input-border: #404040;
-  --color-input-focus: rgba(249, 115, 22, 0.5);
-  /* Accent colors for markdown elements */
-  --color-accent: #f97316;
-  --color-accent-soft: #fb923c;
-  --color-code-text: #fbbf24;
-  --color-code-bg: rgba(251, 191, 36, 0.08);
-  --color-code-border: rgba(251, 191, 36, 0.2);
+  --color-input-focus: rgba(20, 184, 166, 0.5);
+  /* Accent colors - teal/cyan theme */
+  --color-accent: #14b8a6;
+  --color-accent-soft: #2dd4bf;
+  --color-code-text: #5eead4;
+  --color-code-bg: rgba(94, 234, 212, 0.08);
+  --color-code-border: rgba(94, 234, 212, 0.2);
   color-scheme: dark;
 }
 
@@ -54,17 +54,17 @@ html.light {
   --color-text: #171717;
   --color-text-secondary: #525252;
   --color-text-muted: #a3a3a3;
-  --color-bubble-user: #f0ebe4;
+  --color-bubble-user: #ccfbf1;
   --color-bubble-assistant: #f5f5f5;
   --color-input-bg: #ffffff;
   --color-input-border: #d4d4d4;
-  --color-input-focus: rgba(249, 115, 22, 0.4);
-  /* Accent colors for markdown elements */
-  --color-accent: #ea580c;
-  --color-accent-soft: #f97316;
-  --color-code-text: #b45309;
-  --color-code-bg: rgba(180, 83, 9, 0.08);
-  --color-code-border: rgba(180, 83, 9, 0.2);
+  --color-input-focus: rgba(13, 148, 136, 0.4);
+  /* Accent colors - teal/cyan theme */
+  --color-accent: #0d9488;
+  --color-accent-soft: #14b8a6;
+  --color-code-text: #0f766e;
+  --color-code-bg: rgba(15, 118, 110, 0.08);
+  --color-code-border: rgba(15, 118, 110, 0.2);
   color-scheme: light;
 }
 
@@ -94,7 +94,7 @@ body {
 }
 
 /* Markdown prose styling inside assistant bubbles */
-/* Compact layout inspired by chat interfaces, warm orange accent */
+/* Compact layout inspired by chat interfaces, teal/cyan accent */
 .md-prose {
   font-size: 13px;
   line-height: 1.5;
@@ -154,7 +154,7 @@ body {
   font-size: 0.82em;
   line-height: 1.45;
 }
-/* Blockquote: orange left border + subtle bg */
+/* Blockquote: accent left border + subtle bg */
 .md-prose blockquote {
   margin: 0.4em 0;
   padding: 0.15em 0.75em;

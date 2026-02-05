@@ -34,13 +34,13 @@ html.dark {
   --color-bubble-assistant: #262626;
   --color-input-bg: #171717;
   --color-input-border: #404040;
-  --color-input-focus: rgba(249, 115, 22, 0.5);
-  /* Accent colors for markdown elements */
-  --color-accent: #f97316;
-  --color-accent-soft: #fb923c;
-  --color-code-text: #fbbf24;
-  --color-code-bg: rgba(251, 191, 36, 0.08);
-  --color-code-border: rgba(251, 191, 36, 0.2);
+  --color-input-focus: rgba(59, 130, 246, 0.5);
+  /* Accent colors - blue theme */
+  --color-accent: #3b82f6;
+  --color-accent-soft: #60a5fa;
+  --color-code-text: #38bdf8;
+  --color-code-bg: rgba(56, 189, 248, 0.08);
+  --color-code-border: rgba(56, 189, 248, 0.2);
   color-scheme: dark;
 }
 
@@ -54,17 +54,17 @@ html.light {
   --color-text: #171717;
   --color-text-secondary: #525252;
   --color-text-muted: #a3a3a3;
-  --color-bubble-user: #f0ebe4;
+  --color-bubble-user: #e0f2fe;
   --color-bubble-assistant: #f5f5f5;
   --color-input-bg: #ffffff;
   --color-input-border: #d4d4d4;
-  --color-input-focus: rgba(249, 115, 22, 0.4);
-  /* Accent colors for markdown elements */
-  --color-accent: #ea580c;
-  --color-accent-soft: #f97316;
-  --color-code-text: #b45309;
-  --color-code-bg: rgba(180, 83, 9, 0.08);
-  --color-code-border: rgba(180, 83, 9, 0.2);
+  --color-input-focus: rgba(37, 99, 235, 0.4);
+  /* Accent colors - blue theme */
+  --color-accent: #2563eb;
+  --color-accent-soft: #3b82f6;
+  --color-code-text: #0369a1;
+  --color-code-bg: rgba(3, 105, 161, 0.08);
+  --color-code-border: rgba(3, 105, 161, 0.2);
   color-scheme: light;
 }
 
@@ -94,7 +94,7 @@ body {
 }
 
 /* Markdown prose styling inside assistant bubbles */
-/* Compact layout inspired by chat interfaces, warm orange accent */
+/* Compact layout inspired by chat interfaces, blue accent */
 .md-prose {
   font-size: 13px;
   line-height: 1.5;
@@ -154,7 +154,7 @@ body {
   font-size: 0.82em;
   line-height: 1.45;
 }
-/* Blockquote: orange left border + subtle bg */
+/* Blockquote: accent left border + subtle bg */
 .md-prose blockquote {
   margin: 0.4em 0;
   padding: 0.15em 0.75em;

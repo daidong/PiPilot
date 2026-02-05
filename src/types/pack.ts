@@ -1,12 +1,13 @@
 /**
  * Pack Types - 能力包类型定义
- * Pack 是 Tools + Policies + ContextSources 的组合单元
+ * Pack 是 Tools + Policies + ContextSources + Skills 的组合单元
  */
 
 import type { Tool } from './tool.js'
 import type { Policy } from './policy.js'
 import type { ContextSource } from './context.js'
 import type { Runtime } from './runtime.js'
+import type { Skill, SkillLoadingConfig } from './skill.js'
 
 /**
  * Pack 定义
@@ -22,7 +23,21 @@ export interface Pack {
   policies?: Policy[]
   /** 包含的上下文源 */
   contextSources?: ContextSource[]
-  /** Prompt 片段（会被编译到系统提示中） */
+  /**
+   * 包含的 Skills
+   * Skills provide procedural knowledge that can be lazily loaded
+   * to optimize token usage
+   */
+  skills?: Skill[]
+  /**
+   * Skill loading configuration
+   * Controls when skills are loaded into the prompt
+   */
+  skillLoadingConfig?: SkillLoadingConfig
+  /**
+   * Prompt 片段（会被编译到系统提示中）
+   * @deprecated Use skills instead for progressive disclosure
+   */
   promptFragment?: string
   /** 依赖的其他 Pack */
   dependencies?: string[]
@@ -41,6 +56,17 @@ export interface PackConfig {
   tools?: Tool[]
   policies?: Policy[]
   contextSources?: ContextSource[]
+  /**
+   * Skills to include in this pack
+   */
+  skills?: Skill[]
+  /**
+   * Configuration for how skills are loaded
+   */
+  skillLoadingConfig?: SkillLoadingConfig
+  /**
+   * @deprecated Use skills instead for progressive disclosure
+   */
   promptFragment?: string
   dependencies?: string[]
   onInit?: (runtime: Runtime) => Promise<void>

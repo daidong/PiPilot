@@ -76,6 +76,10 @@ export interface ElectronAPI {
   closeProject: () => Promise<void>
   onProjectClosed: (cb: () => void) => () => void
 
+  // Usage totals (framework persistence)
+  getUsageTotals: () => Promise<any>
+  resetUsageTotals: () => Promise<any>
+
   // Notifications
   listNotifications: () => Promise<any[]>
   markNotificationRead: (id: string) => Promise<void>
@@ -189,6 +193,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('project:closed', handler)
     return () => ipcRenderer.removeListener('project:closed', handler)
   },
+
+  getUsageTotals: () => ipcRenderer.invoke('usage:get-totals'),
+  resetUsageTotals: () => ipcRenderer.invoke('usage:reset-totals'),
 
   listNotifications: () => ipcRenderer.invoke('notification:list'),
   markNotificationRead: (id) => ipcRenderer.invoke('notification:mark-read', id),

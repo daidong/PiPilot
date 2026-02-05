@@ -7,3 +7,6 @@
 
 export { createCoordinator } from './agents/coordinator.js'
 export type { CoordinatorConfig } from './agents/coordinator.js'
+
+// Skills (migrated from coordinator-module-* prompts)
+export { gmailSkill, calendarSkill, personalAssistantSkills } from '../skills/index.js'

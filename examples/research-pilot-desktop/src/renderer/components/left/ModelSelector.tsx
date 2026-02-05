@@ -70,7 +70,7 @@ export function ModelSelector() {
                   }`}
                 >
                   <span className="w-4 shrink-0">
-                    {model.id === selectedModel && <Check size={14} className="text-orange-400" />}
+                    {model.id === selectedModel && <Check size={14} className="text-teal-400" />}
                   </span>
                   <span className="truncate">{model.label}</span>
                 </button>

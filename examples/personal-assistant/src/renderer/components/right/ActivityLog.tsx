@@ -71,7 +71,7 @@ function eventIcon(event: ActivityEvent) {
 
 function eventColor(event: ActivityEvent) {
   if (event.type === 'error') return 'text-red-500'
-  if (event.type === 'system') return 'text-orange-400'
+  if (event.type === 'system') return 'text-blue-400'
   if (event.type === 'tool-call') return 'text-blue-400'
   if (event.type === 'tool-result' && event.success) return 'text-green-500'
   if (event.type === 'tool-result' && !event.success) return 'text-red-500'
@@ -80,7 +80,7 @@ function eventColor(event: ActivityEvent) {
 
 function eventTextClass(event: ActivityEvent) {
   if (event.type === 'error' || (event.type === 'tool-result' && !event.success)) return 'text-red-400'
-  if (event.type === 'system') return 'text-orange-400'
+  if (event.type === 'system') return 'text-blue-400'
   if (event.type === 'tool-call') return 't-text'
   return 't-text-secondary'
 }

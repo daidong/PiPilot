@@ -232,7 +232,7 @@ export function EntityPreviewPanel() {
             <p className="text-sm t-text-secondary">{getExtension(entity.filePath!).toUpperCase()} file</p>
             <button
               onClick={() => (window as any).api.openFile(entity.filePath)}
-              className="px-4 py-2 rounded bg-orange-500 hover:bg-orange-600 text-white text-sm"
+              className="px-4 py-2 rounded bg-teal-500 hover:bg-teal-600 text-white text-sm"
             >
               Open in default app
             </button>
@@ -302,7 +302,7 @@ export function EntityPreviewPanel() {
             autoFocus
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
-            className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-orange-400 outline-none min-w-0"
+            className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-teal-400 outline-none min-w-0"
           />
         ) : (
           <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
@@ -311,7 +311,7 @@ export function EntityPreviewPanel() {
         <div className="flex items-center gap-1">
           <button
             onClick={toggleEditing}
-            className={`p-1 rounded transition-colors ${editing ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
+            className={`p-1 rounded transition-colors ${editing ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
             title={editing ? 'Save changes' : 'Edit'}
           >
             <Pencil size={14} />
@@ -319,7 +319,7 @@ export function EntityPreviewPanel() {
           {/* RFC-009: Project Card toggle */}
           <button
             onClick={() => toggleProjectCard(entity.id)}
-            className={`p-1 rounded transition-colors ${isProjectCard ? 'text-orange-400' : 't-text-muted t-bg-hover'}`}
+            className={`p-1 rounded transition-colors ${isProjectCard ? 'text-teal-400' : 't-text-muted t-bg-hover'}`}
             title={isProjectCard ? 'Remove from Project Cards' : 'Mark as Project Card'}
           >
             <Bookmark size={14} />
@@ -327,7 +327,7 @@ export function EntityPreviewPanel() {
           {/* RFC-009: Working Set toggle */}
           <button
             onClick={() => toggleWorkingSet(entity.id)}
-            className={`p-1 rounded transition-colors ${isInWorkingSet ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
+            className={`p-1 rounded transition-colors ${isInWorkingSet ? 'text-teal-400' : 't-text-muted t-bg-hover'}`}
             title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
           >
             <Layers size={14} />
@@ -357,10 +357,10 @@ export function EntityPreviewPanel() {
           {entity.authors?.length > 0 && <p>Authors: {entity.authors.join(', ')}</p>}
           {entity.year && <p>Year: {entity.year}</p>}
           {entity.venue && <p>Venue: {entity.venue}</p>}
-          {entity.doi && <p>DOI: <a href={`https://doi.org/${entity.doi}`} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">{entity.doi}</a></p>}
+          {entity.doi && <p>DOI: <a href={`https://doi.org/${entity.doi}`} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline">{entity.doi}</a></p>}
           {entity.citationCount != null && <p>Citations: {entity.citationCount}</p>}
-          {entity.url && <p>URL: <a href={entity.url} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline break-all">{entity.url}</a></p>}
-          {entity.pdfUrl && <p>PDF: <a href={entity.pdfUrl} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline break-all">{entity.pdfUrl}</a></p>}
+          {entity.url && <p>URL: <a href={entity.url} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline break-all">{entity.url}</a></p>}
+          {entity.pdfUrl && <p>PDF: <a href={entity.pdfUrl} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline break-all">{entity.pdfUrl}</a></p>}
           {entity.citeKey && <p>Cite key: <code className="t-bg-surface px-1 rounded">{entity.citeKey}</code></p>}
           {entity.externalSource && <p>Source: {entity.externalSource}</p>}
           {entity.relevanceScore != null && <p>Relevance: {entity.relevanceScore}/10</p>}
@@ -375,7 +375,7 @@ export function EntityPreviewPanel() {
           )}
           {entity.bibtex && (
             <details className="mt-1">
-              <summary className="cursor-pointer hover:text-orange-400">BibTeX</summary>
+              <summary className="cursor-pointer hover:text-teal-400">BibTeX</summary>
               <pre className="mt-1 p-2 t-bg-surface rounded text-[11px] font-mono whitespace-pre-wrap break-all">{entity.bibtex}</pre>
             </details>
           )}

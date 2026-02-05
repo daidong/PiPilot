@@ -12,6 +12,7 @@
 // ============ Layered Core Packs ============
 
 export { safe, safePack } from './safe.js'
+export type { SafePackOptions } from './safe.js'
 export { exec, execPack, execStrict, execDev } from './exec.js'
 export type { ExecPackOptions } from './exec.js'
 export { network, networkPack, networkStrict, networkApi, networkGitHub, DEFAULT_DENY_IP_RANGES } from './network.js'
@@ -25,6 +26,7 @@ export type { ComputePackOptions } from './compute.js'
 // ============ Domain Packs ============
 
 export { git } from './git.js'
+export type { GitPackOptions } from './git.js'
 export { exploration } from './exploration.js'
 export { python } from './python.js'
 export { kvMemory } from './kv-memory.js'

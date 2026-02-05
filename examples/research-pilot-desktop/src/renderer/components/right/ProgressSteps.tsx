@@ -62,7 +62,7 @@ function statusColor(status: string) {
     case 'done':
       return 'text-green-500'
     case 'in_progress':
-      return 'text-orange-400'
+      return 'text-teal-400'
     case 'blocked':
       return 'text-red-500'
     default:

@@ -69,7 +69,7 @@ function HoverPreview({
           {/* RFC-009: Project Card toggle */}
           <button
             onClick={(e) => { e.stopPropagation(); onProjectCard() }}
-            className={`p-1 rounded ${isProjectCard ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
+            className={`p-1 rounded ${isProjectCard ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
             title={isProjectCard ? 'Remove from Project Cards' : 'Add to Project Cards'}
           >
             <Bookmark size={13} />
@@ -199,9 +199,9 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
             isInWorkingSet={isInWorkingSet}
           />
         )}
-        {/* RFC-009: Status dot - orange for Project Card, blue for Working Set */}
+        {/* RFC-009: Status dot - blue for Project Card and Working Set */}
         <span className={`w-1 h-1 rounded-full shrink-0 ${
-          isProjectCard ? 'bg-orange-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
+          isProjectCard ? 'bg-blue-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
         }`} />
         {entity.type === 'doc' && (
           <DocFileIcon filePath={entity.filePath} className="shrink-0 t-text-muted" size={12} />
@@ -216,7 +216,7 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
       {messageId && (
         <button
           onClick={handleProvenanceClick}
-          className="flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-orange-400 transition-colors border-l t-border"
+          className="flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-blue-400 transition-colors border-l t-border"
           title="Scroll to source message"
         >
           <MessageSquare size={9} />
@@ -335,9 +335,9 @@ function TodoRow({ todo, workingSetIds }: { todo: EntityItem; workingSetIds: Set
         >
           {isCompleted && <Check size={10} strokeWidth={3} />}
         </button>
-        {/* RFC-009: Status dot - orange for Project Card, blue for Working Set */}
+        {/* RFC-009: Status dot - blue for Project Card and Working Set */}
         <span className={`w-1 h-1 rounded-full shrink-0 ${
-          isProjectCard ? 'bg-orange-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
+          isProjectCard ? 'bg-blue-400' : isInWorkingSet ? 'bg-blue-400' : 't-bg-elevated'
         }`} />
         <div className="min-w-0 flex-1">
           <span className={`text-xs truncate block ${
@@ -350,7 +350,7 @@ function TodoRow({ todo, workingSetIds }: { todo: EntityItem; workingSetIds: Set
       {messageId && (
         <button
           onClick={handleProvenanceClick}
-          className="flex items-center gap-1 ml-6 pl-2 py-0.5 text-[10px] t-text-muted hover:text-orange-400 transition-colors border-l t-border"
+          className="flex items-center gap-1 ml-6 pl-2 py-0.5 text-[10px] t-text-muted hover:text-blue-400 transition-colors border-l t-border"
           title="Scroll to source message"
         >
           <MessageSquare size={9} />
@@ -424,7 +424,7 @@ export function EntityTabs() {
             onClick={() => setLeftTab(key)}
             className={`no-drag flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
               leftTab === key
-                ? 'border-orange-400 t-text'
+                ? 'border-blue-400 t-text'
                 : 'border-transparent t-text-muted hover:t-text-secondary'
             }`}
           >
@@ -450,7 +450,7 @@ export function EntityTabs() {
         <div
           onDragOver={handleDragOver}
           onDrop={handleDrop}
-          className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-orange-400/40"
+          className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-blue-400/40"
         >
           <Upload size={16} className="mx-auto mb-1 t-text-muted" />
           <p className="text-xs t-text-muted">

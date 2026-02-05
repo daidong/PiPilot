@@ -27,6 +27,11 @@ src/
 ├── tools/           # Built-in tools (read, write, edit, bash, glob, grep, fetch, etc.)
 ├── policies/        # Built-in policies (no-secret-files, normalize-paths, auto-limit, audit)
 ├── context-sources/ # Built-in context sources (repo-index, repo-search, session-history)
+├── skills/          # Skills system (lazy-loaded procedural knowledge)
+│   ├── define-skill.ts   # Skill factory functions
+│   ├── skill-manager.ts  # Lifecycle and loading management
+│   ├── skill-registry.ts # Discovery and querying
+│   └── builtin/          # Built-in skills (llm-compute, git-workflow, context-retrieval)
 ├── llm/             # LLM integration (Vercel AI SDK)
 ├── mcp/             # Model Context Protocol support
 ├── cli/             # CLI commands and init wizard
@@ -51,16 +56,19 @@ docs/
 ├── PROVIDERS.md     # Provider plugin system
 ├── MCP-GUIDE.md     # MCP integration guide
 ├── TEAM.md          # Multi-agent team documentation
+├── SKILLS.md        # Skills system documentation
 └── AGENT_DEV_GUIDE.md  # **READ THIS when building apps on AgentFoundry**
 examples/
 ├── literature-agent/      # Multi-agent literature search
 ├── personal-assistant/    # Electron desktop assistant (memory, scheduler, notifications)
 │   ├── src/agent/         # Agent layer (coordinator, tools, commands, mentions, scheduler, types)
+│   ├── src/skills/        # App-specific skills (gmail-skill, calendar-skill)
 │   ├── src/main/          # Electron main process (IPC, lifecycle)
 │   ├── src/preload/       # Context bridge (renderer ↔ main)
 │   ├── src/renderer/      # React UI (three-panel layout, Zustand stores)
 │   └── docs/rfc/          # RFC-001 (desktop app), RFC-002 (memory & autonomy)
 └── research-pilot/        # Research assistant (context pipeline demo)
+    └── skills/            # App-specific skills (academic-writing, literature, data-analysis)
 ```
 
 ## Key Concepts
@@ -93,6 +101,44 @@ Packs bundle Tools + Policies + Context Sources + Prompt Fragments:
 | `git` | Elevated | Git operations |
 
 Composite packs: `minimal()`, `standard()`, `full()`, `strict()`
+
+### Skills
+
+Skills are **lazily-loaded procedural knowledge** that optimize token usage through progressive disclosure:
+
+| Concept | Purpose | Loading | Example |
+|---------|---------|---------|---------|
+| **Tool** | Execute operations | Always loaded (schema) | `read`, `write`, `bash` |
+| **Skill** | Provide guidance | Lazy/on-demand | `llm-compute-skill`, `git-workflow-skill` |
+| **Pack** | Bundle capabilities | At initialization | `safe()`, `compute()`, `exec()` |
+
+```typescript
+import { defineSkill, SkillManager } from 'agent-foundry'
+
+const mySkill = defineSkill({
+  id: 'my-skill',
+  name: 'My Skill',
+  shortDescription: 'Brief description (<100 chars)',
+  instructions: {
+    summary: 'Concise overview (~100 tokens)',      // Always loaded
+    procedures: 'Detailed step-by-step guide',      // Loaded on use
+    examples: 'Usage examples with code',           // Loaded on use
+    troubleshooting: 'Common issues and solutions'  // Loaded on use
+  },
+  tools: ['tool-a', 'tool-b'],  // Triggers loading when these tools are used
+  loadingStrategy: 'lazy',       // 'eager' | 'lazy' | 'on-demand'
+  tags: ['category1', 'category2']
+})
+
+// Skills auto-load when associated tools are used
+const manager = new SkillManager()
+manager.register(mySkill)
+manager.onToolUsed('tool-a')  // Triggers full loading
+```
+
+Built-in skills: `llm-compute-skill`, `git-workflow-skill`, `context-retrieval-skill`
+
+See `docs/SKILLS.md` for full documentation.
 
 ### Three-Phase Policy Pipeline
 
@@ -160,6 +206,7 @@ Key components:
    - `docs/PROVIDERS.md` - For provider changes
    - `docs/MCP-GUIDE.md` - For MCP changes
    - `docs/TEAM.md` - For multi-agent team changes
+   - `docs/SKILLS.md` - For skills system changes
 
 2. **Update type definitions** in `src/types/` if interfaces changed
 
@@ -218,6 +265,9 @@ npx agent-foundry validate              # Validate agent.yaml
 | `src/core/tool-registry.ts` | Tool registration and execution |
 | `src/core/policy-engine.ts` | Three-phase policy pipeline |
 | `src/core/context-manager.ts` | Context source management |
+| `src/skills/define-skill.ts` | Skill factory functions (defineSkill, extendSkill, mergeSkills) |
+| `src/skills/skill-manager.ts` | Skill lifecycle and lazy loading |
+| `src/skills/skill-registry.ts` | Skill discovery and querying |
 | `src/recommendation/mcp-catalog.ts` | MCP server catalog for init wizard |
 | `src/recommendation/tool-catalog.ts` | Tool catalog for recommendations |
 | `src/team/define-team.ts` | Team definition (defineTeam, agentHandle) |
@@ -270,13 +320,59 @@ export const myPolicy = defineGuardPolicy({
 ```typescript
 // src/packs/my-pack.ts
 import { definePack } from '../factories/define-pack.js'
+import { mySkill } from '../skills/my-skill.js'
 
 export const myPack = definePack({
   id: 'my-pack',
   name: 'My Pack',
   tools: [myTool],
   policies: [myPolicy],
-  promptFragment: 'Instructions for LLM...'
+  skills: [mySkill],  // Skills replace promptFragment
+  skillLoadingConfig: {
+    lazy: ['my-skill']  // Load on first tool use
+  }
+})
+```
+
+### New Skill
+
+```typescript
+// src/skills/my-skill.ts (or examples/my-app/src/skills/my-skill.ts for app-specific)
+import { defineSkill } from '../skills/define-skill.js'
+import type { Skill } from '../types/skill.js'
+
+export const mySkill: Skill = defineSkill({
+  id: 'my-skill',
+  name: 'My Skill',
+  shortDescription: 'Brief description for matching (<100 chars)',
+
+  instructions: {
+    summary: `Concise overview (~100 tokens)`,
+    procedures: `
+## Section 1
+Step-by-step instructions...
+
+## Section 2
+More detailed procedures...
+    `,
+    examples: `
+## Example 1: Basic Usage
+\`\`\`json
+{ "tool": "...", "input": {...} }
+\`\`\`
+    `,
+    troubleshooting: `
+## Common Issues
+### "Error message X"
+- Cause: ...
+- Fix: ...
+    `
+  },
+
+  tools: ['associated-tool'],  // Triggers loading when this tool is used
+  loadingStrategy: 'lazy',
+  estimatedTokens: { summary: 80, full: 600 },
+  tags: ['category1', 'category2']
 })
 ```
 

@@ -22,6 +22,7 @@ export type FrameworkEvent =
  * Trace 事件类型
  */
 export type TraceEventType =
+  | 'agent.run'
   | 'agent.start'
   | 'agent.step'
   | 'agent.complete'

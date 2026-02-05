@@ -10,9 +10,11 @@ export { createCoordinator, createCoordinatorRunner } from './agents/coordinator
 export type { CoordinatorConfig } from './agents/coordinator.js'
 export { createLiteratureTeam } from './agents/literature-team.js'
 export { createDataAgent, dataAnalyzer } from './agents/data-agent.js'
-export { createWritingAgent, writingOutliner, writingDrafter } from './agents/writing-agent.js'
 export { createDataAnalyzer } from './agents/data-team.js'
 export type { AnalyzeResult } from './agents/data-team.js'
+
+// Skills (writing functionality moved here)
+export { academicWritingSkill, literatureSkill, dataAnalysisSkill, researchPilotSkills } from './skills/index.js'
 
 // Commands
 export {

@@ -30,7 +30,7 @@ function FolderGate() {
       <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
       <div className="text-center max-w-md px-8">
         <div className="mx-auto mb-6 w-20 h-20 rounded-2xl t-bg-surface flex items-center justify-center">
-          <FolderOpen size={36} className="text-orange-400" />
+          <FolderOpen size={36} className="text-teal-400" />
         </div>
         <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily: "'Playfair Display', serif" }}>
           Research Pilot
@@ -41,7 +41,7 @@ function FolderGate() {
         </p>
         <button
           onClick={handlePick}
-          className="px-6 py-3 rounded-xl bg-orange-500 text-white font-medium hover:bg-orange-400 transition-colors text-sm"
+          className="px-6 py-3 rounded-xl bg-teal-500 text-white font-medium hover:bg-teal-400 transition-colors text-sm"
         >
           Open Project Folder
         </button>
@@ -75,6 +75,7 @@ export default function App() {
     if (!hasProject) return
 
     refreshEntities()
+    useUsageStore.getState().loadPersisted().catch(() => {})
 
     // Recover real-time state that may have been lost during a renderer remount
     api.getRealtimeSnapshot().then((snapshot: any) => {

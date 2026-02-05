@@ -24,6 +24,7 @@ import type { EntityIndex, WorkingSetResolvedEntity } from '../../../src/context
 import type { ResolvedMention } from '../mentions/index.js'
 import { countTokens } from '../../../src/utils/tokenizer.js'
 import { loadPrompt } from './prompts/index.js'
+import { researchPilotSkills } from '../skills/index.js'
 import { getWorkingSetIds } from '../commands/select.js'
 
 /**
@@ -680,7 +681,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       'Ask for clarification when instructions are ambiguous'
     ],
     packs: [
-      packs.safe(),           // read, write, edit, glob, grep
+      packs.safe(),           // read, write, edit, glob, grep (includes contextRetrievalSkill)
       packs.exec({ approvalMode: 'none', denyPatterns: [] }),  // bash execution (fully trusted for personal use)
       packs.kvMemory(),       // session memory (ephemeral scratchpad via namespace=session)
       packs.todo(),           // todo-add, todo-update, todo-complete, todo-remove
@@ -692,7 +693,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         tools: [convertToMarkdownTool as any]
       }),
       webPack,                // brave_web_search, fetch for general web queries
-      subagentPack             // literature-search, data-analyze
+      subagentPack,           // literature-search, data-analyze
+      // Research-pilot specific skills (lazy-loaded procedural knowledge)
+      definePack({
+        id: 'research-skills',
+        description: 'Research pilot skills for literature, writing, and data analysis',
+        skills: researchPilotSkills,
+        skillLoadingConfig: {
+          lazy: ['academic-writing-skill', 'literature-skill', 'data-analysis-skill']
+        }
+      })
     ],
     onStream,
     onToolCall: (name: string, args: unknown) => {

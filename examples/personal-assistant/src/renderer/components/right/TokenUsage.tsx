@@ -1,7 +1,7 @@
 /**
  * TokenUsage - Compact token usage and cost display with persistence
  *
- * Shows all-time totals including cache hit rate (persisted to localStorage)
+ * Shows all-time totals including cache hit rate (persisted by framework)
  */
 
 import React, { useState } from 'react'

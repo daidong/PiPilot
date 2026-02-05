@@ -234,7 +234,7 @@ export function EntityPreviewPanel() {
             <p className="text-sm t-text-secondary">{getExtension(entity.filePath!).toUpperCase()} file</p>
             <button
               onClick={() => (window as any).api.openFile(entity.filePath)}
-              className="px-4 py-2 rounded bg-orange-500 hover:bg-orange-600 text-white text-sm"
+              className="px-4 py-2 rounded bg-blue-500 hover:bg-blue-600 text-white text-sm"
             >
               Open in default app
             </button>
@@ -301,7 +301,7 @@ export function EntityPreviewPanel() {
             autoFocus
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
-            className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-orange-400 outline-none min-w-0"
+            className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-blue-400 outline-none min-w-0"
           />
         ) : (
           <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
@@ -310,7 +310,7 @@ export function EntityPreviewPanel() {
         <div className="flex items-center gap-1">
           <button
             onClick={toggleEditing}
-            className={`p-1 rounded transition-colors ${editing ? 'text-orange-400' : 't-text-muted hover:text-orange-400'}`}
+            className={`p-1 rounded transition-colors ${editing ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
             title={editing ? 'Save changes' : 'Edit'}
           >
             <Pencil size={14} />
@@ -318,7 +318,7 @@ export function EntityPreviewPanel() {
           {/* RFC-009: Project Card toggle */}
           <button
             onClick={() => toggleProjectCard(entity.id)}
-            className={`p-1 rounded transition-colors ${isProjectCard ? 'text-orange-400' : 't-text-muted t-bg-hover'}`}
+            className={`p-1 rounded transition-colors ${isProjectCard ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
             title={isProjectCard ? 'Remove from Project Cards' : 'Mark as Project Card'}
           >
             <Bookmark size={14} />

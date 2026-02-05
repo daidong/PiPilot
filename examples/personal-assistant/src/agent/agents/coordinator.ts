@@ -29,6 +29,7 @@ import type { ResolvedMention } from '../mentions/index.js'
 import { countTokens } from '@framework/utils/tokenizer.js'
 import { loadPrompt } from './prompts/index.js'
 import { getWorkingSetIds } from '../commands/select.js'
+import { personalAssistantSkills } from '../../skills/index.js'
 
 /**
  * System prompt for the coordinator (loaded from prompts/coordinator-system)
@@ -47,12 +48,18 @@ const INTENT_PRIORITY: IntentLabel[] = [
   'general'
 ]
 
-const INTENT_MODULES: Partial<Record<IntentLabel, string>> = {
-  email: 'coordinator-module-email',
-  calendar: 'coordinator-module-calendar',
+// Prompt-based modules (legacy approach for non-skill intents)
+const INTENT_PROMPT_MODULES: Partial<Record<IntentLabel, string>> = {
   docs: 'coordinator-module-docs',
   memory: 'coordinator-module-memory',
   scheduler: 'coordinator-module-scheduler'
+}
+
+// Phase 2.1: Skill-based modules are now loaded via SkillManager
+// When intent is detected, call runtime.skillManager.loadFully() instead of direct injection
+const INTENT_SKILL_IDS: Partial<Record<IntentLabel, string>> = {
+  email: 'gmail-skill',
+  calendar: 'calendar-skill'
 }
 
 function detectIntentsByRules(message: string): Set<IntentLabel> {
@@ -150,16 +157,39 @@ function buildToolContracts(toolRegistry: { getAll: () => Array<{ name: string; 
   return lines.join('\n')
 }
 
+/**
+ * Phase 2.1: Preload skills based on detected intents.
+ * This triggers lazy loading so skills appear in the recompiled system prompt.
+ */
+function preloadSkillsForIntents(intents: Set<IntentLabel>, skillManager: any): void {
+  for (const intent of intents) {
+    const skillId = INTENT_SKILL_IDS[intent]
+    if (skillId && skillManager) {
+      skillManager.loadFully(skillId)
+    }
+  }
+}
+
 function buildAdditionalInstructions(intents: Set<IntentLabel>, toolContracts: string): string | undefined {
   const ordered = INTENT_PRIORITY.filter(i => intents.has(i)).slice(0, 2)
-  const modules = [
-    toolContracts,
-    ...ordered
-      .map(i => INTENT_MODULES[i])
-      .filter((name): name is string => !!name)
-      .map(name => loadPrompt(name))
-  ]
-  return modules.length > 0 ? modules.join('\n\n') : undefined
+  const modules: string[] = [toolContracts]
+
+  for (const intent of ordered) {
+    // Phase 2.1: Skills (email, calendar) are now loaded via SkillManager
+    // and will appear in the recompiled system prompt. Skip direct injection.
+    const skillId = INTENT_SKILL_IDS[intent]
+    if (skillId) {
+      continue
+    }
+
+    // Fall back to prompt-based modules (docs, memory, scheduler)
+    const promptName = INTENT_PROMPT_MODULES[intent]
+    if (promptName) {
+      modules.push(loadPrompt(promptName))
+    }
+  }
+
+  return modules.length > 1 ? modules.join('\n\n') : undefined
 }
 
 // ============================================================================
@@ -764,7 +794,7 @@ _(none yet)_
   })
 
   const agentPacks = [
-    packs.safe(),           // read, write, edit, glob, grep
+    packs.safe(),           // read, write, edit, glob, grep (includes contextRetrievalSkill)
     packs.kvMemory(),       // session memory (ephemeral scratchpad via namespace=session)
     packs.todo(),           // todo-add, todo-update, todo-complete, todo-remove
     packs.sessionHistory(), // messageStore for cross-turn history persistence
@@ -776,6 +806,15 @@ _(none yet)_
     }),
     webPack,                // brave_web_search, fetch for general web queries
     entityPack,             // save-note, save-doc, update-note
+    // Personal assistant specific skills (lazy-loaded procedural knowledge)
+    definePack({
+      id: 'assistant-skills',
+      description: 'Personal assistant skills for Gmail and Calendar operations',
+      skills: personalAssistantSkills,
+      skillLoadingConfig: {
+        lazy: ['gmail-skill', 'calendar-skill']
+      }
+    })
   ]
 
   // Add SQLite pack if available
@@ -890,6 +929,10 @@ _(none yet)_
           const label = await classifyIntentWithLLM(intentRouterClient, message)
           if (label !== 'general') intents.add(label)
         }
+
+        // Phase 2.1: Preload skills for detected intents (triggers lazy loading)
+        preloadSkillsForIntents(intents, agent.runtime.skillManager)
+
         const additionalInstructions = buildAdditionalInstructions(intents, toolContracts)
 
         // RFC-009: WorkingSet is built from explicit selections + query each turn
