@@ -17,6 +17,8 @@ export interface ResolvedMention {
   ref: MentionRef
   label: string
   content: string
+  /** Resolved entity ID for entity mentions (note/paper/data) */
+  entityId?: string
   error?: string
 }
 
@@ -74,21 +76,21 @@ function resolveEntity(
 
       // Match by exact id
       if (entity.id === ref.key || entity.id.toLowerCase().startsWith(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity) }
+        return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
       }
 
       // Match by citeKey for literature
       if (entity.type === 'literature') {
         const lit = entity as Literature
         if (lit.citeKey.toLowerCase() === key || lit.citeKey.toLowerCase().startsWith(key)) {
-          return { ref, label: entityLabel(entity), content: formatEntityContent(entity) }
+          return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
         }
       }
 
       // Match by title/name substring
       const name = entityName(entity).toLowerCase()
       if (name.includes(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity) }
+        return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
       }
     } catch {
       // skip invalid files

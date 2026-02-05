@@ -1,9 +1,7 @@
 /**
  * TokenUsage - Compact token usage and cost display with persistence
  *
- * Shows:
- * - Current run stats (resets when new message is sent)
- * - All-time totals (persisted to localStorage, survives app restarts)
+ * Shows all-time totals including cache hit rate (persisted to localStorage)
  */
 
 import React, { useState } from 'react'
@@ -24,17 +22,20 @@ function formatCost(n: number): string {
 
 export function TokenUsage() {
   const {
-    runTokens,
-    runCost,
-    runCacheHitRate,
-    runCallCount,
     allTimeTokens,
+    allTimePromptTokens,
+    allTimeCachedTokens,
     allTimeCost,
     allTimeCalls,
     resetAllTime
   } = useUsageStore()
 
   const [confirmReset, setConfirmReset] = useState(false)
+
+  // Calculate all-time cache hit rate
+  const allTimeCacheHitRate = allTimePromptTokens > 0
+    ? allTimeCachedTokens / allTimePromptTokens
+    : 0
 
   const handleResetClick = () => {
     if (confirmReset) {
@@ -47,27 +48,8 @@ export function TokenUsage() {
   }
 
   return (
-    <div className="text-[11px] t-text-muted space-y-1">
-      {/* Current run: tokens | cost | cache% | calls */}
+    <div className="text-[11px] t-text-muted">
       <div className="flex items-center justify-between">
-        <span className="uppercase text-[10px] font-medium tracking-wide">Run</span>
-        <div className="flex items-center gap-2 font-mono">
-          <span title="Tokens">{formatTokens(runTokens)}</span>
-          <span className="t-text-muted/50">·</span>
-          <span title="Cost" className="text-green-500">{formatCost(runCost)}</span>
-          <span className="t-text-muted/50">·</span>
-          <span title="Cache hit rate" className="text-blue-500">{(runCacheHitRate * 100).toFixed(0)}%</span>
-          {runCallCount > 0 && (
-            <>
-              <span className="t-text-muted/50">·</span>
-              <span title="LLM calls">{runCallCount}×</span>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* All-time totals (persisted) */}
-      <div className="flex items-center justify-between border-t t-border pt-1">
         <div className="flex items-center gap-1">
           <span className="uppercase text-[10px] font-medium tracking-wide">Total</span>
           <button
@@ -84,6 +66,8 @@ export function TokenUsage() {
           <span title="All-time tokens">{formatTokens(allTimeTokens)}</span>
           <span className="t-text-muted/50">·</span>
           <span title="All-time cost" className="text-green-500">{formatCost(allTimeCost)}</span>
+          <span className="t-text-muted/50">·</span>
+          <span title="All-time cache hit rate" className="text-blue-500">{(allTimeCacheHitRate * 100).toFixed(0)}%</span>
           {allTimeCalls > 0 && (
             <>
               <span className="t-text-muted/50">·</span>

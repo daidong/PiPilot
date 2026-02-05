@@ -25,26 +25,52 @@ function Chip({ entity, variant, onRemove }: {
   const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
   const colors = isDark ? typeColors : typeColorsLight
   const color = colors[entity.type] || 'border t-border t-text-secondary'
+  const isAuto = variant === 'workingSet' && entity.workingSetSource && entity.workingSetSource !== 'explicit'
+  const autoLabel = entity.workingSetSource ? `auto:${entity.workingSetSource}` : 'auto'
+  const autoTitle = entity.workingSetReason
+    ? `Auto-added via ${entity.workingSetSource}: ${entity.workingSetReason}`
+    : `Auto-added via ${entity.workingSetSource}`
 
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${color}`}>
       {typeIcons[entity.type]}
       <span className="truncate max-w-[120px]">{entity.title}</span>
       {variant === 'projectCard' && <Bookmark size={10} className="opacity-60" />}
-      <button onClick={onRemove} className="opacity-50 hover:opacity-100 transition-opacity">
-        <X size={10} />
-      </button>
+      {isAuto && (
+        <span
+          className="px-1 py-0.5 text-[9px] rounded border opacity-70"
+          title={autoTitle}
+        >
+          {autoLabel}
+        </span>
+      )}
+      {!isAuto && (
+        <button onClick={onRemove} className="opacity-50 hover:opacity-100 transition-opacity">
+          <X size={10} />
+        </button>
+      )}
     </span>
   )
 }
 
 export function ContextChips() {
   // RFC-009: Using new naming (projectCards, workingSet) with legacy alias support
-  const { projectCards, workingSet, toggleProjectCard, toggleWorkingSet, refreshAll } = useEntityStore()
+  const { projectCards, workingSet, workingSetRuntime, toggleProjectCard, toggleWorkingSet, refreshAll } = useEntityStore()
 
   useEffect(() => {
     refreshAll()
   }, [])
+
+  const workingSetAll = (() => {
+    const merged = new Map<string, EntityItem>()
+    for (const item of workingSetRuntime || []) {
+      merged.set(item.id, item)
+    }
+    for (const item of workingSet || []) {
+      merged.set(item.id, item)
+    }
+    return Array.from(merged.values())
+  })()
 
   return (
     <div className="space-y-3">
@@ -71,11 +97,11 @@ export function ContextChips() {
           <Layers size={10} /> Working Set
           <span className="text-[10px] font-normal opacity-70">(this session)</span>
         </h3>
-        {workingSet.length === 0 ? (
+        {workingSetAll.length === 0 ? (
           <p className="text-xs t-text-muted">No items in working set</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {workingSet.map((e) => (
+            {workingSetAll.map((e) => (
               <Chip key={e.id} entity={e} variant="workingSet" onRemove={() => toggleWorkingSet(e.id)} />
             ))}
           </div>

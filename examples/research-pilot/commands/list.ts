@@ -12,6 +12,7 @@ export interface NoteListItem {
   title: string
   content: string
   tags: string[]
+  projectCard: boolean
   pinned: boolean
   selectedForAI: boolean
   provenance?: Provenance
@@ -26,6 +27,7 @@ export interface LiteratureListItem {
   venue?: string
   url?: string
   citeKey: string
+  projectCard: boolean
   pinned: boolean
   selectedForAI: boolean
   doi?: string
@@ -45,6 +47,7 @@ export interface DataListItem {
   name: string
   filePath: string
   rowCount?: number
+  projectCard: boolean
   pinned: boolean
   selectedForAI: boolean
   tags?: string[]
@@ -69,8 +72,9 @@ export function listNotes(projectPath: string): NoteListItem[] {
         title: note.title,
         content: note.content,
         tags: note.tags,
-        pinned: note.pinned,
-        selectedForAI: note.selectedForAI,
+        projectCard: note.projectCard ?? note.pinned ?? false,
+        pinned: note.projectCard ?? note.pinned ?? false,
+        selectedForAI: note.selectedForAI ?? false,
         provenance: note.provenance
       })
     } catch {
@@ -102,8 +106,9 @@ export function listLiterature(projectPath: string): LiteratureListItem[] {
         venue: lit.venue,
         url: lit.url,
         citeKey: lit.citeKey,
-        pinned: lit.pinned,
-        selectedForAI: lit.selectedForAI,
+        projectCard: lit.projectCard ?? lit.pinned ?? false,
+        pinned: lit.projectCard ?? lit.pinned ?? false,
+        selectedForAI: lit.selectedForAI ?? false,
         doi: lit.doi,
         citationCount: lit.citationCount,
         pdfUrl: lit.pdfUrl,
@@ -140,8 +145,9 @@ export function listData(projectPath: string): DataListItem[] {
         name: data.name,
         filePath: data.filePath,
         rowCount: data.schema?.rowCount,
-        pinned: data.pinned,
-        selectedForAI: data.selectedForAI,
+        projectCard: data.projectCard ?? data.pinned ?? false,
+        pinned: data.projectCard ?? data.pinned ?? false,
+        selectedForAI: data.selectedForAI ?? false,
         tags: data.tags,
         runId: data.runId,
         runLabel: data.runLabel

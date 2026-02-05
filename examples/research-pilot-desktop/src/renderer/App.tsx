@@ -113,8 +113,12 @@ export default function App() {
     const unsub3 = api.onTodoUpdate((item: any) => {
       useProgressStore.getState().upsertItem(item)
     })
+    // Progress/todos persist across turns - only clear on explicit reset
     const unsub4 = api.onTodoClear(() => {
       useProgressStore.getState().clear()
+    })
+    // Activity is per-run - clear on new input
+    const unsubActivityClear = api.onActivityClear(() => {
       useActivityStore.getState().clear()
       useUsageStore.getState().resetRun()
     })
@@ -168,6 +172,7 @@ export default function App() {
       unsub5()
       unsub6()
       unsubActivity()
+      unsubActivityClear()
       unsubUsage()
     }
   }, [hasProject])

@@ -68,7 +68,7 @@ examples/personal-assistant/
 │       │       ├── ProgressSteps.tsx
 │       │       └── ActivityLog.tsx
 │       └── stores/
-│           ├── entity-store.ts    # notes, docs + pin/select
+│           ├── entity-store.ts    # notes, docs + project cards/working set
 │           ├── chat-store.ts
 │           ├── ui-store.ts        # leftTab: 'notes' | 'docs'
 │           ├── progress-store.ts
@@ -81,7 +81,7 @@ examples/personal-assistant/
 ├── commands/
 │   ├── index.ts
 │   ├── list.ts                   # listNotes, listDocs
-│   ├── pin.ts                    # togglePin, getPinned (reuse as-is)
+│   ├── pin.ts                    # Project Cards (/project, legacy /pin)
 │   ├── select.ts                 # toggleSelect, getSelected (reuse as-is)
 │   ├── save-note.ts              # saveNote (reuse as-is)
 │   ├── save-doc.ts               # saveDoc (adapted from save-paper)
@@ -137,8 +137,8 @@ export interface BaseEntity {
   createdAt: string
   updatedAt: string
   tags: string[]
-  pinned: boolean
-  selectedForAI: boolean
+  projectCard: boolean
+  projectCardSource?: 'auto' | 'manual'
   provenance: Provenance
 }
 
@@ -212,7 +212,7 @@ The agent has full read access to the email database via:
 - `sqlite_describe_table` — inspect columns
 - `sqlite_read_query` — execute SELECT queries
 
-Schema discovery is cached in pinned memory (same pattern as personal-email-assistant example).
+Schema discovery is cached in Project Cards memory (same pattern as personal-email-assistant example).
 
 ---
 
@@ -263,12 +263,12 @@ Removed: `@paper:`, `@data:`
 
 - **HeroIdle**: Change branding from "Research Pilot" to "Personal Assistant"
 - **ModelSelector**: Keep as-is
-- **ContextChips**: Works unchanged (shows pinned/selected entity chips)
+- **ContextChips**: Works unchanged (shows Project Cards/WorkingSet chips)
 - **WorkingFolder**: Works unchanged
 - **ProgressSteps / ActivityLog**: Work unchanged
 - **CommandPopover**: Adapt slash commands:
-  - `/pin <id>` — pin entity
-  - `/select <id>` — select entity
+  - `/project <id>` — toggle Project Card (legacy: `/pin`)
+  - `/select <id>` — toggle WorkingSet
   - `/clear` — clear selections
   - `/search <query>` — search entities
   - Remove `/enrich`
@@ -303,7 +303,7 @@ export async function createCoordinator(config: CoordinatorConfig) {
       packs.kvMemory(),           // session memory (ephemeral)
       packs.todo(),               // task tracking
       packs.sessionHistory(),     // cross-turn history persistence
-      packs.contextPipeline(),    // pinned/selected context, compression
+      packs.contextPipeline(),    // project-cards/workingset context, compression
       documentsPack,              // convert_to_markdown wrapper
       webPack,                    // brave_web_search, fetch
       ...(sqlitePack ? [sqlitePack] : []),  // sqlite tools (if email DB available)
@@ -365,10 +365,10 @@ You are a Personal Assistant that helps manage emails, documents, and notes.
 - When summarizing emails, include sender, subject, date, and key content
 
 ## Schema Discovery
-- Check pinned context first for cached schema
+- Check Project Cards context first for cached schema
 - If missing, call sqlite_list_tables → sqlite_describe_table
-- Store condensed schema with memory-put using tags: ["pinned"]
-- Store user corrections (e.g., "internal_date is ms") as pinned too
+- Store condensed schema with memory-put using tags: ["project-card"]
+- Store user corrections (e.g., "internal_date is ms") as Project Cards too
 
 ## Document Workflow
 - Use convert_to_markdown to extract text from PDF/Word/Excel
@@ -377,7 +377,7 @@ You are a Personal Assistant that helps manage emails, documents, and notes.
 
 ## Notes
 - Create notes for important findings, summaries, preferences
-- Notes are automatically pinned and visible in every turn
+- Promote core decisions/constraints to Project Cards (not all notes are long-term)
 - Update existing notes instead of creating duplicates
 
 ## Communication Style
@@ -388,23 +388,23 @@ You are a Personal Assistant that helps manage emails, documents, and notes.
 
 ### 6.4 Context Assembly
 
-Identical to research-pilot, but only two entity directories:
+Project Cards are synced to memoryStorage for the `project-cards` phase. WorkingSet is built per turn from explicit selections + entity @mentions + query. File/URL mentions are injected via the selected phase.
 
 ```
-buildEntitySelections(projectPath):
-  - Load all entities from notes/, docs/
-  - Filter pinned → ContextSelection[] for pinned phase
-  - Filter selectedForAI → ContextSelection[] for selected phase
+buildBootstrapSelections(projectPath):
+  - USER.md, MEMORY.md, today/yesterday logs → ContextSelection[]
+
+getMentionWorkingSetIds(mentions):
+  - Extract entity IDs from @note/@doc mentions
 
 buildMentionSelections(mentions):
-  - Convert resolved @-mentions to ContextSelection[]
+  - Convert file/url @-mentions to ContextSelection[]
 
 chat(message, mentions):
-  - Build entity + mention selections
-  - Build session memory context
-  - // RFC-002: buildBootstrapSelections() will be added here
-  -   (injects MEMORY.md, USER.md, today/yesterday daily logs)
-  - agent.run(augmentedMessage, { selectedContext })
+  - syncProjectCardsToMemoryStorage()
+  - selectedContext = bootstrapSelections + file/url mentions
+  - workingSetIds = explicit UI selections + entity mention IDs
+  - agent.run(message, { selectedContext, workingSet: { explicitIds, query: message } })
 ```
 
 ### 6.5 Conversation Lifecycle & Memory Integration
@@ -413,12 +413,16 @@ chat(message, mentions):
 
 ```typescript
 chat(message, mentions):
-  const entitySelections = buildEntitySelections(projectPath, debug)
-  const mentionSelections = buildMentionSelections(mentions)
-  const bootstrapSelections = buildBootstrapSelections(projectPath)  // RFC-002: USER.md, MEMORY.md, today/yesterday logs
+  const mentionSelections = buildMentionSelections(mentions)         // file/url only
+  const bootstrapSelections = buildBootstrapSelections(projectPath)  // USER.md, MEMORY.md, today/yesterday logs
+  const selectedContext = [...bootstrapSelections, ...mentionSelections]
 
-  const selectedContext = [...entitySelections, ...bootstrapSelections, ...mentionSelections]
-  const result = await agent.run(augmentedMessage, { selectedContext })
+  const workingSetIds = mergeUISelectionsWithMentionIds(mentions)
+
+  const result = await agent.run(message, {
+    selectedContext,
+    workingSet: { explicitIds: workingSetIds, query: message }
+  })
   return result
 ```
 
@@ -439,7 +443,7 @@ Agent:      agent:send, agent:stream-chunk, agent:done, agent:activity,
 Entity:     cmd:list-notes, cmd:delete, cmd:rename-note, cmd:update-entity,
             cmd:save-note, cmd:search
             cmd:select, cmd:get-selected, cmd:clear-selections
-            cmd:pin, cmd:get-pinned
+            cmd:pin (Project Cards), cmd:get-pinned (Project Cards)
 
 File:       file:list-root, file:read, file:read-binary, file:resolve-path,
             file:open-external, file:drop
@@ -489,7 +493,7 @@ export interface ElectronAPI {
   getSelected: () => Promise<any>
   clearSelections: () => Promise<any>
   togglePin: (id: string) => Promise<any>
-  getPinned: () => Promise<any>
+  getPinned: () => Promise<any> // Project Cards (legacy name)
 
   // Mentions (unchanged)
   getCandidates: (partial: string, type?: string) => Promise<any>
@@ -530,7 +534,7 @@ export interface ElectronAPI {
 interface EntityState {
   notes: EntityItem[]
   docs: EntityItem[]        // was: papers
-  pinned: EntityItem[]
+  projectCards: EntityItem[]
   selected: EntityItem[]
   // removed: data, enrichingPapers, setEnriching, clearEnriching, clearAllEnriching
   reset: () => void
@@ -544,10 +548,10 @@ interface EntityState {
 
 `refreshAll()`:
 ```typescript
-const [notes, docs, pinned, selected] = await Promise.all([
+const [notes, docs, projectCards, selected] = await Promise.all([
   api.listNotes(),
   api.listDocs(),
-  api.getPinned(),
+  api.getPinned(), // Project Cards (legacy name)
   api.getSelected()
 ])
 ```
@@ -602,7 +606,7 @@ type LeftTab = 'notes' | 'docs'  // was: 'notes' | 'data' | 'papers'
 
 19. **Wire doc import**: Drag-drop file onto Docs tab → calls `api.dropFile(name, content, 'docs')` → creates Doc entity with optional MarkItDown extraction.
 20. **Wire doc preview**: Click doc row → EntityPreviewPanel renders extracted content or "open in default app".
-21. **Test full flow**: Chat → agent queries email SQLite → formats response → user creates note from chat → note appears in sidebar → pin note → appears in context next turn.
+21. **Test full flow**: Chat → agent queries email SQLite → formats response → user creates note from chat → note appears in sidebar → mark as Project Card → appears in context next turn (budget permitting).
 22. **Environment config**: `EMAIL_DB_PATH` env var for SQLite database path.
 23. **Graceful degradation**: If SQLite pack fails to connect, agent works without email access (notes + docs + web still functional).
 
@@ -671,7 +675,7 @@ export BRAVE_API_KEY=BSA-xxx               # for web search (optional)
 
 | Risk | Mitigation |
 |---|---|
-| Email DB schema varies across mail clients | Agent discovers schema at runtime via `sqlite_list_tables` + `sqlite_describe_table`. Caches in pinned memory. No hardcoded assumptions. |
+| Email DB schema varies across mail clients | Agent discovers schema at runtime via `sqlite_list_tables` + `sqlite_describe_table`. Caches in Project Cards memory. No hardcoded assumptions. |
 | Large email bodies blow up token budget | `toolResultCap: 4096` in budgetConfig. Agent instructed to use LIMIT and select specific columns. |
 | SQLite file locked by mail client | MCP server opens read-only. |
 | No email DB available | SQLite pack fails gracefully. Agent still works for notes, docs, web search. |

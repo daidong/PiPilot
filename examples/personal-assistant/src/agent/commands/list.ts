@@ -11,6 +11,7 @@ export interface NoteListItem {
   title: string
   content: string
   tags: string[]
+  projectCard: boolean
   pinned: boolean
   selectedForAI: boolean
   provenance?: Provenance
@@ -22,6 +23,7 @@ export interface DocListItem {
   filePath: string
   mimeType?: string
   description?: string
+  projectCard: boolean
   pinned: boolean
   selectedForAI: boolean
   tags?: string[]
@@ -45,8 +47,9 @@ export function listNotes(projectPath: string): NoteListItem[] {
         title: note.title,
         content: note.content,
         tags: note.tags,
-        pinned: note.pinned,
-        selectedForAI: note.selectedForAI,
+        projectCard: note.projectCard ?? note.pinned ?? false,
+        pinned: note.projectCard ?? note.pinned ?? false,
+        selectedForAI: note.selectedForAI ?? false,
         provenance: note.provenance
       })
     } catch {
@@ -75,8 +78,9 @@ export function listDocs(projectPath: string): DocListItem[] {
         filePath: doc.filePath,
         mimeType: doc.mimeType,
         description: doc.description,
-        pinned: doc.pinned,
-        selectedForAI: doc.selectedForAI,
+        projectCard: doc.projectCard ?? doc.pinned ?? false,
+        pinned: doc.projectCard ?? doc.pinned ?? false,
+        selectedForAI: doc.selectedForAI ?? false,
         tags: doc.tags,
         provenance: doc.provenance
       })

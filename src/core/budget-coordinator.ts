@@ -13,7 +13,8 @@
  *   [P1] Last User Message — NEVER cut
  *   [P2] Tool Schemas     — Cut 3rd
  *   [P2] Pack Fragments   — Cut 3rd
- *   [P2] Pinned Memory    — Cut 3rd
+ *   [P2] Project Cards    — Cut 3rd
+ *   [P2] Working Set      — Cut 3rd
  *   [P3] Selected Context — Cut 2nd
  *   [P3] History Index    — Cut 2nd
  *   [P3] State Summary    — Cut 2nd
@@ -62,7 +63,8 @@ export interface BudgetSlots {
   systemIdentity: number
   packFragments: number
   toolSchemas: number
-  pinnedMemory: number
+  projectCards: number
+  workingSet: number
   selectedContext: number
   historyIndex: number
   stateSummary: number
@@ -133,7 +135,8 @@ export interface ElasticProfileSlotPct {
  * Elastic profile: min/max/weight per slot
  */
 export interface ElasticProfile {
-  pinned: ElasticProfileSlot
+  projectCards: ElasticProfileSlot
+  workingSet: ElasticProfileSlot
   selected: ElasticProfileSlotPct
   session: ElasticProfileSlot
   historyIndex: ElasticProfileSlot
@@ -166,7 +169,8 @@ function isLegacyProfile(p: ProfileAllocations): p is LegacyProfileAllocations {
  */
 export function normalizeLegacyProfile(p: LegacyProfileAllocations): ElasticProfile {
   return {
-    pinned:       { min: p.pinnedCap, max: p.pinnedCap, weight: 5 },
+    projectCards: { min: p.pinnedCap, max: p.pinnedCap, weight: 5 },
+    workingSet:   { min: 0, max: 0, weight: 0 },
     selected:     { min: 0, maxPct: p.selectedPct, weight: 4 },
     session:      { min: p.sessionCap, max: p.sessionCap, weight: 3 },
     historyIndex: { min: p.historyIndexCap, max: p.historyIndexCap, weight: 1 },
@@ -186,35 +190,40 @@ function normalizeProfile(p: ProfileAllocations): ElasticProfile {
  */
 export const PROFILES: Record<TaskProfile, ElasticProfile> = {
   research: {
-    pinned:       { min: 2000,  max: Infinity, weight: 5 },
-    selected:     { min: 0,     maxPct: 0.30,  weight: 4 },
-    session:      { min: 10000, max: 40000,    weight: 3 },
+    projectCards: { min: 2000,  max: Infinity, weight: 5 },
+    workingSet:   { min: 4000,  max: 20000,    weight: 3 },
+    selected:     { min: 0,     maxPct: 0.20,  weight: 4 },
+    session:      { min: 8000,  max: 15000,    weight: 3 },
     historyIndex: { min: 500,   max: 2000,     weight: 1 },
     stateSummary: { min: 2000,  max: 5000,     weight: 1 },
   },
   coding: {
-    pinned:       { min: 4000,  max: Infinity, weight: 5 },
-    selected:     { min: 0,     maxPct: 0.25,  weight: 4 },
+    projectCards: { min: 4000,  max: Infinity, weight: 5 },
+    workingSet:   { min: 3000,  max: 12000,    weight: 3 },
+    selected:     { min: 0,     maxPct: 0.20,  weight: 4 },
     session:      { min: 6000,  max: 30000,    weight: 3 },
     historyIndex: { min: 300,   max: 1500,     weight: 1 },
     stateSummary: { min: 1500,  max: 4000,     weight: 1 },
   },
   conversation: {
-    pinned:       { min: 1000,  max: Infinity, weight: 3 },
+    projectCards: { min: 1000,  max: Infinity, weight: 3 },
+    workingSet:   { min: 1500,  max: 8000,     weight: 2 },
     selected:     { min: 0,     maxPct: 0.10,  weight: 2 },
     session:      { min: 12000, max: 50000,    weight: 5 },
     historyIndex: { min: 800,   max: 3000,     weight: 1 },
     stateSummary: { min: 500,   max: 2000,     weight: 1 },
   },
   writing: {
-    pinned:       { min: 1500,  max: Infinity, weight: 4 },
+    projectCards: { min: 1500,  max: Infinity, weight: 4 },
+    workingSet:   { min: 2000,  max: 10000,    weight: 3 },
     selected:     { min: 0,     maxPct: 0.15,  weight: 3 },
     session:      { min: 8000,  max: 35000,    weight: 3 },
     historyIndex: { min: 200,   max: 1000,     weight: 1 },
     stateSummary: { min: 1000,  max: 3000,     weight: 1 },
   },
   auto: {
-    pinned:       { min: 3000,  max: Infinity, weight: 5 },
+    projectCards: { min: 3000,  max: Infinity, weight: 5 },
+    workingSet:   { min: 3000,  max: 15000,    weight: 3 },
     selected:     { min: 0,     maxPct: 0.20,  weight: 4 },
     session:      { min: 8000,  max: 40000,    weight: 3 },
     historyIndex: { min: 500,   max: 2000,     weight: 1 },
@@ -362,9 +371,10 @@ export class BudgetCoordinator {
 
     // Slot definitions: [key, min, max, weight]
     // Messages participates in elastic allocation with min guarantee of 4000
-    type SlotKey = 'pinned' | 'selected' | 'session' | 'historyIndex' | 'stateSummary' | 'messages'
+    type SlotKey = 'projectCards' | 'workingSet' | 'selected' | 'session' | 'historyIndex' | 'stateSummary' | 'messages'
     const slots: { key: SlotKey; min: number; max: number; weight: number }[] = [
-      { key: 'pinned',       min: profile.pinned.min,       max: profile.pinned.max,       weight: profile.pinned.weight },
+      { key: 'projectCards', min: profile.projectCards.min, max: profile.projectCards.max, weight: profile.projectCards.weight },
+      { key: 'workingSet',   min: profile.workingSet.min,   max: profile.workingSet.max,   weight: profile.workingSet.weight },
       { key: 'selected',     min: profile.selected.min,     max: selectedMax,               weight: profile.selected.weight },
       { key: 'session',      min: profile.session.min,      max: profile.session.max,       weight: profile.session.weight },
       { key: 'historyIndex', min: profile.historyIndex.min, max: profile.historyIndex.max, weight: profile.historyIndex.weight },
@@ -373,7 +383,7 @@ export class BudgetCoordinator {
     ]
 
     // Allocate minimums
-    const alloc: Record<SlotKey, number> = { pinned: 0, selected: 0, session: 0, historyIndex: 0, stateSummary: 0, messages: 0 }
+    const alloc: Record<SlotKey, number> = { projectCards: 0, workingSet: 0, selected: 0, session: 0, historyIndex: 0, stateSummary: 0, messages: 0 }
     let guaranteedTotal = 0
     for (const s of slots) {
       const m = Math.min(s.min, pool) // don't exceed pool
@@ -438,7 +448,8 @@ export class BudgetCoordinator {
       systemIdentity: measured.systemIdentity,
       packFragments: measured.packFragments,
       toolSchemas: measured.toolSchemas,
-      pinnedMemory: alloc.pinned,
+      projectCards: alloc.projectCards,
+      workingSet: alloc.workingSet,
       selectedContext,
       historyIndex: alloc.historyIndex,
       stateSummary: alloc.stateSummary,
@@ -502,7 +513,8 @@ export class BudgetCoordinator {
     const actions: DegradationAction[] = []
     let toolSubset: string[] | undefined
 
-    let pinnedMemory: number
+    let projectCards: number
+    let workingSet: number
     let selectedContext: number
     let sessionBudget: number
     let historyIndex: number
@@ -522,15 +534,20 @@ export class BudgetCoordinator {
       }
     } else if (level === 1) {
       // Reduced: halve maxes, compress tool output
-      pinnedMemory = Math.min(Math.floor(profile.pinned.max === Infinity ? pool : profile.pinned.max / 2), pool)
-      pinnedMemory = Math.max(profile.pinned.min, pinnedMemory)
-      let remaining = pool - pinnedMemory
+      projectCards = Math.min(Math.floor(profile.projectCards.max === Infinity ? pool : profile.projectCards.max / 2), pool)
+      projectCards = Math.max(profile.projectCards.min, projectCards)
+      let remaining = pool - projectCards
 
       historyIndex = Math.min(profile.historyIndex.min, remaining)
       remaining -= historyIndex
 
       stateSummary = Math.min(profile.stateSummary.min, remaining)
       remaining -= stateSummary
+
+      const halvedWorkingSetMax = Math.floor(profile.workingSet.max * 0.5)
+      workingSet = Math.min(halvedWorkingSetMax, remaining)
+      workingSet = Math.max(profile.workingSet.min, Math.min(workingSet, remaining))
+      remaining -= workingSet
 
       const halvedSelectedMax = Math.floor(selectedMax * 0.5)
       selectedContext = Math.min(actualSelected, halvedSelectedMax, remaining)
@@ -550,9 +567,10 @@ export class BudgetCoordinator {
       actions.push({ type: 'trim_selected', params: { targetTokens: selectedContext } })
     } else if (level === 2) {
       // Minimal: collapse to mins
-      pinnedMemory = Math.min(profile.pinned.min, pool)
-      let remaining = pool - pinnedMemory
+      projectCards = Math.min(profile.projectCards.min, pool)
+      let remaining = pool - projectCards
 
+      workingSet = 0
       selectedContext = 0
       historyIndex = Math.min(profile.historyIndex.min, remaining)
       remaining -= historyIndex
@@ -574,7 +592,8 @@ export class BudgetCoordinator {
       toolSubset = [...(TOOL_GROUPS.core ?? [])]
     } else {
       // Emergency (L3): zero all slots
-      pinnedMemory = 0
+      projectCards = 0
+      workingSet = 0
       selectedContext = 0
       sessionBudget = 0
       historyIndex = 0
@@ -588,7 +607,7 @@ export class BudgetCoordinator {
       toolSubset = [...(TOOL_GROUPS.core ?? [])]
     }
 
-    const usedBySlots = pinnedMemory + selectedContext + sessionBudget + historyIndex + stateSummary
+    const usedBySlots = projectCards + workingSet + selectedContext + sessionBudget + historyIndex + stateSummary
     const messages = Math.max(0, pool - usedBySlots)
 
     return {
@@ -597,7 +616,8 @@ export class BudgetCoordinator {
         systemIdentity: measured.systemIdentity,
         packFragments: level >= 2 ? Math.floor(measured.packFragments * 0.5) : measured.packFragments,
         toolSchemas: measured.toolSchemas,
-        pinnedMemory,
+        projectCards,
+        workingSet,
         selectedContext,
         historyIndex,
         stateSummary,

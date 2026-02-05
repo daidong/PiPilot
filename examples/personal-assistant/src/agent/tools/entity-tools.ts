@@ -8,12 +8,20 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { defineTool } from '@framework/factories/define-tool.js'
+import type { ToolContext } from '@framework/types/tool.js'
 import { saveNote } from '../commands/save-note.js'
 import { saveDoc } from '../commands/save-doc.js'
 import { togglePin } from '../commands/pin.js'
 import { toggleTodoComplete } from '../commands/toggle-todo-complete.js'
 import { PATHS, Entity, Note, Todo } from '../types.js'
 import type { CLIContext } from '../types.js'
+
+function recordWorkingSetUsage(context: ToolContext, entityId: string, useType: 'tool-access' | 'update') {
+  const tracker = context.runtime.workingSetTracker
+  if (tracker?.recordUsage && entityId) {
+    tracker.recordUsage(entityId, useType)
+  }
+}
 
 /**
  * Create a save-note tool that properly saves notes or todos as JSON entities
@@ -46,24 +54,25 @@ export function createSaveNoteTool(sessionId: string, projectPath: string) {
         required: false
       },
     },
-    execute: async (input) => {
+    execute: async (input, context) => {
       const { title, content, type = 'note', tags = [] } = input as {
         title: string
         content: string
         type?: 'note' | 'todo'
         tags?: string[]
       }
-      // All agent-created notes are pinned by default
-      const pinned = true
 
-      const context: CLIContext = {
+      const cliContext: CLIContext = {
         sessionId,
         projectPath
       }
 
-      const result = saveNote(title, content, tags, context, false, undefined, pinned, type)
+      const result = saveNote(title, content, tags, cliContext, false, undefined, undefined, type)
 
       if (result.success) {
+        if (result.note?.id) {
+          recordWorkingSetUsage(context, result.note.id, 'update')
+        }
         return {
           success: true,
           data: {
@@ -125,7 +134,7 @@ export function createSaveDocTool(sessionId: string, projectPath: string) {
         required: false
       }
     },
-    execute: async (input) => {
+    execute: async (input, context) => {
       const { title, filePath, content, mimeType, description, tags = [] } = input as {
         title: string
         filePath: string
@@ -135,7 +144,7 @@ export function createSaveDocTool(sessionId: string, projectPath: string) {
         tags?: string[]
       }
 
-      const context: CLIContext = {
+      const cliContext: CLIContext = {
         sessionId,
         projectPath
       }
@@ -143,10 +152,13 @@ export function createSaveDocTool(sessionId: string, projectPath: string) {
       const result = saveDoc(
         title,
         { filePath, content, mimeType, description, tags },
-        context
+        cliContext
       )
 
       if (result.success) {
+        if (result.doc?.id) {
+          recordWorkingSetUsage(context, result.doc.id, 'update')
+        }
         return {
           success: true,
           data: {
@@ -171,7 +183,7 @@ export function createSaveDocTool(sessionId: string, projectPath: string) {
 export function createUpdateNoteTool(projectPath: string) {
   return defineTool({
     name: 'update-note',
-    description: 'Update an existing note by ID. Use this instead of save-note when a note on the same topic already exists. You can update title, content, tags, and/or pinned status. Only provided fields are changed.',
+    description: 'Update an existing note by ID. Use this instead of save-note when a note on the same topic already exists. You can update title, content, tags, and/or Project Card status. Only provided fields are changed.',
     parameters: {
       id: {
         type: 'string',
@@ -194,18 +206,24 @@ export function createUpdateNoteTool(projectPath: string) {
         description: 'New tags (replaces existing tags)',
         required: false
       },
+      projectCard: {
+        type: 'boolean',
+        description: 'Set Project Card status (long-term memory)',
+        required: false
+      },
       pinned: {
         type: 'boolean',
-        description: 'Set pinned status',
+        description: 'Deprecated: use projectCard',
         required: false
       }
     },
-    execute: async (input) => {
-      const { id, title, content, tags, pinned } = input as {
+    execute: async (input, context) => {
+      const { id, title, content, tags, projectCard, pinned } = input as {
         id: string
         title?: string
         content?: string
         tags?: string[]
+        projectCard?: boolean
         pinned?: boolean
       }
 
@@ -242,17 +260,24 @@ export function createUpdateNoteTool(projectPath: string) {
       if (title !== undefined) note.title = title
       if (content !== undefined) note.content = content
       if (tags !== undefined) note.tags = tags
-      if (pinned !== undefined) note.pinned = pinned
+      const projectCardUpdate = projectCard ?? pinned
+      if (projectCardUpdate !== undefined) {
+        note.projectCard = projectCardUpdate
+        note.projectCardSource = 'manual'
+        if ('pinned' in note) delete (note as Record<string, unknown>).pinned
+      }
       note.updatedAt = new Date().toISOString()
 
       writeFileSync(notePath, JSON.stringify(note, null, 2))
+
+      recordWorkingSetUsage(context, note.id, 'update')
 
       return {
         success: true,
         data: {
           id: note.id,
           title: note.title,
-          pinned: note.pinned
+          projectCard: note.projectCard
         }
       }
     }
@@ -265,7 +290,7 @@ export function createUpdateNoteTool(projectPath: string) {
 export function createTogglePinTool() {
   return defineTool({
     name: 'toggle-pin',
-    description: 'Toggle the pinned status of any entity (note or doc). Pinned entities are always included in your context. Use this to unpin notes that are no longer critical, or to pin important ones.',
+    description: 'Toggle Project Card status of any entity (note or doc). Project Cards represent core decisions/constraints for long-term memory.',
     parameters: {
       id: {
         type: 'string',
@@ -273,17 +298,20 @@ export function createTogglePinTool() {
         required: true
       }
     },
-    execute: async (input) => {
+    execute: async (input, context) => {
       const { id } = input as { id: string }
       const result = togglePin(id)
 
       if (result.success) {
+        if (result.id) {
+          recordWorkingSetUsage(context, result.id, 'update')
+        }
         return {
           success: true,
           data: {
             type: result.entityType,
             title: result.title,
-            pinned: result.pinned
+            projectCard: result.projectCard
           }
         }
       } else {
@@ -307,11 +335,12 @@ export function createToggleCompleteTool(projectPath: string) {
         required: true
       }
     },
-    execute: async (input) => {
+    execute: async (input, context) => {
       const { id } = input as { id: string }
       const result = toggleTodoComplete(id, projectPath)
 
       if (result.success && result.todo) {
+        recordWorkingSetUsage(context, result.todo.id, 'update')
         return {
           success: true,
           data: {

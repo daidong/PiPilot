@@ -15,8 +15,15 @@ import type {
   WorkingSetItem,
   WorkingSetPlan,
   EntityShape,
-  MemoryEntity
+  EntityIndex,
+  WorkingSetResolvedEntity
 } from '../types/memory-entity.js'
+import type { ContextPhase, ContextFragment, AssemblyContext } from '../types/context-pipeline.js'
+import { PHASE_PRIORITIES, DEFAULT_BUDGETS } from './pipeline.js'
+import { ShapeDegrader } from './shape-degrader.js'
+import { countTokens } from '../utils/tokenizer.js'
+
+export type { EntityIndex, WorkingSetResolvedEntity } from '../types/memory-entity.js'
 
 // ============ Configuration ============
 
@@ -186,17 +193,6 @@ export class ContinuityTracker {
 // ============ Retrieval ============
 
 /**
- * Simple text-based retrieval over entities
- */
-export interface EntityIndex {
-  id: string
-  title: string
-  tags: string[]
-  summaryCard: string
-  projectCard: boolean
-}
-
-/**
  * Search entities by query
  */
 export function searchEntities(
@@ -301,9 +297,6 @@ export interface WorkingSetBuildInput {
 
   /** Continuity tracker for recent usage */
   continuityTracker?: ContinuityTracker
-
-  /** Entity resolver (id -> entity) */
-  resolveEntity?: (id: string) => Promise<MemoryEntity | null>
 }
 
 /**
@@ -433,20 +426,182 @@ export async function buildWorkingSet(
  */
 export interface WorkingSetPhaseConfig extends WorkingSetBuilderConfig {
   /** Entity index provider */
-  getEntityIndex?: () => Promise<EntityIndex[]>
+  getEntityIndex?: (ctx: AssemblyContext) => Promise<EntityIndex[]>
+  /** Entity resolver (id -> resolved content) */
+  resolveEntity?: (id: string, ctx: AssemblyContext) => Promise<WorkingSetResolvedEntity | null>
+  /** Explicit WorkingSet IDs */
+  getExplicitIds?: (ctx: AssemblyContext) => string[]
+  /** Query used for retrieval */
+  getQuery?: (ctx: AssemblyContext) => string | undefined
+  /** Custom header text */
+  header?: string
 }
 
 /**
  * Create a context phase for WorkingSet
  */
-export function createWorkingSetPhase(_config: WorkingSetPhaseConfig = {}) {
-  // Config will be used for future enhancements (entity index provider, etc.)
+export function createWorkingSetPhase(config: WorkingSetPhaseConfig = {}): ContextPhase & {
+  recordUsage: (entityId: string, useType: ContinuityEntry['useType']) => void
+  advanceTurn: () => void
+  getContinuityTracker: () => ContinuityTracker
+  clearContinuity: () => void
+} {
   const continuityTracker = new ContinuityTracker()
+  const degrader = new ShapeDegrader()
 
   return {
     id: 'workingset',
-    priority: 70, // After project-cards (90), before session (50)
-    budget: { type: 'percentage' as const, value: 30 }, // 30% of budget
+    priority: PHASE_PRIORITIES.workingset,
+    budget: DEFAULT_BUDGETS.workingset,
+
+    async assemble(ctx: AssemblyContext): Promise<ContextFragment[]> {
+      const { runtime } = ctx
+      const fragments: ContextFragment[] = []
+
+      const indexProvider = config.getEntityIndex
+        ?? ((runtime as any).entityIndexProvider as WorkingSetPhaseConfig['getEntityIndex'] | undefined)
+      if (!indexProvider) {
+        return fragments
+      }
+
+      const availableEntities = await indexProvider(ctx)
+      if (!availableEntities || availableEntities.length === 0) {
+        return fragments
+      }
+
+      const workingSetState = runtime.sessionState.get<{
+        explicitIds?: string[]
+        query?: string
+      }>('workingSet')
+
+      const explicitIds = config.getExplicitIds
+        ? config.getExplicitIds(ctx)
+        : (workingSetState?.explicitIds ?? [])
+
+      const query = config.getQuery
+        ? config.getQuery(ctx)
+        : (workingSetState?.query ?? runtime.sessionState.get<string>('latestUserMessage'))
+
+      continuityTracker.advanceTurn()
+
+      const plan = await buildWorkingSet({
+        explicitIds,
+        query,
+        availableEntities,
+        continuityTracker
+      }, config)
+
+      if (plan.items.length === 0) {
+        return fragments
+      }
+
+      const resolver = config.resolveEntity
+        ?? ((runtime as any).entityResolver as WorkingSetPhaseConfig['resolveEntity'] | undefined)
+
+      const resolvedItems: Array<{ item: WorkingSetItem; entity: WorkingSetResolvedEntity }> = []
+      for (const item of plan.items) {
+        let entity: WorkingSetResolvedEntity | null = null
+        if (resolver) {
+          entity = await resolver(item.entityId, ctx)
+        }
+        if (!entity) {
+          const fallback = availableEntities.find(e => e.id === item.entityId)
+          if (fallback) {
+            entity = buildFallbackResolvedEntity(fallback)
+          }
+        }
+        if (entity) {
+          resolvedItems.push({ item, entity })
+        }
+      }
+
+      if (resolvedItems.length === 0) {
+        return fragments
+      }
+
+      // Store runtime WorkingSet snapshot for UI/debugging (no content payloads)
+      runtime.sessionState.set('workingSetRuntime', {
+        createdAt: new Date().toISOString(),
+        query,
+        explicitIds,
+        items: resolvedItems.map(({ item, entity }) => ({
+          id: entity.id,
+          title: entity.title,
+          type: entity.type,
+          projectCard: entity.projectCard,
+          source: item.source,
+          reason: item.reason,
+          score: item.relevanceScore,
+          requestedShape: item.requestedShape
+        }))
+      })
+
+      const headerContent = config.header ?? '## Working Set'
+      const headerTokens = countTokens(headerContent)
+      const allocated = ctx.allocatedBudget ?? ctx.remainingBudget
+      const contentBudget = Math.max(0, allocated - headerTokens)
+
+      const degradableItems = resolvedItems.map(({ item, entity }) => ({
+        id: entity.id,
+        currentShape: item.requestedShape,
+        content: {
+          full: entity.content.full,
+          excerpt: entity.content.excerpt,
+          card: entity.content.card ?? entity.summaryCard ?? entity.content.full,
+          indexLine: entity.content.indexLine ?? `- ${entity.title} [id:${entity.id}]`
+        },
+        priority: entity.priority ?? Math.round(item.relevanceScore * 100) ?? 50,
+        isProjectCard: false
+      }))
+
+      const degraded = degrader.degradeItems(degradableItems, contentBudget)
+      const kept = degraded.filter(r => !r.dropped && r.content)
+
+      if (kept.length === 0) {
+        return fragments
+      }
+
+      fragments.push({
+        source: 'workingset:header',
+        content: headerContent,
+        tokens: headerTokens,
+        metadata: { itemCount: kept.length }
+      })
+
+      for (const result of kept) {
+        const sourceItem = resolvedItems.find(i => i.entity.id === result.id)
+        const itemMeta = sourceItem?.item
+        fragments.push({
+          source: `workingset:${result.id}`,
+          content: result.content,
+          tokens: result.tokens,
+          metadata: {
+            shape: result.degradedShape,
+            reason: result.reason,
+            source: itemMeta?.source,
+            score: itemMeta?.relevanceScore,
+            requestedShape: itemMeta?.requestedShape
+          }
+        })
+
+        if (itemMeta) {
+          continuityTracker.recordUsage(
+            result.id,
+            itemMeta.source === 'explicit' ? 'mention'
+              : itemMeta.source === 'continuity' ? 'update'
+                : 'tool-access'
+          )
+        }
+      }
+
+      return fragments
+    },
+
+    enabled(ctx: AssemblyContext): boolean {
+      const indexProvider = config.getEntityIndex
+        ?? ((ctx.runtime as any).entityIndexProvider as WorkingSetPhaseConfig['getEntityIndex'] | undefined)
+      return typeof indexProvider === 'function'
+    },
 
     /**
      * Record entity usage (call from tools)
@@ -478,3 +633,20 @@ export function createWorkingSetPhase(_config: WorkingSetPhaseConfig = {}) {
   }
 }
 
+function buildFallbackResolvedEntity(entity: EntityIndex): WorkingSetResolvedEntity {
+  const summary = entity.summaryCard?.trim() || entity.title
+  const cardContent = `### ${entity.title}\n\n${summary}`
+  return {
+    id: entity.id,
+    title: entity.title,
+    tags: entity.tags ?? [],
+    summaryCard: entity.summaryCard,
+    projectCard: entity.projectCard,
+    type: entity.type,
+    content: {
+      full: cardContent,
+      card: cardContent,
+      indexLine: `- ${entity.title} [id:${entity.id}]`
+    }
+  }
+}

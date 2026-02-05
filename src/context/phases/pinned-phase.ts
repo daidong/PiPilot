@@ -1,8 +1,7 @@
 /**
- * Pinned Phase - Assembles pinned memory items
+ * Pinned Phase (legacy) - Assembles pinned memory items
  *
- * Priority: 90
- * Budget: reserved 2000 tokens
+ * Priority/Budget: aligned with project-cards defaults
  *
  * This phase retrieves memory items tagged with 'pinned' and includes them
  * in the context. Pinned items are sorted by priority metadata.
@@ -28,8 +27,8 @@ export function createPinnedPhase(config: PinnedPhaseConfig = {}): ContextPhase 
 
   return {
     id: 'pinned',
-    priority: PHASE_PRIORITIES.pinned,
-    budget: DEFAULT_BUDGETS.pinned,
+    priority: PHASE_PRIORITIES['project-cards'],
+    budget: DEFAULT_BUDGETS['project-cards'],
 
     async assemble(ctx: AssemblyContext): Promise<ContextFragment[]> {
       const { runtime } = ctx

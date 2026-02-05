@@ -84,8 +84,8 @@ describe('PinnedPhase', () => {
     const phase = createPinnedPhase()
 
     expect(phase.id).toBe('pinned')
-    expect(phase.priority).toBe(PHASE_PRIORITIES.pinned)
-    expect(phase.budget).toEqual(DEFAULT_BUDGETS.pinned)
+    expect(phase.priority).toBe(PHASE_PRIORITIES['project-cards'])
+    expect(phase.budget).toEqual(DEFAULT_BUDGETS['project-cards'])
   })
 
   it('should be disabled when no memory storage', () => {

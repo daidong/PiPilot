@@ -3,14 +3,13 @@
  *
  * Assembles Project Card entities for context inclusion.
  *
- * Priority: 90 (same as old pinned phase)
+ * Priority: 90
  * Budget: reserved 2000 tokens (configurable via budget coordinator)
  *
  * Project Cards represent core decisions, constraints, and alignment.
  * They replace the old "pinned" semantics with clearer long-term memory intent.
  *
- * Migration: This phase supports both old 'pinned' tags and new 'project-card' tags
- * for backward compatibility during the transition period.
+ * Migration: Optional support for legacy 'pinned' tags (opt-in).
  */
 
 import type { ContextPhase, ContextFragment, AssemblyContext } from '../../types/context-pipeline.js'
@@ -25,7 +24,7 @@ import { countTokens } from '../../utils/tokenizer.js'
 export interface ProjectCardsPhaseConfig {
   /** Maximum number of Project Cards to include (default: 20) */
   maxItems?: number
-  /** Whether to also include items tagged as 'pinned' for backward compatibility (default: true) */
+  /** Whether to also include items tagged as 'pinned' for backward compatibility (default: false) */
   includeLegacyPinned?: boolean
   /** Default shape for Project Cards when budget allows (default: 'card') */
   defaultShape?: EntityShape
@@ -40,13 +39,13 @@ export interface ProjectCardsPhaseConfig {
 export function createProjectCardsPhase(config: ProjectCardsPhaseConfig = {}): ContextPhase {
   const {
     maxItems = 20,
-    includeLegacyPinned = true,
+    includeLegacyPinned = false,
     defaultShape = 'card'
   } = config
 
   return {
     id: 'project-cards',
-    priority: PHASE_PRIORITIES.pinned, // Same priority as old pinned phase
+    priority: PHASE_PRIORITIES['project-cards'],
     // RFC-009: Project Cards have reserved budget with generous cap
     // These are core decisions/constraints - give them room
     // Shape degradation handles overflow if needed

@@ -454,32 +454,40 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
               const inputTokens = usage?.inputTokens ?? 0
               const outputTokens = usage?.outputTokens ?? 0
 
-              // Extract cache tokens from provider metadata
-              // Anthropic: cacheCreationInputTokens, cacheReadInputTokens
-              // OpenAI: cachedTokens (prompt caching beta)
+              // Extract cache tokens from usage object and provider metadata
+              // Vercel AI SDK puts cachedInputTokens directly in usage for OpenAI
+              // Anthropic uses providerMetadata.anthropic.cacheReadInputTokens
               let cacheCreationInputTokens = 0
               let cacheReadInputTokens = 0
               let reasoningTokens = 0
 
+              // OpenAI: cached tokens are in usage.cachedInputTokens (Vercel AI SDK)
+              // Also check for reasoningTokens (o1 models)
+              const usageAny = usage as Record<string, unknown> | undefined
+              if (usageAny) {
+                if (typeof usageAny.cachedInputTokens === 'number') {
+                  cacheReadInputTokens = usageAny.cachedInputTokens
+                }
+                if (typeof usageAny.reasoningTokens === 'number') {
+                  reasoningTokens = usageAny.reasoningTokens
+                }
+              }
+
               if (providerMeta) {
-                // Anthropic cache tokens
+                // Anthropic cache tokens (in providerMetadata)
                 const anthropicMeta = providerMeta.anthropic as Record<string, unknown> | undefined
                 if (anthropicMeta) {
                   cacheCreationInputTokens = (anthropicMeta.cacheCreationInputTokens as number) ?? 0
-                  cacheReadInputTokens = (anthropicMeta.cacheReadInputTokens as number) ?? 0
-                }
-
-                // OpenAI cache tokens (prompt caching beta)
-                const openaiMeta = providerMeta.openai as Record<string, unknown> | undefined
-                if (openaiMeta) {
-                  // OpenAI reports cached tokens directly
-                  cacheReadInputTokens = (openaiMeta.cachedTokens as number) ?? cacheReadInputTokens
+                  // Only override if not already set from usage
+                  if (cacheReadInputTokens === 0) {
+                    cacheReadInputTokens = (anthropicMeta.cacheReadInputTokens as number) ?? 0
+                  }
                 }
 
                 // Google cache tokens
                 const googleMeta = providerMeta.google as Record<string, unknown> | undefined
-                if (googleMeta) {
-                  cacheReadInputTokens = (googleMeta.cachedContentTokenCount as number) ?? cacheReadInputTokens
+                if (googleMeta && cacheReadInputTokens === 0) {
+                  cacheReadInputTokens = (googleMeta.cachedContentTokenCount as number) ?? 0
                 }
               }
 
@@ -605,20 +613,35 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       const inputTokens = result.usage?.inputTokens ?? 0
       const outputTokens = result.usage?.outputTokens ?? 0
 
-      // Extract cache tokens from provider metadata (may not be in type defs)
-      const providerMeta = (result as any).experimental_providerMetadata
+      // Extract cache tokens from usage object and provider metadata
       let cacheCreationInputTokens = 0
       let cacheReadInputTokens = 0
+      let reasoningTokens = 0
 
+      // OpenAI: cached tokens are in usage.cachedInputTokens (Vercel AI SDK)
+      const usageAny = result.usage as Record<string, unknown> | undefined
+      if (usageAny) {
+        if (typeof usageAny.cachedInputTokens === 'number') {
+          cacheReadInputTokens = usageAny.cachedInputTokens
+        }
+        if (typeof usageAny.reasoningTokens === 'number') {
+          reasoningTokens = usageAny.reasoningTokens
+        }
+      }
+
+      // Extract from provider metadata (Anthropic, Google)
+      const providerMeta = (result as any).experimental_providerMetadata
       if (providerMeta) {
         const anthropicMeta = providerMeta.anthropic as Record<string, unknown> | undefined
         if (anthropicMeta) {
           cacheCreationInputTokens = (anthropicMeta.cacheCreationInputTokens as number) ?? 0
-          cacheReadInputTokens = (anthropicMeta.cacheReadInputTokens as number) ?? 0
+          if (cacheReadInputTokens === 0) {
+            cacheReadInputTokens = (anthropicMeta.cacheReadInputTokens as number) ?? 0
+          }
         }
-        const openaiMeta = providerMeta.openai as Record<string, unknown> | undefined
-        if (openaiMeta) {
-          cacheReadInputTokens = (openaiMeta.cachedTokens as number) ?? cacheReadInputTokens
+        const googleMeta = providerMeta.google as Record<string, unknown> | undefined
+        if (googleMeta && cacheReadInputTokens === 0) {
+          cacheReadInputTokens = (googleMeta.cachedContentTokenCount as number) ?? 0
         }
       }
 
@@ -627,7 +650,8 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
         completionTokens: outputTokens,
         totalTokens: inputTokens + outputTokens,
         cacheCreationInputTokens: cacheCreationInputTokens > 0 ? cacheCreationInputTokens : undefined,
-        cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined
+        cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
+        reasoningTokens: reasoningTokens > 0 ? reasoningTokens : undefined
       }
 
       return {

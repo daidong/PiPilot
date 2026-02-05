@@ -48,8 +48,10 @@
 |-----------|----------|--------------|
 | `createContextPipeline` | `src/context/pipeline.ts` | Pipeline executor with budget management |
 | `createSystemPhase` | `src/context/phases/system-phase.ts` | System prompt assembly |
-| `createPinnedPhase` | `src/context/phases/pinned-phase.ts` | Always-included context |
+| `createProjectCardsPhase` | `src/context/phases/project-cards-phase.ts` | Project Cards (long-term memory) |
+| `createWorkingSetPhase` | `src/context/workingset-builder.ts` | Runtime WorkingSet |
 | `createSelectedPhase` | `src/context/phases/selected-phase.ts` | User-selected context |
+| `createStateSummaryPhase` | `src/context/phases/state-summary-phase.ts` | Session memory summary |
 | `createSessionPhase` | `src/context/phases/session-phase.ts` | Session history |
 | `createIndexPhase` | `src/context/phases/index-phase.ts` | Compressed history index |
 | `SimpleHistoryCompressor` | `src/context/compressors/simple-compressor.ts` | History compression |
@@ -67,8 +69,10 @@
 | Phase | Priority | Budget | Content |
 |-------|----------|--------|---------|
 | `system` | 100 | reserved 2000 | System prompt + tool descriptions |
-| `pinned` | 90 | reserved 2000 | Pinned entities, user corrections |
+| `project-cards` | 90 | reserved 2000+ | Project Cards, long-term decisions |
 | `selected` | 80 | 30% | User-selected items for this request |
+| `workingset` | 70 | 25% | Runtime WorkingSet |
+| `state-summary` | 60 | fixed 1000 | Session memory summary |
 | `session` | 50 | remaining | Recent conversation history |
 | `index` | 30 | fixed 500 | Compressed history + catalog |
 
@@ -198,9 +202,9 @@ class MyContextPipeline {
 }
 
 // ✅ RIGHT: Use framework
-import { createContextPipeline, createPinnedPhase } from 'agent-foundry'
+import { createContextPipeline, createProjectCardsPhase } from 'agent-foundry'
 const pipeline = createContextPipeline({
-  phases: [createPinnedPhase({ /* config */ })]
+  phases: [createProjectCardsPhase({ /* config */ })]
 })
 ```
 
@@ -249,7 +253,7 @@ const compressor = new SimpleHistoryCompressor({ segmentSize: 20 })
 ### Requirements:
 - Notes, literature, data entities
 - User can save notes from agent responses
-- Context pipeline with pinned/selected items
+- Context pipeline with project cards/working set
 
 ### Implementation:
 

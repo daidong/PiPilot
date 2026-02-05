@@ -96,6 +96,7 @@ export function EntityPreviewPanel() {
   // RFC-009: Use new store names
   const projectCardsIds = useEntityStore((s) => s.projectCards)
   const workingSetIds = useEntityStore((s) => s.workingSet)
+  const workingSetRuntime = useEntityStore((s) => s.workingSetRuntime)
   const todos = useEntityStore((s) => s.todos)
   // For todos, get fresh status from store
   const freshTodo = rawEntity?.type === 'todo' ? todos.find((t) => t.id === rawEntity.id) : null
@@ -104,7 +105,7 @@ export function EntityPreviewPanel() {
     ? rawEntity.pinned || rawEntity.projectCard || projectCardsIds.some((p) => p.id === rawEntity.id)
     : false
   const isInWorkingSet = rawEntity
-    ? workingSetIds.some((p) => p.id === rawEntity.id)
+    ? [...(workingSetIds || []), ...(workingSetRuntime || [])].some((p) => p.id === rawEntity.id)
     : false
   const entity = rawEntity
     ? {

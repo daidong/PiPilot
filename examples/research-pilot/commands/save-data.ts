@@ -10,6 +10,7 @@
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { PATHS, DataAttachment, CLIContext } from '../types.js'
+import { applyProjectCardPolicy } from '../../../src/core/project-card-policy.js'
 
 export interface SaveDataResult {
   success: boolean
@@ -54,8 +55,7 @@ export function saveData(
     tags: opts.tags ?? [],
     runId: opts.runId,
     runLabel: opts.runLabel,
-    pinned: false,
-    selectedForAI: false,
+    projectCard: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     provenance: {
@@ -64,6 +64,8 @@ export function saveData(
       extractedFrom: 'user-input'
     }
   }
+
+  applyProjectCardPolicy([data])
 
   // Use projectPath if provided, otherwise fall back to relative path
   const dataPath = context.projectPath

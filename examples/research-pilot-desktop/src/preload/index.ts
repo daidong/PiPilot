@@ -50,6 +50,7 @@ export interface ElectronAPI {
   // Todo progress
   onTodoUpdate: (cb: (item: any) => void) => () => void
   onTodoClear: (cb: () => void) => () => void
+  onActivityClear: (cb: () => void) => () => void
 
   // Activity feed
   onActivity: (cb: (event: any) => void) => () => void
@@ -144,6 +145,11 @@ const api: ElectronAPI = {
     const handler = () => cb()
     ipcRenderer.on('agent:todo-clear', handler)
     return () => ipcRenderer.removeListener('agent:todo-clear', handler)
+  },
+  onActivityClear: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('agent:activity-clear', handler)
+    return () => ipcRenderer.removeListener('agent:activity-clear', handler)
   },
 
   onActivity: (cb) => {

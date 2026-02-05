@@ -63,6 +63,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       api.saveMessage(_sessionId, userMsg).catch(() => {})
     }
 
+    // Reset run stats for the new message
+    const { useUsageStore } = await import('./usage-store')
+    useUsageStore.getState().resetRun()
+
     try {
       const { useUIStore } = await import('./ui-store')
       const model = useUIStore.getState().selectedModel

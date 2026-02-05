@@ -10,7 +10,8 @@ import type {
   ToolUseContent,
   LLMToolDefinition,
   DetailedTokenUsage,
-  TokenCost
+  TokenCost,
+  UsageSummary
 } from '../llm/index.js'
 import {
   createLLMClient,
@@ -261,6 +262,25 @@ export class AgentLoop {
 
     // Start token tracking
     this.config.tokenTracker?.startRun(runId)
+    // Start a new trace run
+    this.config.trace.startRun(runId, startTime)
+    const runSpanId = this.config.trace.startSpan('agent.run', { prompt: userPrompt })
+
+    const finalizeTrace = (params: { success: boolean; steps: number; error?: string; usage?: UsageSummary }) => {
+      this.config.trace.setRunOutcome({
+        success: params.success,
+        error: params.error,
+        steps: params.steps,
+        durationMs: Date.now() - startTime
+      })
+      this.config.trace.setUsageSummary(params.usage)
+      this.config.trace.endSpan(runSpanId, {
+        success: params.success,
+        steps: params.steps,
+        error: params.error
+      })
+      this.config.trace.flush()
+    }
 
     // Record start
     this.config.trace.record({
@@ -365,14 +385,11 @@ export class AgentLoop {
         }
 
         // Send request
-        this.config.trace.record({
-          type: 'llm.request',
-          data: {
-            messagesCount: messagesToSend.length,
-            roundHint,
-            maxTokens: maxTokensForRound,
-            toolSubset: this.activeToolSubset ?? 'all'
-          }
+        const llmSpanId = this.config.trace.startSpan('llm.request', {
+          messagesCount: messagesToSend.length,
+          roundHint,
+          maxTokens: maxTokensForRound,
+          toolSubset: this.activeToolSubset ?? 'all'
         })
 
         // Use streaming API
@@ -390,8 +407,11 @@ export class AgentLoop {
         if (this.config.debug) {
           // Extract working-context metadata from system prompt
           const hasWorkingContext = systemPrompt.includes('<working-context>')
+          const projectMatch = systemPrompt.match(/## Project Cards\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
+          const projectCount = projectMatch ? (projectMatch.match(/^### /gm) || []).length : 0
           const pinnedMatch = systemPrompt.match(/## Pinned Context\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
           const pinnedCount = pinnedMatch ? (pinnedMatch.match(/^### /gm) || []).length : 0
+          const projectCardsCount = projectCount > 0 ? projectCount : pinnedCount
           const selectedMatch = systemPrompt.match(/## Selected Context\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
           const selectedCount = selectedMatch ? (selectedMatch.match(/^### /gm) || []).length : 0
           const sessionMatch = systemPrompt.match(/## Prior Conversation\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
@@ -409,7 +429,7 @@ export class AgentLoop {
 
           console.error('[AgentLoop:debug] === LLM Request ===')
           console.error('[AgentLoop:debug] System prompt:', systemPrompt.length, 'chars |', hasWorkingContext ? 'has working-context' : 'no working-context')
-          console.error('[AgentLoop:debug] Context — pinned:', pinnedCount, '| selected:', selectedCount, '| history msgs:', sessionMsgCount, '| excluded (indexed):', excludedCount)
+          console.error('[AgentLoop:debug] Context — project cards:', projectCardsCount, '| selected:', selectedCount, '| history msgs:', sessionMsgCount, '| excluded (indexed):', excludedCount)
           console.error('[AgentLoop:debug] Messages:', messagesToSend.length, `(${msgSummary})`)
           console.error('[AgentLoop:debug] Tools:', tools.length, '(' + tools.map(t => t.name).join(', ') + ')')
           console.error('[AgentLoop:debug] Round hint:', roundHint, '| maxTokens:', maxTokensForRound)
@@ -558,6 +578,12 @@ export class AgentLoop {
               usage: { inputTokens: 0, outputTokens: 0 }
             }
           })
+          this.config.trace.endSpan(llmSpanId, {
+            toolCallsCount: 0,
+            finishReason: 'error',
+            error: errorMessage,
+            usage: { inputTokens: 0, outputTokens: 0 }
+          })
 
           // Complete token tracking on early error exit
           const usageSummary = this.config.tokenTracker?.completeRun()
@@ -568,7 +594,7 @@ export class AgentLoop {
             data: { steps: step, success: false, error: errorMessage }
           })
 
-          return {
+          const result = {
             success: false,
             output: '',
             error: errorMessage,
@@ -577,6 +603,8 @@ export class AgentLoop {
             durationMs: Date.now() - startTime,
             usage: usageSummary
           }
+          finalizeTrace({ success: false, steps: step, error: errorMessage, usage: usageSummary })
+          return result
         }
 
         // Debug: log response details
@@ -598,6 +626,14 @@ export class AgentLoop {
               inputTokens: usage.promptTokens,
               outputTokens: usage.completionTokens
             }
+          }
+        })
+        this.config.trace.endSpan(llmSpanId, {
+          toolCallsCount: toolCalls.length,
+          finishReason: response.finishReason,
+          usage: {
+            inputTokens: usage.promptTokens,
+            outputTokens: usage.completionTokens
           }
         })
 
@@ -979,7 +1015,7 @@ export class AgentLoop {
         data: { steps: step, success: true }
       })
 
-      return {
+      const result = {
         success: true,
         output: finalOutput,
         steps: step,
@@ -987,6 +1023,8 @@ export class AgentLoop {
         durationMs: Date.now() - startTime,
         usage: usageSummary
       }
+      finalizeTrace({ success: true, steps: step, usage: usageSummary })
+      return result
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error)
@@ -1015,7 +1053,7 @@ export class AgentLoop {
         data: { steps: step, success: false, error: errorMessage }
       })
 
-      return {
+      const result = {
         success: false,
         output: '',
         error: errorMessage,
@@ -1024,6 +1062,8 @@ export class AgentLoop {
         durationMs: Date.now() - startTime,
         usage: usageSummary
       }
+      finalizeTrace({ success: false, steps: step, error: errorMessage, usage: usageSummary })
+      return result
     }
   }
 

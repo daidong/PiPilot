@@ -282,6 +282,20 @@ export type {
   MigrationOptions
 } from './core/entity-migration.js'
 
+// Project Card Policy (auto-pin/auto-demote)
+export {
+  applyProjectCardPolicy,
+  scoreProjectCard,
+  DEFAULT_PROJECT_CARD_POLICY
+} from './core/project-card-policy.js'
+export type {
+  ProjectCardCandidate,
+  ProjectCardPolicyConfig,
+  ProjectCardScore,
+  ProjectCardChange,
+  ProjectCardSource
+} from './core/project-card-policy.js'
+
 // Token Tracking
 export {
   TokenTracker,

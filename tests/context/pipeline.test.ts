@@ -397,8 +397,10 @@ describe('createContextPipeline', () => {
   describe('constants', () => {
     it('should have correct phase priorities', () => {
       expect(PHASE_PRIORITIES.system).toBe(100)
-      expect(PHASE_PRIORITIES.pinned).toBe(90)
+      expect(PHASE_PRIORITIES['project-cards']).toBe(90)
       expect(PHASE_PRIORITIES.selected).toBe(80)
+      expect(PHASE_PRIORITIES.workingset).toBe(70)
+      expect(PHASE_PRIORITIES['state-summary']).toBe(60)
       expect(PHASE_PRIORITIES.session).toBe(50)
       expect(PHASE_PRIORITIES.index).toBe(30)
     })
@@ -406,8 +408,10 @@ describe('createContextPipeline', () => {
     it('should have correct default budgets', () => {
       expect(DEFAULT_BUDGETS.system.type).toBe('reserved')
       expect(DEFAULT_BUDGETS.system.tokens).toBe(2000)
-      expect(DEFAULT_BUDGETS.pinned.type).toBe('reserved')
+      expect(DEFAULT_BUDGETS['project-cards'].type).toBe('reserved')
       expect(DEFAULT_BUDGETS.selected.type).toBe('percentage')
+      expect(DEFAULT_BUDGETS.workingset.type).toBe('percentage')
+      expect(DEFAULT_BUDGETS['state-summary'].type).toBe('fixed')
       expect(DEFAULT_BUDGETS.session.type).toBe('remaining')
       expect(DEFAULT_BUDGETS.index.type).toBe('fixed')
     })

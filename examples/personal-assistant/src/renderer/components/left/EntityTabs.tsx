@@ -365,7 +365,7 @@ export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
   // RFC-009: Get workingSet for status dot logic
-  const { notes, docs, todos, workingSet, refreshAll } = useEntityStore()
+  const { notes, docs, todos, workingSet, workingSetRuntime, refreshAll } = useEntityStore()
   const [showCompleted, setShowCompleted] = useState(false)
 
   useEffect(() => {
@@ -373,7 +373,7 @@ export function EntityTabs() {
   }, [])
 
   // RFC-009: Create Set of working set IDs for efficient lookup
-  const workingSetIds = new Set(workingSet.map(e => e.id))
+  const workingSetIds = new Set([...(workingSet || []), ...(workingSetRuntime || [])].map(e => e.id))
 
   // Filter todos based on showCompleted state
   const filteredTodos = showCompleted

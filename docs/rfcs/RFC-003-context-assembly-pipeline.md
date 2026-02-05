@@ -9,6 +9,8 @@ This RFC proposes a **phased, priority-aware context assembly pipeline** for Age
 3. **History Compression** — summarized index of older context for LLM to request
 4. **Explicit Retrieval** — tools for LLM to fetch specific context on demand
 
+> **RFC-009 Update:** The "Pinned" concept is now **Project Cards** (`project-cards`). WorkingSet and State Summary are first-class phases in the current framework. Entity @mentions should feed WorkingSet; file/URL mentions can remain selected context. Legacy `pinned` tags are only included when explicitly enabled.
+
 ## Problem Statement
 
 ### Motivating Scenario
@@ -46,7 +48,7 @@ Current Context Flow:
 
 ### Why Existing Primitives Don't Solve This
 
-**Q: Can't we use `memory.list({ tags: ['pinned'] })`?**
+**Q: Can't we use `memory.list({ tags: ['project-card'] })`?**
 
 A: This is pull-based. The agent must explicitly query. We need push-based injection that happens automatically before every LLM call.
 
@@ -88,9 +90,9 @@ A: A single hook is insufficient. We need:
 │  └─────────────────────────────────────────────────────────┘    │
 │                              ↓                                   │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Phase 2: PINNED (priority: 90, budget: reserved)        │    │
+│  │ Phase 2: PROJECT CARDS (priority: 90, budget: reserved) │    │
 │  │   - Always-include items (agents.md, .cursorrules)      │    │
-│  │   - Memory items with pinned: { mode: 'always' }        │    │
+│  │   - Memory items tagged as project-card                 │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                              ↓                                   │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -216,24 +218,24 @@ export const systemPhase: ContextPhase = {
 ```
 
 ```typescript
-// src/context/phases/pinned-phase.ts
+// src/context/phases/project-cards-phase.ts
 
-export const pinnedPhase: ContextPhase = {
-  id: 'pinned',
+export const projectCardsPhase: ContextPhase = {
+  id: 'project-cards',
   priority: 90,
   budget: { type: 'reserved', tokens: 2000 },
 
   async assemble(ctx) {
     const fragments: ContextFragment[] = []
 
-    // Get pinned memory items
-    const pinned = await ctx.runtime.memoryStorage?.list({
-      tags: ['pinned'],
+    // Get Project Card memory items
+    const projectCards = await ctx.runtime.memoryStorage?.list({
+      tags: ['project-card'],
       status: 'active'
     }) ?? []
 
     // Sort by priority (higher first)
-    const sorted = pinned.sort((a, b) =>
+    const sorted = projectCards.sort((a, b) =>
       (b.metadata?.priority ?? 0) - (a.metadata?.priority ?? 0)
     )
 
@@ -245,7 +247,7 @@ export const pinnedPhase: ContextPhase = {
       if (usedTokens + tokens > ctx.remainingBudget) break
 
       fragments.push({
-        source: `pinned:${item.key}`,
+        source: `project-cards:${item.key}`,
         content,
         tokens,
         metadata: { key: item.key, priority: item.metadata?.priority }
@@ -942,8 +944,10 @@ export class AgentLoop {
     // Initialize pipeline with default phases
     this.pipeline = createContextPipeline([
       systemPhase,
-      pinnedPhase,
+      projectCardsPhase,
       selectedPhase,
+      workingSetPhase,
+      stateSummaryPhase,
       sessionPhase,
       indexPhase,
       // Apps can add custom phases via config
@@ -998,10 +1002,12 @@ export function contextPipelinePack(options?: ContextPipelineOptions): Pack {
 
 Your context is assembled in phases:
 1. System configuration (always present)
-2. Pinned items (project knowledge marked as important)
-3. User-selected items (chosen for this conversation)
-4. Recent session history
-5. Compressed index of older history
+2. Project Cards (long-term memory)
+3. WorkingSet (runtime focus)
+4. User-selected items (explicit selections)
+5. State summary (session memory)
+6. Recent session history
+7. Compressed index of older history
 
 If you need information from the compressed index, use the ctx-expand tool.
 `,
@@ -1034,12 +1040,12 @@ const agent = createAgent({
 
 // Pin important project knowledge (done once or via UI)
 await agent.runtime.memoryStorage.put('config/agents', agentsMdContent, {
-  tags: ['pinned'],
+  tags: ['project-card'],
   metadata: { priority: 100 }  // High priority
 })
 
 await agent.runtime.memoryStorage.put('knowledge/architecture', architectureDoc, {
-  tags: ['pinned'],
+  tags: ['project-card'],
   metadata: { priority: 50 }
 })
 
@@ -1058,7 +1064,7 @@ const result = await agent.run('How should we optimize the database queries?', {
 
 // Context assembled:
 // 1. System prompt + pack fragments (reserved: 2000 tokens)
-// 2. Pinned: agents.md, architecture doc (reserved: 2000 tokens)
+// 2. Project Cards: agents.md, architecture doc (reserved: 2000 tokens)
 // 3. Selected: caching idea, queries.ts, messages 100-120 (30%: ~3600 tokens)
 // 4. Session: recent messages (remaining: ~7900 tokens)
 // 5. Index: compressed older history (fixed: 500 tokens)
@@ -1091,7 +1097,7 @@ const result = await agent.run('How should we optimize the database queries?', {
 |--------|--------|-------|
 | Context assembly | Flat, unordered | Phased, priority-ordered |
 | Budget allocation | Per-source, uncoordinated | Coordinated across phases |
-| Always-include | Not supported | Pinned phase with reserved budget |
+| Always-include | Not supported | Project Cards phase with reserved budget |
 | User selection | Not supported | `selectedContext` in run options |
 | Long conversations | Early messages lost | Compressed index + ctx-expand |
 | LLM context awareness | Doesn't know what's available | Index shows retrievable content |

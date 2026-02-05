@@ -7,6 +7,7 @@
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { PATHS, Note, CLIContext } from '../types.js'
+import { applyProjectCardPolicy } from '../../../src/core/project-card-policy.js'
 
 export interface SaveNoteResult {
   success: boolean
@@ -26,13 +27,13 @@ export function saveNote(
   context: CLIContext,
   fromLast: boolean = false,
   messageId?: string,
-  pinned: boolean = false
+  projectCardOverride?: boolean
 ): SaveNoteResult {
   if (!title) return { success: false, error: 'Note title is required.' }
   if (!content) return { success: false, error: 'Note content is required.' }
 
   const provenance: Note['provenance'] = {
-    source: 'user',
+    source: fromLast ? 'agent' : 'user',
     sessionId: context.sessionId,
     extractedFrom: fromLast ? 'agent-response' : 'user-input'
   }
@@ -44,11 +45,17 @@ export function saveNote(
     title,
     content,
     tags,
-    pinned,
-    selectedForAI: false,
+    projectCard: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     provenance
+  }
+
+  if (typeof projectCardOverride === 'boolean') {
+    note.projectCard = projectCardOverride
+    note.projectCardSource = 'manual'
+  } else {
+    applyProjectCardPolicy([note])
   }
 
   // Use projectPath if provided, otherwise fall back to relative path
@@ -62,4 +69,3 @@ export function saveNote(
 
   return { success: true, note, filePath }
 }
-

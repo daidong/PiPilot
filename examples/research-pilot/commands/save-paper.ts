@@ -11,6 +11,7 @@
 import { writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { PATHS, Literature, CLIContext } from '../types.js'
+import { applyProjectCardPolicy } from '../../../src/core/project-card-policy.js'
 
 export interface SavePaperResult {
   success: boolean
@@ -59,8 +60,7 @@ export function savePaper(
     url: opts.url,
     citeKey,
     tags: opts.tags ?? [],
-    pinned: false,
-    selectedForAI: false,
+    projectCard: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     provenance: {
@@ -77,6 +77,8 @@ export function savePaper(
     doi: opts.doi,
     bibtex: opts.bibtex
   }
+
+  applyProjectCardPolicy([paper])
 
   // Use projectPath if provided, otherwise fall back to relative path
   const literaturePath = context.projectPath

@@ -37,9 +37,9 @@ docs/rfc/                   # Design documents
 
 ### Desktop UI
 - **Three-Panel Layout**: Left (entities + model selector), Center (chat), Right (activity + notifications + context)
-- **Entity Management**: Notes and Docs with pin/select/delete, hover preview, provenance tracking
-- **@-Mentions**: Reference entities, files, URLs inline in chat
-- **Slash Commands**: `/save-note`, `/save-doc`, `/search`, `/select`, `/pin`, `/clear`, `/delete`, `/help`
+- **Entity Management**: Notes and Docs with Project Cards / WorkingSet selection, hover preview, provenance tracking
+- **@-Mentions**: Entity mentions go to WorkingSet; file/URL mentions are injected directly
+- **Slash Commands**: `/save-note`, `/save-doc`, `/search`, `/select`, `/project` (alias: `/pin`), `/clear`, `/delete`, `/help`
 - **Notifications**: Bell icon with unread badge, notification panel from scheduled task results
 - **Drag & Drop**: Drop files into Notes (text) or Docs (binary + auto-convert)
 - **Model Selector**: Switch between OpenAI models at runtime

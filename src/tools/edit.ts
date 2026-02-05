@@ -126,6 +126,13 @@ export const edit: Tool<EditInput, EditOutput> = defineTool({
       return { success: false, error: writeResult.error }
     }
 
+    // Bump file revision for read-dup guard (per-run)
+    const guard = runtime.sessionState.get<{ fileRevisions: Map<string, number> }>('ioGuard')
+    if (guard?.fileRevisions) {
+      const current = guard.fileRevisions.get(input.path) ?? 0
+      guard.fileRevisions.set(input.path, current + 1)
+    }
+
     return {
       success: true,
       data: {

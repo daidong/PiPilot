@@ -842,7 +842,7 @@ export class RuntimeIO implements IRuntimeIO {
   /**
    * 获取文件统计信息（用于 edit 判断是否需要完整读取）
    */
-  async stat(filePath: string): Promise<IOResult<{ size: number; lines?: number }>> {
+  async stat(filePath: string): Promise<IOResult<{ size: number; lines?: number; mtimeMs?: number }>> {
     const traceId = generateTraceId()
 
     try {
@@ -851,7 +851,7 @@ export class RuntimeIO implements IRuntimeIO {
 
       return {
         success: true,
-        data: { size: stat.size },
+        data: { size: stat.size, mtimeMs: stat.mtimeMs },
         traceId
       }
     } catch (error) {

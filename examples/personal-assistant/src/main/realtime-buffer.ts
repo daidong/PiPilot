@@ -37,9 +37,14 @@ class RealtimeBuffer {
     this.activityEvents.push(event)
   }
 
-  /** Clear progress and activity (called on new agent run / todo-clear) */
+  /** Clear progress and activity (called on project close or explicit reset) */
   clearRun(): void {
     this.progressItems = []
+    this.activityEvents = []
+  }
+
+  /** Clear only activity events (called on new agent run) */
+  clearActivity(): void {
     this.activityEvents = []
   }
 

@@ -9,6 +9,7 @@ import type { ToolRegistry } from '../core/tool-registry.js'
 import type { PolicyEngine } from '../core/policy-engine.js'
 import type { ContextManager } from '../core/context-manager.js'
 import type { MemoryStorage } from './memory.js'
+import type { EntityIndex, WorkingSetResolvedEntity } from './memory-entity.js'
 import type { MessageStore } from './session.js'
 import type { SessionState } from './agent.js'
 import type { createLLMClient } from '../llm/stream.js'
@@ -160,7 +161,7 @@ export interface RuntimeIO {
   grep(pattern: string, options?: GrepOptions): Promise<IOResult<GrepMatch[]>>
 
   /** 获取文件统计信息 */
-  stat?(path: string): Promise<IOResult<{ size: number; lines?: number }>>
+  stat?(path: string): Promise<IOResult<{ size: number; lines?: number; mtimeMs?: number }>>
 
   /** 无限制读取文件（仅供 edit 内部使用） */
   readFileForEdit?(path: string): Promise<IOResult<string>>
@@ -217,6 +218,20 @@ export interface Runtime {
 
   /** Message store for conversation history */
   messageStore?: MessageStore
+
+  /** WorkingSet entity index provider (disk-backed source of truth) */
+  entityIndexProvider?: () => Promise<EntityIndex[]>
+
+  /** WorkingSet entity resolver (id -> content) */
+  entityResolver?: (id: string) => Promise<WorkingSetResolvedEntity | null>
+
+  /**
+   * WorkingSet continuity tracker (runtime-only).
+   * Used by tools to record entity usage for continuity scoring.
+   */
+  workingSetTracker?: {
+    recordUsage: (entityId: string, useType: 'mention' | 'tool-access' | 'update') => void
+  }
 }
 
 /**

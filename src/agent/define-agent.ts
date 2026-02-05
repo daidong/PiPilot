@@ -16,6 +16,7 @@ import { PromptCompiler } from '../core/prompt-compiler.js'
 import { AgentLoop } from './agent-loop.js'
 import { createLLMClient, getModel } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
+import { join } from 'path'
 
 /**
  * 生成唯一 ID
@@ -45,10 +46,23 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
   return (config: AgentConfig): Agent => {
     const agentId = definition.id
     const sessionId = generateId()
+    const projectPath = config.projectPath ?? process.cwd()
 
     // 创建核心组件
     const eventBus = new EventBus()
-    const trace = new TraceCollector(sessionId)
+    const traceExportEnabled = config.trace?.export?.enabled ?? true
+    const traceExportDir = config.trace?.export?.dir
+      ?? join(projectPath, '.agentfoundry', 'traces')
+    const trace = new TraceCollector({
+      sessionId,
+      agentId,
+      export: {
+        enabled: traceExportEnabled,
+        dir: traceExportDir,
+        writeJsonl: config.trace?.export?.writeJsonl ?? true,
+        writeSummary: config.trace?.export?.writeSummary ?? true
+      }
+    })
     const tokenBudget = new TokenBudget({
       total: definition.model?.maxTokens ?? config.maxTokens ?? 100000,
       warningThreshold: 0.8
@@ -71,9 +85,6 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     // 创建上下文管理器
     const contextManager = new ContextManager()
-
-    // 获取工作目录
-    const projectPath = config.projectPath ?? process.cwd()
 
     // 创建运行时
     let currentStep = 0

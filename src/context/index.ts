@@ -50,7 +50,8 @@ export {
   type WorkingSetBuildInput,
   type WorkingSetPhaseConfig,
   type ContinuityEntry,
-  type EntityIndex
+  type EntityIndex,
+  type WorkingSetResolvedEntity
 } from './workingset-builder.js'
 
 // Shape Degrader (RFC-009)

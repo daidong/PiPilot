@@ -7,6 +7,10 @@ export interface EntityItem {
   pinned?: boolean           // Legacy field, kept for backward compatibility
   projectCard?: boolean      // RFC-009: New field for Project Cards
   selectedForAI?: boolean    // Legacy field, kept for backward compatibility (not used in RFC-009)
+  workingSetSource?: 'explicit' | 'continuity' | 'retrieval' | 'index'
+  workingSetReason?: string
+  workingSetScore?: number
+  workingSetRequestedShape?: string
   status?: 'pending' | 'completed'
   completedAt?: string
   [key: string]: any
@@ -18,11 +22,13 @@ interface EntityState {
   todos: EntityItem[]
   projectCards: EntityItem[]   // RFC-009: Renamed from pinned
   workingSet: EntityItem[]     // RFC-009: Renamed from selected
+  workingSetRuntime: EntityItem[]
   // Legacy aliases
   pinned: EntityItem[]
   selected: EntityItem[]
   reset: () => void
   refreshAll: () => Promise<void>
+  setWorkingSetRuntime: (items: EntityItem[]) => void
   toggleProjectCard: (id: string) => Promise<void>   // RFC-009: Renamed from togglePin
   toggleWorkingSet: (id: string) => Promise<void>    // RFC-009: Renamed from toggleSelect
   // Legacy aliases
@@ -42,11 +48,12 @@ export const useEntityStore = create<EntityState>((set, get) => ({
   todos: [],
   projectCards: [],   // RFC-009
   workingSet: [],     // RFC-009
+  workingSetRuntime: [],
   // Legacy aliases pointing to the same data
   get pinned() { return get().projectCards },
   get selected() { return get().workingSet },
 
-  reset: () => set({ notes: [], docs: [], todos: [], projectCards: [], workingSet: [] }),
+  reset: () => set({ notes: [], docs: [], todos: [], projectCards: [], workingSet: [], workingSetRuntime: [] }),
 
   refreshAll: async () => {
     try {
@@ -59,16 +66,26 @@ export const useEntityStore = create<EntityState>((set, get) => ({
       ])
       const stamp = (items: any[], type: EntityItem['type']) =>
         (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
+      const explicitWorkingSet = (workingSet || []).map((i: any) => ({
+        ...i,
+        workingSetSource: 'explicit' as const
+      }))
+      const runtime = get().workingSetRuntime
       set({
         notes: stamp(notes, 'note'),
         docs: stamp(docs, 'doc'),
         todos: stamp(todos, 'todo'),
         projectCards: projectCards || [],
-        workingSet: workingSet || []
+        workingSet: explicitWorkingSet,
+        workingSetRuntime: runtime
       })
     } catch (err) {
       console.warn('[entity-store] refreshAll failed:', err)
     }
+  },
+
+  setWorkingSetRuntime: (items: EntityItem[]) => {
+    set((s) => ({ workingSetRuntime: items || s.workingSetRuntime }))
   },
 
   // RFC-009: Primary method names
@@ -80,9 +97,13 @@ export const useEntityStore = create<EntityState>((set, get) => ({
     ])
     const stamp = (items: any[], type: EntityItem['type']) =>
       (items || []).map((i: any) => ({ ...i, type }))
+    const explicitWorkingSet = (workingSet || []).map((i: any) => ({
+      ...i,
+      workingSetSource: 'explicit' as const
+    }))
     set({
       notes: stamp(notes, 'note'), docs: stamp(docs, 'doc'), todos: stamp(todos, 'todo'),
-      projectCards: projectCards || [], workingSet: workingSet || []
+      projectCards: projectCards || [], workingSet: explicitWorkingSet
     })
   },
 
@@ -94,9 +115,13 @@ export const useEntityStore = create<EntityState>((set, get) => ({
     ])
     const stamp = (items: any[], type: EntityItem['type']) =>
       (items || []).map((i: any) => ({ ...i, type }))
+    const explicitWorkingSet = (workingSet || []).map((i: any) => ({
+      ...i,
+      workingSetSource: 'explicit' as const
+    }))
     set({
       notes: stamp(notes, 'note'), docs: stamp(docs, 'doc'), todos: stamp(todos, 'todo'),
-      projectCards: projectCards || [], workingSet: workingSet || []
+      projectCards: projectCards || [], workingSet: explicitWorkingSet
     })
   },
 
@@ -151,12 +176,16 @@ export const useEntityStore = create<EntityState>((set, get) => ({
     ])
     const stamp = (items: any[], type: EntityItem['type']) =>
       (items || []).map((i: any) => ({ ...i, type }))
+    const explicitWorkingSet = (workingSet || []).map((i: any) => ({
+      ...i,
+      workingSetSource: 'explicit' as const
+    }))
     set({
       notes: stamp(notes, 'note'),
       docs: stamp(docs, 'doc'),
       todos: stamp(todos, 'todo'),
       projectCards: projectCards || [],
-      workingSet: workingSet || []
+      workingSet: explicitWorkingSet
     })
   }
 }))

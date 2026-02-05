@@ -188,6 +188,8 @@ export type {
   EntityShape,
   WorkingSetItem,
   WorkingSetPlan,
+  EntityIndex,
+  WorkingSetResolvedEntity,
   LegacyEntityFields
 } from './memory-entity.js'
 

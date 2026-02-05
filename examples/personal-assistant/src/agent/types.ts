@@ -100,6 +100,11 @@ export interface BaseEntity {
   projectCard: boolean
 
   /**
+   * Source of Project Card status (auto vs manual)
+   */
+  projectCardSource?: 'auto' | 'manual'
+
+  /**
    * Summary card content (≤300 tokens)
    * Used for context assembly and retrieval.
    */

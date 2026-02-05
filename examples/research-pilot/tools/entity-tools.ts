@@ -45,15 +45,12 @@ export function createSaveNoteTool(sessionId: string, projectPath: string) {
         content: string
         tags?: string[]
       }
-      // All agent-created notes are pinned by default — forces discipline
-      const pinned = true
-
       const context: CLIContext = {
         sessionId,
         projectPath
       }
 
-      const result = saveNote(title, content, tags, context, false, undefined, pinned)
+      const result = saveNote(title, content, tags, context, false, undefined)
 
       if (result.success) {
         return {
@@ -192,7 +189,7 @@ export function createSavePaperTool(sessionId: string, projectPath: string) {
 export function createUpdateNoteTool(projectPath: string) {
   return defineTool({
     name: 'update-note',
-    description: 'Update an existing note by ID. Use this instead of save-note when a note on the same topic already exists. You can update title, content, tags, and/or pinned status. Only provided fields are changed.',
+    description: 'Update an existing note by ID. Use this instead of save-note when a note on the same topic already exists. You can update title, content, tags, and/or Project Card status. Only provided fields are changed.',
     parameters: {
       id: {
         type: 'string',
@@ -215,18 +212,24 @@ export function createUpdateNoteTool(projectPath: string) {
         description: 'New tags (replaces existing tags)',
         required: false
       },
+      projectCard: {
+        type: 'boolean',
+        description: 'Set Project Card status (long-term memory)',
+        required: false
+      },
       pinned: {
         type: 'boolean',
-        description: 'Set pinned status',
+        description: 'Deprecated: use projectCard',
         required: false
       }
     },
     execute: async (input) => {
-      const { id, title, content, tags, pinned } = input as {
+      const { id, title, content, tags, projectCard, pinned } = input as {
         id: string
         title?: string
         content?: string
         tags?: string[]
+        projectCard?: boolean
         pinned?: boolean
       }
 
@@ -263,7 +266,12 @@ export function createUpdateNoteTool(projectPath: string) {
       if (title !== undefined) note.title = title
       if (content !== undefined) note.content = content
       if (tags !== undefined) note.tags = tags
-      if (pinned !== undefined) note.pinned = pinned
+      const projectCardUpdate = projectCard ?? pinned
+      if (projectCardUpdate !== undefined) {
+        note.projectCard = projectCardUpdate
+        note.projectCardSource = 'manual'
+        if ('pinned' in note) delete (note as Record<string, unknown>).pinned
+      }
       note.updatedAt = new Date().toISOString()
 
       writeFileSync(notePath, JSON.stringify(note, null, 2))
@@ -273,7 +281,7 @@ export function createUpdateNoteTool(projectPath: string) {
         data: {
           id: note.id,
           title: note.title,
-          pinned: note.pinned
+          projectCard: note.projectCard
         }
       }
     }
@@ -286,7 +294,7 @@ export function createUpdateNoteTool(projectPath: string) {
 export function createTogglePinTool() {
   return defineTool({
     name: 'toggle-pin',
-    description: 'Toggle the pinned status of any entity (note, paper, or data). Pinned entities are always included in your context. Use this to unpin notes that are no longer critical, or to pin important ones.',
+    description: 'Toggle Project Card status for any entity (note, paper, or data). Project Cards represent core decisions/constraints for long-term memory.',
     parameters: {
       id: {
         type: 'string',
@@ -304,7 +312,7 @@ export function createTogglePinTool() {
           data: {
             type: result.entityType,
             title: result.title,
-            pinned: result.pinned
+            projectCard: result.projectCard
           }
         }
       } else {

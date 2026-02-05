@@ -13,6 +13,7 @@ export interface TodoListItem {
   status: 'pending' | 'completed'
   completedAt?: string
   tags: string[]
+  projectCard: boolean
   pinned: boolean
   selectedForAI: boolean
   provenance?: Provenance
@@ -39,8 +40,9 @@ export function listTodos(projectPath: string): TodoListItem[] {
         status: todo.status,
         completedAt: todo.completedAt,
         tags: todo.tags,
-        pinned: todo.pinned,
-        selectedForAI: todo.selectedForAI,
+        projectCard: todo.projectCard ?? todo.pinned ?? false,
+        pinned: todo.projectCard ?? todo.pinned ?? false,
+        selectedForAI: todo.selectedForAI ?? false,
         provenance: todo.provenance,
         createdAt: todo.createdAt,
         updatedAt: todo.updatedAt

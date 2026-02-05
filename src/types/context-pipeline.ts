@@ -2,7 +2,7 @@
  * Context Pipeline Types - Context Assembly Pipeline Type Definitions
  *
  * Provides types for the phased, priority-aware context assembly pipeline:
- * - 5 built-in phases: system, pinned, selected, session, index
+ * - Built-in phases: system, project-cards, selected, workingset, state-summary, session, index
  * - User selection injection via agent.run(prompt, { selectedContext })
  * - History compression with addressable segments for LLM retrieval
  * - ctx-expand tool for LLM to request specific context on demand
@@ -38,7 +38,7 @@ export interface PhaseBudget {
  * A single piece of assembled context
  */
 export interface ContextFragment {
-  /** Source identifier (e.g., 'system', 'pinned:project.rules', 'file:./src/main.ts') */
+  /** Source identifier (e.g., 'system', 'project-cards:project.rules', 'file:./src/main.ts') */
   source: string
   /** Rendered content to include in context */
   content: string
@@ -122,6 +122,8 @@ export interface AssemblyContext {
   runtime: Runtime
   /** Total token budget for entire context */
   totalBudget: number
+  /** Budget allocated to this phase */
+  allocatedBudget: number
   /** Tokens already used by previous phases */
   usedBudget: number
   /** Remaining token budget */
@@ -253,7 +255,9 @@ export interface ContextPipeline {
     selectedContext?: ContextSelection[]
     messages?: Message[]
     externalBudgets?: {
-      pinned?: number
+      project?: number
+      working?: number
+      stateSummary?: number
       selected?: number
       session?: number
       index?: number

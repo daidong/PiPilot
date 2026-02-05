@@ -28,6 +28,11 @@ export interface ReadOutput {
   bytes: number
 }
 
+type ReadGuardState = {
+  readHistory: Map<string, { revision: number; count: number; lastAt: number; fingerprint?: string }>
+  fileRevisions: Map<string, number>
+}
+
 /** Extract filename from a path */
 function getFileName(path: string): string {
   if (!path) return ''
@@ -68,10 +73,49 @@ export const read: Tool<ReadInput, ReadOutput> = defineTool({
     }
   },
   execute: async (input, { runtime }) => {
+    // Prevent redundant reads within the same run to save tokens.
+    // If the exact same read is requested again without the file changing,
+    // return a guidance error instead of re-reading.
+    const guard = (() => {
+      const existing = runtime.sessionState.get<ReadGuardState>('ioGuard')
+      if (existing) return existing
+      const fresh: ReadGuardState = {
+        readHistory: new Map(),
+        fileRevisions: new Map()
+      }
+      runtime.sessionState.set('ioGuard', fresh)
+      return fresh
+    })()
+
+    const encoding = input.encoding ?? 'utf-8'
+    const offset = input.offset ?? 0
+    const limit = input.limit
+    const readKey = JSON.stringify({ path: input.path, encoding, offset, limit: input.limit ?? null })
+    const revision = guard.fileRevisions.get(input.path) ?? 0
+    const prior = guard.readHistory.get(readKey)
+
+    // Best-effort fingerprint to detect external edits (size + mtime).
+    let fingerprint: string | undefined
+    if (runtime.io.stat) {
+      const statResult = await runtime.io.stat(input.path)
+      if (statResult.success && statResult.data) {
+        const size = statResult.data.size
+        const mtime = statResult.data.mtimeMs ?? 0
+        fingerprint = `${size}:${mtime}`
+      }
+    }
+
+    if (prior && prior.revision === revision && fingerprint && prior.fingerprint === fingerprint) {
+      return {
+        success: false,
+        error: `Duplicate read detected for ${input.path}. You already read this exact slice in this run. Use read with offset/limit to fetch a different section, or proceed with the content you have.`
+      }
+    }
+
     const result = await runtime.io.readFile(input.path, {
-      encoding: input.encoding,
-      offset: input.offset,
-      limit: input.limit
+      encoding,
+      offset,
+      limit
     })
 
     if (!result.success) {
@@ -83,6 +127,28 @@ export const read: Tool<ReadInput, ReadOutput> = defineTool({
 
     const content = result.data!
     const meta = result.meta ?? {}
+
+    // Best-effort: record WorkingSet continuity when reading entity JSON
+    try {
+      if (runtime.workingSetTracker?.recordUsage && input.path.endsWith('.json')) {
+        const bytes = meta.bytes ?? content.length
+        if (bytes <= 1_000_000) {
+          const parsed = JSON.parse(content) as { id?: string; type?: string }
+          if (parsed?.id && (parsed.type === 'note' || parsed.type === 'doc' || parsed.type === 'todo')) {
+            runtime.workingSetTracker.recordUsage(parsed.id, 'tool-access')
+          }
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+
+    // Record successful reads for duplicate detection
+    const count = (prior?.count ?? 0) + 1
+    guard.readHistory.set(readKey, { revision, count, lastAt: Date.now(), fingerprint })
+    if (guard.readHistory.size > 200) {
+      guard.readHistory.clear()
+    }
 
     return {
       success: true,

@@ -37,7 +37,7 @@ coordinator invokes them as tools and receives structured JSON back.
 
 When the user asks to write or draft a paper/section:
 
-1. **Outline phase.** Coordinator calls `writing-outline` with the topic, pinned notes, and
+1. **Outline phase.** Coordinator calls `writing-outline` with the topic, Project Cards, and
    literature entities. Returns a section-by-section plan.
 2. **Draft phase.** For each section (or user-selected sections), coordinator calls
    `writing-draft` with the outline entry, prior sections as context, and relevant

@@ -83,7 +83,7 @@ export function createStateSummaryPhase(
     budget: { type: 'fixed' as const, tokens: cfg.maxTokens },
 
     async assemble(ctx: AssemblyContext): Promise<ContextFragment[]> {
-      const { runtime, remainingBudget } = ctx
+      const { runtime, remainingBudget, allocatedBudget } = ctx
       const fragments: ContextFragment[] = []
 
       // Check if memory storage is available
@@ -143,7 +143,7 @@ export function createStateSummaryPhase(
         }
 
         // Build state summary content
-        const effectiveBudget = Math.min(cfg.maxTokens, remainingBudget)
+        const effectiveBudget = Math.min(cfg.maxTokens, allocatedBudget ?? remainingBudget)
         const content = formatStateSummary(sortedItems, effectiveBudget)
 
         if (content) {

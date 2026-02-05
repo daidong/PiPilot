@@ -7,6 +7,7 @@
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { PATHS, Note, Todo, CLIContext } from '../types.js'
+import { applyProjectCardPolicy } from '../../../../../src/core/project-card-policy.js'
 
 export interface SaveNoteResult {
   success: boolean
@@ -34,7 +35,7 @@ function generateSimpleSummaryCard(title: string, content: string, type: 'note' 
  * @param context - CLI context with session info
  * @param fromLast - Whether content was extracted from last agent response
  * @param messageId - Optional message ID for provenance
- * @param projectCard - Whether this is a Project Card (long-term memory)
+ * @param projectCardOverride - Manual override for Project Card status
  * @param type - Entity type ('note' or 'todo')
  */
 export function saveNote(
@@ -44,14 +45,14 @@ export function saveNote(
   context: CLIContext,
   fromLast: boolean = false,
   messageId?: string,
-  projectCard: boolean = false,
+  projectCardOverride?: boolean,
   type: 'note' | 'todo' = 'note'
 ): SaveNoteResult {
   if (!title) return { success: false, error: 'Note title is required.' }
   if (!content) return { success: false, error: 'Note content is required.' }
 
   const provenance: Note['provenance'] = {
-    source: 'user',
+    source: fromLast ? 'agent' : 'user',
     sessionId: context.sessionId,
     extractedFrom: fromLast ? 'agent-response' : 'user-input'
   }
@@ -64,7 +65,7 @@ export function saveNote(
     id: crypto.randomUUID(),
     title,
     tags,
-    projectCard,
+    projectCard: false,
     summaryCard,
     summaryCardMethod: 'deterministic' as const,
     createdAt: new Date().toISOString(),
@@ -76,6 +77,13 @@ export function saveNote(
   const entity: Note | Todo = type === 'todo'
     ? { ...baseEntity, type: 'todo', content, status: 'pending' as const }
     : { ...baseEntity, type: 'note', content }
+
+  if (typeof projectCardOverride === 'boolean') {
+    entity.projectCard = projectCardOverride
+    entity.projectCardSource = 'manual'
+  } else {
+    applyProjectCardPolicy([entity])
+  }
 
   // Use projectPath if provided, otherwise fall back to relative path
   const dirPath = type === 'todo' ? PATHS.todos : PATHS.notes

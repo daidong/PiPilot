@@ -17,6 +17,8 @@ export interface ResolvedMention {
   ref: MentionRef
   label: string
   content: string
+  /** Resolved entity ID for entity mentions (note/doc) */
+  entityId?: string
   error?: string
 }
 
@@ -72,13 +74,13 @@ function resolveEntity(
 
       // Match by exact id
       if (entity.id === ref.key || entity.id.toLowerCase().startsWith(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity) }
+        return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
       }
 
       // Match by title substring
       const name = entityName(entity).toLowerCase()
       if (name.includes(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity) }
+        return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
       }
     } catch {
       // skip invalid files

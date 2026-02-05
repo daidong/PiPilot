@@ -2,7 +2,10 @@
  * TraceCollector - Event trace collector with correlation support
  */
 
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import type { TraceEvent, TraceEventType, TraceFilter, EventCorrelation } from '../types/trace.js'
+import type { UsageSummary } from '../llm/provider.types.js'
 
 /**
  * Generate unique ID
@@ -18,6 +21,12 @@ export interface TraceCollectorConfig {
   sessionId: string
   runId?: string
   agentId?: string
+  export?: {
+    enabled?: boolean
+    dir?: string
+    writeJsonl?: boolean
+    writeSummary?: boolean
+  }
 }
 
 /**
@@ -31,6 +40,15 @@ export class TraceCollector {
   private currentStep = 0
   private currentTraceId: string | null = null
   private eventStack: string[] = []
+  private exportConfig: {
+    enabled: boolean
+    dir?: string
+    writeJsonl: boolean
+    writeSummary: boolean
+  }
+  private runStartedAt: number | null = null
+  private runOutcome: { success?: boolean; error?: string; steps?: number; durationMs?: number } | null = null
+  private usageSummary: UsageSummary | undefined
 
   constructor(config: string | TraceCollectorConfig) {
     if (typeof config === 'string') {
@@ -38,10 +56,17 @@ export class TraceCollector {
       this.sessionId = config
       this.runId = generateId()
       this.agentId = 'default'
+      this.exportConfig = { enabled: false, writeJsonl: true, writeSummary: true }
     } else {
       this.sessionId = config.sessionId
       this.runId = config.runId ?? generateId()
       this.agentId = config.agentId ?? 'default'
+      this.exportConfig = {
+        enabled: config.export?.enabled ?? false,
+        dir: config.export?.dir,
+        writeJsonl: config.export?.writeJsonl ?? true,
+        writeSummary: config.export?.writeSummary ?? true
+      }
     }
   }
 
@@ -65,6 +90,18 @@ export class TraceCollector {
   }
 
   /**
+   * Start a new run (resets in-memory events for this run)
+   */
+  startRun(runId?: string, startedAt?: number): void {
+    this.clear()
+    this.runId = runId ?? generateId()
+    this.currentStep = 0
+    this.runStartedAt = startedAt ?? Date.now()
+    this.runOutcome = null
+    this.usageSummary = undefined
+  }
+
+  /**
    * Set agent ID
    */
   setAgentId(agentId: string): void {
@@ -83,6 +120,20 @@ export class TraceCollector {
    */
   setStep(step: number): void {
     this.currentStep = step
+  }
+
+  /**
+   * Store run outcome data for summary export
+   */
+  setRunOutcome(outcome: { success?: boolean; error?: string; steps?: number; durationMs?: number }): void {
+    this.runOutcome = { ...this.runOutcome, ...outcome }
+  }
+
+  /**
+   * Store token usage summary for export
+   */
+  setUsageSummary(summary?: UsageSummary): void {
+    this.usageSummary = summary
   }
 
   /**
@@ -243,6 +294,47 @@ export class TraceCollector {
     this.events = []
     this.eventStack = []
     this.currentTraceId = null
+  }
+
+  /**
+   * Export trace events and summary to disk (JSONL + summary JSON)
+   */
+  flush(): void {
+    if (!this.exportConfig.enabled) return
+
+    try {
+      const dir = this.exportConfig.dir ?? join(process.cwd(), '.agentfoundry', 'traces')
+      mkdirSync(dir, { recursive: true })
+
+      if (this.exportConfig.writeJsonl) {
+        const jsonl = this.events.map(e => JSON.stringify(e)).join('\n') + (this.events.length ? '\n' : '')
+        const tracePath = join(dir, `trace-${this.runId}.jsonl`)
+        writeFileSync(tracePath, jsonl, 'utf-8')
+      }
+
+      if (this.exportConfig.writeSummary) {
+        const stats = this.getStats()
+        const summary = {
+          runId: this.runId,
+          sessionId: this.sessionId,
+          agentId: this.agentId,
+          startedAt: this.runStartedAt ? new Date(this.runStartedAt).toISOString() : undefined,
+          durationMs: this.runOutcome?.durationMs ?? (this.runStartedAt ? Date.now() - this.runStartedAt : undefined),
+          success: this.runOutcome?.success,
+          error: this.runOutcome?.error,
+          steps: this.runOutcome?.steps ?? stats.steps,
+          totalEvents: stats.totalEvents,
+          byType: stats.byType,
+          usage: this.usageSummary
+        }
+        const summaryPath = join(dir, `trace-${this.runId}.summary.json`)
+        writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf-8')
+      }
+    } catch (error) {
+      // Do not fail agent execution if tracing export fails
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn('[TraceCollector] Failed to export traces:', message)
+    }
   }
 
   /**

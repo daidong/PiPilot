@@ -7,7 +7,7 @@
  * - Sets up history compressor on runtime
  *
  * Use this pack when you want to enable smart context management with:
- * - Pinned context (always included)
+ * - Project Cards (long-term memory, always included when present)
  * - User-selected context (via agent.run options)
  * - Session history with compression
  * - On-demand expansion via ctx-expand
@@ -80,7 +80,7 @@ Use the ctx-expand tool to retrieve compressed context:
 1. Check the History Index for relevant segment keywords
 2. Use search to find specific topics in history
 3. Expand only what you need to save tokens
-4. Memory items tagged 'pinned' are always available
+4. Memory items tagged 'project-card' are always available (legacy 'pinned' is supported)
     `.trim(),
 
     onInit: async (runtime: Runtime) => {

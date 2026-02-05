@@ -9,7 +9,7 @@
 
 ## 1. Motivation
 
-RFC-001 delivers a functional personal assistant with Notes, Docs, and conversational email access. But it operates session-by-session — each conversation starts nearly from scratch, with only pinned notes and kvMemory providing continuity.
+RFC-001 delivers a functional personal assistant with Notes, Docs, and conversational email access. But it operates session-by-session — each conversation starts nearly from scratch, with only Project Cards and kvMemory providing continuity.
 
 A truly useful personal assistant must **remember you** over months and years. It should know your preferences, recall past conversations, learn your workflows, and act proactively — not just respond to prompts.
 
@@ -174,7 +174,7 @@ Total bootstrap budget: **~3,000 tokens** (assuming ~15 chars/token).
 
 ### 4.1 Implementation via Context Pipeline
 
-Bootstrap files are injected as **pinned ContextSelections** in the existing context pipeline:
+Bootstrap files are injected as **selected ContextSelections** in the existing context pipeline:
 
 ```typescript
 function buildBootstrapSelections(projectPath: string): ContextSelection[] {
@@ -205,7 +205,7 @@ function buildBootstrapSelections(projectPath: string): ContextSelection[] {
 }
 ```
 
-This integrates cleanly with RFC-001's existing `buildEntitySelections()` — both return `ContextSelection[]` arrays that merge in the pinned phase.
+Project Cards are synced to memoryStorage for the `project-cards` phase. Bootstrap selections are injected via the selected phase.
 
 ---
 
@@ -870,7 +870,7 @@ The `schedule` field is a 5-field cron expression: minute hour day-of-month mont
 ### 10.1 Updated Phase Order
 
 ```
-Phase 1: pinned       — pinned Notes + Docs (RFC-001)
+Phase 1: project-cards — Project Cards (Notes + Docs)
 Phase 2: bootstrap    — USER.md + MEMORY.md + today/yesterday logs  [NEW]
 Phase 3: selected     — user-selected entities (RFC-001)
 Phase 4: session      — session memory / kvMemory (RFC-001)
@@ -881,7 +881,7 @@ Phase 5: mentions     — @-mention resolved content (RFC-001)
 
 | Phase | Budget | Contents |
 |-------|--------|----------|
-| pinned | ~2,000 tokens | Pinned Notes + Docs |
+| project-cards | ~2,000 tokens | Project Cards (Notes + Docs) |
 | bootstrap | ~3,000 tokens | USER.md + MEMORY.md + daily logs |
 | selected | ~2,000 tokens | User-selected entities |
 | session | ~1,000 tokens | kvMemory items |

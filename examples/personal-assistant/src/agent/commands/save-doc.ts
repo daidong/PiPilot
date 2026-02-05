@@ -7,6 +7,7 @@
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { PATHS, Doc, CLIContext } from '../types.js'
+import { applyProjectCardPolicy } from '../../../../../src/core/project-card-policy.js'
 
 export interface SaveDocResult {
   success: boolean
@@ -41,8 +42,7 @@ export function saveDoc(
     mimeType: opts.mimeType,
     description: opts.description,
     tags: opts.tags ?? [],
-    pinned: false,
-    selectedForAI: false,
+    projectCard: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     provenance: {
@@ -51,6 +51,8 @@ export function saveDoc(
       extractedFrom: 'user-input'
     }
   }
+
+  applyProjectCardPolicy([doc])
 
   const docsPath = context.projectPath
     ? join(context.projectPath, PATHS.docs)

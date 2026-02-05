@@ -56,6 +56,7 @@ export default function App() {
   const initSession = useSessionStore((s) => s.init)
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
+  const setWorkingSetRuntime = useEntityStore((s) => s.setWorkingSetRuntime)
   const rightCollapsed = useUIStore((s) => s.rightSidebarCollapsed)
   const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
   const previewEntity = useUIStore((s) => s.previewEntity)
@@ -114,8 +115,12 @@ export default function App() {
     const unsub3 = api.onTodoUpdate((item: any) => {
       useProgressStore.getState().upsertItem(item)
     })
+    // Progress/todos persist across turns - only clear on explicit reset
     const unsub4 = api.onTodoClear(() => {
       useProgressStore.getState().clear()
+    })
+    // Activity is per-run - clear on new input
+    const unsubActivityClear = api.onActivityClear(() => {
       useActivityStore.getState().clear()
       // Don't reset usage here - we want to accumulate across runs
       // Usage is reset when a NEW run starts, not when the old one ends
@@ -132,6 +137,21 @@ export default function App() {
     const unsub2 = api.onAgentDone((result: any) => {
       finalize(result)
       refreshEntities().catch(() => {})
+
+      if (result?.workingSetRuntime?.items) {
+        const items = result.workingSetRuntime.items.map((item: any) => ({
+          id: item.id,
+          title: item.title || item.id,
+          type: (item.type === 'doc' || item.type === 'todo' || item.type === 'note') ? item.type : 'note',
+          workingSetSource: item.source,
+          workingSetReason: item.reason,
+          workingSetScore: item.score,
+          workingSetRequestedShape: item.requestedShape
+        }))
+        setWorkingSetRuntime(items)
+      } else {
+        setWorkingSetRuntime([])
+      }
 
       // Extract file paths from agent response and add to working files
       const text = result.response || ''
@@ -170,6 +190,7 @@ export default function App() {
       unsub5()
       unsub6()
       unsubActivity()
+      unsubActivityClear()
       unsubUsage()
     }
   }, [hasProject])

@@ -277,8 +277,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
 
     const coord = await ensureCoordinator(win, model)
-    realtimeBuffer.clearRun()
-    safeSend(win, 'agent:todo-clear')
+    // Only clear activity (per-run), NOT progress/todos (persist across turns)
+    realtimeBuffer.clearActivity()
+    safeSend(win, 'agent:activity-clear')
     let mentions: any[] = []
     if (rawMentions) {
       const parsed = parseMentions(rawMentions)

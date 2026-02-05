@@ -91,8 +91,9 @@ export function toggleProjectCard(entityId: string, projectPath?: string): Proje
     const content = readFileSync(filePath, 'utf-8')
     const entity = JSON.parse(content) as Entity
 
-    // Toggle projectCard status
+    // Toggle projectCard status (manual override)
     entity.projectCard = !entity.projectCard
+    entity.projectCardSource = 'manual'
     entity.updatedAt = new Date().toISOString()
 
     // Migrate legacy field if present

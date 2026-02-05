@@ -2,9 +2,9 @@
  * Coordinator Agent
  *
  * Main chat agent using the framework's context pipeline:
- * - Pinned entities synced to memoryStorage → framework's pinned-phase (reserved ∞ budget)
- * - Selected (non-pinned) entities loaded as ContextSelections → selected-phase (30% budget)
- * - @-mentions passed as selectedContext for the selected phase
+ * - Project Cards synced to memoryStorage → project-cards phase (reserved budget)
+ * - WorkingSet built per turn from disk index → workingset phase (percentage budget)
+ * - @-mentions: entity mentions → workingset, file/url mentions → selected phase
  * - Session memory (ephemeral) via kvMemory namespace="session"
  * - Token budgeting, history compression, and ctx-expand come for free
  */
@@ -13,21 +13,154 @@ import os from 'os'
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, basename } from 'path'
 import { createAgent, packs, definePack, defineTool } from '@framework/index.js'
+import { createLLMClientFromModelId } from '@framework/llm/index.js'
+import { applyProjectCardPolicy } from '@framework/core/project-card-policy.js'
+import { generateSummaryCard } from '@framework/core/summary-card.js'
 import { createSaveNoteTool, createSaveDocTool, createUpdateNoteTool, createToggleCompleteTool } from '../tools/entity-tools.js'
 import { createCalendarTool } from '../tools/calendar-tool.js'
 import { createGmailTool } from '../tools/gmail-tool.js'
 import { noGmailDelete } from '../policies/no-gmail-delete.js'
 import type { Agent } from '@framework/types/agent.js'
+import type { Policy } from '@framework/types/policy.js'
 import type { ContextSelection } from '@framework/types/context-pipeline.js'
 import { PATHS, Entity, Note, Todo, Doc } from '../types.js'
+import type { EntityIndex, WorkingSetResolvedEntity } from '@framework/context/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { countTokens } from '@framework/utils/tokenizer.js'
 import { loadPrompt } from './prompts/index.js'
+import { getWorkingSetIds } from '../commands/select.js'
 
 /**
  * System prompt for the coordinator (loaded from prompts/coordinator-system)
  */
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
+
+type IntentLabel = 'email' | 'calendar' | 'docs' | 'memory' | 'scheduler' | 'web' | 'general'
+
+const INTENT_PRIORITY: IntentLabel[] = [
+  'email',
+  'calendar',
+  'scheduler',
+  'docs',
+  'memory',
+  'web',
+  'general'
+]
+
+const INTENT_MODULES: Partial<Record<IntentLabel, string>> = {
+  email: 'coordinator-module-email',
+  calendar: 'coordinator-module-calendar',
+  docs: 'coordinator-module-docs',
+  memory: 'coordinator-module-memory',
+  scheduler: 'coordinator-module-scheduler'
+}
+
+function detectIntentsByRules(message: string): Set<IntentLabel> {
+  const text = message.toLowerCase()
+  const intents = new Set<IntentLabel>()
+
+  if (/(email|inbox|gmail|mail|thread|reply|send|subject|unread|star|mark as read|message|sender|from:|to:|cc:|bcc:|attachment|附件|邮件|邮箱|收件箱|发件人|主题)/.test(text)) {
+    intents.add('email')
+  }
+  if (/(calendar|meeting|event|invite|availability|free time|schedule (a )?meeting|日历|会议|约会|安排时间|空闲时间)/.test(text)) {
+    intents.add('calendar')
+  }
+  if (/(cron|scheduled task|scheduler|daily briefing|weekly briefing|morning briefing|recurring task|定时任务|定期任务|计划任务|日报|周报|晨报)/.test(text)) {
+    intents.add('scheduler')
+  }
+  if (/(pdf|docx|document|convert|markdown|ppt|slides|xlsx|excel|word|文档|转换|提取|幻灯片|表格)/.test(text)) {
+    intents.add('docs')
+  }
+  if (/(remember|note this|save this|my preference|my name is|timezone|language|remember this|记住|记下来|偏好|时区|语言)/.test(text)) {
+    intents.add('memory')
+  }
+  if (/(latest|today|news|deadline|release|price|website|官网|新闻|截止|版本)/.test(text)) {
+    intents.add('web')
+  }
+
+  return intents
+}
+
+async function classifyIntentWithLLM(
+  routerClient: ReturnType<typeof createLLMClientFromModelId> | null,
+  message: string
+): Promise<IntentLabel> {
+  if (!routerClient) return 'general'
+  const system = [
+    'You are an intent router for a personal assistant.',
+    'Choose ONE label from: email, calendar, docs, memory, scheduler, web, general.',
+    'Output the label ONLY.'
+  ].join(' ')
+
+  try {
+    const result = await routerClient.generate({
+      system,
+      messages: [{ role: 'user', content: message }],
+      maxTokens: 6
+    })
+    const raw = result.text.trim().toLowerCase()
+    const label = raw.split(/\s+/)[0] as IntentLabel
+    if (INTENT_PRIORITY.includes(label)) {
+      return label
+    }
+  } catch {
+    // fall through
+  }
+  return 'general'
+}
+
+function describeToolReturn(name: string): string {
+  if (name === 'read') return 'file text'
+  if (name === 'write') return 'path/bytes'
+  if (name === 'edit') return 'replacements'
+  if (name === 'glob') return 'paths'
+  if (name === 'grep') return 'matches'
+  if (name === 'convert_to_markdown') return 'output file path'
+  if (name === 'fetch') return 'status + body'
+  if (name === 'literature-search') return 'summary + file paths'
+  if (name === 'data-analyze') return 'outputs/manifest'
+  if (name.startsWith('brave_')) return 'ranked results'
+  if (name.startsWith('sqlite_')) return 'JSON text'
+  if (name.startsWith('todo-')) return 'internal task (progress)'
+  if (name.startsWith('memory-')) return 'memory item'
+  if (name === 'gmail') return 'gmail action result'
+  if (name === 'calendar') return 'events text'
+  if (name.startsWith('save-') || name.startsWith('update-') || name === 'toggle-complete' || name === 'toggle-pin') return 'entity result'
+  if (name === 'ctx-get') return 'rendered context'
+  if (name === 'ctx-expand') return 'expanded context'
+  if (name === 'bash') return 'stdout/stderr'
+  return 'result'
+}
+
+function buildToolContracts(toolRegistry: { getAll: () => Array<{ name: string; parameters?: Record<string, { required?: boolean }> }> }): string {
+  const tools = toolRegistry.getAll().slice().sort((a, b) => a.name.localeCompare(b.name))
+  const lines: string[] = ['## Tool contracts (minimal)']
+  for (const tool of tools) {
+    const params = tool.parameters ?? {}
+    const names = Object.entries(params).map(([name, def]) => {
+      let label = def?.required === false ? `${name}?` : name
+      if (tool.name === 'memory-put' && name === 'value') {
+        label = def?.required === false ? `${name}?(JSON string)` : `${name}(JSON string)`
+      }
+      return label
+    })
+    const argList = names.length > 0 ? `{ ${names.join(', ')} }` : '{}'
+    lines.push(`- ${tool.name}(${argList}) → ${describeToolReturn(tool.name)}`)
+  }
+  return lines.join('\n')
+}
+
+function buildAdditionalInstructions(intents: Set<IntentLabel>, toolContracts: string): string | undefined {
+  const ordered = INTENT_PRIORITY.filter(i => intents.has(i)).slice(0, 2)
+  const modules = [
+    toolContracts,
+    ...ordered
+      .map(i => INTENT_MODULES[i])
+      .filter((name): name is string => !!name)
+      .map(name => loadPrompt(name))
+  ]
+  return modules.length > 0 ? modules.join('\n\n') : undefined
+}
 
 // ============================================================================
 // Helper Functions
@@ -81,55 +214,241 @@ function formatEntityForContext(entity: Entity): string {
   return `### ${entity.type}: ${entity.id}`
 }
 
-/**
- * Build ContextSelection[] from disk entities.
- * Project Cards (formerly pinned) are synced to memoryStorage separately for the framework's project-cards-phase.
- * WorkingSet is built at runtime from @mentions and explicit selections, not from entity fields.
- *
- * RFC-009: selectedForAI field is no longer used - WorkingSet is runtime-only.
- */
-function buildEntitySelections(projectPath: string, debug: boolean): ContextSelection[] {
+const PROJECT_CARD_NAMESPACE = 'project'
+
+function getEntityTitle(entity: Entity): string {
+  return entity.title
+}
+
+function getEntityDir(entity: Entity): string {
+  switch (entity.type) {
+    case 'note': return PATHS.notes
+    case 'todo': return PATHS.todos
+    case 'doc': return PATHS.docs
+    default: return PATHS.notes
+  }
+}
+
+function writeEntityToDisk(entity: Entity, projectPath: string): void {
+  const dir = join(projectPath, getEntityDir(entity))
+  const filePath = join(dir, `${entity.id}.json`)
+  writeFileSync(filePath, JSON.stringify(entity, null, 2))
+}
+
+function extractSummaryInput(entity: Entity): { type: 'note' | 'task' | 'data'; title: string; content: string; tags: string[] } {
+  if (entity.type === 'note') {
+    const note = entity as Note
+    return { type: 'note', title: note.title, content: note.content, tags: note.tags ?? [] }
+  }
+  if (entity.type === 'todo') {
+    const todo = entity as Todo
+    return { type: 'task', title: todo.title, content: todo.content, tags: todo.tags ?? [] }
+  }
+  const doc = entity as Doc
+  const content = doc.description || `File: ${doc.filePath}`
+  return { type: 'data', title: doc.title, content, tags: doc.tags ?? [] }
+}
+
+async function ensureSummaryCard(entity: Entity): Promise<boolean> {
+  if (entity.summaryCard && entity.summaryCard.trim().length > 0) {
+    return false
+  }
+
+  const input = extractSummaryInput(entity)
+  const summary = await generateSummaryCard({
+    type: input.type,
+    title: input.title,
+    content: input.content,
+    tags: input.tags
+  })
+
+  entity.summaryCard = summary.summaryCard
+  entity.summaryCardMethod = summary.method
+  entity.summaryCardHash = summary.contentHash
+  return true
+}
+
+async function normalizeEntities(projectPath: string, entities: Entity[], debug: boolean): Promise<Entity[]> {
+  const changedIds = new Set<string>()
+
+  for (const entity of entities) {
+    let changed = false
+
+    if ('pinned' in entity) {
+      const legacyPinned = (entity as Record<string, unknown>).pinned === true
+      if (!('projectCard' in entity)) {
+        entity.projectCard = legacyPinned
+      }
+      if (legacyPinned && !entity.projectCardSource) {
+        entity.projectCardSource = 'manual'
+      }
+      delete (entity as Record<string, unknown>).pinned
+      changed = true
+    }
+
+    if ('selectedForAI' in entity) {
+      delete (entity as Record<string, unknown>).selectedForAI
+      changed = true
+    }
+
+    if (!('projectCard' in entity)) {
+      entity.projectCard = false
+      changed = true
+    }
+
+    if (entity.projectCard && !entity.projectCardSource) {
+      entity.projectCardSource = 'manual'
+      changed = true
+    }
+
+    if (await ensureSummaryCard(entity)) {
+      changed = true
+    }
+
+    if (changed) {
+      changedIds.add(entity.id)
+    }
+  }
+
+  const { changes } = applyProjectCardPolicy(entities)
+  if (changes.length > 0) {
+    for (const change of changes) {
+      changedIds.add(change.id)
+    }
+  }
+
+  if (changedIds.size > 0) {
+    const now = new Date().toISOString()
+    for (const entity of entities) {
+      if (!changedIds.has(entity.id)) continue
+      entity.updatedAt = now
+      writeEntityToDisk(entity, projectPath)
+    }
+    if (debug) {
+      console.log(`[Context] Project Card policy updated ${changedIds.size} entities`)
+    }
+  }
+
+  return entities
+}
+
+async function loadAndNormalizeEntities(projectPath: string, debug: boolean): Promise<Entity[]> {
   const allEntities: Entity[] = [
     ...loadEntitiesFromDisk(join(projectPath, PATHS.notes)),
     ...loadEntitiesFromDisk(join(projectPath, PATHS.todos)),
     ...loadEntitiesFromDisk(join(projectPath, PATHS.docs))
   ]
+  return normalizeEntities(projectPath, allEntities, debug)
+}
 
-  // Project Cards are handled via syncProjectCardsToMemoryStorage() → project-cards-phase
-  // RFC-009: WorkingSet is runtime-only, not derived from selectedForAI field
-  const projectCards = allEntities.filter(e => e.pinned || e.projectCard)
+async function buildEntityIndex(projectPath: string, debug: boolean): Promise<EntityIndex[]> {
+  const entities = await loadAndNormalizeEntities(projectPath, debug)
+  return entities.map(entity => ({
+    id: entity.id,
+    title: getEntityTitle(entity),
+    tags: entity.tags ?? [],
+    summaryCard: entity.summaryCard ?? getEntityTitle(entity),
+    projectCard: entity.projectCard ?? false,
+    type: entity.type,
+    updatedAt: entity.updatedAt
+  }))
+}
 
-  if (debug) {
-    console.log(`[Context] Entities: ${allEntities.length} total, ${projectCards.length} project cards (via memoryStorage)`)
+function findEntityById(entityId: string, projectPath: string): { entity: Entity; filePath: string } | null {
+  const dirs = [PATHS.notes, PATHS.todos, PATHS.docs].map(p => join(projectPath, p))
+
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue
+    const files = readdirSync(dir)
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue
+      const filePath = join(dir, file)
+      try {
+        const content = readFileSync(filePath, 'utf-8')
+        const entity = JSON.parse(content) as Entity
+        if (entity.id === entityId || entity.id.startsWith(entityId) || file.includes(entityId)) {
+          return { entity, filePath }
+        }
+      } catch {
+        // skip
+      }
+    }
   }
 
-  // RFC-009: No longer returning selected entities here.
-  // WorkingSet is built from @mentions and explicit UI selections at runtime.
-  return []
+  return null
+}
+
+async function resolveWorkingSetEntity(
+  entityId: string,
+  projectPath: string,
+  debug: boolean
+): Promise<WorkingSetResolvedEntity | null> {
+  const result = findEntityById(entityId, projectPath)
+  if (!result) return null
+
+  const { entity } = result
+
+  let changed = false
+  if (!('projectCard' in entity)) {
+    entity.projectCard = false
+    changed = true
+  }
+  if (await ensureSummaryCard(entity)) {
+    changed = true
+  }
+  if (changed) {
+    entity.updatedAt = new Date().toISOString()
+    writeEntityToDisk(entity, projectPath)
+    if (debug) {
+      console.log(`[Context] Updated summaryCard for ${entity.id.slice(0, 8)}`)
+    }
+  }
+
+  const title = getEntityTitle(entity)
+  const summary = entity.summaryCard ?? title
+  const cardContent = `### ${title}\n\n${summary}`
+
+  return {
+    id: entity.id,
+    title,
+    tags: entity.tags ?? [],
+    summaryCard: entity.summaryCard,
+    projectCard: entity.projectCard ?? false,
+    type: entity.type,
+    content: {
+      full: formatEntityForContext(entity),
+      card: cardContent,
+      indexLine: `- ${title} [id:${entity.id}]`
+    }
+  }
 }
 
 /**
- * Sync Project Cards (long-term memory entities) from disk to memoryStorage.
- * RFC-009: Renamed from syncPinnedToMemoryStorage. Project Cards get reserved (infinite) budget.
+ * Build ContextSelection[] from disk entities.
+ * Project Cards are synced to memoryStorage separately for the framework's project-cards phase.
+ * WorkingSet is built at runtime from explicit selections + query, not from entity fields.
  *
- * Supports both legacy 'pinned' field and new 'projectCard' field for backward compatibility.
+ * RFC-009: selectedForAI field is no longer used - WorkingSet is runtime-only.
+ */
+/**
+ * Sync Project Cards (long-term memory entities) from disk to memoryStorage.
+ * RFC-009: Project Cards get reserved budget and are budgeted via project-cards phase.
+ *
+ * Legacy 'pinned' fields are migrated to projectCard during normalization.
  */
 async function syncProjectCardsToMemoryStorage(
   projectPath: string,
   memoryStorage: any,
   debug: boolean
 ): Promise<void> {
-  const allEntities: Entity[] = [
-    ...loadEntitiesFromDisk(join(projectPath, PATHS.notes)),
-    ...loadEntitiesFromDisk(join(projectPath, PATHS.todos)),
-    ...loadEntitiesFromDisk(join(projectPath, PATHS.docs))
-  ]
-  // Support both legacy 'pinned' and new 'projectCard' fields
-  const projectCards = allEntities.filter(e => e.pinned || e.projectCard)
+  const allEntities = await loadAndNormalizeEntities(projectPath, debug)
+  const projectCards = allEntities.filter(e => e.projectCard)
 
   // Get existing project-card items in memoryStorage to detect removals
-  const existing = await memoryStorage.list({ namespace: 'pinned', tags: ['project-card'], status: 'active' })
+  const existing = await memoryStorage.list({ namespace: PROJECT_CARD_NAMESPACE, tags: ['project-card'], status: 'active' })
   const existingKeys = new Set(existing.items.map((i: any) => i.key))
+  const legacyExisting = await memoryStorage.list({ namespace: 'pinned', tags: ['project-card'], status: 'active' })
+  const legacyKeys = new Set(legacyExisting.items.map((i: any) => i.key))
 
   // Upsert current project card entities
   const currentKeys = new Set<string>()
@@ -139,9 +458,9 @@ async function syncProjectCardsToMemoryStorage(
     currentKeys.add(key)
     const content = formatEntityForContext(entity)
     await memoryStorage.put({
-      namespace: 'pinned',
+      namespace: PROJECT_CARD_NAMESPACE,
       key,
-      value: { entityId: entity.id, type: entity.type, title: entity.title },
+      value: { entityId: entity.id, type: entity.type, title: getEntityTitle(entity) },
       valueText: content,
       tags: ['project-card', entity.type],
       overwrite: true
@@ -151,7 +470,15 @@ async function syncProjectCardsToMemoryStorage(
   // Remove items that are no longer project cards
   for (const oldKey of existingKeys) {
     if (!currentKeys.has(oldKey)) {
+      await memoryStorage.delete(PROJECT_CARD_NAMESPACE, oldKey, 'removed-from-project-cards')
+    }
+  }
+  // Clean legacy namespace to avoid duplicates
+  for (const oldKey of legacyKeys) {
+    if (!currentKeys.has(oldKey)) {
       await memoryStorage.delete('pinned', oldKey, 'removed-from-project-cards')
+    } else {
+      await memoryStorage.delete('pinned', oldKey, 'project-cards-namespace-migrated')
     }
   }
 
@@ -161,13 +488,31 @@ async function syncProjectCardsToMemoryStorage(
 }
 
 /**
+ * Extract WorkingSet entity IDs from resolved @-mentions.
+ * Entity mentions (note/doc) go to the WorkingSet, not selected context.
+ */
+function getMentionWorkingSetIds(mentions?: ResolvedMention[]): string[] {
+  if (!mentions || mentions.length === 0) return []
+
+  const ids: string[] = []
+  for (const mention of mentions) {
+    if (mention.error) continue
+    if ((mention.ref.type === 'note' || mention.ref.type === 'doc') && mention.entityId) {
+      ids.push(mention.entityId)
+    }
+  }
+  return ids
+}
+
+/**
  * Build ContextSelection[] from resolved @-mentions.
+ * Non-entity mentions (file/url) are still injected via selected context.
  */
 function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[] {
   if (!mentions || mentions.length === 0) return []
 
   return mentions
-    .filter(m => !m.error)
+    .filter(m => !m.error && (m.ref.type === 'file' || m.ref.type === 'url'))
     .map(m => ({
       type: 'custom' as const,
       ref: m.ref.raw,
@@ -184,7 +529,7 @@ function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[
 
 /**
  * Build ContextSelection[] from bootstrap memory files (USER.md, MEMORY.md, daily logs).
- * These are injected as pinned context every turn so the agent always has memory access.
+ * These are injected as selected context every turn so the agent always has memory access.
  */
 function buildBootstrapSelections(projectPath: string): ContextSelection[] {
   const today = new Date()
@@ -245,6 +590,29 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   const { apiKey, model, projectPath = process.cwd(), debug = false, sessionId, reasoningEffort = 'high', onStream, onToolCall, onToolResult, onUsage } = config
   // Resolve ~ to the user's home directory (dotenv / Node don't expand shell tilde)
   const emailDbPath = config.emailDbPath?.replace(/^~(?=\/|$)/, os.homedir())
+
+  // Flag to guard against using internal todo tools for user-facing tasks
+  let userTodoIntent = false
+  const userTodoPolicy: Policy = {
+    id: 'deny-internal-todo-for-user',
+    description: 'Block todo-* tools when the user requests user-facing Todos',
+    phase: 'guard',
+    match: (ctx) => userTodoIntent && ctx.tool.startsWith('todo-'),
+    decide: () => ({
+      action: 'deny',
+      reason: 'User-facing tasks must be saved via save-note({ type: "todo", ... }) (Todos tab).'
+    })
+  }
+
+  // Cheap intent router (fallback only when no strong rule-based signals)
+  let intentRouterClient: ReturnType<typeof createLLMClientFromModelId> | null = null
+  try {
+    intentRouterClient = createLLMClientFromModelId('gpt-5-nano', { apiKey })
+  } catch (err) {
+    if (debug) {
+      console.warn('[IntentRouter] Failed to init gpt-5-nano:', err)
+    }
+  }
 
   // Create entity tools for saving, updating notes and docs
   const saveNoteTool = createSaveNoteTool(sessionId || crypto.randomUUID(), projectPath)
@@ -436,6 +804,7 @@ _(none yet)_
       'For multi-step work, briefly state intent before acting',
       'Ask for clarification when instructions are ambiguous'
     ],
+    policies: [userTodoPolicy],
     packs: agentPacks,
     onStream,
     onToolCall: (name: string, args: unknown) => {
@@ -483,6 +852,11 @@ _(none yet)_
 
   // Initialize packs eagerly so memoryStorage is available before first run()
   await agent.ensureInit()
+  agent.runtime.entityIndexProvider = async () => buildEntityIndex(projectPath, debug)
+  agent.runtime.entityResolver = async (id: string) => resolveWorkingSetEntity(id, projectPath, debug)
+
+  // Build minimal tool contracts from actual tool schemas
+  const toolContracts = buildToolContracts(agent.runtime.toolRegistry as any)
 
   // Helper: clear all items in the 'session' namespace
   async function clearSessionMemory() {
@@ -492,23 +866,6 @@ _(none yet)_
     for (const item of items) {
       await storage.delete('session', item.key, 'session-clear')
     }
-  }
-
-  // Helper: build session memory context string for injection
-  async function buildSessionMemoryContext(): Promise<string> {
-    const storage = (agent.runtime as any).memoryStorage
-    if (!storage) return ''
-    const { items } = await storage.list({ namespace: 'session', status: 'active' })
-    if (items.length === 0) return ''
-
-    const now = Date.now()
-    const lines = items.map((item: any) => {
-      const ago = Math.round((now - new Date(item.updatedAt).getTime()) / 60000)
-      const timeLabel = ago < 1 ? 'just now' : `${ago}min ago`
-      const val = typeof item.value === 'string' ? item.value : (item.valueText || JSON.stringify(item.value))
-      return `- ${item.key}: ${val} (${timeLabel})`
-    })
-    return `## Session Memory\n${lines.join('\n')}`
   }
 
   // Clear ephemeral session memory from previous run
@@ -525,19 +882,41 @@ _(none yet)_
           await syncProjectCardsToMemoryStorage(projectPath, storage, debug)
         }
 
-        // RFC-009: WorkingSet is built from @mentions and bootstrap files at runtime
+        // Intent routing → inject minimal task modules per request
+        const intents = detectIntentsByRules(message)
+        userTodoIntent = /(todo|to-do|action items|tasks|task list|待办|清单|事项)/i.test(message)
+        const hasModuleIntent = ['email', 'calendar', 'docs', 'memory', 'scheduler'].some(i => intents.has(i as IntentLabel))
+        if (!hasModuleIntent) {
+          const label = await classifyIntentWithLLM(intentRouterClient, message)
+          if (label !== 'general') intents.add(label)
+        }
+        const additionalInstructions = buildAdditionalInstructions(intents, toolContracts)
+
+        // RFC-009: WorkingSet is built from explicit selections + query each turn
         const mentionSelections = buildMentionSelections(mentions)
         const bootstrapSelections = buildBootstrapSelections(projectPath)
 
         const selectedContext = [...bootstrapSelections, ...mentionSelections]
+        const mentionWorkingSetIds = getMentionWorkingSetIds(mentions)
+        const workingSetIds = Array.from(new Set([
+          ...getWorkingSetIds(sessionId || 'default'),
+          ...mentionWorkingSetIds
+        ]))
 
         if (debug) {
-          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention, ${bootstrapSelections.length} bootstrap selections)...`)
+          const intentList = Array.from(intents).join(', ') || 'none'
+          console.log(`[Chat] Intents: ${intentList}`)
+          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention selections, ${bootstrapSelections.length} bootstrap selections, ${workingSetIds.length} WorkingSet IDs)...`)
         }
 
         // RFC-009: Session memory is now budgeted via state-summary-phase, no prefix injection needed
         const result = await agent.run(message, {
-          ...(selectedContext.length > 0 && { selectedContext })
+          ...(selectedContext.length > 0 && { selectedContext }),
+          workingSet: {
+            explicitIds: workingSetIds,
+            query: message
+          },
+          ...(additionalInstructions ? { additionalInstructions } : {})
         })
 
         if (debug) {
@@ -548,7 +927,8 @@ _(none yet)_
         // (reserved for auto-summary on conversation end, daily log append, etc.)
 
         if (result.success) {
-          return { success: true, response: result.output }
+          const workingSetRuntime = agent.runtime.sessionState.get('workingSetRuntime')
+          return { success: true, response: result.output, workingSetRuntime }
         } else {
           const errorMsg = result.error || 'Agent failed (no error message)'
           return { success: false, error: errorMsg }

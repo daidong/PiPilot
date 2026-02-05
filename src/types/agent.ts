@@ -86,6 +86,15 @@ export interface AgentConfig {
   sessionId?: string
   /** Pre-compaction callback — fired once per run() when context usage >= 80% */
   onPreCompaction?: (agent: Agent) => Promise<void>
+  /** Trace export configuration */
+  trace?: {
+    export?: {
+      enabled?: boolean
+      dir?: string
+      writeJsonl?: boolean
+      writeSummary?: boolean
+    }
+  }
 }
 
 /**
@@ -114,6 +123,15 @@ export interface AgentRunResult {
 export interface AgentRunOptions {
   /** User-selected context to include */
   selectedContext?: ContextSelection[]
+  /** WorkingSet inputs for this run */
+  workingSet?: {
+    /** Explicit entity IDs to include */
+    explicitIds?: string[]
+    /** Query string for retrieval */
+    query?: string
+  }
+  /** Additional system-level instructions for this run */
+  additionalInstructions?: string
   /** Override token budget for this run */
   tokenBudget?: number
 }

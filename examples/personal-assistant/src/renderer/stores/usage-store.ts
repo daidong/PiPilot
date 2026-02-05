@@ -37,6 +37,8 @@ export interface RunSummary {
  */
 interface PersistedTotals {
   tokens: number
+  promptTokens: number
+  cachedTokens: number
   cost: number
   calls: number
   lastUpdated: string
@@ -56,6 +58,8 @@ interface UsageState {
 
   // All-time totals (persisted to localStorage)
   allTimeTokens: number
+  allTimePromptTokens: number
+  allTimeCachedTokens: number
   allTimeCost: number
   allTimeCalls: number
 
@@ -112,6 +116,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
 
     // All-time totals (from persistence)
     allTimeTokens: persisted?.tokens ?? 0,
+    allTimePromptTokens: persisted?.promptTokens ?? 0,
+    allTimeCachedTokens: persisted?.cachedTokens ?? 0,
     allTimeCost: persisted?.cost ?? 0,
     allTimeCalls: persisted?.calls ?? 0,
 
@@ -127,6 +133,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
         sessionCost: state.sessionCost + event.cost,
         sessionCalls: state.sessionCalls + 1,
         allTimeTokens: state.allTimeTokens + newTokens,
+        allTimePromptTokens: state.allTimePromptTokens + event.promptTokens,
+        allTimeCachedTokens: state.allTimeCachedTokens + event.cachedTokens,
         allTimeCost: state.allTimeCost + event.cost,
         allTimeCalls: state.allTimeCalls + 1
       }
@@ -134,6 +142,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
       // Persist all-time totals
       saveToStorage({
         tokens: newState.allTimeTokens,
+        promptTokens: newState.allTimePromptTokens,
+        cachedTokens: newState.allTimeCachedTokens,
         cost: newState.allTimeCost,
         calls: newState.allTimeCalls,
         lastUpdated: new Date().toISOString()
@@ -172,6 +182,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
       if (persisted) {
         set({
           allTimeTokens: persisted.tokens,
+          allTimePromptTokens: persisted.promptTokens ?? 0,
+          allTimeCachedTokens: persisted.cachedTokens ?? 0,
           allTimeCost: persisted.cost,
           allTimeCalls: persisted.calls,
           // Also restore to session totals
@@ -194,6 +206,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
         sessionCost: 0,
         sessionCalls: 0,
         allTimeTokens: 0,
+        allTimePromptTokens: 0,
+        allTimeCachedTokens: 0,
         allTimeCost: 0,
         allTimeCalls: 0
       })

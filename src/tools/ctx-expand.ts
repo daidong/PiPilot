@@ -464,6 +464,16 @@ export const ctxExpand: Tool<CtxExpandInput, CtxExpandOutput> = defineTool({
     const { type, ref, maxTokens } = input
     const extendedRuntime = runtime as RuntimeWithCompressor
 
+    // Best-effort: record WorkingSet continuity if ref looks like an entity id
+    if (runtime.workingSetTracker?.recordUsage && ref) {
+      const uuidMatch = ref.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
+      const idMatch = ref.match(/\bid:([0-9a-f-]{6,})\b/i)
+      const candidate = (idMatch && idMatch[1]) || (uuidMatch && uuidMatch[0])
+      if (candidate) {
+        runtime.workingSetTracker.recordUsage(candidate, 'tool-access')
+      }
+    }
+
     // Get compressed history from runtime or session state
     const compressedHistory = extendedRuntime.compressedHistory ??
       extendedRuntime.sessionState.get<CompressedHistory>('compressedHistory')
@@ -500,4 +510,3 @@ export const ctxExpand: Tool<CtxExpandInput, CtxExpandOutput> = defineTool({
     }
   }
 })
-

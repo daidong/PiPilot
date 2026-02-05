@@ -7,7 +7,7 @@
  * IMPORTANT: This pack sets up runtime.memoryStorage which is required by:
  * - memory-put, memory-update, memory-delete tools
  * - memory.get, memory.search, memory.list context sources
- * - Pinned phase (context pipeline) for auto-loading pinned items
+ * - Project Cards phase (context pipeline) for auto-loading project cards
  */
 
 import { definePack } from '../factories/define-pack.js'
@@ -49,7 +49,7 @@ export function kvMemory(): Pack {
 
     /**
      * Initialize memory storage on runtime.
-     * This is REQUIRED for memory tools and pinned phase to work.
+     * This is REQUIRED for memory tools and project-cards phase to work.
      */
     onInit: async (runtime: Runtime) => {
       // Only create if not already set (e.g., by another pack)

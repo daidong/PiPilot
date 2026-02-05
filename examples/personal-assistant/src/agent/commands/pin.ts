@@ -14,6 +14,7 @@ import { PATHS, Entity } from '../types.js'
 
 export interface ProjectCardResult {
   success: boolean
+  id?: string
   entityType?: string
   title?: string
   projectCard?: boolean
@@ -91,8 +92,9 @@ export function toggleProjectCard(entityId: string, projectPath?: string): Proje
     const content = readFileSync(filePath, 'utf-8')
     const entity = JSON.parse(content) as Entity
 
-    // Toggle projectCard status
+    // Toggle projectCard status (manual override)
     entity.projectCard = !entity.projectCard
+    entity.projectCardSource = 'manual'
     entity.updatedAt = new Date().toISOString()
 
     // Migrate legacy field if present
@@ -104,6 +106,7 @@ export function toggleProjectCard(entityId: string, projectPath?: string): Proje
 
     return {
       success: true,
+      id: entity.id,
       entityType: entity.type,
       title: getEntityTitle(entity),
       projectCard: entity.projectCard

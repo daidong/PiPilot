@@ -247,6 +247,40 @@ export interface WorkingSetPlan {
   createdAt: string
 }
 
+// ============ WorkingSet Index/Resolution ============
+
+/**
+ * Lightweight entity index for WorkingSet retrieval
+ */
+export interface EntityIndex {
+  id: string
+  title: string
+  tags: string[]
+  summaryCard: string
+  projectCard: boolean
+  type?: MemoryEntityType | string
+  updatedAt?: string
+}
+
+/**
+ * Resolved entity content for WorkingSet rendering
+ */
+export interface WorkingSetResolvedEntity {
+  id: string
+  title: string
+  tags: string[]
+  summaryCard?: string
+  projectCard?: boolean
+  type?: MemoryEntityType | string
+  priority?: number
+  content: {
+    full: string
+    excerpt?: string
+    card?: string
+    indexLine?: string
+  }
+}
+
 // ============ Migration Types ============
 
 /**
