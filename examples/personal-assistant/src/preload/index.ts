@@ -8,6 +8,15 @@ export interface UsageEvent {
   cacheHitRate: number
 }
 
+export interface FileTreeNode {
+  name: string
+  path: string
+  relativePath: string
+  type: 'file' | 'directory'
+  hasChildren?: boolean
+  modifiedAt: number
+}
+
 export interface ElectronAPI {
   // Agent
   sendMessage: (message: string, rawMentions?: string, model?: string) => Promise<any>
@@ -19,6 +28,8 @@ export interface ElectronAPI {
   listNotes: () => Promise<any>
   listDocs: () => Promise<any>
   listTodos: () => Promise<any>
+  listMail: () => Promise<any>
+  listCalendar: () => Promise<any>
   search: (query: string) => Promise<any>
   deleteEntity: (id: string) => Promise<any>
   renameNote: (id: string, newTitle: string) => Promise<any>
@@ -26,6 +37,12 @@ export interface ElectronAPI {
   saveNote: (title: string, content: string, messageId?: string) => Promise<any>
   saveDoc: (title: string, filePath: string, content?: string) => Promise<any>
   toggleTodoComplete: (id: string) => Promise<any>
+  artifactCreate: (input: Record<string, unknown>) => Promise<any>
+  artifactUpdate: (id: string, patch: Record<string, unknown>) => Promise<any>
+  artifactGet: (id: string) => Promise<any>
+  artifactList: (types?: string[]) => Promise<any[]>
+  artifactSearch: (query: string, types?: string[]) => Promise<any[]>
+  artifactDelete: (id: string) => Promise<any>
 
   // Agent control
   stopAgent: () => Promise<void>
@@ -37,12 +54,45 @@ export interface ElectronAPI {
     activityEvents: any[]
   }>
 
-  // Select/Pin
+  // Legacy select/pin aliases
   toggleSelect: (id: string) => Promise<any>
   getSelected: () => Promise<any>
   clearSelections: () => Promise<any>
   togglePin: (id: string) => Promise<any>
   getPinned: () => Promise<any>
+
+  // Focus / task anchor / explain
+  focusAdd: (params: {
+    refType: 'artifact' | 'fact' | 'task'
+    refId: string
+    reason?: string
+    score?: number
+    source?: 'manual' | 'auto'
+    ttl?: string
+  }) => Promise<any>
+  focusList: () => Promise<any>
+  focusRemove: (idOrRef: string) => Promise<any>
+  focusClear: () => Promise<any>
+  focusPrune: () => Promise<any>
+  taskAnchorGet: () => Promise<any>
+  taskAnchorSet: (anchor: {
+    currentGoal: string
+    nowDoing: string
+    blockedBy: string[]
+    nextAction: string
+  }) => Promise<any>
+  taskAnchorUpdate: (patch: {
+    currentGoal?: string
+    nowDoing?: string
+    blockedBy?: string[]
+    nextAction?: string
+  }) => Promise<any>
+  memoryExplainTurn: () => Promise<any>
+  memoryExplainFact: (factId: string) => Promise<any>
+  memoryExplainBudget: () => Promise<any>
+  factList: () => Promise<any[]>
+  factPromote: (factId: string) => Promise<any>
+  factDemote: (factId: string) => Promise<any>
 
   // Mentions
   getCandidates: (partial: string, type?: string) => Promise<any>
@@ -65,9 +115,13 @@ export interface ElectronAPI {
   resolvePath: (path: string) => Promise<{ success: boolean; absPath?: string; error?: string }>
   openFile: (path: string) => Promise<{ success: boolean; error?: string }>
   listRootFiles: () => Promise<{ path: string; name: string }[]>
+  listTree: (options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => Promise<FileTreeNode[]>
+  searchTree: (query: string, options?: { showIgnored?: boolean; maxResults?: number }) => Promise<FileTreeNode[]>
+  createArtifactFromFile: (filePath: string) => Promise<any>
+  addFocusFromFile: (filePath: string, reason?: string, ttl?: string) => Promise<any>
+  linkEvidenceToTask: (filePath: string, reason?: string) => Promise<any>
 
   // File drop
-  /** Drop a file into the project. content is base64-encoded binary data. */
   dropFile: (fileName: string, base64Content: string, tab: string) => Promise<any>
 
   // Session/Project
@@ -124,6 +178,8 @@ const api: ElectronAPI = {
   listNotes: () => ipcRenderer.invoke('cmd:list-notes'),
   listDocs: () => ipcRenderer.invoke('cmd:list-docs'),
   listTodos: () => ipcRenderer.invoke('cmd:list-todos'),
+  listMail: () => ipcRenderer.invoke('cmd:list-mail'),
+  listCalendar: () => ipcRenderer.invoke('cmd:list-calendar'),
   search: (query) => ipcRenderer.invoke('cmd:search', query),
   deleteEntity: (id) => ipcRenderer.invoke('cmd:delete', id),
   renameNote: (id, newTitle) => ipcRenderer.invoke('cmd:rename-note', id, newTitle),
@@ -131,6 +187,12 @@ const api: ElectronAPI = {
   saveNote: (title, content, messageId) => ipcRenderer.invoke('cmd:save-note', title, content, messageId),
   saveDoc: (title, filePath, content) => ipcRenderer.invoke('cmd:save-doc', title, filePath, content),
   toggleTodoComplete: (id) => ipcRenderer.invoke('cmd:toggle-todo-complete', id),
+  artifactCreate: (input) => ipcRenderer.invoke('cmd:artifact-create', input),
+  artifactUpdate: (id, patch) => ipcRenderer.invoke('cmd:artifact-update', id, patch),
+  artifactGet: (id) => ipcRenderer.invoke('cmd:artifact-get', id),
+  artifactList: (types) => ipcRenderer.invoke('cmd:artifact-list', types),
+  artifactSearch: (query, types) => ipcRenderer.invoke('cmd:artifact-search', query, types),
+  artifactDelete: (id) => ipcRenderer.invoke('cmd:artifact-delete', id),
 
   stopAgent: () => ipcRenderer.invoke('agent:stop'),
   clearSessionMemory: () => ipcRenderer.invoke('agent:clear-memory'),
@@ -141,6 +203,20 @@ const api: ElectronAPI = {
   clearSelections: () => ipcRenderer.invoke('cmd:clear-selections'),
   togglePin: (id) => ipcRenderer.invoke('cmd:pin', id),
   getPinned: () => ipcRenderer.invoke('cmd:get-pinned'),
+  focusAdd: (params) => ipcRenderer.invoke('cmd:focus-add', params),
+  focusList: () => ipcRenderer.invoke('cmd:focus-list'),
+  focusRemove: (idOrRef) => ipcRenderer.invoke('cmd:focus-remove', idOrRef),
+  focusClear: () => ipcRenderer.invoke('cmd:focus-clear'),
+  focusPrune: () => ipcRenderer.invoke('cmd:focus-prune'),
+  taskAnchorGet: () => ipcRenderer.invoke('cmd:task-anchor-get'),
+  taskAnchorSet: (anchor) => ipcRenderer.invoke('cmd:task-anchor-set', anchor),
+  taskAnchorUpdate: (patch) => ipcRenderer.invoke('cmd:task-anchor-update', patch),
+  memoryExplainTurn: () => ipcRenderer.invoke('cmd:memory-explain-turn'),
+  memoryExplainFact: (factId) => ipcRenderer.invoke('cmd:memory-explain-fact', factId),
+  memoryExplainBudget: () => ipcRenderer.invoke('cmd:memory-explain-budget'),
+  factList: () => ipcRenderer.invoke('cmd:fact-list'),
+  factPromote: (factId) => ipcRenderer.invoke('cmd:fact-promote', factId),
+  factDemote: (factId) => ipcRenderer.invoke('cmd:fact-demote', factId),
 
   getCandidates: (partial, type) => ipcRenderer.invoke('mention:candidates', partial, type),
 
@@ -182,6 +258,11 @@ const api: ElectronAPI = {
   resolvePath: (path) => ipcRenderer.invoke('file:resolve-path', path),
   openFile: (path) => ipcRenderer.invoke('file:open-external', path),
   listRootFiles: () => ipcRenderer.invoke('file:list-root'),
+  listTree: (options) => ipcRenderer.invoke('file:list-tree', options),
+  searchTree: (query, options) => ipcRenderer.invoke('file:search-tree', query, options),
+  createArtifactFromFile: (filePath) => ipcRenderer.invoke('file:create-artifact', filePath),
+  addFocusFromFile: (filePath, reason, ttl) => ipcRenderer.invoke('file:add-focus', filePath, reason, ttl),
+  linkEvidenceToTask: (filePath, reason) => ipcRenderer.invoke('task:link-evidence', filePath, reason),
 
   dropFile: (fileName, content, tab) => ipcRenderer.invoke('file:drop', fileName, content, tab),
 

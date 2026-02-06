@@ -14,11 +14,15 @@ import { PolicyEngine } from '../core/policy-engine.js'
 import { ContextManager } from '../core/context-manager.js'
 import { PromptCompiler } from '../core/prompt-compiler.js'
 import { SkillManager } from '../skills/skill-manager.js'
+import { ExternalSkillLoader, type LoadedExternalSkill } from '../skills/external-skill-loader.js'
 import { globalSkillRegistry } from '../skills/skill-registry.js'
 import { AgentLoop } from './agent-loop.js'
 import { createLLMClient, getModel } from '../llm/index.js'
+import type { Message } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
-import { join } from 'path'
+import { createKernelV2, type KernelV2 } from '../kernel-v2/index.js'
+import { countTokens } from '../utils/tokenizer.js'
+import { isAbsolute, join, relative, resolve } from 'path'
 
 /**
  * 生成唯一 ID
@@ -47,7 +51,7 @@ function createSessionState(): SessionState {
 export function defineAgent(definition: AgentDefinition): (config: AgentConfig) => Agent {
   return (config: AgentConfig): Agent => {
     const agentId = definition.id
-    const sessionId = generateId()
+    const sessionId = config.sessionId ?? generateId()
     const projectPath = config.projectPath ?? process.cwd()
 
     // 创建核心组件
@@ -127,7 +131,10 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     const allPacks = [...definition.packs, ...(config.packs ?? [])]
 
     // Phase 1.4: Create SkillManager for lazy-loaded procedural knowledge
-    const skillManager = new SkillManager()
+    const skillManager = new SkillManager({
+      trace,
+      skillTelemetry: config.skillTelemetry
+    })
 
     for (const pack of allPacks) {
       if (pack.tools) toolRegistry.registerAll(pack.tools)
@@ -136,7 +143,10 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
       // Register Skills with skillLoadingConfig support
       if (pack.skills && pack.skills.length > 0) {
-        const skillsWithConfig = pack.skills.map(skill => {
+        const packSkills = config.disableResourcefulSkill
+          ? pack.skills.filter(skill => skill.id !== 'resourceful-philosophy')
+          : pack.skills
+        const skillsWithConfig = packSkills.map(skill => {
           if (pack.skillLoadingConfig) {
             if (pack.skillLoadingConfig.eager?.includes(skill.id)) {
               return { ...skill, loadingStrategy: 'eager' as const }
@@ -157,7 +167,8 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
         // Load eager skills immediately
         if (pack.skillLoadingConfig?.eager) {
           for (const skillId of pack.skillLoadingConfig.eager) {
-            skillManager.loadFully(skillId)
+            if (config.disableResourcefulSkill && skillId === 'resourceful-philosophy') continue
+            skillManager.loadFully(skillId, { trigger: 'eager' })
           }
         }
       }
@@ -166,6 +177,41 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     // Add SkillManager to runtime
     ;(runtime as any).skillManager = skillManager
     ;(runtime as any).skillRegistry = globalSkillRegistry
+
+    // External skill directory config
+    const configuredExternalSkillsDir = config.externalSkillsDir?.trim()
+    const resolvedExternalSkillsDir = configuredExternalSkillsDir
+      ? (isAbsolute(configuredExternalSkillsDir)
+        ? resolve(configuredExternalSkillsDir)
+        : resolve(projectPath, configuredExternalSkillsDir))
+      : resolve(projectPath, '.agentfoundry/skills')
+    const relativeExternalSkillsDir = relative(projectPath, resolvedExternalSkillsDir)
+    const externalSkillsDirForTools = (
+      relativeExternalSkillsDir &&
+      !relativeExternalSkillsDir.startsWith('..') &&
+      !isAbsolute(relativeExternalSkillsDir)
+    )
+      ? relativeExternalSkillsDir
+      : '.agentfoundry/skills'
+    runtime.sessionState.set('externalSkillsDir', externalSkillsDirForTools.replace(/\\/g, '/'))
+
+    let externalSkillLoader: ExternalSkillLoader | null = null
+
+    const registerExternalSkill = (loaded: LoadedExternalSkill, source: 'init' | 'watch'): void => {
+      skillManager.register(loaded.skill, {
+        approvedByUser: loaded.approvedByUser,
+        source: 'external',
+        filePath: loaded.filePath
+      })
+      globalSkillRegistry.register(loaded.skill)
+      if (source === 'watch') {
+        skillManager.recordTelemetry(
+          'skill.hot_reloaded',
+          { skillId: loaded.skill.id, action: 'modify', filePath: loaded.filePath },
+          `hot-reload id=${loaded.skill.id} action=modify`
+        )
+      }
+    }
 
     // 注册定义级别的策略
     if (definition.policies) {
@@ -180,8 +226,10 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     // 确定 Provider 和模型
     const modelId = config.model ?? definition.model?.default ?? 'gpt-4o'
     const modelConfig = getModel(modelId)
+    const contextWindow = modelConfig?.limit.maxContext ?? 200000
     const provider: ProviderID = config.provider ?? modelConfig?.providerID ?? 'openai'
     const apiKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
+    const useKernelV2 = config.kernelV2?.enabled ?? true
 
     // 创建 LLM 客户端
     const llmClient = createLLMClient({
@@ -192,6 +240,18 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     // 将 LLM 客户端添加到 runtime（供工具内 LLM 调用使用）
     ;(runtime as any).llmClient = llmClient
+
+    const kernelV2: KernelV2 | null = useKernelV2
+      ? createKernelV2({
+          projectPath,
+          config: config.kernelV2,
+          contextWindow,
+          modelId
+        })
+      : null
+    if (kernelV2) {
+      runtime.kernelV2 = kernelV2
+    }
 
     // 编译系统提示 (Phase 1.4: Include skillManager)
     const promptCompiler = new PromptCompiler()
@@ -212,37 +272,97 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     // 创建 AgentLoop
     let agentLoop: AgentLoop | null = null
+    let packsInitialized = false
+
+    async function initPacks(): Promise<void> {
+      if (packsInitialized) return
+
+      for (const pack of allPacks) {
+        if (pack.onInit) {
+          await pack.onInit(runtime)
+        }
+      }
+
+      externalSkillLoader = new ExternalSkillLoader({
+        skillsDir: resolvedExternalSkillsDir,
+        watchForChanges: config.watchExternalSkills ?? true,
+        builtInSkillIds: skillManager.getAll().map(skill => skill.id),
+        onSkillLoaded: (loaded) => {
+          registerExternalSkill(loaded, 'watch')
+        },
+        onSkillRemoved: (skillId) => {
+          const removed = skillManager.unregister(skillId)
+          globalSkillRegistry.unregister(skillId)
+          if (removed) {
+            skillManager.recordTelemetry(
+              'skill.hot_reloaded',
+              { skillId, action: 'remove' },
+              `hot-reload id=${skillId} action=remove`
+            )
+          }
+        },
+        onError: (error, filePath) => {
+          skillManager.recordTelemetry(
+            'skill.load_blocked',
+            { skillId: null, reason: 'invalid', filePath, error: error.message },
+            `load-blocked file=${filePath} reason=invalid`
+          )
+        }
+      })
+
+      const initialExternalSkills = await externalSkillLoader.loadAll()
+      for (const loaded of initialExternalSkills) {
+        registerExternalSkill(loaded, 'init')
+      }
+
+      if (config.watchExternalSkills ?? true) {
+        externalSkillLoader.startWatching()
+      }
+
+      if (kernelV2) {
+        await kernelV2.init()
+        runtime.memoryStorage = kernelV2.getMemoryStorage(sessionId)
+      }
+
+      packsInitialized = true
+    }
 
     const agent: Agent = {
       id: agentId,
       runtime,
 
       async ensureInit() {
-        for (const pack of allPacks) {
-          if (pack.onInit) {
-            await pack.onInit(runtime)
-          }
-        }
+        await initPacks()
       },
 
       async run(prompt: string): Promise<AgentRunResult> {
-        // 初始化 Packs
-        for (const pack of allPacks) {
-          if (pack.onInit) {
-            await pack.onInit(runtime)
-          }
-        }
+        await initPacks()
 
         // Phase 1.4: Recompile system prompt to pick up lazy-loaded skills
         systemPrompt = compileSystemPrompt()
+        let workingContextBlock = ''
+        if (kernelV2) {
+          const identityTokens = countTokens(systemPrompt)
+          const toolSchemas = toolRegistry.generateToolSchemas()
+          const toolTokens = countTokens(JSON.stringify(toolSchemas))
+          const kernelTurn = await kernelV2.beginTurn({
+            sessionId,
+            userPrompt: prompt,
+            systemPromptTokens: identityTokens,
+            toolSchemasTokens: toolTokens
+          })
+          workingContextBlock = kernelTurn.context.workingContextBlock
+        }
+
+        const buildSystemPromptForRun = () => compileSystemPrompt() + workingContextBlock
 
         agentLoop = new AgentLoop({
           client: llmClient,
           toolRegistry,
           runtime,
           trace,
-          systemPrompt,
-          systemPromptBuilder: compileSystemPrompt,
+          systemPrompt: buildSystemPromptForRun(),
+          systemPromptBuilder: buildSystemPromptForRun,
           maxSteps: definition.maxSteps ?? config.maxSteps ?? 30,
           maxTokens: definition.model?.maxTokens ?? config.maxTokens,
           onText: config.onStream,
@@ -251,9 +371,17 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
         })
 
         const result = await agentLoop.run(prompt)
+        if (kernelV2 && agentLoop) {
+          await kernelV2.completeTurn({
+            sessionId,
+            messages: agentLoop.getMessages() as Message[],
+            promptTokens: result.usage?.tokens.promptTokens ?? 0
+          })
+        }
 
         // Phase 3.3: Clean up expired skills (TTL-based downgrading)
         skillManager.cleanup()
+        skillManager.reportTokenSavings(`${sessionId}:${Date.now().toString(36)}`, sessionId)
 
         return result
       },
@@ -263,6 +391,9 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       },
 
       async destroy(): Promise<void> {
+        externalSkillLoader?.stopWatching()
+        externalSkillLoader = null
+
         for (const pack of allPacks) {
           if (pack.onDestroy) {
             await pack.onDestroy(runtime)

@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Bookmark, Layers, StickyNote, BookOpen, Database, Trash2, Pencil } from 'lucide-react'
+import { X, Layers, StickyNote, BookOpen, Database, Brain, Trash2, Pencil, ArrowUp, ArrowDown } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
 
 const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={16} className="text-yellow-500" />,
   paper: <BookOpen size={16} className="text-blue-500" />,
-  data: <Database size={16} className="text-green-500" />
+  data: <Database size={16} className="text-green-500" />,
+  fact: <Brain size={16} className="text-purple-500" />
 }
 
 // File extension categories
@@ -87,20 +88,14 @@ function CsvPreview({ content, separator }: { content: string; separator: string
 export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
-  // RFC-009: Use new method names
-  const toggleProjectCard = useEntityStore((s) => s.toggleProjectCard)
-  const toggleWorkingSet = useEntityStore((s) => s.toggleWorkingSet)
+  const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const updateEntity = useEntityStore((s) => s.updateEntity)
-  // RFC-009: Derive live project card/working set state from entity store
-  const projectCardsIds = useEntityStore((s) => s.projectCards)
-  const workingSetIds = useEntityStore((s) => s.workingSet)
-  // RFC-009: Check both legacy 'pinned' and new 'projectCard' fields
-  const isProjectCard = rawEntity
-    ? rawEntity.pinned || rawEntity.projectCard || projectCardsIds.some((p) => p.id === rawEntity.id)
-    : false
-  const isInWorkingSet = rawEntity
-    ? workingSetIds.some((p) => p.id === rawEntity.id)
+  const promoteFact = useEntityStore((s) => s.promoteFact)
+  const demoteFact = useEntityStore((s) => s.demoteFact)
+  const focusItems = useEntityStore((s) => s.focus)
+  const isInFocus = rawEntity
+    ? focusItems.some((p) => p.id === rawEntity.id)
     : false
   const entity = rawEntity
     ? { ...rawEntity }
@@ -309,38 +304,33 @@ export function EntityPreviewPanel() {
         )}
 
         <div className="flex items-center gap-1">
-          <button
-            onClick={toggleEditing}
-            className={`p-1 rounded transition-colors ${editing ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
-            title={editing ? 'Save changes' : 'Edit'}
-          >
-            <Pencil size={14} />
-          </button>
-          {/* RFC-009: Project Card toggle */}
-          <button
-            onClick={() => toggleProjectCard(entity.id)}
-            className={`p-1 rounded transition-colors ${isProjectCard ? 'text-teal-400' : 't-text-muted t-bg-hover'}`}
-            title={isProjectCard ? 'Remove from Project Cards' : 'Mark as Project Card'}
-          >
-            <Bookmark size={14} />
-          </button>
-          {/* RFC-009: Working Set toggle */}
-          <button
-            onClick={() => toggleWorkingSet(entity.id)}
-            className={`p-1 rounded transition-colors ${isInWorkingSet ? 'text-teal-400' : 't-text-muted t-bg-hover'}`}
-            title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
-          >
-            <Layers size={14} />
-          </button>
-          <button
-            onClick={handleDelete}
-            className={`p-1 rounded transition-colors ${
-              confirmDelete ? 'text-red-500' : 't-text-muted t-bg-hover'
-            }`}
-            title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
-          >
-            <Trash2 size={14} />
-          </button>
+          {entity.type !== 'fact' && (
+            <>
+              <button
+                onClick={toggleEditing}
+                className={`p-1 rounded transition-colors ${editing ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
+                title={editing ? 'Save changes' : 'Edit'}
+              >
+                <Pencil size={14} />
+              </button>
+              <button
+                onClick={() => toggleFocus(entity.id)}
+                className={`p-1 rounded transition-colors ${isInFocus ? 'text-teal-400' : 't-text-muted t-bg-hover'}`}
+                title={isInFocus ? 'Remove from Focus' : 'Add to Focus'}
+              >
+                <Layers size={14} />
+              </button>
+              <button
+                onClick={handleDelete}
+                className={`p-1 rounded transition-colors ${
+                  confirmDelete ? 'text-red-500' : 't-text-muted t-bg-hover'
+                }`}
+                title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
+              >
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
           <button
             onClick={closePreview}
             className="p-1 rounded t-text-muted t-bg-hover transition-colors"
@@ -386,6 +376,53 @@ export function EntityPreviewPanel() {
         <div className="px-4 py-2 border-b t-border text-xs t-text-secondary">
           <p>File: {entity.name}</p>
           {entity.schema.rowCount != null && <p>Rows: {entity.schema.rowCount}</p>}
+        </div>
+      )}
+
+      {/* Fact metadata */}
+      {entity.type === 'fact' && (
+        <div className="px-4 py-2 border-b t-border text-xs t-text-secondary space-y-1">
+          <p>Namespace: <code className="t-bg-surface px-1 rounded">{entity.namespace}</code></p>
+          <p>Key: <code className="t-bg-surface px-1 rounded">{entity.key}</code></p>
+          <p>Status: <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+            entity.status === 'active' ? 'text-green-500 bg-green-500/10' :
+            entity.status === 'proposed' ? 'text-yellow-500 bg-yellow-500/10' :
+            entity.status === 'deprecated' ? 'text-red-400 bg-red-400/10' :
+            't-text-muted t-bg-surface'
+          }`}>{entity.status}</span></p>
+          {entity.confidence != null && (
+            <p>Confidence: {Math.round(entity.confidence * 100)}%</p>
+          )}
+          {entity.provenance && (
+            <div>
+              <p>Source: {entity.provenance.sourceType} ({entity.provenance.sourceRef})</p>
+              {entity.provenance.traceId && <p>Trace: <code className="t-bg-surface px-1 rounded text-[10px]">{entity.provenance.traceId}</code></p>}
+              {entity.provenance.sessionId && <p>Session: <code className="t-bg-surface px-1 rounded text-[10px]">{entity.provenance.sessionId.slice(0, 8)}</code></p>}
+            </div>
+          )}
+          {entity.derivedFromArtifactIds?.length > 0 && (
+            <p>Linked artifacts: {entity.derivedFromArtifactIds.length}</p>
+          )}
+          {entity.createdAt && <p>Created: {new Date(entity.createdAt).toLocaleString()}</p>}
+          {entity.updatedAt && <p>Updated: {new Date(entity.updatedAt).toLocaleString()}</p>}
+          <div className="flex items-center gap-2 pt-1">
+            {entity.status === 'proposed' && (
+              <button
+                onClick={() => promoteFact(entity.id)}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-green-500 bg-green-500/10 hover:bg-green-500/20 transition-colors"
+              >
+                <ArrowUp size={10} /> Promote to Active
+              </button>
+            )}
+            {(entity.status === 'active' || entity.status === 'proposed') && (
+              <button
+                onClick={() => demoteFact(entity.id)}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-red-400 bg-red-400/10 hover:bg-red-400/20 transition-colors"
+              >
+                <ArrowDown size={10} /> Deprecate
+              </button>
+            )}
+          </div>
         </div>
       )}
 

@@ -29,6 +29,8 @@ export { todoAdd } from './todo-add.js'
 export { todoUpdate } from './todo-update.js'
 export { todoComplete } from './todo-complete.js'
 export { todoRemove } from './todo-remove.js'
+export { skillCreateTool } from './skill-create.js'
+export { skillApproveTool } from './skill-approve.js'
 
 // ============ Type exports ============
 
@@ -51,6 +53,8 @@ export type { TodoAddInput, TodoAddOutput } from './todo-add.js'
 export type { TodoUpdateInput, TodoUpdateOutput } from './todo-update.js'
 export type { TodoCompleteInput, TodoCompleteOutput } from './todo-complete.js'
 export type { TodoRemoveInput, TodoRemoveOutput } from './todo-remove.js'
+export type { SkillCreateInput, SkillCreateOutput } from './skill-create.js'
+export type { SkillApproveInput, SkillApproveOutput } from './skill-approve.js'
 
 // ============ Layered tool sets ============
 
@@ -74,6 +78,8 @@ import { todoAdd } from './todo-add.js'
 import { todoUpdate } from './todo-update.js'
 import { todoComplete } from './todo-complete.js'
 import { todoRemove } from './todo-remove.js'
+import { skillCreateTool } from './skill-create.js'
+import { skillApproveTool } from './skill-approve.js'
 
 /**
  * Safe core tools (enabled by default)
@@ -92,7 +98,9 @@ export const safeTools: Tool<any, any>[] = [
   write,
   edit,
   glob,
-  grep
+  grep,
+  skillCreateTool,
+  skillApproveTool
 ]
 
 /**
@@ -239,6 +247,20 @@ export const toolMeta: Record<string, ToolMeta> = {
     category: 'safe',
     requiresExplicitEnable: false,
     description: 'Content search'
+  },
+  'skill-create': {
+    name: 'skill-create',
+    riskLevel: 'safe',
+    category: 'safe',
+    requiresExplicitEnable: false,
+    description: 'Create a project-local skill'
+  },
+  'skill-approve': {
+    name: 'skill-approve',
+    riskLevel: 'safe',
+    category: 'safe',
+    requiresExplicitEnable: false,
+    description: 'Approve a project-local skill'
   },
   bash: {
     name: 'bash',

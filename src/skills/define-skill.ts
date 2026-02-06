@@ -137,7 +137,8 @@ export function defineSkill(config: SkillConfig): Skill {
     tools: config.tools ?? [],
     loadingStrategy: config.loadingStrategy ?? 'lazy',
     estimatedTokens,
-    tags: config.tags ?? []
+    tags: config.tags ?? [],
+    ...(config.meta ? { meta: { ...config.meta } } : {})
   }
 }
 
@@ -180,7 +181,11 @@ export function extendSkill(
     tools: extension.tools ?? base.tools,
     loadingStrategy: extension.loadingStrategy ?? base.loadingStrategy,
     estimatedTokens,
-    tags: [...(base.tags ?? []), ...(extension.tags ?? [])]
+    tags: [...(base.tags ?? []), ...(extension.tags ?? [])],
+    meta: {
+      ...(base.meta ?? {}),
+      ...(extension.meta ?? {})
+    }
   }
 
   validateSkillConfig(mergedConfig)
@@ -198,7 +203,8 @@ export function extendSkill(
     tools: mergedConfig.tools ?? [],
     loadingStrategy: mergedConfig.loadingStrategy ?? 'lazy',
     estimatedTokens,
-    tags: mergedConfig.tags ?? []
+    tags: mergedConfig.tags ?? [],
+    ...(mergedConfig.meta ? { meta: { ...mergedConfig.meta } } : {})
   }
 }
 

@@ -1,16 +1,11 @@
 /**
- * /save-data Command Handler
- *
- * Registers a data file attachment with provenance tracking.
- *
- * Usage (Ink UI):
- *   /save-data <name> --path /path/to/file.csv [--mime text/csv] [--rows 1000] [--tags "a, b"]
+ * Legacy compatibility wrapper for data artifact creation.
+ * RFC-012 canonical API is artifact.create(type=data).
  */
 
-import { writeFileSync, mkdirSync, existsSync } from 'fs'
-import { join } from 'path'
-import { PATHS, DataAttachment, CLIContext } from '../types.js'
-import { applyProjectCardPolicy } from '../../../src/core/project-card-policy.js'
+import { existsSync } from 'fs'
+import { type CLIContext, type DataAttachment } from '../types.js'
+import { createArtifact } from '../memory-v2/store.js'
 
 export interface SaveDataResult {
   success: boolean
@@ -19,9 +14,6 @@ export interface SaveDataResult {
   error?: string
 }
 
-/**
- * Save a data attachment programmatically.
- */
 export function saveData(
   name: string,
   opts: {
@@ -42,47 +34,34 @@ export function saveData(
     return { success: false, error: `File not found: ${opts.filePath}` }
   }
 
-  const data: DataAttachment = {
-    id: crypto.randomUUID(),
+  const { artifact, filePath } = createArtifact({
     type: 'data',
-    name,
+    title: name,
     filePath: opts.filePath,
     mimeType: opts.mimeType,
-    schema: (opts.rowCount || opts.columns) ? {
-      rowCount: opts.rowCount,
-      columns: opts.columns
-    } : undefined,
-    tags: opts.tags ?? [],
+    schema: (opts.rowCount || opts.columns)
+      ? {
+          rowCount: opts.rowCount,
+          columns: opts.columns
+        }
+      : undefined,
     runId: opts.runId,
     runLabel: opts.runLabel,
-    projectCard: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    tags: opts.tags ?? [],
     provenance: {
       source: 'user',
       sessionId: context.sessionId,
       extractedFrom: 'user-input'
     }
+  }, context)
+
+  if (artifact.type !== 'data') {
+    return { success: false, error: 'Failed to create data artifact.' }
   }
 
-  applyProjectCardPolicy([data])
-
-  // Use projectPath if provided, otherwise fall back to relative path
-  const dataPath = context.projectPath
-    ? join(context.projectPath, PATHS.data)
-    : PATHS.data
-
-  mkdirSync(dataPath, { recursive: true })
-  const metaPath = join(dataPath, `${data.id}.json`)
-  writeFileSync(metaPath, JSON.stringify(data, null, 2))
-
-  return { success: true, data, filePath: metaPath }
+  return { success: true, data: artifact, filePath }
 }
 
-/**
- * Parse /save-data arguments.
- * Format: /save-data <name> --path <file> [--mime type] [--rows N] [--tags "a, b"]
- */
 export function parseSaveDataArgs(raw: string): {
   name: string
   filePath: string

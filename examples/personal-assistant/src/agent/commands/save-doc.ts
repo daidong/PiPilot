@@ -1,13 +1,10 @@
 /**
- * Save Doc Command
- *
- * Saves a document entity with provenance tracking.
+ * Legacy save-doc wrapper.
+ * Canonical persistence API is artifact.create(type=doc).
  */
 
-import { writeFileSync, mkdirSync } from 'fs'
-import { join } from 'path'
-import { PATHS, Doc, CLIContext } from '../types.js'
-import { applyProjectCardPolicy } from '../../../../../src/core/project-card-policy.js'
+import { type CLIContext, type Doc } from '../types.js'
+import { artifactCreate } from './artifact.js'
 
 export interface SaveDocResult {
   success: boolean
@@ -16,9 +13,6 @@ export interface SaveDocResult {
   error?: string
 }
 
-/**
- * Save a document reference programmatically.
- */
 export function saveDoc(
   title: string,
   opts: {
@@ -33,34 +27,35 @@ export function saveDoc(
   if (!title) return { success: false, error: 'Document title is required.' }
   if (!opts.filePath) return { success: false, error: 'Document filePath is required.' }
 
-  const doc: Doc = {
-    id: crypto.randomUUID(),
+  const created = artifactCreate({
     type: 'doc',
     title,
     filePath: opts.filePath,
     content: opts.content,
     mimeType: opts.mimeType,
     description: opts.description,
-    tags: opts.tags ?? [],
-    projectCard: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    tags: opts.tags,
+    summary: opts.description ?? opts.content?.slice(0, 220),
     provenance: {
       source: 'user',
-      sessionId: context.sessionId,
       extractedFrom: 'user-input'
+    }
+  }, context)
+
+  if (!created.success || !created.artifact) {
+    return {
+      success: false,
+      error: created.error ?? 'Failed to save document.'
     }
   }
 
-  applyProjectCardPolicy([doc])
+  if (created.artifact.type !== 'doc') {
+    return { success: false, error: 'Unexpected artifact type after save-doc.' }
+  }
 
-  const docsPath = context.projectPath
-    ? join(context.projectPath, PATHS.docs)
-    : PATHS.docs
-
-  mkdirSync(docsPath, { recursive: true })
-  const entityFilePath = join(docsPath, `${doc.id}.json`)
-  writeFileSync(entityFilePath, JSON.stringify(doc, null, 2))
-
-  return { success: true, doc, filePath: entityFilePath }
+  return {
+    success: true,
+    doc: created.artifact,
+    filePath: created.filePath
+  }
 }

@@ -15,8 +15,9 @@ const SLASH_COMMANDS = [
   { name: '/papers', description: 'List all literature' },
   { name: '/data', description: 'List all data attachments' },
   { name: '/search', description: 'Search entities', args: '<query>' },
-  { name: '/select', description: 'Select entity for AI context', args: '<id>' },
-  { name: '/pin', description: 'Pin entity (always in context)', args: '<id>' },
+  { name: '/focus', description: 'Toggle focus for an artifact', args: '<id>' },
+  { name: '/select', description: 'Alias of /focus', args: '<id>' },
+  { name: '/pin', description: 'Alias of /focus (legacy)', args: '<id>' },
   { name: '/delete', description: 'Delete an entity', args: '<id>' },
   { name: '/help', description: 'Show available commands' }
 ]
@@ -107,17 +108,23 @@ export function ChatInput() {
           refreshEntities()
           break
         }
+        case '/focus':
         case '/select': {
           if (!rest) { result = 'Usage: `/select <id>`'; break }
-          const r = await api.toggleSelect(rest)
-          result = r ? `Toggled selection for \`${rest}\`` : `Entity not found: \`${rest}\``
+          const inFocus = useEntityStore.getState().focus.some((item: any) => item.id === rest || item.id.startsWith(rest))
+          const r = inFocus
+            ? await api.focusRemove(rest)
+            : await api.focusAdd({ refType: 'artifact', refId: rest, reason: 'selected via slash command', source: 'manual', ttl: '2h' })
+          result = r?.success
+            ? (inFocus ? `Removed \`${rest}\` from focus` : `Added \`${rest}\` to focus`)
+            : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
           break
         }
         case '/pin': {
           if (!rest) { result = 'Usage: `/pin <id>`'; break }
-          const r = await api.togglePin(rest)
-          result = r ? `Toggled pin for \`${rest}\`` : `Entity not found: \`${rest}\``
+          const r = await api.focusAdd({ refType: 'artifact', refId: rest, reason: 'promoted via slash command', source: 'manual', ttl: 'today' })
+          result = r?.success ? `Added \`${rest}\` to focus (today)` : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
           break
         }

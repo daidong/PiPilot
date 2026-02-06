@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
-type LeftTab = 'notes' | 'data' | 'papers'
+type LeftTab = 'library' | 'papers' | 'knowledge' | 'focus' | 'tasks' | 'runs'
 export type ReasoningEffort = 'high' | 'medium' | 'low'
 
 export const GPT5_REASONING_MODELS = ['gpt-5.2', 'gpt-5.1', 'gpt-5-mini', 'gpt-5-nano']
@@ -61,7 +61,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   theme: 'light',
-  leftTab: 'notes',
+  leftTab: 'library',
   selectedModel: 'gpt-5.2',
   isIdle: true,
   rightSidebarCollapsed: false,
@@ -123,7 +123,7 @@ export const useUIStore = create<UIState>((set) => ({
   clearWorkingFiles: () => set({ workingFiles: [] }),
   reset: () =>
     set({
-      leftTab: 'notes',
+      leftTab: 'library',
       isIdle: true,
       rightSidebarCollapsed: false,
       leftSidebarCollapsed: false,

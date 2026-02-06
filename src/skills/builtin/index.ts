@@ -8,11 +8,13 @@
 export { llmComputeSkill } from './llm-compute-skill.js'
 export { gitWorkflowSkill } from './git-workflow-skill.js'
 export { contextRetrievalSkill } from './context-retrieval-skill.js'
+export { resourcefulPhilosophySkill } from './resourceful-philosophy-skill.js'
 
 // Re-export all skills as a collection
 import { llmComputeSkill } from './llm-compute-skill.js'
 import { gitWorkflowSkill } from './git-workflow-skill.js'
 import { contextRetrievalSkill } from './context-retrieval-skill.js'
+import { resourcefulPhilosophySkill } from './resourceful-philosophy-skill.js'
 
 /**
  * All built-in skills
@@ -20,7 +22,8 @@ import { contextRetrievalSkill } from './context-retrieval-skill.js'
 export const builtinSkills = [
   llmComputeSkill,
   gitWorkflowSkill,
-  contextRetrievalSkill
+  contextRetrievalSkill,
+  resourcefulPhilosophySkill
 ]
 
 /**
@@ -29,7 +32,8 @@ export const builtinSkills = [
 export const skillsById = {
   'llm-compute-skill': llmComputeSkill,
   'git-workflow-skill': gitWorkflowSkill,
-  'context-retrieval-skill': contextRetrievalSkill
+  'context-retrieval-skill': contextRetrievalSkill,
+  'resourceful-philosophy': resourcefulPhilosophySkill
 } as const
 
 /**

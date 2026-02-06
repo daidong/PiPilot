@@ -15,6 +15,7 @@ import type { EntityIndex, WorkingSetResolvedEntity } from './memory-entity.js'
 import type { MessageStore } from './session.js'
 import type { SessionState } from './agent.js'
 import type { createLLMClient } from '../llm/stream.js'
+import type { KernelV2 } from '../kernel-v2/kernel.js'
 
 /**
  * LLM 客户端类型（从 createLLMClient 推断）
@@ -246,6 +247,9 @@ export interface Runtime {
    * Provides query and matching capabilities across all registered skills.
    */
   skillRegistry?: SkillRegistry
+
+  /** RFC-011 long-horizon kernel runtime (optional, feature-flagged) */
+  kernelV2?: KernelV2
 }
 
 /**

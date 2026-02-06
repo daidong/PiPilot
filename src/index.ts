@@ -122,13 +122,20 @@ export {
 
   // Core classes
   SkillManager,
+  ExternalSkillLoader,
   SkillRegistry,
   globalSkillRegistry,
+
+  // External SKILL.md helpers
+  parseExternalSkill,
+  renderExternalSkillMarkdown,
+  updateFrontmatter,
 
   // Built-in skills
   llmComputeSkill,
   gitWorkflowSkill,
   contextRetrievalSkill,
+  resourcefulPhilosophySkill,
   builtinSkills,
   skillsById,
   getBuiltinSkill
@@ -146,9 +153,18 @@ export type {
   SkillState,
   LoadedSkillContent,
   SkillManagerEvents,
+  SkillTelemetryConfig,
+  SkillTelemetryMode,
+  SkillTelemetrySink,
+  SkillRegistrationOptions,
+  SkillTokenSavings,
 
   // Manager types
   SkillManagerOptions,
+  ExternalSkillLoaderOptions,
+  LoadedExternalSkill,
+  ExternalSkillFrontmatter,
+  ParsedExternalSkill,
   SkillQuery,
   SkillMatch
 } from './skills/index.js'
@@ -391,6 +407,8 @@ export {
   llmCall,
   llmExpand,
   llmFilter,
+  skillCreateTool,
+  skillApproveTool,
   builtinTools,
   safeTools,
   execTools,
@@ -410,6 +428,10 @@ export type {
   LLMExpandOutput,
   LLMFilterInput,
   LLMFilterOutput,
+  SkillCreateInput,
+  SkillCreateOutput,
+  SkillApproveInput,
+  SkillApproveOutput,
   CtxExpandInput,
   CtxExpandOutput,
   CtxExpandType
@@ -1093,3 +1115,34 @@ export type {
   ContextPipeline,
   RuntimeWithCompressor
 } from './types/index.js'
+
+// ============================================================================
+// Kernel V2 (RFC-011) 导出
+// ============================================================================
+
+export {
+  createKernelV2,
+  KernelV2Impl,
+  BudgetPlannerV2,
+  ContextAssemblerV2,
+  MemoryWriteGateV2,
+  CompactionEngineV2,
+  TaskStateCoordinator,
+  KernelV2Storage,
+  KernelV2MemoryStorageAdapter
+} from './kernel-v2/index.js'
+export type {
+  KernelV2,
+  KernelV2Config,
+  KernelV2ResolvedConfig,
+  V2TaskState,
+  V2MemoryFact,
+  V2CompactSegment,
+  V2TaskAnchor,
+  V2ContextAssemblyResult,
+  KernelV2IntegrityReport,
+  KernelV2ReplayPayload,
+  KernelV2ReplayRef,
+  KernelV2TurnInput,
+  KernelV2TurnCompletionInput
+} from './kernel-v2/index.js'

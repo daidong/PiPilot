@@ -1,8 +1,11 @@
 /**
- * Research Pilot - Type Definitions
+ * Research Pilot - Memory V2 Type Definitions (RFC-012)
  *
- * Research entity types with provenance tracking.
- * Path constants for file storage.
+ * Canonical model:
+ * - Artifact (authoritative source files/records)
+ * - Fact (durable structured memory)
+ * - Focus (session-scoped attention)
+ * - TaskAnchor (minimal progress continuity)
  */
 
 // ============================================================================
@@ -11,151 +14,94 @@
 
 export const PATHS = {
   root: '.research-pilot',
-  notes: '.research-pilot/notes',
-  literature: '.research-pilot/literature',
-  data: '.research-pilot/data',
+
+  // Artifact storage (authoritative files)
+  artifactsRoot: '.research-pilot/artifacts',
+  notes: '.research-pilot/artifacts/notes',
+  papers: '.research-pilot/artifacts/papers',
+  literature: '.research-pilot/artifacts/papers', // Compatibility alias
+  data: '.research-pilot/artifacts/data',
+  webContent: '.research-pilot/artifacts/web-content',
+  toolOutputs: '.research-pilot/artifacts/tool-output',
+
+  // Runtime and cache
   sessions: '.research-pilot/sessions',
   cache: '.research-pilot/cache',
   documentCache: '.research-pilot/cache/documents',
   project: '.research-pilot/project.json',
-  reviews: '.research-pilot/reviews'
+  reviews: '.research-pilot/reviews',
+
+  // Memory V2 state (app-level)
+  memoryRoot: '.research-pilot/memory-v2',
+  focusDir: '.research-pilot/memory-v2/focus',
+  tasksDir: '.research-pilot/memory-v2/tasks',
+  taskAnchor: '.research-pilot/memory-v2/tasks/anchor.json',
+  artifactFactIndex: '.research-pilot/memory-v2/index/artifact-facts.json',
+  explainDir: '.research-pilot/memory-v2/explain'
 } as const
 
 // ============================================================================
-// Base Entity Types
+// Shared Types
 // ============================================================================
 
-/**
- * Provenance tracking for all research entities
- */
+export type ArtifactType = 'note' | 'paper' | 'data' | 'web-content' | 'tool-output'
+
 export interface Provenance {
-  /** How the entity was created */
   source: 'user' | 'agent' | 'import'
-  /** Session where entity was created */
   sessionId: string
-  /** Agent that created it (if source is 'agent') */
   agentId?: string
-  /** Where content was extracted from */
-  extractedFrom?: 'agent-response' | 'user-input' | 'file-import'
-  /** Chat message ID this entity was derived from */
+  extractedFrom?: 'agent-response' | 'user-input' | 'file-import' | 'tool-output'
   messageId?: string
 }
 
-/**
- * Summary card generation method
- */
-export type SummaryCardMethod = 'deterministic' | 'llm' | 'user'
+// ============================================================================
+// Artifact Types (authoritative)
+// ============================================================================
 
-/**
- * Base interface for all research entities (RFC-009)
- */
-export interface ResearchEntity {
+export interface ArtifactBase {
   id: string
+  type: ArtifactType
+  title: string
+  tags: string[]
+  summary?: string
+  contentRef?: string
+  provenance: Provenance
   createdAt: string
   updatedAt: string
-  tags: string[]
 
-  /**
-   * Project Card flag - marks entity for long-term memory inclusion
-   * Replaces old 'pinned' field. Project Cards represent core decisions
-   * and constraints that should persist across sessions.
-   */
-  projectCard: boolean
-
-  /**
-   * Source of Project Card status (auto vs manual)
-   */
+  // Compatibility fields retained temporarily for callers not yet migrated.
+  projectCard?: boolean
   projectCardSource?: 'auto' | 'manual'
-
-  /**
-   * Summary card content (≤300 tokens)
-   * Used for context assembly and retrieval.
-   */
-  summaryCard?: string
-
-  /**
-   * Method used to generate the summary card
-   */
-  summaryCardMethod?: SummaryCardMethod
-
-  /**
-   * Hash of content for summary card change detection
-   */
-  summaryCardHash?: string
-
-  // Legacy fields (deprecated, for migration)
-  /** @deprecated Use projectCard instead */
   pinned?: boolean
-  /** @deprecated Selection is now runtime-only (WorkingSet) */
   selectedForAI?: boolean
-
-  provenance: Provenance
 }
 
-// ============================================================================
-// Entity Types
-// ============================================================================
-
-/**
- * Note - User-created research notes
- */
-export interface Note extends ResearchEntity {
+export interface NoteArtifact extends ArtifactBase {
   type: 'note'
-  title: string
   content: string
 }
 
-/**
- * Literature - Academic papers and references
- */
-export interface Literature extends ResearchEntity {
-  type: 'literature'
-  title: string
+export interface PaperArtifact extends ArtifactBase {
+  type: 'paper'
+  citeKey: string
+  bibtex: string
+  doi: string
   authors: string[]
   abstract: string
   year?: number
   venue?: string
   url?: string
-  citeKey: string
-  // Search metadata (added for local paper caching)
-  /** Terms that led to this paper being discovered */
-  searchKeywords?: string[]
-  /** Source where paper was found: 'semantic_scholar' | 'arxiv' | 'openalex' | 'dblp' | 'local' */
-  externalSource?: string
-  /** Relevance score from reviewer (0-10) */
-  relevanceScore?: number
-  /** Citation count if available from source */
-  citationCount?: number
-  /** Digital Object Identifier for deduplication */
-  doi?: string
-  /** Full BibTeX entry for citation export */
-  bibtex?: string
-  /** Direct link to the PDF */
   pdfUrl?: string
-  /** Which API source provided enrichment (e.g. 'crossref', 'semantic_scholar') */
+
+  // Search metadata retained for literature-team quality/scoring.
+  searchKeywords?: string[]
+  externalSource?: string
+  relevanceScore?: number
+  citationCount?: number
   enrichmentSource?: string
-  /** ISO timestamp of when metadata enrichment was performed */
   enrichedAt?: string
 }
 
-/**
- * DataAttachment - Data files with schema
- */
-export interface DataAttachment extends ResearchEntity {
-  type: 'data'
-  name: string
-  filePath: string
-  mimeType?: string
-  schema?: DataSchema
-  /** Groups auto-generated outputs under the same analysis run */
-  runId?: string
-  /** Human-readable label for the analysis run */
-  runLabel?: string
-}
-
-/**
- * Schema for data files
- */
 export interface DataSchema {
   columns?: Array<{
     name: string
@@ -166,27 +112,115 @@ export interface DataSchema {
   description?: string
 }
 
-/**
- * Union type for all entity types
- */
-export type Entity = Note | Literature | DataAttachment
+export interface DataArtifact extends ArtifactBase {
+  type: 'data'
+  /** @deprecated Use title */
+  name?: string
+  filePath: string
+  mimeType?: string
+  schema?: DataSchema
+  runId?: string
+  runLabel?: string
+}
+
+export interface WebContentArtifact extends ArtifactBase {
+  type: 'web-content'
+  url: string
+  content: string
+  fetchedAt?: string
+}
+
+export interface ToolOutputArtifact extends ArtifactBase {
+  type: 'tool-output'
+  toolName: string
+  outputPath?: string
+  outputText?: string
+}
+
+export type Artifact = NoteArtifact | PaperArtifact | DataArtifact | WebContentArtifact | ToolOutputArtifact
 
 // ============================================================================
-// Project Configuration
+// Fact / Focus / Task Anchor (Memory V2 semantics)
 // ============================================================================
 
-/**
- * User correction for terminology or preferences
- */
+export type FactStatus = 'proposed' | 'active' | 'superseded' | 'deprecated'
+
+export interface FactProvenance {
+  sourceType: 'file' | 'url' | 'turn' | 'tool' | 'user'
+  sourceRef: string
+  traceId?: string
+  sessionId?: string
+  createdBy?: 'user' | 'model' | 'system'
+}
+
+export interface FactRecord {
+  id: string
+  namespace: string
+  key: string
+  value: unknown
+  valueText?: string
+  status: FactStatus
+  confidence: number
+  provenance: FactProvenance
+  derivedFromArtifactIds: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type FocusRefType = 'artifact' | 'fact' | 'task'
+
+export interface FocusEntry {
+  id: string
+  sessionId: string
+  refType: FocusRefType
+  refId: string
+  reason: string
+  score: number
+  source: 'manual' | 'auto'
+  ttl: string
+  expiresAt: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TaskAnchor {
+  currentGoal: string
+  nowDoing: string
+  blockedBy: string[]
+  nextAction: string
+  updatedAt: string
+  sessionId?: string
+}
+
+export interface FocusCooldown {
+  sessionId: string
+  refType: FocusRefType
+  refId: string
+  until: string
+  reason: 'expired-auto-focus'
+}
+
+export interface FocusStateFile {
+  entries: FocusEntry[]
+  cooldowns: FocusCooldown[]
+  updatedAt: string
+}
+
+export interface ArtifactFactIndex {
+  updatedAt: string
+  byArtifactId: Record<string, string[]>
+}
+
+// ============================================================================
+// Project / Session / CLI Types
+// ============================================================================
+
 export interface UserCorrection {
   term: string
   meaning: string
   createdAt: string
 }
 
-/**
- * Project configuration (stored in project.json)
- */
 export interface ProjectConfig {
   name: string
   description?: string
@@ -196,13 +230,6 @@ export interface ProjectConfig {
   updatedAt: string
 }
 
-// ============================================================================
-// Session Types
-// ============================================================================
-
-/**
- * Session metadata
- */
 export interface Session {
   id: string
   startedAt: string
@@ -210,13 +237,6 @@ export interface Session {
   messageCount: number
 }
 
-// ============================================================================
-// CLI Context
-// ============================================================================
-
-/**
- * Context passed to CLI command handlers
- */
 export interface CLIContext {
   sessionId: string
   projectPath: string
@@ -228,25 +248,16 @@ export interface CLIContext {
 // Data Analysis Types (RFC-006)
 // ============================================================================
 
-/**
- * Detailed column schema with per-column statistics from rich inference
- */
 export interface ColumnSchemaDetailed {
   name: string
-  /** pandas dtype string */
   dtype: string
-  /** Fraction of missing values (0.0–1.0) */
   missingRate: number
-  /** Most frequent values with counts (categorical columns) */
   topKValues?: Array<{ value: string; count: number }>
   min?: number
   max?: number
   mean?: number
 }
 
-/**
- * Manifest describing all outputs produced by an analysis run
- */
 export interface ResultsManifest {
   outputs: Array<{
     path: string
@@ -263,9 +274,6 @@ export interface ResultsManifest {
 // Literature Search v2 Types (RFC-008)
 // ============================================================================
 
-/**
- * Sub-topic within a search plan
- */
 export interface SubTopic {
   name: string
   description: string
@@ -273,9 +281,6 @@ export interface SubTopic {
   expectedPaperCount: number
 }
 
-/**
- * A batch of queries targeting a specific sub-topic
- */
 export interface QueryBatch {
   subTopic: string
   queries: string[]
@@ -284,9 +289,6 @@ export interface QueryBatch {
   priority: number
 }
 
-/**
- * Full search plan produced by the planner
- */
 export interface SearchPlan {
   topic: string
   subTopics: SubTopic[]
@@ -295,9 +297,6 @@ export interface SearchPlan {
   minimumCoveragePerSubTopic: number
 }
 
-/**
- * Coverage tracker for cumulative review across batches
- */
 export interface CoverageTracker {
   subTopics: Record<string, {
     papersFound: number
@@ -310,18 +309,12 @@ export interface CoverageTracker {
   coverageScore: number
 }
 
-/**
- * Filtered message from coordinator conversation
- */
 export interface FilteredMessage {
   role: 'user' | 'assistant' | 'tool-result'
   content: string
   toolName?: string
 }
 
-/**
- * Context assembled for the planner agent
- */
 export interface PlannerContext {
   request: string
   conversationHistory: FilteredMessage[]
@@ -331,9 +324,6 @@ export interface PlannerContext {
   }
 }
 
-/**
- * Compressed result returned from literature-search tool
- */
 export interface LiteratureSearchResult {
   success: boolean
   data: {
@@ -358,3 +348,13 @@ export interface LiteratureSearchResult {
     apiFailureCount: number
   }
 }
+
+// ============================================================================
+// Compatibility Aliases (legacy callers)
+// ============================================================================
+
+export type ResearchEntity = Artifact
+export type Note = NoteArtifact
+export type Literature = PaperArtifact
+export type DataAttachment = DataArtifact
+export type Entity = Artifact

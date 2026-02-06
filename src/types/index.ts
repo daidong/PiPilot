@@ -63,7 +63,12 @@ export type {
   SkillLoadingConfig,
   SkillState,
   LoadedSkillContent,
-  SkillManagerEvents
+  SkillManagerEvents,
+  SkillTelemetryConfig,
+  SkillTelemetryMode,
+  SkillTelemetrySink,
+  SkillRegistrationOptions,
+  SkillTokenSavings
 } from './skill.js'
 
 // Provider types
@@ -215,3 +220,22 @@ export {
   isValidSummaryCard,
   isValidEntityType
 } from './memory-entity.js'
+
+// Kernel V2 types (RFC-011)
+export type {
+  KernelV2Config,
+  KernelV2ResolvedConfig,
+  V2TurnRecord,
+  V2TaskState,
+  V2MemoryFact,
+  V2ArtifactRecord,
+  V2CompactSegment,
+  V2TaskAnchor,
+  V2ContextAssemblyResult,
+  V2WriteResult,
+  KernelV2IntegrityReport,
+  KernelV2ReplayPayload,
+  KernelV2ReplayRef,
+  KernelV2TurnInput,
+  KernelV2TurnCompletionInput
+} from '../kernel-v2/types.js'

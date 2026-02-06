@@ -138,7 +138,7 @@ function FileRow({ file }: { file: WorkingFile }) {
     if (dataEntity) {
       openPreview({
         ...dataEntity,
-        type: 'data',
+        type: 'doc',
         title: dataEntity.title || dataEntity.name || file.name,
         filePath: file.path
       })
@@ -148,12 +148,10 @@ function FileRow({ file }: { file: WorkingFile }) {
     // Fallback for files not yet registered as entities
     openPreview({
       id: file.path,
-      type: 'data',
+      type: 'doc',
       title: file.name,
       filePath: file.path,
       tags: [],
-      pinned: false,
-      selectedForAI: false,
       createdAt: new Date(file.accessedAt).toISOString(),
       updatedAt: new Date(file.accessedAt).toISOString()
     })

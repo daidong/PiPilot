@@ -32,6 +32,14 @@ export { defineSkill, extendSkill, mergeSkills } from './define-skill.js'
 // Core classes
 export { SkillManager } from './skill-manager.js'
 export type { SkillManagerOptions } from './skill-manager.js'
+export { ExternalSkillLoader } from './external-skill-loader.js'
+export type { ExternalSkillLoaderOptions, LoadedExternalSkill } from './external-skill-loader.js'
+export {
+  parseExternalSkill,
+  renderExternalSkillMarkdown,
+  updateFrontmatter
+} from './skill-file.js'
+export type { ExternalSkillFrontmatter, ParsedExternalSkill } from './skill-file.js'
 
 export { SkillRegistry, globalSkillRegistry } from './skill-registry.js'
 export type { SkillQuery, SkillMatch } from './skill-registry.js'
@@ -41,6 +49,7 @@ export {
   llmComputeSkill,
   gitWorkflowSkill,
   contextRetrievalSkill,
+  resourcefulPhilosophySkill,
   builtinSkills,
   skillsById,
   getBuiltinSkill
@@ -57,5 +66,10 @@ export type {
   SkillLoadingConfig,
   SkillState,
   LoadedSkillContent,
-  SkillManagerEvents
+  SkillManagerEvents,
+  SkillTelemetryConfig,
+  SkillTelemetryMode,
+  SkillTelemetrySink,
+  SkillRegistrationOptions,
+  SkillTokenSavings
 } from '../types/skill.js'

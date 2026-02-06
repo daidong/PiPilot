@@ -1,13 +1,17 @@
-import { ipcMain, BrowserWindow, dialog, shell } from 'electron'
+import { app, ipcMain, BrowserWindow, dialog, shell } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
-import { join, resolve, isAbsolute } from 'path'
-import { createCoordinator, type CoordinatorConfig } from '@personal-assistant/agents/coordinator'
+import { basename, dirname, extname, join, relative, resolve, sep, isAbsolute } from 'path'
+import { createCoordinator } from '@personal-assistant/agents/coordinator'
 import {
-  listNotes, listDocs, listTodos,
+  listNotes, listDocs, listTodos, listEmailMessages, listCalendarEvents,
   searchEntities, deleteEntity,
   toggleSelect, getSelected, clearSelections,
   togglePin, getPinned,
-  toggleTodoComplete
+  toggleTodoComplete,
+  artifactCreate, artifactDelete, artifactGet, artifactList, artifactSearch, artifactUpdate,
+  focusAdd, focusClear, focusList, focusPrune, focusRemove,
+  taskAnchorGet, taskAnchorSet, taskAnchorUpdate,
+  memoryExplainTurn, memoryExplainFact, memoryExplainBudget
 } from '@personal-assistant/commands/index'
 import { saveNote } from '@personal-assistant/commands/save-note'
 import { saveDoc } from '@personal-assistant/commands/save-doc'
@@ -24,6 +28,275 @@ import { realtimeBuffer } from './realtime-buffer'
 function getFileName(path: string): string {
   if (!path) return ''
   return path.split('/').pop() || path
+}
+
+interface FileTreeNode {
+  name: string
+  path: string
+  relativePath: string
+  type: 'file' | 'directory'
+  hasChildren?: boolean
+  modifiedAt: number
+}
+
+interface GitIgnoreRule {
+  negated: boolean
+  directoryOnly: boolean
+  regex: RegExp
+}
+
+const TREE_MAX_ENTRIES = 500
+
+function toPosixPath(input: string): string {
+  return input.split(sep).join('/')
+}
+
+function isWithinRoot(rootPath: string, targetPath: string): boolean {
+  const normalizedRoot = resolve(rootPath)
+  const normalizedTarget = resolve(targetPath)
+  if (normalizedRoot === normalizedTarget) return true
+  return normalizedTarget.startsWith(`${normalizedRoot}${sep}`)
+}
+
+function readGitIgnoreRules(rootPath: string): GitIgnoreRule[] {
+  const filePath = join(rootPath, '.gitignore')
+  if (!existsSync(filePath)) return []
+  let raw = ''
+  try {
+    raw = readFileSync(filePath, 'utf-8')
+  } catch {
+    return []
+  }
+
+  return raw
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'))
+    .map(line => {
+      const negated = line.startsWith('!')
+      let pattern = negated ? line.slice(1) : line
+      const directoryOnly = pattern.endsWith('/')
+      if (directoryOnly) pattern = pattern.slice(0, -1)
+
+      const anchored = pattern.startsWith('/')
+      if (anchored) pattern = pattern.slice(1)
+
+      const escaped = pattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*/g, '.*')
+        .replace(/\*/g, '[^/]*')
+        .replace(/\?/g, '[^/]')
+
+      let regexPattern = ''
+      if (anchored) {
+        regexPattern = `^${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
+      } else if (pattern.includes('/')) {
+        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
+      } else {
+        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '(?:$|/)'}`
+      }
+
+      return {
+        negated,
+        directoryOnly,
+        regex: new RegExp(regexPattern)
+      } satisfies GitIgnoreRule
+    })
+}
+
+function isHiddenPath(relativePath: string): boolean {
+  return toPosixPath(relativePath)
+    .split('/')
+    .some(segment => segment.startsWith('.'))
+}
+
+function isIgnored(relativePath: string, isDirectory: boolean, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
+  if (showIgnored) return false
+  if (isHiddenPath(relativePath)) return true
+
+  const normalized = toPosixPath(relativePath)
+  let ignored = false
+  for (const rule of rules) {
+    if (rule.directoryOnly && !isDirectory && !normalized.includes('/')) continue
+    if (rule.regex.test(normalized)) {
+      ignored = !rule.negated
+    }
+  }
+  return ignored
+}
+
+function hasVisibleChildren(dirPath: string, relativePath: string, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
+  try {
+    const entries = readdirSync(dirPath, { withFileTypes: true })
+    for (const entry of entries) {
+      const childRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name
+      if (!isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) {
+        return true
+      }
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+function listTreeChildren(
+  rootPath: string,
+  relativePath: string = '',
+  showIgnored: boolean = false,
+  limit: number = TREE_MAX_ENTRIES
+): FileTreeNode[] {
+  const basePath = resolve(rootPath, relativePath || '.')
+  if (!isWithinRoot(rootPath, basePath)) return []
+  if (!existsSync(basePath) || !statSync(basePath).isDirectory()) return []
+
+  const rules = readGitIgnoreRules(rootPath)
+  const entries = readdirSync(basePath, { withFileTypes: true })
+  const out: FileTreeNode[] = []
+
+  entries
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    .some(entry => {
+      const childRelative = toPosixPath(relativePath ? `${relativePath}/${entry.name}` : entry.name)
+      const childPath = join(basePath, entry.name)
+      if (isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) return false
+
+      let modifiedAt = 0
+      try {
+        modifiedAt = statSync(childPath).mtimeMs
+      } catch {
+        modifiedAt = Date.now()
+      }
+
+      out.push({
+        name: entry.name,
+        path: childPath,
+        relativePath: childRelative,
+        type: entry.isDirectory() ? 'directory' : 'file',
+        hasChildren: entry.isDirectory() ? hasVisibleChildren(childPath, childRelative, rules, showIgnored) : undefined,
+        modifiedAt
+      })
+      return out.length >= limit
+    })
+
+  return out
+}
+
+function searchTree(rootPath: string, query: string, showIgnored: boolean = false, maxResults: number = 200): FileTreeNode[] {
+  const trimmedQuery = query.trim().toLowerCase()
+  if (!trimmedQuery) return []
+
+  const rules = readGitIgnoreRules(rootPath)
+  const root = resolve(rootPath)
+  const stack: Array<{ absPath: string; relativePath: string }> = [{ absPath: root, relativePath: '' }]
+  const out: FileTreeNode[] = []
+
+  while (stack.length > 0 && out.length < maxResults) {
+    const node = stack.pop()!
+    let entries: ReturnType<typeof readdirSync> = []
+    try {
+      entries = readdirSync(node.absPath, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      const rel = toPosixPath(node.relativePath ? `${node.relativePath}/${entry.name}` : entry.name)
+      const abs = join(node.absPath, entry.name)
+      if (isIgnored(rel, entry.isDirectory(), rules, showIgnored)) continue
+
+      if (entry.name.toLowerCase().includes(trimmedQuery)) {
+        let modifiedAt = 0
+        try {
+          modifiedAt = statSync(abs).mtimeMs
+        } catch {
+          modifiedAt = Date.now()
+        }
+        out.push({
+          name: entry.name,
+          path: abs,
+          relativePath: rel,
+          type: entry.isDirectory() ? 'directory' : 'file',
+          hasChildren: entry.isDirectory() ? true : undefined,
+          modifiedAt
+        })
+        if (out.length >= maxResults) break
+      }
+
+      if (entry.isDirectory()) {
+        stack.push({ absPath: abs, relativePath: rel })
+      }
+    }
+  }
+
+  return out
+}
+
+function inferMimeType(path: string): string {
+  const ext = extname(path).toLowerCase()
+  if (ext === '.md' || ext === '.txt') return 'text/plain'
+  if (ext === '.csv') return 'text/csv'
+  if (ext === '.tsv') return 'text/tab-separated-values'
+  if (ext === '.json') return 'application/json'
+  if (ext === '.pdf') return 'application/pdf'
+  return 'application/octet-stream'
+}
+
+function createArtifactFromWorkspaceFile(filePath: string) {
+  const title = basename(filePath, extname(filePath)) || basename(filePath)
+  const ext = extname(filePath).toLowerCase()
+  const isTextNote = ext === '.md' || ext === '.txt'
+  if (isTextNote) {
+    let content = ''
+    try {
+      content = readFileSync(filePath, 'utf-8')
+      if (content.length > 200_000) {
+        content = `${content.slice(0, 200_000)}\n\n[truncated: file exceeded 200000 chars]`
+      }
+    } catch {
+      content = ''
+    }
+    return artifactCreate({
+      type: 'note',
+      title,
+      content,
+      tags: ['from-file'],
+      summary: `Imported from ${title}${ext || ''}`
+    }, { sessionId, projectPath })
+  }
+
+  return artifactCreate({
+    type: 'doc',
+    title,
+    filePath,
+    mimeType: inferMimeType(filePath),
+    tags: ['from-file'],
+    summary: `Linked workspace file: ${toPosixPath(relative(projectPath, filePath))}`
+  }, { sessionId, projectPath })
+}
+
+function addFileToFocus(filePath: string, reason: string = 'selected from workspace tree', ttl: string = '2h') {
+  const docs = listDocs(projectPath)
+  const existing = docs.find(item => resolve(item.filePath) === resolve(filePath))
+  const artifactResult = existing
+    ? { success: true, artifact: { id: existing.id } }
+    : createArtifactFromWorkspaceFile(filePath)
+
+  if (!artifactResult.success || !artifactResult.artifact) {
+    return { success: false, error: artifactResult.error ?? 'Unable to register file artifact.' }
+  }
+
+  return focusAdd(projectPath, {
+    sessionId,
+    refType: 'artifact',
+    refId: artifactResult.artifact.id,
+    reason,
+    source: 'manual',
+    ttl
+  })
 }
 
 const fmt = createActivityFormatter({
@@ -51,6 +324,20 @@ const fmt = createActivityFormatter({
         return { label: title ? `Saved doc: ${title.slice(0, 30)}` : 'Saved doc', icon: 'file' }
       }
     },
+    {
+      match: 'artifact-create',
+      formatCall: (_, a) => {
+        const type = ((a.type as string) || 'artifact').toLowerCase()
+        const title = ((a.title as string) || type).slice(0, 35)
+        return { label: `Create ${type}: ${title}`, icon: 'file' }
+      },
+      formatResult: (_, r) => {
+        const data = (r.data as any) || {}
+        const type = (data.type as string) || 'artifact'
+        const title = (data.title as string) || ''
+        return { label: title ? `Created ${type}: ${title.slice(0, 30)}` : `Created ${type}`, icon: 'file' }
+      }
+    },
   ]
 })
 
@@ -59,14 +346,73 @@ let scheduler: Scheduler | null = null
 let notificationStore: NotificationStore | null = null
 let currentModel = 'gpt-5.2'
 let currentReasoningEffort: 'high' | 'medium' | 'low' = 'medium'
-// Start with empty project path — user must select a folder
+// Active project path (auto-restored from last-opened project when available)
 let projectPath = ''
 let sessionId = crypto.randomUUID()
 let isClosing = false
 
-/** Initialize .personal-assistant directory structure in the project folder */
+function lastProjectFilePath(): string {
+  return join(app.getPath('userData'), 'personal-assistant-last-project.json')
+}
+
+function loadLastProjectPath(): string | null {
+  const file = lastProjectFilePath()
+  if (!existsSync(file)) return null
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf-8')) as { projectPath?: string }
+    const value = typeof raw.projectPath === 'string' ? raw.projectPath.trim() : ''
+    return value || null
+  } catch {
+    return null
+  }
+}
+
+function saveLastProjectPath(path: string): void {
+  try {
+    writeFileSync(lastProjectFilePath(), JSON.stringify({ projectPath: path }, null, 2), 'utf-8')
+  } catch {
+    // best-effort persistence only
+  }
+}
+
+function clearLastProjectPath(): void {
+  try {
+    writeFileSync(lastProjectFilePath(), JSON.stringify({ projectPath: '' }, null, 2), 'utf-8')
+  } catch {
+    // best-effort persistence only
+  }
+}
+
+function isValidProjectDirectory(path: string): boolean {
+  try {
+    return !!path && existsSync(path) && statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/** Initialize .personal-assistant-v2 directory structure in the project folder */
 function initializeProject(path: string): void {
-  const dirs = [PATHS.root, PATHS.notes, PATHS.docs, PATHS.todos, PATHS.memory, PATHS.sessions, PATHS.cache, PATHS.documentCache]
+  const dirs = [
+    PATHS.root,
+    PATHS.artifactsRoot,
+    PATHS.notes,
+    PATHS.docs,
+    PATHS.todos,
+    PATHS.emailMessages,
+    PATHS.emailThreads,
+    PATHS.calendarEvents,
+    PATHS.schedulerRuns,
+    PATHS.toolOutputs,
+    PATHS.sessions,
+    PATHS.cache,
+    PATHS.documentCache,
+    PATHS.memoryRoot,
+    PATHS.focusDir,
+    PATHS.tasksDir,
+    dirname(PATHS.artifactFactIndex),
+    PATHS.explainDir
+  ]
 
   for (const dir of dirs) {
     const fullPath = join(path, dir)
@@ -108,6 +454,91 @@ function loadOrCreateSessionId(path: string): string {
   return newId
 }
 
+function activateProject(path: string): { projectPath: string; sessionId: string } {
+  projectPath = path
+  initializeProject(projectPath)
+
+  sessionId = loadOrCreateSessionId(projectPath)
+
+  const prefsFile = join(projectPath, PATHS.root, 'preferences.json')
+  if (existsSync(prefsFile)) {
+    try {
+      const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
+      if (prefs.selectedModel) currentModel = prefs.selectedModel
+      if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort
+    } catch {
+      // ignore corrupt file
+    }
+  }
+
+  saveLastProjectPath(projectPath)
+  return { projectPath, sessionId }
+}
+
+function readLatestFactsFromKernel(projectPath: string, includeDeprecated: boolean = false): any[] {
+  const factsFile = join(projectPath, '.agent-foundry-v2', 'memory', 'facts.jsonl')
+  if (!existsSync(factsFile)) return []
+
+  try {
+    const raw = readFileSync(factsFile, 'utf-8')
+    const lines = raw.split(/\r?\n/).filter(Boolean)
+    const allFacts: any[] = []
+    for (const line of lines) {
+      try { allFacts.push(JSON.parse(line)) } catch { /* skip malformed */ }
+    }
+
+    const byKey = new Map<string, any>()
+    for (const fact of allFacts) {
+      const key = `${fact.namespace}:${fact.key}`
+      const existing = byKey.get(key)
+      if (!existing || fact.updatedAt > existing.updatedAt) {
+        byKey.set(key, fact)
+      }
+    }
+
+    const latest = Array.from(byKey.values())
+    if (includeDeprecated) return latest
+    return latest.filter((fact: any) => fact.status === 'active' || fact.status === 'proposed')
+  } catch {
+    return []
+  }
+}
+
+async function resolveFactForWrite(win: BrowserWindow, factId: string): Promise<{
+  storage: any
+  namespace: string
+  key: string
+}> {
+  const coord = await ensureCoordinator(win, currentModel)
+  const storage = (coord as any)?.agent?.runtime?.memoryStorage
+  if (!storage) {
+    throw new Error('Memory storage unavailable in runtime.')
+  }
+
+  const listed = await storage.list({ status: 'all', limit: 5000, offset: 0 })
+  const direct = (listed?.items ?? []).find((item: any) => item.id === factId || item.id.startsWith(factId))
+  if (direct) {
+    return {
+      storage,
+      namespace: direct.namespace,
+      key: direct.key
+    }
+  }
+
+  const fallback = readLatestFactsFromKernel(projectPath, true)
+    .find((fact: any) => fact.id === factId || String(fact.id || '').startsWith(factId))
+
+  if (!fallback?.namespace || !fallback?.key) {
+    throw new Error('Fact not found.')
+  }
+
+  return {
+    storage,
+    namespace: String(fallback.namespace),
+    key: String(fallback.key)
+  }
+}
+
 /** Safely send an IPC message — no-op if the window has been destroyed. */
 function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
   if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
@@ -145,6 +576,20 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
             const coord = await coordinator
             if (!coord) return
             const result = await coord.chat(`[SCHEDULED: ${task.id}] ${task.instruction}`)
+            artifactCreate({
+              type: 'scheduler-run',
+              title: `Scheduled task: ${task.id}`,
+              scheduledTaskId: task.id,
+              instruction: task.instruction,
+              status: result.success ? 'success' : 'failed',
+              output: result.success ? result.response : undefined,
+              error: result.success ? undefined : result.error,
+              triggeredAt: new Date().toISOString(),
+              tags: ['scheduler', result.success ? 'success' : 'failed'],
+              summary: result.success
+                ? (result.response?.slice(0, 280) ?? `Task ${task.id} completed`)
+                : (result.error ?? `Task ${task.id} failed`)
+            }, { sessionId, projectPath })
             if (result.success && result.response && notificationStore) {
               const n = notificationStore.add({
                 type: 'info',
@@ -217,12 +662,18 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
           }
         }
 
-        // Notify UI to refresh entity lists when notes, todos, or docs are saved
-        if ((tool === 'save-note' || tool === 'save-doc') && result && typeof result === 'object' && 'success' in result) {
+        // Notify UI to refresh entity lists when artifacts are created/saved.
+        if ((tool === 'save-note' || tool === 'save-doc' || tool === 'artifact-create') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success) {
             // save-note can create either 'note' or 'todo' based on type parameter
-            const entityType = r.data?.type || (tool === 'save-note' ? 'note' : 'doc')
+            const entityType =
+              r.data?.type ||
+              (tool === 'save-note'
+                ? 'note'
+                : tool === 'save-doc'
+                  ? 'doc'
+                  : 'artifact')
             safeSend(win, 'agent:entity-created', {
               type: entityType,
               id: r.data?.id,
@@ -269,6 +720,15 @@ async function ensureCoordinator(win: BrowserWindow, model?: string) {
 
 
 export function registerIpcHandlers(win: BrowserWindow): void {
+  if (!projectPath) {
+    const lastProjectPath = loadLastProjectPath()
+    if (lastProjectPath && isValidProjectDirectory(lastProjectPath)) {
+      activateProject(lastProjectPath)
+    } else if (lastProjectPath) {
+      clearLastProjectPath()
+    }
+  }
+
   // Agent chat
   ipcMain.handle('agent:send', async (_e, message: string, rawMentions?: string, model?: string) => {
     if (!projectPath) {
@@ -344,6 +804,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     if (!projectPath) return []
     return listTodos(projectPath)
   })
+  ipcMain.handle('cmd:list-mail', () => {
+    if (!projectPath) return []
+    return listEmailMessages(projectPath)
+  })
+  ipcMain.handle('cmd:list-calendar', () => {
+    if (!projectPath) return []
+    return listCalendarEvents(projectPath)
+  })
   ipcMain.handle('cmd:toggle-todo-complete', (_e, id: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     return toggleTodoComplete(id, projectPath)
@@ -357,54 +825,189 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return deleteEntity(id, projectPath)
   })
 
+  // Commands - Artifact (RFC-013 canonical)
+  ipcMain.handle('cmd:artifact-create', (_e, input: Record<string, unknown>) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return artifactCreate(input as any, { sessionId, projectPath })
+  })
+  ipcMain.handle('cmd:artifact-update', (_e, artifactId: string, patch: Record<string, unknown>) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return artifactUpdate(projectPath, artifactId, patch as any)
+  })
+  ipcMain.handle('cmd:artifact-get', (_e, artifactId: string) => {
+    if (!projectPath) return null
+    return artifactGet(projectPath, artifactId)
+  })
+  ipcMain.handle('cmd:artifact-list', (_e, types?: string[]) => {
+    if (!projectPath) return []
+    return artifactList(projectPath, types as any)
+  })
+  ipcMain.handle('cmd:artifact-search', (_e, query: string, types?: string[]) => {
+    if (!projectPath) return []
+    return artifactSearch(projectPath, query, types as any)
+  })
+  ipcMain.handle('cmd:artifact-delete', (_e, artifactId: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return artifactDelete(projectPath, artifactId)
+  })
+
+  // Commands - Focus (RFC-013 canonical)
+  ipcMain.handle('cmd:focus-add', (_e, params: {
+    refType: 'artifact' | 'fact' | 'task'
+    refId: string
+    reason?: string
+    score?: number
+    source?: 'manual' | 'auto'
+    ttl?: string
+  }) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return focusAdd(projectPath, {
+      sessionId,
+      refType: params.refType,
+      refId: params.refId,
+      reason: params.reason ?? 'manually selected',
+      score: params.score,
+      source: params.source ?? 'manual',
+      ttl: params.ttl ?? '2h'
+    })
+  })
+  ipcMain.handle('cmd:focus-list', () => {
+    if (!projectPath) return { success: true, entries: [] }
+    return focusList(projectPath, sessionId)
+  })
+  ipcMain.handle('cmd:focus-remove', (_e, idOrRef: string) => {
+    if (!projectPath) return { success: false, removed: false }
+    return focusRemove(projectPath, sessionId, idOrRef)
+  })
+  ipcMain.handle('cmd:focus-clear', () => {
+    if (!projectPath) return { success: false, removed: false }
+    return focusClear(projectPath, sessionId)
+  })
+  ipcMain.handle('cmd:focus-prune', () => {
+    if (!projectPath) return { success: true, expired: 0, kept: 0 }
+    return focusPrune(projectPath, sessionId)
+  })
+
+  // Commands - Task anchor / explain
+  ipcMain.handle('cmd:task-anchor-get', () => {
+    if (!projectPath) return { success: true, anchor: null }
+    return taskAnchorGet(projectPath)
+  })
+  ipcMain.handle('cmd:task-anchor-set', (_e, anchor: {
+    currentGoal: string
+    nowDoing: string
+    blockedBy: string[]
+    nextAction: string
+    sessionId?: string
+  }) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return taskAnchorSet(projectPath, {
+      ...anchor,
+      sessionId: anchor.sessionId ?? sessionId
+    })
+  })
+  ipcMain.handle('cmd:task-anchor-update', (_e, patch: {
+    currentGoal?: string
+    nowDoing?: string
+    blockedBy?: string[]
+    nextAction?: string
+    sessionId?: string
+  }) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return taskAnchorUpdate(projectPath, patch)
+  })
+
+  ipcMain.handle('cmd:memory-explain-turn', () => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return memoryExplainTurn(projectPath)
+  })
+  ipcMain.handle('cmd:memory-explain-fact', (_e, factId: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return memoryExplainFact(projectPath, factId)
+  })
+  ipcMain.handle('cmd:memory-explain-budget', () => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    return memoryExplainBudget(projectPath)
+  })
+
+  // Commands - Facts
+  ipcMain.handle('cmd:fact-list', () => {
+    if (!projectPath) return []
+    return readLatestFactsFromKernel(projectPath, false)
+  })
+
+  ipcMain.handle('cmd:fact-promote', async (_e, factId: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      const resolved = await resolveFactForWrite(win, factId)
+      const updated = await resolved.storage.update(resolved.namespace, resolved.key, {})
+      if (!updated) {
+        return { success: false, error: 'Fact not found.' }
+      }
+      return {
+        success: true,
+        fact: {
+          id: updated.id,
+          namespace: updated.namespace,
+          key: updated.key,
+          status: updated.status
+        }
+      }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('cmd:fact-demote', async (_e, factId: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      const resolved = await resolveFactForWrite(win, factId)
+      const updated = await resolved.storage.update(resolved.namespace, resolved.key, { status: 'deprecated' })
+      if (!updated) {
+        return { success: false, error: 'Fact not found.' }
+      }
+      return {
+        success: true,
+        fact: {
+          id: updated.id,
+          namespace: updated.namespace,
+          key: updated.key,
+          status: updated.status
+        }
+      }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
   // Commands - rename note
   ipcMain.handle('cmd:rename-note', (_e, id: string, newTitle: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    // Search across all entity directories
-    const dirs = [PATHS.notes, PATHS.todos, PATHS.docs]
-    for (const dir of dirs) {
-      const filePath = join(projectPath, dir, `${id}.json`)
-      if (!existsSync(filePath)) continue
-      try {
-        const entity = JSON.parse(readFileSync(filePath, 'utf-8'))
-        entity.title = newTitle
-        entity.updatedAt = new Date().toISOString()
-        writeFileSync(filePath, JSON.stringify(entity, null, 2))
-        return { success: true }
-      } catch (err: any) {
-        return { success: false, error: err.message }
-      }
+    const updated = artifactUpdate(projectPath, id, { title: newTitle })
+    if (!updated.success) {
+      return { success: false, error: updated.error ?? 'Entity not found.' }
     }
-    return { success: false, error: 'Entity not found.' }
+    return { success: true }
   })
 
   // Commands - update entity (title + content)
   ipcMain.handle('cmd:update-entity', (_e, id: string, updates: { title?: string; content?: string }) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const dirs = [PATHS.notes, PATHS.todos, PATHS.docs]
-    for (const dir of dirs) {
-      const filePath = join(projectPath, dir, `${id}.json`)
-      if (!existsSync(filePath)) continue
-      try {
-        const entity = JSON.parse(readFileSync(filePath, 'utf-8'))
-        if (updates.title !== undefined) {
-          entity.title = updates.title
-        }
-        if (updates.content !== undefined) {
-          if (entity.type === 'doc') {
-            entity.description = updates.content
-          } else {
-            entity.content = updates.content
-          }
-        }
-        entity.updatedAt = new Date().toISOString()
-        writeFileSync(filePath, JSON.stringify(entity, null, 2))
-        return { success: true }
-      } catch (err: any) {
-        return { success: false, error: err.message }
-      }
+    const found = artifactGet(projectPath, id)
+    if (!found) return { success: false, error: 'Entity not found.' }
+
+    const patch: Record<string, unknown> = {}
+    if (updates.title !== undefined) patch.title = updates.title
+    if (updates.content !== undefined) {
+      if (found.type === 'doc') patch.description = updates.content
+      else patch.content = updates.content
     }
-    return { success: false, error: 'Entity not found.' }
+
+    const updated = artifactUpdate(projectPath, id, patch as any)
+    if (!updated.success) {
+      return { success: false, error: updated.error ?? 'Entity not found.' }
+    }
+    return { success: true }
   })
 
   // Commands - save
@@ -420,23 +1023,23 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   // Commands - select/pin
   ipcMain.handle('cmd:select', (_e, id: string) => {
     if (!projectPath) return null
-    return toggleSelect(id, projectPath)
+    return toggleSelect(id, projectPath, sessionId)
   })
   ipcMain.handle('cmd:get-selected', () => {
     if (!projectPath) return []
-    return getSelected(projectPath)
+    return getSelected(projectPath, sessionId)
   })
   ipcMain.handle('cmd:clear-selections', () => {
     if (!projectPath) return null
-    return clearSelections(projectPath)
+    return clearSelections(sessionId, projectPath)
   })
   ipcMain.handle('cmd:pin', (_e, id: string) => {
     if (!projectPath) return null
-    return togglePin(id, projectPath)
+    return togglePin(id, projectPath, sessionId)
   })
   ipcMain.handle('cmd:get-pinned', () => {
     if (!projectPath) return []
-    return getPinned(projectPath)
+    return getPinned(projectPath, sessionId)
   })
 
   // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
@@ -456,7 +1059,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       const entries = readdirSync(projectPath)
       const files: { path: string; name: string }[] = []
       for (const entry of entries) {
-        // Skip hidden directories/files like .personal-assistant, .git, etc.
+        // Skip hidden directories/files like .personal-assistant-v2, .git, etc.
         if (entry.startsWith('.')) continue
         const fullPath = join(projectPath, entry)
         try {
@@ -473,6 +1076,20 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
+  // Workspace file tree - lazy by directory level.
+  ipcMain.handle('file:list-tree', (_e, options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => {
+    if (!projectPath) return []
+    const relativePath = options?.relativePath ?? ''
+    const showIgnored = options?.showIgnored ?? false
+    const limit = options?.limit ?? TREE_MAX_ENTRIES
+    return listTreeChildren(projectPath, relativePath, showIgnored, limit)
+  })
+
+  ipcMain.handle('file:search-tree', (_e, query: string, options?: { showIgnored?: boolean; maxResults?: number }) => {
+    if (!projectPath) return []
+    return searchTree(projectPath, query, options?.showIgnored ?? false, options?.maxResults ?? 200)
+  })
+
   // File reading for working folder preview
   ipcMain.handle('file:read', (_e, filePath: string) => {
     try {
@@ -484,6 +1101,61 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       return { success: true, content, path: absPath }
     } catch (err: any) {
       return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('file:create-artifact', (_e, filePath: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+    if (!isWithinRoot(projectPath, absPath)) {
+      return { success: false, error: 'Path is outside current workspace.' }
+    }
+    if (!existsSync(absPath)) {
+      return { success: false, error: 'File not found.' }
+    }
+    return createArtifactFromWorkspaceFile(absPath)
+  })
+
+  ipcMain.handle('file:add-focus', (_e, filePath: string, reason?: string, ttl?: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+    if (!isWithinRoot(projectPath, absPath)) {
+      return { success: false, error: 'Path is outside current workspace.' }
+    }
+    if (!existsSync(absPath)) {
+      return { success: false, error: 'File not found.' }
+    }
+    return addFileToFocus(absPath, reason, ttl)
+  })
+
+  ipcMain.handle('task:link-evidence', (_e, filePath: string, reason?: string) => {
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+    if (!isWithinRoot(projectPath, absPath)) {
+      return { success: false, error: 'Path is outside current workspace.' }
+    }
+    if (!existsSync(absPath)) {
+      return { success: false, error: 'File not found.' }
+    }
+
+    const focusResult = addFileToFocus(absPath, reason ?? 'linked as task evidence', 'today')
+    if (!focusResult.success) return focusResult
+
+    const fileLabel = toPosixPath(relative(projectPath, absPath))
+    const current = taskAnchorGet(projectPath)
+    const blockedBy = current.anchor?.blockedBy ?? []
+    const marker = `Evidence: ${fileLabel}`
+    const mergedBlockedBy = blockedBy.includes(marker) ? blockedBy : [...blockedBy, marker]
+
+    const anchorResult = taskAnchorUpdate(projectPath, {
+      blockedBy: mergedBlockedBy,
+      nextAction: current.anchor?.nextAction || `Review evidence file: ${fileLabel}`
+    })
+
+    return {
+      success: focusResult.success && anchorResult.success,
+      focus: focusResult,
+      taskAnchor: anchorResult
     }
   })
 
@@ -724,26 +1396,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       properties: ['openDirectory']
     })
     if (!result.canceled && result.filePaths[0]) {
-      projectPath = result.filePaths[0]
-      // Initialize .personal-assistant directory structure
-      initializeProject(projectPath)
       // Reset coordinator and memory storage for new project
       if (coordinator) {
         await coordinator.destroy()
         coordinator = null
       }
-      // Reuse persistent session ID for this project folder
-      sessionId = loadOrCreateSessionId(projectPath)
-      // Restore persisted model + reasoning preferences
-      const prefsFile = join(projectPath, PATHS.root, 'preferences.json')
-      if (existsSync(prefsFile)) {
-        try {
-          const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
-          if (prefs.selectedModel) currentModel = prefs.selectedModel
-          if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort
-        } catch { /* ignore corrupt file */ }
-      }
-      return { projectPath, sessionId }
+      return activateProject(result.filePaths[0])
     }
     return null
   })
@@ -783,6 +1441,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       projectPath = ''
       sessionId = crypto.randomUUID()
       currentModel = 'gpt-5.2'
+      clearLastProjectPath()
     } finally {
       isClosing = false
     }

@@ -8,6 +8,8 @@ import type { TraceEvent } from './trace.js'
 import type { ContextSelection } from './context-pipeline.js'
 import type { Runtime } from './runtime.js'
 import type { UsageSummary } from '../llm/provider.types.js'
+import type { SkillTelemetryConfig } from './skill.js'
+import type { KernelV2Config } from '../kernel-v2/types.js'
 
 /**
  * 模型配置
@@ -84,6 +86,14 @@ export interface AgentConfig {
   onToolResult?: (tool: string, result: unknown, args?: unknown) => void
   /** Persistent session ID (reuse across restarts for history continuity) */
   sessionId?: string
+  /** External skills directory (default: .agentfoundry/skills under projectPath) */
+  externalSkillsDir?: string
+  /** Watch external skill files for hot-reload (default: true) */
+  watchExternalSkills?: boolean
+  /** Disable built-in resourceful philosophy skill (default: false) */
+  disableResourcefulSkill?: boolean
+  /** Skill lifecycle telemetry options (default: enabled basic logs) */
+  skillTelemetry?: SkillTelemetryConfig
   /** Pre-compaction callback — fired once per run() when context usage >= 80% */
   onPreCompaction?: (agent: Agent) => Promise<void>
   /** Trace export configuration */
@@ -104,6 +114,9 @@ export interface AgentConfig {
     warnAfter?: number
     disableAfter?: number
   }
+
+  /** RFC-011 Kernel V2 runtime configuration */
+  kernelV2?: KernelV2Config
 }
 
 /**

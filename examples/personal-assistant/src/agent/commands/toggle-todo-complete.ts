@@ -1,12 +1,8 @@
 /**
- * Toggle Todo Complete Command
- *
- * Toggles a todo's status between 'pending' and 'completed'.
+ * Toggle todo completion wrapper over Memory V2 artifact update.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
-import { PATHS, Todo } from '../types.js'
+import { artifactGet, artifactUpdate } from './artifact.js'
 
 export interface ToggleTodoCompleteResult {
   success: boolean
@@ -19,55 +15,29 @@ export interface ToggleTodoCompleteResult {
   error?: string
 }
 
-/**
- * Toggle a todo's completion status.
- * @param id The todo ID (full UUID or prefix)
- * @param projectPath The project root path
- */
 export function toggleTodoComplete(id: string, projectPath: string): ToggleTodoCompleteResult {
-  const todosDir = join(projectPath, PATHS.todos)
-  if (!existsSync(todosDir)) {
-    return { success: false, error: 'Todos directory not found' }
+  const found = artifactGet(projectPath, id)
+  if (!found || found.type !== 'todo') {
+    return { success: false, error: `Todo not found: ${id}` }
   }
 
-  const files = readdirSync(todosDir).filter(f => f.endsWith('.json'))
+  const nextStatus = found.status === 'pending' ? 'completed' : 'pending'
+  const updated = artifactUpdate(projectPath, id, {
+    status: nextStatus,
+    completedAt: nextStatus === 'completed' ? new Date().toISOString() : undefined
+  })
 
-  for (const file of files) {
-    const filePath = join(todosDir, file)
-    try {
-      const content = readFileSync(filePath, 'utf-8')
-      const todo = JSON.parse(content) as Todo
+  if (!updated.success || !updated.artifact || updated.artifact.type !== 'todo') {
+    return { success: false, error: updated.error ?? 'Failed to update todo.' }
+  }
 
-      // Match by full ID or prefix
-      if (todo.id === id || todo.id.startsWith(id)) {
-        // Toggle status
-        const newStatus = todo.status === 'pending' ? 'completed' : 'pending'
-        todo.status = newStatus
-        todo.updatedAt = new Date().toISOString()
-
-        // Set or clear completedAt
-        if (newStatus === 'completed') {
-          todo.completedAt = new Date().toISOString()
-        } else {
-          delete todo.completedAt
-        }
-
-        writeFileSync(filePath, JSON.stringify(todo, null, 2))
-
-        return {
-          success: true,
-          todo: {
-            id: todo.id,
-            title: todo.title,
-            status: todo.status,
-            completedAt: todo.completedAt
-          }
-        }
-      }
-    } catch {
-      // Skip invalid files
+  return {
+    success: true,
+    todo: {
+      id: updated.artifact.id,
+      title: updated.artifact.title,
+      status: updated.artifact.status,
+      completedAt: updated.artifact.completedAt
     }
   }
-
-  return { success: false, error: `Todo not found: ${id}` }
 }

@@ -90,3 +90,40 @@ structured output capabilities if needed.
 - `examples/research-pilot/skills/academic-writing-skill.ts` - The skill definition
 - `examples/research-pilot/skills/index.ts` - Skill exports
 - `src/skills/skill-manager.ts` - Lazy loading infrastructure
+
+## 7. Recommended `kernelV2` Runtime Config
+
+For `createAgent(...)`, use this baseline configuration:
+
+```ts
+kernelV2: {
+  enabled: true,
+  migration: {
+    autoFromV1: true
+  },
+  storage: {
+    integrity: {
+      verifyOnStartup: true
+    },
+    recovery: {
+      autoTruncateToLastValidRecord: true,
+      createRecoverySnapshot: true
+    }
+  },
+  lifecycle: {
+    autoWeekly: true
+  },
+  telemetry: {
+    baselineAlwaysOn: true,
+    mode: 'stderr+file',
+    filePath: '.agent-foundry-v2/logs/kernel-v2.log'
+  }
+}
+```
+
+This locks in the five agreed defaults:
+- V2 enabled by default
+- automatic one-time migration from V1
+- automatic corruption recovery on startup
+- weekly lifecycle maintenance
+- telemetry to both stderr and log file

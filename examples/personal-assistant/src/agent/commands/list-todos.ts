@@ -1,10 +1,9 @@
 /**
- * List Todos Command - Return structured data for todos.
+ * Legacy todo list wrapper over Memory V2 artifacts.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
-import { PATHS, Todo, type Provenance } from '../types.js'
+import { artifactList } from './artifact.js'
+import type { Provenance } from '../types.js'
 
 export interface TodoListItem {
   id: string
@@ -21,42 +20,26 @@ export interface TodoListItem {
   updatedAt: string
 }
 
-/** List all todos, returning structured data */
 export function listTodos(projectPath: string): TodoListItem[] {
-  const todosDir = join(projectPath, PATHS.todos)
-  if (!existsSync(todosDir)) return []
+  const items = artifactList(projectPath, ['todo'])
+    .filter(item => item.type === 'todo')
+    .map(todo => ({
+      id: todo.id,
+      title: todo.title,
+      content: todo.content,
+      status: todo.status,
+      completedAt: todo.completedAt,
+      tags: todo.tags,
+      projectCard: false,
+      pinned: false,
+      selectedForAI: false,
+      provenance: todo.provenance,
+      createdAt: todo.createdAt,
+      updatedAt: todo.updatedAt
+    }))
 
-  const files = readdirSync(todosDir).filter(f => f.endsWith('.json'))
-  const items: TodoListItem[] = []
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(todosDir, file), 'utf-8')
-      const todo = JSON.parse(content) as Todo
-      items.push({
-        id: todo.id,
-        title: todo.title,
-        content: todo.content,
-        status: todo.status,
-        completedAt: todo.completedAt,
-        tags: todo.tags,
-        projectCard: todo.projectCard ?? todo.pinned ?? false,
-        pinned: todo.projectCard ?? todo.pinned ?? false,
-        selectedForAI: todo.selectedForAI ?? false,
-        provenance: todo.provenance,
-        createdAt: todo.createdAt,
-        updatedAt: todo.updatedAt
-      })
-    } catch {
-      // Skip invalid files
-    }
-  }
-
-  // Sort: pending first, then by createdAt descending
   return items.sort((a, b) => {
-    if (a.status !== b.status) {
-      return a.status === 'pending' ? -1 : 1
-    }
+    if (a.status !== b.status) return a.status === 'pending' ? -1 : 1
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   })
 }

@@ -939,6 +939,15 @@ export class AgentLoop {
           // Build tool result content
           let resultContent: string
           if (result.success) {
+            const recentTools = this.config.runtime.sessionState.get<string[]>('recentSuccessfulTools') ?? []
+            if (!recentTools.includes(toolUse.name)) {
+              recentTools.push(toolUse.name)
+            }
+            if (recentTools.length > 20) {
+              recentTools.splice(0, recentTools.length - 20)
+            }
+            this.config.runtime.sessionState.set('recentSuccessfulTools', recentTools)
+
             // Reset error streaks for this tool+args on success (3-strike protocol)
             const argKey = buildArgKey(toolUse.input)
             const prefix = `${toolUse.name}::`

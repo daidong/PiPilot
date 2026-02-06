@@ -87,26 +87,17 @@ function CsvPreview({ content, separator }: { content: string; separator: string
 export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
-  // RFC-009: Use new method names
-  const toggleProjectCard = useEntityStore((s) => s.toggleProjectCard)
-  const toggleWorkingSet = useEntityStore((s) => s.toggleWorkingSet)
+  const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const updateEntity = useEntityStore((s) => s.updateEntity)
-  // RFC-009: Use new store names
-  const projectCardsIds = useEntityStore((s) => s.projectCards)
-  const workingSetIds = useEntityStore((s) => s.workingSet)
-  const workingSetRuntime = useEntityStore((s) => s.workingSetRuntime)
+  const focused = useEntityStore((s) => s.focus)
+  const runtimeFocus = useEntityStore((s) => s.runtimeFocus)
   const todos = useEntityStore((s) => s.todos)
   // For todos, get fresh status from store
   const freshTodo = rawEntity?.type === 'todo' ? todos.find((t) => t.id === rawEntity.id) : null
-  // RFC-009: Check both legacy 'pinned' and new 'projectCard' fields
-  const isProjectCard = rawEntity
-    ? rawEntity.pinned || rawEntity.projectCard || projectCardsIds.some((p) => p.id === rawEntity.id)
-    : false
-  const isInWorkingSet = rawEntity
-    ? [...(workingSetIds || []), ...(workingSetRuntime || [])].some((p) => p.id === rawEntity.id)
-    : false
+  const isFocused = rawEntity ? focused.some((entry) => entry.id === rawEntity.id) : false
+  const isInRuntimeFocus = rawEntity ? runtimeFocus.some((entry) => entry.id === rawEntity.id) : false
   const entity = rawEntity
     ? {
         ...rawEntity,
@@ -315,19 +306,19 @@ export function EntityPreviewPanel() {
           >
             <Pencil size={14} />
           </button>
-          {/* RFC-009: Project Card toggle */}
+          {/* Session focus (longer TTL) */}
           <button
-            onClick={() => toggleProjectCard(entity.id)}
-            className={`p-1 rounded transition-colors ${isProjectCard ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
-            title={isProjectCard ? 'Remove from Project Cards' : 'Mark as Project Card'}
+            onClick={() => toggleFocus(entity.id, { reason: 'manually pinned for this session', ttl: 'today' })}
+            className={`p-1 rounded transition-colors ${isFocused ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
+            title={isFocused ? 'Remove from Focus' : 'Add to Focus (today)'}
           >
             <Bookmark size={14} />
           </button>
-          {/* RFC-009: Working Set toggle */}
+          {/* Turn focus (shorter TTL) */}
           <button
-            onClick={() => toggleWorkingSet(entity.id)}
-            className={`p-1 rounded transition-colors ${isInWorkingSet ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
-            title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
+            onClick={() => toggleFocus(entity.id, { reason: 'selected for current execution', ttl: '2h' })}
+            className={`p-1 rounded transition-colors ${isInRuntimeFocus ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
+            title={isInRuntimeFocus ? 'Used in recent context' : 'Add to Focus (2h)'}
           >
             <Layers size={14} />
           </button>

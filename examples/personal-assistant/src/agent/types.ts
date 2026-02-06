@@ -1,8 +1,11 @@
 /**
- * Personal Assistant - Type Definitions
+ * Personal Assistant - Memory V2 Type Definitions (RFC-013)
  *
- * Entity types with provenance tracking.
- * Path constants for file storage.
+ * Canonical model:
+ * - Artifact (authoritative source records)
+ * - Fact (durable structured memory)
+ * - Focus (session attention)
+ * - TaskAnchor (execution continuity)
  */
 
 // ============================================================================
@@ -10,33 +13,45 @@
 // ============================================================================
 
 export const PATHS = {
-  root: '.personal-assistant',
-  notes: '.personal-assistant/notes',
-  docs: '.personal-assistant/docs',
-  todos: '.personal-assistant/todos',
-  sessions: '.personal-assistant/sessions',
-  cache: '.personal-assistant/cache',
-  documentCache: '.personal-assistant/cache/documents',
-  project: '.personal-assistant/project.json',
-  memory: '.personal-assistant/memory',
-  memoryFile: '.personal-assistant/MEMORY.md',
-  userProfile: '.personal-assistant/USER.md',
-  scheduledTasks: '.personal-assistant/scheduled-tasks.json',
-  notifications: '.personal-assistant/notifications.json'
+  root: '.personal-assistant-v2',
+
+  // Artifact storage (authoritative)
+  artifactsRoot: '.personal-assistant-v2/artifacts',
+  notes: '.personal-assistant-v2/artifacts/notes',
+  todos: '.personal-assistant-v2/artifacts/todos',
+  docs: '.personal-assistant-v2/artifacts/docs',
+  emailMessages: '.personal-assistant-v2/artifacts/email-messages',
+  emailThreads: '.personal-assistant-v2/artifacts/email-threads',
+  calendarEvents: '.personal-assistant-v2/artifacts/calendar-events',
+  schedulerRuns: '.personal-assistant-v2/artifacts/scheduler-runs',
+  toolOutputs: '.personal-assistant-v2/artifacts/tool-outputs',
+
+  // Runtime and cache
+  sessions: '.personal-assistant-v2/sessions',
+  cache: '.personal-assistant-v2/cache',
+  documentCache: '.personal-assistant-v2/cache/documents',
+  project: '.personal-assistant-v2/project.json',
+
+  // Memory V2 runtime state
+  memoryRoot: '.personal-assistant-v2/memory-v2',
+  focusDir: '.personal-assistant-v2/memory-v2/focus',
+  tasksDir: '.personal-assistant-v2/memory-v2/tasks',
+  taskAnchor: '.personal-assistant-v2/memory-v2/tasks/anchor.json',
+  artifactFactIndex: '.personal-assistant-v2/memory-v2/index/artifact-facts.json',
+  explainDir: '.personal-assistant-v2/memory-v2/explain',
+
+  // Scheduler / notifications
+  scheduledTasks: '.personal-assistant-v2/scheduled-tasks.json',
+  notifications: '.personal-assistant-v2/notifications.json'
 } as const
 
 // ============================================================================
 // Scheduler Types
 // ============================================================================
 
-/**
- * A scheduled task persisted to disk
- */
 export interface ScheduledTask {
   id: string
-  /** Cron expression e.g. "0 2 * * *" */
   schedule: string
-  /** What the agent should do when this fires */
   instruction: string
   enabled: boolean
   lastRunAt?: string
@@ -45,9 +60,6 @@ export interface ScheduledTask {
   createdAt: string
 }
 
-/**
- * A notification from scheduled/proactive agent actions
- */
 export interface AgentNotification {
   id: string
   type: 'info' | 'alert' | 'reminder'
@@ -59,133 +71,204 @@ export interface AgentNotification {
 }
 
 // ============================================================================
-// Base Entity Types
+// Shared Types
 // ============================================================================
 
-/**
- * Provenance tracking for all entities
- */
+export type ArtifactType =
+  | 'note'
+  | 'todo'
+  | 'doc'
+  | 'email-message'
+  | 'email-thread'
+  | 'calendar-event'
+  | 'scheduler-run'
+  | 'tool-output'
+
 export interface Provenance {
-  /** How the entity was created */
   source: 'user' | 'agent' | 'import'
-  /** Session where entity was created */
   sessionId: string
-  /** Agent that created it (if source is 'agent') */
   agentId?: string
-  /** Where content was extracted from */
-  extractedFrom?: 'agent-response' | 'user-input' | 'file-import'
-  /** Chat message ID this entity was derived from */
+  extractedFrom?: 'agent-response' | 'user-input' | 'file-import' | 'tool-output'
   messageId?: string
 }
 
-/**
- * Summary card generation method
- */
-export type SummaryCardMethod = 'deterministic' | 'llm' | 'user'
-
-/**
- * Base interface for all entities (RFC-009)
- */
-export interface BaseEntity {
+export interface ArtifactBase {
   id: string
+  type: ArtifactType
+  title: string
+  tags: string[]
+  summary?: string
+  contentRef?: string
+  provenance: Provenance
   createdAt: string
   updatedAt: string
-  tags: string[]
-
-  /**
-   * Project Card flag - marks entity for long-term memory inclusion
-   * Replaces old 'pinned' field. Project Cards represent core decisions
-   * and constraints that should persist across sessions.
-   */
-  projectCard: boolean
-
-  /**
-   * Source of Project Card status (auto vs manual)
-   */
-  projectCardSource?: 'auto' | 'manual'
-
-  /**
-   * Summary card content (≤300 tokens)
-   * Used for context assembly and retrieval.
-   */
-  summaryCard?: string
-
-  /**
-   * Method used to generate the summary card
-   */
-  summaryCardMethod?: SummaryCardMethod
-
-  /**
-   * Hash of content for summary card change detection
-   */
-  summaryCardHash?: string
-
-  // Legacy fields (deprecated, for migration)
-  /** @deprecated Use projectCard instead */
-  pinned?: boolean
-  /** @deprecated Selection is now runtime-only (WorkingSet) */
-  selectedForAI?: boolean
-
-  provenance: Provenance
 }
 
-// ============================================================================
-// Entity Types
-// ============================================================================
-
-/**
- * Note - User-created notes
- */
-export interface Note extends BaseEntity {
+export interface NoteArtifact extends ArtifactBase {
   type: 'note'
-  title: string
   content: string
 }
 
-/**
- * Todo - Trackable task items
- */
-export interface Todo extends BaseEntity {
+export interface TodoArtifact extends ArtifactBase {
   type: 'todo'
-  title: string
   content: string
   status: 'pending' | 'completed'
   completedAt?: string
 }
 
-/**
- * Doc - Document references (files, converted docs, etc.)
- */
-export interface Doc extends BaseEntity {
+export interface DocArtifact extends ArtifactBase {
   type: 'doc'
-  title: string
   filePath: string
   content?: string
   mimeType?: string
   description?: string
 }
 
-/**
- * Union type for all entity types
- */
-export type Entity = Note | Todo | Doc
+export interface EmailMessageArtifact extends ArtifactBase {
+  type: 'email-message'
+  accountEmail?: string
+  messageId?: string
+  threadId?: string
+  from?: string
+  to?: string[]
+  cc?: string[]
+  subject?: string
+  snippet?: string
+  bodyText?: string
+  sentAt?: string
+}
+
+export interface EmailThreadArtifact extends ArtifactBase {
+  type: 'email-thread'
+  accountEmail?: string
+  threadId: string
+  participants?: string[]
+  latestSubject?: string
+  latestSnippet?: string
+  messageCount?: number
+  unreadCount?: number
+}
+
+export interface CalendarEventArtifact extends ArtifactBase {
+  type: 'calendar-event'
+  eventId?: string
+  calendarName?: string
+  startAt?: string
+  endAt?: string
+  location?: string
+  attendees?: string[]
+  notes?: string
+}
+
+export interface SchedulerRunArtifact extends ArtifactBase {
+  type: 'scheduler-run'
+  scheduledTaskId?: string
+  instruction: string
+  status: 'success' | 'failed'
+  output?: string
+  error?: string
+  triggeredAt: string
+}
+
+export interface ToolOutputArtifact extends ArtifactBase {
+  type: 'tool-output'
+  toolName: string
+  outputPath?: string
+  outputText?: string
+}
+
+export type Artifact =
+  | NoteArtifact
+  | TodoArtifact
+  | DocArtifact
+  | EmailMessageArtifact
+  | EmailThreadArtifact
+  | CalendarEventArtifact
+  | SchedulerRunArtifact
+  | ToolOutputArtifact
 
 // ============================================================================
-// Project Configuration
+// Fact / Focus / Task Anchor
 // ============================================================================
 
-/**
- * User correction for terminology or preferences
- */
+export type FactStatus = 'proposed' | 'active' | 'superseded' | 'deprecated'
+
+export interface FactProvenance {
+  sourceType: 'file' | 'url' | 'turn' | 'tool' | 'user'
+  sourceRef: string
+  traceId?: string
+  sessionId?: string
+  createdBy?: 'user' | 'model' | 'system'
+}
+
+export interface FactRecord {
+  id: string
+  namespace: string
+  key: string
+  value: unknown
+  valueText?: string
+  status: FactStatus
+  confidence: number
+  provenance: FactProvenance
+  derivedFromArtifactIds: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type FocusRefType = 'artifact' | 'fact' | 'task'
+
+export interface FocusEntry {
+  id: string
+  sessionId: string
+  refType: FocusRefType
+  refId: string
+  reason: string
+  score: number
+  source: 'manual' | 'auto'
+  ttl: string
+  expiresAt: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TaskAnchor {
+  currentGoal: string
+  nowDoing: string
+  blockedBy: string[]
+  nextAction: string
+  updatedAt: string
+  sessionId?: string
+}
+
+export interface FocusCooldown {
+  sessionId: string
+  refType: FocusRefType
+  refId: string
+  until: string
+  reason: 'expired-auto-focus'
+}
+
+export interface FocusStateFile {
+  entries: FocusEntry[]
+  cooldowns: FocusCooldown[]
+  updatedAt: string
+}
+
+export interface ArtifactFactIndex {
+  updatedAt: string
+  byArtifactId: Record<string, string[]>
+}
+
+// ============================================================================
+// Project / Session / CLI Types
+// ============================================================================
+
 export interface UserCorrection {
   term: string
   meaning: string
   createdAt: string
 }
 
-/**
- * Project configuration (stored in project.json)
- */
 export interface ProjectConfig {
   name: string
   description?: string
@@ -195,13 +278,6 @@ export interface ProjectConfig {
   updatedAt: string
 }
 
-// ============================================================================
-// Session Types
-// ============================================================================
-
-/**
- * Session metadata
- */
 export interface Session {
   id: string
   startedAt: string
@@ -209,16 +285,18 @@ export interface Session {
   messageCount: number
 }
 
-// ============================================================================
-// CLI Context
-// ============================================================================
-
-/**
- * Context passed to CLI command handlers
- */
 export interface CLIContext {
   sessionId: string
   projectPath: string
   lastAgentResponse?: string
   debug?: boolean
 }
+
+// ============================================================================
+// Compatibility aliases (legacy callers)
+// ============================================================================
+
+export type Note = NoteArtifact
+export type Todo = TodoArtifact
+export type Doc = DocArtifact
+export type Entity = Artifact

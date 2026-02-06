@@ -1,17 +1,10 @@
 /**
- * /save-paper Command Handler
- *
- * Saves a literature entry with provenance tracking.
- *
- * Usage (Ink UI):
- *   /save-paper <title> --authors "A, B" --year 2024 --abstract "..." --citekey key
- *   /save-paper <title>   (minimal — only title required, rest defaults)
+ * Legacy compatibility wrapper for paper creation.
+ * RFC-012 canonical API is artifact.create(type=paper).
  */
 
-import { writeFileSync, readFileSync, mkdirSync } from 'fs'
-import { join } from 'path'
-import { PATHS, Literature, CLIContext } from '../types.js'
-import { applyProjectCardPolicy } from '../../../src/core/project-card-policy.js'
+import { type CLIContext, type Literature } from '../types.js'
+import { createArtifact, findArtifactById, findExistingPaperArtifact, updateArtifact } from '../memory-v2/store.js'
 
 export interface SavePaperResult {
   success: boolean
@@ -20,9 +13,33 @@ export interface SavePaperResult {
   error?: string
 }
 
-/**
- * Save a paper programmatically.
- */
+function generateCiteKey(authors: string[] | undefined, year?: number): string {
+  const firstAuthor = authors?.[0]?.split(/\s+/).pop()?.toLowerCase() ?? 'unknown'
+  return `${firstAuthor}${year ?? 'nd'}`
+}
+
+function buildFallbackBibtex(params: {
+  citeKey: string
+  title: string
+  authors: string[]
+  year?: number
+  venue?: string
+  doi?: string
+  url?: string
+}): string {
+  const authorText = params.authors.length > 0 ? params.authors.join(' and ') : 'Unknown'
+  return [
+    `@article{${params.citeKey},`,
+    `  title = {${params.title}},`,
+    `  author = {${authorText}},`,
+    ...(params.year ? [`  year = {${params.year}},`] : []),
+    ...(params.venue ? [`  journal = {${params.venue}},`] : []),
+    ...(params.doi ? [`  doi = {${params.doi}},`] : []),
+    ...(params.url ? [`  url = {${params.url}},`] : []),
+    '}'
+  ].join('\n')
+}
+
 export function savePaper(
   title: string,
   opts: {
@@ -33,69 +50,99 @@ export function savePaper(
     url?: string
     citeKey?: string
     tags?: string[]
-    // New search metadata fields for local paper caching
     searchKeywords?: string[]
     externalSource?: string
     relevanceScore?: number
     citationCount?: number
     doi?: string
     bibtex?: string
+    pdfUrl?: string
   },
   context: CLIContext
 ): SavePaperResult {
   if (!title) return { success: false, error: 'Paper title is required.' }
 
-  // Auto-generate citeKey from first author + year if not provided
-  const firstAuthor = opts.authors?.[0]?.split(' ').pop()?.toLowerCase() ?? 'unknown'
-  const citeKey = opts.citeKey ?? `${firstAuthor}${opts.year ?? 'nd'}`
-
-  const paper: Literature = {
-    id: crypto.randomUUID(),
-    type: 'literature',
+  const authors = opts.authors && opts.authors.length > 0 ? opts.authors : ['Unknown']
+  const citeKey = opts.citeKey ?? generateCiteKey(authors, opts.year)
+  const doi = (opts.doi ?? '').trim() || `unknown:${citeKey}`
+  const bibtex = (opts.bibtex ?? '').trim() || buildFallbackBibtex({
+    citeKey,
     title,
-    authors: opts.authors ?? ['Unknown'],
+    authors,
+    year: opts.year,
+    venue: opts.venue,
+    doi,
+    url: opts.url
+  })
+
+  const dedup = findExistingPaperArtifact(context.projectPath, {
+    doi,
+    citeKey,
+    title,
+    year: opts.year
+  })
+
+  if (dedup) {
+    const updated = updateArtifact(context.projectPath, dedup.id, {
+      title,
+      authors,
+      abstract: opts.abstract ?? dedup.abstract,
+      year: opts.year ?? dedup.year,
+      venue: opts.venue ?? dedup.venue,
+      url: opts.url ?? dedup.url,
+      citeKey,
+      doi,
+      bibtex,
+      pdfUrl: opts.pdfUrl ?? dedup.pdfUrl,
+      searchKeywords: opts.searchKeywords ?? dedup.searchKeywords,
+      externalSource: opts.externalSource ?? dedup.externalSource,
+      relevanceScore: opts.relevanceScore ?? dedup.relevanceScore,
+      citationCount: opts.citationCount ?? dedup.citationCount
+    })
+
+    if (!updated || updated.artifact.type !== 'paper') {
+      return { success: false, error: 'Failed to update existing paper.' }
+    }
+
+    return {
+      success: true,
+      paper: updated.artifact,
+      filePath: updated.filePath
+    }
+  }
+
+  const { artifact, filePath } = createArtifact({
+    type: 'paper',
+    title,
+    authors,
     abstract: opts.abstract ?? '',
     year: opts.year,
     venue: opts.venue,
     url: opts.url,
     citeKey,
+    doi,
+    bibtex,
+    pdfUrl: opts.pdfUrl,
     tags: opts.tags ?? [],
-    projectCard: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    searchKeywords: opts.searchKeywords,
+    externalSource: opts.externalSource,
+    relevanceScore: opts.relevanceScore,
+    citationCount: opts.citationCount,
     provenance: {
       source: opts.externalSource ? 'agent' : 'user',
       sessionId: context.sessionId,
       agentId: opts.externalSource ? 'literature-team' : undefined,
       extractedFrom: opts.externalSource ? 'agent-response' : 'user-input'
-    },
-    // Search metadata fields
-    searchKeywords: opts.searchKeywords,
-    externalSource: opts.externalSource,
-    relevanceScore: opts.relevanceScore,
-    citationCount: opts.citationCount,
-    doi: opts.doi,
-    bibtex: opts.bibtex
+    }
+  }, context)
+
+  if (artifact.type !== 'paper') {
+    return { success: false, error: 'Failed to create paper artifact.' }
   }
 
-  applyProjectCardPolicy([paper])
-
-  // Use projectPath if provided, otherwise fall back to relative path
-  const literaturePath = context.projectPath
-    ? join(context.projectPath, PATHS.literature)
-    : PATHS.literature
-
-  mkdirSync(literaturePath, { recursive: true })
-  const filePath = join(literaturePath, `${paper.id}.json`)
-  writeFileSync(filePath, JSON.stringify(paper, null, 2))
-
-  return { success: true, paper, filePath }
+  return { success: true, paper: artifact, filePath }
 }
 
-/**
- * Update an existing paper entity on disk, merging in any non-empty fields
- * that are currently missing. Preserves user edits (only fills blanks).
- */
 export function updatePaperMetadata(
   existing: Literature,
   enriched: {
@@ -113,72 +160,43 @@ export function updatePaperMetadata(
   },
   context: CLIContext
 ): SavePaperResult {
-  let changed = false
+  const update: Record<string, unknown> = {}
 
-  // Only fill fields that are missing or have placeholder values
-  if ((!existing.abstract || existing.abstract === '') && enriched.abstract) {
-    existing.abstract = enriched.abstract
-    changed = true
+  if ((!existing.abstract || existing.abstract === '') && enriched.abstract) update.abstract = enriched.abstract
+  if ((!existing.venue) && enriched.venue) update.venue = enriched.venue
+  if ((!existing.year) && enriched.year) update.year = enriched.year
+  if ((!existing.url) && enriched.url) update.url = enriched.url
+  if ((!existing.doi || existing.doi.startsWith('unknown:')) && enriched.doi) update.doi = enriched.doi
+  if ((!existing.citationCount) && enriched.citationCount) update.citationCount = enriched.citationCount
+  if ((!existing.bibtex || existing.bibtex.trim().length === 0) && enriched.bibtex) update.bibtex = enriched.bibtex
+  if ((!existing.pdfUrl) && enriched.pdfUrl) update.pdfUrl = enriched.pdfUrl
+  if (enriched.authors && enriched.authors.length > 0 && (existing.authors.length === 0 || (existing.authors.length === 1 && existing.authors[0] === 'Unknown'))) {
+    update.authors = enriched.authors
   }
-  if ((!existing.venue) && enriched.venue) {
-    existing.venue = enriched.venue
-    changed = true
-  }
-  if ((!existing.year) && enriched.year) {
-    existing.year = enriched.year
-    changed = true
-  }
-  if ((!existing.url) && enriched.url) {
-    existing.url = enriched.url
-    changed = true
-  }
-  if ((!existing.doi) && enriched.doi) {
-    existing.doi = enriched.doi
-    changed = true
-  }
-  if ((!existing.citationCount) && enriched.citationCount) {
-    existing.citationCount = enriched.citationCount
-    changed = true
-  }
-  if ((!existing.bibtex) && enriched.bibtex) {
-    existing.bibtex = enriched.bibtex
-    changed = true
-  }
-  if ((!existing.pdfUrl) && enriched.pdfUrl) {
-    existing.pdfUrl = enriched.pdfUrl
-    changed = true
-  }
-  if (enriched.authors && enriched.authors.length > 0 &&
-      (existing.authors.length === 0 || (existing.authors.length === 1 && existing.authors[0] === 'Unknown'))) {
-    existing.authors = enriched.authors
-    changed = true
-  }
-  // Always update enrichment provenance if any field changed
-  if (changed) {
-    if (enriched.enrichmentSource) existing.enrichmentSource = enriched.enrichmentSource
-    existing.enrichedAt = enriched.enrichedAt || new Date().toISOString()
-  }
+  if (enriched.enrichmentSource) update.enrichmentSource = enriched.enrichmentSource
+  if (enriched.enrichedAt) update.enrichedAt = enriched.enrichedAt
 
-  if (!changed) {
+  if (Object.keys(update).length === 0) {
     return { success: true, paper: existing }
   }
 
-  existing.updatedAt = new Date().toISOString()
+  const found = findArtifactById(context.projectPath, existing.id)
+  if (!found) {
+    return { success: false, error: `Paper not found: ${existing.id}` }
+  }
 
-  const literaturePath = context.projectPath
-    ? join(context.projectPath, PATHS.literature)
-    : PATHS.literature
+  const updated = updateArtifact(context.projectPath, existing.id, update)
+  if (!updated || updated.artifact.type !== 'paper') {
+    return { success: false, error: `Failed to update paper: ${existing.id}` }
+  }
 
-  const filePath = join(literaturePath, `${existing.id}.json`)
-  writeFileSync(filePath, JSON.stringify(existing, null, 2))
-
-  return { success: true, paper: existing, filePath }
+  return {
+    success: true,
+    paper: updated.artifact,
+    filePath: updated.filePath
+  }
 }
 
-/**
- * Parse /save-paper arguments.
- * Format: /save-paper <title> [--authors "A, B"] [--year N] [--abstract "..."] [--venue "..."] [--url "..."] [--citekey key] [--tags "a, b"]
- */
 export function parseSavePaperArgs(raw: string): {
   title: string
   authors?: string[]
@@ -189,7 +207,6 @@ export function parseSavePaperArgs(raw: string): {
   citeKey?: string
   tags?: string[]
 } {
-  // Extract flag values first, remainder is the title
   const flagPattern = /--(\w+)\s+"([^"]+)"|--(\w+)\s+(\S+)/g
   const flags: Record<string, string> = {}
   let cleaned = raw

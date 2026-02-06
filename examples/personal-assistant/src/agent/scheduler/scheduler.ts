@@ -102,7 +102,7 @@ const DEFAULT_TASKS: Omit<ScheduledTask, 'createdAt'>[] = [
   {
     id: 'heartbeat',
     schedule: '0 2 * * *',
-    instruction: 'Review daily logs from past 7 days. Extract durable facts, preferences, corrections. Update MEMORY.md — add new, update changed, remove outdated. Update USER.md if identity info changed. Do NOT duplicate.',
+    instruction: 'Review recent sessions and artifacts. Promote durable facts (profile/commitment/routine/work-context) through fact-promote and update task-anchor when needed. Avoid duplicates.',
     enabled: true,
     createdBy: 'system'
   },

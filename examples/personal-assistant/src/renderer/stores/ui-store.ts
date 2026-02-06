@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
-type LeftTab = 'todos' | 'notes' | 'docs'
+type LeftTab = 'todos' | 'notes' | 'docs' | 'mail' | 'calendar' | 'focus'
 export type ReasoningEffort = 'high' | 'medium' | 'low'
 
 export const GPT5_REASONING_MODELS = ['gpt-5.2', 'gpt-5.1', 'gpt-5-mini', 'gpt-5-nano']

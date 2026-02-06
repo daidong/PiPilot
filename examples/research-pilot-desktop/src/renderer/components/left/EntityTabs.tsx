@@ -1,44 +1,57 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { StickyNote, BookOpen, Database, Upload, MessageSquare, Trash2, Bookmark, Layers, ChevronRight, ChevronDown, FileSpreadsheet, FlaskConical, Loader2, RefreshCw } from 'lucide-react'
+import {
+  BookMarked,
+  BookOpen,
+  Brain,
+  Layers,
+  Target,
+  Activity,
+  Upload,
+  MessageSquare,
+  Trash2,
+  ChevronRight,
+  ChevronDown,
+  FileSpreadsheet,
+  FlaskConical,
+  Loader2,
+  RefreshCw
+} from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
+import { KnowledgePanel } from './KnowledgePanel'
+import { FocusPanel } from './FocusPanel'
+import { TasksPanel } from './TasksPanel'
+import { RunsPanel } from './RunsPanel'
 
-// Hover preview tooltip with project card/working set/delete actions (RFC-009)
 function HoverPreview({
   entity,
   anchorRect,
   onMouseEnter,
   onMouseLeave,
-  onProjectCard,
-  onWorkingSet,
+  onFocusToggle,
   onDelete,
   confirmDelete,
-  isInWorkingSet
+  inFocus
 }: {
   entity: EntityItem
   anchorRect: DOMRect
   onMouseEnter: () => void
   onMouseLeave: () => void
-  onProjectCard: () => void
-  onWorkingSet: () => void
+  onFocusToggle: () => void
   onDelete: () => void
   confirmDelete: boolean
-  isInWorkingSet: boolean
+  inFocus: boolean
 }) {
   const content = entity.content || entity.abstract || entity.valueText || ''
-  const isProjectCard = entity.pinned || entity.projectCard
-
-  // Position to the right of the sidebar (fixed position)
-  // Left sidebar is ~220px, so position preview at ~230px from left
   const top = Math.min(anchorRect.top, window.innerHeight - 320)
 
   return (
     <div
       className="fixed z-50 w-80 max-h-72 overflow-y-auto rounded-lg border t-border t-bg-surface shadow-xl"
-      style={{ left: 230, top }}
+      style={{ left: 280, top }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -53,19 +66,10 @@ function HoverPreview({
           )}
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
-          {/* RFC-009: Project Card toggle */}
           <button
-            onClick={(e) => { e.stopPropagation(); onProjectCard() }}
-            className={`p-1 rounded ${isProjectCard ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
-            title={isProjectCard ? 'Remove from Project Cards' : 'Add to Project Cards'}
-          >
-            <Bookmark size={13} />
-          </button>
-          {/* RFC-009: Working Set toggle */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onWorkingSet() }}
-            className={`p-1 rounded ${isInWorkingSet ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
-            title={isInWorkingSet ? 'Remove from Working Set' : 'Add to Working Set'}
+            onClick={(e) => { e.stopPropagation(); onFocusToggle() }}
+            className={`p-1 rounded ${inFocus ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
+            title={inFocus ? 'Remove from Focus' : 'Add to Focus'}
           >
             <Layers size={13} />
           </button>
@@ -92,15 +96,16 @@ function HoverPreview({
 }
 
 const tabs = [
-  { key: 'notes' as const, label: 'Notes', icon: StickyNote },
-  { key: 'data' as const, label: 'Data', icon: Database },
-  { key: 'papers' as const, label: 'Papers', icon: BookOpen }
+  { key: 'library' as const, label: 'Library', icon: BookMarked },
+  { key: 'papers' as const, label: 'Papers', icon: BookOpen },
+  { key: 'knowledge' as const, label: 'Facts', icon: Brain },
+  { key: 'focus' as const, label: 'Focus', icon: Layers },
+  { key: 'tasks' as const, label: 'Tasks', icon: Target },
+  { key: 'runs' as const, label: 'Runs', icon: Activity }
 ]
 
-function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetIds: Set<string> }) {
-  // RFC-009: Use new method names
-  const toggleProjectCard = useEntityStore((s) => s.toggleProjectCard)
-  const toggleWorkingSet = useEntityStore((s) => s.toggleWorkingSet)
+function EntityRow({ entity, focusIds }: { entity: EntityItem; focusIds: Set<string> }) {
+  const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const enrichingPapers = useEntityStore((s) => s.enrichingPapers)
   const isEnriching = enrichingPapers.has(entity.id)
@@ -117,8 +122,7 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
   const confirmResetRef = useRef<number | null>(null)
 
   const messageId = entity.provenance?.messageId as string | undefined
-  const isProjectCard = entity.pinned || entity.projectCard
-  const isInWorkingSet = workingSetIds.has(entity.id)
+  const inFocus = focusIds.has(entity.id)
 
   const cancelHide = () => {
     if (hideTimeoutRef.current) {
@@ -129,7 +133,6 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
 
   const handleMouseEnter = () => {
     cancelHide()
-    // Delay before showing hover preview
     showTimeoutRef.current = window.setTimeout(() => {
       if (rowRef.current) {
         setAnchorRect(rowRef.current.getBoundingClientRect())
@@ -143,12 +146,8 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
       clearTimeout(showTimeoutRef.current)
       showTimeoutRef.current = null
     }
-    // Don't hide while waiting for delete confirmation
     if (confirmDelete) return
-    // Delay before hiding so user can move mouse to preview
-    hideTimeoutRef.current = window.setTimeout(() => {
-      setShowHover(false)
-    }, 300)
+    hideTimeoutRef.current = window.setTimeout(() => setShowHover(false), 300)
   }
 
   const handleProvenanceClick = (e: React.MouseEvent) => {
@@ -158,12 +157,10 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
 
   const handleDelete = async () => {
     if (!confirmDelete) {
-      // First click: arm confirmation, keep popup alive
       setConfirmDelete(true)
       confirmResetRef.current = window.setTimeout(() => setConfirmDelete(false), 3000)
       return
     }
-    // Second click: actually delete
     if (confirmResetRef.current) clearTimeout(confirmResetRef.current)
     setShowHover(false)
     await deleteEntity(entity.id)
@@ -186,20 +183,16 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
             anchorRect={anchorRect}
             onMouseEnter={cancelHide}
             onMouseLeave={handleMouseLeave}
-            onProjectCard={() => toggleProjectCard(entity.id)}
-            onWorkingSet={() => toggleWorkingSet(entity.id)}
+            onFocusToggle={() => toggleFocus(entity.id)}
             onDelete={handleDelete}
             confirmDelete={confirmDelete}
-            isInWorkingSet={isInWorkingSet}
+            inFocus={inFocus}
           />
         )}
         {isEnriching ? (
           <Loader2 size={10} className="shrink-0 text-teal-400 animate-spin" />
         ) : (
-          /* RFC-009: Status dot - teal for Project Card and Working Set */
-          <span className={`w-1 h-1 rounded-full shrink-0 ${
-            isProjectCard ? 'bg-teal-400' : isInWorkingSet ? 'bg-teal-400' : 't-bg-elevated'
-          }`} />
+          <span className={`w-1 h-1 rounded-full shrink-0 ${inFocus ? 'bg-teal-400' : 't-bg-elevated'}`} />
         )}
         <span className="text-xs t-text truncate">{entity.title}</span>
       </div>
@@ -217,11 +210,9 @@ function EntityRow({ entity, workingSetIds }: { entity: EntityItem; workingSetId
   )
 }
 
-function DataTreeView({ items, workingSetIds }: { items: EntityItem[]; workingSetIds: Set<string> }) {
+function DataTreeView({ items, focusIds }: { items: EntityItem[]; focusIds: Set<string> }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const openPreview = useUIStore((s) => s.openPreview)
-
-  // Partition: top-level (no 'auto-generated' tag) vs grouped by runId
   const topLevel: EntityItem[] = []
   const grouped = new Map<string, EntityItem[]>()
 
@@ -251,7 +242,7 @@ function DataTreeView({ items, workingSetIds }: { items: EntityItem[]; workingSe
       {topLevel.map((e) => (
         <div key={e.id} className="flex items-center gap-1">
           <FileSpreadsheet size={13} className="shrink-0 t-text-muted ml-2" />
-          <div className="flex-1 min-w-0"><EntityRow entity={e} workingSetIds={workingSetIds} /></div>
+          <div className="flex-1 min-w-0"><EntityRow entity={e} focusIds={focusIds} /></div>
         </div>
       ))}
       {Array.from(grouped.entries()).map(([runId, children]) => {
@@ -266,17 +257,14 @@ function DataTreeView({ items, workingSetIds }: { items: EntityItem[]; workingSe
               >
                 {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               </button>
-              <FlaskConical size={13} className="shrink-0 text-purple-400" />
-              <span
-                className="text-xs t-text truncate"
-                onClick={() => openPreview(children[0])}
-              >
+              <FlaskConical size={13} className="shrink-0 text-teal-500" />
+              <span className="text-xs t-text truncate" onClick={() => openPreview(children[0])}>
                 Analysis: {label}
               </span>
             </div>
             {isOpen && (
               <div className="pl-4">
-                {children.map((e) => <EntityRow key={e.id} entity={e} workingSetIds={workingSetIds} />)}
+                {children.map((e) => <EntityRow key={e.id} entity={e} focusIds={focusIds} />)}
               </div>
             )}
           </div>
@@ -286,29 +274,94 @@ function DataTreeView({ items, workingSetIds }: { items: EntityItem[]; workingSe
   )
 }
 
-export function EntityTabs() {
-  const leftTab = useUIStore((s) => s.leftTab)
-  const setLeftTab = useUIStore((s) => s.setLeftTab)
-  // RFC-009: Get workingSet for status dot logic
-  const { notes, papers, data, workingSet, refreshAll, setEnriching, clearEnriching, clearAllEnriching } = useEntityStore()
-  const [isEnrichingAll, setIsEnrichingAll] = useState(false)
-
-  useEffect(() => {
-    refreshAll()
+/** Library tab content: shows notes + data (everything except papers) */
+function LibraryContent({
+  notes,
+  data,
+  focusIds,
+  refreshAll
+}: {
+  notes: EntityItem[]
+  data: EntityItem[]
+  focusIds: Set<string>
+  refreshAll: () => Promise<void>
+}) {
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
   }, [])
 
-  // RFC-009: Create Set of working set IDs for efficient lookup
-  const workingSetIds = new Set(workingSet.map(e => e.id))
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    const api = (window as any).api
+    const files = Array.from(e.dataTransfer.files)
+    for (const file of files) {
+      try {
+        const content = await file.text()
+        await api.dropFile(file.name, content, 'notes')
+      } catch (err) {
+        console.error(`Failed to drop file ${file.name}:`, err)
+      }
+    }
+    refreshAll()
+  }, [refreshAll])
+
+  const allItems = [...notes, ...data]
+
+  return (
+    <>
+      <div
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-teal-400/40"
+      >
+        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
+        <p className="text-xs t-text-muted">Drop files here</p>
+      </div>
+
+      <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0">
+        {allItems.length === 0 ? (
+          <p className="px-3 py-4 text-xs t-text-muted text-center">No items yet</p>
+        ) : (
+          <>
+            {notes.length > 0 && (
+              <>
+                <p className="text-[10px] t-text-muted uppercase tracking-wider px-2 pt-1 pb-0.5">Notes ({notes.length})</p>
+                {notes.map((e) => <EntityRow key={e.id} entity={e} focusIds={focusIds} />)}
+              </>
+            )}
+            {data.length > 0 && (
+              <>
+                <p className="text-[10px] t-text-muted uppercase tracking-wider px-2 pt-2 pb-0.5">Data ({data.length})</p>
+                <DataTreeView items={data} focusIds={focusIds} />
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  )
+}
+
+/** Papers tab content: shows papers with enrich button */
+function PapersContent({
+  papers,
+  focusIds,
+  refreshAll
+}: {
+  papers: EntityItem[]
+  focusIds: Set<string>
+  refreshAll: () => Promise<void>
+}) {
+  const { setEnriching, clearEnriching, clearAllEnriching } = useEntityStore()
+  const [isEnrichingAll, setIsEnrichingAll] = useState(false)
 
   const handleEnrichAll = useCallback(async () => {
     const api = (window as any).api
     setIsEnrichingAll(true)
     const unsub = api.onEnrichProgress((info: { paperId: string; status: string }) => {
-      if (info.status === 'enriching') {
-        setEnriching(info.paperId)
-      } else {
-        clearEnriching(info.paperId)
-      }
+      if (info.status === 'enriching') setEnriching(info.paperId)
+      else clearEnriching(info.paperId)
     })
     try {
       await api.enrichAllPapers(papers.map((p: any) => p.id))
@@ -318,15 +371,7 @@ export function EntityTabs() {
       clearAllEnriching()
       setIsEnrichingAll(false)
     }
-  }, [refreshAll, setEnriching, clearEnriching, clearAllEnriching])
-
-  const entities: Record<string, EntityItem[]> = {
-    notes,
-    papers,
-    data
-  }
-
-  const items = entities[leftTab] || []
+  }, [refreshAll, setEnriching, clearEnriching, clearAllEnriching, papers])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -340,71 +385,101 @@ export function EntityTabs() {
     for (const file of files) {
       try {
         const content = await file.text()
-        await api.dropFile(file.name, content, leftTab)
+        await api.dropFile(file.name, content, 'papers')
       } catch (err) {
         console.error(`Failed to drop file ${file.name}:`, err)
       }
     }
     refreshAll()
-  }, [leftTab, refreshAll])
+  }, [refreshAll])
 
   return (
-    <div>
-      {/* Tab bar */}
-      <div className="flex border-b t-border px-2">
+    <>
+      <div className="flex items-center px-3 pt-2 pb-1">
+        <span className="text-[10px] t-text-muted">{papers.length} papers</span>
+        <button
+          onClick={handleEnrichAll}
+          disabled={isEnrichingAll}
+          className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:text-teal-400 transition-colors disabled:opacity-50"
+          title="Enrich metadata for all papers"
+        >
+          {isEnrichingAll ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          <span>Enrich</span>
+        </button>
+      </div>
+
+      <div
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        className="mx-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-teal-400/40"
+      >
+        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
+        <p className="text-xs t-text-muted">Drop files here to add papers</p>
+      </div>
+
+      <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0">
+        {papers.length === 0 ? (
+          <p className="px-3 py-4 text-xs t-text-muted text-center">No papers yet</p>
+        ) : (
+          papers.map((e) => <EntityRow key={e.id} entity={e} focusIds={focusIds} />)
+        )}
+      </div>
+    </>
+  )
+}
+
+export function EntityTabs() {
+  const leftTab = useUIStore((s) => s.leftTab)
+  const setLeftTab = useUIStore((s) => s.setLeftTab)
+  const { notes, papers, data, focus, refreshAll } = useEntityStore()
+
+  useEffect(() => {
+    refreshAll()
+  }, [])
+
+  const focusIds = new Set(focus.map(e => e.id))
+
+  const renderContent = () => {
+    switch (leftTab) {
+      case 'library':
+        return <LibraryContent notes={notes} data={data} focusIds={focusIds} refreshAll={refreshAll} />
+      case 'papers':
+        return <PapersContent papers={papers} focusIds={focusIds} refreshAll={refreshAll} />
+      case 'knowledge':
+        return <KnowledgePanel />
+      case 'focus':
+        return <FocusPanel />
+      case 'tasks':
+        return <TasksPanel />
+      case 'runs':
+        return <RunsPanel />
+      default:
+        return null
+    }
+  }
+
+  return (
+    <div className="h-full flex flex-col min-h-0">
+      <div className="flex border-b t-border px-1">
         {tabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => setLeftTab(key)}
-            className={`no-drag flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
+            className={`no-drag flex items-center gap-1 px-2 py-2 text-[11px] font-medium border-b-2 transition-colors ${
               leftTab === key
                 ? 'border-teal-400 t-text'
                 : 'border-transparent t-text-muted hover:t-text-secondary'
             }`}
+            title={label}
           >
-            <Icon size={13} />
+            <Icon size={12} />
             {label}
           </button>
         ))}
-        {leftTab === 'papers' && (
-          <button
-            onClick={handleEnrichAll}
-            disabled={isEnrichingAll}
-            className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:text-teal-400 transition-colors disabled:opacity-50"
-            title="Enrich metadata for all papers"
-          >
-            {isEnrichingAll ? (
-              <Loader2 size={12} className="animate-spin" />
-            ) : (
-              <RefreshCw size={12} />
-            )}
-          </button>
-        )}
       </div>
 
-      {/* Drop zone */}
-      <div
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-teal-400/40"
-      >
-        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
-        <p className="text-xs t-text-muted">
-          Drop files here to add {leftTab}
-        </p>
-      </div>
-
-      {/* Entity list */}
-      <div className="px-1 py-2 space-y-0.5">
-        {items.length === 0 ? (
-          <p className="px-3 py-4 text-xs t-text-muted text-center">
-            No {leftTab} yet
-          </p>
-        ) : leftTab === 'data' ? (
-          <DataTreeView items={items} workingSetIds={workingSetIds} />
-        ) : (
-          items.map((e) => <EntityRow key={e.id} entity={e} workingSetIds={workingSetIds} />)
-        )}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {renderContent()}
       </div>
     </div>
   )

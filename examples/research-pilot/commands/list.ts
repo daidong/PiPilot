@@ -1,20 +1,25 @@
 /**
- * List Commands - Return structured data for notes, literature, and data files.
- * Extracted from index.ts for Ink UI compatibility.
+ * Artifact listing helpers.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
-import { PATHS, Note, Literature, DataAttachment, type Provenance } from '../types.js'
+import { type Artifact, type ArtifactType, type DataAttachment, type Literature, type Note, type Provenance } from '../types.js'
+import { listArtifacts } from '../memory-v2/store.js'
+
+export interface ArtifactListItem {
+  id: string
+  type: ArtifactType
+  title: string
+  tags: string[]
+  summary?: string
+  updatedAt: string
+  provenance?: Provenance
+}
 
 export interface NoteListItem {
   id: string
   title: string
   content: string
   tags: string[]
-  projectCard: boolean
-  pinned: boolean
-  selectedForAI: boolean
   provenance?: Provenance
 }
 
@@ -27,9 +32,6 @@ export interface LiteratureListItem {
   venue?: string
   url?: string
   citeKey: string
-  projectCard: boolean
-  pinned: boolean
-  selectedForAI: boolean
   doi?: string
   citationCount?: number
   pdfUrl?: string
@@ -47,115 +49,74 @@ export interface DataListItem {
   name: string
   filePath: string
   rowCount?: number
-  projectCard: boolean
-  pinned: boolean
-  selectedForAI: boolean
   tags?: string[]
   runId?: string
   runLabel?: string
 }
 
-/** List all notes, returning structured data */
+function toArtifactListItem(artifact: Artifact): ArtifactListItem {
+  return {
+    id: artifact.id,
+    type: artifact.type,
+    title: artifact.title,
+    tags: artifact.tags,
+    summary: artifact.summary,
+    updatedAt: artifact.updatedAt,
+    provenance: artifact.provenance
+  }
+}
+
+export function listAllArtifacts(projectPath: string, types?: ArtifactType[]): ArtifactListItem[] {
+  return listArtifacts(projectPath, types).map(toArtifactListItem)
+}
+
 export function listNotes(projectPath: string): NoteListItem[] {
-  const notesDir = join(projectPath, PATHS.notes)
-  if (!existsSync(notesDir)) return []
-
-  const files = readdirSync(notesDir).filter(f => f.endsWith('.json'))
-  const items: NoteListItem[] = []
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(notesDir, file), 'utf-8')
-      const note = JSON.parse(content) as Note
-      items.push({
-        id: note.id,
-        title: note.title,
-        content: note.content,
-        tags: note.tags,
-        projectCard: note.projectCard ?? note.pinned ?? false,
-        pinned: note.projectCard ?? note.pinned ?? false,
-        selectedForAI: note.selectedForAI ?? false,
-        provenance: note.provenance
-      })
-    } catch {
-      // Skip invalid files
-    }
-  }
-
-  return items
+  return listArtifacts(projectPath, ['note'])
+    .filter((a): a is Note => a.type === 'note')
+    .map(note => ({
+      id: note.id,
+      title: note.title,
+      content: note.content,
+      tags: note.tags,
+      provenance: note.provenance
+    }))
 }
 
-/** List all literature, returning structured data */
 export function listLiterature(projectPath: string): LiteratureListItem[] {
-  const litDir = join(projectPath, PATHS.literature)
-  if (!existsSync(litDir)) return []
-
-  const files = readdirSync(litDir).filter(f => f.endsWith('.json'))
-  const items: LiteratureListItem[] = []
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(litDir, file), 'utf-8')
-      const lit = JSON.parse(content) as Literature
-      items.push({
-        id: lit.id,
-        title: lit.title,
-        abstract: lit.abstract,
-        authors: lit.authors,
-        year: lit.year,
-        venue: lit.venue,
-        url: lit.url,
-        citeKey: lit.citeKey,
-        projectCard: lit.projectCard ?? lit.pinned ?? false,
-        pinned: lit.projectCard ?? lit.pinned ?? false,
-        selectedForAI: lit.selectedForAI ?? false,
-        doi: lit.doi,
-        citationCount: lit.citationCount,
-        pdfUrl: lit.pdfUrl,
-        bibtex: lit.bibtex,
-        externalSource: lit.externalSource,
-        relevanceScore: lit.relevanceScore,
-        enrichmentSource: lit.enrichmentSource,
-        enrichedAt: lit.enrichedAt,
-        tags: lit.tags,
-        provenance: lit.provenance
-      })
-    } catch {
-      // Skip invalid files
-    }
-  }
-
-  return items
+  return listArtifacts(projectPath, ['paper'])
+    .filter((a): a is Literature => a.type === 'paper')
+    .map(paper => ({
+      id: paper.id,
+      title: paper.title,
+      abstract: paper.abstract,
+      authors: paper.authors,
+      year: paper.year,
+      venue: paper.venue,
+      url: paper.url,
+      citeKey: paper.citeKey,
+      doi: paper.doi,
+      citationCount: paper.citationCount,
+      pdfUrl: paper.pdfUrl,
+      bibtex: paper.bibtex,
+      externalSource: paper.externalSource,
+      relevanceScore: paper.relevanceScore,
+      enrichmentSource: paper.enrichmentSource,
+      enrichedAt: paper.enrichedAt,
+      tags: paper.tags,
+      provenance: paper.provenance
+    }))
 }
 
-/** List all data files, returning structured data */
 export function listData(projectPath: string): DataListItem[] {
-  const dataDir = join(projectPath, PATHS.data)
-  if (!existsSync(dataDir)) return []
-
-  const files = readdirSync(dataDir).filter(f => f.endsWith('.json'))
-  const items: DataListItem[] = []
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(dataDir, file), 'utf-8')
-      const data = JSON.parse(content) as DataAttachment
-      items.push({
-        id: data.id,
-        name: data.name,
-        filePath: data.filePath,
-        rowCount: data.schema?.rowCount,
-        projectCard: data.projectCard ?? data.pinned ?? false,
-        pinned: data.projectCard ?? data.pinned ?? false,
-        selectedForAI: data.selectedForAI ?? false,
-        tags: data.tags,
-        runId: data.runId,
-        runLabel: data.runLabel
-      })
-    } catch {
-      // Skip invalid files
-    }
-  }
-
-  return items
+  return listArtifacts(projectPath, ['data'])
+    .filter((a): a is DataAttachment => a.type === 'data')
+    .map(data => ({
+      id: data.id,
+      name: data.title,
+      filePath: data.filePath,
+      rowCount: data.schema?.rowCount,
+      tags: data.tags,
+      runId: data.runId,
+      runLabel: data.runLabel
+    }))
 }

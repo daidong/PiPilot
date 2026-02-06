@@ -15,6 +15,7 @@ import { PolicyEngine } from '../core/policy-engine.js'
 import { ContextManager } from '../core/context-manager.js'
 import { PromptCompiler } from '../core/prompt-compiler.js'
 import { SkillManager } from '../skills/skill-manager.js'
+import { ExternalSkillLoader, type LoadedExternalSkill } from '../skills/external-skill-loader.js'
 import { globalSkillRegistry } from '../skills/skill-registry.js'
 import { AgentLoop } from './agent-loop.js'
 import { TokenTracker, createTokenTracker, type TokenTrackerConfig } from '../core/token-tracker.js'
@@ -23,7 +24,9 @@ import { BudgetCoordinator } from '../core/budget-coordinator.js'
 import { StateSummarizer } from '../core/state-summarizer.js'
 import { countTokens } from '../utils/tokenizer.js'
 import { createLLMClient, detectProviderFromApiKey, getModel } from '../llm/index.js'
+import type { Message } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
+import { createKernelV2, type KernelV2 } from '../kernel-v2/index.js'
 import { packs } from '../packs/index.js'
 import {
   createContextPipeline,
@@ -39,7 +42,7 @@ import {
   normalizePackConfigs,
   type AgentYAMLConfig
 } from '../config/index.js'
-import { join } from 'path'
+import { isAbsolute, join, relative, resolve } from 'path'
 
 /**
  * 生成唯一 ID
@@ -301,6 +304,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
 
   // 获取工作目录
   const projectPath = config.projectPath ?? process.cwd()
+  const useKernelV2 = config.kernelV2?.enabled ?? true
 
   // 创建核心组件
   const eventBus = new EventBus()
@@ -402,7 +406,11 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   }
 
   // 创建 SkillManager（懒加载程序性知识）
-  const skillManager = new SkillManager({ debug: config.debug })
+  const skillManager = new SkillManager({
+    debug: config.debug,
+    trace,
+    skillTelemetry: config.skillTelemetry
+  })
 
   for (const pack of packsToLoad) {
     // 注册工具
@@ -423,7 +431,11 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     // 注册 Skills（如果 pack 定义了 skills）
     // Phase 1.3: Apply skillLoadingConfig to override individual skill strategies
     if (pack.skills && pack.skills.length > 0) {
-      const skillsWithConfig = pack.skills.map(skill => {
+      const packSkills = config.disableResourcefulSkill
+        ? pack.skills.filter(skill => skill.id !== 'resourceful-philosophy')
+        : pack.skills
+
+      const skillsWithConfig = packSkills.map(skill => {
         if (pack.skillLoadingConfig) {
           if (pack.skillLoadingConfig.eager?.includes(skill.id)) {
             return { ...skill, loadingStrategy: 'eager' as const }
@@ -446,7 +458,8 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       // Load eager skills immediately
       if (pack.skillLoadingConfig?.eager) {
         for (const skillId of pack.skillLoadingConfig.eager) {
-          skillManager.loadFully(skillId)
+          if (config.disableResourcefulSkill && skillId === 'resourceful-philosophy') continue
+          skillManager.loadFully(skillId, { trigger: 'eager' })
         }
       }
     }
@@ -456,6 +469,41 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   ;(runtime as any).skillManager = skillManager
   // Phase 3.2: Add skillRegistry to runtime for skill discovery
   ;(runtime as any).skillRegistry = globalSkillRegistry
+
+  // External skill directory config
+  const configuredExternalSkillsDir = config.externalSkillsDir?.trim()
+  const resolvedExternalSkillsDir = configuredExternalSkillsDir
+    ? (isAbsolute(configuredExternalSkillsDir)
+      ? resolve(configuredExternalSkillsDir)
+      : resolve(projectPath, configuredExternalSkillsDir))
+    : resolve(projectPath, '.agentfoundry/skills')
+  const relativeExternalSkillsDir = relative(projectPath, resolvedExternalSkillsDir)
+  const externalSkillsDirForTools = (
+    relativeExternalSkillsDir &&
+    !relativeExternalSkillsDir.startsWith('..') &&
+    !isAbsolute(relativeExternalSkillsDir)
+  )
+    ? relativeExternalSkillsDir
+    : '.agentfoundry/skills'
+  runtime.sessionState.set('externalSkillsDir', externalSkillsDirForTools.replace(/\\/g, '/'))
+
+  let externalSkillLoader: ExternalSkillLoader | null = null
+
+  const registerExternalSkill = (loaded: LoadedExternalSkill, source: 'init' | 'watch'): void => {
+    skillManager.register(loaded.skill, {
+      approvedByUser: loaded.approvedByUser,
+      source: 'external',
+      filePath: loaded.filePath
+    })
+    globalSkillRegistry.register(loaded.skill)
+    if (source === 'watch') {
+      skillManager.recordTelemetry(
+        'skill.hot_reloaded',
+        { skillId: loaded.skill.id, action: 'modify', filePath: loaded.filePath },
+        `hot-reload id=${loaded.skill.id} action=modify`
+      )
+    }
+  }
 
   // 注册额外策略
   if (config.policies) {
@@ -515,9 +563,23 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   // Create StateSummarizer (Change 3)
   const stateSummarizer = new StateSummarizer()
 
+  // RFC-011: Kernel V2 (feature-flagged)
+  const kernelV2: KernelV2 | null = useKernelV2
+    ? createKernelV2({
+        projectPath,
+        config: config.kernelV2,
+        contextWindow,
+        modelId: model,
+        debug: config.debug
+      })
+    : null
+  if (kernelV2) {
+    runtime.kernelV2 = kernelV2
+  }
+
   // Budget is always active (framework responsibility)
   const effectiveBudgetConfig = {
-    enabled: true,
+    enabled: !useKernelV2,
     modelId: model,
     contextWindow,
     toolResultCap,
@@ -572,6 +634,49 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
           await pack.onInit(runtime)
         }
       }
+
+      // Load project-local external skills after built-in pack skills are ready.
+      externalSkillLoader = new ExternalSkillLoader({
+        skillsDir: resolvedExternalSkillsDir,
+        watchForChanges: config.watchExternalSkills ?? true,
+        builtInSkillIds: skillManager.getAll().map(skill => skill.id),
+        onSkillLoaded: (loaded) => {
+          registerExternalSkill(loaded, 'watch')
+        },
+        onSkillRemoved: (skillId) => {
+          const removed = skillManager.unregister(skillId)
+          globalSkillRegistry.unregister(skillId)
+          if (removed) {
+            skillManager.recordTelemetry(
+              'skill.hot_reloaded',
+              { skillId, action: 'remove' },
+              `hot-reload id=${skillId} action=remove`
+            )
+          }
+        },
+        onError: (error, filePath) => {
+          skillManager.recordTelemetry(
+            'skill.load_blocked',
+            { skillId: null, reason: 'invalid', filePath, error: error.message },
+            `load-blocked file=${filePath} reason=invalid`
+          )
+        }
+      })
+
+      const initialExternalSkills = await externalSkillLoader.loadAll()
+      for (const loaded of initialExternalSkills) {
+        registerExternalSkill(loaded, 'init')
+      }
+
+      if (config.watchExternalSkills ?? true) {
+        externalSkillLoader.startWatching()
+      }
+
+      if (kernelV2) {
+        await kernelV2.init()
+        runtime.memoryStorage = kernelV2.getMemoryStorage(sessionId)
+      }
+
       packsInitialized = true
     }
   }
@@ -611,8 +716,17 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       // Store latest user message for WorkingSet retrieval
       runtime.sessionState.set('latestUserMessage', prompt)
 
-      // Save user message to messageStore BEFORE assembly
-      if (runtime.messageStore) {
+      // Assemble runtime context
+      const extraInstructions = options?.additionalInstructions?.trim()
+      const taskModulesBlock = extraInstructions
+        ? '\n\n## Task Modules\n' + extraInstructions
+        : ''
+      let workingContextBlock = ''
+      let dynamicSystemPrompt = systemPrompt + taskModulesBlock
+      let selectedContent: string | undefined
+
+      // Persist user message into V1 message store for compatibility with session.* context sources
+      if (runtime.messageStore && !kernelV2) {
         await runtime.messageStore.appendMessage({
           sessionId,
           timestamp: new Date().toISOString(),
@@ -622,14 +736,28 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         })
       }
 
-      // Assemble budget-controlled history from messageStore via context pipeline
-      const extraInstructions = options?.additionalInstructions?.trim()
-      const taskModulesBlock = extraInstructions
-        ? '\n\n## Task Modules\n' + extraInstructions
-        : ''
-      let workingContextBlock = ''
-      let dynamicSystemPrompt = systemPrompt + taskModulesBlock
-      if (runtime.messageStore) {
+      if (kernelV2) {
+        const identityTokens = countTokens(systemPrompt)
+        const toolSchemas = toolRegistry.generateToolSchemas()
+        const toolTokens = countTokens(JSON.stringify(toolSchemas))
+        const selectedContextText = options?.selectedContext?.length
+          ? JSON.stringify(options.selectedContext)
+          : undefined
+
+        const kernelTurn = await kernelV2.beginTurn({
+          sessionId,
+          userPrompt: prompt,
+          systemPromptTokens: identityTokens,
+          toolSchemasTokens: toolTokens,
+          selectedContext: selectedContextText,
+          additionalInstructions: extraInstructions
+        })
+
+        workingContextBlock = kernelTurn.context.workingContextBlock
+        if (config.debug) {
+          console.error('[KernelV2] context tokens:', kernelTurn.context.promptTokensEstimate, '| protected turns:', kernelTurn.context.protectedTurnsKept, '| degraded:', kernelTurn.context.degradedZones.join(', ') || 'none')
+        }
+      } else if (runtime.messageStore) {
         try {
           // Measure fixed costs for BudgetCoordinator
           const identityTokens = countTokens(systemPrompt)
@@ -709,11 +837,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
             console.error('[createAgent] Context pipeline assembly failed:', err)
           }
         }
-      }
 
-      // Extract selected content for separate message injection (Change 5)
-      let selectedContent: string | undefined
-      if (runtime.messageStore) {
         try {
           // selectedContent is set by the pipeline assemble above
           const storedSelected = runtime.sessionState.get<string>('assembledSelectedContent')
@@ -747,14 +871,14 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         onText: config.onStream,
         onToolCall: config.onToolCall,
         onToolResult: config.onToolResult,
-        budgetConfig: effectiveBudgetConfig,
+        budgetConfig: useKernelV2 ? { ...effectiveBudgetConfig, enabled: false } : effectiveBudgetConfig,
         debug: config.debug,
         stateSummarizer,
         selectedContext: selectedContent,
-        budgetCoordinator,
+        budgetCoordinator: useKernelV2 ? undefined : budgetCoordinator,
         toolLoopThreshold: config.toolLoopThreshold,
         maxConsecutiveToolRounds: config.maxConsecutiveToolRounds,
-        onPreCompaction: config.onPreCompaction
+        onPreCompaction: !useKernelV2 && config.onPreCompaction
           ? () => config.onPreCompaction!(agent)
           : undefined,
         tokenTracker,
@@ -765,10 +889,10 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       activeAgentLoop = agentLoop
 
       const result = await agentLoop.run(prompt)
+      const allMessages = agentLoop.getMessages()
 
       // Persist assistant + tool messages from this turn to messageStore
-      if (runtime.messageStore) {
-        const allMessages = agentLoop.getMessages()
+      if (runtime.messageStore && !kernelV2) {
         // Skip the first message (user prompt) since we already saved it
         const responseMessages = allMessages.filter(msg => msg.role !== 'user' || msg !== allMessages[0])
         for (const msg of responseMessages) {
@@ -787,8 +911,17 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         }
       }
 
+      if (kernelV2) {
+        await kernelV2.completeTurn({
+          sessionId,
+          messages: allMessages as Message[],
+          promptTokens: result.usage?.tokens.promptTokens ?? 0
+        })
+      }
+
       // Phase 3.3: Clean up expired skills (TTL-based downgrading)
       skillManager.cleanup()
+      skillManager.reportTokenSavings(`${sessionId}:${Date.now().toString(36)}`, sessionId)
 
       activeAgentLoop = null
       return result
@@ -799,6 +932,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     },
 
     async destroy(): Promise<void> {
+      externalSkillLoader?.stopWatching()
+      externalSkillLoader = null
+
       // 销毁 Packs
       for (const pack of packsToLoad) {
         if (pack.onDestroy) {

@@ -8,14 +8,14 @@ import { MentionPopover } from './MentionPopover'
 import { CommandPopover } from './CommandPopover'
 
 const SLASH_COMMANDS = [
-  { name: '/save-note', description: 'Save content as a note', args: '<title>' },
-  { name: '/save-doc', description: 'Save a document', args: '<title>' },
   { name: '/notes', description: 'List all notes' },
   { name: '/docs', description: 'List all documents' },
+  { name: '/todo', description: 'Create a todo artifact', args: '<title>' },
+  { name: '/focus', description: 'Toggle focus for an artifact', args: '<id>' },
+  { name: '/anchor', description: 'Show current task anchor' },
+  { name: '/explain', description: 'Explain memory behavior', args: '[turn|budget|fact <id>]' },
   { name: '/search', description: 'Search entities', args: '<query>' },
-  { name: '/select', description: 'Select entity for AI context', args: '<id>' },
-  { name: '/pin', description: 'Pin entity (always in context)', args: '<id>' },
-  { name: '/clear', description: 'Clear all AI selections' },
+  { name: '/clear', description: 'Clear all focus entries' },
   { name: '/delete', description: 'Delete an entity', args: '<id>' },
   { name: '/help', description: 'Show available commands' }
 ]
@@ -92,37 +92,90 @@ export function ChatInput() {
             : `No results for "${rest}".`
           break
         }
-        case '/save-note': {
-          if (!rest) { result = 'Usage: `/save-note <title>`'; break }
-          const r = await api.saveNote(rest, '')
-          result = r?.success ? `Note saved: **${rest}**` : `Failed: ${r?.error || 'unknown error'}`
+        case '/todo': {
+          if (!rest) { result = 'Usage: `/todo <title>`'; break }
+          const created = await api.artifactCreate({
+            type: 'todo',
+            title: rest,
+            content: '',
+            status: 'pending',
+            tags: ['manual']
+          })
+          const todoId = created?.artifact?.id || created?.data?.id
+          result = created?.success
+            ? `Todo created: **${rest}**${todoId ? ` (\`${String(todoId).slice(0, 8)}\`)` : ''}`
+            : `Failed: ${created?.error || 'unknown error'}`
           refreshEntities()
           break
         }
-        case '/save-doc': {
-          if (!rest) { result = 'Usage: `/save-doc <title>`'; break }
-          const r = await api.saveDoc(rest)
-          result = r?.success ? `Doc saved: **${rest}**` : `Failed: ${r?.error || 'unknown error'}`
+        case '/focus': {
+          if (!rest) { result = 'Usage: `/focus <artifact-id>`'; break }
+          const focus = await api.focusList()
+          const entries: any[] = focus?.entries || []
+          const existing = entries.find((entry: any) => entry.refId === rest || entry.id === rest)
+          if (existing) {
+            const removed = await api.focusRemove(existing.id || existing.refId || rest)
+            result = removed?.success ? `Removed from focus: \`${rest}\`` : `Failed: ${removed?.error || 'unable to remove focus'}`
+          } else {
+            const added = await api.focusAdd({
+              refType: 'artifact',
+              refId: rest,
+              reason: 'manual slash command',
+              source: 'manual',
+              ttl: '2h'
+            })
+            result = added?.success ? `Added to focus: \`${rest}\`` : `Failed: ${added?.error || 'unable to add focus'}`
+          }
           refreshEntities()
           break
         }
-        case '/select': {
-          if (!rest) { result = 'Usage: `/select <id>`'; break }
-          const r = await api.toggleSelect(rest)
-          result = r ? `Toggled selection for \`${rest}\`` : `Entity not found: \`${rest}\``
-          refreshEntities()
+        case '/anchor': {
+          const anchorResult = await api.taskAnchorGet()
+          if (!anchorResult?.success || !anchorResult?.anchor) {
+            result = `No task anchor available${anchorResult?.error ? `: ${anchorResult.error}` : '.'}`
+            break
+          }
+          const anchor = anchorResult.anchor
+          const blockedBy = Array.isArray(anchor.blockedBy) && anchor.blockedBy.length > 0
+            ? anchor.blockedBy.map((item: string) => `  - ${item}`).join('\n')
+            : '  - (none)'
+          result = `**Task Anchor**\n- CurrentGoal: ${anchor.currentGoal || '(empty)'}\n- NowDoing: ${anchor.nowDoing || '(empty)'}\n- BlockedBy:\n${blockedBy}\n- NextAction: ${anchor.nextAction || '(empty)'}`
           break
         }
-        case '/pin': {
-          if (!rest) { result = 'Usage: `/pin <id>`'; break }
-          const r = await api.togglePin(rest)
-          result = r ? `Toggled pin for \`${rest}\`` : `Entity not found: \`${rest}\``
+        case '/explain': {
+          const explainParts = rest.split(/\s+/).filter(Boolean)
+          const mode = explainParts[0] || 'turn'
+          if (mode === 'budget') {
+            const explained = await api.memoryExplainBudget()
+            result = explained?.success
+              ? `**Memory Explain (budget)**\n\`\`\`json\n${JSON.stringify(explained.data, null, 2)}\n\`\`\``
+              : `Failed: ${explained?.error || 'unknown error'}`
+            break
+          }
+          if (mode === 'fact') {
+            const factId = explainParts[1]
+            if (!factId) { result = 'Usage: `/explain fact <factId>`'; break }
+            const explained = await api.memoryExplainFact(factId)
+            result = explained?.success
+              ? `**Memory Explain (fact)**\n\`\`\`json\n${JSON.stringify(explained.data, null, 2)}\n\`\`\``
+              : `Failed: ${explained?.error || 'unknown error'}`
+            break
+          }
+          const explained = await api.memoryExplainTurn()
+          result = explained?.success
+            ? `**Memory Explain (turn)**\n\`\`\`json\n${JSON.stringify(explained.data, null, 2)}\n\`\`\``
+            : `Failed: ${explained?.error || 'unknown error'}`
           refreshEntities()
           break
         }
         case '/clear': {
-          await api.clearSelections()
-          result = 'All selections cleared.'
+          const cleared = await api.focusClear?.()
+          if (cleared?.success) {
+            result = 'All focus entries cleared.'
+          } else {
+            await api.clearSelections()
+            result = 'All selections cleared.'
+          }
           refreshEntities()
           break
         }

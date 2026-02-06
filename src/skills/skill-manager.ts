@@ -10,9 +10,15 @@ import type {
   SkillState,
   LoadedSkillContent,
   SkillLoadingStrategy,
-  SkillManagerEvents
+  SkillManagerEvents,
+  SkillRegistrationOptions,
+  SkillTelemetryConfig,
+  SkillTelemetryMode,
+  SkillTelemetrySink,
+  SkillTokenSavings
 } from '../types/skill.js'
 import { EventBus } from '../core/event-bus.js'
+import type { TraceCollector } from '../core/trace-collector.js'
 
 /**
  * Options for SkillManager initialization
@@ -22,6 +28,11 @@ export interface SkillManagerOptions {
    * Event bus for emitting skill events
    */
   eventBus?: EventBus
+
+  /**
+   * Trace collector for structured telemetry events
+   */
+  trace?: TraceCollector
 
   /**
    * Enable debug logging
@@ -40,6 +51,11 @@ export interface SkillManagerOptions {
    * @default 300000 (5 minutes)
    */
   skillTTL?: number
+
+  /**
+   * Skill lifecycle telemetry
+   */
+  skillTelemetry?: SkillTelemetryConfig
 }
 
 /**
@@ -49,27 +65,43 @@ export class SkillManager {
   private skills: Map<string, Skill> = new Map()
   private loadedContent: Map<string, LoadedSkillContent> = new Map()
   private toolToSkillMap: Map<string, string[]> = new Map()
+  private approvalBySkillId: Map<string, boolean> = new Map()
   private eventBus?: EventBus
+  private trace?: TraceCollector
   private debug: boolean
   private maxFullyLoadedSkills: number
   private skillTTL: number
+  private telemetry: { enabled: boolean; mode: SkillTelemetryMode; sink: SkillTelemetrySink }
 
   constructor(options: SkillManagerOptions = {}) {
     this.eventBus = options.eventBus
+    this.trace = options.trace
     this.debug = options.debug ?? false
     this.maxFullyLoadedSkills = options.maxFullyLoadedSkills ?? 10
     this.skillTTL = options.skillTTL ?? 300000 // 5 minutes
+    const mode = options.skillTelemetry?.mode ?? 'basic'
+    this.telemetry = {
+      enabled: options.skillTelemetry?.enabled ?? true,
+      mode,
+      sink: options.skillTelemetry?.sink ?? 'both'
+    }
+    if (mode === 'off') {
+      this.telemetry.enabled = false
+    }
   }
 
   /**
    * Register a skill
    */
-  register(skill: Skill): void {
+  register(skill: Skill, options: SkillRegistrationOptions = {}): void {
     if (this.skills.has(skill.id)) {
       this.log(`Skill "${skill.id}" already registered, updating...`)
+      this.unload(skill.id)
     }
 
     this.skills.set(skill.id, skill)
+    const approvedByUser = options.approvedByUser ?? skill.meta?.approvedByUser ?? true
+    this.approvalBySkillId.set(skill.id, approvedByUser)
 
     // Build tool → skill mapping for lazy loading
     if (skill.tools) {
@@ -82,10 +114,38 @@ export class SkillManager {
       }
     }
 
-    // Initialize loaded content based on loading strategy
-    this.initializeSkillContent(skill)
+    if (approvedByUser) {
+      // Initialize loaded content based on loading strategy
+      this.initializeSkillContent(skill)
+    } else {
+      // Unapproved skills are discoverable, but never injected into prompt.
+      this.loadedContent.set(skill.id, {
+        state: 'registered',
+        skill,
+        content: '',
+        lastAccessed: Date.now(),
+        accessCount: 0
+      })
+      this.emit('skill:blocked', { skillId: skill.id, reason: 'unapproved' })
+      this.recordTelemetry(
+        'skill.load_blocked',
+        { skillId: skill.id, reason: 'unapproved', source: 'register' },
+        `blocked id=${skill.id} reason=unapproved`
+      )
+    }
 
     this.emit('skill:registered', { skillId: skill.id, skill })
+    this.recordTelemetry(
+      'skill.registered',
+      {
+        skillId: skill.id,
+        strategy: skill.loadingStrategy,
+        summaryTokens: skill.estimatedTokens.summary,
+        fullTokens: skill.estimatedTokens.full,
+        approvedByUser
+      },
+      `registered id=${skill.id} strategy=${skill.loadingStrategy} approved=${approvedByUser}`
+    )
     this.log(`Registered skill: ${skill.id} (strategy: ${skill.loadingStrategy}, tools: [${skill.tools?.join(', ') || 'none'}])`)
   }
 
@@ -109,6 +169,20 @@ export class SkillManager {
    */
   get(skillId: string): Skill | undefined {
     return this.skills.get(skillId)
+  }
+
+  /**
+   * Check if a skill is registered
+   */
+  has(skillId: string): boolean {
+    return this.skills.has(skillId)
+  }
+
+  /**
+   * Check if a registered skill is approved for loading
+   */
+  isApproved(skillId: string): boolean {
+    return this.approvalBySkillId.get(skillId) !== false
   }
 
   /**
@@ -154,6 +228,11 @@ export class SkillManager {
         state: 'fully-loaded',
         tokensLoaded: skill.estimatedTokens.full
       })
+      this.recordTelemetry(
+        'skill.loaded.full',
+        { skillId: skill.id, strategy: skill.loadingStrategy, trigger: 'eager', tokens: skill.estimatedTokens.full },
+        `eager-load id=${skill.id} tokens=+${skill.estimatedTokens.full}`
+      )
     } else {
       // Lazy/on-demand: start with summary only
       content.state = 'summary-loaded'
@@ -163,6 +242,11 @@ export class SkillManager {
         state: 'summary-loaded',
         tokensLoaded: skill.estimatedTokens.summary
       })
+      this.recordTelemetry(
+        'skill.loaded.summary',
+        { skillId: skill.id, reason: 'register', tokens: skill.estimatedTokens.summary },
+        `summary-load id=${skill.id} tokens=+${skill.estimatedTokens.summary}`
+      )
     }
 
     this.loadedContent.set(skill.id, content)
@@ -206,10 +290,23 @@ export class SkillManager {
    * Load a skill to full state
    * Called when skill is needed (e.g., associated tool is first used)
    */
-  loadFully(skillId: string): string | undefined {
+  loadFully(
+    skillId: string,
+    options?: { trigger?: 'tool' | 'on-demand' | 'eager' | 'manual'; triggerTool?: string }
+  ): string | undefined {
     const content = this.loadedContent.get(skillId)
     if (!content) {
       this.log(`Cannot load unknown skill: ${skillId}`)
+      return undefined
+    }
+
+    if (!this.isApproved(skillId)) {
+      this.emit('skill:blocked', { skillId, reason: 'unapproved' })
+      this.recordTelemetry(
+        'skill.load_blocked',
+        { skillId, reason: 'unapproved', source: 'loadFully' },
+        `blocked id=${skillId} reason=unapproved`
+      )
       return undefined
     }
 
@@ -242,6 +339,19 @@ export class SkillManager {
       state: 'fully-loaded',
       tokensLoaded: content.skill.estimatedTokens.full
     })
+    this.recordTelemetry(
+      'skill.loaded.full',
+      {
+        skillId,
+        strategy: content.skill.loadingStrategy,
+        trigger: options?.trigger ?? 'manual',
+        triggerTool: options?.triggerTool,
+        tokens: content.skill.estimatedTokens.full
+      },
+      options?.trigger === 'tool'
+        ? `lazy-load id=${skillId} trigger=${options.triggerTool ?? 'unknown'} tokens=+${content.skill.estimatedTokens.full}`
+        : `load id=${skillId} trigger=${options?.trigger ?? 'manual'} tokens=+${content.skill.estimatedTokens.full}`
+    )
 
     this.log(`Fully loaded skill: ${skillId} (~${content.skill.estimatedTokens.full} tokens)`)
 
@@ -261,6 +371,16 @@ export class SkillManager {
       return undefined
     }
 
+    if (!this.isApproved(skillId)) {
+      this.emit('skill:blocked', { skillId, reason: 'unapproved' })
+      this.recordTelemetry(
+        'skill.load_blocked',
+        { skillId, reason: 'unapproved', source: 'loadOnDemand' },
+        `blocked id=${skillId} reason=unapproved`
+      )
+      return undefined
+    }
+
     content.lastAccessed = Date.now()
     content.accessCount++
 
@@ -273,6 +393,16 @@ export class SkillManager {
         state: 'fully-loaded',
         tokensLoaded: content.skill.estimatedTokens.full
       })
+      this.recordTelemetry(
+        'skill.loaded.full',
+        {
+          skillId,
+          strategy: content.skill.loadingStrategy,
+          trigger: 'on-demand',
+          tokens: content.skill.estimatedTokens.full
+        },
+        `on-demand-load id=${skillId} tokens=+${content.skill.estimatedTokens.full}`
+      )
 
       this.log(`On-demand loaded skill: ${skillId}`)
       this.enforceLoadedLimit()
@@ -293,7 +423,7 @@ export class SkillManager {
       const content = this.loadedContent.get(skillId)
       if (content && content.skill.loadingStrategy === 'lazy') {
         const wasLoaded = content.state === 'fully-loaded'
-        this.loadFully(skillId)
+        this.loadFully(skillId, { trigger: 'tool', triggerTool: toolName })
         if (!wasLoaded) {
           // Always log lazy load trigger (key event for observability)
           this.logInfo(`Tool "${toolName}" → loaded skill "${skillId}" (~${content.skill.estimatedTokens.full} tokens)`)
@@ -332,6 +462,7 @@ export class SkillManager {
     }
 
     for (const [, content] of this.loadedContent) {
+      if (!content.content) continue
       if (content.skill.loadingStrategy === 'eager') {
         result.eager.push(content.content)
       } else if (content.skill.loadingStrategy === 'lazy') {
@@ -352,6 +483,7 @@ export class SkillManager {
     const sections: Array<{ id: string; content: string; protected: boolean }> = []
 
     for (const [skillId, content] of this.loadedContent) {
+      if (!content.content) continue
       sections.push({
         id: `skill:${skillId}`,
         content: content.content,
@@ -386,6 +518,7 @@ export class SkillManager {
 
     this.skills.delete(skillId)
     this.loadedContent.delete(skillId)
+    this.approvalBySkillId.delete(skillId)
 
     // Clean up tool mapping
     if (skill.tools) {
@@ -408,6 +541,15 @@ export class SkillManager {
   }
 
   /**
+   * Alias used by hot-reload workflows
+   */
+  unregister(skillId: string): boolean {
+    if (!this.skills.has(skillId)) return false
+    this.unload(skillId)
+    return true
+  }
+
+  /**
    * Get total estimated token usage
    */
   getTokenUsage(): { current: number; maxPotential: number } {
@@ -415,11 +557,12 @@ export class SkillManager {
     let maxPotential = 0
 
     for (const [, content] of this.loadedContent) {
+      if (!this.isApproved(content.skill.id)) continue
       maxPotential += content.skill.estimatedTokens.full
 
       if (content.state === 'fully-loaded') {
         current += content.skill.estimatedTokens.full
-      } else {
+      } else if (content.state === 'summary-loaded') {
         current += content.skill.estimatedTokens.summary
       }
     }
@@ -467,9 +610,79 @@ export class SkillManager {
    */
   reset(): void {
     for (const skill of this.skills.values()) {
-      this.initializeSkillContent(skill)
+      if (this.isApproved(skill.id)) {
+        this.initializeSkillContent(skill)
+      } else {
+        this.loadedContent.set(skill.id, {
+          state: 'registered',
+          skill,
+          content: '',
+          lastAccessed: Date.now(),
+          accessCount: 0
+        })
+      }
     }
     this.log('Reset all skills to initial state')
+  }
+
+  /**
+   * Emit a skill.created event from dynamic skill creation flow.
+   */
+  recordSkillCreated(
+    skill: Skill,
+    options?: { filePath?: string; approvedByUser?: boolean }
+  ): void {
+    this.recordTelemetry(
+      'skill.created',
+      {
+        skillId: skill.id,
+        loadingStrategy: skill.loadingStrategy,
+        tools: skill.tools ?? [],
+        filePath: options?.filePath,
+        approvedByUser: options?.approvedByUser ?? this.isApproved(skill.id)
+      },
+      `created id=${skill.id} strategy=${skill.loadingStrategy} tools=${(skill.tools ?? []).join(',') || 'none'} approved=${options?.approvedByUser ?? this.isApproved(skill.id)}`
+    )
+  }
+
+  /**
+   * Token savings snapshot for current loading state.
+   */
+  getTokenSavingsSnapshot(): SkillTokenSavings {
+    let summaryOnlyTokens = 0
+    let fullyLoadedTokens = 0
+    let currentLoadedTokens = 0
+
+    for (const [skillId, content] of this.loadedContent) {
+      if (!this.isApproved(skillId)) continue
+      summaryOnlyTokens += content.skill.estimatedTokens.summary
+      fullyLoadedTokens += content.skill.estimatedTokens.full
+      if (content.state === 'fully-loaded') {
+        currentLoadedTokens += content.skill.estimatedTokens.full
+      } else if (content.state === 'summary-loaded') {
+        currentLoadedTokens += content.skill.estimatedTokens.summary
+      }
+    }
+
+    return {
+      summaryOnlyTokens,
+      fullyLoadedTokens,
+      estimatedSavedTokens: Math.max(0, fullyLoadedTokens - currentLoadedTokens)
+    }
+  }
+
+  /**
+   * Emit per-run token savings telemetry.
+   */
+  reportTokenSavings(runId?: string, sessionId?: string): SkillTokenSavings {
+    const savings = this.getTokenSavingsSnapshot()
+    this.emit('skill:token-savings', { runId, sessionId, savings })
+    this.recordTelemetry(
+      'skill.token_savings',
+      { runId, sessionId, ...savings },
+      `token-savings run=${runId ?? '-'} saved=~${savings.estimatedSavedTokens} (summary=${savings.summaryOnlyTokens} full=${savings.fullyLoadedTokens})`
+    )
+    return savings
   }
 
   /**
@@ -519,6 +732,28 @@ export class SkillManager {
     data: SkillManagerEvents[K]
   ): void {
     this.eventBus?.emit(event, data)
+  }
+
+  /**
+   * Emit structured telemetry + concise console log for key lifecycle events.
+   */
+  recordTelemetry(event: string, data: Record<string, unknown>, message?: string): void {
+    if (!this.telemetry.enabled) return
+
+    if (this.telemetry.sink === 'trace' || this.telemetry.sink === 'both') {
+      this.trace?.record({
+        type: 'skill.telemetry' as any,
+        data: {
+          event,
+          ...data
+        }
+      })
+    }
+
+    if ((this.telemetry.sink === 'console' || this.telemetry.sink === 'both') && this.telemetry.mode !== 'off' && message) {
+      const prefix = this.telemetry.mode === 'verbose' ? `[skill:${event}]` : '[skill]'
+      console.log(`${prefix} ${message}`)
+    }
   }
 
   /**

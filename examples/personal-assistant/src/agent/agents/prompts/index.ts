@@ -17,8 +17,8 @@ Hard rules:
 - Email actions use gmail; email DB queries use sqlite_* with LIMIT and no SELECT *.
 - Calendar questions use calendar.
 - Each reply must include a concrete deliverable.
-- If results should persist, save/update entities (save-note / save-doc / todos).
-- User-facing tasks go to the Todos tab via save-note({ type: "todo", ... }) and toggle-complete. Use todo-add/update/complete/remove only for agent-internal progress tracking.
+- If results should persist, use artifact-create / artifact-update.
+- User-facing tasks go to the Todos tab via artifact-create({ type: "todo", ... }) and completion updates via artifact-update({ status: "completed" }). Use todo-add/update/complete/remove only for agent-internal progress tracking.
 
 Memory model:
 - Project Cards = long-term. WorkingSet = per-turn. Session memory = ephemeral.`,
@@ -36,7 +36,7 @@ Memory model:
 'coordinator-module-docs': `## Documents Module
 - Use convert_to_markdown to extract text from PDF/Word/Excel.
 - Use read with offset/limit for large extractions.
-- Save important docs via save-doc.`,
+- Save important docs via artifact-create({ type: "doc", ... }).`,
 
 'coordinator-module-memory': `## Memory Module
 Session memory: use memory-put (namespace="session") for short-lived facts.

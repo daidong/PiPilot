@@ -1,7 +1,7 @@
 /**
  * Local Paper Lookup Utility
  *
- * Searches through locally saved papers in .research-pilot/literature/
+ * Searches through locally saved papers in .research-pilot/artifacts/papers/
  * to find matches against search queries using keyword overlap.
  * This allows reuse of previously discovered papers across searches.
  */
@@ -100,8 +100,8 @@ function loadLocalPapers(projectPath: string): Literature[] {
         const content = readFileSync(filePath, 'utf-8')
         const paper = JSON.parse(content) as Literature
 
-        // Validate it's a literature entity
-        if (paper.type === 'literature' && paper.title) {
+        // Validate it's a paper artifact (accept legacy "literature" type during transition)
+        if ((paper.type === 'paper' || (paper as { type?: string }).type === 'literature') && paper.title) {
           papers.push(paper)
         }
       } catch {

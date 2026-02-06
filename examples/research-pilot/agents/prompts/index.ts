@@ -18,10 +18,10 @@ Hard rules:
 - Academic papers / related work → literature-search. General web facts → brave_web_search or fetch.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
 - Each reply must include a concrete deliverable.
-- If results should persist, save/update entities (save-note / save-paper).
+- If results should persist, write artifacts/facts using artifact-create / artifact-update / fact-promote.
 
 Memory model:
-- Project Cards = long-term. WorkingSet = per-turn. Session memory = ephemeral.`,
+- Artifact = source of truth. Fact = durable memory. Focus = session attention. Task Anchor = progress continuity.`,
 
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ Each point must include at least one checkable noun (metric, baseline, API, data
 Be specific and technical; avoid generic pros/cons.`,
 
 'coordinator-module-resume': `## Resume Module
-If asked to continue/status/next steps: read relevant notes/todos/recent context, then summarize state + next action.`,
+If asked to continue/status/next steps: read relevant artifacts/facts/todos/recent context, then summarize state + next action.`,
 
 // ---------------------------------------------------------------------------
 // data-analysis-system

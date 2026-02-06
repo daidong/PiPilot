@@ -1,10 +1,9 @@
 /**
- * List Commands - Return structured data for notes and docs.
+ * Legacy list wrappers over Memory V2 artifacts.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
-import { PATHS, Note, Doc, type Provenance } from '../types.js'
+import { artifactList } from './artifact.js'
+import type { Provenance } from '../types.js'
 
 export interface NoteListItem {
   id: string
@@ -30,64 +29,84 @@ export interface DocListItem {
   provenance?: Provenance
 }
 
-/** List all notes, returning structured data */
-export function listNotes(projectPath: string): NoteListItem[] {
-  const notesDir = join(projectPath, PATHS.notes)
-  if (!existsSync(notesDir)) return []
-
-  const files = readdirSync(notesDir).filter(f => f.endsWith('.json'))
-  const items: NoteListItem[] = []
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(notesDir, file), 'utf-8')
-      const note = JSON.parse(content) as Note
-      items.push({
-        id: note.id,
-        title: note.title,
-        content: note.content,
-        tags: note.tags,
-        projectCard: note.projectCard ?? note.pinned ?? false,
-        pinned: note.projectCard ?? note.pinned ?? false,
-        selectedForAI: note.selectedForAI ?? false,
-        provenance: note.provenance
-      })
-    } catch {
-      // Skip invalid files
-    }
-  }
-
-  return items
+export interface MailListItem {
+  id: string
+  title: string
+  threadId?: string
+  from?: string
+  subject?: string
+  snippet?: string
+  sentAt?: string
+  tags?: string[]
 }
 
-/** List all docs, returning structured data */
+export interface CalendarListItem {
+  id: string
+  title: string
+  calendarName?: string
+  startAt?: string
+  endAt?: string
+  location?: string
+  tags?: string[]
+}
+
+export function listNotes(projectPath: string): NoteListItem[] {
+  return artifactList(projectPath, ['note'])
+    .filter(item => item.type === 'note')
+    .map(note => ({
+      id: note.id,
+      title: note.title,
+      content: note.content,
+      tags: note.tags,
+      projectCard: false,
+      pinned: false,
+      selectedForAI: false,
+      provenance: note.provenance
+    }))
+}
+
 export function listDocs(projectPath: string): DocListItem[] {
-  const docsDir = join(projectPath, PATHS.docs)
-  if (!existsSync(docsDir)) return []
+  return artifactList(projectPath, ['doc'])
+    .filter(item => item.type === 'doc')
+    .map(doc => ({
+      id: doc.id,
+      title: doc.title,
+      filePath: doc.filePath,
+      mimeType: doc.mimeType,
+      description: doc.description,
+      projectCard: false,
+      pinned: false,
+      selectedForAI: false,
+      tags: doc.tags,
+      provenance: doc.provenance
+    }))
+}
 
-  const files = readdirSync(docsDir).filter(f => f.endsWith('.json'))
-  const items: DocListItem[] = []
+export function listEmailMessages(projectPath: string): MailListItem[] {
+  return artifactList(projectPath, ['email-message'])
+    .filter(item => item.type === 'email-message')
+    .map(mail => ({
+      id: mail.id,
+      title: mail.title,
+      threadId: mail.threadId,
+      from: mail.from,
+      subject: mail.subject,
+      snippet: mail.snippet,
+      sentAt: mail.sentAt,
+      tags: mail.tags
+    }))
+}
 
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(docsDir, file), 'utf-8')
-      const doc = JSON.parse(content) as Doc
-      items.push({
-        id: doc.id,
-        title: doc.title,
-        filePath: doc.filePath,
-        mimeType: doc.mimeType,
-        description: doc.description,
-        projectCard: doc.projectCard ?? doc.pinned ?? false,
-        pinned: doc.projectCard ?? doc.pinned ?? false,
-        selectedForAI: doc.selectedForAI ?? false,
-        tags: doc.tags,
-        provenance: doc.provenance
-      })
-    } catch {
-      // Skip invalid files
-    }
-  }
-
-  return items
+export function listCalendarEvents(projectPath: string): CalendarListItem[] {
+  return artifactList(projectPath, ['calendar-event'])
+    .filter(item => item.type === 'calendar-event')
+    .map(event => ({
+      id: event.id,
+      title: event.title,
+      calendarName: event.calendarName,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      location: event.location,
+      tags: event.tags
+    }))
 }

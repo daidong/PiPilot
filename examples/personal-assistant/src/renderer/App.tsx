@@ -37,8 +37,8 @@ function FolderGate() {
           Personal Assistant
         </h1>
         <p className="t-text-secondary text-sm mb-8 leading-relaxed">
-          Select a project folder to get started. A <code className="px-1.5 py-0.5 rounded t-bg-surface text-xs">.personal-assistant</code> directory
-          will be created to store your notes and docs.
+          Select a project folder to get started. A <code className="px-1.5 py-0.5 rounded t-bg-surface text-xs">.personal-assistant-v2</code> directory
+          will be created to store artifacts and memory state.
         </p>
         <button
           onClick={handlePick}
@@ -56,7 +56,7 @@ export default function App() {
   const initSession = useSessionStore((s) => s.init)
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
-  const setWorkingSetRuntime = useEntityStore((s) => s.setWorkingSetRuntime)
+  const setRuntimeFocus = useEntityStore((s) => s.setRuntimeFocus)
   const rightCollapsed = useUIStore((s) => s.rightSidebarCollapsed)
   const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
   const previewEntity = useUIStore((s) => s.previewEntity)
@@ -144,14 +144,14 @@ export default function App() {
           id: item.id,
           title: item.title || item.id,
           type: (item.type === 'doc' || item.type === 'todo' || item.type === 'note') ? item.type : 'note',
-          workingSetSource: item.source,
-          workingSetReason: item.reason,
-          workingSetScore: item.score,
-          workingSetRequestedShape: item.requestedShape
+          focusSource: item.source,
+          focusReason: item.reason,
+          focusScore: item.score,
+          focusRequestedShape: item.requestedShape
         }))
-        setWorkingSetRuntime(items)
+        setRuntimeFocus(items)
       } else {
-        setWorkingSetRuntime([])
+        setRuntimeFocus([])
       }
 
       // Extract file paths from agent response and add to working files

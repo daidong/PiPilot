@@ -19,6 +19,25 @@
 export type SkillLoadingStrategy = 'eager' | 'lazy' | 'on-demand'
 
 /**
+ * Skill telemetry verbosity mode
+ */
+export type SkillTelemetryMode = 'basic' | 'verbose' | 'off'
+
+/**
+ * Skill telemetry sink
+ */
+export type SkillTelemetrySink = 'console' | 'trace' | 'both'
+
+/**
+ * Skill telemetry configuration
+ */
+export interface SkillTelemetryConfig {
+  enabled?: boolean
+  mode?: SkillTelemetryMode
+  sink?: SkillTelemetrySink
+}
+
+/**
  * Skill instruction sections for progressive disclosure
  */
 export interface SkillInstructions {
@@ -115,6 +134,14 @@ export interface Skill {
    * Tags for categorization and discovery
    */
   tags?: string[]
+
+  /**
+   * Optional metadata for external/dynamic skills
+   */
+  meta?: {
+    approvedByUser?: boolean
+    [key: string]: unknown
+  }
 }
 
 /**
@@ -130,6 +157,10 @@ export interface SkillConfig {
   loadingStrategy?: SkillLoadingStrategy
   estimatedTokens?: Partial<SkillTokenEstimates>
   tags?: string[]
+  meta?: {
+    approvedByUser?: boolean
+    [key: string]: unknown
+  }
 }
 
 /**
@@ -188,6 +219,24 @@ export interface LoadedSkillContent {
 }
 
 /**
+ * Registration options for SkillManager.register()
+ */
+export interface SkillRegistrationOptions {
+  approvedByUser?: boolean
+  source?: 'builtin' | 'external'
+  filePath?: string
+}
+
+/**
+ * Token savings snapshot for current skill loading state
+ */
+export interface SkillTokenSavings {
+  summaryOnlyTokens: number
+  fullyLoadedTokens: number
+  estimatedSavedTokens: number
+}
+
+/**
  * Events emitted by SkillManager
  */
 export interface SkillManagerEvents {
@@ -195,4 +244,6 @@ export interface SkillManagerEvents {
   'skill:loaded': { skillId: string; state: SkillState; tokensLoaded: number }
   'skill:accessed': { skillId: string; accessCount: number }
   'skill:unloaded': { skillId: string }
+  'skill:blocked': { skillId: string; reason: string }
+  'skill:token-savings': { runId?: string; sessionId?: string; savings: SkillTokenSavings }
 }

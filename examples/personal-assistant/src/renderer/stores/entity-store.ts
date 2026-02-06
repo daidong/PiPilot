@@ -2,38 +2,61 @@ import { create } from 'zustand'
 
 export interface EntityItem {
   id: string
-  type: 'note' | 'doc' | 'todo'
+  type: 'note' | 'doc' | 'todo' | 'mail' | 'calendar' | 'fact'
   title: string
-  pinned?: boolean           // Legacy field, kept for backward compatibility
-  projectCard?: boolean      // RFC-009: New field for Project Cards
-  selectedForAI?: boolean    // Legacy field, kept for backward compatibility (not used in RFC-009)
-  workingSetSource?: 'explicit' | 'continuity' | 'retrieval' | 'index'
-  workingSetReason?: string
-  workingSetScore?: number
-  workingSetRequestedShape?: string
+  focusSource?: 'explicit' | 'continuity' | 'retrieval' | 'index'
+  focusReason?: string
+  focusScore?: number
+  focusRequestedShape?: string
   status?: 'pending' | 'completed'
   completedAt?: string
+  reason?: string
+  score?: number
+  expiresAt?: string
   [key: string]: any
+}
+
+export interface FactItem {
+  id: string
+  namespace: string
+  key: string
+  value: any
+  valueText?: string
+  status: 'proposed' | 'active' | 'superseded' | 'deprecated'
+  confidence: number
+  provenance: { sourceType: string; sourceRef: string; traceId?: string; sessionId?: string }
+  derivedFromArtifactIds?: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+interface FocusEntry {
+  refType: 'artifact' | 'fact' | 'task'
+  refId: string
+  reason: string
+  score: number
+  expiresAt: string
 }
 
 interface EntityState {
   notes: EntityItem[]
   docs: EntityItem[]
   todos: EntityItem[]
-  projectCards: EntityItem[]   // RFC-009: Renamed from pinned
-  workingSet: EntityItem[]     // RFC-009: Renamed from selected
-  workingSetRuntime: EntityItem[]
-  // Legacy aliases
-  pinned: EntityItem[]
-  selected: EntityItem[]
+  mail: EntityItem[]
+  calendar: EntityItem[]
+  focus: EntityItem[]
+  runtimeFocus: EntityItem[]
+  facts: FactItem[]
+
   reset: () => void
   refreshAll: () => Promise<void>
-  setWorkingSetRuntime: (items: EntityItem[]) => void
-  toggleProjectCard: (id: string) => Promise<void>   // RFC-009: Renamed from togglePin
-  toggleWorkingSet: (id: string) => Promise<void>    // RFC-009: Renamed from toggleSelect
-  // Legacy aliases
-  togglePin: (id: string) => Promise<void>
-  toggleSelect: (id: string) => Promise<void>
+  refreshFacts: () => Promise<void>
+  setRuntimeFocus: (items: EntityItem[]) => void
+  promoteFact: (id: string) => Promise<void>
+  demoteFact: (id: string) => Promise<void>
+  toggleFocus: (id: string, options?: { reason?: string; ttl?: string }) => Promise<void>
+  clearFocus: () => Promise<void>
+
   toggleTodoComplete: (id: string) => Promise<void>
   renameNote: (id: string, newTitle: string) => Promise<void>
   updateEntity: (id: string, updates: { title?: string; content?: string }) => Promise<void>
@@ -42,150 +65,167 @@ interface EntityState {
 
 const api = (window as any).api
 
+function stamp(items: any[], type: EntityItem['type']): EntityItem[] {
+  return (items || []).map((i: any) => ({
+    ...i,
+    type,
+    title: i.title || i.name || i.id
+  }))
+}
+
+function resolveEntityById(entities: EntityItem[], refId: string): EntityItem | null {
+  const exact = entities.find(item => item.id === refId)
+  if (exact) return exact
+  const prefix = entities.find(item => item.id.startsWith(refId) || refId.startsWith(item.id))
+  return prefix ?? null
+}
+
 export const useEntityStore = create<EntityState>((set, get) => ({
   notes: [],
   docs: [],
   todos: [],
-  projectCards: [],   // RFC-009
-  workingSet: [],     // RFC-009
-  workingSetRuntime: [],
-  // Legacy aliases pointing to the same data
-  get pinned() { return get().projectCards },
-  get selected() { return get().workingSet },
+  mail: [],
+  calendar: [],
+  focus: [],
+  runtimeFocus: [],
+  facts: [],
 
-  reset: () => set({ notes: [], docs: [], todos: [], projectCards: [], workingSet: [], workingSetRuntime: [] }),
+  reset: () => set({
+    notes: [],
+    docs: [],
+    todos: [],
+    mail: [],
+    calendar: [],
+    focus: [],
+    runtimeFocus: [],
+    facts: []
+  }),
 
   refreshAll: async () => {
     try {
-      const [notes, docs, todos, projectCards, workingSet] = await Promise.all([
+      const [
+        notesRaw,
+        docsRaw,
+        todosRaw,
+        mailRaw,
+        calendarRaw,
+        focusResult,
+        factsRaw
+      ] = await Promise.all([
         api.listNotes(),
         api.listDocs(),
         api.listTodos(),
-        api.getPinned(),      // Backend still uses legacy name
-        api.getSelected()     // Backend still uses legacy name
+        api.listMail?.() ?? [],
+        api.listCalendar?.() ?? [],
+        api.focusList?.() ?? { entries: [] },
+        api.factList?.() ?? []
       ])
-      const stamp = (items: any[], type: EntityItem['type']) =>
-        (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
-      const explicitWorkingSet = (workingSet || []).map((i: any) => ({
-        ...i,
-        workingSetSource: 'explicit' as const
-      }))
-      const runtime = get().workingSetRuntime
+
+      const notes = stamp(notesRaw, 'note')
+      const docs = stamp(docsRaw, 'doc')
+      const todos = stamp(todosRaw, 'todo')
+      const mail = stamp(mailRaw, 'mail')
+      const calendar = stamp(calendarRaw, 'calendar')
+      const facts: FactItem[] = factsRaw || []
+      const allArtifacts = [...notes, ...docs, ...todos, ...mail, ...calendar]
+      const entries: FocusEntry[] = (focusResult?.entries || []) as FocusEntry[]
+
+      const focus = entries
+        .filter(entry => entry.refType === 'artifact')
+        .map(entry => {
+          const artifact = resolveEntityById(allArtifacts, entry.refId)
+          if (!artifact) {
+            return {
+              id: entry.refId,
+              type: 'doc' as const,
+              title: entry.refId,
+              reason: entry.reason,
+              score: entry.score,
+              expiresAt: entry.expiresAt
+            }
+          }
+          return {
+            ...artifact,
+            reason: entry.reason,
+            score: entry.score,
+            expiresAt: entry.expiresAt
+          }
+        })
+
+      const runtimeFocus = get().runtimeFocus
       set({
-        notes: stamp(notes, 'note'),
-        docs: stamp(docs, 'doc'),
-        todos: stamp(todos, 'todo'),
-        projectCards: projectCards || [],
-        workingSet: explicitWorkingSet,
-        workingSetRuntime: runtime
+        notes,
+        docs,
+        todos,
+        mail,
+        calendar,
+        focus,
+        facts,
+        runtimeFocus
       })
     } catch (err) {
       console.warn('[entity-store] refreshAll failed:', err)
     }
   },
 
-  setWorkingSetRuntime: (items: EntityItem[]) => {
-    set((s) => ({ workingSetRuntime: items || s.workingSetRuntime }))
+  refreshFacts: async () => {
+    const factsRaw = await api.factList?.()
+    set({ facts: factsRaw || [] })
   },
 
-  // RFC-009: Primary method names
-  toggleProjectCard: async (id: string) => {
-    await api.togglePin(id)  // Backend still uses legacy name
-    const [notes, docs, todos, projectCards, workingSet] = await Promise.all([
-      api.listNotes(), api.listDocs(), api.listTodos(),
-      api.getPinned(), api.getSelected()
-    ])
-    const stamp = (items: any[], type: EntityItem['type']) =>
-      (items || []).map((i: any) => ({ ...i, type }))
-    const explicitWorkingSet = (workingSet || []).map((i: any) => ({
-      ...i,
-      workingSetSource: 'explicit' as const
-    }))
-    set({
-      notes: stamp(notes, 'note'), docs: stamp(docs, 'doc'), todos: stamp(todos, 'todo'),
-      projectCards: projectCards || [], workingSet: explicitWorkingSet
-    })
+  setRuntimeFocus: (items: EntityItem[]) => {
+    set({ runtimeFocus: items || [] })
   },
 
-  toggleWorkingSet: async (id: string) => {
-    await api.toggleSelect(id)  // Backend still uses legacy name
-    const [notes, docs, todos, projectCards, workingSet] = await Promise.all([
-      api.listNotes(), api.listDocs(), api.listTodos(),
-      api.getPinned(), api.getSelected()
-    ])
-    const stamp = (items: any[], type: EntityItem['type']) =>
-      (items || []).map((i: any) => ({ ...i, type }))
-    const explicitWorkingSet = (workingSet || []).map((i: any) => ({
-      ...i,
-      workingSetSource: 'explicit' as const
-    }))
-    set({
-      notes: stamp(notes, 'note'), docs: stamp(docs, 'doc'), todos: stamp(todos, 'todo'),
-      projectCards: projectCards || [], workingSet: explicitWorkingSet
-    })
+  promoteFact: async (id: string) => {
+    await api.factPromote?.(id)
+    await get().refreshFacts()
   },
 
-  // Legacy aliases
-  togglePin: async (id: string) => { return get().toggleProjectCard(id) },
-  toggleSelect: async (id: string) => { return get().toggleWorkingSet(id) },
+  demoteFact: async (id: string) => {
+    await api.factDemote?.(id)
+    await get().refreshFacts()
+  },
+
+  toggleFocus: async (id: string, options?: { reason?: string; ttl?: string }) => {
+    const inFocus = get().focus.some(item => item.id === id)
+    if (inFocus) {
+      await api.focusRemove(id)
+    } else {
+      await api.focusAdd({
+        refType: 'artifact',
+        refId: id,
+        reason: options?.reason ?? 'manually selected for current work',
+        source: 'manual',
+        ttl: options?.ttl ?? '2h'
+      })
+    }
+    await get().refreshAll()
+  },
+
+  clearFocus: async () => {
+    await api.focusClear?.()
+    await get().refreshAll()
+  },
 
   toggleTodoComplete: async (id: string) => {
     await api.toggleTodoComplete(id)
-    const todos = await api.listTodos()
-    const stamp = (items: any[]) =>
-      (items || []).map((i: any) => ({ ...i, type: 'todo' as const }))
-    set({ todos: stamp(todos) })
+    const todosRaw = await api.listTodos()
+    set({ todos: stamp(todosRaw, 'todo') })
   },
 
   renameNote: async (id: string, newTitle: string) => {
     await api.renameNote(id, newTitle)
-    const [notes, docs, todos] = await Promise.all([
-      api.listNotes(), api.listDocs(), api.listTodos()
-    ])
-    const stamp = (items: any[], type: EntityItem['type']) =>
-      (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
-    set({
-      notes: stamp(notes, 'note'),
-      docs: stamp(docs, 'doc'),
-      todos: stamp(todos, 'todo')
-    })
+    await get().refreshAll()
   },
 
   updateEntity: async (id: string, updates: { title?: string; content?: string }) => {
     await api.updateEntity(id, updates)
-    const [notes, docs, todos] = await Promise.all([
-      api.listNotes(), api.listDocs(), api.listTodos()
-    ])
-    const stamp = (items: any[], type: EntityItem['type']) =>
-      (items || []).map((i: any) => ({ ...i, type, title: i.title || i.name || i.id }))
-    set({
-      notes: stamp(notes, 'note'),
-      docs: stamp(docs, 'doc'),
-      todos: stamp(todos, 'todo')
-    })
+    await get().refreshAll()
   },
 
   deleteEntity: async (id: string) => {
     await api.deleteEntity(id)
-    const [notes, docs, todos, projectCards, workingSet] = await Promise.all([
-      api.listNotes(),
-      api.listDocs(),
-      api.listTodos(),
-      api.getPinned(),
-      api.getSelected()
-    ])
-    const stamp = (items: any[], type: EntityItem['type']) =>
-      (items || []).map((i: any) => ({ ...i, type }))
-    const explicitWorkingSet = (workingSet || []).map((i: any) => ({
-      ...i,
-      workingSetSource: 'explicit' as const
-    }))
-    set({
-      notes: stamp(notes, 'note'),
-      docs: stamp(docs, 'doc'),
-      todos: stamp(todos, 'todo'),
-      projectCards: projectCards || [],
-      workingSet: explicitWorkingSet
-    })
+    await get().refreshAll()
   }
 }))

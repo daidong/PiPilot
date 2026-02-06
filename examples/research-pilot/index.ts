@@ -13,26 +13,60 @@ export { createDataAgent, dataAnalyzer } from './agents/data-agent.js'
 export { createDataAnalyzer } from './agents/data-team.js'
 export type { AnalyzeResult } from './agents/data-team.js'
 
-// Skills (writing functionality moved here)
+// Skills
 export { academicWritingSkill, literatureSkill, dataAnalysisSkill, researchPilotSkills } from './skills/index.js'
 
 // Commands
 export {
+  artifactCreate,
+  artifactUpdate,
+  artifactGet,
+  artifactList,
+  artifactSearch,
+  artifactDelete,
+  focusAdd,
+  focusList,
+  focusRemove,
+  focusClear,
+  focusPrune,
+  taskAnchorGet,
+  taskAnchorSet,
+  taskAnchorUpdate,
+  memoryExplainTurn,
+  memoryExplainFact,
+  memoryExplainBudget,
+
+  // Legacy compatibility exports
   saveNote,
   savePaper, parseSavePaperArgs,
   saveData, parseSaveDataArgs,
   deleteEntity,
-  listNotes, listLiterature, listData,
+  listAllArtifacts, listNotes, listLiterature, listData,
   searchEntities,
   toggleSelect, getSelected, clearSelections,
   togglePin, getPinned
 } from './commands/index.js'
 
 export type {
+  ArtifactCreateResult,
+  ArtifactUpdateResult,
+  ArtifactDeleteResult,
+  ArtifactSearchResult,
+  FocusAddResult,
+  FocusListResult,
+  FocusRemoveResult,
+  FocusPruneResult,
+  TaskAnchorResult,
+  MemoryExplainResult,
   SaveNoteResult,
-  SelectResult, SelectedEntity,
-  PinResult, PinnedEntity,
-  NoteListItem, LiteratureListItem, DataListItem,
+  SelectResult,
+  SelectedEntity,
+  PinResult,
+  PinnedEntity,
+  ArtifactListItem,
+  NoteListItem,
+  LiteratureListItem,
+  DataListItem,
   SearchResult,
   SavePaperResult,
   SaveDataResult,
@@ -52,13 +86,26 @@ export {
 } from './types.js'
 
 export type {
+  ArtifactType,
   Provenance,
+  Artifact,
+  NoteArtifact,
+  PaperArtifact,
+  DataArtifact,
+  WebContentArtifact,
+  ToolOutputArtifact,
+  FactRecord,
+  FocusEntry,
+  TaskAnchor,
+  DataSchema,
+
+  // Compatibility aliases
   ResearchEntity,
   Note,
   Literature,
   DataAttachment,
-  DataSchema,
   Entity,
+
   UserCorrection,
   ProjectConfig,
   Session,
