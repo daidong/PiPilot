@@ -54,13 +54,6 @@ export interface ElectronAPI {
     activityEvents: any[]
   }>
 
-  // Legacy select/pin aliases
-  toggleSelect: (id: string) => Promise<any>
-  getSelected: () => Promise<any>
-  clearSelections: () => Promise<any>
-  togglePin: (id: string) => Promise<any>
-  getPinned: () => Promise<any>
-
   // Focus / task anchor / explain
   focusAdd: (params: {
     refType: 'artifact' | 'fact' | 'task'
@@ -198,11 +191,6 @@ const api: ElectronAPI = {
   clearSessionMemory: () => ipcRenderer.invoke('agent:clear-memory'),
   getRealtimeSnapshot: () => ipcRenderer.invoke('agent:get-realtime-snapshot'),
 
-  toggleSelect: (id) => ipcRenderer.invoke('cmd:select', id),
-  getSelected: () => ipcRenderer.invoke('cmd:get-selected'),
-  clearSelections: () => ipcRenderer.invoke('cmd:clear-selections'),
-  togglePin: (id) => ipcRenderer.invoke('cmd:pin', id),
-  getPinned: () => ipcRenderer.invoke('cmd:get-pinned'),
   focusAdd: (params) => ipcRenderer.invoke('cmd:focus-add', params),
   focusList: () => ipcRenderer.invoke('cmd:focus-list'),
   focusRemove: (idOrRef) => ipcRenderer.invoke('cmd:focus-remove', idOrRef),

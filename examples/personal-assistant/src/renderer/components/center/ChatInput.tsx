@@ -170,12 +170,7 @@ export function ChatInput() {
         }
         case '/clear': {
           const cleared = await api.focusClear?.()
-          if (cleared?.success) {
-            result = 'All focus entries cleared.'
-          } else {
-            await api.clearSelections()
-            result = 'All selections cleared.'
-          }
+          result = cleared?.success ? 'All focus entries cleared.' : `Failed: ${cleared?.error || 'unknown error'}`
           refreshEntities()
           break
         }

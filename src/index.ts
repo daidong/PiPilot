@@ -315,53 +315,6 @@ export {
   createTokenEstimator
 } from './core/token-estimator.js'
 
-// Summary Card (RFC-009)
-export {
-  generateSummaryCard,
-  generateContentHash,
-  needsRegeneration,
-  renderFullShape,
-  renderExcerptShape,
-  renderCardShape,
-  renderIndexLineShape,
-  renderEntityShape,
-  estimateShapeTokens
-} from './core/summary-card.js'
-export type {
-  SummaryCardResult,
-  GenerateSummaryCardOptions,
-  EntityShapeOptions
-} from './core/summary-card.js'
-
-// Entity Migration (RFC-009)
-export {
-  needsMigration,
-  migrateEntity,
-  migrateEntities,
-  createMigrationReport,
-  getMigrationStatus
-} from './core/entity-migration.js'
-export type {
-  LegacyEntity,
-  MigrationResult,
-  BatchMigrationResult,
-  MigrationOptions
-} from './core/entity-migration.js'
-
-// Project Card Policy (auto-pin/auto-demote)
-export {
-  applyProjectCardPolicy,
-  scoreProjectCard,
-  DEFAULT_PROJECT_CARD_POLICY
-} from './core/project-card-policy.js'
-export type {
-  ProjectCardCandidate,
-  ProjectCardPolicyConfig,
-  ProjectCardScore,
-  ProjectCardChange,
-  ProjectCardSource
-} from './core/project-card-policy.js'
-
 // Token Tracking
 export {
   TokenTracker,

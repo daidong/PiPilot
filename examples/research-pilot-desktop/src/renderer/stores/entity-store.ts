@@ -4,9 +4,6 @@ export interface EntityItem {
   id: string
   type: 'note' | 'paper' | 'data' | 'fact'
   title: string
-  pinned?: boolean
-  projectCard?: boolean
-  selectedForAI?: boolean
   reason?: string
   score?: number
   expiresAt?: string
@@ -41,11 +38,6 @@ interface EntityState {
   data: EntityItem[]
   focus: EntityItem[]
   facts: FactItem[]
-  // Legacy aliases (deprecated but kept for old components)
-  projectCards: EntityItem[]
-  workingSet: EntityItem[]
-  pinned: EntityItem[]
-  selected: EntityItem[]
 
   enrichingPapers: Set<string>
   setEnriching: (id: string) => void
@@ -59,12 +51,6 @@ interface EntityState {
   demoteFact: (id: string) => Promise<void>
   toggleFocus: (id: string, options?: { reason?: string; ttl?: string }) => Promise<void>
   clearFocus: () => Promise<void>
-
-  // Legacy aliases
-  toggleProjectCard: (id: string) => Promise<void>
-  toggleWorkingSet: (id: string) => Promise<void>
-  togglePin: (id: string) => Promise<void>
-  toggleSelect: (id: string) => Promise<void>
 
   renameNote: (id: string, newTitle: string) => Promise<void>
   updateEntity: (id: string, updates: { title?: string; content?: string }) => Promise<void>
@@ -103,14 +89,6 @@ export const useEntityStore = create<EntityState>((set, get) => ({
   data: [],
   focus: [],
   facts: [],
-  projectCards: [],
-  workingSet: [],
-  get pinned() {
-    return get().focus
-  },
-  get selected() {
-    return get().focus
-  },
   enrichingPapers: new Set<string>(),
 
   setEnriching: (id: string) => set((state) => {
@@ -133,8 +111,6 @@ export const useEntityStore = create<EntityState>((set, get) => ({
     data: [],
     focus: [],
     facts: [],
-    projectCards: [],
-    workingSet: [],
     enrichingPapers: new Set<string>()
   }),
 
@@ -181,9 +157,7 @@ export const useEntityStore = create<EntityState>((set, get) => ({
       papers,
       data,
       focus,
-      facts,
-      projectCards: focus,
-      workingSet: focus
+      facts
     })
   },
 
@@ -221,20 +195,6 @@ export const useEntityStore = create<EntityState>((set, get) => ({
   clearFocus: async () => {
     await api.focusClear()
     await get().refreshAll()
-  },
-
-  // Legacy aliases to preserve old UI behavior.
-  toggleProjectCard: async (id: string) => {
-    await get().toggleFocus(id, { reason: 'promoted to focus (legacy project card)', ttl: 'today' })
-  },
-  toggleWorkingSet: async (id: string) => {
-    await get().toggleFocus(id, { reason: 'selected for current turn', ttl: '2h' })
-  },
-  togglePin: async (id: string) => {
-    await get().toggleProjectCard(id)
-  },
-  toggleSelect: async (id: string) => {
-    await get().toggleWorkingSet(id)
   },
 
   renameNote: async (id: string, newTitle: string) => {

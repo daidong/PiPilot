@@ -281,44 +281,6 @@ export interface WorkingSetResolvedEntity {
   }
 }
 
-// ============ Migration Types ============
-
-/**
- * Legacy entity fields (for migration)
- */
-export interface LegacyEntityFields {
-  /** Old pinned field (maps to projectCard) */
-  pinned?: boolean
-  /** Old selectedForAI field (dropped - runtime only now) */
-  selectedForAI?: boolean
-}
-
-/**
- * Check if an entity has legacy fields that need migration
- */
-export function hasLegacyFields(entity: Record<string, unknown>): boolean {
-  return 'pinned' in entity || 'selectedForAI' in entity
-}
-
-/**
- * Migrate legacy entity fields to new schema
- */
-export function migrateLegacyFields(
-  entity: Record<string, unknown> & LegacyEntityFields
-): Partial<MemoryEntity> {
-  const migrated: Partial<MemoryEntity> = {}
-
-  // Map pinned → projectCard
-  if ('pinned' in entity) {
-    migrated.projectCard = entity.pinned === true
-  }
-
-  // selectedForAI is dropped (runtime only now)
-  // No migration needed - it's simply not included
-
-  return migrated
-}
-
 // ============ Validation ============
 
 /**

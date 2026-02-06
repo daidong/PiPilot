@@ -152,8 +152,6 @@ function FileRow({ file }: { file: WorkingFile }) {
       title: file.name,
       filePath: file.path,
       tags: [],
-      pinned: false,
-      selectedForAI: false,
       createdAt: new Date(file.accessedAt).toISOString(),
       updatedAt: new Date(file.accessedAt).toISOString()
     })

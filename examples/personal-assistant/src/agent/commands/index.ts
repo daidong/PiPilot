@@ -43,8 +43,6 @@ export { listNotes, listDocs, listEmailMessages, listCalendarEvents } from './li
 export { listTodos } from './list-todos.js'
 export { searchEntities } from './search.js'
 export { toggleTodoComplete } from './toggle-todo-complete.js'
-export { toggleSelect, getSelected, clearSelections, getWorkingSetIds } from './select.js'
-export { togglePin, getPinned } from './pin.js'
 
 // Types
 export type { ArtifactCreateResult, ArtifactUpdateResult, ArtifactDeleteResult, ArtifactSearchResult } from './artifact.js'
@@ -59,5 +57,3 @@ export type { NoteListItem, DocListItem, MailListItem, CalendarListItem } from '
 export type { TodoListItem } from './list-todos.js'
 export type { ToggleTodoCompleteResult } from './toggle-todo-complete.js'
 export type { SearchResult } from './search.js'
-export type { SelectResult, SelectedEntity } from './select.js'
-export type { PinResult, PinnedEntity } from './pin.js'

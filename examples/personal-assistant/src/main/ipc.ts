@@ -5,8 +5,6 @@ import { createCoordinator } from '@personal-assistant/agents/coordinator'
 import {
   listNotes, listDocs, listTodos, listEmailMessages, listCalendarEvents,
   searchEntities, deleteEntity,
-  toggleSelect, getSelected, clearSelections,
-  togglePin, getPinned,
   toggleTodoComplete,
   artifactCreate, artifactDelete, artifactGet, artifactList, artifactSearch, artifactUpdate,
   focusAdd, focusClear, focusList, focusPrune, focusRemove,
@@ -1020,27 +1018,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return saveDoc(title, { filePath, content }, { sessionId, projectPath })
   })
 
-  // Commands - select/pin
-  ipcMain.handle('cmd:select', (_e, id: string) => {
-    if (!projectPath) return null
-    return toggleSelect(id, projectPath, sessionId)
-  })
-  ipcMain.handle('cmd:get-selected', () => {
-    if (!projectPath) return []
-    return getSelected(projectPath, sessionId)
-  })
-  ipcMain.handle('cmd:clear-selections', () => {
-    if (!projectPath) return null
-    return clearSelections(sessionId, projectPath)
-  })
-  ipcMain.handle('cmd:pin', (_e, id: string) => {
-    if (!projectPath) return null
-    return togglePin(id, projectPath, sessionId)
-  })
-  ipcMain.handle('cmd:get-pinned', () => {
-    if (!projectPath) return []
-    return getPinned(projectPath, sessionId)
-  })
 
   // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
   ipcMain.handle('mention:candidates', (_e, query: string, type?: string) => {

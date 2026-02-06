@@ -68,12 +68,6 @@ export interface ArtifactBase {
   provenance: Provenance
   createdAt: string
   updatedAt: string
-
-  // Compatibility fields retained temporarily for callers not yet migrated.
-  projectCard?: boolean
-  projectCardSource?: 'auto' | 'manual'
-  pinned?: boolean
-  selectedForAI?: boolean
 }
 
 export interface NoteArtifact extends ArtifactBase {

@@ -43,8 +43,6 @@ export {
   deleteEntity,
   listAllArtifacts, listNotes, listLiterature, listData,
   searchEntities,
-  toggleSelect, getSelected, clearSelections,
-  togglePin, getPinned
 } from './commands/index.js'
 
 export type {
@@ -59,10 +57,6 @@ export type {
   TaskAnchorResult,
   MemoryExplainResult,
   SaveNoteResult,
-  SelectResult,
-  SelectedEntity,
-  PinResult,
-  PinnedEntity,
   ArtifactListItem,
   NoteListItem,
   LiteratureListItem,
