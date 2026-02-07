@@ -13,15 +13,18 @@ import {
   createArtifact,
   linkFactToArtifacts,
   listFocusEntries,
-  readTaskAnchor,
   removeFocusEntry,
   searchArtifacts,
   updateArtifact,
-  updateTaskAnchor,
   unlinkFactFromArtifacts,
   pruneExpiredFocusAtTurnBoundary,
   type CreateArtifactInput
 } from '../memory-v2/store.js'
+import {
+  readKernelTaskAnchor,
+  setKernelTaskAnchor,
+  updateKernelTaskAnchor
+} from '../memory-v2/kernel-task-anchor.js'
 import { memoryExplainBudget, memoryExplainFact, memoryExplainTurn } from '../commands/memory-explain.js'
 
 function generateCiteKey(authors: string[], year?: number, title?: string): string {
@@ -571,7 +574,7 @@ export function createFocusTools(projectPath: string, sessionId: string): Tool[]
   return [add, remove, list, clear]
 }
 
-export function createTaskAnchorTools(projectPath: string): Tool[] {
+export function createTaskAnchorTools(projectPath: string, sessionId: string): Tool[] {
   const set = defineTool({
     name: 'task-anchor-set',
     description: 'Set full task anchor state (CurrentGoal, NowDoing, BlockedBy, NextAction).',
@@ -583,7 +586,7 @@ export function createTaskAnchorTools(projectPath: string): Tool[] {
     },
     execute: async (input) => {
       const args = input as Record<string, unknown>
-      const next = updateTaskAnchor(projectPath, {
+      const next = await setKernelTaskAnchor(projectPath, sessionId, {
         currentGoal: String(args.currentGoal || ''),
         nowDoing: String(args.nowDoing || ''),
         blockedBy: (args.blockedBy as string[] | undefined) ?? [],
@@ -604,7 +607,7 @@ export function createTaskAnchorTools(projectPath: string): Tool[] {
     },
     execute: async (input) => {
       const args = input as Record<string, unknown>
-      const next = updateTaskAnchor(projectPath, {
+      const next = await updateKernelTaskAnchor(projectPath, sessionId, {
         currentGoal: typeof args.currentGoal === 'string' ? args.currentGoal : undefined,
         nowDoing: typeof args.nowDoing === 'string' ? args.nowDoing : undefined,
         blockedBy: (args.blockedBy as string[] | undefined) ?? undefined,
@@ -619,7 +622,7 @@ export function createTaskAnchorTools(projectPath: string): Tool[] {
     description: 'Get current task anchor.',
     parameters: {},
     execute: async () => {
-      const anchor = readTaskAnchor(projectPath)
+      const anchor = await readKernelTaskAnchor(projectPath, sessionId)
       return { success: true, data: anchor }
     }
   })
@@ -706,7 +709,7 @@ export function createResearchMemoryTools(params: {
     createFactDemoteTool(params.projectPath),
     ...createFocusTools(params.projectPath, params.sessionId),
     createFocusPruneTool(params.projectPath, params.sessionId),
-    ...createTaskAnchorTools(params.projectPath),
+    ...createTaskAnchorTools(params.projectPath, params.sessionId),
     createMemoryExplainTool(params.projectPath, params.explainProvider)
   ]
 }

@@ -12,7 +12,6 @@ import {
   type FocusStateFile,
   type PaperArtifact,
   type Provenance,
-  type TaskAnchor,
   type DataSchema
 } from '../types.js'
 
@@ -595,35 +594,6 @@ export function listFocusEntries(projectPath: string, sessionId: string): FocusE
 
 export function getFocusCooldowns(projectPath: string, sessionId: string): FocusCooldown[] {
   return loadFocusState(projectPath, sessionId).cooldowns
-}
-
-export function readTaskAnchor(projectPath: string): TaskAnchor {
-  const filePath = join(projectPath, PATHS.taskAnchor)
-  return readJson<TaskAnchor>(filePath, {
-    currentGoal: 'Not set yet',
-    nowDoing: 'Understand the latest request',
-    blockedBy: [],
-    nextAction: 'Identify the next concrete step',
-    updatedAt: nowIso()
-  })
-}
-
-export function writeTaskAnchor(projectPath: string, anchor: TaskAnchor): TaskAnchor {
-  const full: TaskAnchor = {
-    ...anchor,
-    updatedAt: nowIso()
-  }
-  writeJson(join(projectPath, PATHS.taskAnchor), full)
-  return full
-}
-
-export function updateTaskAnchor(projectPath: string, patch: Partial<TaskAnchor>): TaskAnchor {
-  const current = readTaskAnchor(projectPath)
-  return writeTaskAnchor(projectPath, {
-    ...current,
-    ...patch,
-    blockedBy: patch.blockedBy ?? current.blockedBy
-  })
 }
 
 function artifactFactIndexPath(projectPath: string): string {

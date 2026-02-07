@@ -34,8 +34,6 @@ export const PATHS = {
   // Memory V2 state (app-level)
   memoryRoot: '.research-pilot/memory-v2',
   focusDir: '.research-pilot/memory-v2/focus',
-  tasksDir: '.research-pilot/memory-v2/tasks',
-  taskAnchor: '.research-pilot/memory-v2/tasks/anchor.json',
   artifactFactIndex: '.research-pilot/memory-v2/index/artifact-facts.json',
   explainDir: '.research-pilot/memory-v2/explain'
 } as const

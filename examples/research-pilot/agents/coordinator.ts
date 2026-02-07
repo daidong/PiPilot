@@ -26,9 +26,9 @@ import {
   addFocusEntry,
   findArtifactById,
   listFocusEntries,
-  pruneExpiredFocusAtTurnBoundary,
-  readTaskAnchor
+  pruneExpiredFocusAtTurnBoundary
 } from '../memory-v2/store.js'
+import { readKernelTaskAnchor } from '../memory-v2/kernel-task-anchor.js'
 
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
 
@@ -218,7 +218,12 @@ function shortArtifactBlock(artifact: Artifact): string {
 async function buildFocusDigestSelection(
   sessionId: string,
   projectPath: string,
-  memoryStorage: MemoryStorage | undefined
+  memoryStorage: MemoryStorage | undefined,
+  taskAnchor: {
+    currentGoal: string
+    nowDoing: string
+    nextAction: string
+  }
 ): Promise<{ selection?: ContextSelection; entriesUsed: FocusEntry[]; approxTokens: number }> {
   const focusEntries = listFocusEntries(projectPath, sessionId)
   if (focusEntries.length === 0) {
@@ -255,9 +260,8 @@ async function buildFocusDigestSelection(
     }
 
     if (entry.refType === 'task') {
-      const anchor = readTaskAnchor(projectPath)
       lines.push(`${prefix} reason=${entry.reason}`)
-      lines.push(`- [task] Goal=${anchor.currentGoal}; Doing=${anchor.nowDoing}; Next=${anchor.nextAction}`)
+      lines.push(`- [task] Goal=${taskAnchor.currentGoal}; Doing=${taskAnchor.nowDoing}; Next=${taskAnchor.nextAction}`)
     }
   }
 
@@ -538,14 +542,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const additionalInstructions = buildAdditionalInstructions(intents, toolContracts)
 
         const mentionSelections = buildMentionSelections(mentions)
-        const focusDigest = await buildFocusDigestSelection(sessionId, projectPath, memoryStorage)
+        const anchor = await readKernelTaskAnchor(projectPath, sessionId)
+        const focusDigest = await buildFocusDigestSelection(sessionId, projectPath, memoryStorage, anchor)
 
         const selectedContext: ContextSelection[] = [...mentionSelections]
         if (focusDigest.selection) {
           selectedContext.push(focusDigest.selection)
         }
-
-        const anchor = readTaskAnchor(projectPath)
 
         const explain: TurnExplainSnapshot = {
           timestamp: new Date().toISOString(),
