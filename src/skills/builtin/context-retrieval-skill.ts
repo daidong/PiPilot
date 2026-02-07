@@ -20,7 +20,7 @@ export const contextRetrievalSkill: Skill = defineSkill({
 
   instructions: {
     summary: `Context retrieval via **ctx-get** tool:
-- **session.***: Conversation history, traces, search
+- **session.***: Operation traces
 - **memory.***: Persistent key-value storage
 - **docs.***: Project documentation
 - **meta.***: Project structure information`,
@@ -30,7 +30,7 @@ export const contextRetrievalSkill: Skill = defineSkill({
 Unified interface for all context sources.
 
 ### Parameters
-- \`source\`: Context source ID (e.g., "session.messages", "memory.get")
+- \`source\`: Context source ID (e.g., "session.trace", "memory.get")
 - \`params\`: Source-specific parameters
 
 ### Available Sources
@@ -38,10 +38,7 @@ Unified interface for all context sources.
 #### Session Context
 | Source | Description | Params |
 |--------|-------------|--------|
-| session.messages | Recent conversation | limit, before |
 | session.trace | Execution trace events | types, limit |
-| session.search | Search conversation | query, limit |
-| session.thread | Follow conversation thread | messageId |
 
 #### Memory Context
 | Source | Description | Params |
@@ -85,24 +82,13 @@ Unified interface for all context sources.
 `,
 
     examples: `
-## Get Recent Messages
+## Get Session Trace
 \`\`\`json
 {
   "tool": "ctx-get",
   "input": {
-    "source": "session.messages",
+    "source": "session.trace",
     "params": { "limit": 10 }
-  }
-}
-\`\`\`
-
-## Search Conversation
-\`\`\`json
-{
-  "tool": "ctx-get",
-  "input": {
-    "source": "session.search",
-    "params": { "query": "authentication error", "limit": 5 }
   }
 }
 \`\`\`

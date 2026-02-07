@@ -142,7 +142,6 @@ function describeToolReturn(name: string): string {
   if (name.startsWith('task-anchor-')) return 'task anchor result'
   if (name === 'memory-explain') return 'explain snapshot'
   if (name === 'ctx-get') return 'rendered context'
-  if (name === 'ctx-expand') return 'expanded context'
   if (name === 'bash') return 'stdout/stderr'
   return 'result'
 }
@@ -442,8 +441,6 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       packs.exec({ approvalMode: 'none', denyPatterns: [] }),
       packs.kvMemory(),
       packs.todo(),
-      packs.sessionHistory(),
-      packs.contextPipeline(),
       definePack({
         id: 'documents-wrapper',
         description: 'Document conversion wrapper',

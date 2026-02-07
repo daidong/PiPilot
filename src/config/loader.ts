@@ -258,8 +258,9 @@ export function validateConfig(config: AgentYAMLConfig): string[] {
 
   if (config.packs) {
     const validPacks = [
-      'safe', 'compute', 'network', 'exec', 'browser', 'git', 'exploration', 'python',
-      'kv-memory', 'kvMemory', 'docs', 'discovery', 'session-history', 'sessionHistory'
+      'safe', 'compute', 'network', 'exec', 'git', 'exploration', 'python',
+      'kv-memory', 'kvMemory', 'docs', 'discovery', 'todo', 'web',
+      'documents', 'sqlite', 'memory-search', 'memorySearch'
     ]
     for (const pack of config.packs) {
       const packName = typeof pack === 'string' ? pack : pack.name

@@ -19,7 +19,10 @@ import type {
   WorkingSetResolvedEntity
 } from '../types/memory-entity.js'
 import type { ContextPhase, ContextFragment, AssemblyContext } from '../types/context-pipeline.js'
-import { PHASE_PRIORITIES, DEFAULT_BUDGETS } from './pipeline.js'
+
+// Inlined from deleted pipeline.ts (V1 pipeline removed; Kernel V2 is mandatory)
+const PHASE_PRIORITIES = { workingset: 70 } as const
+const DEFAULT_BUDGETS = { workingset: { type: 'percentage' as const, value: 25, minTokens: 0 } } as const
 import { ShapeDegrader } from './shape-degrader.js'
 import { countTokens } from '../utils/tokenizer.js'
 
@@ -387,7 +390,7 @@ export async function buildWorkingSet(
         source: 'index',
         requestedShape: 'index-line', // Minimal shape for index hints
         relevanceScore: 0.2,
-        reason: 'Index hint (available for ctx-expand)'
+        reason: 'Index hint'
       })
     }
   }

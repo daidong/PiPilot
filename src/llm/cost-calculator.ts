@@ -8,14 +8,14 @@ import type { DetailedTokenUsage, TokenCost, ProviderID } from './provider.types
 import { getModel } from './models.js'
 
 /**
- * Cache discount rates by provider
- * These represent the percentage of normal price charged for cached tokens
+ * Fallback cache discount rates by provider.
+ * Used only when a model does not define `cost.cachedInput`.
  */
-const CACHE_DISCOUNTS: Record<ProviderID, number> = {
+const FALLBACK_CACHE_DISCOUNTS: Record<ProviderID, number> = {
   anthropic: 0.1,   // 90% discount for cached reads
   openai: 0.5,      // 50% discount for cached reads
   google: 0.25,     // 75% discount for Gemini context caching
-  deepseek: 0.5     // 50% discount estimate
+  deepseek: 0.1     // DeepSeek cached-input price is 10% of cache-miss input price
 }
 
 /**
@@ -55,8 +55,9 @@ export function calculateCost(modelId: string, usage: DetailedTokenUsage): Token
   const inputPricePerMillion = model.cost.input
   const outputPricePerMillion = model.cost.output
 
-  // Get cache discount and creation multiplier for this provider
-  const cacheDiscount = CACHE_DISCOUNTS[provider] ?? 0.5
+  // Use model-level cached input pricing when available; otherwise fallback to provider discount.
+  const fallbackDiscount = FALLBACK_CACHE_DISCOUNTS[provider] ?? 0.5
+  const cachedInputPricePerMillion = model.cost.cachedInput ?? (inputPricePerMillion * fallbackDiscount)
   const cacheCreationMultiplier = CACHE_CREATION_MULTIPLIERS[provider] ?? 1.0
 
   // Extract cache token counts (default to 0)
@@ -71,7 +72,7 @@ export function calculateCost(modelId: string, usage: DetailedTokenUsage): Token
   // Calculate costs (price is per million tokens)
   const promptCost = (regularPromptTokens / 1_000_000) * inputPricePerMillion
   const completionCost = (usage.completionTokens / 1_000_000) * outputPricePerMillion
-  const cachedReadCost = (cacheReadTokens / 1_000_000) * inputPricePerMillion * cacheDiscount
+  const cachedReadCost = (cacheReadTokens / 1_000_000) * cachedInputPricePerMillion
   const cacheCreationCost = (cacheCreationTokens / 1_000_000) * inputPricePerMillion * cacheCreationMultiplier
 
   const totalCost = promptCost + completionCost + cachedReadCost + cacheCreationCost

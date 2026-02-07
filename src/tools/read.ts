@@ -128,21 +128,6 @@ export const read: Tool<ReadInput, ReadOutput> = defineTool({
     const content = result.data!
     const meta = result.meta ?? {}
 
-    // Best-effort: record WorkingSet continuity when reading entity JSON
-    try {
-      if (runtime.workingSetTracker?.recordUsage && input.path.endsWith('.json')) {
-        const bytes = meta.bytes ?? content.length
-        if (bytes <= 1_000_000) {
-          const parsed = JSON.parse(content) as { id?: string; type?: string }
-          if (parsed?.id && (parsed.type === 'note' || parsed.type === 'doc' || parsed.type === 'todo')) {
-            runtime.workingSetTracker.recordUsage(parsed.id, 'tool-access')
-          }
-        }
-      }
-    } catch {
-      // ignore parse errors
-    }
-
     // Record successful reads for duplicate detection
     const count = (prior?.count ?? 0) + 1
     guard.readHistory.set(readKey, { revision, count, lastAt: Date.now(), fingerprint })

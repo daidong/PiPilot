@@ -89,7 +89,6 @@ Use dedicated tools for exploring codebases:
 
 ### Context Sources
 For session history and memory:
-- \`ctx.get("session.messages")\` - Recent conversation
 - \`ctx.get("session.trace")\` - Operation trace
 - \`ctx.get("ctx.catalog")\` - List all available context sources
 

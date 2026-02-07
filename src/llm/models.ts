@@ -23,7 +23,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 2.5, output: 10 },
+    cost: { input: 1.75, cachedInput: 0.175, output: 14 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
   {
@@ -38,7 +38,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 2.5, output: 10 },
+    cost: { input: 1.25, cachedInput: 0.125, output: 10 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
   {
@@ -53,7 +53,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 0.15, output: 0.6 },
+    cost: { input: 0.25, cachedInput: 0.025, output: 2 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
   {
@@ -68,7 +68,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 0.075, output: 0.3 },
+    cost: { input: 0.05, cachedInput: 0.005, output: 0.4 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
 
@@ -85,7 +85,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 2.5, output: 10 },
+    cost: { input: 2.5, cachedInput: 1.25, output: 10 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
 
@@ -102,7 +102,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 15, output: 60 },
+    cost: { input: 15, cachedInput: 7.5, output: 60 },
     limit: { maxContext: 200000, maxOutput: 100000 }
   },
   {
@@ -117,7 +117,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text'],
       output: ['text']
     },
-    cost: { input: 3, output: 12 },
+    cost: { input: 1.1, cachedInput: 0.55, output: 4.4 },
     limit: { maxContext: 128000, maxOutput: 65536 }
   },
   {
@@ -132,7 +132,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text'],
       output: ['text']
     },
-    cost: { input: 1.1, output: 4.4 },
+    cost: { input: 1.1, cachedInput: 0.55, output: 4.4 },
     limit: { maxContext: 200000, maxOutput: 100000 }
   },
   {
@@ -147,7 +147,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 1.1, output: 4.4 },
+    cost: { input: 1.1, cachedInput: 0.275, output: 4.4 },
     limit: { maxContext: 200000, maxOutput: 100000 }
   },
 
@@ -164,7 +164,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 5, output: 25 },
+    cost: { input: 5, cachedInput: 0.5, output: 25 },
     limit: { maxContext: 200000, maxOutput: 64000 }
   },
   {
@@ -179,7 +179,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 3, output: 15 },
+    cost: { input: 3, cachedInput: 0.3, output: 15 },
     limit: { maxContext: 200000, maxOutput: 64000 }
   },
   {
@@ -194,7 +194,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 1, output: 5 },
+    cost: { input: 1, cachedInput: 0.1, output: 5 },
     limit: { maxContext: 200000, maxOutput: 64000 }
   },
 
@@ -211,7 +211,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text'],
       output: ['text']
     },
-    cost: { input: 0.14, output: 0.28 },
+    cost: { input: 0.28, cachedInput: 0.028, output: 0.42 },
     limit: { maxContext: 64000, maxOutput: 8192 }
   },
   {
@@ -226,7 +226,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text'],
       output: ['text']
     },
-    cost: { input: 0.55, output: 2.19 },
+    cost: { input: 0.28, cachedInput: 0.028, output: 0.42 },
     limit: { maxContext: 64000, maxOutput: 8192 }
   },
 
@@ -243,7 +243,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 0.1, output: 0.4 },
+    cost: { input: 0.1, cachedInput: 0.025, output: 0.4 },
     limit: { maxContext: 1000000, maxOutput: 8192 }
   },
   {
@@ -258,6 +258,9 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
+    // Not listed as a separate SKU on the current official pricing page.
+    // Keep billing consistent by aligning with gemini-2.0-flash for now.
+    cost: { input: 0.1, cachedInput: 0.025, output: 0.4 },
     limit: { maxContext: 1000000, maxOutput: 8192 }
   }
 ]

@@ -36,6 +36,8 @@ export interface ModelCapabilities {
 export interface ModelCost {
   /** 输入 token 成本 (美元/百万 token) */
   input: number
+  /** 缓存命中输入 token 成本 (美元/百万 token，可选) */
+  cachedInput?: number
   /** 输出 token 成本 (美元/百万 token) */
   output: number
 }

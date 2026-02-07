@@ -1,44 +1,9 @@
 /**
- * Context Module - Context Assembly Pipeline
+ * Context Module - Shared Context Utilities
  *
- * Exports pipeline creation and built-in phases for context assembly.
+ * Exports WorkingSet Builder and Shape Degrader (used by Kernel V2).
+ * V1 context pipeline has been removed; Kernel V2 is now mandatory.
  */
-
-// Pipeline core
-export {
-  createContextPipeline,
-  createBudget,
-  PHASE_PRIORITIES,
-  DEFAULT_BUDGETS,
-  type ContextPipelineConfig
-} from './pipeline.js'
-
-// Built-in phases
-export {
-  createSystemPhase,
-  createPinnedPhase,
-  createProjectCardsPhase,
-  createSelectedPhase,
-  createSessionPhase,
-  createIndexPhase,
-  createStateSummaryPhase,
-  isSessionItemExpired,
-  cleanExpiredSessionItems,
-  type SystemPhaseConfig,
-  type PinnedPhaseConfig,
-  type ProjectCardsPhaseConfig,
-  type SelectedPhaseConfig,
-  type SessionPhaseConfig,
-  type IndexPhaseConfig,
-  type StateSummaryPhaseConfig
-} from './phases/index.js'
-
-// Compressors
-export {
-  SimpleHistoryCompressor,
-  createSimpleCompressor,
-  type SimpleHistoryCompressorConfig
-} from './compressors/index.js'
 
 // WorkingSet Builder (RFC-009)
 export {

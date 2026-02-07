@@ -17,7 +17,6 @@ export { bash } from './bash.js'
 export { glob } from './glob.js'
 export { grep } from './grep.js'
 export { ctxGet, createCtxGetTool } from './ctx-get.js'
-export { ctxExpand } from './ctx-expand.js'
 export { fetchTool } from './fetch.js'
 export { llmCall } from './llm-call.js'
 export { llmExpand } from './llm-expand.js'
@@ -41,7 +40,6 @@ export type { BashInput, BashOutput } from './bash.js'
 export type { GlobInput, GlobOutput } from './glob.js'
 export type { GrepInput, GrepOutput } from './grep.js'
 export type { CtxGetInput, CtxGetOutput, CreateCtxGetOptions, SourceInfo } from './ctx-get.js'
-export type { CtxExpandInput, CtxExpandOutput, CtxExpandType } from './ctx-expand.js'
 export type { FetchInput, FetchOutput } from './fetch.js'
 export type { LLMCallInput, LLMCallOutput } from './llm-call.js'
 export type { LLMExpandInput, LLMExpandOutput } from './llm-expand.js'
@@ -66,7 +64,6 @@ import { bash } from './bash.js'
 import { glob } from './glob.js'
 import { grep } from './grep.js'
 import { ctxGet } from './ctx-get.js'
-import { ctxExpand } from './ctx-expand.js'
 import { fetchTool } from './fetch.js'
 import { llmCall } from './llm-call.js'
 import { llmExpand } from './llm-expand.js'
@@ -89,11 +86,10 @@ import { skillApproveTool } from './skill-approve.js'
  * - Runs within sandbox
  * - Auditable
  *
- * Contains: ctx-get, ctx-expand, read, write, edit, glob, grep
+ * Contains: ctx-get, read, write, edit, glob, grep
  */
 export const safeTools: Tool<any, any>[] = [
   ctxGet,
-  ctxExpand,
   read,
   write,
   edit,
@@ -205,13 +201,6 @@ export const toolMeta: Record<string, ToolMeta> = {
     category: 'safe',
     requiresExplicitEnable: false,
     description: 'Get context information'
-  },
-  'ctx-expand': {
-    name: 'ctx-expand',
-    riskLevel: 'safe',
-    category: 'safe',
-    requiresExplicitEnable: false,
-    description: 'Expand compressed context from history index'
   },
   read: {
     name: 'read',

@@ -2,7 +2,6 @@
  * session.trace - Session operation trace context source
  *
  * Returns trace events (tool calls, file operations) from the current session.
- * This is different from session.messages which returns conversation messages.
  */
 
 import { defineContextSource, createSuccessResult } from '../factories/define-context-source.js'

@@ -50,7 +50,7 @@ function validateSourceId(id: string): void {
   if (!pattern.test(id)) {
     throw new Error(
       `Invalid source ID format: ${id}. ` +
-      `Expected lowercase 'namespace.name' format (e.g., 'docs.index', 'session.messages')`
+      `Expected lowercase 'namespace.name' format (e.g., 'docs.index', 'session.trace')`
     )
   }
 }

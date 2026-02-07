@@ -21,7 +21,7 @@ export type ContextNamespace = 'docs' | 'session' | 'memory' | 'ctx'
 
 /**
  * Index Shape - Browse structure
- * Used by: docs.index, memory.list, session.messages, session.trace
+ * Used by: docs.index, memory.list, session.trace
  */
 export interface IndexParams {
   /** Subtree to browse */
@@ -40,7 +40,7 @@ export interface IndexParams {
 
 /**
  * Search Shape - Retrieve candidates
- * Used by: docs.search, session.search, memory.search
+ * Used by: docs.search, memory.search
  */
 export interface SearchParams {
   /** Search query (required) */
@@ -64,7 +64,7 @@ export interface SearchParams {
 
 /**
  * Open Shape - Read single object
- * Used by: docs.open, session.thread
+ * Used by: docs.open
  */
 export interface OpenParams {
   /** Object ID (mutually exclusive with path) */
@@ -234,7 +234,7 @@ export interface ContextSourceExample {
  * 上下文源定义
  */
 export interface ContextSource<TParams = unknown, TData = unknown> {
-  /** Source ID (e.g., docs.index, session.messages) */
+  /** Source ID (e.g., docs.index, session.trace) */
   id: string
   /** Namespace (extracted from id, e.g., 'docs' from 'docs.index') */
   namespace: string
@@ -293,10 +293,7 @@ export interface ContextSourceConfig<TParams = unknown, TData = unknown> {
  */
 export type BuiltinContextSourceId =
   // session namespace
-  | 'session.messages'
   | 'session.trace'
-  | 'session.search'
-  | 'session.thread'
   // memory namespace
   | 'memory.get'
   | 'memory.search'
@@ -305,6 +302,9 @@ export type BuiltinContextSourceId =
   | 'docs.index'
   | 'docs.search'
   | 'docs.open'
+  // todo namespace
+  | 'todo.list'
+  | 'todo.get'
   // meta namespace
   | 'ctx.catalog'
   | 'ctx.describe'

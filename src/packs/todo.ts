@@ -14,7 +14,6 @@ import { todoComplete } from '../tools/todo-complete.js'
 import { todoRemove } from '../tools/todo-remove.js'
 import { todoList } from '../context-sources/todo-list.js'
 import { todoGet } from '../context-sources/todo-get.js'
-import { createMemoryStorage } from '../core/memory-storage.js'
 
 /**
  * Todo Pack - Structured task tracking for agents
@@ -50,15 +49,10 @@ export function todo(): Pack {
      * Ensure memory storage is available (kv-memory must init first, or we create it).
      */
     onInit: async (runtime: Runtime) => {
+      // Kernel V2 sets runtime.memoryStorage during init.
+      // If it's missing, something went wrong — log a warning.
       if (!runtime.memoryStorage) {
-        try {
-          const memoryStorage = createMemoryStorage(runtime.projectPath)
-          await memoryStorage.init()
-          runtime.memoryStorage = memoryStorage
-        } catch (error) {
-          console.error('[todo] Failed to initialize memory storage:', error)
-          throw error
-        }
+        console.warn('[todo] runtime.memoryStorage not set. Kernel V2 should have initialized it.')
       }
     },
 

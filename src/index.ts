@@ -269,28 +269,7 @@ export { PolicyEngine } from './core/policy-engine.js'
 export { ContextManager } from './core/context-manager.js'
 export { PromptCompiler } from './core/prompt-compiler.js'
 export { ProviderRegistry } from './core/provider-registry.js'
-export { FileMemoryStorage, createMemoryStorage } from './core/memory-storage.js'
-export { FileMessageStore, createMessageStore } from './core/message-store.js'
-export { UnifiedBudgeter, createBudgeterForModel } from './core/unified-budgeter.js'
-export { BudgetCoordinator } from './core/budget-coordinator.js'
-export type {
-  BudgetSlots,
-  BudgetCoordinatorConfig,
-  DegradationAction,
-  DegradationResult,
-  OutputReserveStrategy,
-  RoundHint,
-  TaskProfile,
-  ProfileAllocations,
-  ElasticProfile,
-  ElasticProfileSlot,
-  ElasticProfileSlotPct,
-  LegacyProfileAllocations,
-  normalizeLegacyProfile
-} from './core/budget-coordinator.js'
-export { SAFETY_MARGIN, HYSTERESIS, PROFILES, TOOL_GROUPS } from './core/budget-coordinator.js'
 export { compressToolResult, enforceToolResultBudget, isAlreadyCompressed, TOOL_RESULT_CAPS, TOOL_RESULT_TOTAL_BUDGET_RATIO } from './core/tool-result-compressor.js'
-export { StateSummarizer, isReferenceMessage, REFERENCE_MESSAGE_PREFIX, ACCUMULATED_FINDINGS_TAG } from './core/state-summarizer.js'
 export { ToolsetCompiler } from './core/toolset-compiler.js'
 export {
   generateRuntimeSnapshot,
@@ -305,16 +284,6 @@ export {
   getUsageTotalsPath,
   type UsageTotalsFile
 } from './core/usage-totals.js'
-export {
-  AdaptiveMessageSelector,
-  createMessageSelector,
-  InsufficientBudgetError
-} from './core/adaptive-message-selector.js'
-export {
-  TokenEstimator,
-  createTokenEstimator
-} from './core/token-estimator.js'
-
 // Token Tracking
 export {
   TokenTracker,
@@ -355,7 +324,6 @@ export {
   glob,
   grep,
   ctxGet,
-  ctxExpand,
   fetchTool,
   llmCall,
   llmExpand,
@@ -384,10 +352,7 @@ export type {
   SkillCreateInput,
   SkillCreateOutput,
   SkillApproveInput,
-  SkillApproveOutput,
-  CtxExpandInput,
-  CtxExpandOutput,
-  CtxExpandType
+  SkillApproveOutput
 } from './tools/index.js'
 
 // ============================================================================
@@ -420,9 +385,6 @@ export {
 
 export {
   sessionTrace,
-  sessionMessages,
-  sessionSearch,
-  sessionThread,
   sessionContextSources,
   metaContextSources,
   memoryContextSources,
@@ -460,8 +422,6 @@ export {
   git,
   exploration,
   python,
-  contextPipeline,
-  contextPipelinePack,
   todo,
   web,
   // 组合工厂
@@ -478,7 +438,6 @@ export type {
   ExecPackOptions,
   NetworkPackOptions,
   ComputePackOptions,
-  ContextPipelinePackOptions,
   WebPackOptions,
   PackRiskLevel,
   PackMeta
@@ -1011,62 +970,13 @@ export { createActivityFormatter } from './trace/activity-formatter.js'
 export type { ToolActivityRule, ActivityFormatterOptions } from './trace/activity-formatter.js'
 
 // ============================================================================
-// Context Pipeline 导出
+// Context Types (shared with Kernel V2)
 // ============================================================================
 
-// Pipeline core
-export {
-  createContextPipeline,
-  createBudget,
-  PHASE_PRIORITIES,
-  DEFAULT_BUDGETS
-} from './context/index.js'
-export type { ContextPipelineConfig } from './context/index.js'
-
-// Built-in phases
-export {
-  createSystemPhase,
-  createPinnedPhase,
-  createProjectCardsPhase,
-  createSelectedPhase,
-  createSessionPhase,
-  createIndexPhase
-} from './context/index.js'
 export type {
-  SystemPhaseConfig,
-  PinnedPhaseConfig,
-  ProjectCardsPhaseConfig,
-  SelectedPhaseConfig,
-  SessionPhaseConfig,
-  IndexPhaseConfig
-} from './context/index.js'
-
-// History compressors
-export {
-  SimpleHistoryCompressor,
-  createSimpleCompressor
-} from './context/index.js'
-export type { SimpleHistoryCompressorConfig } from './context/index.js'
-
-// Context Pipeline types (re-export from types for convenience)
-export type {
-  PhaseBudgetType,
-  PhaseBudget,
   ContextFragment,
   ContextSelectionType,
-  ContextSelection,
-  HistorySegment,
-  CompressedHistory,
-  HistoryCompressor,
-  AssemblyContext,
-  ContextPhase,
-  PhaseResult,
-  AssembledContext,
-  CompressionConfig,
-  PhaseConfig,
-  PipelineConfig,
-  ContextPipeline,
-  RuntimeWithCompressor
+  ContextSelection
 } from './types/index.js'
 
 // ============================================================================

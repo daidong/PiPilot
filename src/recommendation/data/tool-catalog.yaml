@@ -135,7 +135,7 @@ tools:
     riskLevel: safe
     requiresApproval: false
     providedBy: safe
-    exampleUsage: 'ctx-get({ source: "session.messages" })'
+    exampleUsage: 'ctx-get({ source: "memory.get", params: { namespace: "user", key: "prefs" } })'
 
   # ============================================================================
   # Compute Tools

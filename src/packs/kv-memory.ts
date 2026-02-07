@@ -7,7 +7,7 @@
  * IMPORTANT: This pack sets up runtime.memoryStorage which is required by:
  * - memory-put, memory-update, memory-delete tools
  * - memory.get, memory.search, memory.list context sources
- * - Project Cards phase (context pipeline) for auto-loading project cards
+ * - Kernel V2 for auto-loading project cards
  */
 
 import { definePack } from '../factories/define-pack.js'
@@ -15,7 +15,6 @@ import type { Pack } from '../types/pack.js'
 import type { Runtime } from '../types/runtime.js'
 import { memoryPut, memoryUpdate, memoryDelete } from '../tools/index.js'
 import { memoryGet, memorySearch, memoryList } from '../context-sources/index.js'
-import { createMemoryStorage } from '../core/memory-storage.js'
 
 /**
  * KV Memory Pack - Key-Value memory storage for agents
@@ -49,19 +48,13 @@ export function kvMemory(): Pack {
 
     /**
      * Initialize memory storage on runtime.
-     * This is REQUIRED for memory tools and project-cards phase to work.
+     * This is REQUIRED for memory tools and Kernel V2 to work.
      */
     onInit: async (runtime: Runtime) => {
-      // Only create if not already set (e.g., by another pack)
+      // Kernel V2 sets runtime.memoryStorage during init.
+      // If it's missing, something went wrong — log a warning.
       if (!runtime.memoryStorage) {
-        try {
-          const memoryStorage = createMemoryStorage(runtime.projectPath)
-          await memoryStorage.init()
-          runtime.memoryStorage = memoryStorage
-        } catch (error) {
-          console.error('[kv-memory] Failed to initialize memory storage:', error)
-          throw error
-        }
+        console.warn('[kv-memory] runtime.memoryStorage not set. Kernel V2 should have initialized it.')
       }
     },
 

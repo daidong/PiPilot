@@ -77,17 +77,23 @@ export interface PackConfig {
  * 内置 Pack 名称
  */
 export type BuiltinPackName =
-  // 分层核心
+  // Core packs
   | 'safe'
   | 'exec'
   | 'network'
   | 'compute'
-  // 领域 Pack
-  | 'repo'
+  // Domain packs
   | 'git'
   | 'exploration'
   | 'python'
   | 'web'
+  | 'kv-memory'
+  | 'docs'
+  | 'discovery'
+  | 'todo'
+  | 'documents'
+  | 'sqlite'
+  | 'memory-search'
 
 /**
  * Pack 风险等级

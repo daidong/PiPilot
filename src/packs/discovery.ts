@@ -54,8 +54,8 @@ Returns a summary of available sources grouped by namespace, including:
 
 ### 2. ctx.describe - Get Full Documentation
 \`\`\`
-ctx.get("ctx.describe", { id: "session.messages" })
 ctx.get("ctx.describe", { id: "docs.open" })
+ctx.get("ctx.describe", { id: "memory.get" })
 \`\`\`
 
 Returns complete documentation including:
@@ -69,7 +69,7 @@ Returns complete documentation including:
 | Kind | Purpose | Example Sources |
 |------|---------|-----------------|
 | index | Overview/listing | docs.index, memory.list |
-| search | Find by query | docs.search, memory.search, session.search |
+| search | Find by query | docs.search, memory.search |
 | open | Read content | docs.open |
 | get | Exact lookup | memory.get, ctx.describe |
 

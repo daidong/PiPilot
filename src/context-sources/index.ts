@@ -10,9 +10,6 @@
 
 // Session namespace
 export { sessionTrace } from './session-trace.js'
-export { sessionMessages } from './session-messages.js'
-export { sessionSearch } from './session-search.js'
-export { sessionThread } from './session-thread.js'
 
 // Meta namespace (ctx.*)
 export { ctxCatalog } from './ctx-catalog.js'
@@ -34,9 +31,6 @@ export { todoGet } from './todo-get.js'
 
 // Type exports
 export type { SessionTraceParams, SessionTraceData, TraceEntry } from './session-trace.js'
-export type { SessionMessagesParams, SessionMessagesData } from './session-messages.js'
-export type { SessionSearchParams, SessionSearchData } from './session-search.js'
-export type { SessionThreadParams, SessionThreadData } from './session-thread.js'
 export type { CtxCatalogParams, CtxCatalogData, CatalogEntry } from './ctx-catalog.js'
 export type { CtxDescribeParams, CtxDescribeData } from './ctx-describe.js'
 export type { MemoryGetParams, MemoryGetData } from './memory-get.js'
@@ -50,9 +44,6 @@ export type { TodoGetParams, TodoGetData } from './todo-get.js'
 
 import type { ContextSource } from '../types/context.js'
 import { sessionTrace } from './session-trace.js'
-import { sessionMessages } from './session-messages.js'
-import { sessionSearch } from './session-search.js'
-import { sessionThread } from './session-thread.js'
 import { ctxCatalog } from './ctx-catalog.js'
 import { ctxDescribe } from './ctx-describe.js'
 import { memoryGet } from './memory-get.js'
@@ -68,10 +59,7 @@ import { todoGet } from './todo-get.js'
  * Session namespace context sources
  */
 export const sessionContextSources: ContextSource<any, any>[] = [
-  sessionTrace,
-  sessionMessages,
-  sessionSearch,
-  sessionThread
+  sessionTrace
 ]
 
 /**

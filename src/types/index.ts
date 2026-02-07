@@ -147,24 +147,6 @@ export {
   parseFullKey
 } from './memory.js'
 
-// Session types
-export type {
-  MessageRole,
-  MessageToolCall,
-  Message,
-  SessionMeta,
-  SessionsIndex,
-  MessageStore,
-  SessionIndex,
-  SessionSearchOptions,
-  SessionSearchResult
-} from './session.js'
-
-export {
-  generateMessageId,
-  generateSessionId
-} from './session.js'
-
 // Todo types
 export type {
   TodoStatus,
@@ -172,25 +154,11 @@ export type {
   TodoItem
 } from './todo.js'
 
-// Context Pipeline types
+// Context Pipeline types (shared with Kernel V2)
 export type {
-  PhaseBudgetType,
-  PhaseBudget,
   ContextFragment,
   ContextSelectionType,
-  ContextSelection,
-  HistorySegment,
-  CompressedHistory,
-  HistoryCompressor,
-  AssemblyContext,
-  ContextPhase,
-  PhaseResult,
-  AssembledContext,
-  CompressionConfig,
-  PhaseConfig,
-  PipelineConfig,
-  ContextPipeline,
-  RuntimeWithCompressor
+  ContextSelection
 } from './context-pipeline.js'
 
 // Memory Entity types (RFC-009)

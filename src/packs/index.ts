@@ -30,7 +30,6 @@ export type { GitPackOptions } from './git.js'
 export { exploration } from './exploration.js'
 export { python } from './python.js'
 export { kvMemory } from './kv-memory.js'
-export { sessionHistory } from './session-history.js'
 export { docs } from './docs.js'
 export { discovery } from './discovery.js'
 export { documents } from './documents.js'
@@ -39,8 +38,6 @@ export { sqlite } from './sqlite.js'
 export type { SqlitePackOptions } from './sqlite.js'
 export { web } from './web.js'
 export type { WebPackOptions } from './web.js'
-export { contextPipeline, contextPipelinePack } from './context-pipeline.js'
-export type { ContextPipelinePackOptions } from './context-pipeline.js'
 export { todo } from './todo.js'
 export { memorySearch } from './memory-search.js'
 export type { MemorySearchPackOptions } from './memory-search.js'
@@ -58,13 +55,11 @@ import { git } from './git.js'
 import { exploration } from './exploration.js'
 import { python } from './python.js'
 import { kvMemory } from './kv-memory.js'
-import { sessionHistory } from './session-history.js'
 import { docs } from './docs.js'
 import { discovery } from './discovery.js'
 import { documents } from './documents.js'
 import { sqlite } from './sqlite.js'
 import { web } from './web.js'
-import { contextPipeline } from './context-pipeline.js'
 import { todo } from './todo.js'
 import { memorySearch } from './memory-search.js'
 
@@ -127,13 +122,11 @@ export const packs = {
   exploration,
   python,
   kvMemory,
-  sessionHistory,
   docs,
   discovery,
   documents,
   sqlite,
   web,
-  contextPipeline,
   todo,
   memorySearch,
 
@@ -211,12 +204,6 @@ export const packMeta: Record<string, PackMeta> = {
     requiresExplicitEnable: false,
     description: 'Key-value memory storage for agents'
   },
-  'session-history': {
-    id: 'session-history',
-    riskLevel: 'safe',
-    requiresExplicitEnable: false,
-    description: 'Session history viewing: messages, trace, search, thread'
-  },
   docs: {
     id: 'docs',
     riskLevel: 'safe',
@@ -246,12 +233,6 @@ export const packMeta: Record<string, PackMeta> = {
     riskLevel: 'elevated',
     requiresExplicitEnable: true,
     description: 'Web search & fetch via Brave Search MCP + built-in fetch tool'
-  },
-  'context-pipeline': {
-    id: 'context-pipeline',
-    riskLevel: 'safe',
-    requiresExplicitEnable: false,
-    description: 'Context assembly pipeline with history compression and on-demand expansion'
   },
   todo: {
     id: 'todo',

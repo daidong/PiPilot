@@ -22,12 +22,6 @@ import type { ToolRegistry } from '../core/tool-registry.js'
 import type { TraceCollector } from '../core/trace-collector.js'
 import type { Runtime } from '../types/runtime.js'
 import type { AgentRunResult } from '../types/agent.js'
-import {
-  AgentLoopBudgetManager,
-  type BlockEstimates
-} from './agent-loop-budget.js'
-import type { StateSummarizer } from '../core/state-summarizer.js'
-import type { BudgetCoordinator, RoundHint } from '../core/budget-coordinator.js'
 import { compressToolResult } from '../core/tool-result-compressor.js'
 import { classifyError, sanitizeErrorContent } from '../core/errors.js'
 import { TokenTracker } from '../core/token-tracker.js'
@@ -84,40 +78,11 @@ export interface AgentLoopConfig {
   /** Hard stop after this many consecutive tool-only rounds (default: threshold * 2) */
   maxConsecutiveToolRounds?: number
 
-  /**
-   * Token budget configuration (optional)
-   * When enabled, uses smart budget management to optimize context
-   */
-  budgetConfig?: {
-    /** Enable unified budget management */
-    enabled: boolean
-    /** Model ID for context window detection */
-    modelId?: string
-    /** Override context window size */
-    contextWindow?: number
-    /** Budget allocation percentages */
-    allocation?: {
-      system?: number   // default: 0.15
-      tools?: number    // default: 0.25
-      messages?: number // default: 0.60
-    }
-    /** Priority tools to keep in minimal mode */
-    priorityTools?: string[]
-    /** Max tokens per tool result (default: 4096) */
-    toolResultCap?: number
-  }
+  /** Max tokens per tool result (default: 4096) */
+  toolResultCap?: number
 
-  /** State summarizer for accumulated findings (Change 3) */
-  stateSummarizer?: StateSummarizer
-
-  /** Selected context to inject as separate message (Change 5) */
+  /** Selected context to inject as separate message */
   selectedContext?: string
-
-  /** Budget coordinator for dynamic output reserve (Change 2) */
-  budgetCoordinator?: BudgetCoordinator
-
-  /** Pre-compaction flush callback — fired once per run() when usage >= 80% */
-  onPreCompaction?: () => Promise<void>
 
   /** Token tracker for usage and cost tracking */
   tokenTracker?: TokenTracker
@@ -228,7 +193,6 @@ export class AgentLoop {
   private client: LLMClient
   private messages: Message[] = []
   private stopped = false
-  private budgetManager: AgentLoopBudgetManager | null = null
   /** Error category counts across the run (RFC-005) */
   private errorCategoryCounts: Partial<Record<ErrorCategory, number>> = {}
   /** Per-run retry budget shared across executor_retry and agent_retry (RFC-005) */
@@ -253,9 +217,6 @@ export class AgentLoop {
   private toolErrorStreaks: Record<string, number> = {}
   /** Last error category per tool+args signature (for pre-block checks) */
   private lastErrorByArgs: Record<string, { category: ErrorCategory }> = {}
-  /** Whether onPreCompaction has already fired this run */
-  private preCompactionFlushed = false
-
   constructor(config: AgentLoopConfig) {
     this.config = config
 
@@ -267,22 +228,12 @@ export class AgentLoop {
     } else {
       throw new Error('Either client or llmConfig must be provided')
     }
-
-    // Initialize budget manager if enabled
-    if (config.budgetConfig?.enabled) {
-      this.budgetManager = new AgentLoopBudgetManager({
-        modelId: config.budgetConfig.modelId ?? config.llmConfig?.model,
-        contextWindow: config.budgetConfig.contextWindow,
-        allocation: config.budgetConfig.allocation,
-        priorityTools: config.budgetConfig.priorityTools
-      })
-    }
   }
 
   /**
-   * Determine round hint for dynamic output reserve (Change 2)
+   * Determine round hint for trace metadata
    */
-  private determineRoundHint(tools: LLMToolDefinition[], previousResponseText: string, previousToolCalls: number): RoundHint {
+  private determineRoundHint(tools: LLMToolDefinition[], previousResponseText: string, previousToolCalls: number): 'intermediate' | 'final' {
     // Tool nudge was just injected → final
     if (this.toolNudgeInjected) return 'final'
     // No tools in schema for this round → final
@@ -347,23 +298,12 @@ export class AgentLoop {
       data: { prompt: userPrompt }
     })
 
-    // Inject selected context as a separate message before the user message (Change 5)
+    // Inject selected context as a separate message before the user message
     if (this.config.selectedContext) {
       this.messages.push({
         role: 'user',
         content: `[REFERENCE MATERIAL]\n<selected-context>\n${this.config.selectedContext}\n</selected-context>`
       })
-    }
-
-    // Inject accumulated findings if available (Change 3)
-    if (this.config.stateSummarizer?.hasContent()) {
-      const summary = this.config.stateSummarizer.render()
-      if (summary) {
-        this.messages.push({
-          role: 'user',
-          content: `<accumulated-findings>\n${summary}\n</accumulated-findings>`
-        })
-      }
     }
 
     // Add user message
@@ -406,50 +346,15 @@ export class AgentLoop {
         let tools = this.config.toolRegistry.generateToolSchemas(
           this.activeToolSubset ? { subset: this.activeToolSubset } : undefined
         ) as LLMToolDefinition[]
-        let messagesToSend = this.messages
-        let estimates: BlockEstimates | undefined
+        const messagesToSend = this.messages
 
-        // Determine round hint and set output reserve (Change 2)
+        // Determine round hint for trace metadata
         const roundHint = this.determineRoundHint(tools, previousResponseText, previousToolCallCount)
-        let maxTokensForRound = this.config.maxTokens
-        if (this.config.budgetCoordinator) {
-          const outputReserve = this.config.budgetCoordinator.getOutputReserve(roundHint)
-          this.config.budgetCoordinator.setOutputReserve(outputReserve)
-          maxTokensForRound = outputReserve
-        }
+        const maxTokensForRound = this.config.maxTokens
 
-        // Inject tool subset constraint if active (Change 4)
-        let subsetConstraint = ''
+        // Inject tool subset constraint if active
         if (this.activeToolSubset) {
-          subsetConstraint = `\n\nOnly the following tools are available for this round: ${this.activeToolSubset.join(', ')}. Do not attempt to call unlisted tools.`
-        }
-        // Note: repeated failure handling is enforced per tool+args signature (3-strike protocol)
-
-        if (this.budgetManager) {
-          const prepared = this.budgetManager.prepareContext({
-            systemPrompt: systemPrompt + subsetConstraint,
-            tools,
-            messages: messagesToSend as unknown as import('../types/session.js').Message[]
-          })
-
-          systemPrompt = prepared.systemPrompt
-          tools = prepared.tools
-          messagesToSend = prepared.messages as unknown as Message[]
-          estimates = prepared.estimates
-
-          // Log degradation if occurred
-          if (prepared.decision.level !== 'normal') {
-            this.config.trace.record({
-              type: 'budget.degradation',
-              data: {
-                level: prepared.decision.level,
-                actions: prepared.decision.actions,
-                messagesExcluded: prepared.messagesExcluded,
-                warning: prepared.warning
-              }
-            })
-          }
-        } else if (subsetConstraint) {
+          const subsetConstraint = `\n\nOnly the following tools are available for this round: ${this.activeToolSubset.join(', ')}. Do not attempt to call unlisted tools.`
           systemPrompt = systemPrompt + subsetConstraint
         }
 
@@ -478,9 +383,7 @@ export class AgentLoop {
           const hasWorkingContext = systemPrompt.includes('<working-context>')
           const projectMatch = systemPrompt.match(/## Project Cards\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
           const projectCount = projectMatch ? (projectMatch.match(/^### /gm) || []).length : 0
-          const pinnedMatch = systemPrompt.match(/## Pinned Context\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
-          const pinnedCount = pinnedMatch ? (pinnedMatch.match(/^### /gm) || []).length : 0
-          const projectCardsCount = projectCount > 0 ? projectCount : pinnedCount
+          const projectCardsCount = projectCount
           const selectedMatch = systemPrompt.match(/## Selected Context\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
           const selectedCount = selectedMatch ? (selectedMatch.match(/^### /gm) || []).length : 0
           const sessionMatch = systemPrompt.match(/## Prior Conversation\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
@@ -541,8 +444,7 @@ export class AgentLoop {
 
               // Record usage with token tracker
               if (this.config.tokenTracker) {
-                // Get modelId from budgetConfig (set by create-agent) or llmConfig
-                const modelId = this.config.budgetConfig?.modelId || this.config.llmConfig?.model || ''
+                const modelId = this.config.llmConfig?.model || ''
                 const cost = this.config.tokenTracker.recordCall(modelId, usage)
                 this.config.onUsage?.(usage, cost)
 
@@ -745,24 +647,6 @@ export class AgentLoop {
           }
         }
 
-        // Calibrate budget manager with actual usage
-        if (this.budgetManager && estimates) {
-          this.budgetManager.calibrate(estimates, usage)
-        }
-
-        // Pre-compaction flush: fire once when usage reaches 80% of context window
-        if (
-          !this.preCompactionFlushed &&
-          this.config.onPreCompaction &&
-          this.config.budgetCoordinator
-        ) {
-          const usageRatio = this.config.budgetCoordinator.computeUsage(usage.promptTokens)
-          if (usageRatio >= 0.80) {
-            this.preCompactionFlushed = true
-            await this.config.onPreCompaction()
-          }
-        }
-
         // Store for next round's hint detection
         previousResponseText = responseText
         previousToolCallCount = toolCalls.length
@@ -788,7 +672,7 @@ export class AgentLoop {
           break
         }
 
-        // Track tool usage for subset selection (Change 4)
+        // Track tool usage for subset selection
         this.trackToolUsage(toolCalls.map(tc => tc.name))
 
         // Execute tool calls
@@ -796,7 +680,7 @@ export class AgentLoop {
         let toolNotAvailableThisRound = false
 
         for (const toolUse of toolCalls) {
-          // Check tool subset validation (Change 4)
+          // Check tool subset validation
           if (this.activeToolSubset) {
             const subsetError = this.config.toolRegistry.validateSubset(toolUse.name, this.activeToolSubset)
             if (subsetError) {
@@ -922,20 +806,6 @@ export class AgentLoop {
             this.config.runtime.skillManager.onToolUsed(toolUse.name)
           }
 
-          // Update state summarizer (Change 3)
-          if (this.config.stateSummarizer) {
-            const args = (typeof toolUse.input === 'object' && toolUse.input !== null)
-              ? toolUse.input as Record<string, unknown>
-              : {}
-            this.config.stateSummarizer.update(
-              toolUse.name,
-              args,
-              result.success ? result.data : result.error,
-              result.success,
-              step
-            )
-          }
-
           // Build tool result content
           let resultContent: string
           if (result.success) {
@@ -1049,7 +919,7 @@ export class AgentLoop {
           }
 
           // Cap tool result to prevent context overflow
-          const toolResultCap = this.config.budgetConfig?.toolResultCap
+          const toolResultCap = this.config.toolResultCap
           if (toolResultCap && resultContent.length > toolResultCap * 3) {
             const compressed = compressToolResult(toolUse.name, resultContent, toolResultCap)
             resultContent = compressed.content
@@ -1248,22 +1118,14 @@ export class AgentLoop {
   }
 
   /**
-   * Get budget manager (if enabled)
-   */
-  getBudgetManager(): AgentLoopBudgetManager | null {
-    return this.budgetManager
-  }
-
-  /**
-   * Set active tool subset (Change 4)
+   * Set active tool subset
    */
   setToolSubset(subset: string[] | undefined): void {
     this.activeToolSubset = subset
   }
 
   /**
-   * Get recently used tool names (Change 4)
-   */
+   * Get recently used tool names   */
   getRecentTools(): string[] {
     return this.getRecentToolNames()
   }
