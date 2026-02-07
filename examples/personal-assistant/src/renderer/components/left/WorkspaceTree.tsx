@@ -9,7 +9,8 @@ import {
   Eye,
   Link,
   Plus,
-  Loader2
+  Loader2,
+  Trash2
 } from 'lucide-react'
 import { useEntityStore } from '../../stores/entity-store'
 import { useSessionStore } from '../../stores/session-store'
@@ -18,6 +19,13 @@ import { useUIStore } from '../../stores/ui-store'
 const api = (window as any).api
 const ROW_HEIGHT = 28
 const OVERSCAN_ROWS = 10
+const MAX_DROP_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
+
+const TEXT_EXTENSIONS = new Set([
+  'md', 'txt', 'json', 'ts', 'js', 'css', 'html', 'yml', 'yaml',
+  'toml', 'env', 'sh', 'py', 'cfg', 'ini', 'log', 'csv', 'xml',
+  'rst', 'jsx', 'tsx', 'mjs', 'cjs', 'markdown', 'gitignore',
+])
 
 interface FileTreeNode {
   name: string
@@ -71,6 +79,9 @@ export function WorkspaceTree() {
   const [tree, setTree] = useState<TreeNodeState>({ byParent: {}, loadingParents: new Set() })
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(280)
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
+  const [confirmTrashPath, setConfirmTrashPath] = useState<string | null>(null)
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
 
   const storageKey = useMemo(() => `pa:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
@@ -188,6 +199,14 @@ export function WorkspaceTree() {
 
   const openFile = useCallback((node: FileTreeNode) => {
     if (node.type !== 'file') return
+
+    // Smart open: non-text files open with system default app
+    const ext = (node.name.split('.').pop() || '').toLowerCase()
+    if (!TEXT_EXTENSIONS.has(ext)) {
+      api.openFile(node.path)
+      return
+    }
+
     const normalizedNodePath = normalizePath(node.path)
     const existing = docs.find(item => normalizePath(item.filePath || '') === normalizedNodePath)
     if (existing) {
@@ -220,6 +239,97 @@ export function WorkspaceTree() {
     await api.createArtifactFromFile(node.path)
     await refreshEntities()
   }, [refreshEntities])
+
+  const handleTrashClick = useCallback(async (node: FileTreeNode) => {
+    if (confirmTrashPath === node.relativePath) {
+      // Second click — actually delete
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+      setConfirmTrashPath(null)
+      const result = await api.trashFile(node.path)
+      if (result.success) {
+        const parentRelPath = node.relativePath.includes('/')
+          ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
+          : ''
+        await loadChildren(parentRelPath)
+      }
+    } else {
+      // First click — arm confirmation
+      setConfirmTrashPath(node.relativePath)
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = setTimeout(() => setConfirmTrashPath(null), 3000)
+    }
+  }, [confirmTrashPath, loadChildren])
+
+  // Resolve drop target directory for a given node row:
+  // - directory → that directory's relativePath
+  // - file → the parent directory (or '' for root-level files)
+  const getDropDir = useCallback((node: FileTreeNode): string => {
+    if (node.type === 'directory') return node.relativePath
+    return node.relativePath.includes('/')
+      ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
+      : ''
+  }, [])
+
+  const handleRowDragOver = useCallback((e: React.DragEvent, node: FileTreeNode) => {
+    e.preventDefault()
+    e.stopPropagation() // prevent viewport from overriding highlight
+    e.dataTransfer.dropEffect = 'copy'
+    setDropTargetPath(getDropDir(node))
+  }, [getDropDir])
+
+  const handleRowDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setDropTargetPath(null)
+  }, [])
+
+  const handleRowDrop = useCallback(async (e: React.DragEvent, node: FileTreeNode) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const targetRelPath = getDropDir(node)
+    setDropTargetPath(null)
+    const files = Array.from(e.dataTransfer.files)
+    for (const file of files) {
+      if (file.size > MAX_DROP_FILE_SIZE) {
+        console.warn(`Skipping "${file.name}": exceeds 100 MB limit`)
+        continue
+      }
+      const buffer = await file.arrayBuffer()
+      const base64 = btoa(
+        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      )
+      await api.dropToDir(file.name, base64, targetRelPath)
+    }
+    await loadChildren(targetRelPath)
+  }, [getDropDir, loadChildren])
+
+  const handleViewportDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDropTargetPath('__root__')
+  }, [])
+
+  const handleViewportDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setDropTargetPath(null)
+  }, [])
+
+  const handleViewportDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setDropTargetPath(null)
+    const files = Array.from(e.dataTransfer.files)
+    for (const file of files) {
+      if (file.size > MAX_DROP_FILE_SIZE) {
+        console.warn(`Skipping "${file.name}": exceeds 100 MB limit`)
+        continue
+      }
+      const buffer = await file.arrayBuffer()
+      const base64 = btoa(
+        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      )
+      await api.dropToDir(file.name, base64, '')
+    }
+    await loadChildren('')
+  }, [loadChildren])
 
   const rootNodes = useMemo(() => tree.byParent[toKey('')] || [], [tree.byParent])
   const activePath = normalizePath(previewEntity?.filePath || '')
@@ -293,13 +403,23 @@ export function WorkspaceTree() {
     const node = row.node
     const isExpanded = node.type === 'directory' && expanded.has(node.relativePath)
     const isActive = !!activePath && normalizePath(node.path) === activePath
+    const isDropTarget = node.type === 'directory' && dropTargetPath === node.relativePath
 
     return (
       <div
         key={row.key}
-        className={`group flex items-center h-7 px-2 rounded cursor-pointer ${isActive ? 'bg-sky-100/70 dark:bg-sky-900/35' : 'hover:t-bg-hover'}`}
+        className={`group flex items-center h-7 px-2 rounded cursor-pointer ${
+          isDropTarget
+            ? 'ring-2 ring-blue-400/60 bg-blue-50/20 dark:bg-blue-900/20'
+            : isActive
+              ? 'bg-sky-100/70 dark:bg-sky-900/35'
+              : 'hover:t-bg-hover'
+        }`}
         style={{ paddingLeft: `${row.depth * 14 + 8}px` }}
         title={node.relativePath}
+        onDragOver={(e) => handleRowDragOver(e, node)}
+        onDragLeave={handleRowDragLeave}
+        onDrop={(e) => handleRowDrop(e, node)}
       >
         {node.type === 'directory' ? (
           <button
@@ -329,34 +449,47 @@ export function WorkspaceTree() {
           {node.name}
         </button>
 
-        {node.type === 'file' && (
-          <div className="ml-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              className="p-0.5 rounded hover:t-bg-hover"
-              title="Open preview"
-              onClick={() => openFile(node)}
-            >
-              <Eye size={11} />
-            </button>
-            <button
-              className="p-0.5 rounded hover:t-bg-hover"
-              title="Create artifact"
-              onClick={() => createArtifact(node)}
-            >
-              <Plus size={11} />
-            </button>
-            <button
-              className="p-0.5 rounded hover:t-bg-hover"
-              title="Add to focus"
-              onClick={() => addFocus(node)}
-            >
-              <Link size={11} />
-            </button>
-          </div>
-        )}
+        <div className="ml-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {node.type === 'file' && (
+            <>
+              <button
+                className="p-0.5 rounded hover:t-bg-hover"
+                title="Open preview"
+                onClick={() => openFile(node)}
+              >
+                <Eye size={11} />
+              </button>
+              <button
+                className="p-0.5 rounded hover:t-bg-hover"
+                title="Create artifact"
+                onClick={() => createArtifact(node)}
+              >
+                <Plus size={11} />
+              </button>
+              <button
+                className="p-0.5 rounded hover:t-bg-hover"
+                title="Add to focus"
+                onClick={() => addFocus(node)}
+              >
+                <Link size={11} />
+              </button>
+            </>
+          )}
+          <button
+            className={`p-0.5 rounded ${
+              confirmTrashPath === node.relativePath
+                ? 'text-red-500 bg-red-500/20 animate-pulse'
+                : 'text-red-400/70 hover:text-red-500'
+            }`}
+            title={confirmTrashPath === node.relativePath ? 'Click again to confirm' : 'Move to trash'}
+            onClick={(e) => { e.stopPropagation(); void handleTrashClick(node) }}
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
       </div>
     )
-  }, [expanded, activePath, openFile, toggleExpand, createArtifact, addFocus])
+  }, [expanded, activePath, dropTargetPath, confirmTrashPath, openFile, toggleExpand, createArtifact, addFocus, handleTrashClick, handleRowDragOver, handleRowDragLeave, handleRowDrop])
 
   return (
     <section className="h-full flex flex-col border-t t-border">
@@ -393,8 +526,11 @@ export function WorkspaceTree() {
 
       <div
         ref={viewportRef}
-        className="flex-1 overflow-auto"
+        className={`flex-1 overflow-auto ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-blue-400/60 bg-blue-50/10 dark:bg-blue-900/10' : ''}`}
         onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
+        onDragOver={handleViewportDragOver}
+        onDragLeave={handleViewportDragLeave}
+        onDrop={handleViewportDrop}
       >
         {searching ? (
           <div className="p-3 text-xs t-text-muted flex items-center gap-2">

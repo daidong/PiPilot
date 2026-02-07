@@ -1,28 +1,34 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   StickyNote,
-  FileText,
+  // FileText,  // hidden tab — re-enable when Docs tab is restored
   CheckSquare,
-  Mail,
-  Calendar,
+  // Mail,      // hidden tab — re-enable when Mail tab is restored
+  // Calendar,  // hidden tab — re-enable when Calendar tab is restored
   Layers,
   Upload,
   Circle,
   CheckCircle2,
   Trash2,
-  Link2
+  Link2,
+  Bell,
+  CheckCheck
 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
+import { useNotificationStore, type Notification } from '../../stores/notification-store'
 import { useChatStore } from '../../stores/chat-store'
 
 const tabs = [
   { key: 'todos' as const, label: 'Todos', icon: CheckSquare },
   { key: 'notes' as const, label: 'Notes', icon: StickyNote },
-  { key: 'docs' as const, label: 'Docs', icon: FileText },
-  { key: 'mail' as const, label: 'Mail', icon: Mail },
-  { key: 'calendar' as const, label: 'Calendar', icon: Calendar },
-  { key: 'focus' as const, label: 'Focus', icon: Layers }
+  // Docs, Mail and Calendar tabs are hidden — the backend/types still support them,
+  // but the UI is too crowded and these features see little use. Re-enable when needed.
+  // { key: 'docs' as const, label: 'Docs', icon: FileText },
+  // { key: 'mail' as const, label: 'Mail', icon: Mail },
+  // { key: 'calendar' as const, label: 'Calendar', icon: Calendar },
+  { key: 'focus' as const, label: 'Focus', icon: Layers },
+  { key: 'notifications' as const, label: 'Alerts', icon: Bell }
 ]
 
 function EntityRow({ entity, inFocus }: { entity: EntityItem; inFocus: boolean }) {
@@ -113,14 +119,52 @@ function TodoRow({ todo, inFocus }: { todo: EntityItem; inFocus: boolean }) {
   )
 }
 
+function NotificationRow({ notification, onRead }: { notification: Notification; onRead: (id: string) => void }) {
+  const isUnread = !notification.readAt
+  const time = new Date(notification.createdAt).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+  })
+  return (
+    <button
+      onClick={() => {
+        if (isUnread) onRead(notification.id)
+        useUIStore.getState().openPreview({
+          id: notification.id, type: 'note' as const,
+          title: notification.title, content: notification.body,
+        })
+      }}
+      className={`w-full text-left rounded-md px-2 py-1.5 transition-colors ${isUnread ? 't-bg-hover' : 'opacity-60'}`}
+    >
+      <div className="flex items-start gap-1.5">
+        {isUnread && <span className="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <p className="text-xs t-text truncate font-medium">{notification.title}</p>
+          <p className="text-[10px] t-text-secondary line-clamp-2 mt-0.5">{notification.body}</p>
+          <p className="text-[10px] t-text-muted mt-0.5">{time}</p>
+        </div>
+      </div>
+    </button>
+  )
+}
+
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
   const { notes, docs, todos, mail, calendar, focus, refreshAll } = useEntityStore()
+  const notifications = useNotificationStore((s) => s.notifications)
+  const unreadCount = useNotificationStore((s) => s.unreadCount)
+  const loadNotifications = useNotificationStore((s) => s.load)
+  const markRead = useNotificationStore((s) => s.markRead)
+  const markAllRead = useNotificationStore((s) => s.markAllRead)
+  const setNotifications = useNotificationStore((s) => s.setNotifications)
   const [showCompleted, setShowCompleted] = useState(true)
 
   useEffect(() => {
     refreshAll()
+    loadNotifications()
+    const api = (window as any).api
+    const unsub = api.onNotification?.((list: Notification[]) => setNotifications(list))
+    return () => unsub?.()
   }, [refreshAll])
 
   const focusIds = useMemo(() => new Set(focus.map(item => item.id)), [focus])
@@ -202,7 +246,16 @@ export function EntityTabs() {
         </div>
       )}
 
-      {(leftTab === 'notes' || leftTab === 'docs') && (
+      {leftTab === 'notifications' && unreadCount > 0 && (
+        <div className="px-3 py-2 border-b t-border flex items-center justify-between">
+          <span className="text-[11px] t-text-muted">{unreadCount} unread</span>
+          <button onClick={markAllRead} className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5">
+            <CheckCheck size={10} /> Read all
+          </button>
+        </div>
+      )}
+
+      {leftTab === 'notes' && (
         <div
           onDragOver={handleDragOver}
           onDrop={handleDrop}
@@ -214,7 +267,13 @@ export function EntityTabs() {
       )}
 
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
-        {items.length === 0 ? (
+        {leftTab === 'notifications' ? (
+          notifications.length === 0 ? (
+            <p className="text-xs t-text-muted px-2 py-4 text-center">No notifications</p>
+          ) : (
+            notifications.map(n => <NotificationRow key={n.id} notification={n} onRead={markRead} />)
+          )
+        ) : items.length === 0 ? (
           <p className="text-xs t-text-muted px-2 py-4 text-center">
             {leftTab === 'todos' ? 'No todos yet' : `No ${leftTab} items`}
           </p>

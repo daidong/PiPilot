@@ -325,8 +325,8 @@ export interface StreamOptions {
   stopSequences?: string[]
   /** 是否启用推理模式 */
   reasoning?: boolean
-  /** Reasoning effort for reasoning models (low, medium, high). Default: medium */
-  reasoningEffort?: 'low' | 'medium' | 'high'
+  /** Reasoning effort for reasoning models (low, medium, high, max). Default: medium */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
 }
 
 /**

@@ -9,7 +9,8 @@ import {
   Eye,
   Link,
   Plus,
-  Loader2
+  Loader2,
+  Trash2
 } from 'lucide-react'
 import { useEntityStore } from '../../stores/entity-store'
 import { useSessionStore } from '../../stores/session-store'
@@ -18,6 +19,13 @@ import { useUIStore } from '../../stores/ui-store'
 const api = (window as any).api
 const ROW_HEIGHT = 28
 const OVERSCAN_ROWS = 10
+const MAX_DROP_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
+
+const TEXT_EXTENSIONS = new Set([
+  'md', 'txt', 'json', 'ts', 'js', 'css', 'html', 'yml', 'yaml',
+  'toml', 'env', 'sh', 'py', 'cfg', 'ini', 'log', 'csv', 'xml',
+  'rst', 'jsx', 'tsx', 'mjs', 'cjs', 'markdown', 'gitignore',
+])
 
 interface FileTreeNode {
   name: string
@@ -71,6 +79,9 @@ export function WorkspaceTree() {
   const [tree, setTree] = useState<TreeNodeState>({ byParent: {}, loadingParents: new Set() })
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(280)
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
+  const [confirmTrashPath, setConfirmTrashPath] = useState<string | null>(null)
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
 
   const storageKey = useMemo(() => `rp:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
@@ -188,6 +199,14 @@ export function WorkspaceTree() {
 
   const openFile = useCallback((node: FileTreeNode) => {
     if (node.type !== 'file') return
+
+    // Smart open: non-text files open with system default app
+    const ext = (node.name.split('.').pop() || '').toLowerCase()
+    if (!TEXT_EXTENSIONS.has(ext)) {
+      api.openFile(node.path)
+      return
+    }
+
     const normalizedNodePath = normalizePath(node.path)
     const existing = data.find(item => normalizePath(item.filePath || '') === normalizedNodePath)
     if (existing) {
@@ -225,6 +244,97 @@ export function WorkspaceTree() {
     await api.linkEvidenceToTask(node.path, 'linked from workspace tree')
     await refreshEntities()
   }, [refreshEntities])
+
+  const handleTrashClick = useCallback(async (node: FileTreeNode) => {
+    if (confirmTrashPath === node.relativePath) {
+      // Second click — actually delete
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+      setConfirmTrashPath(null)
+      const result = await api.trashFile(node.path)
+      if (result.success) {
+        const parentRelPath = node.relativePath.includes('/')
+          ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
+          : ''
+        await loadChildren(parentRelPath)
+      }
+    } else {
+      // First click — arm confirmation
+      setConfirmTrashPath(node.relativePath)
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+      confirmTimerRef.current = setTimeout(() => setConfirmTrashPath(null), 3000)
+    }
+  }, [confirmTrashPath, loadChildren])
+
+  // Resolve drop target directory for a given node row:
+  // - directory → that directory's relativePath
+  // - file → the parent directory (or '' for root-level files)
+  const getDropDir = useCallback((node: FileTreeNode): string => {
+    if (node.type === 'directory') return node.relativePath
+    return node.relativePath.includes('/')
+      ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
+      : ''
+  }, [])
+
+  const handleRowDragOver = useCallback((e: React.DragEvent, node: FileTreeNode) => {
+    e.preventDefault()
+    e.stopPropagation() // prevent viewport from overriding highlight
+    e.dataTransfer.dropEffect = 'copy'
+    setDropTargetPath(getDropDir(node))
+  }, [getDropDir])
+
+  const handleRowDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setDropTargetPath(null)
+  }, [])
+
+  const handleRowDrop = useCallback(async (e: React.DragEvent, node: FileTreeNode) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const targetRelPath = getDropDir(node)
+    setDropTargetPath(null)
+    const files = Array.from(e.dataTransfer.files)
+    for (const file of files) {
+      if (file.size > MAX_DROP_FILE_SIZE) {
+        console.warn(`Skipping "${file.name}": exceeds 100 MB limit`)
+        continue
+      }
+      const buffer = await file.arrayBuffer()
+      const base64 = btoa(
+        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      )
+      await api.dropToDir(file.name, base64, targetRelPath)
+    }
+    await loadChildren(targetRelPath)
+  }, [getDropDir, loadChildren])
+
+  const handleViewportDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDropTargetPath('__root__')
+  }, [])
+
+  const handleViewportDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setDropTargetPath(null)
+  }, [])
+
+  const handleViewportDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    setDropTargetPath(null)
+    const files = Array.from(e.dataTransfer.files)
+    for (const file of files) {
+      if (file.size > MAX_DROP_FILE_SIZE) {
+        console.warn(`Skipping "${file.name}": exceeds 100 MB limit`)
+        continue
+      }
+      const buffer = await file.arrayBuffer()
+      const base64 = btoa(
+        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      )
+      await api.dropToDir(file.name, base64, '')
+    }
+    await loadChildren('')
+  }, [loadChildren])
 
   const rootNodes = useMemo(() => tree.byParent[toKey('')] || [], [tree.byParent])
   const activePath = normalizePath(previewEntity?.filePath || '')
@@ -298,16 +408,24 @@ export function WorkspaceTree() {
     const node = row.node
     const isExpanded = node.type === 'directory' && expanded.has(node.relativePath)
     const isActive = !!activePath && normalizePath(node.path) === activePath
+    const isDropTarget = node.type === 'directory' && dropTargetPath === node.relativePath
 
     return (
       <div
         key={row.key}
         className={`group flex items-center gap-1 rounded px-1.5 h-7 text-xs cursor-pointer ${
-          isActive ? 'bg-teal-500/20 text-teal-300' : 't-bg-hover t-text-secondary'
+          isDropTarget
+            ? 'ring-2 ring-blue-400/60 bg-blue-50/20 dark:bg-blue-900/20'
+            : isActive
+              ? 'bg-teal-500/20 text-teal-300'
+              : 't-bg-hover t-text-secondary'
         }`}
         style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
         onClick={() => (node.type === 'directory' ? void toggleExpand(node) : openFile(node))}
         title={node.relativePath}
+        onDragOver={(e) => handleRowDragOver(e, node)}
+        onDragLeave={handleRowDragLeave}
+        onDrop={(e) => handleRowDrop(e, node)}
       >
         {node.type === 'directory' ? (
           <button className="shrink-0 t-text-muted" onClick={(e) => { e.stopPropagation(); void toggleExpand(node) }}>
@@ -322,41 +440,54 @@ export function WorkspaceTree() {
           <File size={12} className="shrink-0 t-text-muted" />
         )}
         <span className="truncate flex-1">{node.name}</span>
-        {node.type === 'file' && (
-          <div className="hidden group-hover:flex items-center gap-0.5">
-            <button
-              className="p-0.5 rounded t-bg-hover hover:text-teal-400"
-              title="Preview file"
-              onClick={(e) => { e.stopPropagation(); openFile(node) }}
-            >
-              <Eye size={11} />
-            </button>
-            <button
-              className="p-0.5 rounded t-bg-hover hover:text-teal-400"
-              title="Add file to Focus"
-              onClick={(e) => { e.stopPropagation(); void addFocus(node) }}
-            >
-              <Plus size={11} />
-            </button>
-            <button
-              className="p-0.5 rounded t-bg-hover hover:text-teal-400"
-              title="Create Artifact from file"
-              onClick={(e) => { e.stopPropagation(); void createArtifact(node) }}
-            >
-              <File size={11} />
-            </button>
-            <button
-              className="p-0.5 rounded t-bg-hover hover:text-teal-400"
-              title="Link as task evidence"
-              onClick={(e) => { e.stopPropagation(); void linkEvidence(node) }}
-            >
-              <Link size={11} />
-            </button>
-          </div>
-        )}
+        <div className="hidden group-hover:flex items-center gap-0.5">
+          {node.type === 'file' && (
+            <>
+              <button
+                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
+                title="Preview file"
+                onClick={(e) => { e.stopPropagation(); openFile(node) }}
+              >
+                <Eye size={11} />
+              </button>
+              <button
+                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
+                title="Add file to Focus"
+                onClick={(e) => { e.stopPropagation(); void addFocus(node) }}
+              >
+                <Plus size={11} />
+              </button>
+              <button
+                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
+                title="Create Artifact from file"
+                onClick={(e) => { e.stopPropagation(); void createArtifact(node) }}
+              >
+                <File size={11} />
+              </button>
+              <button
+                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
+                title="Link as task evidence"
+                onClick={(e) => { e.stopPropagation(); void linkEvidence(node) }}
+              >
+                <Link size={11} />
+              </button>
+            </>
+          )}
+          <button
+            className={`p-0.5 rounded ${
+              confirmTrashPath === node.relativePath
+                ? 'text-red-500 bg-red-500/20 animate-pulse'
+                : 'text-red-400/70 hover:text-red-500'
+            }`}
+            title={confirmTrashPath === node.relativePath ? 'Click again to confirm' : 'Move to trash'}
+            onClick={(e) => { e.stopPropagation(); void handleTrashClick(node) }}
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
       </div>
     )
-  }, [expanded, activePath, toggleExpand, openFile, addFocus, createArtifact, linkEvidence])
+  }, [expanded, activePath, dropTargetPath, confirmTrashPath, toggleExpand, openFile, addFocus, createArtifact, linkEvidence, handleTrashClick, handleRowDragOver, handleRowDragLeave, handleRowDrop])
 
   return (
     <section className="h-full min-h-0 flex flex-col border-t t-border">
@@ -392,8 +523,11 @@ export function WorkspaceTree() {
 
       <div
         ref={viewportRef}
-        className="flex-1 min-h-0 overflow-y-auto px-1 py-1"
+        className={`flex-1 min-h-0 overflow-y-auto px-1 py-1 ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-blue-400/60 bg-blue-50/10 dark:bg-blue-900/10' : ''}`}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        onDragOver={handleViewportDragOver}
+        onDragLeave={handleViewportDragLeave}
+        onDrop={handleViewportDrop}
       >
         {searching ? (
           <div className="flex items-center gap-1 px-2 py-2 text-xs t-text-muted">

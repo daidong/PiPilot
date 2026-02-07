@@ -1196,6 +1196,8 @@ const anthropicAgent = createAgent({
 })
 ```
 
+> Desktop examples note: Anthropic `setup-token` (app-layer auth) is stored in `~/.agentfoundry/credentials/anthropic.json` (or `$AGENTFOUNDRY_HOME/credentials/anthropic.json`) and shared across desktop apps.
+
 > **Note**: GPT-5.x and o-series models use OpenAI's Responses API which requires strict JSON schemas.
 > Agent Foundry handles this automatically through schema coercion. See [Schema Coercion](docs/SCHEMA-COERCION.md) for details.
 

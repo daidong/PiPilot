@@ -17,6 +17,10 @@ export interface UsageEvent {
   completionTokens: number
   cachedTokens: number
   cost: number
+  rawCost?: number
+  billableCost?: number
+  authMode?: 'setup-token' | 'api-key' | 'none'
+  billingSource?: 'setup-token' | 'api-key' | 'none'
   cacheHitRate: number
 }
 
@@ -60,7 +64,9 @@ interface UsageState {
   allTimePromptTokens: number
   allTimeCachedTokens: number
   allTimeCost: number
+  allTimeBillableCost: number
   allTimeCalls: number
+  billingSource: 'setup-token' | 'api-key' | 'none'
 
   // Actions
   recordCall: (event: UsageEvent) => void
@@ -101,10 +107,13 @@ export const useUsageStore = create<UsageState>((set, get) => {
     allTimePromptTokens: 0,
     allTimeCachedTokens: 0,
     allTimeCost: 0,
+    allTimeBillableCost: 0,
     allTimeCalls: 0,
+    billingSource: 'none',
 
     recordCall: (event: UsageEvent) => set((state) => {
       const newTokens = event.promptTokens + event.completionTokens
+      const billableCost = event.billableCost ?? event.cost
       const newState = {
         runTokens: state.runTokens + newTokens,
         runCost: state.runCost + event.cost,
@@ -118,7 +127,9 @@ export const useUsageStore = create<UsageState>((set, get) => {
         allTimePromptTokens: state.allTimePromptTokens + event.promptTokens,
         allTimeCachedTokens: state.allTimeCachedTokens + event.cachedTokens,
         allTimeCost: state.allTimeCost + event.cost,
-        allTimeCalls: state.allTimeCalls + 1
+        allTimeBillableCost: state.allTimeBillableCost + billableCost,
+        allTimeCalls: state.allTimeCalls + 1,
+        billingSource: event.billingSource ?? state.billingSource
       }
 
       return newState
@@ -157,7 +168,9 @@ export const useUsageStore = create<UsageState>((set, get) => {
           allTimePromptTokens: persisted.totals.promptTokens ?? 0,
           allTimeCachedTokens: persisted.totals.cachedTokens ?? 0,
           allTimeCost: persisted.totals.cost ?? 0,
+          allTimeBillableCost: persisted.totals.cost ?? 0,
           allTimeCalls: persisted.totals.calls ?? 0,
+          billingSource: 'api-key',
           // Also restore to session totals
           sessionTokens: persisted.totals.tokens ?? 0,
           sessionCost: persisted.totals.cost ?? 0,
@@ -181,6 +194,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
         allTimePromptTokens: 0,
         allTimeCachedTokens: 0,
         allTimeCost: 0,
+        allTimeBillableCost: 0,
+        billingSource: 'none',
         allTimeCalls: 0
       })
     }

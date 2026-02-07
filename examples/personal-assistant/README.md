@@ -33,12 +33,12 @@ docs/rfc/                   # Design documents
 - **Memory V2 Runtime**: `artifact.create/update/search`, `focus.add/remove`, `task.anchor.get/update`, `memory.explain`.
 - **Kernel V2 Context Flow**: Focus digest + protected recent turns + tail task anchor.
 - **Scheduled Tasks**: Cron scheduler with scheduler-run artifact persistence and notification integration.
-- **Email/Calendar Integration**: Optional SQLite + Gmail tool + calendar tool with policy guardrails.
+- **Email/Calendar Integration**: Optional SQLite + Gmail tool + calendar tool with policy guardrails. (UI tabs currently hidden; backend still functional.)
 - **Document Conversion**: PDF/Word/Excel/PPT via MarkItDown MCP, with drag-drop auto-conversion.
 
 ### Desktop UI
 - **Three-Panel Layout**: Left (memory/artifacts + workspace tree), Center (chat), Right (context/notifications/activity).
-- **Left Panel V2**: Tabs for Todos/Notes/Docs/Mail/Calendar/Focus and a virtualized workspace tree.
+- **Left Panel V2**: Tabs for Todos/Notes/Focus/Alerts and a virtualized workspace tree. (Docs, Mail, and Calendar tabs are hidden — backend support remains but the UI tabs are commented out to reduce clutter.)
 - **Context Visibility**: Focus chips + Task Anchor + Explain snapshot in normal UI.
 - **@-Mentions**: Entity mentions auto-promote focus; file/URL mentions are injected directly.
 - **Slash Commands**: Legacy commands retained (`/save-note`, `/save-doc`, `/search`, `/select`, `/pin`, `/clear`, `/delete`, `/help`).
@@ -74,8 +74,29 @@ npm run build      # Production build
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `OPENAI_API_KEY` | Required for OpenAI models | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Optional | Anthropic API key fallback (used when setup-token is missing/invalid) |
 | `EMAIL_DB_PATH` | No | Path to SQLite email database |
+
+## Anthropic Setup Token Storage
+
+Anthropic `setup-token` is stored in a shared user-level credentials path, not in project folders:
+
+- Default: `~/.agentfoundry/credentials/anthropic.json`
+- Override: `$AGENTFOUNDRY_HOME/credentials/anthropic.json`
+
+This allows Personal Assistant and Research Pilot Desktop to reuse one token across apps.
+
+Security behavior:
+
+- Credentials directory is created with `0700` (best effort).
+- Credential file is written with `0600` (best effort).
+- Token is not encrypted yet (plaintext JSON on local disk).
+
+Migration behavior (automatic):
+
+- If a legacy project token exists in `.personal-assistant-v2/auth/anthropic.json` or `.research-pilot/auth/anthropic.json`, it is migrated to the shared path on first read.
+- After migration, legacy file token content is scrubbed.
 
 ## Recommended `kernelV2` Config
 
@@ -113,7 +134,7 @@ These values map to the five agreed defaults:
 
 ## Data Storage
 
-All data lives in `.personal-assistant-v2/` within the opened project folder:
+All app data lives in `.personal-assistant-v2/` within the opened project folder, except shared Anthropic credentials (stored under `~/.agentfoundry/credentials/`):
 
 ```
 .personal-assistant-v2/

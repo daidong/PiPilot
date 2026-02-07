@@ -49,13 +49,19 @@ export function LeftSidebar() {
         <div className="flex items-center gap-1">
           <ReasoningToggle />
           <button
-            onClick={() => useNotificationStore.getState().load()}
-            className={`no-drag p-1.5 rounded-lg t-bg-hover transition-colors ${
+            onClick={() => {
+              useNotificationStore.getState().load()
+              useUIStore.getState().setLeftTab('notifications')
+            }}
+            className={`no-drag p-1.5 rounded-lg t-bg-hover transition-colors relative ${
               unreadCount > 0 ? 'text-blue-400' : 't-text-muted'
             }`}
             title="Notifications"
           >
             <Bell size={16} />
+            {unreadCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-500" />
+            )}
           </button>
           <button
             onClick={() => (window as any).api.clearSessionMemory()}

@@ -1,14 +1,16 @@
 import React from 'react'
 import { Lightbulb } from 'lucide-react'
-import { useUIStore, GPT5_REASONING_MODELS, type ReasoningEffort } from '../../stores/ui-store'
+import { useUIStore, REASONING_MODELS, type ReasoningEffort } from '../../stores/ui-store'
 
 const CYCLE: Record<ReasoningEffort, ReasoningEffort> = {
+  low: 'medium',
   medium: 'high',
-  high: 'low',
-  low: 'medium'
+  high: 'max',
+  max: 'low'
 }
 
 const COLORS: Record<ReasoningEffort, string> = {
+  max: 'text-purple-500',
   high: 'text-red-500',
   medium: 'text-blue-500',
   low: 'text-gray-400'
@@ -19,7 +21,7 @@ export function ReasoningToggle() {
   const reasoningEffort = useUIStore((s) => s.reasoningEffort)
   const setReasoningEffort = useUIStore((s) => s.setReasoningEffort)
 
-  if (!GPT5_REASONING_MODELS.includes(selectedModel)) return null
+  if (!REASONING_MODELS.includes(selectedModel)) return null
 
   return (
     <button

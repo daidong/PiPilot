@@ -40,6 +40,8 @@ export type LLMClient = ReturnType<typeof createLLMClient>
 export interface AgentLoopConfig {
   /** LLM client (new API) */
   client?: LLMClient
+  /** Resolved model ID used for token cost calculation */
+  modelId?: string
   /** LLM client config (for auto-creating client) */
   llmConfig?: LLMClientConfig
   /** Tool registry */
@@ -58,8 +60,8 @@ export interface AgentLoopConfig {
   maxTokens?: number
   /** Temperature */
   temperature?: number
-  /** Reasoning effort for reasoning models (low, medium, high) */
-  reasoningEffort?: 'low' | 'medium' | 'high'
+  /** Reasoning effort for reasoning models (low, medium, high, max) */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
   /** Streaming text callback */
   onText?: (text: string) => void
   /** Tool call callback */
@@ -444,7 +446,7 @@ export class AgentLoop {
 
               // Record usage with token tracker
               if (this.config.tokenTracker) {
-                const modelId = this.config.llmConfig?.model || ''
+                const modelId = this.config.modelId ?? this.config.llmConfig?.model ?? ''
                 const cost = this.config.tokenTracker.recordCall(modelId, usage)
                 this.config.onUsage?.(usage, cost)
 

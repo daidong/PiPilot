@@ -687,6 +687,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       // Create a FRESH AgentLoop each turn with budget-controlled history in the system prompt
       const agentLoop = new AgentLoop({
         client: llmClient,
+        modelId: model,
         toolRegistry,
         runtime,
         trace,

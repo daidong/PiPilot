@@ -9,6 +9,7 @@ import { PolicyEngine } from '../../src/core/policy-engine.js'
 import { TraceCollector } from '../../src/core/trace-collector.js'
 import { EventBus } from '../../src/core/event-bus.js'
 import { TokenBudget } from '../../src/core/token-budget.js'
+import { TokenTracker } from '../../src/core/token-tracker.js'
 import type {
   StreamEvent,
   TextDeltaEvent,
@@ -390,6 +391,30 @@ describe('AgentLoop', () => {
 
       expect(onToolCall).toHaveBeenCalled()
       expect(onToolResult).toHaveBeenCalled()
+    })
+
+    it('should report non-zero cost when modelId is provided', async () => {
+      const onUsage = vi.fn()
+      const tokenTracker = new TokenTracker()
+      const client = createMockClient([{ text: 'Cost test' }])
+
+      const agentLoop = new AgentLoop({
+        client,
+        modelId: 'gpt-5.2',
+        toolRegistry,
+        runtime: mockRuntime,
+        trace,
+        systemPrompt: 'You are a helpful assistant.',
+        maxSteps: 10,
+        tokenTracker,
+        onUsage
+      })
+
+      await agentLoop.run('Test cost')
+
+      expect(onUsage).toHaveBeenCalled()
+      const [, cost] = onUsage.mock.calls[0] as [unknown, { totalCost: number }]
+      expect(cost.totalCost).toBeGreaterThan(0)
     })
   })
 

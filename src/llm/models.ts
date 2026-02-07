@@ -151,6 +151,23 @@ export const builtinModels: ModelConfig[] = [
     limit: { maxContext: 200000, maxOutput: 100000 }
   },
 
+  // Anthropic Models — Claude 4.6
+  {
+    id: 'claude-opus-4-6',
+    name: 'Claude Opus 4.6',
+    providerID: 'anthropic',
+    api: 'chat',
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      toolcall: true,
+      input: ['text', 'image'],
+      output: ['text']
+    },
+    cost: { input: 5, cachedInput: 0.5, output: 25 },
+    limit: { maxContext: 200000, maxOutput: 128000 }
+  },
+
   // Anthropic Models — Claude 4.5
   {
     id: 'claude-opus-4-5-20251101',

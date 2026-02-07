@@ -2,10 +2,15 @@ import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
-type LeftTab = 'todos' | 'notes' | 'docs' | 'mail' | 'calendar' | 'focus'
-export type ReasoningEffort = 'high' | 'medium' | 'low'
+type LeftTab = 'todos' | 'notes' | 'docs' | 'mail' | 'calendar' | 'focus' | 'notifications'
+export type ReasoningEffort = 'high' | 'medium' | 'low' | 'max'
 
-export const GPT5_REASONING_MODELS = ['gpt-5.2', 'gpt-5.1', 'gpt-5-mini', 'gpt-5-nano']
+export const REASONING_MODELS = [
+  'gpt-5.2', 'gpt-5.1', 'gpt-5-mini', 'gpt-5-nano',
+  'claude-opus-4-6'
+]
+/** @deprecated Use REASONING_MODELS instead */
+export const GPT5_REASONING_MODELS = REASONING_MODELS
 
 export interface WorkingFile {
   path: string
@@ -28,6 +33,8 @@ export const SUPPORTED_MODELS: ModelOption[] = [
   { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'OpenAI' },
   { id: 'gpt-5-nano', label: 'GPT-5 Nano', provider: 'OpenAI' },
   { id: 'gpt-4o', label: 'GPT-4o', provider: 'OpenAI' },
+  // Anthropic Claude 4.6
+  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'Anthropic' },
   // Anthropic Claude 4.5
   { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Anthropic' },
   { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Anthropic' },

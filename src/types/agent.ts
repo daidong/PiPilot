@@ -72,8 +72,8 @@ export interface AgentConfig {
   maxSteps?: number
   /** 最大 token 数 */
   maxTokens?: number
-  /** Reasoning effort for reasoning models (low, medium, high) */
-  reasoningEffort?: 'low' | 'medium' | 'high'
+  /** Reasoning effort for reasoning models (low, medium, high, max) */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
   /** Hard stop after this many consecutive tool-only rounds (default: threshold * 2) */
   maxConsecutiveToolRounds?: number
   /** 审批处理器 */

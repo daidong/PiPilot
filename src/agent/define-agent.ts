@@ -359,6 +359,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
         agentLoop = new AgentLoop({
           client: llmClient,
+          modelId,
           toolRegistry,
           runtime,
           trace,

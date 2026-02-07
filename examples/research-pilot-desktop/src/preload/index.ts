@@ -5,6 +5,10 @@ export interface UsageEvent {
   completionTokens: number
   cachedTokens: number
   cost: number
+  rawCost?: number
+  billableCost?: number
+  authMode?: 'setup-token' | 'api-key' | 'none'
+  billingSource?: 'setup-token' | 'api-key' | 'none'
   cacheHitRate: number
 }
 
@@ -23,6 +27,11 @@ export interface ElectronAPI {
   onStreamChunk: (cb: (chunk: string) => void) => () => void
   onAgentDone: (cb: (result: any) => void) => () => void
   onUsage: (cb: (event: UsageEvent) => void) => () => void
+  getAnthropicAuthStatus: () => Promise<any>
+  saveAnthropicSetupToken: (token: string) => Promise<any>
+  clearAnthropicSetupToken: () => Promise<any>
+  onAnthropicAuthStatus: (cb: (status: any) => void) => () => void
+  getOpenAIAuthStatus: () => Promise<{ hasApiKey: boolean }>
 
   // Entity commands
   listNotes: () => Promise<any>
@@ -111,6 +120,10 @@ export interface ElectronAPI {
   addFocusFromFile: (filePath: string, reason?: string, ttl?: string) => Promise<any>
   linkEvidenceToTask: (filePath: string, reason?: string) => Promise<any>
 
+  // Workspace file operations
+  trashFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  dropToDir: (fileName: string, base64Content: string, targetDirRelPath: string) => Promise<{ success: boolean; path?: string; error?: string }>
+
   // File drop
   dropFile: (fileName: string, content: string, tab: string) => Promise<any>
 
@@ -161,6 +174,15 @@ const api: ElectronAPI = {
     ipcRenderer.on('agent:usage', handler)
     return () => ipcRenderer.removeListener('agent:usage', handler)
   },
+  getAnthropicAuthStatus: () => ipcRenderer.invoke('auth:get-anthropic-status'),
+  saveAnthropicSetupToken: (token) => ipcRenderer.invoke('auth:save-anthropic-setup-token', token),
+  clearAnthropicSetupToken: () => ipcRenderer.invoke('auth:clear-anthropic-setup-token'),
+  onAnthropicAuthStatus: (cb) => {
+    const handler = (_: any, status: any) => cb(status)
+    ipcRenderer.on('auth:anthropic-status', handler)
+    return () => ipcRenderer.removeListener('auth:anthropic-status', handler)
+  },
+  getOpenAIAuthStatus: () => ipcRenderer.invoke('auth:get-openai-status'),
 
   listNotes: () => ipcRenderer.invoke('cmd:list-notes'),
   listLiterature: () => ipcRenderer.invoke('cmd:list-literature'),
@@ -243,6 +265,9 @@ const api: ElectronAPI = {
   createArtifactFromFile: (filePath) => ipcRenderer.invoke('file:create-artifact', filePath),
   addFocusFromFile: (filePath, reason, ttl) => ipcRenderer.invoke('file:add-focus', filePath, reason, ttl),
   linkEvidenceToTask: (filePath, reason) => ipcRenderer.invoke('task:link-evidence', filePath, reason),
+
+  trashFile: (filePath) => ipcRenderer.invoke('file:trash', filePath),
+  dropToDir: (fileName, base64Content, targetDirRelPath) => ipcRenderer.invoke('file:drop-to-dir', fileName, base64Content, targetDirRelPath),
 
   dropFile: (fileName, content, tab) => ipcRenderer.invoke('file:drop', fileName, content, tab),
 

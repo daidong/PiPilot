@@ -44,29 +44,20 @@ const ANTHROPIC_CACHE_CONTROL = {
 }
 
 /**
- * Format system prompt with cache control for Anthropic
- * Uses providerOptions to mark system prompt for caching
+ * Format system prompt for SDK compatibility.
  *
- * Note: AI SDK types are restrictive, but Anthropic provider
- * does accept providerOptions on text parts at runtime
+ * Important:
+ * - Recent AI SDK versions validate `system` as string/SystemModelMessage.
+ * - Passing raw content-part arrays here can throw InvalidPromptError.
+ * - We keep Anthropic prompt caching on regular messages (convertMessages),
+ *   and pass plain string for system to avoid provider-specific prompt shape errors.
  */
 function formatSystemWithCacheControl(
   system: string | undefined,
-  provider: ProviderID
+  _provider: ProviderID
 ): Parameters<typeof streamText>[0]['system'] {
   if (!system) return undefined
-
-  // Only apply cache control for Anthropic provider
-  // The system prompt is typically >1024 tokens in agent scenarios
-  if (provider === 'anthropic') {
-    // Cast to any to work around strict typing - runtime accepts this format
-    return [{
-      type: 'text',
-      text: system,
-      providerOptions: ANTHROPIC_CACHE_CONTROL
-    }] as unknown as Parameters<typeof streamText>[0]['system']
-  }
-
+  // Keep system as plain string for maximum provider compatibility.
   return system
 }
 
@@ -392,8 +383,28 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       // Pass reasoning effort for reasoning models via providerOptions
       if (modelConfig?.capabilities.reasoning && reasoningEffort) {
         if (clientConfig.provider === 'anthropic') {
-          // Anthropic uses 'thinking' with a budget token approach
-          // reasoningEffort is not directly supported; skip for now
+          if (clientConfig.model === 'claude-opus-4-6') {
+            // Opus 4.6: adaptive thinking + effort parameter
+            streamOptions.providerOptions = {
+              anthropic: {
+                thinking: { type: 'adaptive' },
+                effort: reasoningEffort
+              }
+            }
+          } else {
+            // Older Claude models: manual thinking with budget_tokens
+            const budgetMap: Record<string, number> = {
+              low: 4096,
+              medium: 10000,
+              high: 16384,
+              max: 32768
+            }
+            streamOptions.providerOptions = {
+              anthropic: {
+                thinking: { type: 'enabled', budgetTokens: budgetMap[reasoningEffort] ?? 10000 }
+              }
+            }
+          }
         } else {
           streamOptions.providerOptions = {
             openai: { reasoningEffort }
