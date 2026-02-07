@@ -21,7 +21,7 @@ This RFC defines a new kernel that replaces the current multi-path design with a
 4. One compaction engine with replay guarantees
 5. One task-state anchor contract
 
-The existing V1 subsystems remain only as migration sources.
+The existing V1 subsystems have been removed.
 
 ---
 
@@ -284,7 +284,7 @@ V2 standardizes on typed records persisted on disk.
 ## 8.3 Filesystem Layout (Authoritative)
 
 ```text
-.agent-foundry-v2/
+.agentfoundry/
   history/
     sessions/<sessionId>/turns.jsonl
     sessions/<sessionId>/segments.jsonl
@@ -833,7 +833,7 @@ kernelV2:
   "scope": "workspace|project|file",
   "issues": [
     {
-      "path": ".agent-foundry-v2/history/sessions/sess_1/turns.jsonl",
+      "path": ".agentfoundry/history/sessions/sess_1/turns.jsonl",
       "failureType": "invalid_jsonl|checksum_mismatch|missing_file",
       "lastValidOffset": 18273
     }
@@ -896,7 +896,7 @@ Even with full rewrite, data migration is required.
 
 ## 19.4 Recovery Strategy
 
-V2 defines a recoverable storage contract for `.agent-foundry-v2/`.
+V2 defines a recoverable storage contract for `.agentfoundry/`.
 
 Integrity verification:
 

@@ -32,6 +32,7 @@ import {
   type AgentYAMLConfig
 } from '../config/index.js'
 import { isAbsolute, join, relative, resolve } from 'path'
+import { FRAMEWORK_DIR } from '../constants.js'
 
 /**
  * 生成唯一 ID
@@ -52,6 +53,41 @@ function createSessionState(): SessionState {
     delete: (key: string): void => { store.delete(key) },
     has: (key: string): boolean => store.has(key)
   }
+}
+
+async function renderSelectedContext(
+  selections: AgentRunOptions['selectedContext'],
+  runtime: Runtime,
+  debug: boolean
+): Promise<string | undefined> {
+  if (!selections || selections.length === 0) return undefined
+
+  const blocks = await Promise.all(selections.map(async (selection) => {
+    const source = `${selection.type}:${selection.ref}`
+
+    if (!selection.resolve) {
+      return `### ${source}\n- unresolved selection (missing resolver)`
+    }
+
+    try {
+      const fragment = await selection.resolve(runtime)
+      const resolvedSource = fragment.source || source
+      const content = fragment.content?.trim()
+      if (!content) {
+        return `### ${resolvedSource}\n- (empty)`
+      }
+      return `### ${resolvedSource}\n${content}`
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (debug) {
+        console.warn(`[createAgent] Failed to resolve selected context ${source}: ${message}`)
+      }
+      return `### ${source}\n- [resolve-error] ${message}`
+    }
+  }))
+
+  const rendered = blocks.filter(Boolean).join('\n\n').trim()
+  return rendered.length > 0 ? rendered : undefined
 }
 
 /**
@@ -259,7 +295,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   const eventBus = new EventBus()
   const traceExportEnabled = config.trace?.export?.enabled ?? true
   const traceExportDir = config.trace?.export?.dir
-    ?? join(projectPath, '.agentfoundry', 'traces')
+    ?? join(projectPath, FRAMEWORK_DIR, 'traces')
   const trace = new TraceCollector({
     sessionId,
     agentId,
@@ -425,7 +461,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     ? (isAbsolute(configuredExternalSkillsDir)
       ? resolve(configuredExternalSkillsDir)
       : resolve(projectPath, configuredExternalSkillsDir))
-    : resolve(projectPath, '.agentfoundry/skills')
+    : resolve(projectPath, `${FRAMEWORK_DIR}/skills`)
   const relativeExternalSkillsDir = relative(projectPath, resolvedExternalSkillsDir)
   const externalSkillsDirForTools = (
     relativeExternalSkillsDir &&
@@ -433,7 +469,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     !isAbsolute(relativeExternalSkillsDir)
   )
     ? relativeExternalSkillsDir
-    : '.agentfoundry/skills'
+    : `${FRAMEWORK_DIR}/skills`
   runtime.sessionState.set('externalSkillsDir', externalSkillsDirForTools.replace(/\\/g, '/'))
 
   let externalSkillLoader: ExternalSkillLoader | null = null
@@ -614,15 +650,16 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         : ''
       let workingContextBlock = ''
       let dynamicSystemPrompt = systemPrompt + taskModulesBlock
-      let selectedContent: string | undefined
 
       {
         const identityTokens = countTokens(systemPrompt)
         const toolSchemas = toolRegistry.generateToolSchemas()
         const toolTokens = countTokens(JSON.stringify(toolSchemas))
-        const selectedContextText = options?.selectedContext?.length
-          ? JSON.stringify(options.selectedContext)
-          : undefined
+        const selectedContextText = await renderSelectedContext(
+          options?.selectedContext,
+          runtime,
+          !!config.debug
+        )
 
         const kernelTurn = await kernelV2.beginTurn({
           sessionId,
@@ -663,7 +700,6 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         onToolResult: config.onToolResult,
         toolResultCap,
         debug: config.debug,
-        selectedContext: selectedContent,
         toolLoopThreshold: config.toolLoopThreshold,
         maxConsecutiveToolRounds: config.maxConsecutiveToolRounds,
         tokenTracker,

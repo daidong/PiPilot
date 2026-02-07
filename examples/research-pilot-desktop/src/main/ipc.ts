@@ -390,7 +390,6 @@ function initializeProject(path: string): void {
     PATHS.documentCache,
     PATHS.memoryRoot,
     PATHS.focusDir,
-    PATHS.tasksDir,
     dirname(PATHS.artifactFactIndex),
     PATHS.explainDir
   ]
@@ -701,7 +700,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   // Commands - Task anchor / explain
   ipcMain.handle('cmd:task-anchor-get', () => {
     if (!projectPath) return { success: true, anchor: null }
-    return taskAnchorGet(projectPath)
+    return taskAnchorGet(projectPath, sessionId)
   })
   ipcMain.handle('cmd:task-anchor-set', (_e, anchor: {
     currentGoal: string
@@ -711,9 +710,11 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     sessionId?: string
   }) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorSet(projectPath, {
-      ...anchor,
-      sessionId: anchor.sessionId ?? sessionId
+    return taskAnchorSet(projectPath, anchor.sessionId ?? sessionId, {
+      currentGoal: anchor.currentGoal,
+      nowDoing: anchor.nowDoing,
+      blockedBy: anchor.blockedBy,
+      nextAction: anchor.nextAction
     })
   })
   ipcMain.handle('cmd:task-anchor-update', (_e, patch: {
@@ -724,7 +725,12 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     sessionId?: string
   }) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorUpdate(projectPath, patch)
+    return taskAnchorUpdate(projectPath, patch.sessionId ?? sessionId, {
+      currentGoal: patch.currentGoal,
+      nowDoing: patch.nowDoing,
+      blockedBy: patch.blockedBy,
+      nextAction: patch.nextAction
+    })
   })
 
   ipcMain.handle('cmd:memory-explain-turn', () => {
@@ -740,10 +746,10 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return memoryExplainBudget(projectPath)
   })
 
-  // Commands - Facts (read from .agent-foundry-v2/memory/facts.jsonl)
+  // Commands - Facts (read from .agentfoundry/memory/facts.jsonl)
   ipcMain.handle('cmd:fact-list', () => {
     if (!projectPath) return []
-    const factsFile = join(projectPath, '.agent-foundry-v2', 'memory', 'facts.jsonl')
+    const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
     if (!existsSync(factsFile)) return []
     try {
       const raw = readFileSync(factsFile, 'utf-8')
@@ -771,7 +777,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('cmd:fact-promote', (_e, factId: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const factsFile = join(projectPath, '.agent-foundry-v2', 'memory', 'facts.jsonl')
+    const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
     if (!existsSync(factsFile)) return { success: false, error: 'No facts file found.' }
     try {
       const raw = readFileSync(factsFile, 'utf-8')
@@ -801,7 +807,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('cmd:fact-demote', (_e, factId: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const factsFile = join(projectPath, '.agent-foundry-v2', 'memory', 'facts.jsonl')
+    const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
     if (!existsSync(factsFile)) return { success: false, error: 'No facts file found.' }
     try {
       const raw = readFileSync(factsFile, 'utf-8')

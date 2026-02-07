@@ -311,7 +311,7 @@ npx agent-foundry index-docs --incremental
 | `--exclude, -x` | - | Exclude patterns |
 | `--chunk-size` | `500` | Tokens per chunk |
 | `--overlap` | `50` | Chunk overlap tokens |
-| `--output, -o` | `.agent-foundry` | Output directory |
+| `--output, -o` | `.agentfoundry` | Output directory |
 | `--incremental, -i` | - | Incremental mode |
 | `--verbose, -v` | - | Verbose output |
 

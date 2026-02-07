@@ -4,6 +4,7 @@
 
 import path from 'node:path'
 
+import { FRAMEWORK_DIR } from '../constants.js'
 import { defineTool } from '../factories/define-tool.js'
 import { defineSkill } from '../skills/define-skill.js'
 import { renderExternalSkillMarkdown } from '../skills/skill-file.js'
@@ -44,7 +45,7 @@ function validateSkillId(id: string): boolean {
 function getExternalSkillsDir(runtimeProjectPath: string, configuredDir?: string): string | null {
   const targetDir = configuredDir && configuredDir.trim().length > 0
     ? configuredDir.trim()
-    : '.agentfoundry/skills'
+    : `${FRAMEWORK_DIR}/skills`
 
   if (path.isAbsolute(targetDir)) {
     const relative = path.relative(runtimeProjectPath, targetDir)
@@ -88,7 +89,7 @@ function buildSkillBody(input: SkillCreateInput): string {
 
 export const skillCreateTool: Tool<SkillCreateInput, SkillCreateOutput> = defineTool({
   name: 'skill-create',
-  description: `Create a reusable project-local skill in .agentfoundry/skills.
+  description: `Create a reusable project-local skill in ${FRAMEWORK_DIR}/skills.
 
 Use this after discovering patterns worth reusing.
 - Defaults to loadingStrategy: lazy

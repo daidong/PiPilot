@@ -36,7 +36,7 @@ describe('KernelV2 weekly lifecycle', () => {
       updatedAt: oldDate
     })
 
-    const metaPath = path.join(dir, '.agent-foundry-v2', 'maintenance', 'lifecycle-meta.json')
+    const metaPath = path.join(dir, '.agentfoundry', 'maintenance', 'lifecycle-meta.json')
     await fs.mkdir(path.dirname(metaPath), { recursive: true })
     await fs.writeFile(metaPath, JSON.stringify({ lastRunAt: new Date(Date.now() - (8 * 24 * 60 * 60 * 1000)).toISOString() }), 'utf-8')
 
@@ -59,7 +59,7 @@ describe('KernelV2 weekly lifecycle', () => {
     const latest = await storage.getLatestMemoryFact('project', 'legacy.flag')
     expect(latest?.status).toBe('deprecated')
 
-    const archivePath = path.join(dir, '.agent-foundry-v2', 'memory', 'archive.jsonl')
+    const archivePath = path.join(dir, '.agentfoundry', 'memory', 'archive.jsonl')
     const archiveRaw = await fs.readFile(archivePath, 'utf-8')
     expect(archiveRaw).toContain('legacy.flag')
   })

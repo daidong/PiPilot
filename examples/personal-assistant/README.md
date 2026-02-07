@@ -84,9 +84,6 @@ Use this as the baseline in `createAgent(...)` for production stability:
 ```ts
 kernelV2: {
   enabled: true,
-  migration: {
-    autoFromV1: true
-  },
   storage: {
     integrity: {
       verifyOnStartup: true
@@ -102,7 +99,7 @@ kernelV2: {
   telemetry: {
     baselineAlwaysOn: true,
     mode: 'stderr+file',
-    filePath: '.agent-foundry-v2/logs/kernel-v2.log'
+    filePath: '.agentfoundry/logs/kernel-v2.log'
   }
 }
 ```

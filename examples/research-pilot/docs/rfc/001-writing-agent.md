@@ -98,9 +98,6 @@ For `createAgent(...)`, use this baseline configuration:
 ```ts
 kernelV2: {
   enabled: true,
-  migration: {
-    autoFromV1: true
-  },
   storage: {
     integrity: {
       verifyOnStartup: true
@@ -116,14 +113,13 @@ kernelV2: {
   telemetry: {
     baselineAlwaysOn: true,
     mode: 'stderr+file',
-    filePath: '.agent-foundry-v2/logs/kernel-v2.log'
+    filePath: '.agentfoundry/logs/kernel-v2.log'
   }
 }
 ```
 
-This locks in the five agreed defaults:
+This locks in the four agreed defaults:
 - V2 enabled by default
-- automatic one-time migration from V1
 - automatic corruption recovery on startup
 - weekly lifecycle maintenance
 - telemetry to both stderr and log file

@@ -23,6 +23,7 @@ import type { ProviderID } from '../llm/index.js'
 import { createKernelV2, type KernelV2 } from '../kernel-v2/index.js'
 import { countTokens } from '../utils/tokenizer.js'
 import { isAbsolute, join, relative, resolve } from 'path'
+import { FRAMEWORK_DIR } from '../constants.js'
 
 /**
  * 生成唯一 ID
@@ -58,7 +59,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     const eventBus = new EventBus()
     const traceExportEnabled = config.trace?.export?.enabled ?? true
     const traceExportDir = config.trace?.export?.dir
-      ?? join(projectPath, '.agentfoundry', 'traces')
+      ?? join(projectPath, FRAMEWORK_DIR, 'traces')
     const trace = new TraceCollector({
       sessionId,
       agentId,
@@ -184,7 +185,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       ? (isAbsolute(configuredExternalSkillsDir)
         ? resolve(configuredExternalSkillsDir)
         : resolve(projectPath, configuredExternalSkillsDir))
-      : resolve(projectPath, '.agentfoundry/skills')
+      : resolve(projectPath, `${FRAMEWORK_DIR}/skills`)
     const relativeExternalSkillsDir = relative(projectPath, resolvedExternalSkillsDir)
     const externalSkillsDirForTools = (
       relativeExternalSkillsDir &&
@@ -192,7 +193,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       !isAbsolute(relativeExternalSkillsDir)
     )
       ? relativeExternalSkillsDir
-      : '.agentfoundry/skills'
+      : `${FRAMEWORK_DIR}/skills`
     runtime.sessionState.set('externalSkillsDir', externalSkillsDirForTools.replace(/\\/g, '/'))
 
     let externalSkillLoader: ExternalSkillLoader | null = null

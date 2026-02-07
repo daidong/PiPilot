@@ -30,7 +30,6 @@ import { ContextAssemblerV2 } from './context-assembler-v2.js'
 import { CompactionEngineV2 } from './compaction-engine-v2.js'
 import { KernelV2MemoryStorageAdapter } from './memory-storage-adapter.js'
 import { KernelV2Telemetry } from './telemetry.js'
-import { KernelV2Migrator } from './migrator.js'
 import { MemoryLifecycleManager, type LifecycleReport } from './lifecycle.js'
 
 export interface KernelV2 {
@@ -137,7 +136,6 @@ export class KernelV2Impl implements KernelV2 {
   private readonly assembler: ContextAssemblerV2
   private readonly compaction: CompactionEngineV2
   private readonly telemetry: KernelV2Telemetry
-  private readonly migrator: KernelV2Migrator
   private readonly lifecycle: MemoryLifecycleManager
   private readonly activeProjectBySession = new Map<string, string>()
   private readonly activeTaskBySession = new Map<string, string>()
@@ -162,7 +160,6 @@ export class KernelV2Impl implements KernelV2 {
     }, (event) => this.emit(event))
     this.assembler = new ContextAssemblerV2(this.storage, this.config, (event) => this.emit(event))
     this.compaction = new CompactionEngineV2(this.storage, this.gate, this.config, (event) => this.emit(event))
-    this.migrator = new KernelV2Migrator(projectPath, this.storage, this.config, (event) => this.emit(event))
     this.lifecycle = new MemoryLifecycleManager(projectPath, this.storage, this.config, (event) => this.emit(event))
   }
 
@@ -172,7 +169,6 @@ export class KernelV2Impl implements KernelV2 {
 
   async init(): Promise<void> {
     await this.storage.init()
-    await this.migrator.maybeMigrate()
 
     if (this.config.storage.integrity.verifyOnStartup) {
       const integrity = await this.storage.verifyIntegrity()

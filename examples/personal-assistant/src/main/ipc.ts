@@ -474,7 +474,7 @@ function activateProject(path: string): { projectPath: string; sessionId: string
 }
 
 function readLatestFactsFromKernel(projectPath: string, includeDeprecated: boolean = false): any[] {
-  const factsFile = join(projectPath, '.agent-foundry-v2', 'memory', 'facts.jsonl')
+  const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
   if (!existsSync(factsFile)) return []
 
   try {

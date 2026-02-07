@@ -63,9 +63,6 @@ export interface KernelV2Config {
     mode?: 'stderr' | 'file' | 'stderr+file'
     filePath?: string
   }
-  migration?: {
-    autoFromV1?: boolean
-  }
   lifecycle?: {
     autoWeekly?: boolean
     decayThresholdDays?: number
@@ -134,9 +131,6 @@ export interface KernelV2ResolvedConfig {
     baselineAlwaysOn: boolean
     mode: 'stderr' | 'file' | 'stderr+file'
     filePath: string
-  }
-  migration: {
-    autoFromV1: boolean
   }
   lifecycle: {
     autoWeekly: boolean

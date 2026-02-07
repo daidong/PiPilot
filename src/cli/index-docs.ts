@@ -8,6 +8,7 @@
 
 import { FileDocsIndexer } from '../core/docs-indexer.js'
 import * as path from 'node:path'
+import { FRAMEWORK_DIR } from '../constants.js'
 
 export interface IndexDocsOptions {
   paths?: string[]
@@ -101,7 +102,7 @@ export async function runIndexDocs(options: IndexDocsOptions): Promise<void> {
   const exclude = options.exclude ?? []
   const chunkSize = options.chunkSize ?? 500
   const chunkOverlap = options.chunkOverlap ?? 50
-  const outputDir = options.outputDir ?? '.agent-foundry'
+  const outputDir = options.outputDir ?? FRAMEWORK_DIR
   const incremental = options.incremental ?? false
 
   console.log('📚 Building document index...')
@@ -172,7 +173,7 @@ Options:
   --exclude, -x <globs>   Exclude patterns, comma-separated
   --chunk-size <n>        Chunk size in tokens (default: 500)
   --overlap <n>           Chunk overlap in tokens (default: 50)
-  --output, -o <dir>      Output directory (default: .agent-foundry)
+  --output, -o <dir>      Output directory (default: .agentfoundry)
   --incremental, -i       Incremental update mode
   --verbose, -v           Verbose output
 

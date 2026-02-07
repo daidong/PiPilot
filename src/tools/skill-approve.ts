@@ -4,6 +4,7 @@
 
 import path from 'node:path'
 
+import { FRAMEWORK_DIR } from '../constants.js'
 import { defineTool } from '../factories/define-tool.js'
 import { parseExternalSkill, updateFrontmatter } from '../skills/skill-file.js'
 import type { SkillLoadingStrategy } from '../types/skill.js'
@@ -29,7 +30,7 @@ function isValidLoadingStrategy(value: unknown): value is SkillLoadingStrategy {
 function getExternalSkillsDir(runtimeProjectPath: string, configuredDir?: string): string | null {
   const targetDir = configuredDir && configuredDir.trim().length > 0
     ? configuredDir.trim()
-    : '.agentfoundry/skills'
+    : `${FRAMEWORK_DIR}/skills`
 
   if (path.isAbsolute(targetDir)) {
     const relative = path.relative(runtimeProjectPath, targetDir)

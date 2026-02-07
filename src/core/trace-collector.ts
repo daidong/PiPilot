@@ -4,6 +4,7 @@
 
 import { mkdirSync, writeFileSync } from 'fs'
 import { basename, dirname, join } from 'path'
+import { FRAMEWORK_DIR } from '../constants.js'
 import type { TraceEvent, TraceEventType, TraceFilter, EventCorrelation } from '../types/trace.js'
 import type { UsageSummary } from '../llm/provider.types.js'
 import { updateUsageTotals } from './usage-totals.js'
@@ -304,7 +305,7 @@ export class TraceCollector {
     if (!this.exportConfig.enabled) return
 
     try {
-      const dir = this.exportConfig.dir ?? join(process.cwd(), '.agentfoundry', 'traces')
+      const dir = this.exportConfig.dir ?? join(process.cwd(), FRAMEWORK_DIR, 'traces')
       mkdirSync(dir, { recursive: true })
 
       if (this.exportConfig.writeJsonl) {

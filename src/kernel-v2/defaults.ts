@@ -1,4 +1,5 @@
 import type { KernelV2Config, KernelV2ResolvedConfig } from './types.js'
+import { FRAMEWORK_DIR } from '../constants.js'
 
 export function resolveKernelV2Config(config: KernelV2Config | undefined, contextWindow: number, modelId: string): KernelV2ResolvedConfig {
   return {
@@ -54,10 +55,7 @@ export function resolveKernelV2Config(config: KernelV2Config | undefined, contex
     telemetry: {
       baselineAlwaysOn: config?.telemetry?.baselineAlwaysOn ?? true,
       mode: config?.telemetry?.mode ?? 'stderr+file',
-      filePath: config?.telemetry?.filePath ?? '.agent-foundry-v2/logs/kernel-v2.log'
-    },
-    migration: {
-      autoFromV1: config?.migration?.autoFromV1 ?? true
+      filePath: config?.telemetry?.filePath ?? `${FRAMEWORK_DIR}/logs/kernel-v2.log`
     },
     lifecycle: {
       autoWeekly: config?.lifecycle?.autoWeekly ?? true,

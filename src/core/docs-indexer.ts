@@ -12,6 +12,7 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
+import { FRAMEWORK_DIR } from '../constants.js'
 import type {
   DocsIndex,
   DocsIndexConfig,
@@ -202,7 +203,7 @@ export class FileDocsIndexer implements DocsIndexer {
 
   constructor(projectPath: string) {
     this.projectPath = projectPath
-    this.indexPath = path.join(projectPath, '.agent-foundry', 'docs_index.json')
+    this.indexPath = path.join(projectPath, FRAMEWORK_DIR, 'docs_index.json')
   }
 
   async build(options: DocsIndexerOptions): Promise<DocsIndex> {
@@ -212,7 +213,7 @@ export class FileDocsIndexer implements DocsIndexer {
       exclude = [],
       chunkSize = 500,
       chunkOverlap = 50,
-      outputDir = '.agent-foundry',
+      outputDir = FRAMEWORK_DIR,
       incremental = false,
       verbose = false
     } = options

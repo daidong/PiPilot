@@ -20,6 +20,7 @@ import type {
   V2TurnRecord,
   V2TurnUpsertInput
 } from './types.js'
+import { FRAMEWORK_DIR } from '../constants.js'
 
 function nowIso(): string {
   return new Date().toISOString()
@@ -129,7 +130,7 @@ export class KernelV2Storage {
   private turnIndexCache = new Map<string, number>()
 
   constructor(private readonly projectPath: string) {
-    const root = path.join(projectPath, '.agent-foundry-v2')
+    const root = path.join(projectPath, FRAMEWORK_DIR)
     this.paths = {
       root,
       turnsFile: (sessionId) => path.join(root, 'history', 'sessions', sessionId, 'turns.jsonl'),

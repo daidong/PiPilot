@@ -6,6 +6,7 @@
  */
 
 import { join } from 'path'
+import { FRAMEWORK_DIR } from '../constants.js'
 import { definePack } from '../factories/define-pack.js'
 import { defineTool } from '../factories/define-tool.js'
 import { MemoryIndex } from '../core/memory-index.js'
@@ -17,7 +18,7 @@ export interface MemorySearchPackOptions {
   dirs: string[]
   /** Extra individual files to index (absolute paths) */
   extraFiles?: string[]
-  /** Custom path for the SQLite index file. Defaults to <projectPath>/.agent-foundry/memory-search.db */
+  /** Custom path for the SQLite index file. Defaults to <projectPath>/.agentfoundry/memory-search.db */
   indexPath?: string
 }
 
@@ -128,7 +129,7 @@ export function memorySearch(options: MemorySearchPackOptions): Pack {
 
     async onInit(runtime: Runtime) {
       const projectPath = (runtime as any).projectPath || process.cwd()
-      const dbPath = options.indexPath ?? join(projectPath, '.agent-foundry', 'memory-search.db')
+      const dbPath = options.indexPath ?? join(projectPath, FRAMEWORK_DIR, 'memory-search.db')
 
       const index = new MemoryIndex(dbPath, options.dirs, options.extraFiles ?? [])
       await index.init()

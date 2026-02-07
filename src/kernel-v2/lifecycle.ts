@@ -3,6 +3,7 @@ import * as path from 'node:path'
 
 import type { KernelV2ResolvedConfig, V2MemoryFact } from './types.js'
 import { KernelV2Storage } from './storage.js'
+import { FRAMEWORK_DIR } from '../constants.js'
 
 interface LifecycleMeta {
   lastRunAt?: string
@@ -30,7 +31,7 @@ export class MemoryLifecycleManager {
     private readonly config: KernelV2ResolvedConfig,
     private readonly emit: (event: { event: string; payload: Record<string, unknown>; message: string }) => void
   ) {
-    this.metaPath = path.join(projectPath, '.agent-foundry-v2', 'maintenance', 'lifecycle-meta.json')
+    this.metaPath = path.join(projectPath, FRAMEWORK_DIR, 'maintenance', 'lifecycle-meta.json')
   }
 
   private async readMeta(): Promise<LifecycleMeta> {

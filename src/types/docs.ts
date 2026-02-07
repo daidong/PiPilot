@@ -115,7 +115,7 @@ export interface DocsIndexStats {
 }
 
 /**
- * Document index file format (.agent-foundry/docs_index.json)
+ * Document index file format (.agentfoundry/docs_index.json)
  */
 export interface DocsIndex {
   /** Schema version */

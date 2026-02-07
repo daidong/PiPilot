@@ -60,7 +60,7 @@ describe('KernelV2 API and telemetry coverage', () => {
     expect(typeof integrity.checkedAt).toBe('string')
     expect(Array.isArray(integrity.issues)).toBe(true)
 
-    const telemetryPath = path.join(dir, '.agent-foundry-v2', 'logs', 'kernel-v2.log')
+    const telemetryPath = path.join(dir, '.agentfoundry', 'logs', 'kernel-v2.log')
     const telemetryRaw = await fs.readFile(telemetryPath, 'utf-8')
     expect(telemetryRaw).toContain('task.anchor.injected')
     expect(telemetryRaw).toContain('context.protected_zone.kept')

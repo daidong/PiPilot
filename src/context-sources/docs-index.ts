@@ -85,7 +85,7 @@ export const docsIndex: ContextSource<DocsIndexParams, DocsIndexData> = defineCo
         durationMs: Date.now() - startTime,
         suggestions: [
           'Build index: npx agent-foundry index-docs --paths docs',
-          'Check if .agent-foundry/docs_index.json exists'
+          'Check if .agentfoundry/docs_index.json exists'
         ]
       })
     }

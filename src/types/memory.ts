@@ -2,7 +2,7 @@
  * Memory Types - KV Memory Storage Type Definitions
  *
  * Provides types for the explicit key-value memory storage system.
- * Memory is stored in .agent-foundry/memory/ as JSON files.
+ * Memory is stored in .agentfoundry/memory/ as JSON files.
  */
 
 // ============ Core Types ============
@@ -71,7 +71,7 @@ export interface MemoryItem {
 // ============ Storage Types ============
 
 /**
- * Memory data file format (.agent-foundry/memory/items.json)
+ * Memory data file format (.agentfoundry/memory/items.json)
  */
 export interface MemoryData {
   version: string
@@ -87,7 +87,7 @@ export interface MemoryData {
 }
 
 /**
- * Memory index file format (.agent-foundry/memory/index.json)
+ * Memory index file format (.agentfoundry/memory/index.json)
  */
 export interface MemoryIndex {
   version: string

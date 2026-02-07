@@ -2,7 +2,7 @@
  * kv-memory - Key-Value Memory Storage Pack
  *
  * Provides explicit memory storage for agents to save and retrieve information.
- * Uses file-based JSON storage in .agent-foundry/memory/
+ * Uses file-based JSON storage in .agentfoundry/memory/
  *
  * IMPORTANT: This pack sets up runtime.memoryStorage which is required by:
  * - memory-put, memory-update, memory-delete tools

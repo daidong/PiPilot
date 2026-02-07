@@ -27,7 +27,7 @@ import {
  *
  * Prerequisites:
  * - Run `agent-foundry index-docs --paths <dirs>` to build index
- * - Index stored in .agent-foundry/docs_index.json
+ * - Index stored in .agentfoundry/docs_index.json
  */
 export function docs(): Pack {
   return definePack({
