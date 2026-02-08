@@ -166,6 +166,7 @@ export function EntityPreviewPanel() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [draftMarkdown, setDraftMarkdown] = useState('')
   const [baselineMarkdown, setBaselineMarkdown] = useState('')
+  const [editorSeedMarkdown, setEditorSeedMarkdown] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null)
 
@@ -183,6 +184,7 @@ export function EntityPreviewPanel() {
     const initial = getEntityContent()
     setDraftMarkdown(initial)
     setBaselineMarkdown(initial)
+    setEditorSeedMarkdown(initial)
     setSaveError(null)
     setSaveSuccess(null)
     setPreviewEditorFocused(false)
@@ -214,6 +216,7 @@ export function EntityPreviewPanel() {
           if (targetType === 'text' && isMarkdown) {
             setDraftMarkdown(res.content)
             setBaselineMarkdown(res.content)
+            setEditorSeedMarkdown(res.content)
             setSaveError(null)
             setSaveSuccess(null)
           }
@@ -235,8 +238,10 @@ export function EntityPreviewPanel() {
   const isInlineEditable = entity.type !== 'fact' && !entity.filePath
   const isEditable = isInlineEditable || isFileMarkdown
   const isDirty = isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown)
-  const fp = buildFingerprint(baselineMarkdown)
-  const editorKey = `${entity.id}:${entity.updatedAt ?? 'na'}:${fp.length}:${fp.codeFenceCount}:${fp.mermaidFenceCount}:${fp.mathBlockCount}:${fp.imageCount}`
+  // Rebuild Milkdown when a different document seed loads, but keep it
+  // stable while typing/saving in the same preview session.
+  const seedFp = buildFingerprint(editorSeedMarkdown)
+  const editorKey = `${entity.id}:${entity.filePath ?? 'inline'}:${seedFp.length}:${seedFp.codeFenceCount}:${seedFp.mermaidFenceCount}:${seedFp.mathBlockCount}:${seedFp.imageCount}`
 
   const handleDelete = async () => {
     if (!confirmDelete) {

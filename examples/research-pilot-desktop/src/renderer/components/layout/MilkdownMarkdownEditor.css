@@ -25,6 +25,7 @@
 .entity-preview-milkdown-shell .milkdown .ProseMirror {
   padding: 18px 20px;
   min-height: 280px;
+  caret-color: var(--color-accent);
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h1 {
