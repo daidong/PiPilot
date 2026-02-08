@@ -1,35 +1,35 @@
 /**
  * Provider Scanner
  *
- * 扫描文件系统中的 Provider manifest 文件
+ * Scan the filesystem for Provider manifest files
  */
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
 /**
- * 扫描选项
+ * Scan options
  */
 export interface ScanOptions {
-  /** 是否扫描 node_modules */
+  /** Whether to scan node_modules */
   scanNodeModules?: boolean
-  /** 自定义 provider 目录 */
+  /** Custom provider directories */
   providerDirs?: string[]
-  /** manifest 文件名模式 */
+  /** Manifest filename pattern */
   manifestPattern?: string
-  /** 排除的包 */
+  /** Packages to exclude */
   excludePackages?: string[]
-  /** 最大扫描深度 */
+  /** Maximum scan depth */
   maxDepth?: number
 }
 
 /**
- * 默认 manifest 文件名
+ * Default manifest filename
  */
 const DEFAULT_MANIFEST_NAME = 'agentfoundry.provider.json'
 
 /**
- * 默认排除的目录
+ * Default excluded directories
  */
 const DEFAULT_EXCLUDES = [
   '.git',
@@ -43,7 +43,7 @@ const DEFAULT_EXCLUDES = [
 ]
 
 /**
- * 扫描 Provider manifest 文件
+ * Scan for Provider manifest files
  */
 export async function scanForManifests(
   projectRoot: string,
@@ -59,20 +59,20 @@ export async function scanForManifests(
 
   const manifests: string[] = []
 
-  // 1. 扫描项目根目录的 manifest
+  // 1. Scan for manifest in the project root
   const rootManifest = path.join(projectRoot, manifestPattern)
   if (await fileExists(rootManifest)) {
     manifests.push(rootManifest)
   }
 
-  // 2. 扫描自定义 provider 目录
+  // 2. Scan custom provider directories
   for (const dir of providerDirs) {
     const fullDir = path.isAbsolute(dir) ? dir : path.join(projectRoot, dir)
     const dirManifests = await scanDirectory(fullDir, manifestPattern, maxDepth)
     manifests.push(...dirManifests)
   }
 
-  // 3. 扫描 node_modules
+  // 3. Scan node_modules
   if (shouldScanNodeModules) {
     const nodeModulesDir = path.join(projectRoot, 'node_modules')
     const nodeManifests = await scanNodeModulesDir(
@@ -83,12 +83,12 @@ export async function scanForManifests(
     manifests.push(...nodeManifests)
   }
 
-  // 去重
+  // Deduplicate
   return [...new Set(manifests)]
 }
 
 /**
- * 扫描目录
+ * Scan a directory
  */
 async function scanDirectory(
   dir: string,
@@ -121,14 +121,14 @@ async function scanDirectory(
       }
     }
   } catch (error) {
-    // 忽略不可访问的目录
+    // Ignore inaccessible directories
   }
 
   return manifests
 }
 
 /**
- * 扫描 node_modules
+ * Scan node_modules
  */
 async function scanNodeModulesDir(
   nodeModulesDir: string,
@@ -146,7 +146,7 @@ async function scanNodeModulesDir(
       const pkgName = entry.name
       const pkgPath = path.join(nodeModulesDir, pkgName)
 
-      // 处理 scoped packages (@org/package)
+      // Handle scoped packages (@org/package)
       if (pkgName.startsWith('@')) {
         const scopedManifests = await scanScopedPackages(
           pkgPath,
@@ -157,26 +157,26 @@ async function scanNodeModulesDir(
         continue
       }
 
-      // 检查是否在排除列表中
+      // Check if the package is in the exclude list
       if (excludePackages.includes(pkgName)) {
         continue
       }
 
-      // 检查 manifest 是否存在
+      // Check if the manifest exists
       const manifestPath = path.join(pkgPath, manifestPattern)
       if (await fileExists(manifestPath)) {
         manifests.push(manifestPath)
       }
     }
   } catch (error) {
-    // node_modules 不存在或不可访问
+    // node_modules does not exist or is not accessible
   }
 
   return manifests
 }
 
 /**
- * 扫描 scoped packages
+ * Scan scoped packages
  */
 async function scanScopedPackages(
   scopeDir: string,
@@ -195,26 +195,26 @@ async function scanScopedPackages(
       const fullPkgName = `${scopeName}/${entry.name}`
       const pkgPath = path.join(scopeDir, entry.name)
 
-      // 检查是否在排除列表中
+      // Check if the package is in the exclude list
       if (excludePackages.includes(fullPkgName)) {
         continue
       }
 
-      // 检查 manifest 是否存在
+      // Check if the manifest exists
       const manifestPath = path.join(pkgPath, manifestPattern)
       if (await fileExists(manifestPath)) {
         manifests.push(manifestPath)
       }
     }
   } catch (error) {
-    // 忽略不可访问的目录
+    // Ignore inaccessible directories
   }
 
   return manifests
 }
 
 /**
- * 检查文件是否存在
+ * Check if a file exists
  */
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -226,7 +226,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 /**
- * 从 manifest 路径提取包信息
+ * Extract package info from a manifest path
  */
 export function extractPackageInfo(manifestPath: string): {
   packageName: string | null
@@ -236,7 +236,7 @@ export function extractPackageInfo(manifestPath: string): {
   const packagePath = path.dirname(manifestPath)
   const parts = manifestPath.split(path.sep)
 
-  // 检查是否在 node_modules 中
+  // Check if it's inside node_modules
   const nodeModulesIndex = parts.lastIndexOf('node_modules')
   if (nodeModulesIndex === -1) {
     return {
@@ -246,10 +246,10 @@ export function extractPackageInfo(manifestPath: string): {
     }
   }
 
-  // 提取包名
+  // Extract package name
   const afterNodeModules = parts.slice(nodeModulesIndex + 1)
 
-  // 处理 scoped packages
+  // Handle scoped packages
   if (afterNodeModules[0]?.startsWith('@') && afterNodeModules.length >= 2) {
     return {
       packageName: `${afterNodeModules[0]}/${afterNodeModules[1]}`,

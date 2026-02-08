@@ -1,7 +1,7 @@
 /**
  * Permission-Policy Bridges Module
  *
- * 将 Provider manifest 中的权限和预算声明转换为实际执行的 Policy
+ * Converts permission and budget declarations from Provider manifests into executable Policies
  */
 
 // Core bridge

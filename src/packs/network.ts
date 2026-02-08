@@ -1,11 +1,11 @@
 /**
- * network - 网络能力包
+ * network - Network capability pack
  *
- * 特点：
- * - 需要显式启用
- * - 支持 domain allowlist/denylist
- * - 支持响应大小限制
- * - SSRF 防护
+ * Features:
+ * - Requires explicit enablement
+ * - Supports domain allowlist/denylist
+ * - Supports response size limits
+ * - SSRF protection
  */
 
 import { definePack } from '../factories/define-pack.js'
@@ -15,54 +15,54 @@ import type { Policy } from '../types/policy.js'
 import { fetchTool } from '../tools/index.js'
 
 /**
- * Network Pack 配置选项
+ * Network Pack configuration options
  */
 export interface NetworkPackOptions {
   /**
-   * 允许访问的域名（allowlist 模式）
-   * 如果设置，只能访问这些域名
+   * Allowed domains (allowlist mode)
+   * If set, only these domains can be accessed
    */
   allowDomains?: string[]
 
   /**
-   * 禁止访问的域名（denylist 模式）
-   * 默认包含内网地址
+   * Denied domains (denylist mode)
+   * Includes internal network addresses by default
    */
   denyDomains?: string[]
 
   /**
-   * 禁止访问的 IP 范围（SSRF 防护）
-   * 默认禁止内网 IP
+   * Denied IP ranges (SSRF protection)
+   * Internal network IPs are denied by default
    */
   denyIpRanges?: string[]
 
   /**
-   * 最大响应大小（字节）
-   * 默认 10MB
+   * Maximum response size in bytes
+   * Default: 10MB
    */
   maxResponseSize?: number
 
   /**
-   * 请求超时时间（毫秒）
-   * 默认 30000
+   * Request timeout in milliseconds
+   * Default: 30000
    */
   timeout?: number
 
   /**
-   * 允许的 HTTP 方法
-   * 默认 ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+   * Allowed HTTP methods
+   * Default: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
    */
   allowMethods?: string[]
 
   /**
-   * 是否允许非 HTTPS 请求
-   * 默认 false（只允许 HTTPS）
+   * Whether non-HTTPS requests are allowed
+   * Default: false (HTTPS only)
    */
   allowHttp?: boolean
 }
 
 /**
- * 默认禁止的内网 IP 范围（保留供未来 IP 级别 SSRF 防护使用）
+ * Default denied internal IP ranges (reserved for future IP-level SSRF protection)
  */
 export const DEFAULT_DENY_IP_RANGES = [
   '10.0.0.0/8',
@@ -76,7 +76,7 @@ export const DEFAULT_DENY_IP_RANGES = [
 ]
 
 /**
- * 默认禁止的域名
+ * Default denied domains
  */
 const DEFAULT_DENY_DOMAINS = [
   'localhost',
@@ -87,7 +87,7 @@ const DEFAULT_DENY_DOMAINS = [
 ]
 
 /**
- * 检查域名是否匹配模式
+ * Check if a domain matches a pattern
  */
 function matchDomain(domain: string, pattern: string): boolean {
   if (pattern.startsWith('*.')) {
@@ -98,7 +98,7 @@ function matchDomain(domain: string, pattern: string): boolean {
 }
 
 /**
- * 从 URL 提取域名
+ * Extract domain from URL
  */
 function extractDomain(url: string): string | null {
   try {
@@ -110,12 +110,12 @@ function extractDomain(url: string): string | null {
 }
 
 /**
- * 创建域名 allowlist 策略
+ * Create a domain allowlist policy
  */
 function createDomainAllowlistPolicy(allowDomains: string[]): Policy {
   return defineGuardPolicy({
     id: 'network:domain-allowlist',
-    description: '只允许访问白名单中的域名',
+    description: 'Only allow access to domains in the allowlist',
     priority: 5,
     match: (ctx) => ctx.tool === 'fetch',
     decide: (ctx) => {
@@ -123,14 +123,14 @@ function createDomainAllowlistPolicy(allowDomains: string[]): Policy {
       const domain = extractDomain(url)
 
       if (!domain) {
-        return { action: 'deny', reason: `无效的 URL: ${url}` }
+        return { action: 'deny', reason: `Invalid URL: ${url}` }
       }
 
       const allowed = allowDomains.some(pattern => matchDomain(domain, pattern))
       if (!allowed) {
         return {
           action: 'deny',
-          reason: `域名不在允许列表中: ${domain}`
+          reason: `Domain not in allowlist: ${domain}`
         }
       }
       return { action: 'allow' }
@@ -139,12 +139,12 @@ function createDomainAllowlistPolicy(allowDomains: string[]): Policy {
 }
 
 /**
- * 创建域名 denylist 策略
+ * Create a domain denylist policy
  */
 function createDomainDenylistPolicy(denyDomains: string[]): Policy {
   return defineGuardPolicy({
     id: 'network:domain-denylist',
-    description: '禁止访问黑名单中的域名',
+    description: 'Deny access to domains in the denylist',
     priority: 10,
     match: (ctx) => ctx.tool === 'fetch',
     decide: (ctx) => {
@@ -152,14 +152,14 @@ function createDomainDenylistPolicy(denyDomains: string[]): Policy {
       const domain = extractDomain(url)
 
       if (!domain) {
-        return { action: 'deny', reason: `无效的 URL: ${url}` }
+        return { action: 'deny', reason: `Invalid URL: ${url}` }
       }
 
       const denied = denyDomains.some(pattern => matchDomain(domain, pattern))
       if (denied) {
         return {
           action: 'deny',
-          reason: `域名被禁止访问: ${domain}`
+          reason: `Domain is denied: ${domain}`
         }
       }
       return { action: 'allow' }
@@ -168,12 +168,12 @@ function createDomainDenylistPolicy(denyDomains: string[]): Policy {
 }
 
 /**
- * 创建 HTTPS 强制策略
+ * Create an HTTPS-only enforcement policy
  */
 function createHttpsOnlyPolicy(): Policy {
   return defineGuardPolicy({
     id: 'network:https-only',
-    description: '只允许 HTTPS 请求',
+    description: 'Only allow HTTPS requests',
     priority: 8,
     match: (ctx) => ctx.tool === 'fetch',
     decide: (ctx) => {
@@ -183,11 +183,11 @@ function createHttpsOnlyPolicy(): Policy {
         if (parsed.protocol !== 'https:') {
           return {
             action: 'deny',
-            reason: `只允许 HTTPS 请求: ${url}`
+            reason: `Only HTTPS requests are allowed: ${url}`
           }
         }
       } catch {
-        return { action: 'deny', reason: `无效的 URL: ${url}` }
+        return { action: 'deny', reason: `Invalid URL: ${url}` }
       }
       return { action: 'allow' }
     }
@@ -195,12 +195,12 @@ function createHttpsOnlyPolicy(): Policy {
 }
 
 /**
- * 创建 HTTP 方法限制策略
+ * Create an HTTP method restriction policy
  */
 function createMethodPolicy(allowMethods: string[]): Policy {
   return defineGuardPolicy({
     id: 'network:method-restrict',
-    description: '限制允许的 HTTP 方法',
+    description: 'Restrict allowed HTTP methods',
     priority: 12,
     match: (ctx) => ctx.tool === 'fetch',
     decide: (ctx) => {
@@ -208,7 +208,7 @@ function createMethodPolicy(allowMethods: string[]): Policy {
       if (!allowMethods.includes(method)) {
         return {
           action: 'deny',
-          reason: `HTTP 方法不被允许: ${method}`
+          reason: `HTTP method not allowed: ${method}`
         }
       }
       return { action: 'allow' }
@@ -217,12 +217,12 @@ function createMethodPolicy(allowMethods: string[]): Policy {
 }
 
 /**
- * 创建超时限制策略（Mutate）
+ * Create a timeout limit policy (Mutate)
  */
 function createTimeoutPolicy(timeout: number): Policy {
   return defineMutatePolicy({
     id: 'network:timeout-limit',
-    description: '强制设置请求超时',
+    description: 'Enforce request timeout limit',
     priority: 50,
     match: (ctx) => ctx.tool === 'fetch',
     transforms: [
@@ -232,11 +232,11 @@ function createTimeoutPolicy(timeout: number): Policy {
 }
 
 /**
- * 创建网络审计策略
+ * Create a network audit policy
  */
 const networkAuditPolicy = defineAuditPolicy({
   id: 'network:audit',
-  description: '审计所有网络请求',
+  description: 'Audit all network requests',
   priority: 100,
   match: (ctx) => ctx.tool === 'fetch',
   record: (ctx) => {
@@ -254,15 +254,15 @@ const networkAuditPolicy = defineAuditPolicy({
 })
 
 /**
- * Network Pack - 网络能力包
+ * Network Pack - Network capability pack
  *
- * 包含工具：
- * - fetch: HTTP 请求
+ * Included tools:
+ * - fetch: HTTP requests
  *
- * 默认策略：
- * - 禁止访问内网地址（SSRF 防护）
- * - 只允许 HTTPS（可配置）
- * - 审计所有网络请求
+ * Default policies:
+ * - Deny access to internal network addresses (SSRF protection)
+ * - HTTPS only (configurable)
+ * - Audit all network requests
  */
 export function network(options: NetworkPackOptions = {}): Pack {
   const {
@@ -276,69 +276,69 @@ export function network(options: NetworkPackOptions = {}): Pack {
 
   const policies: Policy[] = []
 
-  // Domain allowlist 策略
+  // Domain allowlist policy
   if (allowDomains && allowDomains.length > 0) {
     policies.push(createDomainAllowlistPolicy(allowDomains))
   }
 
-  // Domain denylist 策略
+  // Domain denylist policy
   if (denyDomains && denyDomains.length > 0) {
     policies.push(createDomainDenylistPolicy(denyDomains))
   }
 
-  // HTTPS 强制策略
+  // HTTPS enforcement policy
   if (!allowHttp) {
     policies.push(createHttpsOnlyPolicy())
   }
 
-  // HTTP 方法限制策略
+  // HTTP method restriction policy
   policies.push(createMethodPolicy(allowMethods))
 
-  // Timeout 限制策略
+  // Timeout limit policy
   policies.push(createTimeoutPolicy(timeout))
 
-  // 审计策略
+  // Audit policy
   policies.push(networkAuditPolicy)
 
   return definePack({
     id: 'network',
-    description: '网络能力包：HTTP 请求（需显式启用）',
+    description: 'Network capability pack: HTTP requests (requires explicit enablement)',
 
     tools: [fetchTool as any],
 
     policies,
 
     promptFragment: `
-## 网络请求能力
+## Network Request Capabilities
 
-### fetch 工具
-发送 HTTP 请求，用于：
-- 调用外部 API
-- 获取远程数据
-- Webhook 调用
+### fetch Tool
+Send HTTP requests for:
+- Calling external APIs
+- Fetching remote data
+- Webhook invocations
 
-### 安全限制
-${allowDomains ? `- 仅允许访问: ${allowDomains.join(', ')}` : '- 禁止访问内网地址'}
-${!allowHttp ? '- 仅允许 HTTPS 请求' : ''}
-- 允许方法: ${allowMethods.join(', ')}
-- 超时限制: ${timeout}ms
-- 响应大小限制: ${Math.round(maxResponseSize / 1024 / 1024)}MB
+### Security Restrictions
+${allowDomains ? `- Only allowed domains: ${allowDomains.join(', ')}` : '- Access to internal network addresses is denied'}
+${!allowHttp ? '- Only HTTPS requests are allowed' : ''}
+- Allowed methods: ${allowMethods.join(', ')}
+- Timeout limit: ${timeout}ms
+- Response size limit: ${Math.round(maxResponseSize / 1024 / 1024)}MB
 
-### 最佳实践
-1. 使用完整的 URL（包含协议）
-2. 设置适当的 Content-Type
-3. 处理超时和错误情况
+### Best Practices
+1. Use complete URLs (including protocol)
+2. Set an appropriate Content-Type
+3. Handle timeouts and error conditions
     `.trim()
   })
 }
 
 /**
- * 别名：networkPack
+ * Alias: networkPack
  */
 export const networkPack = network
 
 /**
- * 预设：严格模式（需要显式指定允许的域名）
+ * Preset: Strict mode (requires explicitly specified allowed domains)
  */
 export function networkStrict(allowDomains: string[]): Pack {
   return network({
@@ -350,7 +350,7 @@ export function networkStrict(allowDomains: string[]): Pack {
 }
 
 /**
- * 预设：API 模式（常见 API 场景）
+ * Preset: API mode (common API scenarios)
  */
 export function networkApi(): Pack {
   return network({
@@ -365,7 +365,7 @@ export function networkApi(): Pack {
 }
 
 /**
- * 预设：GitHub API
+ * Preset: GitHub API
  */
 export function networkGitHub(): Pack {
   return network({

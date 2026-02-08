@@ -1,5 +1,5 @@
 /**
- * Policies - 内置策略导出
+ * Policies - Built-in policy exports
  */
 
 export { noDestructive, requireApprovalForDestructive } from './no-destructive.js'
@@ -39,7 +39,7 @@ import { normalizePathsPolicies } from './normalize-paths.js'
 import { auditPolicies } from './audit-all.js'
 
 /**
- * 所有内置 Guard 策略
+ * All built-in Guard policies
  */
 export const builtinGuardPolicies: Policy[] = [
   noDestructive,
@@ -47,7 +47,7 @@ export const builtinGuardPolicies: Policy[] = [
 ]
 
 /**
- * 所有内置 Mutate 策略
+ * All built-in Mutate policies
  */
 export const builtinMutatePolicies: Policy[] = [
   ...autoLimitPolicies,
@@ -55,14 +55,14 @@ export const builtinMutatePolicies: Policy[] = [
 ]
 
 /**
- * 所有内置 Observe 策略
+ * All built-in Observe policies
  */
 export const builtinObservePolicies: Policy[] = [
   ...auditPolicies
 ]
 
 /**
- * 所有内置策略
+ * All built-in policies
  */
 export const builtinPolicies: Policy[] = [
   ...builtinGuardPolicies,
@@ -71,7 +71,7 @@ export const builtinPolicies: Policy[] = [
 ]
 
 /**
- * 默认安全策略（推荐启用）
+ * Default security policies (recommended to enable)
  */
 export const defaultSecurityPolicies: Policy[] = [
   noDestructive,
@@ -79,7 +79,7 @@ export const defaultSecurityPolicies: Policy[] = [
 ]
 
 /**
- * 获取策略 by ID
+ * Get a policy by ID
  */
 export function getBuiltinPolicy(id: string): Policy | undefined {
   return builtinPolicies.find(p => p.id === id)

@@ -1,7 +1,7 @@
 /**
  * MCP STDIO Transport
  *
- * 通过子进程的 stdin/stdout 与本地 MCP server 通信
+ * Communicates with a local MCP server via stdin/stdout of a child process
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -15,19 +15,19 @@ import type {
 import { MCPTransport, type TransportConfig } from './base.js'
 
 /**
- * STDIO 传输配置
+ * STDIO transport configuration
  */
 export interface StdioTransportConfig extends TransportConfig {
-  /** STDIO 配置 */
+  /** STDIO configuration */
   stdio: MCPStdioConfig
-  /** 启动超时（毫秒） */
+  /** Startup timeout (ms) */
   startTimeout?: number
 }
 
 /**
- * STDIO 传输实现
+ * STDIO transport implementation
  *
- * 使用子进程的 stdin/stdout 进行 JSON-RPC 通信
+ * Uses stdin/stdout of a child process for JSON-RPC communication
  */
 export class StdioTransport extends MCPTransport {
   private stdioConfig: MCPStdioConfig
@@ -43,7 +43,7 @@ export class StdioTransport extends MCPTransport {
   }
 
   /**
-   * 启动子进程并建立连接
+   * Start the child process and establish the connection
    */
   async start(): Promise<void> {
     if (this.ready) {
@@ -149,7 +149,7 @@ export class StdioTransport extends MCPTransport {
   }
 
   /**
-   * 停止传输并关闭子进程
+   * Stop the transport and close the child process
    */
   async stop(): Promise<void> {
     this.ready = false
@@ -160,10 +160,10 @@ export class StdioTransport extends MCPTransport {
     }
 
     if (this.process) {
-      // 尝试优雅关闭
+      // Attempt graceful shutdown
       this.process.stdin?.end()
 
-      // 等待进程退出或强制终止
+      // Wait for process to exit or force kill
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           if (this.process && !this.process.killed) {
@@ -178,7 +178,7 @@ export class StdioTransport extends MCPTransport {
             resolve()
           })
 
-          // 发送 SIGTERM
+          // Send SIGTERM
           this.process.kill('SIGTERM')
         } else {
           clearTimeout(timer)
@@ -193,7 +193,7 @@ export class StdioTransport extends MCPTransport {
   }
 
   /**
-   * 发送消息到子进程
+   * Send a message to the child process
    */
   protected async send(message: JsonRpcRequest | JsonRpcNotification): Promise<void> {
     if (!this.process?.stdin || !this.ready) {
@@ -214,7 +214,7 @@ export class StdioTransport extends MCPTransport {
   }
 
   /**
-   * 处理收到的一行数据
+   * Handle a received line of data
    */
   private handleLine(line: string): void {
     const trimmed = line.trim()
@@ -229,27 +229,27 @@ export class StdioTransport extends MCPTransport {
       if (this.config.debug) {
         console.debug('[MCP] Failed to parse line:', trimmed, error)
       }
-      // 可能是多行 JSON，尝试缓冲
+      // Might be multi-line JSON, try buffering
       this.buffer += trimmed
       try {
         const message = JSON.parse(this.buffer) as JsonRpcResponse | JsonRpcNotification
         this.buffer = ''
         this.handleMessage(message)
       } catch {
-        // 继续缓冲
+        // Continue buffering
       }
     }
   }
 
   /**
-   * 获取子进程 PID
+   * Get the child process PID
    */
   getPid(): number | undefined {
     return this.process?.pid
   }
 
   /**
-   * 检查子进程是否存活
+   * Check if the child process is alive
    */
   isProcessAlive(): boolean {
     return this.process !== null && !this.process.killed
@@ -257,7 +257,7 @@ export class StdioTransport extends MCPTransport {
 }
 
 /**
- * 创建 STDIO 传输
+ * Create a STDIO transport
  */
 export function createStdioTransport(
   config: MCPStdioConfig,

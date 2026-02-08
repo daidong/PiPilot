@@ -1,45 +1,45 @@
 /**
- * no-destructive - 禁止危险命令策略
+ * no-destructive - Prohibit dangerous commands policy
  */
 
 import { defineGuardPolicy } from '../factories/define-policy.js'
 
 /**
- * 危险命令模式
+ * Dangerous command patterns
  */
 const DESTRUCTIVE_PATTERNS = [
-  // 删除操作
+  // Delete operations
   /\brm\s+(-[rf]+\s+)?[\/\w]/,
   /\brmdir\b/,
   /\bdel\b/,
   /\brd\b/,
 
-  // 数据库操作
+  // Database operations
   /\bDROP\s+(TABLE|DATABASE|INDEX|VIEW)/i,
   /\bTRUNCATE\s+TABLE/i,
   /\bDELETE\s+FROM\s+\w+\s*$/i, // DELETE without WHERE
 
-  // 系统操作
+  // System operations
   /\bformat\b/i,
   /\bmkfs\b/,
   /\bdd\s+if=/,
 
-  // Git 危险操作
+  // Dangerous Git operations
   /\bgit\s+push\s+.*--force/,
   /\bgit\s+reset\s+--hard/,
   /\bgit\s+clean\s+-[fd]/,
 
-  // 权限操作
+  // Permission operations
   /\bchmod\s+777/,
   /\bchown\s+-R/
 ]
 
 /**
- * 禁止危险命令策略
+ * Prohibit dangerous commands policy
  */
 export const noDestructive = defineGuardPolicy({
   id: 'no-destructive',
-  description: '禁止执行危险的破坏性命令',
+  description: 'Prohibit execution of dangerous destructive commands',
   priority: 10,
   match: (ctx) => {
     return ctx.tool === 'bash' || ctx.operation === 'exec'
@@ -52,7 +52,7 @@ export const noDestructive = defineGuardPolicy({
       if (pattern.test(command)) {
         return {
           action: 'deny',
-          reason: `危险命令被阻止: ${command.slice(0, 50)}...`
+          reason: `Dangerous command blocked: ${command.slice(0, 50)}...`
         }
       }
     }
@@ -62,11 +62,11 @@ export const noDestructive = defineGuardPolicy({
 })
 
 /**
- * 需要审批的危险操作（比 noDestructive 宽松）
+ * Dangerous operations requiring approval (more lenient than noDestructive)
  */
 export const requireApprovalForDestructive = defineGuardPolicy({
   id: 'require-approval-destructive',
-  description: '危险命令需要用户审批',
+  description: 'Dangerous commands require user approval',
   priority: 20,
   match: (ctx) => {
     return ctx.tool === 'bash' || ctx.operation === 'exec'
@@ -75,7 +75,7 @@ export const requireApprovalForDestructive = defineGuardPolicy({
     const command = (ctx.input as { command?: string })?.command ??
                     (ctx.params as { command?: string })?.command ?? ''
 
-    // 需要审批的命令模式
+    // Command patterns that require approval
     const needsApproval = [
       /\brm\b/,
       /\bgit\s+push/,
@@ -87,7 +87,7 @@ export const requireApprovalForDestructive = defineGuardPolicy({
       if (pattern.test(command)) {
         return {
           action: 'require_approval',
-          message: `执行此命令需要确认: ${command}`,
+          message: `Confirmation required to execute this command: ${command}`,
           timeout: 30000
         }
       }

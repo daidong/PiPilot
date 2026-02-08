@@ -1,7 +1,7 @@
 /**
  * MCP Client
  *
- * 管理与单个 MCP server 的连接和通信
+ * Manages the connection and communication with a single MCP server
  */
 
 import { EventEmitter } from 'node:events'
@@ -20,20 +20,20 @@ import { StdioTransport } from './transport/stdio.js'
 import { HttpTransport } from './transport/http.js'
 
 /**
- * MCP 客户端配置
+ * MCP client configuration
  */
 export interface MCPClientConfig extends MCPServerConfig {
-  /** 调试模式 */
+  /** Debug mode */
   debug?: boolean
 }
 
 /**
- * MCP 协议版本
+ * MCP protocol version
  */
 const PROTOCOL_VERSION = '2024-11-05'
 
 /**
- * 客户端信息
+ * Client information
  */
 const CLIENT_INFO = {
   name: 'AgentFoundry',
@@ -41,9 +41,9 @@ const CLIENT_INFO = {
 }
 
 /**
- * MCP 客户端
+ * MCP Client
  *
- * 管理与 MCP server 的连接、工具发现和调用
+ * Manages connection, tool discovery, and invocation with an MCP server
  */
 export class MCPClient extends EventEmitter {
   private config: MCPClientConfig
@@ -63,7 +63,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 连接到 MCP server
+   * Connect to the MCP server
    */
   async connect(): Promise<void> {
     if (this.state === 'connected' || this.state === 'connecting') {
@@ -73,10 +73,10 @@ export class MCPClient extends EventEmitter {
     this.setState('connecting')
 
     try {
-      // 创建传输层
+      // Create transport layer
       this.transport = this.createTransport()
 
-      // 监听传输层事件
+      // Listen for transport layer events
       this.transport.on('message', (message) => {
         this.handleNotification(message)
       })
@@ -89,14 +89,14 @@ export class MCPClient extends EventEmitter {
         this.handleClose()
       })
 
-      // 启动传输
+      // Start transport
       await this.transport.start()
 
-      // 初始化 MCP 协议
+      // Initialize MCP protocol
       this.setState('initializing')
       await this.initialize()
 
-      // 获取工具列表
+      // Fetch tool list
       await this.refreshTools()
 
       this.setState('connected')
@@ -107,7 +107,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 断开连接
+   * Disconnect
    */
   async disconnect(): Promise<void> {
     if (this.state === 'disconnected' || this.state === 'closing') {
@@ -127,7 +127,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 获取可用工具列表
+   * Get the list of available tools
    */
   async listTools(): Promise<MCPToolDefinition[]> {
     await this.ensureConnected()
@@ -135,7 +135,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 刷新工具列表
+   * Refresh the tool list
    */
   async refreshTools(): Promise<MCPToolDefinition[]> {
     // Allow refreshTools during initialization (called from connect())
@@ -155,12 +155,12 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 调用工具
+   * Call a tool
    */
   async callTool(name: string, input: unknown): Promise<MCPToolResult> {
     await this.ensureConnected()
 
-    // 检查工具是否存在
+    // Check if the tool exists
     const tool = this.tools.find((t) => t.name === name)
     if (!tool) {
       throw new MCPError(
@@ -186,42 +186,42 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 获取当前状态
+   * Get the current state
    */
   getState(): MCPClientState {
     return this.state
   }
 
   /**
-   * 获取缓存的工具列表
+   * Get the cached tool list
    */
   getCachedTools(): MCPToolDefinition[] {
     return [...this.tools]
   }
 
   /**
-   * 获取服务器能力
+   * Get server capabilities
    */
   getServerCapabilities(): MCPServerCapabilities | null {
     return this.serverCapabilities
   }
 
   /**
-   * 获取服务器信息
+   * Get server information
    */
   getServerInfo(): { name: string; version: string } | null {
     return this.serverInfo
   }
 
   /**
-   * 获取配置
+   * Get configuration
    */
   getConfig(): MCPClientConfig {
     return { ...this.config }
   }
 
   /**
-   * 创建传输层
+   * Create the transport layer
    */
   private createTransport(): MCPTransport {
     const { transport } = this.config
@@ -245,13 +245,13 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 初始化 MCP 协议
+   * Initialize the MCP protocol
    */
   private async initialize(): Promise<void> {
     const params: MCPInitializeParams = {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {
-        // 客户端支持的能力
+        // Capabilities supported by the client
       },
       clientInfo: CLIENT_INFO
     }
@@ -264,7 +264,7 @@ export class MCPClient extends EventEmitter {
     this.serverCapabilities = result.capabilities
     this.serverInfo = result.serverInfo
 
-    // 发送 initialized 通知
+    // Send the initialized notification
     await this.transport!.notify('notifications/initialized')
 
     if (this.config.debug) {
@@ -274,7 +274,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 确保已连接
+   * Ensure the client is connected
    */
   private async ensureConnected(): Promise<void> {
     if (this.state !== 'connected') {
@@ -290,7 +290,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 设置状态
+   * Set state
    */
   private setState(newState: MCPClientState): void {
     const oldState = this.state
@@ -305,14 +305,14 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 处理通知
+   * Handle notifications
    */
   private handleNotification(message: unknown): void {
     const notification = message as { method?: string; params?: unknown }
 
     if (!notification.method) return
 
-    // 处理工具列表变更通知
+    // Handle tool list change notification
     if (notification.method === 'notifications/tools/list_changed') {
       this.refreshTools().catch((error) => {
         if (this.config.debug) {
@@ -328,7 +328,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 处理错误
+   * Handle errors
    */
   private handleError(error: Error): void {
     if (this.config.debug) {
@@ -343,7 +343,7 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * 处理连接关闭
+   * Handle connection close
    */
   private handleClose(): void {
     if (this.state !== 'disconnected' && this.state !== 'closing') {
@@ -366,7 +366,7 @@ export class MCPClient extends EventEmitter {
 }
 
 /**
- * 创建 MCP 客户端
+ * Create an MCP client
  */
 export function createMCPClient(config: MCPClientConfig): MCPClient {
   return new MCPClient(config)

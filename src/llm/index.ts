@@ -1,15 +1,15 @@
 /**
- * LLM - 统一 LLM 抽象层
+ * LLM - Unified LLM abstraction layer
  *
- * 基于 Vercel AI SDK 的统一 LLM 接口
+ * Unified LLM interface based on Vercel AI SDK
  */
 
 // ============================================================================
-// 类型导出
+// Type exports
 // ============================================================================
 
 export type {
-  // Provider 类型
+  // Provider types
   ProviderID,
   ModelAPI,
   ModelCapabilities,
@@ -19,7 +19,7 @@ export type {
   ProviderSDKConfig,
   ProviderOptions,
 
-  // 消息类型
+  // Message types
   MessageRole,
   TextContent,
   ToolUseContent,
@@ -27,7 +27,7 @@ export type {
   ContentBlock,
   Message,
 
-  // 流式事件类型
+  // Stream event types
   StreamEventType,
   StreamEvent,
   TextDeltaEvent,
@@ -38,7 +38,7 @@ export type {
   FinishEvent,
   ErrorEvent,
 
-  // 请求/响应类型
+  // Request/response types
   TokenUsage,
   DetailedTokenUsage,
   TokenCost,
@@ -50,7 +50,7 @@ export type {
 } from './provider.types.js'
 
 // ============================================================================
-// 模型注册表
+// Model registry
 // ============================================================================
 
 export {
@@ -62,7 +62,7 @@ export {
 } from './models.js'
 
 // ============================================================================
-// Provider 管理
+// Provider management
 // ============================================================================
 
 export {
@@ -82,7 +82,7 @@ export {
 } from './provider.js'
 
 // ============================================================================
-// 流式 API
+// Streaming API
 // ============================================================================
 
 export {

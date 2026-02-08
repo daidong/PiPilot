@@ -1,19 +1,19 @@
 /**
- * no-secret-files - 禁止访问敏感文件策略
+ * no-secret-files - Prohibit access to sensitive files policy
  */
 
 import { defineGuardPolicy } from '../factories/define-policy.js'
 
 /**
- * 敏感文件模式
+ * Sensitive file patterns
  */
 const SECRET_PATTERNS = [
-  // 环境变量文件
+  // Environment variable files
   /\.env$/,
   /\.env\.\w+$/,
   /\.env\.local$/,
 
-  // 密钥和证书
+  // Keys and certificates
   /\.pem$/,
   /\.key$/,
   /\.p12$/,
@@ -21,7 +21,7 @@ const SECRET_PATTERNS = [
   /id_rsa$/,
   /id_ed25519$/,
 
-  // 认证文件
+  // Authentication files
   /credentials\.json$/,
   /secrets\.json$/,
   /auth\.json$/,
@@ -37,7 +37,7 @@ const SECRET_PATTERNS = [
   /\.ssh\/config$/,
   /\.ssh\/known_hosts$/,
 
-  // 其他敏感文件
+  // Other sensitive files
   /\.htpasswd$/,
   /\.htaccess$/,
   /shadow$/,
@@ -45,7 +45,7 @@ const SECRET_PATTERNS = [
 ]
 
 /**
- * 检查路径是否为敏感文件
+ * Check if a path is a sensitive file
  */
 function isSensitivePath(path: string): boolean {
   const normalizedPath = path.replace(/\\/g, '/')
@@ -60,11 +60,11 @@ function isSensitivePath(path: string): boolean {
 }
 
 /**
- * 禁止读取敏感文件策略
+ * Prohibit reading sensitive files policy
  */
 export const noSecretFilesRead = defineGuardPolicy({
   id: 'no-secret-files-read',
-  description: '禁止读取敏感文件（如 .env、密钥文件等）',
+  description: 'Prohibit reading sensitive files (e.g., .env, key files, etc.)',
   priority: 10,
   match: (ctx) => {
     return ctx.tool === 'read' || ctx.operation === 'readFile'
@@ -76,7 +76,7 @@ export const noSecretFilesRead = defineGuardPolicy({
     if (isSensitivePath(path)) {
       return {
         action: 'deny',
-        reason: `禁止读取敏感文件: ${path}`
+        reason: `Reading sensitive files is prohibited: ${path}`
       }
     }
 
@@ -85,11 +85,11 @@ export const noSecretFilesRead = defineGuardPolicy({
 })
 
 /**
- * 禁止写入敏感文件策略
+ * Prohibit writing sensitive files policy
  */
 export const noSecretFilesWrite = defineGuardPolicy({
   id: 'no-secret-files-write',
-  description: '禁止写入敏感文件',
+  description: 'Prohibit writing to sensitive files',
   priority: 10,
   match: (ctx) => {
     return ctx.tool === 'write' || ctx.tool === 'edit' || ctx.operation === 'writeFile'
@@ -101,7 +101,7 @@ export const noSecretFilesWrite = defineGuardPolicy({
     if (isSensitivePath(path)) {
       return {
         action: 'deny',
-        reason: `禁止写入敏感文件: ${path}`
+        reason: `Writing to sensitive files is prohibited: ${path}`
       }
     }
 
@@ -110,11 +110,11 @@ export const noSecretFilesWrite = defineGuardPolicy({
 })
 
 /**
- * 禁止搜索敏感内容策略
+ * Prohibit searching for sensitive content policy
  */
 export const noSecretSearch = defineGuardPolicy({
   id: 'no-secret-search',
-  description: '禁止搜索密码、API 密钥等敏感内容',
+  description: 'Prohibit searching for sensitive content such as passwords and API keys',
   priority: 10,
   match: (ctx) => {
     return ctx.tool === 'grep' || ctx.operation === 'grep'
@@ -137,7 +137,7 @@ export const noSecretSearch = defineGuardPolicy({
       if (sensitive.test(pattern)) {
         return {
           action: 'deny',
-          reason: `禁止搜索敏感内容: ${pattern}`
+          reason: `Searching for sensitive content is prohibited: ${pattern}`
         }
       }
     }
@@ -147,7 +147,7 @@ export const noSecretSearch = defineGuardPolicy({
 })
 
 /**
- * 合并的敏感文件策略
+ * Combined sensitive file policies
  */
 export const noSecretFiles = [
   noSecretFilesRead,

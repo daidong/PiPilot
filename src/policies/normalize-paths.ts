@@ -1,20 +1,20 @@
 /**
- * normalize-paths - 路径规范化策略
+ * normalize-paths - Path normalization policies
  */
 
 import { defineMutatePolicy } from '../factories/define-policy.js'
 
 /**
- * 规范化路径
+ * Normalize a path
  */
 function normalizePath(path: string): string {
-  // 替换反斜杠
+  // Replace backslashes
   let normalized = path.replace(/\\/g, '/')
 
-  // 移除多余的斜杠
+  // Remove redundant slashes
   normalized = normalized.replace(/\/+/g, '/')
 
-  // 处理 . 和 ..
+  // Handle . and ..
   const parts = normalized.split('/')
   const result: string[] = []
 
@@ -31,18 +31,18 @@ function normalizePath(path: string): string {
     }
   }
 
-  // 保留开头的斜杠
+  // Preserve the leading slash
   const prefix = normalized.startsWith('/') ? '/' : ''
 
   return prefix + result.join('/')
 }
 
 /**
- * 规范化读取路径
+ * Normalize read paths
  */
 export const normalizeReadPaths = defineMutatePolicy({
   id: 'normalize-read-paths',
-  description: '规范化读取操作的文件路径',
+  description: 'Normalize file paths for read operations',
   priority: 90,
   match: (ctx) => {
     return ctx.tool === 'read' || ctx.operation === 'readFile'
@@ -66,11 +66,11 @@ export const normalizeReadPaths = defineMutatePolicy({
 })
 
 /**
- * 规范化写入路径
+ * Normalize write paths
  */
 export const normalizeWritePaths = defineMutatePolicy({
   id: 'normalize-write-paths',
-  description: '规范化写入操作的文件路径',
+  description: 'Normalize file paths for write operations',
   priority: 90,
   match: (ctx) => {
     return ctx.tool === 'write' || ctx.tool === 'edit' || ctx.operation === 'writeFile'
@@ -94,11 +94,11 @@ export const normalizeWritePaths = defineMutatePolicy({
 })
 
 /**
- * 规范化 glob 路径
+ * Normalize glob paths
  */
 export const normalizeGlobPaths = defineMutatePolicy({
   id: 'normalize-glob-paths',
-  description: '规范化 glob 操作的路径',
+  description: 'Normalize paths for glob operations',
   priority: 90,
   match: (ctx) => {
     return ctx.tool === 'glob' || ctx.operation === 'glob'
@@ -122,7 +122,7 @@ export const normalizeGlobPaths = defineMutatePolicy({
 })
 
 /**
- * 所有路径规范化策略
+ * All path normalization policies
  */
 export const normalizePathsPolicies = [
   normalizeReadPaths,

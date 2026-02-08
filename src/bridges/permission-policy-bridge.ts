@@ -1,7 +1,7 @@
 /**
  * Permission-Policy Bridge
  *
- * 将 Provider manifest 中的权限声明转换为实际执行的 Policy
+ * Converts permission declarations from Provider manifests into executable Policies
  */
 
 import type { Policy } from '../types/policy.js'
@@ -12,19 +12,19 @@ import { createExecAccessPolicies } from './exec-policies.js'
 import { createBudgetPolicies } from './budget-policies.js'
 
 /**
- * 策略生成选项
+ * Policy generation options
  */
 export interface PolicyGenerationOptions {
-  /** Provider ID（用于策略 ID 前缀） */
+  /** Provider ID (used as policy ID prefix) */
   providerId: string
-  /** 策略优先级基数 */
+  /** Base priority for policies */
   basePriority?: number
-  /** 是否生成审计策略 */
+  /** Whether to generate audit policies */
   generateAudit?: boolean
 }
 
 /**
- * 从权限声明生成策略
+ * Generate policies from permission declarations
  */
 export function generatePoliciesFromPermissions(
   permissions: ProviderPermissions,
@@ -33,21 +33,21 @@ export function generatePoliciesFromPermissions(
   const { providerId, basePriority = 15 } = options
   const policies: Policy[] = []
 
-  // 文件访问策略
+  // File access policies
   if (permissions.file) {
     policies.push(
       ...createFileAccessPolicies(providerId, permissions.file, basePriority)
     )
   }
 
-  // 网络访问策略
+  // Network access policies
   if (permissions.network) {
     policies.push(
       ...createNetworkAccessPolicies(providerId, permissions.network, basePriority)
     )
   }
 
-  // 命令执行策略
+  // Command execution policies
   if (permissions.exec) {
     policies.push(
       ...createExecAccessPolicies(providerId, permissions.exec, basePriority)
@@ -58,7 +58,7 @@ export function generatePoliciesFromPermissions(
 }
 
 /**
- * 从预算声明生成策略
+ * Generate policies from budget declarations
  */
 export function generatePoliciesFromBudgets(
   budgets: ProviderBudgets,
@@ -70,7 +70,7 @@ export function generatePoliciesFromBudgets(
 }
 
 /**
- * 综合生成所有策略
+ * Generate all policies comprehensively
  */
 export function generateProviderPolicies(
   permissions: ProviderPermissions | undefined,
@@ -91,13 +91,13 @@ export function generateProviderPolicies(
 }
 
 /**
- * 权限策略桥接器类
+ * Permission-Policy bridge class
  *
- * 提供静态方法生成各类策略
+ * Provides static methods to generate various policies
  */
 export class PermissionPolicyBridge {
   /**
-   * 生成文件访问策略
+   * Generate file access policies
    */
   static fileAccessPolicies(
     permissions: ProviderPermissions['file'],
@@ -108,7 +108,7 @@ export class PermissionPolicyBridge {
   }
 
   /**
-   * 生成网络访问策略
+   * Generate network access policies
    */
   static networkAccessPolicies(
     permissions: ProviderPermissions['network'],
@@ -119,7 +119,7 @@ export class PermissionPolicyBridge {
   }
 
   /**
-   * 生成命令执行策略
+   * Generate command execution policies
    */
   static execAccessPolicies(
     permissions: ProviderPermissions['exec'],
@@ -130,7 +130,7 @@ export class PermissionPolicyBridge {
   }
 
   /**
-   * 生成预算限制策略
+   * Generate budget limit policies
    */
   static budgetPolicies(
     budgets: ProviderBudgets,
@@ -141,7 +141,7 @@ export class PermissionPolicyBridge {
   }
 
   /**
-   * 从完整的权限和预算声明生成策略
+   * Generate policies from complete permission and budget declarations
    */
   static fromManifest(
     permissions: ProviderPermissions | undefined,
@@ -153,14 +153,14 @@ export class PermissionPolicyBridge {
 }
 
 /**
- * 验证权限声明是否有效
+ * Validate whether permission declarations are valid
  */
 export function validatePermissions(
   permissions: ProviderPermissions
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = []
 
-  // 验证文件权限
+  // Validate file permissions
   if (permissions.file) {
     if (permissions.file.read) {
       for (const path of permissions.file.read) {
@@ -178,7 +178,7 @@ export function validatePermissions(
     }
   }
 
-  // 验证网络权限
+  // Validate network permissions
   if (permissions.network) {
     if (permissions.network.allow) {
       for (const domain of permissions.network.allow) {
@@ -196,7 +196,7 @@ export function validatePermissions(
     }
   }
 
-  // 验证执行权限
+  // Validate exec permissions
   if (permissions.exec) {
     if (permissions.exec.allow) {
       for (const cmd of permissions.exec.allow) {
@@ -218,7 +218,7 @@ export function validatePermissions(
 }
 
 /**
- * 验证预算声明是否有效
+ * Validate whether budget declarations are valid
  */
 export function validateBudgets(
   budgets: ProviderBudgets

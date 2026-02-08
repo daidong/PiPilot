@@ -1,28 +1,28 @@
 /**
- * TokenBudget - Token 预算管理
+ * TokenBudget - Token Budget Management
  */
 
 import type { CostTier } from '../types/context.js'
 import { countTokens } from '../utils/tokenizer.js'
 
 /**
- * Token 预算配置
+ * Token budget configuration
  */
 export interface TokenBudgetConfig {
-  /** 总预算 */
+  /** Total budget */
   total: number
-  /** 各成本等级的限制 */
+  /** Limits per cost tier */
   tierLimits?: {
     cheap?: number
     medium?: number
     expensive?: number
   }
-  /** 警告阈值（百分比） */
+  /** Warning threshold (percentage) */
   warningThreshold?: number
 }
 
 /**
- * 完整的 tier 限制配置
+ * Full tier limits configuration
  */
 interface FullTierLimits {
   cheap: number
@@ -31,7 +31,7 @@ interface FullTierLimits {
 }
 
 /**
- * 完整的配置
+ * Full configuration
  */
 interface FullTokenBudgetConfig {
   total: number
@@ -40,7 +40,7 @@ interface FullTokenBudgetConfig {
 }
 
 /**
- * Token 使用统计
+ * Token usage statistics
  */
 export interface TokenUsage {
   total: number
@@ -52,7 +52,7 @@ export interface TokenUsage {
 }
 
 /**
- * Token 预算管理器
+ * Token Budget Manager
  */
 export class TokenBudget {
   private config: FullTokenBudgetConfig
@@ -79,20 +79,20 @@ export class TokenBudget {
   }
 
   /**
-   * 设置警告回调
+   * Set the warning callback
    */
   setWarningHandler(handler: (usage: TokenUsage, threshold: number) => void): void {
     this.onWarning = handler
   }
 
   /**
-   * 检查是否能承担指定成本
+   * Check if the specified cost is affordable
    */
   canAfford(tier: CostTier, tokens?: number): boolean {
     const tierLimit = this.config.tierLimits[tier]
     const tierUsage = this.usage.byTier[tier]
 
-    // 如果提供了具体 token 数，检查是否会超出
+    // If a specific token count is provided, check if it would exceed the limit
     if (tokens !== undefined) {
       if (tierUsage + tokens > tierLimit) {
         return false
@@ -102,18 +102,18 @@ export class TokenBudget {
       }
     }
 
-    // 检查当前使用是否已超出
+    // Check if current usage already exceeds the limit
     return tierUsage < tierLimit && this.usage.total < this.config.total
   }
 
   /**
-   * 消费 token
+   * Consume tokens
    */
   consume(tier: CostTier, tokens: number): void {
     this.usage.total += tokens
     this.usage.byTier[tier] += tokens
 
-    // 检查是否触发警告
+    // Check if the warning threshold is triggered
     const usageRatio = this.usage.total / this.config.total
     if (usageRatio >= this.config.warningThreshold && this.onWarning) {
       this.onWarning(this.getUsage(), this.config.warningThreshold)
@@ -121,7 +121,7 @@ export class TokenBudget {
   }
 
   /**
-   * 消费文本内容的 token
+   * Consume tokens for text content
    */
   consumeText(tier: CostTier, text: string): number {
     const tokens = countTokens(text)
@@ -130,7 +130,7 @@ export class TokenBudget {
   }
 
   /**
-   * 获取当前使用情况
+   * Get current usage
    */
   getUsage(): TokenUsage {
     return {
@@ -140,7 +140,7 @@ export class TokenBudget {
   }
 
   /**
-   * 获取剩余预算
+   * Get remaining budget
    */
   getRemaining(): {
     total: number
@@ -161,7 +161,7 @@ export class TokenBudget {
   }
 
   /**
-   * 获取使用百分比
+   * Get usage percentage
    */
   getUsagePercentage(): {
     total: number
@@ -182,7 +182,7 @@ export class TokenBudget {
   }
 
   /**
-   * 重置使用情况
+   * Reset usage
    */
   reset(): void {
     this.usage = {
@@ -196,7 +196,7 @@ export class TokenBudget {
   }
 
   /**
-   * 更新配置
+   * Update configuration
    */
   updateConfig(config: Partial<TokenBudgetConfig>): void {
     if (config.total !== undefined) {
@@ -211,7 +211,7 @@ export class TokenBudget {
   }
 
   /**
-   * 获取配置
+   * Get configuration
    */
   getConfig(): FullTokenBudgetConfig {
     return { ...this.config }

@@ -1,5 +1,5 @@
 /**
- * Agent Types - Agent 类型定义
+ * Agent Types - Agent type definitions
  */
 
 import type { Pack } from './pack.js'
@@ -12,77 +12,77 @@ import type { SkillTelemetryConfig } from './skill.js'
 import type { KernelV2Config } from '../kernel-v2/types.js'
 
 /**
- * 模型配置
+ * Model configuration
  */
 export interface ModelConfig {
-  /** 默认模型 */
+  /** Default model */
   default: string
-  /** 备用模型 */
+  /** Fallback model */
   fallback?: string
-  /** 最大 token 数 */
+  /** Maximum number of tokens */
   maxTokens?: number
 }
 
 /**
- * Agent 定义
+ * Agent definition
  */
 export interface AgentDefinition {
   /** Agent ID */
   id: string
-  /** Agent 名称 */
+  /** Agent name */
   name: string
-  /** 核心人设（永不裁剪） */
+  /** Core identity (never trimmed) */
   identity: string
-  /** 使用的 Packs */
+  /** Packs to use */
   packs: Pack[]
-  /** 额外的策略 */
+  /** Additional policies */
   policies?: Policy[]
-  /** 约束规则（永不裁剪） */
+  /** Constraint rules (never trimmed) */
   constraints: string[]
-  /** 上下文使用指南 */
+  /** Context usage guide */
   contextGuide?: string
-  /** 模型配置 */
+  /** Model configuration */
   model?: ModelConfig
-  /** 最大步骤数 */
+  /** Maximum number of steps */
   maxSteps?: number
 }
 
 /**
- * LLM 提供商类型
+ * LLM provider type
  */
 export type LLMProvider = 'openai' | 'anthropic'
 
 /**
- * Agent 配置（用于 createAgent）
+ * Agent configuration (for createAgent)
  */
 export interface AgentConfig {
-  /** API 密钥 */
+  /** API key */
   apiKey?: string
-  /** LLM 提供商 */
+  /** LLM provider */
   provider?: LLMProvider
-  /** 模型名称 */
+  /** Model name */
   model?: string
-  /** 工作目录 */
+  /** Working directory */
   projectPath?: string
-  /** 使用的 Packs */
+  /** Packs to use */
   packs?: Pack[]
-  /** 额外的策略 */
+  /** Additional policies */
   policies?: Policy[]
-  /** 最大步骤数 */
+  /** Maximum number of steps */
   maxSteps?: number
-  /** 最大 token 数 */
+  /** Maximum number of tokens */
   maxTokens?: number
   /** Reasoning effort for reasoning models (low, medium, high, max) */
   reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
   /** Hard stop after this many consecutive tool-only rounds (default: threshold * 2) */
   maxConsecutiveToolRounds?: number
-  /** 审批处理器 */
+  /** Approval handler */
   onApprovalRequired?: (message: string, timeout?: number) => Promise<boolean>
-  /** 流式输出处理器 */
+  /** Streaming output handler */
   onStream?: (chunk: string) => void
-  /** 工具调用处理器 */
+  /** Tool call handler */
   onToolCall?: (tool: string, input: unknown) => void
-  /** 工具结果处理器 */
+  /** Tool result handler */
   onToolResult?: (tool: string, result: unknown, args?: unknown) => void
   /** Persistent session ID (reuse across restarts for history continuity) */
   sessionId?: string
@@ -120,20 +120,20 @@ export interface AgentConfig {
 }
 
 /**
- * Agent 运行结果
+ * Agent run result
  */
 export interface AgentRunResult {
-  /** 是否成功 */
+  /** Whether the run succeeded */
   success: boolean
-  /** 最终输出 */
+  /** Final output */
   output: string
-  /** 错误信息 */
+  /** Error message */
   error?: string
-  /** 执行步骤数 */
+  /** Number of steps executed */
   steps: number
-  /** Trace 事件 */
+  /** Trace events */
   trace: TraceEvent[]
-  /** 总耗时（毫秒） */
+  /** Total duration (milliseconds) */
   durationMs: number
   /** Token usage and cost summary */
   usage?: UsageSummary
@@ -145,13 +145,6 @@ export interface AgentRunResult {
 export interface AgentRunOptions {
   /** User-selected context to include */
   selectedContext?: ContextSelection[]
-  /** WorkingSet inputs for this run */
-  workingSet?: {
-    /** Explicit entity IDs to include */
-    explicitIds?: string[]
-    /** Query string for retrieval */
-    query?: string
-  }
   /** Additional system-level instructions for this run */
   additionalInstructions?: string
   /** Override token budget for this run */
@@ -159,7 +152,7 @@ export interface AgentRunOptions {
 }
 
 /**
- * Agent 实例
+ * Agent instance
  */
 export interface Agent {
   /** Agent ID */
@@ -168,24 +161,24 @@ export interface Agent {
   runtime: Runtime
   /** Ensure packs are initialized (idempotent, called automatically by run()) */
   ensureInit: () => Promise<void>
-  /** 运行 Agent */
+  /** Run the Agent */
   run: (prompt: string, options?: AgentRunOptions) => Promise<AgentRunResult>
-  /** 停止运行 */
+  /** Stop the run */
   stop: () => void
-  /** 销毁 Agent */
+  /** Destroy the Agent */
   destroy: () => Promise<void>
 }
 
 /**
- * 会话状态
+ * Session state
  */
 export interface SessionState {
-  /** 获取状态值 */
+  /** Get a state value */
   get: <T>(key: string) => T | undefined
-  /** 设置状态值 */
+  /** Set a state value */
   set: <T>(key: string, value: T) => void
-  /** 删除状态值 */
+  /** Delete a state value */
   delete: (key: string) => void
-  /** 检查是否存在 */
+  /** Check if a key exists */
   has: (key: string) => boolean
 }

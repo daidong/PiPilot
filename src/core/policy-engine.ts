@@ -1,6 +1,6 @@
 /**
- * PolicyEngine - 策略引擎
- * 三阶段 Pipeline: Guard → Mutate → Observe
+ * PolicyEngine - Policy Engine
+ * Three-phase Pipeline: Guard → Mutate → Observe
  */
 
 import type {
@@ -19,7 +19,7 @@ import type { EventBus } from './event-bus.js'
 import { applyTransforms } from '../utils/transform.js'
 
 /**
- * PolicyEngine 配置
+ * PolicyEngine configuration
  */
 export interface PolicyEngineConfig {
   trace: TraceCollector
@@ -29,7 +29,7 @@ export interface PolicyEngineConfig {
 }
 
 /**
- * 策略引擎
+ * Policy Engine
  */
 export class PolicyEngine {
   private guards: Policy[] = []
@@ -42,7 +42,7 @@ export class PolicyEngine {
   }
 
   /**
-   * 注册策略
+   * Register a policy
    */
   register(policy: Policy): void {
     switch (policy.phase) {
@@ -62,7 +62,7 @@ export class PolicyEngine {
   }
 
   /**
-   * 批量注册策略
+   * Register multiple policies
    */
   registerAll(policies: Policy[]): void {
     for (const policy of policies) {
@@ -71,7 +71,7 @@ export class PolicyEngine {
   }
 
   /**
-   * 取消注册策略
+   * Unregister a policy
    */
   unregister(policyId: string): boolean {
     let removed = false
@@ -92,10 +92,10 @@ export class PolicyEngine {
   }
 
   /**
-   * 执行前评估（Guard + Mutate 阶段）
+   * Pre-execution evaluation (Guard + Mutate phases)
    */
   async evaluateBefore(ctx: PolicyContext): Promise<BeforeResult> {
-    // 1. Guard 阶段：任一 deny 即终止
+    // 1. Guard phase: terminate on any deny
     for (const policy of this.guards) {
       if (!policy.match(ctx)) {
         continue
@@ -133,13 +133,13 @@ export class PolicyEngine {
             return { allowed: false, reason: 'User denied approval' }
           }
         } else {
-          // 没有审批处理器，默认拒绝
+          // No approval handler configured, deny by default
           return { allowed: false, reason: 'Approval required but no handler configured' }
         }
       }
     }
 
-    // 2. Mutate 阶段：收集所有 transforms
+    // 2. Mutate phase: collect all transforms
     const transforms: Transform[] = []
 
     for (const policy of this.mutators) {
@@ -159,7 +159,7 @@ export class PolicyEngine {
       }
     }
 
-    // 应用所有 transforms
+    // Apply all transforms
     const mutatedInput = transforms.length > 0
       ? applyTransforms(ctx.input, transforms)
       : ctx.input
@@ -168,7 +168,7 @@ export class PolicyEngine {
   }
 
   /**
-   * 执行后评估（Observe 阶段）
+   * Post-execution evaluation (Observe phase)
    */
   async evaluateAfter(ctx: PolicyContext): Promise<void> {
     for (const policy of this.observers) {
@@ -201,7 +201,7 @@ export class PolicyEngine {
   }
 
   /**
-   * 评估完整的工具调用（包含前后阶段）
+   * Evaluate a complete tool call (including pre and post phases)
    */
   async evaluateToolCall<T>(
     ctx: PolicyContext,
@@ -225,14 +225,14 @@ export class PolicyEngine {
   }
 
   /**
-   * 获取所有策略
+   * Get all policies
    */
   getAllPolicies(): Policy[] {
     return [...this.guards, ...this.mutators, ...this.observers]
   }
 
   /**
-   * 获取指定阶段的策略
+   * Get policies by phase
    */
   getPoliciesByPhase(phase: 'guard' | 'mutate' | 'observe'): Policy[] {
     switch (phase) {
@@ -246,7 +246,7 @@ export class PolicyEngine {
   }
 
   /**
-   * 获取策略统计
+   * Get policy statistics
    */
   getStats(): {
     total: number
@@ -263,7 +263,7 @@ export class PolicyEngine {
   }
 
   /**
-   * 清空所有策略
+   * Clear all policies
    */
   clear(): void {
     this.guards = []
@@ -272,14 +272,14 @@ export class PolicyEngine {
   }
 
   /**
-   * 设置审批处理器
+   * Set the approval handler
    */
   setApprovalHandler(handler: ApprovalHandler): void {
     this.config.onApprovalRequired = handler
   }
 
   /**
-   * 设置告警处理器
+   * Set the alert handler
    */
   setAlertHandler(handler: AlertHandler): void {
     this.config.onAlert = handler

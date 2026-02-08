@@ -1,7 +1,7 @@
 /**
  * MCP Transport Base
  *
- * 传输层抽象基类，定义 MCP 通信的基础接口
+ * Abstract base class for the transport layer, defining the fundamental interface for MCP communication
  */
 
 import { EventEmitter } from 'node:events'
@@ -12,7 +12,7 @@ import type {
 } from '../types.js'
 
 /**
- * 传输层事件类型
+ * Transport layer event types
  */
 export interface TransportEvents {
   'message': JsonRpcResponse | JsonRpcNotification
@@ -21,17 +21,17 @@ export interface TransportEvents {
 }
 
 /**
- * 传输层配置
+ * Transport layer configuration
  */
 export interface TransportConfig {
-  /** 请求超时（毫秒） */
+  /** Request timeout (ms) */
   timeout?: number
-  /** 调试模式 */
+  /** Debug mode */
   debug?: boolean
 }
 
 /**
- * 传输层抽象基类
+ * Transport layer abstract base class
  */
 export abstract class MCPTransport extends EventEmitter {
   protected ready = false
@@ -55,29 +55,29 @@ export abstract class MCPTransport extends EventEmitter {
   }
 
   /**
-   * 启动传输连接
+   * Start the transport connection
    */
   abstract start(): Promise<void>
 
   /**
-   * 停止传输连接
+   * Stop the transport connection
    */
   abstract stop(): Promise<void>
 
   /**
-   * 发送原始消息
+   * Send a raw message
    */
   protected abstract send(message: JsonRpcRequest | JsonRpcNotification): Promise<void>
 
   /**
-   * 检查是否就绪
+   * Check if the transport is ready
    */
   isReady(): boolean {
     return this.ready
   }
 
   /**
-   * 发送 JSON-RPC 请求并等待响应
+   * Send a JSON-RPC request and wait for the response
    */
   async request<T>(method: string, params?: unknown): Promise<T> {
     if (!this.ready) {
@@ -117,7 +117,7 @@ export abstract class MCPTransport extends EventEmitter {
   }
 
   /**
-   * 发送通知（不等待响应）
+   * Send a notification (does not wait for a response)
    */
   async notify(method: string, params?: unknown): Promise<void> {
     if (!this.ready) {
@@ -138,14 +138,14 @@ export abstract class MCPTransport extends EventEmitter {
   }
 
   /**
-   * 处理收到的消息
+   * Handle a received message
    */
   protected handleMessage(message: JsonRpcResponse | JsonRpcNotification): void {
     if (this.config.debug) {
       console.debug('[MCP] Received:', JSON.stringify(message))
     }
 
-    // 检查是否是响应（有 id）
+    // Check if it's a response (has an id)
     if ('id' in message && message.id !== undefined) {
       const pending = this.pendingRequests.get(message.id)
       if (pending) {
@@ -159,13 +159,13 @@ export abstract class MCPTransport extends EventEmitter {
         }
       }
     } else {
-      // 是通知，发出事件
+      // It's a notification, emit an event
       this.emit('message', message)
     }
   }
 
   /**
-   * 处理错误
+   * Handle an error
    */
   protected handleError(error: Error): void {
     if (this.config.debug) {
@@ -175,12 +175,12 @@ export abstract class MCPTransport extends EventEmitter {
   }
 
   /**
-   * 处理连接关闭
+   * Handle connection close
    */
   protected handleClose(): void {
     this.ready = false
 
-    // 拒绝所有挂起的请求
+    // Reject all pending requests
     for (const [id, pending] of this.pendingRequests) {
       clearTimeout(pending.timer)
       pending.reject(new Error('Transport closed'))
@@ -191,7 +191,7 @@ export abstract class MCPTransport extends EventEmitter {
   }
 
   /**
-   * 生成下一个请求 ID
+   * Generate the next request ID
    */
   protected nextRequestId(): number {
     return ++this.requestId

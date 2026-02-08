@@ -1,7 +1,7 @@
 /**
- * Config Loader - 配置加载器
+ * Config Loader - Configuration loader
  *
- * 加载和解析 agent.yaml 配置文件
+ * Load and parse agent.yaml configuration files
  */
 
 import * as fs from 'node:fs'
@@ -11,43 +11,43 @@ import * as yaml from 'yaml'
 import type { MCPServerConfig } from '../mcp/index.js'
 
 /**
- * Agent YAML 配置结构
+ * Agent YAML configuration structure
  */
 export interface AgentYAMLConfig {
   /** Agent ID */
   id: string
 
-  /** Agent 名称 */
+  /** Agent name */
   name?: string
 
-  /** Agent 身份描述 */
+  /** Agent identity description */
   identity?: string
 
-  /** 约束条件 */
+  /** Constraints */
   constraints?: string[]
 
-  /** 使用的 Packs */
+  /** Packs to use */
   packs?: Array<string | PackConfigEntry>
 
-  /** MCP 服务器配置 */
+  /** MCP server configuration */
   mcp?: MCPConfigEntry[]
 
-  /** 模型配置 */
+  /** Model configuration */
   model?: {
     default?: string
     maxTokens?: number
     temperature?: number
   }
 
-  /** 最大步骤数 */
+  /** Maximum number of steps */
   maxSteps?: number
 
-  /** 自定义配置 */
+  /** Custom configuration */
   custom?: Record<string, unknown>
 }
 
 /**
- * Pack 配置项
+ * Pack configuration entry
  */
 export interface PackConfigEntry {
   name: string
@@ -55,7 +55,7 @@ export interface PackConfigEntry {
 }
 
 /**
- * MCP 配置项
+ * MCP configuration entry
  */
 export interface MCPConfigEntry {
   name: string
@@ -70,7 +70,7 @@ export interface MCPConfigEntry {
 }
 
 /**
- * 默认配置文件名
+ * Default configuration file names
  */
 export const DEFAULT_CONFIG_FILENAMES = [
   'agent.yaml',
@@ -80,7 +80,7 @@ export const DEFAULT_CONFIG_FILENAMES = [
 ]
 
 /**
- * 查找配置文件
+ * Find configuration file
  */
 export function findConfigFile(dir: string = process.cwd()): string | null {
   for (const filename of DEFAULT_CONFIG_FILENAMES) {
@@ -93,13 +93,13 @@ export function findConfigFile(dir: string = process.cwd()): string | null {
 }
 
 /**
- * 加载配置文件
+ * Load configuration file
  */
 export function loadConfig(filepath: string): AgentYAMLConfig {
   const content = fs.readFileSync(filepath, 'utf-8')
   const config = yaml.parse(content) as AgentYAMLConfig
 
-  // 验证必需字段
+  // Validate required fields
   if (!config.id) {
     throw new Error(`Config file ${filepath} missing required field: id`)
   }
@@ -108,7 +108,7 @@ export function loadConfig(filepath: string): AgentYAMLConfig {
 }
 
 /**
- * 尝试加载配置文件（如果存在）
+ * Try to load config file (if it exists)
  */
 export function tryLoadConfig(dir: string = process.cwd()): AgentYAMLConfig | null {
   const filepath = findConfigFile(dir)
@@ -125,7 +125,7 @@ export function tryLoadConfig(dir: string = process.cwd()): AgentYAMLConfig | nu
 }
 
 /**
- * 保存配置文件
+ * Save configuration file
  */
 export function saveConfig(
   config: AgentYAMLConfig,
@@ -141,7 +141,7 @@ export function saveConfig(
 }
 
 /**
- * 合并配置（参数覆盖文件配置）
+ * Merge configurations (parameters override file configuration)
  */
 export function mergeConfigs(
   fileConfig: AgentYAMLConfig | null,
@@ -157,7 +157,7 @@ export function mergeConfigs(
   return {
     ...fileConfig,
     ...paramConfig,
-    // 深度合并特定字段
+    // Deep merge specific fields
     packs: paramConfig.packs ?? fileConfig.packs,
     mcp: paramConfig.mcp ?? fileConfig.mcp,
     model: {
@@ -173,7 +173,7 @@ export function mergeConfigs(
 }
 
 /**
- * 将 Pack 配置转换为 Pack 名称列表
+ * Normalize Pack configurations into a list of Pack names
  */
 export function normalizePackConfigs(
   packs?: Array<string | PackConfigEntry>
@@ -189,7 +189,7 @@ export function normalizePackConfigs(
 }
 
 /**
- * 将 MCP 配置转换为 MCPServerConfig
+ * Convert MCP configurations to MCPServerConfig
  */
 export function normalizeMCPConfigs(
   mcpConfigs?: MCPConfigEntry[]
@@ -217,7 +217,7 @@ export function normalizeMCPConfigs(
 }
 
 /**
- * 生成 .env.example 内容
+ * Generate .env.example content
  */
 export function generateEnvExample(
   envVars: Record<string, string>
@@ -243,7 +243,7 @@ export function generateEnvExample(
 }
 
 /**
- * 验证配置文件
+ * Validate configuration file
  */
 export function validateConfig(config: AgentYAMLConfig): string[] {
   const errors: string[] = []

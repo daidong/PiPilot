@@ -1,5 +1,5 @@
 /**
- * PromptCompiler - Prompt 编译器
+ * PromptCompiler - Prompt Compiler
  */
 
 import type { AgentDefinition } from '../types/agent.js'
@@ -10,21 +10,21 @@ import type { SkillManager } from '../skills/skill-manager.js'
 import { countTokens, truncateToTokens } from '../utils/tokenizer.js'
 
 /**
- * Prompt 段落
+ * Prompt section
  */
 export interface PromptSection {
-  /** 段落 ID */
+  /** Section ID */
   id: string
-  /** 段落内容 */
+  /** Section content */
   content: string
-  /** 是否受保护（永不裁剪） */
+  /** Whether it is protected (never truncated) */
   protected: boolean
-  /** token 数量 */
+  /** Token count */
   tokens?: number
 }
 
 /**
- * 编译后的 Prompt
+ * Compiled Prompt
  */
 export class CompiledPrompt {
   private sections: PromptSection[]
@@ -39,13 +39,13 @@ export class CompiledPrompt {
   }
 
   /**
-   * 渲染为字符串
+   * Render as a string
    */
   render(): string {
     const result: string[] = []
     let totalTokens = 0
 
-    // 首先计算受保护段落的总 token
+    // First calculate the total tokens of protected sections
     const protectedTokens = this.sections
       .filter(s => s.protected)
       .reduce((sum, s) => sum + (s.tokens ?? 0), 0)
@@ -54,17 +54,17 @@ export class CompiledPrompt {
 
     for (const section of this.sections) {
       if (section.protected) {
-        // 受保护段落直接添加
+        // Protected sections are added directly
         result.push(section.content)
         totalTokens += section.tokens ?? 0
       } else {
-        // 非保护段落检查预算
+        // Non-protected sections check the budget
         const sectionTokens = section.tokens ?? 0
         if (totalTokens + sectionTokens <= this.maxTokens) {
           result.push(section.content)
           totalTokens += sectionTokens
         } else {
-          // 尝试截断
+          // Try to truncate
           const available = remainingBudget - (totalTokens - protectedTokens)
           if (available > 100) {
             const truncated = truncateToTokens(section.content, available, 'tail')
@@ -79,21 +79,21 @@ export class CompiledPrompt {
   }
 
   /**
-   * 获取段落列表
+   * Get the list of sections
    */
   getSections(): PromptSection[] {
     return [...this.sections]
   }
 
   /**
-   * 获取总 token 数
+   * Get total token count
    */
   getTotalTokens(): number {
     return this.sections.reduce((sum, s) => sum + (s.tokens ?? 0), 0)
   }
 
   /**
-   * 获取受保护段落的 token 数
+   * Get the token count of protected sections
    */
   getProtectedTokens(): number {
     return this.sections
@@ -103,11 +103,11 @@ export class CompiledPrompt {
 }
 
 /**
- * Prompt 编译器
+ * Prompt Compiler
  */
 export class PromptCompiler {
   /**
-   * 编译 Agent 定义为 Prompt
+   * Compile an Agent definition into a Prompt
    */
   compile(
     agent: AgentDefinition,
@@ -118,7 +118,7 @@ export class PromptCompiler {
   ): CompiledPrompt {
     const sections: PromptSection[] = []
 
-    // 1. Identity（永不裁剪）
+    // 1. Identity (never truncated)
     sections.push({
       id: 'identity',
       content: agent.identity.trim(),
@@ -148,7 +148,7 @@ ${agent.contextGuide ?? ''}`
       protected: true
     })
 
-    // 4. Pack Prompt Fragments（可裁剪）
+    // 4. Pack Prompt Fragments (can be truncated)
     for (const pack of agent.packs) {
       if (pack.promptFragment) {
         sections.push({
@@ -159,7 +159,7 @@ ${agent.contextGuide ?? ''}`
       }
     }
 
-    // 5. Skill Sections（可裁剪，懒加载的程序性知识）
+    // 5. Skill Sections (can be truncated, lazy-loaded procedural knowledge)
     // Phase 1.5: Use skillSection.id directly (SkillManager already adds skill: prefix)
     if (skillManager) {
       const skillSections = skillManager.getPromptSections()
@@ -172,7 +172,7 @@ ${agent.contextGuide ?? ''}`
       }
     }
 
-    // 6. Constraints（永不裁剪）
+    // 6. Constraints (never truncated)
     if (agent.constraints.length > 0) {
       const constraintsSection = `## Constraints
 
@@ -191,7 +191,7 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
   }
 
   /**
-   * 编译简单的系统提示
+   * Compile a simple system prompt
    */
   compileSimple(config: {
     identity?: string

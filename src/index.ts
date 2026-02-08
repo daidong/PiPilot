@@ -1,10 +1,10 @@
 /**
  * Agent Foundry - Agent Framework v2
  *
- * 三轴正交架构：
- * - Tools（工具轴）: Agent 能执行的操作
- * - Policies（策略轴）: 决定操作是否被允许
- * - Context Sources（上下文轴）: Agent 获取必要信息
+ * Three-axis orthogonal architecture:
+ * - Tools (Tool axis): Operations agents can execute
+ * - Policies (Policy axis): Determine whether operations are allowed
+ * - Context Sources (Context axis): Provide necessary information for agents
  */
 
 // ============================================================================
@@ -14,11 +14,11 @@
 export { FRAMEWORK_DIR } from './constants.js'
 
 // ============================================================================
-// 类型导出
+// Type exports
 // ============================================================================
 
 export type {
-  // Tool 相关类型
+  // Tool related types
   Tool,
   ToolContext,
   ToolResult,
@@ -27,7 +27,7 @@ export type {
   ActivitySummary,
   ToolActivityFormat,
 
-  // Policy 相关类型
+  // Policy related types
   Policy,
   PolicyContext,
   Transform,
@@ -39,16 +39,16 @@ export type {
   ApprovalHandler,
   AlertHandler,
 
-  // Context 相关类型
+  // Context related types
   ContextSource,
   ContextResult,
   Provenance,
   Coverage,
 
-  // Pack 相关类型
+  // Pack related types
   Pack,
 
-  // Provider 相关类型
+  // Provider related types
   ProviderPermissions,
   ProviderBudgets,
   ProviderPackDescriptor,
@@ -57,7 +57,7 @@ export type {
   ToolProvider,
   ToolProviderConfig,
 
-  // Agent 相关类型
+  // Agent related types
   AgentDefinition,
   AgentConfig,
   AgentRunOptions,
@@ -65,7 +65,7 @@ export type {
   AgentRunResult,
   SessionState,
 
-  // Runtime 相关类型
+  // Runtime related types
   Runtime,
   RuntimeIO as RuntimeIOType,
   IOResult,
@@ -78,11 +78,11 @@ export type {
 } from './types/index.js'
 
 // ============================================================================
-// 工厂函数导出
+// Factory function exports
 // ============================================================================
 
 export {
-  // 定义工具
+  // Define tools
   defineTool,
   withErrorHandling,
   withTimeout,
@@ -90,12 +90,12 @@ export {
 } from './factories/define-tool.js'
 
 export {
-  // 定义 Provider
+  // Define Provider
   defineProvider
 } from './factories/define-provider.js'
 
 export {
-  // 定义策略
+  // Define policies
   definePolicy,
   defineGuardPolicy,
   defineDenyPolicy,
@@ -104,12 +104,12 @@ export {
 } from './factories/define-policy.js'
 
 export {
-  // 定义上下文源
+  // Define context sources
   defineContextSource
 } from './factories/define-context-source.js'
 
 export {
-  // 定义 Pack
+  // Define Pack
   definePack,
   mergePacks,
   extendPack,
@@ -117,7 +117,7 @@ export {
 } from './factories/define-pack.js'
 
 // ============================================================================
-// Skills 导出
+// Skills exports
 // ============================================================================
 
 export {
@@ -176,7 +176,7 @@ export type {
 } from './skills/index.js'
 
 // ============================================================================
-// Agent 导出
+// Agent exports
 // ============================================================================
 
 export { createAgent } from './agent/create-agent.js'
@@ -208,7 +208,7 @@ export type {
 } from './agent/define-simple-agent.js'
 
 // ============================================================================
-// 核心组件导出
+// Core component exports
 // ============================================================================
 
 // Error Feedback & Retry (RFC-005)
@@ -319,7 +319,7 @@ export {
 export { applyTransform, applyTransforms } from './utils/transform.js'
 
 // ============================================================================
-// 内置工具导出
+// Built-in tool exports
 // ============================================================================
 
 export {
@@ -362,7 +362,7 @@ export type {
 } from './tools/index.js'
 
 // ============================================================================
-// 内置策略导出
+// Built-in policy exports
 // ============================================================================
 
 export {
@@ -386,7 +386,7 @@ export {
 } from './policies/index.js'
 
 // ============================================================================
-// 内置上下文源导出
+// Built-in context source exports
 // ============================================================================
 
 export {
@@ -400,11 +400,11 @@ export {
 } from './context-sources/index.js'
 
 // ============================================================================
-// Packs 导出
+// Packs exports
 // ============================================================================
 
 export {
-  // 分层核心
+  // Layered core
   safe,
   safePack,
   exec,
@@ -430,12 +430,12 @@ export {
   python,
   todo,
   web,
-  // 组合工厂
+  // Composite factories
   minimal,
   standard,
   full,
   strict,
-  // 命名空间
+  // Namespace
   packs,
   packMeta
 } from './packs/index.js'
@@ -450,12 +450,12 @@ export type {
 } from './packs/index.js'
 
 // ============================================================================
-// LLM 导出 (基于 Vercel AI SDK)
+// LLM exports (based on Vercel AI SDK)
 // ============================================================================
 
-// 类型导出
+// Type exports
 export type {
-  // Provider 类型
+  // Provider types
   ProviderID,
   ModelAPI,
   ModelCapabilities,
@@ -465,7 +465,7 @@ export type {
   ProviderSDKConfig,
   ProviderOptions,
 
-  // 消息类型
+  // Message types
   MessageRole,
   TextContent,
   ToolUseContent,
@@ -473,7 +473,7 @@ export type {
   ContentBlock,
   Message,
 
-  // 流式事件类型
+  // Streaming event types
   StreamEventType,
   StreamEvent,
   TextDeltaEvent,
@@ -484,7 +484,7 @@ export type {
   FinishEvent,
   ErrorEvent,
 
-  // 请求/响应类型
+  // Request/response types
   TokenUsage,
   DetailedTokenUsage,
   TokenCost,
@@ -494,15 +494,15 @@ export type {
   GenerateOptions,
   CompletionResponse,
 
-  // Provider 信息
+  // Provider info
   ProviderInfo,
 
-  // 客户端类型
+  // Client types
   LLMClientConfig,
   StreamCallbacks
 } from './llm/index.js'
 
-// 模型注册表
+// Model registry
 export {
   builtinModels,
   modelRegistry,
@@ -511,7 +511,7 @@ export {
   registerModel
 } from './llm/index.js'
 
-// Provider 管理
+// Provider management
 export {
   getLanguageModel,
   getLanguageModelByModelId,
@@ -527,7 +527,7 @@ export {
   supportsVision
 } from './llm/index.js'
 
-// 流式 API
+// Streaming API
 export {
   createLLMClient,
   createLLMClientFromModelId,
@@ -575,12 +575,12 @@ export type {
   SchemaAnalysisResult
 } from './llm/index.js'
 
-// AgentLoop 相关
+// AgentLoop related
 export type { LLMClient, AgentLoopConfig } from './agent/agent-loop.js'
 export { runAgent } from './agent/agent-loop.js'
 
 // ============================================================================
-// Python 桥接导出
+// Python bridge exports
 // ============================================================================
 
 export { PythonBridge } from './python/bridge.js'
@@ -593,25 +593,25 @@ export {
 export type { PythonToolConfig } from './python/define-python-tool.js'
 
 // ============================================================================
-// MCP 适配器导出
+// MCP adapter exports
 // ============================================================================
 //
-// MCP 用于连接外部工具服务器。使用指南：
-// - 通用能力（文件、GitHub、数据库等）→ 使用现有 MCP server
-// - 自己的业务逻辑 → 使用 defineTool() 创建本地工具
+// MCP is used to connect to external tool servers. Usage guide:
+// - General capabilities (files, GitHub, databases, etc.) -> Use existing MCP servers
+// - Your own business logic -> Use defineTool() to create local tools
 //
-// 详见 docs/MCP-GUIDE.md
+// See docs/MCP-GUIDE.md for details
 // ============================================================================
 
-// 公共 API：创建 MCP Provider（推荐使用）
+// Public API: Create MCP Provider (recommended)
 export {
-  createStdioMCPProvider,   // 本地 MCP server
-  createHttpMCPProvider,    // 远程 MCP server
-  createMCPProvider,        // 完整配置（多 server）
-  MCPProvider               // Provider 类
+  createStdioMCPProvider,   // Local MCP server
+  createHttpMCPProvider,    // Remote MCP server
+  createMCPProvider,        // Full config (multi-server)
+  MCPProvider               // Provider class
 } from './mcp/index.js'
 
-// 公共类型：配置 MCP（TypeScript 用户需要）
+// Public types: MCP configuration (needed by TypeScript users)
 export type {
   MCPServerConfig,
   MCPProviderConfig,
@@ -620,15 +620,15 @@ export type {
   MCPTransportConfig
 } from './mcp/index.js'
 
-// 错误处理
+// Error handling
 export { MCPError, MCPErrorCode } from './mcp/index.js'
 
-// 高级 API：直接操作 MCP 客户端（特殊场景）
+// Advanced API: Direct MCP client operations (special scenarios)
 export { MCPClient, createMCPClient } from './mcp/index.js'
 export type { MCPClientConfig } from './mcp/index.js'
 
-// 内部实现：传输层和适配器（一般不需要直接使用）
-// 如需使用，请从 'agent-foundry/mcp' 导入
+// Internal implementation: Transport layer and adapters (generally not needed directly)
+// If needed, import from 'agent-foundry/mcp'
 export { MCPTransport, StdioTransport, HttpTransport } from './mcp/index.js'
 export { createStdioTransport, createHttpTransport } from './mcp/index.js'
 export {
@@ -649,7 +649,7 @@ export type {
 } from './mcp/index.js'
 
 // ============================================================================
-// 权限→策略桥接导出
+// Permission-to-Policy bridge exports
 // ============================================================================
 
 export {
@@ -662,19 +662,19 @@ export {
 } from './bridges/index.js'
 export type { PolicyGenerationOptions } from './bridges/index.js'
 
-// 文件策略
+// File policies
 export { createFileReadPolicy, createFileWritePolicy, createFileAccessPolicies } from './bridges/index.js'
 export type { FileAccessPolicyConfig } from './bridges/index.js'
 
-// 网络策略
+// Network policies
 export { createNetworkPolicy, createNetworkAccessPolicies, extractDomain, matchesDomain } from './bridges/index.js'
 export type { NetworkPolicyConfig } from './bridges/index.js'
 
-// 执行策略
+// Execution policies
 export { createExecPolicy, createExecAccessPolicies } from './bridges/index.js'
 export type { ExecPolicyConfig } from './bridges/index.js'
 
-// 预算策略
+// Budget policies
 export {
   createTimeoutPolicy,
   createOutputLimitPolicy,
@@ -688,7 +688,7 @@ export type {
 } from './bridges/index.js'
 
 // ============================================================================
-// Provider 自动发现导出
+// Provider auto-discovery exports
 // ============================================================================
 
 export {
@@ -703,7 +703,7 @@ export { scanForManifests, extractPackageInfo } from './discovery/index.js'
 export type { ScanOptions } from './discovery/index.js'
 
 // ============================================================================
-// 配置文件导出
+// Configuration file exports
 // ============================================================================
 
 export {
@@ -725,57 +725,14 @@ export type {
 } from './config/index.js'
 
 // ============================================================================
-// 工具推荐导出
+// CLI exports
 // ============================================================================
 
-export {
-  ToolRecommender,
-  createRecommender,
-  // Catalog access
-  getToolCatalog,
-  getPackCatalog,
-  getMCPCatalog,
-  // Scoring API (new)
-  scoreMCPByQuery,
-  scoreToolsByQuery,
-  scorePacksByQuery,
-  scoreMCPServers,
-  scoreTools,
-  scorePacks,
-  // Category and filter functions
-  getMCPByCategory,
-  getPopularMCP,
-  getPackTools,
-  // Formatting
-  formatToolCatalogForLLM,
-  formatMCPCatalogForLLM,
-  collectEnvVars,
-  // Template resolution
-  resolveTemplate,
-  getRequiredParameters,
-  getAllParameters
-} from './recommendation/index.js'
-export type {
-  ToolRecommendation,
-  MCPRecommendation,
-  PackRecommendation,
-  RecommendationResult,
-  RecommenderConfig,
-  ToolCatalogEntry,
-  PackCatalogEntry,
-  MCPServerEntry,
-  ScoredRecommendation,
-  MatchSignal
-} from './recommendation/index.js'
+export { runIndexDocs, parseIndexDocsArgs, printIndexDocsHelp } from './cli/index.js'
+export type { IndexDocsOptions } from './cli/index.js'
 
 // ============================================================================
-// CLI 导出
-// ============================================================================
-
-export { InitWizard, runInitWizard } from './cli/index.js'
-
-// ============================================================================
-// Multi-Agent Team 导出
+// Multi-Agent Team exports
 // ============================================================================
 
 export {
@@ -969,7 +926,7 @@ export type {
 } from './team/index.js'
 
 // ============================================================================
-// Activity Formatter 导出
+// Activity Formatter exports
 // ============================================================================
 
 export { createActivityFormatter } from './trace/activity-formatter.js'
@@ -986,7 +943,7 @@ export type {
 } from './types/index.js'
 
 // ============================================================================
-// Kernel V2 (RFC-011) 导出
+// Kernel V2 (RFC-011) exports
 // ============================================================================
 
 export {

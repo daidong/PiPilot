@@ -2,10 +2,9 @@
 /**
  * Agent Foundry CLI
  *
- * 命令行入口
+ * CLI entry point
  */
 
-import { runInitWizard } from './init-wizard.js'
 import { runIndexDocs, parseIndexDocsArgs, printIndexDocsHelp } from './index-docs.js'
 
 const VERSION = '0.1.0'
@@ -17,7 +16,6 @@ Usage:
   agent-foundry <command> [options]
 
 Commands:
-  init          Create agent.yaml configuration file
   validate      Validate configuration file
   index-docs    Build document index for docs context sources
   help          Show help information
@@ -27,9 +25,7 @@ Options:
   --version, -v Show version number
 
 Examples:
-  $ agent-foundry init
   $ agent-foundry validate
-  $ agent-foundry init --api-key sk-xxx
   $ agent-foundry index-docs --paths docs,wiki -v
 `
 
@@ -37,20 +33,18 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const command = args[0]
 
-  // 解析选项
-  const options: { apiKey?: string; help?: boolean; version?: boolean } = {}
+  // Parse options
+  const options: { help?: boolean; version?: boolean } = {}
   for (let i = 1; i < args.length; i++) {
     const arg = args[i]
-    if (arg === '--api-key' && args[i + 1]) {
-      options.apiKey = args[++i]
-    } else if (arg === '--help' || arg === '-h') {
+    if (arg === '--help' || arg === '-h') {
       options.help = true
     } else if (arg === '--version' || arg === '-v') {
       options.version = true
     }
   }
 
-  // 处理全局选项
+  // Handle global options
   if (options.version || command === 'version' || command === '-v' || command === '--version') {
     console.log(`agent-foundry v${VERSION}`)
     return
@@ -63,10 +57,6 @@ async function main(): Promise<void> {
 
   // Execute command
   switch (command) {
-    case 'init':
-      await runInitWizard(options.apiKey as string | undefined)
-      break
-
     case 'validate':
       await runValidate()
       break
@@ -91,44 +81,44 @@ async function main(): Promise<void> {
 }
 
 /**
- * 验证配置文件
+ * Validate configuration file
  */
 async function runValidate(): Promise<void> {
   const { findConfigFile, loadConfig, validateConfig } = await import('../config/index.js')
 
   const configPath = findConfigFile()
   if (!configPath) {
-    console.error('❌ 未找到配置文件 (agent.yaml)')
+    console.error('Configuration file not found (agent.yaml)')
     process.exit(1)
   }
 
-  console.log(`📄 验证配置文件: ${configPath}`)
+  console.log(`Validating configuration file: ${configPath}`)
 
   try {
     const config = loadConfig(configPath)
     const errors = validateConfig(config)
 
     if (errors.length > 0) {
-      console.error('❌ 配置文件验证失败:')
+      console.error('Configuration file validation failed:')
       for (const error of errors) {
         console.error(`   • ${error}`)
       }
       process.exit(1)
     }
 
-    console.log('✅ 配置文件验证通过')
+    console.log('Configuration file validation passed')
     console.log('')
     console.log(`   Agent ID: ${config.id}`)
-    console.log(`   Name: ${config.name || '(未设置)'}`)
+    console.log(`   Name: ${config.name || '(not set)'}`)
     console.log(`   Packs: ${config.packs?.length || 0}`)
     console.log(`   MCP Servers: ${config.mcp?.length || 0}`)
   } catch (error) {
-    console.error(`❌ 加载配置文件失败: ${(error as Error).message}`)
+    console.error(`Failed to load configuration file: ${(error as Error).message}`)
     process.exit(1)
   }
 }
 
-// 运行
+// Run
 main().catch((error) => {
   console.error('Error:', error.message)
   process.exit(1)

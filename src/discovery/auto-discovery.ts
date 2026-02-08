@@ -1,7 +1,7 @@
 /**
  * Provider Auto-Discovery
  *
- * 自动发现和加载 Provider
+ * Automatically discover and load Providers
  */
 
 import type { ToolProvider } from '../types/provider.js'
@@ -9,37 +9,37 @@ import { ProviderRegistry } from '../core/provider-registry.js'
 import { scanForManifests, extractPackageInfo, type ScanOptions } from './scanner.js'
 
 /**
- * 发现配置
+ * Discovery configuration
  */
 export interface DiscoveryConfig extends ScanOptions {
-  /** 是否自动加载发现的 provider */
+  /** Whether to automatically load discovered providers */
   autoLoad?: boolean
-  /** 加载失败时是否继续 */
+  /** Whether to continue on load failure */
   continueOnError?: boolean
-  /** 是否验证 manifest */
+  /** Whether to validate manifests */
   validateManifest?: boolean
 }
 
 /**
- * 发现结果
+ * Discovery result
  */
 export interface DiscoveryResult {
-  /** 发现的 manifest 路径 */
+  /** Discovered manifest paths */
   manifests: string[]
-  /** 成功加载的 provider */
+  /** Successfully loaded providers */
   loaded: ToolProvider[]
-  /** 加载失败的记录 */
+  /** Records of load failures */
   errors: Array<{
     path: string
     error: Error
     packageName: string | null
   }>
-  /** 跳过的 provider */
+  /** Skipped providers */
   skipped: string[]
 }
 
 /**
- * Provider 自动发现器
+ * Provider auto-discoverer
  */
 export class ProviderDiscovery {
   private projectRoot: string
@@ -57,14 +57,14 @@ export class ProviderDiscovery {
   }
 
   /**
-   * 扫描所有可能的 provider
+   * Scan for all possible providers
    */
   async scan(): Promise<string[]> {
     return scanForManifests(this.projectRoot, this.config)
   }
 
   /**
-   * 扫描并加载所有 provider
+   * Scan and load all providers
    */
   async discover(): Promise<DiscoveryResult> {
     const registry = new ProviderRegistry()
@@ -72,7 +72,7 @@ export class ProviderDiscovery {
   }
 
   /**
-   * 加载到指定的 registry
+   * Load into the specified registry
    */
   async loadIntoRegistry(registry: ProviderRegistry): Promise<DiscoveryResult> {
     const result: DiscoveryResult = {
@@ -82,14 +82,14 @@ export class ProviderDiscovery {
       skipped: []
     }
 
-    // 扫描 manifest 文件
+    // Scan for manifest files
     result.manifests = await this.scan()
 
     if (!this.config.autoLoad) {
       return result
     }
 
-    // 加载每个 provider
+    // Load each provider
     for (const manifestPath of result.manifests) {
       const packageInfo = extractPackageInfo(manifestPath)
 
@@ -119,14 +119,14 @@ export class ProviderDiscovery {
   }
 
   /**
-   * 获取项目根目录
+   * Get the project root directory
    */
   getProjectRoot(): string {
     return this.projectRoot
   }
 
   /**
-   * 获取配置
+   * Get the configuration
    */
   getConfig(): DiscoveryConfig {
     return { ...this.config }
@@ -134,7 +134,7 @@ export class ProviderDiscovery {
 }
 
 /**
- * 便捷函数：自动发现并加载
+ * Convenience function: auto-discover and load
  */
 export async function autoDiscoverProviders(
   projectRoot: string,
@@ -146,7 +146,7 @@ export async function autoDiscoverProviders(
 }
 
 /**
- * 便捷函数：仅扫描不加载
+ * Convenience function: scan only without loading
  */
 export async function scanProviders(
   projectRoot: string,
@@ -156,7 +156,7 @@ export async function scanProviders(
 }
 
 /**
- * 创建发现器并返回
+ * Create and return a discoverer
  */
 export function createDiscovery(
   projectRoot: string,

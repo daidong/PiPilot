@@ -1,13 +1,13 @@
 /**
- * Models - 内置模型配置
+ * Models - Built-in model configurations
  *
- * 定义支持的 LLM 模型及其能力
+ * Define supported LLM models and their capabilities
  */
 
 import type { ModelConfig } from './provider.types.js'
 
 /**
- * 内置模型配置
+ * Built-in model configurations
  */
 export const builtinModels: ModelConfig[] = [
   // OpenAI Models - GPT-5.x (Responses API)
@@ -283,48 +283,48 @@ export const builtinModels: ModelConfig[] = [
 ]
 
 /**
- * 模型注册表
+ * Model registry
  */
 class ModelRegistry {
   private models: Map<string, ModelConfig> = new Map()
 
   constructor() {
-    // 注册内置模型
+    // Register built-in models
     for (const model of builtinModels) {
       this.register(model)
     }
   }
 
   /**
-   * 注册模型
+   * Register a model
    */
   register(model: ModelConfig): void {
     this.models.set(model.id, model)
   }
 
   /**
-   * 获取模型配置
+   * Get model configuration
    */
   get(id: string): ModelConfig | undefined {
     return this.models.get(id)
   }
 
   /**
-   * 获取所有模型
+   * Get all models
    */
   getAll(): ModelConfig[] {
     return Array.from(this.models.values())
   }
 
   /**
-   * 按 Provider 获取模型
+   * Get models by Provider
    */
   getByProvider(providerID: string): ModelConfig[] {
     return this.getAll().filter(m => m.providerID === providerID)
   }
 
   /**
-   * 检查模型是否支持某能力
+   * Check if a model supports a given capability
    */
   hasCapability(
     id: string,
@@ -338,26 +338,26 @@ class ModelRegistry {
 }
 
 /**
- * 全局模型注册表实例
+ * Global model registry instance
  */
 export const modelRegistry = new ModelRegistry()
 
 /**
- * 获取模型配置
+ * Get model configuration
  */
 export function getModel(id: string): ModelConfig | undefined {
   return modelRegistry.get(id)
 }
 
 /**
- * 获取所有模型
+ * Get all models
  */
 export function getAllModels(): ModelConfig[] {
   return modelRegistry.getAll()
 }
 
 /**
- * 注册自定义模型
+ * Register a custom model
  */
 export function registerModel(model: ModelConfig): void {
   modelRegistry.register(model)

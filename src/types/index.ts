@@ -1,5 +1,5 @@
 /**
- * Types - 导出所有类型定义
+ * Types - Export all type definitions
  */
 
 // Tool types
@@ -160,31 +160,6 @@ export type {
   ContextSelectionType,
   ContextSelection
 } from './context-pipeline.js'
-
-// Memory Entity types (RFC-009)
-export type {
-  EntityProvenance,
-  EntityLink,
-  SummaryCardMethod,
-  SummaryCardConfig,
-  MemoryEntityType,
-  MemoryEntity,
-  CreateEntityOptions,
-  UpdateEntityOptions,
-  WorkingSetSource,
-  EntityShape,
-  WorkingSetItem,
-  WorkingSetPlan,
-  EntityIndex,
-  WorkingSetResolvedEntity
-} from './memory-entity.js'
-
-export {
-  DEFAULT_SUMMARY_CARD_CONFIG,
-  MAX_SUMMARY_CARD_TOKENS,
-  isValidSummaryCard,
-  isValidEntityType
-} from './memory-entity.js'
 
 // Kernel V2 types (RFC-011)
 export type {

@@ -1,7 +1,7 @@
 /**
  * MCP Provider
  *
- * 将 MCP servers 包装为 AgentFoundry Provider
+ * Wraps MCP servers as an AgentFoundry Provider
  */
 
 import type { ToolProvider, ToolProviderManifest, ProviderCreateOptions } from '../types/provider.js'
@@ -14,9 +14,9 @@ import { adaptMCPTools } from './tool-adapter.js'
 import { definePack } from '../factories/define-pack.js'
 
 /**
- * MCP Provider 类
+ * MCP Provider class
  *
- * 管理多个 MCP 客户端的生命周期，并将它们的工具暴露为 Packs
+ * Manages the lifecycle of multiple MCP clients and exposes their tools as Packs
  */
 export class MCPProvider implements ToolProvider {
   readonly manifest: ToolProviderManifest
@@ -27,7 +27,7 @@ export class MCPProvider implements ToolProvider {
   constructor(config: MCPProviderConfig) {
     this.config = config
 
-    // 构建 manifest
+    // Build manifest
     this.manifest = {
       id: config.id,
       name: config.name,
@@ -38,7 +38,7 @@ export class MCPProvider implements ToolProvider {
       packs: config.servers.map((server) => ({
         id: `${config.id}.${server.id}`,
         description: `MCP tools from ${server.name}`,
-        tools: [], // 将在连接后填充
+        tools: [], // Will be populated after connection
         permissions: server.permissions,
         budgets: server.budgets
       }))
@@ -46,10 +46,10 @@ export class MCPProvider implements ToolProvider {
   }
 
   /**
-   * 创建 Packs
+   * Create Packs
    */
   async createPacks(_options?: ProviderCreateOptions): Promise<Pack[]> {
-    // 如果尚未连接，连接所有客户端
+    // If not yet connected, connect all clients
     if (!this.connected) {
       await this.connectAll()
     }
@@ -60,10 +60,10 @@ export class MCPProvider implements ToolProvider {
       const serverConfig = this.config.servers.find((s) => s.id === serverId)
       if (!serverConfig) continue
 
-      // 获取工具列表
+      // Get tool list
       const mcpTools = await client.listTools()
 
-      // 转换为 AgentFoundry 工具
+      // Convert to AgentFoundry tools
       const tools = adaptMCPTools(mcpTools, client, {
         prefix: serverConfig.toolPrefix ?? '',
         timeout: serverConfig.budgets?.timeoutMs,
@@ -71,7 +71,7 @@ export class MCPProvider implements ToolProvider {
         sourceName: serverConfig.name
       })
 
-      // 创建 Pack
+      // Create Pack
       const pack = this.createServerPack(serverId, serverConfig, tools)
       packs.push(pack)
     }
@@ -80,7 +80,7 @@ export class MCPProvider implements ToolProvider {
   }
 
   /**
-   * 连接所有 MCP 服务器
+   * Connect to all MCP servers
    */
   async connectAll(): Promise<void> {
     const connectPromises = this.config.servers.map(async (serverConfig) => {
@@ -103,7 +103,7 @@ export class MCPProvider implements ToolProvider {
   }
 
   /**
-   * 断开所有连接
+   * Disconnect all connections
    */
   async disconnectAll(): Promise<void> {
     const disconnectPromises = Array.from(this.clients.values()).map((client) =>
@@ -118,35 +118,35 @@ export class MCPProvider implements ToolProvider {
   }
 
   /**
-   * 销毁 Provider
+   * Destroy the Provider
    */
   async destroy(): Promise<void> {
     await this.disconnectAll()
   }
 
   /**
-   * 获取客户端
+   * Get a client
    */
   getClient(serverId: string): MCPClient | undefined {
     return this.clients.get(serverId)
   }
 
   /**
-   * 获取所有客户端
+   * Get all clients
    */
   getAllClients(): Map<string, MCPClient> {
     return new Map(this.clients)
   }
 
   /**
-   * 是否已连接
+   * Whether the provider is connected
    */
   isConnected(): boolean {
     return this.connected
   }
 
   /**
-   * 创建服务器 Pack
+   * Create a server Pack
    */
   private createServerPack(
     serverId: string,
@@ -159,29 +159,29 @@ export class MCPProvider implements ToolProvider {
       id: packId,
       description: `MCP tools from ${serverConfig.name}`,
       tools,
-      // 生命周期钩子
+      // Lifecycle hooks
       onInit: async (_runtime: Runtime) => {
-        // 确保客户端已连接
+        // Ensure the client is connected
         const client = this.clients.get(serverId)
         if (client && client.getState() !== 'connected') {
           await client.connect()
         }
       },
       onDestroy: async (_runtime: Runtime) => {
-        // Pack 销毁时断开对应的客户端
+        // Disconnect the corresponding client when the Pack is destroyed
         const client = this.clients.get(serverId)
         if (client) {
           await client.disconnect()
           this.clients.delete(serverId)
         }
       },
-      // 添加 prompt fragment
+      // Add prompt fragment
       promptFragment: this.generatePromptFragment(serverConfig, tools)
     })
   }
 
   /**
-   * 生成 prompt fragment
+   * Generate prompt fragment
    */
   private generatePromptFragment(
     serverConfig: MCPServerConfig,
@@ -196,23 +196,23 @@ export class MCPProvider implements ToolProvider {
     return `
 ## MCP Tools: ${serverConfig.name}
 
-以下工具来自外部 MCP 服务器 "${serverConfig.name}"：
+The following tools are provided by the external MCP server "${serverConfig.name}":
 - ${toolNames}
 
-这些工具通过 MCP 协议调用，可能有额外的延迟。
+These tools are invoked via the MCP protocol and may have additional latency.
 `
   }
 }
 
 /**
- * 创建 MCP Provider
+ * Create an MCP Provider
  */
 export function createMCPProvider(config: MCPProviderConfig): MCPProvider {
   return new MCPProvider(config)
 }
 
 /**
- * 从单个 MCP 服务器创建 Provider
+ * Create a Provider from a single MCP server
  */
 export function createSingleServerProvider(
   serverConfig: MCPServerConfig & { providerId?: string; providerName?: string }
@@ -225,7 +225,7 @@ export function createSingleServerProvider(
 }
 
 /**
- * 快速创建 STDIO MCP Provider
+ * Quickly create a STDIO MCP Provider
  */
 export function createStdioMCPProvider(options: {
   id: string
@@ -263,7 +263,7 @@ export function createStdioMCPProvider(options: {
 }
 
 /**
- * 快速创建 HTTP MCP Provider
+ * Quickly create an HTTP MCP Provider
  */
 export function createHttpMCPProvider(options: {
   id: string

@@ -1,34 +1,34 @@
 /**
- * Policy Types - 策略轴类型定义
- * Policies 决定操作是否被允许
+ * Policy Types - Policy axis type definitions
+ * Policies determine whether operations are allowed
  */
 
 /**
- * 策略上下文
+ * Policy context
  */
 export interface PolicyContext {
-  /** 工具名称 */
+  /** Tool name */
   tool: string
-  /** IO 操作类型 */
+  /** IO operation type */
   operation?: string
-  /** 工具输入 */
+  /** Tool input */
   input: unknown
-  /** IO 操作参数 */
+  /** IO operation parameters */
   params?: unknown
   /** Call source (e.g., ctx.get:docs.search) */
   caller?: string
-  /** 代理 ID */
+  /** Agent ID */
   agentId: string
-  /** 会话 ID */
+  /** Session ID */
   sessionId: string
-  /** 当前步骤 */
+  /** Current step */
   step: number
-  /** 工具执行结果（仅 Observe 阶段可用） */
+  /** Tool execution result (only available in the Observe phase) */
   result?: unknown
 }
 
 /**
- * 声明式变换操作符（可序列化、可重放）
+ * Declarative transform operators (serializable and replayable)
  */
 export type Transform =
   | { op: 'set'; path: string; value: unknown }
@@ -40,7 +40,7 @@ export type Transform =
   | { op: 'normalize_path'; path: string }
 
 /**
- * Guard 阶段决策
+ * Guard phase decision
  */
 export type GuardDecision =
   | { action: 'allow' }
@@ -48,55 +48,55 @@ export type GuardDecision =
   | { action: 'require_approval'; message: string; timeout?: number }
 
 /**
- * Mutate 阶段决策
+ * Mutate phase decision
  */
 export type MutateDecision =
   | { action: 'pass' }
   | { action: 'transform'; transforms: Transform[] }
 
 /**
- * Observe 阶段决策
+ * Observe phase decision
  */
 export interface ObserveDecision {
   action: 'observe'
-  /** 写入 trace */
+  /** Write to trace */
   record?: Record<string, unknown>
-  /** 发送事件 */
+  /** Emit events */
   emit?: { event: string; data: unknown }[]
-  /** 告警 */
+  /** Alert */
   alert?: { level: 'info' | 'warn' | 'error'; message: string }
 }
 
 /**
- * 策略决策（所有阶段的联合类型）
+ * Policy decision (union type of all phases)
  */
 export type PolicyDecision = GuardDecision | MutateDecision | ObserveDecision
 
 /**
- * 策略阶段
+ * Policy phase
  */
 export type PolicyPhase = 'guard' | 'mutate' | 'observe'
 
 /**
- * 策略定义
+ * Policy definition
  */
 export interface Policy {
-  /** 策略 ID */
+  /** Policy ID */
   id: string
-  /** 策略描述 */
+  /** Policy description */
   description?: string
-  /** 优先级（数字越小越先执行） */
+  /** Priority (lower number executes first) */
   priority?: number
-  /** 策略阶段 */
+  /** Policy phase */
   phase: PolicyPhase
-  /** 匹配函数 */
+  /** Match function */
   match: (ctx: PolicyContext) => boolean
-  /** 决策函数 */
+  /** Decision function */
   decide: (ctx: PolicyContext) => PolicyDecision | Promise<PolicyDecision>
 }
 
 /**
- * 策略配置（用于 definePolicy）
+ * Policy configuration (for definePolicy)
  */
 export interface PolicyConfig {
   id: string
@@ -108,7 +108,7 @@ export interface PolicyConfig {
 }
 
 /**
- * PolicyEngine 评估前的结果
+ * PolicyEngine pre-evaluation result
  */
 export interface BeforeResult {
   allowed: boolean
@@ -120,7 +120,7 @@ export interface BeforeResult {
 }
 
 /**
- * 审批请求处理器
+ * Approval request handler
  */
 export type ApprovalHandler = (decision: {
   message: string
@@ -128,7 +128,7 @@ export type ApprovalHandler = (decision: {
 }) => Promise<boolean>
 
 /**
- * 告警处理器
+ * Alert handler
  */
 export type AlertHandler = (alert: {
   level: 'info' | 'warn' | 'error'

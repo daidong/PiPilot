@@ -1,11 +1,11 @@
 /**
- * safe - 安全核心工具包
+ * safe - Safe core toolkit
  *
- * 特点：
- * - 无外部依赖
- * - 沙箱内运行
- * - 可审计
- * - 默认启用
+ * Features:
+ * - No external dependencies
+ * - Runs within sandbox
+ * - Auditable
+ * - Enabled by default
  *
  * Migration to Skills:
  * - Set useSkills: true to use lazy-loaded skills instead of promptFragment
@@ -40,20 +40,20 @@ export interface SafePackOptions {
 }
 
 /**
- * Safe Pack - 安全核心工具包
+ * Safe Pack - Safe core toolkit
  *
- * 包含工具：
- * - ctx-get: 统一上下文入口
- * - read: 读取文件
- * - write: 写入文件
- * - edit: 编辑文件
- * - glob: 文件匹配
- * - grep: 内容搜索
+ * Included tools:
+ * - ctx-get: Unified context entry point
+ * - read: Read files
+ * - write: Write files
+ * - edit: Edit files
+ * - glob: File pattern matching
+ * - grep: Content search
  *
- * 不包含：
- * - bash: 执行能力（移至 execPack）
- * - fetch: 网络能力（移至 networkPack）
- * - llm_call: LLM 调用（移至 computePack）
+ * Not included:
+ * - bash: Execution capability (moved to execPack)
+ * - fetch: Network capability (moved to networkPack)
+ * - llm_call: LLM calls (moved to computePack)
  *
  * @param options - Configuration options
  * @param options.useSkills - Use lazy-loaded skill instead of promptFragment (default: true)
@@ -73,11 +73,11 @@ export function safe(options: SafePackOptions = {}): Pack {
   ]
 
   const policies = [
-    // Guard: 禁止访问敏感文件
+    // Guard: Deny access to sensitive files
     ...noSecretFiles,
-    // Mutate: 路径规范化
+    // Mutate: Path normalization
     ...normalizePathsPolicies,
-    // Mutate: 自动限制输出大小
+    // Mutate: Auto-limit output size
     autoLimitRead,
     autoLimitGrep,
     autoLimitGlob
@@ -92,7 +92,7 @@ export function safe(options: SafePackOptions = {}): Pack {
 
     return definePack({
       id: 'safe',
-      description: '安全核心工具包：ctx-get, read, write, edit, glob, grep, skill-create, skill-approve',
+      description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve',
       tools,
       policies,
       skills: packSkills,
@@ -106,7 +106,7 @@ export function safe(options: SafePackOptions = {}): Pack {
   // Legacy promptFragment approach (for backward compatibility)
   return definePack({
     id: 'safe',
-    description: '安全核心工具包：ctx-get, read, write, edit, glob, grep, skill-create, skill-approve',
+    description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve',
     tools,
     policies,
     promptFragment: `
@@ -134,6 +134,6 @@ export function safe(options: SafePackOptions = {}): Pack {
 }
 
 /**
- * 别名：safePack
+ * Alias: safePack
  */
 export const safePack = safe

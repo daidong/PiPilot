@@ -1,5 +1,5 @@
 /**
- * ContextManager - 上下文管理器
+ * ContextManager - Context Manager
  *
  * Enhanced with:
  * - Parameter validation
@@ -38,7 +38,7 @@ interface ValidationResult {
 }
 
 /**
- * ContextManager 配置
+ * ContextManager configuration
  */
 export interface ContextManagerConfig {
   trace: TraceCollector
@@ -47,7 +47,7 @@ export interface ContextManagerConfig {
 }
 
 /**
- * 缓存条目
+ * Cache entry
  */
 interface CacheEntry {
   result: ContextResult
@@ -94,22 +94,22 @@ function similarity(a: string, b: string): number {
 }
 
 /**
- * 上下文管理器
+ * Context Manager
  */
 export class ContextManager {
   private sources = new Map<string, ContextSource>()
-  private cache = new Cache<CacheEntry>(5 * 60 * 1000) // 默认 5 分钟 TTL
+  private cache = new Cache<CacheEntry>(5 * 60 * 1000) // Default 5-minute TTL
   private config: ContextManagerConfig | null = null
 
   /**
-   * 设置配置
+   * Set configuration
    */
   configure(config: ContextManagerConfig): void {
     this.config = config
   }
 
   /**
-   * 注册上下文源
+   * Register a context source
    */
   register(source: ContextSource): void {
     if (this.sources.has(source.id)) {
@@ -119,7 +119,7 @@ export class ContextManager {
   }
 
   /**
-   * 批量注册上下文源
+   * Register multiple context sources
    */
   registerAll(sources: ContextSource[]): void {
     for (const source of sources) {
@@ -128,28 +128,28 @@ export class ContextManager {
   }
 
   /**
-   * 取消注册上下文源
+   * Unregister a context source
    */
   unregister(sourceId: string): boolean {
     return this.sources.delete(sourceId)
   }
 
   /**
-   * 获取上下文源
+   * Get a context source
    */
   getSource(sourceId: string): ContextSource | undefined {
     return this.sources.get(sourceId)
   }
 
   /**
-   * 检查上下文源是否存在
+   * Check if a context source exists
    */
   has(sourceId: string): boolean {
     return this.sources.has(sourceId)
   }
 
   /**
-   * 获取所有上下文源
+   * Get all context sources
    */
   getAllSources(): ContextSource[] {
     return Array.from(this.sources.values())
@@ -336,7 +336,7 @@ export class ContextManager {
   }
 
   /**
-   * 获取上下文
+   * Get context
    */
   async get<T = unknown>(
     sourceId: string,
@@ -364,7 +364,7 @@ export class ContextManager {
       return this.createValidationError(source, validation.errors, params) as ContextResult<T>
     }
 
-    // 2. 检查缓存
+    // 2. Check cache
     const cacheKey = buildCacheKey(sourceId, params)
     const cached = this.cache.get(cacheKey)
 
@@ -387,7 +387,7 @@ export class ContextManager {
       }
     }
 
-    // 3. 检查 token 预算
+    // 3. Check token budget
     if (source.costTier === 'expensive') {
       if (!this.config.tokenBudget.canAfford('expensive')) {
         return {
@@ -408,7 +408,7 @@ export class ContextManager {
       }
     }
 
-    // 4. 执行获取
+    // 4. Execute fetch
     const startTime = Date.now()
     const paramsUsed = (params ?? {}) as Record<string, unknown>
 
@@ -440,7 +440,7 @@ export class ContextManager {
       }
     }
 
-    // 5. 裁剪 rendered
+    // 5. Truncate rendered output
     if (source.render?.maxTokens && result.rendered) {
       const tokens = countTokens(result.rendered)
 
@@ -467,7 +467,7 @@ export class ContextManager {
       }
     }
 
-    // 7. 更新缓存和预算
+    // 7. Update cache and budget
     if (source.cache) {
       this.cache.set(cacheKey, {
         result: result as ContextResult,
@@ -487,7 +487,7 @@ export class ContextManager {
   }
 
   /**
-   * 生成可用上下文源描述
+   * Generate description of available context sources
    */
   getAvailableSourcesDescription(): string {
     const descriptions: string[] = []
@@ -500,7 +500,7 @@ export class ContextManager {
   }
 
   /**
-   * 生成上下文源列表（用于系统提示）
+   * Generate context source list (for system prompt)
    */
   getSourcesForPrompt(): Array<{
     id: string
@@ -550,7 +550,7 @@ export class ContextManager {
   }
 
   /**
-   * 按事件失效缓存
+   * Invalidate cache by event
    */
   invalidateByEvent(event: string): number {
     let count = 0
@@ -566,14 +566,14 @@ export class ContextManager {
   }
 
   /**
-   * 清空缓存
+   * Clear cache
    */
   clearCache(): void {
     this.cache.clear()
   }
 
   /**
-   * 获取缓存统计
+   * Get cache statistics
    */
   getCacheStats(): {
     size: number
@@ -586,7 +586,7 @@ export class ContextManager {
   }
 
   /**
-   * 清空所有
+   * Clear all
    */
   clear(): void {
     this.sources.clear()

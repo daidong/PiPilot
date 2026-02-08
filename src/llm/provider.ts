@@ -1,7 +1,7 @@
 /**
- * Provider - LLM Provider 管理
+ * Provider - LLM Provider management
  *
- * 基于 Vercel AI SDK 的统一 Provider 管理，支持 SDK 缓存
+ * Unified Provider management based on Vercel AI SDK, with SDK caching support
  */
 
 import { createOpenAI, type OpenAIProvider } from '@ai-sdk/openai'
@@ -15,24 +15,24 @@ import type {
 import { getModel } from './models.js'
 
 /**
- * SDK 实例类型
+ * SDK instance type
  */
 type SDKInstance = OpenAIProvider | AnthropicProvider
 
 /**
- * SDK 缓存 - 按 provider + apiKey 缓存 SDK 实例
+ * SDK cache - caches SDK instances by provider + apiKey
  */
 const sdkCache = new Map<string, SDKInstance>()
 
 /**
- * 生成缓存键
+ * Generate cache key
  */
 function getCacheKey(provider: ProviderID, apiKey: string): string {
   return `${provider}:${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`
 }
 
 /**
- * 获取或创建 OpenAI SDK 实例
+ * Get or create OpenAI SDK instance
  */
 function getOpenAISDK(config: ProviderSDKConfig): OpenAIProvider {
   const cacheKey = getCacheKey('openai', config.apiKey)
@@ -50,7 +50,7 @@ function getOpenAISDK(config: ProviderSDKConfig): OpenAIProvider {
 }
 
 /**
- * 获取或创建 Anthropic SDK 实例
+ * Get or create Anthropic SDK instance
  */
 function getAnthropicSDK(config: ProviderSDKConfig): AnthropicProvider {
   const cacheKey = getCacheKey('anthropic', config.apiKey)
@@ -68,7 +68,7 @@ function getAnthropicSDK(config: ProviderSDKConfig): AnthropicProvider {
 }
 
 /**
- * 获取或创建 DeepSeek SDK 实例 (使用 OpenAI 兼容 API)
+ * Get or create DeepSeek SDK instance (uses OpenAI-compatible API)
  */
 function getDeepSeekSDK(config: ProviderSDKConfig): OpenAIProvider {
   const cacheKey = getCacheKey('deepseek', config.apiKey)
@@ -86,8 +86,8 @@ function getDeepSeekSDK(config: ProviderSDKConfig): OpenAIProvider {
 }
 
 /**
- * 获取或创建 Google SDK 实例 (使用 OpenAI 兼容 API)
- * 注意: 实际使用时应该用 @ai-sdk/google
+ * Get or create Google SDK instance (uses OpenAI-compatible API)
+ * Note: For production use, @ai-sdk/google should be used instead
  */
 function getGoogleSDK(config: ProviderSDKConfig): OpenAIProvider {
   const cacheKey = getCacheKey('google', config.apiKey)
@@ -107,7 +107,7 @@ function getGoogleSDK(config: ProviderSDKConfig): OpenAIProvider {
 }
 
 /**
- * 获取 Language Model 实例
+ * Get Language Model instance
  *
  * Note: AI SDK v5+ defaults to Responses API for OpenAI.
  * We need to explicitly use .chat() for Chat Completions API
@@ -153,7 +153,7 @@ export function getLanguageModel(options: ProviderOptions): LanguageModel {
 }
 
 /**
- * 根据模型 ID 获取 Language Model
+ * Get Language Model by model ID
  */
 export function getLanguageModelByModelId(
   modelId: string,
@@ -172,21 +172,21 @@ export function getLanguageModelByModelId(
 }
 
 /**
- * 清除 SDK 缓存
+ * Clear SDK cache
  */
 export function clearSDKCache(): void {
   sdkCache.clear()
 }
 
 /**
- * 获取缓存的 SDK 数量
+ * Get the number of cached SDK instances
  */
 export function getSDKCacheSize(): number {
   return sdkCache.size
 }
 
 /**
- * Provider 信息
+ * Provider information
  */
 export interface ProviderInfo {
   id: ProviderID
@@ -197,7 +197,7 @@ export interface ProviderInfo {
 }
 
 /**
- * 获取 Provider 信息
+ * Get Provider information
  */
 export function getProviderInfo(id: ProviderID): ProviderInfo {
   const providers: Record<ProviderID, ProviderInfo> = {
@@ -235,7 +235,7 @@ export function getProviderInfo(id: ProviderID): ProviderInfo {
 }
 
 /**
- * 获取所有支持的 Provider
+ * Get all supported Providers
  */
 export function getAllProviders(): ProviderInfo[] {
   return [
@@ -247,7 +247,7 @@ export function getAllProviders(): ProviderInfo[] {
 }
 
 /**
- * 根据 API 密钥格式检测 Provider
+ * Detect Provider from API key format
  */
 export function detectProviderFromApiKey(apiKey: string): ProviderID | null {
   if (apiKey.startsWith('sk-ant-')) {
@@ -263,7 +263,7 @@ export function detectProviderFromApiKey(apiKey: string): ProviderID | null {
 }
 
 /**
- * 验证模型是否属于指定的 Provider
+ * Validate whether a model belongs to the specified Provider
  */
 export function validateModelProvider(
   modelId: string,
@@ -274,7 +274,7 @@ export function validateModelProvider(
 }
 
 /**
- * 获取模型的默认配置参数
+ * Get default configuration parameters for a model
  */
 export function getModelDefaults(modelId: string): {
   maxTokens: number
@@ -296,7 +296,7 @@ export function getModelDefaults(modelId: string): {
 }
 
 /**
- * 检查模型是否支持工具调用
+ * Check if a model supports tool calling
  */
 export function supportsTools(modelId: string): boolean {
   const model = getModel(modelId)
@@ -304,7 +304,7 @@ export function supportsTools(modelId: string): boolean {
 }
 
 /**
- * 检查模型是否支持推理模式
+ * Check if a model supports reasoning mode
  */
 export function supportsReasoning(modelId: string): boolean {
   const model = getModel(modelId)
@@ -312,7 +312,7 @@ export function supportsReasoning(modelId: string): boolean {
 }
 
 /**
- * 检查模型是否支持图像输入
+ * Check if a model supports image input
  */
 export function supportsVision(modelId: string): boolean {
   const model = getModel(modelId)

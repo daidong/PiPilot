@@ -1,5 +1,5 @@
 /**
- * defineAgent - Agent 定义工厂
+ * defineAgent - Agent definition factory
  */
 
 import type { AgentDefinition, Agent, AgentConfig, AgentRunResult, SessionState } from '../types/agent.js'
@@ -26,14 +26,14 @@ import { isAbsolute, join, relative, resolve } from 'path'
 import { FRAMEWORK_DIR } from '../constants.js'
 
 /**
- * 生成唯一 ID
+ * Generate a unique ID
  */
 function generateId(): string {
   return `agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 }
 
 /**
- * 创建会话状态
+ * Create session state
  */
 function createSessionState(): SessionState {
   const store = new Map<string, unknown>()
@@ -47,7 +47,7 @@ function createSessionState(): SessionState {
 }
 
 /**
- * 定义 Agent
+ * Define an Agent
  */
 export function defineAgent(definition: AgentDefinition): (config: AgentConfig) => Agent {
   return (config: AgentConfig): Agent => {
@@ -55,7 +55,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     const sessionId = config.sessionId ?? generateId()
     const projectPath = config.projectPath ?? process.cwd()
 
-    // 创建核心组件
+    // Create core components
     const eventBus = new EventBus()
     const traceExportEnabled = config.trace?.export?.enabled ?? true
     const traceExportDir = config.trace?.export?.dir
@@ -75,7 +75,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       warningThreshold: 0.8
     })
 
-    // 创建策略引擎
+    // Create policy engine
     const policyEngine = new PolicyEngine({
       trace,
       eventBus,
@@ -87,13 +87,13 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       }
     })
 
-    // 创建工具注册表
+    // Create tool registry
     const toolRegistry = new ToolRegistry()
 
-    // 创建上下文管理器
+    // Create context manager
     const contextManager = new ContextManager()
 
-    // 创建运行时
+    // Create runtime
     let currentStep = 0
     const runtime: Runtime = {
       projectPath,
@@ -111,7 +111,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       sessionState: createSessionState()
     } as Runtime
 
-    // 创建 RuntimeIO
+    // Create RuntimeIO
     const runtimeIO = new RuntimeIO({
       projectPath,
       policyEngine,
@@ -124,11 +124,11 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     ;(runtime as any).io = runtimeIO
 
-    // 配置组件
+    // Configure components
     toolRegistry.configure({ policyEngine, trace, runtime })
     contextManager.configure({ trace, tokenBudget, runtime })
 
-    // 合并 Packs
+    // Merge Packs
     const allPacks = [...definition.packs, ...(config.packs ?? [])]
 
     // Phase 1.4: Create SkillManager for lazy-loaded procedural knowledge
@@ -214,17 +214,17 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       }
     }
 
-    // 注册定义级别的策略
+    // Register definition-level policies
     if (definition.policies) {
       policyEngine.registerAll(definition.policies)
     }
 
-    // 注册配置级别的策略
+    // Register config-level policies
     if (config.policies) {
       policyEngine.registerAll(config.policies)
     }
 
-    // 确定 Provider 和模型
+    // Determine Provider and model
     const modelId = config.model ?? definition.model?.default ?? 'gpt-4o'
     const modelConfig = getModel(modelId)
     const contextWindow = modelConfig?.limit.maxContext ?? 200000
@@ -232,14 +232,14 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     const apiKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
     const useKernelV2 = config.kernelV2?.enabled ?? true
 
-    // 创建 LLM 客户端
+    // Create LLM client
     const llmClient = createLLMClient({
       provider,
       model: modelId,
       config: { apiKey }
     })
 
-    // 将 LLM 客户端添加到 runtime（供工具内 LLM 调用使用）
+    // Add LLM client to runtime (used for in-tool LLM calls)
     ;(runtime as any).llmClient = llmClient
 
     const kernelV2: KernelV2 | null = useKernelV2
@@ -254,7 +254,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       runtime.kernelV2 = kernelV2
     }
 
-    // 编译系统提示 (Phase 1.4: Include skillManager)
+    // Compile system prompt (Phase 1.4: Include skillManager)
     const promptCompiler = new PromptCompiler()
 
     // Helper to compile system prompt with current skill state
@@ -271,7 +271,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     let systemPrompt = compileSystemPrompt()
 
-    // 创建 AgentLoop
+    // Create AgentLoop
     let agentLoop: AgentLoop | null = null
     let packsInitialized = false
 
@@ -395,6 +395,9 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       async destroy(): Promise<void> {
         externalSkillLoader?.stopWatching()
         externalSkillLoader = null
+        if (kernelV2) {
+          await kernelV2.destroy()
+        }
 
         for (const pack of allPacks) {
           if (pack.onDestroy) {
@@ -416,7 +419,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 }
 
 /**
- * 验证 Agent 定义
+ * Validate an Agent definition
  */
 export function validateAgentDefinition(definition: Partial<AgentDefinition>): {
   valid: boolean

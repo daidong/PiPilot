@@ -1,9 +1,9 @@
 /**
- * Trace Types - 追踪类型定义
+ * Trace Types - Tracing type definitions
  */
 
 /**
- * 框架事件类型
+ * Framework event type
  */
 export type FrameworkEvent =
   | 'file:read'
@@ -19,7 +19,7 @@ export type FrameworkEvent =
   | 'policy:approval_requested'
 
 /**
- * Trace 事件类型
+ * Trace event type
  */
 export type TraceEventType =
   | 'agent.run'
@@ -112,13 +112,13 @@ export interface TraceFilter {
 }
 
 /**
- * Replay 选项
+ * Replay options
  */
 export interface ReplayOptions {
-  /** 事件处理器 */
+  /** Event handler */
   onEvent?: (event: TraceEvent) => Promise<void>
-  /** Mock 工具 */
+  /** Mock tools */
   mockTools?: Record<string, (input: unknown) => Promise<unknown>>
-  /** 播放速度倍数 */
+  /** Playback speed multiplier */
   speed?: number
 }

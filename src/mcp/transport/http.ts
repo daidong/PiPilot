@@ -1,7 +1,7 @@
 /**
  * MCP HTTP Transport
  *
- * 通过 HTTP/SSE 与远程 MCP server 通信
+ * Communicates with a remote MCP server via HTTP/SSE
  */
 
 import type {
@@ -13,19 +13,19 @@ import type {
 import { MCPTransport, type TransportConfig } from './base.js'
 
 /**
- * HTTP 传输配置
+ * HTTP transport configuration
  */
 export interface HttpTransportConfig extends TransportConfig {
-  /** HTTP 配置 */
+  /** HTTP configuration */
   http: MCPHttpConfig
-  /** 是否使用 SSE 接收通知 */
+  /** Whether to use SSE for receiving notifications */
   useSSE?: boolean
 }
 
 /**
- * HTTP 传输实现
+ * HTTP transport implementation
  *
- * 使用 HTTP POST 发送请求，可选 SSE 接收通知
+ * Uses HTTP POST to send requests, optionally SSE for receiving notifications
  */
 export class HttpTransport extends MCPTransport {
   private httpConfig: MCPHttpConfig
@@ -41,14 +41,14 @@ export class HttpTransport extends MCPTransport {
   }
 
   /**
-   * 启动 HTTP 传输
+   * Start the HTTP transport
    */
   async start(): Promise<void> {
     if (this.ready) {
       return
     }
 
-    // 验证服务器可达
+    // Verify the server is reachable
     try {
       const response = await fetch(this.baseUrl, {
         method: 'HEAD',
@@ -57,28 +57,28 @@ export class HttpTransport extends MCPTransport {
       })
 
       if (!response.ok && response.status !== 405) {
-        // 405 是预期的（不支持 HEAD）
+        // 405 is expected (HEAD not supported)
         throw new Error(`Server not reachable: ${response.status}`)
       }
     } catch (error) {
-      // 如果 HEAD 失败，尝试 OPTIONS
+      // If HEAD fails, try OPTIONS
       try {
         const response = await fetch(this.baseUrl, {
           method: 'OPTIONS',
           headers: this.httpConfig.headers,
           signal: AbortSignal.timeout(this.httpConfig.timeout ?? 5000)
         })
-        // OPTIONS 通常返回 200 或 204
+        // OPTIONS typically returns 200 or 204
         if (!response.ok && response.status !== 204) {
           throw error
         }
       } catch {
-        // 如果都失败了，假设服务器可能只接受 POST
-        // 继续尝试
+        // If both fail, assume the server may only accept POST
+        // Continue trying
       }
     }
 
-    // 如果需要 SSE，启动 SSE 连接
+    // If SSE is needed, start the SSE connection
     if (this.useSSE) {
       this.startSSE()
     }
@@ -87,7 +87,7 @@ export class HttpTransport extends MCPTransport {
   }
 
   /**
-   * 停止 HTTP 传输
+   * Stop the HTTP transport
    */
   async stop(): Promise<void> {
     this.ready = false
@@ -101,7 +101,7 @@ export class HttpTransport extends MCPTransport {
   }
 
   /**
-   * 发送 HTTP 请求
+   * Send an HTTP request
    */
   protected async send(message: JsonRpcRequest | JsonRpcNotification): Promise<void> {
     const response = await fetch(this.baseUrl, {
@@ -118,7 +118,7 @@ export class HttpTransport extends MCPTransport {
       throw new Error(`HTTP error: ${response.status} ${response.statusText}`)
     }
 
-    // 如果是请求（有 id），处理响应
+    // If it's a request (has an id), handle the response
     if ('id' in message) {
       const contentType = response.headers.get('content-type')
       if (contentType?.includes('application/json')) {
@@ -129,7 +129,7 @@ export class HttpTransport extends MCPTransport {
   }
 
   /**
-   * 启动 SSE 连接接收通知
+   * Start an SSE connection to receive notifications
    */
   private startSSE(): void {
     this.sseController = new AbortController()
@@ -160,7 +160,7 @@ export class HttpTransport extends MCPTransport {
 
           buffer += decoder.decode(value, { stream: true })
 
-          // 处理 SSE 消息
+          // Process SSE messages
           const lines = buffer.split('\n')
           buffer = lines.pop() ?? ''
 
@@ -169,7 +169,7 @@ export class HttpTransport extends MCPTransport {
             if (line.startsWith('data: ')) {
               data += line.slice(6)
             } else if (line === '' && data) {
-              // 空行表示消息结束
+              // Empty line indicates end of message
               try {
                 const message = JSON.parse(data) as JsonRpcResponse | JsonRpcNotification
                 this.handleMessage(message)
@@ -188,7 +188,7 @@ export class HttpTransport extends MCPTransport {
         }
         this.handleError(error as Error)
 
-        // 如果还在运行，尝试重连
+        // If still running, attempt to reconnect
         if (this.ready && this.sseController && !this.sseController.signal.aborted) {
           setTimeout(() => connect(), 5000)
         }
@@ -199,7 +199,7 @@ export class HttpTransport extends MCPTransport {
   }
 
   /**
-   * 获取基础 URL
+   * Get the base URL
    */
   getBaseUrl(): string {
     return this.baseUrl
@@ -207,7 +207,7 @@ export class HttpTransport extends MCPTransport {
 }
 
 /**
- * 创建 HTTP 传输
+ * Create an HTTP transport
  */
 export function createHttpTransport(
   config: MCPHttpConfig,

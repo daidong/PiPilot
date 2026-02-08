@@ -1,7 +1,7 @@
 /**
  * MCP (Model Context Protocol) Types
  *
- * 定义 MCP 适配器相关的类型
+ * Defines types related to the MCP adapter
  */
 
 import type { ProviderPermissions, ProviderBudgets } from '../types/provider.js'
@@ -11,39 +11,39 @@ import type { ProviderPermissions, ProviderBudgets } from '../types/provider.js'
 // ============================================================================
 
 /**
- * STDIO 传输配置
+ * STDIO transport configuration
  */
 export interface MCPStdioConfig {
   type: 'stdio'
-  /** 要执行的命令 */
+  /** Command to execute */
   command: string
-  /** 命令参数 */
+  /** Command arguments */
   args?: string[]
-  /** 工作目录 */
+  /** Working directory */
   cwd?: string
-  /** 环境变量 */
+  /** Environment variables */
   env?: Record<string, string>
-  /** 请求超时（毫秒）。Default: 30000. Increase for slow-starting servers. */
+  /** Request timeout (ms). Default: 30000. Increase for slow-starting servers. */
   timeout?: number
-  /** 启动超时（毫秒）。Default: 10000. Increase for servers that need time to initialize (e.g., MarkItDown Python venv). */
+  /** Startup timeout (ms). Default: 10000. Increase for servers that need time to initialize (e.g., MarkItDown Python venv). */
   startTimeout?: number
 }
 
 /**
- * HTTP 传输配置
+ * HTTP transport configuration
  */
 export interface MCPHttpConfig {
   type: 'http'
   /** MCP server URL */
   url: string
-  /** 请求头 */
+  /** Request headers */
   headers?: Record<string, string>
-  /** 请求超时（毫秒） */
+  /** Request timeout (ms) */
   timeout?: number
 }
 
 /**
- * 传输配置联合类型
+ * Transport configuration union type
  */
 export type MCPTransportConfig = MCPStdioConfig | MCPHttpConfig
 
@@ -52,24 +52,24 @@ export type MCPTransportConfig = MCPStdioConfig | MCPHttpConfig
 // ============================================================================
 
 /**
- * MCP Server 配置
+ * MCP Server configuration
  */
 export interface MCPServerConfig {
-  /** 唯一标识符 */
+  /** Unique identifier */
   id: string
-  /** 显示名称 */
+  /** Display name */
   name: string
-  /** 传输配置 */
+  /** Transport configuration */
   transport: MCPTransportConfig
-  /** 权限覆盖（可选） */
+  /** Permission overrides (optional) */
   permissions?: ProviderPermissions
-  /** 预算覆盖（可选） */
+  /** Budget overrides (optional) */
   budgets?: ProviderBudgets
-  /** 工具名前缀（避免冲突） */
+  /** Tool name prefix (to avoid conflicts) */
   toolPrefix?: string
-  /** 连接超时（毫秒） */
+  /** Connection timeout (ms) */
   connectTimeout?: number
-  /** 是否自动重连 */
+  /** Whether to auto-reconnect */
   autoReconnect?: boolean
 }
 
@@ -78,7 +78,7 @@ export interface MCPServerConfig {
 // ============================================================================
 
 /**
- * JSON-RPC 请求
+ * JSON-RPC request
  */
 export interface JsonRpcRequest {
   jsonrpc: '2.0'
@@ -88,7 +88,7 @@ export interface JsonRpcRequest {
 }
 
 /**
- * JSON-RPC 响应
+ * JSON-RPC response
  */
 export interface JsonRpcResponse<T = unknown> {
   jsonrpc: '2.0'
@@ -98,7 +98,7 @@ export interface JsonRpcResponse<T = unknown> {
 }
 
 /**
- * JSON-RPC 错误
+ * JSON-RPC error
  */
 export interface JsonRpcError {
   code: number
@@ -107,7 +107,7 @@ export interface JsonRpcError {
 }
 
 /**
- * JSON-RPC 通知（无 id）
+ * JSON-RPC notification (no id)
  */
 export interface JsonRpcNotification {
   jsonrpc: '2.0'
@@ -120,7 +120,7 @@ export interface JsonRpcNotification {
 // ============================================================================
 
 /**
- * MCP 工具定义（来自 MCP 协议）
+ * MCP tool definition (from the MCP protocol)
  */
 export interface MCPToolDefinition {
   name: string
@@ -129,7 +129,7 @@ export interface MCPToolDefinition {
 }
 
 /**
- * MCP 输入 Schema（JSON Schema 子集）
+ * MCP input schema (subset of JSON Schema)
  */
 export interface MCPInputSchema {
   type: 'object'
@@ -139,7 +139,7 @@ export interface MCPInputSchema {
 }
 
 /**
- * MCP 属性 Schema
+ * MCP property schema
  */
 export interface MCPPropertySchema {
   type: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object'
@@ -152,7 +152,7 @@ export interface MCPPropertySchema {
 }
 
 /**
- * MCP 工具调用结果
+ * MCP tool call result
  */
 export interface MCPToolResult {
   content: MCPContent[]
@@ -160,7 +160,7 @@ export interface MCPToolResult {
 }
 
 /**
- * MCP 内容类型
+ * MCP content types
  */
 export type MCPContent =
   | MCPTextContent
@@ -193,7 +193,7 @@ export interface MCPResourceContent {
 // ============================================================================
 
 /**
- * MCP 初始化参数
+ * MCP initialization parameters
  */
 export interface MCPInitializeParams {
   protocolVersion: string
@@ -205,7 +205,7 @@ export interface MCPInitializeParams {
 }
 
 /**
- * MCP 客户端能力
+ * MCP client capabilities
  */
 export interface MCPClientCapabilities {
   roots?: { listChanged?: boolean }
@@ -214,7 +214,7 @@ export interface MCPClientCapabilities {
 }
 
 /**
- * MCP 初始化结果
+ * MCP initialization result
  */
 export interface MCPInitializeResult {
   protocolVersion: string
@@ -226,7 +226,7 @@ export interface MCPInitializeResult {
 }
 
 /**
- * MCP 服务器能力
+ * MCP server capabilities
  */
 export interface MCPServerCapabilities {
   tools?: { listChanged?: boolean }
@@ -241,7 +241,7 @@ export interface MCPServerCapabilities {
 // ============================================================================
 
 /**
- * MCP 客户端状态
+ * MCP client state
  */
 export type MCPClientState =
   | 'disconnected'
@@ -252,7 +252,7 @@ export type MCPClientState =
   | 'closing'
 
 /**
- * MCP 客户端事件类型
+ * MCP client event types
  */
 export interface MCPClientEvents {
   'state:change': { from: MCPClientState; to: MCPClientState }
@@ -266,24 +266,24 @@ export interface MCPClientEvents {
 // ============================================================================
 
 /**
- * MCP Provider 配置
+ * MCP Provider configuration
  */
 export interface MCPProviderConfig {
   /** Provider ID */
   id: string
-  /** Provider 名称 */
+  /** Provider name */
   name: string
-  /** Provider 版本 */
+  /** Provider version */
   version?: string
-  /** Provider 描述 */
+  /** Provider description */
   description?: string
-  /** MCP server 配置列表 */
+  /** List of MCP server configurations */
   servers: MCPServerConfig[]
-  /** 是否自动生成权限策略 */
+  /** Whether to auto-generate permission policies */
   autoGeneratePolicies?: boolean
-  /** 全局权限（应用到所有 server） */
+  /** Global permissions (applied to all servers) */
   permissions?: ProviderPermissions
-  /** 全局预算（应用到所有 server） */
+  /** Global budgets (applied to all servers) */
   budgets?: ProviderBudgets
 }
 
@@ -292,17 +292,17 @@ export interface MCPProviderConfig {
 // ============================================================================
 
 /**
- * MCP 错误代码
+ * MCP error codes
  */
 export enum MCPErrorCode {
-  // JSON-RPC 标准错误
+  // JSON-RPC standard errors
   ParseError = -32700,
   InvalidRequest = -32600,
   MethodNotFound = -32601,
   InvalidParams = -32602,
   InternalError = -32603,
 
-  // MCP 特定错误
+  // MCP-specific errors
   ConnectionFailed = -1,
   Timeout = -2,
   ProtocolError = -3,
@@ -311,7 +311,7 @@ export enum MCPErrorCode {
 }
 
 /**
- * MCP 错误类
+ * MCP error class
  */
 export class MCPError extends Error {
   readonly code: MCPErrorCode

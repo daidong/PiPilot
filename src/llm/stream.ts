@@ -1,7 +1,7 @@
 /**
- * Stream - 统一流式 API
+ * Stream - Unified streaming API
  *
- * 基于 Vercel AI SDK 的流式处理，支持双流合并
+ * Stream processing based on Vercel AI SDK, with dual-stream merging support
  */
 
 import {
@@ -62,7 +62,7 @@ function formatSystemWithCacheControl(
 }
 
 /**
- * 将框架消息转换为 Vercel AI SDK 消息格式
+ * Convert framework messages to Vercel AI SDK message format
  * For Anthropic: marks early stable messages with cache_control
  */
 function convertMessages(messages: Message[], provider?: ProviderID): ModelMessage[] {
@@ -93,22 +93,22 @@ function convertMessages(messages: Message[], provider?: ProviderID): ModelMessa
       }
     }
 
-    // 处理内容块数组
+    // Process content block array
     const blocks = msg.content as ContentBlock[]
 
     if (msg.role === 'assistant') {
-      // Assistant 消息可能包含工具调用
+      // Assistant messages may contain tool calls
       const textBlocks = blocks.filter(b => b.type === 'text')
       const toolCallBlocks = blocks.filter(b => b.type === 'tool_use')
 
-      // 构建内容数组，包含文本和工具调用
+      // Build content array containing text and tool calls
       // SDK 6: ToolCallPart uses 'input' instead of 'args'
       const content: Array<
         | { type: 'text'; text: string; providerOptions?: Record<string, unknown> }
         | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
       > = []
 
-      // 添加文本块 (with cache control if applicable)
+      // Add text blocks (with cache control if applicable)
       for (const block of textBlocks) {
         const textPart: { type: 'text'; text: string; providerOptions?: Record<string, unknown> } = {
           type: 'text',
@@ -120,7 +120,7 @@ function convertMessages(messages: Message[], provider?: ProviderID): ModelMessa
         content.push(textPart)
       }
 
-      // 添加工具调用
+      // Add tool calls
       for (const tc of toolCallBlocks) {
         content.push({
           type: 'tool-call',
@@ -137,7 +137,7 @@ function convertMessages(messages: Message[], provider?: ProviderID): ModelMessa
         }
       }
 
-      // 如果只有文本块且需要缓存，保持数组格式
+      // If only text blocks and caching needed, keep array format
       if (toolCallBlocks.length === 0 && !shouldCache) {
         return {
           role: 'assistant',
@@ -152,7 +152,7 @@ function convertMessages(messages: Message[], provider?: ProviderID): ModelMessa
     }
 
     if (msg.role === 'tool') {
-      // Tool 结果消息
+      // Tool result messages
       // SDK 6: ToolResultPart uses output: { type: 'text', value: string }
       const toolResults = blocks.filter(b => b.type === 'tool_result')
       return {
@@ -169,7 +169,7 @@ function convertMessages(messages: Message[], provider?: ProviderID): ModelMessa
       }
     }
 
-    // User 消息 (with cache control if applicable)
+    // User messages (with cache control if applicable)
     const textContent = blocks
       .filter(b => b.type === 'text')
       .map(b => (b as { text: string }).text)
@@ -194,7 +194,7 @@ function convertMessages(messages: Message[], provider?: ProviderID): ModelMessa
 }
 
 /**
- * 将 LLM 工具定义转换为 Vercel AI SDK 工具格式
+ * Convert LLM tool definitions to Vercel AI SDK tool format
  * SDK 6: uses inputSchema instead of parameters, strict defaults to false
  */
 function convertTools(
@@ -203,7 +203,7 @@ function convertTools(
   const result: ToolSet = {}
 
   for (const tool of tools) {
-    // 将 JSON Schema 转换为 Zod schema
+    // Convert JSON Schema to Zod schema
     const zodSchema = jsonSchemaToZod(tool.parameters)
 
     result[tool.name] = {
@@ -333,19 +333,19 @@ function jsonSchemaToZod(schema: {
 }
 
 /**
- * LLM 客户端配置
+ * LLM client configuration
  */
 export interface LLMClientConfig {
   /** Provider ID */
   provider: ProviderID
-  /** 模型 ID */
+  /** Model ID */
   model: string
-  /** SDK 配置 */
+  /** SDK configuration */
   config: ProviderSDKConfig
 }
 
 /**
- * 创建 LLM 客户端
+ * Create LLM client
  */
 export function createLLMClient(clientConfig: LLMClientConfig) {
   const languageModel = getLanguageModel({
@@ -359,7 +359,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 
   return {
     /**
-     * 流式生成
+     * Streaming generation
      */
     async *stream(options: StreamOptions): AsyncGenerator<StreamEvent> {
       const { system, messages, tools, maxTokens, temperature, stopSequences, reasoningEffort } =
@@ -433,7 +433,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       try {
         const result = streamText(streamOptions)
 
-        // 使用 fullStream 获取所有事件
+        // Use fullStream to get all events
         for await (const event of result.fullStream) {
           switch (event.type) {
             case 'text-delta':
@@ -562,7 +562,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
     },
 
     /**
-     * 非流式生成
+     * Non-streaming generation
      */
     async generate(options: GenerateOptions): Promise<CompletionResponse> {
       const { system, messages, tools, maxTokens, temperature, stopSequences } =
@@ -578,12 +578,12 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
         stopSequences
       }
 
-      // 只在模型支持时添加温度
+      // Only add temperature when model supports it
       if (modelConfig?.capabilities.temperature && temperature !== undefined) {
         generateOptions.temperature = temperature
       }
 
-      // 只在模型支持时添加工具
+      // Only add tools when model supports them
       // SDK 6: strict mode defaults to false per tool
       if (tools && tools.length > 0 && supportsTools(clientConfig.model)) {
         generateOptions.tools = convertTools(tools)
@@ -675,14 +675,14 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
     },
 
     /**
-     * 获取模型配置
+     * Get model configuration
      */
     getModelConfig() {
       return modelConfig
     },
 
     /**
-     * 获取语言模型实例
+     * Get language model instance
      */
     getLanguageModel(): LanguageModel {
       return languageModel
@@ -691,7 +691,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 }
 
 /**
- * 快捷方式：直接使用模型 ID 创建客户端
+ * Shortcut: create a client directly from a model ID
  */
 export function createLLMClientFromModelId(
   modelId: string,
@@ -710,7 +710,7 @@ export function createLLMClientFromModelId(
 }
 
 /**
- * 流式回调接口
+ * Streaming callback interface
  */
 export interface StreamCallbacks {
   onText?: (text: string) => void
@@ -728,7 +728,7 @@ export interface StreamCallbacks {
 }
 
 /**
- * 使用回调的流式生成
+ * Streaming generation with callbacks
  */
 export async function streamWithCallbacks(
   client: ReturnType<typeof createLLMClient>,

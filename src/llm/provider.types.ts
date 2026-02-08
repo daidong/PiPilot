@@ -1,106 +1,106 @@
 /**
- * Provider Types - LLM Provider 类型定义
+ * Provider Types - LLM Provider type definitions
  *
- * 基于 Vercel AI SDK 的统一抽象层类型
+ * Unified abstraction layer types based on Vercel AI SDK
  */
 
 /**
- * 支持的 Provider ID
+ * Supported Provider IDs
  */
 export type ProviderID = 'openai' | 'anthropic' | 'google' | 'deepseek'
 
 /**
- * 模型 API 类型
+ * Model API type
  */
 export type ModelAPI = 'chat' | 'completion'
 
 /**
- * 模型能力定义
+ * Model capabilities definition
  */
 export interface ModelCapabilities {
-  /** 是否支持温度调节 */
+  /** Whether temperature adjustment is supported */
   temperature: boolean
-  /** 是否支持推理模式 (thinking/reasoning) */
+  /** Whether reasoning mode (thinking/reasoning) is supported */
   reasoning: boolean
-  /** 是否支持工具调用 */
+  /** Whether tool calling is supported */
   toolcall: boolean
-  /** 支持的输入类型 */
+  /** Supported input types */
   input: ('text' | 'image')[]
-  /** 支持的输出类型 */
+  /** Supported output types */
   output: ('text')[]
 }
 
 /**
- * 模型成本定义 (每百万 token)
+ * Model cost definition (per million tokens)
  */
 export interface ModelCost {
-  /** 输入 token 成本 (美元/百万 token) */
+  /** Input token cost (USD per million tokens) */
   input: number
-  /** 缓存命中输入 token 成本 (美元/百万 token，可选) */
+  /** Cached input token cost (USD per million tokens, optional) */
   cachedInput?: number
-  /** 输出 token 成本 (美元/百万 token) */
+  /** Output token cost (USD per million tokens) */
   output: number
 }
 
 /**
- * 模型限制
+ * Model limits
  */
 export interface ModelLimit {
-  /** 最大上下文长度 */
+  /** Maximum context length */
   maxContext: number
-  /** 最大输出长度 */
+  /** Maximum output length */
   maxOutput: number
 }
 
 /**
- * 模型定义
+ * Model definition
  */
 export interface ModelConfig {
-  /** 模型唯一标识符 */
+  /** Unique model identifier */
   id: string
-  /** 显示名称 */
+  /** Display name */
   name: string
   /** Provider ID */
   providerID: ProviderID
-  /** API 类型 */
+  /** API type */
   api: ModelAPI
-  /** 模型能力 */
+  /** Model capabilities */
   capabilities: ModelCapabilities
-  /** 成本信息 */
+  /** Cost information */
   cost?: ModelCost
-  /** 模型限制 */
+  /** Model limits */
   limit: ModelLimit
 }
 
 /**
- * Provider SDK 配置
+ * Provider SDK configuration
  */
 export interface ProviderSDKConfig {
-  /** API 密钥 */
+  /** API key */
   apiKey: string
-  /** 基础 URL (可选) */
+  /** Base URL (optional) */
   baseURL?: string
 }
 
 /**
- * Provider 选项
+ * Provider options
  */
 export interface ProviderOptions {
   /** Provider ID */
   provider: ProviderID
-  /** 模型 ID */
+  /** Model ID */
   model: string
-  /** SDK 配置 */
+  /** SDK configuration */
   config: ProviderSDKConfig
 }
 
 /**
- * 消息角色
+ * Message role
  */
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool'
 
 /**
- * 文本内容块
+ * Text content block
  */
 export interface TextContent {
   type: 'text'
@@ -108,7 +108,7 @@ export interface TextContent {
 }
 
 /**
- * 工具调用内容块
+ * Tool call content block
  */
 export interface ToolUseContent {
   type: 'tool_use'
@@ -118,7 +118,7 @@ export interface ToolUseContent {
 }
 
 /**
- * 工具结果内容块
+ * Tool result content block
  */
 export interface ToolResultContent {
   type: 'tool_result'
@@ -128,12 +128,12 @@ export interface ToolResultContent {
 }
 
 /**
- * 内容块类型
+ * Content block type
  */
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent
 
 /**
- * 消息
+ * Message
  */
 export interface Message {
   role: MessageRole
@@ -141,7 +141,7 @@ export interface Message {
 }
 
 /**
- * 流式事件类型
+ * Stream event type
  */
 export type StreamEventType =
   | 'text-delta'
@@ -153,7 +153,7 @@ export type StreamEventType =
   | 'error'
 
 /**
- * 流式事件
+ * Stream event
  */
 export interface StreamEvent {
   type: StreamEventType
@@ -161,7 +161,7 @@ export interface StreamEvent {
 }
 
 /**
- * 文本增量事件
+ * Text delta event
  */
 export interface TextDeltaEvent extends StreamEvent {
   type: 'text-delta'
@@ -171,7 +171,7 @@ export interface TextDeltaEvent extends StreamEvent {
 }
 
 /**
- * 工具调用事件
+ * Tool call event
  */
 export interface ToolCallEvent extends StreamEvent {
   type: 'tool-call'
@@ -183,7 +183,7 @@ export interface ToolCallEvent extends StreamEvent {
 }
 
 /**
- * 工具结果事件
+ * Tool result event
  */
 export interface ToolResultEvent extends StreamEvent {
   type: 'tool-result'
@@ -195,7 +195,7 @@ export interface ToolResultEvent extends StreamEvent {
 }
 
 /**
- * 步骤开始事件
+ * Step start event
  */
 export interface StepStartEvent extends StreamEvent {
   type: 'step-start'
@@ -205,7 +205,7 @@ export interface StepStartEvent extends StreamEvent {
 }
 
 /**
- * 步骤完成事件
+ * Step finish event
  */
 export interface StepFinishEvent extends StreamEvent {
   type: 'step-finish'
@@ -217,7 +217,7 @@ export interface StepFinishEvent extends StreamEvent {
 }
 
 /**
- * 完成事件
+ * Finish event
  */
 export interface FinishEvent extends StreamEvent {
   type: 'finish'
@@ -230,7 +230,7 @@ export interface FinishEvent extends StreamEvent {
 }
 
 /**
- * 错误事件
+ * Error event
  */
 export interface ErrorEvent extends StreamEvent {
   type: 'error'
@@ -240,7 +240,7 @@ export interface ErrorEvent extends StreamEvent {
 }
 
 /**
- * Token 使用情况
+ * Token usage
  */
 export interface TokenUsage {
   promptTokens: number
@@ -295,7 +295,7 @@ export interface UsageSummary {
 }
 
 /**
- * LLM 工具定义 (Vercel AI SDK 格式)
+ * LLM tool definition (Vercel AI SDK format)
  */
 export interface LLMToolDefinition {
   name: string
@@ -308,47 +308,47 @@ export interface LLMToolDefinition {
 }
 
 /**
- * 流式请求选项
+ * Stream request options
  */
 export interface StreamOptions {
-  /** 系统提示 */
+  /** System prompt */
   system?: string
-  /** 消息历史 */
+  /** Message history */
   messages: Message[]
-  /** 可用工具 */
+  /** Available tools */
   tools?: LLMToolDefinition[]
-  /** 最大 token 数 */
+  /** Maximum number of tokens */
   maxTokens?: number
-  /** 温度 (0-1) */
+  /** Temperature (0-1) */
   temperature?: number
-  /** 停止序列 */
+  /** Stop sequences */
   stopSequences?: string[]
-  /** 是否启用推理模式 */
+  /** Whether to enable reasoning mode */
   reasoning?: boolean
   /** Reasoning effort for reasoning models (low, medium, high, max). Default: medium */
   reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
 }
 
 /**
- * 生成请求选项
+ * Generate request options
  */
 export interface GenerateOptions extends StreamOptions {
-  /** 是否包含工具结果 */
+  /** Whether to include tool results */
   includeToolResults?: boolean
 }
 
 /**
- * 完成响应
+ * Completion response
  */
 export interface CompletionResponse {
-  /** 响应 ID */
+  /** Response ID */
   id: string
-  /** 生成的文本 */
+  /** Generated text */
   text: string
-  /** 工具调用 */
+  /** Tool calls */
   toolCalls: ToolUseContent[]
-  /** 完成原因 */
+  /** Finish reason */
   finishReason: 'stop' | 'tool-calls' | 'length' | 'content-filter' | 'error'
-  /** Token 使用情况 (with cache info when available) */
+  /** Token usage (with cache info when available) */
   usage: DetailedTokenUsage
 }

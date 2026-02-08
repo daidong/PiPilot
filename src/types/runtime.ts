@@ -1,5 +1,5 @@
 /**
- * Runtime Types - 运行时类型定义
+ * Runtime Types - Runtime type definitions
  */
 
 import type { EventBus } from '../core/event-bus.js'
@@ -16,22 +16,22 @@ import type { createLLMClient } from '../llm/stream.js'
 import type { KernelV2 } from '../kernel-v2/kernel.js'
 
 /**
- * LLM 客户端类型（从 createLLMClient 推断）
+ * LLM client type (inferred from createLLMClient)
  */
 export type LLMClient = ReturnType<typeof createLLMClient>
 
 /**
- * IO 操作结果
+ * IO operation result
  */
 export interface IOResult<T = unknown> {
   success: boolean
   data?: T
   error?: string
-  /** 用于审计追踪 */
+  /** For audit trail */
   traceId: string
-  /** 操作耗时（毫秒） */
+  /** Operation duration (milliseconds) */
   durationMs?: number
-  /** 元信息（count/truncated 等） */
+  /** Metadata (count/truncated, etc.) */
   meta?: {
     truncated?: boolean
     count?: number
@@ -44,23 +44,23 @@ export interface IOResult<T = unknown> {
 }
 
 /**
- * 资源限制配置
+ * Resource limits configuration
  */
 export interface ResourceLimits {
-  /** 最大读取字节数（默认 10MB） */
+  /** Maximum read bytes (default: 10MB) */
   maxBytes?: number
-  /** 最大读取行数（默认 10000） */
+  /** Maximum read lines (default: 10000) */
   maxLines?: number
-  /** 最大结果数（默认 1000） */
+  /** Maximum results (default: 1000) */
   maxResults?: number
-  /** 最大写入字节数（默认 5MB） */
+  /** Maximum write bytes (default: 5MB) */
   maxWriteBytes?: number
-  /** 超时时间（毫秒，默认 60000） */
+  /** Timeout (milliseconds, default: 60000) */
   timeout?: number
 }
 
 /**
- * 读取文件选项
+ * File read options
  */
 export interface ReadOptions {
   encoding?: BufferEncoding
@@ -69,7 +69,7 @@ export interface ReadOptions {
 }
 
 /**
- * 目录条目
+ * Directory entry
  */
 export interface DirEntry {
   name: string
@@ -80,7 +80,7 @@ export interface DirEntry {
 }
 
 /**
- * 读取目录选项
+ * Directory read options
  */
 export interface ReaddirOptions {
   recursive?: boolean
@@ -88,7 +88,7 @@ export interface ReaddirOptions {
 }
 
 /**
- * 执行命令选项
+ * Command execution options
  */
 export interface ExecOptions {
   cwd?: string
@@ -98,7 +98,7 @@ export interface ExecOptions {
 }
 
 /**
- * 执行命令输出
+ * Command execution output
  */
 export interface ExecOutput {
   stdout: string
@@ -107,7 +107,7 @@ export interface ExecOutput {
 }
 
 /**
- * Glob 选项
+ * Glob options
  */
 export interface GlobOptions {
   cwd?: string
@@ -117,7 +117,7 @@ export interface GlobOptions {
 }
 
 /**
- * Grep 选项
+ * Grep options
  */
 export interface GrepOptions {
   cwd?: string
@@ -128,7 +128,7 @@ export interface GrepOptions {
 }
 
 /**
- * Grep 匹配结果
+ * Grep match result
  */
 export interface GrepMatch {
   file: string
@@ -137,81 +137,81 @@ export interface GrepMatch {
 }
 
 /**
- * RuntimeIO 接口 - 受控 IO 层
+ * RuntimeIO interface - controlled IO layer
  */
 export interface RuntimeIO {
-  /** 读取文件 */
+  /** Read a file */
   readFile(path: string, options?: ReadOptions): Promise<IOResult<string>>
 
-  /** 写入文件 */
+  /** Write a file */
   writeFile(path: string, content: string): Promise<IOResult<void>>
 
-  /** 读取目录 */
+  /** Read a directory */
   readdir(path: string, options?: ReaddirOptions): Promise<IOResult<DirEntry[]>>
 
-  /** 检查文件是否存在 */
+  /** Check if a file exists */
   exists(path: string): Promise<IOResult<boolean>>
 
-  /** 执行命令 */
+  /** Execute a command */
   exec(command: string, options?: ExecOptions): Promise<IOResult<ExecOutput>>
 
-  /** Glob 文件匹配 */
+  /** Glob file matching */
   glob(pattern: string, options?: GlobOptions): Promise<IOResult<string[]>>
 
-  /** Grep 内容搜索 */
+  /** Grep content search */
   grep(pattern: string, options?: GrepOptions): Promise<IOResult<GrepMatch[]>>
 
-  /** 获取文件统计信息 */
+  /** Get file statistics */
   stat?(path: string): Promise<IOResult<{ size: number; lines?: number; mtimeMs?: number }>>
 
-  /** 无限制读取文件（仅供 edit 内部使用） */
+  /** Unrestricted file read (for internal use by edit only) */
   readFileForEdit?(path: string): Promise<IOResult<string>>
 
-  /** 获取资源限制配置 */
+  /** Get resource limits configuration */
   getLimits?(): Required<ResourceLimits>
 }
 
 /**
- * Runtime 接口 - Agent 运行时
+ * Runtime interface - Agent runtime
  */
 export interface Runtime {
-  /** 项目路径 */
+  /** Project path */
   projectPath: string
 
-  /** 会话 ID */
+  /** Session ID */
   sessionId: string
 
-  /** 代理 ID */
+  /** Agent ID */
   agentId: string
 
-  /** 当前步骤 */
+  /** Current step */
   step: number
 
-  /** 受控 IO */
+  /** Controlled IO */
   io: RuntimeIO
 
-  /** 事件总线 */
+  /** Event bus */
   eventBus: EventBus
 
-  /** Trace 收集器 */
+  /** Trace collector */
   trace: TraceCollector
 
-  /** Token 预算 */
+  /** Token budget */
   tokenBudget: TokenBudget
 
-  /** 工具注册表 */
+  /** Tool registry */
   toolRegistry: ToolRegistry
 
-  /** 策略引擎 */
+  /** Policy engine */
   policyEngine: PolicyEngine
 
-  /** 上下文管理器 */
+  /** Context manager */
   contextManager: ContextManager
 
-  /** 会话状态 */
+  /** Session state */
   sessionState: SessionState
 
-  /** LLM 客户端（用于工具内 LLM 调用） */
+  /** LLM client (for in-tool LLM calls) */
   llmClient?: LLMClient
 
   /** Memory storage for KV operations */
@@ -234,7 +234,7 @@ export interface Runtime {
 }
 
 /**
- * Runtime 配置
+ * Runtime configuration
  */
 export interface RuntimeConfig {
   projectPath: string

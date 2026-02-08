@@ -1,5 +1,5 @@
 /**
- * python - Python 桥接包
+ * python - Python bridge pack
  */
 
 import { definePack } from '../factories/define-pack.js'
@@ -9,20 +9,20 @@ import { PythonBridge } from '../python/bridge.js'
 import { createPythonToolFactory } from '../python/define-python-tool.js'
 
 /**
- * Python Pack 配置
+ * Python Pack configuration
  */
 export interface PythonPackConfig {
-  /** Python Bridge 实例 */
+  /** Python Bridge instance */
   bridge: PythonBridge
-  /** 工具配置 */
+  /** Tool configurations */
   tools: Array<{
-    /** 方法名 */
+    /** Method name */
     method: string
-    /** 工具名称 */
+    /** Tool name */
     name: string
-    /** 工具描述 */
+    /** Tool description */
     description: string
-    /** 参数定义 */
+    /** Parameter definitions */
     parameters?: Record<string, {
       type: string
       description?: string
@@ -32,7 +32,7 @@ export interface PythonPackConfig {
 }
 
 /**
- * 创建 Python Pack
+ * Create a Python Pack
  */
 export function python(config: PythonPackConfig): Pack {
   const factory = createPythonToolFactory(config.bridge)
@@ -64,7 +64,7 @@ export function python(config: PythonPackConfig): Pack {
 
   return definePack({
     id: 'python',
-    description: `Python 桥接包：${tools.map(t => t.name).join(', ')}`,
+    description: `Python bridge pack: ${tools.map(t => t.name).join(', ')}`,
     tools,
 
     onInit: async () => {
@@ -78,13 +78,13 @@ export function python(config: PythonPackConfig): Pack {
     },
 
     promptFragment: `
-## Python 工具
+## Python Tools
 
-以下工具由 Python 提供：
+The following tools are provided by Python:
 
 ${tools.map(t => `- **${t.name}**: ${t.description}`).join('\n')}
 
-这些工具通过 Python Bridge 执行，可能需要额外的依赖。
+These tools are executed via the Python Bridge and may require additional dependencies.
     `.trim()
   })
 }

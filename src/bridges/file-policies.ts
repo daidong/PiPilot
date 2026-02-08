@@ -1,28 +1,28 @@
 /**
  * File Access Policies
  *
- * 根据权限声明生成文件访问策略
+ * Generates file access policies based on permission declarations
  */
 
 import type { Policy, PolicyContext, GuardDecision } from '../types/policy.js'
 import { defineGuardPolicy } from '../factories/define-policy.js'
 
 /**
- * 文件策略配置
+ * File policy configuration
  */
 export interface FileAccessPolicyConfig {
-  /** Provider ID（用于策略 ID 前缀） */
+  /** Provider ID (used as policy ID prefix) */
   providerId: string
-  /** 允许访问的路径 */
+  /** Allowed access paths */
   allowedPaths?: string[]
-  /** 禁止访问的路径 */
+  /** Denied access paths */
   deniedPaths?: string[]
-  /** 策略优先级 */
+  /** Policy priority */
   priority?: number
 }
 
 /**
- * 创建文件读取策略
+ * Create a file read policy
  */
 export function createFileReadPolicy(config: FileAccessPolicyConfig): Policy {
   const { providerId, allowedPaths, deniedPaths, priority = 15 } = config
@@ -32,7 +32,7 @@ export function createFileReadPolicy(config: FileAccessPolicyConfig): Policy {
     description: `File read access control for ${providerId}`,
     priority,
     match: (ctx: PolicyContext) => {
-      // 匹配 read 工具或文件读取操作
+      // Match the read tool or file read operations
       return ctx.tool === 'read' || ctx.operation === 'readFile'
     },
     decide: (ctx: PolicyContext): GuardDecision => {
@@ -43,7 +43,7 @@ export function createFileReadPolicy(config: FileAccessPolicyConfig): Policy {
         return { action: 'allow' }
       }
 
-      // 检查是否在禁止列表中
+      // Check if the path is in the denied list
       if (deniedPaths && matchesAnyPattern(filePath, deniedPaths)) {
         return {
           action: 'deny',
@@ -51,7 +51,7 @@ export function createFileReadPolicy(config: FileAccessPolicyConfig): Policy {
         }
       }
 
-      // 如果有允许列表，检查是否在允许范围内
+      // If an allow list exists, check if the path is within allowed scope
       if (allowedPaths && allowedPaths.length > 0) {
         if (!matchesAnyPattern(filePath, allowedPaths)) {
           return {
@@ -67,7 +67,7 @@ export function createFileReadPolicy(config: FileAccessPolicyConfig): Policy {
 }
 
 /**
- * 创建文件写入策略
+ * Create a file write policy
  */
 export function createFileWritePolicy(config: FileAccessPolicyConfig): Policy {
   const { providerId, allowedPaths, deniedPaths, priority = 15 } = config
@@ -77,7 +77,7 @@ export function createFileWritePolicy(config: FileAccessPolicyConfig): Policy {
     description: `File write access control for ${providerId}`,
     priority,
     match: (ctx: PolicyContext) => {
-      // 匹配 write/edit 工具或文件写入操作
+      // Match the write/edit tools or file write operations
       return (
         ctx.tool === 'write' ||
         ctx.tool === 'edit' ||
@@ -92,7 +92,7 @@ export function createFileWritePolicy(config: FileAccessPolicyConfig): Policy {
         return { action: 'allow' }
       }
 
-      // 检查是否在禁止列表中
+      // Check if the path is in the denied list
       if (deniedPaths && matchesAnyPattern(filePath, deniedPaths)) {
         return {
           action: 'deny',
@@ -100,7 +100,7 @@ export function createFileWritePolicy(config: FileAccessPolicyConfig): Policy {
         }
       }
 
-      // 如果有允许列表，检查是否在允许范围内
+      // If an allow list exists, check if the path is within allowed scope
       if (allowedPaths && allowedPaths.length > 0) {
         if (!matchesAnyPattern(filePath, allowedPaths)) {
           return {
@@ -116,7 +116,7 @@ export function createFileWritePolicy(config: FileAccessPolicyConfig): Policy {
 }
 
 /**
- * 检查路径是否匹配任意模式
+ * Check if a path matches any pattern
  */
 function matchesAnyPattern(filePath: string, patterns: string[]): boolean {
   const normalizedPath = normalizePath(filePath)
@@ -131,61 +131,61 @@ function matchesAnyPattern(filePath: string, patterns: string[]): boolean {
 }
 
 /**
- * 规范化路径
+ * Normalize a path
  */
 function normalizePath(filePath: string): string {
-  // 替换反斜杠
+  // Replace backslashes
   let normalized = filePath.replace(/\\/g, '/')
 
-  // 移除多余的斜杠
+  // Remove redundant slashes
   normalized = normalized.replace(/\/+/g, '/')
 
   return normalized
 }
 
 /**
- * 匹配路径模式
+ * Match a path pattern
  *
- * 支持的模式：
- * - 精确匹配: /path/to/file
- * - 目录匹配: /path/to/ (匹配目录下所有文件)
- * - 通配符: *.txt (匹配扩展名)
- * - 双星: ** (匹配任意深度)
+ * Supported patterns:
+ * - Exact match: /path/to/file
+ * - Directory match: /path/to/ (matches all files under the directory)
+ * - Wildcard: *.txt (matches file extensions)
+ * - Double star: ** (matches any depth)
  */
 function matchPattern(filePath: string, pattern: string): boolean {
   const normalizedPattern = normalizePath(pattern)
 
-  // 精确匹配
+  // Exact match
   if (filePath === normalizedPattern) {
     return true
   }
 
-  // 目录匹配（以 / 结尾）
+  // Directory match (ends with /)
   if (normalizedPattern.endsWith('/')) {
     return filePath.startsWith(normalizedPattern) ||
            filePath === normalizedPattern.slice(0, -1)
   }
 
-  // 转换 glob 模式为正则表达式
+  // Convert glob pattern to regular expression
   const regexPattern = globToRegex(normalizedPattern)
   return regexPattern.test(filePath)
 }
 
 /**
- * 将 glob 模式转换为正则表达式
+ * Convert a glob pattern to a regular expression
  */
 function globToRegex(pattern: string): RegExp {
   let regex = pattern
-    // 转义特殊字符
+    // Escape special characters
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    // ** 匹配任意路径
+    // ** matches any path
     .replace(/\\\*\\\*/g, '.*')
-    // * 匹配除 / 外的任意字符
+    // * matches any character except /
     .replace(/\\\*/g, '[^/]*')
-    // ? 匹配单个字符
+    // ? matches a single character
     .replace(/\\\?/g, '[^/]')
 
-  // 如果模式不以 / 开头，允许匹配路径中的任意位置
+  // If the pattern doesn't start with /, allow matching at any position in the path
   if (!pattern.startsWith('/') && !pattern.startsWith('./')) {
     regex = '(^|/)' + regex
   }
@@ -194,7 +194,7 @@ function globToRegex(pattern: string): RegExp {
 }
 
 /**
- * 从权限声明创建文件访问策略
+ * Create file access policies from permission declarations
  */
 export function createFileAccessPolicies(
   providerId: string,
@@ -207,7 +207,7 @@ export function createFileAccessPolicies(
     return policies
   }
 
-  // 读取策略
+  // Read policy
   if (permissions.read) {
     policies.push(
       createFileReadPolicy({
@@ -218,7 +218,7 @@ export function createFileAccessPolicies(
     )
   }
 
-  // 写入策略
+  // Write policy
   if (permissions.write) {
     policies.push(
       createFileWritePolicy({

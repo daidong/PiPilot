@@ -122,7 +122,7 @@ export class SimpleTokenizer implements Tokenizer {
   }
 
   encode(text: string): number[] {
-    // 简化实现：每个字符映射到其 charCode
+    // Simplified implementation: each character maps to its charCode
     const tokens: number[] = []
     for (let i = 0; i < text.length; i++) {
       tokens.push(text.charCodeAt(i))
@@ -140,7 +140,7 @@ export class SimpleTokenizer implements Tokenizer {
       return text
     }
 
-    // 估算需要保留的字符数
+    // Estimate the number of characters to keep
     const ratio = maxTokens / currentTokens
     const targetLength = Math.floor(text.length * ratio)
 
@@ -159,25 +159,25 @@ export class SimpleTokenizer implements Tokenizer {
   }
 }
 
-// 默认 tokenizer 实例
+// Default tokenizer instance
 let defaultTokenizer: Tokenizer = new SimpleTokenizer()
 
 /**
- * 获取默认 tokenizer
+ * Get the default tokenizer
  */
 export function getTokenizer(): Tokenizer {
   return defaultTokenizer
 }
 
 /**
- * 设置默认 tokenizer
+ * Set the default tokenizer
  */
 export function setTokenizer(tokenizer: Tokenizer): void {
   defaultTokenizer = tokenizer
 }
 
 /**
- * 计算 token 数量
+ * Count the number of tokens
  */
 export function countTokens(text: string): number {
   return defaultTokenizer.count(text)

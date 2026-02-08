@@ -2,7 +2,7 @@
  * TraceCollector - Event trace collector with correlation support
  */
 
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'path'
 import { FRAMEWORK_DIR } from '../constants.js'
 import type { TraceEvent, TraceEventType, TraceFilter, EventCorrelation } from '../types/trace.js'
@@ -111,14 +111,14 @@ export class TraceCollector {
   }
 
   /**
-   * 获取当前 trace ID
+   * Get current trace ID
    */
   get currentId(): string {
     return this.currentTraceId ?? generateId()
   }
 
   /**
-   * 设置当前步骤
+   * Set the current step
    */
   setStep(step: number): void {
     this.currentStep = step
@@ -166,7 +166,7 @@ export class TraceCollector {
   }
 
   /**
-   * 开始一个事件范围（用于测量持续时间）
+   * Start an event span (used to measure duration)
    */
   startSpan(type: TraceEventType, data?: Record<string, unknown>): string {
     const id = this.record({ type, data })
@@ -175,7 +175,7 @@ export class TraceCollector {
   }
 
   /**
-   * 结束一个事件范围
+   * End an event span
    */
   endSpan(spanId: string, additionalData?: Record<string, unknown>): void {
     const event = this.events.find(e => e.id === spanId)
@@ -193,7 +193,7 @@ export class TraceCollector {
   }
 
   /**
-   * 获取所有事件
+   * Get all events
    */
   getEvents(): TraceEvent[] {
     return [...this.events]
@@ -236,7 +236,7 @@ export class TraceCollector {
   }
 
   /**
-   * 按类型分组事件
+   * Group events by type
    */
   groupByType(): Map<TraceEventType, TraceEvent[]> {
     const groups = new Map<TraceEventType, TraceEvent[]>()
@@ -252,14 +252,14 @@ export class TraceCollector {
   }
 
   /**
-   * 获取指定步骤的事件
+   * Get events for a specific step
    */
   getStepEvents(step: number): TraceEvent[] {
     return this.events.filter(e => e.step === step)
   }
 
   /**
-   * 获取事件统计
+   * Get event statistics
    */
   getStats(): {
     totalEvents: number
@@ -290,7 +290,7 @@ export class TraceCollector {
   }
 
   /**
-   * 清空事件
+   * Clear all events
    */
   clear(): void {
     this.events = []
@@ -301,17 +301,17 @@ export class TraceCollector {
   /**
    * Export trace events and summary to disk (JSONL + summary JSON)
    */
-  flush(): void {
+  async flush(): Promise<void> {
     if (!this.exportConfig.enabled) return
 
     try {
       const dir = this.exportConfig.dir ?? join(process.cwd(), FRAMEWORK_DIR, 'traces')
-      mkdirSync(dir, { recursive: true })
+      await mkdir(dir, { recursive: true })
 
       if (this.exportConfig.writeJsonl) {
         const jsonl = this.events.map(e => JSON.stringify(e)).join('\n') + (this.events.length ? '\n' : '')
         const tracePath = join(dir, `trace-${this.runId}.jsonl`)
-        writeFileSync(tracePath, jsonl, 'utf-8')
+        await writeFile(tracePath, jsonl, 'utf-8')
       }
 
       if (this.exportConfig.writeSummary) {
@@ -330,12 +330,12 @@ export class TraceCollector {
           usage: this.usageSummary
         }
         const summaryPath = join(dir, `trace-${this.runId}.summary.json`)
-        writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf-8')
+        await writeFile(summaryPath, JSON.stringify(summary, null, 2), 'utf-8')
       }
 
       if (this.usageSummary) {
         const baseDir = basename(dir) === 'traces' ? dirname(dir) : dir
-        updateUsageTotals(baseDir, this.runId, this.usageSummary)
+        await updateUsageTotals(baseDir, this.runId, this.usageSummary)
       }
     } catch (error) {
       // Do not fail agent execution if tracing export fails
@@ -345,14 +345,14 @@ export class TraceCollector {
   }
 
   /**
-   * 导出为 JSON
+   * Export as JSON
    */
   toJSON(): string {
     return JSON.stringify(this.events, null, 2)
   }
 
   /**
-   * 从 JSON 导入
+   * Import from JSON
    */
   static fromJSON(json: string, sessionId?: string): TraceCollector {
     const events = JSON.parse(json) as TraceEvent[]

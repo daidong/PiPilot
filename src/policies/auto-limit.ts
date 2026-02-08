@@ -1,18 +1,18 @@
 /**
- * auto-limit - 自动限制策略
+ * auto-limit - Auto-limiting policies
  */
 
 import { defineMutatePolicy } from '../factories/define-policy.js'
 
 /**
- * 自动为 SQL 查询添加 LIMIT
+ * Automatically add LIMIT to SQL queries
  */
 export const autoLimitSql = defineMutatePolicy({
   id: 'auto-limit-sql',
-  description: '自动为 SQL 查询添加 LIMIT 限制',
+  description: 'Automatically add LIMIT clause to SQL queries',
   priority: 50,
   match: (ctx) => {
-    // 匹配执行 SQL 的工具
+    // Match tools that execute SQL
     const input = ctx.input as { sql?: string }
     return !!input?.sql
   },
@@ -20,12 +20,12 @@ export const autoLimitSql = defineMutatePolicy({
     const input = ctx.input as { sql?: string }
     const sql = input.sql ?? ''
 
-    // 检查是否已有 LIMIT
+    // Check if LIMIT already exists
     if (/LIMIT\s+\d+/i.test(sql)) {
       return []
     }
 
-    // 只对 SELECT 语句添加
+    // Only add to SELECT statements
     if (!/^\s*SELECT/i.test(sql)) {
       return []
     }
@@ -39,11 +39,11 @@ export const autoLimitSql = defineMutatePolicy({
 })
 
 /**
- * 自动限制 grep 结果数量
+ * Automatically limit grep result count
  */
 export const autoLimitGrep = defineMutatePolicy({
   id: 'auto-limit-grep',
-  description: '自动限制 grep 搜索结果数量',
+  description: 'Automatically limit the number of grep search results',
   priority: 50,
   match: (ctx) => {
     return ctx.tool === 'grep' || ctx.operation === 'grep'
@@ -51,7 +51,7 @@ export const autoLimitGrep = defineMutatePolicy({
   transforms: (ctx) => {
     const input = ctx.input as { limit?: number }
 
-    // 如果没有设置 limit 或 limit 过大
+    // If limit is not set or is too large
     if (input.limit === undefined || input.limit > 200) {
       return [{
         op: 'set',
@@ -65,17 +65,17 @@ export const autoLimitGrep = defineMutatePolicy({
 })
 
 /**
- * 自动限制 glob 结果数量
+ * Automatically limit glob result count
  */
 export const autoLimitGlob = defineMutatePolicy({
   id: 'auto-limit-glob',
-  description: '自动限制 glob 匹配结果数量',
+  description: 'Automatically limit the number of glob match results',
   priority: 50,
   match: (ctx) => {
     return ctx.tool === 'glob' || ctx.operation === 'glob'
   },
   transforms: () => {
-    // 添加常见的忽略模式
+    // Add common ignore patterns
     return [{
       op: 'set',
       path: 'ignore',
@@ -85,11 +85,11 @@ export const autoLimitGlob = defineMutatePolicy({
 })
 
 /**
- * 自动限制文件读取行数
+ * Automatically limit file read line count
  */
 export const autoLimitRead = defineMutatePolicy({
   id: 'auto-limit-read',
-  description: '自动限制读取文件的行数',
+  description: 'Automatically limit the number of lines read from a file',
   priority: 50,
   match: (ctx) => {
     return ctx.tool === 'read' || ctx.operation === 'readFile'
@@ -97,7 +97,7 @@ export const autoLimitRead = defineMutatePolicy({
   transforms: (ctx) => {
     const input = ctx.input as { limit?: number }
 
-    // 如果没有设置 limit 或 limit 过大
+    // If limit is not set or is too large
     if (input.limit === undefined || input.limit > 2000) {
       return [{
         op: 'set',
@@ -111,7 +111,7 @@ export const autoLimitRead = defineMutatePolicy({
 })
 
 /**
- * 所有自动限制策略
+ * All auto-limiting policies
  */
 export const autoLimitPolicies = [
   autoLimitSql,

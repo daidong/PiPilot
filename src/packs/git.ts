@@ -1,5 +1,5 @@
 /**
- * git - Git 操作包
+ * git - Git operations pack
  *
  * Migration to Skills:
  * - Set useSkills: true to use lazy-loaded skills instead of promptFragment
@@ -27,11 +27,11 @@ export interface GitPackOptions {
 }
 
 /**
- * Git status 工具
+ * Git status tool
  */
 const gitStatus: Tool = defineTool({
   name: 'git_status',
-  description: '获取 Git 仓库状态',
+  description: 'Get Git repository status',
   parameters: {},
   execute: async (_, { runtime }) => {
     const result = await runtime.io.exec('git status --short', {
@@ -53,21 +53,21 @@ const gitStatus: Tool = defineTool({
 })
 
 /**
- * Git diff 工具
+ * Git diff tool
  */
 const gitDiff: Tool = defineTool({
   name: 'git_diff',
-  description: '查看 Git 变更',
+  description: 'View Git changes',
   parameters: {
     staged: {
       type: 'boolean',
-      description: '是否只查看已暂存的变更',
+      description: 'Whether to show only staged changes',
       required: false,
       default: false
     },
     file: {
       type: 'string',
-      description: '指定文件路径',
+      description: 'Specify file path',
       required: false
     }
   },
@@ -95,15 +95,15 @@ const gitDiff: Tool = defineTool({
 })
 
 /**
- * Git add 工具
+ * Git add tool
  */
 const gitAdd: Tool = defineTool({
   name: 'git_add',
-  description: '暂存文件',
+  description: 'Stage files',
   parameters: {
     files: {
       type: 'array',
-      description: '要暂存的文件列表，使用 "." 表示全部',
+      description: 'List of files to stage, use "." for all',
       required: true,
       items: { type: 'string' }
     }
@@ -125,22 +125,22 @@ const gitAdd: Tool = defineTool({
 })
 
 /**
- * Git commit 工具
+ * Git commit tool
  */
 const gitCommit: Tool = defineTool({
   name: 'git_commit',
-  description: '提交变更',
+  description: 'Commit changes',
   parameters: {
     message: {
       type: 'string',
-      description: '提交信息',
+      description: 'Commit message',
       required: true
     }
   },
   execute: async (input, { runtime }) => {
     const { message } = input as { message: string }
 
-    // 使用 heredoc 处理多行消息
+    // Use heredoc to handle multi-line messages
     const escapedMessage = message.replace(/"/g, '\\"')
     const result = await runtime.io.exec(`git commit -m "${escapedMessage}"`, {
       caller: 'git.commit'
@@ -161,21 +161,21 @@ const gitCommit: Tool = defineTool({
 })
 
 /**
- * Git log 工具
+ * Git log tool
  */
 const gitLog: Tool = defineTool({
   name: 'git_log',
-  description: '查看提交历史',
+  description: 'View commit history',
   parameters: {
     limit: {
       type: 'number',
-      description: '显示的提交数量',
+      description: 'Number of commits to display',
       required: false,
       default: 10
     },
     oneline: {
       type: 'boolean',
-      description: '单行显示',
+      description: 'Display in single-line format',
       required: false,
       default: true
     }
@@ -200,11 +200,11 @@ const gitLog: Tool = defineTool({
 })
 
 /**
- * 禁止强制推送策略
+ * Deny force push policy
  */
 const noForcePush = defineGuardPolicy({
   id: 'no-force-push',
-  description: '禁止 git push --force',
+  description: 'Deny git push --force',
   priority: 5,
   match: (ctx) => {
     const cmd = (ctx.input as { command?: string })?.command ?? ''
@@ -212,7 +212,7 @@ const noForcePush = defineGuardPolicy({
   },
   decide: () => ({
     action: 'deny',
-    reason: '禁止使用 --force 推送'
+    reason: 'Force push with --force is not allowed'
   })
 })
 
@@ -231,7 +231,7 @@ export function git(options: GitPackOptions = {}): Pack {
   if (useSkills) {
     return definePack({
       id: 'git',
-      description: 'Git 操作包：git.status, git.diff, git.add, git.commit, git.log',
+      description: 'Git operations pack: git.status, git.diff, git.add, git.commit, git.log',
 
       tools: [
         gitStatus,
@@ -253,7 +253,7 @@ export function git(options: GitPackOptions = {}): Pack {
   // Legacy promptFragment approach (for backward compatibility)
   return definePack({
     id: 'git',
-    description: 'Git 操作包：git.status, git.diff, git.add, git.commit, git.log',
+    description: 'Git operations pack: git.status, git.diff, git.add, git.commit, git.log',
 
     tools: [
       gitStatus,
@@ -266,19 +266,19 @@ export function git(options: GitPackOptions = {}): Pack {
     policies: [noForcePush],
 
     promptFragment: `
-## Git 操作
+## Git Operations
 
-### 可用工具
-- **git.status**: 查看仓库状态
-- **git.diff**: 查看变更内容
-- **git.add**: 暂存文件
-- **git.commit**: 提交变更
-- **git.log**: 查看提交历史
+### Available Tools
+- **git.status**: View repository status
+- **git.diff**: View changes
+- **git.add**: Stage files
+- **git.commit**: Commit changes
+- **git.log**: View commit history
 
-### 提交规范
-1. 先查看 status 和 diff 确认变更
-2. 使用清晰的提交信息
-3. 避免大规模提交，按功能拆分
+### Commit Guidelines
+1. Check status and diff to review changes before committing
+2. Use clear, descriptive commit messages
+3. Avoid large commits; split by feature
     `.trim()
   })
 }

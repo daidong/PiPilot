@@ -1,5 +1,5 @@
 /**
- * ToolRegistry - 工具注册表
+ * ToolRegistry - Tool Registry
  */
 
 import type { Tool, ToolContext, ToolResult, ParameterSchema, ParameterDefinition } from '../types/tool.js'
@@ -11,7 +11,7 @@ import { toolValidationFeedback, policyDenialFeedback, formatFeedbackAsToolResul
 import type { FeedbackContext, ToolSchemaSummary } from './feedback.js'
 
 /**
- * 工具调用信息
+ * Tool call information
  */
 export interface ToolCallInfo {
   tool: string
@@ -22,7 +22,7 @@ export interface ToolCallInfo {
 }
 
 /**
- * 工具注册表配置
+ * Tool registry configuration
  */
 export interface ToolRegistryConfig {
   policyEngine: PolicyEngine
@@ -31,7 +31,7 @@ export interface ToolRegistryConfig {
 }
 
 /**
- * 参数校验错误
+ * Parameter validation error
  */
 export interface ValidationError {
   param: string
@@ -39,7 +39,7 @@ export interface ValidationError {
 }
 
 /**
- * 参数校验结果
+ * Parameter validation result
  */
 export interface ValidationResult {
   valid: boolean
@@ -48,7 +48,7 @@ export interface ValidationResult {
 }
 
 /**
- * 校验单个参数值
+ * Validate a single parameter value
  */
 function validateValue(
   value: unknown,
@@ -57,7 +57,7 @@ function validateValue(
 ): ValidationError[] {
   const errors: ValidationError[] = []
 
-  // 类型检查
+  // Type check
   const actualType = Array.isArray(value) ? 'array' : typeof value
 
   if (def.type === 'array') {
@@ -66,7 +66,7 @@ function validateValue(
       return errors
     }
 
-    // 校验数组元素
+    // Validate array elements
     if (def.items) {
       for (let i = 0; i < value.length; i++) {
         errors.push(...validateValue(value[i], def.items, `${path}[${i}]`))
@@ -78,7 +78,7 @@ function validateValue(
       return errors
     }
 
-    // 校验对象属性
+    // Validate object properties
     if (def.properties) {
       const obj = value as Record<string, unknown>
       for (const [propName, propDef] of Object.entries(def.properties)) {
@@ -106,7 +106,7 @@ function validateValue(
     }
   }
 
-  // enum 检查
+  // Enum check
   if (def.enum && !errors.length) {
     if (!def.enum.includes(value)) {
       errors.push({ param: path, message: `Value must be one of: ${def.enum.join(', ')}` })
@@ -117,7 +117,7 @@ function validateValue(
 }
 
 /**
- * 校验工具输入参数
+ * Validate tool input parameters
  */
 function validateInput(
   input: unknown,
@@ -139,20 +139,20 @@ function validateInput(
   for (const [paramName, paramDef] of Object.entries(schema)) {
     const value = inputObj[paramName]
 
-    // 检查必填参数
+    // Check required parameters
     if (value === undefined || value === null) {
       if (paramDef.required !== false) {
         errors.push({ param: paramName, message: 'Required parameter missing' })
         continue
       }
-      // 应用默认值
+      // Apply default value
       if (paramDef.default !== undefined) {
         normalized[paramName] = paramDef.default
       }
       continue
     }
 
-    // 校验参数类型和约束
+    // Validate parameter type and constraints
     const paramErrors = validateValue(value, paramDef, paramName)
     errors.push(...paramErrors)
 
@@ -161,7 +161,7 @@ function validateInput(
     }
   }
 
-  // 保留未定义在 schema 中的参数（向前兼容）
+  // Preserve parameters not defined in the schema (forward compatibility)
   for (const [key, value] of Object.entries(inputObj)) {
     if (!(key in schema) && value !== undefined) {
       normalized[key] = value
@@ -176,21 +176,21 @@ function validateInput(
 }
 
 /**
- * 工具注册表
+ * Tool Registry
  */
 export class ToolRegistry {
   private tools = new Map<string, Tool>()
   private config: ToolRegistryConfig | null = null
 
   /**
-   * 设置配置
+   * Set configuration
    */
   configure(config: ToolRegistryConfig): void {
     this.config = config
   }
 
   /**
-   * 注册工具
+   * Register a tool
    */
   register(tool: Tool): void {
     if (this.tools.has(tool.name)) {
@@ -200,7 +200,7 @@ export class ToolRegistry {
   }
 
   /**
-   * 批量注册工具
+   * Register multiple tools
    */
   registerAll(tools: Tool[]): void {
     for (const tool of tools) {
@@ -209,49 +209,49 @@ export class ToolRegistry {
   }
 
   /**
-   * 取消注册工具
+   * Unregister a tool
    */
   unregister(name: string): boolean {
     return this.tools.delete(name)
   }
 
   /**
-   * 获取工具
+   * Get a tool
    */
   get(name: string): Tool | undefined {
     return this.tools.get(name)
   }
 
   /**
-   * 检查工具是否存在
+   * Check if a tool exists
    */
   has(name: string): boolean {
     return this.tools.has(name)
   }
 
   /**
-   * 获取所有工具
+   * Get all tools
    */
   getAll(): Tool[] {
     return Array.from(this.tools.values())
   }
 
   /**
-   * 获取所有工具名称
+   * Get all tool names
    */
   getNames(): string[] {
     return Array.from(this.tools.keys())
   }
 
   /**
-   * 获取工具数量
+   * Get the number of tools
    */
   get size(): number {
     return this.tools.size
   }
 
   /**
-   * 调用工具
+   * Call a tool
    */
   async call(
     name: string,
@@ -267,7 +267,7 @@ export class ToolRegistry {
       return { success: false, error: `Unknown tool: ${name}` }
     }
 
-    // ========== 参数校验 ==========
+    // ========== Parameter Validation ==========
     const validation = validateInput(input, tool.parameters)
     if (!validation.valid) {
       const agentError = createValidationError(name, validation.errors)
@@ -295,10 +295,10 @@ export class ToolRegistry {
       }
     }
 
-    // 使用规范化后的输入（包含默认值）
+    // Use normalized input (includes default values)
     const normalizedInput = validation.normalized
 
-    // 构建策略上下文
+    // Build policy context
     const policyContext = {
       tool: name,
       input: normalizedInput,
@@ -307,7 +307,7 @@ export class ToolRegistry {
       step: this.config.runtime.step
     }
 
-    // 执行前检查（Guard + Mutate）
+    // Pre-execution check (Guard + Mutate)
     const beforeResult = await this.config.policyEngine.evaluateBefore(policyContext)
 
     if (!beforeResult.allowed) {
@@ -322,10 +322,10 @@ export class ToolRegistry {
       return result
     }
 
-    // 使用可能被 mutate 的输入
+    // Use potentially mutated input
     const mutatedInput = beforeResult.input ?? normalizedInput
 
-    // 记录工具调用
+    // Record tool call
     const spanId = this.config.trace.startSpan('tool.call', { tool: name, input: mutatedInput })
 
     // Build tool context
@@ -346,13 +346,13 @@ export class ToolRegistry {
       result = { success: false, error: errorMessage }
     }
 
-    // 结束 span
+    // End span
     this.config.trace.endSpan(spanId, {
       success: result.success,
       error: result.error
     })
 
-    // 执行后观察（Observe）
+    // Post-execution observation (Observe)
     await this.config.policyEngine.evaluateAfter({
       ...policyContext,
       input: mutatedInput,
@@ -363,7 +363,7 @@ export class ToolRegistry {
   }
 
   /**
-   * 校验输入参数（不执行工具）
+   * Validate input parameters (without executing the tool)
    */
   validate(name: string, input: unknown): ValidationResult {
     const tool = this.tools.get(name)
@@ -493,12 +493,12 @@ export class ToolRegistry {
   }
 
   /**
-   * 清空注册表
+   * Clear the registry
    */
   clear(): void {
     this.tools.clear()
   }
 }
 
-// 导出校验函数供测试使用
+// Export validation functions for testing
 export { validateInput, validateValue }

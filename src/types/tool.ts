@@ -1,12 +1,12 @@
 /**
- * Tool Types - 工具轴类型定义
- * Tools 定义 Agent 能执行的操作
+ * Tool Types - Tool axis type definitions
+ * Tools define the operations an Agent can execute
  */
 
 import type { Runtime } from './runtime.js'
 
 /**
- * 参数类型定义
+ * Parameter type definition
  */
 export interface ParameterDefinition {
   type: 'string' | 'number' | 'boolean' | 'object' | 'array'
@@ -21,7 +21,7 @@ export interface ParameterDefinition {
 export type ParameterSchema = Record<string, ParameterDefinition>
 
 /**
- * 工具执行上下文
+ * Tool execution context
  */
 export interface ToolContext {
   /** Runtime instance */
@@ -37,7 +37,7 @@ export interface ToolContext {
 }
 
 /**
- * 附件类型
+ * Attachment type
  */
 export interface Attachment {
   type: 'image' | 'file' | 'code'
@@ -47,7 +47,7 @@ export interface Attachment {
 }
 
 /**
- * 工具执行结果
+ * Tool execution result
  */
 export interface ToolResult<T = unknown> {
   success: boolean
@@ -57,19 +57,19 @@ export interface ToolResult<T = unknown> {
 }
 
 /**
- * 工具定义
+ * Tool definition
  */
 export interface Tool<TInput = unknown, TOutput = unknown> {
-  /** 工具名称（唯一标识） */
+  /** Tool name (unique identifier) */
   name: string
 
-  /** 工具描述（给 LLM 看的） */
+  /** Tool description (for the LLM) */
   description: string
 
-  /** 参数定义 */
+  /** Parameter definitions */
   parameters: ParameterSchema
 
-  /** 执行函数 */
+  /** Execute function */
   execute: (input: TInput, context: ToolContext) => Promise<ToolResult<TOutput>>
 
   /** Optional activity label formatters for UI display */
@@ -77,7 +77,7 @@ export interface Tool<TInput = unknown, TOutput = unknown> {
 }
 
 /**
- * 工具配置（用于 defineTool）
+ * Tool configuration (for defineTool)
  */
 export interface ToolConfig<TInput = unknown, TOutput = unknown> {
   name: string
@@ -89,21 +89,21 @@ export interface ToolConfig<TInput = unknown, TOutput = unknown> {
 }
 
 /**
- * 内置工具名称
+ * Built-in tool names
  */
 export type BuiltinToolName =
-  // 安全核心
+  // Safe core
   | 'ctx-get'
   | 'read'
   | 'write'
   | 'edit'
   | 'glob'
   | 'grep'
-  // 执行能力
+  // Execution capability
   | 'bash'
-  // 网络能力
+  // Network capability
   | 'fetch'
-  // 计算能力
+  // Compute capability
   | 'llm-call'
   | 'llm-expand'
   | 'llm-filter'
@@ -127,11 +127,11 @@ export interface ToolActivityFormat {
 }
 
 /**
- * 工具风险等级
+ * Tool risk level
  */
 export type ToolRiskLevel = 'safe' | 'elevated' | 'high'
 
 /**
- * 工具类别
+ * Tool category
  */
 export type ToolCategory = 'safe' | 'exec' | 'network' | 'compute'

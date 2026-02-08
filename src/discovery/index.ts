@@ -1,7 +1,7 @@
 /**
  * Provider Discovery Module
  *
- * 自动扫描和加载 Provider
+ * Automatically scan and load Providers
  */
 
 // Scanner

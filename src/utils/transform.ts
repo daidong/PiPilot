@@ -1,11 +1,11 @@
 /**
- * Transform - 声明式变换工具
+ * Transform - Declarative transformation utilities
  */
 
 import type { Transform } from '../types/policy.js'
 
 /**
- * 获取嵌套对象的值
+ * Get a value from a nested object
  */
 function getByPath(obj: unknown, path: string): unknown {
   const keys = path.split('.')
@@ -25,7 +25,7 @@ function getByPath(obj: unknown, path: string): unknown {
 }
 
 /**
- * 设置嵌套对象的值
+ * Set a value in a nested object
  */
 function setByPath(obj: unknown, path: string, value: unknown): unknown {
   if (typeof obj !== 'object' || obj === null) {
@@ -51,7 +51,7 @@ function setByPath(obj: unknown, path: string, value: unknown): unknown {
 }
 
 /**
- * 删除嵌套对象的值
+ * Delete a value from a nested object
  */
 function deleteByPath(obj: unknown, path: string): unknown {
   if (typeof obj !== 'object' || obj === null) {
@@ -77,7 +77,7 @@ function deleteByPath(obj: unknown, path: string): unknown {
 }
 
 /**
- * 应用单个 transform
+ * Apply a single transform
  */
 export function applyTransform(obj: unknown, transform: Transform): unknown {
   switch (transform.op) {
@@ -136,7 +136,7 @@ export function applyTransform(obj: unknown, transform: Transform): unknown {
     case 'normalize_path': {
       const value = getByPath(obj, transform.path)
       if (typeof value === 'string') {
-        // 规范化路径：移除多余斜杠，解析 . 和 ..
+        // Normalize path: remove redundant slashes, resolve . and ..
         const normalized = normalizePath(value)
         return setByPath(obj, transform.path, normalized)
       }
@@ -149,7 +149,7 @@ export function applyTransform(obj: unknown, transform: Transform): unknown {
 }
 
 /**
- * 应用多个 transforms
+ * Apply multiple transforms
  */
 export function applyTransforms(obj: unknown, transforms: Transform[]): unknown {
   let result = obj
@@ -160,13 +160,13 @@ export function applyTransforms(obj: unknown, transforms: Transform[]): unknown 
 }
 
 /**
- * 规范化路径
+ * Normalize a path
  */
 export function normalizePath(path: string): string {
-  // 处理 Windows 路径
+  // Handle Windows paths
   const normalized = path.replace(/\\/g, '/')
 
-  // 分割路径
+  // Split path
   const parts = normalized.split('/').filter(Boolean)
   const result: string[] = []
 
@@ -181,14 +181,14 @@ export function normalizePath(path: string): string {
     result.push(part)
   }
 
-  // 保留开头的斜杠（绝对路径）
+  // Preserve the leading slash (absolute path)
   const prefix = normalized.startsWith('/') ? '/' : ''
 
   return prefix + result.join('/')
 }
 
 /**
- * 验证 transform 是否有效
+ * Validate whether a transform is valid
  */
 export function validateTransform(transform: Transform): { valid: boolean; error?: string } {
   if (!transform || typeof transform !== 'object') {
@@ -208,7 +208,7 @@ export function validateTransform(transform: Transform): { valid: boolean; error
     return { valid: false, error: 'Transform must have a "path" field of type string' }
   }
 
-  // 特定操作的额外验证
+  // Additional validation for specific operations
   if (transform.op === 'limit' && typeof transform.max !== 'number') {
     return { valid: false, error: 'limit transform must have a numeric "max" field' }
   }

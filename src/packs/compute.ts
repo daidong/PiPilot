@@ -1,10 +1,10 @@
 /**
- * compute - 计算能力包（成本型）
+ * compute - Compute capability pack (cost-sensitive)
  *
- * 特点：
- * - 需要显式启用
- * - Token 配额控制
- * - 成本监控
+ * Features:
+ * - Requires explicit enablement
+ * - Token quota control
+ * - Cost monitoring
  *
  * Migration to Skills:
  * - useSkills defaults to true for lazy-loaded skills
@@ -21,34 +21,34 @@ import { llmCall, llmExpand, llmFilter } from '../tools/index.js'
 import { llmComputeSkill } from '../skills/builtin/index.js'
 
 /**
- * Compute Pack 配置选项
+ * Compute Pack configuration options
  */
 export interface ComputePackOptions {
   /**
-   * 单次调用最大 token 数
-   * 默认 4000
+   * Maximum tokens per call
+   * Default: 4000
    */
   maxTokensPerCall?: number
 
   /**
-   * 会话总 token 配额
-   * 默认 100000
+   * Session total token quota
+   * Default: 100000
    */
   sessionTokenQuota?: number
 
   /**
-   * 允许的模型列表（如果需要限制）
+   * Allowed model list (if restriction is needed)
    */
   allowModels?: string[]
 
   /**
-   * 是否允许 JSON 模式
-   * 默认 true
+   * Whether JSON mode is allowed
+   * Default: true
    */
   allowJsonMode?: boolean
 
   /**
-   * 温度限制范围
+   * Temperature limit range
    */
   temperatureRange?: {
     min: number
@@ -56,8 +56,8 @@ export interface ComputePackOptions {
   }
 
   /**
-   * 是否需要审批
-   * 默认 false
+   * Whether approval is required
+   * Default: false
    */
   requireApproval?: boolean
 
@@ -70,31 +70,31 @@ export interface ComputePackOptions {
 }
 
 /**
- * 会话 token 使用跟踪器
+ * Session token usage tracker
  */
 const sessionTokenUsage = new Map<string, number>()
 
 /**
- * 获取会话 token 使用量
+ * Get session token usage
  */
 export function getSessionTokenUsage(sessionId: string): number {
   return sessionTokenUsage.get(sessionId) ?? 0
 }
 
 /**
- * 重置会话 token 使用量
+ * Reset session token usage
  */
 export function resetSessionTokenUsage(sessionId: string): void {
   sessionTokenUsage.delete(sessionId)
 }
 
 /**
- * 创建 token 限制策略（Mutate）
+ * Create a token limit policy (Mutate)
  */
 function createMaxTokensPolicy(maxTokens: number): Policy {
   return defineMutatePolicy({
     id: 'compute:max-tokens',
-    description: '限制单次调用的最大 token 数',
+    description: 'Limit the maximum tokens per single call',
     priority: 50,
     match: (ctx) => ctx.tool === 'llm-call',
     transforms: [
@@ -104,12 +104,12 @@ function createMaxTokensPolicy(maxTokens: number): Policy {
 }
 
 /**
- * 创建会话配额策略
+ * Create a session quota policy
  */
 function createQuotaPolicy(quota: number): Policy {
   return defineGuardPolicy({
     id: 'compute:session-quota',
-    description: '限制会话总 token 配额',
+    description: 'Limit the total session token quota',
     priority: 10,
     match: (ctx) => ctx.tool === 'llm-call',
     decide: (ctx) => {
@@ -119,7 +119,7 @@ function createQuotaPolicy(quota: number): Policy {
       if (used + requested > quota) {
         return {
           action: 'deny',
-          reason: `Token 配额已用尽: ${used}/${quota}，请求 ${requested}`
+          reason: `Token quota exhausted: ${used}/${quota}, requested ${requested}`
         }
       }
       return { action: 'allow' }
@@ -128,12 +128,12 @@ function createQuotaPolicy(quota: number): Policy {
 }
 
 /**
- * 创建温度限制策略
+ * Create a temperature limit policy
  */
 function createTemperaturePolicy(range: { min: number; max: number }): Policy {
   return defineMutatePolicy({
     id: 'compute:temperature-limit',
-    description: '限制温度参数范围',
+    description: 'Limit the temperature parameter range',
     priority: 50,
     match: (ctx) => ctx.tool === 'llm-call',
     transforms: [
@@ -143,12 +143,12 @@ function createTemperaturePolicy(range: { min: number; max: number }): Policy {
 }
 
 /**
- * 创建 JSON 模式禁用策略
+ * Create a JSON mode disable policy
  */
 function createNoJsonModePolicy(): Policy {
   return defineMutatePolicy({
     id: 'compute:no-json-mode',
-    description: '禁用 JSON 模式',
+    description: 'Disable JSON mode',
     priority: 50,
     match: (ctx) => ctx.tool === 'llm-call',
     transforms: [
@@ -158,12 +158,12 @@ function createNoJsonModePolicy(): Policy {
 }
 
 /**
- * 创建审批策略
+ * Create an approval policy
  */
 function createApprovalPolicy(): Policy {
   return defineGuardPolicy({
     id: 'compute:approval',
-    description: 'LLM 调用需要审批',
+    description: 'Require approval for LLM calls',
     priority: 20,
     match: (ctx) => ctx.tool === 'llm-call',
     decide: (ctx) => {
@@ -171,7 +171,7 @@ function createApprovalPolicy(): Policy {
       const promptPreview = (input.prompt ?? '').slice(0, 100)
       return {
         action: 'require_approval',
-        message: `LLM 调用审批:\nPrompt: ${promptPreview}...\nMax tokens: ${input.maxTokens ?? 1000}`,
+        message: `LLM call approval:\nPrompt: ${promptPreview}...\nMax tokens: ${input.maxTokens ?? 1000}`,
         timeout: 60000
       }
     }
@@ -179,12 +179,12 @@ function createApprovalPolicy(): Policy {
 }
 
 /**
- * 创建 LLM 审计策略
+ * Create an LLM audit policy
  */
 function createLlmAuditPolicy(): Policy {
   return defineAuditPolicy({
     id: 'compute:audit',
-    description: '审计所有 LLM 调用',
+    description: 'Audit all LLM calls',
     priority: 100,
     match: (ctx) => ctx.tool === 'llm-call',
     record: (ctx) => {
@@ -196,7 +196,7 @@ function createLlmAuditPolicy(): Policy {
         jsonMode?: boolean
       }
 
-      // 更新 token 使用量（在 observe 阶段，result 可能包含实际使用量）
+      // Update token usage (in the observe phase, result may contain actual usage)
       const result = ctx.result as { data?: { usage?: { totalTokens?: number } } } | undefined
       const tokensUsed = result?.data?.usage?.totalTokens ?? input.maxTokens ?? 1000
 
@@ -221,15 +221,15 @@ function createLlmAuditPolicy(): Policy {
 }
 
 /**
- * Compute Pack - 计算能力包
+ * Compute Pack - Compute capability pack
  *
- * 包含工具：
- * - llm-call: LLM 子调用
+ * Included tools:
+ * - llm-call: LLM sub-call
  *
- * 默认策略：
- * - 单次调用 token 限制
- * - 会话 token 配额
- * - 审计所有调用
+ * Default policies:
+ * - Per-call token limit
+ * - Session token quota
+ * - Audit all calls
  */
 export function compute(options: ComputePackOptions = {}): Pack {
   const {
@@ -243,28 +243,28 @@ export function compute(options: ComputePackOptions = {}): Pack {
 
   const policies: Policy[] = []
 
-  // Token 限制策略
+  // Token limit policy
   policies.push(createMaxTokensPolicy(maxTokensPerCall))
 
-  // 会话配额策略
+  // Session quota policy
   policies.push(createQuotaPolicy(sessionTokenQuota))
 
-  // 温度限制策略
+  // Temperature limit policy
   if (temperatureRange) {
     policies.push(createTemperaturePolicy(temperatureRange))
   }
 
-  // JSON 模式禁用策略
+  // JSON mode disable policy
   if (!allowJsonMode) {
     policies.push(createNoJsonModePolicy())
   }
 
-  // 审批策略
+  // Approval policy
   if (requireApproval) {
     policies.push(createApprovalPolicy())
   }
 
-  // 审计策略
+  // Audit policy
   policies.push(createLlmAuditPolicy())
 
   // Build pack with either skills (new) or promptFragment (legacy)
@@ -273,7 +273,7 @@ export function compute(options: ComputePackOptions = {}): Pack {
     // Only ~60 tokens loaded initially vs ~400 tokens with promptFragment
     return definePack({
       id: 'compute',
-      description: '计算能力包：llm-call, llm-expand, llm-filter（需显式启用）',
+      description: 'Compute capability pack: llm-call, llm-expand, llm-filter (requires explicit enablement)',
 
       tools: [llmCall as any, llmExpand as any, llmFilter as any],
 
@@ -288,7 +288,7 @@ export function compute(options: ComputePackOptions = {}): Pack {
       // Runtime quota info can be added to skill via runtime configuration
 
       onDestroy: async (_runtime) => {
-        // 清理会话 token 使用记录
+        // Clean up session token usage records
       }
     })
   }
@@ -296,63 +296,63 @@ export function compute(options: ComputePackOptions = {}): Pack {
   // Legacy promptFragment approach (for backward compatibility)
   return definePack({
     id: 'compute',
-    description: '计算能力包：llm-call, llm-expand, llm-filter（需显式启用）',
+    description: 'Compute capability pack: llm-call, llm-expand, llm-filter (requires explicit enablement)',
 
     tools: [llmCall as any, llmExpand as any, llmFilter as any],
 
     policies,
 
     promptFragment: `
-## LLM 计算能力
+## LLM Compute Capabilities
 
-### llm-call 工具
-进行原始 LLM 子调用，用于：
-- 自定义 prompt 任务
-- 文本分类
-- 摘要生成
-- 结构化数据提取
+### llm-call Tool
+Perform raw LLM sub-calls for:
+- Custom prompt tasks
+- Text classification
+- Summary generation
+- Structured data extraction
 
-### llm-expand 工具
-文本扩展，生成多个变体：
-- style: "search" - 搜索查询优化（默认）
-- style: "synonyms" - 同义词生成
-- style: "rephrase" - 多角度重述
-- domain: 领域提示（如 "academic", "technical"）
+### llm-expand Tool
+Text expansion, generating multiple variants:
+- style: "search" - Search query optimization (default)
+- style: "synonyms" - Synonym generation
+- style: "rephrase" - Multi-perspective rephrasing
+- domain: Domain hint (e.g., "academic", "technical")
 
-### llm-filter 工具
-相关性过滤，对列表评分筛选：
-- 按 query 对每项评分 0-10
-- minScore: 最低分数阈值（默认 5）
-- maxItems: 最大返回数量（默认 10）
-- 返回排序后的高相关性项目
+### llm-filter Tool
+Relevance filtering, scoring and filtering lists:
+- Scores each item 0-10 against the query
+- minScore: Minimum score threshold (default 5)
+- maxItems: Maximum number of results (default 10)
+- Returns sorted high-relevance items
 
-### 配额限制
-- 单次调用: 最多 ${maxTokensPerCall} tokens
-- 会话配额: ${sessionTokenQuota} tokens
-${temperatureRange ? `- 温度范围: ${temperatureRange.min} - ${temperatureRange.max}` : ''}
-${!allowJsonMode ? '- JSON 模式已禁用' : ''}
+### Quota Limits
+- Per call: Up to ${maxTokensPerCall} tokens
+- Session quota: ${sessionTokenQuota} tokens
+${temperatureRange ? `- Temperature range: ${temperatureRange.min} - ${temperatureRange.max}` : ''}
+${!allowJsonMode ? '- JSON mode is disabled' : ''}
 
-### 最佳实践
-1. 优先使用 llm-expand/llm-filter 替代自定义 prompt
-2. 设置合理的 maxTokens 避免浪费
-3. 复杂任务拆分为多次小调用
-4. llm-filter 适合筛选搜索结果
+### Best Practices
+1. Prefer llm-expand/llm-filter over custom prompts
+2. Set reasonable maxTokens to avoid waste
+3. Break complex tasks into multiple smaller calls
+4. llm-filter is ideal for filtering search results
     `.trim(),
 
     onDestroy: async (_runtime) => {
-      // 清理会话 token 使用记录
-      // 注意：这里可以添加更多清理逻辑
+      // Clean up session token usage records
+      // Note: additional cleanup logic can be added here
     }
   })
 }
 
 /**
- * 别名：computePack
+ * Alias: computePack
  */
 export const computePack = compute
 
 /**
- * 预设：经济模式（低配额）
+ * Preset: Economy mode (low quota)
  */
 export function computeEconomy(): Pack {
   return compute({
@@ -363,7 +363,7 @@ export function computeEconomy(): Pack {
 }
 
 /**
- * 预设：标准模式
+ * Preset: Standard mode
  */
 export function computeStandard(): Pack {
   return compute({
@@ -373,7 +373,7 @@ export function computeStandard(): Pack {
 }
 
 /**
- * 预设：高级模式（大配额）
+ * Preset: Premium mode (high quota)
  */
 export function computePremium(): Pack {
   return compute({
@@ -383,7 +383,7 @@ export function computePremium(): Pack {
 }
 
 /**
- * 预设：审批模式
+ * Preset: Approval mode
  */
 export function computeWithApproval(): Pack {
   return compute({

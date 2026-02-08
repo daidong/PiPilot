@@ -1,5 +1,5 @@
 /**
- * EventBus - 事件总线
+ * EventBus - Event Bus
  */
 
 import type { FrameworkEvent } from '../types/trace.js'
@@ -7,14 +7,14 @@ import type { FrameworkEvent } from '../types/trace.js'
 export type EventHandler<T = unknown> = (data: T) => void | Promise<void>
 
 /**
- * 事件总线
+ * Event Bus
  */
 export class EventBus {
   private listeners = new Map<string, Set<EventHandler>>()
 
   /**
-   * 订阅事件
-   * @returns 取消订阅函数
+   * Subscribe to an event
+   * @returns Unsubscribe function
    */
   on<T = unknown>(event: FrameworkEvent | string, handler: EventHandler<T>): () => void {
     if (!this.listeners.has(event)) {
@@ -33,7 +33,7 @@ export class EventBus {
   }
 
   /**
-   * 订阅一次性事件
+   * Subscribe to a one-time event
    */
   once<T = unknown>(event: FrameworkEvent | string, handler: EventHandler<T>): () => void {
     const wrappedHandler: EventHandler<T> = (data) => {
@@ -46,7 +46,7 @@ export class EventBus {
   }
 
   /**
-   * 发送事件
+   * Emit an event
    */
   emit<T = unknown>(event: FrameworkEvent | string, data: T): void {
     const handlers = this.listeners.get(event)
@@ -57,7 +57,7 @@ export class EventBus {
     for (const handler of handlers) {
       try {
         const result = handler(data)
-        // 处理异步 handler
+        // Handle async handler
         if (result instanceof Promise) {
           result.catch((error) => {
             console.error(`Error in event handler for ${event}:`, error)
@@ -70,7 +70,7 @@ export class EventBus {
   }
 
   /**
-   * 异步发送事件，等待所有 handler 完成
+   * Emit an event asynchronously, waiting for all handlers to complete
    */
   async emitAsync<T = unknown>(event: FrameworkEvent | string, data: T): Promise<void> {
     const handlers = this.listeners.get(event)
@@ -95,33 +95,33 @@ export class EventBus {
   }
 
   /**
-   * 移除事件的所有 handler
+   * Remove all handlers for an event
    */
   off(event: FrameworkEvent | string): void {
     this.listeners.delete(event)
   }
 
   /**
-   * 清空所有事件监听
+   * Clear all event listeners
    */
   clear(): void {
     this.listeners.clear()
   }
 
   /**
-   * 获取事件的监听器数量
+   * Get the number of listeners for an event
    */
   listenerCount(event: FrameworkEvent | string): number {
     return this.listeners.get(event)?.size ?? 0
   }
 
   /**
-   * 获取所有已注册的事件
+   * Get all registered event names
    */
   eventNames(): string[] {
     return Array.from(this.listeners.keys())
   }
 }
 
-// 创建默认事件总线实例
+// Create default event bus instance
 export const defaultEventBus = new EventBus()

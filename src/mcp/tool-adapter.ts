@@ -1,7 +1,7 @@
 /**
  * MCP Tool Adapter
  *
- * 将 MCP 工具转换为 AgentFoundry 工具格式
+ * Converts MCP tools to AgentFoundry tool format
  */
 
 import { resolve as resolvePath, basename } from 'node:path'
@@ -21,21 +21,21 @@ import type {
 import type { MCPClient } from './client.js'
 
 /**
- * 适配器选项
+ * Adapter options
  */
 export interface ToolAdapterOptions {
-  /** 工具名前缀（避免冲突） */
+  /** Tool name prefix (to avoid conflicts) */
   prefix?: string
-  /** 超时时间（毫秒） */
+  /** Timeout in milliseconds */
   timeout?: number
-  /** 是否在描述中添加来源信息 */
+  /** Whether to include source information in the description */
   includeSource?: boolean
-  /** 来源名称 */
+  /** Source name */
   sourceName?: string
 }
 
 /**
- * 将 MCP 工具转换为 AgentFoundry 工具
+ * Convert an MCP tool to an AgentFoundry tool
  */
 export function adaptMCPTool(
   mcpTool: MCPToolDefinition,
@@ -114,17 +114,17 @@ export function adaptMCPTool(
 }
 
 /**
- * MCP 工具结果数据
+ * MCP tool result data
  */
 export interface MCPToolResultData {
-  /** 文本内容 */
+  /** Text content */
   text?: string
-  /** 所有内容块 */
+  /** All content blocks */
   contents: MCPContent[]
 }
 
 /**
- * 将 MCP JSON Schema 转换为 AgentFoundry ParameterSchema
+ * Convert MCP JSON Schema to AgentFoundry ParameterSchema
  */
 export function convertJsonSchemaToParameters(
   schema: MCPToolDefinition['inputSchema']
@@ -145,7 +145,7 @@ export function convertJsonSchemaToParameters(
 }
 
 /**
- * 转换属性 Schema
+ * Convert a property schema
  */
 function convertPropertySchema(
   prop: MCPPropertySchema,
@@ -165,12 +165,12 @@ function convertPropertySchema(
     definition.enum = prop.enum
   }
 
-  // 处理数组类型
+  // Handle array type
   if (prop.type === 'array' && prop.items) {
     definition.items = convertPropertySchema(prop.items, false)
   }
 
-  // 处理对象类型
+  // Handle object type
   if (prop.type === 'object' && prop.properties) {
     definition.properties = {}
     const objRequired = new Set(prop.required ?? [])
@@ -187,7 +187,7 @@ function convertPropertySchema(
 }
 
 /**
- * 映射 Schema 类型
+ * Map schema types
  */
 function mapSchemaType(
   type: MCPPropertySchema['type']
@@ -210,10 +210,10 @@ function mapSchemaType(
 }
 
 /**
- * 转换 MCP 结果
+ * Convert an MCP result
  */
 function convertMCPResult(result: MCPToolResult): ToolResult<MCPToolResultData> {
-  // 提取文本内容
+  // Extract text content
   const textContents = result.content
     .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
     .map((c) => c.text)
@@ -350,7 +350,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * 批量转换 MCP 工具
+ * Batch convert MCP tools
  */
 export function adaptMCPTools(
   tools: MCPToolDefinition[],
@@ -361,7 +361,7 @@ export function adaptMCPTools(
 }
 
 /**
- * 验证工具输入是否符合 Schema
+ * Validate whether tool input conforms to the schema
  */
 export function validateToolInput(
   input: unknown,
@@ -375,7 +375,7 @@ export function validateToolInput(
 
   const inputObj = input as Record<string, unknown>
 
-  // 检查必需字段
+  // Check required fields
   if (schema.required) {
     for (const field of schema.required) {
       if (!(field in inputObj)) {
@@ -384,7 +384,7 @@ export function validateToolInput(
     }
   }
 
-  // 检查字段类型
+  // Check field types
   if (schema.properties) {
     for (const [name, prop] of Object.entries(schema.properties)) {
       if (name in inputObj) {
@@ -402,7 +402,7 @@ export function validateToolInput(
 }
 
 /**
- * 验证值类型
+ * Validate value type
  */
 function validateType(value: unknown, schema: MCPPropertySchema): string | null {
   const actualType = Array.isArray(value) ? 'array' : typeof value
@@ -439,7 +439,7 @@ function validateType(value: unknown, schema: MCPPropertySchema): string | null 
       break
   }
 
-  // 检查枚举
+  // Check enum values
   if (schema.enum && !schema.enum.includes(value)) {
     return `value must be one of: ${schema.enum.join(', ')}`
   }

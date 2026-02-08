@@ -1,20 +1,20 @@
 /**
  * MCP (Model Context Protocol) Module
  *
- * 提供 MCP 适配器，让 AgentFoundry 可以接入 MCP 生态。
+ * Provides MCP adapters so that AgentFoundry can integrate with the MCP ecosystem.
  *
- * ## 使用指南
+ * ## Usage Guide
  *
- * MCP 用于连接外部工具服务器，而不是自己实现。
- * - 使用现有 MCP server 获得通用能力（文件系统、GitHub、数据库等）
- * - 自己的业务逻辑请使用 defineTool() 创建本地工具
+ * MCP is used to connect to external tool servers, not to implement your own.
+ * - Use existing MCP servers for common capabilities (filesystem, GitHub, databases, etc.)
+ * - For your own business logic, use defineTool() to create local tools
  *
- * ## 快速开始
+ * ## Quick Start
  *
  * ```typescript
  * import { createStdioMCPProvider, createHttpMCPProvider } from 'agent-foundry'
  *
- * // 本地 MCP server（推荐大多数场景）
+ * // Local MCP server (recommended for most scenarios)
  * const localMCP = createStdioMCPProvider({
  *   id: 'github',
  *   name: 'GitHub',
@@ -22,7 +22,7 @@
  *   args: ['-y', '@modelcontextprotocol/server-github']
  * })
  *
- * // 远程 MCP server
+ * // Remote MCP server
  * const remoteMCP = createHttpMCPProvider({
  *   id: 'service',
  *   name: 'My Service',
@@ -30,55 +30,55 @@
  * })
  * ```
  *
- * 详见 docs/MCP-GUIDE.md
+ * See docs/MCP-GUIDE.md for details
  */
 
 // ============================================================================
-// 公共 API（推荐使用）
+// Public API (recommended)
 // ============================================================================
 
 /**
- * 创建 MCP Provider 的便捷函数
+ * Convenience functions for creating MCP Providers
  */
 export {
-  // 最常用：快速创建本地/远程 MCP Provider
+  // Most common: quickly create local/remote MCP Providers
   createStdioMCPProvider,
   createHttpMCPProvider,
-  // 完整配置：多 server 场景
+  // Full configuration: multi-server scenarios
   createMCPProvider,
-  // 单 server 场景
+  // Single server scenario
   createSingleServerProvider,
-  // Provider 类（高级用法）
+  // Provider class (advanced usage)
   MCPProvider
 } from './mcp-provider.js'
 
 /**
- * 配置类型（TypeScript 用户需要）
+ * Configuration types (needed by TypeScript users)
  */
 export type {
-  // Server 配置
+  // Server configuration
   MCPServerConfig,
   MCPProviderConfig,
-  // 传输配置
+  // Transport configuration
   MCPStdioConfig,
   MCPHttpConfig,
   MCPTransportConfig
 } from './types.js'
 
 /**
- * 错误处理
+ * Error handling
  */
 export { MCPError, MCPErrorCode } from './types.js'
 
 // ============================================================================
-// 高级 API（特殊场景使用）
+// Advanced API (for special scenarios)
 // ============================================================================
 
 /**
- * MCP 客户端（直接与 MCP server 通信）
+ * MCP Client (communicates directly with MCP servers)
  *
- * 大多数用户应使用 createStdioMCPProvider/createHttpMCPProvider，
- * 而不是直接使用 MCPClient。
+ * Most users should use createStdioMCPProvider/createHttpMCPProvider
+ * instead of using MCPClient directly.
  */
 export {
   MCPClient,
@@ -87,9 +87,9 @@ export {
 } from './client.js'
 
 /**
- * 工具适配器（将 MCP 工具转为 AgentFoundry 工具）
+ * Tool adapter (converts MCP tools to AgentFoundry tools)
  *
- * MCPProvider 内部使用，通常不需要直接调用。
+ * Used internally by MCPProvider; typically does not need to be called directly.
  */
 export {
   adaptMCPTool,
@@ -101,14 +101,14 @@ export {
 } from './tool-adapter.js'
 
 // ============================================================================
-// 内部实现（一般不需要直接使用）
+// Internal implementation (generally not needed directly)
 // ============================================================================
 
 /**
- * 传输层实现
+ * Transport layer implementations
  *
- * @internal 这些是底层实现，普通用户不需要直接使用。
- * 如果你需要自定义传输层，可以使用这些类。
+ * @internal These are low-level implementations that most users do not need to use directly.
+ * Use these classes if you need to implement a custom transport layer.
  */
 export {
   MCPTransport,
@@ -129,12 +129,12 @@ export {
 } from './transport/http.js'
 
 /**
- * 协议类型
+ * Protocol types
  *
- * @internal MCP 协议相关的底层类型
+ * @internal Low-level types related to the MCP protocol
  */
 export type {
-  // 工具定义
+  // Tool definitions
   MCPToolDefinition,
   MCPToolResult,
   MCPContent,
@@ -143,10 +143,10 @@ export type {
   MCPResourceContent,
   MCPInputSchema,
   MCPPropertySchema,
-  // 客户端状态
+  // Client state
   MCPClientState,
   MCPClientEvents,
-  // 生命周期
+  // Lifecycle
   MCPInitializeParams,
   MCPInitializeResult,
   MCPServerCapabilities,

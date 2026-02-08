@@ -1,5 +1,5 @@
 /**
- * definePack - Pack 定义工厂
+ * definePack - Pack definition factory
  */
 
 import type { Pack, PackConfig } from '../types/pack.js'
@@ -10,10 +10,10 @@ import type { Runtime } from '../types/runtime.js'
 import type { Skill, SkillLoadingConfig } from '../types/skill.js'
 
 /**
- * 定义 Pack
+ * Define a Pack
  */
 export function definePack(config: PackConfig): Pack {
-  // 验证配置
+  // Validate configuration
   if (!config.id) {
     throw new Error('Pack id is required')
   }
@@ -79,7 +79,7 @@ function buildDefaultSkillLoadingConfig(skills: Skill[]): SkillLoadingConfig {
 }
 
 /**
- * 合并多个 Pack
+ * Merge multiple Packs
  */
 export function mergePacks(...packs: Pack[]): Pack {
   const merged: Pack = {
@@ -104,7 +104,7 @@ export function mergePacks(...packs: Pack[]): Pack {
   const skillIds = new Set<string>()
 
   for (const pack of packs) {
-    // 合并工具（去重）
+    // Merge tools (deduplicate)
     for (const tool of pack.tools ?? []) {
       if (!toolNames.has(tool.name)) {
         toolNames.add(tool.name)
@@ -112,7 +112,7 @@ export function mergePacks(...packs: Pack[]): Pack {
       }
     }
 
-    // 合并策略（去重）
+    // Merge policies (deduplicate)
     for (const policy of pack.policies ?? []) {
       if (!policyIds.has(policy.id)) {
         policyIds.add(policy.id)
@@ -120,7 +120,7 @@ export function mergePacks(...packs: Pack[]): Pack {
       }
     }
 
-    // 合并上下文源（去重）
+    // Merge context sources (deduplicate)
     for (const source of pack.contextSources ?? []) {
       if (!sourceIds.has(source.id)) {
         sourceIds.add(source.id)
@@ -128,7 +128,7 @@ export function mergePacks(...packs: Pack[]): Pack {
       }
     }
 
-    // 合并 Skills（去重）
+    // Merge Skills (deduplicate)
     for (const skill of pack.skills ?? []) {
       if (!skillIds.has(skill.id)) {
         skillIds.add(skill.id)
@@ -136,7 +136,7 @@ export function mergePacks(...packs: Pack[]): Pack {
       }
     }
 
-    // 合并 skill loading config
+    // Merge skill loading config
     if (pack.skillLoadingConfig) {
       for (const id of pack.skillLoadingConfig.eager ?? []) {
         if (!merged.skillLoadingConfig!.eager!.includes(id)) {
@@ -155,12 +155,12 @@ export function mergePacks(...packs: Pack[]): Pack {
       }
     }
 
-    // 合并 prompt fragment
+    // Merge prompt fragment
     if (pack.promptFragment) {
       merged.promptFragment += '\n\n' + pack.promptFragment
     }
 
-    // 合并依赖
+    // Merge dependencies
     for (const dep of pack.dependencies ?? []) {
       if (!merged.dependencies!.includes(dep)) {
         merged.dependencies!.push(dep)
@@ -168,7 +168,7 @@ export function mergePacks(...packs: Pack[]): Pack {
     }
   }
 
-  // 创建合并的初始化函数
+  // Create merged init function
   const initFns = packs.filter(p => p.onInit).map(p => p.onInit!)
   if (initFns.length > 0) {
     merged.onInit = async (runtime: Runtime) => {
@@ -178,7 +178,7 @@ export function mergePacks(...packs: Pack[]): Pack {
     }
   }
 
-  // 创建合并的销毁函数
+  // Create merged destroy function
   const destroyFns = packs.filter(p => p.onDestroy).map(p => p.onDestroy!)
   if (destroyFns.length > 0) {
     merged.onDestroy = async (runtime: Runtime) => {
@@ -192,7 +192,7 @@ export function mergePacks(...packs: Pack[]): Pack {
 }
 
 /**
- * 扩展 Pack
+ * Extend a Pack
  */
 export function extendPack(
   base: Pack,
@@ -248,7 +248,7 @@ export function extendPack(
     dependencies: [...new Set([...(base.dependencies ?? []), ...(extension.dependencies ?? [])])]
   }
 
-  // 合并初始化函数
+  // Merge init functions
   if (base.onInit || extension.onInit) {
     extended.onInit = async (runtime: Runtime) => {
       if (base.onInit) await base.onInit(runtime)
@@ -256,7 +256,7 @@ export function extendPack(
     }
   }
 
-  // 合并销毁函数
+  // Merge destroy functions
   if (base.onDestroy || extension.onDestroy) {
     extended.onDestroy = async (runtime: Runtime) => {
       if (base.onDestroy) await base.onDestroy(runtime)
@@ -268,7 +268,7 @@ export function extendPack(
 }
 
 /**
- * 过滤 Pack 内容
+ * Filter Pack contents
  */
 export function filterPack(
   pack: Pack,
@@ -306,7 +306,7 @@ export function filterPack(
 }
 
 /**
- * 创建空 Pack
+ * Create an empty Pack
  */
 export function createEmptyPack(id: string, description: string): Pack {
   return definePack({

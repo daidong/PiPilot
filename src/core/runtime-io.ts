@@ -1,12 +1,12 @@
 /**
- * RuntimeIO - 受控 IO 层
- * 所有外部 IO 必须通过此层，确保 Policy 检查和 Trace 记录
+ * RuntimeIO - Controlled IO Layer
+ * All external IO must go through this layer to ensure Policy checks and Trace recording
  *
- * 安全特性：
- * - realpath 路径边界校验（防止符号链接逃逸）
- * - 统一资源预算（maxBytes/maxLines/maxResults/timeout）
- * - 原子写入（临时文件 + rename）
- * - 非 shell 执行 grep（防止命令注入）
+ * Security features:
+ * - realpath boundary validation (prevents symlink escape)
+ * - Unified resource budgets (maxBytes/maxLines/maxResults/timeout)
+ * - Atomic writes (temp file + rename)
+ * - Non-shell grep execution (prevents command injection)
  */
 
 import * as fs from 'node:fs/promises'
@@ -36,18 +36,18 @@ import type { TraceCollector } from './trace-collector.js'
 import type { EventBus } from './event-bus.js'
 
 /**
- * 默认资源限制
+ * Default resource limits
  */
 const DEFAULT_LIMITS: Required<ResourceLimits> = {
   maxBytes: 10 * 1024 * 1024,      // 10MB
-  maxLines: 10000,                  // 10000 行
-  maxResults: 1000,                 // 1000 结果
+  maxLines: 10000,                  // 10000 lines
+  maxResults: 1000,                 // 1000 results
   maxWriteBytes: 5 * 1024 * 1024,  // 5MB
-  timeout: 60000                    // 60 秒
+  timeout: 60000                    // 60 seconds
 }
 
 /**
- * 默认忽略模式
+ * Default ignore patterns
  */
 const DEFAULT_IGNORE_PATTERNS = [
   '**/node_modules/**',
@@ -62,7 +62,7 @@ const DEFAULT_IGNORE_PATTERNS = [
 ]
 
 /**
- * RuntimeIO 配置
+ * RuntimeIO configuration
  */
 export interface RuntimeIOConfig {
   projectPath: string
@@ -72,19 +72,19 @@ export interface RuntimeIOConfig {
   agentId: string
   sessionId: string
   getCurrentStep: () => number
-  /** 资源限制（可覆盖默认值） */
+  /** Resource limits (can override defaults) */
   limits?: Partial<ResourceLimits>
 }
 
 /**
- * 生成 trace ID
+ * Generate a trace ID
  */
 function generateTraceId(): string {
   return `io-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 }
 
 /**
- * 生成临时文件名
+ * Generate a temporary file name
  */
 function generateTempFileName(originalPath: string): string {
   const dir = path.dirname(originalPath)
@@ -95,7 +95,7 @@ function generateTempFileName(originalPath: string): string {
 }
 
 /**
- * RuntimeIO 实现
+ * RuntimeIO implementation
  */
 export class RuntimeIO implements IRuntimeIO {
   private config: RuntimeIOConfig
@@ -108,7 +108,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 获取解析后的项目根目录（realpath）
+   * Get the resolved project root directory (realpath)
    */
   private async getProjectRoot(): Promise<string> {
     if (!this.resolvedProjectPath) {
@@ -118,7 +118,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 构建策略上下文
+   * Build policy context
    */
   private buildPolicyContext(
     operation: string,
@@ -138,18 +138,18 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 解析路径并验证边界（使用 realpath 防止符号链接逃逸）
+   * Resolve path and validate boundary (uses realpath to prevent symlink escape)
    */
   private async resolvePath(filePath: string): Promise<string> {
     const projectRoot = await this.getProjectRoot()
     const resolved = path.resolve(projectRoot, filePath)
 
-    // 首先检查逻辑路径是否在项目目录内
+    // First check if the logical path is within the project directory
     if (!resolved.startsWith(projectRoot + path.sep) && resolved !== projectRoot) {
       throw new Error(`Path is outside project directory: ${filePath}`)
     }
 
-    // 检查文件是否存在，如果存在则验证 realpath
+    // Check if the file exists; if so, validate via realpath
     try {
       const realResolved = await fs.realpath(resolved)
       if (!realResolved.startsWith(projectRoot + path.sep) && realResolved !== projectRoot) {
@@ -157,9 +157,9 @@ export class RuntimeIO implements IRuntimeIO {
       }
       return realResolved
     } catch (err) {
-      // 文件不存在时，检查父目录
+      // File does not exist; check the parent directory
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        // 对于新文件，验证父目录
+        // For new files, validate the parent directory
         const parentDir = path.dirname(resolved)
         try {
           const realParent = await fs.realpath(parentDir)
@@ -167,7 +167,7 @@ export class RuntimeIO implements IRuntimeIO {
             throw new Error(`Parent directory resolves outside project (symlink escape): ${filePath}`)
           }
         } catch {
-          // 父目录也不存在，使用逻辑路径检查
+          // Parent directory also does not exist; use logical path check
         }
         return resolved
       }
@@ -197,14 +197,14 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 获取资源限制
+   * Get resource limits
    */
   getLimits(): Required<ResourceLimits> {
     return { ...this.limits }
   }
 
   /**
-   * 读取文件（流式处理大文件）
+   * Read a file (streams large files)
    */
   async readFile(filePath: string, options?: ReadOptions): Promise<IOResult<string>> {
     const startTime = Date.now()
@@ -220,21 +220,21 @@ export class RuntimeIO implements IRuntimeIO {
     try {
       const resolvedPath = await this.resolvePath(filePath)
 
-      // 检查文件大小
+      // Check file size
       const stat = await fs.stat(resolvedPath)
       if (stat.size > this.limits.maxBytes) {
-        // 使用流式读取大文件
+        // Use streaming for large files
         return this.readFileStream(resolvedPath, options, traceId, startTime)
       }
 
-      // 小文件直接读取
+      // Read small files directly
       let content = await fs.readFile(resolvedPath, {
         encoding: options?.encoding ?? 'utf-8'
       })
 
       let truncated = false
 
-      // 处理 offset 和 limit
+      // Handle offset and limit
       const lines = content.split('\n')
       const offset = options?.offset ?? 0
       const limit = Math.min(options?.limit ?? this.limits.maxLines, this.limits.maxLines)
@@ -245,7 +245,7 @@ export class RuntimeIO implements IRuntimeIO {
         truncated = offset + limit < lines.length
       }
 
-      // 字节限制
+      // Byte limit
       if (content.length > this.limits.maxBytes) {
         content = content.slice(0, this.limits.maxBytes)
         truncated = true
@@ -272,7 +272,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 流式读取大文件
+   * Stream-read large files
    */
   private async readFileStream(
     resolvedPath: string,
@@ -335,13 +335,13 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 写入文件（原子写入 + 权限保留）
+   * Write a file (atomic write + permission preservation)
    */
   async writeFile(filePath: string, content: string): Promise<IOResult<void>> {
     const startTime = Date.now()
     const traceId = generateTraceId()
 
-    // 大小限制检查
+    // Size limit check
     if (content.length > this.limits.maxWriteBytes) {
       return {
         success: false,
@@ -360,7 +360,7 @@ export class RuntimeIO implements IRuntimeIO {
     try {
       const resolvedPath = await this.resolvePath(filePath)
 
-      // 检查文件是否存在，获取原权限
+      // Check if the file exists and get original permissions
       let existingMode: number | undefined
       let exists = false
       try {
@@ -368,31 +368,31 @@ export class RuntimeIO implements IRuntimeIO {
         existingMode = stat.mode
         exists = true
       } catch {
-        // 文件不存在
+        // File does not exist
       }
 
-      // 确保目录存在
+      // Ensure directory exists
       await fs.mkdir(path.dirname(resolvedPath), { recursive: true })
 
-      // 原子写入：先写临时文件再 rename
+      // Atomic write: write to temp file first, then rename
       const tempPath = generateTempFileName(resolvedPath)
 
       try {
         await fs.writeFile(tempPath, content, 'utf-8')
 
-        // 如果原文件存在，保留权限
+        // If the original file exists, preserve its permissions
         if (existingMode !== undefined) {
           await fs.chmod(tempPath, existingMode)
         }
 
-        // 原子 rename
+        // Atomic rename
         await fs.rename(tempPath, resolvedPath)
       } catch (error) {
-        // 清理临时文件
+        // Clean up temp file
         try {
           await fs.unlink(tempPath)
         } catch {
-          // 忽略清理错误
+          // Ignore cleanup errors
         }
         throw error
       }
@@ -416,7 +416,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 读取目录
+   * Read a directory
    */
   async readdir(dirPath: string, options?: ReaddirOptions): Promise<IOResult<DirEntry[]>> {
     const startTime = Date.now()
@@ -441,7 +441,7 @@ export class RuntimeIO implements IRuntimeIO {
         const results: DirEntry[] = []
 
         for (const entry of entries) {
-          // 跳过隐藏的系统目录
+          // Skip hidden system directories
           if (entry.name.startsWith('.') && entry.isDirectory()) {
             continue
           }
@@ -457,7 +457,7 @@ export class RuntimeIO implements IRuntimeIO {
             modifiedAt: stat?.mtime
           })
 
-          // 限制结果数量
+          // Limit the number of results
           if (results.length >= this.limits.maxResults) {
             break
           }
@@ -500,7 +500,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 检查文件是否存在
+   * Check if a file exists
    */
   async exists(filePath: string): Promise<IOResult<boolean>> {
     const traceId = generateTraceId()
@@ -515,7 +515,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 执行命令
+   * Execute a command
    */
   async exec(command: string, options?: ExecOptions): Promise<IOResult<ExecOutput>> {
     const startTime = Date.now()
@@ -528,7 +528,7 @@ export class RuntimeIO implements IRuntimeIO {
       return { success: false, error: result.reason, traceId }
     }
 
-    // 使用可能被 mutate 的输入
+    // Use potentially mutated input
     const mutatedCommand = (result.input as { command: string })?.command ?? command
 
     const execCwd = await this.resolveCwd(options?.cwd)
@@ -536,7 +536,7 @@ export class RuntimeIO implements IRuntimeIO {
     return new Promise((resolve) => {
       const timeout = Math.min(options?.timeout ?? this.limits.timeout, this.limits.timeout)
 
-      // 使用 spawn 而不是 exec，通过 shell
+      // Use spawn instead of exec, via shell
       const child = spawn('sh', ['-c', mutatedCommand], {
         cwd: execCwd,
         env: { ...process.env, ...options?.env },
@@ -548,7 +548,7 @@ export class RuntimeIO implements IRuntimeIO {
 
       child.stdout?.on('data', (data) => {
         stdout += data.toString()
-        // 限制输出大小
+        // Limit output size
         if (stdout.length > this.limits.maxBytes) {
           stdout = stdout.slice(0, this.limits.maxBytes)
           child.kill()
@@ -594,7 +594,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * Glob 文件匹配
+   * Glob file matching
    */
   async glob(pattern: string, options?: GlobOptions): Promise<IOResult<string[]>> {
     const startTime = Date.now()
@@ -610,7 +610,7 @@ export class RuntimeIO implements IRuntimeIO {
     try {
       const cwd = await this.resolveCwd(options?.cwd)
 
-      // 合并用户 ignore 和默认 ignore
+      // Merge user ignore patterns with default ignore patterns
       const userIgnore = options?.ignore ?? []
       const mergedIgnore = [...new Set([...DEFAULT_IGNORE_PATTERNS, ...userIgnore])]
 
@@ -621,7 +621,7 @@ export class RuntimeIO implements IRuntimeIO {
         nodir: true
       })
 
-      // 应用硬限制
+      // Apply hard limit
       const truncated = files.length > this.limits.maxResults
       const limitedFiles = files.slice(0, this.limits.maxResults)
 
@@ -644,7 +644,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * Grep 内容搜索（非 shell 执行，使用 spawn + 参数数组）
+   * Grep content search (non-shell execution, uses spawn + argument array)
    */
   async grep(pattern: string, options?: GrepOptions): Promise<IOResult<GrepMatch[]>> {
     const startTime = Date.now()
@@ -704,7 +704,7 @@ export class RuntimeIO implements IRuntimeIO {
 
         child.stdout?.on('data', (data) => {
           stdout += data.toString()
-          // 限制输出大小
+          // Limit output size
           if (stdout.length > this.limits.maxBytes) {
             stdout = stdout.slice(0, this.limits.maxBytes)
             child.kill()
@@ -716,7 +716,7 @@ export class RuntimeIO implements IRuntimeIO {
         })
 
         child.on('close', (code) => {
-          // grep 返回 1 表示没有匹配，不是错误
+          // grep returns 1 when there are no matches; this is not an error
           if (code !== 0 && code !== 1) {
             resolve({
               success: false,
@@ -760,7 +760,7 @@ export class RuntimeIO implements IRuntimeIO {
         })
 
         child.on('error', (error) => {
-          // 如果 grep 不可用，降级到内置搜索
+          // If grep is unavailable, fall back to built-in search
           if (error.message.includes('ENOENT')) {
             this.grepFallback(pattern, cwd, options, limit, traceId, startTime)
               .then(resolve)
@@ -781,7 +781,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * Grep 降级实现（纯 JS，用于 grep 不可用时）
+   * Grep fallback implementation (pure JS, used when grep is unavailable)
    */
   private async grepFallback(
     pattern: string,
@@ -794,7 +794,7 @@ export class RuntimeIO implements IRuntimeIO {
     const matches: GrepMatch[] = []
     const regex = new RegExp(pattern, options?.ignoreCase ? 'i' : '')
 
-    // 获取文件列表
+    // Get file list
     const files = await globFn(options?.type ? `**/*.${options.type}` : '**/*', {
       cwd,
       ignore: DEFAULT_IGNORE_PATTERNS,
@@ -819,7 +819,7 @@ export class RuntimeIO implements IRuntimeIO {
           }
         }
       } catch {
-        // 忽略无法读取的文件
+        // Ignore unreadable files
       }
     }
 
@@ -840,7 +840,7 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 获取文件统计信息（用于 edit 判断是否需要完整读取）
+   * Get file stat information (used by edit to determine if a full read is needed)
    */
   async stat(filePath: string): Promise<IOResult<{ size: number; lines?: number; mtimeMs?: number }>> {
     const traceId = generateTraceId()
@@ -861,19 +861,19 @@ export class RuntimeIO implements IRuntimeIO {
   }
 
   /**
-   * 无限制读取文件（仅供 edit 内部使用，绕过 autoLimitRead）
-   * 注意：仍然有硬限制保护
+   * Read file without limits (for internal edit use only, bypasses autoLimitRead)
+   * Note: hard limits still apply for protection
    */
   async readFileForEdit(filePath: string): Promise<IOResult<string>> {
     const startTime = Date.now()
     const traceId = generateTraceId()
 
-    // 不经过 policy，但仍验证路径
+    // Bypass policy, but still validate path
     try {
       const resolvedPath = await this.resolvePath(filePath)
       const stat = await fs.stat(resolvedPath)
 
-      // edit 专用的更大限制
+      // Larger limit specifically for edit operations
       const editMaxBytes = this.limits.maxBytes * 2 // 20MB for edit
 
       if (stat.size > editMaxBytes) {

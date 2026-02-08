@@ -1,7 +1,7 @@
 /**
  * Budget Policies
  *
- * 根据预算声明生成限制策略
+ * Generates limit policies based on budget declarations
  */
 
 import type {
@@ -14,23 +14,23 @@ import type { ProviderBudgets } from '../types/provider.js'
 import { defineGuardPolicy, defineMutatePolicy } from '../factories/define-policy.js'
 
 /**
- * 超时策略配置
+ * Timeout policy configuration
  */
 export interface TimeoutPolicyConfig {
   /** Provider ID */
   providerId: string
-  /** 超时时间（毫秒） */
+  /** Timeout duration (milliseconds) */
   timeoutMs: number
-  /** 策略优先级 */
+  /** Policy priority */
   priority?: number
-  /** 应用到哪些工具 */
+  /** Tools to apply this policy to */
   tools?: string[]
 }
 
 /**
- * 创建超时策略
+ * Create a timeout policy
  *
- * 注意：这是一个 Mutate 策略，会修改工具输入添加超时参数
+ * Note: This is a Mutate policy that modifies tool input to add timeout parameters
  */
 export function createTimeoutPolicy(config: TimeoutPolicyConfig): Policy {
   const { providerId, timeoutMs, priority = 50, tools } = config
@@ -40,18 +40,18 @@ export function createTimeoutPolicy(config: TimeoutPolicyConfig): Policy {
     description: `Timeout limit for ${providerId}: ${timeoutMs}ms`,
     priority,
     match: (ctx: PolicyContext) => {
-      // 如果指定了工具列表，只匹配这些工具
+      // If a tool list is specified, only match those tools
       if (tools && tools.length > 0) {
         return tools.includes(ctx.tool)
       }
-      // 否则匹配所有工具
+      // Otherwise match all tools
       return true
     },
     transforms: (ctx: PolicyContext): Transform[] => {
       const input = ctx.input as { timeout?: number } | undefined
       const currentTimeout = input?.timeout
 
-      // 只有当没有设置超时或设置的超时大于限制时才应用
+      // Only apply when no timeout is set or the current timeout exceeds the limit
       if (currentTimeout === undefined || currentTimeout > timeoutMs) {
         return [{ op: 'set', path: 'timeout', value: timeoutMs }]
       }
@@ -62,21 +62,21 @@ export function createTimeoutPolicy(config: TimeoutPolicyConfig): Policy {
 }
 
 /**
- * 输出大小限制策略配置
+ * Output size limit policy configuration
  */
 export interface OutputLimitPolicyConfig {
   /** Provider ID */
   providerId: string
-  /** 最大输出字节数 */
+  /** Maximum output bytes */
   maxBytes: number
-  /** 策略优先级 */
+  /** Policy priority */
   priority?: number
 }
 
 /**
- * 创建输出大小限制策略
+ * Create an output size limit policy
  *
- * 注意：这是一个 Mutate 策略，会修改工具输入添加限制参数
+ * Note: This is a Mutate policy that modifies tool input to add limit parameters
  */
 export function createOutputLimitPolicy(config: OutputLimitPolicyConfig): Policy {
   const { providerId, maxBytes, priority = 50 } = config
@@ -86,15 +86,15 @@ export function createOutputLimitPolicy(config: OutputLimitPolicyConfig): Policy
     description: `Output limit for ${providerId}: ${maxBytes} bytes`,
     priority,
     match: (ctx: PolicyContext) => {
-      // 匹配可能产生大输出的工具
+      // Match tools that may produce large output
       return ['read', 'grep', 'glob', 'bash', 'fetch'].includes(ctx.tool)
     },
     transforms: (ctx: PolicyContext): Transform[] => {
       const transforms: Transform[] = []
 
-      // 对于 read 工具，限制行数
+      // For the read tool, limit line count
       if (ctx.tool === 'read') {
-        const estimatedLinesLimit = Math.floor(maxBytes / 100) // 假设每行平均 100 字节
+        const estimatedLinesLimit = Math.floor(maxBytes / 100) // Assuming ~100 bytes per line
         transforms.push({
           op: 'clamp',
           path: 'limit',
@@ -102,9 +102,9 @@ export function createOutputLimitPolicy(config: OutputLimitPolicyConfig): Policy
         })
       }
 
-      // 对于 grep 工具，限制结果数
+      // For the grep tool, limit result count
       if (ctx.tool === 'grep') {
-        const estimatedMatchLimit = Math.floor(maxBytes / 200) // 假设每个匹配平均 200 字节
+        const estimatedMatchLimit = Math.floor(maxBytes / 200) // Assuming ~200 bytes per match
         transforms.push({
           op: 'clamp',
           path: 'limit',
@@ -112,9 +112,9 @@ export function createOutputLimitPolicy(config: OutputLimitPolicyConfig): Policy
         })
       }
 
-      // 对于 glob 工具，限制结果数
+      // For the glob tool, limit result count
       if (ctx.tool === 'glob') {
-        const estimatedFileLimit = Math.floor(maxBytes / 50) // 假设每个文件路径平均 50 字节
+        const estimatedFileLimit = Math.floor(maxBytes / 50) // Assuming ~50 bytes per file path
         transforms.push({
           op: 'clamp',
           path: 'limit',
@@ -128,28 +128,28 @@ export function createOutputLimitPolicy(config: OutputLimitPolicyConfig): Policy
 }
 
 /**
- * 请求次数限制策略配置
+ * Request limit policy configuration
  */
 export interface RequestLimitPolicyConfig {
   /** Provider ID */
   providerId: string
-  /** 最大请求次数 */
+  /** Maximum number of requests */
   maxRequests: number
-  /** 时间窗口（毫秒），默认 60000 (1分钟) */
+  /** Time window (milliseconds), defaults to 60000 (1 minute) */
   windowMs?: number
-  /** 策略优先级 */
+  /** Policy priority */
   priority?: number
-  /** 应用到哪些工具 */
+  /** Tools to apply this policy to */
   tools?: string[]
 }
 
 /**
- * 请求计数器
+ * Request counter
  */
 const requestCounters = new Map<string, { count: number; resetTime: number }>()
 
 /**
- * 创建请求次数限制策略
+ * Create a request limit policy
  */
 export function createRequestLimitPolicy(config: RequestLimitPolicyConfig): Policy {
   const {
@@ -176,13 +176,13 @@ export function createRequestLimitPolicy(config: RequestLimitPolicyConfig): Poli
       const now = Date.now()
       let counter = requestCounters.get(counterId)
 
-      // 检查是否需要重置计数器
+      // Check if the counter needs to be reset
       if (!counter || now >= counter.resetTime) {
         counter = { count: 0, resetTime: now + windowMs }
         requestCounters.set(counterId, counter)
       }
 
-      // 检查是否超过限制
+      // Check if the limit is exceeded
       if (counter.count >= maxRequests) {
         const remainingMs = counter.resetTime - now
         return {
@@ -191,7 +191,7 @@ export function createRequestLimitPolicy(config: RequestLimitPolicyConfig): Poli
         }
       }
 
-      // 增加计数
+      // Increment the counter
       counter.count++
 
       return { action: 'allow' }
@@ -200,21 +200,21 @@ export function createRequestLimitPolicy(config: RequestLimitPolicyConfig): Poli
 }
 
 /**
- * 重置请求计数器（用于测试）
+ * Reset request counter (for testing)
  */
 export function resetRequestCounter(providerId: string): void {
   requestCounters.delete(`${providerId}.requests`)
 }
 
 /**
- * 重置所有请求计数器（用于测试）
+ * Reset all request counters (for testing)
  */
 export function resetAllRequestCounters(): void {
   requestCounters.clear()
 }
 
 /**
- * 从预算声明创建策略
+ * Create policies from budget declarations
  */
 export function createBudgetPolicies(
   providerId: string,
@@ -227,7 +227,7 @@ export function createBudgetPolicies(
 
   const policies: Policy[] = []
 
-  // 超时策略
+  // Timeout policy
   if (budgets.timeoutMs !== undefined) {
     policies.push(
       createTimeoutPolicy({
@@ -238,7 +238,7 @@ export function createBudgetPolicies(
     )
   }
 
-  // 输出大小限制策略
+  // Output size limit policy
   if (budgets.maxOutputBytes !== undefined) {
     policies.push(
       createOutputLimitPolicy({
@@ -249,7 +249,7 @@ export function createBudgetPolicies(
     )
   }
 
-  // 请求次数限制策略
+  // Request limit policy
   if (budgets.maxRequests !== undefined) {
     policies.push(
       createRequestLimitPolicy({

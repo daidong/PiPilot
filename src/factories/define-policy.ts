@@ -1,5 +1,5 @@
 /**
- * definePolicy - 策略定义工厂
+ * definePolicy - Policy definition factory
  */
 
 import type {
@@ -12,10 +12,10 @@ import type {
 } from '../types/policy.js'
 
 /**
- * 定义策略
+ * Define a policy
  */
 export function definePolicy(config: PolicyConfig): Policy {
-  // 验证配置
+  // Validate configuration
   if (!config.id) {
     throw new Error('Policy id is required')
   }
@@ -46,10 +46,10 @@ export function definePolicy(config: PolicyConfig): Policy {
   }
 }
 
-// ============ Guard 策略快捷创建 ============
+// ============ Guard policy shorthand creators ============
 
 /**
- * 创建 Guard 策略
+ * Create a Guard policy
  */
 export function defineGuardPolicy(config: {
   id: string
@@ -65,7 +65,7 @@ export function defineGuardPolicy(config: {
 }
 
 /**
- * 创建简单的拒绝策略
+ * Create a simple deny policy
  */
 export function defineDenyPolicy(config: {
   id: string
@@ -87,7 +87,7 @@ export function defineDenyPolicy(config: {
 }
 
 /**
- * 创建需要审批的策略
+ * Create an approval-required policy
  */
 export function defineApprovalPolicy(config: {
   id: string
@@ -110,10 +110,10 @@ export function defineApprovalPolicy(config: {
   })
 }
 
-// ============ Mutate 策略快捷创建 ============
+// ============ Mutate policy shorthand creators ============
 
 /**
- * 创建 Mutate 策略
+ * Create a Mutate policy
  */
 export function defineMutatePolicy(config: {
   id: string
@@ -137,10 +137,10 @@ export function defineMutatePolicy(config: {
   })
 }
 
-// ============ Observe 策略快捷创建 ============
+// ============ Observe policy shorthand creators ============
 
 /**
- * 创建 Observe 策略
+ * Create an Observe policy
  */
 export function defineObservePolicy(config: {
   id: string
@@ -156,7 +156,7 @@ export function defineObservePolicy(config: {
 }
 
 /**
- * 创建审计策略
+ * Create an audit policy
  */
 export function defineAuditPolicy(config: {
   id: string
@@ -178,7 +178,7 @@ export function defineAuditPolicy(config: {
 }
 
 /**
- * 创建告警策略
+ * Create an alert policy
  */
 export function defineAlertPolicy(config: {
   id: string

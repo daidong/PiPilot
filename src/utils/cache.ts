@@ -1,5 +1,5 @@
 /**
- * Cache - 缓存工具
+ * Cache - Caching utilities
  */
 
 export interface CacheEntry<T> {
@@ -9,7 +9,7 @@ export interface CacheEntry<T> {
 }
 
 /**
- * 简单的内存缓存
+ * Simple in-memory cache
  */
 export class Cache<T = unknown> {
   private store = new Map<string, CacheEntry<T>>()
@@ -20,7 +20,7 @@ export class Cache<T = unknown> {
   }
 
   /**
-   * 获取缓存值
+   * Get a cached value
    */
   get(key: string): T | undefined {
     const entry = this.store.get(key)
@@ -37,7 +37,7 @@ export class Cache<T = unknown> {
   }
 
   /**
-   * 设置缓存值
+   * Set a cached value
    */
   set(key: string, value: T, ttlMs?: number): void {
     this.store.set(key, {
@@ -48,7 +48,7 @@ export class Cache<T = unknown> {
   }
 
   /**
-   * 检查缓存是否存在且有效
+   * Check if a cache entry exists and is valid
    */
   has(key: string): boolean {
     const entry = this.store.get(key)
@@ -65,21 +65,21 @@ export class Cache<T = unknown> {
   }
 
   /**
-   * 删除缓存
+   * Delete a cache entry
    */
   delete(key: string): boolean {
     return this.store.delete(key)
   }
 
   /**
-   * 清空所有缓存
+   * Clear all cache entries
    */
   clear(): void {
     this.store.clear()
   }
 
   /**
-   * 按模式失效缓存
+   * Invalidate cache entries by pattern
    */
   invalidateByPattern(pattern: RegExp): number {
     let count = 0
@@ -93,14 +93,14 @@ export class Cache<T = unknown> {
   }
 
   /**
-   * 获取缓存大小
+   * Get cache size
    */
   get size(): number {
     return this.store.size
   }
 
   /**
-   * 清理过期缓存
+   * Clean up expired cache entries
    */
   cleanup(): number {
     let count = 0
@@ -120,7 +120,7 @@ export class Cache<T = unknown> {
 }
 
 /**
- * 构建缓存键
+ * Build a cache key
  */
 export function buildCacheKey(prefix: string, params?: unknown): string {
   if (!params) {

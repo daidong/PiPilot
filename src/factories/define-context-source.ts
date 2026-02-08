@@ -1,5 +1,5 @@
 /**
- * defineContextSource - 上下文源定义工厂
+ * defineContextSource - Context source definition factory
  */
 
 import type {
@@ -56,7 +56,7 @@ function validateSourceId(id: string): void {
 }
 
 /**
- * 定义上下文源
+ * Define a context source
  */
 export function defineContextSource<TParams = unknown, TData = unknown>(
   config: ContextSourceConfig<TParams, TData>
@@ -122,7 +122,7 @@ export interface SuccessResultOptions {
 }
 
 /**
- * 创建成功的 ContextResult
+ * Create a successful ContextResult
  */
 export function createSuccessResult<T>(
   data: T,
@@ -158,7 +158,7 @@ export interface ErrorResultOptions {
 }
 
 /**
- * 创建失败的 ContextResult
+ * Create a failed ContextResult
  */
 export function createErrorResult<T = never>(
   error: string,
@@ -187,7 +187,7 @@ export function createErrorResult<T = never>(
 }
 
 /**
- * 创建带超时的上下文源
+ * Create a context source with timeout
  */
 export function withContextTimeout<TParams, TData>(
   source: ContextSource<TParams, TData>,
@@ -261,7 +261,7 @@ export function withContextRetry<TParams, TData>(
 }
 
 /**
- * 创建带默认值的上下文源
+ * Create a context source with default value
  */
 export function withContextDefault<TParams, TData>(
   source: ContextSource<TParams, TData>,
@@ -281,7 +281,7 @@ export function withContextDefault<TParams, TData>(
 }
 
 /**
- * 组合多个上下文源增强器
+ * Compose multiple context source enhancers
  */
 export function composeContextSource<TParams, TData>(
   source: ContextSource<TParams, TData>,

@@ -1,5 +1,5 @@
 /**
- * definePythonTool - Python 工具定义
+ * definePythonTool - Python tool definition
  */
 
 import { defineTool } from '../factories/define-tool.js'
@@ -8,27 +8,27 @@ import { PythonBridge } from './bridge.js'
 import { buildFeedback, formatFeedbackAsToolResult } from '../core/feedback.js'
 
 /**
- * Python 工具配置
+ * Python tool configuration
  */
 export interface PythonToolConfig {
-  /** 工具名称 */
+  /** Tool name */
   name: string
-  /** 工具描述 */
+  /** Tool description */
   description: string
-  /** Python 脚本路径 */
+  /** Python script path */
   script: string
-  /** 方法名（服务模式） */
+  /** Method name (service mode) */
   method?: string
-  /** 参数定义 */
+  /** Parameter definitions */
   parameters: ParameterSchema
-  /** Python 解释器 */
+  /** Python interpreter */
   python?: string
-  /** 工作目录 */
+  /** Working directory */
   cwd?: string
 }
 
 /**
- * 定义 Python 工具（脚本模式）
+ * Define a Python tool (script mode)
  */
 export function definePythonTool<TInput = unknown, TOutput = unknown>(
   config: PythonToolConfig
@@ -107,7 +107,7 @@ export class PythonToolFactory {
   }
 
   /**
-   * 创建多个工具
+   * Create multiple tools
    */
   createAll(configs: Array<{
     name: string
@@ -120,7 +120,7 @@ export class PythonToolFactory {
 }
 
 /**
- * 从 Python Bridge 创建工具工厂
+ * Create a tool factory from a Python Bridge
  */
 export function createPythonToolFactory(bridge: PythonBridge): PythonToolFactory {
   return new PythonToolFactory(bridge)

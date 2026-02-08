@@ -1,28 +1,28 @@
 /**
  * Network Access Policies
  *
- * 根据权限声明生成网络访问策略
+ * Generates network access policies based on permission declarations
  */
 
 import type { Policy, PolicyContext, GuardDecision } from '../types/policy.js'
 import { defineGuardPolicy } from '../factories/define-policy.js'
 
 /**
- * 网络策略配置
+ * Network policy configuration
  */
 export interface NetworkPolicyConfig {
-  /** Provider ID（用于策略 ID 前缀） */
+  /** Provider ID (used as policy ID prefix) */
   providerId: string
-  /** 允许访问的域名 */
+  /** Allowed domains */
   allowedDomains?: string[]
-  /** 禁止访问的域名 */
+  /** Denied domains */
   deniedDomains?: string[]
-  /** 策略优先级 */
+  /** Policy priority */
   priority?: number
 }
 
 /**
- * 创建网络访问策略
+ * Create a network access policy
  */
 export function createNetworkPolicy(config: NetworkPolicyConfig): Policy {
   const { providerId, allowedDomains, deniedDomains, priority = 15 } = config
@@ -32,7 +32,7 @@ export function createNetworkPolicy(config: NetworkPolicyConfig): Policy {
     description: `Network access control for ${providerId}`,
     priority,
     match: (ctx: PolicyContext) => {
-      // 匹配 fetch 工具或网络请求操作
+      // Match the fetch tool or network request operations
       return ctx.tool === 'fetch' || ctx.operation === 'fetch'
     },
     decide: (ctx: PolicyContext): GuardDecision => {
@@ -43,7 +43,7 @@ export function createNetworkPolicy(config: NetworkPolicyConfig): Policy {
         return { action: 'allow' }
       }
 
-      // 解析域名
+      // Parse domain
       const domain = extractDomain(url)
       if (!domain) {
         return {
@@ -52,7 +52,7 @@ export function createNetworkPolicy(config: NetworkPolicyConfig): Policy {
         }
       }
 
-      // 检查是否在禁止列表中
+      // Check if the domain is in the denied list
       if (deniedDomains && matchesDomain(domain, deniedDomains)) {
         return {
           action: 'deny',
@@ -60,7 +60,7 @@ export function createNetworkPolicy(config: NetworkPolicyConfig): Policy {
         }
       }
 
-      // 如果有允许列表，检查是否在允许范围内
+      // If an allow list exists, check if the domain is within allowed scope
       if (allowedDomains && allowedDomains.length > 0) {
         if (!matchesDomain(domain, allowedDomains)) {
           return {
@@ -76,16 +76,16 @@ export function createNetworkPolicy(config: NetworkPolicyConfig): Policy {
 }
 
 /**
- * 从 URL 提取域名
+ * Extract domain from URL
  */
 export function extractDomain(url: string): string | null {
   try {
-    // 处理相对 URL
+    // Handle relative URLs
     if (url.startsWith('/')) {
       return null
     }
 
-    // 添加协议前缀（如果没有）
+    // Add protocol prefix (if missing)
     let fullUrl = url
     if (!url.includes('://')) {
       fullUrl = 'https://' + url
@@ -99,7 +99,7 @@ export function extractDomain(url: string): string | null {
 }
 
 /**
- * 检查域名是否匹配任意模式
+ * Check if a domain matches any pattern
  */
 export function matchesDomain(domain: string, patterns: string[]): boolean {
   const normalizedDomain = domain.toLowerCase()
@@ -114,38 +114,38 @@ export function matchesDomain(domain: string, patterns: string[]): boolean {
 }
 
 /**
- * 匹配域名模式
+ * Match a domain pattern
  *
- * 支持的模式：
- * - 精确匹配: api.example.com
- * - 通配符: *.example.com (匹配子域名)
- * - 全局通配: * (匹配所有)
+ * Supported patterns:
+ * - Exact match: api.example.com
+ * - Wildcard: *.example.com (matches subdomains)
+ * - Global wildcard: * (matches all)
  */
 function matchDomainPattern(domain: string, pattern: string): boolean {
-  // 全局通配
+  // Global wildcard
   if (pattern === '*') {
     return true
   }
 
-  // 精确匹配
+  // Exact match
   if (domain === pattern) {
     return true
   }
 
-  // 通配符匹配 (*.example.com)
+  // Wildcard match (*.example.com)
   if (pattern.startsWith('*.')) {
     const baseDomain = pattern.slice(2)
-    // 匹配 example.com 本身
+    // Match example.com itself
     if (domain === baseDomain) {
       return true
     }
-    // 匹配子域名 sub.example.com
+    // Match subdomains like sub.example.com
     if (domain.endsWith('.' + baseDomain)) {
       return true
     }
   }
 
-  // 后缀匹配 (.example.com)
+  // Suffix match (.example.com)
   if (pattern.startsWith('.')) {
     if (domain.endsWith(pattern)) {
       return true
@@ -156,7 +156,7 @@ function matchDomainPattern(domain: string, pattern: string): boolean {
 }
 
 /**
- * 从权限声明创建网络访问策略
+ * Create network access policies from permission declarations
  */
 export function createNetworkAccessPolicies(
   providerId: string,
@@ -167,7 +167,7 @@ export function createNetworkAccessPolicies(
     return []
   }
 
-  // 如果只有 deny 列表，创建拒绝策略
+  // If there is only a deny list, create a deny policy
   if (permissions.deny && permissions.deny.length > 0 && !permissions.allow) {
     return [
       createNetworkPolicy({
@@ -178,7 +178,7 @@ export function createNetworkAccessPolicies(
     ]
   }
 
-  // 如果有 allow 列表，创建允许策略
+  // If there is an allow list, create an allow policy
   if (permissions.allow && permissions.allow.length > 0) {
     return [
       createNetworkPolicy({

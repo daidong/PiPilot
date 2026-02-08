@@ -1,6 +1,6 @@
 /**
- * Context Types - 上下文轴类型定义
- * Context Sources 提供 Agent 获取必要信息的能力
+ * Context Types - Context axis type definitions
+ * Context Sources provide agents with the ability to retrieve necessary information
  */
 
 import type { Runtime } from './runtime.js'
@@ -102,30 +102,30 @@ export interface GetParams {
 // ============ Provenance & Coverage ============
 
 /**
- * 数据来源追踪
+ * Data provenance tracking
  */
 export interface Provenance {
-  /** 执行的操作列表 */
+  /** List of executed operations */
   operations: {
     type: string
     target: string
     traceId: string
   }[]
-  /** 执行耗时（毫秒） */
+  /** Execution duration (milliseconds) */
   durationMs: number
-  /** 是否来自缓存 */
+  /** Whether the result came from cache */
   cached: boolean
 }
 
 /**
- * 覆盖度说明
+ * Coverage description
  */
 export interface Coverage {
-  /** 是否完整 */
+  /** Whether the result is complete */
   complete: boolean
-  /** 限制说明 */
+  /** Limitation descriptions */
   limitations?: string[]
-  /** 建议 */
+  /** Suggestions */
   suggestions?: string[]
 }
 
@@ -156,18 +156,18 @@ export interface NextStep {
 }
 
 /**
- * 上下文获取结果
+ * Context fetch result
  */
 export interface ContextResult<T = unknown> {
   success: boolean
   error?: string
-  /** 结构化数据（供程序侧使用） */
+  /** Structured data (for programmatic use) */
   data?: T
-  /** 渲染后的文本（给模型看，token 预算基于此计算） */
+  /** Rendered text (for the model; token budget is calculated based on this) */
   rendered: string
-  /** 数据来源追踪 */
+  /** Data provenance tracking */
   provenance: Provenance
-  /** 覆盖度说明 */
+  /** Coverage description */
   coverage: Coverage
   /** Echo back what was called (for confirmation) */
   kindEcho?: KindEcho
@@ -176,27 +176,27 @@ export interface ContextResult<T = unknown> {
 }
 
 /**
- * 缓存配置
+ * Cache configuration
  */
 export interface CacheConfig {
-  /** TTL（毫秒） */
+  /** TTL (milliseconds) */
   ttlMs: number
-  /** 失效事件 */
+  /** Invalidation events */
   invalidateOn?: string[]
 }
 
 /**
- * 渲染配置
+ * Render configuration
  */
 export interface RenderConfig {
-  /** 最大 token 数 */
+  /** Maximum number of tokens */
   maxTokens: number
-  /** 截断策略 */
+  /** Truncation strategy */
   truncateStrategy: 'head' | 'tail' | 'middle'
 }
 
 /**
- * 成本等级
+ * Cost tier
  */
 export type CostTier = 'cheap' | 'medium' | 'expensive'
 
@@ -231,7 +231,7 @@ export interface ContextSourceExample {
 }
 
 /**
- * 上下文源定义
+ * Context source definition
  */
 export interface ContextSource<TParams = unknown, TData = unknown> {
   /** Source ID (e.g., docs.index, session.trace) */
@@ -244,24 +244,24 @@ export interface ContextSource<TParams = unknown, TData = unknown> {
   description: string
   /** One-liner for catalog listing */
   shortDescription: string
-  /** 声明的资源类型（用于 Policy 匹配） */
+  /** Declared resource types (for Policy matching) */
   resourceTypes: string[]
   /** Parameter schema for validation */
   params?: ParamSchema[]
   /** Example calls for documentation */
   examples?: ContextSourceExample[]
-  /** 获取函数 */
+  /** Fetch function */
   fetch: (params: TParams, runtime: Runtime) => Promise<ContextResult<TData>>
-  /** 缓存配置 */
+  /** Cache configuration */
   cache?: CacheConfig
-  /** 成本等级 */
+  /** Cost tier */
   costTier: CostTier
-  /** 渲染配置 */
+  /** Render configuration */
   render?: RenderConfig
 }
 
 /**
- * 上下文源配置（用于 defineContextSource）
+ * Context source configuration (for defineContextSource)
  */
 export interface ContextSourceConfig<TParams = unknown, TData = unknown> {
   /** Source ID (e.g., 'docs.index') - namespace is extracted automatically */

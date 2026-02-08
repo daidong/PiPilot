@@ -1,15 +1,15 @@
 /**
- * audit-all - 审计策略
+ * audit-all - Audit policies
  */
 
 import { defineObservePolicy, defineAlertPolicy } from '../factories/define-policy.js'
 
 /**
- * 审计所有工具调用
+ * Audit all tool calls
  */
 export const auditAllCalls = defineObservePolicy({
   id: 'audit-all-calls',
-  description: '记录所有工具调用',
+  description: 'Record all tool calls',
   priority: 100,
   match: () => true,
   decide: (ctx) => ({
@@ -27,11 +27,11 @@ export const auditAllCalls = defineObservePolicy({
 })
 
 /**
- * 审计文件写入
+ * Audit file writes
  */
 export const auditFileWrites = defineObservePolicy({
   id: 'audit-file-writes',
-  description: '记录所有文件写入操作',
+  description: 'Record all file write operations',
   priority: 100,
   match: (ctx) => {
     return ctx.tool === 'write' || ctx.tool === 'edit' || ctx.operation === 'writeFile'
@@ -54,11 +54,11 @@ export const auditFileWrites = defineObservePolicy({
 })
 
 /**
- * 审计命令执行
+ * Audit command execution
  */
 export const auditCommandExecution = defineObservePolicy({
   id: 'audit-command-execution',
-  description: '记录所有命令执行',
+  description: 'Record all command executions',
   priority: 100,
   match: (ctx) => {
     return ctx.tool === 'bash' || ctx.operation === 'exec'
@@ -75,11 +75,11 @@ export const auditCommandExecution = defineObservePolicy({
 })
 
 /**
- * 错误告警
+ * Error alerts
  */
 export const alertOnErrors = defineAlertPolicy({
   id: 'alert-on-errors',
-  description: '工具执行失败时告警',
+  description: 'Alert when tool execution fails',
   priority: 100,
   match: (ctx) => {
     const result = ctx.result as { success?: boolean } | undefined
@@ -88,16 +88,16 @@ export const alertOnErrors = defineAlertPolicy({
   level: 'warn',
   message: (ctx) => {
     const result = ctx.result as { error?: string } | undefined
-    return `工具 ${ctx.tool} 执行失败: ${result?.error ?? 'Unknown error'}`
+    return `Tool ${ctx.tool} execution failed: ${result?.error ?? 'Unknown error'}`
   }
 })
 
 /**
- * 策略拒绝告警
+ * Policy denial alerts
  */
 export const alertOnDenied = defineObservePolicy({
   id: 'alert-on-denied',
-  description: '策略拒绝时告警',
+  description: 'Alert when a policy denies an action',
   priority: 100,
   match: () => true,
   decide: (ctx) => ({
@@ -114,7 +114,7 @@ export const alertOnDenied = defineObservePolicy({
 })
 
 /**
- * 所有审计策略
+ * All audit policies
  */
 export const auditPolicies = [
   auditAllCalls,

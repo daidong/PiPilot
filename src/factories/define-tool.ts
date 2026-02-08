@@ -1,5 +1,5 @@
 /**
- * defineTool - 工具定义工厂
+ * defineTool - Tool definition factory
  */
 
 import type { Tool, ToolConfig, ToolContext, ToolResult } from '../types/tool.js'
@@ -10,12 +10,12 @@ import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from 
 import type { RetryStrategy } from '../core/retry.js'
 
 /**
- * 定义工具
+ * Define a tool
  */
 export function defineTool<TInput = unknown, TOutput = unknown>(
   config: ToolConfig<TInput, TOutput>
 ): Tool<TInput, TOutput> {
-  // 验证配置
+  // Validate configuration
   if (!config.name) {
     throw new Error('Tool name is required')
   }
@@ -38,7 +38,7 @@ export function defineTool<TInput = unknown, TOutput = unknown>(
 }
 
 /**
- * 创建工具包装器，添加错误处理
+ * Create a tool wrapper with error handling
  */
 export function withErrorHandling<TInput, TOutput>(
   tool: Tool<TInput, TOutput>
@@ -60,7 +60,7 @@ export function withErrorHandling<TInput, TOutput>(
 }
 
 /**
- * 创建工具包装器，添加超时
+ * Create a tool wrapper with timeout
  */
 export function withTimeout<TInput, TOutput>(
   tool: Tool<TInput, TOutput>,
@@ -192,7 +192,7 @@ export function withRetry<TInput, TOutput>(
 }
 
 /**
- * 组合多个工具增强器
+ * Compose multiple tool enhancers
  */
 export function composeTool<TInput, TOutput>(
   tool: Tool<TInput, TOutput>,

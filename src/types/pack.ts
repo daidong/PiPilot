@@ -1,6 +1,6 @@
 /**
- * Pack Types - 能力包类型定义
- * Pack 是 Tools + Policies + ContextSources + Skills 的组合单元
+ * Pack Types - Capability pack type definitions
+ * A Pack is a bundled unit of Tools + Policies + ContextSources + Skills
  */
 
 import type { Tool } from './tool.js'
@@ -10,21 +10,21 @@ import type { Runtime } from './runtime.js'
 import type { Skill, SkillLoadingConfig } from './skill.js'
 
 /**
- * Pack 定义
+ * Pack definition
  */
 export interface Pack {
   /** Pack ID */
   id: string
-  /** Pack 描述 */
+  /** Pack description */
   description: string
-  /** 包含的工具 */
+  /** Included tools */
   tools?: Tool[]
-  /** 包含的策略 */
+  /** Included policies */
   policies?: Policy[]
-  /** 包含的上下文源 */
+  /** Included context sources */
   contextSources?: ContextSource[]
   /**
-   * 包含的 Skills
+   * Included Skills
    * Skills provide procedural knowledge that can be lazily loaded
    * to optimize token usage
    */
@@ -35,20 +35,20 @@ export interface Pack {
    */
   skillLoadingConfig?: SkillLoadingConfig
   /**
-   * Prompt 片段（会被编译到系统提示中）
+   * Prompt fragment (compiled into the system prompt)
    * @deprecated Use skills instead for progressive disclosure
    */
   promptFragment?: string
-  /** 依赖的其他 Pack */
+  /** Dependencies on other Packs */
   dependencies?: string[]
-  /** 初始化钩子 */
+  /** Initialization hook */
   onInit?: (runtime: Runtime) => Promise<void>
-  /** 销毁钩子 */
+  /** Destruction hook */
   onDestroy?: (runtime: Runtime) => Promise<void>
 }
 
 /**
- * Pack 配置（用于 definePack）
+ * Pack configuration (for definePack)
  */
 export interface PackConfig {
   id: string
@@ -74,7 +74,7 @@ export interface PackConfig {
 }
 
 /**
- * 内置 Pack 名称
+ * Built-in Pack names
  */
 export type BuiltinPackName =
   // Core packs
@@ -96,6 +96,6 @@ export type BuiltinPackName =
   | 'memory-search'
 
 /**
- * Pack 风险等级
+ * Pack risk level
  */
 export type PackRiskLevel = 'safe' | 'elevated' | 'high'

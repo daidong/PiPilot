@@ -1,28 +1,28 @@
 /**
  * Exec Access Policies
  *
- * 根据权限声明生成命令执行策略
+ * Generates command execution policies based on permission declarations
  */
 
 import type { Policy, PolicyContext, GuardDecision } from '../types/policy.js'
 import { defineGuardPolicy } from '../factories/define-policy.js'
 
 /**
- * 执行策略配置
+ * Execution policy configuration
  */
 export interface ExecPolicyConfig {
-  /** Provider ID（用于策略 ID 前缀） */
+  /** Provider ID (used as policy ID prefix) */
   providerId: string
-  /** 允许执行的命令模式 */
+  /** Allowed command patterns */
   allowedCommands?: string[]
-  /** 禁止执行的命令模式 */
+  /** Denied command patterns */
   deniedCommands?: string[]
-  /** 策略优先级 */
+  /** Policy priority */
   priority?: number
 }
 
 /**
- * 创建命令执行策略
+ * Create a command execution policy
  */
 export function createExecPolicy(config: ExecPolicyConfig): Policy {
   const { providerId, allowedCommands, deniedCommands, priority = 15 } = config
@@ -32,7 +32,7 @@ export function createExecPolicy(config: ExecPolicyConfig): Policy {
     description: `Command execution control for ${providerId}`,
     priority,
     match: (ctx: PolicyContext) => {
-      // 匹配 bash 工具或命令执行操作
+      // Match the bash tool or command execution operations
       return ctx.tool === 'bash' || ctx.operation === 'exec'
     },
     decide: (ctx: PolicyContext): GuardDecision => {
@@ -43,10 +43,10 @@ export function createExecPolicy(config: ExecPolicyConfig): Policy {
         return { action: 'allow' }
       }
 
-      // 提取命令名称
+      // Extract command name
       const commandName = extractCommandName(command)
 
-      // 检查是否在禁止列表中
+      // Check if the command is in the denied list
       if (deniedCommands && matchesCommand(command, commandName, deniedCommands)) {
         return {
           action: 'deny',
@@ -54,7 +54,7 @@ export function createExecPolicy(config: ExecPolicyConfig): Policy {
         }
       }
 
-      // 如果有允许列表，检查是否在允许范围内
+      // If an allow list exists, check if the command is within allowed scope
       if (allowedCommands && allowedCommands.length > 0) {
         if (!matchesCommand(command, commandName, allowedCommands)) {
           return {
@@ -70,18 +70,18 @@ export function createExecPolicy(config: ExecPolicyConfig): Policy {
 }
 
 /**
- * 提取命令名称
+ * Extract command name
  */
 function extractCommandName(command: string): string {
-  // 移除前导空白和环境变量设置
+  // Remove leading whitespace and environment variable assignments
   let cmd = command.trim()
 
-  // 处理 env VAR=value command 格式
+  // Handle env VAR=value command format
   while (cmd.match(/^\w+=\S*\s+/)) {
     cmd = cmd.replace(/^\w+=\S*\s+/, '')
   }
 
-  // 处理 sudo、time 等前缀
+  // Handle prefixes like sudo, time, etc.
   const prefixes = ['sudo', 'time', 'nice', 'nohup', 'env']
   for (const prefix of prefixes) {
     if (cmd.startsWith(prefix + ' ')) {
@@ -89,18 +89,18 @@ function extractCommandName(command: string): string {
     }
   }
 
-  // 提取第一个命令
+  // Extract the first command
   const parts = cmd.split(/\s+/)
   const firstPart = parts[0] ?? ''
 
-  // 移除路径，只保留命令名
+  // Remove path, keep only the command name
   const cmdName = firstPart.split('/').pop() ?? firstPart
 
   return cmdName
 }
 
 /**
- * 检查命令是否匹配任意模式
+ * Check if a command matches any pattern
  */
 function matchesCommand(
   fullCommand: string,
@@ -117,25 +117,25 @@ function matchesCommand(
 }
 
 /**
- * 匹配命令模式
+ * Match a command pattern
  *
- * 支持的模式：
- * - 精确匹配: npm
- * - 正则匹配: /rm\s+-rf/ (以 / 包围)
- * - 通配符: npm* (匹配 npm, npx 等)
- * - 全局通配: * (匹配所有)
+ * Supported patterns:
+ * - Exact match: npm
+ * - Regex match: /rm\s+-rf/ (enclosed in /)
+ * - Wildcard: npm* (matches npm, npx, etc.)
+ * - Global wildcard: * (matches all)
  */
 function matchCommandPattern(
   fullCommand: string,
   commandName: string,
   pattern: string
 ): boolean {
-  // 全局通配
+  // Global wildcard
   if (pattern === '*') {
     return true
   }
 
-  // 正则匹配
+  // Regex match
   if (pattern.startsWith('/') && pattern.endsWith('/')) {
     try {
       const regex = new RegExp(pattern.slice(1, -1), 'i')
@@ -145,7 +145,7 @@ function matchCommandPattern(
     }
   }
 
-  // 通配符匹配
+  // Wildcard match
   if (pattern.includes('*')) {
     const regexPattern = pattern
       .replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -154,12 +154,12 @@ function matchCommandPattern(
     return regex.test(commandName)
   }
 
-  // 精确匹配
+  // Exact match
   return commandName.toLowerCase() === pattern.toLowerCase()
 }
 
 /**
- * 从权限声明创建执行策略
+ * Create execution policies from permission declarations
  */
 export function createExecAccessPolicies(
   providerId: string,
@@ -170,7 +170,7 @@ export function createExecAccessPolicies(
     return []
   }
 
-  // 如果只有 deny 列表，创建拒绝策略
+  // If there is only a deny list, create a deny policy
   if (permissions.deny && permissions.deny.length > 0 && !permissions.allow) {
     return [
       createExecPolicy({
@@ -181,7 +181,7 @@ export function createExecAccessPolicies(
     ]
   }
 
-  // 如果有 allow 列表，创建允许策略
+  // If there is an allow list, create an allow policy
   if (permissions.allow && permissions.allow.length > 0) {
     return [
       createExecPolicy({
