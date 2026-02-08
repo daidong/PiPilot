@@ -52,8 +52,6 @@ interface EntityState {
   toggleFocus: (id: string, options?: { reason?: string; ttl?: string }) => Promise<void>
   clearFocus: () => Promise<void>
 
-  renameNote: (id: string, newTitle: string) => Promise<void>
-  updateEntity: (id: string, updates: { title?: string; content?: string }) => Promise<void>
   deleteEntity: (id: string) => Promise<void>
 }
 
@@ -194,16 +192,6 @@ export const useEntityStore = create<EntityState>((set, get) => ({
 
   clearFocus: async () => {
     await api.focusClear()
-    await get().refreshAll()
-  },
-
-  renameNote: async (id: string, newTitle: string) => {
-    await api.renameNote(id, newTitle)
-    await get().refreshAll()
-  },
-
-  updateEntity: async (id: string, updates: { title?: string; content?: string }) => {
-    await api.updateEntity(id, updates)
     await get().refreshAll()
   },
 

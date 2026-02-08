@@ -104,7 +104,7 @@ export function ChatInput() {
         }
         case '/save-note': {
           if (!rest) { result = 'Usage: `/save-note <title>`'; break }
-          const r = await api.saveNote(rest, '')
+          const r = await api.artifactCreate({ type: 'note', title: rest, content: '' })
           result = r?.success ? `Note saved: **${rest}**` : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
           break

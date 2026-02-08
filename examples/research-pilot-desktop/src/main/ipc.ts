@@ -10,7 +10,6 @@ import {
   taskAnchorGet, taskAnchorSet, taskAnchorUpdate,
   memoryExplainTurn, memoryExplainFact, memoryExplainBudget
 } from '@research-pilot/commands/index'
-import { saveNote } from '@research-pilot/commands/save-note'
 import { savePaper, parseSavePaperArgs, updatePaperMetadata } from '@research-pilot/commands/save-paper'
 import { RateLimiter, CircuitBreaker, DEFAULT_SEARCHER_CONFIG } from '@research-pilot/agents/rate-limiter'
 import { enrichPapers, createEnrichmentConfig, countCoreFields, type PaperInput } from '@research-pilot/agents/metadata-enrichment'
@@ -1041,71 +1040,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  // Commands - rename note
-  ipcMain.handle('cmd:rename-note', (_e, id: string, newTitle: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    // Search across all entity directories
-    const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
-    for (const dir of dirs) {
-      const filePath = join(projectPath, dir, `${id}.json`)
-      if (!existsSync(filePath)) continue
-      try {
-        const entity = JSON.parse(readFileSync(filePath, 'utf-8'))
-        // Data entities use 'name', notes/papers use 'title'
-        if (entity.type === 'data') {
-          entity.name = newTitle
-        } else {
-          entity.title = newTitle
-        }
-        entity.updatedAt = new Date().toISOString()
-        writeFileSync(filePath, JSON.stringify(entity, null, 2))
-        return { success: true }
-      } catch (err: any) {
-        return { success: false, error: err.message }
-      }
-    }
-    return { success: false, error: 'Entity not found.' }
-  })
-
-  // Commands - update entity (title + content)
-  ipcMain.handle('cmd:update-entity', (_e, id: string, updates: { title?: string; content?: string }) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const dirs = [PATHS.notes, PATHS.literature, PATHS.data]
-    for (const dir of dirs) {
-      const filePath = join(projectPath, dir, `${id}.json`)
-      if (!existsSync(filePath)) continue
-      try {
-        const entity = JSON.parse(readFileSync(filePath, 'utf-8'))
-        if (updates.title !== undefined) {
-          if (entity.type === 'data') {
-            entity.name = updates.title
-          } else {
-            entity.title = updates.title
-          }
-        }
-        if (updates.content !== undefined) {
-          if (entity.type === 'paper') {
-            entity.abstract = updates.content
-          } else {
-            entity.content = updates.content
-          }
-        }
-        entity.updatedAt = new Date().toISOString()
-        writeFileSync(filePath, JSON.stringify(entity, null, 2))
-        return { success: true }
-      } catch (err: any) {
-        return { success: false, error: err.message }
-      }
-    }
-    return { success: false, error: 'Entity not found.' }
-  })
-
   // Commands - save
-  // saveNote signature: saveNote(title, content, tags, context, fromLast)
-  ipcMain.handle('cmd:save-note', (_e, title: string, content: string, messageId?: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return saveNote(title, content, [], { sessionId, projectPath, lastAgentResponse: '' }, false, messageId)
-  })
   ipcMain.handle('cmd:save-paper', (_e, argsStr: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     const args = parseSavePaperArgs(argsStr)
@@ -1456,7 +1391,18 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     if (tab === 'notes') {
       // Save text content as a note entity
       const title = fileName.replace(/\.\w+$/, '')
-      return saveNote(title, content, [], { sessionId, projectPath, lastAgentResponse: '' }, false)
+      return artifactCreate(
+        {
+          type: 'note',
+          title,
+          content,
+          provenance: {
+            source: 'user',
+            extractedFrom: 'file-import'
+          }
+        },
+        { sessionId, projectPath, lastAgentResponse: '' }
+      )
     }
 
     if (tab === 'data') {

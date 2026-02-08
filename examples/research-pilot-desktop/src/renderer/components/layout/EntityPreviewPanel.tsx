@@ -61,7 +61,7 @@ function detectPotentialLoss(original: string, next: string): string[] {
   const after = buildFingerprint(next)
   const issues: string[] = []
 
-  if (before.length > 80 && after.length === 0) {
+  if (before.length > 0 && after.length === 0) {
     issues.push('Output became empty.')
   }
 
@@ -155,7 +155,7 @@ export function EntityPreviewPanel() {
   const setPreviewEditorFocused = useUIStore((s) => s.setPreviewEditorFocused)
   const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
-  const updateEntity = useEntityStore((s) => s.updateEntity)
+  const refreshAll = useEntityStore((s) => s.refreshAll)
   const promoteFact = useEntityStore((s) => s.promoteFact)
   const demoteFact = useEntityStore((s) => s.demoteFact)
   const focusItems = useEntityStore((s) => s.focus)
@@ -174,9 +174,17 @@ export function EntityPreviewPanel() {
   const [fileType, setFileType] = useState<'text' | 'external' | 'csv' | null>(null)
   const [loading, setLoading] = useState(false)
 
+  const getArtifactMarkdownContent = (artifactLike: any): string => {
+    if (!artifactLike) return ''
+    if (artifactLike.type === 'paper') {
+      return artifactLike.abstract || artifactLike.content || artifactLike.valueText || ''
+    }
+    return artifactLike.content || artifactLike.valueText || artifactLike.abstract || ''
+  }
+
   const getEntityContent = (): string => {
     if (!entity) return ''
-    return entity.content || entity.abstract || entity.valueText || ''
+    return getArtifactMarkdownContent(entity)
   }
 
   useEffect(() => {
@@ -270,26 +278,47 @@ export function EntityPreviewPanel() {
       setSaveError(null)
       setSaveSuccess(null)
       if (isInlineEditable) {
-        await updateEntity(entity.id, { content: nextMarkdown })
+        const api = (window as any).api
+        const latest = await api.artifactGet(entity.id)
+        if (!latest) {
+          throw new Error('Unable to load latest artifact before save.')
+        }
+
+        const latestOnDisk = getArtifactMarkdownContent(latest)
+        if (normalizeMarkdown(latestOnDisk) !== normalizeMarkdown(baselineMarkdown)) {
+          setSaveError('Detected newer content on disk. Reload this note and retry to avoid overwriting newer changes.')
+          return
+        }
+
+        const patch = entity.type === 'paper'
+          ? { abstract: nextMarkdown }
+          : { content: nextMarkdown }
+        const updated = await api.artifactUpdate(entity.id, patch)
+        if (!updated?.success) {
+          throw new Error(updated?.error || 'Failed to save artifact.')
+        }
+
+        const persisted = updated?.artifact ?? await api.artifactGet(entity.id)
+        const persistedMarkdown = getArtifactMarkdownContent(persisted)
+        setDraftMarkdown(persistedMarkdown)
+        setBaselineMarkdown(persistedMarkdown)
+        await refreshAll()
       } else if (isFileMarkdown && entity.filePath) {
         const api = (window as any).api
         const result = await api.writeFile(entity.filePath, nextMarkdown)
         if (!result?.success) {
           throw new Error(result?.error || 'Failed to write markdown file.')
         }
-        setFileContent(nextMarkdown)
+        const verify = await api.readFile(entity.filePath)
+        const persistedMarkdown = (verify?.success && typeof verify.content === 'string')
+          ? verify.content
+          : nextMarkdown
+        setFileContent(persistedMarkdown)
+        setDraftMarkdown(persistedMarkdown)
+        setBaselineMarkdown(persistedMarkdown)
       }
-      setBaselineMarkdown(nextMarkdown)
       setSaveSuccess('Saved')
       setTimeout(() => setSaveSuccess(null), 1200)
-
-      if (isInlineEditable) {
-        useUIStore.getState().openPreview({
-          ...entity,
-          content: entity.type === 'paper' ? entity.content : nextMarkdown,
-          abstract: entity.type === 'paper' ? nextMarkdown : entity.abstract
-        })
-      }
     } catch (err: any) {
       setSaveError(err?.message || 'Failed to save markdown.')
     }
