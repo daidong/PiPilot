@@ -76,7 +76,19 @@ function SelectionBookmark() {
     try {
       const first = selectedText.split(/[.!?\n]/)[0].trim()
       const title = first.length > 60 ? first.slice(0, 57) + '…' : first || 'Untitled selection'
-      await api.saveNote(title, selectedText, selectedMsgId || undefined)
+      const created = await api.artifactCreate({
+        type: 'note',
+        title,
+        content: selectedText,
+        provenance: {
+          source: 'user',
+          extractedFrom: 'user-input',
+          messageId: selectedMsgId || undefined
+        }
+      })
+      if (!created?.success) {
+        throw new Error(created?.error || 'Failed to save note')
+      }
       setSaveState('saved')
       if (selectedMsgId) markSaved(selectedMsgId)
       await refreshAll()
@@ -138,7 +150,19 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
     try {
       const first = msg.content.replace(/^#+\s*/, '').split(/[.!?\n]/)[0].trim()
       const title = first.length > 60 ? first.slice(0, 57) + '…' : first || 'Untitled note'
-      await api.saveNote(title, msg.content, msg.id)
+      const created = await api.artifactCreate({
+        type: 'note',
+        title,
+        content: msg.content,
+        provenance: {
+          source: 'user',
+          extractedFrom: 'user-input',
+          messageId: msg.id
+        }
+      })
+      if (!created?.success) {
+        throw new Error(created?.error || 'Failed to save note')
+      }
       setSaveState('saved')
       markSaved(msg.id)
       await refreshAll()

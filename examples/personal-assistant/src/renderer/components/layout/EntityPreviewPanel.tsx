@@ -90,7 +90,7 @@ export function EntityPreviewPanel() {
   const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
-  const updateEntity = useEntityStore((s) => s.updateEntity)
+  const refreshAll = useEntityStore((s) => s.refreshAll)
   const focused = useEntityStore((s) => s.focus)
   const runtimeFocus = useEntityStore((s) => s.runtimeFocus)
   const todos = useEntityStore((s) => s.todos)
@@ -186,6 +186,9 @@ export function EntityPreviewPanel() {
   }
 
   const getEntityContent = (): string => {
+    if (entity.type === 'doc') {
+      return entity.description || entity.content || ''
+    }
     return entity.content || ''
   }
 
@@ -199,16 +202,32 @@ export function EntityPreviewPanel() {
       if (editContent !== getEntityContent()) {
         updates.content = editContent
       }
-      if (Object.keys(updates).length > 0) {
-        await updateEntity(entity.id, updates)
-        useUIStore.getState().openPreview({
-          ...entity,
-          title: updates.title ?? entity.title,
-          content: entity.type === 'doc' ? entity.content : (updates.content ?? entity.content),
-          description: entity.type === 'doc' ? (updates.content ?? entity.description) : entity.description
-        })
+      try {
+        if (Object.keys(updates).length > 0) {
+          const api = (window as any).api
+          const patch: Record<string, unknown> = {}
+          if (updates.title !== undefined) patch.title = updates.title
+          if (updates.content !== undefined) {
+            if (entity.type === 'doc') patch.description = updates.content
+            else patch.content = updates.content
+          }
+          const result = await api.artifactUpdate(entity.id, patch)
+          if (!result?.success) {
+            throw new Error(result?.error || 'Failed to update entity.')
+          }
+          await refreshAll()
+          const latest = result?.artifact ?? await api.artifactGet(entity.id)
+          if (latest) {
+            useUIStore.getState().openPreview({
+              ...entity,
+              ...latest
+            })
+          }
+        }
+        setEditing(false)
+      } catch (err) {
+        console.error('[EntityPreview] failed to save entity:', err)
       }
-      setEditing(false)
     } else {
       setEditTitle(entity.title)
       setEditContent(getEntityContent())

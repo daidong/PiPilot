@@ -58,8 +58,6 @@ interface EntityState {
   clearFocus: () => Promise<void>
 
   toggleTodoComplete: (id: string) => Promise<void>
-  renameNote: (id: string, newTitle: string) => Promise<void>
-  updateEntity: (id: string, updates: { title?: string; content?: string }) => Promise<void>
   deleteEntity: (id: string) => Promise<void>
 }
 
@@ -212,16 +210,6 @@ export const useEntityStore = create<EntityState>((set, get) => ({
     await api.toggleTodoComplete(id)
     const todosRaw = await api.listTodos()
     set({ todos: stamp(todosRaw, 'todo') })
-  },
-
-  renameNote: async (id: string, newTitle: string) => {
-    await api.renameNote(id, newTitle)
-    await get().refreshAll()
-  },
-
-  updateEntity: async (id: string, updates: { title?: string; content?: string }) => {
-    await api.updateEntity(id, updates)
-    await get().refreshAll()
   },
 
   deleteEntity: async (id: string) => {

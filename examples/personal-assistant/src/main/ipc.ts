@@ -11,7 +11,6 @@ import {
   taskAnchorGet, taskAnchorSet, taskAnchorUpdate,
   memoryExplainTurn, memoryExplainFact, memoryExplainBudget
 } from '@personal-assistant/commands/index'
-import { saveNote } from '@personal-assistant/commands/save-note'
 import { saveDoc } from '@personal-assistant/commands/save-doc'
 import { parseMentions, resolveMentions, getCandidates } from '@personal-assistant/mentions/index'
 import { setCachedMarkdown, fileUriToPath } from '@personal-assistant/mentions/document-cache'
@@ -1184,41 +1183,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  // Commands - rename note
-  ipcMain.handle('cmd:rename-note', (_e, id: string, newTitle: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const updated = artifactUpdate(projectPath, id, { title: newTitle })
-    if (!updated.success) {
-      return { success: false, error: updated.error ?? 'Entity not found.' }
-    }
-    return { success: true }
-  })
-
-  // Commands - update entity (title + content)
-  ipcMain.handle('cmd:update-entity', (_e, id: string, updates: { title?: string; content?: string }) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const found = artifactGet(projectPath, id)
-    if (!found) return { success: false, error: 'Entity not found.' }
-
-    const patch: Record<string, unknown> = {}
-    if (updates.title !== undefined) patch.title = updates.title
-    if (updates.content !== undefined) {
-      if (found.type === 'doc') patch.description = updates.content
-      else patch.content = updates.content
-    }
-
-    const updated = artifactUpdate(projectPath, id, patch as any)
-    if (!updated.success) {
-      return { success: false, error: updated.error ?? 'Entity not found.' }
-    }
-    return { success: true }
-  })
-
   // Commands - save
-  ipcMain.handle('cmd:save-note', (_e, title: string, content: string, messageId?: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return saveNote(title, content, [], { sessionId, projectPath, lastAgentResponse: '' }, false, messageId)
-  })
   ipcMain.handle('cmd:save-doc', (_e, title: string, filePath: string, content?: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     return saveDoc(title, { filePath, content }, { sessionId, projectPath })
@@ -1426,7 +1391,18 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       // Notes are text — decode as UTF-8
       const textContent = binaryBuffer.toString('utf-8')
       const title = fileName.replace(/\.\w+$/, '')
-      return saveNote(title, textContent, [], { sessionId, projectPath, lastAgentResponse: '' }, false)
+      return artifactCreate(
+        {
+          type: 'note',
+          title,
+          content: textContent,
+          provenance: {
+            source: 'user',
+            extractedFrom: 'file-import'
+          }
+        },
+        { sessionId, projectPath, lastAgentResponse: '' }
+      )
     }
 
     if (tab === 'docs') {
