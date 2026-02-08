@@ -59,18 +59,7 @@ npx agent-foundry <command>
 
 ## Quick Start
 
-### Option 1: CLI Setup (Recommended)
-
-```bash
-# Interactive setup with intelligent recommendations
-npx agent-foundry init --api-key sk-xxx
-
-# This generates:
-# - agent.yaml (configuration)
-# - .env.example (environment variables template)
-```
-
-Then use in your code:
+### Option 1: Programmatic Setup (Recommended)
 
 ```typescript
 import { createAgent } from 'agent-foundry'
@@ -87,7 +76,7 @@ console.log(result.output)
 await agent.destroy()
 ```
 
-### Option 2: Programmatic Setup
+### Option 2: Pack-based Setup
 
 ```typescript
 import { createAgent, packs } from 'agent-foundry'
@@ -256,18 +245,6 @@ examples/research-pilot/
 ```
 
 ## CLI Tools
-
-### init - Interactive Setup
-
-```bash
-npx agent-foundry init [--api-key <key>]
-```
-
-Creates `agent.yaml` through an interactive wizard:
-1. Describe your agent in natural language
-2. Review recommended packs and MCP servers
-3. Refine through conversation
-4. Generate configuration files
 
 ### validate - Check Configuration
 
@@ -1314,8 +1291,7 @@ src/
 │   └── builtin/          # Built-in skills
 ├── llm/             # LLM integration (Vercel AI SDK)
 ├── mcp/             # Model Context Protocol support
-├── cli/             # CLI commands and init wizard
-├── recommendation/  # Tool/MCP recommendation engine
+├── cli/             # CLI commands (validate, index-docs)
 ├── config/          # agent.yaml loading and validation
 ├── team/            # Multi-agent team system
 │   ├── flow/        # Flow combinators, executor, AST, reducers, handoff

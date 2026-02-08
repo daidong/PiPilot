@@ -34,8 +34,7 @@ src/
 │   └── builtin/          # Built-in skills (llm-compute, git-workflow, context-retrieval)
 ├── llm/             # LLM integration (Vercel AI SDK)
 ├── mcp/             # Model Context Protocol support
-├── cli/             # CLI commands and init wizard
-├── recommendation/  # Tool/MCP recommendation engine
+├── cli/             # CLI commands (validate, index-docs)
 ├── config/          # agent.yaml loading and validation
 ├── team/            # Multi-agent team system
 │   ├── flow/        # Flow combinators, executor, AST, reducers, handoff
@@ -252,8 +251,8 @@ npm run clean      # Remove dist/
 ## CLI Usage
 
 ```bash
-npx agent-foundry init --api-key <key>  # Interactive setup wizard
 npx agent-foundry validate              # Validate agent.yaml
+npx agent-foundry index-docs --paths docs -v  # Build document index
 ```
 
 ## Key Files
@@ -268,8 +267,6 @@ npx agent-foundry validate              # Validate agent.yaml
 | `src/skills/define-skill.ts` | Skill factory functions (defineSkill, extendSkill, mergeSkills) |
 | `src/skills/skill-manager.ts` | Skill lifecycle and lazy loading |
 | `src/skills/skill-registry.ts` | Skill discovery and querying |
-| `src/recommendation/mcp-catalog.ts` | MCP server catalog for init wizard |
-| `src/recommendation/tool-catalog.ts` | Tool catalog for recommendations |
 | `src/team/define-team.ts` | Team definition (defineTeam, agentHandle) |
 | `src/team/team-runtime.ts` | Team execution runtime |
 | `src/team/flow/combinators.ts` | Flow combinators (seq, par, loop, etc.) |
@@ -374,26 +371,6 @@ More detailed procedures...
   estimatedTokens: { summary: 80, full: 600 },
   tags: ['category1', 'category2']
 })
-```
-
-### New MCP Server (for init wizard)
-
-Add entry to `src/recommendation/mcp-catalog.ts`:
-
-```typescript
-{
-  name: 'my-mcp',
-  package: '@org/mcp-server',
-  description: 'What it does',
-  category: 'other',
-  keywords: ['keyword1', 'keyword2'],
-  useCases: ['Use case 1'],
-  popularity: 'medium',
-  configTemplate: { ... },
-  envVars: ['MY_API_KEY'],
-  riskLevel: 'elevated',
-  permissions: ['What it can access']
-}
 ```
 
 ## Testing Patterns
