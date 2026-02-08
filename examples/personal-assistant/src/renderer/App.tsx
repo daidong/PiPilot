@@ -139,20 +139,7 @@ export default function App() {
       finalize(result)
       refreshEntities().catch(() => {})
 
-      if (result?.workingSetRuntime?.items) {
-        const items = result.workingSetRuntime.items.map((item: any) => ({
-          id: item.id,
-          title: item.title || item.id,
-          type: (item.type === 'doc' || item.type === 'todo' || item.type === 'note') ? item.type : 'note',
-          focusSource: item.source,
-          focusReason: item.reason,
-          focusScore: item.score,
-          focusRequestedShape: item.requestedShape
-        }))
-        setRuntimeFocus(items)
-      } else {
-        setRuntimeFocus([])
-      }
+      setRuntimeFocus([])
 
       // Extract file paths from agent response and add to working files
       const text = result.response || ''

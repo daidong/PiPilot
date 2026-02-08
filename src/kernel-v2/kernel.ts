@@ -66,6 +66,7 @@ export interface KernelV2 {
   }): Promise<void>
   verifyIntegrity(scope?: 'workspace' | 'project' | 'file'): Promise<KernelV2IntegrityReport>
   runMemoryLifecycle(mode: 'weekly' | 'on-demand', projectId?: string): Promise<LifecycleReport>
+  destroy(): Promise<void>
   addArtifact(params: {
     sessionId: string
     type: 'document' | 'tool-output' | 'file-snapshot' | 'web-content'
@@ -116,6 +117,13 @@ function trimTextByTokens(text: string, maxTokens: number): { text: string; trun
     used += lineTokens
   }
   return { text: kept.join('\n'), truncated: true }
+}
+
+function isWithinRoot(rootPath: string, targetPath: string): boolean {
+  const normalizedRoot = path.resolve(rootPath)
+  const normalizedTarget = path.resolve(targetPath)
+  if (normalizedRoot === normalizedTarget) return true
+  return normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
 }
 
 function taskAnchorToText(anchor: V2TaskAnchor): string {
@@ -223,6 +231,10 @@ export class KernelV2Impl implements KernelV2 {
 
   async runMemoryLifecycle(mode: 'weekly' | 'on-demand', _projectId?: string): Promise<LifecycleReport> {
     return this.lifecycle.run(mode)
+  }
+
+  async destroy(): Promise<void> {
+    await this.telemetry.flush()
   }
 
   async addArtifact(params: {
@@ -575,8 +587,16 @@ export class KernelV2Impl implements KernelV2 {
 
     if (ref.type === 'path') {
       const filePath = path.isAbsolute(ref.value)
-        ? ref.value
-        : path.join(this.projectPath, ref.value)
+        ? path.resolve(ref.value)
+        : path.resolve(this.projectPath, ref.value)
+      if (!isWithinRoot(this.projectPath, filePath)) {
+        return {
+          found: false,
+          ref,
+          source: 'filesystem',
+          content: ''
+        }
+      }
       try {
         const raw = await fs.readFile(filePath, 'utf-8')
         const trimmed = trimTextByTokens(raw, this.config.retrieval.rawScanLimitTokens)

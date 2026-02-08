@@ -64,6 +64,18 @@ export interface ExecutionContext {
   concurrency: number
   /** Abort signal */
   abortSignal?: AbortSignal
+  /** Optional validator registry used by gate(type=validator) */
+  validators?: Record<string, {
+    description?: string
+    validate: (input: unknown) => { ok: boolean; issues?: unknown[]; score?: number }
+  }>
+  /** Optional policy gate evaluator */
+  evaluatePolicyGate?: (policyId: string, ctx: ExecutionContext) => Promise<{ passed: boolean; details?: unknown }> | { passed: boolean; details?: unknown }
+  /** Optional human approval hook */
+  requestHumanGate?: (
+    request: { message: string; timeoutSec?: number },
+    ctx: ExecutionContext
+  ) => Promise<{ approved: boolean; details?: unknown }> | { approved: boolean; details?: unknown }
 }
 
 /**
@@ -525,21 +537,76 @@ async function executeGate(
       break
 
     case 'validator': {
-      // TODO: Implement validator lookup
-      passed = true
+      const input = resolveInput(spec.gate.input, ctx)
+      const validator = ctx.validators?.[spec.gate.validatorId]
+      if (validator) {
+        const result = validator.validate(input)
+        passed = result.ok
+        details = {
+          source: 'registry',
+          validatorId: spec.gate.validatorId,
+          issues: result.issues,
+          score: result.score,
+          description: validator.description
+        }
+      } else if (ctx.agentRegistry.has(spec.gate.validatorId)) {
+        const raw = await ctx.invokeAgent(spec.gate.validatorId, input, ctx)
+        const interpreted = interpretValidatorAgentResult(raw)
+        passed = interpreted.passed
+        details = {
+          source: 'agent',
+          validatorId: spec.gate.validatorId,
+          ...interpreted.details
+        }
+      } else {
+        passed = false
+        details = {
+          source: 'none',
+          validatorId: spec.gate.validatorId,
+          reason: 'validator_not_found'
+        }
+      }
       break
     }
 
     case 'policy': {
-      // TODO: Implement policy check
-      passed = true
+      if (ctx.evaluatePolicyGate) {
+        const result = await ctx.evaluatePolicyGate(spec.gate.policyId, ctx)
+        passed = result.passed
+        details = {
+          policyId: spec.gate.policyId,
+          ...result
+        }
+      } else {
+        passed = false
+        details = {
+          policyId: spec.gate.policyId,
+          reason: 'policy_gate_not_configured'
+        }
+      }
       break
     }
 
     case 'human': {
-      // TODO: Implement human approval
-      console.warn('Human gate not implemented, auto-passing')
-      passed = true
+      if (ctx.requestHumanGate) {
+        const result = await ctx.requestHumanGate(
+          { message: spec.gate.message, timeoutSec: spec.gate.timeoutSec },
+          ctx
+        )
+        passed = result.approved
+        details = {
+          message: spec.gate.message,
+          timeoutSec: spec.gate.timeoutSec,
+          ...result
+        }
+      } else {
+        passed = false
+        details = {
+          message: spec.gate.message,
+          timeoutSec: spec.gate.timeoutSec,
+          reason: 'human_gate_not_configured'
+        }
+      }
       break
     }
   }
@@ -561,6 +628,47 @@ async function executeGate(
   }
 
   return result.output
+}
+
+function interpretValidatorAgentResult(raw: unknown): { passed: boolean; details: Record<string, unknown> } {
+  if (typeof raw === 'boolean') {
+    return { passed: raw, details: { format: 'boolean' } }
+  }
+
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>
+    const direct = ['ok', 'passed', 'valid', 'approved', 'success']
+      .find(key => typeof obj[key] === 'boolean')
+    if (direct) {
+      return {
+        passed: Boolean(obj[direct]),
+        details: {
+          format: 'object',
+          signal: direct,
+          issues: obj.issues,
+          score: obj.score
+        }
+      }
+    }
+
+    if (typeof obj.status === 'string') {
+      const normalized = obj.status.toLowerCase()
+      if (normalized === 'approved' || normalized === 'pass' || normalized === 'passed' || normalized === 'ok') {
+        return { passed: true, details: { format: 'object', signal: 'status', status: obj.status } }
+      }
+      if (normalized === 'rejected' || normalized === 'fail' || normalized === 'failed' || normalized === 'deny') {
+        return { passed: false, details: { format: 'object', signal: 'status', status: obj.status } }
+      }
+    }
+  }
+
+  return {
+    passed: false,
+    details: {
+      format: typeof raw,
+      reason: 'unrecognized_validator_output'
+    }
+  }
 }
 
 async function executeRace(
@@ -615,12 +723,28 @@ async function executeRace(
     throw new Error('All race contenders failed')
   }
 
-  // TODO: Implement score extraction from path
-  const firstSuccess = successResults[0]
-  if (!firstSuccess) {
-    throw new Error('All race contenders failed')
+  let winnerOutput = successResults[0]!.result.output
+  if (spec.winner.type === 'highestScore') {
+    let bestScore = Number.NEGATIVE_INFINITY
+    let foundAnyScore = false
+
+    for (const entry of successResults) {
+      const rawScore = getNestedValue(entry.result.output, spec.winner.path)
+      if (typeof rawScore !== 'number' || Number.isNaN(rawScore)) {
+        continue
+      }
+      foundAnyScore = true
+      if (rawScore > bestScore) {
+        bestScore = rawScore
+        winnerOutput = entry.result.output
+      }
+    }
+
+    if (!foundAnyScore) {
+      throw new Error(`Race winner highestScore path "${spec.winner.path}" did not resolve to numeric scores`)
+    }
   }
-  return firstSuccess.result.output
+  return winnerOutput
 }
 
 async function executeSupervise(

@@ -36,8 +36,7 @@ export {
   memoryExplainFact,
   memoryExplainBudget,
 
-  // Legacy compatibility exports
-  saveNote,
+  // Compatibility exports
   savePaper, parseSavePaperArgs,
   saveData, parseSaveDataArgs,
   deleteEntity,
@@ -56,7 +55,6 @@ export type {
   FocusPruneResult,
   TaskAnchorResult,
   MemoryExplainResult,
-  SaveNoteResult,
   ArtifactListItem,
   NoteListItem,
   LiteratureListItem,

@@ -41,7 +41,6 @@ export interface ElectronAPI {
   listCalendar: () => Promise<any>
   search: (query: string) => Promise<any>
   deleteEntity: (id: string) => Promise<any>
-  saveDoc: (title: string, filePath: string, content?: string) => Promise<any>
   toggleTodoComplete: (id: string) => Promise<any>
   artifactCreate: (input: Record<string, unknown>) => Promise<any>
   artifactUpdate: (id: string, patch: Record<string, unknown>) => Promise<any>
@@ -194,7 +193,6 @@ const api: ElectronAPI = {
   listCalendar: () => ipcRenderer.invoke('cmd:list-calendar'),
   search: (query) => ipcRenderer.invoke('cmd:search', query),
   deleteEntity: (id) => ipcRenderer.invoke('cmd:delete', id),
-  saveDoc: (title, filePath, content) => ipcRenderer.invoke('cmd:save-doc', title, filePath, content),
   toggleTodoComplete: (id) => ipcRenderer.invoke('cmd:toggle-todo-complete', id),
   artifactCreate: (input) => ipcRenderer.invoke('cmd:artifact-create', input),
   artifactUpdate: (id, patch) => ipcRenderer.invoke('cmd:artifact-update', id, patch),

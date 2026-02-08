@@ -21,7 +21,7 @@ Hard rules:
 - User-facing tasks go to the Todos tab via artifact-create({ type: "todo", ... }) and completion updates via artifact-update({ status: "completed" }). Use todo-add/update/complete/remove only for agent-internal progress tracking.
 
 Memory model:
-- Project Cards = long-term. WorkingSet = per-turn. Session memory = ephemeral.`,
+- Artifact = source of truth. Fact = durable memory. Focus = session attention. Task Anchor = progress continuity.`,
 
 
 // ---------------------------------------------------------------------------

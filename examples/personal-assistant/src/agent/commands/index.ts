@@ -35,9 +35,7 @@ export {
   memoryExplainBudget
 } from './memory-explain.js'
 
-// Legacy compatibility wrappers
-export { saveNote } from './save-note.js'
-export { saveDoc } from './save-doc.js'
+// Read/list convenience commands
 export { deleteEntity } from './delete.js'
 export { listNotes, listDocs, listEmailMessages, listCalendarEvents } from './list.js'
 export { listTodos } from './list-todos.js'
@@ -49,9 +47,6 @@ export type { ArtifactCreateResult, ArtifactUpdateResult, ArtifactDeleteResult, 
 export type { FocusAddResult, FocusListResult, FocusRemoveResult, FocusPruneResult } from './focus.js'
 export type { TaskAnchorResult } from './task-anchor.js'
 export type { MemoryExplainResult } from './memory-explain.js'
-
-export type { SaveNoteResult } from './save-note.js'
-export type { SaveDocResult } from './save-doc.js'
 export type { DeleteResult } from './delete.js'
 export type { NoteListItem, DocListItem, MailListItem, CalendarListItem } from './list.js'
 export type { TodoListItem } from './list-todos.js'

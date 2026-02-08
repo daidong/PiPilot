@@ -1,5 +1,5 @@
 /**
- * Legacy todo list wrapper over Memory V2 artifacts.
+ * Todo list helper over Memory V2 artifacts.
  */
 
 import { artifactList } from './artifact.js'
@@ -12,9 +12,6 @@ export interface TodoListItem {
   status: 'pending' | 'completed'
   completedAt?: string
   tags: string[]
-  projectCard: boolean
-  pinned: boolean
-  selectedForAI: boolean
   provenance?: Provenance
   createdAt: string
   updatedAt: string
@@ -30,9 +27,6 @@ export function listTodos(projectPath: string): TodoListItem[] {
       status: todo.status,
       completedAt: todo.completedAt,
       tags: todo.tags,
-      projectCard: false,
-      pinned: false,
-      selectedForAI: false,
       provenance: todo.provenance,
       createdAt: todo.createdAt,
       updatedAt: todo.updatedAt

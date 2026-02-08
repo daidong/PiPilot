@@ -7,7 +7,7 @@
  * IMPORTANT: This pack sets up runtime.memoryStorage which is required by:
  * - memory-put, memory-update, memory-delete tools
  * - memory.get, memory.search, memory.list context sources
- * - Kernel V2 for auto-loading project cards
+ * - Kernel V2 durable memory and retrieval pipeline
  */
 
 import { definePack } from '../factories/define-pack.js'

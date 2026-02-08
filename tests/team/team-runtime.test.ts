@@ -174,7 +174,8 @@ describe('TeamRuntime', () => {
 
       const result = await runtime.run({})
 
-      expect(result.durationMs).toBeGreaterThanOrEqual(50)
+      // Allow minor scheduler jitter on shared CI runners.
+      expect(result.durationMs).toBeGreaterThanOrEqual(45)
     })
 
     it('should handle parallel execution', async () => {

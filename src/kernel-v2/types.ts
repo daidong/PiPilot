@@ -34,7 +34,6 @@ export interface KernelV2Config {
   }
   memory?: {
     writeGate?: {
-      enforced?: boolean
       maxWritesPerTurn?: number
       maxWritesPerSession?: number
     }
@@ -43,18 +42,11 @@ export interface KernelV2Config {
     enabled?: boolean
     preFlush?: {
       enabled?: boolean
-      timeoutMs?: number
       writeReserve?: number
-      promptTemplate?: string
-      allowNoOp?: boolean
-      fallbackOnTimeout?: 'skip'
     }
     requireReplayRefs?: boolean
   }
   retrieval?: {
-    hybrid?: boolean
-    vectorWeight?: number
-    lexicalWeight?: number
     fallbackChain?: Array<'hybrid' | 'lexical' | 'vector-only' | 'raw-file-scan'>
     rawScanLimitTokens?: number
   }
@@ -103,7 +95,6 @@ export interface KernelV2ResolvedConfig {
   }
   memory: {
     writeGate: {
-      enforced: true
       maxWritesPerTurn: number
       maxWritesPerSession: number
     }
@@ -112,18 +103,11 @@ export interface KernelV2ResolvedConfig {
     enabled: boolean
     preFlush: {
       enabled: boolean
-      timeoutMs: number
       writeReserve: number
-      promptTemplate: string
-      allowNoOp: boolean
-      fallbackOnTimeout: 'skip'
     }
     requireReplayRefs: boolean
   }
   retrieval: {
-    hybrid: boolean
-    vectorWeight: number
-    lexicalWeight: number
     fallbackChain: Array<'hybrid' | 'lexical' | 'vector-only' | 'raw-file-scan'>
     rawScanLimitTokens: number
   }

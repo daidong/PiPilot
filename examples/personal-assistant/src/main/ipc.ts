@@ -11,7 +11,6 @@ import {
   taskAnchorGet, taskAnchorSet, taskAnchorUpdate,
   memoryExplainTurn, memoryExplainFact, memoryExplainBudget
 } from '@personal-assistant/commands/index'
-import { saveDoc } from '@personal-assistant/commands/save-doc'
 import { parseMentions, resolveMentions, getCandidates } from '@personal-assistant/mentions/index'
 import { setCachedMarkdown, fileUriToPath } from '@personal-assistant/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@personal-assistant/types'
@@ -309,22 +308,6 @@ const fmt = createActivityFormatter({
       match: 'convert_to_markdown',
       formatCall: (_, a) => ({ label: `Convert: ${getFileName((a.uri as string) || '')}`, icon: 'file' }),
       formatResult: (_, _r, a) => ({ label: `Converted ${getFileName((a?.uri as string) || '')}`, icon: 'file' }),
-    },
-    {
-      match: 'save-note',
-      formatCall: (_, a) => ({ label: `Save note: ${((a.title as string) || 'note').slice(0, 35)}`, icon: 'file' }),
-      formatResult: (_, r) => {
-        const title = ((r.data as any)?.title as string) || ''
-        return { label: title ? `Saved note: ${title.slice(0, 30)}` : 'Saved note', icon: 'file' }
-      }
-    },
-    {
-      match: 'save-doc',
-      formatCall: (_, a) => ({ label: `Save doc: ${((a.title as string) || 'doc').slice(0, 35)}`, icon: 'file' }),
-      formatResult: (_, r) => {
-        const title = ((r.data as any)?.title as string) || ''
-        return { label: title ? `Saved doc: ${title.slice(0, 30)}` : 'Saved doc', icon: 'file' }
-      }
     },
     {
       match: 'artifact-create',
@@ -760,18 +743,11 @@ async function ensureCoordinator(
           }
         }
 
-        // Notify UI to refresh entity lists when artifacts are created/saved.
-        if ((tool === 'save-note' || tool === 'save-doc' || tool === 'artifact-create') && result && typeof result === 'object' && 'success' in result) {
+        // Notify UI to refresh entity lists when artifacts are created.
+        if (tool === 'artifact-create' && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success) {
-            // save-note can create either 'note' or 'todo' based on type parameter
-            const entityType =
-              r.data?.type ||
-              (tool === 'save-note'
-                ? 'note'
-                : tool === 'save-doc'
-                  ? 'doc'
-                  : 'artifact')
+            const entityType = r.data?.type || 'artifact'
             safeSend(win, 'agent:entity-created', {
               type: entityType,
               id: r.data?.id,
@@ -1183,13 +1159,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  // Commands - save
-  ipcMain.handle('cmd:save-doc', (_e, title: string, filePath: string, content?: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return saveDoc(title, { filePath, content }, { sessionId, projectPath })
-  })
-
-
   // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
   ipcMain.handle('mention:candidates', (_e, query: string, type?: string) => {
     if (!projectPath) return []
@@ -1440,9 +1409,18 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         }
       }
 
-      return saveDoc(title, {
+      return artifactCreate({
+        type: 'doc',
+        title,
         filePath: destPath,
-        content: extractedContent
+        content: extractedContent,
+        summary: extractedContent
+          ? `Converted from ${fileName} (markdown extracted)`
+          : `Imported document ${fileName}`,
+        provenance: {
+          source: 'user',
+          extractedFrom: 'file-import'
+        }
       }, { sessionId, projectPath })
     }
 

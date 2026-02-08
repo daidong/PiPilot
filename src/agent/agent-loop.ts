@@ -83,9 +83,6 @@ export interface AgentLoopConfig {
   /** Max tokens per tool result (default: 4096) */
   toolResultCap?: number
 
-  /** Selected context to inject as separate message */
-  selectedContext?: string
-
   /** Token tracker for usage and cost tracking */
   tokenTracker?: TokenTracker
 
@@ -278,7 +275,7 @@ export class AgentLoop {
     this.config.trace.startRun(runId, startTime)
     const runSpanId = this.config.trace.startSpan('agent.run', { prompt: userPrompt })
 
-    const finalizeTrace = (params: { success: boolean; steps: number; error?: string; usage?: UsageSummary }) => {
+    const finalizeTrace = async (params: { success: boolean; steps: number; error?: string; usage?: UsageSummary }) => {
       this.config.trace.setRunOutcome({
         success: params.success,
         error: params.error,
@@ -291,7 +288,7 @@ export class AgentLoop {
         steps: params.steps,
         error: params.error
       })
-      this.config.trace.flush()
+      await this.config.trace.flush()
     }
 
     // Record start
@@ -299,14 +296,6 @@ export class AgentLoop {
       type: 'agent.start',
       data: { prompt: userPrompt }
     })
-
-    // Inject selected context as a separate message before the user message
-    if (this.config.selectedContext) {
-      this.messages.push({
-        role: 'user',
-        content: `[REFERENCE MATERIAL]\n<selected-context>\n${this.config.selectedContext}\n</selected-context>`
-      })
-    }
 
     // Add user message
     this.messages.push({
@@ -383,13 +372,15 @@ export class AgentLoop {
         if (this.config.debug) {
           // Extract working-context metadata from system prompt
           const hasWorkingContext = systemPrompt.includes('<working-context>')
-          const projectMatch = systemPrompt.match(/## Project Cards\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
-          const projectCount = projectMatch ? (projectMatch.match(/^### /gm) || []).length : 0
-          const projectCardsCount = projectCount
-          const selectedMatch = systemPrompt.match(/## Selected Context\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
+          const memoryMatch = systemPrompt.match(/## Memory Cards\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
+          const memoryCardsCount = memoryMatch ? (memoryMatch.match(/^- /gm) || []).length : 0
+          const selectedMatch = systemPrompt.match(/## Optional Expansion\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
           const selectedCount = selectedMatch ? (selectedMatch.match(/^### /gm) || []).length : 0
-          const sessionMatch = systemPrompt.match(/## Prior Conversation\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
-          const sessionMsgCount = sessionMatch ? (sessionMatch.match(/^\*\*(User|Assistant|Tool)\*\*/gm) || []).length : 0
+          const historyMatch = systemPrompt.match(/## Non-Protected History\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
+          const protectedMatch = systemPrompt.match(/## Protected Recent Turns\n([\s\S]*?)(?=\n## |<\/working-context>)/)?.[1]
+          const historyMsgCount = historyMatch ? (historyMatch.match(/^\*\*(User|Assistant|Tool)\*\*/gm) || []).length : 0
+          const protectedMsgCount = protectedMatch ? (protectedMatch.match(/^\*\*(User|Assistant|Tool)\*\*/gm) || []).length : 0
+          const sessionMsgCount = historyMsgCount + protectedMsgCount
           const excludedMatch = systemPrompt.match(/\[(\d+) earlier messages in index/)
           const excludedCount = excludedMatch?.[1] ? parseInt(excludedMatch[1], 10) : 0
 
@@ -403,7 +394,7 @@ export class AgentLoop {
 
           console.error('[AgentLoop:debug] === LLM Request ===')
           console.error('[AgentLoop:debug] System prompt:', systemPrompt.length, 'chars |', hasWorkingContext ? 'has working-context' : 'no working-context')
-          console.error('[AgentLoop:debug] Context — project cards:', projectCardsCount, '| selected:', selectedCount, '| history msgs:', sessionMsgCount, '| excluded (indexed):', excludedCount)
+          console.error('[AgentLoop:debug] Context — memory cards:', memoryCardsCount, '| selected:', selectedCount, '| history msgs:', sessionMsgCount, '| excluded (indexed):', excludedCount)
           console.error('[AgentLoop:debug] Messages:', messagesToSend.length, `(${msgSummary})`)
           console.error('[AgentLoop:debug] Tools:', tools.length, '(' + tools.map(t => t.name).join(', ') + ')')
           console.error('[AgentLoop:debug] Round hint:', roundHint, '| maxTokens:', maxTokensForRound)
@@ -576,7 +567,7 @@ export class AgentLoop {
             durationMs: Date.now() - startTime,
             usage: usageSummary
           }
-          finalizeTrace({ success: false, steps: step, error: errorMessage, usage: usageSummary })
+          await finalizeTrace({ success: false, steps: step, error: errorMessage, usage: usageSummary })
           return result
         }
 
@@ -1047,7 +1038,7 @@ export class AgentLoop {
         durationMs: Date.now() - startTime,
         usage: usageSummary
       }
-      finalizeTrace({ success: true, steps: step, usage: usageSummary })
+      await finalizeTrace({ success: true, steps: step, usage: usageSummary })
       return result
     } catch (error) {
       const errorMessage =
@@ -1086,7 +1077,7 @@ export class AgentLoop {
         durationMs: Date.now() - startTime,
         usage: usageSummary
       }
-      finalizeTrace({ success: false, steps: step, error: errorMessage, usage: usageSummary })
+      await finalizeTrace({ success: false, steps: step, error: errorMessage, usage: usageSummary })
       return result
     }
   }

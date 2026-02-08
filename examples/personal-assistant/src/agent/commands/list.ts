@@ -1,5 +1,5 @@
 /**
- * Legacy list wrappers over Memory V2 artifacts.
+ * List helpers over Memory V2 artifacts.
  */
 
 import { artifactList } from './artifact.js'
@@ -10,9 +10,6 @@ export interface NoteListItem {
   title: string
   content: string
   tags: string[]
-  projectCard: boolean
-  pinned: boolean
-  selectedForAI: boolean
   provenance?: Provenance
 }
 
@@ -22,9 +19,6 @@ export interface DocListItem {
   filePath: string
   mimeType?: string
   description?: string
-  projectCard: boolean
-  pinned: boolean
-  selectedForAI: boolean
   tags?: string[]
   provenance?: Provenance
 }
@@ -58,9 +52,6 @@ export function listNotes(projectPath: string): NoteListItem[] {
       title: note.title,
       content: note.content,
       tags: note.tags,
-      projectCard: false,
-      pinned: false,
-      selectedForAI: false,
       provenance: note.provenance
     }))
 }
@@ -74,9 +65,6 @@ export function listDocs(projectPath: string): DocListItem[] {
       filePath: doc.filePath,
       mimeType: doc.mimeType,
       description: doc.description,
-      projectCard: false,
-      pinned: false,
-      selectedForAI: false,
       tags: doc.tags,
       provenance: doc.provenance
     }))

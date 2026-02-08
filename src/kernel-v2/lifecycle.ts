@@ -22,6 +22,10 @@ function daysBetween(a: Date, b: Date): number {
   return Math.floor((a.getTime() - b.getTime()) / (24 * 60 * 60 * 1000))
 }
 
+function isNotFoundError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
 export class MemoryLifecycleManager {
   private readonly metaPath: string
 
@@ -38,7 +42,11 @@ export class MemoryLifecycleManager {
     try {
       const raw = await fs.readFile(this.metaPath, 'utf-8')
       return JSON.parse(raw) as LifecycleMeta
-    } catch {
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[KernelV2Lifecycle] failed to read meta: ${message}`)
+      }
       return {}
     }
   }

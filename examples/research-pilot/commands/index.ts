@@ -35,8 +35,7 @@ export {
   memoryExplainBudget
 } from './memory-explain.js'
 
-// Legacy compatibility wrappers
-export { saveNote } from './save-note.js'
+// Compatibility wrappers
 export { savePaper, parseSavePaperArgs } from './save-paper.js'
 export { saveData, parseSaveDataArgs } from './save-data.js'
 export { deleteEntity } from './delete.js'
@@ -48,8 +47,6 @@ export type { ArtifactCreateResult, ArtifactUpdateResult, ArtifactDeleteResult, 
 export type { FocusAddResult, FocusListResult, FocusRemoveResult, FocusPruneResult } from './focus.js'
 export type { TaskAnchorResult } from './task-anchor.js'
 export type { MemoryExplainResult } from './memory-explain.js'
-
-export type { SaveNoteResult } from './save-note.js'
 export type { SavePaperResult } from './save-paper.js'
 export type { SaveDataResult } from './save-data.js'
 export type { DeleteResult } from './delete.js'

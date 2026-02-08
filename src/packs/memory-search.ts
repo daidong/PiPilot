@@ -97,19 +97,35 @@ const memoryGetTool = defineTool({
       return { success: false, error: 'Memory index not initialized' }
     }
 
-    // Resolve relative paths against project root
-    const { resolve } = require('path')
-    const projectPath = (context.runtime as any).projectPath || process.cwd()
-    const absPath = resolve(projectPath, input.path)
+    const startLine = input.startLine
+    const endLine = input.endLine
+    if (startLine !== undefined && startLine < 1) {
+      return { success: false, error: 'startLine must be >= 1' }
+    }
+    if (endLine !== undefined && endLine < 1) {
+      return { success: false, error: 'endLine must be >= 1' }
+    }
+    if (startLine !== undefined && endLine !== undefined && endLine < startLine) {
+      return { success: false, error: 'endLine must be >= startLine' }
+    }
 
-    const content = index.get(absPath, input.startLine, input.endLine)
-    if (content === null) {
-      return { success: false, error: `File not found: ${input.path}` }
+    const offset = startLine ? startLine - 1 : 0
+    const limit = startLine !== undefined && endLine !== undefined
+      ? (endLine - startLine + 1)
+      : undefined
+
+    // Read through runtime.io so path/policy controls are enforced.
+    const result = await context.runtime.io.readFile(input.path, {
+      offset,
+      limit
+    })
+    if (!result.success) {
+      return { success: false, error: result.error ?? `Failed to read: ${input.path}` }
     }
 
     return {
       success: true,
-      data: { content }
+      data: { content: result.data ?? '' }
     }
   }
 })

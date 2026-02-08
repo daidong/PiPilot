@@ -237,6 +237,15 @@ export class TeamRuntime {
 
     try {
       // Create execution context
+      const validatorRegistry = this.team.validators
+        ? Object.fromEntries(
+            this.team.validators.map(v => [
+              v.id,
+              { description: v.description, validate: v.validate }
+            ])
+          )
+        : undefined
+
       const ctx: ExecutionContext = {
         runId,
         step,
@@ -339,7 +348,8 @@ export class TeamRuntime {
             throw error
           }
         },
-        concurrency: this.team.defaults?.concurrency ?? 4
+        concurrency: this.team.defaults?.concurrency ?? 4,
+        validators: validatorRegistry
       }
 
       // Execute the flow

@@ -22,6 +22,10 @@ import type {
 } from './types.js'
 import { FRAMEWORK_DIR } from '../constants.js'
 
+const LOCK_RETRY_LIMIT = 80
+const LOCK_RETRY_DELAY_MS = 25
+const LOCK_STALE_MS = 30_000
+
 function nowIso(): string {
   return new Date().toISOString()
 }
@@ -30,50 +34,165 @@ function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`
 }
 
-function safeJsonParse<T>(line: string): T | null {
-  try {
-    return JSON.parse(line) as T
-  } catch {
-    return null
-  }
+function isNodeError(value: unknown): value is NodeJS.ErrnoException {
+  return value instanceof Error
+}
+
+function isNotFoundError(value: unknown): boolean {
+  return isNodeError(value) && value.code === 'ENOENT'
+}
+
+function warnStorageError(code: string, filePath: string, error: unknown, details?: Record<string, unknown>): void {
+  const message = isNodeError(error) ? error.message : String(error)
+  const suffix = details
+    ? ` details=${JSON.stringify(details)}`
+    : ''
+  console.warn(`[KernelV2Storage] ${code} path=${filePath} message=${message}${suffix}`)
 }
 
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
 
-async function appendJsonl(filePath: string, record: unknown): Promise<void> {
+async function sleep(ms: number): Promise<void> {
+  await new Promise<void>(resolve => setTimeout(resolve, ms))
+}
+
+async function acquireLock(lockPath: string): Promise<fs.FileHandle> {
+  await ensureDir(path.dirname(lockPath))
+
+  for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt += 1) {
+    try {
+      const handle = await fs.open(lockPath, 'wx')
+      try {
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: nowIso() }), 'utf-8')
+      } catch {
+        // Best effort lock metadata.
+      }
+      return handle
+    } catch (error: any) {
+      if (error?.code !== 'EEXIST') {
+        throw error
+      }
+
+      try {
+        const stat = await fs.stat(lockPath)
+        if ((Date.now() - stat.mtimeMs) > LOCK_STALE_MS) {
+          await fs.unlink(lockPath)
+          continue
+        }
+      } catch {
+        // Lock file may disappear between stat/unlink attempts.
+      }
+
+      if (attempt === LOCK_RETRY_LIMIT - 1) {
+        throw new Error(`KV2_E_LOCK_TIMEOUT:${lockPath}`)
+      }
+
+      await sleep(LOCK_RETRY_DELAY_MS)
+    }
+  }
+
+  throw new Error(`KV2_E_LOCK_TIMEOUT:${lockPath}`)
+}
+
+async function releaseLock(lockPath: string, handle: fs.FileHandle): Promise<void> {
+  try {
+    await handle.close()
+  } catch {
+    // Ignore lock close errors.
+  }
+  try {
+    await fs.unlink(lockPath)
+  } catch {
+    // Ignore lock cleanup errors.
+  }
+}
+
+async function withFileLock<T>(filePath: string, op: () => Promise<T>): Promise<T> {
+  const lockPath = `${filePath}.lock`
+  const handle = await acquireLock(lockPath)
+  try {
+    return await op()
+  } finally {
+    await releaseLock(lockPath, handle)
+  }
+}
+
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  await ensureDir(path.dirname(filePath))
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  await fs.writeFile(tmpPath, content, 'utf-8')
+  try {
+    await fs.rename(tmpPath, filePath)
+  } catch (error: any) {
+    if (error?.code === 'EEXIST' || error?.code === 'EPERM') {
+      await fs.unlink(filePath).catch(() => {})
+      await fs.rename(tmpPath, filePath)
+    } else {
+      throw error
+    }
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {})
+  }
+}
+
+async function appendJsonlUnsafe(filePath: string, record: unknown): Promise<void> {
   await ensureDir(path.dirname(filePath))
   await fs.appendFile(filePath, JSON.stringify(record) + '\n', 'utf-8')
 }
 
+async function appendJsonl(filePath: string, record: unknown): Promise<void> {
+  await withFileLock(filePath, async () => {
+    await appendJsonlUnsafe(filePath, record)
+  })
+}
+
 async function readJsonl<T>(filePath: string): Promise<T[]> {
+  let raw: string
   try {
-    const raw = await fs.readFile(filePath, 'utf-8')
-    const lines = raw.split(/\r?\n/).filter(Boolean)
-    const out: T[] = []
-    for (const line of lines) {
-      const parsed = safeJsonParse<T>(line)
-      if (parsed) out.push(parsed)
-    }
-    return out
-  } catch {
+    raw = await fs.readFile(filePath, 'utf-8')
+  } catch (error) {
+    if (isNotFoundError(error)) return []
+    warnStorageError('KV2_E_IO_READ', filePath, error)
     return []
   }
+
+  const lines = raw.split(/\r?\n/).filter(Boolean)
+  const out: T[] = []
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!
+    try {
+      out.push(JSON.parse(line) as T)
+    } catch (error) {
+      warnStorageError('KV2_E_PARSE_JSONL', filePath, error, { line: i + 1 })
+    }
+  }
+  return out
 }
 
 async function readJsonFile<T>(filePath: string): Promise<T | null> {
+  let raw: string
   try {
-    const raw = await fs.readFile(filePath, 'utf-8')
+    raw = await fs.readFile(filePath, 'utf-8')
+  } catch (error) {
+    if (isNotFoundError(error)) return null
+    warnStorageError('KV2_E_IO_READ', filePath, error)
+    return null
+  }
+
+  try {
     return JSON.parse(raw) as T
-  } catch {
+  } catch (error) {
+    warnStorageError('KV2_E_PARSE_JSON', filePath, error)
     return null
   }
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  await ensureDir(path.dirname(filePath))
-  await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf-8')
+  await withFileLock(filePath, async () => {
+    await writeFileAtomic(filePath, JSON.stringify(value, null, 2))
+  })
 }
 
 function tokenize(text: string): string[] {
@@ -112,6 +231,13 @@ function toMemoryItem(fact: V2MemoryFact): MemoryItem {
   }
 }
 
+interface LatestMemoryItemFilters {
+  namespace?: MemoryNamespace
+  tags?: string[]
+  status?: 'active' | 'deprecated' | 'all'
+  sensitivity?: MemorySearchOptions['sensitivity']
+}
+
 export interface KernelV2Paths {
   root: string
   turnsFile: (sessionId: string) => string
@@ -127,7 +253,8 @@ export interface KernelV2Paths {
 
 export class KernelV2Storage {
   readonly paths: KernelV2Paths
-  private turnIndexCache = new Map<string, number>()
+  private latestMemoryFactsByKeyCache: Map<string, V2MemoryFact> | null = null
+  private latestMemoryFactsCacheDirty = true
 
   constructor(private readonly projectPath: string) {
     const root = path.join(projectPath, FRAMEWORK_DIR)
@@ -175,8 +302,12 @@ export class KernelV2Storage {
             break
           }
         }
-      } catch {
-        // Missing files are acceptable before first write.
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          // Missing files are acceptable before first write.
+          continue
+        }
+        warnStorageError('KV2_E_IO_READ', file, error)
       }
     }
     return { ok: issues.length === 0, issues }
@@ -203,22 +334,26 @@ export class KernelV2Storage {
       }
 
       try {
-        if (createSnapshot) {
-          const snapshotDir = path.join(this.paths.root, 'recovery', 'snapshots')
-          await ensureDir(snapshotDir)
-          const base = path.basename(issue.path)
-          const snapshotPath = path.join(snapshotDir, `${base}.${Date.now().toString(36)}.bak`)
-          await fs.copyFile(issue.path, snapshotPath)
-        }
+        await withFileLock(issue.path, async () => {
+          if (createSnapshot) {
+            const snapshotDir = path.join(this.paths.root, 'recovery', 'snapshots')
+            await ensureDir(snapshotDir)
+            const base = path.basename(issue.path)
+            const snapshotPath = path.join(snapshotDir, `${base}.${Date.now().toString(36)}.bak`)
+            await fs.copyFile(issue.path, snapshotPath)
+          }
 
-        const raw = await fs.readFile(issue.path, 'utf-8')
-        const truncated = raw.slice(0, issue.lastValidOffset)
-        await fs.writeFile(issue.path, truncated, 'utf-8')
+          const raw = await fs.readFile(issue.path, 'utf-8')
+          const truncated = raw.slice(0, issue.lastValidOffset)
+          await writeFileAtomic(issue.path, truncated)
+        })
         recovered += 1
       } catch {
         failed += 1
       }
     }
+
+    this.latestMemoryFactsCacheDirty = true
 
     return { recovered, failed, issues }
   }
@@ -228,21 +363,23 @@ export class KernelV2Storage {
     const name = path.basename(rootPath) || 'workspace'
     const projectId = `proj_${name.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`
 
-    const all = await readJsonl<V2ProjectRecord>(this.paths.projectRegistry)
-    const existing = all.find(p => p.projectId === projectId && p.status === 'registered')
-    if (existing) return existing
+    return withFileLock(this.paths.projectRegistry, async () => {
+      const all = await readJsonl<V2ProjectRecord>(this.paths.projectRegistry)
+      const existing = all.find(p => p.projectId === projectId && p.status === 'registered')
+      if (existing) return existing
 
-    const record: V2ProjectRecord = {
-      projectId,
-      name,
-      rootPath,
-      detectionStrategy: 'path-based',
-      status: 'registered',
-      defaultForWorkspace: true,
-      updatedAt: nowIso()
-    }
-    await appendJsonl(this.paths.projectRegistry, record)
-    return record
+      const record: V2ProjectRecord = {
+        projectId,
+        name,
+        rootPath,
+        detectionStrategy: 'path-based',
+        status: 'registered',
+        defaultForWorkspace: true,
+        updatedAt: nowIso()
+      }
+      await appendJsonlUnsafe(this.paths.projectRegistry, record)
+      return record
+    })
   }
 
   async listProjects(): Promise<V2ProjectRecord[]> {
@@ -272,24 +409,22 @@ export class KernelV2Storage {
 
   async appendTurn(sessionId: string, input: V2TurnUpsertInput): Promise<V2TurnRecord> {
     const turnsFile = this.paths.turnsFile(sessionId)
-    let nextIndex = this.turnIndexCache.get(sessionId)
-    if (nextIndex === undefined) {
+    return withFileLock(turnsFile, async () => {
       const turns = await readJsonl<V2TurnRecord>(turnsFile)
-      nextIndex = turns.length > 0 ? turns[turns.length - 1]!.index + 1 : 1
-    }
+      const nextIndex = turns.length > 0 ? turns[turns.length - 1]!.index + 1 : 1
 
-    const turn: V2TurnRecord = {
-      id: generateId('turn'),
-      sessionId,
-      index: nextIndex,
-      role: input.role,
-      content: input.content,
-      createdAt: input.createdAt ?? nowIso()
-    }
+      const turn: V2TurnRecord = {
+        id: generateId('turn'),
+        sessionId,
+        index: nextIndex,
+        role: input.role,
+        content: input.content,
+        createdAt: input.createdAt ?? nowIso()
+      }
 
-    this.turnIndexCache.set(sessionId, nextIndex + 1)
-    await appendJsonl(turnsFile, turn)
-    return turn
+      await appendJsonlUnsafe(turnsFile, turn)
+      return turn
+    })
   }
 
   async getSessionTurns(sessionId: string): Promise<V2TurnRecord[]> {
@@ -310,15 +445,17 @@ export class KernelV2Storage {
 
   async upsertTask(task: V2TaskState): Promise<void> {
     const file = this.paths.tasksFile(task.projectId)
-    const tasks = await readJsonl<V2TaskState>(file)
-    const idx = tasks.findIndex(t => t.taskId === task.taskId)
-    if (idx >= 0) {
-      tasks[idx] = task
-    } else {
-      tasks.push(task)
-    }
-    await ensureDir(path.dirname(file))
-    await fs.writeFile(file, tasks.map(t => JSON.stringify(t)).join('\n') + (tasks.length > 0 ? '\n' : ''), 'utf-8')
+    await withFileLock(file, async () => {
+      const tasks = await readJsonl<V2TaskState>(file)
+      const idx = tasks.findIndex(t => t.taskId === task.taskId)
+      if (idx >= 0) {
+        tasks[idx] = task
+      } else {
+        tasks.push(task)
+      }
+      const serialized = tasks.map(t => JSON.stringify(t)).join('\n') + (tasks.length > 0 ? '\n' : '')
+      await writeFileAtomic(file, serialized)
+    })
   }
 
   async listTasks(projectId: string): Promise<V2TaskState[]> {
@@ -353,7 +490,10 @@ export class KernelV2Storage {
       }
       records.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
       return records.slice(0, maxCount)
-    } catch {
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        warnStorageError('KV2_E_IO_READ', folder, error)
+      }
       return []
     }
   }
@@ -365,8 +505,10 @@ export class KernelV2Storage {
   }
 
   async getLatestMemoryFact(namespace: MemoryNamespace, key: string): Promise<V2MemoryFact | null> {
-    const facts = await this.listMemoryFacts()
-    return facts.find(f => f.namespace === namespace && f.key === key && f.status !== 'superseded') ?? null
+    const latestByKey = await this.getLatestMemoryFactsByKeyMap()
+    const found = latestByKey.get(`${namespace}:${key}`)
+    if (!found || found.status === 'superseded') return null
+    return found
   }
 
   async putMemoryFact(
@@ -381,6 +523,7 @@ export class KernelV2Storage {
       updatedAt: options?.updatedAt ?? now
     }
     await appendJsonl(this.paths.memoryFactsFile, full)
+    this.latestMemoryFactsCacheDirty = true
     return full
   }
 
@@ -391,6 +534,7 @@ export class KernelV2Storage {
       updatedAt: nowIso()
     }
     await appendJsonl(this.paths.memoryFactsFile, superseded)
+    this.latestMemoryFactsCacheDirty = true
     return superseded
   }
 
@@ -401,6 +545,7 @@ export class KernelV2Storage {
       updatedAt: nowIso()
     }
     await appendJsonl(this.paths.memoryFactsFile, deprecated)
+    this.latestMemoryFactsCacheDirty = true
     return deprecated
   }
 
@@ -445,19 +590,46 @@ export class KernelV2Storage {
   }
 
   async listLatestMemoryFactsByKey(): Promise<V2MemoryFact[]> {
-    const facts = await this.listMemoryFacts()
-    const latest = new Map<string, V2MemoryFact>()
-    for (const fact of facts) {
-      const fk = `${fact.namespace}:${fact.key}`
-      if (!latest.has(fk)) {
-        latest.set(fk, fact)
-      }
-    }
-    return [...latest.values()]
+    const latest = await this.getLatestMemoryFactsByKeyMap()
+    const values = [...latest.values()]
+    values.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    return values
   }
 
-  async listActiveMemoryItems(options?: MemoryListOptions): Promise<{ items: MemoryItem[]; total: number }> {
-    const facts = await this.listMemoryFacts()
+  private async listLatestMemoryItems(filters?: LatestMemoryItemFilters): Promise<MemoryItem[]> {
+    const latestByKey = await this.getLatestMemoryFactsByKeyMap()
+    let items = [...latestByKey.values()]
+      .filter(f => f.status !== 'superseded')
+      .map(toMemoryItem)
+
+    if (filters?.namespace) {
+      items = items.filter(i => i.namespace === filters.namespace)
+    }
+
+    if (filters?.tags && filters.tags.length > 0) {
+      const tagSet = new Set(filters.tags)
+      items = items.filter(i => i.tags.some(t => tagSet.has(t)))
+    }
+
+    if (filters?.status && filters.status !== 'all') {
+      items = items.filter(i => i.status === filters.status)
+    }
+
+    if (filters?.sensitivity && filters.sensitivity !== 'all') {
+      items = items.filter(i => i.sensitivity === filters.sensitivity)
+    }
+
+    return items
+  }
+
+  private async getLatestMemoryFactsByKeyMap(): Promise<Map<string, V2MemoryFact>> {
+    if (this.latestMemoryFactsByKeyCache && !this.latestMemoryFactsCacheDirty) {
+      return this.latestMemoryFactsByKeyCache
+    }
+
+    const facts = await readJsonl<V2MemoryFact>(this.paths.memoryFactsFile)
+    facts.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+
     const latestByKey = new Map<string, V2MemoryFact>()
     for (const fact of facts) {
       const fk = `${fact.namespace}:${fact.key}`
@@ -466,22 +638,17 @@ export class KernelV2Storage {
       }
     }
 
-    let items = [...latestByKey.values()]
-      .filter(f => f.status !== 'superseded')
-      .map(toMemoryItem)
+    this.latestMemoryFactsByKeyCache = latestByKey
+    this.latestMemoryFactsCacheDirty = false
+    return latestByKey
+  }
 
-    if (options?.namespace) {
-      items = items.filter(i => i.namespace === options.namespace)
-    }
-
-    if (options?.tags && options.tags.length > 0) {
-      const tagSet = new Set(options.tags)
-      items = items.filter(i => i.tags.some(t => tagSet.has(t)))
-    }
-
-    if (options?.status && options.status !== 'all') {
-      items = items.filter(i => i.status === options.status)
-    }
+  async listActiveMemoryItems(options?: MemoryListOptions): Promise<{ items: MemoryItem[]; total: number }> {
+    let items = await this.listLatestMemoryItems({
+      namespace: options?.namespace,
+      tags: options?.tags,
+      status: options?.status
+    })
 
     const total = items.length
     const offset = options?.offset ?? 0
@@ -492,22 +659,16 @@ export class KernelV2Storage {
   }
 
   async searchMemoryItems(query: string, options?: MemorySearchOptions): Promise<MemorySearchResult[]> {
-    const listed = await this.listActiveMemoryItems({
+    const listed = await this.listLatestMemoryItems({
       namespace: options?.namespace,
       tags: options?.tags,
       status: options?.includeDeprecated ? 'all' : 'active',
-      limit: Number.MAX_SAFE_INTEGER,
-      offset: 0
+      sensitivity: options?.sensitivity
     })
 
     const queryTokens = tokenize(query)
-    const filtered = listed.items.filter(item => {
-      if (options?.sensitivity && options.sensitivity !== 'all') {
-        return item.sensitivity === options.sensitivity
-      }
-      if (!options?.sensitivity) {
-        return item.sensitivity !== 'sensitive'
-      }
+    const filtered = listed.filter(item => {
+      if (!options?.sensitivity) return item.sensitivity !== 'sensitive'
       return true
     })
 
@@ -528,7 +689,7 @@ export class KernelV2Storage {
   }
 
   async getMemoryStats(): Promise<{ totalItems: number; byNamespace: Record<string, number>; bySensitivity: Record<MemorySensitivity, number> }> {
-    const listed = await this.listActiveMemoryItems({ status: 'all', limit: Number.MAX_SAFE_INTEGER, offset: 0 })
+    const listed = await this.listLatestMemoryItems({ status: 'all' })
     const byNamespace: Record<string, number> = {}
     const bySensitivity: Record<MemorySensitivity, number> = {
       public: 0,
@@ -536,13 +697,13 @@ export class KernelV2Storage {
       sensitive: 0
     }
 
-    for (const item of listed.items) {
+    for (const item of listed) {
       byNamespace[item.namespace] = (byNamespace[item.namespace] ?? 0) + 1
       bySensitivity[item.sensitivity] = (bySensitivity[item.sensitivity] ?? 0) + 1
     }
 
     return {
-      totalItems: listed.total,
+      totalItems: listed.length,
       byNamespace,
       bySensitivity
     }
@@ -559,7 +720,10 @@ export class KernelV2Storage {
       const sessionsDir = path.join(this.paths.root, 'history', 'sessions')
       const dirs = await fs.readdir(sessionsDir)
       return dirs.length > 0
-    } catch {
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        warnStorageError('KV2_E_IO_READ', path.join(this.paths.root, 'history', 'sessions'), error)
+      }
       return false
     }
   }
@@ -570,7 +734,10 @@ export class KernelV2Storage {
       let entries: Dirent[]
       try {
         entries = await fs.readdir(dir, { withFileTypes: true })
-      } catch {
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          warnStorageError('KV2_E_IO_READ', dir, error)
+        }
         return
       }
       for (const entry of entries) {
@@ -595,7 +762,10 @@ export class KernelV2Storage {
         .filter(entry => entry.isDirectory())
         .map(entry => entry.name)
         .sort()
-    } catch {
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        warnStorageError('KV2_E_IO_READ', sessionsRoot, error)
+      }
       return []
     }
   }

@@ -14,6 +14,7 @@ import {
   choose,
   loop,
   gate,
+  race,
   join
 } from '../../src/team/flow/combinators.js'
 import type { ExecutionContext, AgentInvoker } from '../../src/team/flow/executor.js'
@@ -321,6 +322,60 @@ describe('Flow Executor', () => {
       expect(invokedAgents.length).toBe(1)
       expect(invokedAgents[0].agentId).toBe('notifier')
     })
+
+    it('should evaluate registered validator gates', async () => {
+      ctx.prevOutput = { approved: true }
+      ctx.validators = {
+        quality: {
+          description: 'quality check',
+          validate: (input) => ({ ok: Boolean((input as { approved?: boolean }).approved) })
+        }
+      }
+
+      const spec = gate(
+        { type: 'validator', validatorId: 'quality', input: inputRef.prev() },
+        buildInvoke('researcher', inputRef.initial()),
+        buildInvoke('notifier', inputRef.initial())
+      )
+
+      await executeFlow(spec, ctx)
+      expect(invokedAgents.length).toBe(1)
+      expect(invokedAgents[0].agentId).toBe('researcher')
+    })
+
+    it('should fail closed for human gate when no approver is configured', async () => {
+      const spec = gate(
+        { type: 'human', message: 'Approve publish?' },
+        buildInvoke('researcher', inputRef.initial()),
+        buildInvoke('notifier', inputRef.initial())
+      )
+
+      await executeFlow(spec, ctx)
+      expect(invokedAgents.length).toBe(1)
+      expect(invokedAgents[0].agentId).toBe('notifier')
+    })
+
+    it('should fallback to validator agent when validator is not registered', async () => {
+      ctx.agentRegistry = createAgentRegistry({
+        id: 'test-team',
+        agents: {
+          reviewer: { id: 'reviewer', agent: {} }
+        },
+        flow: buildInvoke('reviewer', inputRef.initial())
+      } as any)
+      ctx.prevOutput = { sample: 'input' }
+
+      const spec = gate(
+        { type: 'validator', validatorId: 'reviewer', input: inputRef.prev() },
+        buildInvoke('researcher', inputRef.initial()),
+        buildInvoke('notifier', inputRef.initial())
+      )
+
+      await executeFlow(spec, ctx)
+      expect(invokedAgents.length).toBe(2)
+      expect(invokedAgents[0].agentId).toBe('reviewer')
+      expect(invokedAgents[1].agentId).toBe('researcher')
+    })
   })
 
   describe('nested flows', () => {
@@ -367,6 +422,28 @@ describe('Flow Executor', () => {
       expect(invokedAgents.length).toBe(2)
       expect(invokedAgents[0].agentId).toBe('researcher')
       expect(invokedAgents[1].agentId).toBe('reviewer')
+    })
+  })
+
+  describe('race', () => {
+    it('should pick highestScore winner by output path', async () => {
+      ctx.invokeAgent = async (agentId) => {
+        if (agentId === 'a') return { score: 0.2, value: 'a' }
+        if (agentId === 'b') return { score: 0.9, value: 'b' }
+        return { score: 0.1, value: 'fallback' }
+      }
+
+      const spec = race(
+        [
+          buildInvoke('a', inputRef.initial()),
+          buildInvoke('b', inputRef.initial())
+        ],
+        { type: 'highestScore', path: 'score' }
+      )
+
+      const result = await executeFlow(spec, ctx)
+      expect(result.success).toBe(true)
+      expect(result.output).toEqual({ score: 0.9, value: 'b' })
     })
   })
 

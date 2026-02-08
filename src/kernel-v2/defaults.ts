@@ -27,7 +27,6 @@ export function resolveKernelV2Config(config: KernelV2Config | undefined, contex
     },
     memory: {
       writeGate: {
-        enforced: true,
         maxWritesPerTurn: config?.memory?.writeGate?.maxWritesPerTurn ?? 20,
         maxWritesPerSession: config?.memory?.writeGate?.maxWritesPerSession ?? 500
       }
@@ -36,19 +35,11 @@ export function resolveKernelV2Config(config: KernelV2Config | undefined, contex
       enabled: config?.compaction?.enabled ?? true,
       preFlush: {
         enabled: config?.compaction?.preFlush?.enabled ?? true,
-        timeoutMs: config?.compaction?.preFlush?.timeoutMs ?? 10000,
-        writeReserve: config?.compaction?.preFlush?.writeReserve ?? 5,
-        promptTemplate: config?.compaction?.preFlush?.promptTemplate
-          ?? 'Context nearing compaction. Save only durable, high-signal facts and task updates now. Ignore transient details.',
-        allowNoOp: config?.compaction?.preFlush?.allowNoOp ?? true,
-        fallbackOnTimeout: 'skip'
+        writeReserve: config?.compaction?.preFlush?.writeReserve ?? 5
       },
       requireReplayRefs: config?.compaction?.requireReplayRefs ?? true
     },
     retrieval: {
-      hybrid: config?.retrieval?.hybrid ?? true,
-      vectorWeight: config?.retrieval?.vectorWeight ?? 0.7,
-      lexicalWeight: config?.retrieval?.lexicalWeight ?? 0.3,
       fallbackChain: config?.retrieval?.fallbackChain ?? ['hybrid', 'lexical', 'vector-only', 'raw-file-scan'],
       rawScanLimitTokens: config?.retrieval?.rawScanLimitTokens ?? 10000
     },

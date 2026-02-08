@@ -12,7 +12,7 @@ src/
 │   ├── mentions/           # @-mention parser and resolver
 │   ├── memory-v2/          # App-local Memory V2 store helpers
 │   ├── scheduler/          # Cron scheduler + notification store
-│   ├── tools/              # Canonical tool surface + legacy aliases
+│   ├── tools/              # Canonical tool surface
 │   └── types.ts            # Shared types (artifacts, focus, task anchor, paths)
 ├── main/                   # Electron main process (IPC, lifecycle)
 ├── preload/                # Context bridge (renderer ↔ main)
@@ -41,7 +41,7 @@ docs/rfc/                   # Design documents
 - **Left Panel V2**: Tabs for Todos/Notes/Focus/Alerts and a virtualized workspace tree. (Docs, Mail, and Calendar tabs are hidden — backend support remains but the UI tabs are commented out to reduce clutter.)
 - **Context Visibility**: Focus chips + Task Anchor + Explain snapshot in normal UI.
 - **@-Mentions**: Entity mentions auto-promote focus; file/URL mentions are injected directly.
-- **Slash Commands**: Legacy commands retained (`/save-note`, `/save-doc`, `/search`, `/select`, `/pin`, `/clear`, `/delete`, `/help`).
+- **Slash Commands**: `/todo`, `/focus`, `/anchor`, `/explain`, `/search`, `/clear`, `/delete`, `/help`.
 - **Notifications**: Bell icon with unread badge, notification panel from scheduled task results.
 - **Session Persistence**: Chat history saved to disk, restorable across restarts.
 
@@ -58,7 +58,6 @@ docs/rfc/                   # Design documents
 | `sqlite` (optional) | sqlite_read_query, sqlite_list_tables, sqlite_describe_table |
 
 Canonical memory tools: `artifact-*`, `focus-*`, `task-anchor-*`, `memory-explain`, `fact-*`.
-Legacy aliases retained: `save-note`, `save-doc`, `update-note`, `toggle-complete`.
 
 ## Quick Start
 

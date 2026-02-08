@@ -30,6 +30,7 @@ export class MemoryIndex {
   private db!: Database.Database
   private watchers: FSWatcher[] = []
   private syncTimer: ReturnType<typeof setTimeout> | null = null
+  private indexedFiles = new Set<string>()
 
   constructor(
     private dbPath: string,
@@ -94,6 +95,7 @@ export class MemoryIndex {
    */
   async sync(): Promise<void> {
     const allFiles = this.collectMarkdownFiles()
+    this.indexedFiles = new Set(allFiles.map(file => resolve(file)))
     const existingFiles = new Map<string, { hash: string; mtime_ms: number }>()
 
     const rows = this.db.prepare('SELECT path, hash, mtime_ms FROM files').all() as Array<{ path: string; hash: string; mtime_ms: number }>
@@ -197,6 +199,7 @@ export class MemoryIndex {
    */
   get(path: string, startLine?: number, endLine?: number): string | null {
     const absPath = resolve(path)
+    if (!this.indexedFiles.has(absPath)) return null
     if (!existsSync(absPath)) return null
 
     const content = readFileSync(absPath, 'utf-8')

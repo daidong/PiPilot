@@ -8,7 +8,7 @@ import { MentionPopover } from './MentionPopover'
 import { CommandPopover } from './CommandPopover'
 
 const SLASH_COMMANDS = [
-  { name: '/save-note', description: 'Save content as a note', args: '<title>' },
+  { name: '/note', description: 'Create a note artifact', args: '<title>' },
   { name: '/save-paper', description: 'Save a literature entry', args: '<title> [--authors ...]' },
   { name: '/save-data', description: 'Attach a data file', args: '<name> --path <file>' },
   { name: '/notes', description: 'List all notes' },
@@ -102,8 +102,8 @@ export function ChatInput() {
             : `No results for "${rest}".`
           break
         }
-        case '/save-note': {
-          if (!rest) { result = 'Usage: `/save-note <title>`'; break }
+        case '/note': {
+          if (!rest) { result = 'Usage: `/note <title>`'; break }
           const r = await api.artifactCreate({ type: 'note', title: rest, content: '' })
           result = r?.success ? `Note saved: **${rest}**` : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
