@@ -1290,6 +1290,37 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
+  ipcMain.handle('file:write', (_e, filePath: string, content: string) => {
+    try {
+      if (!projectPath) {
+        return { success: false, error: 'No project folder selected.' }
+      }
+      if (typeof content !== 'string') {
+        return { success: false, error: 'Invalid content.' }
+      }
+      const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+      if (!isWithinRoot(projectPath, absPath)) {
+        return { success: false, error: 'Path is outside current workspace.' }
+      }
+      if (!existsSync(absPath)) {
+        return { success: false, error: 'File not found' }
+      }
+
+      const ext = extname(absPath).toLowerCase()
+      const editableTextExts = new Set([
+        '.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.xml', '.log', '.ini', '.toml', '.cfg'
+      ])
+      if (ext && !editableTextExts.has(ext)) {
+        return { success: false, error: 'Only text files can be edited in preview.' }
+      }
+
+      writeFileSync(absPath, content, 'utf-8')
+      return { success: true, path: absPath }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
   ipcMain.handle('file:create-artifact', (_e, filePath: string) => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
     const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)

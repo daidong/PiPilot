@@ -110,6 +110,7 @@ export interface ElectronAPI {
   // File tracking
   onFileCreated: (cb: (path: string) => void) => () => void
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
+  writeFile: (path: string, content: string) => Promise<{ success: boolean; path?: string; error?: string }>
   readFileBinary: (path: string) => Promise<{ success: boolean; base64?: string; mime?: string; error?: string }>
   resolvePath: (path: string) => Promise<{ success: boolean; absPath?: string; error?: string }>
   openFile: (path: string) => Promise<{ success: boolean; error?: string }>
@@ -256,6 +257,7 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:file-created', handler)
   },
   readFile: (path) => ipcRenderer.invoke('file:read', path),
+  writeFile: (path, content) => ipcRenderer.invoke('file:write', path, content),
   readFileBinary: (path) => ipcRenderer.invoke('file:read-binary', path),
   resolvePath: (path) => ipcRenderer.invoke('file:resolve-path', path),
   openFile: (path) => ipcRenderer.invoke('file:open-external', path),

@@ -1,0 +1,89 @@
+.entity-preview-milkdown-shell .milkdown {
+  --crepe-color-background: var(--color-bg-base);
+  --crepe-color-on-background: var(--color-text);
+  --crepe-color-surface: var(--color-bg-surface);
+  --crepe-color-surface-low: var(--color-bg-elevated);
+  --crepe-color-on-surface: var(--color-text);
+  --crepe-color-on-surface-variant: var(--color-text-secondary);
+  --crepe-color-outline: var(--color-border);
+  --crepe-color-primary: var(--color-accent);
+  --crepe-color-secondary: var(--color-bg-elevated);
+  --crepe-color-on-secondary: var(--color-text);
+  --crepe-color-inverse: var(--color-bg-surface);
+  --crepe-color-on-inverse: var(--color-text);
+  --crepe-color-inline-code: var(--color-code-text);
+  --crepe-color-error: #ef4444;
+  --crepe-color-hover: var(--color-bg-hover);
+  --crepe-color-selected: color-mix(in srgb, var(--color-accent-soft), transparent 72%);
+  --crepe-color-inline-area: color-mix(in srgb, var(--color-accent-soft), transparent 84%);
+
+  --crepe-font-title: 'Inter', system-ui, -apple-system, sans-serif;
+  --crepe-font-default: 'Inter', system-ui, -apple-system, sans-serif;
+  --crepe-font-code: 'SF Mono', 'Monaco', 'Menlo', 'Fira Code', monospace;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror {
+  padding: 18px 20px;
+  min-height: 280px;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror h1 {
+  font-family: var(--crepe-font-default);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 34px;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror h2 {
+  font-family: var(--crepe-font-default);
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 30px;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror h3 {
+  font-family: var(--crepe-font-default);
+  font-weight: 700;
+  font-size: 19px;
+  line-height: 27px;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror h4 {
+  font-family: var(--crepe-font-default);
+  font-weight: 700;
+  font-size: 17px;
+  line-height: 25px;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror h5 {
+  font-family: var(--crepe-font-default);
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 23px;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror h6 {
+  font-family: var(--crepe-font-default);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror p,
+.entity-preview-milkdown-shell .milkdown .ProseMirror li {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror pre {
+  border: 1px solid var(--color-border);
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror code {
+  border-radius: 4px;
+}
+
+.entity-preview-milkdown-shell .milkdown .milkdown-toolbar {
+  border-color: var(--color-border);
+  background: var(--color-bg-surface);
+}

@@ -51,6 +51,7 @@ interface UIState {
   workingFiles: WorkingFile[]
   reasoningEffort: ReasoningEffort
   previewEntity: EntityItem | null
+  previewEditorFocused: boolean
   setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
@@ -64,6 +65,7 @@ interface UIState {
   reset: () => void
   openPreview: (entity: EntityItem) => void
   closePreview: () => void
+  setPreviewEditorFocused: (focused: boolean) => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -76,6 +78,7 @@ export const useUIStore = create<UIState>((set) => ({
   workingFiles: [],
   reasoningEffort: 'medium',
   previewEntity: null,
+  previewEditorFocused: false,
 
   setReasoningEffort: (reasoningEffort) => {
     set({ reasoningEffort })
@@ -135,10 +138,12 @@ export const useUIStore = create<UIState>((set) => ({
       rightSidebarCollapsed: false,
       leftSidebarCollapsed: false,
       workingFiles: [],
-      previewEntity: null
+      previewEntity: null,
+      previewEditorFocused: false
     }),
-  openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true }),
-  closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false })
+  openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true, previewEditorFocused: false }),
+  closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false, previewEditorFocused: false }),
+  setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused })
 }))
 
 /** Load persisted model, reasoning, and theme preferences from disk. Call after project path is set. */

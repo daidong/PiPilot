@@ -58,6 +58,7 @@ export default function App() {
   const rightCollapsed = useUIStore((s) => s.rightSidebarCollapsed)
   const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
   const previewEntity = useUIStore((s) => s.previewEntity)
+  const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
   const theme = useUIStore((s) => s.theme)
 
   // Apply theme class to html element
@@ -189,6 +190,8 @@ export default function App() {
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (previewEditorFocused) return
+
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
         useChatStore.getState().clear()
@@ -206,7 +209,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [previewEntity])
+  }, [previewEntity, previewEditorFocused])
 
   // Show folder gate if no project selected
   if (!hasProject) {

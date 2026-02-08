@@ -1,9 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Layers, StickyNote, BookOpen, Database, Brain, Trash2, Pencil, ArrowUp, ArrowDown } from 'lucide-react'
+import { X, Layers, StickyNote, BookOpen, Database, Brain, Trash2, ArrowUp, ArrowDown, Save } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
+
+const LazyMilkdownMarkdownEditor = lazy(async () => {
+  const mod = await import('./MilkdownMarkdownEditor')
+  return { default: mod.MilkdownMarkdownEditor }
+})
 
 const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={16} className="text-yellow-500" />,
@@ -12,20 +17,80 @@ const typeIcons: Record<string, React.ReactNode> = {
   fact: <Brain size={16} className="text-purple-500" />
 }
 
-// File extension categories
 const EXTERNAL_EXTS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg',
   'pdf',
   'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'
 ])
 const CSV_EXTS = new Set(['csv', 'tsv'])
-const TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'xml', 'log', 'ini', 'toml', 'cfg'])
 
 function getExtension(filePath: string): string {
   return (filePath.split('.').pop() || '').toLowerCase()
 }
 
-/** Parse CSV content into rows (handles quoted fields) */
+function normalizeMarkdown(markdown: string): string {
+  return markdown.replace(/\r\n/g, '\n').trim()
+}
+
+interface MarkdownFingerprint {
+  length: number
+  codeFenceCount: number
+  mermaidFenceCount: number
+  mathBlockCount: number
+  imageCount: number
+}
+
+function buildFingerprint(markdown: string): MarkdownFingerprint {
+  const source = markdown || ''
+  const lines = source.split('\n')
+  const codeFenceCount = lines.filter((line) => line.trimStart().startsWith('```')).length
+  const mermaidFenceCount = lines.filter((line) => /^```mermaid\b/i.test(line.trimStart())).length
+  const mathBlockCount = lines.filter((line) => line.trim() === '$$').length
+  const imageCount = (source.match(/!\[[^\]]*]\([^)]+\)/g) || []).length
+  return {
+    length: source.length,
+    codeFenceCount,
+    mermaidFenceCount,
+    mathBlockCount,
+    imageCount
+  }
+}
+
+function detectPotentialLoss(original: string, next: string): string[] {
+  const before = buildFingerprint(original)
+  const after = buildFingerprint(next)
+  const issues: string[] = []
+
+  if (before.length > 80 && after.length === 0) {
+    issues.push('Output became empty.')
+  }
+
+  if (before.length > 0 && after.length > 0) {
+    const ratio = after.length / before.length
+    if (ratio < 0.2) {
+      issues.push(`Content length dropped significantly (${Math.round(ratio * 100)}%).`)
+    }
+  }
+
+  if (before.codeFenceCount > 0 && after.codeFenceCount === 0) {
+    issues.push('All fenced code blocks disappeared.')
+  }
+
+  if (before.mermaidFenceCount > 0 && after.mermaidFenceCount === 0) {
+    issues.push('Mermaid blocks disappeared.')
+  }
+
+  if (before.mathBlockCount >= 2 && after.mathBlockCount === 0) {
+    issues.push('Math block delimiters ($$) disappeared.')
+  }
+
+  if (before.imageCount > 0 && after.imageCount === 0) {
+    issues.push('Image links disappeared.')
+  }
+
+  return issues
+}
+
 function parseCsv(content: string, separator = ','): string[][] {
   const lines = content.split('\n').filter(l => l.trim())
   return lines.map(line => {
@@ -48,12 +113,11 @@ function parseCsv(content: string, separator = ','): string[][] {
   })
 }
 
-/** Render a CSV/TSV table */
 function CsvPreview({ content, separator }: { content: string; separator: string }) {
   const rows = parseCsv(content, separator)
   if (rows.length === 0) return <p className="text-xs t-text-muted">Empty file</p>
   const header = rows[0]
-  const body = rows.slice(1, 201) // limit to 200 data rows
+  const body = rows.slice(1, 201)
   const truncated = rows.length > 201
 
   return (
@@ -88,46 +152,43 @@ function CsvPreview({ content, separator }: { content: string; separator: string
 export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
+  const setPreviewEditorFocused = useUIStore((s) => s.setPreviewEditorFocused)
   const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const updateEntity = useEntityStore((s) => s.updateEntity)
   const promoteFact = useEntityStore((s) => s.promoteFact)
   const demoteFact = useEntityStore((s) => s.demoteFact)
   const focusItems = useEntityStore((s) => s.focus)
-  const isInFocus = rawEntity
-    ? focusItems.some((p) => p.id === rawEntity.id)
-    : false
-  const entity = rawEntity
-    ? { ...rawEntity }
-    : null
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [editTitle, setEditTitle] = useState('')
-  const [editContent, setEditContent] = useState('')
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Loaded file content for data entities
+  const isInFocus = rawEntity ? focusItems.some((p) => p.id === rawEntity.id) : false
+  const entity = rawEntity ? { ...rawEntity } : null
+
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [draftMarkdown, setDraftMarkdown] = useState('')
+  const [baselineMarkdown, setBaselineMarkdown] = useState('')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null)
+
   const [fileContent, setFileContent] = useState<string | null>(null)
   const [fileType, setFileType] = useState<'text' | 'external' | 'csv' | null>(null)
   const [loading, setLoading] = useState(false)
 
-  // Reset editing state when entity changes
+  const getEntityContent = (): string => {
+    if (!entity) return ''
+    return entity.content || entity.abstract || entity.valueText || ''
+  }
+
   useEffect(() => {
-    setEditing(false)
-    setEditTitle(entity?.title ?? '')
-    setEditContent('')
+    if (!entity) return
+    const initial = getEntityContent()
+    setDraftMarkdown(initial)
+    setBaselineMarkdown(initial)
+    setSaveError(null)
+    setSaveSuccess(null)
+    setPreviewEditorFocused(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity?.id])
 
-  // Auto-resize textarea when editing
-  useEffect(() => {
-    if (editing && textareaRef.current) {
-      const ta = textareaRef.current
-      ta.style.height = 'auto'
-      ta.style.height = ta.scrollHeight + 'px'
-    }
-  }, [editing, editContent])
-
-  // Load file content for data entities with a filePath
   useEffect(() => {
     setFileContent(null)
     setFileType(null)
@@ -139,39 +200,43 @@ export function EntityPreviewPanel() {
 
     if (EXTERNAL_EXTS.has(ext)) {
       setFileType('external')
-    } else if (CSV_EXTS.has(ext)) {
-      setFileType('csv')
-      setLoading(true)
-      api.readFile(entity.filePath).then((res: any) => {
-        if (res.success && res.content) {
-          setFileContent(res.content)
-        }
-        setLoading(false)
-      })
-    } else if (TEXT_EXTS.has(ext) || !ext) {
-      // Default to text for known text extensions or extensionless files
-      setFileType('text')
-      setLoading(true)
-      api.readFile(entity.filePath).then((res: any) => {
-        if (res.success && res.content) {
-          setFileContent(res.content)
-        }
-        setLoading(false)
-      })
-    } else {
-      // Try reading as text for unknown extensions
-      setFileType('text')
-      setLoading(true)
-      api.readFile(entity.filePath).then((res: any) => {
-        if (res.success && res.content) {
-          setFileContent(res.content)
-        }
-        setLoading(false)
-      })
+      return
     }
+
+    const targetType: 'text' | 'csv' = CSV_EXTS.has(ext) ? 'csv' : 'text'
+    const isMarkdown = ext === 'md' || ext === 'markdown'
+    setFileType(targetType)
+    setLoading(true)
+    api.readFile(entity.filePath)
+      .then((res: any) => {
+        if (res.success && typeof res.content === 'string') {
+          setFileContent(res.content)
+          if (targetType === 'text' && isMarkdown) {
+            setDraftMarkdown(res.content)
+            setBaselineMarkdown(res.content)
+            setSaveError(null)
+            setSaveSuccess(null)
+          }
+        } else if (!res.success && targetType === 'text' && isMarkdown) {
+          setSaveError(res.error || 'Failed to load markdown file.')
+        }
+      })
+      .finally(() => setLoading(false))
   }, [entity?.id, entity?.filePath])
 
+  useEffect(() => {
+    return () => setPreviewEditorFocused(false)
+  }, [setPreviewEditorFocused])
+
   if (!entity) return null
+
+  const fileExt = entity.filePath ? getExtension(entity.filePath) : ''
+  const isFileMarkdown = Boolean(entity.filePath && (fileExt === 'md' || fileExt === 'markdown'))
+  const isInlineEditable = entity.type !== 'fact' && !entity.filePath
+  const isEditable = isInlineEditable || isFileMarkdown
+  const isDirty = isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown)
+  const fp = buildFingerprint(baselineMarkdown)
+  const editorKey = `${entity.id}:${entity.updatedAt ?? 'na'}:${fp.length}:${fp.codeFenceCount}:${fp.mermaidFenceCount}:${fp.mathBlockCount}:${fp.imageCount}`
 
   const handleDelete = async () => {
     if (!confirmDelete) {
@@ -183,48 +248,95 @@ export function EntityPreviewPanel() {
     closePreview()
   }
 
-  const getEntityContent = (): string => {
-    return entity.content || entity.abstract || entity.valueText || ''
-  }
+  const handleSave = async () => {
+    if (!isEditable || !isDirty) return
 
-  const toggleEditing = async () => {
-    if (editing) {
-      // Exiting edit mode — save changes
-      const updates: { title?: string; content?: string } = {}
-      const trimmedTitle = editTitle.trim()
-      if (trimmedTitle && trimmedTitle !== entity.title) {
-        updates.title = trimmedTitle
+    const nextMarkdown = draftMarkdown
+    const issues = detectPotentialLoss(baselineMarkdown, nextMarkdown)
+    if (issues.length > 0) {
+      const details = issues.map((issue) => `- ${issue}`).join('\n')
+      const proceed = window.confirm(
+        `Potential markdown compatibility risk detected:\n${details}\n\nSave anyway?`
+      )
+      if (!proceed) return
+    }
+
+    try {
+      setSaveError(null)
+      setSaveSuccess(null)
+      if (isInlineEditable) {
+        await updateEntity(entity.id, { content: nextMarkdown })
+      } else if (isFileMarkdown && entity.filePath) {
+        const api = (window as any).api
+        const result = await api.writeFile(entity.filePath, nextMarkdown)
+        if (!result?.success) {
+          throw new Error(result?.error || 'Failed to write markdown file.')
+        }
+        setFileContent(nextMarkdown)
       }
-      if (editContent !== getEntityContent()) {
-        updates.content = editContent
-      }
-      if (Object.keys(updates).length > 0) {
-        await updateEntity(entity.id, updates)
-        // Update the preview entity in UI store so content refreshes immediately
+      setBaselineMarkdown(nextMarkdown)
+      setSaveSuccess('Saved')
+      setTimeout(() => setSaveSuccess(null), 1200)
+
+      if (isInlineEditable) {
         useUIStore.getState().openPreview({
           ...entity,
-          title: updates.title ?? entity.title,
-          content: entity.type === 'paper' ? entity.content : (updates.content ?? entity.content),
-          abstract: entity.type === 'paper' ? (updates.content ?? entity.abstract) : entity.abstract
+          content: entity.type === 'paper' ? entity.content : nextMarkdown,
+          abstract: entity.type === 'paper' ? nextMarkdown : entity.abstract
         })
       }
-      setEditing(false)
-    } else {
-      // Entering edit mode
-      setEditTitle(entity.title)
-      setEditContent(getEntityContent())
-      setEditing(true)
+    } catch (err: any) {
+      setSaveError(err?.message || 'Failed to save markdown.')
     }
   }
 
-  // Determine what to render in the content area
+  const handleClosePreview = () => {
+    if (isEditable && isDirty) {
+      const proceed = window.confirm('You have unsaved markdown changes. Close preview without saving?')
+      if (!proceed) return
+    }
+    setPreviewEditorFocused(false)
+    closePreview()
+  }
+
+  const renderMarkdownEditor = () => (
+    <div className="space-y-2">
+      {(saveError || saveSuccess) && (
+        <div className={`text-xs px-2 py-1 rounded border ${
+          saveError
+            ? 'text-red-400 border-red-400/40 bg-red-500/10'
+            : 'text-teal-500 border-teal-500/40 bg-teal-500/10'
+        }`}
+        >
+          {saveError || saveSuccess}
+        </div>
+      )}
+
+      <div className="border t-border rounded-lg overflow-hidden">
+        <Suspense fallback={<div className="px-3 py-2 text-xs t-text-muted">Loading markdown editor...</div>}>
+          <LazyMilkdownMarkdownEditor
+            editorId={editorKey}
+            initialMarkdown={baselineMarkdown}
+            onChange={(markdown) => {
+              setDraftMarkdown(markdown)
+              if (saveError) setSaveError(null)
+            }}
+            onFocusChange={setPreviewEditorFocused}
+            onSaveShortcut={() => {
+              void handleSave()
+            }}
+          />
+        </Suspense>
+      </div>
+    </div>
+  )
+
   const renderContent = () => {
-    // If this is a data entity with a filePath, use the loaded file content
     if (entity.filePath && fileType) {
       if (fileType === 'external') {
         return (
           <div className="flex flex-col items-center justify-center gap-3 py-12">
-            <p className="text-sm t-text-secondary">{getExtension(entity.filePath!).toUpperCase()} file</p>
+            <p className="text-sm t-text-secondary">{getExtension(entity.filePath).toUpperCase()} file</p>
             <button
               onClick={() => (window as any).api.openFile(entity.filePath)}
               className="px-4 py-2 rounded bg-teal-500 hover:bg-teal-600 text-white text-sm"
@@ -239,42 +351,27 @@ export function EntityPreviewPanel() {
         return <p className="text-xs t-text-muted animate-pulse">Loading file preview...</p>
       }
 
-      if (fileType === 'csv' && fileContent) {
+      if (fileType === 'csv' && fileContent !== null) {
         const ext = getExtension(entity.filePath)
         return <CsvPreview content={fileContent} separator={ext === 'tsv' ? '\t' : ','} />
       }
 
-      if (fileType === 'text' && fileContent) {
+      if (fileType === 'text' && fileContent !== null) {
         const ext = getExtension(entity.filePath)
         const isMarkdown = ext === 'md' || ext === 'markdown'
         if (isMarkdown) {
-          return (
-            <div className="md-prose" style={{ color: 'var(--color-text)' }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{fileContent}</ReactMarkdown>
-            </div>
-          )
+          return renderMarkdownEditor()
         }
-        // Plain text or code — render in a monospace pre block
         return (
           <pre className="text-xs whitespace-pre-wrap break-words t-text font-mono leading-relaxed">{fileContent}</pre>
         )
       }
 
-      // Fallback: show file path
       return <p className="text-xs t-text-muted">{entity.filePath}</p>
     }
 
-    // Non-data entities or data entities without filePath: use existing content fields
-    if (editing) {
-      return (
-        <textarea
-          ref={textareaRef}
-          value={editContent}
-          onChange={(e) => setEditContent(e.target.value)}
-          className="w-full min-h-[200px] text-sm t-text bg-transparent outline-none resize-none font-mono leading-relaxed"
-          placeholder="Enter content..."
-        />
-      )
+    if (isInlineEditable) {
+      return renderMarkdownEditor()
     }
 
     const content = entity.content || entity.abstract || entity.valueText || 'No content available.'
@@ -289,30 +386,28 @@ export function EntityPreviewPanel() {
 
   return (
     <div className="flex-1 flex flex-col border-l t-border t-bg-base pt-10 min-w-0">
-      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b t-border">
         {typeIcons[entity.type] || null}
-        {editing ? (
-          <input
-            autoFocus
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-teal-400 outline-none min-w-0"
-          />
-        ) : (
-          <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
+        <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
+        {isEditable && isDirty && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">Unsaved</span>
         )}
 
         <div className="flex items-center gap-1">
           {entity.type !== 'fact' && (
             <>
-              <button
-                onClick={toggleEditing}
-                className={`p-1 rounded transition-colors ${editing ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
-                title={editing ? 'Save changes' : 'Edit'}
-              >
-                <Pencil size={14} />
-              </button>
+              {isEditable && (
+                <button
+                  onClick={() => void handleSave()}
+                  disabled={!isDirty}
+                  className={`p-1 rounded transition-colors ${
+                    isDirty ? 'text-teal-400 hover:text-teal-300' : 't-text-muted opacity-50'
+                  }`}
+                  title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
+                >
+                  <Save size={14} />
+                </button>
+              )}
               <button
                 onClick={() => toggleFocus(entity.id)}
                 className={`p-1 rounded transition-colors ${isInFocus ? 'text-teal-400' : 't-text-muted t-bg-hover'}`}
@@ -332,7 +427,7 @@ export function EntityPreviewPanel() {
             </>
           )}
           <button
-            onClick={closePreview}
+            onClick={handleClosePreview}
             className="p-1 rounded t-text-muted t-bg-hover transition-colors"
             title="Close preview"
           >
@@ -341,7 +436,6 @@ export function EntityPreviewPanel() {
         </div>
       </div>
 
-      {/* Metadata row */}
       {entity.type === 'paper' && (
         <div className="px-4 py-2 border-b t-border text-xs t-text-secondary space-y-1">
           {entity.authors?.length > 0 && <p>Authors: {entity.authors.join(', ')}</p>}
@@ -379,7 +473,6 @@ export function EntityPreviewPanel() {
         </div>
       )}
 
-      {/* Fact metadata */}
       {entity.type === 'fact' && (
         <div className="px-4 py-2 border-b t-border text-xs t-text-secondary space-y-1">
           <p>Namespace: <code className="t-bg-surface px-1 rounded">{entity.namespace}</code></p>
@@ -426,7 +519,6 @@ export function EntityPreviewPanel() {
         </div>
       )}
 
-      {/* Content */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {renderContent()}
       </div>
