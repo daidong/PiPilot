@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react'
 import { Crepe } from '@milkdown/crepe'
 import { diagram } from '@milkdown/plugin-diagram'
+import { replaceAll } from '@milkdown/utils'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 import 'katex/dist/katex.min.css'
@@ -10,6 +11,8 @@ import './MilkdownMarkdownEditor.css'
 interface MilkdownMarkdownEditorProps {
   editorId: string
   initialMarkdown: string
+  /** When set, replaces editor content in-place (preserving scroll position). */
+  externalMarkdown?: string
   onChange: (markdown: string) => void
   onFocusChange?: (focused: boolean) => void
   onSaveShortcut?: () => void
@@ -18,6 +21,7 @@ interface MilkdownMarkdownEditorProps {
 function MilkdownInner({
   editorId,
   initialMarkdown,
+  externalMarkdown,
   onChange,
   onFocusChange,
   onSaveShortcut
@@ -28,6 +32,12 @@ function MilkdownInner({
   const createdAtRef = useRef<number>(Date.now())
   const hasSeenFirstUpdateRef = useRef(false)
   const userInteractedRef = useRef(false)
+  const crepeRef = useRef<Crepe | null>(null)
+  const shellRef = useRef<HTMLDivElement>(null)
+  // Flag to suppress onChange during programmatic content replacement
+  const isExternalUpdateRef = useRef(false)
+  // Track what was last applied externally to avoid duplicate updates
+  const lastExternalMarkdownRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -45,6 +55,7 @@ function MilkdownInner({
     createdAtRef.current = Date.now()
     hasSeenFirstUpdateRef.current = false
     userInteractedRef.current = false
+    lastExternalMarkdownRef.current = undefined
   }, [editorId])
 
   useEditor((root) => {
@@ -52,6 +63,7 @@ function MilkdownInner({
       root,
       defaultValue: initialMarkdown
     })
+    crepeRef.current = crepe
 
     // Mermaid code fences (```mermaid) render as diagrams.
     crepe.editor.use(diagram)
@@ -59,6 +71,9 @@ function MilkdownInner({
 
     crepe.on((listener) => {
       listener.markdownUpdated((_ctx, markdown) => {
+        // Skip onChange during programmatic external updates
+        if (isExternalUpdateRef.current) return
+
         if (!hasSeenFirstUpdateRef.current) {
           hasSeenFirstUpdateRef.current = true
           const elapsedMs = Date.now() - createdAtRef.current
@@ -73,6 +88,37 @@ function MilkdownInner({
 
     return crepe
   }, [editorId])
+
+  // In-place content replacement when externalMarkdown changes
+  useEffect(() => {
+    if (
+      externalMarkdown === undefined ||
+      externalMarkdown === lastExternalMarkdownRef.current ||
+      !crepeRef.current
+    ) return
+
+    lastExternalMarkdownRef.current = externalMarkdown
+
+    // Find the scrollable ancestor to preserve scroll position
+    const scrollable = shellRef.current?.closest('.overflow-y-auto') as HTMLElement | null
+    const scrollTop = scrollable?.scrollTop ?? 0
+
+    try {
+      isExternalUpdateRef.current = true
+      crepeRef.current.editor.action(replaceAll(externalMarkdown))
+    } catch {
+      // Editor might not be ready yet — ignore
+    } finally {
+      isExternalUpdateRef.current = false
+    }
+
+    // Restore scroll position after the DOM updates
+    if (scrollable) {
+      requestAnimationFrame(() => {
+        scrollable.scrollTop = scrollTop
+      })
+    }
+  }, [externalMarkdown])
 
   useEffect(() => {
     return () => onFocusChangeRef.current?.(false)
@@ -102,6 +148,7 @@ function MilkdownInner({
 
   return (
     <div
+      ref={shellRef}
       className="entity-preview-milkdown-shell no-drag"
       onKeyDownCapture={onKeyDownCapture}
       onMouseDownCapture={() => {

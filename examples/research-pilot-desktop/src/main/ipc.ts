@@ -265,6 +265,7 @@ function createArtifactFromWorkspaceFile(filePath: string) {
       type: 'note',
       title,
       content,
+      filePath: toPosixPath(relative(projectPath, filePath)),
       tags: ['from-file'],
       summary: `Imported from ${title}${ext || ''}`
     }, { sessionId, projectPath })

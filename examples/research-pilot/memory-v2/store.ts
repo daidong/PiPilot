@@ -25,6 +25,7 @@ export type CreateArtifactInput =
       type: 'note'
       title: string
       content: string
+      filePath?: string
       tags?: string[]
       summary?: string
       provenance?: Partial<Provenance>
@@ -231,7 +232,8 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
     artifact = {
       ...common,
       type: 'note',
-      content: input.content
+      content: input.content,
+      ...(input.filePath ? { filePath: input.filePath } : {})
     }
   } else if (input.type === 'paper') {
     artifact = {

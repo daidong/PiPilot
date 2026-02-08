@@ -5,7 +5,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { join } from 'path'
 import { listNotes, listLiterature, listData } from '../commands/index.js'
 import type { MentionType } from './parser.js'
 
@@ -17,6 +17,52 @@ export interface MentionCandidate {
   label: string
   /** Optional secondary info (e.g. author, tags) */
   detail?: string
+}
+
+// Directories to skip during recursive file walk
+const SKIP_DIRS = new Set([
+  'node_modules', '__pycache__', '.git', '.research-pilot', '.agentfoundry',
+  'dist', 'out', '.next', '.venv', 'venv'
+])
+const MAX_FILE_CANDIDATES = 500
+const MAX_DEPTH = 8
+
+/**
+ * Recursively walk directories and collect file candidates.
+ * Uses relative POSIX paths as values for @file: insertion.
+ */
+function walkFiles(
+  root: string,
+  rel: string,
+  depth: number,
+  out: MentionCandidate[]
+): void {
+  if (depth > MAX_DEPTH || out.length >= MAX_FILE_CANDIDATES) return
+  const dir = rel ? join(root, rel) : root
+  let entries: string[]
+  try { entries = readdirSync(dir) } catch { return }
+
+  for (const name of entries) {
+    if (name.startsWith('.')) continue
+    if (out.length >= MAX_FILE_CANDIDATES) return
+    const childRel = rel ? `${rel}/${name}` : name
+    const full = join(dir, name)
+    let stat
+    try { stat = statSync(full) } catch { continue }
+
+    if (stat.isDirectory()) {
+      if (SKIP_DIRS.has(name)) continue
+      walkFiles(root, childRel, depth + 1, out)
+    } else {
+      const parentDir = rel ? `${rel}/` : ''
+      out.push({
+        type: 'file',
+        value: childRel,
+        label: name,
+        detail: parentDir || `${(stat.size / 1024).toFixed(1)}KB`
+      })
+    }
+  }
 }
 
 /**
@@ -65,23 +111,8 @@ export function getCandidates(
   }
 
   if (!typeFilter || typeFilter === 'file') {
-    // List top-level files in projectPath (non-recursive, skip hidden)
     if (existsSync(projectPath)) {
-      try {
-        for (const entry of readdirSync(projectPath)) {
-          if (entry.startsWith('.')) continue
-          const full = join(projectPath, entry)
-          try {
-            const stat = statSync(full)
-            candidates.push({
-              type: 'file',
-              value: stat.isDirectory() ? `${entry}/` : entry,
-              label: entry,
-              detail: stat.isDirectory() ? 'directory' : `${(stat.size / 1024).toFixed(1)}KB`
-            })
-          } catch { /* skip */ }
-        }
-      } catch { /* skip */ }
+      walkFiles(projectPath, '', 0, candidates)
     }
   }
 

@@ -20,6 +20,7 @@ export interface NoteListItem {
   title: string
   content: string
   tags: string[]
+  filePath?: string
   provenance?: Provenance
 }
 
@@ -78,6 +79,7 @@ export function listNotes(projectPath: string): NoteListItem[] {
       title: note.title,
       content: note.content,
       tags: note.tags,
+      filePath: note.filePath,
       provenance: note.provenance
     }))
 }

@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { X, Layers, StickyNote, BookOpen, Database, Brain, Trash2, ArrowUp, ArrowDown, Save } from 'lucide-react'
@@ -173,6 +173,12 @@ export function EntityPreviewPanel() {
   const [fileContent, setFileContent] = useState<string | null>(null)
   const [fileType, setFileType] = useState<'text' | 'external' | 'csv' | null>(null)
   const [loading, setLoading] = useState(false)
+  // In-place content update (passed to Milkdown to replace without rebuilding)
+  const [externalMarkdown, setExternalMarkdown] = useState<string | undefined>(undefined)
+  // Resolved absolute path for matching agent:file-created events
+  const resolvedAbsPathRef = useRef<string | null>(null)
+  // Track latest baseline for stale-closure comparisons
+  const baselineRef = useRef('')
 
   const getArtifactMarkdownContent = (artifactLike: any): string => {
     if (!artifactLike) return ''
@@ -202,6 +208,8 @@ export function EntityPreviewPanel() {
   useEffect(() => {
     setFileContent(null)
     setFileType(null)
+    resolvedAbsPathRef.current = null
+    setExternalMarkdown(undefined)
 
     if (!entity?.filePath) return
 
@@ -221,10 +229,13 @@ export function EntityPreviewPanel() {
       .then((res: any) => {
         if (res.success && typeof res.content === 'string') {
           setFileContent(res.content)
+          // Store resolved absolute path for file-change matching
+          if (res.path) resolvedAbsPathRef.current = res.path
           if (targetType === 'text' && isMarkdown) {
             setDraftMarkdown(res.content)
             setBaselineMarkdown(res.content)
             setEditorSeedMarkdown(res.content)
+            baselineRef.current = res.content
             setSaveError(null)
             setSaveSuccess(null)
           }
@@ -238,6 +249,58 @@ export function EntityPreviewPanel() {
   useEffect(() => {
     return () => setPreviewEditorFocused(false)
   }, [setPreviewEditorFocused])
+
+  // Keep baselineRef in sync for stale-closure comparisons
+  useEffect(() => {
+    baselineRef.current = baselineMarkdown
+  }, [baselineMarkdown])
+
+  // Auto-reload when agent modifies the currently previewed markdown file
+  useEffect(() => {
+    if (!entity?.filePath) return
+    const ext = getExtension(entity.filePath)
+    if (ext !== 'md' && ext !== 'markdown') return
+
+    const api = (window as any).api
+    const unsub = api.onFileCreated((changedPath: string) => {
+      if (!resolvedAbsPathRef.current) return
+      if (changedPath !== resolvedAbsPathRef.current) return
+
+      // Re-read the file and update editor content in-place
+      api.readFile(entity.filePath).then((res: any) => {
+        if (!res.success || typeof res.content !== 'string') return
+        // Only update if content actually changed from the current baseline
+        if (normalizeMarkdown(res.content) === normalizeMarkdown(baselineRef.current)) return
+        setFileContent(res.content)
+        setBaselineMarkdown(res.content)
+        setDraftMarkdown(res.content)
+        setExternalMarkdown(res.content)
+        baselineRef.current = res.content
+      })
+    })
+    return unsub
+  }, [entity?.id, entity?.filePath])
+
+  // Auto-reload inline artifacts (notes, papers) after an agent turn completes
+  useEffect(() => {
+    if (!entity?.id || entity.filePath || entity.type === 'fact') return
+
+    const api = (window as any).api
+    const unsub = api.onAgentDone(async () => {
+      try {
+        const latest = await api.artifactGet(entity.id)
+        if (!latest) return
+        const content = getArtifactMarkdownContent(latest)
+        if (normalizeMarkdown(content) === normalizeMarkdown(baselineRef.current)) return
+        setDraftMarkdown(content)
+        setBaselineMarkdown(content)
+        setExternalMarkdown(content)
+        baselineRef.current = content
+      } catch { /* ignore fetch errors */ }
+    })
+    return unsub
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entity?.id, entity?.filePath, entity?.type])
 
   if (!entity) return null
 
@@ -351,6 +414,7 @@ export function EntityPreviewPanel() {
           <LazyMilkdownMarkdownEditor
             editorId={editorKey}
             initialMarkdown={baselineMarkdown}
+            externalMarkdown={externalMarkdown}
             onChange={(markdown) => {
               setDraftMarkdown(markdown)
               if (saveError) setSaveError(null)

@@ -36,11 +36,11 @@ async function resolveOne(ref: MentionRef, projectPath: string): Promise<Resolve
   try {
     switch (ref.type) {
       case 'note':
-        return resolveEntity(ref, join(projectPath, PATHS.notes), 'note')
+        return resolveEntity(ref, join(projectPath, PATHS.notes), 'note', projectPath)
       case 'paper':
-        return resolveEntity(ref, join(projectPath, PATHS.papers), 'paper')
+        return resolveEntity(ref, join(projectPath, PATHS.papers), 'paper', projectPath)
       case 'data':
-        return resolveEntity(ref, join(projectPath, PATHS.data), 'data')
+        return resolveEntity(ref, join(projectPath, PATHS.data), 'data', projectPath)
       case 'file':
         return resolveFile(ref, projectPath)
       case 'url':
@@ -60,7 +60,8 @@ async function resolveOne(ref: MentionRef, projectPath: string): Promise<Resolve
 function resolveEntity(
   ref: MentionRef,
   dir: string,
-  entityType: string
+  entityType: string,
+  projectPath: string
 ): ResolvedMention {
   if (!existsSync(dir)) {
     return { ref, label: ref.raw, content: '', error: `No ${entityType} directory found` }
@@ -76,21 +77,21 @@ function resolveEntity(
 
       // Match by exact id
       if (entity.id === ref.key || entity.id.toLowerCase().startsWith(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
+        return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
       }
 
       // Match by citeKey for papers (accept legacy "literature" type)
       if (entity.type === 'paper' || (entity as { type?: string }).type === 'literature') {
         const lit = entity as Literature
         if (lit.citeKey.toLowerCase() === key || lit.citeKey.toLowerCase().startsWith(key)) {
-          return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
+          return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
         }
       }
 
       // Match by title/name substring
       const name = entityName(entity).toLowerCase()
       if (name.includes(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity), entityId: entity.id }
+        return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
       }
     } catch {
       // skip invalid files
@@ -176,10 +177,22 @@ function entityLabel(entity: Entity): string {
   return `${entity.type}: ${entityName(entity)}`
 }
 
-function formatEntityContent(entity: Entity): string {
+function formatEntityContent(entity: Entity, projectPath?: string): string {
   if (entity.type === 'note') {
     const note = entity as Note
-    return `Title: ${note.title}\nTags: ${note.tags.join(', ') || 'none'}\n\n${note.content}`
+    let content = note.content
+    // Read live content from disk for file-backed notes
+    if ((note as any).filePath && projectPath) {
+      const absPath = resolve(projectPath, (note as any).filePath)
+      if (existsSync(absPath)) {
+        try {
+          const buf = readFileSync(absPath)
+          content = buf.slice(0, MAX_CONTENT_BYTES).toString('utf-8')
+          if (buf.length > MAX_CONTENT_BYTES) content += '\n...(truncated)'
+        } catch { /* fall back to cached content */ }
+      }
+    }
+    return `Title: ${note.title}\nTags: ${note.tags.join(', ') || 'none'}\n\n${content}`
   }
   if (entity.type === 'paper' || (entity as { type?: string }).type === 'literature') {
     const lit = entity as Literature

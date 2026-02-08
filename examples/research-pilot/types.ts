@@ -71,6 +71,7 @@ export interface ArtifactBase {
 export interface NoteArtifact extends ArtifactBase {
   type: 'note'
   content: string
+  filePath?: string  // relative POSIX path to source file (when imported from workspace)
 }
 
 export interface PaperArtifact extends ArtifactBase {

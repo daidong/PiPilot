@@ -33,6 +33,12 @@ const typeLabels: Record<string, string> = {
 
 const typeOrder = ['note', 'paper', 'data', 'file']
 
+/** Wrap value in quotes if it contains spaces so the parser handles it correctly */
+function formatMention(c: MentionCandidate): string {
+  const needsQuotes = c.value.includes(' ')
+  return needsQuotes ? `@${c.type}:"${c.value}"` : `@${c.type}:${c.value}`
+}
+
 export function MentionPopover({ query, onSelect, onClose }: Props) {
   const [candidates, setCandidates] = useState<MentionCandidate[]>([])
   const [selectedIdx, setSelectedIdx] = useState(0)
@@ -87,7 +93,7 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
           e.preventDefault()
           e.stopPropagation()
           const c = flatList[selectedIdx]
-          onSelect(`@${c.type}:${c.value}`)
+          onSelect(formatMention(c))
         }
       }
     }
@@ -134,7 +140,7 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
                   key={`${c.type}-${c.value}`}
                   onMouseDown={(e) => {
                     e.preventDefault()
-                    onSelect(`@${c.type}:${c.value}`)
+                    onSelect(formatMention(c))
                   }}
                   onMouseEnter={() => setSelectedIdx(idx)}
                   className={`flex items-center gap-1.5 w-full px-3 py-1 text-xs text-left transition-colors ${
