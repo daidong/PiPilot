@@ -7,6 +7,8 @@ import type { ToolRegistry } from './tool-registry.js'
 import type { ContextManager } from './context-manager.js'
 import type { TokenBudget } from './token-budget.js'
 import type { SkillManager } from '../skills/skill-manager.js'
+import type { ProviderID } from '../llm/provider.types.js'
+import { getProviderStyleNormalization } from '../llm/provider-style.js'
 import { countTokens, truncateToTokens } from '../utils/tokenizer.js'
 
 /**
@@ -114,7 +116,8 @@ export class PromptCompiler {
     toolRegistry: ToolRegistry,
     contextManager: ContextManager,
     tokenBudget: TokenBudget,
-    skillManager?: SkillManager
+    skillManager?: SkillManager,
+    provider?: ProviderID
   ): CompiledPrompt {
     const sections: PromptSection[] = []
 
@@ -124,6 +127,12 @@ export class PromptCompiler {
       content: agent.identity.trim(),
       protected: true
     })
+
+    // 1.5. Provider style normalization (non-Anthropic only)
+    const styleGuide = provider ? getProviderStyleNormalization(provider) : undefined
+    if (styleGuide) {
+      sections.push({ id: 'provider-style', content: styleGuide, protected: true })
+    }
 
     // 2. Available Tools
     const toolsSection = `## Available Tools\n\n${toolRegistry.generateCompactToolDescriptions()}`
@@ -203,7 +212,7 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
     initialContext?: string
     /** Skill manager for lazy-loaded procedural knowledge */
     skillManager?: SkillManager
-  }, tokenBudget: TokenBudget): CompiledPrompt {
+  }, tokenBudget: TokenBudget, provider?: ProviderID): CompiledPrompt {
     const sections: PromptSection[] = []
 
     if (config.identity) {
@@ -212,6 +221,12 @@ ${agent.constraints.map(c => `- ${c}`).join('\n')}`
         content: config.identity.trim(),
         protected: true
       })
+    }
+
+    // Provider style normalization (non-Anthropic only)
+    const styleGuide = provider ? getProviderStyleNormalization(provider) : undefined
+    if (styleGuide) {
+      sections.push({ id: 'provider-style', content: styleGuide, protected: true })
     }
 
     if (config.tools) {

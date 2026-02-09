@@ -17,7 +17,7 @@ import { SkillManager } from '../skills/skill-manager.js'
 import { ExternalSkillLoader, type LoadedExternalSkill } from '../skills/external-skill-loader.js'
 import { globalSkillRegistry } from '../skills/skill-registry.js'
 import { AgentLoop } from './agent-loop.js'
-import { createLLMClient, getModel } from '../llm/index.js'
+import { createLLMClient, getModel, detectProviderFromApiKey } from '../llm/index.js'
 import type { Message } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
 import { createKernelV2, type KernelV2 } from '../kernel-v2/index.js'
@@ -224,12 +224,21 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       policyEngine.registerAll(config.policies)
     }
 
-    // Determine Provider and model
-    const modelId = config.model ?? definition.model?.default ?? 'gpt-4o'
+    // Determine Provider and model — resolve API key first so we can pick a
+    // provider-appropriate default model when none is specified.
+    const apiKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
+    const explicitModel = config.model ?? definition.model?.default
+    const modelId = explicitModel ?? (() => {
+      // Pick a default model that matches the resolved API key's provider
+      const detected = apiKey ? detectProviderFromApiKey(apiKey) : null
+      if (detected === 'anthropic') return 'claude-sonnet-4-5-20250929'
+      if (detected === 'deepseek') return 'deepseek-chat'
+      if (detected === 'google') return 'gemini-2.0-flash'
+      return 'gpt-4o'
+    })()
     const modelConfig = getModel(modelId)
     const contextWindow = modelConfig?.limit.maxContext ?? 200000
     const provider: ProviderID = config.provider ?? modelConfig?.providerID ?? 'openai'
-    const apiKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
     const useKernelV2 = config.kernelV2?.enabled ?? true
 
     // Create LLM client
@@ -254,6 +263,9 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       runtime.kernelV2 = kernelV2
     }
 
+    // Provider style normalization (opt-out, enabled by default)
+    const normalizeStyle = config.normalizeProviderStyle !== false
+
     // Compile system prompt (Phase 1.4: Include skillManager)
     const promptCompiler = new PromptCompiler()
 
@@ -264,7 +276,8 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
         toolRegistry,
         contextManager,
         tokenBudget,
-        skillManager
+        skillManager,
+        normalizeStyle ? provider : undefined
       )
       return compiledPrompt.render()
     }

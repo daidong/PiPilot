@@ -46,7 +46,7 @@ describe('Built-in Policies', () => {
       const result = await policyEngine.evaluateBefore(context)
 
       expect(result.allowed).toBe(false)
-      expect(result.reason).toContain('危险命令被阻止')
+      expect(result.reason).toContain('Dangerous command blocked')
     })
 
     it('should block rm -rf with path', async () => {
@@ -124,7 +124,7 @@ describe('Built-in Policies', () => {
       const result = await policyEngine.evaluateBefore(context)
 
       expect(result.allowed).toBe(false)
-      expect(result.reason).toContain('禁止读取敏感文件')
+      expect(result.reason).toContain('Reading sensitive files is prohibited')
     })
 
     it('should block reading .env.local', async () => {

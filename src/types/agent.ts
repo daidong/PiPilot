@@ -117,6 +117,9 @@ export interface AgentConfig {
 
   /** RFC-011 Kernel V2 runtime configuration */
   kernelV2?: KernelV2Config
+
+  /** Inject style normalization for non-Anthropic providers to produce more natural output (default: true) */
+  normalizeProviderStyle?: boolean
 }
 
 /**

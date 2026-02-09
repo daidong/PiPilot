@@ -90,12 +90,21 @@ async function renderSelectedContext(
   return rendered.length > 0 ? rendered : undefined
 }
 
+/** Default model per provider */
+const DEFAULT_MODEL_FOR_PROVIDER: Record<ProviderID, string> = {
+  openai: 'gpt-5.2',
+  anthropic: 'claude-sonnet-4-5-20250929',
+  deepseek: 'deepseek-chat',
+  google: 'gemini-2.0-flash'
+}
+
 /**
  * Detect provider and model.
  * When a preferred model is specified, derive the provider from the model
  * registry so that e.g. "claude-sonnet-4-20250514" correctly resolves to
  * the "anthropic" provider regardless of which API key was passed in.
- * Falls back to API-key-based detection when no model is specified.
+ * Falls back to API-key-based detection when no model is specified,
+ * then to environment variable detection.
  */
 function detectProviderAndModel(apiKey: string, preferredModel?: string): { provider: ProviderID; model: string } {
   // If a model is explicitly requested, trust the model registry for the provider
@@ -109,13 +118,27 @@ function detectProviderAndModel(apiKey: string, preferredModel?: string): { prov
   // Fallback: detect from API key
   const provider = detectProviderFromApiKey(apiKey)
   if (provider) {
-    const model = preferredModel || (provider === 'openai' ? 'gpt-5.2' : 'claude-sonnet-4-5-20250929')
-    return { provider, model }
+    return { provider, model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER[provider] }
   }
 
+  // Fallback: detect from environment variables
+  if (process.env.ANTHROPIC_API_KEY) {
+    return { provider: 'anthropic', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.anthropic }
+  }
+  if (process.env.OPENAI_API_KEY) {
+    return { provider: 'openai', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.openai }
+  }
+  if (process.env.DEEPSEEK_API_KEY) {
+    return { provider: 'deepseek', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.deepseek }
+  }
+  if (process.env.GOOGLE_API_KEY) {
+    return { provider: 'google', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.google }
+  }
+
+  // Ultimate fallback
   return {
     provider: 'openai',
-    model: preferredModel || 'gpt-5.2'
+    model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.openai
   }
 }
 
@@ -502,9 +525,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   // Resolve the correct API key for the detected provider
   const providerKeyMap: Record<string, string | undefined> = {
     openai: config.apiKey || process.env['OPENAI_API_KEY'],
-    anthropic: process.env['ANTHROPIC_API_KEY'],
-    deepseek: process.env['DEEPSEEK_API_KEY'],
-    google: process.env['GOOGLE_API_KEY']
+    anthropic: config.apiKey || process.env['ANTHROPIC_API_KEY'],
+    deepseek: config.apiKey || process.env['DEEPSEEK_API_KEY'],
+    google: config.apiKey || process.env['GOOGLE_API_KEY']
   }
   const apiKey = providerKeyMap[provider] || fallbackKey
 
@@ -533,6 +556,9 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   })
   runtime.kernelV2 = kernelV2
 
+  // Provider style normalization (opt-out, enabled by default)
+  const normalizeStyle = config.normalizeProviderStyle !== false
+
   // Prompt compiler (will be used to recompile each run for skill updates)
   const promptCompiler = new PromptCompiler()
 
@@ -546,7 +572,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       constraints: effectiveConstraints,
       initialContext: config.initialContext,
       skillManager
-    }, tokenBudget)
+    }, tokenBudget, normalizeStyle ? provider : undefined)
     return compiledPrompt.render()
   }
 
