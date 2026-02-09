@@ -1,9 +1,10 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Layers, StickyNote, BookOpen, Database, Brain, Trash2, ArrowUp, ArrowDown, Save } from 'lucide-react'
+import { X, Layers, StickyNote, BookOpen, Database, Brain, Trash2, ArrowUp, ArrowDown, Save, ChevronUp, ChevronDown } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
-import { useEntityStore } from '../../stores/entity-store'
+import type { LeftTab } from '../../stores/ui-store'
+import { useEntityStore, type EntityItem, type FactItem } from '../../stores/entity-store'
 
 const LazyMilkdownMarkdownEditor = lazy(async () => {
   const mod = await import('./MilkdownMarkdownEditor')
@@ -149,6 +150,70 @@ function CsvPreview({ content, separator }: { content: string; separator: string
   )
 }
 
+function factToPreviewEntity(fact: FactItem): EntityItem {
+  return {
+    id: fact.id,
+    type: 'fact',
+    title: `${fact.namespace}/${fact.key}`,
+    content: typeof fact.value === 'string' ? fact.value : JSON.stringify(fact.value, null, 2),
+    valueText: fact.valueText,
+    namespace: fact.namespace,
+    key: fact.key,
+    status: fact.status,
+    confidence: fact.confidence,
+    provenance: fact.provenance,
+    derivedFromArtifactIds: fact.derivedFromArtifactIds,
+    createdAt: fact.createdAt,
+    updatedAt: fact.updatedAt
+  }
+}
+
+function usePreviewNavigation() {
+  const previewSourceTab = useUIStore((s) => s.previewSourceTab)
+  const previewEntity = useUIStore((s) => s.previewEntity)
+  const openPreview = useUIStore((s) => s.openPreview)
+  const notes = useEntityStore((s) => s.notes)
+  const papers = useEntityStore((s) => s.papers)
+  const data = useEntityStore((s) => s.data)
+  const facts = useEntityStore((s) => s.facts)
+  const focus = useEntityStore((s) => s.focus)
+
+  const list: EntityItem[] = (() => {
+    switch (previewSourceTab) {
+      case 'library':
+        return [...notes, ...data]
+      case 'papers':
+        return papers
+      case 'knowledge':
+        return facts.map(factToPreviewEntity)
+      case 'focus':
+        return focus
+      case 'tasks':
+      case 'runs':
+      default:
+        return []
+    }
+  })()
+
+  const currentIndex = previewEntity ? list.findIndex((item) => item.id === previewEntity.id) : -1
+  const total = list.length
+  const canNavigate = total > 1 && currentIndex >= 0
+
+  const goNext = useCallback(() => {
+    if (!canNavigate) return
+    const nextIndex = (currentIndex + 1) % total
+    openPreview(list[nextIndex])
+  }, [canNavigate, currentIndex, total, list, openPreview])
+
+  const goPrev = useCallback(() => {
+    if (!canNavigate) return
+    const prevIndex = (currentIndex - 1 + total) % total
+    openPreview(list[prevIndex])
+  }, [canNavigate, currentIndex, total, list, openPreview])
+
+  return { canNavigate, goNext, goPrev, currentIndex, total }
+}
+
 export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
@@ -159,6 +224,9 @@ export function EntityPreviewPanel() {
   const promoteFact = useEntityStore((s) => s.promoteFact)
   const demoteFact = useEntityStore((s) => s.demoteFact)
   const focusItems = useEntityStore((s) => s.focus)
+
+  const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
+  const nav = usePreviewNavigation()
 
   const isInFocus = rawEntity ? focusItems.some((p) => p.id === rawEntity.id) : false
   const entity = rawEntity ? { ...rawEntity } : null
@@ -313,6 +381,41 @@ export function EntityPreviewPanel() {
   // stable while typing/saving in the same preview session.
   const seedFp = buildFingerprint(editorSeedMarkdown)
   const editorKey = `${entity.id}:${entity.filePath ?? 'inline'}:${seedFp.length}:${seedFp.codeFenceCount}:${seedFp.mermaidFenceCount}:${seedFp.mathBlockCount}:${seedFp.imageCount}`
+
+  const handleNavNext = useCallback(() => {
+    if (!nav.canNavigate) return
+    if (isEditable && isDirty) {
+      const proceed = window.confirm('You have unsaved markdown changes. Navigate without saving?')
+      if (!proceed) return
+    }
+    nav.goNext()
+  }, [nav, isEditable, isDirty])
+
+  const handleNavPrev = useCallback(() => {
+    if (!nav.canNavigate) return
+    if (isEditable && isDirty) {
+      const proceed = window.confirm('You have unsaved markdown changes. Navigate without saving?')
+      if (!proceed) return
+    }
+    nav.goPrev()
+  }, [nav, isEditable, isDirty])
+
+  // Keyboard shortcut: Alt+ArrowUp / Alt+ArrowDown for prev/next navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!nav.canNavigate || previewEditorFocused) return
+      if (!e.altKey) return
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        handleNavPrev()
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        handleNavNext()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [nav.canNavigate, previewEditorFocused, handleNavPrev, handleNavNext])
 
   const handleDelete = async () => {
     if (!confirmDelete) {
@@ -489,6 +592,28 @@ export function EntityPreviewPanel() {
         <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
         {isEditable && isDirty && (
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">Unsaved</span>
+        )}
+
+        {nav.canNavigate && (
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={handleNavPrev}
+              className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+              title="Previous item (Alt+Up)"
+            >
+              <ChevronUp size={14} />
+            </button>
+            <span className="text-[10px] t-text-muted tabular-nums min-w-[2.5rem] text-center">
+              {nav.currentIndex + 1} / {nav.total}
+            </span>
+            <button
+              onClick={handleNavNext}
+              className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+              title="Next item (Alt+Down)"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
         )}
 
         <div className="flex items-center gap-1">

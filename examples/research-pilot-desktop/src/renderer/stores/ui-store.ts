@@ -3,6 +3,7 @@ import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
 type LeftTab = 'library' | 'papers' | 'knowledge' | 'focus' | 'tasks' | 'runs'
+export type { LeftTab }
 export type ReasoningEffort = 'high' | 'medium' | 'low' | 'max'
 
 export const REASONING_MODELS = [
@@ -51,6 +52,7 @@ interface UIState {
   workingFiles: WorkingFile[]
   reasoningEffort: ReasoningEffort
   previewEntity: EntityItem | null
+  previewSourceTab: LeftTab | null
   previewEditorFocused: boolean
   setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
@@ -78,6 +80,7 @@ export const useUIStore = create<UIState>((set) => ({
   workingFiles: [],
   reasoningEffort: 'medium',
   previewEntity: null,
+  previewSourceTab: null,
   previewEditorFocused: false,
 
   setReasoningEffort: (reasoningEffort) => {
@@ -139,10 +142,11 @@ export const useUIStore = create<UIState>((set) => ({
       leftSidebarCollapsed: false,
       workingFiles: [],
       previewEntity: null,
+      previewSourceTab: null,
       previewEditorFocused: false
     }),
-  openPreview: (entity) => set({ previewEntity: entity, leftSidebarCollapsed: true, previewEditorFocused: false }),
-  closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false, previewEditorFocused: false }),
+  openPreview: (entity) => set((s) => ({ previewEntity: entity, previewSourceTab: s.leftTab, leftSidebarCollapsed: true, previewEditorFocused: false })),
+  closePreview: () => set({ previewEntity: null, previewSourceTab: null, leftSidebarCollapsed: false, previewEditorFocused: false }),
   setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused })
 }))
 
