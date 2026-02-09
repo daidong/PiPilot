@@ -74,6 +74,14 @@
 .entity-preview-milkdown-shell .milkdown .ProseMirror li {
   font-size: 14px;
   line-height: 1.6;
+  font-weight: 400;
+}
+
+/* Keep bold visually obvious inside Milkdown (theme CSS can override global strong rules). */
+.entity-preview-milkdown-shell .milkdown .ProseMirror strong,
+.entity-preview-milkdown-shell .milkdown .ProseMirror b {
+  font-weight: 750 !important;
+  font-variation-settings: "wght" 750;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror pre {

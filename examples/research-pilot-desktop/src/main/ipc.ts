@@ -591,7 +591,9 @@ async function ensureCoordinator(
         if ((tool === 'write' || tool === 'edit') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.data?.path) {
-            safeSend(win, 'agent:file-created', r.data.path)
+            // Normalize to absolute path so renderer listeners can compare reliably
+            const absPath = isAbsolute(r.data.path) ? r.data.path : resolve(projectPath, r.data.path)
+            safeSend(win, 'agent:file-created', absPath)
           }
         }
 
