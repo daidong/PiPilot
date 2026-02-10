@@ -12,6 +12,7 @@ import { basename, join } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { createAgent, packs, definePack, defineTool } from '../../../src/index.js'
 import { createLLMClientFromModelId } from '../../../src/llm/index.js'
+import { getModel } from '../../../src/llm/models.js'
 import { createSubagentTools } from './subagent-tools.js'
 import { createResearchMemoryTools, type MemoryExplainProvider } from '../tools/entity-tools.js'
 import type { Agent } from '../../../src/types/agent.js'
@@ -333,12 +334,18 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     getBudgetExplain: () => lastBudgetExplain
   }
 
+  // Select intent router model based on coordinator's provider
+  const coordinatorProvider = getModel(model ?? '')?.providerID
+  const intentRouterModelId = coordinatorProvider === 'anthropic'
+    ? 'claude-haiku-4-5-20251001'
+    : 'gpt-5-nano'
+
   let intentRouterClient: ReturnType<typeof createLLMClientFromModelId> | null = null
   try {
-    intentRouterClient = createLLMClientFromModelId('gpt-5-nano', { apiKey })
+    intentRouterClient = createLLMClientFromModelId(intentRouterModelId, { apiKey })
   } catch (err) {
     if (debug) {
-      console.warn('[IntentRouter] Failed to init gpt-5-nano:', err)
+      console.warn(`[IntentRouter] Failed to init ${intentRouterModelId}:`, err)
     }
   }
 

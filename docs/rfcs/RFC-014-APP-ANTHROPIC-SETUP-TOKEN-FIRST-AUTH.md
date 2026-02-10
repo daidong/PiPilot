@@ -1,10 +1,26 @@
-# RFC-014: App-Layer Anthropic Setup-Token-First Authentication
-## Research Pilot + Personal Assistant (API Key Fallback)
+# RFC-014: App-Layer Anthropic Setup-Token-First Authentication (Deprecated)
+## Research Pilot + Personal Assistant (Historical Plan)
 
-Status: Draft  
+Status: Deprecated (Historical)  
 Author: AgentFoundry Team  
 Created: 2026-02-07  
-Updated: 2026-02-07
+Updated: 2026-02-09
+
+> Deprecation Note (2026-02-09): This RFC is kept for historical context only.  
+> The setup-token-first design described below has been removed from active app code.  
+> Current behavior in `research-pilot-desktop` and `personal-assistant` is **API Key only** for Anthropic models (`ANTHROPIC_API_KEY`), with no setup-token storage, setup modal, or setup-token fallback path.
+
+---
+
+## 0. Current Effective Behavior (Replaces This RFC)
+
+1. Anthropic models use `ANTHROPIC_API_KEY` only.
+2. OpenAI models use `OPENAI_API_KEY` only.
+3. UI model selector shows `API Key Only` for both providers.
+4. Cost/token panels no longer branch on setup-token mode.
+5. `examples/shared/anthropic-auth/*` has been removed.
+
+The remaining sections in this document describe the prior proposal and are no longer normative.
 
 ---
 
@@ -81,7 +97,7 @@ Out of scope:
 
 ---
 
-## 6. High-Level Architecture
+## 6. High-Level Architecture (Historical / Deprecated)
 
 Shared module design:
 
@@ -109,7 +125,7 @@ Core flow:
 
 ---
 
-## 7. Storage and Security
+## 7. Storage and Security (Historical / Deprecated)
 
 ## 7.1 Storage Targets
 
@@ -143,7 +159,7 @@ Token value is stored in OS keychain (or secure store), not plaintext project fi
 
 ---
 
-## 8. UX Flows
+## 8. UX Flows (Historical / Deprecated)
 
 ## 8.1 First Anthropic Model Selection
 
@@ -177,7 +193,7 @@ On classified auth failure:
 
 ---
 
-## 9. Request Path and Fallback
+## 9. Request Path and Fallback (Historical / Deprecated)
 
 ## 9.1 Resolver
 
@@ -203,7 +219,7 @@ No infinite retries.
 
 ---
 
-## 10. Error Classification
+## 10. Error Classification (Historical / Deprecated)
 
 Auth invalidation requires strict classifier:
 
@@ -228,7 +244,7 @@ Classifier output:
 
 ---
 
-## 11. Billing and Cost Accounting
+## 11. Billing and Cost Accounting (Historical / Deprecated)
 
 ## 11.1 Usage Data
 
@@ -252,7 +268,7 @@ This avoids false precision in API bill estimation for non-API-key auth modes.
 
 ---
 
-## 12. Implementation Plan
+## 12. Implementation Plan (Historical / Deprecated)
 
 ## 12.1 Shared App-Layer Modules
 
@@ -309,7 +325,7 @@ In each app coordinator initialization:
 
 ---
 
-## 13. App-Specific Change Map
+## 13. App-Specific Change Map (Historical / Deprecated)
 
 Research Pilot Desktop:
 
@@ -329,7 +345,7 @@ Personal Assistant:
 
 ---
 
-## 14. Telemetry and Logging
+## 14. Telemetry and Logging (Historical / Deprecated)
 
 Add app logs (stderr + file, aligned with current recommendation):
 
@@ -353,7 +369,7 @@ Never include token values.
 
 ---
 
-## 15. Rollout Strategy
+## 15. Rollout Strategy (Historical / Deprecated)
 
 Phase 1:
 
@@ -372,7 +388,7 @@ Phase 3:
 
 ---
 
-## 16. Test Plan
+## 16. Test Plan (Historical / Deprecated)
 
 Core test matrix:
 
@@ -387,7 +403,7 @@ Core test matrix:
 
 ---
 
-## 17. Risks and Mitigations
+## 17. Risks and Mitigations (Historical / Deprecated)
 
 1. False auth invalidation:
    - mitigate with strict classifier and no invalidation on 429/5xx/timeouts.
@@ -400,7 +416,7 @@ Core test matrix:
 
 ---
 
-## 18. Acceptance Criteria
+## 18. Acceptance Criteria (Historical / Deprecated)
 
 This RFC is complete when all are true:
 
@@ -413,7 +429,7 @@ This RFC is complete when all are true:
 
 ---
 
-## 19. Open Decisions
+## 19. Open Decisions (Historical / Deprecated)
 
 1. Background validation timing:
    - lazy on first request only, or startup background ping.

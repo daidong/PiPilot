@@ -25,6 +25,26 @@ type SDKInstance = OpenAIProvider | AnthropicProvider
 const sdkCache = new Map<string, SDKInstance>()
 
 /**
+ * Per-provider environment variable mapping
+ */
+const PROVIDER_ENV_KEYS: Record<ProviderID, string> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  google: 'GOOGLE_API_KEY'
+}
+
+/**
+ * Resolve API key from config or provider-specific environment variable
+ */
+function resolveApiKey(provider: ProviderID, config: ProviderSDKConfig): string {
+  if (config.apiKey) return config.apiKey
+  const envKey = process.env[PROVIDER_ENV_KEYS[provider]]?.trim()
+  if (envKey) return envKey
+  throw new Error(`No API key for ${provider}. Set ${PROVIDER_ENV_KEYS[provider]} or pass apiKey.`)
+}
+
+/**
  * Generate cache key
  */
 function getCacheKey(provider: ProviderID, apiKey: string): string {
@@ -35,12 +55,13 @@ function getCacheKey(provider: ProviderID, apiKey: string): string {
  * Get or create OpenAI SDK instance
  */
 function getOpenAISDK(config: ProviderSDKConfig): OpenAIProvider {
-  const cacheKey = getCacheKey('openai', config.apiKey)
+  const apiKey = resolveApiKey('openai', config)
+  const cacheKey = getCacheKey('openai', apiKey)
 
   let sdk = sdkCache.get(cacheKey) as OpenAIProvider | undefined
   if (!sdk) {
     sdk = createOpenAI({
-      apiKey: config.apiKey,
+      apiKey,
       baseURL: config.baseURL
     })
     sdkCache.set(cacheKey, sdk)
@@ -53,12 +74,13 @@ function getOpenAISDK(config: ProviderSDKConfig): OpenAIProvider {
  * Get or create Anthropic SDK instance
  */
 function getAnthropicSDK(config: ProviderSDKConfig): AnthropicProvider {
-  const cacheKey = getCacheKey('anthropic', config.apiKey)
+  const apiKey = resolveApiKey('anthropic', config)
+  const cacheKey = getCacheKey('anthropic', apiKey)
 
   let sdk = sdkCache.get(cacheKey) as AnthropicProvider | undefined
   if (!sdk) {
     sdk = createAnthropic({
-      apiKey: config.apiKey,
+      apiKey,
       baseURL: config.baseURL
     })
     sdkCache.set(cacheKey, sdk)
@@ -71,12 +93,13 @@ function getAnthropicSDK(config: ProviderSDKConfig): AnthropicProvider {
  * Get or create DeepSeek SDK instance (uses OpenAI-compatible API)
  */
 function getDeepSeekSDK(config: ProviderSDKConfig): OpenAIProvider {
-  const cacheKey = getCacheKey('deepseek', config.apiKey)
+  const apiKey = resolveApiKey('deepseek', config)
+  const cacheKey = getCacheKey('deepseek', apiKey)
 
   let sdk = sdkCache.get(cacheKey) as OpenAIProvider | undefined
   if (!sdk) {
     sdk = createOpenAI({
-      apiKey: config.apiKey,
+      apiKey,
       baseURL: config.baseURL || 'https://api.deepseek.com/v1'
     })
     sdkCache.set(cacheKey, sdk)
@@ -90,13 +113,14 @@ function getDeepSeekSDK(config: ProviderSDKConfig): OpenAIProvider {
  * Note: For production use, @ai-sdk/google should be used instead
  */
 function getGoogleSDK(config: ProviderSDKConfig): OpenAIProvider {
-  const cacheKey = getCacheKey('google', config.apiKey)
+  const apiKey = resolveApiKey('google', config)
+  const cacheKey = getCacheKey('google', apiKey)
 
   let sdk = sdkCache.get(cacheKey) as OpenAIProvider | undefined
   if (!sdk) {
     // Google AI uses OpenAI-compatible API through a proxy or direct endpoint
     sdk = createOpenAI({
-      apiKey: config.apiKey,
+      apiKey,
       baseURL:
         config.baseURL || 'https://generativelanguage.googleapis.com/v1beta'
     })

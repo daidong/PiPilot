@@ -7,8 +7,8 @@ export interface UsageEvent {
   cost: number
   rawCost?: number
   billableCost?: number
-  authMode?: 'setup-token' | 'api-key' | 'none'
-  billingSource?: 'setup-token' | 'api-key' | 'none'
+  authMode?: 'api-key' | 'none'
+  billingSource?: 'api-key' | 'none'
   cacheHitRate: number
 }
 
@@ -28,8 +28,6 @@ export interface ElectronAPI {
   onAgentDone: (cb: (result: any) => void) => () => void
   onUsage: (cb: (event: UsageEvent) => void) => () => void
   getAnthropicAuthStatus: () => Promise<any>
-  saveAnthropicSetupToken: (token: string) => Promise<any>
-  clearAnthropicSetupToken: () => Promise<any>
   onAnthropicAuthStatus: (cb: (status: any) => void) => () => void
   getOpenAIAuthStatus: () => Promise<{ hasApiKey: boolean }>
 
@@ -173,8 +171,6 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:usage', handler)
   },
   getAnthropicAuthStatus: () => ipcRenderer.invoke('auth:get-anthropic-status'),
-  saveAnthropicSetupToken: (token) => ipcRenderer.invoke('auth:save-anthropic-setup-token', token),
-  clearAnthropicSetupToken: () => ipcRenderer.invoke('auth:clear-anthropic-setup-token'),
   onAnthropicAuthStatus: (cb) => {
     const handler = (_: any, status: any) => cb(status)
     ipcRenderer.on('auth:anthropic-status', handler)

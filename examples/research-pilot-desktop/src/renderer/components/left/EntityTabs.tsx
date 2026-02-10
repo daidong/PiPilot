@@ -319,7 +319,7 @@ function LibraryContent({
         <p className="text-xs t-text-muted">Drop files here</p>
       </div>
 
-      <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0">
+      <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0 flex-1">
         {allItems.length === 0 ? (
           <p className="px-3 py-4 text-xs t-text-muted text-center">No items yet</p>
         ) : (
@@ -417,7 +417,7 @@ function PapersContent({
         <p className="text-xs t-text-muted">Drop files here to add papers</p>
       </div>
 
-      <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0">
+      <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0 flex-1">
         {papers.length === 0 ? (
           <p className="px-3 py-4 text-xs t-text-muted text-center">No papers yet</p>
         ) : (
@@ -478,7 +478,7 @@ export function EntityTabs() {
         ))}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         {renderContent()}
       </div>
     </div>

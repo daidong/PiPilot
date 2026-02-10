@@ -67,13 +67,13 @@ export function TokenUsage() {
           <span title="All-time tokens">{formatTokens(allTimeTokens)}</span>
           <span className="t-text-muted/50">·</span>
           <span title="API-billable cost" className="text-green-500">
-            {billingSource === 'setup-token' ? 'n/a' : formatCost(allTimeBillableCost)}
+            {formatCost(allTimeBillableCost)}
           </span>
           <span className="t-text-muted/50">·</span>
           <span title="All-time cache hit rate" className="text-blue-500">{(allTimeCacheHitRate * 100).toFixed(0)}%</span>
           <span className="t-text-muted/50">·</span>
           <span title="Current billing source">
-            {billingSource === 'setup-token' ? 'setup-token' : billingSource === 'none' ? 'none' : 'api-key'}
+            {billingSource === 'none' ? 'none' : 'api-key'}
           </span>
           {allTimeCalls > 0 && (
             <>

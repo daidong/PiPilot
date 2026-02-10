@@ -440,7 +440,8 @@ export function createDataAnalyzer(config: {
   projectPath: string
   sessionId?: string
 }) {
-  const { apiKey, model = 'gpt-5.2', projectPath, sessionId } = config
+  const { apiKey, model, projectPath, sessionId } = config
+  if (!model) throw new Error('data-team: model is required')
   const languageModel = getLanguageModelByModelId(model, { apiKey })
 
   const outputBase = join(projectPath, '.research-pilot', 'outputs')

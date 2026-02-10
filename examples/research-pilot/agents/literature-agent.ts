@@ -40,9 +40,11 @@ export function createLiteratureAgent(config: {
   model?: string
   maxReviewIterations?: number
 }) {
+  if (!config.model) throw new Error('literature-agent: model is required')
+
   const team = createLiteratureTeam({
     apiKey: config.apiKey,
-    model: config.model ?? 'gpt-5.2',
+    model: config.model,
     maxReviewIterations: config.maxReviewIterations ?? 2
   })
 

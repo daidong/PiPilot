@@ -76,8 +76,8 @@ export interface ModelConfig {
  * Provider SDK configuration
  */
 export interface ProviderSDKConfig {
-  /** API key */
-  apiKey: string
+  /** API key (falls back to provider-specific env var if not set) */
+  apiKey?: string
   /** Base URL (optional) */
   baseURL?: string
 }

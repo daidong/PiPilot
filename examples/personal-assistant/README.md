@@ -74,28 +74,8 @@ npm run build      # Production build
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | Required for OpenAI models | OpenAI API key |
-| `ANTHROPIC_API_KEY` | Optional | Anthropic API key fallback (used when setup-token is missing/invalid) |
+| `ANTHROPIC_API_KEY` | Required for Anthropic models | Anthropic API key |
 | `EMAIL_DB_PATH` | No | Path to SQLite email database |
-
-## Anthropic Setup Token Storage
-
-Anthropic `setup-token` is stored in a shared user-level credentials path, not in project folders:
-
-- Default: `~/.agentfoundry/credentials/anthropic.json`
-- Override: `$AGENTFOUNDRY_HOME/credentials/anthropic.json`
-
-This allows Personal Assistant and Research Pilot Desktop to reuse one token across apps.
-
-Security behavior:
-
-- Credentials directory is created with `0700` (best effort).
-- Credential file is written with `0600` (best effort).
-- Token is not encrypted yet (plaintext JSON on local disk).
-
-Migration behavior (automatic):
-
-- If a legacy project token exists in `.personal-assistant-v2/auth/anthropic.json` or `.research-pilot/auth/anthropic.json`, it is migrated to the shared path on first read.
-- After migration, legacy file token content is scrubbed.
 
 ## Recommended `kernelV2` Config
 

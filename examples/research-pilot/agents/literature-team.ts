@@ -711,7 +711,7 @@ export function createLiteratureTeam(config: {
 }) {
   const {
     apiKey,
-    model = 'gpt-5.2',
+    model,
     maxReviewIterations = 2,
     projectPath,
     sessionId = 'default',
@@ -719,6 +719,7 @@ export function createLiteratureTeam(config: {
     onSearcherActivity
   } = config
   if (!apiKey) throw new Error('API key is required')
+  if (!model) throw new Error('literature-team: model is required')
 
   const languageModel = getLanguageModelByModelId(model, { apiKey })
 

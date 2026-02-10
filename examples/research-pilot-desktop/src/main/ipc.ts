@@ -20,11 +20,6 @@ import { PATHS, type ProjectConfig } from '@research-pilot/types'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
 import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
 import { realtimeBuffer } from './realtime-buffer'
-import {
-  createAnthropicAuthManager,
-  classifyAnthropicAuthFailure,
-  type AnthropicResolvedMode
-} from '../../../shared/anthropic-auth/index'
 
 /** Extract just the filename from a path */
 function getFileName(path: string): string {
@@ -376,31 +371,23 @@ const fmt = createActivityFormatter({
 let coordinator: ReturnType<typeof createCoordinator> | null = null
 let currentModel = 'gpt-5.2'
 let currentReasoningEffort: 'high' | 'medium' | 'low' = 'medium'
-let currentAuthMode: Exclude<AnthropicResolvedMode, 'not-applicable'> = 'none'
+let currentAuthMode: 'api-key' | 'none' = 'none'
 // Start with empty project path — user must select a folder
 let projectPath = ''
 let sessionId = crypto.randomUUID()
 let isClosing = false
 
-const anthropicAuth = createAnthropicAuthManager({
-  appMemoryRoot: '.research-pilot',
-  logger: (message) => console.log(message)
-})
-
 interface ResolvedCoordinatorAuth {
   apiKey: string
-  authMode: Exclude<AnthropicResolvedMode, 'not-applicable'>
+  authMode: 'api-key' | 'none'
   isAnthropicModel: boolean
-  billingSource: 'api-key' | 'setup-token' | 'none'
+  billingSource: 'api-key' | 'none'
 }
 
-function resolveCoordinatorAuth(
-  modelId: string,
-  options?: { anthropicModeOverride?: 'setup-token' | 'api-key' }
-): ResolvedCoordinatorAuth {
+function resolveCoordinatorAuth(modelId: string): ResolvedCoordinatorAuth {
   const openaiApiKey = (process.env.OPENAI_API_KEY || '').trim()
   const anthropicApiKey = (process.env.ANTHROPIC_API_KEY || '').trim()
-  const isAnthropic = anthropicAuth.isAnthropicModel(modelId)
+  const isAnthropic = modelId.startsWith('claude-')
 
   if (!isAnthropic) {
     if (!openaiApiKey) {
@@ -414,54 +401,16 @@ function resolveCoordinatorAuth(
     }
   }
 
-  if (!projectPath) {
-    throw new Error('No project folder selected. Please select a folder first.')
+  if (!anthropicApiKey) {
+    throw new Error('ANTHROPIC_API_KEY is required for the selected Anthropic model.')
   }
 
-  if (options?.anthropicModeOverride === 'api-key') {
-    if (!anthropicApiKey) {
-      throw new Error('ANTHROPIC_API_KEY is required for API-key fallback mode.')
-    }
-    return {
-      apiKey: anthropicApiKey,
-      authMode: 'api-key',
-      isAnthropicModel: true,
-      billingSource: 'api-key'
-    }
+  return {
+    apiKey: anthropicApiKey,
+    authMode: 'api-key',
+    isAnthropicModel: true,
+    billingSource: 'api-key'
   }
-
-  if (options?.anthropicModeOverride === 'setup-token') {
-    const status = anthropicAuth.getStatus(projectPath, anthropicApiKey)
-    if (!status.hasSetupToken || status.authStatus === 'invalid') {
-      throw new Error('Anthropic setup-token is missing or invalid. Please setup token first.')
-    }
-  }
-
-  const resolved = anthropicAuth.resolveCredential({
-    model: modelId,
-    projectPath,
-    anthropicApiKey
-  })
-
-  if (resolved.mode === 'setup-token' && resolved.apiKey) {
-    return {
-      apiKey: resolved.apiKey,
-      authMode: 'setup-token',
-      isAnthropicModel: true,
-      billingSource: 'setup-token'
-    }
-  }
-
-  if (resolved.mode === 'api-key' && resolved.apiKey) {
-    return {
-      apiKey: resolved.apiKey,
-      authMode: 'api-key',
-      isAnthropicModel: true,
-      billingSource: 'api-key'
-    }
-  }
-
-  throw new Error('Anthropic authentication required. Add setup-token or ANTHROPIC_API_KEY.')
 }
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
@@ -532,11 +481,11 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
 async function ensureCoordinator(
   win: BrowserWindow,
   model?: string,
-  options?: { forceRecreate?: boolean; anthropicModeOverride?: 'setup-token' | 'api-key' }
+  options?: { forceRecreate?: boolean }
 ) {
   if (isClosing) throw new Error('Project is closing')
   const requestedModel = model || currentModel
-  const resolvedAuth = resolveCoordinatorAuth(requestedModel, options)
+  const resolvedAuth = resolveCoordinatorAuth(requestedModel)
   // Recreate coordinator if model/auth mode changed (reasoning effort changes handled by prefs:save)
   if (
     coordinator
@@ -642,14 +591,13 @@ async function ensureCoordinator(
       // Token usage tracking
       onUsage: (usage: any, cost: any) => {
         const rawCost = cost.totalCost ?? 0
-        const isApiBillable = !(resolvedAuth.isAnthropicModel && resolvedAuth.billingSource === 'setup-token')
         const usageEvent = {
           promptTokens: usage.promptTokens ?? 0,
           completionTokens: usage.completionTokens ?? 0,
           cachedTokens: usage.cacheReadInputTokens ?? 0,
-          cost: isApiBillable ? rawCost : 0,
+          cost: rawCost,
           rawCost,
-          billableCost: isApiBillable ? rawCost : 0,
+          billableCost: rawCost,
           authMode: currentAuthMode,
           billingSource: resolvedAuth.billingSource,
           cacheHitRate: usage.promptTokens > 0
@@ -698,52 +646,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       }
     }
     try {
-      let result = await coord.chat(message, mentions)
-
-      // If setup-token is invalid/revoked, mark invalid and retry once with API key fallback.
-      if (
-        !result.success
-        && anthropicAuth.isAnthropicModel(requestedModel)
-        && currentAuthMode === 'setup-token'
-      ) {
-        const classified = classifyAnthropicAuthFailure(result.error)
-        if (classified.isAuthInvalid) {
-          const status = anthropicAuth.invalidateSetupToken(
-            projectPath,
-            result.error || classified.reasonCode,
-            process.env.ANTHROPIC_API_KEY
-          )
-          safeSend(win, 'auth:anthropic-status', status)
-
-          if ((process.env.ANTHROPIC_API_KEY || '').trim()) {
-            const fallbackEvent = {
-              type: 'system',
-              summary: 'Anthropic setup-token invalid. Retrying with API key fallback.'
-            }
-            realtimeBuffer.pushActivity(fallbackEvent)
-            safeSend(win, 'agent:activity', fallbackEvent)
-
-            coordinator?.destroy().catch(() => {})
-            coordinator = null
-
-            const fallbackCoordinator = await ensureCoordinator(win, requestedModel, {
-              forceRecreate: true,
-              anthropicModeOverride: 'api-key'
-            })
-            result = await fallbackCoordinator.chat(message, mentions)
-          }
-        }
-      }
-
-      // Successful setup-token run marks token as valid.
-      if (
-        result.success
-        && anthropicAuth.isAnthropicModel(requestedModel)
-        && currentAuthMode === 'setup-token'
-      ) {
-        const status = anthropicAuth.markSetupTokenValid(projectPath, process.env.ANTHROPIC_API_KEY)
-        safeSend(win, 'auth:anthropic-status', status)
-      }
+      const result = await coord.chat(message, mentions)
       realtimeBuffer.finishStreaming()
       safeSend(win, 'agent:done', result)
       return result
@@ -774,44 +677,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  // Auth (Anthropic setup-token / fallback)
+  // Auth (Anthropic API key only)
   ipcMain.handle('auth:get-anthropic-status', () => {
-    if (!projectPath) {
-      return {
-        authMode: 'none',
-        authStatus: 'missing',
-        hasSetupToken: false,
-        hasApiKeyFallback: !!(process.env.ANTHROPIC_API_KEY || '').trim(),
-        lastError: null
-      }
+    const hasApiKey = !!(process.env.ANTHROPIC_API_KEY || '').trim()
+    return {
+      authMode: hasApiKey ? 'api-key' : 'none',
+      authStatus: hasApiKey ? 'valid' : 'missing',
+      hasSetupToken: false,
+      hasApiKeyFallback: hasApiKey,
+      lastError: null
     }
-    return anthropicAuth.getStatus(projectPath, process.env.ANTHROPIC_API_KEY)
-  })
-
-  ipcMain.handle('auth:save-anthropic-setup-token', (_e, token: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    try {
-      const status = anthropicAuth.saveSetupToken(projectPath, token)
-      if (coordinator && anthropicAuth.isAnthropicModel(currentModel)) {
-        coordinator.destroy().catch(() => {})
-        coordinator = null
-      }
-      safeSend(win, 'auth:anthropic-status', status)
-      return { success: true, status }
-    } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to save setup-token.' }
-    }
-  })
-
-  ipcMain.handle('auth:clear-anthropic-setup-token', () => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const status = anthropicAuth.clearSetupToken(projectPath, process.env.ANTHROPIC_API_KEY)
-    if (coordinator && anthropicAuth.isAnthropicModel(currentModel)) {
-      coordinator.destroy().catch(() => {})
-      coordinator = null
-    }
-    safeSend(win, 'auth:anthropic-status', status)
-    return { success: true, status }
   })
 
   ipcMain.handle('auth:get-openai-status', () => {

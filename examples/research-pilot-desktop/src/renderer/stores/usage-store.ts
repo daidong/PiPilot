@@ -19,8 +19,8 @@ export interface UsageEvent {
   cost: number
   rawCost?: number
   billableCost?: number
-  authMode?: 'setup-token' | 'api-key' | 'none'
-  billingSource?: 'setup-token' | 'api-key' | 'none'
+  authMode?: 'api-key' | 'none'
+  billingSource?: 'api-key' | 'none'
   cacheHitRate: number
 }
 
@@ -66,7 +66,7 @@ interface UsageState {
   allTimeCost: number
   allTimeBillableCost: number
   allTimeCalls: number
-  billingSource: 'setup-token' | 'api-key' | 'none'
+  billingSource: 'api-key' | 'none'
 
   // Actions
   recordCall: (event: UsageEvent) => void

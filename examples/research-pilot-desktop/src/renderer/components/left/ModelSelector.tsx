@@ -14,12 +14,8 @@ export function ModelSelector() {
   const setModel = useUIStore((s) => s.setModel)
   const [open, setOpen] = useState(false)
   const [anthropicStatus, setAnthropicStatus] = useState<any>(null)
-  const [showSetupDialog, setShowSetupDialog] = useState(false)
-  const [setupTokenInput, setSetupTokenInput] = useState('')
-  const [setupError, setSetupError] = useState<string | null>(null)
-  const [copyHint, setCopyHint] = useState<string | null>(null)
-  const [pendingModel, setPendingModel] = useState<ModelOption | null>(null)
-  const [allowApiFallback, setAllowApiFallback] = useState(false)
+  const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
+  const [anthropicCopyHint, setAnthropicCopyHint] = useState<string | null>(null)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
   const [openAICopyHint, setOpenAICopyHint] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
@@ -79,16 +75,9 @@ export function ModelSelector() {
 
     if (model.provider === 'Anthropic') {
       const status = await api?.getAnthropicAuthStatus?.()
-      const hasSetupToken = !!status?.hasSetupToken && status?.authStatus !== 'invalid'
-      const hasFallback = !!status?.hasApiKeyFallback
-
-      if (!hasSetupToken) {
-        setPendingModel(model)
-        setAllowApiFallback(hasFallback)
-        setSetupTokenInput('')
-        setSetupError(null)
-        setCopyHint(null)
-        setShowSetupDialog(true)
+      if (!status?.hasApiKeyFallback) {
+        setShowAnthropicDialog(true)
+        setAnthropicCopyHint(null)
         setOpen(false)
         return
       }
@@ -100,11 +89,9 @@ export function ModelSelector() {
   }
 
   const authBadge = current?.provider === 'Anthropic'
-    ? anthropicStatus?.authMode === 'setup-token'
-      ? 'token'
-      : anthropicStatus?.authMode === 'api-key'
-        ? 'api'
-        : 'auth'
+    ? anthropicStatus?.authMode === 'api-key'
+      ? 'api'
+      : 'auth'
     : null
 
   return (
@@ -129,7 +116,7 @@ export function ModelSelector() {
               <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider t-text-muted sticky top-0 t-bg-surface">
                 {provider}
               </div>
-              {provider === 'OpenAI' && (
+              {(provider === 'OpenAI' || provider === 'Anthropic') && (
                 <div className="px-3 pb-1 text-[11px] t-text-muted">
                   API Key Only
                 </div>
@@ -205,103 +192,47 @@ export function ModelSelector() {
         </div>
       )}
 
-      {showSetupDialog && (
+      {showAnthropicDialog && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border t-border t-bg-surface shadow-2xl p-4 space-y-3">
             <div>
-              <div className="text-sm font-semibold t-text">Anthropic Setup Token</div>
+              <div className="text-sm font-semibold t-text">Anthropic API Key Required</div>
               <div className="text-xs t-text-secondary mt-1">
-                Paste your setup-token to continue with {pendingModel?.label || 'Anthropic model'}.
+                Anthropic models require <code className="px-1 rounded t-bg-surface">ANTHROPIC_API_KEY</code>.
               </div>
             </div>
             <div className="rounded-lg border t-border t-bg-base/60 p-3 space-y-2">
-              <div className="text-xs font-medium t-text">How to get setup-token</div>
+              <div className="text-xs font-medium t-text">How to set it</div>
               <ol className="text-xs t-text-secondary space-y-1 list-decimal pl-4">
-                <li>Open Terminal on your machine.</li>
-                <li>Run <code className="px-1 rounded t-bg-surface">claude setup-token</code> and finish login.</li>
-                <li>Copy the token (starts with <code className="px-1 rounded t-bg-surface">sk-ant-</code>) and paste below.</li>
+                <li>Open your environment config (for example project <code className="px-1 rounded t-bg-surface">.env</code>).</li>
+                <li>Add <code className="px-1 rounded t-bg-surface">ANTHROPIC_API_KEY=sk-ant-...</code>.</li>
+                <li>Restart the app, then select the Anthropic model again.</li>
               </ol>
               <div className="flex items-center gap-2">
-                <code className="text-[11px] px-2 py-1 rounded t-bg-surface border t-border">claude setup-token</code>
+                <code className="text-[11px] px-2 py-1 rounded t-bg-surface border t-border">ANTHROPIC_API_KEY=sk-ant-...</code>
                 <button
                   className="px-2 py-1 rounded text-[11px] t-bg-hover t-text-secondary"
                   onClick={async () => {
                     try {
-                      await navigator.clipboard.writeText('claude setup-token')
-                      setCopyHint('Command copied')
+                      await navigator.clipboard.writeText('ANTHROPIC_API_KEY=sk-ant-...')
+                      setAnthropicCopyHint('Template copied')
                     } catch {
-                      setCopyHint('Copy failed')
+                      setAnthropicCopyHint('Copy failed')
                     }
-                    setTimeout(() => setCopyHint(null), 1500)
+                    setTimeout(() => setAnthropicCopyHint(null), 1500)
                   }}
                 >
                   Copy
                 </button>
-                {copyHint && <span className="text-[11px] t-text-muted">{copyHint}</span>}
+                {anthropicCopyHint && <span className="text-[11px] t-text-muted">{anthropicCopyHint}</span>}
               </div>
             </div>
-            <input
-              value={setupTokenInput}
-              onChange={(e) => {
-                setSetupTokenInput(e.target.value)
-                if (setupError) setSetupError(null)
-              }}
-              placeholder="sk-ant-..."
-              className="w-full rounded-lg border t-border t-bg-base px-3 py-2 text-sm t-text"
-            />
-            {setupError && (
-              <div className="text-xs text-red-400">{setupError}</div>
-            )}
-            <div className="flex items-center justify-end gap-2">
-              <button
-                className="px-3 py-1.5 rounded-lg text-xs t-bg-hover t-text-secondary"
-                onClick={() => {
-                  setShowSetupDialog(false)
-                  setPendingModel(null)
-                  setSetupTokenInput('')
-                  setSetupError(null)
-                }}
-              >
-                Cancel
-              </button>
-              {allowApiFallback && (
-                <button
-                  className="px-3 py-1.5 rounded-lg text-xs t-bg-hover t-text-secondary"
-                  onClick={() => {
-                    if (pendingModel) setModel(pendingModel.id)
-                    setShowSetupDialog(false)
-                    setPendingModel(null)
-                    setSetupTokenInput('')
-                    setSetupError(null)
-                    refreshAnthropicStatus().catch(() => {})
-                  }}
-                >
-                  Use API Key
-                </button>
-              )}
+            <div className="flex items-center justify-end">
               <button
                 className="px-3 py-1.5 rounded-lg text-xs bg-teal-500 text-white hover:bg-teal-400"
-                onClick={async () => {
-                  const token = setupTokenInput.trim()
-                  if (!token) {
-                    setSetupError('Please enter a setup-token.')
-                    return
-                  }
-                  const saved = await api?.saveAnthropicSetupToken?.(token)
-                  if (!saved?.success) {
-                    setSetupError(saved?.error || 'Failed to save setup-token.')
-                    return
-                  }
-                  setAnthropicStatus(saved.status ?? null)
-                  if (pendingModel) setModel(pendingModel.id)
-                  setShowSetupDialog(false)
-                  setPendingModel(null)
-                  setSetupTokenInput('')
-                  setSetupError(null)
-                  refreshAnthropicStatus().catch(() => {})
-                }}
+                onClick={() => setShowAnthropicDialog(false)}
               >
-                Save & Continue
+                Got It
               </button>
             </div>
           </div>

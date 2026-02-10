@@ -75,7 +75,8 @@ export function createDataAgent(config: {
   apiKey: string
   model?: string
 }) {
-  const { apiKey, model = 'gpt-5.2' } = config
+  const { apiKey, model } = config
+  if (!model) throw new Error('data-agent: model is required')
 
   const languageModel = getLanguageModelByModelId(model, { apiKey })
 
