@@ -114,11 +114,10 @@ write_results(
 ## Analysis Tasks
 
 ### analyze (Statistical Analysis)
-- Compute descriptive statistics (mean, median, std, quartiles)
-- Identify correlations between numeric columns
-- Detect outliers using IQR or z-score
+- Compute only the statistics explicitly requested by the user
+- Identify correlations/outliers only when requested
 - Print key findings to stdout
-- Save summary as CSV table
+- Save summary as CSV table only if the user asked for file output
 
 ### visualize (Data Visualization)
 - Create appropriate plots for data types
@@ -130,13 +129,13 @@ write_results(
 ### transform (Data Transformation)
 - Clean, reshape, or transform data
 - Handle missing values, type conversions
-- Save transformed dataset as CSV
+- Save transformed dataset as CSV only when requested
 - Print summary of changes
 
 ### model (Statistical Modeling)
 - Build statistical/ML models (sklearn, statsmodels)
 - Report performance metrics
-- Save results summary as CSV
+- Save results summary as CSV only when requested
 - Print key metrics to stdout
 
 ## Code Standards

@@ -39,6 +39,7 @@ import {
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
 
 type IntentLabel = 'email' | 'calendar' | 'docs' | 'memory' | 'scheduler' | 'web' | 'general'
+type PersistenceDecision = 'ephemeral' | 'conditional' | 'persist-requested'
 
 const INTENT_PRIORITY: IntentLabel[] = [
   'email',
@@ -61,6 +62,12 @@ const INTENT_SKILL_IDS: Partial<Record<IntentLabel, string>> = {
   calendar: 'calendar-skill'
 }
 
+interface CoordinatorCapabilities {
+  gmailWriteAvailable: boolean
+  emailDbAvailable: boolean
+  calendarAvailable: boolean
+}
+
 interface TurnExplainSnapshot {
   timestamp: string
   sessionId: string
@@ -74,6 +81,10 @@ interface TurnExplainSnapshot {
     mentionSelections: number
     focusDigestIncluded: boolean
     approxTokens: number
+  }
+  persistence: {
+    decision: PersistenceDecision
+    reason: string
   }
   taskAnchor: {
     currentGoal: string
@@ -181,17 +192,73 @@ function buildToolContracts(toolRegistry: { getAll: () => Array<{ name: string; 
 }
 
 function preloadSkillsForIntents(intents: Set<IntentLabel>, skillManager: any): void {
+  if (!skillManager || typeof skillManager.loadFully !== 'function') return
   for (const intent of intents) {
     const skillId = INTENT_SKILL_IDS[intent]
-    if (skillId && skillManager) {
+    if (skillId) {
       skillManager.loadFully(skillId)
     }
   }
 }
 
-function buildAdditionalInstructions(intents: Set<IntentLabel>, toolContracts: string): string | undefined {
+function classifyPersistenceDecision(message: string): { decision: PersistenceDecision; reason: string } {
+  const text = message.toLowerCase()
+
+  if (/(do not save|don't save|no artifact|just answer|不要保存|别保存|不用保存)/.test(text)) {
+    return { decision: 'ephemeral', reason: 'User explicitly requested no persistence.' }
+  }
+
+  if (/(save|persist|remember|track|record|store|archive|保存|记住|记录|跟踪|持久化)/.test(text)) {
+    return { decision: 'persist-requested', reason: 'User requested durable tracking or saving.' }
+  }
+
+  if (/(^|\s)(why|what|how|status|clarify|explain|check)(\s|$)|为什么|怎么|是否|有无|确认/.test(text)) {
+    return { decision: 'ephemeral', reason: 'Message appears to be clarification/status Q&A.' }
+  }
+
+  return { decision: 'conditional', reason: 'Persist only if reuse/traceability triggers are met during execution.' }
+}
+
+function buildCapabilityGuidance(intents: Set<IntentLabel>, capabilities: CoordinatorCapabilities): string | undefined {
+  const lines: string[] = []
+
+  if (intents.has('email')) {
+    lines.push('## Email capability')
+    if (capabilities.emailDbAvailable) {
+      lines.push('- Email database querying is available via sqlite_* tools. Use LIMIT and explicit columns.')
+    } else {
+      lines.push('- Email database querying is unavailable in this run. Avoid sqlite email workflows.')
+    }
+    if (capabilities.gmailWriteAvailable) {
+      lines.push('- Gmail action tool is available for send/reply/mark/star operations.')
+    } else {
+      lines.push('- Gmail action tool is unavailable in this run. Explain the limitation and offer manual steps.')
+    }
+  }
+
+  if (intents.has('calendar')) {
+    lines.push('## Calendar capability')
+    if (capabilities.calendarAvailable) {
+      lines.push('- Calendar tool is available for schedule/event queries.')
+    } else {
+      lines.push('- Calendar tool is unavailable in this run. Explain limitation and suggest alternatives.')
+    }
+  }
+
+  return lines.length > 0 ? lines.join('\n') : undefined
+}
+
+function buildAdditionalInstructions(
+  intents: Set<IntentLabel>,
+  toolContracts: string,
+  capabilities: CoordinatorCapabilities
+): string | undefined {
   const ordered = INTENT_PRIORITY.filter(i => intents.has(i)).slice(0, 2)
   const modules: string[] = [toolContracts]
+  const capabilityGuidance = buildCapabilityGuidance(intents, capabilities)
+  if (capabilityGuidance) {
+    modules.push(capabilityGuidance)
+  }
 
   for (const intent of ordered) {
     const skillId = INTENT_SKILL_IDS[intent]
@@ -344,27 +411,10 @@ function persistToolArtifacts(
     const { projectPath, sessionId, tool, args, result } = params
     const payload = result as { success?: boolean; data?: unknown; error?: string } | undefined
     const success = payload?.success !== false
-    const outputText = tool === 'gmail'
-      ? JSON.stringify({
-          success,
-          error: payload?.error,
-          note: 'gmail tool output redacted by default'
-        })
-      : JSON.stringify(result).slice(0, 4000)
 
-    createArtifact({
-      type: 'tool-output',
-      title: `${tool} ${success ? 'result' : 'error'}`,
-      toolName: tool,
-      outputText,
-      tags: ['tool-output', tool],
-      summary: success ? `${tool} executed` : `${tool} failed: ${payload?.error ?? 'unknown error'}`,
-      provenance: {
-        source: 'agent',
-        sessionId,
-        extractedFrom: 'tool-output'
-      }
-    }, { sessionId, projectPath })
+    if (tool !== 'calendar' && tool !== 'gmail') {
+      return
+    }
 
     if (tool === 'calendar' && success) {
       const text = typeof payload?.data === 'string' ? payload.data : ''
@@ -559,6 +609,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   }
 
   const gmailTool = emailDbPath ? createGmailTool(emailDbPath) : null
+  const capabilities: CoordinatorCapabilities = {
+    gmailWriteAvailable: !!gmailTool,
+    emailDbAvailable: !!sqlitePack,
+    calendarAvailable: true
+  }
 
   const memoryPack = definePack({
     id: 'personal-memory-v2',
@@ -706,7 +761,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
         preloadSkillsForIntents(intents, agent.runtime.skillManager)
 
-        const additionalInstructions = buildAdditionalInstructions(intents, toolContracts)
+        const additionalInstructions = buildAdditionalInstructions(intents, toolContracts, capabilities)
+        const persistence = classifyPersistenceDecision(message)
 
         const mentionSelections = buildMentionSelections(mentions)
         const focusDigest = await buildFocusDigestSelection(sessionId, projectPath, memoryStorage)
@@ -736,6 +792,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
             mentionSelections: mentionSelections.length,
             focusDigestIncluded: !!focusDigest.selection,
             approxTokens: focusDigest.approxTokens
+          },
+          persistence: {
+            decision: persistence.decision,
+            reason: persistence.reason
           },
           taskAnchor: {
             currentGoal: anchor.currentGoal,

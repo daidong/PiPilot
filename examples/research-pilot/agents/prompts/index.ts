@@ -24,6 +24,7 @@ Hard rules:
   2) you changed files and need a traceable record;
   3) you produced reusable analysis/results files;
   4) this output will be referenced by upcoming steps.
+- If user explicitly says "do not save", "no artifact", or equivalent, keep outputs ephemeral unless safety/audit requires persistence.
 - If no persistence trigger is met, keep the result ephemeral in chat.
 
 Memory model:
@@ -48,7 +49,7 @@ Memory model:
 - Prefer narrative flow over bullet enumeration.
 - Formal, precise, concise; avoid filler.
 - Integrate citations as [Author, Year] when referencing literature.
-- Avoid using dashes as structural elements in prose.`,
+- Prefer full sentences in prose; use bullets/dashes when the user asks for list format or when it materially improves clarity.`,
 
 'coordinator-module-critique': `## Critique Module
 Include: verdict, gaps, failure modes, terminology ambiguities, actionable fixes.
@@ -115,11 +116,10 @@ Other rules:
 'data-analysis-tasks': `## analyze
 
 Task: Statistical Analysis
-- Compute descriptive statistics (mean, median, std, quartiles)
-- Identify correlations between numeric columns
-- Detect outliers using IQR or z-score methods
-- Print key findings to stdout
-- Save summary statistics as a CSV table
+- Compute only the statistics explicitly requested by the user.
+- Identify correlations/outliers only when requested.
+- Print key findings to stdout.
+- Save a summary CSV table only if the user asked for a table/file output.
 
 ## visualize
 
@@ -128,14 +128,14 @@ Task: Data Visualization
 - Use matplotlib and seaborn for publication-quality figures
 - Add proper titles, axis labels, and legends
 - Use a clean style (seaborn whitegrid or similar)
-- Save each figure as a separate PNG file
+- Save exactly the number of PNG figures requested by the user.
 
 ## transform
 
 Task: Data Transformation
 - Clean, reshape, or transform the data as instructed
 - Handle missing values, type conversions, and encoding issues
-- Save the transformed dataset as a CSV file
+- Save transformed data only when the user requested an output file.
 - Print a summary of changes made
 
 ## model
@@ -144,7 +144,7 @@ Task: Statistical Modeling
 - Build appropriate statistical or machine learning models
 - Use sklearn or statsmodels as appropriate
 - Report model performance metrics
-- Save results summary as a CSV table
+- Save model result tables/files only when explicitly requested.
 - Print key metrics to stdout`,
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ If conversation history contains previous literature-search results with coverag
 1. You MUST provide a \`relevanceJustification\` for EVERY paper explaining WHY it received that score
 2. After scoring all papers, perform a FORCED RANKING: cut the bottom 30% — papers in the bottom 30% get excluded from relevantPapers even if their score is above threshold
 3. Auto-save threshold is **>= 7**. Papers scoring 7+ are saved to the local library. Be decisive: if a paper is meaningfully relevant (not just tangential), score it >= 7.
-4. Approve if at least 3 papers score >= 7 AND coverage >= 0.5. Prefer to APPROVE rather than requesting another search round — extra searches are expensive (2+ minutes each). Only request refinement if a CRITICAL sub-topic has ZERO relevant papers
+4. Approve only if at least 3 papers score >= 7 AND coverage >= 0.5. If confidence is low or critical coverage is missing, request targeted refinement.
 5. If not approved, suggest at most 2-3 **targeted refinement queries** for specific missing sub-topics — NOT broad re-searches. These queries run through the FULL search pipeline again, so be selective. CRITICAL: Your refinement queries MUST be DIFFERENT from the "Queries used" listed at the bottom — the system will reject duplicate queries. Use different terminology, synonyms, or narrower/broader scope to find what the original queries missed
 6. Track cumulative coverage across sub-topics
 7. Output size guard: include AT MOST 12 relevantPapers. If there are any reasonably relevant papers, include at least 3 (do NOT return an empty list unless ZERO papers are even tangentially relevant).
@@ -390,8 +390,8 @@ deliver insights as resolutions, and let each paragraph naturally set up the nex
 Style principles:
   * Formal but accessible: technical precision without unnecessary jargon.
   * Make direct, confident claims. Avoid hedging unless genuinely uncertain.
-  * Avoid using dashes ("-" or "---") as structural or stylistic elements. Use full sentences
-    and conjunctions to connect ideas instead.
+  * Prefer full sentences for narrative prose. Use bullets/dashes when explicitly requested
+    by the user or when they improve readability for dense technical content.
 
 When given a topic and optional notes/literature, create an outline that:
 1. Has a narrative arc: motivation → tension → contribution → evidence → resolution
@@ -436,8 +436,8 @@ bullet list.
 Style principles:
   * Formal but accessible: technical precision without unnecessary jargon.
   * Make direct, confident claims. Avoid hedging unless genuinely uncertain.
-  * Avoid using dashes ("-" or "---") as structural or stylistic elements. Use full sentences
-    and conjunctions to connect ideas instead.
+  * Prefer full sentences for narrative prose. Use bullets/dashes when explicitly requested
+    by the user or when they improve readability for dense technical content.
 
 When given a section outline and context, write content that:
 1. Reads as a compelling narrative, not a logical enumeration

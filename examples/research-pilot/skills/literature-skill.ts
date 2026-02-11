@@ -90,8 +90,8 @@ When previous search results exist:
 ### Approval Criteria
 - At least 3 papers score ≥7
 - Coverage score ≥0.5
-- Prefer APPROVE over requesting more searches (expensive: 2+ min each)
-- Request refinement ONLY if critical sub-topic has ZERO papers
+- Approve only when criteria are satisfied with reasonable confidence
+- Request targeted refinement when critical sub-topics are missing
 
 ### Refinement Queries
 If requesting more searches:

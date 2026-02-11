@@ -85,6 +85,8 @@ export function ContextChips() {
             <p><span className="opacity-70">Intents:</span> {(explain.intents || []).join(', ') || '-'}</p>
             <p><span className="opacity-70">Focus used:</span> {explain.focus?.used?.length ?? 0}</p>
             <p><span className="opacity-70">Selected context:</span> {explain.selectedContext?.approxTokens ?? 0} tokens</p>
+            <p><span className="opacity-70">Persistence:</span> {explain.persistence?.decision ?? '-'}</p>
+            <p><span className="opacity-70">Reason:</span> {explain.persistence?.reason ?? '-'}</p>
             <p><span className="opacity-70">Budget total:</span> {explain.budget?.totalTokens ?? '-'}</p>
           </div>
         )}

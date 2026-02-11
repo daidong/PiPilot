@@ -35,7 +35,7 @@ export const academicWritingSkill: Skill = defineSkill({
 - **Philosophy**: Narrative flow over bullet enumeration; every sentence earns its place
 - **Outlining**: Create structure with narrative arc (motivation → tension → contribution → evidence → resolution)
 - **Drafting**: Compelling scholarly prose with natural citation integration [Author, Year]
-- **Style**: Formal but accessible; direct claims; no dashes as structural elements`,
+- **Style**: Formal but accessible; direct claims; prefer prose, use bullets when requested or clearer`,
 
     procedures: `
 ## Writing Philosophy
@@ -54,7 +54,7 @@ the reader should never wonder "why am I reading this?"
 
 1. **Formal but accessible**: Technical precision without unnecessary jargon
 2. **Direct, confident claims**: Avoid hedging unless genuinely uncertain
-3. **No dashes as structural elements**: Use full sentences and conjunctions instead
+3. **Prefer prose by default**: Use full sentences for narrative flow; use bullets/dashes when requested or when clarity improves
 4. **Citations as narrative**: Integrate [Author, Year] naturally, not as afterthoughts
 
 ## Outlining Process

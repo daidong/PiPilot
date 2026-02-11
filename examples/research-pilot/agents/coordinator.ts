@@ -34,6 +34,7 @@ import { readKernelTaskAnchor } from '../memory-v2/kernel-task-anchor.js'
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
 
 type IntentLabel = 'literature' | 'data' | 'writing' | 'critique' | 'resume' | 'web' | 'general'
+type PersistenceDecision = 'ephemeral' | 'conditional' | 'persist-requested'
 
 const INTENT_PRIORITY: IntentLabel[] = [
   'data',
@@ -53,6 +54,12 @@ const INTENT_MODULES: Partial<Record<IntentLabel, string>> = {
   resume: 'coordinator-module-resume'
 }
 
+const INTENT_SKILL_IDS: Partial<Record<IntentLabel, string>> = {
+  literature: 'literature-skill',
+  data: 'data-analysis-skill',
+  writing: 'academic-writing-skill'
+}
+
 interface TurnExplainSnapshot {
   timestamp: string
   sessionId: string
@@ -66,6 +73,10 @@ interface TurnExplainSnapshot {
     mentionSelections: number
     focusDigestIncluded: boolean
     approxTokens: number
+  }
+  persistence: {
+    decision: PersistenceDecision
+    reason: string
   }
   taskAnchor: {
     currentGoal: string
@@ -160,15 +171,46 @@ function buildToolContracts(toolRegistry: { getAll: () => Array<{ name: string; 
   return lines.join('\n')
 }
 
+function preloadSkillsForIntents(intents: Set<IntentLabel>, skillManager: any): void {
+  if (!skillManager || typeof skillManager.loadFully !== 'function') return
+  for (const intent of intents) {
+    const skillId = INTENT_SKILL_IDS[intent]
+    if (skillId) {
+      skillManager.loadFully(skillId)
+    }
+  }
+}
+
+function classifyPersistenceDecision(message: string): { decision: PersistenceDecision; reason: string } {
+  const text = message.toLowerCase()
+
+  if (/(do not save|don't save|no artifact|just answer|不要保存|别保存|不用保存)/.test(text)) {
+    return { decision: 'ephemeral', reason: 'User explicitly requested no persistence.' }
+  }
+
+  if (/(save|persist|remember|track|record|store|archive|保存|记住|记录|跟踪|持久化)/.test(text)) {
+    return { decision: 'persist-requested', reason: 'User requested durable tracking or saving.' }
+  }
+
+  if (/(^|\s)(why|what|how|status|clarify|explain|check)(\s|$)|为什么|怎么|是否|有无|确认/.test(text)) {
+    return { decision: 'ephemeral', reason: 'Message appears to be clarification/status Q&A.' }
+  }
+
+  return { decision: 'conditional', reason: 'Persist only if reuse/traceability triggers are met during execution.' }
+}
+
 function buildAdditionalInstructions(intents: Set<IntentLabel>, toolContracts: string): string | undefined {
   const ordered = INTENT_PRIORITY.filter(i => intents.has(i)).slice(0, 2)
-  const modules = [
-    toolContracts,
-    ...ordered
-      .map(i => INTENT_MODULES[i])
-      .filter((name): name is string => !!name)
-      .map(name => loadPrompt(name))
-  ]
+  const modules: string[] = [toolContracts]
+
+  for (const intent of ordered) {
+    if (INTENT_SKILL_IDS[intent]) continue
+
+    const name = INTENT_MODULES[intent]
+    if (name) {
+      modules.push(loadPrompt(name))
+    }
+  }
 
   return modules.length > 0 ? modules.join('\n\n') : undefined
 }
@@ -546,7 +588,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           const label = await classifyIntentWithLLM(intentRouterClient, message)
           if (label !== 'general') intents.add(label)
         }
+        preloadSkillsForIntents(intents, agent.runtime.skillManager)
         const additionalInstructions = buildAdditionalInstructions(intents, toolContracts)
+        const persistence = classifyPersistenceDecision(message)
 
         const mentionSelections = buildMentionSelections(mentions)
         const anchor = await readKernelTaskAnchor(projectPath, sessionId)
@@ -575,6 +619,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
             mentionSelections: mentionSelections.length,
             focusDigestIncluded: !!focusDigest.selection,
             approxTokens: focusDigest.approxTokens
+          },
+          persistence: {
+            decision: persistence.decision,
+            reason: persistence.reason
           },
           taskAnchor: {
             currentGoal: anchor.currentGoal,
