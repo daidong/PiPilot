@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog, shell } from 'electron'
+import { ipcMain, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, sep, isAbsolute } from 'path'
 import { createCoordinator } from '@research-pilot/agents/coordinator'
@@ -19,7 +19,7 @@ import { setCachedMarkdown, fileUriToPath } from '@research-pilot/mentions/docum
 import { PATHS, type ProjectConfig } from '@research-pilot/types'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
 import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
-import { realtimeBuffer } from './realtime-buffer'
+import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 
 /** Extract just the filename from a path */
 function getFileName(path: string): string {
@@ -242,7 +242,146 @@ function inferMimeType(path: string): string {
   return 'application/octet-stream'
 }
 
-function createArtifactFromWorkspaceFile(filePath: string) {
+interface WindowRuntimeState {
+  coordinator: ReturnType<typeof createCoordinator> | null
+  currentModel: string
+  currentReasoningEffort: 'high' | 'medium' | 'low'
+  currentAuthMode: 'api-key' | 'none'
+  projectPath: string
+  sessionId: string
+  isClosing: boolean
+  realtimeBuffer: RealtimeBuffer
+  fmt: ReturnType<typeof createActivityFormatter>
+}
+
+const windowStates = new Map<number, WindowRuntimeState>()
+let ipcHandlersRegistered = false
+
+function createWindowActivityFormatter(state: WindowRuntimeState) {
+  return createActivityFormatter({
+    // Lazy getter: registry becomes available after coordinator is created
+    toolRegistry: () => state.coordinator?.agent?.runtime?.toolRegistry,
+    customRules: [
+      {
+        match: 'literature-search',
+        formatCall: (_, a) => ({ label: `Search: ${((a.query as string) || '').slice(0, 40)}${((a.query as string) || '').length > 40 ? '...' : ''}`, icon: 'search' }),
+        formatResult: (_, r) => {
+          const data = r.data as Record<string, unknown> | undefined
+          // v2 compressed result format
+          const totalFound = (data?.totalPapersFound as number) ?? 0
+          const saved = (data?.papersAutoSaved as number) ?? 0
+          const coverage = data?.coverage as { score?: number } | undefined
+          if (totalFound > 0) {
+            let summary = `Found ${totalFound} papers`
+            if (coverage?.score != null) summary += ` (coverage: ${Math.round(coverage.score * 100)}%)`
+            if (saved > 0) summary += `, saved ${saved}`
+            return { label: summary, icon: 'search' }
+          }
+          // v1 fallback
+          const local = (data?.localPapersUsed as number) ?? 0
+          const external = (data?.externalPapersUsed as number) ?? 0
+          const savedV1 = (data?.savedPapers as number) ?? 0
+          let summary = `Found ${local + external} papers`
+          if (local > 0) summary += ` (${local} local)`
+          if (savedV1 > 0) summary += `, saved ${savedV1}`
+          return { label: summary, icon: 'search' }
+        }
+      },
+      // Sub-topic search progress (ACTIVITY, not PROGRESS)
+      {
+        match: 'lit-subtopic',
+        formatCall: (_, a) => ({ label: (a._summary as string) || 'Searching sub-topic', icon: 'search' }),
+        formatResult: (_, r) => ({ label: (r.data as string) || 'Search completed', icon: 'search' }),
+      },
+      // Metadata enrichment progress
+      {
+        match: 'lit-enrich',
+        formatCall: (_, a) => ({ label: (a._summary as string) || 'Enriching paper metadata', icon: 'search' }),
+        formatResult: (_, r) => ({ label: (r.data as string) || 'Enriched metadata', icon: 'search' }),
+      },
+      // Auto-save papers
+      {
+        match: 'lit-autosave',
+        formatCall: (_, a) => ({ label: (a._summary as string) || 'Saving papers', icon: 'file' }),
+        formatResult: (_, r) => ({ label: (r.data as string) || 'Saved papers', icon: 'file' }),
+      },
+      {
+        match: 'data-analyze',
+        formatCall: (_, a) => ({ label: `Analyze: ${getFileName((a.filePath as string) || '') || 'data'}`, icon: 'file' }),
+      },
+      {
+        match: 'convert_to_markdown',
+        formatCall: (_, a) => ({ label: `Convert: ${getFileName((a.uri as string) || '')}`, icon: 'file' }),
+        formatResult: (_, _r, a) => ({ label: `Converted ${getFileName((a?.uri as string) || '')}`, icon: 'file' }),
+      },
+      {
+        match: 'artifact-create',
+        formatCall: (_, a) => {
+          const type = ((a.type as string) || 'artifact').toLowerCase()
+          const title = ((a.title as string) || type).slice(0, 35)
+          return { label: `Create ${type}: ${title}`, icon: 'file' }
+        },
+        formatResult: (_, r) => {
+          const data = (r.data as any) || {}
+          const type = (data.type as string) || 'artifact'
+          const title = (data.title as string) || ''
+          return { label: title ? `Created ${type}: ${title.slice(0, 30)}` : `Created ${type}`, icon: 'file' }
+        }
+      },
+    ]
+  })
+}
+
+function createWindowRuntimeState(): WindowRuntimeState {
+  const state: WindowRuntimeState = {
+    coordinator: null,
+    currentModel: 'gpt-5.2',
+    currentReasoningEffort: 'medium',
+    currentAuthMode: 'none',
+    projectPath: '',
+    sessionId: crypto.randomUUID(),
+    isClosing: false,
+    realtimeBuffer: createRealtimeBuffer(),
+    fmt: undefined as unknown as ReturnType<typeof createActivityFormatter>
+  }
+  state.fmt = createWindowActivityFormatter(state)
+  return state
+}
+
+function getOrCreateWindowState(win: BrowserWindow): WindowRuntimeState {
+  const key = win.webContents.id
+  let state = windowStates.get(key)
+  if (!state) {
+    state = createWindowRuntimeState()
+    windowStates.set(key, state)
+  }
+  return state
+}
+
+function getWindowContext(event: IpcMainInvokeEvent): { win: BrowserWindow; state: WindowRuntimeState } {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (!win) {
+    throw new Error('Unable to resolve BrowserWindow from IPC sender.')
+  }
+  return { win, state: getOrCreateWindowState(win) }
+}
+
+export function registerWindow(win: BrowserWindow): void {
+  const key = win.webContents.id
+  getOrCreateWindowState(win)
+  win.on('closed', () => {
+    const state = windowStates.get(key)
+    if (!state) return
+    if (state.coordinator) {
+      state.coordinator.destroy().catch(() => {})
+    }
+    windowStates.delete(key)
+  })
+}
+
+function createArtifactFromWorkspaceFile(state: WindowRuntimeState, filePath: string) {
+  const projectPath = state.projectPath
+  const sessionId = state.sessionId
   const title = basename(filePath, extname(filePath)) || basename(filePath)
   const ext = extname(filePath).toLowerCase()
   const isTextNote = ext === '.md' || ext === '.txt'
@@ -276,10 +415,12 @@ function createArtifactFromWorkspaceFile(filePath: string) {
   }, { sessionId, projectPath })
 }
 
-function addFileToFocus(filePath: string, reason: string = 'selected from workspace tree', ttl: string = '2h') {
+function addFileToFocus(state: WindowRuntimeState, filePath: string, reason: string = 'selected from workspace tree', ttl: string = '2h') {
+  const projectPath = state.projectPath
+  const sessionId = state.sessionId
   const dataArtifacts = listData(projectPath)
-  const existing = dataArtifacts.find(item => resolve(item.filePath) === resolve(filePath))
-  const artifactResult = existing ? { success: true, artifact: { id: existing.id } } : createArtifactFromWorkspaceFile(filePath)
+  const existing = dataArtifacts.find((item) => resolve(item.filePath) === resolve(filePath))
+  const artifactResult = existing ? { success: true, artifact: { id: existing.id } } : createArtifactFromWorkspaceFile(state, filePath)
 
   if (!artifactResult.success || !artifactResult.artifact) {
     return { success: false, error: artifactResult.error ?? 'Unable to register file artifact.' }
@@ -294,88 +435,6 @@ function addFileToFocus(filePath: string, reason: string = 'selected from worksp
     ttl
   })
 }
-
-const fmt = createActivityFormatter({
-  // Lazy getter: registry becomes available after coordinator is created
-  toolRegistry: () => coordinator?.agent?.runtime?.toolRegistry,
-  customRules: [
-    {
-      match: 'literature-search',
-      formatCall: (_, a) => ({ label: `Search: ${((a.query as string) || '').slice(0, 40)}${((a.query as string) || '').length > 40 ? '...' : ''}`, icon: 'search' }),
-      formatResult: (_, r) => {
-        const data = r.data as Record<string, unknown> | undefined
-        // v2 compressed result format
-        const totalFound = (data?.totalPapersFound as number) ?? 0
-        const saved = (data?.papersAutoSaved as number) ?? 0
-        const coverage = data?.coverage as { score?: number } | undefined
-        if (totalFound > 0) {
-          let summary = `Found ${totalFound} papers`
-          if (coverage?.score != null) summary += ` (coverage: ${Math.round(coverage.score * 100)}%)`
-          if (saved > 0) summary += `, saved ${saved}`
-          return { label: summary, icon: 'search' }
-        }
-        // v1 fallback
-        const local = (data?.localPapersUsed as number) ?? 0
-        const external = (data?.externalPapersUsed as number) ?? 0
-        const savedV1 = (data?.savedPapers as number) ?? 0
-        let summary = `Found ${local + external} papers`
-        if (local > 0) summary += ` (${local} local)`
-        if (savedV1 > 0) summary += `, saved ${savedV1}`
-        return { label: summary, icon: 'search' }
-      }
-    },
-    // Sub-topic search progress (ACTIVITY, not PROGRESS)
-    {
-      match: 'lit-subtopic',
-      formatCall: (_, a) => ({ label: (a._summary as string) || 'Searching sub-topic', icon: 'search' }),
-      formatResult: (_, r) => ({ label: (r.data as string) || 'Search completed', icon: 'search' }),
-    },
-    // Metadata enrichment progress
-    {
-      match: 'lit-enrich',
-      formatCall: (_, a) => ({ label: (a._summary as string) || 'Enriching paper metadata', icon: 'search' }),
-      formatResult: (_, r) => ({ label: (r.data as string) || 'Enriched metadata', icon: 'search' }),
-    },
-    // Auto-save papers
-    {
-      match: 'lit-autosave',
-      formatCall: (_, a) => ({ label: (a._summary as string) || 'Saving papers', icon: 'file' }),
-      formatResult: (_, r) => ({ label: (r.data as string) || 'Saved papers', icon: 'file' }),
-    },
-    {
-      match: 'data-analyze',
-      formatCall: (_, a) => ({ label: `Analyze: ${getFileName((a.filePath as string) || '') || 'data'}`, icon: 'file' }),
-    },
-    {
-      match: 'convert_to_markdown',
-      formatCall: (_, a) => ({ label: `Convert: ${getFileName((a.uri as string) || '')}`, icon: 'file' }),
-      formatResult: (_, _r, a) => ({ label: `Converted ${getFileName((a?.uri as string) || '')}`, icon: 'file' }),
-    },
-    {
-      match: 'artifact-create',
-      formatCall: (_, a) => {
-        const type = ((a.type as string) || 'artifact').toLowerCase()
-        const title = ((a.title as string) || type).slice(0, 35)
-        return { label: `Create ${type}: ${title}`, icon: 'file' }
-      },
-      formatResult: (_, r) => {
-        const data = (r.data as any) || {}
-        const type = (data.type as string) || 'artifact'
-        const title = (data.title as string) || ''
-        return { label: title ? `Created ${type}: ${title.slice(0, 30)}` : `Created ${type}`, icon: 'file' }
-      }
-    },
-  ]
-})
-
-let coordinator: ReturnType<typeof createCoordinator> | null = null
-let currentModel = 'gpt-5.2'
-let currentReasoningEffort: 'high' | 'medium' | 'low' = 'medium'
-let currentAuthMode: 'api-key' | 'none' = 'none'
-// Start with empty project path — user must select a folder
-let projectPath = ''
-let sessionId = crypto.randomUUID()
-let isClosing = false
 
 interface ResolvedCoordinatorAuth {
   apiKey: string
@@ -451,8 +510,7 @@ function initializeProject(path: string): void {
     writeFileSync(projectFile, JSON.stringify(defaultConfig, null, 2))
   }
 
-  // Change cwd so relative PATHS in save commands resolve correctly
-  process.chdir(path)
+  // Keep process cwd stable; each window passes explicit projectPath.
 }
 
 /** Load or create a persistent session ID for a project folder */
@@ -479,59 +537,61 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
 }
 
 async function ensureCoordinator(
+  state: WindowRuntimeState,
   win: BrowserWindow,
   model?: string,
   options?: { forceRecreate?: boolean }
 ) {
-  if (isClosing) throw new Error('Project is closing')
-  const requestedModel = model || currentModel
+  if (state.isClosing) throw new Error('Project is closing')
+  const requestedModel = model || state.currentModel
   const resolvedAuth = resolveCoordinatorAuth(requestedModel)
   // Recreate coordinator if model/auth mode changed (reasoning effort changes handled by prefs:save)
   if (
-    coordinator
+    state.coordinator
     && (
       options?.forceRecreate
-      || requestedModel !== currentModel
-      || resolvedAuth.authMode !== currentAuthMode
+      || requestedModel !== state.currentModel
+      || resolvedAuth.authMode !== state.currentAuthMode
     )
   ) {
-    coordinator.destroy().catch(() => {})
-    coordinator = null
+    state.coordinator.destroy().catch(() => {})
+    state.coordinator = null
   }
-  currentModel = requestedModel
-  currentAuthMode = resolvedAuth.authMode
+  state.currentModel = requestedModel
+  state.currentAuthMode = resolvedAuth.authMode
 
-  if (!coordinator) {
+  if (!state.coordinator) {
     const apiKey = resolvedAuth.apiKey
+    const runProjectPath = state.projectPath
 
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
     const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
-    realtimeBuffer.pushActivity(initEvent)
+    state.realtimeBuffer.pushActivity(initEvent)
     safeSend(win, 'agent:activity', initEvent)
 
-    coordinator = await createCoordinator({
+    state.coordinator = await createCoordinator({
       apiKey,
-      model: currentModel,
-      reasoningEffort: currentReasoningEffort,
-      projectPath,
-      sessionId,
+      model: state.currentModel,
+      reasoningEffort: state.currentReasoningEffort,
+      projectPath: state.projectPath,
+      sessionId: state.sessionId,
       debug: true,
       onStream: (chunk: string) => {
-        realtimeBuffer.appendChunk(chunk)
+        state.realtimeBuffer.appendChunk(chunk)
         safeSend(win, 'agent:stream-chunk', chunk)
       },
       onToolCall: (tool: string, args: unknown) => {
         // Send activity event for tool invocation
-        const summary = fmt.formatToolCall(tool, args).label
+        const summary = state.fmt.formatToolCall(tool, args).label
         const event = { type: 'tool-call', tool, summary }
-        realtimeBuffer.pushActivity(event)
+        state.realtimeBuffer.pushActivity(event)
         safeSend(win, 'agent:activity', event)
       },
       onToolResult: (tool: string, result: unknown, args?: unknown) => {
         if (tool.startsWith('todo-') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.item) {
-            realtimeBuffer.upsertProgressItem(r.item)
+            state.realtimeBuffer.upsertProgressItem(r.item)
             safeSend(win, 'agent:todo-update', r.item)
           }
         }
@@ -541,7 +601,7 @@ async function ensureCoordinator(
           const r = result as any
           if (r.success && r.data?.path) {
             // Normalize to absolute path so renderer listeners can compare reliably
-            const absPath = isAbsolute(r.data.path) ? r.data.path : resolve(projectPath, r.data.path)
+            const absPath = isAbsolute(r.data.path) ? r.data.path : resolve(runProjectPath, r.data.path)
             safeSend(win, 'agent:file-created', absPath)
           }
         }
@@ -560,8 +620,8 @@ async function ensureCoordinator(
           if (r.success && r.data?.content && args && typeof args === 'object' && 'uri' in args) {
             const uri = (args as { uri: string }).uri
             const filePath = fileUriToPath(uri)
-            if (filePath && projectPath) {
-              setCachedMarkdown(filePath, r.data.content, projectPath)
+            if (filePath && runProjectPath) {
+              setCachedMarkdown(filePath, r.data.content, runProjectPath)
             }
           }
         }
@@ -582,9 +642,9 @@ async function ensureCoordinator(
         const r = result as any
         const success = r?.success !== false
         const error = !success ? (r?.error || 'Unknown error') : undefined
-        const summary = fmt.formatToolResult(tool, result, args).label
+        const summary = state.fmt.formatToolResult(tool, result, args).label
         const actEvent = { type: 'tool-result', tool, summary, success, error }
-        realtimeBuffer.pushActivity(actEvent)
+        state.realtimeBuffer.pushActivity(actEvent)
         safeSend(win, 'agent:activity', actEvent)
       },
 
@@ -598,7 +658,7 @@ async function ensureCoordinator(
           cost: rawCost,
           rawCost,
           billableCost: rawCost,
-          authMode: currentAuthMode,
+          authMode: state.currentAuthMode,
           billingSource: resolvedAuth.billingSource,
           cacheHitRate: usage.promptTokens > 0
             ? (usage.cacheReadInputTokens ?? 0) / usage.promptTokens
@@ -610,48 +670,58 @@ async function ensureCoordinator(
 
     // Notify UI that initialization is complete
     const readyEvent = { type: 'system', summary: 'Agent ready' }
-    realtimeBuffer.pushActivity(readyEvent)
+    state.realtimeBuffer.pushActivity(readyEvent)
     safeSend(win, 'agent:activity', readyEvent)
   }
-  return coordinator
+  return state.coordinator
 }
 
 
-export function registerIpcHandlers(win: BrowserWindow): void {
+export function registerIpcHandlers(): void {
+  if (ipcHandlersRegistered) return
+  ipcHandlersRegistered = true
+
+  const handleWindow = <T extends unknown[], R>(
+    channel: string,
+    handler: (ctx: { win: BrowserWindow; state: WindowRuntimeState }, ...args: T) => Promise<R> | R
+  ) => {
+    ipcMain.handle(channel, (event, ...args) => handler(getWindowContext(event), ...(args as T)))
+  }
+
   // Agent chat
-  ipcMain.handle('agent:send', async (_e, message: string, rawMentions?: string, model?: string) => {
-    if (!projectPath) {
+  handleWindow('agent:send', async ({ win, state }, message: string, rawMentions?: string, model?: string) => {
+    if (!state.projectPath) {
       const errResult = { success: false, error: 'No project folder selected. Please select a folder first.' }
       safeSend(win, 'agent:done', errResult)
       return errResult
     }
 
-    const requestedModel = model || currentModel
+    const requestedModel = model || state.currentModel
     let coord: Awaited<ReturnType<typeof ensureCoordinator>>
     try {
-      coord = await ensureCoordinator(win, requestedModel)
+      coord = await ensureCoordinator(state, win, requestedModel)
     } catch (err: any) {
       const errResult = { success: false, error: err.message || 'Failed to initialize coordinator.' }
       safeSend(win, 'agent:done', errResult)
       return errResult
     }
     // Only clear activity (per-run), NOT progress/todos (persist across turns)
-    realtimeBuffer.clearActivity()
+    state.realtimeBuffer.clearActivity()
     safeSend(win, 'agent:activity-clear')
     let mentions: any[] = []
     if (rawMentions) {
       const parsed = parseMentions(rawMentions)
       if (parsed.mentions.length > 0) {
-        mentions = await resolveMentions(parsed.mentions, projectPath)
+        mentions = await resolveMentions(parsed.mentions, state.projectPath)
       }
     }
     try {
       const result = await coord.chat(message, mentions)
-      realtimeBuffer.finishStreaming()
+      state.realtimeBuffer.finishStreaming()
       safeSend(win, 'agent:done', result)
       return result
     } catch (err: any) {
-      realtimeBuffer.finishStreaming()
+      state.realtimeBuffer.finishStreaming()
       const errResult = { success: false, error: err.message }
       safeSend(win, 'agent:done', errResult)
       return errResult
@@ -659,21 +729,21 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Realtime state recovery (renderer calls this on mount to restore lost state)
-  ipcMain.handle('agent:get-realtime-snapshot', () => {
-    return realtimeBuffer.getSnapshot()
+  handleWindow('agent:get-realtime-snapshot', ({ state }) => {
+    return state.realtimeBuffer.getSnapshot()
   })
 
   // Stop running agent
-  ipcMain.handle('agent:stop', () => {
-    if (coordinator) {
-      (coordinator as any).agent.stop()
+  handleWindow('agent:stop', ({ state }) => {
+    if (state.coordinator) {
+      (state.coordinator as any).agent.stop()
     }
   })
 
   // Clear session memory
-  ipcMain.handle('agent:clear-memory', async () => {
-    if (coordinator) {
-      await (coordinator as any).clearSessionMemory()
+  handleWindow('agent:clear-memory', async ({ state }) => {
+    if (state.coordinator) {
+      await (state.coordinator as any).clearSessionMemory()
     }
   })
 
@@ -696,55 +766,55 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Commands - entities
-  ipcMain.handle('cmd:list-notes', () => {
-    if (!projectPath) return []
-    return listNotes(projectPath)
+  handleWindow('cmd:list-notes', ({ state }) => {
+    if (!state.projectPath) return []
+    return listNotes(state.projectPath)
   })
-  ipcMain.handle('cmd:list-literature', () => {
-    if (!projectPath) return []
-    return listLiterature(projectPath)
+  handleWindow('cmd:list-literature', ({ state }) => {
+    if (!state.projectPath) return []
+    return listLiterature(state.projectPath)
   })
-  ipcMain.handle('cmd:list-data', () => {
-    if (!projectPath) return []
-    return listData(projectPath)
+  handleWindow('cmd:list-data', ({ state }) => {
+    if (!state.projectPath) return []
+    return listData(state.projectPath)
   })
-  ipcMain.handle('cmd:search', (_e, query: string) => {
-    if (!projectPath) return []
-    return searchEntities(projectPath, query)
+  handleWindow('cmd:search', ({ state }, query: string) => {
+    if (!state.projectPath) return []
+    return searchEntities(state.projectPath, query)
   })
-  ipcMain.handle('cmd:delete', (_e, id: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return deleteEntity(id, projectPath)
+  handleWindow('cmd:delete', ({ state }, id: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return deleteEntity(id, state.projectPath)
   })
 
   // Commands - Artifact (RFC-012 canonical)
-  ipcMain.handle('cmd:artifact-create', (_e, input: Record<string, unknown>) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return artifactCreate(input as any, { sessionId, projectPath })
+  handleWindow('cmd:artifact-create', ({ state }, input: Record<string, unknown>) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return artifactCreate(input as any, { sessionId: state.sessionId, projectPath: state.projectPath })
   })
-  ipcMain.handle('cmd:artifact-update', (_e, artifactId: string, patch: Record<string, unknown>) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return artifactUpdate(projectPath, artifactId, patch as any)
+  handleWindow('cmd:artifact-update', ({ state }, artifactId: string, patch: Record<string, unknown>) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return artifactUpdate(state.projectPath, artifactId, patch as any)
   })
-  ipcMain.handle('cmd:artifact-get', (_e, artifactId: string) => {
-    if (!projectPath) return null
-    return artifactGet(projectPath, artifactId)
+  handleWindow('cmd:artifact-get', ({ state }, artifactId: string) => {
+    if (!state.projectPath) return null
+    return artifactGet(state.projectPath, artifactId)
   })
-  ipcMain.handle('cmd:artifact-list', (_e, types?: string[]) => {
-    if (!projectPath) return []
-    return artifactList(projectPath, types as any)
+  handleWindow('cmd:artifact-list', ({ state }, types?: string[]) => {
+    if (!state.projectPath) return []
+    return artifactList(state.projectPath, types as any)
   })
-  ipcMain.handle('cmd:artifact-search', (_e, query: string, types?: string[]) => {
-    if (!projectPath) return []
-    return artifactSearch(projectPath, query, types as any)
+  handleWindow('cmd:artifact-search', ({ state }, query: string, types?: string[]) => {
+    if (!state.projectPath) return []
+    return artifactSearch(state.projectPath, query, types as any)
   })
-  ipcMain.handle('cmd:artifact-delete', (_e, artifactId: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return artifactDelete(projectPath, artifactId)
+  handleWindow('cmd:artifact-delete', ({ state }, artifactId: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return artifactDelete(state.projectPath, artifactId)
   })
 
   // Commands - Focus (RFC-012 canonical)
-  ipcMain.handle('cmd:focus-add', (_e, params: {
+  handleWindow('cmd:focus-add', ({ state }, params: {
     refType: 'artifact' | 'fact' | 'task'
     refId: string
     reason?: string
@@ -752,9 +822,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     source?: 'manual' | 'auto'
     ttl?: string
   }) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return focusAdd(projectPath, {
-      sessionId,
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return focusAdd(state.projectPath, {
+      sessionId: state.sessionId,
       refType: params.refType,
       refId: params.refId,
       reason: params.reason ?? 'manually selected',
@@ -763,52 +833,52 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       ttl: params.ttl ?? '2h'
     })
   })
-  ipcMain.handle('cmd:focus-list', () => {
-    if (!projectPath) return { success: true, entries: [] }
-    return focusList(projectPath, sessionId)
+  handleWindow('cmd:focus-list', ({ state }) => {
+    if (!state.projectPath) return { success: true, entries: [] }
+    return focusList(state.projectPath, state.sessionId)
   })
-  ipcMain.handle('cmd:focus-remove', (_e, idOrRef: string) => {
-    if (!projectPath) return { success: false, removed: false }
-    return focusRemove(projectPath, sessionId, idOrRef)
+  handleWindow('cmd:focus-remove', ({ state }, idOrRef: string) => {
+    if (!state.projectPath) return { success: false, removed: false }
+    return focusRemove(state.projectPath, state.sessionId, idOrRef)
   })
-  ipcMain.handle('cmd:focus-clear', () => {
-    if (!projectPath) return { success: false, removed: false }
-    return focusClear(projectPath, sessionId)
+  handleWindow('cmd:focus-clear', ({ state }) => {
+    if (!state.projectPath) return { success: false, removed: false }
+    return focusClear(state.projectPath, state.sessionId)
   })
-  ipcMain.handle('cmd:focus-prune', () => {
-    if (!projectPath) return { success: true, expired: 0, kept: 0 }
-    return focusPrune(projectPath, sessionId)
+  handleWindow('cmd:focus-prune', ({ state }) => {
+    if (!state.projectPath) return { success: true, expired: 0, kept: 0 }
+    return focusPrune(state.projectPath, state.sessionId)
   })
 
   // Commands - Task anchor / explain
-  ipcMain.handle('cmd:task-anchor-get', () => {
-    if (!projectPath) return { success: true, anchor: null }
-    return taskAnchorGet(projectPath, sessionId)
+  handleWindow('cmd:task-anchor-get', ({ state }) => {
+    if (!state.projectPath) return { success: true, anchor: null }
+    return taskAnchorGet(state.projectPath, state.sessionId)
   })
-  ipcMain.handle('cmd:task-anchor-set', (_e, anchor: {
+  handleWindow('cmd:task-anchor-set', ({ state }, anchor: {
     currentGoal: string
     nowDoing: string
     blockedBy: string[]
     nextAction: string
     sessionId?: string
   }) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorSet(projectPath, anchor.sessionId ?? sessionId, {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return taskAnchorSet(state.projectPath, anchor.sessionId ?? state.sessionId, {
       currentGoal: anchor.currentGoal,
       nowDoing: anchor.nowDoing,
       blockedBy: anchor.blockedBy,
       nextAction: anchor.nextAction
     })
   })
-  ipcMain.handle('cmd:task-anchor-update', (_e, patch: {
+  handleWindow('cmd:task-anchor-update', ({ state }, patch: {
     currentGoal?: string
     nowDoing?: string
     blockedBy?: string[]
     nextAction?: string
     sessionId?: string
   }) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorUpdate(projectPath, patch.sessionId ?? sessionId, {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return taskAnchorUpdate(state.projectPath, patch.sessionId ?? state.sessionId, {
       currentGoal: patch.currentGoal,
       nowDoing: patch.nowDoing,
       blockedBy: patch.blockedBy,
@@ -816,23 +886,23 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     })
   })
 
-  ipcMain.handle('cmd:memory-explain-turn', () => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainTurn(projectPath)
+  handleWindow('cmd:memory-explain-turn', ({ state }) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return memoryExplainTurn(state.projectPath)
   })
-  ipcMain.handle('cmd:memory-explain-fact', (_e, factId: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainFact(projectPath, factId)
+  handleWindow('cmd:memory-explain-fact', ({ state }, factId: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return memoryExplainFact(state.projectPath, factId)
   })
-  ipcMain.handle('cmd:memory-explain-budget', () => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainBudget(projectPath)
+  handleWindow('cmd:memory-explain-budget', ({ state }) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    return memoryExplainBudget(state.projectPath)
   })
 
   // Commands - Facts (read from .agentfoundry/memory/facts.jsonl)
-  ipcMain.handle('cmd:fact-list', () => {
-    if (!projectPath) return []
-    const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
+  handleWindow('cmd:fact-list', ({ state }) => {
+    if (!state.projectPath) return []
+    const factsFile = join(state.projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
     if (!existsSync(factsFile)) return []
     try {
       const raw = readFileSync(factsFile, 'utf-8')
@@ -858,9 +928,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  ipcMain.handle('cmd:fact-promote', (_e, factId: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
+  handleWindow('cmd:fact-promote', ({ state }, factId: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const factsFile = join(state.projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
     if (!existsSync(factsFile)) return { success: false, error: 'No facts file found.' }
     try {
       const raw = readFileSync(factsFile, 'utf-8')
@@ -888,9 +958,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  ipcMain.handle('cmd:fact-demote', (_e, factId: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
+  handleWindow('cmd:fact-demote', ({ state }, factId: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const factsFile = join(state.projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
     if (!existsSync(factsFile)) return { success: false, error: 'No facts file found.' }
     try {
       const raw = readFileSync(factsFile, 'utf-8')
@@ -919,20 +989,21 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Commands - save
-  ipcMain.handle('cmd:save-paper', (_e, argsStr: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+  handleWindow('cmd:save-paper', ({ state }, argsStr: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
     const args = parseSavePaperArgs(argsStr)
-    return savePaper(args.title, args, { sessionId, projectPath })
+    return savePaper(args.title, args, { sessionId: state.sessionId, projectPath: state.projectPath })
   })
-  ipcMain.handle('cmd:save-data', (_e, argsStr: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+  handleWindow('cmd:save-data', ({ state }, argsStr: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
     const args = parseSaveDataArgs(argsStr)
-    return saveData(args.name, args, { sessionId, projectPath })
+    return saveData(args.name, args, { sessionId: state.sessionId, projectPath: state.projectPath })
   })
 
   // Commands - enrich all papers
-  ipcMain.handle('cmd:enrich-papers', async (_e, paperIds?: string[]) => {
-    if (!projectPath) return { success: false, enriched: 0, skipped: 0, failed: 0 }
+  handleWindow('cmd:enrich-papers', async ({ win, state }, paperIds?: string[]) => {
+    if (!state.projectPath) return { success: false, enriched: 0, skipped: 0, failed: 0 }
+    const projectPath = state.projectPath
 
     // Load full Literature objects from disk (listLiterature only returns a subset of fields)
     const litDir = join(projectPath, PATHS.literature)
@@ -1020,7 +1091,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
             pdfUrl: asPaperInput.pdfUrl ?? undefined,
             enrichmentSource: (asPaperInput as any).enrichmentSource ?? undefined,
             enrichedAt: (asPaperInput as any).enrichedAt ?? undefined
-          }, { sessionId, projectPath })
+          }, { sessionId: state.sessionId, projectPath })
           enriched++
           safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'done' })
         } else {
@@ -1042,25 +1113,25 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
 
   // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
-  ipcMain.handle('mention:candidates', (_e, query: string, type?: string) => {
-    if (!projectPath) return []
+  handleWindow('mention:candidates', ({ state }, query: string, type?: string) => {
+    if (!state.projectPath) return []
     try {
-      return getCandidates(projectPath, type as any, query)
+      return getCandidates(state.projectPath, type as any, query)
     } catch {
       return []
     }
   })
 
   // List files in the project root folder (non-recursive, files only)
-  ipcMain.handle('file:list-root', () => {
-    if (!projectPath) return []
+  handleWindow('file:list-root', ({ state }) => {
+    if (!state.projectPath) return []
     try {
-      const entries = readdirSync(projectPath)
+      const entries = readdirSync(state.projectPath)
       const files: { path: string; name: string }[] = []
       for (const entry of entries) {
         // Skip hidden directories/files like .research-pilot, .git, etc.
         if (entry.startsWith('.')) continue
-        const fullPath = join(projectPath, entry)
+        const fullPath = join(state.projectPath, entry)
         try {
           if (statSync(fullPath).isFile()) {
             files.push({ path: fullPath, name: entry })
@@ -1076,23 +1147,23 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Workspace file tree - lazy by directory level.
-  ipcMain.handle('file:list-tree', (_e, options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => {
-    if (!projectPath) return []
+  handleWindow('file:list-tree', ({ state }, options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => {
+    if (!state.projectPath) return []
     const relativePath = options?.relativePath ?? ''
     const showIgnored = options?.showIgnored ?? false
     const limit = options?.limit ?? TREE_MAX_ENTRIES
-    return listTreeChildren(projectPath, relativePath, showIgnored, limit)
+    return listTreeChildren(state.projectPath, relativePath, showIgnored, limit)
   })
 
-  ipcMain.handle('file:search-tree', (_e, query: string, options?: { showIgnored?: boolean; maxResults?: number }) => {
-    if (!projectPath) return []
-    return searchTree(projectPath, query, options?.showIgnored ?? false, options?.maxResults ?? 200)
+  handleWindow('file:search-tree', ({ state }, query: string, options?: { showIgnored?: boolean; maxResults?: number }) => {
+    if (!state.projectPath) return []
+    return searchTree(state.projectPath, query, options?.showIgnored ?? false, options?.maxResults ?? 200)
   })
 
   // File reading for working folder preview
-  ipcMain.handle('file:read', (_e, filePath: string) => {
+  handleWindow('file:read', ({ state }, filePath: string) => {
     try {
-      const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+      const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
       if (!existsSync(absPath)) {
         return { success: false, error: 'File not found' }
       }
@@ -1103,16 +1174,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  ipcMain.handle('file:write', (_e, filePath: string, content: string) => {
+  handleWindow('file:write', ({ state }, filePath: string, content: string) => {
     try {
-      if (!projectPath) {
+      if (!state.projectPath) {
         return { success: false, error: 'No project folder selected.' }
       }
       if (typeof content !== 'string') {
         return { success: false, error: 'Invalid content.' }
       }
-      const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
-      if (!isWithinRoot(projectPath, absPath)) {
+      const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+      if (!isWithinRoot(state.projectPath, absPath)) {
         return { success: false, error: 'Path is outside current workspace.' }
       }
       if (!existsSync(absPath)) {
@@ -1134,50 +1205,50 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  ipcMain.handle('file:create-artifact', (_e, filePath: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
-    if (!isWithinRoot(projectPath, absPath)) {
+  handleWindow('file:create-artifact', ({ state }, filePath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    if (!isWithinRoot(state.projectPath, absPath)) {
       return { success: false, error: 'Path is outside current workspace.' }
     }
     if (!existsSync(absPath)) {
       return { success: false, error: 'File not found.' }
     }
-    return createArtifactFromWorkspaceFile(absPath)
+    return createArtifactFromWorkspaceFile(state, absPath)
   })
 
-  ipcMain.handle('file:add-focus', (_e, filePath: string, reason?: string, ttl?: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
-    if (!isWithinRoot(projectPath, absPath)) {
+  handleWindow('file:add-focus', ({ state }, filePath: string, reason?: string, ttl?: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    if (!isWithinRoot(state.projectPath, absPath)) {
       return { success: false, error: 'Path is outside current workspace.' }
     }
     if (!existsSync(absPath)) {
       return { success: false, error: 'File not found.' }
     }
-    return addFileToFocus(absPath, reason, ttl)
+    return addFileToFocus(state, absPath, reason, ttl)
   })
 
-  ipcMain.handle('task:link-evidence', (_e, filePath: string, reason?: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
-    if (!isWithinRoot(projectPath, absPath)) {
+  handleWindow('task:link-evidence', ({ state }, filePath: string, reason?: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    if (!isWithinRoot(state.projectPath, absPath)) {
       return { success: false, error: 'Path is outside current workspace.' }
     }
     if (!existsSync(absPath)) {
       return { success: false, error: 'File not found.' }
     }
 
-    const focusResult = addFileToFocus(absPath, reason ?? 'linked as task evidence', 'today')
+    const focusResult = addFileToFocus(state, absPath, reason ?? 'linked as task evidence', 'today')
     if (!focusResult.success) return focusResult
 
-    const fileLabel = toPosixPath(relative(projectPath, absPath))
-    const current = taskAnchorGet(projectPath)
+    const fileLabel = toPosixPath(relative(state.projectPath, absPath))
+    const current = taskAnchorGet(state.projectPath)
     const blockedBy = current.anchor?.blockedBy ?? []
     const marker = `Evidence: ${fileLabel}`
     const mergedBlockedBy = blockedBy.includes(marker) ? blockedBy : [...blockedBy, marker]
 
-    const anchorResult = taskAnchorUpdate(projectPath, {
+    const anchorResult = taskAnchorUpdate(state.projectPath, {
       blockedBy: mergedBlockedBy,
       nextAction: current.anchor?.nextAction || `Review evidence file: ${fileLabel}`
     })
@@ -1190,9 +1261,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Resolve a file path to an absolute path (for file:// URLs)
-  ipcMain.handle('file:resolve-path', (_e, filePath: string) => {
+  handleWindow('file:resolve-path', ({ state }, filePath: string) => {
     try {
-      const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+      const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
       if (!existsSync(absPath)) {
         return { success: false, error: 'File not found' }
       }
@@ -1203,18 +1274,18 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Open a file in the system default application
-  ipcMain.handle('file:open-external', (_e, filePath: string) => {
-    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+  handleWindow('file:open-external', ({ state }, filePath: string) => {
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
     if (!existsSync(absPath)) return { success: false, error: 'File not found' }
     shell.openPath(absPath)
     return { success: true }
   })
 
   // Move a workspace file or directory to system trash
-  ipcMain.handle('file:trash', async (_e, filePath: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
-    if (!isWithinRoot(projectPath, absPath)) return { success: false, error: 'Path is outside workspace.' }
+  handleWindow('file:trash', async ({ state }, filePath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    if (!isWithinRoot(state.projectPath, absPath)) return { success: false, error: 'Path is outside workspace.' }
     if (!existsSync(absPath)) return { success: false, error: 'File not found.' }
     try {
       await shell.trashItem(absPath)
@@ -1225,10 +1296,10 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Drop file into a specific workspace directory
-  ipcMain.handle('file:drop-to-dir', (_e, fileName: string, base64Content: string, targetDirRelPath: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const targetDir = targetDirRelPath ? resolve(projectPath, targetDirRelPath) : projectPath
-    if (!isWithinRoot(projectPath, targetDir)) return { success: false, error: 'Target outside workspace.' }
+  handleWindow('file:drop-to-dir', ({ state }, fileName: string, base64Content: string, targetDirRelPath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const targetDir = targetDirRelPath ? resolve(state.projectPath, targetDirRelPath) : state.projectPath
+    if (!isWithinRoot(state.projectPath, targetDir)) return { success: false, error: 'Target outside workspace.' }
     if (!existsSync(targetDir) || !statSync(targetDir).isDirectory()) return { success: false, error: 'Invalid directory.' }
     const destPath = join(targetDir, fileName)
     if (existsSync(destPath)) return { success: false, error: `"${fileName}" already exists.` }
@@ -1241,9 +1312,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Binary file reading (images, PDFs) — returns base64
-  ipcMain.handle('file:read-binary', (_e, filePath: string) => {
+  handleWindow('file:read-binary', ({ state }, filePath: string) => {
     try {
-      const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+      const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
       if (!existsSync(absPath)) {
         return { success: false, error: 'File not found' }
       }
@@ -1263,8 +1334,8 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Drop file handler — copies file into project and creates entity
-  ipcMain.handle('file:drop', async (_e, fileName: string, content: string, tab: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+  handleWindow('file:drop', async ({ state }, fileName: string, content: string, tab: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
 
     if (tab === 'notes') {
       // Save text content as a note entity
@@ -1279,13 +1350,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
             extractedFrom: 'file-import'
           }
         },
-        { sessionId, projectPath, lastAgentResponse: '' }
+        { sessionId: state.sessionId, projectPath: state.projectPath, lastAgentResponse: '' }
       )
     }
 
     if (tab === 'data') {
       // Write file into .research-pilot/data/ and register as data entity
-      const dataDir = join(projectPath, PATHS.data)
+      const dataDir = join(state.projectPath, PATHS.data)
       if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true })
       const destPath = join(dataDir, fileName)
       writeFileSync(destPath, content, 'utf-8')
@@ -1293,56 +1364,56 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       const name = fileName.replace(/\.\w+$/, '')
       const ext = fileName.split('.').pop()?.toLowerCase() || ''
       const mimeMap: Record<string, string> = { csv: 'text/csv', tsv: 'text/tab-separated-values', json: 'application/json' }
-      return saveData(name, { filePath: destPath, mimeType: mimeMap[ext] }, { sessionId, projectPath })
+      return saveData(name, { filePath: destPath, mimeType: mimeMap[ext] }, { sessionId: state.sessionId, projectPath: state.projectPath })
     }
 
     if (tab === 'papers') {
       // Save as a literature reference with content as abstract
       const title = fileName.replace(/\.\w+$/, '')
-      return savePaper(title, { authors: [], abstract: content }, { sessionId, projectPath })
+      return savePaper(title, { authors: [], abstract: content }, { sessionId: state.sessionId, projectPath: state.projectPath })
     }
 
     return { success: false, error: `Unknown tab: ${tab}` }
   })
 
   // Preferences persistence
-  ipcMain.handle('prefs:load', () => {
-    if (!projectPath) return null
-    const file = join(projectPath, PATHS.root, 'preferences.json')
+  handleWindow('prefs:load', ({ state }) => {
+    if (!state.projectPath) return null
+    const file = join(state.projectPath, PATHS.root, 'preferences.json')
     if (!existsSync(file)) return null
     try { return JSON.parse(readFileSync(file, 'utf-8')) } catch { return null }
   })
-  ipcMain.handle('prefs:save', (_e, prefs: { selectedModel?: string; reasoningEffort?: string }) => {
-    if (!projectPath) return
-    const file = join(projectPath, PATHS.root, 'preferences.json')
+  handleWindow('prefs:save', ({ state }, prefs: { selectedModel?: string; reasoningEffort?: string }) => {
+    if (!state.projectPath) return
+    const file = join(state.projectPath, PATHS.root, 'preferences.json')
     const data = { ...prefs, updatedAt: new Date().toISOString() }
     writeFileSync(file, JSON.stringify(data, null, 2))
     // Invalidate coordinator if model or reasoning effort changed so it gets recreated
-    const modelChanged = prefs.selectedModel && prefs.selectedModel !== currentModel
-    const effortChanged = prefs.reasoningEffort && prefs.reasoningEffort !== currentReasoningEffort
-    if (prefs.selectedModel) currentModel = prefs.selectedModel
-    if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort as any
-    if ((modelChanged || effortChanged) && coordinator) {
-      coordinator.destroy().catch(() => {})
-      coordinator = null
+    const modelChanged = prefs.selectedModel && prefs.selectedModel !== state.currentModel
+    const effortChanged = prefs.reasoningEffort && prefs.reasoningEffort !== state.currentReasoningEffort
+    if (prefs.selectedModel) state.currentModel = prefs.selectedModel
+    if (prefs.reasoningEffort) state.currentReasoningEffort = prefs.reasoningEffort as any
+    if ((modelChanged || effortChanged) && state.coordinator) {
+      state.coordinator.destroy().catch(() => {})
+      state.coordinator = null
     }
   })
 
   // Usage totals (framework persistence)
-  ipcMain.handle('usage:get-totals', () => {
-    if (!projectPath) return null
-    const baseDir = join(projectPath, '.agentfoundry')
+  handleWindow('usage:get-totals', ({ state }) => {
+    if (!state.projectPath) return null
+    const baseDir = join(state.projectPath, '.agentfoundry')
     return loadUsageTotals(baseDir)
   })
-  ipcMain.handle('usage:reset-totals', () => {
-    if (!projectPath) return null
-    const baseDir = join(projectPath, '.agentfoundry')
+  handleWindow('usage:reset-totals', ({ state }) => {
+    if (!state.projectPath) return null
+    const baseDir = join(state.projectPath, '.agentfoundry')
     return resetUsageTotals(baseDir)
   })
 
   // Open working folder with specified app
-  ipcMain.handle('folder:open-with', async (_e, app: 'finder' | 'zed' | 'cursor' | 'vscode') => {
-    if (!projectPath) return { success: false, error: 'No project open' }
+  handleWindow('folder:open-with', async ({ state }, app: 'finder' | 'zed' | 'cursor' | 'vscode') => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
 
     const { exec } = await import('child_process')
     const { promisify } = await import('util')
@@ -1351,16 +1422,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     try {
       switch (app) {
         case 'finder':
-          await execAsync(`open "${projectPath}"`)
+          await execAsync(`open "${state.projectPath}"`)
           break
         case 'zed':
-          await execAsync(`zed "${projectPath}"`)
+          await execAsync(`zed "${state.projectPath}"`)
           break
         case 'cursor':
-          await execAsync(`cursor "${projectPath}"`)
+          await execAsync(`cursor "${state.projectPath}"`)
           break
         case 'vscode':
-          await execAsync(`code "${projectPath}"`)
+          await execAsync(`code "${state.projectPath}"`)
           break
         default:
           return { success: false, error: `Unknown app: ${app}` }
@@ -1372,17 +1443,17 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   })
 
   // Session - chat history persistence
-  ipcMain.handle('session:save-message', (_e, sid: string, msg: any) => {
-    if (!projectPath) return
-    const dir = join(projectPath, PATHS.sessions)
+  handleWindow('session:save-message', ({ state }, sid: string, msg: any) => {
+    if (!state.projectPath) return
+    const dir = join(state.projectPath, PATHS.sessions)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     const file = join(dir, `${sid}.jsonl`)
     appendFileSync(file, JSON.stringify(msg) + '\n')
   })
 
-  ipcMain.handle('session:load-messages', (_e, sid: string, offset: number, limit: number) => {
-    if (!projectPath) return []
-    const file = join(projectPath, PATHS.sessions, `${sid}.jsonl`)
+  handleWindow('session:load-messages', ({ state }, sid: string, offset: number, limit: number) => {
+    if (!state.projectPath) return []
+    const file = join(state.projectPath, PATHS.sessions, `${sid}.jsonl`)
     if (!existsSync(file)) return []
     const lines = readFileSync(file, 'utf-8').split('\n').filter(Boolean)
     // offset=0 means most recent batch; we read from the end
@@ -1391,16 +1462,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return lines.slice(start, end).map((l) => JSON.parse(l))
   })
 
-  ipcMain.handle('session:get-total-count', (_e, sid: string) => {
-    if (!projectPath) return 0
-    const file = join(projectPath, PATHS.sessions, `${sid}.jsonl`)
+  handleWindow('session:get-total-count', ({ state }, sid: string) => {
+    if (!state.projectPath) return 0
+    const file = join(state.projectPath, PATHS.sessions, `${sid}.jsonl`)
     if (!existsSync(file)) return 0
     return readFileSync(file, 'utf-8').split('\n').filter(Boolean).length
   })
 
-  ipcMain.handle('session:mark-saved', (_e, sid: string, messageId: string) => {
-    if (!projectPath) return
-    const file = join(projectPath, PATHS.sessions, `${sid}.saved.json`)
+  handleWindow('session:mark-saved', ({ state }, sid: string, messageId: string) => {
+    if (!state.projectPath) return
+    const file = join(state.projectPath, PATHS.sessions, `${sid}.saved.json`)
     let ids: string[] = []
     if (existsSync(file)) {
       try { ids = JSON.parse(readFileSync(file, 'utf-8')) } catch { ids = [] }
@@ -1411,77 +1482,78 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   })
 
-  ipcMain.handle('session:load-saved-ids', (_e, sid: string) => {
-    if (!projectPath) return []
-    const file = join(projectPath, PATHS.sessions, `${sid}.saved.json`)
+  handleWindow('session:load-saved-ids', ({ state }, sid: string) => {
+    if (!state.projectPath) return []
+    const file = join(state.projectPath, PATHS.sessions, `${sid}.saved.json`)
     if (!existsSync(file)) return []
     try { return JSON.parse(readFileSync(file, 'utf-8')) } catch { return [] }
   })
 
   // Session
-  ipcMain.handle('session:current', () => ({ sessionId, projectPath }))
+  handleWindow('session:current', ({ state }) => ({ sessionId: state.sessionId, projectPath: state.projectPath }))
 
   // Project - pick folder and initialize
-  ipcMain.handle('project:pick-folder', async () => {
+  handleWindow('project:pick-folder', async ({ win, state }) => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory']
     })
     if (!result.canceled && result.filePaths[0]) {
-      projectPath = result.filePaths[0]
+      state.projectPath = result.filePaths[0]
       // Initialize .research-pilot directory structure
-      initializeProject(projectPath)
+      initializeProject(state.projectPath)
       // Reset coordinator and memory storage for new project
-      if (coordinator) {
-        await coordinator.destroy()
-        coordinator = null
+      if (state.coordinator) {
+        await state.coordinator.destroy()
+        state.coordinator = null
       }
       // Reuse persistent session ID for this project folder
-      sessionId = loadOrCreateSessionId(projectPath)
+      state.sessionId = loadOrCreateSessionId(state.projectPath)
       // Restore persisted model + reasoning preferences
-      const prefsFile = join(projectPath, PATHS.root, 'preferences.json')
+      const prefsFile = join(state.projectPath, PATHS.root, 'preferences.json')
       if (existsSync(prefsFile)) {
         try {
           const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
-          if (prefs.selectedModel) currentModel = prefs.selectedModel
-          if (prefs.reasoningEffort) currentReasoningEffort = prefs.reasoningEffort
+          if (prefs.selectedModel) state.currentModel = prefs.selectedModel
+          if (prefs.reasoningEffort) state.currentReasoningEffort = prefs.reasoningEffort
         } catch { /* ignore corrupt file */ }
       }
-      return { projectPath, sessionId }
+      return { projectPath: state.projectPath, sessionId: state.sessionId }
     }
     return null
   })
 
   // Close project: stop agent, destroy coordinator, reset state
-  ipcMain.handle('project:close', async () => {
-    isClosing = true
+  handleWindow('project:close', async ({ state }) => {
+    state.isClosing = true
     try {
       // Stop any running agent
-      if (coordinator) {
+      if (state.coordinator) {
         try {
-          ;(coordinator as any).agent.stop()
+          ;(state.coordinator as any).agent.stop()
         } catch {
           /* agent may not be running */
         }
       }
 
       // Destroy coordinator (agent + MCP servers + subagents)
-      if (coordinator) {
+      if (state.coordinator) {
         try {
-          await coordinator.destroy()
+          await state.coordinator.destroy()
         } catch (err) {
           console.error('[Close] coordinator.destroy() error:', err)
         }
-        coordinator = null
+        state.coordinator = null
       }
 
       // Reset main-process state
-      realtimeBuffer.reset()
-      projectPath = ''
-      sessionId = crypto.randomUUID()
-      currentModel = 'gpt-5.2'
-      currentAuthMode = 'none'
+      state.realtimeBuffer.reset()
+      state.projectPath = ''
+      state.sessionId = crypto.randomUUID()
+      state.currentModel = 'gpt-5.2'
+      state.currentReasoningEffort = 'medium'
+      state.currentAuthMode = 'none'
     } finally {
-      isClosing = false
+      state.isClosing = false
     }
   })
 }

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, shell, Menu } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
-import { registerIpcHandlers } from './ipc'
+import { registerIpcHandlers, registerWindow } from './ipc'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -41,19 +41,18 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
-  const win = createWindow()
-  registerIpcHandlers(win)
-  buildMenu(win)
+  registerIpcHandlers()
+  registerWindow(createWindow())
+  buildMenu()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      const w = createWindow()
-      registerIpcHandlers(w)
+      registerWindow(createWindow())
     }
   })
 })
 
-function buildMenu(win: BrowserWindow): void {
+function buildMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(process.platform === 'darwin'
       ? [
@@ -75,9 +74,20 @@ function buildMenu(win: BrowserWindow): void {
       label: 'File',
       submenu: [
         {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => {
+            registerWindow(createWindow())
+          }
+        },
+        { type: 'separator' },
+        {
           label: 'Close Project',
           accelerator: 'CmdOrCtrl+Shift+K',
-          click: () => win.webContents.send('project:closed')
+          click: () => {
+            const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+            if (target) target.webContents.send('project:closed')
+          }
         },
         { type: 'separator' },
         process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' }

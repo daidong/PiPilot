@@ -10,7 +10,7 @@ export interface RealtimeSnapshot {
   activityEvents: any[]
 }
 
-class RealtimeBuffer {
+export class RealtimeBuffer {
   private streamingText = ''
   private isStreaming = false
   private progressItems: any[] = []
@@ -73,4 +73,6 @@ class RealtimeBuffer {
   }
 }
 
-export const realtimeBuffer = new RealtimeBuffer()
+export function createRealtimeBuffer(): RealtimeBuffer {
+  return new RealtimeBuffer()
+}
