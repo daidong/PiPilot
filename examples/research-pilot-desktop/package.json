@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build && node ../../scripts/copy-desktop-community-skills.mjs",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "icon:generate": "python3 scripts/generate-app-icon.py"
   },
   "dependencies": {
     "@milkdown/plugin-diagram": "^7.7.0",

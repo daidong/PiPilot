@@ -1,9 +1,23 @@
 import { app, BrowserWindow, shell, Menu } from 'electron'
-import { join } from 'path'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers, registerWindow } from './ipc'
 
+function resolveAppIconPath(): string | undefined {
+  const candidates = [
+    join(process.cwd(), 'build', 'icon.png'),
+    resolve(__dirname, '../../build/icon.png'),
+    resolve(__dirname, '../../../build/icon.png'),
+    resolve(__dirname, '../build/icon.png'),
+    process.resourcesPath ? join(process.resourcesPath, 'build', 'icon.png') : ''
+  ].filter(Boolean)
+
+  return candidates.find((p) => existsSync(p))
+}
+
 function createWindow(): BrowserWindow {
+  const iconPath = resolveAppIconPath()
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -12,6 +26,7 @@ function createWindow(): BrowserWindow {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 16, y: 18 },
     backgroundColor: '#0a0a0a',
+    ...(process.platform === 'darwin' ? {} : iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -41,6 +56,10 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  const iconPath = resolveAppIconPath()
+  if (iconPath && process.platform === 'darwin') {
+    app.dock?.setIcon(iconPath)
+  }
   registerIpcHandlers()
   registerWindow(createWindow())
   buildMenu()
