@@ -4,6 +4,7 @@ export type V2Role = 'user' | 'assistant' | 'tool'
 
 export interface KernelV2Config {
   enabled?: boolean
+  profile?: 'minimal' | 'legacy'
   contextWindow?: number
   modelId?: string
   project?: {
@@ -72,6 +73,7 @@ export interface KernelV2Config {
 
 export interface KernelV2ResolvedConfig {
   enabled: boolean
+  profile: 'minimal' | 'legacy'
   contextWindow: number
   modelId: string
   context: {

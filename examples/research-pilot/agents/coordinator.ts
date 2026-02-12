@@ -1,5 +1,5 @@
 /**
- * Coordinator Agent (Research Pilot Memory V2 - RFC-012)
+ * Coordinator Agent (Research Pilot Memory Minimal Core - RFC-015)
  *
  * Key behavior:
  * - Canonical durable memory surface: Artifact
@@ -14,6 +14,7 @@ import { createLLMClientFromModelId } from '../../../src/llm/index.js'
 import { getModel } from '../../../src/llm/models.js'
 import { createSubagentTools } from './subagent-tools.js'
 import { createResearchMemoryTools } from '../tools/entity-tools.js'
+import { RESEARCH_PILOT_KERNEL_V2_CONFIG } from '../config/kernel-v2.js'
 import type { Agent } from '../../../src/types/agent.js'
 import type { ContextSelection } from '../../../src/types/context-pipeline.js'
 import type { SkillScriptMetadata } from '../../../src/types/skill.js'
@@ -868,9 +869,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     toolLoopThreshold: 15,
     maxSteps: 100,
     onUsage,
-    kernelV2: {
-      enabled: true
-    }
+    kernelV2: RESEARCH_PILOT_KERNEL_V2_CONFIG
   })
 
   await agent.ensureInit()

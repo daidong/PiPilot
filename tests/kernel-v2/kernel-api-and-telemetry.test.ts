@@ -15,6 +15,7 @@ describe('KernelV2 API and telemetry coverage', () => {
       modelId: 'gpt-5.2',
       config: {
         enabled: true,
+        profile: 'legacy',
         telemetry: { mode: 'stderr+file' }
       }
     })
@@ -65,5 +66,48 @@ describe('KernelV2 API and telemetry coverage', () => {
     expect(telemetryRaw).toContain('task.anchor.injected')
     expect(telemetryRaw).toContain('context.protected_zone.kept')
     expect(telemetryRaw).toContain('context.failsafe.entered')
+  })
+
+  it('minimal profile skips legacy task/memory telemetry scaffolding', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'af-kv2-api-min-'))
+    const kernel = createKernelV2({
+      projectPath: dir,
+      contextWindow: 1200,
+      modelId: 'gpt-5.2',
+      config: {
+        enabled: true,
+        profile: 'minimal',
+        telemetry: { mode: 'stderr+file' }
+      }
+    })
+
+    await kernel.init()
+
+    const turn = await kernel.runTurn({
+      sessionId: 'sess_api_min',
+      userPrompt: 'Summarize progress for this coding task',
+      systemPromptTokens: 900,
+      toolSchemasTokens: 500
+    }, {
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Implemented minimal profile and verified tests.'
+        }
+      ],
+      promptTokens: 1000
+    })
+
+    expect(turn.projectId).toBeTruthy()
+    expect(turn.task.taskId).toContain('minimal_')
+
+    const activeTasks = await kernel.listActiveTasks(turn.projectId)
+    expect(activeTasks).toEqual([])
+
+    const telemetryPath = path.join(dir, '.agentfoundry', 'logs', 'kernel-v2.log')
+    const telemetryRaw = await fs.readFile(telemetryPath, 'utf-8')
+    expect(telemetryRaw).not.toContain('task.anchor.injected')
+    expect(telemetryRaw).not.toContain('retrieval mode=')
+    expect(telemetryRaw).toContain('retrieval skipped profile=minimal')
   })
 })

@@ -17,6 +17,7 @@ describe('ContextAssemblerV2 fail-safe and retrieval fallback', () => {
 
     const cfg = resolveKernelV2Config({
       enabled: true,
+      profile: 'legacy',
       context: {
         protectedRecentTurns: 3
       },

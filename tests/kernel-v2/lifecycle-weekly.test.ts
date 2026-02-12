@@ -46,6 +46,7 @@ describe('KernelV2 weekly lifecycle', () => {
       modelId: 'gpt-5.2',
       config: {
         enabled: true,
+        profile: 'legacy',
         lifecycle: {
           autoWeekly: true,
           decayThresholdDays: 90

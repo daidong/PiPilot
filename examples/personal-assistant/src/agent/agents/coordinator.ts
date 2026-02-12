@@ -706,7 +706,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     maxSteps: 100,
     onUsage,
     kernelV2: {
-      enabled: true
+      enabled: true,
+      profile: 'legacy'
     }
   })
 

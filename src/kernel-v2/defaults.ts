@@ -4,6 +4,7 @@ import { FRAMEWORK_DIR } from '../constants.js'
 export function resolveKernelV2Config(config: KernelV2Config | undefined, contextWindow: number, modelId: string): KernelV2ResolvedConfig {
   return {
     enabled: config?.enabled ?? true,
+    profile: config?.profile ?? 'minimal',
     contextWindow,
     modelId,
     context: {

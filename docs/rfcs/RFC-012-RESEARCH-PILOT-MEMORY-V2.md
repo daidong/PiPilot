@@ -1,10 +1,23 @@
 # RFC-012: Research Pilot Memory V2
 ## Artifact/Fact/Focus Core with Lightweight Task Anchors
 
-Status: Draft  
+Status: Deprecated (Research Pilot runtime)  
 Author: AgentFoundry Team  
 Created: 2026-02-06  
-Updated: 2026-02-06
+Updated: 2026-02-12  
+Superseded by: RFC-015 (Framework Memory Minimal Core)
+
+---
+
+## Deprecation Notice
+
+This RFC is kept as historical design context only.
+
+For current and future implementation direction:
+
+- Research Pilot memory semantics: `Artifacts + Session Summaries`
+- Framework default runtime semantics: minimal core, heavy memory semantics moved to optional profiles/plugins
+- See `docs/rfcs/RFC-015-FRAMEWORK-MEMORY-MINIMAL-CORE.md`
 
 ---
 

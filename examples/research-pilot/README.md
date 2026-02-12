@@ -11,6 +11,10 @@ The project has moved away from complex in-prompt memory objects (`Fact`, `Focus
 
 In short: persist only what matters, keep chat context lean, and recover continuity via periodic summaries.
 
+Runtime profile:
+
+- `kernelV2.profile = "minimal"` (no task anchor / facts / evidence cards scaffolding)
+
 ## 2. Memory Model
 
 ### 2.1 Durable memory: Artifact only
@@ -83,6 +87,7 @@ Per user message:
 3. Build selected context from:
    - mention selections
    - latest session summary (if any)
+   - no legacy task/facts/evidence injection in minimal profile
 4. Run agent with additional intent module instructions.
 5. Write turn explain snapshot.
 6. Append turn history and trigger `maybeGenerateSummary()`.

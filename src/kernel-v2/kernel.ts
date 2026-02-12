@@ -135,6 +135,42 @@ function taskAnchorToText(anchor: V2TaskAnchor): string {
   ].join('\n')
 }
 
+function createMinimalTask(projectId: string, sessionId: string, userPrompt: string): V2TaskState {
+  const trimmed = userPrompt.trim()
+  const goal = trimmed.length > 180 ? `${trimmed.slice(0, 177)}...` : (trimmed || 'Handle current user request')
+  return {
+    taskId: `minimal_${Date.now().toString(36)}`,
+    projectId,
+    status: 'in_progress',
+    currentGoal: goal,
+    nowDoing: 'Using minimal profile (no task-state persistence)',
+    blockedBy: [],
+    nextAction: 'Continue with current user request',
+    lastSessionId: sessionId,
+    updatedAt: new Date().toISOString()
+  }
+}
+
+function buildMinimalContinuitySummary(assistantText: string): string {
+  const condensed = assistantText
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!condensed) return 'No assistant output yet.'
+  return condensed.length > 220 ? `${condensed.slice(0, 217)}...` : condensed
+}
+
+function createSkippedLifecycleReport(mode: 'weekly' | 'on-demand'): LifecycleReport {
+  const timestamp = new Date().toISOString()
+  return {
+    mode,
+    startedAt: timestamp,
+    finishedAt: timestamp,
+    consolidated: 0,
+    deprecated: 0,
+    archived: 0
+  }
+}
+
 export class KernelV2Impl implements KernelV2 {
   readonly config: KernelV2ResolvedConfig
 
@@ -209,12 +245,20 @@ export class KernelV2Impl implements KernelV2 {
       }
     }
 
-    const lifecycleReport = await this.lifecycle.maybeRunWeekly()
-    if (lifecycleReport) {
+    if (this.config.profile === 'legacy') {
+      const lifecycleReport = await this.lifecycle.maybeRunWeekly()
+      if (lifecycleReport) {
+        this.emit({
+          event: 'memory.lifecycle.weekly',
+          payload: lifecycleReport as unknown as Record<string, unknown>,
+          message: `weekly-lifecycle consolidated=${lifecycleReport.consolidated} deprecated=${lifecycleReport.deprecated} archived=${lifecycleReport.archived}`
+        })
+      }
+    } else {
       this.emit({
-        event: 'memory.lifecycle.weekly',
-        payload: lifecycleReport as unknown as Record<string, unknown>,
-        message: `weekly-lifecycle consolidated=${lifecycleReport.consolidated} deprecated=${lifecycleReport.deprecated} archived=${lifecycleReport.archived}`
+        event: 'memory.lifecycle.skipped',
+        payload: { profile: this.config.profile, reason: 'minimal-profile' },
+        message: `memory-lifecycle skipped profile=${this.config.profile}`
       })
     }
   }
@@ -230,6 +274,15 @@ export class KernelV2Impl implements KernelV2 {
   }
 
   async runMemoryLifecycle(mode: 'weekly' | 'on-demand', _projectId?: string): Promise<LifecycleReport> {
+    if (this.config.profile !== 'legacy') {
+      const report = createSkippedLifecycleReport(mode)
+      this.emit({
+        event: 'memory.lifecycle.skipped',
+        payload: { profile: this.config.profile, mode },
+        message: `memory-lifecycle skipped profile=${this.config.profile} mode=${mode}`
+      })
+      return report
+    }
     return this.lifecycle.run(mode)
   }
 
@@ -334,6 +387,7 @@ export class KernelV2Impl implements KernelV2 {
     additionalInstructions?: string
   }): Promise<{ projectId: string; task: V2TaskState; context: V2ContextAssemblyResult }> {
     this.gate.beginTurn()
+    const isLegacyProfile = this.config.profile === 'legacy'
 
     const projectId = await this.ensureProject(params.sessionId)
 
@@ -342,8 +396,14 @@ export class KernelV2Impl implements KernelV2 {
       content: params.userPrompt
     })
 
-    const task = await this.taskCoordinator.resolveOrCreate(projectId, params.sessionId, params.userPrompt)
-    this.activeTaskBySession.set(params.sessionId, task.taskId)
+    const task = isLegacyProfile
+      ? await this.taskCoordinator.resolveOrCreate(projectId, params.sessionId, params.userPrompt)
+      : createMinimalTask(projectId, params.sessionId, params.userPrompt)
+    if (isLegacyProfile) {
+      this.activeTaskBySession.set(params.sessionId, task.taskId)
+    } else {
+      this.activeTaskBySession.delete(params.sessionId)
+    }
 
     const context = await this.assembler.assemble(params.sessionId, projectId, {
       systemPromptTokens: params.systemPromptTokens,
@@ -395,32 +455,34 @@ export class KernelV2Impl implements KernelV2 {
     }
     this.failSafeBySession.set(params.sessionId, context.failSafeMode)
 
-    this.emit({
-      event: 'task.anchor.injected',
-      payload: {
-        sessionId: params.sessionId,
-        taskId: task.taskId,
-        anchor: context.taskAnchor
-      },
-      message: `task-anchor injected task=${task.taskId}`
-    })
+    if (isLegacyProfile) {
+      this.emit({
+        event: 'task.anchor.injected',
+        payload: {
+          sessionId: params.sessionId,
+          taskId: task.taskId,
+          anchor: context.taskAnchor
+        },
+        message: `task-anchor injected task=${task.taskId}`
+      })
 
-    await this.gate.writeCandidate({
-      namespace: 'task',
-      key: `${task.taskId}.goal`,
-      value: {
-        currentGoal: task.currentGoal,
-        nowDoing: task.nowDoing,
-        nextAction: task.nextAction,
-        blockedBy: task.blockedBy
-      },
-      valueText: `Task anchor for ${task.taskId}`,
-      sourceType: 'turn',
-      sourceRef: userTurn.id,
-      createdBy: 'model',
-      confidence: 0.8,
-      overwrite: true
-    }, params.sessionId)
+      await this.gate.writeCandidate({
+        namespace: 'task',
+        key: `${task.taskId}.goal`,
+        value: {
+          currentGoal: task.currentGoal,
+          nowDoing: task.nowDoing,
+          nextAction: task.nextAction,
+          blockedBy: task.blockedBy
+        },
+        valueText: `Task anchor for ${task.taskId}`,
+        sourceType: 'turn',
+        sourceRef: userTurn.id,
+        createdBy: 'model',
+        confidence: 0.8,
+        overwrite: true
+      }, params.sessionId)
+    }
 
     return { projectId, task, context }
   }
@@ -444,6 +506,7 @@ export class KernelV2Impl implements KernelV2 {
     messages: Message[]
     promptTokens: number
   }): Promise<void> {
+    const isLegacyProfile = this.config.profile === 'legacy'
     const projectId = await this.ensureProject(params.sessionId)
 
     const conversationTurns = this.extractConversationTurns(params.messages)
@@ -461,24 +524,28 @@ export class KernelV2Impl implements KernelV2 {
       .map(t => t.content)
       .join('\n')
 
-    const taskId = this.activeTaskBySession.get(params.sessionId)
-    const updatedTask = taskId
+    const taskId = isLegacyProfile
+      ? this.activeTaskBySession.get(params.sessionId)
+      : undefined
+    const updatedTask = (isLegacyProfile && taskId)
       ? await this.taskCoordinator.updateAfterAssistant(projectId, taskId, params.sessionId, assistantText)
       : null
 
-    const continuitySummary = this.taskCoordinator.buildContinuitySummary(updatedTask)
+    const continuitySummary = isLegacyProfile
+      ? this.taskCoordinator.buildContinuitySummary(updatedTask)
+      : buildMinimalContinuitySummary(assistantText)
     await this.storage.writeContinuity({
       id: `cont_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       projectId,
       sessionId: params.sessionId,
       summary: continuitySummary,
-      activeTaskIds: updatedTask ? [updatedTask.taskId] : [],
-      carryOverNextActions: updatedTask?.nextAction ? [updatedTask.nextAction] : [],
-      knownBlockers: updatedTask?.blockedBy ?? [],
+      activeTaskIds: (isLegacyProfile && updatedTask) ? [updatedTask.taskId] : [],
+      carryOverNextActions: (isLegacyProfile && updatedTask?.nextAction) ? [updatedTask.nextAction] : [],
+      knownBlockers: (isLegacyProfile && updatedTask?.blockedBy) ? updatedTask.blockedBy : [],
       createdAt: new Date().toISOString()
     })
 
-    const preFlushCandidates: V2MemoryWriteCandidate[] = updatedTask
+    const preFlushCandidates: V2MemoryWriteCandidate[] = (isLegacyProfile && updatedTask)
       ? [{
           namespace: 'task',
           key: `${updatedTask.taskId}.checkpoint`,
@@ -514,10 +581,12 @@ export class KernelV2Impl implements KernelV2 {
   }
 
   async getTaskState(projectId: string, taskId: string): Promise<V2TaskState | null> {
+    if (this.config.profile !== 'legacy') return null
     return this.storage.getTask(projectId, taskId)
   }
 
   async listActiveTasks(projectId: string): Promise<V2TaskState[]> {
+    if (this.config.profile !== 'legacy') return []
     const tasks = await this.storage.listTasks(projectId)
     return tasks.filter(task => task.status !== 'done')
   }
@@ -553,19 +622,23 @@ export class KernelV2Impl implements KernelV2 {
 
     const currentProjectId = await this.ensureProject(sessionId)
     if (currentProjectId !== projectId) {
-      const activeTaskId = this.activeTaskBySession.get(sessionId)
+      const activeTaskId = this.config.profile === 'legacy'
+        ? this.activeTaskBySession.get(sessionId)
+        : undefined
       const activeTask = activeTaskId
         ? await this.storage.getTask(currentProjectId, activeTaskId)
         : null
-      const summary = this.taskCoordinator.buildContinuitySummary(activeTask)
+      const summary = this.config.profile === 'legacy'
+        ? this.taskCoordinator.buildContinuitySummary(activeTask)
+        : 'Switched active project context.'
       await this.storage.writeContinuity({
         id: `cont_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
         projectId: currentProjectId,
         sessionId,
         summary,
-        activeTaskIds: activeTask ? [activeTask.taskId] : [],
-        carryOverNextActions: activeTask?.nextAction ? [activeTask.nextAction] : [],
-        knownBlockers: activeTask?.blockedBy ?? [],
+        activeTaskIds: (this.config.profile === 'legacy' && activeTask) ? [activeTask.taskId] : [],
+        carryOverNextActions: (this.config.profile === 'legacy' && activeTask?.nextAction) ? [activeTask.nextAction] : [],
+        knownBlockers: (this.config.profile === 'legacy' && activeTask?.blockedBy) ? activeTask.blockedBy : [],
         createdAt: new Date().toISOString()
       })
     }

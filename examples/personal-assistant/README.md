@@ -84,6 +84,7 @@ Use this as the baseline in `createAgent(...)` for production stability:
 ```ts
 kernelV2: {
   enabled: true,
+  profile: 'legacy',
   storage: {
     integrity: {
       verifyOnStartup: true

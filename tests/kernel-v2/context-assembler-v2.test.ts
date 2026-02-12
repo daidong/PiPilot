@@ -16,6 +16,7 @@ describe('ContextAssemblerV2', () => {
 
     const cfg = resolveKernelV2Config({
       enabled: true,
+      profile: 'legacy',
       context: { protectedRecentTurns: 3 }
     }, 200000, 'gpt-5.2')
 
@@ -52,5 +53,39 @@ describe('ContextAssemblerV2', () => {
     expect(result.workingContextBlock).toContain('user-4')
     expect(result.workingContextBlock).toContain('## Task Anchor')
     expect(result.workingContextBlock).toContain('CurrentGoal: Fix auth refresh flow')
+  })
+
+  it('minimal profile omits task/memory/evidence scaffolding', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'af-kv2-ctx-min-'))
+    const storage = new KernelV2Storage(dir)
+    await storage.init()
+
+    const cfg = resolveKernelV2Config({
+      enabled: true,
+      profile: 'minimal',
+      context: { protectedRecentTurns: 2 }
+    }, 200000, 'gpt-5.2')
+
+    const assembler = new ContextAssemblerV2(storage, cfg)
+
+    const project = await storage.getOrCreateProject()
+    await storage.bindSessionToProject('sess_ctx_min', project.projectId)
+
+    for (let i = 1; i <= 3; i++) {
+      await storage.appendTurn('sess_ctx_min', { role: 'user', content: `u-${i}` })
+      await storage.appendTurn('sess_ctx_min', { role: 'assistant', content: `a-${i}` })
+    }
+
+    const result = await assembler.assemble('sess_ctx_min', project.projectId, {
+      systemPromptTokens: 1000,
+      toolSchemasTokens: 500,
+      selectedContext: '## Session Summary\nshort summary'
+    })
+
+    expect(result.workingContextBlock).not.toContain('## Task Anchor')
+    expect(result.workingContextBlock).not.toContain('## Memory Cards')
+    expect(result.workingContextBlock).not.toContain('## Evidence Cards')
+    expect(result.workingContextBlock).toContain('## Protected Recent Turns')
+    expect(result.workingContextBlock).toContain('## Non-Protected History')
   })
 })

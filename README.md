@@ -26,6 +26,13 @@ Agent Foundry is built on three orthogonal axes:
 - **Policies**: Rules controlling what operations are allowed (three-phase pipeline)
 - **Context Sources**: Read-only information providers (`ctx.get()` API)
 
+### Kernel V2 Profiles
+
+`kernelV2.profile` controls memory semantics:
+
+- `minimal` (default): lean core context (history + selected context + continuity), no built-in task/facts/evidence scaffolding
+- `legacy`: enables task anchor + memory facts + evidence retrieval flow for compatibility
+
 ## Table of Contents
 
 - [Installation](#installation)

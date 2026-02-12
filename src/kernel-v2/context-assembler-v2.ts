@@ -222,6 +222,7 @@ export class ContextAssemblerV2 {
     }
 
     this.emit('retrieval.hybrid.stats', {
+      profile: this.config.profile,
       mode: selectedMode,
       attemptedModes,
       fallbackDepth,
@@ -229,12 +230,14 @@ export class ContextAssemblerV2 {
       evidenceCandidates: evidenceBlocks.length,
       rawScanTruncated,
       queryTokens: tokenize(query).length
-    }, `retrieval mode=${selectedMode} memory=${memoryBlocks.length} evidence=${evidenceBlocks.length}`)
+    }, `retrieval profile=${this.config.profile} mode=${selectedMode} memory=${memoryBlocks.length} evidence=${evidenceBlocks.length}`)
 
     return { memoryBlocks, evidenceBlocks }
   }
 
   async assemble(sessionId: string, projectId: string, input: V2ContextAssemblyInput): Promise<V2ContextAssemblyResult> {
+    const isLegacyProfile = this.config.profile === 'legacy'
+
     const turns = await this.storage.getSessionTurns(sessionId)
     const segments = await this.storage.listCompactSegments(sessionId)
     const compactedRanges = segments.map(s => s.turnRange)
@@ -246,37 +249,51 @@ export class ContextAssemblerV2 {
     const protectedTurns = logicalTurns.slice(Math.max(0, totalTurns - k))
     const nonProtectedTurns = logicalTurns.slice(0, Math.max(0, totalTurns - k))
 
-    const tasks = await this.storage.listTasks(projectId)
-    const activeTask = tasks.find(t => t.status !== 'done') ?? tasks[0]
-    const taskAnchor: V2TaskAnchor = activeTask
-      ? {
-          currentGoal: activeTask.currentGoal,
-          nowDoing: activeTask.nowDoing,
-          blockedBy: activeTask.blockedBy,
-          nextAction: activeTask.nextAction
-        }
-      : emptyAnchor()
+    let taskAnchor: V2TaskAnchor = emptyAnchor()
+    let taskAnchorBlock = ''
+    if (isLegacyProfile) {
+      const tasks = await this.storage.listTasks(projectId)
+      const activeTask = tasks.find(t => t.status !== 'done') ?? tasks[0]
+      taskAnchor = activeTask
+        ? {
+            currentGoal: activeTask.currentGoal,
+            nowDoing: activeTask.nowDoing,
+            blockedBy: activeTask.blockedBy,
+            nextAction: activeTask.nextAction
+          }
+        : emptyAnchor()
 
-    const taskAnchorBlock = [
-      '## Task Anchor',
-      `CurrentGoal: ${taskAnchor.currentGoal}`,
-      `NowDoing: ${taskAnchor.nowDoing}`,
-      `BlockedBy: ${taskAnchor.blockedBy.length > 0 ? taskAnchor.blockedBy.join('; ') : 'None'}`,
-      `NextAction: ${taskAnchor.nextAction}`
-    ].join('\n')
+      taskAnchorBlock = [
+        '## Task Anchor',
+        `CurrentGoal: ${taskAnchor.currentGoal}`,
+        `NowDoing: ${taskAnchor.nowDoing}`,
+        `BlockedBy: ${taskAnchor.blockedBy.length > 0 ? taskAnchor.blockedBy.join('; ') : 'None'}`,
+        `NextAction: ${taskAnchor.nextAction}`
+      ].join('\n')
+    }
 
     const retrievalQuery = input.query?.trim()
       ? input.query
       : `${taskAnchor.currentGoal} ${taskAnchor.nowDoing} ${taskAnchor.nextAction}`.trim()
 
-    const { memoryBlocks, evidenceBlocks } = await this.retrieveCards(projectId, retrievalQuery)
+    let memoryBlocks: string[] = []
+    let evidenceBlocks: string[] = []
+    if (isLegacyProfile) {
+      ({ memoryBlocks, evidenceBlocks } = await this.retrieveCards(projectId, retrievalQuery))
+    } else {
+      this.emit(
+        'retrieval.profile.skipped',
+        { profile: this.config.profile, queryTokens: tokenize(retrievalQuery).length },
+        `retrieval skipped profile=${this.config.profile}`
+      )
+    }
 
-    const memoryCardsBlock = memoryBlocks.length > 0
-      ? `## Memory Cards\n${memoryBlocks.join('\n')}`
-      : '## Memory Cards\n- none'
-    const evidenceCardsBlock = evidenceBlocks.length > 0
-      ? `## Evidence Cards\n${evidenceBlocks.join('\n')}`
-      : '## Evidence Cards\n- none'
+    const memoryCardsBlock = isLegacyProfile
+      ? (memoryBlocks.length > 0 ? `## Memory Cards\n${memoryBlocks.join('\n')}` : '## Memory Cards\n- none')
+      : ''
+    const evidenceCardsBlock = isLegacyProfile
+      ? (evidenceBlocks.length > 0 ? `## Evidence Cards\n${evidenceBlocks.join('\n')}` : '## Evidence Cards\n- none')
+      : ''
 
     const nonProtectedBlocks = nonProtectedTurns.map(t => renderLogicalTurn(t, this.config.context.includeToolMessagesInProtectedZone))
     const protectedBlocks = protectedTurns.map(t => renderLogicalTurn(t, this.config.context.includeToolMessagesInProtectedZone))
@@ -291,12 +308,12 @@ export class ContextAssemblerV2 {
 
     const requiredTokens = {
       protectedTurns: countTokens(requiredProtectedBlock),
-      taskAnchor: countTokens(taskAnchorBlock)
+      taskAnchor: isLegacyProfile ? countTokens(taskAnchorBlock) : 0
     }
 
     const desiredOptionalTokens = {
-      memoryCards: countTokens(memoryCardsBlock),
-      evidenceCards: countTokens(evidenceCardsBlock),
+      memoryCards: isLegacyProfile ? countTokens(memoryCardsBlock) : 0,
+      evidenceCards: isLegacyProfile ? countTokens(evidenceCardsBlock) : 0,
       nonProtectedTurns: countTokens(nonProtectedBlocks.join('\n\n')),
       optionalExpansion: optionalExpansionBlock ? countTokens(optionalExpansionBlock) : 0
     }
@@ -314,15 +331,13 @@ export class ContextAssemblerV2 {
       budgetPlan.allocations.nonProtectedTurns
     ).reverse()
 
-    const selectedMemory = takeByBudget(
-      memoryBlocks,
-      budgetPlan.allocations.memoryCards
-    )
+    const selectedMemory = isLegacyProfile
+      ? takeByBudget(memoryBlocks, budgetPlan.allocations.memoryCards)
+      : []
 
-    const selectedEvidence = takeByBudget(
-      evidenceBlocks,
-      budgetPlan.allocations.evidenceCards
-    )
+    const selectedEvidence = isLegacyProfile
+      ? takeByBudget(evidenceBlocks, budgetPlan.allocations.evidenceCards)
+      : []
 
     let selectedExpansion = ''
     if (optionalExpansionBlock && budgetPlan.allocations.optionalExpansion > 0) {
@@ -356,12 +371,11 @@ export class ContextAssemblerV2 {
       budgetPlan.protectedTurnsTarget
     )
 
-    const parts = [
-      continuityBlock,
-      memorySection,
-      evidenceSection,
-      historySection
-    ]
+    const parts = [continuityBlock, historySection]
+
+    if (isLegacyProfile) {
+      parts.splice(1, 0, memorySection, evidenceSection)
+    }
 
     if (selectedExpansion) {
       parts.push(selectedExpansion)
@@ -369,7 +383,7 @@ export class ContextAssemblerV2 {
 
     parts.push(`## Protected Recent Turns\n${protectedSelection.selected.length > 0 ? protectedSelection.selected.join('\n\n') : '- none'}`)
 
-    if (this.config.context.tailTaskAnchor) {
+    if (isLegacyProfile && this.config.context.tailTaskAnchor) {
       parts.push(taskAnchorBlock)
     }
 
