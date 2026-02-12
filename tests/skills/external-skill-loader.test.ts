@@ -154,7 +154,7 @@ Compatibility skill.
     })
 
     const loaded = await loader.loadAll()
-    const expectedIds = ['markitdown', 'document-docx']
+    const expectedIds = ['markitdown', 'document-docx', 'repo-quick-audit']
 
     for (const skillId of expectedIds) {
       const record = loaded.find(item => item.skill.id === skillId)

@@ -5,9 +5,6 @@ shortDescription: Fast local repository sanity checks
 loadingStrategy: lazy
 tools:
   - skill-script-run
-  - read
-  - glob
-  - grep
 tags:
   - community
   - audit

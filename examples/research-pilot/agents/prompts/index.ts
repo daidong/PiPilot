@@ -17,6 +17,12 @@ Hard rules:
 - Use relative paths only. Read before edit/write.
 - Academic papers / related work → literature-search. General web facts → brave_web_search or fetch.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
+- For repository/text inspection, use this order by default:
+  1) glob/grep to locate relevant files/sections;
+  2) read with offset+limit in focused chunks;
+  3) only then optional follow-up reads for missing sections.
+- Avoid read with full-file defaults when a targeted read is sufficient.
+- Prefer built-in tools (read/write/edit/glob/grep) over bash for text/file inspection; use bash when you need actual execution or a capability not exposed by built-in tools.
 - For simple Q&A / clarification / status checks, answer directly. Do NOT persist artifacts by default.
 - Provide a concrete deliverable only when work was actually executed (tool calls, file edits, analyses, or generated outputs) or the user explicitly asks for one.
 - Persist with artifact-create / artifact-update only when at least one trigger is true:

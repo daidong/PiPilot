@@ -154,26 +154,6 @@ async function classifyIntentWithLLM(
   return 'general'
 }
 
-function describeToolReturn(name: string): string {
-  if (name === 'read') return 'file text'
-  if (name === 'write') return 'path/bytes'
-  if (name === 'edit') return 'replacements'
-  if (name === 'glob') return 'paths'
-  if (name === 'grep') return 'matches'
-  if (name === 'convert_to_markdown') return 'output file path'
-  if (name === 'fetch') return 'status + body'
-  if (name === 'literature-search') return 'summary + review paths'
-  if (name === 'data-analyze') return 'outputs/manifest'
-  if (name.startsWith('brave_')) return 'ranked results'
-  if (name.startsWith('sqlite_')) return 'JSON text'
-  if (name.startsWith('todo-')) return 'todo item'
-  if (name.startsWith('memory-')) return 'memory item'
-  if (name.startsWith('artifact-')) return 'artifact result'
-  if (name === 'ctx-get') return 'rendered context'
-  if (name === 'bash') return 'stdout/stderr'
-  return 'result'
-}
-
 interface ScriptCandidate {
   skillId: string
   script: string
@@ -371,19 +351,6 @@ function discoverDynamicConversionScripts(
   return candidates
 }
 
-function buildToolContracts(toolRegistry: { getAll: () => Array<{ name: string; parameters?: Record<string, { required?: boolean }> }> }): string {
-  const tools = toolRegistry.getAll().slice().sort((a, b) => a.name.localeCompare(b.name))
-  const lines: string[] = ['## Tool contracts (minimal)']
-
-  for (const tool of tools) {
-    const params = tool.parameters ?? {}
-    const names = Object.entries(params).map(([name, def]) => def?.required === false ? `${name}?` : name)
-    lines.push(`- ${tool.name}({ ${names.join(', ')} }) -> ${describeToolReturn(tool.name)}`)
-  }
-
-  return lines.join('\n')
-}
-
 function recommendSkillsForMessage(
   message: string,
   intents: Set<IntentLabel>,
@@ -479,9 +446,9 @@ function classifyPersistenceDecision(message: string): { decision: PersistenceDe
   return { decision: 'conditional', reason: 'Persist only if reuse/traceability triggers are met during execution.' }
 }
 
-function buildAdditionalInstructions(intents: Set<IntentLabel>, toolContracts: string): string | undefined {
+function buildAdditionalInstructions(intents: Set<IntentLabel>): string | undefined {
   const ordered = INTENT_PRIORITY.filter(i => intents.has(i)).slice(0, 2)
-  const modules: string[] = [toolContracts]
+  const modules: string[] = []
 
   for (const intent of ordered) {
     if (INTENT_SKILL_IDS[intent]) continue
@@ -801,7 +768,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     }
   })
 
-  const webPack = await packs.web({ timeout: 30000 })
+  const webPack = await packs.web({
+    timeout: 30000,
+    enabledTools: ['brave_web_search']
+  })
 
   const subagentPack = definePack({
     id: 'subagents',
@@ -818,7 +788,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     identity: SYSTEM_PROMPT,
     constraints: [
       'For multi-step work, briefly state intent before acting',
-      'Ask for clarification when instructions are ambiguous'
+      'Ask for clarification when instructions are ambiguous',
+      'For repo/file investigation: locate with glob/grep first, then use targeted read with offset/limit; avoid bash unless execution or built-in tools cannot perform the task.'
     ],
     packs: [
       packs.safe(),
@@ -873,10 +844,6 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   })
 
   await agent.ensureInit()
-
-  const toolContracts = buildToolContracts(agent.runtime.toolRegistry as unknown as {
-    getAll: () => Array<{ name: string; parameters?: Record<string, { required?: boolean }> }>
-  })
 
   async function clearSessionMemory() {
     const storage = agent.runtime.memoryStorage
@@ -971,7 +938,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           agent.runtime.skillManager,
           agent.runtime.skillRegistry
         )
-        const baseAdditionalInstructions = buildAdditionalInstructions(intents, toolContracts)
+        const baseAdditionalInstructions = buildAdditionalInstructions(intents)
 
         // Read agent.md and prepend to additionalInstructions (system prompt level, never truncated)
         const agentMdRecord = findArtifactById(projectPath, AGENT_MD_ID)

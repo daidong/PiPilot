@@ -11,6 +11,7 @@ import { createStdioMCPProvider } from '../mcp/index.js'
 import { mergePacks } from '../factories/define-pack.js'
 import { definePack } from '../factories/define-pack.js'
 import type { Pack } from '../types/pack.js'
+import type { ParameterDefinition, Tool } from '../types/tool.js'
 import { fetchTool } from '../tools/index.js'
 
 export interface WebPackOptions {
@@ -30,6 +31,61 @@ export interface WebPackOptions {
    * For free tier, consider limiting to ['brave_web_search'] to conserve quota.
    */
   enabledTools?: string[]
+}
+
+const BRAVE_TOOL_PREFIX = 'brave_'
+const BRAVE_TOOL_DESC_MAX = 120
+const BRAVE_PARAM_DESC_MAX = 80
+
+function normalizeAndClamp(text: string, maxChars: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxChars) return normalized
+  return `${normalized.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`
+}
+
+function compactParameterDefinition(def: ParameterDefinition): ParameterDefinition {
+  const next: ParameterDefinition = { ...def }
+
+  if (typeof next.description === 'string' && next.description.trim().length > 0) {
+    next.description = normalizeAndClamp(next.description, BRAVE_PARAM_DESC_MAX)
+  }
+
+  if (next.items) {
+    next.items = compactParameterDefinition(next.items)
+  }
+
+  if (next.properties) {
+    const compacted: Record<string, ParameterDefinition> = {}
+    for (const [name, property] of Object.entries(next.properties)) {
+      compacted[name] = compactParameterDefinition(property)
+    }
+    next.properties = compacted
+  }
+
+  return next
+}
+
+/**
+ * "Mild compaction" for Brave MCP tools:
+ * - Keep all parameters and types intact
+ * - Clamp verbose descriptions to reduce tool schema token overhead
+ */
+export function compactBraveToolSchemas(tools: Tool[]): Tool[] {
+  return tools.map((tool) => {
+    if (!tool.name.startsWith(BRAVE_TOOL_PREFIX)) return tool
+
+    const compactedParams = Object.fromEntries(
+      Object.entries(tool.parameters).map(([name, def]) => [name, compactParameterDefinition(def)])
+    )
+
+    const compactedDescription = normalizeAndClamp(tool.description, BRAVE_TOOL_DESC_MAX)
+
+    return {
+      ...tool,
+      description: compactedDescription,
+      parameters: compactedParams
+    }
+  })
 }
 
 /**
@@ -92,6 +148,10 @@ export async function web(options: WebPackOptions = {}): Promise<Pack> {
   if (!bravePack) {
     throw new Error('Failed to create Brave Search MCP pack')
   }
+  const compactedBravePack: Pack = {
+    ...bravePack,
+    tools: compactBraveToolSchemas(bravePack.tools ?? [])
+  }
 
   // Optionally merge with fetch tool
   if (includeFetch) {
@@ -100,8 +160,8 @@ export async function web(options: WebPackOptions = {}): Promise<Pack> {
       description: 'HTTP fetch for direct URL retrieval',
       tools: [fetchTool as any]
     })
-    return mergePacks(bravePack, fetchPack)
+    return mergePacks(compactedBravePack, fetchPack)
   }
 
-  return bravePack
+  return compactedBravePack
 }
