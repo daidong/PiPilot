@@ -38,6 +38,17 @@ export interface SkillTelemetryConfig {
 }
 
 /**
+ * Skill script metadata discovered from a skill directory.
+ */
+export interface SkillScriptMetadata {
+  name: string
+  fileName?: string
+  relativePath?: string
+  filePath?: string
+  runner?: 'bash' | 'node' | 'python' | 'executable'
+}
+
+/**
  * Skill instruction sections for progressive disclosure
  */
 export interface SkillInstructions {
@@ -140,6 +151,10 @@ export interface Skill {
    */
   meta?: {
     approvedByUser?: boolean
+    sourceType?: 'builtin' | 'community-builtin' | 'project-local' | 'external'
+    filePath?: string
+    skillDir?: string
+    scripts?: SkillScriptMetadata[]
     [key: string]: unknown
   }
 }
@@ -159,6 +174,10 @@ export interface SkillConfig {
   tags?: string[]
   meta?: {
     approvedByUser?: boolean
+    sourceType?: 'builtin' | 'community-builtin' | 'project-local' | 'external'
+    filePath?: string
+    skillDir?: string
+    scripts?: SkillScriptMetadata[]
     [key: string]: unknown
   }
 }
@@ -223,7 +242,7 @@ export interface LoadedSkillContent {
  */
 export interface SkillRegistrationOptions {
   approvedByUser?: boolean
-  source?: 'builtin' | 'external'
+  source?: 'builtin' | 'external' | 'community-builtin' | 'project-local'
   filePath?: string
 }
 

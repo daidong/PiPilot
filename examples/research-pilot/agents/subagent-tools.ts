@@ -148,7 +148,8 @@ export function createSubagentTools(
             projectPath,
             sessionId: sessionId || 'default',
             messages: coordinatorMessages as unknown[] | undefined,
-            onSearcherActivity: searcherActivity
+            onSearcherActivity: searcherActivity,
+            toolContext
           })
         }
 

@@ -23,7 +23,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-community-skills.mjs",
     "dev": "tsc --watch",
     "test": "vitest",
     "test:run": "vitest run",

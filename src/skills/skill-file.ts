@@ -2,7 +2,9 @@
  * SKILL.md file parsing and serialization helpers.
  */
 
+import path from 'node:path'
 import YAML from 'yaml'
+
 import { defineSkill } from './define-skill.js'
 import type { Skill, SkillLoadingStrategy } from '../types/skill.js'
 
@@ -27,8 +29,20 @@ export interface ParsedExternalSkill {
   approvedByUser: boolean
 }
 
+export interface ParseExternalSkillOptions {
+  filePath?: string
+  defaultId?: string
+  defaultName?: string
+  defaultShortDescription?: string
+  defaultLoadingStrategy?: SkillLoadingStrategy
+  defaultTools?: string[]
+  defaultTags?: string[]
+  defaultMeta?: Record<string, unknown>
+  defaultApprovedByUser?: boolean
+}
+
 interface FrontmatterSplit {
-  frontmatterRaw: string
+  frontmatterRaw?: string
   body: string
 }
 
@@ -43,6 +57,27 @@ function parseStringArray(value: unknown): string[] | undefined {
     .map(item => typeof item === 'string' ? item.trim() : '')
     .filter(Boolean)
   return values.length > 0 ? values : undefined
+}
+
+function normalizeToolName(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, '-')
+  const aliasMap: Record<string, string> = {
+    read: 'read',
+    write: 'write',
+    edit: 'edit',
+    bash: 'bash',
+    'skill-script-run': 'skill-script-run',
+    'skill-create': 'skill-create',
+    'skill-approve': 'skill-approve'
+  }
+  return aliasMap[normalized] ?? normalized
+}
+
+function parseToolArray(value: unknown): string[] | undefined {
+  const values = parseStringArray(value)
+  if (!values) return undefined
+  const normalized = [...new Set(values.map(normalizeToolName).filter(Boolean))]
+  return normalized.length > 0 ? normalized : undefined
 }
 
 function parseLoadingStrategy(value: unknown): SkillLoadingStrategy | undefined {
@@ -74,10 +109,56 @@ function classifyHeading(heading: string): 'summary' | 'procedures' | 'examples'
   return undefined
 }
 
+function toKebabCase(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function toTitleCaseFromId(value: string): string {
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function normalizeSkillId(value: string): string {
+  let normalized = toKebabCase(value)
+  if (!normalized) normalized = 'skill'
+  if (!/^[a-z]/.test(normalized)) {
+    normalized = `skill-${normalized}`
+  }
+  return normalized
+}
+
+function inferDefaultId(options: ParseExternalSkillOptions): string | undefined {
+  if (options.defaultId?.trim()) {
+    return normalizeSkillId(options.defaultId)
+  }
+
+  const filePath = options.filePath?.trim()
+  if (!filePath) return undefined
+
+  const fileName = path.basename(filePath).toLowerCase()
+  if (fileName === 'skill.md') {
+    return normalizeSkillId(path.basename(path.dirname(filePath)))
+  }
+
+  const withoutSkillExt = path.basename(filePath).replace(/\.skill\.md$/i, '')
+  const withoutMd = withoutSkillExt.replace(/\.md$/i, '')
+  return normalizeSkillId(withoutMd)
+}
+
 function splitFrontmatter(content: string): FrontmatterSplit {
-  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  const normalized = content.replace(/\r\n/g, '\n')
+  const lines = normalized.split('\n')
+
   if (lines[0]?.trim() !== '---') {
-    throw new Error('SKILL.md must start with YAML frontmatter (---).')
+    return { body: normalized.trim() }
   }
 
   let endIndex = -1
@@ -166,29 +247,65 @@ function firstNonEmptyParagraph(body: string): string {
   return paragraph.join(' ').trim()
 }
 
-function parseFrontmatterObject(frontmatterRaw: string): ExternalSkillFrontmatter {
-  const parsed = YAML.parse(frontmatterRaw) as Record<string, unknown> | null
+function parseFrontmatterObject(
+  frontmatterRaw: string | undefined,
+  body: string,
+  options: ParseExternalSkillOptions
+): ExternalSkillFrontmatter {
+  const parsed = frontmatterRaw
+    ? (YAML.parse(frontmatterRaw) as Record<string, unknown> | null)
+    : {}
+
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Invalid SKILL.md frontmatter.')
   }
 
-  const id = typeof parsed.id === 'string' ? parsed.id.trim() : ''
-  const name = typeof parsed.name === 'string' ? parsed.name.trim() : ''
-  const shortDescription = typeof parsed.shortDescription === 'string'
-    ? parsed.shortDescription.trim()
-    : ''
+  const inferredId = inferDefaultId(options)
+  const id = normalizeSkillId(
+    typeof parsed.id === 'string' && parsed.id.trim().length > 0
+      ? parsed.id
+      : (inferredId ?? 'skill')
+  )
+  const name = (
+    typeof parsed.name === 'string' && parsed.name.trim().length > 0
+      ? parsed.name.trim()
+      : (options.defaultName?.trim() || toTitleCaseFromId(id))
+  )
 
-  if (!id || !name || !shortDescription) {
-    throw new Error('SKILL.md frontmatter requires id, name, shortDescription.')
-  }
+  const paragraph = firstNonEmptyParagraph(body)
+  const descriptionFallback = typeof parsed.description === 'string' ? parsed.description.trim() : ''
+  const shortDescription = (
+    typeof parsed.shortDescription === 'string' && parsed.shortDescription.trim().length > 0
+      ? parsed.shortDescription.trim()
+      : (descriptionFallback || options.defaultShortDescription?.trim() || paragraph || `Skill instructions for ${name}`)
+  )
 
   const loadingStrategy = parseLoadingStrategy(parsed.loadingStrategy)
-  const tools = parseStringArray(parsed.tools)
+    ?? options.defaultLoadingStrategy
+  const allowedTools = parseToolArray((parsed as Record<string, unknown>)['allowed-tools'])
+    ?? parseToolArray((parsed as Record<string, unknown>).allowedTools)
+  const tools = parseToolArray(parsed.tools)
+    ?? allowedTools
+    ?? parseToolArray(options.defaultTools)
   const tags = parseStringArray(parsed.tags)
+    ?? parseStringArray(options.defaultTags)
+
   const metaRaw = parsed.meta
-  const meta = (metaRaw && typeof metaRaw === 'object')
+  const parsedMeta = (metaRaw && typeof metaRaw === 'object')
     ? { ...(metaRaw as Record<string, unknown>) }
-    : undefined
+    : {}
+  const defaultMeta = options.defaultMeta ?? {}
+  const mergedMeta: Record<string, unknown> = {
+    ...defaultMeta,
+    ...parsedMeta
+  }
+
+  if (
+    options.defaultApprovedByUser !== undefined &&
+    mergedMeta.approvedByUser === undefined
+  ) {
+    mergedMeta.approvedByUser = options.defaultApprovedByUser
+  }
 
   return {
     ...parsed,
@@ -198,13 +315,16 @@ function parseFrontmatterObject(frontmatterRaw: string): ExternalSkillFrontmatte
     ...(loadingStrategy ? { loadingStrategy } : {}),
     ...(tools ? { tools } : {}),
     ...(tags ? { tags } : {}),
-    ...(meta ? { meta } : {})
+    ...(Object.keys(mergedMeta).length > 0 ? { meta: mergedMeta } : {})
   }
 }
 
-export function parseExternalSkill(content: string): ParsedExternalSkill {
+export function parseExternalSkill(
+  content: string,
+  options: ParseExternalSkillOptions = {}
+): ParsedExternalSkill {
   const { frontmatterRaw, body } = splitFrontmatter(content)
-  const frontmatter = parseFrontmatterObject(frontmatterRaw)
+  const frontmatter = parseFrontmatterObject(frontmatterRaw, body, options)
   const { preamble, blocks } = splitHeadingBlocks(body)
 
   const summaryChunks: string[] = []
@@ -246,7 +366,10 @@ export function parseExternalSkill(content: string): ParsedExternalSkill {
     summary = firstNonEmptyParagraph(body)
   }
   if (!summary) {
-    throw new Error('SKILL.md requires a summary section or a non-empty first paragraph.')
+    summary = frontmatter.shortDescription
+  }
+  if (!summary) {
+    throw new Error('SKILL.md requires a summary section or non-empty content.')
   }
 
   const proceduresParts = [...proceduresChunks, ...unknownChunks]
@@ -254,7 +377,7 @@ export function parseExternalSkill(content: string): ParsedExternalSkill {
   const examples = examplesChunks.length > 0 ? examplesChunks.join('\n\n').trim() : undefined
   const troubleshooting = troubleshootingChunks.length > 0 ? troubleshootingChunks.join('\n\n').trim() : undefined
 
-  const approvedByUser = frontmatter.meta?.approvedByUser === true
+  const approvedByUser = frontmatter.meta?.approvedByUser !== false
 
   const skill = defineSkill({
     id: frontmatter.id,

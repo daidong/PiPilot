@@ -162,13 +162,18 @@ export type {
   SkillTelemetryConfig,
   SkillTelemetryMode,
   SkillTelemetrySink,
+  SkillScriptMetadata,
   SkillRegistrationOptions,
   SkillTokenSavings,
 
   // Manager types
   SkillManagerOptions,
   ExternalSkillLoaderOptions,
+  ExternalSkillSourceConfig,
+  ExternalSkillSourceType,
   LoadedExternalSkill,
+  LoadedSkillScript,
+  SkillScriptRunner,
   ExternalSkillFrontmatter,
   ParsedExternalSkill,
   SkillQuery,
@@ -336,6 +341,7 @@ export {
   llmFilter,
   skillCreateTool,
   skillApproveTool,
+  skillScriptRunTool,
   builtinTools,
   safeTools,
   execTools,
@@ -358,7 +364,9 @@ export type {
   SkillCreateInput,
   SkillCreateOutput,
   SkillApproveInput,
-  SkillApproveOutput
+  SkillApproveOutput,
+  SkillScriptRunInput,
+  SkillScriptRunOutput
 } from './tools/index.js'
 
 // ============================================================================

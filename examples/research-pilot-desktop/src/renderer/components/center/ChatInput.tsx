@@ -15,10 +15,7 @@ const SLASH_COMMANDS = [
   { name: '/papers', description: 'List all literature' },
   { name: '/data', description: 'List all data attachments' },
   { name: '/search', description: 'Search entities', args: '<query>' },
-  { name: '/focus', description: 'Toggle focus for an artifact', args: '<id>' },
-  { name: '/anchor', description: 'Show current task anchor' },
-  { name: '/explain', description: 'Explain memory behavior', args: '[turn|budget|fact <id>]' },
-  { name: '/clear', description: 'Clear all focus entries' },
+  { name: '/summary', description: 'Show latest session summary' },
   { name: '/delete', description: 'Delete an entity', args: '<id>' },
   { name: '/help', description: 'Show available commands' }
 ]
@@ -109,61 +106,38 @@ export function ChatInput() {
           refreshEntities()
           break
         }
-        case '/focus': {
-          if (!rest) { result = 'Usage: `/focus <id>`'; break }
-          const inFocus = useEntityStore.getState().focus.some((item: any) => item.id === rest || item.id.startsWith(rest))
-          const r = inFocus
-            ? await api.focusRemove(rest)
-            : await api.focusAdd({ refType: 'artifact', refId: rest, reason: 'selected via slash command', source: 'manual', ttl: '2h' })
+        case '/save-paper': {
+          if (!rest) { result = 'Usage: `/save-paper <title> [--authors ...]`'; break }
+          const r = await api.savePaper(rest)
           result = r?.success
-            ? (inFocus ? `Removed \`${rest}\` from focus` : `Added \`${rest}\` to focus`)
+            ? `Paper saved: **${r?.paper?.title || rest}**`
             : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
           break
         }
-        case '/anchor': {
-          const anchorResult = await api.taskAnchorGet()
-          if (!anchorResult?.success || !anchorResult?.anchor) {
-            result = `No task anchor available${anchorResult?.error ? `: ${anchorResult.error}` : '.'}`
-            break
-          }
-          const anchor = anchorResult.anchor
-          const blockedBy = Array.isArray(anchor.blockedBy) && anchor.blockedBy.length > 0
-            ? anchor.blockedBy.map((item: string) => `  - ${item}`).join('\n')
-            : '  - (none)'
-          result = `**Task Anchor**\n- CurrentGoal: ${anchor.currentGoal || '(empty)'}\n- NowDoing: ${anchor.nowDoing || '(empty)'}\n- BlockedBy:\n${blockedBy}\n- NextAction: ${anchor.nextAction || '(empty)'}`
-          break
-        }
-        case '/explain': {
-          const explainParts = rest.split(/\s+/).filter(Boolean)
-          const mode = explainParts[0] || 'turn'
-          if (mode === 'budget') {
-            const explained = await api.memoryExplainBudget()
-            result = explained?.success
-              ? `**Memory Explain (budget)**\n\`\`\`json\n${JSON.stringify(explained.data, null, 2)}\n\`\`\``
-              : `Failed: ${explained?.error || 'unknown error'}`
-            break
-          }
-          if (mode === 'fact') {
-            const factId = explainParts[1]
-            if (!factId) { result = 'Usage: `/explain fact <factId>`'; break }
-            const explained = await api.memoryExplainFact(factId)
-            result = explained?.success
-              ? `**Memory Explain (fact)**\n\`\`\`json\n${JSON.stringify(explained.data, null, 2)}\n\`\`\``
-              : `Failed: ${explained?.error || 'unknown error'}`
-            break
-          }
-          const explained = await api.memoryExplainTurn()
-          result = explained?.success
-            ? `**Memory Explain (turn)**\n\`\`\`json\n${JSON.stringify(explained.data, null, 2)}\n\`\`\``
-            : `Failed: ${explained?.error || 'unknown error'}`
+        case '/save-data': {
+          if (!rest) { result = 'Usage: `/save-data <name> --path <file>`'; break }
+          const r = await api.saveData(rest)
+          result = r?.success
+            ? `Data saved: **${r?.data?.title || rest}**`
+            : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
           break
         }
-        case '/clear': {
-          const cleared = await api.focusClear?.()
-          result = cleared?.success ? 'All focus entries cleared.' : `Failed: ${cleared?.error || 'unknown error'}`
-          refreshEntities()
+        case '/summary': {
+          const summaryResult = await api.sessionSummaryGet()
+          if (!summaryResult?.success || !summaryResult?.summary) {
+            result = 'No session summary available yet.'
+            break
+          }
+          const s = summaryResult.summary
+          result = `**Session Summary** (turns ${s.turnRange[0]}-${s.turnRange[1]})\n\n${s.summary}`
+          if (s.topicsDiscussed?.length > 0) {
+            result += `\n\n**Topics:** ${s.topicsDiscussed.join(', ')}`
+          }
+          if (s.openQuestions?.length > 0) {
+            result += `\n\n**Open questions:**\n${s.openQuestions.map((q: string) => `- ${q}`).join('\n')}`
+          }
           break
         }
         case '/delete': {

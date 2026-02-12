@@ -48,6 +48,17 @@ describe('SkillManager', () => {
     loadingStrategy: 'on-demand'
   })
 
+  const scriptOnlySkill = defineSkill({
+    id: 'script-only-skill',
+    name: 'Script Only Skill',
+    shortDescription: 'Skill that should load only when explicitly targeted by skill-script-run',
+    instructions: {
+      summary: 'Script-only summary'
+    },
+    tools: ['skill-script-run'],
+    loadingStrategy: 'lazy'
+  })
+
   beforeEach(() => {
     eventBus = new EventBus()
     manager = new SkillManager({ eventBus, debug: false })
@@ -139,6 +150,14 @@ describe('SkillManager', () => {
       manager.loadOnDemand('on-demand-skill')
 
       expect(manager.getState('on-demand-skill')).toBe('fully-loaded')
+    })
+
+    it('should not bulk-load script-only skills from generic skill-script-run usage', () => {
+      manager.register(scriptOnlySkill)
+
+      manager.onToolUsed('skill-script-run')
+
+      expect(manager.getState('script-only-skill')).toBe('summary-loaded')
     })
   })
 

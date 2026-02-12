@@ -56,37 +56,9 @@ export interface ElectronAPI {
     activityEvents: any[]
   }>
 
-  focusAdd: (params: {
-    refType: 'artifact' | 'fact' | 'task'
-    refId: string
-    reason?: string
-    score?: number
-    source?: 'manual' | 'auto'
-    ttl?: string
-  }) => Promise<any>
-  focusList: () => Promise<any>
-  focusRemove: (idOrRef: string) => Promise<any>
-  focusClear: () => Promise<any>
-  focusPrune: () => Promise<any>
-  taskAnchorGet: () => Promise<any>
-  taskAnchorSet: (anchor: {
-    currentGoal: string
-    nowDoing: string
-    blockedBy: string[]
-    nextAction: string
-  }) => Promise<any>
-  taskAnchorUpdate: (patch: {
-    currentGoal?: string
-    nowDoing?: string
-    blockedBy?: string[]
-    nextAction?: string
-  }) => Promise<any>
-  memoryExplainTurn: () => Promise<any>
-  memoryExplainFact: (factId: string) => Promise<any>
-  memoryExplainBudget: () => Promise<any>
-  factList: () => Promise<any[]>
-  factPromote: (factId: string) => Promise<any>
-  factDemote: (factId: string) => Promise<any>
+  // Context debug and session summary
+  turnExplainGet: () => Promise<any>
+  sessionSummaryGet: () => Promise<any>
 
   // Mentions
   getCandidates: (partial: string, type?: string) => Promise<any>
@@ -113,8 +85,9 @@ export interface ElectronAPI {
   listTree: (options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => Promise<FileTreeNode[]>
   searchTree: (query: string, options?: { showIgnored?: boolean; maxResults?: number }) => Promise<FileTreeNode[]>
   createArtifactFromFile: (filePath: string) => Promise<any>
-  addFocusFromFile: (filePath: string, reason?: string, ttl?: string) => Promise<any>
-  linkEvidenceToTask: (filePath: string, reason?: string) => Promise<any>
+  createFile: (relativePath: string) => Promise<{ success: boolean; absPath?: string; error?: string }>
+  createDir: (relativePath: string) => Promise<{ success: boolean; absPath?: string; error?: string }>
+  renameFile: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>
 
   // Workspace file operations
   trashFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
@@ -196,20 +169,8 @@ const api: ElectronAPI = {
   clearSessionMemory: () => ipcRenderer.invoke('agent:clear-memory'),
   getRealtimeSnapshot: () => ipcRenderer.invoke('agent:get-realtime-snapshot'),
 
-  focusAdd: (params) => ipcRenderer.invoke('cmd:focus-add', params),
-  focusList: () => ipcRenderer.invoke('cmd:focus-list'),
-  focusRemove: (idOrRef) => ipcRenderer.invoke('cmd:focus-remove', idOrRef),
-  focusClear: () => ipcRenderer.invoke('cmd:focus-clear'),
-  focusPrune: () => ipcRenderer.invoke('cmd:focus-prune'),
-  taskAnchorGet: () => ipcRenderer.invoke('cmd:task-anchor-get'),
-  taskAnchorSet: (anchor) => ipcRenderer.invoke('cmd:task-anchor-set', anchor),
-  taskAnchorUpdate: (patch) => ipcRenderer.invoke('cmd:task-anchor-update', patch),
-  memoryExplainTurn: () => ipcRenderer.invoke('cmd:memory-explain-turn'),
-  memoryExplainFact: (factId) => ipcRenderer.invoke('cmd:memory-explain-fact', factId),
-  memoryExplainBudget: () => ipcRenderer.invoke('cmd:memory-explain-budget'),
-  factList: () => ipcRenderer.invoke('cmd:fact-list'),
-  factPromote: (factId) => ipcRenderer.invoke('cmd:fact-promote', factId),
-  factDemote: (factId) => ipcRenderer.invoke('cmd:fact-demote', factId),
+  turnExplainGet: () => ipcRenderer.invoke('cmd:turn-explain-get'),
+  sessionSummaryGet: () => ipcRenderer.invoke('cmd:session-summary-get'),
 
   getCandidates: (partial, type) => ipcRenderer.invoke('mention:candidates', partial, type),
 
@@ -255,8 +216,9 @@ const api: ElectronAPI = {
   listTree: (options) => ipcRenderer.invoke('file:list-tree', options),
   searchTree: (query, options) => ipcRenderer.invoke('file:search-tree', query, options),
   createArtifactFromFile: (filePath) => ipcRenderer.invoke('file:create-artifact', filePath),
-  addFocusFromFile: (filePath, reason, ttl) => ipcRenderer.invoke('file:add-focus', filePath, reason, ttl),
-  linkEvidenceToTask: (filePath, reason) => ipcRenderer.invoke('task:link-evidence', filePath, reason),
+  createFile: (relativePath) => ipcRenderer.invoke('file:create', relativePath),
+  createDir: (relativePath) => ipcRenderer.invoke('file:create-dir', relativePath),
+  renameFile: (oldPath, newPath) => ipcRenderer.invoke('file:rename', oldPath, newPath),
 
   trashFile: (filePath) => ipcRenderer.invoke('file:trash', filePath),
   dropToDir: (fileName, base64Content, targetDirRelPath) => ipcRenderer.invoke('file:drop-to-dir', fileName, base64Content, targetDirRelPath),

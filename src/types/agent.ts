@@ -88,8 +88,12 @@ export interface AgentConfig {
   sessionId?: string
   /** External skills directory (default: .agentfoundry/skills under projectPath) */
   externalSkillsDir?: string
+  /** Community skills directory (default: src/skills/community-builtin in framework project) */
+  communitySkillsDir?: string
   /** Watch external skill files for hot-reload (default: true) */
   watchExternalSkills?: boolean
+  /** Watch community skill files for hot-reload (default: false) */
+  watchCommunitySkills?: boolean
   /** Disable built-in resourceful philosophy skill (default: false) */
   disableResourcefulSkill?: boolean
   /** Skill lifecycle telemetry options (default: enabled basic logs) */

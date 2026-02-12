@@ -30,6 +30,7 @@ export { todoComplete } from './todo-complete.js'
 export { todoRemove } from './todo-remove.js'
 export { skillCreateTool } from './skill-create.js'
 export { skillApproveTool } from './skill-approve.js'
+export { skillScriptRunTool } from './skill-script-run.js'
 
 // ============ Type exports ============
 
@@ -53,6 +54,7 @@ export type { TodoCompleteInput, TodoCompleteOutput } from './todo-complete.js'
 export type { TodoRemoveInput, TodoRemoveOutput } from './todo-remove.js'
 export type { SkillCreateInput, SkillCreateOutput } from './skill-create.js'
 export type { SkillApproveInput, SkillApproveOutput } from './skill-approve.js'
+export type { SkillScriptRunInput, SkillScriptRunOutput } from './skill-script-run.js'
 
 // ============ Layered tool sets ============
 
@@ -77,16 +79,18 @@ import { todoComplete } from './todo-complete.js'
 import { todoRemove } from './todo-remove.js'
 import { skillCreateTool } from './skill-create.js'
 import { skillApproveTool } from './skill-approve.js'
+import { skillScriptRunTool } from './skill-script-run.js'
 
 /**
  * Safe core tools (enabled by default)
  *
  * Properties:
- * - No external dependencies
- * - Runs within sandbox
+ * - Available by default
+ * - Mostly sandbox-friendly file/context tools
+ * - Includes skill lifecycle and skill script runner tools
  * - Auditable
  *
- * Contains: ctx-get, read, write, edit, glob, grep
+ * Contains: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve, skill-script-run
  */
 export const safeTools: Tool<any, any>[] = [
   ctxGet,
@@ -96,7 +100,8 @@ export const safeTools: Tool<any, any>[] = [
   glob,
   grep,
   skillCreateTool,
-  skillApproveTool
+  skillApproveTool,
+  skillScriptRunTool
 ]
 
 /**
@@ -250,6 +255,13 @@ export const toolMeta: Record<string, ToolMeta> = {
     category: 'safe',
     requiresExplicitEnable: false,
     description: 'Approve a project-local skill'
+  },
+  'skill-script-run': {
+    name: 'skill-script-run',
+    riskLevel: 'high',
+    category: 'exec',
+    requiresExplicitEnable: false,
+    description: 'Run a script from a loaded skill'
   },
   bash: {
     name: 'bash',

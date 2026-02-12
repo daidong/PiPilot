@@ -12,28 +12,20 @@ export {
   artifactDelete
 } from './artifact.js'
 
-// Focus canonical surface
+// Explain (read-only, retained for ContextDebugView)
 export {
-  focusAdd,
-  focusList,
-  focusRemove,
-  focusClear,
-  focusPrune
-} from './focus.js'
-
-// Task anchor canonical surface
-export {
-  taskAnchorGet,
-  taskAnchorSet,
-  taskAnchorUpdate
-} from './task-anchor.js'
-
-// Explain canonical surface
-export {
-  memoryExplainTurn,
-  memoryExplainFact,
-  memoryExplainBudget
+  memoryExplainTurn
 } from './memory-explain.js'
+
+// Session summary
+export {
+  sessionSummaryGet
+} from './session-summary.js'
+
+// Paper enrichment
+export {
+  enrichPaperArtifacts
+} from './paper-enrichment.js'
 
 // Compatibility wrappers
 export { savePaper, parseSavePaperArgs } from './save-paper.js'
@@ -44,9 +36,9 @@ export { searchEntities } from './search.js'
 
 // Types
 export type { ArtifactCreateResult, ArtifactUpdateResult, ArtifactDeleteResult, ArtifactSearchResult } from './artifact.js'
-export type { FocusAddResult, FocusListResult, FocusRemoveResult, FocusPruneResult } from './focus.js'
-export type { TaskAnchorResult } from './task-anchor.js'
 export type { MemoryExplainResult } from './memory-explain.js'
+export type { SessionSummaryResult } from './session-summary.js'
+export type { EnrichPapersResult, EnrichPapersProgress } from './paper-enrichment.js'
 export type { SavePaperResult } from './save-paper.js'
 export type { SaveDataResult } from './save-data.js'
 export type { DeleteResult } from './delete.js'

@@ -9,7 +9,6 @@
 export { createCoordinator, createCoordinatorRunner } from './agents/coordinator.js'
 export type { CoordinatorConfig } from './agents/coordinator.js'
 export { createLiteratureTeam } from './agents/literature-team.js'
-export { createDataAgent, dataAnalyzer } from './agents/data-agent.js'
 export { createDataAnalyzer } from './agents/data-team.js'
 export type { AnalyzeResult } from './agents/data-team.js'
 
@@ -24,17 +23,9 @@ export {
   artifactList,
   artifactSearch,
   artifactDelete,
-  focusAdd,
-  focusList,
-  focusRemove,
-  focusClear,
-  focusPrune,
-  taskAnchorGet,
-  taskAnchorSet,
-  taskAnchorUpdate,
   memoryExplainTurn,
-  memoryExplainFact,
-  memoryExplainBudget,
+  sessionSummaryGet,
+  enrichPaperArtifacts,
 
   // Compatibility exports
   savePaper, parseSavePaperArgs,
@@ -49,12 +40,10 @@ export type {
   ArtifactUpdateResult,
   ArtifactDeleteResult,
   ArtifactSearchResult,
-  FocusAddResult,
-  FocusListResult,
-  FocusRemoveResult,
-  FocusPruneResult,
-  TaskAnchorResult,
   MemoryExplainResult,
+  SessionSummaryResult,
+  EnrichPapersResult,
+  EnrichPapersProgress,
   ArtifactListItem,
   NoteListItem,
   LiteratureListItem,
@@ -86,9 +75,7 @@ export type {
   DataArtifact,
   WebContentArtifact,
   ToolOutputArtifact,
-  FactRecord,
-  FocusEntry,
-  TaskAnchor,
+  SessionSummary,
   DataSchema,
 
   // Compatibility aliases

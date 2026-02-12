@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { FileText, ChevronDown, Folder, Code, Terminal } from 'lucide-react'
 import { useUIStore, type WorkingFile } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
+import { useSessionStore } from '../../stores/session-store'
 
 const api = (window as any).api
 
@@ -120,10 +121,19 @@ export function WorkingFolder() {
 
 function FileRow({ file }: { file: WorkingFile }) {
   const openPreview = useUIStore((s) => s.openPreview)
+  const projectPath = useSessionStore((s) => s.projectPath)
   // Look up the real data entity by filePath so we use its actual UUID
   const dataEntity = useEntityStore((s) =>
     [...s.notes, ...s.docs].find((d) => d.filePath === file.path)
   )
+
+  // Show path relative to project root for directory context
+  const displayName = useMemo(() => {
+    if (projectPath && file.path.startsWith(projectPath)) {
+      return file.path.slice(projectPath.length).replace(/^\//, '') || file.name
+    }
+    return file.path.startsWith('/') ? file.name : file.path
+  }, [file.path, file.name, projectPath])
 
   const handleClick = async () => {
     const ext = (file.name.split('.').pop() || '').toLowerCase()
@@ -163,7 +173,7 @@ function FileRow({ file }: { file: WorkingFile }) {
       className="flex items-center gap-1.5 px-2 py-1 rounded t-bg-hover transition-colors text-xs w-full text-left cursor-pointer"
     >
       <FileText size={11} className="t-text-muted shrink-0" />
-      <span className="t-text-secondary truncate">{file.name}</span>
+      <span className="t-text-secondary truncate">{displayName}</span>
     </button>
   )
 }

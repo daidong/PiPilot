@@ -19,7 +19,7 @@ Hard rules:
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
 - For simple Q&A / clarification / status checks, answer directly. Do NOT create artifacts/facts by default.
 - Provide a concrete deliverable only when work was actually executed (tool calls, file edits, analyses, or generated outputs) or the user explicitly asks for one.
-- Persist with artifact-create / artifact-update / fact-promote only when at least one trigger is true:
+- Persist with artifact-create / artifact-update only when at least one trigger is true:
   1) user explicitly asks to save/track for future reuse;
   2) you changed files and need a traceable record;
   3) you produced reusable analysis/results files;
@@ -28,7 +28,10 @@ Hard rules:
 - If no persistence trigger is met, keep the result ephemeral in chat.
 
 Memory model:
-- Artifact = source of truth. Fact = durable memory. Focus = session attention. Task Anchor = progress continuity.`,
+- Artifact = source of truth (notes, papers, data, web-content, tool-output).
+- Use artifact-create to persist important results; artifact-search to find existing.
+- Session context is maintained automatically via periodic summaries.
+- For quick-reference info, create a note via artifact-create({ type: "note", ... }).`,
 
 
 // ---------------------------------------------------------------------------
@@ -55,9 +58,6 @@ Memory model:
 Include: verdict, gaps, failure modes, terminology ambiguities, actionable fixes.
 Each point must include at least one checkable noun (metric, baseline, API, data structure, deployment constraint).
 Be specific and technical; avoid generic pros/cons.`,
-
-'coordinator-module-resume': `## Resume Module
-If asked to continue/status/next steps: read relevant artifacts/facts/todos/recent context, then summarize state + next action.`,
 
 // ---------------------------------------------------------------------------
 // data-analysis-system

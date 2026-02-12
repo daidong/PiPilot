@@ -1,70 +1,60 @@
 import React, { useEffect, useState } from 'react'
-import { Layers, Target, X } from 'lucide-react'
-import { useEntityStore, type EntityItem } from '../../stores/entity-store'
+import { FileText } from 'lucide-react'
 
-interface TaskAnchorView {
-  currentGoal: string
-  nowDoing: string
-  blockedBy: string[]
-  nextAction: string
-  updatedAt: string
-}
-
-function FocusChip({ entity, onRemove }: { entity: EntityItem; onRemove: () => void }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs t-border t-bg-surface t-text-secondary">
-      <Layers size={10} className="text-teal-400" />
-      <span className="truncate max-w-[160px]">{entity.title}</span>
-      <button onClick={onRemove} className="opacity-60 hover:opacity-100 transition-opacity">
-        <X size={10} />
-      </button>
-    </span>
-  )
+interface SessionSummaryView {
+  sessionId: string
+  turnRange: [number, number]
+  summary: string
+  topicsDiscussed: string[]
+  openQuestions: string[]
+  createdAt: string
 }
 
 export function ContextChips() {
-  const { focus, toggleFocus, refreshAll } = useEntityStore()
-  const [anchor, setAnchor] = useState<TaskAnchorView | null>(null)
+  const [summary, setSummary] = useState<SessionSummaryView | null>(null)
 
   useEffect(() => {
     ;(async () => {
-      refreshAll()
       const api = (window as any).api
-      const result = await api.taskAnchorGet()
-      setAnchor(result?.anchor || null)
+      const result = await api.sessionSummaryGet()
+      setSummary(result?.summary || null)
     })()
-  }, [refreshAll, focus.length])
+  }, [])
 
   return (
     <div className="space-y-3">
       <div>
         <h3 className="text-xs font-semibold t-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
-          <Layers size={10} /> Focus
-          <span className="text-[10px] font-normal opacity-70">(session)</span>
+          <FileText size={10} /> Session Summary
         </h3>
-        {focus.length === 0 ? (
-          <p className="text-xs t-text-muted">No focused artifacts</p>
+        {!summary ? (
+          <p className="text-xs t-text-muted">No session summary yet</p>
         ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {focus.map((e) => (
-              <FocusChip key={e.id} entity={e} onRemove={() => toggleFocus(e.id)} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div>
-        <h3 className="text-xs font-semibold t-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
-          <Target size={10} /> Task Anchor
-        </h3>
-        {!anchor ? (
-          <p className="text-xs t-text-muted">No task anchor yet</p>
-        ) : (
-          <div className="rounded-lg border t-border t-bg-surface p-2 text-xs space-y-1">
-            <p><span className="opacity-70">Goal:</span> {anchor.currentGoal || '-'}</p>
-            <p><span className="opacity-70">Doing:</span> {anchor.nowDoing || '-'}</p>
-            <p><span className="opacity-70">Blocked:</span> {anchor.blockedBy?.length ? anchor.blockedBy.join('; ') : '-'}</p>
-            <p><span className="opacity-70">Next:</span> {anchor.nextAction || '-'}</p>
+          <div className="rounded-lg border t-border t-bg-surface p-2 text-xs space-y-2">
+            <p className="t-text-secondary">{summary.summary}</p>
+            {summary.topicsDiscussed.length > 0 && (
+              <div>
+                <p className="text-[10px] t-text-muted mb-1">Topics:</p>
+                <div className="flex flex-wrap gap-1">
+                  {summary.topicsDiscussed.map((topic, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded-full t-bg-elevated text-[10px] t-text-secondary">{topic}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {summary.openQuestions.length > 0 && (
+              <div>
+                <p className="text-[10px] t-text-muted mb-1">Open questions:</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {summary.openQuestions.map((q, i) => (
+                    <li key={i} className="text-[10px] t-text-secondary">{q}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <p className="text-[9px] t-text-muted">
+              Turns {summary.turnRange[0]}-{summary.turnRange[1]}
+            </p>
           </div>
         )}
       </div>

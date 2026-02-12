@@ -668,7 +668,9 @@ async function ensureCoordinator(
         if ((tool === 'write' || tool === 'edit') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.data?.path) {
-            safeSend(win, 'agent:file-created', r.data.path)
+            // Normalize to absolute path so renderer can compare reliably
+            const absPath = isAbsolute(r.data.path) ? r.data.path : resolve(projectPath, r.data.path)
+            safeSend(win, 'agent:file-created', absPath)
           }
         }
 
@@ -702,6 +704,11 @@ async function ensureCoordinator(
               id: r.data?.id,
               title: r.data?.title
             })
+            // Also track the artifact's source file in Working Folder
+            if (r.data?.filePath) {
+              const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(projectPath, r.data.filePath)
+              safeSend(win, 'agent:file-created', absPath)
+            }
           }
         }
 

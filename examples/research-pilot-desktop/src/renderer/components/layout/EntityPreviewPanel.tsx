@@ -1,10 +1,10 @@
 import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Layers, StickyNote, BookOpen, Database, Brain, Trash2, ArrowUp, ArrowDown, Save, ChevronUp, ChevronDown } from 'lucide-react'
+import { X, StickyNote, BookOpen, Database, Trash2, Save, ChevronUp, ChevronDown } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
-import { useEntityStore, type EntityItem, type FactItem } from '../../stores/entity-store'
+import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 
 const LazyMilkdownMarkdownEditor = lazy(async () => {
   const mod = await import('./MilkdownMarkdownEditor')
@@ -14,8 +14,7 @@ const LazyMilkdownMarkdownEditor = lazy(async () => {
 const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={16} className="text-yellow-500" />,
   paper: <BookOpen size={16} className="text-blue-500" />,
-  data: <Database size={16} className="text-green-500" />,
-  fact: <Brain size={16} className="text-purple-500" />
+  data: <Database size={16} className="text-green-500" />
 }
 
 const EXTERNAL_EXTS = new Set([
@@ -150,24 +149,6 @@ function CsvPreview({ content, separator }: { content: string; separator: string
   )
 }
 
-function factToPreviewEntity(fact: FactItem): EntityItem {
-  return {
-    id: fact.id,
-    type: 'fact',
-    title: `${fact.namespace}/${fact.key}`,
-    content: typeof fact.value === 'string' ? fact.value : JSON.stringify(fact.value, null, 2),
-    valueText: fact.valueText,
-    namespace: fact.namespace,
-    key: fact.key,
-    status: fact.status,
-    confidence: fact.confidence,
-    provenance: fact.provenance,
-    derivedFromArtifactIds: fact.derivedFromArtifactIds,
-    createdAt: fact.createdAt,
-    updatedAt: fact.updatedAt
-  }
-}
-
 function usePreviewNavigation() {
   const previewSourceTab = useUIStore((s) => s.previewSourceTab)
   const previewEntity = useUIStore((s) => s.previewEntity)
@@ -175,8 +156,6 @@ function usePreviewNavigation() {
   const notes = useEntityStore((s) => s.notes)
   const papers = useEntityStore((s) => s.papers)
   const data = useEntityStore((s) => s.data)
-  const facts = useEntityStore((s) => s.facts)
-  const focus = useEntityStore((s) => s.focus)
 
   const list: EntityItem[] = (() => {
     switch (previewSourceTab) {
@@ -184,12 +163,7 @@ function usePreviewNavigation() {
         return [...notes, ...data]
       case 'papers':
         return papers
-      case 'knowledge':
-        return facts.map(factToPreviewEntity)
-      case 'focus':
-        return focus
-      case 'tasks':
-      case 'runs':
+      case 'debug':
       default:
         return []
     }
@@ -218,17 +192,12 @@ export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
   const setPreviewEditorFocused = useUIStore((s) => s.setPreviewEditorFocused)
-  const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const refreshAll = useEntityStore((s) => s.refreshAll)
-  const promoteFact = useEntityStore((s) => s.promoteFact)
-  const demoteFact = useEntityStore((s) => s.demoteFact)
-  const focusItems = useEntityStore((s) => s.focus)
 
   const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
   const nav = usePreviewNavigation()
 
-  const isInFocus = rawEntity ? focusItems.some((p) => p.id === rawEntity.id) : false
   const entity = rawEntity ? { ...rawEntity } : null
 
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -241,11 +210,8 @@ export function EntityPreviewPanel() {
   const [fileContent, setFileContent] = useState<string | null>(null)
   const [fileType, setFileType] = useState<'text' | 'external' | 'csv' | null>(null)
   const [loading, setLoading] = useState(false)
-  // In-place content update (passed to Milkdown to replace without rebuilding)
   const [externalMarkdown, setExternalMarkdown] = useState<string | undefined>(undefined)
-  // Resolved absolute path for matching agent:file-created events
   const resolvedAbsPathRef = useRef<string | null>(null)
-  // Track latest baseline for stale-closure comparisons
   const baselineRef = useRef('')
 
   const getArtifactMarkdownContent = (artifactLike: any): string => {
@@ -297,7 +263,6 @@ export function EntityPreviewPanel() {
       .then((res: any) => {
         if (res.success && typeof res.content === 'string') {
           setFileContent(res.content)
-          // Store resolved absolute path for file-change matching
           if (res.path) resolvedAbsPathRef.current = res.path
           if (targetType === 'text' && isMarkdown) {
             setDraftMarkdown(res.content)
@@ -318,7 +283,6 @@ export function EntityPreviewPanel() {
     return () => setPreviewEditorFocused(false)
   }, [setPreviewEditorFocused])
 
-  // Keep baselineRef in sync for stale-closure comparisons
   useEffect(() => {
     baselineRef.current = baselineMarkdown
   }, [baselineMarkdown])
@@ -334,10 +298,8 @@ export function EntityPreviewPanel() {
       if (!resolvedAbsPathRef.current) return
       if (changedPath !== resolvedAbsPathRef.current) return
 
-      // Re-read the file and update editor content in-place
       api.readFile(entity.filePath).then((res: any) => {
         if (!res.success || typeof res.content !== 'string') return
-        // Only update if content actually changed from the current baseline
         if (normalizeMarkdown(res.content) === normalizeMarkdown(baselineRef.current)) return
         setFileContent(res.content)
         setBaselineMarkdown(res.content)
@@ -351,7 +313,7 @@ export function EntityPreviewPanel() {
 
   // Auto-reload inline artifacts (notes, papers) after an agent turn completes
   useEffect(() => {
-    if (!entity?.id || entity.filePath || entity.type === 'fact') return
+    if (!entity?.id || entity.filePath) return
 
     const api = (window as any).api
     const unsub = api.onAgentDone(async () => {
@@ -374,11 +336,9 @@ export function EntityPreviewPanel() {
 
   const fileExt = entity.filePath ? getExtension(entity.filePath) : ''
   const isFileMarkdown = Boolean(entity.filePath && (fileExt === 'md' || fileExt === 'markdown'))
-  const isInlineEditable = entity.type !== 'fact' && !entity.filePath
+  const isInlineEditable = !entity.filePath
   const isEditable = isInlineEditable || isFileMarkdown
   const isDirty = isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown)
-  // Rebuild Milkdown when a different document seed loads, but keep it
-  // stable while typing/saving in the same preview session.
   const seedFp = buildFingerprint(editorSeedMarkdown)
   const editorKey = `${entity.id}:${entity.filePath ?? 'inline'}:${seedFp.length}:${seedFp.codeFenceCount}:${seedFp.mermaidFenceCount}:${seedFp.mathBlockCount}:${seedFp.imageCount}`
 
@@ -431,6 +391,13 @@ export function EntityPreviewPanel() {
     if (!isEditable || !isDirty) return
 
     const nextMarkdown = draftMarkdown
+
+    // Enforce character limit for agent.md
+    if (entity.id === 'agent-md' && nextMarkdown.length > 5000) {
+      setSaveError('agent.md cannot exceed 5,000 characters.')
+      return
+    }
+
     const issues = detectPotentialLoss(baselineMarkdown, nextMarkdown)
     if (issues.length > 0) {
       const details = issues.map((issue) => `- ${issue}`).join('\n')
@@ -529,6 +496,11 @@ export function EntityPreviewPanel() {
           />
         </Suspense>
       </div>
+      {entity.id === 'agent-md' && (
+        <span className={`text-[10px] ${draftMarkdown.length > 5000 ? 'text-red-400' : 't-text-muted'}`}>
+          {draftMarkdown.length} / 5,000
+        </span>
+      )}
     </div>
   )
 
@@ -617,37 +589,28 @@ export function EntityPreviewPanel() {
         )}
 
         <div className="flex items-center gap-1">
-          {entity.type !== 'fact' && (
-            <>
-              {isEditable && (
-                <button
-                  onClick={() => void handleSave()}
-                  disabled={!isDirty}
-                  className={`p-1 rounded transition-colors ${
-                    isDirty ? 'text-teal-400 hover:text-teal-300' : 't-text-muted opacity-50'
-                  }`}
-                  title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
-                >
-                  <Save size={14} />
-                </button>
-              )}
-              <button
-                onClick={() => toggleFocus(entity.id)}
-                className={`p-1 rounded transition-colors ${isInFocus ? 'text-teal-400' : 't-text-muted t-bg-hover'}`}
-                title={isInFocus ? 'Remove from Focus' : 'Add to Focus'}
-              >
-                <Layers size={14} />
-              </button>
-              <button
-                onClick={handleDelete}
-                className={`p-1 rounded transition-colors ${
-                  confirmDelete ? 'text-red-500' : 't-text-muted t-bg-hover'
-                }`}
-                title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
-              >
-                <Trash2 size={14} />
-              </button>
-            </>
+          {isEditable && (
+            <button
+              onClick={() => void handleSave()}
+              disabled={!isDirty}
+              className={`p-1 rounded transition-colors ${
+                isDirty ? 'text-teal-400 hover:text-teal-300' : 't-text-muted opacity-50'
+              }`}
+              title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
+            >
+              <Save size={14} />
+            </button>
+          )}
+          {entity.id !== 'agent-md' && (
+            <button
+              onClick={handleDelete}
+              className={`p-1 rounded transition-colors ${
+                confirmDelete ? 'text-red-500' : 't-text-muted t-bg-hover'
+              }`}
+              title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
+            >
+              <Trash2 size={14} />
+            </button>
           )}
           <button
             onClick={handleClosePreview}
@@ -693,52 +656,6 @@ export function EntityPreviewPanel() {
         <div className="px-4 py-2 border-b t-border text-xs t-text-secondary">
           <p>File: {entity.name}</p>
           {entity.schema.rowCount != null && <p>Rows: {entity.schema.rowCount}</p>}
-        </div>
-      )}
-
-      {entity.type === 'fact' && (
-        <div className="px-4 py-2 border-b t-border text-xs t-text-secondary space-y-1">
-          <p>Namespace: <code className="t-bg-surface px-1 rounded">{entity.namespace}</code></p>
-          <p>Key: <code className="t-bg-surface px-1 rounded">{entity.key}</code></p>
-          <p>Status: <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
-            entity.status === 'active' ? 'text-green-500 bg-green-500/10' :
-            entity.status === 'proposed' ? 'text-yellow-500 bg-yellow-500/10' :
-            entity.status === 'deprecated' ? 'text-red-400 bg-red-400/10' :
-            't-text-muted t-bg-surface'
-          }`}>{entity.status}</span></p>
-          {entity.confidence != null && (
-            <p>Confidence: {Math.round(entity.confidence * 100)}%</p>
-          )}
-          {entity.provenance && (
-            <div>
-              <p>Source: {entity.provenance.sourceType} ({entity.provenance.sourceRef})</p>
-              {entity.provenance.traceId && <p>Trace: <code className="t-bg-surface px-1 rounded text-[10px]">{entity.provenance.traceId}</code></p>}
-              {entity.provenance.sessionId && <p>Session: <code className="t-bg-surface px-1 rounded text-[10px]">{entity.provenance.sessionId.slice(0, 8)}</code></p>}
-            </div>
-          )}
-          {entity.derivedFromArtifactIds?.length > 0 && (
-            <p>Linked artifacts: {entity.derivedFromArtifactIds.length}</p>
-          )}
-          {entity.createdAt && <p>Created: {new Date(entity.createdAt).toLocaleString()}</p>}
-          {entity.updatedAt && <p>Updated: {new Date(entity.updatedAt).toLocaleString()}</p>}
-          <div className="flex items-center gap-2 pt-1">
-            {entity.status === 'proposed' && (
-              <button
-                onClick={() => promoteFact(entity.id)}
-                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-green-500 bg-green-500/10 hover:bg-green-500/20 transition-colors"
-              >
-                <ArrowUp size={10} /> Promote to Active
-              </button>
-            )}
-            {(entity.status === 'active' || entity.status === 'proposed') && (
-              <button
-                onClick={() => demoteFact(entity.id)}
-                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-red-400 bg-red-400/10 hover:bg-red-400/20 transition-colors"
-              >
-                <ArrowDown size={10} /> Deprecate
-              </button>
-            )}
-          </div>
         </div>
       )}
 

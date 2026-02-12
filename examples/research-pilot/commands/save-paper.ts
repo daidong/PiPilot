@@ -4,7 +4,8 @@
  */
 
 import { type CLIContext, type Literature } from '../types.js'
-import { createArtifact, findArtifactById, findExistingPaperArtifact, updateArtifact } from '../memory-v2/store.js'
+import { findExistingPaperArtifact } from '../memory-v2/store.js'
+import { artifactCreate, artifactUpdate } from './artifact.js'
 
 export interface SavePaperResult {
   success: boolean
@@ -83,7 +84,7 @@ export function savePaper(
   })
 
   if (dedup) {
-    const updated = updateArtifact(context.projectPath, dedup.id, {
+    const updated = artifactUpdate(context.projectPath, dedup.id, {
       title,
       authors,
       abstract: opts.abstract ?? dedup.abstract,
@@ -100,7 +101,7 @@ export function savePaper(
       citationCount: opts.citationCount ?? dedup.citationCount
     })
 
-    if (!updated || updated.artifact.type !== 'paper') {
+    if (!updated.success || !updated.artifact || updated.artifact.type !== 'paper') {
       return { success: false, error: 'Failed to update existing paper.' }
     }
 
@@ -111,7 +112,7 @@ export function savePaper(
     }
   }
 
-  const { artifact, filePath } = createArtifact({
+  const created = artifactCreate({
     type: 'paper',
     title,
     authors,
@@ -136,11 +137,11 @@ export function savePaper(
     }
   }, context)
 
-  if (artifact.type !== 'paper') {
+  if (!created.success || !created.artifact || created.artifact.type !== 'paper') {
     return { success: false, error: 'Failed to create paper artifact.' }
   }
 
-  return { success: true, paper: artifact, filePath }
+  return { success: true, paper: created.artifact, filePath: created.filePath }
 }
 
 export function updatePaperMetadata(
@@ -180,13 +181,8 @@ export function updatePaperMetadata(
     return { success: true, paper: existing }
   }
 
-  const found = findArtifactById(context.projectPath, existing.id)
-  if (!found) {
-    return { success: false, error: `Paper not found: ${existing.id}` }
-  }
-
-  const updated = updateArtifact(context.projectPath, existing.id, update)
-  if (!updated || updated.artifact.type !== 'paper') {
+  const updated = artifactUpdate(context.projectPath, existing.id, update)
+  if (!updated.success || !updated.artifact || updated.artifact.type !== 'paper') {
     return { success: false, error: `Failed to update paper: ${existing.id}` }
   }
 

@@ -2,7 +2,6 @@
  * safe - Safe core toolkit
  *
  * Features:
- * - No external dependencies
  * - Runs within sandbox
  * - Auditable
  * - Enabled by default
@@ -15,7 +14,7 @@
 
 import { definePack } from '../factories/define-pack.js'
 import type { Pack } from '../types/pack.js'
-import { read, write, edit, glob, grep, ctxGet, skillCreateTool, skillApproveTool } from '../tools/index.js'
+import { read, write, edit, glob, grep, ctxGet, skillCreateTool, skillApproveTool, skillScriptRunTool } from '../tools/index.js'
 import { noSecretFiles } from '../policies/no-secret-files.js'
 import { normalizePathsPolicies } from '../policies/normalize-paths.js'
 import { autoLimitRead, autoLimitGrep, autoLimitGlob } from '../policies/auto-limit.js'
@@ -69,7 +68,8 @@ export function safe(options: SafePackOptions = {}): Pack {
     glob as any,
     grep as any,
     skillCreateTool as any,
-    skillApproveTool as any
+    skillApproveTool as any,
+    skillScriptRunTool as any
   ]
 
   const policies = [
@@ -92,7 +92,7 @@ export function safe(options: SafePackOptions = {}): Pack {
 
     return definePack({
       id: 'safe',
-      description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve',
+      description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve, skill-script-run',
       tools,
       policies,
       skills: packSkills,
@@ -106,7 +106,7 @@ export function safe(options: SafePackOptions = {}): Pack {
   // Legacy promptFragment approach (for backward compatibility)
   return definePack({
     id: 'safe',
-    description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve',
+    description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve, skill-script-run',
     tools,
     policies,
     promptFragment: `

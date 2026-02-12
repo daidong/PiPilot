@@ -1,5 +1,5 @@
 /**
- * skill-approve - Approve an external SKILL.md for regular loading.
+ * skill-approve - Approve a project-local SKILL.md for regular loading.
  */
 
 import path from 'node:path'
@@ -83,7 +83,7 @@ export const skillApproveTool: Tool<SkillApproveInput, SkillApproveOutput> = def
         }
       }
 
-      const relativeFilePath = path.join(skillsDir, `${input.id}.skill.md`)
+      const relativeFilePath = path.join(skillsDir, input.id, 'SKILL.md')
       const readResult = await runtime.io.readFile(relativeFilePath)
       if (!readResult.success || !readResult.data) {
         return {
@@ -92,7 +92,11 @@ export const skillApproveTool: Tool<SkillApproveInput, SkillApproveOutput> = def
         }
       }
 
-      const parsed = parseExternalSkill(readResult.data)
+      const parsed = parseExternalSkill(readResult.data, {
+        filePath: relativeFilePath,
+        defaultId: input.id,
+        defaultApprovedByUser: true
+      })
       const updatedFrontmatter = {
         ...parsed.frontmatter,
         ...(input.setLoadingStrategy ? { loadingStrategy: input.setLoadingStrategy } : {}),
@@ -111,7 +115,11 @@ export const skillApproveTool: Tool<SkillApproveInput, SkillApproveOutput> = def
         }
       }
 
-      const reparsed = parseExternalSkill(updatedMarkdown)
+      const reparsed = parseExternalSkill(updatedMarkdown, {
+        filePath: relativeFilePath,
+        defaultId: input.id,
+        defaultApprovedByUser: true
+      })
       runtime.skillManager.register(reparsed.skill, {
         approvedByUser: true,
         source: 'external',

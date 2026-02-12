@@ -138,11 +138,18 @@ export default function App() {
       refreshEntities()
 
       // Extract file paths from agent response and add to working files
+      // Matches both absolute (/foo/bar.txt) and relative (docs/bar.txt) paths
       const text = result.response || ''
-      const filePathRegex = /(?:^|\s)((?:\/[\w.-]+)+\.\w+)/gm
+      const projectRoot = useSessionStore.getState().projectPath
+      const filePathRegex = /(?:^|\s)((?:[\w.-]+\/)+[\w.-]+\.\w+|(?:\/[\w.-]+)+\.\w+)/gm
       let match: RegExpExecArray | null
       while ((match = filePathRegex.exec(text)) !== null) {
-        useUIStore.getState().addWorkingFile(match[1])
+        let filePath = match[1]
+        // Normalize relative paths to absolute for consistent deduplication
+        if (!filePath.startsWith('/') && projectRoot) {
+          filePath = projectRoot + '/' + filePath
+        }
+        useUIStore.getState().addWorkingFile(filePath)
       }
 
       // Complete usage tracking for this run

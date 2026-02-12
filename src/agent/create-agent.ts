@@ -31,8 +31,9 @@ import {
   normalizePackConfigs,
   type AgentYAMLConfig
 } from '../config/index.js'
-import { isAbsolute, join, relative, resolve } from 'path'
+import { isAbsolute, join, relative } from 'path'
 import { FRAMEWORK_DIR } from '../constants.js'
+import { resolveCommunitySkillDir, resolveProjectSkillDir } from '../skills/skill-source-paths.js'
 
 /**
  * Generate a unique ID
@@ -478,13 +479,13 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   // Phase 3.2: Add skillRegistry to runtime for skill discovery
   ;(runtime as any).skillRegistry = globalSkillRegistry
 
-  // External skill directory config
-  const configuredExternalSkillsDir = config.externalSkillsDir?.trim()
-  const resolvedExternalSkillsDir = configuredExternalSkillsDir
-    ? (isAbsolute(configuredExternalSkillsDir)
-      ? resolve(configuredExternalSkillsDir)
-      : resolve(projectPath, configuredExternalSkillsDir))
-    : resolve(projectPath, `${FRAMEWORK_DIR}/skills`)
+  // Skill source directory config
+  const resolvedExternalSkillsDir = resolveProjectSkillDir(projectPath, config.externalSkillsDir)
+  const resolvedCommunitySkillsDir = resolveCommunitySkillDir(projectPath, config.communitySkillsDir)
+  if (config.debug) {
+    console.log(`[Skills] external dir: ${resolvedExternalSkillsDir}`)
+    console.log(`[Skills] community dir: ${resolvedCommunitySkillsDir}`)
+  }
   const relativeExternalSkillsDir = relative(projectPath, resolvedExternalSkillsDir)
   const externalSkillsDirForTools = (
     relativeExternalSkillsDir &&
@@ -494,21 +495,39 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     ? relativeExternalSkillsDir
     : `${FRAMEWORK_DIR}/skills`
   runtime.sessionState.set('externalSkillsDir', externalSkillsDirForTools.replace(/\\/g, '/'))
+  runtime.sessionState.set('communitySkillsDir', resolvedCommunitySkillsDir)
+  runtime.sessionState.set('skillDirectoryById', new Map<string, string>())
+  runtime.sessionState.set('skillScriptsById', new Map<string, unknown[]>())
 
   let externalSkillLoader: ExternalSkillLoader | null = null
 
   const registerExternalSkill = (loaded: LoadedExternalSkill, source: 'init' | 'watch'): void => {
+    const skillDirectoryById = runtime.sessionState.get<Map<string, string>>('skillDirectoryById')
+      ?? new Map<string, string>()
+    const skillScriptsById = runtime.sessionState.get<Map<string, unknown[]>>('skillScriptsById')
+      ?? new Map<string, unknown[]>()
+
     skillManager.register(loaded.skill, {
-      approvedByUser: loaded.approvedByUser,
-      source: 'external',
+      approvedByUser: true,
+      source: loaded.sourceType,
       filePath: loaded.filePath
     })
     globalSkillRegistry.register(loaded.skill)
+    skillDirectoryById.set(loaded.skill.id, loaded.skillDir)
+    skillScriptsById.set(loaded.skill.id, loaded.scripts)
+    runtime.sessionState.set('skillDirectoryById', skillDirectoryById)
+    runtime.sessionState.set('skillScriptsById', skillScriptsById)
+
     if (source === 'watch') {
       skillManager.recordTelemetry(
         'skill.hot_reloaded',
-        { skillId: loaded.skill.id, action: 'modify', filePath: loaded.filePath },
-        `hot-reload id=${loaded.skill.id} action=modify`
+        {
+          skillId: loaded.skill.id,
+          action: 'modify',
+          filePath: loaded.filePath,
+          sourceType: loaded.sourceType
+        },
+        `hot-reload id=${loaded.skill.id} action=modify source=${loaded.sourceType}`
       )
     }
   }
@@ -593,17 +612,39 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         }
       }
 
-      // Load project-local external skills after built-in pack skills are ready.
+      // Load directory-based skills after built-in pack skills are ready.
       externalSkillLoader = new ExternalSkillLoader({
-        skillsDir: resolvedExternalSkillsDir,
-        watchForChanges: config.watchExternalSkills ?? true,
+        skillSources: [
+          {
+            dir: resolvedCommunitySkillsDir,
+            sourceType: 'community-builtin',
+            watchForChanges: config.watchCommunitySkills ?? false,
+            approvedByDefault: true
+          },
+          {
+            dir: resolvedExternalSkillsDir,
+            sourceType: 'project-local',
+            watchForChanges: config.watchExternalSkills ?? true,
+            approvedByDefault: true
+          }
+        ],
+        watchForChanges: true,
         builtInSkillIds: skillManager.getAll().map(skill => skill.id),
         onSkillLoaded: (loaded) => {
           registerExternalSkill(loaded, 'watch')
         },
         onSkillRemoved: (skillId) => {
+          const skillDirectoryById = runtime.sessionState.get<Map<string, string>>('skillDirectoryById')
+            ?? new Map<string, string>()
+          const skillScriptsById = runtime.sessionState.get<Map<string, unknown[]>>('skillScriptsById')
+            ?? new Map<string, unknown[]>()
+
           const removed = skillManager.unregister(skillId)
           globalSkillRegistry.unregister(skillId)
+          skillDirectoryById.delete(skillId)
+          skillScriptsById.delete(skillId)
+          runtime.sessionState.set('skillDirectoryById', skillDirectoryById)
+          runtime.sessionState.set('skillScriptsById', skillScriptsById)
           if (removed) {
             skillManager.recordTelemetry(
               'skill.hot_reloaded',
@@ -626,7 +667,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         registerExternalSkill(loaded, 'init')
       }
 
-      if (config.watchExternalSkills ?? true) {
+      if ((config.watchExternalSkills ?? true) || (config.watchCommunitySkills ?? false)) {
         externalSkillLoader.startWatching()
       }
 

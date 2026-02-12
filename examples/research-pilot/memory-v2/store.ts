@@ -2,17 +2,16 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from 'path'
 import {
   PATHS,
+  AGENT_MD_ID,
+  AGENT_MD_MAX_CHARS,
   type Artifact,
-  type ArtifactFactIndex,
   type ArtifactType,
   type CLIContext,
-  type FocusCooldown,
-  type FocusEntry,
-  type FocusRefType,
-  type FocusStateFile,
+  type NoteArtifact,
   type PaperArtifact,
   type Provenance,
-  type DataSchema
+  type DataSchema,
+  type SessionSummary
 } from '../types.js'
 
 export interface ArtifactFileRecord<T extends Artifact = Artifact> {
@@ -116,18 +115,6 @@ export interface UpdateArtifactInput {
   enrichedAt?: string
 }
 
-export interface FocusAddInput {
-  sessionId: string
-  refType: FocusRefType
-  refId: string
-  reason: string
-  score: number
-  source: 'manual' | 'auto'
-  ttl: string
-  now?: Date
-  cooldownMinutes?: number
-}
-
 function nowIso(): string {
   return new Date().toISOString()
 }
@@ -211,6 +198,35 @@ function mergeProvenance(context: CLIContext, override?: Partial<Provenance>): P
     extractedFrom: override?.extractedFrom ?? 'user-input',
     messageId: override?.messageId
   }
+}
+
+/**
+ * Ensure the special agent-md note exists. Auto-creates it if missing.
+ * Called during project initialization so the user always has agent.md available.
+ */
+export function ensureAgentMd(projectPath: string): void {
+  const notesDir = join(projectPath, PATHS.notes)
+  const filePath = join(notesDir, `${AGENT_MD_ID}.json`)
+  if (existsSync(filePath)) return
+
+  ensureDir(notesDir)
+  const now = nowIso()
+  const artifact: NoteArtifact = {
+    id: AGENT_MD_ID,
+    type: 'note',
+    title: 'agent.md',
+    content: '',
+    tags: ['pinned'],
+    summary: 'User instructions always injected into agent context.',
+    provenance: {
+      source: 'user',
+      sessionId: 'init',
+      extractedFrom: 'user-input'
+    },
+    createdAt: now,
+    updatedAt: now
+  }
+  writeFileSync(filePath, JSON.stringify(artifact, null, 2), 'utf-8')
 }
 
 export function createArtifact(input: CreateArtifactInput, context: CLIContext): ArtifactFileRecord {
@@ -334,6 +350,11 @@ export function updateArtifact(projectPath: string, artifactId: string, patch: U
   const found = findArtifactById(projectPath, artifactId)
   if (!found) return null
 
+  // Enforce character limit on agent.md
+  if (found.artifact.id === AGENT_MD_ID && patch.content && patch.content.length > AGENT_MD_MAX_CHARS) {
+    return null
+  }
+
   const updated: Artifact = {
     ...found.artifact,
     ...patch,
@@ -441,206 +462,27 @@ export function findExistingPaperArtifact(
   return byTitleYear ?? null
 }
 
-function focusFilePath(projectPath: string, sessionId: string): string {
-  return join(projectPath, PATHS.focusDir, `${sessionId}.json`)
+// ============================================================================
+// Session Summary
+// ============================================================================
+
+export function writeSessionSummary(projectPath: string, summary: SessionSummary): void {
+  const dir = join(projectPath, PATHS.sessionSummaries, summary.sessionId)
+  ensureDir(dir)
+  const filePath = join(dir, `${Date.now()}.json`)
+  writeFileSync(filePath, JSON.stringify(summary, null, 2), 'utf-8')
 }
 
-function loadFocusState(projectPath: string, sessionId: string): FocusStateFile {
-  return readJson<FocusStateFile>(focusFilePath(projectPath, sessionId), {
-    entries: [],
-    cooldowns: [],
-    updatedAt: nowIso()
+export function readLatestSessionSummary(projectPath: string, sessionId: string): SessionSummary | null {
+  const dir = join(projectPath, PATHS.sessionSummaries, sessionId)
+  if (!existsSync(dir)) return null
+  const files = readdirSync(dir).filter(f => f.endsWith('.json'))
+  if (files.length === 0) return null
+  // Sort by numeric filename descending (ms epoch)
+  files.sort((a, b) => {
+    const na = parseInt(a, 10)
+    const nb = parseInt(b, 10)
+    return nb - na
   })
-}
-
-function saveFocusState(projectPath: string, sessionId: string, state: FocusStateFile): void {
-  state.updatedAt = nowIso()
-  writeJson(focusFilePath(projectPath, sessionId), state)
-}
-
-function parseTtlPreset(ttl: string, now: Date): Date {
-  if (ttl === '30m') {
-    return new Date(now.getTime() + 30 * 60_000)
-  }
-  if (ttl === '2h') {
-    return new Date(now.getTime() + 2 * 60 * 60_000)
-  }
-  if (ttl === 'today') {
-    const until = new Date(now)
-    until.setHours(23, 59, 59, 999)
-    return until
-  }
-
-  const asDate = new Date(ttl)
-  if (!Number.isNaN(asDate.getTime())) return asDate
-
-  return new Date(now.getTime() + 30 * 60_000)
-}
-
-function focusKey(entry: Pick<FocusEntry, 'sessionId' | 'refType' | 'refId'>): string {
-  return `${entry.sessionId}:${entry.refType}:${entry.refId}`
-}
-
-export function pruneExpiredFocusAtTurnBoundary(
-  projectPath: string,
-  sessionId: string,
-  now: Date = new Date(),
-  cooldownMinutes: number = 15
-): { expired: number; kept: number } {
-  const state = loadFocusState(projectPath, sessionId)
-  const nowMs = now.getTime()
-  const beforeCount = state.entries.length
-
-  const alive: FocusEntry[] = []
-  for (const entry of state.entries) {
-    const expiresMs = new Date(entry.expiresAt).getTime()
-    if (!Number.isNaN(expiresMs) && expiresMs <= nowMs) {
-      if (entry.source === 'auto') {
-        const until = new Date(nowMs + cooldownMinutes * 60_000).toISOString()
-        state.cooldowns = state.cooldowns.filter(c => focusKey(c) !== focusKey(entry))
-        state.cooldowns.push({
-          sessionId,
-          refType: entry.refType,
-          refId: entry.refId,
-          until,
-          reason: 'expired-auto-focus'
-        })
-      }
-      continue
-    }
-    alive.push(entry)
-  }
-
-  state.entries = alive
-  state.cooldowns = state.cooldowns.filter(c => new Date(c.until).getTime() > nowMs)
-  saveFocusState(projectPath, sessionId, state)
-
-  return {
-    expired: Math.max(0, beforeCount - alive.length),
-    kept: alive.length
-  }
-}
-
-export function addFocusEntry(projectPath: string, input: FocusAddInput): { ok: boolean; reason?: string; entry?: FocusEntry } {
-  const now = input.now ?? new Date()
-  const state = loadFocusState(projectPath, input.sessionId)
-  const nowMs = now.getTime()
-
-  state.cooldowns = state.cooldowns.filter(c => new Date(c.until).getTime() > nowMs)
-  const cooldown = state.cooldowns.find(c => c.refType === input.refType && c.refId === input.refId)
-  if (input.source === 'auto' && cooldown) {
-    saveFocusState(projectPath, input.sessionId, state)
-    return { ok: false, reason: `cooldown-active-until:${cooldown.until}` }
-  }
-
-  const expiresAt = parseTtlPreset(input.ttl, now).toISOString()
-  const existing = state.entries.find(entry => entry.refType === input.refType && entry.refId === input.refId)
-  if (existing) {
-    existing.reason = input.reason
-    existing.score = input.score
-    existing.source = input.source
-    existing.ttl = input.ttl
-    existing.expiresAt = expiresAt
-    existing.updatedAt = nowIso()
-    saveFocusState(projectPath, input.sessionId, state)
-    return { ok: true, entry: existing }
-  }
-
-  const entry: FocusEntry = {
-    id: crypto.randomUUID(),
-    sessionId: input.sessionId,
-    refType: input.refType,
-    refId: input.refId,
-    reason: input.reason,
-    score: input.score,
-    source: input.source,
-    ttl: input.ttl,
-    expiresAt,
-    createdAt: nowIso(),
-    updatedAt: nowIso()
-  }
-
-  state.entries.push(entry)
-  saveFocusState(projectPath, input.sessionId, state)
-  return { ok: true, entry }
-}
-
-export function removeFocusEntry(projectPath: string, sessionId: string, idOrRef: string): boolean {
-  const state = loadFocusState(projectPath, sessionId)
-  const before = state.entries.length
-  state.entries = state.entries.filter(entry => entry.id !== idOrRef && entry.refId !== idOrRef && !entry.refId.startsWith(idOrRef))
-  if (state.entries.length !== before) {
-    saveFocusState(projectPath, sessionId, state)
-    return true
-  }
-  return false
-}
-
-export function clearFocusEntries(projectPath: string, sessionId: string): number {
-  const state = loadFocusState(projectPath, sessionId)
-  const count = state.entries.length
-  state.entries = []
-  saveFocusState(projectPath, sessionId, state)
-  return count
-}
-
-export function listFocusEntries(projectPath: string, sessionId: string): FocusEntry[] {
-  const state = loadFocusState(projectPath, sessionId)
-  return state.entries
-    .slice()
-    .sort((a, b) => {
-      if (a.score !== b.score) return b.score - a.score
-      return a.updatedAt < b.updatedAt ? 1 : -1
-    })
-}
-
-export function getFocusCooldowns(projectPath: string, sessionId: string): FocusCooldown[] {
-  return loadFocusState(projectPath, sessionId).cooldowns
-}
-
-function artifactFactIndexPath(projectPath: string): string {
-  return join(projectPath, PATHS.artifactFactIndex)
-}
-
-export function readArtifactFactIndex(projectPath: string): ArtifactFactIndex {
-  return readJson<ArtifactFactIndex>(artifactFactIndexPath(projectPath), {
-    updatedAt: nowIso(),
-    byArtifactId: {}
-  })
-}
-
-export function writeArtifactFactIndex(projectPath: string, index: ArtifactFactIndex): void {
-  index.updatedAt = nowIso()
-  writeJson(artifactFactIndexPath(projectPath), index)
-}
-
-export function linkFactToArtifacts(projectPath: string, factId: string, artifactIds: string[]): void {
-  if (artifactIds.length === 0) return
-  const index = readArtifactFactIndex(projectPath)
-
-  for (const artifactId of artifactIds) {
-    const existing = new Set(index.byArtifactId[artifactId] ?? [])
-    existing.add(factId)
-    index.byArtifactId[artifactId] = [...existing]
-  }
-
-  writeArtifactFactIndex(projectPath, index)
-}
-
-export function unlinkFactFromArtifacts(projectPath: string, factId: string): void {
-  const index = readArtifactFactIndex(projectPath)
-  for (const artifactId of Object.keys(index.byArtifactId)) {
-    const remaining = (index.byArtifactId[artifactId] ?? []).filter(id => id !== factId)
-    if (remaining.length > 0) {
-      index.byArtifactId[artifactId] = remaining
-    } else {
-      delete index.byArtifactId[artifactId]
-    }
-  }
-  writeArtifactFactIndex(projectPath, index)
-}
-
-export function getFactIdsForArtifact(projectPath: string, artifactId: string): string[] {
-  const index = readArtifactFactIndex(projectPath)
-  return index.byArtifactId[artifactId] ?? []
+  return readJson<SessionSummary | null>(join(dir, files[0]), null)
 }

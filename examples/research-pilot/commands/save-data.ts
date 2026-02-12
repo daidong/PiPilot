@@ -5,7 +5,7 @@
 
 import { existsSync } from 'fs'
 import { type CLIContext, type DataAttachment } from '../types.js'
-import { createArtifact } from '../memory-v2/store.js'
+import { artifactCreate } from './artifact.js'
 
 export interface SaveDataResult {
   success: boolean
@@ -34,7 +34,7 @@ export function saveData(
     return { success: false, error: `File not found: ${opts.filePath}` }
   }
 
-  const { artifact, filePath } = createArtifact({
+  const created = artifactCreate({
     type: 'data',
     title: name,
     filePath: opts.filePath,
@@ -55,11 +55,11 @@ export function saveData(
     }
   }, context)
 
-  if (artifact.type !== 'data') {
+  if (!created.success || !created.artifact || created.artifact.type !== 'data') {
     return { success: false, error: 'Failed to create data artifact.' }
   }
 
-  return { success: true, data: artifact, filePath }
+  return { success: true, data: created.artifact, filePath: created.filePath }
 }
 
 export function parseSaveDataArgs(raw: string): {

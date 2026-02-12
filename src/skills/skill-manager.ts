@@ -416,6 +416,10 @@ export class SkillManager {
    * Called by ToolRegistry before tool execution
    */
   onToolUsed(toolName: string): void {
+    // skill-script-run performs targeted loading for the requested skillId.
+    // Avoid broad auto-loading of every skill bound to this tool.
+    if (toolName === 'skill-script-run') return
+
     const skillIds = this.toolToSkillMap.get(toolName)
     if (!skillIds || skillIds.length === 0) return
 

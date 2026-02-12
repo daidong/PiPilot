@@ -67,6 +67,7 @@ export type {
   SkillTelemetryConfig,
   SkillTelemetryMode,
   SkillTelemetrySink,
+  SkillScriptMetadata,
   SkillRegistrationOptions,
   SkillTokenSavings
 } from './skill.js'

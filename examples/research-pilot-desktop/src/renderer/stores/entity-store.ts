@@ -2,42 +2,15 @@ import { create } from 'zustand'
 
 export interface EntityItem {
   id: string
-  type: 'note' | 'paper' | 'data' | 'fact'
+  type: 'note' | 'paper' | 'data'
   title: string
-  reason?: string
-  score?: number
-  expiresAt?: string
   [key: string]: any
-}
-
-export interface FactItem {
-  id: string
-  namespace: string
-  key: string
-  value: any
-  valueText?: string
-  status: 'proposed' | 'active' | 'superseded' | 'deprecated'
-  confidence: number
-  provenance: { sourceType: string; sourceRef: string; traceId?: string; sessionId?: string }
-  derivedFromArtifactIds?: string[]
-  createdAt: string
-  updatedAt: string
-}
-
-interface FocusEntry {
-  refType: 'artifact' | 'fact' | 'task'
-  refId: string
-  reason: string
-  score: number
-  expiresAt: string
 }
 
 interface EntityState {
   notes: EntityItem[]
   papers: EntityItem[]
   data: EntityItem[]
-  focus: EntityItem[]
-  facts: FactItem[]
 
   enrichingPapers: Set<string>
   setEnriching: (id: string) => void
@@ -46,11 +19,6 @@ interface EntityState {
 
   reset: () => void
   refreshAll: () => Promise<void>
-  refreshFacts: () => Promise<void>
-  promoteFact: (id: string) => Promise<void>
-  demoteFact: (id: string) => Promise<void>
-  toggleFocus: (id: string, options?: { reason?: string; ttl?: string }) => Promise<void>
-  clearFocus: () => Promise<void>
 
   deleteEntity: (id: string) => Promise<void>
 }
@@ -74,19 +42,10 @@ function sortByYear(items: EntityItem[]): EntityItem[] {
   })
 }
 
-function resolveEntityById(entities: EntityItem[], refId: string): EntityItem | null {
-  const exact = entities.find(item => item.id === refId)
-  if (exact) return exact
-  const prefix = entities.find(item => item.id.startsWith(refId) || refId.startsWith(item.id))
-  return prefix ?? null
-}
-
 export const useEntityStore = create<EntityState>((set, get) => ({
   notes: [],
   papers: [],
   data: [],
-  focus: [],
-  facts: [],
   enrichingPapers: new Set<string>(),
 
   setEnriching: (id: string) => set((state) => {
@@ -107,92 +66,27 @@ export const useEntityStore = create<EntityState>((set, get) => ({
     notes: [],
     papers: [],
     data: [],
-    focus: [],
-    facts: [],
     enrichingPapers: new Set<string>()
   }),
 
   refreshAll: async () => {
-    const [notesRaw, papersRaw, dataRaw, focusResult, factsRaw] = await Promise.all([
+    const [notesRaw, papersRaw, dataRaw] = await Promise.all([
       api.listNotes(),
       api.listLiterature(),
-      api.listData(),
-      api.focusList(),
-      api.factList()
+      api.listData()
     ])
 
     const notes = stamp(notesRaw, 'note')
+    // Sort agent-md to top of notes list
+    notes.sort((a, b) => (a.id === 'agent-md' ? -1 : b.id === 'agent-md' ? 1 : 0))
     const papers = sortByYear(stamp(papersRaw, 'paper'))
     const data = stamp(dataRaw, 'data')
-    const facts: FactItem[] = factsRaw || []
-    const allArtifacts = [...notes, ...papers, ...data]
-    const entries: FocusEntry[] = (focusResult?.entries || []) as FocusEntry[]
-
-    const focus = entries
-      .filter(entry => entry.refType === 'artifact')
-      .map(entry => {
-        const artifact = resolveEntityById(allArtifacts, entry.refId)
-        if (!artifact) {
-          return {
-            id: entry.refId,
-            type: 'data' as const,
-            title: entry.refId,
-            reason: entry.reason,
-            score: entry.score,
-            expiresAt: entry.expiresAt
-          }
-        }
-        return {
-          ...artifact,
-          reason: entry.reason,
-          score: entry.score,
-          expiresAt: entry.expiresAt
-        }
-      })
 
     set({
       notes,
       papers,
-      data,
-      focus,
-      facts
+      data
     })
-  },
-
-  refreshFacts: async () => {
-    const factsRaw = await api.factList()
-    set({ facts: factsRaw || [] })
-  },
-
-  promoteFact: async (id: string) => {
-    await api.factPromote(id)
-    await get().refreshFacts()
-  },
-
-  demoteFact: async (id: string) => {
-    await api.factDemote(id)
-    await get().refreshFacts()
-  },
-
-  toggleFocus: async (id: string, options?: { reason?: string; ttl?: string }) => {
-    const inFocus = get().focus.some(item => item.id === id)
-    if (inFocus) {
-      await api.focusRemove(id)
-    } else {
-      await api.focusAdd({
-        refType: 'artifact',
-        refId: id,
-        reason: options?.reason ?? 'manually selected for current work',
-        source: 'manual',
-        ttl: options?.ttl ?? '2h'
-      })
-    }
-    await get().refreshAll()
-  },
-
-  clearFocus: async () => {
-    await api.focusClear()
-    await get().refreshAll()
   },
 
   deleteEntity: async (id: string) => {

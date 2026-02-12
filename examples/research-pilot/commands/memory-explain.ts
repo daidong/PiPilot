@@ -1,7 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { PATHS } from '../types.js'
-import { readArtifactFactIndex } from '../memory-v2/store.js'
 
 export interface MemoryExplainResult {
   success: boolean
@@ -23,43 +22,6 @@ export function memoryExplainTurn(projectPath: string): MemoryExplainResult {
     return {
       success: true,
       data: readLatestExplainTurn(projectPath) ?? { message: 'No turn explanation recorded yet.' }
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-}
-
-export function memoryExplainFact(projectPath: string, factId: string): MemoryExplainResult {
-  try {
-    const index = readArtifactFactIndex(projectPath)
-    const artifactIds = Object.keys(index.byArtifactId)
-      .filter(artifactId => (index.byArtifactId[artifactId] ?? []).includes(factId))
-
-    return {
-      success: true,
-      data: {
-        factId,
-        derivedFromArtifactIds: artifactIds,
-        artifactCount: artifactIds.length
-      }
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-}
-
-export function memoryExplainBudget(projectPath: string): MemoryExplainResult {
-  try {
-    const turn = readLatestExplainTurn(projectPath) as { budget?: unknown } | null
-    return {
-      success: true,
-      data: turn?.budget ?? { message: 'No budget snapshot recorded yet.' }
     }
   } catch (error) {
     return {

@@ -2,38 +2,44 @@
  * Coordinator Agent (Research Pilot Memory V2 - RFC-012)
  *
  * Key behavior:
- * - Canonical memory surface: Artifact / Fact / Focus / Task Anchor
- * - Focus is session-scoped with TTL + turn-boundary expiry
- * - Durable fact writes route through runtime.memoryStorage (Kernel V2 write gate)
- * - Context is assembled by Kernel V2; focus digest is injected as selected context
+ * - Canonical durable memory surface: Artifact
+ * - Cross-turn continuity is provided by Session Summary snapshots
+ * - Context is assembled by Kernel V2 with mention selections + latest session summary
  */
 
-import { basename, join } from 'path'
-import { existsSync, mkdirSync, writeFileSync } from 'fs'
+import { join, parse } from 'path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { createAgent, packs, definePack, defineTool } from '../../../src/index.js'
 import { createLLMClientFromModelId } from '../../../src/llm/index.js'
 import { getModel } from '../../../src/llm/models.js'
 import { createSubagentTools } from './subagent-tools.js'
-import { createResearchMemoryTools, type MemoryExplainProvider } from '../tools/entity-tools.js'
+import { createResearchMemoryTools } from '../tools/entity-tools.js'
 import type { Agent } from '../../../src/types/agent.js'
 import type { ContextSelection } from '../../../src/types/context-pipeline.js'
-import type { MemoryStorage } from '../../../src/types/memory.js'
+import type { SkillScriptMetadata } from '../../../src/types/skill.js'
 import { countTokens } from '../../../src/utils/tokenizer.js'
 import { loadPrompt } from './prompts/index.js'
 import { researchPilotSkills } from '../skills/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
-import { PATHS, type Artifact, type FocusEntry } from '../types.js'
+import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import {
-  addFocusEntry,
   findArtifactById,
-  listFocusEntries,
-  pruneExpiredFocusAtTurnBoundary
+  readLatestSessionSummary,
+  writeSessionSummary
 } from '../memory-v2/store.js'
-import { readKernelTaskAnchor } from '../memory-v2/kernel-task-anchor.js'
 
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
 
-type IntentLabel = 'literature' | 'data' | 'writing' | 'critique' | 'resume' | 'web' | 'general'
+type IntentLabel =
+  | 'literature'
+  | 'data'
+  | 'writing'
+  | 'critique'
+  | 'web'
+  | 'citation'
+  | 'grants'
+  | 'docx'
+  | 'general'
 type PersistenceDecision = 'ephemeral' | 'conditional' | 'persist-requested'
 
 const INTENT_PRIORITY: IntentLabel[] = [
@@ -41,7 +47,9 @@ const INTENT_PRIORITY: IntentLabel[] = [
   'literature',
   'critique',
   'writing',
-  'resume',
+  'citation',
+  'grants',
+  'docx',
   'web',
   'general'
 ]
@@ -50,39 +58,47 @@ const INTENT_MODULES: Partial<Record<IntentLabel, string>> = {
   literature: 'coordinator-module-literature',
   data: 'coordinator-module-data',
   writing: 'coordinator-module-writing',
-  critique: 'coordinator-module-critique',
-  resume: 'coordinator-module-resume'
+  critique: 'coordinator-module-critique'
 }
 
 const INTENT_SKILL_IDS: Partial<Record<IntentLabel, string>> = {
   literature: 'literature-skill',
   data: 'data-analysis-skill',
-  writing: 'academic-writing-skill'
+  writing: 'academic-writing-skill',
+  citation: 'citation-management',
+  grants: 'research-grants',
+  docx: 'document-docx'
+}
+
+const INTENT_TAG_HINTS: Partial<Record<IntentLabel, string[]>> = {
+  literature: ['literature', 'papers', 'research'],
+  data: ['data', 'analysis'],
+  writing: ['writing', 'academic'],
+  citation: ['citations', 'bibtex', 'doi'],
+  grants: ['grants', 'proposal'],
+  docx: ['docx', 'document-processing']
 }
 
 interface TurnExplainSnapshot {
   timestamp: string
   sessionId: string
   intents: string[]
-  focus: {
-    active: number
-    used: Array<{ refType: string; refId: string; score: number; reason: string }>
-    prunedAtTurnBoundary: number
+  skillRouting?: {
+    explicitPreloads: string[]
+    recommendedPreloads: string[]
   }
   selectedContext: {
     mentionSelections: number
-    focusDigestIncluded: boolean
     approxTokens: number
   }
   persistence: {
     decision: PersistenceDecision
     reason: string
   }
-  taskAnchor: {
-    currentGoal: string
-    nowDoing: string
-    blockedBy: string[]
-    nextAction: string
+  sessionSummary: {
+    included: boolean
+    turnRange?: [number, number]
+    approxTokens: number
   }
   budget: {
     model: string
@@ -100,8 +116,10 @@ function detectIntentsByRules(message: string): Set<IntentLabel> {
   if (/(paper|papers|literature|related work|citation|survey|systematic review|find papers|arxiv|doi|bibtex|scholar)/.test(text)) intents.add('literature')
   if (/(data|dataset|csv|tsv|xlsx|xls|json|parquet|statistics|statistical|analysis|analyze|visualize|plot|chart|graph|regression|modeling|correlation|distribution|outlier)/.test(text)) intents.add('data')
   if (/(rewrite|draft|write|outline|abstract|introduction|section|manuscript|proposal|review article|写作|改写|润色|摘要|大纲)/.test(text)) intents.add('writing')
+  if (/(citation|cite|bibtex|endnote|zotero|doi|reference list|references|参考文献|引文|引证)/.test(text)) intents.add('citation')
+  if (/(grant|grants|proposal|specific aims|broader impacts|nih|nsf|doe|darpa|funding|资助|基金|申报书)/.test(text)) intents.add('grants')
+  if (/(docx|word document|tracked changes|track changes|ooxml|comment thread|批注|修订)/.test(text)) intents.add('docx')
   if (/(critique|review|evaluate|assessment|assess|weakness|limitation|pros|cons|flaw|评审|评价|批评|缺陷|可行性)/.test(text)) intents.add('critique')
-  if (/(continue|resume|progress|status|where are we|what's next|next step|继续|进展|下一步)/.test(text)) intents.add('resume')
   if (/(latest|today|news|deadline|release|price|官网|新闻|截止|版本)/.test(text)) intents.add('web')
 
   return intents
@@ -115,7 +133,7 @@ async function classifyIntentWithLLM(
 
   const system = [
     'You are an intent router for a research assistant.',
-    'Choose ONE label from: literature, data, writing, critique, resume, web, general.',
+    'Choose ONE label from: literature, data, writing, critique, web, citation, grants, docx, general.',
     'Output only the label.'
   ].join(' ')
 
@@ -149,13 +167,206 @@ function describeToolReturn(name: string): string {
   if (name.startsWith('todo-')) return 'todo item'
   if (name.startsWith('memory-')) return 'memory item'
   if (name.startsWith('artifact-')) return 'artifact result'
-  if (name.startsWith('fact-')) return 'fact result'
-  if (name.startsWith('focus-')) return 'focus result'
-  if (name.startsWith('task-anchor-')) return 'task anchor result'
-  if (name === 'memory-explain') return 'explain snapshot'
   if (name === 'ctx-get') return 'rendered context'
   if (name === 'bash') return 'stdout/stderr'
   return 'result'
+}
+
+interface ScriptCandidate {
+  skillId: string
+  script: string
+  score: number
+  reason: string
+}
+
+interface ConversionCapability {
+  extensions?: string[]
+  script?: string
+}
+
+interface PreferredConversionScript {
+  skillId: string
+  script: string
+  successes: number
+  failures: number
+  lastUsedAt: number
+}
+
+interface SkillPreloadDecision {
+  explicitPreloads: string[]
+  recommendedPreloads: string[]
+}
+
+function isScriptOnlySkill(skill: { tools?: unknown[] } | null | undefined): boolean {
+  if (!skill || !Array.isArray(skill.tools)) return false
+  return skill.tools.length === 1 && skill.tools[0] === 'skill-script-run'
+}
+
+function normalizeExtension(ext: string): string {
+  return ext.toLowerCase().replace(/^\./, '').trim()
+}
+
+function normalizeScriptName(script: SkillScriptMetadata): string {
+  const raw = (script.name ?? script.fileName ?? '').trim()
+  if (!raw) return ''
+  const ext = raw.lastIndexOf('.')
+  return ext > 0 ? raw.slice(0, ext) : raw
+}
+
+function readConversionCapability(skill: { meta?: Record<string, unknown> }): ConversionCapability | null {
+  const meta = skill.meta
+  if (!meta || typeof meta !== 'object') return null
+  const capabilities = (meta as Record<string, unknown>).capabilities
+  if (!capabilities || typeof capabilities !== 'object') return null
+  const convert = (capabilities as Record<string, unknown>).convert_to_markdown
+  if (!convert || typeof convert !== 'object') return null
+
+  const convertObj = convert as Record<string, unknown>
+  const extensions = Array.isArray(convertObj.extensions)
+    ? convertObj.extensions
+      .map(item => typeof item === 'string' ? normalizeExtension(item) : '')
+      .filter(Boolean)
+    : undefined
+  const script = typeof convertObj.script === 'string' && convertObj.script.trim()
+    ? convertObj.script.trim().toLowerCase()
+    : undefined
+
+  if ((!extensions || extensions.length === 0) && !script) return null
+  return { extensions, script }
+}
+
+function scoreScriptCandidate(
+  skillId: string,
+  scriptName: string,
+  extNoDot: string,
+  options?: {
+    capability?: ConversionCapability | null
+    preferred?: PreferredConversionScript | null
+  }
+): { score: number; reason: string } | null {
+  const normalizedSkill = skillId.toLowerCase()
+  const normalizedScript = scriptName.toLowerCase()
+  let score = 0
+  const reasons: string[] = []
+
+  if (normalizedScript === `${extNoDot}-to-markdown`) {
+    score += 240
+    reasons.push('exact extension converter')
+  } else if (normalizedScript === 'convert-file') {
+    score += 200
+    reasons.push('generic file converter')
+  } else if (normalizedScript === 'convert-to-markdown') {
+    score += 180
+    reasons.push('explicit markdown converter')
+  } else if (normalizedScript.includes('to-markdown')) {
+    score += 160
+    reasons.push('markdown conversion script')
+  } else if (normalizedScript.includes('convert') && normalizedScript.includes('markdown')) {
+    score += 140
+    reasons.push('convert+markdown script')
+  } else if (normalizedScript.includes('convert')) {
+    score += 80
+    reasons.push('generic conversion script')
+  }
+
+  if (normalizedScript.includes(extNoDot)) {
+    score += 40
+    reasons.push('extension mentioned in script')
+  }
+
+  if (normalizedSkill.includes('markitdown')) {
+    score += 35
+    reasons.push('markitdown skill')
+  }
+
+  if (normalizedSkill.includes(extNoDot)) {
+    score += 30
+    reasons.push('extension-aligned skill')
+  }
+
+  if (options?.capability?.extensions?.includes(extNoDot)) {
+    score += 90
+    reasons.push('declared extension capability')
+  }
+
+  if (options?.capability?.script && options.capability.script === normalizedScript) {
+    score += 110
+    reasons.push('declared preferred conversion script')
+  }
+
+  if (
+    options?.preferred &&
+    options.preferred.skillId === skillId &&
+    options.preferred.script.toLowerCase() === normalizedScript
+  ) {
+    score += 160
+    reasons.push('previous successful converter')
+    score += Math.min(40, options.preferred.successes * 8)
+    score -= Math.min(30, options.preferred.failures * 10)
+  }
+
+  if (score <= 0) return null
+
+  return {
+    score,
+    reason: reasons.join(', ')
+  }
+}
+
+function discoverDynamicConversionScripts(
+  skillManager: any,
+  inputPath: string,
+  preferredByExt?: Map<string, PreferredConversionScript>
+): ScriptCandidate[] {
+  if (!skillManager || typeof skillManager.getAll !== 'function') {
+    return []
+  }
+
+  const extNoDot = normalizeExtension(parse(inputPath).ext)
+  if (!extNoDot) return []
+
+  const preferred = preferredByExt?.get(extNoDot) ?? null
+  const skills = skillManager.getAll() as Array<{
+    id: string
+    meta?: Record<string, unknown> & { scripts?: SkillScriptMetadata[] }
+  }>
+  const candidates: ScriptCandidate[] = []
+  const seen = new Set<string>()
+
+  for (const skill of skills) {
+    const scripts = skill.meta?.scripts
+    if (!Array.isArray(scripts) || scripts.length === 0) continue
+    const capability = readConversionCapability(skill)
+
+    for (const script of scripts) {
+      const scriptName = normalizeScriptName(script)
+      if (!scriptName) continue
+
+      const scored = scoreScriptCandidate(skill.id, scriptName, extNoDot, {
+        capability,
+        preferred
+      })
+      if (!scored) continue
+
+      const key = `${skill.id}:${scriptName}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidates.push({
+        skillId: skill.id,
+        script: scriptName,
+        score: scored.score,
+        reason: scored.reason
+      })
+    }
+  }
+
+  candidates.sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score
+    if (a.skillId !== b.skillId) return a.skillId.localeCompare(b.skillId)
+    return a.script.localeCompare(b.script)
+  })
+
+  return candidates
 }
 
 function buildToolContracts(toolRegistry: { getAll: () => Array<{ name: string; parameters?: Record<string, { required?: boolean }> }> }): string {
@@ -171,14 +382,81 @@ function buildToolContracts(toolRegistry: { getAll: () => Array<{ name: string; 
   return lines.join('\n')
 }
 
-function preloadSkillsForIntents(intents: Set<IntentLabel>, skillManager: any): void {
-  if (!skillManager || typeof skillManager.loadFully !== 'function') return
+function recommendSkillsForMessage(
+  message: string,
+  intents: Set<IntentLabel>,
+  skillRegistry: any
+): string[] {
+  if (!skillRegistry || typeof skillRegistry.findMatches !== 'function') {
+    return []
+  }
+
+  const tagHints = new Set<string>()
+  for (const intent of intents) {
+    const tags = INTENT_TAG_HINTS[intent] ?? []
+    for (const tag of tags) tagHints.add(tag)
+  }
+
+  const matches = skillRegistry.findMatches({
+    ...(tagHints.size > 0 ? { tags: Array.from(tagHints) } : {}),
+    search: message
+  }) as Array<{
+    score: number
+    skill?: { id?: string; loadingStrategy?: string; meta?: Record<string, unknown>; tools?: unknown[] }
+  }>
+
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return []
+  }
+
+  const recommended: string[] = []
+  for (const match of matches) {
+    const skill = match.skill
+    if (!skill?.id) continue
+    if ((match.score ?? 0) < 25) continue
+    if (skill.loadingStrategy === 'on-demand') continue
+    if (isScriptOnlySkill(skill)) continue
+    const sourceType = typeof skill.meta?.sourceType === 'string' ? skill.meta.sourceType : ''
+    if (sourceType !== 'community-builtin' && sourceType !== 'project-local') continue
+    recommended.push(skill.id)
+    if (recommended.length >= 3) break
+  }
+
+  return recommended
+}
+
+function preloadSkillsForIntents(
+  message: string,
+  intents: Set<IntentLabel>,
+  skillManager: any,
+  skillRegistry: any
+): SkillPreloadDecision {
+  const decision: SkillPreloadDecision = {
+    explicitPreloads: [],
+    recommendedPreloads: []
+  }
+  if (!skillManager || typeof skillManager.loadFully !== 'function') return decision
+
+  const loaded = new Set<string>()
   for (const intent of intents) {
     const skillId = INTENT_SKILL_IDS[intent]
-    if (skillId) {
-      skillManager.loadFully(skillId)
-    }
+    if (!skillId || loaded.has(skillId)) continue
+    const skill = typeof skillManager.get === 'function' ? skillManager.get(skillId) : null
+    if (isScriptOnlySkill(skill)) continue
+    loaded.add(skillId)
+    decision.explicitPreloads.push(skillId)
+    skillManager.loadFully(skillId)
   }
+
+  const recommended = recommendSkillsForMessage(message, intents, skillRegistry)
+  for (const skillId of recommended) {
+    if (loaded.has(skillId)) continue
+    loaded.add(skillId)
+    decision.recommendedPreloads.push(skillId)
+    skillManager.loadFully(skillId)
+  }
+
+  return decision
 }
 
 function classifyPersistenceDecision(message: string): { decision: PersistenceDecision; reason: string } {
@@ -215,18 +493,11 @@ function buildAdditionalInstructions(intents: Set<IntentLabel>, toolContracts: s
   return modules.length > 0 ? modules.join('\n\n') : undefined
 }
 
-function getMentionArtifactIds(mentions?: ResolvedMention[]): string[] {
-  if (!mentions) return []
-  return mentions
-    .filter(m => !m.error && (m.ref.type === 'note' || m.ref.type === 'paper' || m.ref.type === 'data') && !!m.entityId)
-    .map(m => m.entityId!)
-}
-
 function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[] {
   if (!mentions) return []
 
   return mentions
-    .filter(m => !m.error && (m.ref.type === 'file' || m.ref.type === 'url'))
+    .filter(m => !m.error)
     .map(m => ({
       type: 'custom' as const,
       ref: m.ref.raw,
@@ -241,90 +512,28 @@ function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[
     }))
 }
 
-function shortArtifactBlock(artifact: Artifact): string {
-  if (artifact.type === 'note') {
-    return `- [note] ${artifact.title}: ${(artifact.summary ?? artifact.content).slice(0, 220)}`
-  }
-  if (artifact.type === 'paper') {
-    const authorText = artifact.authors.slice(0, 3).join(', ')
-    return `- [paper] ${artifact.title} (${artifact.year ?? 'n.d.'}) | ${authorText} | doi=${artifact.doi} | ${(artifact.summary ?? artifact.abstract).slice(0, 220)}`
-  }
-  if (artifact.type === 'data') {
-    return `- [data] ${artifact.title} | path=${artifact.filePath} | ${(artifact.summary ?? '').slice(0, 180)}`
-  }
-  if (artifact.type === 'web-content') {
-    return `- [web] ${artifact.title} | ${artifact.url} | ${(artifact.summary ?? artifact.content).slice(0, 220)}`
-  }
-  return `- [tool-output] ${artifact.title} | ${artifact.toolName} | ${(artifact.summary ?? artifact.outputText ?? '').slice(0, 220)}`
-}
-
-async function buildFocusDigestSelection(
-  sessionId: string,
-  projectPath: string,
-  memoryStorage: MemoryStorage | undefined,
-  taskAnchor: {
-    currentGoal: string
-    nowDoing: string
-    nextAction: string
-  }
-): Promise<{ selection?: ContextSelection; entriesUsed: FocusEntry[]; approxTokens: number }> {
-  const focusEntries = listFocusEntries(projectPath, sessionId)
-  if (focusEntries.length === 0) {
-    return { entriesUsed: [], approxTokens: 0 }
-  }
-
-  const used = focusEntries.slice(0, 12)
-  const lines: string[] = ['## Focus Digest']
-
-  for (const entry of used) {
-    const prefix = `[score=${entry.score.toFixed(2)} source=${entry.source} ttl=${entry.ttl}]`
-
-    if (entry.refType === 'artifact') {
-      const found = findArtifactById(projectPath, entry.refId)
-      if (found) {
-        lines.push(`${prefix} reason=${entry.reason}`)
-        lines.push(shortArtifactBlock(found.artifact))
-      }
-      continue
-    }
-
-    if (entry.refType === 'fact') {
-      if (memoryStorage && entry.refId.includes(':')) {
-        const [namespace, key] = entry.refId.split(':', 2)
-        if (namespace && key) {
-          const fact = await memoryStorage.get(namespace, key)
-          if (fact) {
-            lines.push(`${prefix} reason=${entry.reason}`)
-            lines.push(`- [fact] ${namespace}:${key} -> ${fact.valueText ?? JSON.stringify(fact.value).slice(0, 220)}`)
-          }
-        }
-      }
-      continue
-    }
-
-    if (entry.refType === 'task') {
-      lines.push(`${prefix} reason=${entry.reason}`)
-      lines.push(`- [task] Goal=${taskAnchor.currentGoal}; Doing=${taskAnchor.nowDoing}; Next=${taskAnchor.nextAction}`)
-    }
-  }
-
+function buildSessionSummarySelection(summary: SessionSummary): ContextSelection {
+  const lines = [
+    '## Session Summary',
+    `Turns ${summary.turnRange[0]}-${summary.turnRange[1]}:`,
+    summary.summary,
+    '',
+    `Topics: ${summary.topicsDiscussed.join(', ')}`,
+    ...(summary.openQuestions.length > 0
+      ? ['Open questions:', ...summary.openQuestions.map(q => `- ${q}`)]
+      : [])
+  ]
   const content = lines.join('\n')
   const tokens = countTokens(content)
 
-  const selection: ContextSelection = {
+  return {
     type: 'custom',
-    ref: 'focus:digest',
+    ref: 'session:summary',
     resolve: async () => ({
-      source: 'focus:digest',
+      source: 'session:summary',
       content,
       tokens
     })
-  }
-
-  return {
-    selection,
-    entriesUsed: used,
-    approxTokens: tokens
   }
 }
 
@@ -342,6 +551,10 @@ export interface CoordinatorConfig {
   projectPath?: string
   debug?: boolean
   sessionId?: string
+  externalSkillsDir?: string
+  communitySkillsDir?: string
+  watchExternalSkills?: boolean
+  watchCommunitySkills?: boolean
   reasoningEffort?: 'high' | 'medium' | 'low'
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown) => void
@@ -361,6 +574,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     projectPath = process.cwd(),
     debug = false,
     sessionId = 'default',
+    externalSkillsDir,
+    communitySkillsDir,
+    watchExternalSkills,
+    watchCommunitySkills,
     reasoningEffort = 'high',
     onStream,
     onToolCall,
@@ -370,11 +587,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   let lastTurnExplain: TurnExplainSnapshot | null = null
   let lastBudgetExplain: TurnExplainSnapshot['budget'] | null = null
-
-  const explainProvider: MemoryExplainProvider = {
-    getTurnExplain: () => lastTurnExplain,
-    getBudgetExplain: () => lastBudgetExplain
-  }
+  let turnCount = 0
+  let activeTurnToolCallCount: number | null = null
+  const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
 
   // Select intent router model based on coordinator's provider
   const coordinatorProvider = getModel(model ?? '')?.providerID
@@ -391,10 +606,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     }
   }
 
+  const wrappedOnToolResult = (tool: string, result: unknown, args?: unknown) => {
+    if (activeTurnToolCallCount !== null) {
+      activeTurnToolCallCount++
+    }
+    onToolResult?.(tool, result, args)
+  }
+
   const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(
     apiKey,
     model,
-    onToolResult,
+    wrappedOnToolResult,
     projectPath,
     sessionId,
     onToolCall
@@ -402,12 +624,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   const memoryTools = createResearchMemoryTools({
     sessionId,
-    projectPath,
-    explainProvider
+    projectPath
   })
-
-  const documentsPack = await packs.documents({ timeout: 90000 })
-  const rawConvertTool = documentsPack.tools?.find(t => t.name === 'convert_to_markdown')
 
   const convertToMarkdownTool = defineTool({
     name: 'convert_to_markdown',
@@ -420,29 +638,133 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       }
     },
     execute: async (input, context) => {
-      if (!rawConvertTool) {
-        return { success: false, error: 'convert_to_markdown MCP tool not available' }
-      }
-
       const fileName = (input as { path: string }).path
-      const absPath = join(process.cwd(), fileName)
+      const absPath = join(projectPath, fileName)
       if (!existsSync(absPath)) {
         return { success: false, error: `File not found: ${fileName}` }
       }
 
-      const uri = `file://${absPath}`
-      const result = await rawConvertTool.execute({ uri }, context)
-      if (!result.success) return result
+      const outputName = `${parse(fileName).name}.extracted.md`
+      const outputPath = join(projectPath, outputName)
+      const extension = normalizeExtension(parse(fileName).ext)
+      const preferredByExt = context.runtime.sessionState.get<Map<string, PreferredConversionScript>>('preferredConverterByExt')
+        ?? new Map<string, PreferredConversionScript>()
+      const dynamicCandidates = discoverDynamicConversionScripts(context.runtime.skillManager, absPath, preferredByExt)
+      if (debug) {
+        const preview = dynamicCandidates
+          .slice(0, 5)
+          .map(c => `${c.skillId}/${c.script} score=${c.score}`)
+          .join(', ')
+        console.log(`[convert_to_markdown] extension=${extension || '(none)'} candidates=${dynamicCandidates.length}${preview ? ` -> ${preview}` : ''}`)
+      }
+      const errors: string[] = []
+      let usedConverter: string | null = null
+      let usedScript: string | null = null
 
-      const data = result.data as { text?: string } | undefined
-      const text = data?.text || ''
-      if (!text) {
-        return { success: false, error: 'No text extracted from document' }
+      if (dynamicCandidates.length === 0) {
+        if (debug) {
+          console.log('[convert_to_markdown] no converter scripts discovered from loaded skills')
+        }
+        return {
+          success: false,
+          error: [
+            `Failed to convert "${fileName}" because no conversion script was discovered from loaded skills.`,
+            'Expected scripts like: convert-file, <ext>-to-markdown, convert-to-markdown.',
+            'Tip: ensure community skill "markitdown" or project-local converter skills are loaded.'
+          ].join('\n')
+        }
       }
 
-      const outputName = basename(fileName, '.pdf') + '.extracted.md'
-      const outputPath = join(process.cwd(), outputName)
-      writeFileSync(outputPath, text, 'utf-8')
+      const skillScriptRunTool = context.runtime.toolRegistry.get('skill-script-run')
+      if (!skillScriptRunTool) {
+        if (debug) {
+          console.log('[convert_to_markdown] skill-script-run not available in runtime')
+        }
+        return {
+          success: false,
+          error: 'skill-script-run tool is not available in runtime.'
+        }
+      }
+
+      for (const candidate of dynamicCandidates) {
+        const runResult = await skillScriptRunTool.execute({
+          skillId: candidate.skillId,
+          script: candidate.script,
+          args: [absPath, outputPath],
+          cwd: '.',
+          timeout: 240000
+        }, context)
+
+        if (!runResult.success) {
+          if (debug) {
+            console.log(`[convert_to_markdown] failed ${candidate.skillId}/${candidate.script}: ${runResult.error ?? 'execution failed'}`)
+          }
+          errors.push(`${candidate.skillId}/${candidate.script} (${candidate.reason}): ${runResult.error ?? 'execution failed'}`)
+
+          if (extension) {
+            const preferred = preferredByExt.get(extension)
+            if (
+              preferred &&
+              preferred.skillId === candidate.skillId &&
+              preferred.script.toLowerCase() === candidate.script.toLowerCase()
+            ) {
+              preferredByExt.set(extension, {
+                ...preferred,
+                failures: preferred.failures + 1,
+                lastUsedAt: Date.now()
+              })
+              context.runtime.sessionState.set('preferredConverterByExt', preferredByExt)
+            }
+          }
+          continue
+        }
+
+        if (!existsSync(outputPath)) {
+          errors.push(`${candidate.skillId}/${candidate.script} (${candidate.reason}): completed but output file missing`)
+          continue
+        }
+
+        const generated = readFileSync(outputPath, 'utf-8').trim()
+        if (!generated) {
+          errors.push(`${candidate.skillId}/${candidate.script} (${candidate.reason}): output markdown is empty`)
+          continue
+        }
+
+        usedConverter = candidate.skillId
+        usedScript = candidate.script
+        if (debug) {
+          console.log(`[convert_to_markdown] selected ${usedConverter}/${usedScript}`)
+        }
+        if (extension) {
+          const preferred = preferredByExt.get(extension)
+          const sameAsPreferred = preferred &&
+            preferred.skillId === candidate.skillId &&
+            preferred.script.toLowerCase() === candidate.script.toLowerCase()
+
+          preferredByExt.set(extension, {
+            skillId: candidate.skillId,
+            script: candidate.script,
+            successes: sameAsPreferred ? preferred.successes + 1 : 1,
+            failures: sameAsPreferred ? preferred.failures : 0,
+            lastUsedAt: Date.now()
+          })
+          context.runtime.sessionState.set('preferredConverterByExt', preferredByExt)
+        }
+        break
+      }
+
+      if (!usedConverter) {
+        return {
+          success: false,
+          error: [
+            `Failed to convert document "${fileName}" to markdown.`,
+            'Tried skill scripts:',
+            ...errors.map((line) => `- ${line}`)
+          ].join('\n')
+        }
+      }
+
+      const text = readFileSync(outputPath, 'utf-8')
 
       const allLines = text.split('\n')
       const lines = allLines.length
@@ -459,6 +781,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           outputFile: outputName,
           lines,
           bytes: text.length,
+          converterSkill: usedConverter,
+          converterScript: usedScript,
           head,
           tail: tail || undefined,
           headings: headings.length > 0
@@ -517,7 +841,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         console.log(`  [Tool] ${name}(${JSON.stringify(args).slice(0, 120)}...)`)
       }
     },
-    onToolResult,
+    onToolResult: wrappedOnToolResult,
+    externalSkillsDir,
+    communitySkillsDir,
+    watchExternalSkills,
+    watchCommunitySkills,
     sessionId,
     debug,
     taskProfile: 'research',
@@ -557,78 +885,130 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   await clearSessionMemory()
 
+  async function maybeGenerateSummary(): Promise<void> {
+    if (turnHistory.length === 0) return
+
+    // Trigger conditions
+    const isBaselineTrigger = turnCount % 5 === 0
+    const last3 = turnHistory.slice(-3)
+    const toolCallSum = last3.reduce((sum, t) => sum + t.toolCallCount, 0)
+    const isHeavyToolUsage = last3.length >= 3 && toolCallSum > 15
+    const responseCharSum = last3.reduce((sum, t) => sum + t.response.length, 0)
+    const isLotsOfContent = last3.length >= 3 && responseCharSum > 8000
+
+    if (!isBaselineTrigger && !isHeavyToolUsage && !isLotsOfContent) return
+
+    if (!intentRouterClient) return
+
+    const historyText = turnHistory
+      .map((t, i) => `Turn ${turnCount - turnHistory.length + i + 1}: User: ${t.userMessage}\nAssistant: ${t.response}`)
+      .join('\n\n')
+
+    const prompt = [
+      'Summarize this research assistant conversation excerpt.',
+      'Output JSON: {"summary":"<2-3 sentences>","topicsDiscussed":["topic1","topic2"],"openQuestions":["q1"]}',
+      '',
+      historyText
+    ].join('\n')
+
+    try {
+      const result = await intentRouterClient.generate({
+        system: 'You summarize research conversations. Output valid JSON only.',
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 200
+      })
+
+      const text = result.text.trim()
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) return
+
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        summary: string
+        topicsDiscussed: string[]
+        openQuestions: string[]
+      }
+
+      const summary: SessionSummary = {
+        sessionId,
+        turnRange: [Math.max(1, turnCount - turnHistory.length + 1), turnCount],
+        summary: parsed.summary,
+        topicsDiscussed: parsed.topicsDiscussed ?? [],
+        openQuestions: parsed.openQuestions ?? [],
+        createdAt: new Date().toISOString()
+      }
+
+      writeSessionSummary(projectPath, summary)
+
+      if (debug) {
+        console.log(`[Summary] Generated session summary at turn ${turnCount}: ${parsed.summary.slice(0, 80)}...`)
+      }
+    } catch (err) {
+      if (debug) {
+        console.warn('[Summary] Failed to generate session summary:', err)
+      }
+    }
+  }
+
   return {
     agent,
 
     async chat(message: string, mentions?: ResolvedMention[]) {
       try {
-        const memoryStorage = agent.runtime.memoryStorage
-
-        const pruned = pruneExpiredFocusAtTurnBoundary(projectPath, sessionId)
-        if (debug && pruned.expired > 0) {
-          console.log(`[Focus] Pruned ${pruned.expired} expired entries at turn boundary`) 
-        }
-
-        const mentionArtifactIds = getMentionArtifactIds(mentions)
-        for (const artifactId of mentionArtifactIds) {
-          addFocusEntry(projectPath, {
-            sessionId,
-            refType: 'artifact',
-            refId: artifactId,
-            reason: 'entity mentioned in current request',
-            score: 0.85,
-            source: 'auto',
-            ttl: '30m'
-          })
-        }
-
         const intents = detectIntentsByRules(message)
-        const hasModuleIntent = ['literature', 'data', 'writing', 'critique', 'resume'].some(i => intents.has(i as IntentLabel))
+        const hasModuleIntent = ['literature', 'data', 'writing', 'citation', 'grants', 'docx', 'critique']
+          .some(i => intents.has(i as IntentLabel))
         if (!hasModuleIntent) {
           const label = await classifyIntentWithLLM(intentRouterClient, message)
           if (label !== 'general') intents.add(label)
         }
-        preloadSkillsForIntents(intents, agent.runtime.skillManager)
-        const additionalInstructions = buildAdditionalInstructions(intents, toolContracts)
+        const skillRouting = preloadSkillsForIntents(
+          message,
+          intents,
+          agent.runtime.skillManager,
+          agent.runtime.skillRegistry
+        )
+        const baseAdditionalInstructions = buildAdditionalInstructions(intents, toolContracts)
+
+        // Read agent.md and prepend to additionalInstructions (system prompt level, never truncated)
+        const agentMdRecord = findArtifactById(projectPath, AGENT_MD_ID)
+        const agentMdContent = agentMdRecord?.artifact?.type === 'note'
+          ? (agentMdRecord.artifact as NoteArtifact).content
+          : ''
+        const additionalInstructions = agentMdContent
+          ? `## User Instructions (agent.md)\n\n${agentMdContent}\n\n${baseAdditionalInstructions ?? ''}`
+          : baseAdditionalInstructions
+
         const persistence = classifyPersistenceDecision(message)
 
         const mentionSelections = buildMentionSelections(mentions)
-        const anchor = await readKernelTaskAnchor(projectPath, sessionId)
-        const focusDigest = await buildFocusDigestSelection(sessionId, projectPath, memoryStorage, anchor)
+        const latestSummary = readLatestSessionSummary(projectPath, sessionId)
+        const summarySelection = latestSummary ? buildSessionSummarySelection(latestSummary) : null
+        const summaryTokens = summarySelection
+          ? countTokens(`Session summary (~${latestSummary!.turnRange[0]}-${latestSummary!.turnRange[1]})`)
+          : 0
 
-        const selectedContext: ContextSelection[] = [...mentionSelections]
-        if (focusDigest.selection) {
-          selectedContext.push(focusDigest.selection)
-        }
+        const selectedContext: ContextSelection[] = [
+          ...mentionSelections,
+          ...(summarySelection ? [summarySelection] : [])
+        ]
 
         const explain: TurnExplainSnapshot = {
           timestamp: new Date().toISOString(),
           sessionId,
           intents: Array.from(intents),
-          focus: {
-            active: listFocusEntries(projectPath, sessionId).length,
-            used: focusDigest.entriesUsed.map(entry => ({
-              refType: entry.refType,
-              refId: entry.refId,
-              score: entry.score,
-              reason: entry.reason
-            })),
-            prunedAtTurnBoundary: pruned.expired
-          },
+          skillRouting,
           selectedContext: {
             mentionSelections: mentionSelections.length,
-            focusDigestIncluded: !!focusDigest.selection,
-            approxTokens: focusDigest.approxTokens
+            approxTokens: summaryTokens
           },
           persistence: {
             decision: persistence.decision,
             reason: persistence.reason
           },
-          taskAnchor: {
-            currentGoal: anchor.currentGoal,
-            nowDoing: anchor.nowDoing,
-            blockedBy: anchor.blockedBy,
-            nextAction: anchor.nextAction
+          sessionSummary: {
+            included: !!summarySelection,
+            turnRange: latestSummary?.turnRange,
+            approxTokens: summaryTokens
           },
           budget: {
             model: model ?? 'default'
@@ -641,13 +1021,25 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         if (debug) {
           const intentList = Array.from(intents).join(', ') || 'none'
           console.log(`[Chat] Intents: ${intentList}`)
-          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention selections, focus entries used: ${focusDigest.entriesUsed.length})...`)
+          if (skillRouting.explicitPreloads.length > 0 || skillRouting.recommendedPreloads.length > 0) {
+            console.log(`[Chat] Skill preloads: explicit=[${skillRouting.explicitPreloads.join(', ')}] recommended=[${skillRouting.recommendedPreloads.join(', ')}]`)
+          }
+          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention selections, summary=${!!summarySelection})...`)
         }
 
-        const result = await agent.run(message, {
-          ...(selectedContext.length > 0 ? { selectedContext } : {}),
-          ...(additionalInstructions ? { additionalInstructions } : {})
-        })
+        // Count tool calls for this turn via coordinator-level onToolResult wrapper.
+        let perTurnToolCallCount = 0
+        activeTurnToolCallCount = 0
+        let result: Awaited<ReturnType<Agent['run']>>
+        try {
+          result = await agent.run(message, {
+            ...(selectedContext.length > 0 ? { selectedContext } : {}),
+            ...(additionalInstructions ? { additionalInstructions } : {})
+          })
+          perTurnToolCallCount = activeTurnToolCallCount ?? 0
+        } finally {
+          activeTurnToolCallCount = null
+        }
 
         if (result.usage?.tokens) {
           explain.budget.promptTokens = result.usage.tokens.promptTokens
@@ -659,8 +1051,21 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
         writeExplainSnapshot(projectPath, explain)
 
+        // Update turn history and count (single-point increment)
+        turnCount++
+        turnHistory.push({
+          userMessage: message.slice(0, 300),
+          response: (result.output ?? '').slice(0, 300),
+          toolCallCount: perTurnToolCallCount,
+          timestamp: new Date().toISOString()
+        })
+        if (turnHistory.length > 8) turnHistory.shift()
+
+        // Smart summary trigger
+        void maybeGenerateSummary()
+
         if (debug) {
-          console.log(`[Chat] Result: success=${result.success}, hasOutput=${!!result.output}`)
+          console.log(`[Chat] Result: success=${result.success}, hasOutput=${!!result.output}, turn=${turnCount}`)
         }
 
         if (result.success) {

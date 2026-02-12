@@ -33,7 +33,14 @@ export { defineSkill, extendSkill, mergeSkills } from './define-skill.js'
 export { SkillManager } from './skill-manager.js'
 export type { SkillManagerOptions } from './skill-manager.js'
 export { ExternalSkillLoader } from './external-skill-loader.js'
-export type { ExternalSkillLoaderOptions, LoadedExternalSkill } from './external-skill-loader.js'
+export type {
+  ExternalSkillLoaderOptions,
+  ExternalSkillSourceConfig,
+  ExternalSkillSourceType,
+  LoadedExternalSkill,
+  LoadedSkillScript,
+  SkillScriptRunner
+} from './external-skill-loader.js'
 export {
   parseExternalSkill,
   renderExternalSkillMarkdown,
@@ -70,6 +77,7 @@ export type {
   SkillTelemetryConfig,
   SkillTelemetryMode,
   SkillTelemetrySink,
+  SkillScriptMetadata,
   SkillRegistrationOptions,
   SkillTokenSavings
 } from '../types/skill.js'

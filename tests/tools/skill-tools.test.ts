@@ -87,8 +87,9 @@ describe('skill-create & skill-approve tools', () => {
     expect(result.success).toBe(true)
     expect(result.data?.loadingStrategy).toBe('lazy')
     expect(result.data?.tools).toEqual(['read', 'grep'])
+    expect(result.data?.skillDir).toBe(path.join('.agentfoundry', 'skills', 'project-api-auth'))
 
-    const filePath = path.join(tempDir, '.agentfoundry', 'skills', 'project-api-auth.skill.md')
+    const filePath = path.join(tempDir, '.agentfoundry', 'skills', 'project-api-auth', 'SKILL.md')
     const content = await fs.readFile(filePath, 'utf-8')
     const parsed = parseExternalSkill(content)
 
@@ -99,7 +100,7 @@ describe('skill-create & skill-approve tools', () => {
   })
 
   it('skill-approve updates approvedByUser and registers approved skill', async () => {
-    const filePath = path.join(tempDir, '.agentfoundry', 'skills', 'manual-skill.skill.md')
+    const filePath = path.join(tempDir, '.agentfoundry', 'skills', 'manual-skill', 'SKILL.md')
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, renderExternalSkillMarkdown(
       {

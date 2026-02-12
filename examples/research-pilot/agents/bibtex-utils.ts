@@ -21,6 +21,10 @@ export interface PaperMetadata {
   source: string
 }
 
+export interface BibtexResolveOptions {
+  resolveDoiBibtex?: (doi: string) => Promise<string | null>
+}
+
 /**
  * Escape special LaTeX characters in a string
  */
@@ -182,7 +186,21 @@ export function generateBibtex(paper: PaperMetadata): string {
  * @param paper - Paper metadata
  * @returns BibTeX string (may be generated or fetched)
  */
-export async function getBibtex(paper: PaperMetadata): Promise<string> {
+export async function getBibtex(
+  paper: PaperMetadata,
+  options: BibtexResolveOptions = {}
+): Promise<string> {
+  if (paper.doi && options.resolveDoiBibtex) {
+    try {
+      const resolved = await options.resolveDoiBibtex(paper.doi)
+      if (resolved && resolved.includes('@') && resolved.includes('{')) {
+        return resolved.trim()
+      }
+    } catch {
+      // fall back to native resolvers below
+    }
+  }
+
   // For DBLP papers, try to fetch first
   if (paper.source === 'dblp' && paper.id) {
     const fetched = await fetchDblpBibtex(paper.id)

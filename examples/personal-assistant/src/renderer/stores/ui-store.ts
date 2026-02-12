@@ -103,12 +103,20 @@ export const useUIStore = create<UIState>((set) => ({
   toggleRightSidebar: () => set((s) => ({ rightSidebarCollapsed: !s.rightSidebarCollapsed })),
   addWorkingFile: (path) =>
     set((s) => {
-      if (s.workingFiles.some((f) => f.path === path)) {
-        return s
+      const now = Date.now()
+      const existing = s.workingFiles.find((f) => f.path === path)
+      if (existing) {
+        // Bump accessedAt and re-sort so most-recently-accessed comes first
+        const updated = s.workingFiles.map((f) =>
+          f.path === path ? { ...f, accessedAt: now } : f
+        )
+        updated.sort((a, b) => b.accessedAt - a.accessedAt)
+        return { workingFiles: updated }
       }
       const name = path.split('/').pop() || path
+      // Prepend new file (already most recent) — list stays sorted
       return {
-        workingFiles: [{ path, name, accessedAt: Date.now() }, ...s.workingFiles]
+        workingFiles: [{ path, name, accessedAt: now }, ...s.workingFiles]
       }
     }),
   setWorkingFiles: (paths) =>
@@ -123,6 +131,8 @@ export const useUIStore = create<UIState>((set) => ({
           files.push({ path, name, accessedAt: now })
         }
       }
+      // Sort by accessedAt descending (most recent first)
+      files.sort((a, b) => b.accessedAt - a.accessedAt)
       return { workingFiles: files }
     }),
   clearWorkingFiles: () => set({ workingFiles: [] }),

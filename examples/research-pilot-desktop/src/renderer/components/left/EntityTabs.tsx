@@ -4,9 +4,6 @@ import remarkGfm from 'remark-gfm'
 import {
   BookMarked,
   BookOpen,
-  Brain,
-  Layers,
-  Target,
   Activity,
   Upload,
   MessageSquare,
@@ -21,9 +18,6 @@ import {
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
-import { KnowledgePanel } from './KnowledgePanel'
-import { FocusPanel } from './FocusPanel'
-import { TasksPanel } from './TasksPanel'
 import { RunsPanel } from './RunsPanel'
 
 function HoverPreview({
@@ -31,21 +25,17 @@ function HoverPreview({
   anchorRect,
   onMouseEnter,
   onMouseLeave,
-  onFocusToggle,
   onDelete,
-  confirmDelete,
-  inFocus
+  confirmDelete
 }: {
   entity: EntityItem
   anchorRect: DOMRect
   onMouseEnter: () => void
   onMouseLeave: () => void
-  onFocusToggle: () => void
   onDelete: () => void
   confirmDelete: boolean
-  inFocus: boolean
 }) {
-  const content = entity.content || entity.abstract || entity.valueText || ''
+  const content = entity.content || entity.abstract || ''
   const top = Math.min(anchorRect.top, window.innerHeight - 320)
 
   return (
@@ -65,22 +55,17 @@ function HoverPreview({
             </p>
           )}
         </div>
-        <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            onClick={(e) => { e.stopPropagation(); onFocusToggle() }}
-            className={`p-1 rounded ${inFocus ? 'text-teal-400' : 't-text-muted hover:text-teal-400'}`}
-            title={inFocus ? 'Remove from Focus' : 'Add to Focus'}
-          >
-            <Layers size={13} />
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete() }}
-            className={`p-1 rounded transition-colors ${confirmDelete ? 'text-red-500' : 't-text-muted hover:text-red-400'}`}
-            title={confirmDelete ? 'Click again to confirm' : 'Delete'}
-          >
-            <Trash2 size={13} />
-          </button>
-        </div>
+        {entity.id !== 'agent-md' && (
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete() }}
+              className={`p-1 rounded transition-colors ${confirmDelete ? 'text-red-500' : 't-text-muted hover:text-red-400'}`}
+              title={confirmDelete ? 'Click again to confirm' : 'Delete'}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
       </div>
       {content && (
         <div className="px-3 py-2">
@@ -98,14 +83,10 @@ function HoverPreview({
 const tabs = [
   { key: 'library' as const, label: 'Library', icon: BookMarked },
   { key: 'papers' as const, label: 'Papers', icon: BookOpen },
-  { key: 'knowledge' as const, label: 'Facts', icon: Brain },
-  { key: 'focus' as const, label: 'Focus', icon: Layers },
-  { key: 'tasks' as const, label: 'Tasks', icon: Target },
-  { key: 'runs' as const, label: 'Runs', icon: Activity }
+  { key: 'debug' as const, label: 'Debug', icon: Activity }
 ]
 
-function EntityRow({ entity, focusIds }: { entity: EntityItem; focusIds: Set<string> }) {
-  const toggleFocus = useEntityStore((s) => s.toggleFocus)
+function EntityRow({ entity }: { entity: EntityItem }) {
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const enrichingPapers = useEntityStore((s) => s.enrichingPapers)
   const isEnriching = enrichingPapers.has(entity.id)
@@ -122,7 +103,6 @@ function EntityRow({ entity, focusIds }: { entity: EntityItem; focusIds: Set<str
   const confirmResetRef = useRef<number | null>(null)
 
   const messageId = entity.provenance?.messageId as string | undefined
-  const inFocus = focusIds.has(entity.id)
 
   const cancelHide = () => {
     if (hideTimeoutRef.current) {
@@ -183,16 +163,14 @@ function EntityRow({ entity, focusIds }: { entity: EntityItem; focusIds: Set<str
             anchorRect={anchorRect}
             onMouseEnter={cancelHide}
             onMouseLeave={handleMouseLeave}
-            onFocusToggle={() => toggleFocus(entity.id)}
             onDelete={handleDelete}
             confirmDelete={confirmDelete}
-            inFocus={inFocus}
           />
         )}
         {isEnriching ? (
           <Loader2 size={10} className="shrink-0 text-teal-400 animate-spin" />
         ) : (
-          <span className={`w-1 h-1 rounded-full shrink-0 ${inFocus ? 'bg-teal-400' : 't-bg-elevated'}`} />
+          <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
         )}
         <span className="text-xs t-text truncate">{entity.title}</span>
       </div>
@@ -210,7 +188,7 @@ function EntityRow({ entity, focusIds }: { entity: EntityItem; focusIds: Set<str
   )
 }
 
-function DataTreeView({ items, focusIds }: { items: EntityItem[]; focusIds: Set<string> }) {
+function DataTreeView({ items }: { items: EntityItem[] }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const openPreview = useUIStore((s) => s.openPreview)
   const topLevel: EntityItem[] = []
@@ -242,7 +220,7 @@ function DataTreeView({ items, focusIds }: { items: EntityItem[]; focusIds: Set<
       {topLevel.map((e) => (
         <div key={e.id} className="flex items-center gap-1">
           <FileSpreadsheet size={13} className="shrink-0 t-text-muted ml-2" />
-          <div className="flex-1 min-w-0"><EntityRow entity={e} focusIds={focusIds} /></div>
+          <div className="flex-1 min-w-0"><EntityRow entity={e} /></div>
         </div>
       ))}
       {Array.from(grouped.entries()).map(([runId, children]) => {
@@ -264,7 +242,7 @@ function DataTreeView({ items, focusIds }: { items: EntityItem[]; focusIds: Set<
             </div>
             {isOpen && (
               <div className="pl-4">
-                {children.map((e) => <EntityRow key={e.id} entity={e} focusIds={focusIds} />)}
+                {children.map((e) => <EntityRow key={e.id} entity={e} />)}
               </div>
             )}
           </div>
@@ -278,12 +256,10 @@ function DataTreeView({ items, focusIds }: { items: EntityItem[]; focusIds: Set<
 function LibraryContent({
   notes,
   data,
-  focusIds,
   refreshAll
 }: {
   notes: EntityItem[]
   data: EntityItem[]
-  focusIds: Set<string>
   refreshAll: () => Promise<void>
 }) {
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -327,13 +303,13 @@ function LibraryContent({
             {notes.length > 0 && (
               <>
                 <p className="text-[10px] t-text-muted uppercase tracking-wider px-2 pt-1 pb-0.5">Notes ({notes.length})</p>
-                {notes.map((e) => <EntityRow key={e.id} entity={e} focusIds={focusIds} />)}
+                {notes.map((e) => <EntityRow key={e.id} entity={e} />)}
               </>
             )}
             {data.length > 0 && (
               <>
                 <p className="text-[10px] t-text-muted uppercase tracking-wider px-2 pt-2 pb-0.5">Data ({data.length})</p>
-                <DataTreeView items={data} focusIds={focusIds} />
+                <DataTreeView items={data} />
               </>
             )}
           </>
@@ -346,11 +322,9 @@ function LibraryContent({
 /** Papers tab content: shows papers with enrich button */
 function PapersContent({
   papers,
-  focusIds,
   refreshAll
 }: {
   papers: EntityItem[]
-  focusIds: Set<string>
   refreshAll: () => Promise<void>
 }) {
   const { setEnriching, clearEnriching, clearAllEnriching } = useEntityStore()
@@ -421,7 +395,7 @@ function PapersContent({
         {papers.length === 0 ? (
           <p className="px-3 py-4 text-xs t-text-muted text-center">No papers yet</p>
         ) : (
-          papers.map((e) => <EntityRow key={e.id} entity={e} focusIds={focusIds} />)
+          papers.map((e) => <EntityRow key={e.id} entity={e} />)
         )}
       </div>
     </>
@@ -431,27 +405,19 @@ function PapersContent({
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, papers, data, focus, refreshAll } = useEntityStore()
+  const { notes, papers, data, refreshAll } = useEntityStore()
 
   useEffect(() => {
     refreshAll()
   }, [])
 
-  const focusIds = new Set(focus.map(e => e.id))
-
   const renderContent = () => {
     switch (leftTab) {
       case 'library':
-        return <LibraryContent notes={notes} data={data} focusIds={focusIds} refreshAll={refreshAll} />
+        return <LibraryContent notes={notes} data={data} refreshAll={refreshAll} />
       case 'papers':
-        return <PapersContent papers={papers} focusIds={focusIds} refreshAll={refreshAll} />
-      case 'knowledge':
-        return <KnowledgePanel />
-      case 'focus':
-        return <FocusPanel />
-      case 'tasks':
-        return <TasksPanel />
-      case 'runs':
+        return <PapersContent papers={papers} refreshAll={refreshAll} />
+      case 'debug':
         return <RunsPanel />
       default:
         return null

@@ -7,10 +7,12 @@ import {
   RefreshCw,
   Search,
   Eye,
-  Link,
   Plus,
+  FolderPlus,
   Loader2,
-  Trash2
+  Trash2,
+  Pencil,
+  FilePlus
 } from 'lucide-react'
 import { useEntityStore } from '../../stores/entity-store'
 import { useSessionStore } from '../../stores/session-store'
@@ -56,6 +58,12 @@ interface VisibleLoadingRow {
 
 type VisibleRow = VisibleNodeRow | VisibleLoadingRow
 
+interface ContextMenuState {
+  x: number
+  y: number
+  node: FileTreeNode
+}
+
 function toKey(relativePath: string): string {
   return relativePath || '__root__'
 }
@@ -81,10 +89,30 @@ export function WorkspaceTree() {
   const [viewportHeight, setViewportHeight] = useState(280)
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
   const [confirmTrashPath, setConfirmTrashPath] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null) // relativePath being renamed
+  const [renameValue, setRenameValue] = useState('')
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
 
   const storageKey = useMemo(() => `rp:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
+
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!contextMenu) return
+    const handleClick = () => setContextMenu(null)
+    window.addEventListener('click', handleClick)
+    return () => window.removeEventListener('click', handleClick)
+  }, [contextMenu])
+
+  // Auto-focus rename input
+  useEffect(() => {
+    if (renaming && renameInputRef.current) {
+      renameInputRef.current.focus()
+      renameInputRef.current.select()
+    }
+  }, [renaming])
 
   const setParentLoading = useCallback((parentKey: string, loading: boolean) => {
     setTree((state) => {
@@ -230,18 +258,8 @@ export function WorkspaceTree() {
     })
   }, [data, openPreview])
 
-  const addFocus = useCallback(async (node: FileTreeNode) => {
-    await api.addFocusFromFile(node.path, 'added from workspace tree', '2h')
-    await refreshEntities()
-  }, [refreshEntities])
-
   const createArtifact = useCallback(async (node: FileTreeNode) => {
     await api.createArtifactFromFile(node.path)
-    await refreshEntities()
-  }, [refreshEntities])
-
-  const linkEvidence = useCallback(async (node: FileTreeNode) => {
-    await api.linkEvidenceToTask(node.path, 'linked from workspace tree')
     await refreshEntities()
   }, [refreshEntities])
 
@@ -265,9 +283,76 @@ export function WorkspaceTree() {
     }
   }, [confirmTrashPath, loadChildren])
 
-  // Resolve drop target directory for a given node row:
-  // - directory → that directory's relativePath
-  // - file → the parent directory (or '' for root-level files)
+  // Get parent directory relativePath for a given node
+  const getParentDir = useCallback((node: FileTreeNode): string => {
+    if (node.type === 'directory') return node.relativePath
+    return node.relativePath.includes('/')
+      ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
+      : ''
+  }, [])
+
+  const handleNewFile = useCallback(async (parentRelPath: string) => {
+    const name = prompt('File name:')
+    if (!name?.trim()) return
+    const relPath = parentRelPath ? `${parentRelPath}/${name.trim()}` : name.trim()
+    const result = await api.createFile(relPath)
+    if (result.success) {
+      if (parentRelPath) {
+        const next = new Set(expanded)
+        next.add(parentRelPath)
+        setExpanded(next)
+      }
+      await loadChildren(parentRelPath)
+    }
+  }, [expanded, loadChildren])
+
+  const handleNewFolder = useCallback(async (parentRelPath: string) => {
+    const name = prompt('Folder name:')
+    if (!name?.trim()) return
+    const relPath = parentRelPath ? `${parentRelPath}/${name.trim()}` : name.trim()
+    const result = await api.createDir(relPath)
+    if (result.success) {
+      if (parentRelPath) {
+        const next = new Set(expanded)
+        next.add(parentRelPath)
+        setExpanded(next)
+      }
+      await loadChildren(parentRelPath)
+    }
+  }, [expanded, loadChildren])
+
+  const startRename = useCallback((node: FileTreeNode) => {
+    setRenaming(node.relativePath)
+    setRenameValue(node.name)
+    setContextMenu(null)
+  }, [])
+
+  const commitRename = useCallback(async () => {
+    if (!renaming || !renameValue.trim()) {
+      setRenaming(null)
+      return
+    }
+    const parentDir = renaming.includes('/')
+      ? renaming.slice(0, renaming.lastIndexOf('/'))
+      : ''
+    const newRelPath = parentDir ? `${parentDir}/${renameValue.trim()}` : renameValue.trim()
+    if (newRelPath !== renaming) {
+      await api.renameFile(renaming, newRelPath)
+      await loadChildren(parentDir)
+    }
+    setRenaming(null)
+  }, [renaming, renameValue, loadChildren])
+
+  const handleRenameKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void commitRename()
+    } else if (e.key === 'Escape') {
+      setRenaming(null)
+    }
+  }, [commitRename])
+
+  // Resolve drop target directory for a given node row
   const getDropDir = useCallback((node: FileTreeNode): string => {
     if (node.type === 'directory') return node.relativePath
     return node.relativePath.includes('/')
@@ -277,7 +362,7 @@ export function WorkspaceTree() {
 
   const handleRowDragOver = useCallback((e: React.DragEvent, node: FileTreeNode) => {
     e.preventDefault()
-    e.stopPropagation() // prevent viewport from overriding highlight
+    e.stopPropagation()
     e.dataTransfer.dropEffect = 'copy'
     setDropTargetPath(getDropDir(node))
   }, [getDropDir])
@@ -335,6 +420,12 @@ export function WorkspaceTree() {
     }
     await loadChildren('')
   }, [loadChildren])
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, node: FileTreeNode) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ x: e.clientX, y: e.clientY, node })
+  }, [])
 
   const rootNodes = useMemo(() => tree.byParent[toKey('')] || [], [tree.byParent])
   const activePath = normalizePath(previewEntity?.filePath || '')
@@ -409,6 +500,7 @@ export function WorkspaceTree() {
     const isExpanded = node.type === 'directory' && expanded.has(node.relativePath)
     const isActive = !!activePath && normalizePath(node.path) === activePath
     const isDropTarget = node.type === 'directory' && dropTargetPath === node.relativePath
+    const isRenaming = renaming === node.relativePath
 
     return (
       <div
@@ -422,6 +514,7 @@ export function WorkspaceTree() {
         }`}
         style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
         onClick={() => (node.type === 'directory' ? void toggleExpand(node) : openFile(node))}
+        onContextMenu={(e) => handleContextMenu(e, node)}
         title={node.relativePath}
         onDragOver={(e) => handleRowDragOver(e, node)}
         onDragLeave={handleRowDragLeave}
@@ -439,7 +532,19 @@ export function WorkspaceTree() {
         ) : (
           <File size={12} className="shrink-0 t-text-muted" />
         )}
-        <span className="truncate flex-1">{node.name}</span>
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={handleRenameKeyDown}
+            onBlur={() => void commitRename()}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 bg-transparent outline-none border-b border-teal-400 text-xs t-text"
+          />
+        ) : (
+          <span className="truncate flex-1">{node.name}</span>
+        )}
         <div className="hidden group-hover:flex items-center gap-0.5">
           {node.type === 'file' && (
             <>
@@ -452,24 +557,10 @@ export function WorkspaceTree() {
               </button>
               <button
                 className="p-0.5 rounded t-bg-hover hover:text-teal-400"
-                title="Add file to Focus"
-                onClick={(e) => { e.stopPropagation(); void addFocus(node) }}
-              >
-                <Plus size={11} />
-              </button>
-              <button
-                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
                 title="Create Artifact from file"
                 onClick={(e) => { e.stopPropagation(); void createArtifact(node) }}
               >
                 <File size={11} />
-              </button>
-              <button
-                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
-                title="Link as task evidence"
-                onClick={(e) => { e.stopPropagation(); void linkEvidence(node) }}
-              >
-                <Link size={11} />
               </button>
             </>
           )}
@@ -487,20 +578,36 @@ export function WorkspaceTree() {
         </div>
       </div>
     )
-  }, [expanded, activePath, dropTargetPath, confirmTrashPath, toggleExpand, openFile, addFocus, createArtifact, linkEvidence, handleTrashClick, handleRowDragOver, handleRowDragLeave, handleRowDrop])
+  }, [expanded, activePath, dropTargetPath, confirmTrashPath, renaming, renameValue, toggleExpand, openFile, createArtifact, handleTrashClick, handleContextMenu, handleRowDragOver, handleRowDragLeave, handleRowDrop, handleRenameKeyDown, commitRename])
 
   return (
     <section className="h-full min-h-0 flex flex-col border-t t-border">
       <div className="px-3 py-2 border-b t-border">
         <div className="flex items-center justify-between">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider t-text-muted">Workspace Files</h3>
-          <button
-            className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
-            onClick={() => void refreshRoot()}
-            title="Refresh tree"
-          >
-            <RefreshCw size={12} />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
+              onClick={() => void handleNewFile('')}
+              title="New File"
+            >
+              <FilePlus size={12} />
+            </button>
+            <button
+              className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
+              onClick={() => void handleNewFolder('')}
+              title="New Folder"
+            >
+              <FolderPlus size={12} />
+            </button>
+            <button
+              className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
+              onClick={() => void refreshRoot()}
+              title="Refresh tree"
+            >
+              <RefreshCw size={12} />
+            </button>
+          </div>
         </div>
         <div className="mt-2 flex items-center gap-1 rounded border t-border px-2 py-1">
           <Search size={12} className="t-text-muted" />
@@ -546,6 +653,57 @@ export function WorkspaceTree() {
           </div>
         )}
       </div>
+
+      {/* Right-click context menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 min-w-[160px] rounded-lg border t-border t-bg-surface shadow-xl py-1"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {contextMenu.node.type === 'file' && (
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+              onClick={() => { openFile(contextMenu.node); setContextMenu(null) }}
+            >
+              <Eye size={11} /> Open
+            </button>
+          )}
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+            onClick={() => startRename(contextMenu.node)}
+          >
+            <Pencil size={11} /> Rename
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+            onClick={() => { void handleNewFile(getParentDir(contextMenu.node)); setContextMenu(null) }}
+          >
+            <FilePlus size={11} /> New File Here
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+            onClick={() => { void handleNewFolder(getParentDir(contextMenu.node)); setContextMenu(null) }}
+          >
+            <FolderPlus size={11} /> New Folder Here
+          </button>
+          {contextMenu.node.type === 'file' && (
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+              onClick={() => { void createArtifact(contextMenu.node); setContextMenu(null) }}
+            >
+              <Plus size={11} /> Create Artifact
+            </button>
+          )}
+          <div className="border-t t-border my-1" />
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:t-bg-hover flex items-center gap-2"
+            onClick={() => { void handleTrashClick(contextMenu.node); setContextMenu(null) }}
+          >
+            <Trash2 size={11} /> Trash
+          </button>
+        </div>
+      )}
     </section>
   )
 }

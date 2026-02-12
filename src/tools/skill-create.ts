@@ -1,5 +1,5 @@
 /**
- * skill-create - Create a project-local SKILL.md file and register it.
+ * skill-create - Create a project-local skill directory with SKILL.md and register it.
  */
 
 import path from 'node:path'
@@ -26,6 +26,7 @@ export interface SkillCreateInput {
 export interface SkillCreateOutput {
   skillId: string
   filePath: string
+  skillDir: string
   loadingStrategy: SkillLoadingStrategy
   tools: string[]
   message: string
@@ -89,7 +90,7 @@ function buildSkillBody(input: SkillCreateInput): string {
 
 export const skillCreateTool: Tool<SkillCreateInput, SkillCreateOutput> = defineTool({
   name: 'skill-create',
-  description: `Create a reusable project-local skill in ${FRAMEWORK_DIR}/skills.
+  description: `Create a reusable project-local skill directory in ${FRAMEWORK_DIR}/skills.
 
 Use this after discovering patterns worth reusing.
 - Defaults to loadingStrategy: lazy
@@ -150,7 +151,8 @@ Use this after discovering patterns worth reusing.
         }
       }
 
-      const relativeFilePath = path.join(skillsDir, `${input.id}.skill.md`)
+      const relativeSkillDir = path.join(skillsDir, input.id)
+      const relativeFilePath = path.join(relativeSkillDir, 'SKILL.md')
       const frontmatter = {
         id: input.id,
         name: input.name,
@@ -208,6 +210,7 @@ Use this after discovering patterns worth reusing.
         data: {
           skillId: input.id,
           filePath: relativeFilePath,
+          skillDir: relativeSkillDir,
           loadingStrategy,
           tools: inferredTools,
           message: `Skill "${input.name}" created and registered (lazy).`

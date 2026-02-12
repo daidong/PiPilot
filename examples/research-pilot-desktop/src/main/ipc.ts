@@ -6,17 +6,16 @@ import {
   listNotes, listLiterature, listData,
   searchEntities, deleteEntity,
   artifactCreate, artifactDelete, artifactGet, artifactList, artifactSearch, artifactUpdate,
-  focusAdd, focusClear, focusList, focusPrune, focusRemove,
-  taskAnchorGet, taskAnchorSet, taskAnchorUpdate,
-  memoryExplainTurn, memoryExplainFact, memoryExplainBudget
+  memoryExplainTurn,
+  sessionSummaryGet,
+  enrichPaperArtifacts
 } from '@research-pilot/commands/index'
-import { savePaper, parseSavePaperArgs, updatePaperMetadata } from '@research-pilot/commands/save-paper'
-import { RateLimiter, CircuitBreaker, DEFAULT_SEARCHER_CONFIG } from '@research-pilot/agents/rate-limiter'
-import { enrichPapers, createEnrichmentConfig, countCoreFields, type PaperInput } from '@research-pilot/agents/metadata-enrichment'
+import { savePaper, parseSavePaperArgs } from '@research-pilot/commands/save-paper'
 import { saveData, parseSaveDataArgs } from '@research-pilot/commands/save-data'
 import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/mentions/index'
-import { setCachedMarkdown, fileUriToPath } from '@research-pilot/mentions/document-cache'
+import { setCachedMarkdown } from '@research-pilot/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@research-pilot/types'
+import { ensureAgentMd } from '@research-pilot/memory-v2/store'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
 import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
@@ -25,6 +24,20 @@ import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 function getFileName(path: string): string {
   if (!path) return ''
   return path.split('/').pop() || path
+}
+
+function resolveDesktopCommunitySkillsDir(): string | undefined {
+  const envOverride = (process.env.AGENT_FOUNDRY_COMMUNITY_SKILLS_DIR || '').trim()
+  const resourcesPath = process.resourcesPath
+  const candidates = [
+    envOverride,
+    resourcesPath ? join(resourcesPath, 'skills', 'community-builtin') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'skills', 'community-builtin') : '',
+    resolve(process.cwd(), 'src', 'skills', 'community-builtin'),
+    resolve(process.cwd(), 'dist', 'skills', 'community-builtin')
+  ].filter(Boolean)
+
+  return candidates.find(candidate => existsSync(candidate))
 }
 
 interface FileTreeNode {
@@ -311,8 +324,23 @@ function createWindowActivityFormatter(state: WindowRuntimeState) {
       },
       {
         match: 'convert_to_markdown',
-        formatCall: (_, a) => ({ label: `Convert: ${getFileName((a.uri as string) || '')}`, icon: 'file' }),
-        formatResult: (_, _r, a) => ({ label: `Converted ${getFileName((a?.uri as string) || '')}`, icon: 'file' }),
+        formatCall: (_, a) => {
+          const sourcePath = ((a.path as string) || (a.uri as string) || '')
+          return { label: `Convert: ${getFileName(sourcePath)}`, icon: 'file' }
+        },
+        formatResult: (_, r, a) => {
+          const sourcePath = ((a?.path as string) || (a?.uri as string) || '')
+          const data = (r.data as Record<string, unknown> | undefined) ?? {}
+          const skill = typeof data.converterSkill === 'string' ? data.converterSkill : ''
+          const script = typeof data.converterScript === 'string' ? data.converterScript : ''
+          if (skill && script) {
+            return { label: `Converted ${getFileName(sourcePath)} via ${skill}/${script}`, icon: 'file' }
+          }
+          if (skill) {
+            return { label: `Converted ${getFileName(sourcePath)} via ${skill}`, icon: 'file' }
+          }
+          return { label: `Converted ${getFileName(sourcePath)}`, icon: 'file' }
+        },
       },
       {
         match: 'artifact-create',
@@ -415,27 +443,6 @@ function createArtifactFromWorkspaceFile(state: WindowRuntimeState, filePath: st
   }, { sessionId, projectPath })
 }
 
-function addFileToFocus(state: WindowRuntimeState, filePath: string, reason: string = 'selected from workspace tree', ttl: string = '2h') {
-  const projectPath = state.projectPath
-  const sessionId = state.sessionId
-  const dataArtifacts = listData(projectPath)
-  const existing = dataArtifacts.find((item) => resolve(item.filePath) === resolve(filePath))
-  const artifactResult = existing ? { success: true, artifact: { id: existing.id } } : createArtifactFromWorkspaceFile(state, filePath)
-
-  if (!artifactResult.success || !artifactResult.artifact) {
-    return { success: false, error: artifactResult.error ?? 'Unable to register file artifact.' }
-  }
-
-  return focusAdd(projectPath, {
-    sessionId,
-    refType: 'artifact',
-    refId: artifactResult.artifact.id,
-    reason,
-    source: 'manual',
-    ttl
-  })
-}
-
 interface ResolvedCoordinatorAuth {
   apiKey: string
   authMode: 'api-key' | 'none'
@@ -485,9 +492,8 @@ function initializeProject(path: string): void {
     PATHS.cache,
     PATHS.documentCache,
     PATHS.memoryRoot,
-    PATHS.focusDir,
-    dirname(PATHS.artifactFactIndex),
-    PATHS.explainDir
+    PATHS.explainDir,
+    PATHS.sessionSummaries
   ]
 
   for (const dir of dirs) {
@@ -509,6 +515,9 @@ function initializeProject(path: string): void {
     }
     writeFileSync(projectFile, JSON.stringify(defaultConfig, null, 2))
   }
+
+  // Ensure agent.md note exists (pinned, always-present)
+  ensureAgentMd(path)
 
   // Keep process cwd stable; each window passes explicit projectPath.
 }
@@ -563,6 +572,7 @@ async function ensureCoordinator(
   if (!state.coordinator) {
     const apiKey = resolvedAuth.apiKey
     const runProjectPath = state.projectPath
+    const communitySkillsDir = resolveDesktopCommunitySkillsDir()
 
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
     const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
@@ -575,6 +585,7 @@ async function ensureCoordinator(
       reasoningEffort: state.currentReasoningEffort,
       projectPath: state.projectPath,
       sessionId: state.sessionId,
+      communitySkillsDir,
       debug: true,
       onStream: (chunk: string) => {
         state.realtimeBuffer.appendChunk(chunk)
@@ -614,14 +625,23 @@ async function ensureCoordinator(
           }
         }
 
-        // Cache convert_to_markdown results for document files
+        // Cache convert_to_markdown results for document files (path-based wrapper)
         if (tool === 'convert_to_markdown' && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
-          if (r.success && r.data?.content && args && typeof args === 'object' && 'uri' in args) {
-            const uri = (args as { uri: string }).uri
-            const filePath = fileUriToPath(uri)
-            if (filePath && runProjectPath) {
-              setCachedMarkdown(filePath, r.data.content, runProjectPath)
+          if (r.success && r.data?.outputFile && args && typeof args === 'object' && 'path' in args) {
+            const sourcePath = (args as { path: string }).path
+            const absSourcePath = isAbsolute(sourcePath) ? sourcePath : resolve(runProjectPath, sourcePath)
+            const absOutputPath = resolve(runProjectPath, r.data.outputFile as string)
+
+            if (existsSync(absOutputPath)) {
+              try {
+                const markdown = readFileSync(absOutputPath, 'utf-8')
+                if (markdown.trim()) {
+                  setCachedMarkdown(absSourcePath, markdown, runProjectPath)
+                }
+              } catch {
+                // ignore cache failures
+              }
             }
           }
         }
@@ -635,6 +655,11 @@ async function ensureCoordinator(
               id: r.data?.id,
               title: r.data?.title
             })
+            // Also track the artifact's source file in Working Folder
+            if (r.data?.filePath) {
+              const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
+              safeSend(win, 'agent:file-created', absPath)
+            }
           }
         }
 
@@ -813,179 +838,16 @@ export function registerIpcHandlers(): void {
     return artifactDelete(state.projectPath, artifactId)
   })
 
-  // Commands - Focus (RFC-012 canonical)
-  handleWindow('cmd:focus-add', ({ state }, params: {
-    refType: 'artifact' | 'fact' | 'task'
-    refId: string
-    reason?: string
-    score?: number
-    source?: 'manual' | 'auto'
-    ttl?: string
-  }) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return focusAdd(state.projectPath, {
-      sessionId: state.sessionId,
-      refType: params.refType,
-      refId: params.refId,
-      reason: params.reason ?? 'manually selected',
-      score: params.score,
-      source: params.source ?? 'manual',
-      ttl: params.ttl ?? '2h'
-    })
-  })
-  handleWindow('cmd:focus-list', ({ state }) => {
-    if (!state.projectPath) return { success: true, entries: [] }
-    return focusList(state.projectPath, state.sessionId)
-  })
-  handleWindow('cmd:focus-remove', ({ state }, idOrRef: string) => {
-    if (!state.projectPath) return { success: false, removed: false }
-    return focusRemove(state.projectPath, state.sessionId, idOrRef)
-  })
-  handleWindow('cmd:focus-clear', ({ state }) => {
-    if (!state.projectPath) return { success: false, removed: false }
-    return focusClear(state.projectPath, state.sessionId)
-  })
-  handleWindow('cmd:focus-prune', ({ state }) => {
-    if (!state.projectPath) return { success: true, expired: 0, kept: 0 }
-    return focusPrune(state.projectPath, state.sessionId)
-  })
-
-  // Commands - Task anchor / explain
-  handleWindow('cmd:task-anchor-get', ({ state }) => {
-    if (!state.projectPath) return { success: true, anchor: null }
-    return taskAnchorGet(state.projectPath, state.sessionId)
-  })
-  handleWindow('cmd:task-anchor-set', ({ state }, anchor: {
-    currentGoal: string
-    nowDoing: string
-    blockedBy: string[]
-    nextAction: string
-    sessionId?: string
-  }) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorSet(state.projectPath, anchor.sessionId ?? state.sessionId, {
-      currentGoal: anchor.currentGoal,
-      nowDoing: anchor.nowDoing,
-      blockedBy: anchor.blockedBy,
-      nextAction: anchor.nextAction
-    })
-  })
-  handleWindow('cmd:task-anchor-update', ({ state }, patch: {
-    currentGoal?: string
-    nowDoing?: string
-    blockedBy?: string[]
-    nextAction?: string
-    sessionId?: string
-  }) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorUpdate(state.projectPath, patch.sessionId ?? state.sessionId, {
-      currentGoal: patch.currentGoal,
-      nowDoing: patch.nowDoing,
-      blockedBy: patch.blockedBy,
-      nextAction: patch.nextAction
-    })
-  })
-
-  handleWindow('cmd:memory-explain-turn', ({ state }) => {
+  // Commands - Context debug (read-only)
+  handleWindow('cmd:turn-explain-get', ({ state }) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
     return memoryExplainTurn(state.projectPath)
   })
-  handleWindow('cmd:memory-explain-fact', ({ state }, factId: string) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainFact(state.projectPath, factId)
-  })
-  handleWindow('cmd:memory-explain-budget', ({ state }) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainBudget(state.projectPath)
-  })
 
-  // Commands - Facts (read from .agentfoundry/memory/facts.jsonl)
-  handleWindow('cmd:fact-list', ({ state }) => {
-    if (!state.projectPath) return []
-    const factsFile = join(state.projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
-    if (!existsSync(factsFile)) return []
-    try {
-      const raw = readFileSync(factsFile, 'utf-8')
-      const lines = raw.split(/\r?\n/).filter(Boolean)
-      const allFacts: any[] = []
-      for (const line of lines) {
-        try { allFacts.push(JSON.parse(line)) } catch { /* skip malformed */ }
-      }
-      // Return latest version per namespace:key, only active/proposed
-      const byKey = new Map<string, any>()
-      for (const fact of allFacts) {
-        const k = `${fact.namespace}:${fact.key}`
-        const existing = byKey.get(k)
-        if (!existing || fact.updatedAt > existing.updatedAt) {
-          byKey.set(k, fact)
-        }
-      }
-      return Array.from(byKey.values()).filter(
-        (f: any) => f.status === 'active' || f.status === 'proposed'
-      )
-    } catch {
-      return []
-    }
-  })
-
-  handleWindow('cmd:fact-promote', ({ state }, factId: string) => {
+  // Commands - Session summary
+  handleWindow('cmd:session-summary-get', ({ state }) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const factsFile = join(state.projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
-    if (!existsSync(factsFile)) return { success: false, error: 'No facts file found.' }
-    try {
-      const raw = readFileSync(factsFile, 'utf-8')
-      const lines = raw.split(/\r?\n/).filter(Boolean)
-      const updated: string[] = []
-      let found = false
-      for (const line of lines) {
-        try {
-          const fact = JSON.parse(line)
-          if (fact.id === factId) {
-            fact.status = 'active'
-            fact.updatedAt = new Date().toISOString()
-            found = true
-          }
-          updated.push(JSON.stringify(fact))
-        } catch {
-          updated.push(line)
-        }
-      }
-      if (!found) return { success: false, error: 'Fact not found.' }
-      writeFileSync(factsFile, updated.join('\n') + '\n')
-      return { success: true }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
-  })
-
-  handleWindow('cmd:fact-demote', ({ state }, factId: string) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const factsFile = join(state.projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
-    if (!existsSync(factsFile)) return { success: false, error: 'No facts file found.' }
-    try {
-      const raw = readFileSync(factsFile, 'utf-8')
-      const lines = raw.split(/\r?\n/).filter(Boolean)
-      const updated: string[] = []
-      let found = false
-      for (const line of lines) {
-        try {
-          const fact = JSON.parse(line)
-          if (fact.id === factId) {
-            fact.status = 'deprecated'
-            fact.updatedAt = new Date().toISOString()
-            found = true
-          }
-          updated.push(JSON.stringify(fact))
-        } catch {
-          updated.push(line)
-        }
-      }
-      if (!found) return { success: false, error: 'Fact not found.' }
-      writeFileSync(factsFile, updated.join('\n') + '\n')
-      return { success: true }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
+    return sessionSummaryGet(state.projectPath, state.sessionId)
   })
 
   // Commands - save
@@ -1003,112 +865,15 @@ export function registerIpcHandlers(): void {
   // Commands - enrich all papers
   handleWindow('cmd:enrich-papers', async ({ win, state }, paperIds?: string[]) => {
     if (!state.projectPath) return { success: false, enriched: 0, skipped: 0, failed: 0 }
-    const projectPath = state.projectPath
-
-    // Load full Literature objects from disk (listLiterature only returns a subset of fields)
-    const litDir = join(projectPath, PATHS.literature)
-    if (!existsSync(litDir)) return { success: true, enriched: 0, skipped: 0, failed: 0 }
-    const files = readdirSync(litDir).filter(f => f.endsWith('.json'))
-    const allPapers: any[] = []
-    for (const file of files) {
-      try {
-        allPapers.push(JSON.parse(readFileSync(join(litDir, file), 'utf-8')))
-      } catch { /* skip corrupt files */ }
-    }
-
-    // Respect the order provided by the renderer (e.g. sorted by year desc)
-    let papers: any[]
-    if (paperIds && paperIds.length > 0) {
-      const byId = new Map(allPapers.map(p => [p.id, p]))
-      papers = paperIds.map(id => byId.get(id)).filter(Boolean)
-    } else {
-      papers = allPapers
-    }
-    if (papers.length === 0) return { success: true, enriched: 0, skipped: 0, failed: 0 }
-
-    const rateLimiter = new RateLimiter(DEFAULT_SEARCHER_CONFIG.rateLimits)
-    const circuitBreaker = new CircuitBreaker(DEFAULT_SEARCHER_CONFIG.circuitBreaker)
-    const config = createEnrichmentConfig(rateLimiter, circuitBreaker)
-    // Each paper gets its own enrichPapers() call; give generous budget
-    config.maxPapersToEnrich = 1
-    config.maxTimeMs = 60_000
-
-    let enriched = 0
-    let skipped = 0
-    let failed = 0
-
-    for (const paper of papers) {
-      const beforeFields = {
-        venue: paper.venue,
-        doi: paper.doi,
-        citationCount: paper.citationCount,
-        url: paper.url,
-        abstract: paper.abstract
+    return enrichPaperArtifacts({
+      sessionId: state.sessionId,
+      projectPath: state.projectPath,
+      paperIds,
+      debug: true,
+      onProgress: (event) => {
+        safeSend(win, 'enrich:progress', event)
       }
-
-      const asPaperInput: PaperInput = {
-        title: paper.title || '',
-        authors: paper.authors,
-        year: paper.year,
-        venue: paper.venue,
-        abstract: paper.abstract,
-        doi: paper.doi,
-        citationCount: paper.citationCount,
-        url: paper.url,
-        pdfUrl: paper.pdfUrl,
-        source: paper.externalSource
-      }
-
-      // Skip papers already complete (5+ of 7 core fields)
-      if (countCoreFields(asPaperInput) >= 5) {
-        safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'skipped' })
-        skipped++
-        continue
-      }
-
-      safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'enriching' })
-
-      try {
-        await enrichPapers([asPaperInput], config)
-
-        // Check if any field actually changed on the PaperInput object
-        const hasNewData =
-          (asPaperInput.venue && asPaperInput.venue !== beforeFields.venue) ||
-          (asPaperInput.doi && asPaperInput.doi !== beforeFields.doi) ||
-          (asPaperInput.citationCount != null && asPaperInput.citationCount !== beforeFields.citationCount) ||
-          (asPaperInput.url && asPaperInput.url !== beforeFields.url) ||
-          (asPaperInput.abstract && asPaperInput.abstract !== beforeFields.abstract)
-
-        if (hasNewData) {
-          updatePaperMetadata(paper, {
-            authors: asPaperInput.authors,
-            year: asPaperInput.year,
-            abstract: asPaperInput.abstract,
-            venue: asPaperInput.venue ?? undefined,
-            url: asPaperInput.url,
-            citationCount: asPaperInput.citationCount ?? undefined,
-            doi: asPaperInput.doi ?? undefined,
-            pdfUrl: asPaperInput.pdfUrl ?? undefined,
-            enrichmentSource: (asPaperInput as any).enrichmentSource ?? undefined,
-            enrichedAt: (asPaperInput as any).enrichedAt ?? undefined
-          }, { sessionId: state.sessionId, projectPath })
-          enriched++
-          safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'done' })
-        } else {
-          // APIs didn't return useful data for this paper
-          console.log(`[enrich] No new data found for: ${paper.title?.slice(0, 60)}`)
-          skipped++
-          safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'skipped' })
-        }
-      } catch (err) {
-        console.error(`[enrich] Error enriching "${paper.title?.slice(0, 60)}":`, err)
-        failed++
-        safeSend(win, 'enrich:progress', { paperId: paper.id, status: 'failed' })
-      }
-    }
-
-    console.log(`[enrich] Done: ${enriched} enriched, ${skipped} skipped, ${failed} failed`)
-    return { success: true, enriched, skipped, failed }
+    })
   })
 
 
@@ -1217,46 +982,66 @@ export function registerIpcHandlers(): void {
     return createArtifactFromWorkspaceFile(state, absPath)
   })
 
-  handleWindow('file:add-focus', ({ state }, filePath: string, reason?: string, ttl?: string) => {
+  // New file creation
+  handleWindow('file:create', ({ state }, relativePath: string) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    const absPath = resolve(state.projectPath, relativePath)
     if (!isWithinRoot(state.projectPath, absPath)) {
       return { success: false, error: 'Path is outside current workspace.' }
     }
-    if (!existsSync(absPath)) {
-      return { success: false, error: 'File not found.' }
+    if (existsSync(absPath)) {
+      return { success: false, error: 'File already exists.' }
     }
-    return addFileToFocus(state, absPath, reason, ttl)
+    try {
+      const parentDir = dirname(absPath)
+      if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true })
+      writeFileSync(absPath, '', 'utf-8')
+      return { success: true, absPath }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
   })
 
-  handleWindow('task:link-evidence', ({ state }, filePath: string, reason?: string) => {
+  // New directory creation
+  handleWindow('file:create-dir', ({ state }, relativePath: string) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    const absPath = resolve(state.projectPath, relativePath)
     if (!isWithinRoot(state.projectPath, absPath)) {
       return { success: false, error: 'Path is outside current workspace.' }
     }
-    if (!existsSync(absPath)) {
-      return { success: false, error: 'File not found.' }
+    if (existsSync(absPath)) {
+      return { success: false, error: 'Directory already exists.' }
     }
+    try {
+      mkdirSync(absPath, { recursive: true })
+      return { success: true, absPath }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
 
-    const focusResult = addFileToFocus(state, absPath, reason ?? 'linked as task evidence', 'today')
-    if (!focusResult.success) return focusResult
-
-    const fileLabel = toPosixPath(relative(state.projectPath, absPath))
-    const current = taskAnchorGet(state.projectPath)
-    const blockedBy = current.anchor?.blockedBy ?? []
-    const marker = `Evidence: ${fileLabel}`
-    const mergedBlockedBy = blockedBy.includes(marker) ? blockedBy : [...blockedBy, marker]
-
-    const anchorResult = taskAnchorUpdate(state.projectPath, {
-      blockedBy: mergedBlockedBy,
-      nextAction: current.anchor?.nextAction || `Review evidence file: ${fileLabel}`
-    })
-
-    return {
-      success: focusResult.success && anchorResult.success,
-      focus: focusResult,
-      taskAnchor: anchorResult
+  // Rename file or directory
+  handleWindow('file:rename', async ({ state }, oldRelPath: string, newRelPath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const { rename: fsRename } = await import('fs/promises')
+    const oldAbs = resolve(state.projectPath, oldRelPath)
+    const newAbs = resolve(state.projectPath, newRelPath)
+    if (!isWithinRoot(state.projectPath, oldAbs) || !isWithinRoot(state.projectPath, newAbs)) {
+      return { success: false, error: 'Path is outside current workspace.' }
+    }
+    if (!existsSync(oldAbs)) {
+      return { success: false, error: 'Source path not found.' }
+    }
+    if (existsSync(newAbs)) {
+      return { success: false, error: 'Destination already exists.' }
+    }
+    try {
+      const parentDir = dirname(newAbs)
+      if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true })
+      await fsRename(oldAbs, newAbs)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message }
     }
   })
 

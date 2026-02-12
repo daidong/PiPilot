@@ -3,14 +3,19 @@
  *
  * Canonical model:
  * - Artifact (authoritative source files/records)
- * - Fact (durable structured memory)
- * - Focus (session-scoped attention)
- * - TaskAnchor (minimal progress continuity)
+ * - SessionSummary (lightweight cross-turn continuity)
  */
 
 // ============================================================================
 // Path Constants
 // ============================================================================
+
+// ============================================================================
+// Agent.md Constants
+// ============================================================================
+
+export const AGENT_MD_ID = 'agent-md'
+export const AGENT_MD_MAX_CHARS = 5000
 
 export const PATHS = {
   root: '.research-pilot',
@@ -33,9 +38,8 @@ export const PATHS = {
 
   // Memory V2 state (app-level)
   memoryRoot: '.research-pilot/memory-v2',
-  focusDir: '.research-pilot/memory-v2/focus',
-  artifactFactIndex: '.research-pilot/memory-v2/index/artifact-facts.json',
-  explainDir: '.research-pilot/memory-v2/explain'
+  explainDir: '.research-pilot/memory-v2/explain',
+  sessionSummaries: '.research-pilot/memory-v2/session-summaries'
 } as const
 
 // ============================================================================
@@ -131,78 +135,6 @@ export interface ToolOutputArtifact extends ArtifactBase {
 }
 
 export type Artifact = NoteArtifact | PaperArtifact | DataArtifact | WebContentArtifact | ToolOutputArtifact
-
-// ============================================================================
-// Fact / Focus / Task Anchor (Memory V2 semantics)
-// ============================================================================
-
-export type FactStatus = 'proposed' | 'active' | 'superseded' | 'deprecated'
-
-export interface FactProvenance {
-  sourceType: 'file' | 'url' | 'turn' | 'tool' | 'user'
-  sourceRef: string
-  traceId?: string
-  sessionId?: string
-  createdBy?: 'user' | 'model' | 'system'
-}
-
-export interface FactRecord {
-  id: string
-  namespace: string
-  key: string
-  value: unknown
-  valueText?: string
-  status: FactStatus
-  confidence: number
-  provenance: FactProvenance
-  derivedFromArtifactIds: string[]
-  createdAt: string
-  updatedAt: string
-}
-
-export type FocusRefType = 'artifact' | 'fact' | 'task'
-
-export interface FocusEntry {
-  id: string
-  sessionId: string
-  refType: FocusRefType
-  refId: string
-  reason: string
-  score: number
-  source: 'manual' | 'auto'
-  ttl: string
-  expiresAt: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface TaskAnchor {
-  currentGoal: string
-  nowDoing: string
-  blockedBy: string[]
-  nextAction: string
-  updatedAt: string
-  sessionId?: string
-}
-
-export interface FocusCooldown {
-  sessionId: string
-  refType: FocusRefType
-  refId: string
-  until: string
-  reason: 'expired-auto-focus'
-}
-
-export interface FocusStateFile {
-  entries: FocusEntry[]
-  cooldowns: FocusCooldown[]
-  updatedAt: string
-}
-
-export interface ArtifactFactIndex {
-  updatedAt: string
-  byArtifactId: Record<string, string[]>
-}
 
 // ============================================================================
 // Project / Session / CLI Types
@@ -340,6 +272,19 @@ export interface LiteratureSearchResult {
     apiCallCount: number
     apiFailureCount: number
   }
+}
+
+// ============================================================================
+// Session Summary (replaces Focus + Task Anchor)
+// ============================================================================
+
+export interface SessionSummary {
+  sessionId: string
+  turnRange: [number, number]
+  summary: string
+  topicsDiscussed: string[]
+  openQuestions: string[]
+  createdAt: string
 }
 
 // ============================================================================

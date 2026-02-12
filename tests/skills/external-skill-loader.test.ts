@@ -5,6 +5,7 @@ import path from 'node:path'
 import { createTempDir, cleanupTempDir } from '../test-utils.js'
 import { ExternalSkillLoader } from '../../src/skills/external-skill-loader.js'
 import { renderExternalSkillMarkdown } from '../../src/skills/skill-file.js'
+import { resolveCommunitySkillDir } from '../../src/skills/skill-source-paths.js'
 
 describe('ExternalSkillLoader', () => {
   let tempDir: string
@@ -50,10 +51,14 @@ Use read first.`
 Unapproved summary.`
     )
 
-    await fs.writeFile(path.join(skillsDir, 'approved-skill.skill.md'), approvedContent, 'utf-8')
-    await fs.writeFile(path.join(skillsDir, 'unapproved-skill.skill.md'), unapprovedContent, 'utf-8')
+    await fs.mkdir(path.join(skillsDir, 'approved-skill'), { recursive: true })
+    await fs.mkdir(path.join(skillsDir, 'unapproved-skill'), { recursive: true })
+    await fs.writeFile(path.join(skillsDir, 'approved-skill', 'SKILL.md'), approvedContent, 'utf-8')
+    await fs.writeFile(path.join(skillsDir, 'unapproved-skill', 'SKILL.md'), unapprovedContent, 'utf-8')
 
-    const loader = new ExternalSkillLoader({ skillsDir })
+    const loader = new ExternalSkillLoader({
+      skillSources: [{ dir: skillsDir, sourceType: 'project-local' }]
+    })
     const loaded = await loader.loadAll()
 
     expect(loaded).toHaveLength(2)
@@ -61,6 +66,7 @@ Unapproved summary.`
     const unapproved = loaded.find(item => item.skill.id === 'unapproved-skill')
     expect(approved?.approvedByUser).toBe(true)
     expect(unapproved?.approvedByUser).toBe(false)
+    expect(approved?.sourceType).toBe('project-local')
   })
 
   it('rejects skill id collision with built-ins', async () => {
@@ -77,11 +83,12 @@ Unapproved summary.`
       `# Summary
 collision`
     )
-    const filePath = path.join(skillsDir, 'collision.skill.md')
+    await fs.mkdir(path.join(skillsDir, 'collision'), { recursive: true })
+    const filePath = path.join(skillsDir, 'collision', 'SKILL.md')
     await fs.writeFile(filePath, content, 'utf-8')
 
     const loader = new ExternalSkillLoader({
-      skillsDir,
+      skillSources: [{ dir: skillsDir, sourceType: 'project-local' }],
       builtInSkillIds: ['context-retrieval-skill'],
       onError
     })
@@ -89,5 +96,70 @@ collision`
     const loaded = await loader.loadAll()
     expect(loaded).toHaveLength(0)
     expect(onError).toHaveBeenCalled()
+  })
+
+  it('discovers scripts and infers metadata for SKILL.md without frontmatter', async () => {
+    const skillDir = path.join(skillsDir, 'quick-audit')
+    await fs.mkdir(path.join(skillDir, 'scripts'), { recursive: true })
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), `
+# Summary
+Run fast checks with the bundled script.
+`, 'utf-8')
+    await fs.writeFile(path.join(skillDir, 'scripts', 'audit.sh'), 'echo "audit:$1"\n', 'utf-8')
+
+    const loader = new ExternalSkillLoader({
+      skillSources: [{ dir: skillsDir, sourceType: 'project-local' }]
+    })
+    const loaded = await loader.loadAll()
+
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0]?.skill.id).toBe('quick-audit')
+    expect(loaded[0]?.scripts).toHaveLength(1)
+    expect(loaded[0]?.scripts[0]?.name).toBe('audit')
+    expect(loaded[0]?.scripts[0]?.runner).toBe('bash')
+    const scripts = (loaded[0]?.skill.meta?.scripts as Array<{ name: string }> | undefined) ?? []
+    expect(scripts[0]?.name).toBe('audit')
+  })
+
+  it('maps claude-style allowed-tools to normalized tools', async () => {
+    const skillDir = path.join(skillsDir, 'format-compat')
+    await fs.mkdir(skillDir, { recursive: true })
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), `---
+name: format-compat
+description: claude style metadata
+allowed-tools:
+  - Read
+  - Write
+  - Bash
+---
+
+# Summary
+Compatibility skill.
+`, 'utf-8')
+
+    const loader = new ExternalSkillLoader({
+      skillSources: [{ dir: skillsDir, sourceType: 'project-local' }]
+    })
+    const loaded = await loader.loadAll()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0]?.skill.id).toBe('format-compat')
+    expect(loaded[0]?.skill.tools).toEqual(['read', 'write', 'bash'])
+    expect(loaded[0]?.skill.shortDescription).toBe('claude style metadata')
+  })
+
+  it('keeps community document skills script-only for lazy load isolation', async () => {
+    const communityDir = resolveCommunitySkillDir(process.cwd())
+    const loader = new ExternalSkillLoader({
+      skillSources: [{ dir: communityDir, sourceType: 'community-builtin' }]
+    })
+
+    const loaded = await loader.loadAll()
+    const expectedIds = ['markitdown', 'document-docx', 'citation-management', 'research-grants']
+
+    for (const skillId of expectedIds) {
+      const record = loaded.find(item => item.skill.id === skillId)
+      expect(record, `${skillId} should be loaded`).toBeTruthy()
+      expect(record?.skill.tools, `${skillId} should only bind skill-script-run`).toEqual(['skill-script-run'])
+    }
   })
 })

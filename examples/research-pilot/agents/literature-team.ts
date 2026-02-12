@@ -30,6 +30,7 @@ import {
   type Agent as SimpleAgent,
   type AgentContext
 } from '../../../src/agent/define-simple-agent.js'
+import type { ToolContext } from '../../../src/types/tool.js'
 
 import { getLanguageModelByModelId } from '../../../src/index.js'
 import { loadPrompt } from './prompts/index.js'
@@ -268,6 +269,43 @@ interface SearchResults {
 
 /** Callback for emitting real-time activity events from inside the searcher */
 export type SearcherActivityCallback = (phase: 'search-batch-start' | 'search-batch-done' | 'enrich-start' | 'enrich-done', detail: string) => void
+
+interface SkillScriptRunResult {
+  success: boolean
+  data?: {
+    stdout?: string
+  }
+}
+
+interface SkillScriptRunToolLike {
+  execute: (input: {
+    skillId: string
+    script: string
+    args?: string[]
+    timeout?: number
+    cwd?: string
+  }, context?: ToolContext) => Promise<SkillScriptRunResult>
+}
+
+async function resolveDoiBibtexViaSkill(doi: string, toolContext?: ToolContext): Promise<string | null> {
+  if (!doi || !toolContext?.runtime?.toolRegistry) return null
+  const tool = toolContext.runtime.toolRegistry.get('skill-script-run') as SkillScriptRunToolLike | undefined
+  if (!tool || typeof tool.execute !== 'function') return null
+
+  const result = await tool.execute({
+    skillId: 'citation-management',
+    script: 'doi-to-bibtex',
+    args: [doi],
+    timeout: 20_000
+  }, toolContext)
+
+  if (!result.success) return null
+  const stdout = typeof result.data?.stdout === 'string' ? result.data.stdout.trim() : ''
+  if (!stdout) return null
+  const entryStart = stdout.indexOf('@')
+  if (entryStart < 0) return null
+  return stdout.slice(entryStart).trim()
+}
 
 function createSearcherAgent(
   projectPath?: string,
@@ -708,6 +746,7 @@ export function createLiteratureTeam(config: {
   sessionId?: string
   messages?: unknown[]
   onSearcherActivity?: SearcherActivityCallback
+  toolContext?: ToolContext
 }) {
   const {
     apiKey,
@@ -716,7 +755,8 @@ export function createLiteratureTeam(config: {
     projectPath,
     sessionId = 'default',
     messages: coordinatorMessages,
-    onSearcherActivity
+    onSearcherActivity,
+    toolContext
   } = config
   if (!apiKey) throw new Error('API key is required')
   if (!model) throw new Error('literature-team: model is required')
@@ -970,6 +1010,9 @@ export function createLiteratureTeam(config: {
             projectPath,
             debug: false
           }
+          const resolveDoiBibtex = async (doi: string): Promise<string | null> => {
+            return resolveDoiBibtexViaSkill(doi, toolContext)
+          }
 
           for (const paper of relevantPapers) {
             if (paper.source === 'local') continue
@@ -1013,7 +1056,7 @@ export function createLiteratureTeam(config: {
                 doi: paper.doi,
                 source: paper.source
               }
-              bibtex = await getBibtex(paperMeta)
+              bibtex = await getBibtex(paperMeta, { resolveDoiBibtex })
             } catch (err) {
               console.log(`  [Auto-save] BibTeX generation failed for "${paper.title.slice(0, 40)}...": ${err instanceof Error ? err.message : String(err)}`)
             }

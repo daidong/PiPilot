@@ -1,4 +1,4 @@
-import { type Artifact, type ArtifactType, type CLIContext } from '../types.js'
+import { type Artifact, type ArtifactType, type CLIContext, AGENT_MD_ID, AGENT_MD_MAX_CHARS } from '../types.js'
 import {
   createArtifact,
   deleteArtifact,
@@ -51,6 +51,9 @@ export function artifactCreate(input: CreateArtifactInput, context: CLIContext):
 }
 
 export function artifactUpdate(projectPath: string, artifactId: string, patch: UpdateArtifactInput): ArtifactUpdateResult {
+  if (artifactId === AGENT_MD_ID && patch.content && patch.content.length > AGENT_MD_MAX_CHARS) {
+    return { success: false, error: `agent.md cannot exceed ${AGENT_MD_MAX_CHARS} characters.` }
+  }
   try {
     const updated = updateArtifact(projectPath, artifactId, patch)
     if (!updated) {
@@ -84,6 +87,9 @@ export function artifactSearch(projectPath: string, query: string, types?: Artif
 }
 
 export function artifactDelete(projectPath: string, artifactId: string): ArtifactDeleteResult {
+  if (artifactId === AGENT_MD_ID) {
+    return { success: false, error: 'agent.md cannot be deleted.' }
+  }
   try {
     const deleted = deleteArtifact(projectPath, artifactId)
     if (!deleted) {
