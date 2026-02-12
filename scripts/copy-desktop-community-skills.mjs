@@ -3,11 +3,20 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)))
-const sourceDir = join(rootDir, 'src', 'skills', 'community-builtin')
 const desktopOutDir = join(rootDir, 'examples', 'research-pilot-desktop', 'out')
-const targetDirs = [
-  join(desktopOutDir, 'skills', 'community-builtin'),
-  join(desktopOutDir, 'main', 'skills', 'community-builtin')
+const copyJobs = [
+  {
+    sourceDir: join(rootDir, 'src', 'skills', 'community-builtin'),
+    targetName: 'community-builtin'
+  },
+  {
+    sourceDir: join(rootDir, 'examples', 'research-pilot', 'skills', 'default-project-skills'),
+    targetName: 'research-pilot-default-project-skills'
+  }
+]
+const targetRoots = [
+  join(desktopOutDir, 'skills'),
+  join(desktopOutDir, 'main', 'skills')
 ]
 
 async function pathExists(targetPath) {
@@ -20,20 +29,23 @@ async function pathExists(targetPath) {
 }
 
 async function main() {
-  if (!await pathExists(sourceDir)) {
-    console.warn(`[copy-desktop-community-skills] skipped, source not found: ${sourceDir}`)
-    return
-  }
   if (!await pathExists(desktopOutDir)) {
     console.warn(`[copy-desktop-community-skills] skipped, desktop out not found: ${desktopOutDir}`)
     return
   }
 
-  for (const targetDir of targetDirs) {
-    await mkdir(dirname(targetDir), { recursive: true })
-    await rm(targetDir, { recursive: true, force: true })
-    await cp(sourceDir, targetDir, { recursive: true })
-    console.log(`[copy-desktop-community-skills] copied ${sourceDir} -> ${targetDir}`)
+  for (const job of copyJobs) {
+    if (!await pathExists(job.sourceDir)) {
+      console.warn(`[copy-desktop-community-skills] skipped, source not found: ${job.sourceDir}`)
+      continue
+    }
+    for (const root of targetRoots) {
+      const targetDir = join(root, job.targetName)
+      await mkdir(dirname(targetDir), { recursive: true })
+      await rm(targetDir, { recursive: true, force: true })
+      await cp(job.sourceDir, targetDir, { recursive: true })
+      console.log(`[copy-desktop-community-skills] copied ${job.sourceDir} -> ${targetDir}`)
+    }
   }
 }
 

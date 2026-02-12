@@ -1,5 +1,5 @@
 import { app, ipcMain, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'electron'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync, cpSync } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, sep, isAbsolute } from 'path'
 import { createCoordinator } from '@research-pilot/agents/coordinator'
 import {
@@ -45,6 +45,53 @@ function resolveDesktopCommunitySkillsDir(): string | undefined {
   ].filter(Boolean)
 
   return [...new Set(candidates)].find(candidate => existsSync(candidate))
+}
+
+function resolveDesktopDefaultProjectSkillsDir(): string | undefined {
+  const envOverride = (process.env.AGENT_FOUNDRY_DEFAULT_PROJECT_SKILLS_DIR || '').trim()
+  const appPath = app.getAppPath()
+  const resourcesPath = process.resourcesPath
+  const candidates = [
+    envOverride,
+    join(appPath, 'skills', 'research-pilot-default-project-skills'),
+    join(appPath, 'out', 'skills', 'research-pilot-default-project-skills'),
+    join(appPath, 'out', 'main', 'skills', 'research-pilot-default-project-skills'),
+    resourcesPath ? join(resourcesPath, 'skills', 'research-pilot-default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'skills', 'research-pilot-default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'skills', 'research-pilot-default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'main', 'skills', 'research-pilot-default-project-skills') : '',
+    resolve(process.cwd(), 'out', 'skills', 'research-pilot-default-project-skills'),
+    resolve(process.cwd(), 'out', 'main', 'skills', 'research-pilot-default-project-skills'),
+    resolve(process.cwd(), 'examples', 'research-pilot-desktop', 'out', 'skills', 'research-pilot-default-project-skills'),
+    resolve(process.cwd(), 'examples', 'research-pilot', 'skills', 'default-project-skills')
+  ].filter(Boolean)
+
+  return [...new Set(candidates)].find(candidate => existsSync(candidate))
+}
+
+function seedDefaultProjectSkills(projectPath: string): void {
+  const sourceRoot = resolveDesktopDefaultProjectSkillsDir()
+  if (!sourceRoot || !existsSync(sourceRoot)) return
+
+  const targetRoot = join(projectPath, '.agentfoundry', 'skills')
+  mkdirSync(targetRoot, { recursive: true })
+
+  let seeded = 0
+  for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const sourceSkillDir = join(sourceRoot, entry.name)
+    const sourceSkillFile = join(sourceSkillDir, 'SKILL.md')
+    if (!existsSync(sourceSkillFile)) continue
+
+    const targetSkillDir = join(targetRoot, entry.name)
+    if (existsSync(targetSkillDir)) continue
+    cpSync(sourceSkillDir, targetSkillDir, { recursive: true })
+    seeded++
+  }
+
+  if (seeded > 0) {
+    console.log(`[ResearchPilot] seeded ${seeded} default project skill(s) from ${sourceRoot}`)
+  }
 }
 
 interface FileTreeNode {
@@ -522,6 +569,8 @@ function initializeProject(path: string): void {
     }
     writeFileSync(projectFile, JSON.stringify(defaultConfig, null, 2))
   }
+
+  seedDefaultProjectSkills(path)
 
   // Ensure agent.md note exists (pinned, always-present)
   ensureAgentMd(path)

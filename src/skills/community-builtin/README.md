@@ -17,9 +17,13 @@ Project-local user skills use the same layout under:
 Included examples:
 - `repo-quick-audit`
 - `markitdown`
-- `citation-management`
-- `research-grants`
 - `document-docx`
+
+Research Pilot-specific default project skills live in:
+
+```text
+examples/research-pilot/skills/default-project-skills
+```
 
 Build note:
 - `npm run build` copies this directory to `dist/skills/community-builtin` so published packages can load community skills without source files.

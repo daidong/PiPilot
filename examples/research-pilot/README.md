@@ -121,6 +121,17 @@ Relevant files:
 
 It records which skill/script was used in the tool result (`converterSkill`, `converterScript`) for UI transparency.
 
+Research Pilot also ships app-specific default project-local skills under:
+
+- `examples/research-pilot/skills/default-project-skills`
+
+Current defaults:
+
+- `citation-management`
+- `research-grants`
+
+Desktop project initialization seeds missing defaults into `.agentfoundry/skills` (without overwriting user-modified skills).
+
 ## 7. Public API Surface
 
 Library exports are centralized in:

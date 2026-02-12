@@ -147,14 +147,14 @@ Compatibility skill.
     expect(loaded[0]?.skill.shortDescription).toBe('claude style metadata')
   })
 
-  it('keeps community document skills script-only for lazy load isolation', async () => {
+  it('keeps community conversion skills script-only for lazy load isolation', async () => {
     const communityDir = resolveCommunitySkillDir(process.cwd())
     const loader = new ExternalSkillLoader({
       skillSources: [{ dir: communityDir, sourceType: 'community-builtin' }]
     })
 
     const loaded = await loader.loadAll()
-    const expectedIds = ['markitdown', 'document-docx', 'citation-management', 'research-grants']
+    const expectedIds = ['markitdown', 'document-docx']
 
     for (const skillId of expectedIds) {
       const record = loaded.find(item => item.skill.id === skillId)
