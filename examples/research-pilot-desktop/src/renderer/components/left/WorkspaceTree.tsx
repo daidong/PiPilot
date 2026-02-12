@@ -148,6 +148,12 @@ export function WorkspaceTree() {
     await loadChildren('')
   }, [loadChildren])
 
+  // Reload root + all currently expanded directories
+  const refreshAll = useCallback(async () => {
+    const dirs = ['', ...Array.from(expanded)]
+    await Promise.all(dirs.map((dir) => loadChildren(dir)))
+  }, [expanded, loadChildren])
+
   useEffect(() => {
     let initialExpanded = new Set<string>()
     try {
@@ -160,16 +166,18 @@ export function WorkspaceTree() {
       initialExpanded = new Set()
     }
     setExpanded(initialExpanded)
-    refreshRoot()
-  }, [storageKey, refreshRoot])
+    // Load root + all previously expanded directories so the tree fully restores
+    const dirs = ['', ...Array.from(initialExpanded)]
+    void Promise.all(dirs.map((dir) => loadChildren(dir)))
+  }, [storageKey, loadChildren])
 
   useEffect(() => {
     sessionStorage.setItem(storageKey, JSON.stringify(Array.from(expanded)))
   }, [expanded, storageKey])
 
   useEffect(() => {
-    refreshRoot()
-  }, [showIgnored, refreshRoot])
+    refreshAll()
+  }, [showIgnored, refreshAll])
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -602,7 +610,7 @@ export function WorkspaceTree() {
             </button>
             <button
               className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
-              onClick={() => void refreshRoot()}
+              onClick={() => void refreshAll()}
               title="Refresh tree"
             >
               <RefreshCw size={12} />

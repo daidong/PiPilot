@@ -228,7 +228,13 @@ export default function App() {
       {/* Draggable title bar */}
       <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
 
-      {!previewEntity && !leftCollapsed && <LeftSidebar />}
+      {/* Keep LeftSidebar mounted (hidden) when preview is open to preserve
+          WorkspaceTree expanded state, scroll position, and loaded children */}
+      {!leftCollapsed && (
+        <div className={previewEntity ? 'hidden' : 'contents'}>
+          <LeftSidebar />
+        </div>
+      )}
       <CenterPanel />
       {previewEntity
         ? <EntityPreviewPanel />
