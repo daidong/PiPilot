@@ -30,7 +30,9 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "example:no-code-researcher": "npm run build && npm --prefix examples/no-code-researcher run start",
+    "example:no-code-researcher:help": "npm --prefix examples/no-code-researcher run help"
   },
   "keywords": [
     "agent",

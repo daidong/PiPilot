@@ -1235,6 +1235,7 @@ const result = await registry.call('my-tool', { input: 'value' }, context)
 
 | Example | Description |
 |---------|-------------|
+| `examples/no-code-researcher/` | Config-only autonomous researcher (`agent.yaml` + project-local skills + `agent-foundry run`) |
 | `examples/research-pilot/` | Full-featured research assistant with Ink UI, @-mentions, activity panel, entity preview, context pipeline |
 | `examples/literature-agent/` | Multi-agent literature search and review |
 | `examples/dataanalysis-agent/` | Data analysis agent |

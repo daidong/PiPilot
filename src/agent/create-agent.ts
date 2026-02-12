@@ -29,11 +29,14 @@ import { packs } from '../packs/index.js'
 import {
   tryLoadConfig,
   normalizePackConfigs,
+  normalizeMCPConfigs,
+  type MCPConfigEntry,
   type AgentYAMLConfig
 } from '../config/index.js'
 import { isAbsolute, join, relative } from 'path'
 import { FRAMEWORK_DIR } from '../constants.js'
 import { resolveCommunitySkillDir, resolveProjectSkillDir } from '../skills/skill-source-paths.js'
+import { createMCPProvider } from '../mcp/index.js'
 
 /**
  * Generate a unique ID
@@ -147,7 +150,61 @@ function detectProviderAndModel(apiKey: string, preferredModel?: string): { prov
  * Mapping from Pack names to factory functions
  * Note: python pack requires PythonBridge configuration and cannot be auto-created
  */
-type PackFactory = (options?: Record<string, unknown>) => Pack
+type PackFactory = (
+  options: Record<string, unknown> | undefined,
+  context: { projectPath: string }
+) => Pack | Promise<Pack>
+
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  return value as Record<string, unknown>
+}
+
+function resolveProjectRelativePath(projectPath: string, value: string): string {
+  return isAbsolute(value) ? value : join(projectPath, value)
+}
+
+function createMemorySearchPack(
+  options: Record<string, unknown> | undefined,
+  projectPath: string
+): Pack {
+  const parsed = asObject(options)
+  const rawDirs = parsed['dirs']
+  if (!Array.isArray(rawDirs) || rawDirs.length === 0) {
+    throw new Error('Pack "memory-search" requires options.dirs (string[]) in agent.yaml')
+  }
+  const dirs = rawDirs.map((dir, idx) => {
+    if (typeof dir !== 'string' || dir.trim().length === 0) {
+      throw new Error(`Pack "memory-search" options.dirs[${idx}] must be a non-empty string`)
+    }
+    return resolveProjectRelativePath(projectPath, dir)
+  })
+
+  const rawExtraFiles = parsed['extraFiles']
+  const extraFiles = Array.isArray(rawExtraFiles)
+    ? rawExtraFiles
+      .map((file, idx) => {
+        if (typeof file !== 'string' || file.trim().length === 0) {
+          throw new Error(`Pack "memory-search" options.extraFiles[${idx}] must be a non-empty string`)
+        }
+        return resolveProjectRelativePath(projectPath, file)
+      })
+    : undefined
+
+  const rawIndexPath = parsed['indexPath']
+  const indexPath = typeof rawIndexPath === 'string' && rawIndexPath.trim().length > 0
+    ? resolveProjectRelativePath(projectPath, rawIndexPath)
+    : undefined
+
+  return packs.memorySearch({
+    ...(parsed as any),
+    dirs,
+    extraFiles,
+    indexPath
+  })
+}
 
 const packFactories: Record<string, PackFactory> = {
   safe: packs.safe,
@@ -161,26 +218,47 @@ const packFactories: Record<string, PackFactory> = {
   docs: packs.docs,
   discovery: packs.discovery,
   todo: packs.todo,
+  web: async (options) => packs.web(asObject(options) as any),
+  documents: async (options) => packs.documents(asObject(options) as any),
+  sqlite: async (options, { projectPath }) => {
+    const parsed = asObject(options)
+    const rawDbPath = parsed['dbPath']
+    if (typeof rawDbPath !== 'string' || rawDbPath.trim().length === 0) {
+      throw new Error('Pack "sqlite" requires options.dbPath in agent.yaml')
+    }
+    return packs.sqlite({
+      ...(parsed as any),
+      dbPath: resolveProjectRelativePath(projectPath, rawDbPath)
+    })
+  },
+  'memory-search': (options, { projectPath }) => createMemorySearchPack(options, projectPath),
+  memorySearch: (options, { projectPath }) => createMemorySearchPack(options, projectPath)
   // python: requires PythonBridge, cannot be auto-created from config
 }
 
 /**
  * Resolve a Pack instance from a pack name
  */
-function resolvePackFromName(packConfig: { name: string; options?: Record<string, unknown> }): Pack | null {
+async function resolvePackFromName(
+  packConfig: { name: string; options?: Record<string, unknown> },
+  projectPath: string
+): Promise<Pack | null> {
   const factory = packFactories[packConfig.name]
   if (!factory) {
     console.warn(`[createAgent] Unknown pack: ${packConfig.name}`)
     return null
   }
 
-  return factory(packConfig.options)
+  return await factory(packConfig.options, { projectPath })
 }
 
 /**
  * Resolve Packs from YAML configuration
  */
-function resolvePacksFromConfig(yamlConfig: AgentYAMLConfig): Pack[] {
+async function resolvePacksFromConfig(
+  yamlConfig: AgentYAMLConfig,
+  projectPath: string
+): Promise<Pack[]> {
   if (!yamlConfig.packs || yamlConfig.packs.length === 0) {
     return [packs.safe()]
   }
@@ -189,7 +267,7 @@ function resolvePacksFromConfig(yamlConfig: AgentYAMLConfig): Pack[] {
   const resolvedPacks: Pack[] = []
 
   for (const packConfig of normalized) {
-    const pack = resolvePackFromName(packConfig)
+    const pack = await resolvePackFromName(packConfig, projectPath)
     if (pack) {
       resolvedPacks.push(pack)
     }
@@ -201,6 +279,25 @@ function resolvePacksFromConfig(yamlConfig: AgentYAMLConfig): Pack[] {
   }
 
   return resolvedPacks
+}
+
+async function resolveMCPPacksFromConfig(mcpConfigs?: MCPConfigEntry[]): Promise<Pack[]> {
+  if (!mcpConfigs || mcpConfigs.length === 0) {
+    return []
+  }
+
+  const normalizedServers = normalizeMCPConfigs(mcpConfigs)
+  if (normalizedServers.length === 0) {
+    return []
+  }
+
+  const provider = createMCPProvider({
+    id: 'yaml-mcp',
+    name: 'YAML MCP Provider',
+    servers: normalizedServers
+  })
+
+  return await provider.createPacks()
 }
 
 /**
@@ -399,20 +496,13 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     runtime
   })
 
-  // Load Packs
-  // Priority: parameters > YAML config > defaults
-  let packsToLoad: Pack[]
-
-  if (config.packs && config.packs.length > 0) {
-    // Packs specified via parameters
-    packsToLoad = config.packs
-  } else if (yamlConfig) {
-    // Resolve from YAML config
-    packsToLoad = resolvePacksFromConfig(yamlConfig)
-  } else {
-    // Default
-    packsToLoad = [packs.standard()]
-  }
+  // Resolve pack inputs (actual registration happens in initPacks, because YAML packs can be async).
+  const hasDirectPacks = !!(config.packs && config.packs.length > 0)
+  let packsToLoad: Pack[] = hasDirectPacks
+    ? [...config.packs!]
+    : yamlConfig
+      ? []
+      : [packs.standard()]
 
   // Create SkillManager (lazy-loaded procedural knowledge)
   const skillManager = new SkillManager({
@@ -421,7 +511,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     skillTelemetry: config.skillTelemetry
   })
 
-  for (const pack of packsToLoad) {
+  const registerPackComponents = (pack: Pack): void => {
     // Register tools
     if (pack.tools) {
       toolRegistry.registerAll(pack.tools)
@@ -603,6 +693,19 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
 
   async function initPacks() {
     if (!packsInitialized) {
+      if (!hasDirectPacks && yamlConfig) {
+        packsToLoad = await resolvePacksFromConfig(yamlConfig, projectPath)
+      }
+
+      if (yamlConfig?.mcp && yamlConfig.mcp.length > 0) {
+        const mcpPacks = await resolveMCPPacksFromConfig(yamlConfig.mcp)
+        packsToLoad.push(...mcpPacks)
+      }
+
+      for (const pack of packsToLoad) {
+        registerPackComponents(pack)
+      }
+
       await kernelV2.init()
       runtime.memoryStorage = kernelV2.getMemoryStorage(sessionId)
 

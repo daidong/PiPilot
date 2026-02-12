@@ -6,6 +6,7 @@
  */
 
 import { runIndexDocs, parseIndexDocsArgs, printIndexDocsHelp } from './index-docs.js'
+import { runAgentTask, parseRunArgs, printRunHelp } from './run.js'
 
 const VERSION = '0.1.0'
 
@@ -17,6 +18,7 @@ Usage:
 
 Commands:
   validate      Validate configuration file
+  run           Run agent task (single or autonomous mode)
   index-docs    Build document index for docs context sources
   help          Show help information
 
@@ -26,6 +28,7 @@ Options:
 
 Examples:
   $ agent-foundry validate
+  $ agent-foundry run "Summarize README.md"
   $ agent-foundry index-docs --paths docs,wiki -v
 `
 
@@ -50,7 +53,7 @@ async function main(): Promise<void> {
     return
   }
 
-  if (options.help || command === 'help' || command === '-h' || command === '--help' || !command) {
+  if (command === 'help' || command === '-h' || command === '--help' || !command) {
     console.log(HELP)
     return
   }
@@ -58,8 +61,23 @@ async function main(): Promise<void> {
   // Execute command
   switch (command) {
     case 'validate':
+      if (args.slice(1).includes('--help') || args.slice(1).includes('-h')) {
+        console.log(HELP)
+        break
+      }
       await runValidate()
       break
+
+    case 'run': {
+      const cmdArgs = args.slice(1)
+      if (cmdArgs.includes('--help') || cmdArgs.includes('-h')) {
+        printRunHelp()
+        break
+      }
+      const runOptions = parseRunArgs(cmdArgs)
+      await runAgentTask(runOptions)
+      break
+    }
 
     case 'index-docs': {
       // Check for help flag

@@ -1,0 +1,57 @@
+id: no-code-researcher
+name: No-Code Researcher
+
+identity: |
+  You are an autonomous research agent focused on producing high-quality, verifiable outputs.
+  Work in multi-step fashion: plan, execute, verify, and finalize.
+  Favor concrete deliverables in files over vague summaries.
+
+constraints:
+  - Always start by reading agent.md and relevant task files before execution.
+  - Create and maintain a short todo list for multi-step tasks.
+  - Store intermediate work and final outputs under outputs/.
+  - Prefer reproducible, inspectable operations over hidden assumptions.
+  - If you finish the task, output exactly TASK_COMPLETE on its own line.
+
+packs:
+  - safe
+  - exec
+  - network
+  - todo
+  - kv-memory
+  - discovery
+  - name: memory-search
+    options:
+      dirs:
+        - notes
+        - workspace
+        - outputs
+      extraFiles:
+        - agent.md
+
+maxSteps: 24
+
+runner:
+  mode: autonomous
+  maxTurns: 40
+  stopCondition: TASK_COMPLETE
+  continuePrompt: Continue from your latest plan and execute the next best step.
+  additionalInstructions: |
+    Treat files in tasks/ as executable specs when referenced by the user.
+    Keep your working notes concise and persist key decisions to outputs/.
+    Use project-local skills via skill-script-run when relevant.
+
+# Optional: enable Brave web search via MCP (requires BRAVE_API_KEY).
+# mcp:
+#   - name: brave-search
+#     transport:
+#       type: stdio
+#       command: npx
+#       args:
+#         - -y
+#         - @brave/brave-search-mcp-server@2.0.69
+#       timeout: 30000
+#       startTimeout: 30000
+#     env:
+#       - BRAVE_API_KEY
+#       - BRAVE_MCP_ENABLED_TOOLS=brave_web_search

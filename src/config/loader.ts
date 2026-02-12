@@ -39,6 +39,9 @@ export interface AgentYAMLConfig {
     temperature?: number
   }
 
+  /** Runner configuration (used by CLI run command) */
+  runner?: RunnerConfigEntry
+
   /** Maximum number of steps */
   maxSteps?: number
 
@@ -55,6 +58,17 @@ export interface PackConfigEntry {
 }
 
 /**
+ * Runner configuration entry
+ */
+export interface RunnerConfigEntry {
+  mode?: 'single' | 'autonomous'
+  stopCondition?: string
+  maxTurns?: number
+  continuePrompt?: string
+  additionalInstructions?: string
+}
+
+/**
  * MCP configuration entry
  */
 export interface MCPConfigEntry {
@@ -64,9 +78,13 @@ export interface MCPConfigEntry {
     type: 'stdio' | 'http'
     command?: string
     args?: string[]
+    cwd?: string
     url?: string
+    headers?: Record<string, string>
+    timeout?: number
+    startTimeout?: number
   }
-  env?: string[]
+  env?: string[] | Record<string, string>
 }
 
 /**
@@ -78,6 +96,16 @@ export const DEFAULT_CONFIG_FILENAMES = [
   '.agent.yaml',
   '.agent.yml'
 ]
+
+/**
+ * Supported pack names for agent.yaml.
+ * Note: "python" is intentionally excluded because it requires a non-serializable PythonBridge instance.
+ */
+export const SUPPORTED_YAML_PACKS = [
+  'safe', 'compute', 'network', 'exec', 'git', 'exploration',
+  'kv-memory', 'kvMemory', 'docs', 'discovery', 'todo',
+  'web', 'documents', 'sqlite', 'memory-search', 'memorySearch'
+] as const
 
 /**
  * Find configuration file
@@ -164,6 +192,10 @@ export function mergeConfigs(
       ...fileConfig.model,
       ...paramConfig.model
     },
+    runner: {
+      ...fileConfig.runner,
+      ...paramConfig.runner
+    },
     constraints: paramConfig.constraints ?? fileConfig.constraints,
     custom: {
       ...fileConfig.custom,
@@ -196,7 +228,36 @@ export function normalizeMCPConfigs(
 ): MCPServerConfig[] {
   if (!mcpConfigs) return []
 
+  const resolveEnv = (entry?: string[] | Record<string, string>): Record<string, string> | undefined => {
+    if (!entry) return undefined
+
+    if (Array.isArray(entry)) {
+      const env: Record<string, string> = {}
+      for (const key of entry) {
+        const raw = key.trim()
+        if (!raw) continue
+
+        const eq = raw.indexOf('=')
+        if (eq > 0) {
+          const envKey = raw.slice(0, eq).trim()
+          const envVal = raw.slice(eq + 1)
+          if (envKey.length > 0) env[envKey] = envVal
+          continue
+        }
+
+        const value = process.env[raw]
+        if (typeof value === 'string') {
+          env[raw] = value
+        }
+      }
+      return Object.keys(env).length > 0 ? env : undefined
+    }
+
+    return Object.keys(entry).length > 0 ? entry : undefined
+  }
+
   return mcpConfigs.map(config => {
+    const env = resolveEnv(config.env)
     const serverConfig: MCPServerConfig = {
       id: config.name,
       name: config.name,
@@ -204,11 +265,17 @@ export function normalizeMCPConfigs(
         ? {
             type: 'stdio',
             command: config.transport.command || 'npx',
-            args: config.transport.args || []
+            args: config.transport.args || [],
+            cwd: config.transport.cwd,
+            timeout: config.transport.timeout,
+            startTimeout: config.transport.startTimeout,
+            env
           }
         : {
             type: 'http',
-            url: config.transport.url || ''
+            url: config.transport.url || '',
+            headers: config.transport.headers,
+            timeout: config.transport.timeout
           }
     }
 
@@ -257,14 +324,11 @@ export function validateConfig(config: AgentYAMLConfig): string[] {
   }
 
   if (config.packs) {
-    const validPacks = [
-      'safe', 'compute', 'network', 'exec', 'git', 'exploration', 'python',
-      'kv-memory', 'kvMemory', 'docs', 'discovery', 'todo', 'web',
-      'documents', 'sqlite', 'memory-search', 'memorySearch'
-    ]
     for (const pack of config.packs) {
       const packName = typeof pack === 'string' ? pack : pack.name
-      if (!validPacks.includes(packName)) {
+      if (packName === 'python') {
+        errors.push('Pack "python" is not supported in agent.yaml (requires a PythonBridge instance). Use createAgent({ packs: [packs.python(...)] }) in code.')
+      } else if (!SUPPORTED_YAML_PACKS.includes(packName as typeof SUPPORTED_YAML_PACKS[number])) {
         errors.push(`Unknown pack: ${packName}`)
       }
     }
@@ -272,6 +336,21 @@ export function validateConfig(config: AgentYAMLConfig): string[] {
 
   if (config.maxSteps !== undefined && (config.maxSteps < 1 || config.maxSteps > 100)) {
     errors.push('maxSteps must be between 1 and 100')
+  }
+
+  if (config.runner) {
+    if (config.runner.mode && config.runner.mode !== 'single' && config.runner.mode !== 'autonomous') {
+      errors.push('runner.mode must be "single" or "autonomous"')
+    }
+    if (config.runner.maxTurns !== undefined && (config.runner.maxTurns < 1 || config.runner.maxTurns > 1000)) {
+      errors.push('runner.maxTurns must be between 1 and 1000')
+    }
+    if (config.runner.stopCondition !== undefined && config.runner.stopCondition.trim().length === 0) {
+      errors.push('runner.stopCondition cannot be empty')
+    }
+    if (config.runner.continuePrompt !== undefined && config.runner.continuePrompt.trim().length === 0) {
+      errors.push('runner.continuePrompt cannot be empty')
+    }
   }
 
   return errors
