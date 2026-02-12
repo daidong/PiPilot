@@ -90,6 +90,9 @@ function checkPythonDeps(): { ok: boolean; error?: string } {
 // ============================================================================
 
 const BASE_ANALYSIS_PROMPT = loadPrompt('data-analysis-system')
+const MATPLOTLIB_SKILL_ID = 'matplotlib'
+const MATPLOTLIB_QUICKSTART_MAX_CHARS = 1800
+const MATPLOTLIB_KEYWORDS = /\b(plot|chart|figure|visualiz|matplotlib|seaborn|histogram|scatter|bar|line|heatmap|boxplot|violin)\b/i
 
 /**
  * Parse task instructions from the markdown file.
@@ -111,6 +114,46 @@ function parseTaskInstructions(raw: string): Record<string, string> {
 const TASK_INSTRUCTIONS: Record<string, string> = parseTaskInstructions(loadPrompt('data-analysis-tasks'))
 
 const CODE_TEMPLATE_HEADER = loadPrompt('data-code-template')
+
+function resolveMatplotlibSkillQuickstartPath(projectPath: string): string | null {
+  const projectLocal = join(
+    projectPath,
+    '.agentfoundry',
+    'skills',
+    MATPLOTLIB_SKILL_ID,
+    'references',
+    'subagent_quickstart.md'
+  )
+  if (existsSync(projectLocal)) return projectLocal
+
+  const bundledDefault = resolve(
+    dirname(new URL(import.meta.url).pathname),
+    '..',
+    'skills',
+    'default-project-skills',
+    MATPLOTLIB_SKILL_ID,
+    'references',
+    'subagent_quickstart.md'
+  )
+  if (existsSync(bundledDefault)) return bundledDefault
+
+  return null
+}
+
+function loadMatplotlibQuickstart(projectPath: string): string | null {
+  const quickstartPath = resolveMatplotlibSkillQuickstartPath(projectPath)
+  if (!quickstartPath) return null
+
+  try {
+    const raw = readFileSync(quickstartPath, 'utf-8').replace(/\r\n/g, '\n').trim()
+    if (!raw) return null
+    return raw.length > MATPLOTLIB_QUICKSTART_MAX_CHARS
+      ? `${raw.slice(0, MATPLOTLIB_QUICKSTART_MAX_CHARS).trimEnd()}\n...`
+      : raw
+  } catch {
+    return null
+  }
+}
 
 // ============================================================================
 // Schema Inference
@@ -385,9 +428,18 @@ function collectOutputsFromManifest(
 /**
  * Build system prompt based on task type
  */
-function buildSystemPrompt(taskType: string): string {
+function buildSystemPrompt(taskType: string, matplotlibQuickstart?: string): string {
   const taskInstr = TASK_INSTRUCTIONS[taskType] || TASK_INSTRUCTIONS.analyze
-  return `${BASE_ANALYSIS_PROMPT}\n\n${taskInstr}`
+  if (!matplotlibQuickstart) {
+    return `${BASE_ANALYSIS_PROMPT}\n\n${taskInstr}`
+  }
+
+  return `${BASE_ANALYSIS_PROMPT}
+
+${taskInstr}
+
+## Matplotlib Quickstart (project skill)
+${matplotlibQuickstart}`
 }
 
 /**
@@ -443,6 +495,7 @@ export function createDataAnalyzer(config: {
   const { apiKey, model, projectPath, sessionId } = config
   if (!model) throw new Error('data-team: model is required')
   const languageModel = getLanguageModelByModelId(model, { apiKey })
+  const matplotlibQuickstart = loadMatplotlibQuickstart(projectPath)
 
   const outputBase = join(projectPath, '.research-pilot', 'outputs')
   const scriptsDir = join(projectPath, '.research-pilot', 'analysis', 'scripts')
@@ -498,7 +551,12 @@ export function createDataAnalyzer(config: {
         rowCount: schemaResult.rowCount,
         isStructured: schemaResult.isStructured
       }
-      const systemPrompt = buildSystemPrompt(taskType)
+      const shouldInjectMatplotlibQuickstart =
+        taskType === 'visualize' || MATPLOTLIB_KEYWORDS.test(instructions)
+      const systemPrompt = buildSystemPrompt(
+        taskType,
+        shouldInjectMatplotlibQuickstart ? (matplotlibQuickstart ?? undefined) : undefined
+      )
 
       let previousError: string | undefined
       const maxAttempts = 3

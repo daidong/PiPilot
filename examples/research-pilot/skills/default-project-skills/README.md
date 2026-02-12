@@ -12,6 +12,7 @@ examples/research-pilot/skills/default-project-skills/<skill-id>/scripts/*
 Included skills:
 - `citation-management`
 - `research-grants`
+- `matplotlib`
 
 Desktop startup seeds these into each opened project at:
 

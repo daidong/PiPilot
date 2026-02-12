@@ -17,6 +17,7 @@ Hard rules:
 - Use relative paths only. Read before edit/write.
 - Academic papers / related work → literature-search. General web facts → brave_web_search or fetch.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
+- For reusable matplotlib plot/style scaffolding, use skill-script-run with skillId "matplotlib" (e.g. script "plot_template" or "style_configurator"), then apply to dataset tasks via data-analyze.
 - For repository/text inspection, use this order by default:
   1) glob/grep to locate relevant files/sections;
   2) read with offset+limit in focused chunks;
