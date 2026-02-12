@@ -19,6 +19,12 @@ export interface ArtifactFileRecord<T extends Artifact = Artifact> {
   filePath: string
 }
 
+export interface LegacyMigrationResult {
+  updatedFiles: number
+  convertedLiteratureType: number
+  removedDataNameField: number
+}
+
 export type CreateArtifactInput =
   | {
       type: 'note'
@@ -229,6 +235,56 @@ export function ensureAgentMd(projectPath: string): void {
   writeFileSync(filePath, JSON.stringify(artifact, null, 2), 'utf-8')
 }
 
+/**
+ * Migrate legacy artifact shapes in place.
+ * - type: "literature" -> "paper"
+ * - data.name -> title (if title missing), then remove data.name
+ */
+export function migrateLegacyArtifacts(projectPath: string): LegacyMigrationResult {
+  const dirs = resolveArtifactDirs(projectPath)
+  let updatedFiles = 0
+  let convertedLiteratureType = 0
+  let removedDataNameField = 0
+
+  for (const { dir } of dirs) {
+    if (!existsSync(dir)) continue
+
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.json')) continue
+      const filePath = join(dir, file)
+      let raw: Record<string, unknown>
+      try {
+        raw = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+      } catch {
+        continue
+      }
+
+      let changed = false
+
+      if (raw.type === 'literature') {
+        raw.type = 'paper'
+        convertedLiteratureType++
+        changed = true
+      }
+
+      if (raw.type === 'data' && typeof raw.name === 'string') {
+        if (typeof raw.title !== 'string' || raw.title.trim().length === 0) {
+          raw.title = raw.name
+        }
+        delete raw.name
+        removedDataNameField++
+        changed = true
+      }
+
+      if (!changed) continue
+      writeFileSync(filePath, JSON.stringify(raw, null, 2), 'utf-8')
+      updatedFiles++
+    }
+  }
+
+  return { updatedFiles, convertedLiteratureType, removedDataNameField }
+}
+
 export function createArtifact(input: CreateArtifactInput, context: CLIContext): ArtifactFileRecord {
   const id = crypto.randomUUID()
   const timestamp = nowIso()
@@ -275,7 +331,6 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
     artifact = {
       ...common,
       type: 'data',
-      name: input.title,
       filePath: input.filePath,
       mimeType: input.mimeType,
       schema: input.schema,

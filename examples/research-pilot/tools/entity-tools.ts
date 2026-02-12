@@ -3,6 +3,7 @@
  */
 
 import { existsSync } from 'fs'
+import { isAbsolute, resolve } from 'path'
 import { defineTool } from '../../../src/factories/define-tool.js'
 import type { Tool } from '../../../src/types/tool.js'
 import { type ArtifactType, type CLIContext } from '../types.js'
@@ -229,7 +230,10 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
       } else if (type === 'data') {
         const filePath = typeof args.filePath === 'string' ? args.filePath : ''
         if (!filePath) return { success: false, error: 'filePath is required for data artifacts' }
-        if (!existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` }
+        const resolvedFilePath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+        if (!existsSync(resolvedFilePath)) {
+          return { success: false, error: `File not found: ${filePath}` }
+        }
 
         payload = {
           type,

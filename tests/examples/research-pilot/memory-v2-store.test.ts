@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { CLIContext } from '../../../examples/research-pilot/types.js'
 import {
-  addFocusEntry,
   createArtifact,
   findExistingPaperArtifact,
   listArtifacts,
-  pruneExpiredFocusAtTurnBoundary
+  migrateLegacyArtifacts,
+  readArtifactFromFile
 } from '../../../examples/research-pilot/memory-v2/store.js'
 
 describe('research-pilot memory-v2 store', () => {
@@ -55,56 +55,50 @@ describe('research-pilot memory-v2 store', () => {
     expect(dedupHit?.id).toBe(created.artifact.id)
   })
 
-  it('applies turn-boundary expiry and cooldown for auto focus entries', () => {
-    const now = new Date('2026-01-01T10:00:00.000Z')
-    const add = addFocusEntry(projectPath, {
-      sessionId: context.sessionId,
-      refType: 'artifact',
-      refId: 'art_123',
-      reason: 'auto mention',
-      score: 0.8,
-      source: 'auto',
-      ttl: '30m',
-      now
-    })
+  it('migrates legacy literature/data artifact shapes in place', () => {
+    const papersDir = join(projectPath, '.research-pilot', 'artifacts', 'papers')
+    const dataDir = join(projectPath, '.research-pilot', 'artifacts', 'data')
+    mkdirSync(papersDir, { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
 
-    expect(add.ok).toBe(true)
+    const legacyPaperPath = join(papersDir, 'legacy-paper.json')
+    writeFileSync(legacyPaperPath, JSON.stringify({
+      id: 'legacy-paper',
+      type: 'literature',
+      title: 'Legacy Paper',
+      tags: [],
+      provenance: { source: 'user', sessionId: 's' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      authors: ['A'],
+      abstract: '',
+      citeKey: 'a2026',
+      doi: 'unknown:a2026',
+      bibtex: '@article{a2026,title={Legacy Paper}}'
+    }, null, 2), 'utf-8')
 
-    const prune = pruneExpiredFocusAtTurnBoundary(
-      projectPath,
-      context.sessionId,
-      new Date('2026-01-01T10:31:00.000Z'),
-      15
-    )
+    const legacyDataPath = join(dataDir, 'legacy-data.json')
+    writeFileSync(legacyDataPath, JSON.stringify({
+      id: 'legacy-data',
+      type: 'data',
+      name: 'Legacy Data',
+      tags: [],
+      provenance: { source: 'user', sessionId: 's' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      filePath: 'data.csv'
+    }, null, 2), 'utf-8')
 
-    expect(prune.expired).toBe(1)
-    expect(prune.kept).toBe(0)
+    const migration = migrateLegacyArtifacts(projectPath)
+    expect(migration.updatedFiles).toBe(2)
+    expect(migration.convertedLiteratureType).toBe(1)
+    expect(migration.removedDataNameField).toBe(1)
 
-    const blockedAuto = addFocusEntry(projectPath, {
-      sessionId: context.sessionId,
-      refType: 'artifact',
-      refId: 'art_123',
-      reason: 'auto repromote',
-      score: 0.7,
-      source: 'auto',
-      ttl: '30m',
-      now: new Date('2026-01-01T10:35:00.000Z')
-    })
+    const migratedPaper = readArtifactFromFile(legacyPaperPath)
+    expect(migratedPaper?.type).toBe('paper')
 
-    expect(blockedAuto.ok).toBe(false)
-    expect(blockedAuto.reason).toContain('cooldown-active-until')
-
-    const allowedManual = addFocusEntry(projectPath, {
-      sessionId: context.sessionId,
-      refType: 'artifact',
-      refId: 'art_123',
-      reason: 'manual override',
-      score: 1,
-      source: 'manual',
-      ttl: '2h',
-      now: new Date('2026-01-01T10:35:00.000Z')
-    })
-
-    expect(allowedManual.ok).toBe(true)
+    const migratedDataRaw = JSON.parse(readFileSync(legacyDataPath, 'utf-8'))
+    expect(migratedDataRaw.title).toBe('Legacy Data')
+    expect(migratedDataRaw.name).toBeUndefined()
   })
 })

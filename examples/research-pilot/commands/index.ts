@@ -26,10 +26,6 @@ export {
 export {
   enrichPaperArtifacts
 } from './paper-enrichment.js'
-
-// Compatibility wrappers
-export { savePaper, parseSavePaperArgs } from './save-paper.js'
-export { saveData, parseSaveDataArgs } from './save-data.js'
 export { deleteEntity } from './delete.js'
 export { listAllArtifacts, listNotes, listLiterature, listData } from './list.js'
 export { searchEntities } from './search.js'
@@ -39,8 +35,6 @@ export type { ArtifactCreateResult, ArtifactUpdateResult, ArtifactDeleteResult, 
 export type { MemoryExplainResult } from './memory-explain.js'
 export type { SessionSummaryResult } from './session-summary.js'
 export type { EnrichPapersResult, EnrichPapersProgress } from './paper-enrichment.js'
-export type { SavePaperResult } from './save-paper.js'
-export type { SaveDataResult } from './save-data.js'
 export type { DeleteResult } from './delete.js'
 export type { ArtifactListItem, NoteListItem, LiteratureListItem, DataListItem } from './list.js'
 export type { SearchResult } from './search.js'

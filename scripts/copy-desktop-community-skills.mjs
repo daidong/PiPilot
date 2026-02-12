@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url'
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const sourceDir = join(rootDir, 'src', 'skills', 'community-builtin')
 const desktopOutDir = join(rootDir, 'examples', 'research-pilot-desktop', 'out')
-const targetDir = join(desktopOutDir, 'skills', 'community-builtin')
+const targetDirs = [
+  join(desktopOutDir, 'skills', 'community-builtin'),
+  join(desktopOutDir, 'main', 'skills', 'community-builtin')
+]
 
 async function pathExists(targetPath) {
   try {
@@ -26,11 +29,12 @@ async function main() {
     return
   }
 
-  await mkdir(dirname(targetDir), { recursive: true })
-  await rm(targetDir, { recursive: true, force: true })
-  await cp(sourceDir, targetDir, { recursive: true })
-
-  console.log(`[copy-desktop-community-skills] copied ${sourceDir} -> ${targetDir}`)
+  for (const targetDir of targetDirs) {
+    await mkdir(dirname(targetDir), { recursive: true })
+    await rm(targetDir, { recursive: true, force: true })
+    await cp(sourceDir, targetDir, { recursive: true })
+    console.log(`[copy-desktop-community-skills] copied ${sourceDir} -> ${targetDir}`)
+  }
 }
 
 main().catch((error) => {

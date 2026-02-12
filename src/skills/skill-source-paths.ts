@@ -40,11 +40,17 @@ export function resolveCommunitySkillDir(projectPath: string, configuredDir?: st
     ...resourceCandidates,
     resolve(moduleDir, 'community-builtin'),
     resolve(moduleDir, '..', '..', 'src', 'skills', 'community-builtin'),
+    resolve(moduleDir, '..', '..', 'out', 'skills', 'community-builtin'),
+    resolve(moduleDir, '..', '..', 'out', 'main', 'skills', 'community-builtin'),
     resolve(projectPath, 'node_modules', 'agent-foundry', 'dist', 'skills', 'community-builtin'),
     resolve(projectPath, 'node_modules', 'agent-foundry', 'src', 'skills', 'community-builtin'),
+    resolve(projectPath, 'out', 'skills', 'community-builtin'),
+    resolve(projectPath, 'out', 'main', 'skills', 'community-builtin'),
     ...ladderRoots.flatMap((root) => [
       resolve(root, 'src', 'skills', 'community-builtin'),
-      resolve(root, 'dist', 'skills', 'community-builtin')
+      resolve(root, 'dist', 'skills', 'community-builtin'),
+      resolve(root, 'out', 'skills', 'community-builtin'),
+      resolve(root, 'out', 'main', 'skills', 'community-builtin')
     ])
   ]
 

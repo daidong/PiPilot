@@ -21,6 +21,8 @@ Primary persistence is the artifact surface:
 - `artifact-update`
 - `artifact-search`
 
+Legacy `save-paper` / `save-data` wrappers have been removed from the runtime path.
+
 Implemented in:
 
 - `examples/research-pilot/tools/entity-tools.ts`
@@ -50,6 +52,15 @@ Store/load functions:
 - `readLatestSessionSummary(...)`
 
 Both in `examples/research-pilot/memory-v2/store.ts`.
+
+### 2.4 Legacy artifact migration
+
+On project init / coordinator startup, legacy artifact payloads are migrated in place:
+
+- `type: "literature"` -> `type: "paper"`
+- `data.name` -> `data.title` (then remove `data.name`)
+
+Implemented in `migrateLegacyArtifacts(...)` in `examples/research-pilot/memory-v2/store.ts`.
 
 ### 2.3 Debug explain snapshots
 

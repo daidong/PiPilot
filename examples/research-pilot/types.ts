@@ -24,7 +24,6 @@ export const PATHS = {
   artifactsRoot: '.research-pilot/artifacts',
   notes: '.research-pilot/artifacts/notes',
   papers: '.research-pilot/artifacts/papers',
-  literature: '.research-pilot/artifacts/papers', // Compatibility alias
   data: '.research-pilot/artifacts/data',
   webContent: '.research-pilot/artifacts/web-content',
   toolOutputs: '.research-pilot/artifacts/tool-output',
@@ -111,8 +110,6 @@ export interface DataSchema {
 
 export interface DataArtifact extends ArtifactBase {
   type: 'data'
-  /** @deprecated Use title */
-  name?: string
   filePath: string
   mimeType?: string
   schema?: DataSchema

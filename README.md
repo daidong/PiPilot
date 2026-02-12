@@ -205,43 +205,33 @@ The preview overlay displays full entity content (metadata, tags, pinned/selecte
 
 ```
 examples/research-pilot/
-├── index.tsx                 # Entry point (Ink renderer)
-├── types.ts                  # Entity types + path constants
+├── index.ts                  # Library exports
+├── types.ts                  # Artifact + session summary types
 ├── agents/
-│   ├── coordinator.ts        # Main chat agent (context pipeline)
-│   ├── literature-agent.ts   # Literature search
-│   ├── writing-agent.ts      # Writing assistance
-│   ├── data-agent.ts         # Data analysis
-│   └── index.ts              # Agent exports
+│   ├── coordinator.ts        # Main orchestrator
+│   ├── literature-team.ts    # Literature multi-agent team
+│   ├── data-team.ts          # Data analysis pipeline
+│   ├── subagent-tools.ts     # literature-search / data-analyze tools
+│   └── prompts/              # Coordinator + subagent prompts
 ├── commands/
-│   ├── save-note.ts          # /save-note handler
-│   ├── save-paper.ts         # /save-paper handler
-│   ├── save-data.ts          # /save-data handler
-│   ├── select.ts             # /select handler
-│   ├── pin.ts                # /pin handler
-│   ├── list.ts               # /notes, /papers, /data
-│   ├── search.ts             # /search handler
-│   ├── delete.ts             # /delete handler
+│   ├── artifact.ts           # Canonical artifact CRUD/search surface
+│   ├── paper-artifact.ts     # Paper upsert / metadata update helpers
+│   ├── list.ts               # Notes/papers/data views
+│   ├── search.ts             # Search helpers
+│   ├── delete.ts             # Delete by id
+│   ├── paper-enrichment.ts   # Enrichment pipeline command
+│   ├── session-summary.ts    # Session summary read
 │   └── index.ts              # Command exports
+├── memory-v2/
+│   └── store.ts              # Artifact store + summary storage + legacy migration
 ├── mentions/
 │   ├── parser.ts             # @-mention regex parser
 │   ├── resolver.ts           # Entity/file/URL resolution
 │   ├── candidates.ts         # Autocomplete candidate builder
 │   └── index.ts              # Mention exports
-└── ui/
-    ├── App.tsx               # Root component (layout + state)
-    ├── LineStore.ts           # Agent output line tracking
-    ├── hooks/
-    │   └── useAgent.ts       # Agent hook (streaming + mentions)
-    └── components/
-        ├── Banner.tsx         # Startup info display
-        ├── AgentResponse.tsx  # Response with line numbers
-        ├── CommandOutput.tsx  # Structured command results
-        ├── InputBar.tsx       # Input with @-mention autocomplete
-        ├── MentionPopup.tsx   # Autocomplete dropdown
-        ├── ActivityPanel.tsx  # Tabbed right panel (Notes/Papers/Data)
-        ├── EntityPreview.tsx  # Full-screen entity overlay
-        └── Sidebar.tsx        # Legacy pinned/selected sidebar
+├── tools/
+│   └── entity-tools.ts       # artifact-create/update/search runtime tools
+└── README.md                 # Current architecture notes
 ```
 
 ## CLI Tools

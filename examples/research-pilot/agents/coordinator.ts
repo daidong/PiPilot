@@ -23,6 +23,7 @@ import { researchPilotSkills } from '../skills/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import {
+  migrateLegacyArtifacts,
   findArtifactById,
   readLatestSessionSummary,
   writeSessionSummary
@@ -591,6 +592,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   let activeTurnToolCallCount: number | null = null
   const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
 
+  const migration = migrateLegacyArtifacts(projectPath)
+  if (debug && migration.updatedFiles > 0) {
+    console.log(`[Coordinator] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
+  }
+
   // Select intent router model based on coordinator's provider
   const coordinatorProvider = getModel(model ?? '')?.providerID
   const intentRouterModelId = coordinatorProvider === 'anthropic'
@@ -816,7 +822,6 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     packs: [
       packs.safe(),
       packs.exec({ approvalMode: 'none', denyPatterns: [] }),
-      packs.kvMemory(),
       packs.todo(),
       definePack({
         id: 'documents-wrapper',

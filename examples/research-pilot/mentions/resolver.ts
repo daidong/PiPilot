@@ -80,8 +80,8 @@ function resolveEntity(
         return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
       }
 
-      // Match by citeKey for papers (accept legacy "literature" type)
-      if (entity.type === 'paper' || (entity as { type?: string }).type === 'literature') {
+      // Match by citeKey for papers
+      if (entity.type === 'paper') {
         const lit = entity as Literature
         if (lit.citeKey.toLowerCase() === key || lit.citeKey.toLowerCase().startsWith(key)) {
           return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
@@ -168,8 +168,8 @@ async function resolveUrl(ref: MentionRef): Promise<ResolvedMention> {
 
 function entityName(entity: Entity): string {
   if (entity.type === 'note') return (entity as Note).title
-  if (entity.type === 'paper' || (entity as { type?: string }).type === 'literature') return (entity as Literature).title
-  if (entity.type === 'data') return (entity as DataAttachment).title || (entity as DataAttachment).name || entity.id
+  if (entity.type === 'paper') return (entity as Literature).title
+  if (entity.type === 'data') return (entity as DataAttachment).title || entity.id
   return entity.id
 }
 
@@ -194,7 +194,7 @@ function formatEntityContent(entity: Entity, projectPath?: string): string {
     }
     return `Title: ${note.title}\nTags: ${note.tags.join(', ') || 'none'}\n\n${content}`
   }
-  if (entity.type === 'paper' || (entity as { type?: string }).type === 'literature') {
+  if (entity.type === 'paper') {
     const lit = entity as Literature
     return `Title: ${lit.title}\nAuthors: ${lit.authors.join(', ')}\nYear: ${lit.year || 'unknown'}\nCiteKey: ${lit.citeKey}\n\n${lit.abstract}`
   }
@@ -206,8 +206,9 @@ function formatEntityContent(entity: Entity, projectPath?: string): string {
     // Include a content preview so the LLM sees actual file data, not just metadata
     let preview = ''
     try {
-      if (existsSync(data.filePath)) {
-        const buf = readFileSync(data.filePath)
+      const dataPath = projectPath ? resolve(projectPath, data.filePath) : data.filePath
+      if (existsSync(dataPath)) {
+        const buf = readFileSync(dataPath)
         const text = buf.slice(0, MAX_CONTENT_BYTES).toString('utf-8')
         const truncated = buf.length > MAX_CONTENT_BYTES ? '\n...(truncated)' : ''
         preview = `\n\n--- File Content Preview ---\n${text}${truncated}`
@@ -215,7 +216,7 @@ function formatEntityContent(entity: Entity, projectPath?: string): string {
     } catch {
       // skip if unreadable
     }
-    return `Name: ${data.title || data.name || data.id}\nFile path (for analysis tools): ${data.filePath}${schema}\n\nNOTE: This is a data entity. The actual data is in the file at the path above. Use that path to read/analyze the data.${preview}`
+    return `Name: ${data.title || data.id}\nFile path (for analysis tools): ${data.filePath}${schema}\n\nNOTE: This is a data entity. The actual data is in the file at the path above. Use that path to read/analyze the data.${preview}`
   }
   return JSON.stringify(entity, null, 2)
 }

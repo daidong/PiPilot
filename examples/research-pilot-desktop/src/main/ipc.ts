@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, ipcMain, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, sep, isAbsolute } from 'path'
 import { createCoordinator } from '@research-pilot/agents/coordinator'
@@ -10,12 +10,10 @@ import {
   sessionSummaryGet,
   enrichPaperArtifacts
 } from '@research-pilot/commands/index'
-import { savePaper, parseSavePaperArgs } from '@research-pilot/commands/save-paper'
-import { saveData, parseSaveDataArgs } from '@research-pilot/commands/save-data'
 import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/mentions/index'
 import { setCachedMarkdown } from '@research-pilot/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@research-pilot/types'
-import { ensureAgentMd } from '@research-pilot/memory-v2/store'
+import { ensureAgentMd, migrateLegacyArtifacts } from '@research-pilot/memory-v2/store'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
 import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
@@ -28,16 +26,25 @@ function getFileName(path: string): string {
 
 function resolveDesktopCommunitySkillsDir(): string | undefined {
   const envOverride = (process.env.AGENT_FOUNDRY_COMMUNITY_SKILLS_DIR || '').trim()
+  const appPath = app.getAppPath()
   const resourcesPath = process.resourcesPath
   const candidates = [
     envOverride,
+    join(appPath, 'skills', 'community-builtin'),
+    join(appPath, 'out', 'skills', 'community-builtin'),
+    join(appPath, 'out', 'main', 'skills', 'community-builtin'),
     resourcesPath ? join(resourcesPath, 'skills', 'community-builtin') : '',
     resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'skills', 'community-builtin') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'skills', 'community-builtin') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'main', 'skills', 'community-builtin') : '',
+    resolve(process.cwd(), 'out', 'skills', 'community-builtin'),
+    resolve(process.cwd(), 'out', 'main', 'skills', 'community-builtin'),
+    resolve(process.cwd(), 'examples', 'research-pilot-desktop', 'out', 'skills', 'community-builtin'),
     resolve(process.cwd(), 'src', 'skills', 'community-builtin'),
     resolve(process.cwd(), 'dist', 'skills', 'community-builtin')
   ].filter(Boolean)
 
-  return candidates.find(candidate => existsSync(candidate))
+  return [...new Set(candidates)].find(candidate => existsSync(candidate))
 }
 
 interface FileTreeNode {
@@ -518,6 +525,10 @@ function initializeProject(path: string): void {
 
   // Ensure agent.md note exists (pinned, always-present)
   ensureAgentMd(path)
+  const migration = migrateLegacyArtifacts(path)
+  if (migration.updatedFiles > 0) {
+    console.log(`[ResearchPilot] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
+  }
 
   // Keep process cwd stable; each window passes explicit projectPath.
 }
@@ -850,18 +861,6 @@ export function registerIpcHandlers(): void {
     return sessionSummaryGet(state.projectPath, state.sessionId)
   })
 
-  // Commands - save
-  handleWindow('cmd:save-paper', ({ state }, argsStr: string) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const args = parseSavePaperArgs(argsStr)
-    return savePaper(args.title, args, { sessionId: state.sessionId, projectPath: state.projectPath })
-  })
-  handleWindow('cmd:save-data', ({ state }, argsStr: string) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const args = parseSaveDataArgs(argsStr)
-    return saveData(args.name, args, { sessionId: state.sessionId, projectPath: state.projectPath })
-  })
-
   // Commands - enrich all papers
   handleWindow('cmd:enrich-papers', async ({ win, state }, paperIds?: string[]) => {
     if (!state.projectPath) return { success: false, enriched: 0, skipped: 0, failed: 0 }
@@ -1146,16 +1145,43 @@ export function registerIpcHandlers(): void {
       const destPath = join(dataDir, fileName)
       writeFileSync(destPath, content, 'utf-8')
 
-      const name = fileName.replace(/\.\w+$/, '')
       const ext = fileName.split('.').pop()?.toLowerCase() || ''
       const mimeMap: Record<string, string> = { csv: 'text/csv', tsv: 'text/tab-separated-values', json: 'application/json' }
-      return saveData(name, { filePath: destPath, mimeType: mimeMap[ext] }, { sessionId: state.sessionId, projectPath: state.projectPath })
+      return artifactCreate(
+        {
+          type: 'data',
+          title: fileName.replace(/\.\w+$/, ''),
+          filePath: destPath,
+          mimeType: mimeMap[ext],
+          provenance: {
+            source: 'user',
+            extractedFrom: 'file-import'
+          }
+        },
+        { sessionId: state.sessionId, projectPath: state.projectPath, lastAgentResponse: '' }
+      )
     }
 
     if (tab === 'papers') {
       // Save as a literature reference with content as abstract
       const title = fileName.replace(/\.\w+$/, '')
-      return savePaper(title, { authors: [], abstract: content }, { sessionId: state.sessionId, projectPath: state.projectPath })
+      const stamp = Date.now()
+      return artifactCreate(
+        {
+          type: 'paper',
+          title,
+          authors: ['Unknown'],
+          abstract: content,
+          citeKey: `unknown${stamp}`,
+          doi: `unknown:${title.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'paper'}`,
+          bibtex: `@article{unknown${stamp},\n  title = {${title}}\n}`,
+          provenance: {
+            source: 'user',
+            extractedFrom: 'file-import'
+          }
+        },
+        { sessionId: state.sessionId, projectPath: state.projectPath, lastAgentResponse: '' }
+      )
     }
 
     return { success: false, error: `Unknown tab: ${tab}` }

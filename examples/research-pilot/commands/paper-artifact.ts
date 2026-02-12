@@ -1,13 +1,8 @@
-/**
- * Legacy compatibility wrapper for paper creation.
- * RFC-012 canonical API is artifact.create(type=paper).
- */
-
 import { type CLIContext, type Literature } from '../types.js'
 import { findExistingPaperArtifact } from '../memory-v2/store.js'
 import { artifactCreate, artifactUpdate } from './artifact.js'
 
-export interface SavePaperResult {
+export interface UpsertPaperResult {
   success: boolean
   paper?: Literature
   filePath?: string
@@ -41,7 +36,7 @@ function buildFallbackBibtex(params: {
   ].join('\n')
 }
 
-export function savePaper(
+export function upsertPaperArtifact(
   title: string,
   opts: {
     authors?: string[]
@@ -60,7 +55,7 @@ export function savePaper(
     pdfUrl?: string
   },
   context: CLIContext
-): SavePaperResult {
+): UpsertPaperResult {
   if (!title) return { success: false, error: 'Paper title is required.' }
 
   const authors = opts.authors && opts.authors.length > 0 ? opts.authors : ['Unknown']
@@ -160,7 +155,7 @@ export function updatePaperMetadata(
     enrichedAt?: string
   },
   context: CLIContext
-): SavePaperResult {
+): UpsertPaperResult {
   const update: Record<string, unknown> = {}
 
   if ((!existing.abstract || existing.abstract === '') && enriched.abstract) update.abstract = enriched.abstract
@@ -190,41 +185,5 @@ export function updatePaperMetadata(
     success: true,
     paper: updated.artifact,
     filePath: updated.filePath
-  }
-}
-
-export function parseSavePaperArgs(raw: string): {
-  title: string
-  authors?: string[]
-  year?: number
-  abstract?: string
-  venue?: string
-  url?: string
-  citeKey?: string
-  tags?: string[]
-} {
-  const flagPattern = /--(\w+)\s+"([^"]+)"|--(\w+)\s+(\S+)/g
-  const flags: Record<string, string> = {}
-  let cleaned = raw
-
-  let match: RegExpExecArray | null
-  while ((match = flagPattern.exec(raw)) !== null) {
-    const key = match[1] || match[3]
-    const value = match[2] || match[4]
-    flags[key] = value
-    cleaned = cleaned.replace(match[0], '')
-  }
-
-  const title = cleaned.trim()
-
-  return {
-    title,
-    authors: flags.authors?.split(',').map(a => a.trim()),
-    year: flags.year ? parseInt(flags.year, 10) : undefined,
-    abstract: flags.abstract,
-    venue: flags.venue,
-    url: flags.url,
-    citeKey: flags.citekey,
-    tags: flags.tags?.split(',').map(t => t.trim())
   }
 }

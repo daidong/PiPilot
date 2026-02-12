@@ -37,7 +37,7 @@ import { loadPrompt } from './prompts/index.js'
 
 import { searchLocalPapers, findExistingPaper, scanLocalLibrary } from './local-paper-lookup.js'
 import { getBibtex, type PaperMetadata } from './bibtex-utils.js'
-import { savePaper, updatePaperMetadata } from '../commands/save-paper.js'
+import { upsertPaperArtifact, updatePaperMetadata } from '../commands/paper-artifact.js'
 import { RateLimiter, CircuitBreaker, DEFAULT_SEARCHER_CONFIG } from './rate-limiter.js'
 import { enrichPapers, createEnrichmentConfig, type PaperInput } from './metadata-enrichment.js'
 import type {
@@ -1061,7 +1061,7 @@ export function createLiteratureTeam(config: {
               console.log(`  [Auto-save] BibTeX generation failed for "${paper.title.slice(0, 40)}...": ${err instanceof Error ? err.message : String(err)}`)
             }
 
-            const saveResult = savePaper(
+            const saveResult = upsertPaperArtifact(
               paper.title,
               {
                 authors: paper.authors,

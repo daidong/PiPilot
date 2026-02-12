@@ -9,8 +9,8 @@ import { CommandPopover } from './CommandPopover'
 
 const SLASH_COMMANDS = [
   { name: '/note', description: 'Create a note artifact', args: '<title>' },
-  { name: '/save-paper', description: 'Save a literature entry', args: '<title> [--authors ...]' },
-  { name: '/save-data', description: 'Attach a data file', args: '<name> --path <file>' },
+  { name: '/save-paper', description: 'Create a paper artifact', args: '<title> [--authors ...]' },
+  { name: '/save-data', description: 'Create a data artifact', args: '<name> --path <file>' },
   { name: '/notes', description: 'List all notes' },
   { name: '/papers', description: 'List all literature' },
   { name: '/data', description: 'List all data attachments' },
@@ -21,6 +21,20 @@ const SLASH_COMMANDS = [
 ]
 
 const api = (window as any).api
+
+function parseFlagArgs(raw: string): { cleaned: string; flags: Record<string, string> } {
+  const flagPattern = /--(\w+)\s+"([^"]+)"|--(\w+)\s+(\S+)/g
+  const flags: Record<string, string> = {}
+  let cleaned = raw
+  let match: RegExpExecArray | null
+  while ((match = flagPattern.exec(raw)) !== null) {
+    const key = match[1] || match[3]
+    const value = match[2] || match[4]
+    flags[key] = value
+    cleaned = cleaned.replace(match[0], '')
+  }
+  return { cleaned: cleaned.trim(), flags }
+}
 
 export function ChatInput() {
   const [text, setText] = useState('')
@@ -108,18 +122,47 @@ export function ChatInput() {
         }
         case '/save-paper': {
           if (!rest) { result = 'Usage: `/save-paper <title> [--authors ...]`'; break }
-          const r = await api.savePaper(rest)
+          const { cleaned, flags } = parseFlagArgs(rest)
+          if (!cleaned) { result = 'Usage: `/save-paper <title> [--authors ...]`'; break }
+          const authors = flags.authors
+            ? flags.authors.split(',').map((a) => a.trim()).filter(Boolean)
+            : ['Unknown']
+          const parsedYear = flags.year ? parseInt(flags.year, 10) : NaN
+          const year = Number.isFinite(parsedYear) ? parsedYear : undefined
+          const citeKey = flags.citekey || flags.citeKey || `${authors[0]?.split(/\s+/).pop()?.toLowerCase() || 'unknown'}${year ?? 'nd'}`
+          const doi = flags.doi || `unknown:${citeKey}`
+          const bibtex = flags.bibtex || `@article{${citeKey},\n  title = {${cleaned}}\n}`
+          const r = await api.artifactCreate({
+            type: 'paper',
+            title: cleaned,
+            authors,
+            year,
+            abstract: flags.abstract || '',
+            venue: flags.venue,
+            url: flags.url,
+            citeKey,
+            doi,
+            bibtex,
+            tags: flags.tags ? flags.tags.split(',').map((t) => t.trim()).filter(Boolean) : []
+          })
           result = r?.success
-            ? `Paper saved: **${r?.paper?.title || rest}**`
+            ? `Paper saved: **${cleaned}**`
             : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
           break
         }
         case '/save-data': {
           if (!rest) { result = 'Usage: `/save-data <name> --path <file>`'; break }
-          const r = await api.saveData(rest)
+          const { cleaned, flags } = parseFlagArgs(rest)
+          if (!cleaned || !flags.path) { result = 'Usage: `/save-data <name> --path <file>`'; break }
+          const r = await api.artifactCreate({
+            type: 'data',
+            title: cleaned,
+            filePath: flags.path,
+            mimeType: flags.mime
+          })
           result = r?.success
-            ? `Data saved: **${r?.data?.title || rest}**`
+            ? `Data saved: **${cleaned}**`
             : `Failed: ${r?.error || 'unknown error'}`
           refreshEntities()
           break

@@ -1,6 +1,6 @@
 import { listArtifacts } from '../memory-v2/store.js'
 import type { CLIContext, PaperArtifact } from '../types.js'
-import { updatePaperMetadata } from './save-paper.js'
+import { updatePaperMetadata } from './paper-artifact.js'
 import { RateLimiter, CircuitBreaker, DEFAULT_SEARCHER_CONFIG } from '../agents/rate-limiter.js'
 import { enrichPapers, createEnrichmentConfig, countCoreFields, type PaperInput } from '../agents/metadata-enrichment.js'
 

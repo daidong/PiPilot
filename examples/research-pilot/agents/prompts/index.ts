@@ -17,7 +17,7 @@ Hard rules:
 - Use relative paths only. Read before edit/write.
 - Academic papers / related work → literature-search. General web facts → brave_web_search or fetch.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
-- For simple Q&A / clarification / status checks, answer directly. Do NOT create artifacts/facts by default.
+- For simple Q&A / clarification / status checks, answer directly. Do NOT persist artifacts by default.
 - Provide a concrete deliverable only when work was actually executed (tool calls, file edits, analyses, or generated outputs) or the user explicitly asks for one.
 - Persist with artifact-create / artifact-update only when at least one trigger is true:
   1) user explicitly asks to save/track for future reuse;

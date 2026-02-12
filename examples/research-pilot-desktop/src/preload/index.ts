@@ -37,8 +37,6 @@ export interface ElectronAPI {
   listData: () => Promise<any>
   search: (query: string) => Promise<any>
   deleteEntity: (id: string) => Promise<any>
-  savePaper: (argsStr: string) => Promise<any>
-  saveData: (argsStr: string) => Promise<any>
   artifactCreate: (input: Record<string, unknown>) => Promise<any>
   artifactUpdate: (id: string, patch: Record<string, unknown>) => Promise<any>
   artifactGet: (id: string) => Promise<any>
@@ -156,8 +154,6 @@ const api: ElectronAPI = {
   listData: () => ipcRenderer.invoke('cmd:list-data'),
   search: (query) => ipcRenderer.invoke('cmd:search', query),
   deleteEntity: (id) => ipcRenderer.invoke('cmd:delete', id),
-  savePaper: (argsStr) => ipcRenderer.invoke('cmd:save-paper', argsStr),
-  saveData: (argsStr) => ipcRenderer.invoke('cmd:save-data', argsStr),
   artifactCreate: (input) => ipcRenderer.invoke('cmd:artifact-create', input),
   artifactUpdate: (id, patch) => ipcRenderer.invoke('cmd:artifact-update', id, patch),
   artifactGet: (id) => ipcRenderer.invoke('cmd:artifact-get', id),

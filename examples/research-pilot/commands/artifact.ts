@@ -1,3 +1,5 @@
+import { existsSync } from 'fs'
+import { isAbsolute, resolve } from 'path'
 import { type Artifact, type ArtifactType, type CLIContext, AGENT_MD_ID, AGENT_MD_MAX_CHARS } from '../types.js'
 import {
   createArtifact,
@@ -40,6 +42,13 @@ export interface ArtifactSearchResult {
 
 export function artifactCreate(input: CreateArtifactInput, context: CLIContext): ArtifactCreateResult {
   try {
+    if (input.type === 'data') {
+      const filePath = input.filePath
+      const resolved = isAbsolute(filePath) ? filePath : resolve(context.projectPath, filePath)
+      if (!existsSync(resolved)) {
+        return { success: false, error: `File not found: ${filePath}` }
+      }
+    }
     const { artifact, filePath } = createArtifact(input, context)
     return { success: true, artifact, filePath }
   } catch (error) {

@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import type { CLIContext } from '../../../examples/research-pilot/types.js'
-import { savePaper } from '../../../examples/research-pilot/commands/save-paper.js'
+import { upsertPaperArtifact } from '../../../examples/research-pilot/commands/paper-artifact.js'
 import { enrichPaperArtifacts } from '../../../examples/research-pilot/commands/paper-enrichment.js'
 
 describe('paper enrichment command', () => {
@@ -38,7 +38,7 @@ describe('paper enrichment command', () => {
   })
 
   it('skips already complete papers without making enrichment calls', async () => {
-    const saved = savePaper('Complete Metadata Paper', {
+    const saved = upsertPaperArtifact('Complete Metadata Paper', {
       authors: ['Alice Example'],
       year: 2024,
       abstract: 'Ready',

@@ -26,10 +26,6 @@ export {
   memoryExplainTurn,
   sessionSummaryGet,
   enrichPaperArtifacts,
-
-  // Compatibility exports
-  savePaper, parseSavePaperArgs,
-  saveData, parseSaveDataArgs,
   deleteEntity,
   listAllArtifacts, listNotes, listLiterature, listData,
   searchEntities,
@@ -49,8 +45,6 @@ export type {
   LiteratureListItem,
   DataListItem,
   SearchResult,
-  SavePaperResult,
-  SaveDataResult,
   DeleteResult
 } from './commands/index.js'
 

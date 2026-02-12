@@ -16,7 +16,7 @@ import { PythonBridge } from '../../../src/python/bridge.js'
 import { executionFailureFeedback, formatFeedbackAsToolResult } from '../../../src/core/feedback.js'
 import { createPythonError } from '../../../src/core/errors.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG } from '../../../src/core/retry.js'
-import { saveData } from '../commands/save-data.js'
+import { artifactCreate } from '../commands/artifact.js'
 import { loadPrompt } from './prompts/index.js'
 import type { CLIContext, ColumnSchemaDetailed, ResultsManifest } from '../types.js'
 
@@ -592,21 +592,26 @@ ${code}`
           // Find matching manifest entry for metadata
           const manifestEntry = manifest?.outputs.find(o => basename(o.path) === output.name)
 
-          saveData(
-            output.title || output.name,
-            {
-              filePath: output.path,
-              mimeType: mimeMap[ext] || 'application/octet-stream',
-              tags: [
-                taskType,
-                'auto-generated',
-                ...(manifestEntry?.tags || [])
-              ],
-              runId,
-              runLabel
-            },
-            cliContext
-          )
+          artifactCreate({
+            type: 'data',
+            title: output.title || output.name,
+            filePath: output.path,
+            mimeType: mimeMap[ext] || 'application/octet-stream',
+            tags: [
+              taskType,
+              'auto-generated',
+              ...(manifestEntry?.tags || [])
+            ],
+            runId,
+            runLabel,
+            summary: manifestEntry?.description,
+            provenance: {
+              source: 'agent',
+              sessionId: cliContext.sessionId,
+              agentId: 'data-team',
+              extractedFrom: 'tool-output'
+            }
+          }, cliContext)
         }
 
         return {
