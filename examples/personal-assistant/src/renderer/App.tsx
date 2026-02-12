@@ -56,7 +56,6 @@ export default function App() {
   const initSession = useSessionStore((s) => s.init)
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
-  const setRuntimeFocus = useEntityStore((s) => s.setRuntimeFocus)
   const rightCollapsed = useUIStore((s) => s.rightSidebarCollapsed)
   const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
   const previewEntity = useUIStore((s) => s.previewEntity)
@@ -138,8 +137,6 @@ export default function App() {
     const unsub2 = api.onAgentDone((result: any) => {
       finalize(result)
       refreshEntities().catch(() => {})
-
-      setRuntimeFocus([])
 
       // Extract file paths from agent response and add to working files
       // Matches both absolute (/foo/bar.txt) and relative (docs/bar.txt) paths

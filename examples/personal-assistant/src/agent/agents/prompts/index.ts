@@ -14,9 +14,9 @@ const prompts: Record<string, string> = {
 Hard rules:
 - Never fabricate file contents, tool results, or external facts.
 - Use relative paths only. Read before edit/write.
-- For simple Q&A / clarification / status checks, answer directly. Do NOT create artifacts/facts by default.
+- For simple Q&A / clarification / status checks, answer directly. Do NOT create artifacts by default.
 - Provide a concrete deliverable only when work was actually executed (tool calls, file edits, analyses, or generated outputs) or the user explicitly asks for one.
-- Persist with artifact-create / artifact-update / fact-promote only when at least one trigger is true:
+- Persist with artifact-create / artifact-update only when at least one trigger is true:
   1) user explicitly asks to save/track for future reuse;
   2) you changed files and need a traceable record;
   3) you produced reusable analysis/results files;
@@ -26,7 +26,9 @@ Hard rules:
 - User-facing tasks go to the Todos tab via artifact-create({ type: "todo", ... }) and completion updates via artifact-update({ status: "completed" }). Use todo-add/update/complete/remove only for agent-internal progress tracking.
 
 Memory model:
-- Artifact = source of truth. Fact = durable memory. Focus = session attention. Task Anchor = progress continuity.`,
+- Artifact = source of truth.
+- Session summaries provide cross-turn continuity.
+- agent.md contains pinned user instructions that are always injected.`,
 
 
 // ---------------------------------------------------------------------------
@@ -42,14 +44,6 @@ Memory model:
 - Use convert_to_markdown to extract text from PDF/Word/Excel.
 - Use read with offset/limit for large extractions.
 - Save docs with artifact-create({ type: "doc", ... }) only when user requests persistence or reuse is likely.`,
-
-'coordinator-module-memory': `## Memory Module
-Use canonical Memory V2 tools only:
-- Durable memory: fact-promote / fact-demote
-- Session attention: focus-add / focus-remove / focus-list / focus-prune
-- Progress continuity: task-anchor-set / task-anchor-update / task-anchor-get
-- Debugging: memory-explain(mode=turn|fact|budget)
-Avoid legacy direct writes to ad-hoc memory markdown files.`,
 
 'coordinator-module-scheduler': `## Scheduled Tasks Module
 Schedules live in .personal-assistant-v2/scheduled-tasks.json as JSON array.

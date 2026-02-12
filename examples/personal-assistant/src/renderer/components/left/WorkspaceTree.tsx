@@ -7,7 +7,6 @@ import {
   RefreshCw,
   Search,
   Eye,
-  Link,
   Plus,
   Loader2,
   Trash2
@@ -229,11 +228,6 @@ export function WorkspaceTree() {
       updatedAt: new Date().toISOString()
     })
   }, [docs, openPreview])
-
-  const addFocus = useCallback(async (node: FileTreeNode) => {
-    await api.addFocusFromFile(node.path, 'added from workspace tree', '2h')
-    await refreshEntities()
-  }, [refreshEntities])
 
   const createArtifact = useCallback(async (node: FileTreeNode) => {
     await api.createArtifactFromFile(node.path)
@@ -466,13 +460,6 @@ export function WorkspaceTree() {
               >
                 <Plus size={11} />
               </button>
-              <button
-                className="p-0.5 rounded hover:t-bg-hover"
-                title="Add to focus"
-                onClick={() => addFocus(node)}
-              >
-                <Link size={11} />
-              </button>
             </>
           )}
           <button
@@ -489,7 +476,7 @@ export function WorkspaceTree() {
         </div>
       </div>
     )
-  }, [expanded, activePath, dropTargetPath, confirmTrashPath, openFile, toggleExpand, createArtifact, addFocus, handleTrashClick, handleRowDragOver, handleRowDragLeave, handleRowDrop])
+  }, [expanded, activePath, dropTargetPath, confirmTrashPath, openFile, toggleExpand, createArtifact, handleTrashClick, handleRowDragOver, handleRowDragLeave, handleRowDrop])
 
   return (
     <section className="h-full flex flex-col border-t t-border">

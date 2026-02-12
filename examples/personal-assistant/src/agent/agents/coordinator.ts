@@ -1,11 +1,10 @@
 /**
- * Coordinator Agent (Personal Assistant Memory V2 - RFC-013)
+ * Coordinator Agent (Personal Assistant Memory Minimal Core)
  *
  * Key behavior:
- * - Canonical memory surface: Artifact / Fact / Focus / Task Anchor
- * - Focus is session-scoped with TTL + turn-boundary expiry
- * - Durable fact writes route through runtime.memoryStorage (Kernel V2 write gate)
- * - Context is assembled by Kernel V2; focus digest is injected as selected context
+ * - Canonical durable memory surface: Artifact
+ * - Cross-turn continuity via Session Summary snapshots
+ * - Context assembly uses mention selections + latest session summary
  */
 
 import os from 'os'
@@ -13,27 +12,25 @@ import { basename, join } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { createAgent, packs, definePack, defineTool } from '@framework/index.js'
 import { createLLMClientFromModelId, getModel } from '@framework/llm/index.js'
-import { createPersonalMemoryTools, type MemoryExplainProvider } from '../tools/entity-tools.js'
+import { createPersonalMemoryTools } from '../tools/entity-tools.js'
 import { createCalendarTool } from '../tools/calendar-tool.js'
 import { createGmailTool } from '../tools/gmail-tool.js'
 import { noGmailDelete } from '../policies/no-gmail-delete.js'
+import { PERSONAL_ASSISTANT_KERNEL_V2_CONFIG } from '../config/kernel-v2.js'
 import type { Agent } from '@framework/types/agent.js'
 import type { Policy } from '@framework/types/policy.js'
 import type { ContextSelection } from '@framework/types/context-pipeline.js'
-import type { MemoryStorage } from '@framework/types/memory.js'
 import type { Tool } from '@framework/types/tool.js'
 import { countTokens } from '@framework/utils/tokenizer.js'
 import { loadPrompt } from './prompts/index.js'
 import { personalAssistantSkills } from '../../skills/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
-import { PATHS, type Artifact, type FocusEntry } from '../types.js'
+import { AGENT_MD_ID, PATHS, type NoteArtifact, type SessionSummary } from '../types.js'
 import {
-  addFocusEntry,
   createArtifact,
   findArtifactById,
-  listFocusEntries,
-  pruneExpiredFocusAtTurnBoundary,
-  readTaskAnchor
+  readLatestSessionSummary,
+  writeSessionSummary
 } from '../memory-v2/store.js'
 
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
@@ -53,7 +50,6 @@ const INTENT_PRIORITY: IntentLabel[] = [
 
 const INTENT_PROMPT_MODULES: Partial<Record<IntentLabel, string>> = {
   docs: 'coordinator-module-docs',
-  memory: 'coordinator-module-memory',
   scheduler: 'coordinator-module-scheduler'
 }
 
@@ -72,25 +68,18 @@ interface TurnExplainSnapshot {
   timestamp: string
   sessionId: string
   intents: string[]
-  focus: {
-    active: number
-    used: Array<{ refType: string; refId: string; score: number; reason: string }>
-    prunedAtTurnBoundary: number
-  }
   selectedContext: {
     mentionSelections: number
-    focusDigestIncluded: boolean
     approxTokens: number
   }
   persistence: {
     decision: PersistenceDecision
     reason: string
   }
-  taskAnchor: {
-    currentGoal: string
-    nowDoing: string
-    blockedBy: string[]
-    nextAction: string
+  sessionSummary: {
+    included: boolean
+    turnRange?: [number, number]
+    approxTokens: number
   }
   budget: {
     model: string
@@ -166,11 +155,7 @@ function describeToolReturn(name: string): string {
   if (name.startsWith('brave_')) return 'ranked results'
   if (name.startsWith('sqlite_')) return 'JSON text'
   if (name.startsWith('todo-')) return 'todo item'
-  if (name.startsWith('memory-')) return 'memory item'
   if (name.startsWith('artifact-')) return 'artifact result'
-  if (name.startsWith('focus-')) return 'focus result'
-  if (name.startsWith('task-anchor-')) return 'task anchor result'
-  if (name === 'memory-explain') return 'explain snapshot'
   if (name === 'calendar') return 'events text'
   if (name === 'gmail') return 'gmail action result'
   if (name === 'ctx-get') return 'rendered context'
@@ -273,18 +258,11 @@ function buildAdditionalInstructions(
   return modules.length > 1 ? modules.join('\n\n') : undefined
 }
 
-function getMentionArtifactIds(mentions?: ResolvedMention[]): string[] {
-  if (!mentions) return []
-  return mentions
-    .filter(m => !m.error && (m.ref.type === 'note' || m.ref.type === 'doc') && !!m.entityId)
-    .map(m => m.entityId!)
-}
-
 function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[] {
   if (!mentions) return []
 
   return mentions
-    .filter(m => !m.error && (m.ref.type === 'file' || m.ref.type === 'url'))
+    .filter(m => !m.error)
     .map(m => ({
       type: 'custom' as const,
       ref: m.ref.raw,
@@ -299,94 +277,28 @@ function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[
     }))
 }
 
-function shortArtifactBlock(artifact: Artifact): string {
-  if (artifact.type === 'note') {
-    return `- [note] ${artifact.title}: ${(artifact.summary ?? artifact.content).slice(0, 220)}`
-  }
-  if (artifact.type === 'todo') {
-    return `- [todo:${artifact.status}] ${artifact.title}: ${(artifact.summary ?? artifact.content).slice(0, 220)}`
-  }
-  if (artifact.type === 'doc') {
-    return `- [doc] ${artifact.title} | path=${artifact.filePath} | ${(artifact.summary ?? artifact.description ?? '').slice(0, 180)}`
-  }
-  if (artifact.type === 'email-message') {
-    return `- [mail] ${artifact.subject ?? artifact.title} | from=${artifact.from ?? 'unknown'} | ${(artifact.summary ?? artifact.snippet ?? '').slice(0, 220)}`
-  }
-  if (artifact.type === 'email-thread') {
-    return `- [thread] ${artifact.latestSubject ?? artifact.title} | unread=${artifact.unreadCount ?? 0} | ${(artifact.summary ?? artifact.latestSnippet ?? '').slice(0, 220)}`
-  }
-  if (artifact.type === 'calendar-event') {
-    return `- [calendar] ${artifact.title} | ${artifact.startAt ?? '-'} | ${(artifact.location ?? '').slice(0, 160)}`
-  }
-  if (artifact.type === 'scheduler-run') {
-    return `- [scheduler:${artifact.status}] ${artifact.title} | ${(artifact.summary ?? artifact.output ?? artifact.error ?? '').slice(0, 220)}`
-  }
-  return `- [tool-output] ${artifact.title} | ${artifact.toolName} | ${(artifact.summary ?? artifact.outputText ?? '').slice(0, 220)}`
-}
-
-async function buildFocusDigestSelection(
-  sessionId: string,
-  projectPath: string,
-  memoryStorage: MemoryStorage | undefined
-): Promise<{ selection?: ContextSelection; entriesUsed: FocusEntry[]; approxTokens: number }> {
-  const focusEntries = listFocusEntries(projectPath, sessionId)
-  if (focusEntries.length === 0) {
-    return { entriesUsed: [], approxTokens: 0 }
-  }
-
-  const used = focusEntries.slice(0, 12)
-  const lines: string[] = ['## Focus Digest']
-
-  for (const entry of used) {
-    const prefix = `[score=${entry.score.toFixed(2)} source=${entry.source} ttl=${entry.ttl}]`
-
-    if (entry.refType === 'artifact') {
-      const found = findArtifactById(projectPath, entry.refId)
-      if (found) {
-        lines.push(`${prefix} reason=${entry.reason}`)
-        lines.push(shortArtifactBlock(found.artifact))
-      }
-      continue
-    }
-
-    if (entry.refType === 'fact') {
-      if (memoryStorage && entry.refId.includes(':')) {
-        const [namespace, key] = entry.refId.split(':', 2)
-        if (namespace && key) {
-          const fact = await memoryStorage.get(namespace, key)
-          if (fact) {
-            lines.push(`${prefix} reason=${entry.reason}`)
-            lines.push(`- [fact] ${namespace}:${key} -> ${fact.valueText ?? JSON.stringify(fact.value).slice(0, 220)}`)
-          }
-        }
-      }
-      continue
-    }
-
-    if (entry.refType === 'task') {
-      const anchor = readTaskAnchor(projectPath)
-      lines.push(`${prefix} reason=${entry.reason}`)
-      lines.push(`- [task] Goal=${anchor.currentGoal}; Doing=${anchor.nowDoing}; Next=${anchor.nextAction}`)
-    }
-  }
-
+function buildSessionSummarySelection(summary: SessionSummary): ContextSelection {
+  const lines = [
+    '## Session Summary',
+    `Turns ${summary.turnRange[0]}-${summary.turnRange[1]}:`,
+    summary.summary,
+    '',
+    `Topics: ${summary.topicsDiscussed.join(', ')}`,
+    ...(summary.openQuestions.length > 0
+      ? ['Open questions:', ...summary.openQuestions.map(q => `- ${q}`)]
+      : [])
+  ]
   const content = lines.join('\n')
   const tokens = countTokens(content)
 
-  const selection: ContextSelection = {
+  return {
     type: 'custom',
-    ref: 'focus:digest',
+    ref: 'session:summary',
     resolve: async () => ({
-      source: 'focus:digest',
+      source: 'session:summary',
       content,
       tokens
     })
-  }
-
-  return {
-    selection,
-    entriesUsed: used,
-    approxTokens: tokens
   }
 }
 
@@ -494,13 +406,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   const emailDbPath = config.emailDbPath?.replace(/^~(?=\/|$)/, os.homedir())
 
-  let lastTurnExplain: TurnExplainSnapshot | null = null
-  let lastBudgetExplain: TurnExplainSnapshot['budget'] | null = null
-
-  const explainProvider: MemoryExplainProvider = {
-    getTurnExplain: () => lastTurnExplain,
-    getBudgetExplain: () => lastBudgetExplain
-  }
+  let turnCount = 0
+  let activeTurnToolCallCount: number | null = null
+  const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
 
   const userTodoPolicy: Policy = {
     id: 'deny-internal-todo-for-user',
@@ -525,10 +433,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     }
   }
 
+  const wrappedOnToolResult = (tool: string, result: unknown, args?: unknown) => {
+    if (activeTurnToolCallCount !== null) {
+      activeTurnToolCallCount++
+    }
+    onToolResult?.(tool, result, args)
+  }
+
   const memoryTools = createPersonalMemoryTools({
     sessionId,
-    projectPath,
-    explainProvider
+    projectPath
   })
 
   const documentsPack = await packs.documents({ timeout: 90000 })
@@ -550,7 +464,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       }
 
       const fileName = (input as { path: string }).path
-      const absPath = join(process.cwd(), fileName)
+      const absPath = join(projectPath, fileName)
       if (!existsSync(absPath)) {
         return { success: false, error: `File not found: ${fileName}` }
       }
@@ -566,7 +480,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       }
 
       const outputName = basename(fileName, '.pdf') + '.extracted.md'
-      const outputPath = join(process.cwd(), outputName)
+      const outputPath = join(projectPath, outputName)
       writeFileSync(outputPath, text, 'utf-8')
 
       const allLines = text.split('\n')
@@ -617,8 +531,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   const memoryPack = definePack({
     id: 'personal-memory-v2',
-    name: 'Personal Memory V2 Tools',
-    description: 'Artifact/Focus/TaskAnchor/Explain tool surface',
+    description: 'Artifact memory surface for Personal Assistant',
     tools: memoryTools
   })
 
@@ -685,7 +598,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
     onToolResult: (tool: string, result: unknown, args?: unknown) => {
       persistToolArtifacts({ projectPath, sessionId, tool, args, result })
-      onToolResult?.(tool, result, args)
+      wrappedOnToolResult(tool, result, args)
     },
     sessionId,
     debug,
@@ -705,10 +618,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     maxConsecutiveToolRounds: 20,
     maxSteps: 100,
     onUsage,
-    kernelV2: {
-      enabled: true,
-      profile: 'legacy'
-    }
+    kernelV2: PERSONAL_ASSISTANT_KERNEL_V2_CONFIG
   })
 
   await agent.ensureInit()
@@ -728,33 +638,76 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   await clearSessionMemory()
 
+  async function maybeGenerateSummary(): Promise<void> {
+    if (turnHistory.length === 0) return
+
+    const isBaselineTrigger = turnCount % 5 === 0
+    const last3 = turnHistory.slice(-3)
+    const toolCallSum = last3.reduce((sum, t) => sum + t.toolCallCount, 0)
+    const isHeavyToolUsage = last3.length >= 3 && toolCallSum > 15
+    const responseCharSum = last3.reduce((sum, t) => sum + t.response.length, 0)
+    const isLotsOfContent = last3.length >= 3 && responseCharSum > 8000
+
+    if (!isBaselineTrigger && !isHeavyToolUsage && !isLotsOfContent) return
+    if (!intentRouterClient) return
+
+    const historyText = turnHistory
+      .map((t, i) => `Turn ${turnCount - turnHistory.length + i + 1}: User: ${t.userMessage}\nAssistant: ${t.response}`)
+      .join('\n\n')
+
+    const prompt = [
+      'Summarize this personal assistant conversation excerpt.',
+      'Output JSON: {"summary":"<2-3 sentences>","topicsDiscussed":["topic1","topic2"],"openQuestions":["q1"]}',
+      '',
+      historyText
+    ].join('\n')
+
+    try {
+      const result = await intentRouterClient.generate({
+        system: 'You summarize assistant conversations. Output valid JSON only.',
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 200
+      })
+
+      const text = result.text.trim()
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) return
+
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        summary: string
+        topicsDiscussed: string[]
+        openQuestions: string[]
+      }
+
+      const summary: SessionSummary = {
+        sessionId,
+        turnRange: [Math.max(1, turnCount - turnHistory.length + 1), turnCount],
+        summary: parsed.summary,
+        topicsDiscussed: parsed.topicsDiscussed ?? [],
+        openQuestions: parsed.openQuestions ?? [],
+        createdAt: new Date().toISOString()
+      }
+
+      writeSessionSummary(projectPath, summary)
+
+      if (debug) {
+        console.log(`[Summary] Generated session summary at turn ${turnCount}: ${parsed.summary.slice(0, 80)}...`)
+      }
+    } catch (err) {
+      if (debug) {
+        console.warn('[Summary] Failed to generate session summary:', err)
+      }
+    }
+  }
+
   return {
     agent,
 
     async chat(message: string, mentions?: ResolvedMention[]) {
       try {
-        const memoryStorage = agent.runtime.memoryStorage
-
-        const pruned = pruneExpiredFocusAtTurnBoundary(projectPath, sessionId)
-        if (debug && pruned.expired > 0) {
-          console.log(`[Focus] Pruned ${pruned.expired} expired entries at turn boundary`)
-        }
-
-        const mentionArtifactIds = getMentionArtifactIds(mentions)
-        for (const artifactId of mentionArtifactIds) {
-          addFocusEntry(projectPath, {
-            sessionId,
-            refType: 'artifact',
-            refId: artifactId,
-            reason: 'entity mentioned in current request',
-            score: 0.85,
-            source: 'auto',
-            ttl: '30m'
-          })
-        }
-
         const intents = detectIntentsByRules(message)
-        const hasModuleIntent = ['email', 'calendar', 'docs', 'memory', 'scheduler'].some(i => intents.has(i as IntentLabel))
+        const hasModuleIntent = ['email', 'calendar', 'docs', 'memory', 'scheduler']
+          .some(i => intents.has(i as IntentLabel))
         if (!hasModuleIntent) {
           const label = await classifyIntentWithLLM(intentRouterClient, message)
           if (label !== 'general') intents.add(label)
@@ -762,79 +715,92 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
         preloadSkillsForIntents(intents, agent.runtime.skillManager)
 
-        const additionalInstructions = buildAdditionalInstructions(intents, toolContracts, capabilities)
+        const baseAdditionalInstructions = buildAdditionalInstructions(intents, toolContracts, capabilities)
+
+        const agentMdRecord = findArtifactById(projectPath, AGENT_MD_ID)
+        const agentMdContent = agentMdRecord?.artifact?.type === 'note'
+          ? (agentMdRecord.artifact as NoteArtifact).content
+          : ''
+        const additionalInstructions = agentMdContent
+          ? `## User Instructions (agent.md)\n\n${agentMdContent}\n\n${baseAdditionalInstructions ?? ''}`
+          : baseAdditionalInstructions
+
         const persistence = classifyPersistenceDecision(message)
 
         const mentionSelections = buildMentionSelections(mentions)
-        const focusDigest = await buildFocusDigestSelection(sessionId, projectPath, memoryStorage)
+        const latestSummary = readLatestSessionSummary(projectPath, sessionId)
+        const summarySelection = latestSummary ? buildSessionSummarySelection(latestSummary) : null
+        const summaryTokens = summarySelection
+          ? countTokens(`Session summary (~${latestSummary!.turnRange[0]}-${latestSummary!.turnRange[1]})`)
+          : 0
 
-        const selectedContext: ContextSelection[] = [...mentionSelections]
-        if (focusDigest.selection) {
-          selectedContext.push(focusDigest.selection)
-        }
-
-        const anchor = readTaskAnchor(projectPath)
+        const selectedContext: ContextSelection[] = [
+          ...mentionSelections,
+          ...(summarySelection ? [summarySelection] : [])
+        ]
 
         const explain: TurnExplainSnapshot = {
           timestamp: new Date().toISOString(),
           sessionId,
           intents: Array.from(intents),
-          focus: {
-            active: listFocusEntries(projectPath, sessionId).length,
-            used: focusDigest.entriesUsed.map(entry => ({
-              refType: entry.refType,
-              refId: entry.refId,
-              score: entry.score,
-              reason: entry.reason
-            })),
-            prunedAtTurnBoundary: pruned.expired
-          },
           selectedContext: {
             mentionSelections: mentionSelections.length,
-            focusDigestIncluded: !!focusDigest.selection,
-            approxTokens: focusDigest.approxTokens
+            approxTokens: summaryTokens
           },
           persistence: {
             decision: persistence.decision,
             reason: persistence.reason
           },
-          taskAnchor: {
-            currentGoal: anchor.currentGoal,
-            nowDoing: anchor.nowDoing,
-            blockedBy: anchor.blockedBy,
-            nextAction: anchor.nextAction
+          sessionSummary: {
+            included: !!summarySelection,
+            turnRange: latestSummary?.turnRange,
+            approxTokens: summaryTokens
           },
           budget: {
             model: model ?? 'default'
           }
         }
 
-        lastTurnExplain = explain
-        lastBudgetExplain = explain.budget
-
         if (debug) {
           const intentList = Array.from(intents).join(', ') || 'none'
           console.log(`[Chat] Intents: ${intentList}`)
-          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention selections, focus entries used: ${focusDigest.entriesUsed.length})...`)
+          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention selections, summary=${!!summarySelection})...`)
         }
 
-        const result = await agent.run(message, {
-          ...(selectedContext.length > 0 ? { selectedContext } : {}),
-          ...(additionalInstructions ? { additionalInstructions } : {})
-        })
+        let perTurnToolCallCount = 0
+        activeTurnToolCallCount = 0
+        let result: Awaited<ReturnType<Agent['run']>>
+        try {
+          result = await agent.run(message, {
+            ...(selectedContext.length > 0 ? { selectedContext } : {}),
+            ...(additionalInstructions ? { additionalInstructions } : {})
+          })
+          perTurnToolCallCount = activeTurnToolCallCount ?? 0
+        } finally {
+          activeTurnToolCallCount = null
+        }
 
         if (result.usage?.tokens) {
           explain.budget.promptTokens = result.usage.tokens.promptTokens
           explain.budget.completionTokens = result.usage.tokens.completionTokens
           explain.budget.totalTokens = result.usage.tokens.totalTokens
-          lastBudgetExplain = explain.budget
-          lastTurnExplain = explain
         }
 
         writeExplainSnapshot(projectPath, explain)
 
+        turnCount++
+        turnHistory.push({
+          userMessage: message.slice(0, 300),
+          response: (result.output ?? '').slice(0, 300),
+          toolCallCount: perTurnToolCallCount,
+          timestamp: new Date().toISOString()
+        })
+        if (turnHistory.length > 8) turnHistory.shift()
+
+        void maybeGenerateSummary()
+
         if (debug) {
-          console.log(`[Chat] Result: success=${result.success}, hasOutput=${!!result.output}`)
+          console.log(`[Chat] Result: success=${result.success}, hasOutput=${!!result.output}, turn=${turnCount}`)
         }
 
         if (result.success) {

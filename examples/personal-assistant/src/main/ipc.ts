@@ -1,21 +1,20 @@
 import { app, ipcMain, BrowserWindow, dialog, shell } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
-import { basename, dirname, extname, join, relative, resolve, sep, isAbsolute } from 'path'
+import { basename, extname, join, relative, resolve, sep, isAbsolute } from 'path'
 import { createCoordinator } from '@personal-assistant/agents/coordinator'
 import {
   listNotes, listDocs, listTodos, listEmailMessages, listCalendarEvents,
   searchEntities, deleteEntity,
   toggleTodoComplete,
   artifactCreate, artifactDelete, artifactGet, artifactList, artifactSearch, artifactUpdate,
-  focusAdd, focusClear, focusList, focusPrune, focusRemove,
-  taskAnchorGet, taskAnchorSet, taskAnchorUpdate,
-  memoryExplainTurn, memoryExplainFact, memoryExplainBudget
+  sessionSummaryGet
 } from '@personal-assistant/commands/index'
 import { parseMentions, resolveMentions, getCandidates } from '@personal-assistant/mentions/index'
 import { setCachedMarkdown, fileUriToPath } from '@personal-assistant/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '@personal-assistant/types'
 import { Scheduler } from '@personal-assistant/scheduler/scheduler'
 import { NotificationStore } from '@personal-assistant/scheduler/notifications'
+import { ensureAgentMd } from '@personal-assistant/memory-v2/store'
 import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
 import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
 import { realtimeBuffer } from './realtime-buffer'
@@ -274,35 +273,14 @@ function createArtifactFromWorkspaceFile(filePath: string) {
   }, { sessionId, projectPath })
 }
 
-function addFileToFocus(filePath: string, reason: string = 'selected from workspace tree', ttl: string = '2h') {
-  const docs = listDocs(projectPath)
-  const existing = docs.find(item => resolve(item.filePath) === resolve(filePath))
-  const artifactResult = existing
-    ? { success: true, artifact: { id: existing.id } }
-    : createArtifactFromWorkspaceFile(filePath)
-
-  if (!artifactResult.success || !artifactResult.artifact) {
-    return { success: false, error: artifactResult.error ?? 'Unable to register file artifact.' }
-  }
-
-  return focusAdd(projectPath, {
-    sessionId,
-    refType: 'artifact',
-    refId: artifactResult.artifact.id,
-    reason,
-    source: 'manual',
-    ttl
-  })
-}
-
 const fmt = createActivityFormatter({
   // Lazy getter: registry becomes available after coordinator is created
   toolRegistry: () => coordinator?.agent?.runtime?.toolRegistry,
   customRules: [
     {
       match: 'convert_to_markdown',
-      formatCall: (_, a) => ({ label: `Convert: ${getFileName((a.uri as string) || '')}`, icon: 'file' }),
-      formatResult: (_, _r, a) => ({ label: `Converted ${getFileName((a?.uri as string) || '')}`, icon: 'file' }),
+      formatCall: (_, a) => ({ label: `Convert: ${getFileName((a.path as string) || (a.uri as string) || '')}`, icon: 'file' }),
+      formatResult: (_, _r, a) => ({ label: `Converted ${getFileName((a?.path as string) || (a?.uri as string) || '')}`, icon: 'file' }),
     },
     {
       match: 'artifact-create',
@@ -425,9 +403,7 @@ function initializeProject(path: string): void {
     PATHS.cache,
     PATHS.documentCache,
     PATHS.memoryRoot,
-    PATHS.focusDir,
-    PATHS.tasksDir,
-    dirname(PATHS.artifactFactIndex),
+    PATHS.sessionSummaries,
     PATHS.explainDir
   ]
 
@@ -450,6 +426,8 @@ function initializeProject(path: string): void {
     }
     writeFileSync(projectFile, JSON.stringify(defaultConfig, null, 2))
   }
+
+  ensureAgentMd(path)
 
   // Change cwd so relative PATHS in save commands resolve correctly
   process.chdir(path)
@@ -490,70 +468,6 @@ function activateProject(path: string): { projectPath: string; sessionId: string
 
   saveLastProjectPath(projectPath)
   return { projectPath, sessionId }
-}
-
-function readLatestFactsFromKernel(projectPath: string, includeDeprecated: boolean = false): any[] {
-  const factsFile = join(projectPath, '.agentfoundry', 'memory', 'facts.jsonl')
-  if (!existsSync(factsFile)) return []
-
-  try {
-    const raw = readFileSync(factsFile, 'utf-8')
-    const lines = raw.split(/\r?\n/).filter(Boolean)
-    const allFacts: any[] = []
-    for (const line of lines) {
-      try { allFacts.push(JSON.parse(line)) } catch { /* skip malformed */ }
-    }
-
-    const byKey = new Map<string, any>()
-    for (const fact of allFacts) {
-      const key = `${fact.namespace}:${fact.key}`
-      const existing = byKey.get(key)
-      if (!existing || fact.updatedAt > existing.updatedAt) {
-        byKey.set(key, fact)
-      }
-    }
-
-    const latest = Array.from(byKey.values())
-    if (includeDeprecated) return latest
-    return latest.filter((fact: any) => fact.status === 'active' || fact.status === 'proposed')
-  } catch {
-    return []
-  }
-}
-
-async function resolveFactForWrite(win: BrowserWindow, factId: string): Promise<{
-  storage: any
-  namespace: string
-  key: string
-}> {
-  const coord = await ensureCoordinator(win, currentModel)
-  const storage = (coord as any)?.agent?.runtime?.memoryStorage
-  if (!storage) {
-    throw new Error('Memory storage unavailable in runtime.')
-  }
-
-  const listed = await storage.list({ status: 'all', limit: 5000, offset: 0 })
-  const direct = (listed?.items ?? []).find((item: any) => item.id === factId || item.id.startsWith(factId))
-  if (direct) {
-    return {
-      storage,
-      namespace: direct.namespace,
-      key: direct.key
-    }
-  }
-
-  const fallback = readLatestFactsFromKernel(projectPath, true)
-    .find((fact: any) => fact.id === factId || String(fact.id || '').startsWith(factId))
-
-  if (!fallback?.namespace || !fallback?.key) {
-    throw new Error('Fact not found.')
-  }
-
-  return {
-    storage,
-    namespace: String(fallback.namespace),
-    key: String(fallback.key)
-  }
 }
 
 /** Safely send an IPC message — no-op if the window has been destroyed. */
@@ -912,133 +826,9 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return artifactDelete(projectPath, artifactId)
   })
 
-  // Commands - Focus (RFC-013 canonical)
-  ipcMain.handle('cmd:focus-add', (_e, params: {
-    refType: 'artifact' | 'fact' | 'task'
-    refId: string
-    reason?: string
-    score?: number
-    source?: 'manual' | 'auto'
-    ttl?: string
-  }) => {
+  ipcMain.handle('cmd:session-summary-get', () => {
     if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return focusAdd(projectPath, {
-      sessionId,
-      refType: params.refType,
-      refId: params.refId,
-      reason: params.reason ?? 'manually selected',
-      score: params.score,
-      source: params.source ?? 'manual',
-      ttl: params.ttl ?? '2h'
-    })
-  })
-  ipcMain.handle('cmd:focus-list', () => {
-    if (!projectPath) return { success: true, entries: [] }
-    return focusList(projectPath, sessionId)
-  })
-  ipcMain.handle('cmd:focus-remove', (_e, idOrRef: string) => {
-    if (!projectPath) return { success: false, removed: false }
-    return focusRemove(projectPath, sessionId, idOrRef)
-  })
-  ipcMain.handle('cmd:focus-clear', () => {
-    if (!projectPath) return { success: false, removed: false }
-    return focusClear(projectPath, sessionId)
-  })
-  ipcMain.handle('cmd:focus-prune', () => {
-    if (!projectPath) return { success: true, expired: 0, kept: 0 }
-    return focusPrune(projectPath, sessionId)
-  })
-
-  // Commands - Task anchor / explain
-  ipcMain.handle('cmd:task-anchor-get', () => {
-    if (!projectPath) return { success: true, anchor: null }
-    return taskAnchorGet(projectPath)
-  })
-  ipcMain.handle('cmd:task-anchor-set', (_e, anchor: {
-    currentGoal: string
-    nowDoing: string
-    blockedBy: string[]
-    nextAction: string
-    sessionId?: string
-  }) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorSet(projectPath, {
-      ...anchor,
-      sessionId: anchor.sessionId ?? sessionId
-    })
-  })
-  ipcMain.handle('cmd:task-anchor-update', (_e, patch: {
-    currentGoal?: string
-    nowDoing?: string
-    blockedBy?: string[]
-    nextAction?: string
-    sessionId?: string
-  }) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return taskAnchorUpdate(projectPath, patch)
-  })
-
-  ipcMain.handle('cmd:memory-explain-turn', () => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainTurn(projectPath)
-  })
-  ipcMain.handle('cmd:memory-explain-fact', (_e, factId: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainFact(projectPath, factId)
-  })
-  ipcMain.handle('cmd:memory-explain-budget', () => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    return memoryExplainBudget(projectPath)
-  })
-
-  // Commands - Facts
-  ipcMain.handle('cmd:fact-list', () => {
-    if (!projectPath) return []
-    return readLatestFactsFromKernel(projectPath, false)
-  })
-
-  ipcMain.handle('cmd:fact-promote', async (_e, factId: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    try {
-      const resolved = await resolveFactForWrite(win, factId)
-      const updated = await resolved.storage.update(resolved.namespace, resolved.key, {})
-      if (!updated) {
-        return { success: false, error: 'Fact not found.' }
-      }
-      return {
-        success: true,
-        fact: {
-          id: updated.id,
-          namespace: updated.namespace,
-          key: updated.key,
-          status: updated.status
-        }
-      }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
-  })
-
-  ipcMain.handle('cmd:fact-demote', async (_e, factId: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    try {
-      const resolved = await resolveFactForWrite(win, factId)
-      const updated = await resolved.storage.update(resolved.namespace, resolved.key, { status: 'deprecated' })
-      if (!updated) {
-        return { success: false, error: 'Fact not found.' }
-      }
-      return {
-        success: true,
-        fact: {
-          id: updated.id,
-          namespace: updated.namespace,
-          key: updated.key,
-          status: updated.status
-        }
-      }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
+    return sessionSummaryGet(projectPath, sessionId)
   })
 
   // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
@@ -1113,49 +903,6 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       return { success: false, error: 'File not found.' }
     }
     return createArtifactFromWorkspaceFile(absPath)
-  })
-
-  ipcMain.handle('file:add-focus', (_e, filePath: string, reason?: string, ttl?: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
-    if (!isWithinRoot(projectPath, absPath)) {
-      return { success: false, error: 'Path is outside current workspace.' }
-    }
-    if (!existsSync(absPath)) {
-      return { success: false, error: 'File not found.' }
-    }
-    return addFileToFocus(absPath, reason, ttl)
-  })
-
-  ipcMain.handle('task:link-evidence', (_e, filePath: string, reason?: string) => {
-    if (!projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
-    if (!isWithinRoot(projectPath, absPath)) {
-      return { success: false, error: 'Path is outside current workspace.' }
-    }
-    if (!existsSync(absPath)) {
-      return { success: false, error: 'File not found.' }
-    }
-
-    const focusResult = addFileToFocus(absPath, reason ?? 'linked as task evidence', 'today')
-    if (!focusResult.success) return focusResult
-
-    const fileLabel = toPosixPath(relative(projectPath, absPath))
-    const current = taskAnchorGet(projectPath)
-    const blockedBy = current.anchor?.blockedBy ?? []
-    const marker = `Evidence: ${fileLabel}`
-    const mergedBlockedBy = blockedBy.includes(marker) ? blockedBy : [...blockedBy, marker]
-
-    const anchorResult = taskAnchorUpdate(projectPath, {
-      blockedBy: mergedBlockedBy,
-      nextAction: current.anchor?.nextAction || `Review evidence file: ${fileLabel}`
-    })
-
-    return {
-      success: focusResult.success && anchorResult.success,
-      focus: focusResult,
-      taskAnchor: anchorResult
-    }
   })
 
   // Resolve a file path to an absolute path (for file:// URLs)

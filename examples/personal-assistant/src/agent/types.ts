@@ -1,12 +1,17 @@
 /**
- * Personal Assistant - Memory V2 Type Definitions (RFC-013)
+ * Personal Assistant - Memory V2 Type Definitions (Minimal)
  *
  * Canonical model:
  * - Artifact (authoritative source records)
- * - Fact (durable structured memory)
- * - Focus (session attention)
- * - TaskAnchor (execution continuity)
+ * - SessionSummary (lightweight cross-turn continuity)
  */
+
+// ============================================================================
+// Agent.md Constants
+// ============================================================================
+
+export const AGENT_MD_ID = 'agent-md'
+export const AGENT_MD_MAX_CHARS = 5000
 
 // ============================================================================
 // Path Constants
@@ -32,12 +37,9 @@ export const PATHS = {
   documentCache: '.personal-assistant-v2/cache/documents',
   project: '.personal-assistant-v2/project.json',
 
-  // Memory V2 runtime state
+  // Memory runtime state
   memoryRoot: '.personal-assistant-v2/memory-v2',
-  focusDir: '.personal-assistant-v2/memory-v2/focus',
-  tasksDir: '.personal-assistant-v2/memory-v2/tasks',
-  taskAnchor: '.personal-assistant-v2/memory-v2/tasks/anchor.json',
-  artifactFactIndex: '.personal-assistant-v2/memory-v2/index/artifact-facts.json',
+  sessionSummaries: '.personal-assistant-v2/memory-v2/session-summaries',
   explainDir: '.personal-assistant-v2/memory-v2/explain',
 
   // Scheduler / notifications
@@ -187,76 +189,13 @@ export type Artifact =
   | SchedulerRunArtifact
   | ToolOutputArtifact
 
-// ============================================================================
-// Fact / Focus / Task Anchor
-// ============================================================================
-
-export type FactStatus = 'proposed' | 'active' | 'superseded' | 'deprecated'
-
-export interface FactProvenance {
-  sourceType: 'file' | 'url' | 'turn' | 'tool' | 'user'
-  sourceRef: string
-  traceId?: string
-  sessionId?: string
-  createdBy?: 'user' | 'model' | 'system'
-}
-
-export interface FactRecord {
-  id: string
-  namespace: string
-  key: string
-  value: unknown
-  valueText?: string
-  status: FactStatus
-  confidence: number
-  provenance: FactProvenance
-  derivedFromArtifactIds: string[]
-  createdAt: string
-  updatedAt: string
-}
-
-export type FocusRefType = 'artifact' | 'fact' | 'task'
-
-export interface FocusEntry {
-  id: string
+export interface SessionSummary {
   sessionId: string
-  refType: FocusRefType
-  refId: string
-  reason: string
-  score: number
-  source: 'manual' | 'auto'
-  ttl: string
-  expiresAt: string
+  turnRange: [number, number]
+  summary: string
+  topicsDiscussed: string[]
+  openQuestions: string[]
   createdAt: string
-  updatedAt: string
-}
-
-export interface TaskAnchor {
-  currentGoal: string
-  nowDoing: string
-  blockedBy: string[]
-  nextAction: string
-  updatedAt: string
-  sessionId?: string
-}
-
-export interface FocusCooldown {
-  sessionId: string
-  refType: FocusRefType
-  refId: string
-  until: string
-  reason: 'expired-auto-focus'
-}
-
-export interface FocusStateFile {
-  entries: FocusEntry[]
-  cooldowns: FocusCooldown[]
-  updatedAt: string
-}
-
-export interface ArtifactFactIndex {
-  updatedAt: string
-  byArtifactId: Record<string, string[]>
 }
 
 // ============================================================================

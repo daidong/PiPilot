@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
-type LeftTab = 'todos' | 'notes' | 'docs' | 'mail' | 'calendar' | 'focus' | 'notifications'
+type LeftTab = 'todos' | 'notes' | 'docs' | 'mail' | 'calendar' | 'notifications'
 export type ReasoningEffort = 'high' | 'medium' | 'low' | 'max'
 
 export const REASONING_MODELS = [

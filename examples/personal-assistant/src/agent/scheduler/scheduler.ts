@@ -102,7 +102,7 @@ const DEFAULT_TASKS: Omit<ScheduledTask, 'createdAt'>[] = [
   {
     id: 'heartbeat',
     schedule: '0 2 * * *',
-    instruction: 'Review recent sessions and artifacts. Promote durable facts (profile/commitment/routine/work-context) through fact-promote and update task-anchor when needed. Avoid duplicates.',
+    instruction: 'Review recent sessions and artifacts. Create or update durable notes/todos only when reuse value is clear. Keep continuity concise in session summaries and avoid duplicate records.',
     enabled: true,
     createdBy: 'system'
   },

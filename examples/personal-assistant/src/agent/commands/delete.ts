@@ -3,6 +3,7 @@
  */
 
 import { artifactDelete } from './artifact.js'
+import { AGENT_MD_ID } from '../types.js'
 
 export interface DeleteResult {
   success: boolean
@@ -17,6 +18,10 @@ export function deleteEntity(entityId: string, projectPath?: string): DeleteResu
   }
   if (!projectPath) {
     return { success: false, error: 'Project path is required.' }
+  }
+
+  if (entityId === AGENT_MD_ID) {
+    return { success: false, error: 'agent.md cannot be deleted.' }
   }
 
   const deleted = artifactDelete(projectPath, entityId)

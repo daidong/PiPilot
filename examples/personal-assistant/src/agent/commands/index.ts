@@ -1,5 +1,5 @@
 /**
- * Personal Assistant Commands (RFC-013)
+ * Personal Assistant Commands (Minimal)
  */
 
 // Artifact canonical surface
@@ -12,28 +12,10 @@ export {
   artifactDelete
 } from './artifact.js'
 
-// Focus canonical surface
+// Session summary
 export {
-  focusAdd,
-  focusList,
-  focusRemove,
-  focusClear,
-  focusPrune
-} from './focus.js'
-
-// Task anchor canonical surface
-export {
-  taskAnchorGet,
-  taskAnchorSet,
-  taskAnchorUpdate
-} from './task-anchor.js'
-
-// Explain canonical surface
-export {
-  memoryExplainTurn,
-  memoryExplainFact,
-  memoryExplainBudget
-} from './memory-explain.js'
+  sessionSummaryGet
+} from './session-summary.js'
 
 // Read/list convenience commands
 export { deleteEntity } from './delete.js'
@@ -44,9 +26,7 @@ export { toggleTodoComplete } from './toggle-todo-complete.js'
 
 // Types
 export type { ArtifactCreateResult, ArtifactUpdateResult, ArtifactDeleteResult, ArtifactSearchResult } from './artifact.js'
-export type { FocusAddResult, FocusListResult, FocusRemoveResult, FocusPruneResult } from './focus.js'
-export type { TaskAnchorResult } from './task-anchor.js'
-export type { MemoryExplainResult } from './memory-explain.js'
+export type { SessionSummaryResult } from './session-summary.js'
 export type { DeleteResult } from './delete.js'
 export type { NoteListItem, DocListItem, MailListItem, CalendarListItem } from './list.js'
 export type { TodoListItem } from './list-todos.js'

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { X, Bookmark, Layers, StickyNote, FileText, Trash2, Pencil, Check, CheckSquare } from 'lucide-react'
+import { X, StickyNote, FileText, Trash2, Pencil, Check, CheckSquare, Undo2 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
 
@@ -19,6 +19,7 @@ const EXTERNAL_EXTS = new Set([
 ])
 const CSV_EXTS = new Set(['csv', 'tsv'])
 const TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'xml', 'log', 'ini', 'toml', 'cfg'])
+const AGENT_MD_MAX_CHARS = 5000
 
 function getExtension(filePath: string): string {
   return (filePath.split('.').pop() || '').toLowerCase()
@@ -87,17 +88,12 @@ function CsvPreview({ content, separator }: { content: string; separator: string
 export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
-  const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const refreshAll = useEntityStore((s) => s.refreshAll)
-  const focused = useEntityStore((s) => s.focus)
-  const runtimeFocus = useEntityStore((s) => s.runtimeFocus)
   const todos = useEntityStore((s) => s.todos)
   // For todos, get fresh status from store
   const freshTodo = rawEntity?.type === 'todo' ? todos.find((t) => t.id === rawEntity.id) : null
-  const isFocused = rawEntity ? focused.some((entry) => entry.id === rawEntity.id) : false
-  const isInRuntimeFocus = rawEntity ? runtimeFocus.some((entry) => entry.id === rawEntity.id) : false
   const entity = rawEntity
     ? {
         ...rawEntity,
@@ -108,6 +104,7 @@ export function EntityPreviewPanel() {
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const [editContent, setEditContent] = useState('')
+  const [saveError, setSaveError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Loaded file content for doc entities
@@ -120,6 +117,7 @@ export function EntityPreviewPanel() {
     setEditing(false)
     setEditTitle(entity?.title ?? '')
     setEditContent('')
+    setSaveError(null)
   }, [entity?.id])
 
   // Auto-resize textarea when editing
@@ -192,46 +190,60 @@ export function EntityPreviewPanel() {
     return entity.content || ''
   }
 
-  const toggleEditing = async () => {
-    if (editing) {
-      const updates: { title?: string; content?: string } = {}
-      const trimmedTitle = editTitle.trim()
-      if (trimmedTitle && trimmedTitle !== entity.title) {
-        updates.title = trimmedTitle
-      }
-      if (editContent !== getEntityContent()) {
-        updates.content = editContent
-      }
-      try {
-        if (Object.keys(updates).length > 0) {
-          const api = (window as any).api
-          const patch: Record<string, unknown> = {}
-          if (updates.title !== undefined) patch.title = updates.title
-          if (updates.content !== undefined) {
-            if (entity.type === 'doc') patch.description = updates.content
-            else patch.content = updates.content
-          }
-          const result = await api.artifactUpdate(entity.id, patch)
-          if (!result?.success) {
-            throw new Error(result?.error || 'Failed to update entity.')
-          }
-          await refreshAll()
-          const latest = result?.artifact ?? await api.artifactGet(entity.id)
-          if (latest) {
-            useUIStore.getState().openPreview({
-              ...entity,
-              ...latest
-            })
-          }
+  const startEditing = () => {
+    setEditTitle(entity.title)
+    setEditContent(getEntityContent())
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  const cancelEditing = () => {
+    setEditTitle(entity.title)
+    setEditContent(getEntityContent())
+    setSaveError(null)
+    setEditing(false)
+  }
+
+  const saveEditing = async () => {
+    setSaveError(null)
+    const updates: { title?: string; content?: string } = {}
+    const trimmedTitle = editTitle.trim()
+    if (trimmedTitle && trimmedTitle !== entity.title) {
+      updates.title = trimmedTitle
+    }
+    if (editContent !== getEntityContent()) {
+      updates.content = editContent
+    }
+    if (entity.id === 'agent-md' && updates.content !== undefined && updates.content.length > AGENT_MD_MAX_CHARS) {
+      setSaveError(`agent.md cannot exceed ${AGENT_MD_MAX_CHARS} characters.`)
+      return
+    }
+    try {
+      if (Object.keys(updates).length > 0) {
+        const api = (window as any).api
+        const patch: Record<string, unknown> = {}
+        if (updates.title !== undefined) patch.title = updates.title
+        if (updates.content !== undefined) {
+          if (entity.type === 'doc') patch.description = updates.content
+          else patch.content = updates.content
         }
-        setEditing(false)
-      } catch (err) {
-        console.error('[EntityPreview] failed to save entity:', err)
+        const result = await api.artifactUpdate(entity.id, patch)
+        if (!result?.success) {
+          throw new Error(result?.error || 'Failed to update entity.')
+        }
+        await refreshAll()
+        const latest = result?.artifact ?? await api.artifactGet(entity.id)
+        if (latest) {
+          useUIStore.getState().openPreview({
+            ...entity,
+            ...latest
+          })
+        }
       }
-    } else {
-      setEditTitle(entity.title)
-      setEditContent(getEntityContent())
-      setEditing(true)
+      setEditing(false)
+    } catch (err) {
+      console.error('[EntityPreview] failed to save entity:', err)
+      setSaveError(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -318,29 +330,34 @@ export function EntityPreviewPanel() {
         )}
 
         <div className="flex items-center gap-1">
-          <button
-            onClick={toggleEditing}
-            className={`p-1 rounded transition-colors ${editing ? 'text-blue-400' : 't-text-muted hover:text-blue-400'}`}
-            title={editing ? 'Save changes' : 'Edit'}
-          >
-            <Pencil size={14} />
-          </button>
-          {/* Session focus (longer TTL) */}
-          <button
-            onClick={() => toggleFocus(entity.id, { reason: 'manually pinned for this session', ttl: 'today' })}
-            className={`p-1 rounded transition-colors ${isFocused ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
-            title={isFocused ? 'Remove from Focus' : 'Add to Focus (today)'}
-          >
-            <Bookmark size={14} />
-          </button>
-          {/* Turn focus (shorter TTL) */}
-          <button
-            onClick={() => toggleFocus(entity.id, { reason: 'selected for current execution', ttl: '2h' })}
-            className={`p-1 rounded transition-colors ${isInRuntimeFocus ? 'text-blue-400' : 't-text-muted t-bg-hover'}`}
-            title={isInRuntimeFocus ? 'Used in recent context' : 'Add to Focus (2h)'}
-          >
-            <Layers size={14} />
-          </button>
+          {editing ? (
+            <>
+              <button
+                onClick={saveEditing}
+                className="px-2 py-1 rounded text-xs bg-blue-500 text-white hover:bg-blue-400 transition-colors inline-flex items-center gap-1"
+                title="Save changes"
+              >
+                <Check size={12} />
+                Save
+              </button>
+              <button
+                onClick={cancelEditing}
+                className="px-2 py-1 rounded text-xs t-text-muted t-bg-hover transition-colors inline-flex items-center gap-1"
+                title="Cancel editing"
+              >
+                <Undo2 size={12} />
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={startEditing}
+              className="p-1 rounded transition-colors t-text-muted hover:text-blue-400"
+              title="Edit"
+            >
+              <Pencil size={14} />
+            </button>
+          )}
           <button
             onClick={handleDelete}
             className={`p-1 rounded transition-colors ${
@@ -359,6 +376,18 @@ export function EntityPreviewPanel() {
           </button>
         </div>
       </div>
+      {editing && entity.id === 'agent-md' && (
+        <div className="px-4 py-1 border-b t-border text-[11px]">
+          <span className={editContent.length > AGENT_MD_MAX_CHARS ? 'text-red-500' : 't-text-muted'}>
+            agent.md: {editContent.length}/{AGENT_MD_MAX_CHARS}
+          </span>
+        </div>
+      )}
+      {saveError && (
+        <div className="px-4 py-2 border-b t-border text-xs text-red-500">
+          {saveError}
+        </div>
+      )}
 
       {/* Status row for todos */}
       {entity.type === 'todo' && (

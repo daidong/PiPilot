@@ -1,16 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   StickyNote,
-  // FileText,  // hidden tab — re-enable when Docs tab is restored
   CheckSquare,
-  // Mail,      // hidden tab — re-enable when Mail tab is restored
-  // Calendar,  // hidden tab — re-enable when Calendar tab is restored
-  Layers,
   Upload,
   Circle,
   CheckCircle2,
   Trash2,
-  Link2,
   Bell,
   CheckCheck
 } from 'lucide-react'
@@ -22,18 +17,11 @@ import { useChatStore } from '../../stores/chat-store'
 const tabs = [
   { key: 'todos' as const, label: 'Todos', icon: CheckSquare },
   { key: 'notes' as const, label: 'Notes', icon: StickyNote },
-  // Docs, Mail and Calendar tabs are hidden — the backend/types still support them,
-  // but the UI is too crowded and these features see little use. Re-enable when needed.
-  // { key: 'docs' as const, label: 'Docs', icon: FileText },
-  // { key: 'mail' as const, label: 'Mail', icon: Mail },
-  // { key: 'calendar' as const, label: 'Calendar', icon: Calendar },
-  { key: 'focus' as const, label: 'Focus', icon: Layers },
   { key: 'notifications' as const, label: 'Alerts', icon: Bell }
 ]
 
-function EntityRow({ entity, inFocus }: { entity: EntityItem; inFocus: boolean }) {
+function EntityRow({ entity }: { entity: EntityItem }) {
   const openPreview = useUIStore((s) => s.openPreview)
-  const toggleFocus = useEntityStore((s) => s.toggleFocus)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const requestScrollTo = useChatStore((s) => s.requestScrollTo)
 
@@ -49,23 +37,11 @@ function EntityRow({ entity, inFocus }: { entity: EntityItem; inFocus: boolean }
     <div className="group rounded-md hover:t-bg-hover">
       <div className="flex items-center gap-1.5 px-2 py-1">
         <button
-          className={`w-2 h-2 rounded-full shrink-0 ${inFocus ? 'bg-teal-400' : 't-bg-elevated'}`}
-          title={inFocus ? 'Remove from focus' : 'Add to focus'}
-          onClick={() => toggleFocus(entity.id)}
-        />
-        <button
           className="min-w-0 flex-1 text-left"
           onClick={() => openPreview(entity)}
         >
           <span className="text-xs t-text truncate block">{entity.title}</span>
           {subtitle && <span className="text-[10px] t-text-muted truncate block">{subtitle}</span>}
-        </button>
-        <button
-          className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:t-bg-hover"
-          title="Focus"
-          onClick={() => toggleFocus(entity.id)}
-        >
-          <Link2 size={12} />
         </button>
         <button
           className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400"
@@ -88,10 +64,9 @@ function EntityRow({ entity, inFocus }: { entity: EntityItem; inFocus: boolean }
   )
 }
 
-function TodoRow({ todo, inFocus }: { todo: EntityItem; inFocus: boolean }) {
+function TodoRow({ todo }: { todo: EntityItem }) {
   const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
   const openPreview = useUIStore((s) => s.openPreview)
-  const toggleFocus = useEntityStore((s) => s.toggleFocus)
 
   const completed = todo.status === 'completed'
 
@@ -110,11 +85,6 @@ function TodoRow({ todo, inFocus }: { todo: EntityItem; inFocus: boolean }) {
       >
         <span className="text-xs t-text truncate block">{todo.title}</span>
       </button>
-      <button
-        className={`w-2 h-2 rounded-full shrink-0 ${inFocus ? 'bg-teal-400' : 't-bg-elevated'}`}
-        title={inFocus ? 'Remove from focus' : 'Add to focus'}
-        onClick={() => toggleFocus(todo.id)}
-      />
     </div>
   )
 }
@@ -150,7 +120,7 @@ function NotificationRow({ notification, onRead }: { notification: Notification;
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, docs, todos, mail, calendar, focus, refreshAll } = useEntityStore()
+  const { notes, docs, todos, mail, calendar, refreshAll } = useEntityStore()
   const notifications = useNotificationStore((s) => s.notifications)
   const unreadCount = useNotificationStore((s) => s.unreadCount)
   const loadNotifications = useNotificationStore((s) => s.load)
@@ -167,8 +137,6 @@ export function EntityTabs() {
     return () => unsub?.()
   }, [refreshAll])
 
-  const focusIds = useMemo(() => new Set(focus.map(item => item.id)), [focus])
-
   const filteredTodos = useMemo(() => {
     if (showCompleted) return todos
     return todos.filter((t) => t.status !== 'completed')
@@ -181,7 +149,6 @@ export function EntityTabs() {
       case 'docs': return docs
       case 'mail': return mail
       case 'calendar': return calendar
-      case 'focus': return focus
       default: return []
     }
   })()
@@ -279,11 +246,11 @@ export function EntityTabs() {
           </p>
         ) : leftTab === 'todos' ? (
           items.map(todo => (
-            <TodoRow key={todo.id} todo={todo} inFocus={focusIds.has(todo.id)} />
+            <TodoRow key={todo.id} todo={todo} />
           ))
         ) : (
           items.map(entity => (
-            <EntityRow key={entity.id} entity={entity} inFocus={focusIds.has(entity.id)} />
+            <EntityRow key={entity.id} entity={entity} />
           ))
         )}
       </div>
