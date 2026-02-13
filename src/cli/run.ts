@@ -15,6 +15,66 @@ export interface RunOptions {
   stopCondition?: string
   continuePrompt?: string
   additionalInstructions?: string
+  quiet?: boolean
+}
+
+/**
+ * Extract a brief summary from tool input args for log display.
+ */
+function summarizeToolInput(tool: string, input: unknown): string {
+  if (!input || typeof input !== 'object') return ''
+  const args = input as Record<string, unknown>
+
+  switch (tool) {
+    case 'read':
+    case 'write':
+    case 'edit':
+      return String(args.path ?? args.file_path ?? '')
+    case 'glob':
+      return String(args.pattern ?? '')
+    case 'grep':
+      return String(args.pattern ?? '')
+    case 'bash': {
+      const cmd = String(args.command ?? '')
+      return cmd.length > 80 ? cmd.slice(0, 77) + '...' : cmd
+    }
+    case 'skill-script-run':
+      return [args.skillId, args.script].filter(Boolean).join('/')
+    case 'kv-get':
+    case 'kv-set':
+    case 'kv-delete':
+      return String(args.key ?? '')
+    case 'todo-add':
+    case 'todo-update':
+      return String(args.text ?? args.id ?? '')
+    case 'fetch':
+      return String(args.url ?? '')
+    default: {
+      const fallback = args.path ?? args.file_path ?? args.name ?? args.id
+      return typeof fallback === 'string' ? fallback : ''
+    }
+  }
+}
+
+/**
+ * Format a tool result log line for stderr output.
+ */
+function formatToolResultLog(
+  tool: string,
+  result: unknown,
+  args?: unknown
+): string {
+  const summary = summarizeToolInput(tool, args)
+  const detail = summary ? ` ${summary}` : ''
+  const res = result as { success?: boolean; error?: string } | undefined
+
+  if (res?.success === false) {
+    const errMsg = res.error
+      ? ` -- ${res.error.length > 80 ? res.error.slice(0, 77) + '...' : res.error}`
+      : ''
+    return `  \u2717 ${tool}${detail}${errMsg}\n`
+  }
+  return `  \u2713 ${tool}${detail}\n`
 }
 
 export function parseRunArgs(args: string[]): RunOptions {
@@ -75,6 +135,11 @@ export function parseRunArgs(args: string[]): RunOptions {
         }
         break
 
+      case '--quiet':
+      case '-q':
+        options.quiet = true
+        break
+
       default:
         if (!arg.startsWith('-')) {
           promptParts.push(arg)
@@ -105,10 +170,30 @@ export async function runAgentTask(options: RunOptions): Promise<void> {
   const continuePrompt = options.continuePrompt ?? runner.continuePrompt ?? 'Continue your work.'
   const baseInstructions = options.additionalInstructions ?? runner.additionalInstructions
 
-  const agent = createAgent({ projectPath, configDir: projectPath })
+  const verbose = !options.quiet
+
+  const agent = createAgent({
+    projectPath,
+    configDir: projectPath,
+    onToolCall: verbose
+      ? (tool: string, input: unknown) => {
+          const summary = summarizeToolInput(tool, input)
+          const detail = summary ? ` ${summary}` : ''
+          process.stderr.write(`  \u25B8 ${tool}${detail}\n`)
+        }
+      : undefined,
+    onToolResult: verbose
+      ? (tool: string, result: unknown, args?: unknown) => {
+          process.stderr.write(formatToolResultLog(tool, result, args))
+        }
+      : undefined
+  })
 
   try {
     if (mode === 'single') {
+      if (verbose) {
+        process.stderr.write(`\n\u2500\u2500 single run \u2500\u2500\n`)
+      }
       const result = await agent.run(options.prompt, {
         additionalInstructions: baseInstructions
       })
@@ -127,6 +212,10 @@ export async function runAgentTask(options: RunOptions): Promise<void> {
     let completed = false
 
     for (let turn = 1; turn <= maxTurns; turn++) {
+      if (verbose) {
+        process.stderr.write(`\n\u2500\u2500 turn ${turn}/${maxTurns} \u2500\u2500\n`)
+      }
+
       const result = await agent.run(prompt, {
         additionalInstructions: autonomousInstructions
       })
@@ -141,6 +230,9 @@ export async function runAgentTask(options: RunOptions): Promise<void> {
 
       if (lines.includes(stopCondition)) {
         completed = true
+        if (verbose) {
+          process.stderr.write(`\n\u2500\u2500 completed \u2500\u2500\n`)
+        }
         break
       }
 
@@ -171,6 +263,7 @@ Options:
   --stop <text>               Stop condition token (default: runner.stopCondition or TASK_COMPLETE)
   --continue <text>           Continue prompt between turns (default: runner.continuePrompt)
   --instructions <text>       Additional task instructions for this run
+  --quiet, -q                 Suppress tool call logs (stderr)
 
 Examples:
   $ agent-foundry run "Summarize docs/architecture.md"

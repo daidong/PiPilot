@@ -194,7 +194,7 @@ export class ToolRegistry {
    */
   register(tool: Tool): void {
     if (this.tools.has(tool.name)) {
-      throw new Error(`Tool already registered: ${tool.name}`)
+      console.warn(`[ToolRegistry] Tool "${tool.name}" already registered, overriding with later definition`)
     }
     this.tools.set(tool.name, tool)
   }

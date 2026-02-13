@@ -16,10 +16,10 @@ constraints:
 packs:
   - safe
   - exec
-  - network
   - todo
   - kv-memory
   - discovery
+  - web
   - name: memory-search
     options:
       dirs:
@@ -29,7 +29,16 @@ packs:
       extraFiles:
         - agent.md
 
+model:
+  provider: openai
+  default: gpt-5.2
+  # maxTokens: 8192
+  # temperature: 0.3
+
 maxSteps: 24
+
+# Optional: add "web" to the packs list above to enable Brave web search.
+# Requires BRAVE_API_KEY env var.
 
 runner:
   mode: autonomous
@@ -40,18 +49,3 @@ runner:
     Treat files in tasks/ as executable specs when referenced by the user.
     Keep your working notes concise and persist key decisions to outputs/.
     Use project-local skills via skill-script-run when relevant.
-
-# Optional: enable Brave web search via MCP (requires BRAVE_API_KEY).
-# mcp:
-#   - name: brave-search
-#     transport:
-#       type: stdio
-#       command: npx
-#       args:
-#         - -y
-#         - @brave/brave-search-mcp-server@2.0.69
-#       timeout: 30000
-#       startTimeout: 30000
-#     env:
-#       - BRAVE_API_KEY
-#       - BRAVE_MCP_ENABLED_TOOLS=brave_web_search

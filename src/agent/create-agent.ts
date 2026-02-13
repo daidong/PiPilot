@@ -373,8 +373,11 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     ?? yamlConfig?.maxSteps
     ?? 30
 
+  const effectiveTemperature = config.temperature
+    ?? yamlConfig?.model?.temperature
+
   const effectiveReasoningEffort = config.reasoningEffort
-    ?? (yamlConfig?.model as any)?.reasoningEffort
+    ?? yamlConfig?.model?.reasoningEffort
 
   const effectiveModel = config.model
     ?? yamlConfig?.model?.default
@@ -627,9 +630,12 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     policyEngine.registerAll(config.policies)
   }
 
-  // Detect provider from model config (preferred) or API key
+  // Detect provider from explicit config, model name, or API key
+  const explicitProvider = (config.provider ?? yamlConfig?.model?.provider) as ProviderID | undefined
   const fallbackKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
-  const { provider, model } = detectProviderAndModel(fallbackKey, effectiveModel)
+  const { provider, model } = explicitProvider
+    ? { provider: explicitProvider, model: effectiveModel || DEFAULT_MODEL_FOR_PROVIDER[explicitProvider] }
+    : detectProviderAndModel(fallbackKey, effectiveModel)
 
   // Resolve the correct API key for the detected provider
   const providerKeyMap: Record<string, string | undefined> = {
@@ -850,6 +856,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         systemPromptBuilder: buildSystemPromptForRun,
         maxSteps: effectiveMaxSteps,
         maxTokens: options?.tokenBudget ?? effectiveMaxTokens,
+        temperature: effectiveTemperature,
         reasoningEffort: effectiveReasoningEffort,
         onText: config.onStream,
         onToolCall: config.onToolCall,

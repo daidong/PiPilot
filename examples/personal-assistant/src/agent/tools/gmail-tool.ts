@@ -159,6 +159,46 @@ async function callGmailApi(
 // RFC 2822 Message Builder
 // ============================================================================
 
+/**
+ * Normalize common Unicode punctuation to ASCII equivalents.
+ * Covers the characters LLMs and email clients most frequently produce.
+ */
+function normalizeToAscii(value: string): string {
+  return value
+    // Dashes
+    .replace(/\u2014/g, '--')   // em dash  —
+    .replace(/\u2013/g, '-')    // en dash  –
+    .replace(/\u2012/g, '-')    // figure dash
+    .replace(/\u2015/g, '--')   // horizontal bar
+    // Quotes
+    .replace(/[\u201C\u201D]/g, '"')  // smart double quotes " "
+    .replace(/[\u2018\u2019]/g, "'")  // smart single quotes ' '
+    .replace(/[\u201A]/g, ',')        // single low-9 quote ‚
+    .replace(/[\u201E]/g, '"')        // double low-9 quote „
+    .replace(/[\u2039\u203A]/g, "'")  // single guillemets ‹ ›
+    .replace(/[\u00AB\u00BB]/g, '"')  // double guillemets « »
+    // Spaces
+    .replace(/[\u00A0\u2007\u202F]/g, ' ')  // non-breaking spaces
+    // Ellipsis
+    .replace(/\u2026/g, '...')
+    // Bullets
+    .replace(/\u2022/g, '*')   // bullet •
+    .replace(/\u2023/g, '>')   // triangular bullet ‣
+}
+
+/**
+ * RFC 2047 encode a header value if it still contains non-ASCII
+ * characters after normalization. Only used as a safety net for
+ * genuinely non-Latin content (CJK, Cyrillic, etc.).
+ */
+function encodeHeaderValue(value: string): string {
+  const normalized = normalizeToAscii(value)
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x00-\x7F]*$/.test(normalized)) return normalized
+  const encoded = Buffer.from(normalized, 'utf-8').toString('base64')
+  return `=?UTF-8?B?${encoded}?=`
+}
+
 function buildRfc2822Message(opts: {
   from: string
   to: string
@@ -172,13 +212,15 @@ function buildRfc2822Message(opts: {
   lines.push(`From: ${opts.from}`)
   lines.push(`To: ${opts.to}`)
   if (opts.cc) lines.push(`Cc: ${opts.cc}`)
-  lines.push(`Subject: ${opts.subject}`)
+  lines.push(`Subject: ${encodeHeaderValue(opts.subject)}`)
   lines.push('MIME-Version: 1.0')
   lines.push('Content-Type: text/plain; charset="UTF-8"')
+  lines.push('Content-Transfer-Encoding: base64')
   if (opts.inReplyTo) lines.push(`In-Reply-To: ${opts.inReplyTo}`)
   if (opts.references) lines.push(`References: ${opts.references}`)
   lines.push('')
-  lines.push(opts.body)
+  // Encode body as base64 to safely handle non-ASCII content
+  lines.push(Buffer.from(opts.body, 'utf-8').toString('base64'))
   return lines.join('\r\n')
 }
 

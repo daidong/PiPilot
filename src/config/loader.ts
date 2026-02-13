@@ -35,8 +35,10 @@ export interface AgentYAMLConfig {
   /** Model configuration */
   model?: {
     default?: string
+    provider?: string
     maxTokens?: number
     temperature?: number
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
   }
 
   /** Runner configuration (used by CLI run command) */
@@ -331,6 +333,27 @@ export function validateConfig(config: AgentYAMLConfig): string[] {
       } else if (!SUPPORTED_YAML_PACKS.includes(packName as typeof SUPPORTED_YAML_PACKS[number])) {
         errors.push(`Unknown pack: ${packName}`)
       }
+    }
+  }
+
+  if (config.model) {
+    if (config.model.provider !== undefined) {
+      const validProviders = ['openai', 'anthropic', 'deepseek', 'google']
+      if (!validProviders.includes(config.model.provider)) {
+        errors.push(`model.provider must be one of: ${validProviders.join(', ')}`)
+      }
+    }
+    if (config.model.temperature !== undefined && (config.model.temperature < 0 || config.model.temperature > 2)) {
+      errors.push('model.temperature must be between 0 and 2')
+    }
+    if (config.model.reasoningEffort !== undefined) {
+      const validEfforts = ['low', 'medium', 'high', 'max']
+      if (!validEfforts.includes(config.model.reasoningEffort)) {
+        errors.push(`model.reasoningEffort must be one of: ${validEfforts.join(', ')}`)
+      }
+    }
+    if (config.model.maxTokens !== undefined && (config.model.maxTokens < 1 || config.model.maxTokens > 1000000)) {
+      errors.push('model.maxTokens must be between 1 and 1000000')
     }
   }
 

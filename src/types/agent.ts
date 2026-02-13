@@ -72,6 +72,8 @@ export interface AgentConfig {
   maxSteps?: number
   /** Maximum number of tokens */
   maxTokens?: number
+  /** Temperature for LLM generation */
+  temperature?: number
   /** Reasoning effort for reasoning models (low, medium, high, max) */
   reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
   /** Hard stop after this many consecutive tool-only rounds (default: threshold * 2) */
