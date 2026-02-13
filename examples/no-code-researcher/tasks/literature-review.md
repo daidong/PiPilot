@@ -1,6 +1,6 @@
 # Task Spec: Literature Review
 
-Goal: Produce a concise literature review on a user-provided topic.
+Goal: Produce a concise literature review on a user-provided topic. Topic: what is the best execution environment for large number of LLM agents? What are the key design considerations.
 
 ## Required Deliverables
 
