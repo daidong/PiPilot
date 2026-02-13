@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "icon:generate": "python3 scripts/generate-app-icon.py"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

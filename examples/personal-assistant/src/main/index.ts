@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell, Menu } from 'electron'
-import { join } from 'path'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'path'
 import { configDotenv } from 'dotenv'
 
 // electron-vite only injects VITE_/MAIN_VITE_ prefixed vars, so we load .env manually
@@ -8,7 +9,19 @@ configDotenv({ path: join(__dirname, '../../.env') })
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
 
+function resolveAppIconPath(): string | undefined {
+  const candidates = [
+    join(process.cwd(), 'build', 'icon.png'),
+    resolve(__dirname, '../../build/icon.png'),
+    resolve(__dirname, '../../../build/icon.png'),
+    resolve(__dirname, '../build/icon.png'),
+    process.resourcesPath ? join(process.resourcesPath, 'build', 'icon.png') : ''
+  ].filter(Boolean)
+  return candidates.find((p) => existsSync(p))
+}
+
 function createWindow(): BrowserWindow {
+  const iconPath = resolveAppIconPath()
   const win = new BrowserWindow({
     title: 'Personal Assistant',
     width: 1400,
@@ -18,6 +31,7 @@ function createWindow(): BrowserWindow {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 16, y: 18 },
     backgroundColor: '#0a0a0a',
+    ...(process.platform === 'darwin' ? {} : iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -47,6 +61,12 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  // Set dock icon on macOS
+  const dockIcon = resolveAppIconPath()
+  if (dockIcon && app.dock) {
+    app.dock.setIcon(dockIcon)
+  }
+
   const win = createWindow()
   registerIpcHandlers(win)
   buildMenu(win)
