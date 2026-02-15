@@ -32,7 +32,10 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build",
     "example:no-code-researcher": "npm run build && npm --prefix examples/no-code-researcher run start",
-    "example:no-code-researcher:help": "npm --prefix examples/no-code-researcher run help"
+    "example:no-code-researcher:help": "npm --prefix examples/no-code-researcher run help",
+    "example:yolo-researcher:desktop:install": "npm --prefix examples/yolo-researcher/desktop install",
+    "example:yolo-researcher:desktop:dev": "npm --prefix examples/yolo-researcher/desktop run dev",
+    "example:yolo-researcher:desktop:build": "npm --prefix examples/yolo-researcher/desktop run build"
   },
   "keywords": [
     "agent",
