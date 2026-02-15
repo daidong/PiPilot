@@ -77,13 +77,81 @@ export interface YoloSnapshot {
   }
 }
 
+// ─── Planner thinking types ─────────────────────────────────
+
+export interface PlannerToolPlanStep {
+  step: number
+  tool: string
+  goal: string
+  output_contract: string
+}
+
+export interface PlannerNeedFromUser {
+  required: boolean
+  request: string
+  required_files?: string[]
+}
+
+export interface PlannerContract {
+  current_focus: string
+  why_now: string
+  action: string
+  tool_plan: PlannerToolPlanStep[]
+  expected_output: string[]
+  need_from_user: PlannerNeedFromUser
+  done_definition: string
+  risk_flags: string[]
+}
+
+export interface PlannerSpec {
+  turnSpec: { turnNumber: number; stage: string; objective: string }
+  suggestedPrompt: string
+  rationale: string
+  uncertaintyNote: string
+  planContract: PlannerContract
+}
+
+// ─── Execution trace types ──────────────────────────────────
+
+export interface ExecutionTraceItem {
+  tool: string
+  reason: string
+  result_summary: string
+}
+
+// ─── Reviewer process review types ──────────────────────────
+
+export interface ReviewerCriticalIssue {
+  id: string
+  severity: 'high' | 'medium' | 'low'
+  message: string
+}
+
+export interface ReviewerFixPlanItem {
+  issue_id: string
+  action: string
+}
+
+export interface ReviewerProcessReview {
+  verdict: 'pass' | 'revise' | 'block'
+  critical_issues: ReviewerCriticalIssue[]
+  fix_plan: ReviewerFixPlanItem[]
+  confidence: number
+  notes_for_user: string
+}
+
+// ─── Turn report ────────────────────────────────────────────
+
 export interface TurnReport {
   turnNumber: number
   turnSpec: { objective: string; stage: string }
   summary: string
+  plannerSpec?: PlannerSpec
+  nextStepRationale?: string
   execution?: {
     action?: 'explore' | 'refine_question' | 'issue_experiment_request' | 'digest_uploaded_results'
     actionRationale?: string
+    executionTrace?: ExecutionTraceItem[]
     toolCalls?: Array<{
       tool: string
       argsPreview?: string
@@ -95,6 +163,20 @@ export interface TurnReport {
       enabledPacks: string[]
       degradeReason?: string
     }
+  }
+  reviewerSnapshot?: {
+    status?: 'not-run' | 'completed'
+    notes?: string[]
+    processReview?: ReviewerProcessReview
+    reviewerPasses?: Array<{
+      persona?: 'Novelty' | 'System' | 'Evaluation' | 'Writing'
+      hardBlockers?: Array<{ label?: string }>
+    }>
+    consensusBlockers?: Array<{
+      label?: string
+      voteCount?: number
+      personas?: Array<'Novelty' | 'System' | 'Evaluation' | 'Writing'>
+    }>
   }
   gateImpact?: {
     status: string
@@ -261,7 +343,6 @@ export interface StageGateInfo {
 
 export interface BudgetUsageInfo {
   used: { tokens: number; costUsd: number; turns: number }
-  tokenRatio: number
   costRatio: number
   turnRatio: number
   maxRatio: number

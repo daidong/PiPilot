@@ -1,7 +1,8 @@
 import crypto from 'node:crypto'
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { basename, join, parse, relative } from 'node:path'
+import { rename as fsRename } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 
 import {
   buildAssetInventoryExport,
@@ -1720,6 +1721,213 @@ export async function closeProjectForWindow(win: BrowserWindow): Promise<void> {
   await closeProjectState(win, state, true, true)
 }
 
+// ─── File tree helpers ────────────────────────────────────────────────
+
+interface FileTreeNode {
+  name: string
+  path: string
+  relativePath: string
+  type: 'file' | 'directory'
+  hasChildren?: boolean
+  modifiedAt: number
+}
+
+interface GitIgnoreRule {
+  negated: boolean
+  directoryOnly: boolean
+  regex: RegExp
+}
+
+const TREE_MAX_ENTRIES = 500
+
+function toPosixPath(input: string): string {
+  return input.split(sep).join('/')
+}
+
+function isWithinRoot(rootPath: string, targetPath: string): boolean {
+  const normalizedRoot = resolve(rootPath)
+  const normalizedTarget = resolve(targetPath)
+  if (normalizedRoot === normalizedTarget) return true
+  return normalizedTarget.startsWith(`${normalizedRoot}${sep}`)
+}
+
+function readGitIgnoreRules(rootPath: string): GitIgnoreRule[] {
+  const filePath = join(rootPath, '.gitignore')
+  if (!existsSync(filePath)) return []
+  let raw = ''
+  try {
+    raw = readFileSync(filePath, 'utf-8')
+  } catch {
+    return []
+  }
+
+  return raw
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'))
+    .map(line => {
+      const negated = line.startsWith('!')
+      let pattern = negated ? line.slice(1) : line
+      const directoryOnly = pattern.endsWith('/')
+      if (directoryOnly) pattern = pattern.slice(0, -1)
+
+      const anchored = pattern.startsWith('/')
+      if (anchored) pattern = pattern.slice(1)
+
+      const escaped = pattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*/g, '.*')
+        .replace(/\*/g, '[^/]*')
+        .replace(/\?/g, '[^/]')
+
+      let regexPattern = ''
+      if (anchored) {
+        regexPattern = `^${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
+      } else if (pattern.includes('/')) {
+        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
+      } else {
+        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '(?:$|/)'}`
+      }
+
+      return {
+        negated,
+        directoryOnly,
+        regex: new RegExp(regexPattern)
+      } satisfies GitIgnoreRule
+    })
+}
+
+function isHiddenPath(relativePath: string): boolean {
+  return toPosixPath(relativePath)
+    .split('/')
+    .some(segment => segment.startsWith('.'))
+}
+
+function isIgnored(relativePath: string, isDirectory: boolean, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
+  if (showIgnored) return false
+  if (isHiddenPath(relativePath)) return true
+
+  const normalized = toPosixPath(relativePath)
+  let ignored = false
+  for (const rule of rules) {
+    if (rule.directoryOnly && !isDirectory && !normalized.includes('/')) continue
+    if (rule.regex.test(normalized)) {
+      ignored = !rule.negated
+    }
+  }
+  return ignored
+}
+
+function hasVisibleChildren(dirPath: string, relativePath: string, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
+  try {
+    const entries = readdirSync(dirPath, { withFileTypes: true })
+    for (const entry of entries) {
+      const childRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name
+      if (!isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) {
+        return true
+      }
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+function listTreeChildren(
+  rootPath: string,
+  relativePath: string = '',
+  showIgnored: boolean = false,
+  limit: number = TREE_MAX_ENTRIES
+): FileTreeNode[] {
+  const basePath = resolve(rootPath, relativePath || '.')
+  if (!isWithinRoot(rootPath, basePath)) return []
+  if (!existsSync(basePath) || !statSync(basePath).isDirectory()) return []
+
+  const rules = readGitIgnoreRules(rootPath)
+  const entries = readdirSync(basePath, { withFileTypes: true })
+  const out: FileTreeNode[] = []
+
+  entries
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    .some(entry => {
+      const childRelative = toPosixPath(relativePath ? `${relativePath}/${entry.name}` : entry.name)
+      const childPath = join(basePath, entry.name)
+      if (isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) return false
+
+      let modifiedAt = 0
+      try {
+        modifiedAt = statSync(childPath).mtimeMs
+      } catch {
+        modifiedAt = Date.now()
+      }
+
+      out.push({
+        name: entry.name,
+        path: childPath,
+        relativePath: childRelative,
+        type: entry.isDirectory() ? 'directory' : 'file',
+        hasChildren: entry.isDirectory() ? hasVisibleChildren(childPath, childRelative, rules, showIgnored) : undefined,
+        modifiedAt
+      })
+      return out.length >= limit
+    })
+
+  return out
+}
+
+function searchTree(rootPath: string, query: string, showIgnored: boolean = false, maxResults: number = 200): FileTreeNode[] {
+  const trimmedQuery = query.trim().toLowerCase()
+  if (!trimmedQuery) return []
+
+  const rules = readGitIgnoreRules(rootPath)
+  const root = resolve(rootPath)
+  const stack: Array<{ absPath: string; relativePath: string }> = [{ absPath: root, relativePath: '' }]
+  const out: FileTreeNode[] = []
+
+  while (stack.length > 0 && out.length < maxResults) {
+    const node = stack.pop()!
+    let entries: ReturnType<typeof readdirSync> = []
+    try {
+      entries = readdirSync(node.absPath, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      const rel = toPosixPath(node.relativePath ? `${node.relativePath}/${entry.name}` : entry.name)
+      const abs = join(node.absPath, entry.name)
+      if (isIgnored(rel, entry.isDirectory(), rules, showIgnored)) continue
+
+      if (entry.name.toLowerCase().includes(trimmedQuery)) {
+        let modifiedAt = 0
+        try {
+          modifiedAt = statSync(abs).mtimeMs
+        } catch {
+          modifiedAt = Date.now()
+        }
+        out.push({
+          name: entry.name,
+          path: abs,
+          relativePath: rel,
+          type: entry.isDirectory() ? 'directory' : 'file',
+          hasChildren: entry.isDirectory() ? true : undefined,
+          modifiedAt
+        })
+        if (out.length >= maxResults) break
+      }
+
+      if (entry.isDirectory()) {
+        stack.push({ absPath: abs, relativePath: rel })
+      }
+    }
+  }
+
+  return out
+}
+
 export function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
   ipcHandlersRegistered = true
@@ -2532,5 +2740,130 @@ export function registerIpcHandlers(): void {
     if (!state.yoloSession) return
     const snapshot = await state.yoloSession.getSnapshot()
     persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
+  })
+
+  // ─── File tree handlers ──────────────────────────────────────────────
+
+  handleWindow('file:list-tree', ({ state }, options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => {
+    if (!state.projectPath) return []
+    const relativePath = options?.relativePath ?? ''
+    const showIgnored = options?.showIgnored ?? false
+    const limit = options?.limit ?? TREE_MAX_ENTRIES
+    return listTreeChildren(state.projectPath, relativePath, showIgnored, limit)
+  })
+
+  handleWindow('file:search-tree', ({ state }, query: string, options?: { showIgnored?: boolean; maxResults?: number }) => {
+    if (!state.projectPath) return []
+    return searchTree(state.projectPath, query, options?.showIgnored ?? false, options?.maxResults ?? 200)
+  })
+
+  handleWindow('file:create', ({ state }, relativePath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const absPath = resolve(state.projectPath, relativePath)
+    if (!isWithinRoot(state.projectPath, absPath)) return { success: false, error: 'Path is outside workspace.' }
+    const parentDir = dirname(absPath)
+    if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true })
+    if (existsSync(absPath)) return { success: false, error: 'File already exists.' }
+    writeFileSync(absPath, '', { encoding: 'utf-8' })
+    return { success: true, path: absPath }
+  })
+
+  handleWindow('file:create-dir', ({ state }, relativePath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const absPath = resolve(state.projectPath, relativePath)
+    if (!isWithinRoot(state.projectPath, absPath)) return { success: false, error: 'Path is outside workspace.' }
+    if (existsSync(absPath)) return { success: false, error: 'Directory already exists.' }
+    mkdirSync(absPath, { recursive: true })
+    return { success: true, path: absPath }
+  })
+
+  handleWindow('file:rename', async ({ state }, oldRelativePath: string, newName: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const absOld = resolve(state.projectPath, oldRelativePath)
+    if (!isWithinRoot(state.projectPath, absOld)) return { success: false, error: 'Path is outside workspace.' }
+    if (!existsSync(absOld)) return { success: false, error: 'File not found.' }
+    const absNew = join(dirname(absOld), newName)
+    if (!isWithinRoot(state.projectPath, absNew)) return { success: false, error: 'New path is outside workspace.' }
+    if (existsSync(absNew)) return { success: false, error: 'A file with that name already exists.' }
+    await fsRename(absOld, absNew)
+    return { success: true, path: absNew }
+  })
+
+  handleWindow('file:open-external', ({ state }, filePath: string) => {
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    if (!existsSync(absPath)) return { success: false, error: 'File not found' }
+    shell.openPath(absPath)
+    return { success: true }
+  })
+
+  handleWindow('file:trash', async ({ state }, filePath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    if (!isWithinRoot(state.projectPath, absPath)) return { success: false, error: 'Path is outside workspace.' }
+    if (!existsSync(absPath)) return { success: false, error: 'File not found.' }
+    try {
+      await shell.trashItem(absPath)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  handleWindow('file:drop-to-dir', ({ state }, fileName: string, base64Content: string, targetDirRelPath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const targetDir = targetDirRelPath ? resolve(state.projectPath, targetDirRelPath) : state.projectPath
+    if (!isWithinRoot(state.projectPath, targetDir)) return { success: false, error: 'Target outside workspace.' }
+    if (!existsSync(targetDir) || !statSync(targetDir).isDirectory()) return { success: false, error: 'Invalid directory.' }
+    const destPath = join(targetDir, fileName)
+    if (existsSync(destPath)) return { success: false, error: `"${fileName}" already exists.` }
+    try {
+      writeFileSync(destPath, Buffer.from(base64Content, 'base64'))
+      return { success: true, path: destPath }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  handleWindow('file:read-text', ({ state }, filePath: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
+    if (!isWithinRoot(state.projectPath, absPath)) return { success: false, error: 'Path is outside workspace.' }
+    if (!existsSync(absPath)) return { success: false, error: 'File not found.' }
+    try {
+      const stats = statSync(absPath)
+      if (stats.size > 200 * 1024) return { success: false, error: 'File exceeds 200 KB limit.' }
+      const content = readFileSync(absPath, 'utf-8')
+      return { success: true, content, path: absPath }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  handleWindow('folder:open-with', async ({ state }, appName: 'finder' | 'zed' | 'cursor' | 'vscode') => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const { exec } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execAsync = promisify(exec)
+    try {
+      switch (appName) {
+        case 'finder':
+          await execAsync(`open "${state.projectPath}"`)
+          break
+        case 'zed':
+          await execAsync(`zed "${state.projectPath}"`)
+          break
+        case 'cursor':
+          await execAsync(`cursor "${state.projectPath}"`)
+          break
+        case 'vscode':
+          await execAsync(`code "${state.projectPath}"`)
+          break
+        default:
+          return { success: false, error: `Unknown app: ${appName}` }
+      }
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to open folder' }
+    }
   })
 }

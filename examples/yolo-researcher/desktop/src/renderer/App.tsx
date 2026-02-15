@@ -5,13 +5,14 @@ import { FolderGate } from '@/components/FolderGate'
 import { TopBar } from '@/components/TopBar'
 import { HeroSection } from '@/components/HeroSection'
 import { DetailTabs } from '@/components/DetailTabs'
+import { WorkspaceFolder } from '@/components/WorkspaceFolder'
 import { ActivityFeed } from '@/components/ActivityFeed'
 import { InteractionDrawer } from '@/components/InteractionDrawer'
+import { ChatInput } from '@/components/ChatInput'
 
 export default function App() {
   const session = useYoloSession()
   const { projectPath, snapshot, actions, actionError, actionNotice, totalCreatedAssets } = session
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const exportRef = useRef<HTMLDivElement>(null)
 
@@ -93,56 +94,64 @@ export default function App() {
           </div>
         )}
 
-        {/* Toggle bar */}
+        {/* Chat input — lets users inject thoughts at any time */}
+        {snapshot?.sessionId && (
+          <div className="px-4 pt-3">
+            <ChatInput
+              onSend={(text, priority) => actions.yoloEnqueueInput(text, priority)}
+              disabled={!snapshot?.sessionId}
+              placeholder={
+                session.activeTurn?.plannerSpec?.planContract?.current_focus
+                  ? `Share thoughts about: ${session.activeTurn.plannerSpec.planContract.current_focus.slice(0, 60)}...`
+                  : 'Send a message to the research agent...'
+              }
+            />
+          </div>
+        )}
+
+        {/* MANAGEMENT BOARD */}
         <div className="px-4 pt-3">
-          <div className="rounded-2xl border t-border t-bg-surface px-3 py-2">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs t-text-secondary">
-                Advanced includes timeline, assets, system diagnostics, and exports.
-              </div>
-              <div className="flex items-center gap-2">
-                {/* Export dropdown */}
-                <div ref={exportRef} className="relative">
+          {/* Section header with Export dropdown */}
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-[11px] uppercase tracking-wide t-text-secondary">
+              Management Board
+            </div>
+            <div ref={exportRef} className="relative">
+              <button
+                onClick={() => setExportOpen((v) => !v)}
+                className="flex items-center gap-1 rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable"
+              >
+                Export <ChevronDown size={10} />
+              </button>
+              {exportOpen && (
+                <div className="absolute right-0 top-full mt-1 z-10 min-w-[160px] rounded-lg border t-border t-bg-surface shadow-lg py-1">
                   <button
-                    onClick={() => setExportOpen((v) => !v)}
-                    className="flex items-center gap-1 rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable"
+                    onClick={() => { actions.exportSummary(); setExportOpen(false) }}
+                    className="block w-full text-left px-3 py-1.5 text-[11px] t-hoverable"
                   >
-                    Export <ChevronDown size={10} />
+                    Export Summary
                   </button>
-                  {exportOpen && (
-                    <div className="absolute right-0 top-full mt-1 z-10 min-w-[160px] rounded-lg border t-border t-bg-surface shadow-lg py-1">
-                      <button
-                        onClick={() => { actions.exportSummary(); setExportOpen(false) }}
-                        className="block w-full text-left px-3 py-1.5 text-[11px] t-hoverable"
-                      >
-                        Export Summary
-                      </button>
-                      <button
-                        onClick={() => { actions.exportFinalBundle(); setExportOpen(false) }}
-                        className="block w-full text-left px-3 py-1.5 text-[11px] t-hoverable"
-                      >
-                        Export Final Bundle
-                      </button>
-                    </div>
-                  )}
+                  <button
+                    onClick={() => { actions.exportFinalBundle(); setExportOpen(false) }}
+                    className="block w-full text-left px-3 py-1.5 text-[11px] t-hoverable"
+                  >
+                    Export Final Bundle
+                  </button>
                 </div>
-                <button
-                  onClick={() => setAdvancedOpen((prev) => !prev)}
-                  className="rounded-md border border-teal-500/40 px-2 py-1 text-[11px] t-accent-teal hover:bg-teal-500/10"
-                >
-                  {advancedOpen ? 'Hide Advanced' : 'Show Advanced'}
-                </button>
-              </div>
+              )}
+            </div>
+          </div>
+
+          {/* Two-column grid: DetailTabs left, WorkspaceFolder right */}
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2" style={{ minHeight: '480px' }}>
+            <div className="min-h-0">
+              <DetailTabs session={session} />
+            </div>
+            <div className="min-h-0">
+              <WorkspaceFolder projectPath={projectPath} />
             </div>
           </div>
         </div>
-
-        {/* Zone 3: Advanced tabs (optional) */}
-        {advancedOpen && (
-          <div className="p-4 pt-3">
-            <DetailTabs session={session} />
-          </div>
-        )}
 
         {/* Bottom padding */}
         <div className="h-4" />

@@ -172,20 +172,6 @@ export function TopBar({
         </div>
       </div>
 
-      {/* Budget progress bar */}
-      {!isIdle && (
-        <div className="mt-2 flex items-center gap-2">
-          <div className="flex-1 h-1.5 rounded-full bg-neutral-500/20 overflow-hidden">
-            <div className={`h-full rounded-full transition-all duration-500 ${
-              budgetUsage.maxRatio >= 0.95 ? 'bg-rose-500'
-              : budgetUsage.maxRatio >= 0.8 ? 'bg-amber-500'
-              : 'bg-teal-500'
-            }`} style={{ width: `${Math.min(100, budgetUsage.maxRatio * 100)}%` }} />
-          </div>
-          <span className="text-[11px] t-text-muted">{Math.round(budgetUsage.maxRatio * 100)}%</span>
-        </div>
-      )}
-
       <div className="mt-1 text-[11px] t-text-muted truncate">{projectPath}</div>
     </header>
   )

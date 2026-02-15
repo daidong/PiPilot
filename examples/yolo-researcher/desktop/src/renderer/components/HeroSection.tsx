@@ -155,9 +155,38 @@ export function HeroSection({
               {friendlyAction(latestExecution.action)}
             </div>
           )}
-          {latestExecution?.actionRationale && (
+          {activeTurn?.plannerSpec?.planContract?.why_now && (
+            <div className="mt-1 text-[11px] t-text-muted">
+              {cleanStageRefs(activeTurn.plannerSpec.planContract.why_now)}
+            </div>
+          )}
+          {latestExecution?.actionRationale && !activeTurn?.plannerSpec?.planContract?.why_now && (
             <div className="mt-1 text-[11px] t-text-secondary line-clamp-3">
               {cleanStageRefs(latestExecution.actionRationale)}
+            </div>
+          )}
+          {activeTurn?.plannerSpec?.planContract?.tool_plan?.length ? (
+            <ol className="mt-2 space-y-0.5 text-[11px] list-none pl-0">
+              {activeTurn.plannerSpec.planContract.tool_plan.slice(0, 4).map((step) => (
+                <li key={step.step} className="flex gap-1 t-text-secondary">
+                  <span className="shrink-0 t-text-muted">{step.step}.</span>
+                  <span className="truncate">{step.goal}</span>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+          {activeTurn?.plannerSpec?.planContract?.risk_flags?.length ? (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {activeTurn.plannerSpec.planContract.risk_flags.map((flag, i) => (
+                <span key={i} className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] t-accent-amber">
+                  {flag}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {activeTurn?.plannerSpec?.planContract?.need_from_user?.required && activeTurn.plannerSpec.planContract.need_from_user.request && (
+            <div className="mt-1.5 text-[11px] t-accent-amber">
+              {activeTurn.plannerSpec.planContract.need_from_user.request}
             </div>
           )}
           {(state === 'PAUSED' || state === 'STOPPED') && (

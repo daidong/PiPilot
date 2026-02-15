@@ -62,11 +62,27 @@ export function ActivityFeed({ items }: ActivityFeedProps) {
     )
   }
 
+  // Derive current phase from the most recent activity item
+  const latestKind = items[0]?.kind
+  const phaseLabel = (() => {
+    switch (latestKind) {
+      case 'planner_start': return 'Planning next step'
+      case 'planner_end': return 'Plan ready'
+      case 'coordinator_start': return 'Executing plan'
+      case 'coordinator_end': return 'Execution complete'
+      case 'reviewer_start': return 'Reviewing quality'
+      case 'reviewer_end': return 'Review complete'
+      default: return null
+    }
+  })()
+  const isActivePhase = latestKind === 'planner_start' || latestKind === 'coordinator_start' || latestKind === 'reviewer_start'
+
   return (
     <div className="rounded-2xl border t-border t-bg-surface p-3">
       <div className="mb-2 flex items-center gap-2">
-        <Bot size={14} className="t-accent-teal" />
-        <span className="text-[11px] font-medium">Live Activity</span>
+        <Bot size={14} className={isActivePhase ? 't-accent-teal animate-pulse' : 't-accent-teal'} />
+        <span className="text-[11px] font-medium">{phaseLabel ?? 'Live Activity'}</span>
+        {isActivePhase && <span className="text-[11px] t-text-muted animate-pulse">...</span>}
         <span className="text-[11px] t-text-muted">{items.length} events</span>
       </div>
       <div ref={scrollRef} className="max-h-[320px] overflow-y-auto space-y-1">

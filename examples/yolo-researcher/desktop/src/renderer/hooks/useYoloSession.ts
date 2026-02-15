@@ -97,12 +97,11 @@ export function useYoloSession() {
 
   const budgetUsage: BudgetUsageInfo = useMemo(() => {
     const used = snapshot?.budgetUsed ?? { tokens: 0, costUsd: 0, turns: 0 }
-    const tokenRatio = budgetCaps.maxTokens > 0 ? used.tokens / budgetCaps.maxTokens : 0
     const costRatio = budgetCaps.maxCostUsd > 0 ? used.costUsd / budgetCaps.maxCostUsd : 0
     const turnRatio = budgetCaps.maxTurns > 0 ? used.turns / budgetCaps.maxTurns : 0
-    const maxRatio = Math.max(tokenRatio, costRatio, turnRatio)
-    return { used, tokenRatio, costRatio, turnRatio, maxRatio }
-  }, [snapshot?.budgetUsed, budgetCaps.maxTokens, budgetCaps.maxCostUsd, budgetCaps.maxTurns])
+    const maxRatio = Math.max(costRatio, turnRatio)
+    return { used, costRatio, turnRatio, maxRatio }
+  }, [snapshot?.budgetUsed, budgetCaps.maxCostUsd, budgetCaps.maxTurns])
 
   const budgetAlert = useMemo(() => {
     if (budgetUsage.maxRatio >= 0.95) return { label: 'Critical', tone: 't-accent-rose border-rose-500/40 bg-rose-500/10' }
@@ -780,8 +779,14 @@ export function useYoloSession() {
 
   // ─── IPC listeners ─────────────────────────────────────────────────
   useEffect(() => {
-    api.getCurrentSession().then((session: { projectPath: string }) => {
+    // Restore session first, then fetch history — turn reports are only
+    // populated in main-process state after restoreSessionFromDisk completes,
+    // so we must wait for getCurrentSession before calling refreshHistory.
+    api.getCurrentSession().then(async (session: { projectPath: string }) => {
       if (session?.projectPath) setProjectPath(session.projectPath)
+      await refreshHistory()
+      await refreshQueue()
+      await refreshWaitTasks()
     })
 
     const unsubState = api.onYoloState((payload: YoloSnapshot) => {
@@ -819,6 +824,9 @@ export function useYoloSession() {
         void refreshBranchSnapshot()
         void refreshAssets()
       }
+      if (payload?.type === 'session_restored') {
+        void refreshHistory()
+      }
     })
     const unsubActivity = api.onYoloActivity((payload: ActivityItem) => {
       if (payload.kind === 'llm_text') {
@@ -845,9 +853,6 @@ export function useYoloSession() {
     const unsubClosed = api.onProjectClosed(() => resetSession())
 
     api.yoloGetSnapshot().then((s: YoloSnapshot | null) => setSnapshot(s)).catch(() => {})
-    void refreshHistory()
-    void refreshQueue()
-    void refreshWaitTasks()
 
     return () => {
       unsubState(); unsubTurn(); unsubQuestion(); unsubEvent(); unsubActivity(); unsubDrawer(); unsubClosed()

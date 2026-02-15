@@ -8,6 +8,7 @@ import type {
   AssetRecord,
   EvidenceGraphLane,
   EventRecord,
+  ReviewerProcessReview,
 } from './types'
 
 // Translate raw planner action identifiers to user-facing labels
@@ -642,4 +643,35 @@ export function friendlyErrorReason(reason: string): string {
 
 export function friendlyErrorCategory(category: string): string {
   return ERROR_CATEGORY_LABELS[category] ?? category.replace(/_/g, ' ')
+}
+
+// ─── Thinking narrative helpers ─────────────────────────────
+
+// Translate raw planner action identifiers to narrative sentences
+const NARRATIVE_ACTION_LABELS: Record<string, string> = {
+  explore: 'Exploring the problem space',
+  refine_question: 'Refining the research question',
+  issue_experiment_request: 'Designing an experiment',
+  digest_uploaded_results: 'Analyzing uploaded results',
+  synthesize: 'Synthesizing findings',
+  deep_dive: 'Deep diving into specifics',
+  validate: 'Validating results',
+  compare: 'Comparing alternatives',
+  collect_evidence: 'Collecting evidence',
+  resolve_conflict: 'Resolving conflicting evidence',
+}
+
+export function narrativeAction(action: string | undefined): string {
+  if (!action) return 'Working'
+  return NARRATIVE_ACTION_LABELS[action] ?? action.replace(/_/g, ' ')
+}
+
+// CSS class string for reviewer verdict badges
+export function verdictColor(verdict: string): string {
+  switch (verdict) {
+    case 'pass': return 'border-emerald-500/40 t-accent-emerald bg-emerald-500/5'
+    case 'revise': return 'border-amber-500/40 t-accent-amber bg-amber-500/5'
+    case 'block': return 'border-rose-500/40 t-accent-rose bg-rose-500/5'
+    default: return 't-border t-text-secondary'
+  }
 }

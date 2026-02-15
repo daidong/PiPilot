@@ -138,7 +138,7 @@ export function SystemTab({
           <div className={`rounded-xl border px-3 py-2 ${budgetAlert.tone}`}>
             <div className="font-medium">Budget {budgetAlert.label}</div>
             <div className="mt-1">
-              tokens {Math.round(budgetUsage.tokenRatio * 100)}% · cost {Math.round(budgetUsage.costRatio * 100)}% · cycles {Math.round(budgetUsage.turnRatio * 100)}%
+              cost {Math.round(budgetUsage.costRatio * 100)}% · cycles {Math.round(budgetUsage.turnRatio * 100)}%
             </div>
           </div>
 

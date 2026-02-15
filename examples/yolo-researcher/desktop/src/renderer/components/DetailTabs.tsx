@@ -10,7 +10,7 @@ import { SystemTab } from './tabs/SystemTab'
 import { EventsTab } from './tabs/EventsTab'
 
 const PRIMARY_TABS: { id: TabId; label: string }[] = [
-  { id: 'timeline', label: 'Timeline' },
+  { id: 'timeline', label: 'Thinking' },
   { id: 'assets', label: 'Assets' },
   { id: 'system', label: 'System' },
   { id: 'events', label: 'Events' },

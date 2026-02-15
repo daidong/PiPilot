@@ -121,6 +121,15 @@ interface DrawerState {
   chatHistory: DrawerChatMessage[]
 }
 
+export interface FileTreeNode {
+  name: string
+  path: string
+  relativePath: string
+  type: 'file' | 'directory'
+  hasChildren?: boolean
+  modifiedAt: number
+}
+
 export interface ElectronAPI {
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
   pickFolder: () => Promise<{ projectPath: string; sessionId: string } | null>
@@ -190,6 +199,18 @@ export interface ElectronAPI {
   drawerAction: (payload: { interactionId: string; actionId: string; text?: string }) => Promise<{ success: boolean }>
   drawerClearChat: () => Promise<void>
   onDrawerStateChanged: (cb: (payload: DrawerState) => void) => () => void
+
+  // File tree operations
+  listTree: (options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => Promise<FileTreeNode[]>
+  searchTree: (query: string, options?: { showIgnored?: boolean; maxResults?: number }) => Promise<FileTreeNode[]>
+  createFile: (relativePath: string) => Promise<{ success: boolean; error?: string; path?: string }>
+  createDir: (relativePath: string) => Promise<{ success: boolean; error?: string; path?: string }>
+  renameFile: (oldRelativePath: string, newName: string) => Promise<{ success: boolean; error?: string; path?: string }>
+  trashFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  dropToDir: (fileName: string, base64Content: string, targetDirRelPath: string) => Promise<{ success: boolean; error?: string; path?: string }>
+  openFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  readTextFile: (filePath: string) => Promise<{ success: boolean; error?: string; content?: string; path?: string }>
+  openFolderWith: (app: 'finder' | 'zed' | 'cursor' | 'vscode') => Promise<{ success: boolean; error?: string }>
 }
 
 const api: ElectronAPI = {
@@ -266,7 +287,19 @@ const api: ElectronAPI = {
     const handler = (_: any, payload: any) => cb(payload)
     ipcRenderer.on('drawer:state-changed', handler)
     return () => ipcRenderer.removeListener('drawer:state-changed', handler)
-  }
+  },
+
+  // File tree operations
+  listTree: (options) => ipcRenderer.invoke('file:list-tree', options),
+  searchTree: (query, options) => ipcRenderer.invoke('file:search-tree', query, options),
+  createFile: (relativePath) => ipcRenderer.invoke('file:create', relativePath),
+  createDir: (relativePath) => ipcRenderer.invoke('file:create-dir', relativePath),
+  renameFile: (oldRelativePath, newName) => ipcRenderer.invoke('file:rename', oldRelativePath, newName),
+  trashFile: (filePath) => ipcRenderer.invoke('file:trash', filePath),
+  dropToDir: (fileName, base64Content, targetDirRelPath) => ipcRenderer.invoke('file:drop-to-dir', fileName, base64Content, targetDirRelPath),
+  openFile: (filePath) => ipcRenderer.invoke('file:open-external', filePath),
+  readTextFile: (filePath) => ipcRenderer.invoke('file:read-text', filePath),
+  openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app)
 }
 
 contextBridge.exposeInMainWorld('api', api)
