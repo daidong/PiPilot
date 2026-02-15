@@ -31,11 +31,18 @@ export function friendlyAction(action: string | undefined): string {
 export const STAGES: StageId[] = ['S1', 'S2', 'S3', 'S4', 'S5']
 
 export const STAGE_LABELS: Record<StageId, string> = {
-  S1: 'Discovery',
-  S2: 'Baseline',
-  S3: 'Experiment',
-  S4: 'Analysis',
-  S5: 'Synthesis',
+  S1: 'Problem Framing',
+  S2: 'Measurement Design',
+  S3: 'Execution Planning',
+  S4: 'Result Analysis',
+  S5: 'Final Synthesis',
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  P0: 'Core Loop',
+  P1: 'External Collaboration',
+  P2: 'Synthesis',
+  P3: 'Quality Review',
 }
 
 export function isStageId(value: string): value is StageId {
@@ -49,12 +56,15 @@ export function friendlyStage(id: string | undefined | null): string {
   return label ?? id
 }
 
-// Replace inline stage references in LLM-generated text
-// e.g. "Transition from S1 framing to S2 measurement" → "Transition from Discovery framing to Baseline measurement"
+// Replace internal stage/phase refs in LLM-generated text with user-facing labels.
 export function cleanStageRefs(text: string): string {
-  return text.replace(/\bS([1-5])\b/g, (_, num) => {
+  const withStages = text.replace(/\bS([1-5])\b/g, (_, num) => {
     const stage = `S${num}` as StageId
     return STAGE_LABELS[stage] ?? stage
+  })
+  return withStages.replace(/\bP([0-3])\b/g, (_, num) => {
+    const phase = `P${num}`
+    return PHASE_LABELS[phase] ?? phase
   })
 }
 
@@ -147,7 +157,7 @@ export function buildStateSummary(
 }
 
 export const defaultOptions = {
-  budget: { maxTurns: 12, maxTokens: 120000, maxCostUsd: 12 },
+  budget: { maxTurns: 12, maxTokens: 500_000, maxCostUsd: 12 },
   models: { planner: 'gpt-5.2', coordinator: 'gpt-5.2' },
   mode: 'lean_v2' as const
 }
@@ -207,6 +217,57 @@ export function laneFromId(id: string, assetType?: string): EvidenceGraphLane {
   return 'evidence'
 }
 
+// CSS classes for lane-colored card styling per asset type
+export function laneToneFromType(assetType: string): string {
+  const lane = laneFromId('', assetType)
+  switch (lane) {
+    case 'claim':    return 'border-emerald-400/50 bg-emerald-500/15 t-accent-emerald'
+    case 'link':     return 'border-sky-400/50 bg-sky-500/15 t-accent-sky'
+    case 'decision': return 'border-amber-400/50 bg-amber-500/15 t-accent-amber'
+    default:         return 'border-violet-400/50 bg-violet-500/15 t-accent-violet'
+  }
+}
+
+// Tailwind bg color class for the colored dot in filter pills
+export function laneDotColor(assetType: string): string {
+  const lane = laneFromId('', assetType)
+  switch (lane) {
+    case 'claim':    return 'bg-emerald-500'
+    case 'link':     return 'bg-sky-500'
+    case 'decision': return 'bg-amber-500'
+    default:         return 'bg-violet-500'
+  }
+}
+
+// Lowercased searchable string from asset ID, type, and key payload fields
+export function assetSearchableText(asset: AssetRecord): string {
+  const parts: string[] = [friendlyAssetId(asset.id).toLowerCase(), asset.type.toLowerCase()]
+  const p = asset.payload
+  if (typeof p.statement === 'string') parts.push(p.statement.toLowerCase())
+  if (typeof p.claim === 'string') parts.push(p.claim.toLowerCase())
+  if (typeof p.text === 'string') parts.push(p.text.toLowerCase())
+  if (typeof p.relation === 'string') parts.push(p.relation.toLowerCase())
+  if (typeof p.runKey === 'string') parts.push(p.runKey.toLowerCase())
+  if (typeof p.kind === 'string') parts.push(p.kind.toLowerCase())
+  if (typeof p.rationale === 'string') parts.push(p.rationale.toLowerCase())
+  return parts.join(' ')
+}
+
+// Walk the supersedes chain backward from an asset (cycle-safe)
+export function buildSupersedesChain(assetId: string, assetMap: Map<string, AssetRecord>): AssetRecord[] {
+  const chain: AssetRecord[] = []
+  let currentId = assetMap.get(assetId)?.supersedes
+  const visited = new Set<string>()
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId)
+    const ancestor = assetMap.get(currentId)
+    if (!ancestor) break
+    chain.push(ancestor)
+    currentId = ancestor.supersedes
+  }
+  return chain
+}
+
 // Translate event type IDs to user-friendly labels
 const EVENT_TYPE_LABELS: Record<string, string> = {
   session_started: 'Session Started',
@@ -250,7 +311,7 @@ export function formatEvent(payload: any): EventRecord {
   const type = EVENT_TYPE_LABELS[rawType] ?? rawType
   switch (rawType) {
     case 'session_started':
-      return { at, type, text: `Research session started (phase ${payload.phase ?? 'P0'})` }
+      return { at, type, text: 'Research session started' }
     case 'session_restored':
       return {
         at,
@@ -262,7 +323,7 @@ export function formatEvent(payload: any): EventRecord {
     case 'state_transition':
       return { at, type, text: `${friendlyState(payload.from)} → ${friendlyState(payload.to)}${payload.reason ? ` (${payload.reason})` : ''}` }
     case 'turn_planning':
-      return { at, type, text: `Planning research cycle ${payload.turn} · stage: ${friendlyStage(payload.stage)}` }
+      return { at, type, text: `Planning research cycle ${payload.turn} · focus: ${friendlyStage(payload.stage)}` }
     case 'turn_committed':
       return {
         at,
@@ -495,14 +556,14 @@ export function friendlyQuestionContext(context: string | undefined): string | u
   const consensusMatch = context.match(/^stage=(\w+);\s*consensus=(.+)$/)
   if (consensusMatch) {
     const stage = friendlyStage(consensusMatch[1])
-    return `Stage: ${stage}. Details: ${friendlyConsensusDetails(consensusMatch[2])}`
+    return `Current focus: ${stage}. Details: ${friendlyConsensusDetails(consensusMatch[2])}`
   }
 
   // "stage=S3; blockers=overclaim, causality_gap"
   const blockerMatch = context.match(/^stage=(\w+);\s*blockers=(.+)$/)
   if (blockerMatch) {
     const stage = friendlyStage(blockerMatch[1])
-    return `Stage: ${stage}. Issues: ${friendlyBlockerList(blockerMatch[2])}`
+    return `Current focus: ${stage}. Issues: ${friendlyBlockerList(blockerMatch[2])}`
   }
 
   // "waitTask=xxx | uploadDir=yyy | requiredFiles=zzz"

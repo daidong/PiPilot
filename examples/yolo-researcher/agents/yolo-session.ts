@@ -83,6 +83,7 @@ export function createYoloSession(config: CreateYoloSessionConfig): YoloSession 
           debug: config.reviewerConfig?.debug,
           identityPrompt: config.reviewerConfig?.identityPrompt,
           constraints: config.reviewerConfig?.constraints,
+          onActivity: config.onActivity,
           createAgentInstance: config.reviewerConfig?.createAgentInstance
         })
       : undefined

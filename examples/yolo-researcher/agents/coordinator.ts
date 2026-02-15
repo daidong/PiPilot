@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 import type {
   ActivityEvent,
+  AgentLike,
   AskUserRequest,
   CoordinatorExecutionTraceItem,
   CoordinatorToolCallSummary,
@@ -86,27 +87,40 @@ export interface YoloCoordinatorConfig {
   }) => AgentLike
 }
 
-export interface AgentLike {
-  ensureInit: () => Promise<void>
-  run: (prompt: string) => Promise<AgentRunResult>
-  destroy?: () => Promise<void>
-}
+// AgentLike is defined in runtime/types.ts
+export type { AgentLike } from '../runtime/types.js'
 
 const DEFAULT_IDENTITY = [
   'You are YOLO coordinator for one bounded research turn.',
   'Progress-first and contract-first.',
   'Prioritize concrete auditable outputs over process abstractions.',
   'If blocked, call ask_user.'
-].join(' ')
+].join('\n')
 
 const DEFAULT_CONSTRAINTS: string[] = [
   'Produce machine-readable output only as specified.',
   'Keep outputs aligned to three core assets: ResearchQuestion, ExperimentRequest, ResultInsight.',
   'Do not fabricate evidence or external results.',
+  'Never fabricate citations, DOIs, or paper details.',
+  'If full text is required but unavailable, call ask_user instead of guessing.',
+  'Use relative paths in asset payloads and tool arguments.',
+  'Follow PlannerOutput.planContract.tool_plan as the primary execution strategy when provided.',
+  'For unfamiliar domains or prior-art questions, call literature-search first, then reason from returned results.',
+  'For dataset or measurement-file questions, use data-analyze instead of manual computation in prompt space.',
+  'For writing/refinement requests, use writing-outline or writing-draft to produce structured drafts.',
+  'Use ctx-get only when background/literature context retrieval is truly needed; otherwise prefer explicit tools.',
   'If missing critical context, call ask_user.'
 ]
 
-const DISCOVERY_TOOL_SET = new Set(['glob', 'grep', 'read', 'literature-search', 'data-analyze'])
+const DISCOVERY_TOOL_SET = new Set([
+  'glob',
+  'grep',
+  'read',
+  'ctx-get',
+  'literature-search',
+  'fetch'
+])
+
 const COORDINATOR_DIR = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_EXTERNAL_SKILLS_DIR = join(COORDINATOR_DIR, '..', 'skills', 'default-project-skills')
 const VALID_ACTIONS = new Set<YoloTurnAction>([
@@ -115,8 +129,6 @@ const VALID_ACTIONS = new Set<YoloTurnAction>([
   'issue_experiment_request',
   'digest_uploaded_results'
 ])
-
-type TurnIntent = 'literature' | 'data' | 'writing' | 'local'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -194,49 +206,6 @@ function normalizeExecutionTrace(value: unknown): CoordinatorExecutionTraceItem[
     })
   }
   return normalized
-}
-
-function inferIntent(input: {
-  stage: YoloStage
-  goal: string
-  turnSpec: TurnSpec
-  plannerOutput?: PlannerOutput
-}): TurnIntent {
-  const focus = `${input.goal} ${input.turnSpec.objective} ${input.plannerOutput?.planContract.current_focus ?? ''}`.toLowerCase()
-  const plannedTools = (input.plannerOutput?.planContract.tool_plan ?? [])
-    .map((item) => item.tool.toLowerCase())
-    .join(' ')
-
-  if (plannedTools.includes('data') || focus.includes('csv') || focus.includes('trace') || focus.includes('percentile')) {
-    return 'data'
-  }
-  if (plannedTools.includes('writing') || focus.includes('draft') || focus.includes('write') || focus.includes('outline')) {
-    return 'writing'
-  }
-  if (plannedTools.includes('literature') || focus.includes('paper') || focus.includes('related work') || focus.includes('prior art')) {
-    return 'literature'
-  }
-  if (input.stage === 'S2' || input.stage === 'S3') {
-    return 'writing'
-  }
-  return 'local'
-}
-
-function preferredToolsForIntent(intent: TurnIntent, tooling: CoordinatorToolingStatus): string[] {
-  const byIntent: Record<TurnIntent, string[]> = {
-    literature: ['literature-search', 'read', 'grep'],
-    data: ['data-analyze', 'read', 'bash'],
-    writing: ['writing-draft', 'writing-outline', 'read'],
-    local: ['read', 'grep', 'bash']
-  }
-  const candidates = byIntent[intent]
-  return candidates.filter((tool) => {
-    if (tool === 'literature-search') return tooling.enabledPacks.includes('literature-search')
-    if (tool.startsWith('writing-')) return tooling.enabledPacks.includes('writing')
-    if (tool === 'data-analyze') return tooling.enabledPacks.includes('data-analyze')
-    if (tool === 'bash') return tooling.enabledPacks.includes('exec')
-    return true
-  })
 }
 
 function buildContextCompilerView(input: {
@@ -396,13 +365,6 @@ function buildTurnPrompt(input: {
     priority: item.priority,
     source: item.source
   }))
-  const intent = inferIntent({
-    stage: input.stage,
-    goal: input.goal,
-    turnSpec: input.turnSpec,
-    plannerOutput: input.plannerOutput
-  })
-  const preferredTools = preferredToolsForIntent(intent, options.tooling)
   const contextView = buildContextCompilerView(input)
   const stageGuidance = (input.stage === 'S2' || input.stage === 'S3' || input.stage === 'S4')
     ? [
@@ -414,35 +376,22 @@ function buildTurnPrompt(input: {
       ].join(' ')
     : 'For this stage, keep outputs auditable and scoped to one bounded turn.'
 
-  const toolModeNote = options.tooling.mode === 'local-only'
-    ? `Tooling mode is local-only. ${options.tooling.degradeReason ?? 'External literature search unavailable.'}`
-    : 'Tooling mode supports local investigation plus literature/data/writing subagents.'
+  const toolAvailabilityNote = [
+    `Tooling mode: ${options.tooling.mode}.`,
+    `Enabled packs: ${options.tooling.enabledPacks.join(', ') || 'none'}.`,
+    options.tooling.degradeReason ? `Degrade reason: ${options.tooling.degradeReason}` : undefined
+  ].filter(Boolean).join(' ')
 
   return [
     'Execute exactly one YOLO turn.',
-    'Return STRICT JSON with schema:',
-    '{"action":"explore|refine_question|issue_experiment_request|digest_uploaded_results","actionRationale":string,"summary":string,"assets":[{"type":string,"payload":object,"supersedes"?:string}],"askUser":{"required":boolean,"question":string,"blocking":boolean,"required_files"?:string[],"options"?:string[],"context"?:string,"checkpoint"?: "problem-freeze"|"baseline-freeze"|"claim-freeze"|"final-scope"},"execution_trace":[{"tool":string,"reason":string,"result_summary":string}]}',
-    'v2 contract:',
-    '- Use core asset types: ResearchQuestion, ExperimentRequest, ResultInsight.',
-    '- Use Note for exploration or free-form observations.',
-    '- If action=explore, output Note assets only.',
-    '- If action=issue_experiment_request, include at least one executable ExperimentRequest.',
-    '- For ExperimentRequest, use plain language and concrete instructions suitable for a junior PhD.',
-    '- Include command templates or pseudocode where useful.',
-    '- Include explicit upload checklist and expected file formats.',
-    '- For unfamiliar domains or prior-art questions, call literature-search first, then reason from returned coverage and persisted paper records.',
-    '- For dataset or measurement-file questions, use data-analyze instead of manual arithmetic in prompt space.',
-    '- For writing/refinement requests, use writing-outline or writing-draft to produce structured drafts.',
-    '- If action=digest_uploaded_results, include ResultInsight and link it to ExperimentRequest + uploaded artifacts in payload.',
-    '- askUser.required=true only when user action is genuinely required this turn.',
-    '- execution_trace must summarize concrete tool usage; if no tools are used, include one item with tool=\"none\" and why.',
-    'Do not wrap JSON in prose unless unavoidable. If uncertain, call ask_user.',
-    `Runtime mode: ${options.mode}`,
-    toolModeNote,
-    `Intent routing: ${intent}`,
-    `Preferred tools (ordered): ${preferredTools.join(', ') || 'none'}`,
-    `Context compiler: ${JSON.stringify(contextView)}`,
+    'Return STRICT JSON only (no prose).',
+    'Minimum required JSON shape:',
+    '{"action":"explore|refine_question|issue_experiment_request|digest_uploaded_results","actionRationale":"string","summary":"string","assets":[{"type":"string","payload":{}}],"askUser":{"required":"boolean","question":"string","blocking":"boolean"},"execution_trace":[{"tool":"string","reason":"string","result_summary":"string"}]}',
+    'If you cannot complete safely, set askUser.required=true and ask a concrete blocking question.',
     stageGuidance,
+    `Runtime mode: ${options.mode}`,
+    toolAvailabilityNote,
+    `Context compiler: ${JSON.stringify(contextView)}`,
     `Goal: ${input.goal}`,
     `Stage: ${input.stage}`,
     `TurnSpec: ${JSON.stringify(input.turnSpec)}`,
@@ -920,8 +869,6 @@ export const __private = {
   normalizeAssets,
   normalizeAskUser,
   normalizeExecutionTrace,
-  inferIntent,
-  preferredToolsForIntent,
   buildContextCompilerView,
   normalizeTurnAction,
   inferActionFromAssets,

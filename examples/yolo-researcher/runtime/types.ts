@@ -1,4 +1,11 @@
+import type { AgentRunResult } from '../../../src/index.js'
 import type { BranchNode } from './branch-manager.js'
+
+export interface AgentLike {
+  ensureInit: () => Promise<void>
+  run: (prompt: string) => Promise<AgentRunResult>
+  destroy?: () => Promise<void>
+}
 
 export type YoloPhase = 'P0' | 'P1' | 'P2' | 'P3'
 export type YoloRuntimeMode = 'legacy' | 'lean_v2'
@@ -91,6 +98,7 @@ export interface PlannerInput {
     objective: string
     assetsCreated: number
     assetsUpdated: number
+    summary: string
   }>
   assetInventory: Array<{
     id: string
@@ -417,6 +425,7 @@ export interface ReviewEngine {
     plannerOutput?: PlannerOutput
     coordinatorOutput?: CoordinatorTurnResult
   }): SemanticReviewResult | Promise<SemanticReviewResult>
+  destroy?(): Promise<void>
 }
 
 export type YoloEventType =
@@ -638,6 +647,8 @@ export type ActivityEventKind =
   | 'planner_end'
   | 'coordinator_start'
   | 'coordinator_end'
+  | 'reviewer_start'
+  | 'reviewer_end'
   | 'tool_call'
   | 'tool_result'
   | 'llm_text'
@@ -646,7 +657,7 @@ export interface ActivityEvent {
   id: string
   timestamp: string
   kind: ActivityEventKind
-  agent: 'planner' | 'coordinator'
+  agent: 'planner' | 'coordinator' | 'reviewer'
   tool?: string
   preview?: string
 }

@@ -1,6 +1,7 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect } from 'react'
 import { Bot, Wrench, MessageSquare, Play, CheckCircle } from 'lucide-react'
 import type { ActivityItem } from '@/lib/types'
+import { cleanStageRefs } from '@/lib/formatters'
 
 interface ActivityFeedProps {
   items: ActivityItem[]
@@ -21,6 +22,8 @@ const KIND_LABEL: Record<string, string> = {
   planner_end: 'Plan ready',
   coordinator_start: 'Coordinator executing...',
   coordinator_end: 'Execution complete',
+  reviewer_start: 'Reviewer evaluating...',
+  reviewer_end: 'Review complete',
   tool_call: 'Tool call',
   tool_result: 'Tool result',
   llm_text: 'LLM output',
@@ -79,9 +82,9 @@ export function ActivityFeed({ items }: ActivityFeedProps) {
                 <span className="font-medium">{KIND_LABEL[item.kind] ?? item.kind}</span>
                 {item.tool && <span className="ml-1 t-text-secondary">&middot; {item.tool}</span>}
                 {item.preview && item.kind === 'llm_text' ? (
-                  <LlmPreview text={item.preview} />
+                  <LlmPreview text={cleanStageRefs(item.preview)} />
                 ) : item.preview ? (
-                  <div className="mt-0.5 truncate t-text-muted">{item.preview}</div>
+                  <div className="mt-0.5 truncate t-text-muted">{cleanStageRefs(item.preview)}</div>
                 ) : null}
               </div>
               <span className="shrink-0 t-text-muted">

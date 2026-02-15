@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react'
 import type { FailureInfo, InteractionContext, TurnReport, YoloSnapshot } from '@/lib/types'
 import { cleanStageRefs, friendlyAction, friendlyState } from '@/lib/formatters'
 import { AlertTriangle, ArrowRight } from 'lucide-react'
@@ -41,12 +42,25 @@ export function HeroSection({
   onRestoreCheckpoint,
   onOpenDrawer,
 }: HeroSectionProps) {
+  const [insightExpanded, setInsightExpanded] = useState(false)
   const state = snapshot?.state
   const displayState = state === 'WAITING_FOR_USER' ? 'Running (waiting for your input)' : friendlyState(state)
   const latestExecution = activeTurn?.execution
   const hasNeed = hasBlockingNeed(snapshot, drawerInteraction)
+  const hasSession = Boolean(snapshot?.sessionId)
+  const latestInsightText = useMemo(
+    () => (activeTurn?.summary ? cleanStageRefs(activeTurn.summary) : ''),
+    [activeTurn?.summary]
+  )
+  const canExpandInsight = latestInsightText.length > 220 || latestInsightText.includes('\n')
 
-  const isIdle = !snapshot?.sessionId || state === 'IDLE'
+  useEffect(() => {
+    setInsightExpanded(false)
+  }, [activeTurn?.turnNumber])
+
+  // Keep start CTA strictly for first-time/no-session bootstrap.
+  // Restored sessions can be IDLE but should not regress to bootstrap UI.
+  const isIdle = !hasSession
   if (isIdle) {
     return (
       <section className="rounded-2xl border t-border t-bg-surface p-5">
@@ -87,11 +101,17 @@ export function HeroSection({
         <div className="grid gap-3 md:grid-cols-2">
           <article className="rounded-xl border t-card-emerald p-3">
             <div className="text-[11px] uppercase tracking-wide t-text-secondary">Summary</div>
-            <div className="mt-2 text-xs line-clamp-4">
-              {activeTurn?.summary
-                ? cleanStageRefs(activeTurn.summary)
-                : 'Research complete.'}
+            <div className={`mt-2 text-xs ${insightExpanded ? 'whitespace-pre-wrap' : 'line-clamp-4'}`}>
+              {latestInsightText || 'Research complete.'}
             </div>
+            {latestInsightText && canExpandInsight && (
+              <button
+                onClick={() => setInsightExpanded((v) => !v)}
+                className="mt-2 text-[11px] t-accent-teal hover:underline"
+              >
+                {insightExpanded ? '收起' : '查看全文'}
+              </button>
+            )}
           </article>
           <article className="rounded-xl border t-card-teal p-3">
             <div className="text-[11px] uppercase tracking-wide t-text-secondary">Final Metrics</div>
@@ -181,11 +201,17 @@ export function HeroSection({
         {/* Latest Insight */}
         <article className="rounded-xl border t-card-emerald p-3">
           <div className="text-[11px] uppercase tracking-wide t-text-secondary">Latest Insight</div>
-          <div className="mt-2 text-xs line-clamp-4">
-            {activeTurn?.summary
-              ? cleanStageRefs(activeTurn.summary)
-              : 'No insight yet. The first successful cycle will appear here.'}
+          <div className={`mt-2 text-xs ${insightExpanded ? 'whitespace-pre-wrap' : 'line-clamp-4'}`}>
+            {latestInsightText || 'No insight yet. The first successful cycle will appear here.'}
           </div>
+          {latestInsightText && canExpandInsight && (
+            <button
+              onClick={() => setInsightExpanded((v) => !v)}
+              className="mt-2 text-[11px] t-accent-teal hover:underline"
+            >
+              {insightExpanded ? '收起' : '查看全文'}
+            </button>
+          )}
           {activeTurn && (
             <div className="mt-2 text-[11px] t-text-secondary">
               {activeTurn.assetDiff?.created?.length ?? 0} artifacts

@@ -8,6 +8,7 @@ import {
   buildClaimEvidenceTableExport,
   buildFinalBundleManifest,
   createYoloSession,
+  getLanguageModelByModelId,
   type AssetRecord,
   type BranchNode,
   type ExternalWaitTask,
@@ -791,7 +792,7 @@ function buildFallbackOptions(snapshot: SessionPersistedState): YoloSessionOptio
     mode: 'legacy',
     budget: {
       maxTurns: Math.max(snapshot.currentTurn + 10, snapshot.budgetUsed.turns + 10),
-      maxTokens: Math.max(snapshot.budgetUsed.tokens + 120_000, 120_000),
+      maxTokens: Math.max(snapshot.budgetUsed.tokens + 500_000, 500_000),
       maxCostUsd: Math.max(Math.ceil(snapshot.budgetUsed.costUsd + 12), 12)
     },
     models: {
@@ -866,7 +867,8 @@ function isTerminalOrBlocked(state: SessionPersistedState['state']): boolean {
 }
 
 function isSessionTerminal(state: SessionPersistedState['state']): boolean {
-  return state === 'STOPPED' || state === 'COMPLETE' || state === 'FAILED'
+  // STOPPED is NOT terminal — users can extend budget and resume from STOPPED.
+  return state === 'COMPLETE' || state === 'FAILED'
 }
 
 async function pushState(
@@ -1075,6 +1077,17 @@ interface ExperimentDetails {
   checklist?: string[]
 }
 
+function focusLabelForUi(stage: string | undefined | null): string {
+  switch (stage) {
+    case 'S1': return 'Problem Framing'
+    case 'S2': return 'Measurement Design'
+    case 'S3': return 'Execution Planning'
+    case 'S4': return 'Result Analysis'
+    case 'S5': return 'Final Synthesis'
+    default: return 'Current Research Focus'
+  }
+}
+
 const EXPERIMENT_SECTIONS = [
   'Why this experiment:',
   'Objective:',
@@ -1129,6 +1142,131 @@ function parseExperimentDetailsLocal(details: string): ExperimentDetails | null 
   return result
 }
 
+function readStringFieldFromPayload(payload: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = payload[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return undefined
+}
+
+function readStringListFieldFromPayload(payload: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = payload[key]
+    if (Array.isArray(value)) {
+      const normalized = value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean)
+      if (normalized.length > 0) return normalized
+    }
+    if (typeof value === 'string' && value.trim()) {
+      return value
+        .split(/\r?\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    }
+  }
+  return []
+}
+
+function parseExperimentDetailsFromAsset(asset: AssetRecord): ExperimentDetails | null {
+  if (asset.type !== 'ExperimentRequest' && asset.type !== 'ExperimentRequirement') return null
+  const payload = asset.payload as Record<string, unknown>
+  const methodSteps = readStringListFieldFromPayload(payload, ['methodSteps', 'steps', 'procedureSteps', 'executionSteps'])
+  const method = readStringFieldFromPayload(payload, ['method', 'plan', 'procedure', 'approach'])
+  const protocol = methodSteps.length > 0 ? methodSteps : method ? [method] : []
+
+  const details: ExperimentDetails = {
+    assetRef: asset.id,
+    why: readStringFieldFromPayload(payload, ['why', 'rationale', 'reason']),
+    objective: readStringFieldFromPayload(payload, ['objective', 'goal', 'experimentGoal']),
+    setup: readStringFieldFromPayload(payload, ['setup', 'environment', 'setupRequirements']),
+    protocol: protocol.length > 0 ? protocol : undefined,
+    controls: readStringFieldFromPayload(payload, ['controls', 'controlPlan']),
+    metrics: readStringFieldFromPayload(payload, ['metrics', 'measurementPlan', 'measurements']),
+    expectedResult: readStringFieldFromPayload(payload, ['expectedResult', 'expectedOutcome', 'expected', 'successCriteria']),
+    outputFormat: readStringFieldFromPayload(payload, ['outputFormat', 'deliverables', 'reportFormat', 'submissionFormat']),
+    checklist: readStringListFieldFromPayload(payload, ['submissionChecklist', 'uploadChecklist', 'checklist'])
+  }
+
+  if (!details.why && !details.objective && !details.protocol?.length) return null
+  return details
+}
+
+function extractExperimentRequiredFilesFromAsset(asset: AssetRecord): string[] {
+  if (asset.type !== 'ExperimentRequest' && asset.type !== 'ExperimentRequirement') return []
+  const payload = asset.payload as Record<string, unknown>
+  const files = new Set<string>()
+  const append = (value: unknown) => {
+    if (typeof value !== 'string') return
+    const normalized = value.trim()
+    if (normalized) files.add(normalized)
+  }
+
+  const fromPayload = payload.requiredFiles
+  if (Array.isArray(fromPayload)) {
+    for (const item of fromPayload) append(item)
+  }
+  if (typeof fromPayload === 'string') append(fromPayload)
+  const fromSnakeCase = payload.required_files
+  if (Array.isArray(fromSnakeCase)) {
+    for (const item of fromSnakeCase) append(item)
+  }
+  if (typeof fromSnakeCase === 'string') append(fromSnakeCase)
+
+  return [...files]
+}
+
+function looksLikeExperimentDataQuestion(pendingQuestion: SessionPersistedState['pendingQuestion']): boolean {
+  if (!pendingQuestion) return false
+  if (Array.isArray(pendingQuestion.requiredFiles) && pendingQuestion.requiredFiles.length > 0) return true
+  const text = `${pendingQuestion.question ?? ''}\n${pendingQuestion.context ?? ''}`.toLowerCase()
+  const asksForArtifacts = /\bupload\b|\bpaste\b|\battach\b|\bjsonl\b|\bcsv\b|\blog\b|\btrace\b|\bresult\b|\bfile\b/.test(text)
+  const experimentSignals = /\bexperiment\b|\bprotocol\b|\bworkload\b|\bbenchmark\b|\blatency\b|\bperf\b|\bebpf\b|\bbpftrace\b|\btimestamp\b|\btool-call\b/.test(text)
+  return asksForArtifacts && experimentSignals
+}
+
+function findRelatedExperimentAsset(
+  pendingQuestion: SessionPersistedState['pendingQuestion'],
+  assets: AssetRecord[]
+): { asset: AssetRecord; details: ExperimentDetails; requiredFiles: string[] } | null {
+  if (!looksLikeExperimentDataQuestion(pendingQuestion)) return null
+
+  const ids = Array.isArray(pendingQuestion?.referencedAssetIds)
+    ? pendingQuestion.referencedAssetIds
+    : []
+
+  const byId = new Map(assets.map((asset) => [asset.id, asset]))
+  const candidates: AssetRecord[] = []
+  for (const id of ids) {
+    const asset = byId.get(id)
+    if (!asset) continue
+    if (asset.type === 'ExperimentRequest' || asset.type === 'ExperimentRequirement') {
+      candidates.push(asset)
+    }
+  }
+
+  if (candidates.length === 0) {
+    const latest = [...assets]
+      .filter((asset) => asset.type === 'ExperimentRequest' || asset.type === 'ExperimentRequirement')
+      .sort((a, b) => b.createdByTurn - a.createdByTurn || b.id.localeCompare(a.id))
+      .at(0)
+    if (latest) candidates.push(latest)
+  }
+
+  for (const asset of candidates) {
+    const details = parseExperimentDetailsFromAsset(asset)
+    if (!details) continue
+    const requiredFiles = extractExperimentRequiredFilesFromAsset(asset)
+    return { asset, details, requiredFiles }
+  }
+
+  return null
+}
+
 // ─── InteractionDrawer context assembly ──────────────────────────────
 
 function assembleInteractionContext(
@@ -1149,6 +1287,7 @@ function assembleInteractionContext(
 
   const pendingQuestion = snapshot.pendingQuestion
   const questionText = `${pendingQuestion?.question ?? ''} ${pendingQuestion?.context ?? ''}`.toLowerCase()
+  const relatedExperiment = findRelatedExperimentAsset(pendingQuestion, assets)
   const latestTurn = turnReports[turnReports.length - 1]
   const latestGateBlockers = latestTurn?.gateImpact?.gateResult?.hardBlockers ?? []
   const latestConsensusBlockers = latestTurn?.reviewerSnapshot?.status === 'completed'
@@ -1291,7 +1430,7 @@ function assembleInteractionContext(
 
       sections.push({
         label: 'Current Progress',
-        content: `Cycle ${snapshot.currentTurn} · Stage ${snapshot.activeStage} · ${assets.length} artifacts`
+        content: `Cycle ${snapshot.currentTurn} · Focus ${focusLabelForUi(snapshot.activeStage)} · ${assets.length} artifacts`
       })
 
       if (q.options?.length) {
@@ -1383,12 +1522,89 @@ function assembleInteractionContext(
       title = 'Question From Research Agent'
 
       sections.push({ label: 'Question', content: q.question })
-      if (q.context) sections.push({ label: 'Context', content: q.context, collapsible: true })
+      if (relatedExperiment) {
+        sections.push({
+          label: 'Why This Is Needed',
+          content: relatedExperiment.details.why
+            ?? `The agent needs externally executed data to validate ${relatedExperiment.asset.id}.`
+        })
+        if (relatedExperiment.details.objective) {
+          sections.push({
+            label: 'Experiment Objective',
+            content: relatedExperiment.details.objective
+          })
+        }
+        if (relatedExperiment.details.protocol?.length) {
+          sections.push({
+            label: 'How To Run It',
+            content: relatedExperiment.details.protocol.map((line, idx) => `${idx + 1}. ${line}`).join('\n'),
+            collapsible: true
+          })
+        }
+        if (relatedExperiment.details.metrics) {
+          sections.push({
+            label: 'Metrics To Report',
+            content: relatedExperiment.details.metrics
+          })
+        }
+        const requiredUploads = (Array.isArray(q.requiredFiles) && q.requiredFiles.length > 0)
+          ? q.requiredFiles
+          : relatedExperiment.requiredFiles
+        if (requiredUploads.length > 0) {
+          sections.push({
+            label: 'Files To Upload',
+            content: requiredUploads.map((name) => `- ${name}`).join('\n')
+          })
+        }
+        if (relatedExperiment.details.outputFormat) {
+          sections.push({
+            label: 'Expected Output Format',
+            content: relatedExperiment.details.outputFormat,
+            collapsible: true
+          })
+        }
+      }
+      if (q.context) {
+        sections.push({ label: 'Context', content: q.context, collapsible: true })
+      } else {
+        const latestObjective = latestTurn?.turnSpec?.objective?.trim()
+        const latestRationale = latestTurn?.execution?.actionRationale?.trim()
+        const latestSummary = latestTurn?.summary?.trim()
+        const contextLines: string[] = []
+        if (latestObjective) {
+          contextLines.push(`Current focus: ${latestObjective}`)
+        }
+        if (latestRationale || latestSummary) {
+          contextLines.push(`Why this is asked now: ${latestRationale || latestSummary}`)
+        }
+        if (Array.isArray(q.requiredFiles) && q.requiredFiles.length > 0) {
+          contextLines.push(`Files expected: ${q.requiredFiles.join(', ')}`)
+        }
+        if (contextLines.length > 0) {
+          sections.push({
+            label: 'Context',
+            content: contextLines.join('\n'),
+            collapsible: true
+          })
+        }
+      }
+      const needsUploadAction = (
+        (Array.isArray(q.requiredFiles) && q.requiredFiles.length > 0)
+        || /\bupload\b|\bpaste\b|\battach\b|\bjsonl\b|\bcsv\b|\blog\b|\btrace\b|\bresult\b|\bfile\b/.test(questionText)
+      )
+      if (needsUploadAction) {
+        actions.push({ id: 'upload', label: 'Upload Files', variant: 'primary' })
+      }
+
+      sections.push({
+        label: 'What Happens Next',
+        content: 'Your reply is merged into the next cycle input. The agent then resumes automatically with this decision.'
+      })
 
       if (q.options?.length) {
         quickReplies = q.options
         for (const opt of q.options) {
-          actions.push({ id: 'quick_reply', label: opt, variant: 'primary' })
+          actions.push({ id: 'quick_reply', label: opt, variant: needsUploadAction ? 'secondary' : 'primary' })
         }
       }
       actions.push({ id: 'submit_text', label: 'Send Custom Reply', variant: 'secondary' })
@@ -1434,10 +1650,13 @@ function buildDrawerSystemPrompt(
   turnReports: TurnReport[]
 ): string {
   const lines: string[] = [
-    'You are a research advisor helping the user understand a decision point in their autonomous research session. Answer concisely based on the context below.',
+    'You are a research advisor helping the user understand a decision point in their autonomous research session.',
+    'Answer concisely and concretely.',
+    'If the user is confused, explain in this order: why this request exists, exact step-by-step actions, and what outputs/files to submit.',
+    'Do not ask for uploads without giving runnable instructions; if context lacks commands, explicitly say what is missing and provide a minimal template request.',
     '',
     `Research Goal: ${snapshot.goal}`,
-    `Current Phase: ${snapshot.phase}, Stage: ${snapshot.activeStage}`,
+    `Current mission focus: ${focusLabelForUi(snapshot.activeStage)}`,
     `Cycle: ${snapshot.currentTurn}, Budget: $${snapshot.budgetUsed.costUsd.toFixed(2)} spent`,
     '',
     `## Current Decision: ${context.title}`,
@@ -2142,11 +2361,8 @@ export function registerIpcHandlers(): void {
       if (!apiKey) {
         assistantContent = 'No API key found. Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, or another provider key in your environment.'
       } else {
-        // Dynamic imports for packages not in the desktop app's direct dependencies.
-        // These are externalized by electron-vite and resolved from the monorepo root at runtime.
         const aiModule = await import(/* @vite-ignore */ 'ai')
-        const frameworkModule = await import(/* @vite-ignore */ 'agent-foundry')
-        const model = frameworkModule.getLanguageModelByModelId(modelId, { apiKey })
+        const model = getLanguageModelByModelId(modelId, { apiKey })
         const result = await aiModule.generateText({
           model,
           system: systemPrompt,

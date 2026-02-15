@@ -138,10 +138,21 @@ export function InteractionDrawer({
     }
   }
 
-  // Determine if we need a text input for certain interaction types
-  const needsTextInput = interaction?.kind === 'checkpoint_decision'
+  // Inline answer/input policy:
+  // - Required response: question/checkpoint/gate blocker
+  // - Optional note: experiment/fulltext/resource/failure actions
+  const inlineInputRequired = interaction?.kind === 'checkpoint_decision'
     || interaction?.kind === 'gate_blocker'
     || interaction?.kind === 'general_question'
+  const inlineInputOptional = interaction?.kind === 'experiment_request'
+    || interaction?.kind === 'fulltext_upload'
+    || interaction?.kind === 'resource_extension'
+    || interaction?.kind === 'failure_recovery'
+  const showInlineInput = Boolean(inlineInputRequired || inlineInputOptional)
+  const inlinePlaceholder = inlineInputRequired
+    ? 'Type your response...'
+    : 'Optional note for this action...'
+  const hasSubmitTextAction = Boolean(interaction?.actions.some((a) => a.id === 'submit_text'))
 
   return (
     <div
@@ -237,19 +248,19 @@ export function InteractionDrawer({
               </div>
             )}
 
-            {/* Free-text input for checkpoint/question actions */}
-            {needsTextInput && (
+            {/* Inline answer / optional note */}
+            {showInlineInput && (
               <div className="flex gap-2">
                 <input
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && textInput.trim()) {
+                    if (e.key === 'Enter' && !e.shiftKey && hasSubmitTextAction && textInput.trim()) {
                       onAction('submit_text', textInput.trim())
                       setTextInput('')
                     }
                   }}
-                  placeholder="Type your response..."
+                  placeholder={inlinePlaceholder}
                   className="flex-1 rounded-lg border border-amber-500/30 bg-transparent px-3 py-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500/40"
                 />
               </div>
@@ -262,10 +273,11 @@ export function InteractionDrawer({
                 .map((action) => (
                   <ActionButton key={action.id} action={action} onClick={() => handleAction(action)} />
                 ))}
-              {needsTextInput && textInput.trim() && (
+              {showInlineInput && hasSubmitTextAction && (
                 <ActionButton
-                  action={{ id: 'submit_text', label: 'Send Reply', variant: 'primary' }}
+                  action={{ id: 'submit_text', label: inlineInputRequired ? 'Send Reply' : 'Send Note', variant: 'primary' }}
                   onClick={() => {
+                    if (!textInput.trim()) return
                     onAction('submit_text', textInput.trim())
                     setTextInput('')
                   }}

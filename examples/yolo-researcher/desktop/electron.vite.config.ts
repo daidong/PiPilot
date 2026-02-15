@@ -7,7 +7,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        external: ['ai', 'agent-foundry']
+        external: ['ai']
       }
     },
     resolve: {

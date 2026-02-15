@@ -19,7 +19,6 @@ import type {
   CoordinatorTurnResult,
   ExternalWaitTask,
   GateEngine,
-  GateResult,
   PendingResourceExtension,
   PlannerInput,
   PlannerOutput,
@@ -29,7 +28,6 @@ import type {
   ReviewerProcessReview,
   RuntimeCheckpoint,
   RuntimeLease,
-  SemanticReviewResult,
   SessionPersistedState,
   SnapshotManifest,
   TurnExecutionResult,
@@ -438,7 +436,8 @@ export class YoloSession {
   }): Promise<PendingResourceExtension> {
     await this.init()
     const state = await this.readSessionState()
-    if (state.state === 'STOPPED' || state.state === 'FAILED' || state.state === 'COMPLETE') {
+    // Allow extension requests from STOPPED so budget-exhausted sessions can be continued.
+    if (state.state === 'FAILED' || state.state === 'COMPLETE') {
       throw new Error(`cannot request resource extension from terminal state ${state.state}`)
     }
     if (state.pendingResourceExtension) {
@@ -999,6 +998,7 @@ export class YoloSession {
 
   async stop(): Promise<void> {
     await this.transitionOutOfTurn('STOPPED', 'stop requested by user')
+    await this.reviewEngine.destroy?.()
   }
 
   async getSnapshot(): Promise<SessionPersistedState> {
@@ -1187,7 +1187,8 @@ export class YoloSession {
             stage: report.turnSpec.stage,
             objective: report.turnSpec.objective,
             assetsCreated: report.assetDiff.created.length,
-            assetsUpdated: report.assetDiff.updated.length
+            assetsUpdated: report.assetDiff.updated.length,
+            summary: report.summary ?? ''
           })
         } catch {
           // Skip unreadable reports
@@ -1244,46 +1245,22 @@ export class YoloSession {
               activeNodeId: state.activeNodeId
             })
           }
-      const stageProgressionAdjustment = this.applyStageProgressionPolicy(
-        plannerInput,
-        plannerOutputValidated.turnSpec
-      )
-      const nonProgressAdjustment = this.applyNonProgressReplanPolicy(state, stageProgressionAdjustment.turnSpec)
-      const gateLoopBreakerAdjustment = this.applyGateLoopBreakerPolicy(
-        state,
-        nonProgressAdjustment.turnSpec
-      )
-      const budgetDegradationAdjustment = this.applyBudgetDegradationPolicy(
-        state,
-        gateLoopBreakerAdjustment.turnSpec
-      )
-      const plannerAdjustmentUpdated = (
-        stageProgressionAdjustment.updated
-        || nonProgressAdjustment.updated
-        || gateLoopBreakerAdjustment.updated
-        || budgetDegradationAdjustment.updated
-      )
-      const plannerAdjustmentReason = [
-        stageProgressionAdjustment.reason,
-        nonProgressAdjustment.reason,
-        gateLoopBreakerAdjustment.reason,
-        budgetDegradationAdjustment.reason
-      ]
-        .filter((value): value is string => Boolean(value))
-        .join(' | ')
-      const invalidateCurrentNode = gateLoopBreakerAdjustment.invalidateCurrentNode === true
-      const plannerOutput = plannerAdjustmentUpdated
-        ? {
-            ...plannerOutputValidated,
-            turnSpec: budgetDegradationAdjustment.turnSpec,
-            rationale: plannerAdjustmentReason
-              ? `${plannerOutputValidated.rationale} | ${plannerAdjustmentReason}`
-              : plannerOutputValidated.rationale
-          }
-        : plannerOutputValidated
-
-      if (plannerAdjustmentReason) {
-        await emit('amendment_requested', { reason: plannerAdjustmentReason })
+      const plannerOutput = plannerOutputValidated
+      const invalidateCurrentNode = false
+      if (state.nonProgressTurns >= 3) {
+        advisoryNotes.push(
+          `non-progress signal: ${state.nonProgressTurns} consecutive non-progress turns; planner should re-scope next turn`
+        )
+      }
+      const gateFailuresOnNode = this.getGateFailureCount(state, state.activeNodeId, state.activeStage)
+      if (gateFailuresOnNode >= 2) {
+        advisoryNotes.push(
+          `gate-loop signal: node ${state.activeNodeId} has ${gateFailuresOnNode} gate failures; planner should choose a different approach`
+        )
+      }
+      const remainingTurns = Math.max(0, this.options.budget.maxTurns - state.budgetUsed.turns)
+      if (remainingTurns <= 2) {
+        advisoryNotes.push('budget signal: <=2 turns remaining; planner should choose minimal irreversible progress.')
       }
 
       this.onActivity?.({
@@ -1504,11 +1481,6 @@ export class YoloSession {
       }
 
       const gateResult = this.gateEngine.evaluate(snapshotManifest)
-      const gateIntervention = this.deriveGateInterventionQuestion(
-        plannerOutput.turnSpec.stage,
-        gateResult,
-        coordinatorResult.askUser
-      )
       const semanticReview = await Promise.resolve(this.reviewEngine.evaluate({
         phase: this.options.phase,
         stage: plannerOutput.turnSpec.stage,
@@ -1522,11 +1494,6 @@ export class YoloSession {
         reviewerCount: semanticReview.reviewerPasses.length,
         consensusBlockerLabels: semanticReview.consensusBlockers.map((item) => item.label)
       })
-      const semanticIntervention = this.deriveSemanticReviewIntervention(
-        plannerOutput.turnSpec.stage,
-        semanticReview,
-        gateIntervention.askUser
-      )
       const rewriteApplied = this.applyReviewerRewritePatch(
         plannerOutput,
         coordinatorResult,
@@ -1539,7 +1506,7 @@ export class YoloSession {
       }
       const coordinatorResultWithIntervention: CoordinatorTurnResult = {
         ...coordinatorResultPatched,
-        askUser: semanticIntervention.askUser
+        askUser: coordinatorResultPatched.askUser
       }
       await emit('gate_evaluated', {
         stage: plannerOutput.turnSpec.stage,
@@ -1566,18 +1533,8 @@ export class YoloSession {
           refs: gateTracking.regressions
         })
       }
-      if (gateIntervention.synthesized) {
-        advisoryNotes.push(
-          `scope negotiation required by gate blockers: ${gateIntervention.blockerLabels.join(', ')}`
-        )
-      }
       for (const note of semanticReview.advisoryNotes) {
         advisoryNotes.push(note)
-      }
-      if (semanticIntervention.synthesized) {
-        advisoryNotes.push(
-          `semantic consensus blockers require user confirmation: ${semanticIntervention.blockerLabels.join(', ')}`
-        )
       }
       const reviewerSnapshot: TurnReport['reviewerSnapshot'] = semanticReview.enabled
         ? {
@@ -1704,7 +1661,16 @@ export class YoloSession {
         && coordinatorResultWithIntervention.askUser
         && (coordinatorResultWithIntervention.askUser.required ?? true)
       ) {
-        const askUserInput = this.withAutoCheckpointReferences(coordinatorResultWithIntervention.askUser, allRecords)
+        let askUserInput = this.withAutoCheckpointReferences(coordinatorResultWithIntervention.askUser, allRecords)
+        askUserInput = this.withFallbackAskUserContext(askUserInput, {
+          objective: plannerOutput.turnSpec.objective,
+          currentFocus: plannerOutputForReport.planContract.current_focus,
+          whyNow: plannerOutputForReport.planContract.why_now,
+          needFromUser: plannerOutputForReport.planContract.need_from_user?.request,
+          doneDefinition: plannerOutputForReport.planContract.done_definition,
+          actionRationale: coordinatorResultWithIntervention.actionRationale,
+          summary: coordinatorResultPatched.summary
+        })
         const pendingQuestion = this.checkpointBroker.emitQuestion(askUserInput)
         state.pendingQuestion = pendingQuestion
         await emit('ask_user_emitted', {
@@ -1911,216 +1877,6 @@ export class YoloSession {
     return advisoryNotes
   }
 
-  private countConsecutiveStageTurns(
-    summaries: PlannerInput['lastTurnSummaries'],
-    stage: YoloStage
-  ): number {
-    let count = 0
-    for (let i = summaries.length - 1; i >= 0; i -= 1) {
-      if (summaries[i]?.stage !== stage) break
-      count += 1
-    }
-    return count
-  }
-
-  private applyStageProgressionPolicy(
-    plannerInput: PlannerInput,
-    turnSpec: TurnReport['turnSpec']
-  ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string } {
-    if (this.isLeanMode()) {
-      return { turnSpec, updated: false }
-    }
-    // Keep P0/P1 lightweight and avoid overriding planner stage intent there.
-    if (!this.isPhaseAtLeast('P2')) {
-      return { turnSpec, updated: false }
-    }
-    if (turnSpec.stage !== 'S1') {
-      return { turnSpec, updated: false }
-    }
-
-    const consecutiveS1Turns = this.countConsecutiveStageTurns(plannerInput.lastTurnSummaries, 'S1')
-    const inventoryTypes = new Set(plannerInput.assetInventory.map((asset) => asset.type))
-    const hasProblemPack = inventoryTypes.has('ProblemDefinitionPack')
-      || (
-        inventoryTypes.has('Hypothesis')
-        && inventoryTypes.has('RiskRegister')
-        && inventoryTypes.has('LandscapeSurvey')
-      )
-    const capReached = consecutiveS1Turns >= 2 && hasProblemPack
-    const hardStall = consecutiveS1Turns >= 4
-    if (!capReached && !hardStall) {
-      return { turnSpec, updated: false }
-    }
-
-    const expectedAssets = Array.from(new Set([
-      ...turnSpec.expectedAssets,
-      'Claim',
-      'EvidenceLink',
-      'ExperimentRequirement'
-    ]))
-
-    return {
-      turnSpec: {
-        ...turnSpec,
-        stage: 'S2',
-        objective: 'Transition to S2: define latency bottleneck claims, map evidence links, and emit ExperimentRequirement for externally executed latency measurement.',
-        expectedAssets
-      },
-      updated: true,
-      reason: hardStall
-        ? `stage progression guard: forced S1 -> S2 after ${consecutiveS1Turns} consecutive S1 turns`
-        : `stage progression guard: S1 framing pack complete; advancing to S2 after ${consecutiveS1Turns} S1 turns`
-    }
-  }
-
-  private applyNonProgressReplanPolicy(
-    state: SessionPersistedState,
-    turnSpec: TurnReport['turnSpec']
-  ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string } {
-    if (this.isLeanMode()) {
-      return { turnSpec, updated: false }
-    }
-    if (state.nonProgressTurns < 3) {
-      return { turnSpec, updated: false }
-    }
-
-    const message = `mandatory re-plan triggered after ${state.nonProgressTurns} consecutive non-progress turns`
-    if (this.options.phase === 'P0') {
-      return { turnSpec, updated: false, reason: `${message}; P0 keeps advance-only policy` }
-    }
-
-    if (turnSpec.branch.action === 'advance') {
-      return {
-        turnSpec: {
-          ...turnSpec,
-          objective: `${turnSpec.objective} [non-progress re-plan]`,
-          branch: {
-            ...turnSpec.branch,
-            action: 'fork'
-          }
-        },
-        updated: true,
-        reason: `${message}; branch action adjusted from advance to fork`
-      }
-    }
-
-    return { turnSpec, updated: false, reason: `${message}; planner already selected ${turnSpec.branch.action}` }
-  }
-
-  private applyGateLoopBreakerPolicy(
-    state: SessionPersistedState,
-    turnSpec: TurnReport['turnSpec']
-  ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string; invalidateCurrentNode?: boolean } {
-    if (this.isLeanMode()) {
-      return { turnSpec, updated: false }
-    }
-    const gateFailures = this.getGateFailureCount(state, state.activeNodeId, state.activeStage)
-    if (gateFailures < 2) {
-      return { turnSpec, updated: false }
-    }
-
-    const message = `loop-breaker: same node ${state.activeNodeId} failed gate ${state.activeStage} ${gateFailures} times`
-    if (this.options.phase === 'P0') {
-      return { turnSpec, updated: false, reason: `${message}; P0 keeps advance-only policy` }
-    }
-
-    if (turnSpec.branch.action !== 'fork') {
-      return {
-        turnSpec: {
-          ...turnSpec,
-          objective: `${turnSpec.objective} [loop-breaker fork]`,
-          branch: {
-            ...turnSpec.branch,
-            action: 'fork'
-          }
-        },
-        updated: true,
-        reason: `${message}; branch action adjusted to fork`,
-        invalidateCurrentNode: true
-      }
-    }
-
-    return { turnSpec, updated: false, reason: `${message}; planner already selected fork` }
-  }
-
-  private applyBudgetDegradationPolicy(
-    state: SessionPersistedState,
-    turnSpec: TurnReport['turnSpec']
-  ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string } {
-    if (this.isLeanMode()) {
-      return { turnSpec, updated: false }
-    }
-    const remainingTurns = Math.max(0, this.options.budget.maxTurns - state.budgetUsed.turns)
-    const remainingTokens = Math.max(0, this.options.budget.maxTokens - state.budgetUsed.tokens)
-    const remainingCostUsd = Math.max(0, this.options.budget.maxCostUsd - state.budgetUsed.costUsd)
-    const c = turnSpec.constraints
-    const budgetTight = (
-      remainingTurns <= 2
-      || remainingTokens <= c.maxTurnTokens * 1.25
-      || remainingCostUsd <= c.maxTurnCostUsd * 1.25
-    )
-    if (!budgetTight) {
-      return { turnSpec, updated: false }
-    }
-
-    let updated = false
-    const reasons: string[] = []
-    let nextTurnSpec = turnSpec
-
-    const tightenedConstraints = {
-      ...nextTurnSpec.constraints,
-      maxToolCalls: Math.max(1, Math.floor(nextTurnSpec.constraints.maxToolCalls * 0.75)),
-      maxDiscoveryOps: Math.max(1, Math.floor(nextTurnSpec.constraints.maxDiscoveryOps * 0.75)),
-      maxReadBytes: Math.max(1, Math.floor(nextTurnSpec.constraints.maxReadBytes * 0.75))
-    }
-    if (
-      tightenedConstraints.maxToolCalls !== nextTurnSpec.constraints.maxToolCalls
-      || tightenedConstraints.maxDiscoveryOps !== nextTurnSpec.constraints.maxDiscoveryOps
-      || tightenedConstraints.maxReadBytes !== nextTurnSpec.constraints.maxReadBytes
-    ) {
-      nextTurnSpec = {
-        ...nextTurnSpec,
-        constraints: tightenedConstraints
-      }
-      updated = true
-      reasons.push('degradation ladder: context breadth reduced')
-    }
-
-    if (nextTurnSpec.expectedAssets.length > 2) {
-      nextTurnSpec = {
-        ...nextTurnSpec,
-        expectedAssets: nextTurnSpec.expectedAssets.slice(0, 2)
-      }
-      updated = true
-      reasons.push('degradation ladder: expected asset fan-out reduced')
-    }
-
-    if (this.options.phase !== 'P0' && nextTurnSpec.branch.action !== 'advance') {
-      nextTurnSpec = {
-        ...nextTurnSpec,
-        branch: {
-          ...nextTurnSpec.branch,
-          action: 'advance'
-        }
-      }
-      updated = true
-      reasons.push(`degradation ladder: branch action forced to advance from ${turnSpec.branch.action}`)
-    }
-
-    if (!updated) {
-      return { turnSpec, updated: false }
-    }
-
-    return {
-      turnSpec: nextTurnSpec,
-      updated: true,
-      reason: [
-        `degradation ladder applied (turns=${remainingTurns}, tokens=${remainingTokens}, costUsd=${remainingCostUsd.toFixed(3)})`,
-        ...reasons
-      ].join('; ')
-    }
-  }
-
   private getGateFailureCount(
     state: SessionPersistedState,
     nodeId: string,
@@ -2271,99 +2027,6 @@ export class YoloSession {
     }
 
     throw new Error(`unsupported branch action: ${String(action)}`)
-  }
-
-  private deriveGateInterventionQuestion(
-    stage: YoloStage,
-    gateResult: GateResult,
-    existingAskUser: AskUserRequest | undefined
-  ): { askUser: AskUserRequest | undefined; synthesized: boolean; blockerLabels: string[] } {
-    if (this.isLeanMode()) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-    if (existingAskUser && (existingAskUser.blocking ?? true)) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-    if (this.options.phase === 'P0') {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-    if (gateResult.passed) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-    if (stage !== 'S4' && stage !== 'S5') {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-
-    const blockerSet = new Set(gateResult.hardBlockers.map((item) => item.label))
-    const scopeNegotiationBlockers = [
-      'parity_violation_unresolved',
-      'causality_gap',
-      'claim_without_direct_evidence',
-      'overclaim'
-    ]
-    const matched = scopeNegotiationBlockers.filter((label) => blockerSet.has(label))
-    if (matched.length === 0) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-
-    return {
-      askUser: {
-        required: true,
-        question: `Scope negotiation required before continuing: ${matched.join(', ')}.`,
-        checkpoint: 'final-scope',
-        blocking: true,
-        context: `stage=${stage}; blockers=${matched.join(', ')}`
-      },
-      synthesized: true,
-      blockerLabels: matched
-    }
-  }
-
-  private deriveSemanticReviewIntervention(
-    stage: YoloStage,
-    semanticReview: SemanticReviewResult,
-    existingAskUser: AskUserRequest | undefined
-  ): { askUser: AskUserRequest | undefined; synthesized: boolean; blockerLabels: string[] } {
-    if (this.isLeanMode()) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-    if (existingAskUser && (existingAskUser.blocking ?? true)) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-    if (!semanticReview.enabled) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-    const labels = sortStrings(Array.from(new Set(semanticReview.consensusBlockers.map((item) => item.label))))
-    const details = semanticReview.consensusBlockers
-      .map((item) => `${item.label}(${item.voteCount}/3)`)
-      .join(', ')
-    const processVerdict = semanticReview.processReview?.verdict
-    const shouldBlockByProcess = processVerdict === 'block'
-
-    if (labels.length === 0 && !shouldBlockByProcess) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-
-    const contextParts = [`stage=${stage}`]
-    if (details) contextParts.push(`consensus=${details}`)
-    if (processVerdict) contextParts.push(`processVerdict=${processVerdict}`)
-    if (semanticReview.processReview?.notes_for_user) {
-      contextParts.push(`reviewNotes=${semanticReview.processReview.notes_for_user}`)
-    }
-
-    return {
-      askUser: {
-        required: true,
-        question: labels.length > 0
-          ? `Semantic review requires intervention: ${labels.join(', ')}.`
-          : 'Semantic review marked this turn as blocked; user intervention is required.',
-        checkpoint: 'final-scope',
-        blocking: true,
-        context: contextParts.join('; ')
-      },
-      synthesized: true,
-      blockerLabels: labels
-    }
   }
 
   private applyReviewerRewritePatch(
@@ -2734,7 +2397,8 @@ export class YoloSession {
   private shouldTransitionToComplete(turnReport: TurnReport): boolean {
     if (!this.isPhaseAtLeast('P2')) return false
     if (turnReport.turnSpec.stage !== 'S5') return false
-    if (turnReport.gateImpact.status !== 'pass') return false
+    // In lean_v2, gate artifacts are advisory/advanced and should not block closure.
+    if (!this.isLeanMode() && turnReport.gateImpact.status !== 'pass') return false
 
     if (this.isLeanMode()) {
       const lean = turnReport.gateImpact.snapshotManifest.lean
@@ -2836,9 +2500,8 @@ export class YoloSession {
     if (state.budgetUsed.turns >= this.options.budget.maxTurns) {
       return 'max turn budget reached'
     }
-    if (state.budgetUsed.tokens >= this.options.budget.maxTokens) {
-      return 'max token budget reached'
-    }
+    // Token budget is report-only — never used as a hard stop.
+    // Only cost (maxCostUsd) gates session execution.
     if (state.budgetUsed.costUsd >= this.options.budget.maxCostUsd) {
       return 'max cost budget reached'
     }
@@ -4283,6 +3946,61 @@ export class YoloSession {
     }
   }
 
+  private withFallbackAskUserContext(
+    request: AskUserRequest,
+    input: {
+      objective: string
+      currentFocus?: string
+      whyNow?: string
+      needFromUser?: string
+      doneDefinition?: string
+      actionRationale?: string
+      summary?: string
+    }
+  ): AskUserRequest {
+    const existing = typeof request.context === 'string' ? request.context.trim() : ''
+    if (existing) {
+      return {
+        ...request,
+        context: existing
+      }
+    }
+
+    const lines: string[] = []
+    const focus = (input.currentFocus ?? '').trim() || input.objective.trim() || 'current research objective'
+    lines.push(`Current focus: ${focus}`)
+
+    const why = (input.whyNow ?? '').trim() || (input.actionRationale ?? '').trim() || (input.summary ?? '').trim()
+    if (why) {
+      lines.push(`Why this is asked now: ${why}`)
+    }
+
+    const need = (input.needFromUser ?? '').trim()
+    if (need) {
+      lines.push(`What is needed from you: ${need}`)
+    }
+
+    if (Array.isArray(request.requiredFiles) && request.requiredFiles.length > 0) {
+      lines.push(`Files expected: ${request.requiredFiles.join(', ')}`)
+    }
+
+    if (/\(\d+\)|\d\)/.test(request.question)) {
+      lines.push('Reply format: answer each numbered item inline, for example "1) ... 2) ...".')
+    }
+
+    const doneDefinition = (input.doneDefinition ?? '').trim()
+    if (doneDefinition) {
+      lines.push(`After your reply, the run continues when this is satisfied: ${doneDefinition}`)
+    } else {
+      lines.push(`After your reply, the run resumes this objective: ${focus}`)
+    }
+
+    return {
+      ...request,
+      context: lines.join('\n')
+    }
+  }
+
   private async resolveCheckpointReferencedAssetIds(pending: AskUserRequest): Promise<string[]> {
     const existingRefs = this.normalizeIdList(pending.referencedAssetIds)
     if (existingRefs.length > 0) return existingRefs
@@ -4480,7 +4198,9 @@ export class YoloSession {
     const turnRatio = this.options.budget.maxTurns > 0
       ? state.budgetUsed.turns / this.options.budget.maxTurns
       : 0
-    const maxRatio = Math.max(tokenRatio, costRatio, turnRatio)
+    // Token ratio is report-only — excluded from hard-stop alerts.
+    // Only cost and turn ratios drive warning/critical thresholds.
+    const maxRatio = Math.max(costRatio, turnRatio)
     const budgetLevel: 'none' | 'warning' | 'critical' = maxRatio >= 0.95
       ? 'critical'
       : maxRatio >= 0.8

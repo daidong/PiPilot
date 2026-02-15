@@ -1,5 +1,5 @@
-import { createAgent, packs } from '../../../src/index.js'
-import type { AgentRunResult } from '../../../src/index.js'
+import { createAgent, packs, createTokenTracker } from '../../../src/index.js'
+import type { TokenTracker } from '../../../src/index.js'
 
 import {
   ANCHORED_LABELS,
@@ -9,6 +9,8 @@ import {
   buildHeuristicBlockers
 } from '../runtime/review-engine.js'
 import type {
+  ActivityEvent,
+  AgentLike,
   AnchoredHardBlockerLabel,
   CoordinatorTurnResult,
   GateResult,
@@ -24,6 +26,7 @@ import type {
   SnapshotManifest,
   YoloStage
 } from '../runtime/types.js'
+import { randomId, nowIso } from '../runtime/utils.js'
 
 interface ReviewerJsonOutput {
   notes?: unknown
@@ -42,12 +45,6 @@ interface ReviewerJsonHardBlocker {
   assetRefs?: unknown
 }
 
-export interface AgentLike {
-  ensureInit: () => Promise<void>
-  run: (prompt: string) => Promise<AgentRunResult>
-  destroy?: () => Promise<void>
-}
-
 export interface YoloReviewerConfig {
   projectPath: string
   model: string
@@ -57,26 +54,59 @@ export interface YoloReviewerConfig {
   debug?: boolean
   identityPrompt?: string
   constraints?: string[]
+  onActivity?: (event: ActivityEvent) => void
+  tokenTracker?: TokenTracker
   createAgentInstance?: (input: { persona: ReviewerPersona }) => AgentLike
 }
 
 const DEFAULT_IDENTITY = [
   'You are a strict but practical scientific reviewer persona.',
   'Your job is critique-to-fix, not abstract scoring.',
-  'Return concrete revision actions and optional rewrite patches.'
-].join(' ')
+  'Return concrete revision actions and optional rewrite patches.',
+  '',
+  'Output contract — return STRICT JSON with this schema:',
+  '{"verdict":"pass|revise|block","critical_issues":[{"id":string,"severity":"high|medium|low","message":string}],"fix_plan":[{"issue_id":string,"action":string}],"rewrite_patch":{"apply":boolean,"target":"planner_output|coordinator_output","patch":object},"confidence":number,"notes_for_user":string,"notes":string[],"hardBlockers":[{"label":"claim_without_direct_evidence"|"causality_gap"|"parity_violation_unresolved"|"reproducibility_gap"|"overclaim","citations":string[],"assetRefs":string[]}]}',
+  '',
+  'Rules:',
+  '- Prefer revise over block unless missing structure makes progress impossible.',
+  '- critical_issues <= 3, each with concrete fix action.',
+  '- rewrite_patch should be minimal and machine-applicable.',
+  '- hardBlockers optional; include only anchored labels with concrete citations.'
+].join('\n')
 
 const DEFAULT_CONSTRAINTS = [
   'Output strict JSON only.',
   'Do not invent citations.',
   'Keep critical issues <= 3.',
-  'Prioritize actionable fixes over commentary.'
+  'Prioritize actionable fixes over commentary.',
+  'Do not use ctx-get in reviewer; critique only from provided materials.'
 ]
 
 const ANCHORED_LABEL_SET = new Set<string>(ANCHORED_LABELS)
 
+const STAGE_LABELS: Record<YoloStage, string> = {
+  S1: 'problem framing',
+  S2: 'measurement design',
+  S3: 'execution planning',
+  S4: 'result analysis',
+  S5: 'final synthesis'
+}
+
+function stageLabel(stage: YoloStage): string {
+  return STAGE_LABELS[stage] ?? stage
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid]
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -236,15 +266,11 @@ function buildPersonaPrompt(input: {
 }): string {
   return [
     'Run one critique-to-fix semantic review pass.',
+    'Return STRICT JSON only (no prose).',
+    'Minimum required JSON shape:',
+    '{"verdict":"pass|revise|block","critical_issues":[{"id":"string","severity":"high|medium|low","message":"string"}],"fix_plan":[{"issue_id":"string","action":"string"}],"rewrite_patch":{"apply":"boolean","target":"planner_output|coordinator_output","patch":{}},"confidence":"number","notes_for_user":"string","notes":["string"],"hardBlockers":[{"label":"claim_without_direct_evidence|causality_gap|parity_violation_unresolved|reproducibility_gap|overclaim","citations":["string"],"assetRefs":["string"]}]}',
     `Persona: ${input.persona}`,
     `Stage: ${input.stage}`,
-    'Return STRICT JSON schema:',
-    '{"verdict":"pass|revise|block","critical_issues":[{"id":string,"severity":"high|medium|low","message":string}],"fix_plan":[{"issue_id":string,"action":string}],"rewrite_patch":{"apply":boolean,"target":"planner_output|coordinator_output","patch":object},"confidence":number,"notes_for_user":string,"notes":string[],"hardBlockers":[{"label":"claim_without_direct_evidence"|"causality_gap"|"parity_violation_unresolved"|"reproducibility_gap"|"overclaim","citations":string[],"assetRefs":string[]}]}',
-    'Rules:',
-    '- Prefer revise over block unless missing structure makes progress impossible.',
-    '- critical_issues <= 3, each with concrete fix action.',
-    '- rewrite_patch should be minimal and machine-applicable.',
-    '- hardBlockers optional; include only anchored labels with concrete citations.',
     `PlannerOutput: ${JSON.stringify(input.plannerOutput ?? null)}`,
     `CoordinatorOutput: ${JSON.stringify(input.coordinatorOutput ?? null)}`,
     `SnapshotManifest: ${JSON.stringify(input.manifest)}`,
@@ -315,7 +341,7 @@ function aggregateProcessReview(
     ?? { apply: false, target: 'coordinator_output', patch: {} }
 
   const confidence = processPasses.length > 0
-    ? processPasses.reduce((acc, pass) => acc + pass.confidence, 0) / processPasses.length
+    ? median(processPasses.map((pass) => pass.confidence))
     : 0.5
 
   return {
@@ -328,12 +354,21 @@ function aggregateProcessReview(
   }
 }
 
+// Circuit-breaker: allow retry after this many evaluate() calls following a failure
+const CIRCUIT_BREAKER_RETRY_AFTER = 3
+
 class LlmBackedReviewEngine implements ReviewEngine {
   private readonly agents = new Map<ReviewerPersona, AgentLike>()
   private readonly initialized = new Set<ReviewerPersona>()
   private unavailableReason?: string
+  private unavailableCallsSince = 0
+  private readonly tokenTracker: TokenTracker
+  private lastReportedReviewerCostUsd = 0
 
-  constructor(private readonly config: YoloReviewerConfig) {}
+  constructor(private readonly config: YoloReviewerConfig) {
+    this.tokenTracker = config.tokenTracker ?? createTokenTracker()
+    this.tokenTracker.startRun(`reviewer-${Date.now()}`)
+  }
 
   async evaluate(input: {
     phase: 'P0' | 'P1' | 'P2' | 'P3'
@@ -360,6 +395,19 @@ class LlmBackedReviewEngine implements ReviewEngine {
       }
     }
 
+    // Circuit-breaker recovery: retry after enough calls have passed
+    if (this.unavailableReason && !this.config.createAgentInstance) {
+      this.unavailableCallsSince += 1
+      if (this.unavailableCallsSince >= CIRCUIT_BREAKER_RETRY_AFTER) {
+        this.unavailableReason = undefined
+        this.unavailableCallsSince = 0
+        // Clear stale agents so they get re-created on next getAgent()
+        await this.resetAgents()
+      }
+    }
+
+    this.emitActivity('reviewer_start', `reviewing ${stageLabel(input.stage)}`)
+
     const personas = REVIEWER_PERSONAS_BY_STAGE[input.stage]
     const reviewerPasses = await Promise.all(
       personas.map(async (persona) => this.runPersonaPass(persona, input))
@@ -367,6 +415,16 @@ class LlmBackedReviewEngine implements ReviewEngine {
     const consensusBlockers = buildConsensusBlockers(reviewerPasses)
     const processReview = aggregateProcessReview(reviewerPasses, consensusBlockers)
     const advisoryNotes: string[] = []
+
+    // Report reviewer cost
+    const costSummary = this.tokenTracker.getSummary()
+    const reviewerCostTotalUsd = costSummary?.cost?.totalCost ?? 0
+    const reviewerCostDeltaUsd = Math.max(0, reviewerCostTotalUsd - this.lastReportedReviewerCostUsd)
+    this.lastReportedReviewerCostUsd = reviewerCostTotalUsd
+    if (reviewerCostDeltaUsd > 0) {
+      advisoryNotes.push(`reviewer cost (this evaluate): $${reviewerCostDeltaUsd.toFixed(4)}`)
+    }
+
     if (this.unavailableReason) {
       advisoryNotes.push(this.unavailableReason)
     }
@@ -377,6 +435,8 @@ class LlmBackedReviewEngine implements ReviewEngine {
     }
     advisoryNotes.push(`process review verdict: ${processReview.verdict}`)
 
+    this.emitActivity('reviewer_end', `verdict: ${processReview.verdict}`)
+
     return {
       enabled: true,
       reviewerPasses,
@@ -384,6 +444,30 @@ class LlmBackedReviewEngine implements ReviewEngine {
       advisoryNotes,
       processReview
     }
+  }
+
+  async destroy(): Promise<void> {
+    await this.resetAgents()
+  }
+
+  private async resetAgents(): Promise<void> {
+    const destroyPromises: Promise<void>[] = []
+    for (const agent of this.agents.values()) {
+      if (agent.destroy) destroyPromises.push(agent.destroy())
+    }
+    await Promise.allSettled(destroyPromises)
+    this.agents.clear()
+    this.initialized.clear()
+  }
+
+  private emitActivity(kind: string, preview?: string): void {
+    this.config.onActivity?.({
+      id: randomId('act'),
+      timestamp: nowIso(),
+      kind: kind as ActivityEvent['kind'],
+      agent: 'reviewer',
+      preview
+    })
   }
 
   private async runPersonaPass(
@@ -403,7 +487,7 @@ class LlmBackedReviewEngine implements ReviewEngine {
         persona,
         notes: [
           `${persona} review fallback: ${reason}`,
-          `${persona} review pass for ${input.stage}`,
+          `${persona} review pass for ${stageLabel(input.stage)}`,
           `manifest=${input.manifest.id}`
         ],
         hardBlockers: heuristicBlockers.map((item) => ({
@@ -431,6 +515,7 @@ class LlmBackedReviewEngine implements ReviewEngine {
 
     try {
       const agent = await this.getAgent(persona)
+      this.emitActivity('tool_call', `${persona} reviewer pass for ${stageLabel(input.stage)}`)
       const prompt = buildPersonaPrompt({
         persona,
         stage: input.stage,
@@ -444,6 +529,15 @@ class LlmBackedReviewEngine implements ReviewEngine {
         return fallbackPass(runResult.error ? `agent run failed: ${runResult.error}` : 'agent run failed')
       }
 
+      // Track reviewer token costs
+      if (runResult.usage?.tokens) {
+        this.tokenTracker.recordCall(this.config.model, {
+          promptTokens: runResult.usage.tokens.promptTokens ?? 0,
+          completionTokens: runResult.usage.tokens.completionTokens ?? 0,
+          totalTokens: runResult.usage.tokens.totalTokens ?? 0
+        })
+      }
+
       const parsed = parseReviewerJson(runResult.output)
       if (!parsed) {
         return fallbackPass('review output is not valid JSON')
@@ -451,10 +545,11 @@ class LlmBackedReviewEngine implements ReviewEngine {
 
       const notes = normalizeStringArray(parsed.notes)
       if (notes.length === 0) {
-        notes.push(`${persona} review pass for ${input.stage}`)
+        notes.push(`${persona} review pass for ${stageLabel(input.stage)}`)
       }
       const hardBlockers = normalizeHardBlockers(parsed.hardBlockers, notes)
       const processReview = normalizeProcessReview(parsed)
+      this.emitActivity('tool_result', `${persona}: verdict=${processReview.verdict}`)
       return {
         persona,
         notes,
@@ -487,6 +582,7 @@ class LlmBackedReviewEngine implements ReviewEngine {
         const message = error instanceof Error ? error.message : String(error)
         if (!this.config.createAgentInstance) {
           this.unavailableReason = `semantic reviewer unavailable: ${message}`
+          this.unavailableCallsSince = 0
         }
         throw error
       }

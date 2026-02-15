@@ -3,6 +3,7 @@ import type { AgentRunResult } from '../../../src/index.js'
 
 import { buildDefaultP0Constraints, createConservativeFallbackSpec } from '../runtime/planner.js'
 import type {
+  AgentLike,
   PlannerContract,
   PlannerInput,
   PlannerOutput,
@@ -13,16 +14,6 @@ import type {
   YoloStage,
   YoloTurnAction
 } from '../runtime/types.js'
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface AgentLike {
-  ensureInit: () => Promise<void>
-  run: (prompt: string) => Promise<AgentRunResult>
-  destroy?: () => Promise<void>
-}
 
 export interface YoloPlannerConfig {
   projectPath: string
@@ -51,7 +42,8 @@ const DEFAULT_CONSTRAINTS = [
   'Output strict JSON only.',
   'Do not fabricate asset references.',
   'Keep tool_plan <= 3 steps.',
-  'Use plain language and concrete execution intent.'
+  'Use plain language and concrete execution intent.',
+  'Do not use ctx-get in planner; rely on provided turn context only.'
 ]
 
 const VALID_BRANCH_ACTIONS = new Set(['advance', 'fork', 'revisit', 'merge', 'prune'])
@@ -418,12 +410,9 @@ function buildStageGuidance(stage: YoloStage): string {
 
 function buildBranchGuidance(phase: string): string {
   if (phase === 'P0') {
-    return 'P0 branch rules: advance-only. Do not fork, revisit, merge, or prune.'
+    return 'Lean default branch policy: runtime manages branching; treat turnSpec.branch as optional and keep action=advance unless an explicit override is essential.'
   }
-  return [
-    'Branch actions available: advance, fork, revisit, merge, prune.',
-    'Use non-advance actions only when non-progress or repeated gate loops are explicit.'
-  ].join(' ')
+  return 'Lean default branch policy: runtime manages branching; omit turnSpec.branch unless there is a clear, explicit need to override. Prefer action=advance.'
 }
 
 function buildBudgetGuidance(remaining: PlannerInput['remainingBudget']): string {
@@ -451,44 +440,38 @@ function buildBudgetGuidance(remaining: PlannerInput['remainingBudget']): string
 function buildPlannerPrompt(input: PlannerInput): string {
   const sections = [
     [
-      'You are the YOLO-Scholar turn planner. Produce one plan contract as strict JSON.',
-      'Primary required schema:',
+      'You are the YOLO-Scholar turn planner.',
+      'Goal: choose one bounded, highest-leverage action that creates irreversible research progress this turn.',
+      'Return strict JSON only.',
+      'Required schema:',
       JSON.stringify({
-        current_focus: 'string',
-        why_now: 'string',
-        action: 'explore|refine_question|issue_experiment_request|digest_uploaded_results',
-        tool_plan: [{ step: 'number', tool: 'string', goal: 'string', output_contract: 'string' }],
-        expected_output: ['string'],
-        need_from_user: {
-          required: 'boolean',
-          request: 'string',
-          required_files: ['string']
+        planContract: {
+          current_focus: 'string',
+          action: 'explore|refine_question|issue_experiment_request|digest_uploaded_results',
+          tool_plan: [{ step: 'number', tool: 'string', goal: 'string', output_contract: 'string' }],
+          done_definition: 'string',
+          need_from_user: {
+            required: 'boolean',
+            request: 'string',
+            required_files: ['string']
+          },
+          why_now: 'string(optional)',
+          expected_output: ['string(optional)'],
+          risk_flags: ['string(optional)']
         },
-        done_definition: 'string',
-        risk_flags: ['string'],
+        suggestedPrompt: 'string(optional)',
+        rationale: 'string(optional)',
+        uncertaintyNote: 'string(optional)',
         turnSpec: {
-          stage: 'S1|S2|S3|S4|S5',
-          branch: { action: 'advance|fork|revisit|merge|prune', targetNodeId: 'string(optional)' },
-          objective: 'string',
-          expectedAssets: ['string'],
-          constraints: {
-            maxToolCalls: 'number',
-            maxWallClockSec: 'number',
-            maxStepCount: 'number',
-            maxNewAssets: 'number',
-            maxDiscoveryOps: 'number',
-            maxReadBytes: 'number',
-            maxPromptTokens: 'number',
-            maxCompletionTokens: 'number',
-            maxTurnTokens: 'number',
-            maxTurnCostUsd: 'number'
-          }
-        },
-        suggestedPrompt: 'string',
-        rationale: 'string',
-        uncertaintyNote: 'string'
+          note: 'optional advanced override; omit unless strictly needed'
+        }
       }, null, 2),
-      'Rules: tool_plan min=1 max=3; keep action and expected_output consistent; no process theater.'
+      'Rules:',
+      '- tool_plan must be 1-3 concrete steps.',
+      '- planContract.action and expected_output must be consistent.',
+      '- Prefer the smallest plan that can move the research forward now.',
+      '- Avoid process/taxonomy artifacts unless directly needed for this turn.',
+      '- For S2-S4, prioritize actionable ExperimentRequest quality over workflow abstraction.'
     ].join('\n'),
 
     buildStageGuidance(input.stage),
@@ -505,9 +488,6 @@ function buildPlannerPrompt(input: PlannerInput): string {
       `Active branch: ${input.activeBranchId}`,
       `Active node: ${input.activeNodeId}`,
       `Non-progress turns: ${input.nonProgressTurns}`,
-      `Requires branch diversification: ${input.requiresBranchDiversification}`,
-      `Gate failure count on active node: ${input.gateFailureCountOnActiveNode}`,
-      `Requires gate-loop break: ${input.requiresGateLoopBreak}`,
       `Remaining budget: ${JSON.stringify(input.remainingBudget)}`,
       `Merged user inputs: ${JSON.stringify(input.mergedUserInputs)}`
     ].join('\n'),
@@ -523,7 +503,7 @@ function buildPlannerPrompt(input: PlannerInput): string {
       ? [
           'Recent turn history:',
           ...input.lastTurnSummaries.map(
-            (s) => `  Turn ${s.turnNumber} [${s.stage}]: ${s.objective} (created: ${s.assetsCreated}, updated: ${s.assetsUpdated})`
+            (s) => `  Turn ${s.turnNumber} [${s.stage}]: ${s.objective} (created: ${s.assetsCreated}, updated: ${s.assetsUpdated})${s.summary ? `\n    Summary: ${s.summary}` : ''}`
           )
         ].join('\n')
       : 'No previous turns completed yet.',

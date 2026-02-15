@@ -11,6 +11,7 @@ export { CheckpointBroker } from './runtime/checkpoint-broker.js'
 export { UserIngressManager } from './runtime/user-ingress-manager.js'
 export { buildDefaultP0Constraints, createConservativeFallbackSpec } from './runtime/planner.js'
 export { ScriptedCoordinator } from './runtime/coordinator.js'
+export { getLanguageModelByModelId } from '../../src/index.js'
 export {
   buildClaimEvidenceRowsFromAssets,
   computeCoverageFromClaimEvidenceRows,
@@ -20,6 +21,7 @@ export {
 } from './runtime/export-artifacts.js'
 
 export type {
+  AgentLike,
   YoloPhase,
   YoloRuntimeMode,
   YoloStage,
@@ -76,7 +78,7 @@ export type {
 
 export type { BranchNode } from './runtime/branch-manager.js'
 export type { CreateYoloSessionConfig } from './agents/yolo-session.js'
-export type { YoloCoordinatorConfig, AgentLike } from './agents/coordinator.js'
+export type { YoloCoordinatorConfig } from './agents/coordinator.js'
 export type { YoloPlannerConfig } from './agents/planner.js'
 export type { YoloReviewerConfig } from './agents/reviewer.js'
 export type {
