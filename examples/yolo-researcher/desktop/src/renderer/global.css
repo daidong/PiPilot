@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 400 900;
+  src: url('./assets/fonts/PlayfairDisplay-Variable-Latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  src: url('./assets/fonts/Inter-Variable-Latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  src: url('./assets/fonts/Inter-Variable-LatinExt.woff2') format('woff2');
+}
+
+:root {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+html.dark {
+  --color-bg-base: #0a0a0a;
+  --color-bg-surface: #171717;
+  --color-bg-elevated: #262626;
+  --color-bg-hover: rgba(255 255 255 / 0.06);
+  --color-border: #262626;
+  --color-border-subtle: #1f1f1f;
+  --color-text: #f5f5f5;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #525252;
+  --color-input-bg: #171717;
+  --color-input-border: #404040;
+  --color-input-focus: rgba(20, 184, 166, 0.5);
+  --color-accent: #14b8a6;
+  --color-accent-soft: #2dd4bf;
+  color-scheme: dark;
+}
+
+html.light {
+  --color-bg-base: #ffffff;
+  --color-bg-surface: #f5f5f5;
+  --color-bg-elevated: #e5e5e5;
+  --color-bg-hover: rgba(0 0 0 / 0.04);
+  --color-border: #e5e5e5;
+  --color-border-subtle: #f0f0f0;
+  --color-text: #171717;
+  --color-text-secondary: #525252;
+  --color-text-muted: #a3a3a3;
+  --color-input-bg: #ffffff;
+  --color-input-border: #d4d4d4;
+  --color-input-focus: rgba(13, 148, 136, 0.4);
+  --color-accent: #0d9488;
+  --color-accent-soft: #14b8a6;
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 700px at 12% -10%, rgba(20, 184, 166, 0.12), transparent 60%),
+    radial-gradient(1200px 700px at 88% 110%, rgba(45, 212, 191, 0.1), transparent 60%),
+    var(--color-bg-base);
+  color: var(--color-text);
+}
+
+.t-bg-base { background: var(--color-bg-base); }
+.t-bg-surface { background: var(--color-bg-surface); }
+.t-bg-elevated { background: var(--color-bg-elevated); }
+.t-border { border-color: var(--color-border); }
+.t-border-subtle { border-color: var(--color-border-subtle); }
+.t-text { color: var(--color-text); }
+.t-text-secondary { color: var(--color-text-secondary); }
+.t-text-muted { color: var(--color-text-muted); }
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-elevated);
+  border-radius: 3px;
+}
