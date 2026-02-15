@@ -282,7 +282,7 @@ describe('P2 runtime robustness', () => {
     expect(checkpointNames).toContain('rollup-meta.json')
   })
 
-  it('fails turn when supersedes chain is invalid', async () => {
+  it('repairs hallucinated supersedes references instead of failing the turn', async () => {
     const projectPath = await createTempDir('yolo-p2-supersedes-invalid-')
     tempDirs.push(projectPath)
 
@@ -319,7 +319,11 @@ describe('P2 runtime robustness', () => {
       { planner: new DeterministicPlannerAdvance() }
     )
 
-    await expect(session.executeNextTurn()).rejects.toThrow('asset supersedes integrity violation')
+    const result = await session.executeNextTurn()
+    expect(result.turnReport.assetDiff.created).toHaveLength(1)
+    expect(
+      result.turnReport.riskDelta.some((note) => note.includes('supersedes references repaired'))
+    ).toBe(true)
   })
 
   it('emits wait-task reminder and escalation maintenance alerts', async () => {

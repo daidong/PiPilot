@@ -1,9 +1,18 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" class="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>YOLO Researcher</title>
+    <script>
+      // Restore saved theme preference before first paint to avoid flash
+      (function() {
+        var saved = localStorage.getItem('yolo-theme');
+        if (saved === 'dark' || saved === 'light') {
+          document.documentElement.className = saved;
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

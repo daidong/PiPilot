@@ -1,0 +1,387 @@
+// All shared types for the YOLO Researcher desktop UI
+
+export type YoloState =
+  | 'IDLE'
+  | 'PLANNING'
+  | 'EXECUTING'
+  | 'TURN_COMPLETE'
+  | 'WAITING_FOR_USER'
+  | 'WAITING_EXTERNAL'
+  | 'PAUSED'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'STOPPED'
+  | 'CRASHED'
+
+export type StageId = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
+export type GateStatus = 'pass' | 'fail' | 'none'
+export type TabId = 'timeline' | 'branches' | 'assets' | 'evidence' | 'system' | 'events'
+
+export interface YoloSnapshot {
+  sessionId: string
+  goal: string
+  phase: 'P0' | 'P1' | 'P2' | 'P3'
+  state: YoloState
+  currentTurn: number
+  activeStage: StageId
+  budgetUsed: { tokens: number; costUsd: number; turns: number }
+  budgetCaps?: { maxTurns: number; maxTokens: number; maxCostUsd: number; deadlineIso?: string }
+  pendingQuestion?: {
+    id?: string
+    question: string
+    options?: string[]
+    context?: string
+    checkpoint?: 'problem-freeze' | 'baseline-freeze' | 'claim-freeze' | 'final-scope'
+    blocking?: boolean
+  }
+  pendingExternalTaskId?: string
+  pendingResourceExtension?: {
+    id: string
+    requestedAt: string
+    requestedBy: 'user' | 'agent'
+    rationale: string
+    delta: {
+      maxTurns: number
+      maxTokens: number
+      maxCostUsd: number
+    }
+  }
+  runtimeStatus?: {
+    lease?: {
+      ownerId?: string
+      acquiredAt?: string
+      heartbeatAt?: string
+      staleAfterSec?: number
+      takeoverReason?: string
+      takeoverFromOwnerId?: string
+    }
+    latestCheckpoint?: {
+      checkpointId?: string
+      fileName?: string
+      createdAt?: string
+      trigger?: string
+      turnNumber?: number
+      runtimeState?: YoloState
+    }
+    checkpointCount?: number
+  }
+}
+
+export interface TurnReport {
+  turnNumber: number
+  turnSpec: { objective: string; stage: string }
+  summary: string
+  gateImpact?: {
+    status: string
+    gateResult?: { passed: boolean }
+    snapshotManifest?: {
+      evidencePolicy?: {
+        crossBranchCountableLinkIds?: string[]
+        keyRunMissingParityContractLinkIds?: string[]
+        invalidCountableLinkIds?: string[]
+      }
+      causality?: {
+        requiredClaims?: number
+        satisfiedClaims?: number
+        interventionLinkCount?: number
+        counterfactualLinkCount?: number
+        correlationOnlyLinkCount?: number
+        missingClaimIds?: string[]
+      }
+      claimDecisionBinding?: {
+        assertedClaimCount?: number
+        assertedClaimWithFreezeRefCount?: number
+        missingFreezeRefClaimIds?: string[]
+      }
+      directEvidence?: {
+        requiredClaims?: number
+        satisfiedClaims?: number
+        missingClaimIds?: string[]
+      }
+    }
+  }
+  reviewerSnapshot?: {
+    status?: 'not-run' | 'completed'
+    notes?: string[]
+    reviewerPasses?: Array<{
+      persona?: 'Novelty' | 'System' | 'Evaluation' | 'Writing'
+      hardBlockers?: Array<{ label?: string }>
+    }>
+    consensusBlockers?: Array<{
+      label?: string
+      voteCount?: number
+      personas?: Array<'Novelty' | 'System' | 'Evaluation' | 'Writing'>
+    }>
+  }
+  readinessSnapshot?: {
+    phase?: 'P0' | 'P1' | 'P2' | 'P3'
+    stage?: StageId
+    pass?: boolean
+    requiredFailed?: Array<'TG0' | 'TG1' | 'TG2' | 'TG3' | 'TG4'>
+  }
+  riskDelta?: string[]
+  consumedBudgets?: {
+    turnCostUsd?: number
+    turnTokens?: number
+    toolCalls?: number
+    wallClockSec?: number
+    readBytes?: number
+    discoveryOps?: number
+    promptTokens?: number
+    completionTokens?: number
+    stepCount?: number
+  }
+  assetDiff?: { created: string[] }
+  nonProgress?: boolean
+}
+
+export interface BranchNode {
+  nodeId: string
+  branchId: string
+  parentNodeId?: string
+  stage: StageId
+  status: 'active' | 'paused' | 'merged' | 'pruned' | 'invalidated'
+  summary: string
+  mergedFrom?: string[]
+  createdByTurn?: number
+}
+
+export interface BranchSnapshot {
+  activeBranchId: string
+  activeNodeId: string
+  rootNodeId: string
+  nodes: BranchNode[]
+}
+
+export interface AssetRecord {
+  id: string
+  type: string
+  payload: Record<string, unknown>
+  supersedes?: string
+  createdAt: string
+  createdByTurn: number
+  createdByAttempt: number
+}
+
+export interface EventRecord {
+  at: string
+  type: string
+  text: string
+}
+
+export interface QueuedUserInput {
+  id: string
+  text: string
+  priority: 'urgent' | 'normal'
+  createdAt: string
+  source: 'chat' | 'system'
+}
+
+export interface ExternalWaitTask {
+  id: string
+  sessionId: string
+  status: 'waiting' | 'satisfied' | 'canceled' | 'expired' | 'open' | 'resolved' | 'cancelled'
+  stage?: StageId
+  branchId?: string
+  nodeId?: string
+  title: string
+  reason?: string
+  requiredArtifacts?: Array<{ kind: string; pathHint?: string; description: string }>
+  completionRule: string
+  resumeAction: string
+  uploadDir?: string
+  details?: string
+  createdAt: string
+  resolvedAt?: string
+  resolutionNote?: string
+}
+
+export interface WaitTaskValidationResult {
+  taskId: string
+  status: ExternalWaitTask['status']
+  uploadDir?: string
+  requiredUploads: string[]
+  missingRequiredUploads: string[]
+  hasAnyUpload: boolean
+  checks: Array<{ name: string; passed: boolean; detail?: string }>
+  ok: boolean
+  reason?: string
+}
+
+export type EvidenceGraphLane = 'claim' | 'link' | 'evidence' | 'decision'
+
+export interface EvidenceGraphNode {
+  id: string
+  label: string
+  lane: EvidenceGraphLane
+  assetType: string
+  external: boolean
+  x: number
+  y: number
+}
+
+export interface EvidenceGraphEdge {
+  id: string
+  from: string
+  to: string
+  kind: 'claim_link' | 'link_evidence' | 'supersedes'
+}
+
+export interface StageGateInfo {
+  status: GateStatus
+  lastTurn?: number
+  objective?: string
+  summary?: string
+}
+
+export interface BudgetUsageInfo {
+  used: { tokens: number; costUsd: number; turns: number }
+  tokenRatio: number
+  costRatio: number
+  turnRatio: number
+  maxRatio: number
+}
+
+export interface BudgetTrendInfo {
+  sampleSize: number
+  avgTokensPerTurn: number
+  avgCostPerTurn: number
+  projectedTurnsLeftByTokens: number | null
+  projectedTurnsLeftByCost: number | null
+}
+
+export interface FailureInfo {
+  category: string
+  reason: string
+}
+
+export interface GovernanceSummary {
+  overrideDecisionCount: number
+  claimFreezeDecisionCount: number
+  invalidatedNodeCount: number
+  maintenanceAlertCount: number
+  maintenanceErrorCount: number
+  readinessGateFailureAlertCount: number
+  readinessRequiredFailedCount: number
+  semanticReviewerCount: number
+  semanticConsensusBlockerCount: number
+  crossBranchDefaultedCount: number
+  crossBranchAutoUpgradedCount: number
+  invalidCountableLinkCount: number
+  missingParityContractLinkCount: number
+  causalityMissingClaimCount: number
+  missingClaimDecisionBindingCount: number
+  directEvidenceMissingClaimCount: number
+}
+
+export interface CoverageSummary {
+  source: string
+  assertedPrimary: number
+  coveredPrimary: number
+  primaryRatio: number | null
+  assertedSecondary: number
+  coveredSecondary: number
+  secondaryRatio: number | null
+  primaryPass: boolean
+  secondaryPass: boolean
+}
+
+export interface ClaimMatrixRow {
+  id: string
+  summary: string
+  tier: string
+  state: string
+  coverageStatus: string
+  hasPrimaryGap: boolean
+  countableIds: string[]
+  citeOnlyIds: string[]
+  needsRevalidateIds: string[]
+}
+
+export interface LatestClaimEvidenceTable {
+  assetId: string
+  createdByTurn: number
+  rowCount: number
+  assertedPrimary: number
+  coveredPrimary: number
+  assertedPrimaryCoverage: number | null
+  assertedSecondary: number
+  coveredSecondary: number
+  assertedSecondaryCoverage: number | null
+  primaryPass: boolean
+  secondaryPass: boolean
+  rows: ClaimMatrixRow[]
+}
+
+export interface EvidenceGraphData {
+  nodes: EvidenceGraphNode[]
+  nodeById: Map<string, EvidenceGraphNode>
+  edges: EvidenceGraphEdge[]
+  graphW: number
+  graphH: number
+  nodeW: number
+  nodeH: number
+  counts: {
+    claims: number
+    links: number
+    evidence: number
+    decisions: number
+  }
+}
+
+// Actions interface returned by useYoloSession
+export interface SessionActions {
+  pickFolder: () => Promise<void>
+  startYolo: () => Promise<void>
+  pauseYolo: () => Promise<void>
+  resumeYolo: () => Promise<void>
+  stopYolo: () => Promise<void>
+  restoreFromCheckpoint: () => Promise<void>
+  submitReply: (text: string) => Promise<void>
+  submitQuickReply: (text: string) => Promise<void>
+  exportSummary: () => Promise<void>
+  exportClaimEvidenceTable: () => Promise<void>
+  exportAssetInventory: () => Promise<void>
+  exportFinalBundle: () => Promise<void>
+  requestWaitExternal: (params: {
+    title: string
+    completionRule: string
+    resumeAction: string
+    details: string
+  }) => Promise<void>
+  requestFullTextWait: (params: {
+    citation: string
+    requiredFiles: string
+    reason: string
+  }) => Promise<void>
+  resolveWaitTask: (resolutionNote: string) => Promise<void>
+  validateWaitTask: () => Promise<void>
+  cancelWaitTask: (reason: string) => Promise<void>
+  addIngressFiles: (taskId?: string) => Promise<void>
+  requestResourceExtension: (params: {
+    rationale: string
+    deltaTurns: string
+    deltaTokens: string
+    deltaCostUsd: string
+  }) => Promise<void>
+  resolveResourceExtension: (approved: boolean, note: string) => Promise<void>
+  recordOverrideDecision: (params: {
+    targetNodeId: string
+    rationale: string
+    riskAccepted: string
+  }) => Promise<void>
+  setQueuePriority: (id: string, priority: 'urgent' | 'normal') => Promise<void>
+  moveQueueItem: (id: string, toIndex: number) => Promise<void>
+  removeQueueItem: (id: string) => Promise<void>
+  setGoal: (goal: string) => void
+  setSelectedPhase: (phase: 'P0' | 'P1' | 'P2' | 'P3') => void
+  setActiveTab: (tab: TabId) => void
+  setSelectedStage: (stage: StageId) => void
+  setTimelineStageFilter: (filter: 'ALL' | StageId) => void
+  setTimelineGateFilter: (filter: 'ALL' | GateStatus) => void
+  setTimelineProgressFilter: (filter: 'ALL' | 'PROGRESS' | 'NON_PROGRESS') => void
+  setSelectedTurnNumber: (turnNumber: number | null) => void
+  setSelectedGraphNodeId: (nodeId: string | null) => void
+  setShowSupersedesEdges: (show: boolean | ((prev: boolean) => boolean)) => void
+  setQueueOpen: (open: boolean | ((prev: boolean) => boolean)) => void
+}

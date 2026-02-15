@@ -1228,7 +1228,11 @@ export class YoloSession {
               activeNodeId: state.activeNodeId
             })
           }
-      const nonProgressAdjustment = this.applyNonProgressReplanPolicy(state, plannerOutputValidated.turnSpec)
+      const stageProgressionAdjustment = this.applyStageProgressionPolicy(
+        plannerInput,
+        plannerOutputValidated.turnSpec
+      )
+      const nonProgressAdjustment = this.applyNonProgressReplanPolicy(state, stageProgressionAdjustment.turnSpec)
       const gateLoopBreakerAdjustment = this.applyGateLoopBreakerPolicy(
         state,
         nonProgressAdjustment.turnSpec
@@ -1238,11 +1242,13 @@ export class YoloSession {
         gateLoopBreakerAdjustment.turnSpec
       )
       const plannerAdjustmentUpdated = (
-        nonProgressAdjustment.updated
+        stageProgressionAdjustment.updated
+        || nonProgressAdjustment.updated
         || gateLoopBreakerAdjustment.updated
         || budgetDegradationAdjustment.updated
       )
       const plannerAdjustmentReason = [
+        stageProgressionAdjustment.reason,
         nonProgressAdjustment.reason,
         gateLoopBreakerAdjustment.reason,
         budgetDegradationAdjustment.reason
@@ -1340,6 +1346,19 @@ export class YoloSession {
           `cross-branch evidence auto-upgraded to countable: ${evidencePolicyNormalization.autoUpgradedCountableLinkIds.join(', ')}`
         )
       }
+      const supersedesRepairs = this.repairSupersedesIntegrity(existingAssets, stagedAssets.records)
+      if (supersedesRepairs.length > 0) {
+        advisoryNotes.push(
+          `supersedes references repaired (hallucinated IDs stripped): ${supersedesRepairs.join(', ')}`
+        )
+        // Re-write repaired staged asset files
+        for (const record of stagedAssets.records) {
+          if (supersedesRepairs.some((r) => r.startsWith(record.id + '->'))) {
+            await writeJsonFile(path.join(this.assetStore.stagingDir, `${record.id}.json`), record)
+          }
+        }
+      }
+      // Validate remaining supersedes references (self-refs, type mismatches, cycles are still fatal)
       this.assertSupersedesIntegrity([...existingAssets, ...stagedAssets.records])
 
       const updatedAssets = stagedAssets.records
@@ -1756,6 +1775,65 @@ export class YoloSession {
     }
   }
 
+  private countConsecutiveStageTurns(
+    summaries: PlannerInput['lastTurnSummaries'],
+    stage: YoloStage
+  ): number {
+    let count = 0
+    for (let i = summaries.length - 1; i >= 0; i -= 1) {
+      if (summaries[i]?.stage !== stage) break
+      count += 1
+    }
+    return count
+  }
+
+  private applyStageProgressionPolicy(
+    plannerInput: PlannerInput,
+    turnSpec: TurnReport['turnSpec']
+  ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string } {
+    // Keep P0/P1 lightweight and avoid overriding planner stage intent there.
+    if (!this.isPhaseAtLeast('P2')) {
+      return { turnSpec, updated: false }
+    }
+    if (turnSpec.stage !== 'S1') {
+      return { turnSpec, updated: false }
+    }
+
+    const consecutiveS1Turns = this.countConsecutiveStageTurns(plannerInput.lastTurnSummaries, 'S1')
+    const inventoryTypes = new Set(plannerInput.assetInventory.map((asset) => asset.type))
+    const hasProblemPack = inventoryTypes.has('ProblemDefinitionPack')
+      || (
+        inventoryTypes.has('Hypothesis')
+        && inventoryTypes.has('RiskRegister')
+        && inventoryTypes.has('LandscapeSurvey')
+      )
+    const capReached = consecutiveS1Turns >= 2 && hasProblemPack
+    const hardStall = consecutiveS1Turns >= 4
+    if (!capReached && !hardStall) {
+      return { turnSpec, updated: false }
+    }
+
+    const expectedAssets = Array.from(new Set([
+      ...turnSpec.expectedAssets,
+      'Claim',
+      'EvidenceLink',
+      'ExperimentRequirement'
+    ]))
+
+    return {
+      turnSpec: {
+        ...turnSpec,
+        stage: 'S2',
+        objective: 'Transition to S2: define latency bottleneck claims, map evidence links, and emit ExperimentRequirement for externally executed latency measurement.',
+        expectedAssets
+      },
+      updated: true,
+      reason: hardStall
+        ? `stage progression guard: forced S1 -> S2 after ${consecutiveS1Turns} consecutive S1 turns`
+        : `stage progression guard: S1 framing pack complete; advancing to S2 after ${consecutiveS1Turns} S1 turns`
+    }
+  }
+
   private applyNonProgressReplanPolicy(
     state: SessionPersistedState,
     turnSpec: TurnReport['turnSpec']
@@ -1975,6 +2053,24 @@ export class YoloSession {
       throw new Error(`not implemented in P0: branch action ${action}`)
     }
 
+    // Validate that targetNodeId exists — LLM planner may hallucinate node IDs.
+    // If invalid, fall back to 'advance' to keep the session running.
+    let validatedTargetNodeId = targetNodeId
+    if (targetNodeId && action !== 'advance') {
+      const existingNode = await this.branchManager.getNode(targetNodeId)
+      if (!existingNode) {
+        console.warn(`[yolo] branch mutation: planner referenced non-existent node ${targetNodeId}, falling back to advance`)
+        validatedTargetNodeId = undefined
+        // Fall back to advance — the safest default
+        return this.branchManager.advance({
+          stage,
+          summary: objective,
+          createdByTurn: turnNumber,
+          createdByAttempt: attempt
+        })
+      }
+    }
+
     if (action === 'advance') {
       return this.branchManager.advance({
         stage,
@@ -1988,7 +2084,7 @@ export class YoloSession {
       return this.branchManager.fork({
         stage,
         summary: objective,
-        targetNodeId,
+        targetNodeId: validatedTargetNodeId,
         sourceNodeStatus: options.invalidateCurrentNode ? 'invalidated' : 'paused',
         createdByTurn: turnNumber,
         createdByAttempt: attempt
@@ -1996,16 +2092,16 @@ export class YoloSession {
     }
 
     if (action === 'revisit') {
-      if (!targetNodeId) throw new Error('revisit requires targetNodeId')
-      const allowInvalidatedOverride = await this.hasOverrideDecisionForNode(targetNodeId)
-      return this.branchManager.revisit({ targetNodeId, allowInvalidatedOverride })
+      if (!validatedTargetNodeId) throw new Error('revisit requires targetNodeId')
+      const allowInvalidatedOverride = await this.hasOverrideDecisionForNode(validatedTargetNodeId)
+      return this.branchManager.revisit({ targetNodeId: validatedTargetNodeId, allowInvalidatedOverride })
     }
 
     if (action === 'merge') {
-      if (!targetNodeId) throw new Error('merge requires targetNodeId')
-      const allowInvalidatedOverride = await this.hasOverrideDecisionForNode(targetNodeId)
+      if (!validatedTargetNodeId) throw new Error('merge requires targetNodeId')
+      const allowInvalidatedOverride = await this.hasOverrideDecisionForNode(validatedTargetNodeId)
       return this.branchManager.merge({
-        targetNodeId,
+        targetNodeId: validatedTargetNodeId,
         allowInvalidatedOverride,
         stage,
         summary: objective,
@@ -2015,8 +2111,8 @@ export class YoloSession {
     }
 
     if (action === 'prune') {
-      const allowInvalidatedOverride = targetNodeId ? await this.hasOverrideDecisionForNode(targetNodeId) : false
-      return this.branchManager.prune({ targetNodeId, allowInvalidatedOverride })
+      const allowInvalidatedOverride = validatedTargetNodeId ? await this.hasOverrideDecisionForNode(validatedTargetNodeId) : false
+      return this.branchManager.prune({ targetNodeId: validatedTargetNodeId, allowInvalidatedOverride })
     }
 
     throw new Error(`unsupported branch action: ${String(action)}`)
@@ -2756,6 +2852,29 @@ export class YoloSession {
     }
 
     return { assets: deduped, duplicateRunKeys: sortStrings(Array.from(new Set(duplicateRunKeys))) }
+  }
+
+  /**
+   * Repair missing supersedes references by stripping them from staged assets.
+   * This handles the common case where the LLM hallucinates a shorthand ID
+   * (e.g. "S1-SCT1") instead of using the real asset ID format.
+   * Returns a list of repaired references like "assetId->missingRef".
+   */
+  private repairSupersedesIntegrity(existingAssets: AssetRecord[], stagedAssets: AssetRecord[]): string[] {
+    const allById = new Map<string, AssetRecord>()
+    for (const record of existingAssets) allById.set(record.id, record)
+    for (const record of stagedAssets) allById.set(record.id, record)
+
+    const repaired: string[] = []
+    for (const record of stagedAssets) {
+      const supersedes = record.supersedes?.trim()
+      if (!supersedes) continue
+      if (!allById.has(supersedes)) {
+        repaired.push(`${record.id}->${supersedes}`)
+        record.supersedes = undefined
+      }
+    }
+    return repaired
   }
 
   private assertSupersedesIntegrity(records: AssetRecord[]): void {

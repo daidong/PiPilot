@@ -290,7 +290,9 @@ function defaultAgentFactory(config: YoloCoordinatorConfig, callbacks: Coordinat
     onToolCall: (name, _args) => {
       callbacks.onToolCall(name, _args)
     },
-    onToolResult: (name, result, args) => callbacks.onToolResult(name, result, args)
+    onToolResult: (name, result, args) => callbacks.onToolResult(name, result, args),
+    // Enable token tracking so usage/cost data flows into turn reports
+    onUsage: () => {}
   })
 
   return {

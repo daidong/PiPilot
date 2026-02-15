@@ -23,6 +23,7 @@ interface WindowRuntimeState {
   yoloTurnReports: TurnReport[]
   loopRunning: boolean
   pauseRequested: boolean
+  stopRequested: boolean
   lastBroadcastState?: SessionPersistedState['state']
 }
 
@@ -69,6 +70,7 @@ function createWindowRuntimeState(): WindowRuntimeState {
     yoloTurnReports: [],
     loopRunning: false,
     pauseRequested: false,
+    stopRequested: false,
     lastBroadcastState: undefined
   }
 }
@@ -109,6 +111,7 @@ function clearWindowState(state: WindowRuntimeState): void {
   state.projectPath = ''
   state.loopRunning = false
   state.pauseRequested = false
+  state.stopRequested = false
   state.lastBroadcastState = undefined
 }
 
@@ -817,8 +820,15 @@ async function runYoloLoop(win: BrowserWindow, state: WindowRuntimeState): Promi
   if (!state.yoloSession) return
 
   state.loopRunning = true
+  state.stopRequested = false
   try {
     while (state.yoloSession) {
+      // Check stop request at the top of each iteration
+      if (state.stopRequested) {
+        state.stopRequested = false
+        break
+      }
+
       const currentSnapshot = await pushStateWithEvent(win, state, state.yoloSession, 'loop_iter')
       pushQuestionIfAny(win, currentSnapshot)
 
@@ -831,6 +841,15 @@ async function runYoloLoop(win: BrowserWindow, state: WindowRuntimeState): Promi
       })
 
       const result = await state.yoloSession.executeNextTurn()
+
+      // Check stop request immediately after turn completes — discard result and exit
+      if (state.stopRequested) {
+        state.stopRequested = false
+        safeSend(win, 'yolo:event', { type: 'loop_stopped', message: 'Stop requested — current turn discarded' })
+        if (state.yoloSession) await pushStateWithEvent(win, state, state.yoloSession, 'stop_after_turn')
+        break
+      }
+
       state.yoloTurnReports.push(result.turnReport)
       safeSend(win, 'yolo:turn-report', result.turnReport)
       safeSend(win, 'yolo:event', {
@@ -857,7 +876,11 @@ async function runYoloLoop(win: BrowserWindow, state: WindowRuntimeState): Promi
         })
       }
 
-      if (state.pauseRequested) {
+      if (state.pauseRequested || state.stopRequested) {
+        if (state.stopRequested) {
+          state.stopRequested = false
+          break
+        }
         await state.yoloSession.pause()
         state.pauseRequested = false
         await pushStateWithEvent(win, state, state.yoloSession, 'pause_requested')
@@ -872,6 +895,7 @@ async function runYoloLoop(win: BrowserWindow, state: WindowRuntimeState): Promi
     if (state.yoloSession) await pushStateWithEvent(win, state, state.yoloSession, 'loop_error')
   } finally {
     state.loopRunning = false
+    state.stopRequested = false
   }
 }
 
@@ -1046,6 +1070,7 @@ export function registerIpcHandlers(): void {
     if (!state.yoloSession) throw new Error('No active YOLO session.')
 
     state.pauseRequested = false
+    state.stopRequested = true
     await state.yoloSession.stop()
     await pushStateWithEvent(win, state, state.yoloSession, 'stop')
     return state.yoloSession.getSnapshot()

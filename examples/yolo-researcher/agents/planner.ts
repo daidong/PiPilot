@@ -205,6 +205,7 @@ function buildStageGuidance(stage: YoloStage): string {
     S1: [
       'S1 (Problem Definition): Focus on Hypothesis, RiskRegister, and baseline landscape.',
       'Do NOT propose experiments yet — stay in framing mode.',
+      'Keep S1 concise: typically 1-2 turns, then advance to S2 when framing is stable.',
       'Ideal assets: Hypothesis, RiskRegister, LandscapeSurvey.'
     ].join(' '),
     S2: [

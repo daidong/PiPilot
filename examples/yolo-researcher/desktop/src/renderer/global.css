@@ -31,8 +31,10 @@ html.dark {
   --color-bg-surface: #171717;
   --color-bg-elevated: #262626;
   --color-bg-hover: rgba(255 255 255 / 0.06);
+  --color-bg-selected: rgba(255, 255, 255, 0.1);
   --color-border: #262626;
   --color-border-subtle: #1f1f1f;
+  --color-border-action: rgba(255, 255, 255, 0.2);
   --color-text: #f5f5f5;
   --color-text-secondary: #a3a3a3;
   --color-text-muted: #525252;
@@ -41,6 +43,15 @@ html.dark {
   --color-input-focus: rgba(20, 184, 166, 0.5);
   --color-accent: #14b8a6;
   --color-accent-soft: #2dd4bf;
+  --color-graph-bg: rgba(2, 6, 23, 0.4);
+  /* Accent text colors */
+  --color-accent-teal: #5eead4;
+  --color-accent-rose: #fda4af;
+  --color-accent-amber: #fcd34d;
+  --color-accent-emerald: #6ee7b7;
+  --color-accent-sky: #7dd3fc;
+  --color-accent-violet: #c4b5fd;
+  --color-accent-slate: #cbd5e1;
   color-scheme: dark;
 }
 
@@ -49,8 +60,10 @@ html.light {
   --color-bg-surface: #f5f5f5;
   --color-bg-elevated: #e5e5e5;
   --color-bg-hover: rgba(0 0 0 / 0.04);
+  --color-bg-selected: rgba(0, 0, 0, 0.07);
   --color-border: #e5e5e5;
   --color-border-subtle: #f0f0f0;
+  --color-border-action: rgba(0, 0, 0, 0.15);
   --color-text: #171717;
   --color-text-secondary: #525252;
   --color-text-muted: #a3a3a3;
@@ -59,6 +72,15 @@ html.light {
   --color-input-focus: rgba(13, 148, 136, 0.4);
   --color-accent: #0d9488;
   --color-accent-soft: #14b8a6;
+  --color-graph-bg: rgba(241, 245, 249, 0.7);
+  /* Accent text colors */
+  --color-accent-teal: #0d9488;
+  --color-accent-rose: #e11d48;
+  --color-accent-amber: #b45309;
+  --color-accent-emerald: #059669;
+  --color-accent-sky: #0369a1;
+  --color-accent-violet: #7c3aed;
+  --color-accent-slate: #475569;
   color-scheme: light;
 }
 
@@ -70,14 +92,34 @@ body {
   color: var(--color-text);
 }
 
+html.light body {
+  background: radial-gradient(1200px 700px at 12% -10%, rgba(13, 148, 136, 0.06), transparent 60%),
+    radial-gradient(1200px 700px at 88% 110%, rgba(20, 184, 166, 0.04), transparent 60%),
+    var(--color-bg-base);
+}
+
+/* Theme-aware utility classes */
 .t-bg-base { background: var(--color-bg-base); }
 .t-bg-surface { background: var(--color-bg-surface); }
 .t-bg-elevated { background: var(--color-bg-elevated); }
+.t-bg-selected { background: var(--color-bg-selected); }
+.t-graph-bg { background: var(--color-graph-bg); }
 .t-border { border-color: var(--color-border); }
 .t-border-subtle { border-color: var(--color-border-subtle); }
+.t-border-action { border-color: var(--color-border-action); }
 .t-text { color: var(--color-text); }
 .t-text-secondary { color: var(--color-text-secondary); }
 .t-text-muted { color: var(--color-text-muted); }
+.t-hoverable:hover { background: var(--color-bg-hover); }
+
+/* Accent text colors — adapt between light and dark themes */
+.t-accent-teal { color: var(--color-accent-teal); }
+.t-accent-rose { color: var(--color-accent-rose); }
+.t-accent-amber { color: var(--color-accent-amber); }
+.t-accent-emerald { color: var(--color-accent-emerald); }
+.t-accent-sky { color: var(--color-accent-sky); }
+.t-accent-violet { color: var(--color-accent-violet); }
+.t-accent-slate { color: var(--color-accent-slate); }
 
 .drag-region {
   -webkit-app-region: drag;
