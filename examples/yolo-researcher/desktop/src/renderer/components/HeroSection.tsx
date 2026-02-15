@@ -1,6 +1,6 @@
-import type { YoloSnapshot, TurnReport, CoverageSummary, FailureInfo, ExternalWaitTask } from '@/lib/types'
-import { friendlyState, friendlyQuestion, friendlyQuestionContext, cleanStageRefs, friendlyErrorReason, friendlyErrorCategory } from '@/lib/formatters'
-import { QuestionPanel } from './QuestionPanel'
+import type { FailureInfo, InteractionContext, TurnReport, YoloSnapshot } from '@/lib/types'
+import { cleanStageRefs, friendlyAction, friendlyState } from '@/lib/formatters'
+import { AlertTriangle, ArrowRight } from 'lucide-react'
 
 interface HeroSectionProps {
   snapshot: YoloSnapshot | null
@@ -8,26 +8,20 @@ interface HeroSectionProps {
   selectedPhase: 'P0' | 'P1' | 'P2' | 'P3'
   activeTurn: TurnReport | null
   failureInfo: FailureInfo | null
-  completeCoverageSummary: CoverageSummary
-  totalCreatedAssets: number
-  quickOptions: string[]
   isStarting: boolean
-  pendingWaitTask: ExternalWaitTask | null
-  isCheckpointModal: boolean
+  drawerInteraction: InteractionContext | null
+  totalCreatedAssets: number
   onGoalChange: (goal: string) => void
   onPhaseChange: (phase: 'P0' | 'P1' | 'P2' | 'P3') => void
   onStart: () => void
   onResume: () => void
   onRestart: () => void
   onRestoreCheckpoint: () => void
-  onQuickReply: (text: string) => void
-  onSubmitReply: (text: string) => void
-  onExportSummary: () => void
-  onExportClaimTable: () => void
-  onExportAssets: () => void
-  onExportFinalBundle: () => void
-  onOpenEvidence: () => void
-  onOpenSystem: () => void
+  onOpenDrawer: () => void
+}
+
+function hasBlockingNeed(snapshot: YoloSnapshot | null, drawerInteraction: InteractionContext | null): boolean {
+  return drawerInteraction !== null
 }
 
 export function HeroSection({
@@ -36,51 +30,30 @@ export function HeroSection({
   selectedPhase,
   activeTurn,
   failureInfo,
-  completeCoverageSummary,
-  totalCreatedAssets,
-  quickOptions,
   isStarting,
-  pendingWaitTask,
-  isCheckpointModal,
+  drawerInteraction,
+  totalCreatedAssets,
   onGoalChange,
   onPhaseChange,
   onStart,
   onResume,
   onRestart,
   onRestoreCheckpoint,
-  onQuickReply,
-  onSubmitReply,
-  onExportSummary,
-  onExportClaimTable,
-  onExportAssets,
-  onExportFinalBundle,
-  onOpenEvidence,
-  onOpenSystem,
+  onOpenDrawer,
 }: HeroSectionProps) {
   const state = snapshot?.state
+  const displayState = state === 'WAITING_FOR_USER' ? 'Running (waiting for your input)' : friendlyState(state)
+  const latestExecution = activeTurn?.execution
+  const hasNeed = hasBlockingNeed(snapshot, drawerInteraction)
 
-  // Show launching card whenever isStarting is true (regardless of snapshot state)
-  if (isStarting) {
-    return (
-      <section className="rounded-2xl border border-teal-500/40 bg-teal-500/5 p-5">
-        <div className="flex items-center gap-3">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-teal-500 border-t-transparent" />
-          <div>
-            <div className="text-sm font-medium">Launching Research Session...</div>
-            <div className="mt-0.5 text-xs t-text-secondary">Initializing planner and preparing first cycle</div>
-          </div>
-        </div>
-        <div className="mt-3 rounded-lg bg-teal-500/10 px-3 py-2 text-xs t-text-secondary">
-          <span className="font-medium t-accent-teal">Goal:</span> {goal}
-        </div>
-      </section>
-    )
-  }
-
-  // IDLE — goal form
-  if (!snapshot?.sessionId || state === 'IDLE') {
+  const isIdle = !snapshot?.sessionId || state === 'IDLE'
+  if (isIdle) {
     return (
       <section className="rounded-2xl border t-border t-bg-surface p-5">
+        <div className="mb-3">
+          <div className="text-[11px] uppercase tracking-wide t-text-secondary">Mission Board</div>
+          <div className="text-sm font-medium">Define your research objective and start</div>
+        </div>
         <label className="mb-2 block text-xs uppercase tracking-wide t-text-secondary">Research Goal</label>
         <textarea
           value={goal}
@@ -93,229 +66,134 @@ export function HeroSection({
           onClick={onStart}
           disabled={isStarting}
         >
-          Start Research
+          {isStarting ? 'Starting...' : 'Start Research'}
         </button>
       </section>
     )
   }
 
-  // RUNNING (EXECUTING / PLANNING / TURN_COMPLETE)
-  if (state === 'EXECUTING' || state === 'PLANNING' || state === 'TURN_COMPLETE') {
+  // COMPLETE state: show concrete summary
+  if (state === 'COMPLETE') {
+    const totalCycles = snapshot?.currentTurn ?? 0
+    const totalCost = snapshot?.budgetUsed?.costUsd ?? 0
     return (
-      <section className="rounded-2xl border border-teal-500/30 bg-teal-500/5 p-5">
-        {activeTurn ? (
-          <>
-            <div className="flex items-center gap-2">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent" />
-              <div className="text-xs t-text-secondary">
-                {state === 'PLANNING' ? 'Planning next cycle...' : state === 'TURN_COMPLETE' ? 'Cycle complete — preparing next...' : 'Researching'}
+      <section className="rounded-2xl border t-border t-bg-surface p-4">
+        <div className="mb-3">
+          <div className="text-[11px] uppercase tracking-wide t-text-secondary">Mission Board</div>
+          <div className="text-sm font-medium t-accent-emerald">
+            Run complete · {totalCycles} cycles · {totalCreatedAssets} artifacts · ${totalCost.toFixed(2)} spent
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <article className="rounded-xl border t-card-emerald p-3">
+            <div className="text-[11px] uppercase tracking-wide t-text-secondary">Summary</div>
+            <div className="mt-2 text-xs line-clamp-4">
+              {activeTurn?.summary
+                ? cleanStageRefs(activeTurn.summary)
+                : 'Research complete.'}
+            </div>
+          </article>
+          <article className="rounded-xl border t-card-teal p-3">
+            <div className="text-[11px] uppercase tracking-wide t-text-secondary">Final Metrics</div>
+            <div className="mt-2 text-xs t-text-secondary">
+              <div>{totalCycles} research cycles completed</div>
+              <div>{totalCreatedAssets} total artifacts created</div>
+              <div>${totalCost.toFixed(2)} total cost</div>
+              <div>{(snapshot?.budgetUsed?.tokens ?? 0).toLocaleString()} tokens consumed</div>
+            </div>
+          </article>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="rounded-2xl border t-border t-bg-surface p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide t-text-secondary">Mission Board</div>
+          <div className="text-sm font-medium">
+            {hasNeed ? 'Current Focus · Need From You · Latest Insight' : 'Current Focus · Latest Insight'}
+          </div>
+        </div>
+        <div className={`rounded-md border px-2 py-1 text-[11px] ${hasNeed ? 'border-amber-500/40 t-accent-amber' : 'border-emerald-500/40 t-accent-emerald'}`}>
+          {hasNeed ? 'Action Needed' : 'No Blocker'}
+        </div>
+      </div>
+
+      <div className={`grid gap-3 ${hasNeed ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
+        {/* Current Focus */}
+        <article className="rounded-xl border t-card-teal p-3">
+          <div className="text-[11px] uppercase tracking-wide t-text-secondary">Current Focus</div>
+          <div className="mt-1 text-sm font-medium">{displayState}</div>
+          <div className="mt-1 text-xs t-text-secondary">Cycle {snapshot?.currentTurn ?? 0}</div>
+          {activeTurn?.turnSpec?.objective && (
+            <div className="mt-2 text-xs line-clamp-3">{cleanStageRefs(activeTurn.turnSpec.objective)}</div>
+          )}
+          {latestExecution?.action && (
+            <div className="mt-2 text-[11px] t-accent-teal">
+              {friendlyAction(latestExecution.action)}
+            </div>
+          )}
+          {latestExecution?.actionRationale && (
+            <div className="mt-1 text-[11px] t-text-secondary line-clamp-3">
+              {cleanStageRefs(latestExecution.actionRationale)}
+            </div>
+          )}
+          {(state === 'PAUSED' || state === 'STOPPED') && (
+            <button
+              onClick={onResume}
+              className="mt-3 rounded-md border t-border px-2 py-1 text-[11px] t-hoverable"
+            >
+              Resume
+            </button>
+          )}
+        </article>
+
+        {/* Need From You — compact trigger card that opens the drawer */}
+        {hasNeed && drawerInteraction && (
+          <article
+            className="rounded-xl border t-card-amber p-3 cursor-pointer hover:bg-amber-500/10 transition-colors group"
+            onClick={onOpenDrawer}
+          >
+            <div className="text-[11px] uppercase tracking-wide t-text-secondary">Need From You</div>
+            <div className="mt-1.5 flex items-start gap-2">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5 t-accent-amber" />
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-medium">{drawerInteraction.title}</div>
+                <div className="mt-1 text-[11px] t-text-secondary">
+                  {drawerInteraction.kind === 'experiment_request' && 'Experiment data needed to continue research.'}
+                  {drawerInteraction.kind === 'fulltext_upload' && 'Full-text document needed to continue.'}
+                  {drawerInteraction.kind === 'gate_blocker' && 'A gate blocker requires your scope decision.'}
+                  {drawerInteraction.kind === 'checkpoint_decision' && 'A research checkpoint requires your decision.'}
+                  {drawerInteraction.kind === 'resource_extension' && 'The system is requesting additional budget.'}
+                  {drawerInteraction.kind === 'general_question' && 'The research agent has a question for you.'}
+                  {drawerInteraction.kind === 'failure_recovery' && 'The session encountered a failure and needs recovery.'}
+                </div>
               </div>
             </div>
-            <div className="mt-2 text-sm font-medium">{cleanStageRefs(activeTurn.turnSpec?.objective ?? '')}</div>
-            {activeTurn.summary && (
-              <div className="mt-1 text-xs t-text-secondary">{cleanStageRefs(activeTurn.summary)}</div>
-            )}
-          </>
-        ) : (
-          <div className="flex items-center gap-3">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-teal-500 border-t-transparent" />
-            <div>
-              <div className="text-sm font-medium">Planning first cycle...</div>
-              <div className="mt-0.5 text-xs t-text-secondary">The planner is deciding what to investigate first</div>
+            <div className="mt-2 flex items-center gap-1 text-[11px] t-accent-teal group-hover:underline">
+              Click to review and respond <ArrowRight size={10} />
             </div>
-          </div>
+          </article>
         )}
-      </section>
-    )
-  }
 
-  // WAITING_FOR_USER (non-modal questions shown inline)
-  if (state === 'WAITING_FOR_USER' && !isCheckpointModal) {
-    return (
-      <section className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-5">
-        <QuestionPanel
-          question={friendlyQuestion(snapshot.pendingQuestion?.question ?? '')}
-          context={friendlyQuestionContext(snapshot.pendingQuestion?.context)}
-          quickOptions={quickOptions}
-          onQuickReply={onQuickReply}
-          onSubmit={onSubmitReply}
-        />
-      </section>
-    )
-  }
-
-  // WAITING_FOR_USER with checkpoint modal — show a brief note (modal handles the interaction)
-  if (state === 'WAITING_FOR_USER' && isCheckpointModal) {
-    return (
-      <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5">
-        <div className="text-sm font-medium t-accent-amber">Checkpoint Decision Required</div>
-        <div className="mt-1 text-xs t-text-secondary">
-          A checkpoint decision dialog is open. Please respond in the modal overlay.
-        </div>
-      </section>
-    )
-  }
-
-  // WAITING_EXTERNAL
-  if (state === 'WAITING_EXTERNAL') {
-    return (
-      <section className="rounded-2xl border border-sky-500/30 bg-sky-500/5 p-5">
-        <div className="text-sm font-medium t-accent-sky">Waiting for External Input</div>
-        <div className="mt-1 text-xs">{pendingWaitTask?.title ?? 'Pending external task'}</div>
-        <div className="mt-1 text-xs t-text-secondary">{pendingWaitTask?.completionRule}</div>
-        <button
-          onClick={onOpenSystem}
-          className="mt-3 rounded-md border border-sky-400/40 px-3 py-1.5 text-xs t-accent-sky hover:bg-sky-500/10"
-        >
-          Manage in System tab
-        </button>
-      </section>
-    )
-  }
-
-  // PAUSED
-  if (state === 'PAUSED') {
-    return (
-      <section className="rounded-2xl border border-slate-500/30 bg-slate-500/5 p-5">
-        <div className="text-sm font-medium">Session Paused</div>
-        <div className="mt-1 text-xs t-text-secondary">
-          Execution paused. Resume continues from next planning boundary.
-        </div>
-        <button
-          onClick={onResume}
-          className="mt-3 rounded-lg border t-border px-3 py-1.5 text-xs font-medium t-hoverable"
-        >
-          Resume
-        </button>
-      </section>
-    )
-  }
-
-  // COMPLETE
-  if (state === 'COMPLETE') {
-    return (
-      <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
-        <div className="text-sm font-medium t-accent-emerald">Research Complete</div>
-        <div className="mt-1 text-xs t-text-secondary">{activeTurn?.summary ?? 'Session reached COMPLETE.'}</div>
-        <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs t-accent-emerald">
-          <div>
-            primary {completeCoverageSummary.coveredPrimary}/{completeCoverageSummary.assertedPrimary}
-            {' · '}
-            ratio {(completeCoverageSummary.primaryRatio ?? 0).toFixed(2)}
-            {' · '}
-            {completeCoverageSummary.primaryPass ? 'pass' : 'fail'}
+        {/* Latest Insight */}
+        <article className="rounded-xl border t-card-emerald p-3">
+          <div className="text-[11px] uppercase tracking-wide t-text-secondary">Latest Insight</div>
+          <div className="mt-2 text-xs line-clamp-4">
+            {activeTurn?.summary
+              ? cleanStageRefs(activeTurn.summary)
+              : 'No insight yet. The first successful cycle will appear here.'}
           </div>
-          <div className="mt-0.5">
-            secondary {completeCoverageSummary.coveredSecondary}/{completeCoverageSummary.assertedSecondary}
-            {' · '}
-            ratio {(completeCoverageSummary.secondaryRatio ?? 0).toFixed(2)}
-            {' · '}
-            {completeCoverageSummary.secondaryPass ? 'pass' : 'fail'}
-          </div>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button onClick={onOpenEvidence} className="rounded-md border border-emerald-400/40 px-2 py-1 text-[11px] t-accent-emerald hover:bg-emerald-500/20">
-            Open Evidence Map
-          </button>
-          <button onClick={onExportFinalBundle} className="rounded-md border border-emerald-400/40 px-2 py-1 text-[11px] t-accent-emerald hover:bg-emerald-500/20">
-            Export Final Bundle
-          </button>
-          <button onClick={onExportSummary} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Summary
-          </button>
-          <button onClick={onExportClaimTable} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Claim Table
-          </button>
-          <button onClick={onExportAssets} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Assets
-          </button>
-          <button onClick={onRestart} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Restart New Run
-          </button>
-        </div>
-      </section>
-    )
-  }
-
-  // FAILED
-  if (state === 'FAILED') {
-    return (
-      <section className="rounded-2xl border border-rose-500/30 bg-rose-500/5 p-5">
-        <div className="text-sm font-medium t-accent-rose">Run Failed</div>
-        <div className="mt-1 text-xs t-text-secondary">{cleanStageRefs(activeTurn?.summary ?? 'The research session encountered an error.')}</div>
-        {failureInfo && (
-          <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[11px] t-accent-rose">
-            <div className="font-medium">{friendlyErrorCategory(failureInfo.category)}</div>
-            <div className="mt-0.5">{friendlyErrorReason(failureInfo.reason)}</div>
-          </div>
-        )}
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button onClick={onOpenSystem} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Inspect Diagnostics
-          </button>
-          {selectedPhase !== 'P0' && (
-            <button onClick={onRestoreCheckpoint} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-              Restore Checkpoint
-            </button>
+          {activeTurn && (
+            <div className="mt-2 text-[11px] t-text-secondary">
+              {activeTurn.assetDiff?.created?.length ?? 0} artifacts
+              {' · '}{(activeTurn.consumedBudgets?.turnTokens ?? 0).toLocaleString()} tokens
+              {' · '}${(activeTurn.consumedBudgets?.turnCostUsd ?? 0).toFixed(3)}
+            </div>
           )}
-          <button onClick={onRestart} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Restart New Run
-          </button>
-          <button onClick={onExportSummary} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Summary
-          </button>
-        </div>
-      </section>
-    )
-  }
-
-  // STOPPED
-  if (state === 'STOPPED') {
-    return (
-      <section className="rounded-2xl border border-slate-500/30 bg-slate-500/5 p-5">
-        <div className="text-sm font-medium">Run Stopped</div>
-        <div className="mt-1 text-xs t-text-secondary">Session was stopped by user. You can resume from the last durable boundary.</div>
-        <div className="mt-2 rounded-lg border border-slate-500/30 bg-slate-500/10 px-2 py-1 text-[11px]">
-          cycles: {snapshot.budgetUsed.turns} · artifacts: {totalCreatedAssets} · tokens: {snapshot.budgetUsed.tokens.toLocaleString()} · cost: ${snapshot.budgetUsed.costUsd.toFixed(3)}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button onClick={onResume} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Resume Session
-          </button>
-          {selectedPhase !== 'P0' && (
-            <button onClick={onRestoreCheckpoint} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-              Restore Checkpoint
-            </button>
-          )}
-          <button onClick={onRestart} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Restart New Run
-          </button>
-          <button onClick={onExportSummary} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Summary
-          </button>
-          <button onClick={onExportClaimTable} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Claim Table
-          </button>
-          <button onClick={onExportAssets} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Assets
-          </button>
-          <button onClick={onExportFinalBundle} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-            Export Final Bundle
-          </button>
-        </div>
-      </section>
-    )
-  }
-
-  // CRASHED or unknown fallback
-  return (
-    <section className="rounded-2xl border border-rose-500/30 bg-rose-500/5 p-5">
-      <div className="text-sm font-medium t-accent-rose">Session State: {friendlyState(state)}</div>
-      <div className="mt-1 text-xs t-text-secondary">{activeTurn?.summary ?? 'Unexpected state.'}</div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button onClick={onRestart} className="rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable">
-          Restart New Run
-        </button>
+        </article>
       </div>
     </section>
   )

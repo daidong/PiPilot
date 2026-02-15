@@ -275,7 +275,7 @@ export function BranchesTab({ branchSnapshot, onRecordOverride }: BranchesTabPro
                   />
                   <span>{friendlyBranchId(b.branchId)}</span>
                   {b.isActive && (
-                    <span className="text-[10px] text-teal-400">(active)</span>
+                    <span className="text-[11px] text-teal-400">(active)</span>
                   )}
                 </span>
               ))}
@@ -284,7 +284,7 @@ export function BranchesTab({ branchSnapshot, onRecordOverride }: BranchesTabPro
               {layout.totalRails} line{layout.totalRails !== 1 ? 's' : ''} · {layout.ordered.length} step{layout.ordered.length !== 1 ? 's' : ''}
             </div>
           </div>
-          <div className="mb-2 text-[10px] t-text-muted">
+          <div className="mb-2 text-[11px] t-text-muted">
             Each line is an independent research direction. Steps are individual investigation actions within that line.
           </div>
 
@@ -394,24 +394,24 @@ export function BranchesTab({ branchSnapshot, onRecordOverride }: BranchesTabPro
                           <span className="font-semibold" style={{ color }}>
                             {friendlyNodeId(node.nodeId)}
                           </span>
-                          <span className="text-[10px] t-text-muted" title={node.branchId}>
+                          <span className="text-[11px] t-text-muted" title={node.branchId}>
                             {friendlyBranchId(node.branchId)}
                           </span>
                           <span
-                            className={`rounded-full border t-border px-1.5 py-0.5 text-[10px] ${sts.fg}`}
+                            className={`rounded-full border t-border px-1.5 py-0.5 text-[11px] ${sts.fg}`}
                           >
                             {sts.label}
                           </span>
-                          <span className="text-[10px] t-text-muted">
+                          <span className="text-[11px] t-text-muted">
                             {STAGE_LABELS[node.stage] ?? node.stage}
                           </span>
                           {typeof node.createdByTurn === 'number' && (
-                            <span className="text-[10px] t-text-muted">
+                            <span className="text-[11px] t-text-muted">
                               Cycle {node.createdByTurn}
                             </span>
                           )}
                           {isActive && (
-                            <span className="text-[10px] font-medium t-accent-teal">CURRENT</span>
+                            <span className="text-[11px] font-medium t-accent-teal">CURRENT</span>
                           )}
                         </div>
                         <div className="truncate text-[11px] t-text-secondary max-w-lg">
@@ -434,11 +434,11 @@ export function BranchesTab({ branchSnapshot, onRecordOverride }: BranchesTabPro
           <div className="mt-2 space-y-1 t-text-secondary">
             <div>
               <span className="t-text-muted">Step:</span> {friendlyNodeId(selectedNode.nodeId)}
-              <span className="ml-1 text-[10px] t-text-muted">({selectedNode.nodeId})</span>
+              <span className="ml-1 text-[11px] t-text-muted">({selectedNode.nodeId})</span>
             </div>
             <div>
               <span className="t-text-muted">Research Line:</span> {friendlyBranchId(selectedNode.branchId)}
-              <span className="ml-1 text-[10px] t-text-muted">({selectedNode.branchId})</span>
+              <span className="ml-1 text-[11px] t-text-muted">({selectedNode.branchId})</span>
             </div>
             <div>
               <span className="t-text-muted">Research Stage:</span>{' '}
@@ -479,13 +479,13 @@ export function BranchesTab({ branchSnapshot, onRecordOverride }: BranchesTabPro
         </button>
         {showRedirect && (
           <div className="border-t border-amber-500/20 px-3 py-3">
-            <div className="mb-2 t-text-muted text-[10px]">
+            <div className="mb-2 t-text-muted text-[11px]">
               Manually override the planner's direction by revisiting a previous investigation step.
               Use this when the automated research took a wrong turn and you want to explore a different path.
             </div>
             <div className="space-y-2">
               <div>
-                <label className="mb-0.5 block text-[10px] t-text-muted">Target Step ID (e.g. N-002)</label>
+                <label className="mb-0.5 block text-[11px] t-text-muted">Target Step ID (e.g. N-002)</label>
                 <input
                   value={overrideTargetNodeId}
                   onChange={(e) => setOverrideTargetNodeId(e.target.value)}
@@ -494,7 +494,7 @@ export function BranchesTab({ branchSnapshot, onRecordOverride }: BranchesTabPro
                 />
               </div>
               <div>
-                <label className="mb-0.5 block text-[10px] t-text-muted">Why redirect? (rationale for changing direction)</label>
+                <label className="mb-0.5 block text-[11px] t-text-muted">Why redirect? (rationale for changing direction)</label>
                 <textarea
                   value={overrideRationale}
                   onChange={(e) => setOverrideRationale(e.target.value)}
@@ -504,7 +504,7 @@ export function BranchesTab({ branchSnapshot, onRecordOverride }: BranchesTabPro
                 />
               </div>
               <div>
-                <label className="mb-0.5 block text-[10px] t-text-muted">Acknowledged trade-offs</label>
+                <label className="mb-0.5 block text-[11px] t-text-muted">Acknowledged trade-offs</label>
                 <input
                   value={overrideRiskAccepted}
                   onChange={(e) => setOverrideRiskAccepted(e.target.value)}

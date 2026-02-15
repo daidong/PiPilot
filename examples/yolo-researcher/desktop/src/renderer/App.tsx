@@ -1,26 +1,44 @@
+import { useState, useRef, useEffect } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { useYoloSession } from '@/hooks/useYoloSession'
-import { friendlyQuestion, friendlyQuestionContext } from '@/lib/formatters'
 import { FolderGate } from '@/components/FolderGate'
 import { TopBar } from '@/components/TopBar'
 import { HeroSection } from '@/components/HeroSection'
 import { DetailTabs } from '@/components/DetailTabs'
-import { CheckpointModal } from '@/components/CheckpointModal'
+import { ActivityFeed } from '@/components/ActivityFeed'
+import { InteractionDrawer } from '@/components/InteractionDrawer'
 
 export default function App() {
   const session = useYoloSession()
-  const { projectPath, snapshot, actions, actionError, actionNotice, isCheckpointModal, quickOptions } = session
+  const { projectPath, snapshot, actions, actionError, actionNotice, totalCreatedAssets } = session
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportRef = useRef<HTMLDivElement>(null)
+
+  // Close export dropdown on outside click
+  useEffect(() => {
+    if (!exportOpen) return
+    function handleClick(e: MouseEvent) {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [exportOpen])
 
   if (!projectPath) return <FolderGate onPick={actions.pickFolder} />
+
+  const drawerIsOpen = session.drawerOpen && session.drawerInteraction !== null
 
   return (
     <div className="flex h-screen w-screen flex-col t-text">
       <div className="drag-region fixed top-0 left-0 right-0 h-8 z-20" />
 
-      {/* Zone 1: Persistent top bar — fixed height */}
+      {/* Zone 1: Persistent top bar — fixed, never scrolls */}
       <TopBar
         projectPath={projectPath}
         snapshot={snapshot}
-        stageGates={session.stageGates}
         budgetUsage={session.budgetUsage}
         budgetCaps={session.budgetCaps}
         canPause={session.canPause}
@@ -32,64 +50,114 @@ export default function App() {
         onPause={actions.pauseYolo}
         onResume={actions.resumeYolo}
         onStop={actions.stopYolo}
+        onRestart={actions.restartYolo}
       />
 
-      {/* Zone 2: Hero (shrink-to-fit, never expands beyond content) */}
-      <div className="shrink-0 px-4 pt-4">
-        {actionError && (
-          <div className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs t-accent-rose">
-            {actionError}
+      {/* Main content area — shrinks when drawer is open */}
+      <div className={`min-h-0 flex-1 overflow-y-auto transition-all duration-300 ${drawerIsOpen ? 'mr-[420px]' : ''}`}>
+        {/* Zone 2: Hero */}
+        <div className="px-4 pt-4">
+          {actionError && (
+            <div className="mb-3 rounded-xl border t-card-rose px-3 py-2 text-xs t-accent-rose">
+              {actionError}
+            </div>
+          )}
+          {actionNotice && (
+            <div className="mb-3 rounded-xl border t-card-emerald px-3 py-2 text-xs t-accent-emerald">
+              {actionNotice}
+            </div>
+          )}
+          <HeroSection
+            snapshot={snapshot}
+            goal={session.goal}
+            selectedPhase={session.selectedPhase}
+            activeTurn={session.activeTurn}
+            failureInfo={session.failureInfo}
+            isStarting={session.isStarting}
+            drawerInteraction={session.drawerInteraction}
+            totalCreatedAssets={totalCreatedAssets}
+            onGoalChange={actions.setGoal}
+            onPhaseChange={actions.setSelectedPhase}
+            onStart={actions.startYolo}
+            onResume={actions.resumeYolo}
+            onRestart={actions.startYolo}
+            onRestoreCheckpoint={actions.restoreFromCheckpoint}
+            onOpenDrawer={actions.openDrawer}
+          />
+        </div>
+
+        {/* Zone 2b: Live activity feed (visible during execution) */}
+        {session.activityFeed.length > 0 && (
+          <div className="px-4 pt-3">
+            <ActivityFeed items={session.activityFeed} />
           </div>
         )}
-        {actionNotice && (
-          <div className="mb-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs t-accent-emerald">
-            {actionNotice}
+
+        {/* Toggle bar */}
+        <div className="px-4 pt-3">
+          <div className="rounded-2xl border t-border t-bg-surface px-3 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs t-text-secondary">
+                Advanced includes timeline, assets, system diagnostics, and exports.
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Export dropdown */}
+                <div ref={exportRef} className="relative">
+                  <button
+                    onClick={() => setExportOpen((v) => !v)}
+                    className="flex items-center gap-1 rounded-md border t-border-action px-2 py-1 text-[11px] t-hoverable"
+                  >
+                    Export <ChevronDown size={10} />
+                  </button>
+                  {exportOpen && (
+                    <div className="absolute right-0 top-full mt-1 z-10 min-w-[160px] rounded-lg border t-border t-bg-surface shadow-lg py-1">
+                      <button
+                        onClick={() => { actions.exportSummary(); setExportOpen(false) }}
+                        className="block w-full text-left px-3 py-1.5 text-[11px] t-hoverable"
+                      >
+                        Export Summary
+                      </button>
+                      <button
+                        onClick={() => { actions.exportFinalBundle(); setExportOpen(false) }}
+                        className="block w-full text-left px-3 py-1.5 text-[11px] t-hoverable"
+                      >
+                        Export Final Bundle
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setAdvancedOpen((prev) => !prev)}
+                  className="rounded-md border border-teal-500/40 px-2 py-1 text-[11px] t-accent-teal hover:bg-teal-500/10"
+                >
+                  {advancedOpen ? 'Hide Advanced' : 'Show Advanced'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Zone 3: Advanced tabs (optional) */}
+        {advancedOpen && (
+          <div className="p-4 pt-3">
+            <DetailTabs session={session} />
           </div>
         )}
-        <HeroSection
-          snapshot={snapshot}
-          goal={session.goal}
-          selectedPhase={session.selectedPhase}
-          activeTurn={session.activeTurn}
-          failureInfo={session.failureInfo}
-          completeCoverageSummary={session.completeCoverageSummary}
-          totalCreatedAssets={session.totalCreatedAssets}
-          quickOptions={quickOptions}
-          isStarting={session.isStarting}
-          pendingWaitTask={session.pendingWaitTask}
-          isCheckpointModal={isCheckpointModal}
-          onGoalChange={actions.setGoal}
-          onPhaseChange={actions.setSelectedPhase}
-          onStart={actions.startYolo}
-          onResume={actions.resumeYolo}
-          onRestart={actions.startYolo}
-          onRestoreCheckpoint={actions.restoreFromCheckpoint}
-          onQuickReply={actions.submitQuickReply}
-          onSubmitReply={actions.submitReply}
-          onExportSummary={actions.exportSummary}
-          onExportClaimTable={actions.exportClaimEvidenceTable}
-          onExportAssets={actions.exportAssetInventory}
-          onExportFinalBundle={actions.exportFinalBundle}
-          onOpenEvidence={() => actions.setActiveTab('evidence')}
-          onOpenSystem={() => actions.setActiveTab('system')}
-        />
+
+        {/* Bottom padding */}
+        <div className="h-4" />
       </div>
 
-      {/* Zone 3: Tabbed detail views — fills remaining space, scrolls internally */}
-      <div className="min-h-0 flex-1 p-4 pt-4">
-        <DetailTabs session={session} />
-      </div>
-
-      {/* Checkpoint decision modal overlay */}
-      {isCheckpointModal && (
-        <CheckpointModal
-          question={friendlyQuestion(snapshot?.pendingQuestion?.question ?? '')}
-          context={friendlyQuestionContext(snapshot?.pendingQuestion?.context)}
-          quickOptions={quickOptions}
-          onQuickReply={actions.submitQuickReply}
-          onSubmit={actions.submitReply}
-        />
-      )}
+      {/* InteractionDrawer — unified right-side panel */}
+      <InteractionDrawer
+        open={session.drawerOpen}
+        interaction={session.drawerInteraction}
+        chatHistory={session.drawerChat}
+        chatLoading={session.drawerChatLoading}
+        onClose={actions.closeDrawer}
+        onSendChat={actions.sendDrawerChat}
+        onAction={actions.executeDrawerAction}
+      />
     </div>
   )
 }

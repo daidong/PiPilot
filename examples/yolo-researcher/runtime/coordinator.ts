@@ -1,4 +1,12 @@
-import type { CoordinatorTurnResult, QueuedUserInput, TurnSpec, YoloCoordinator, YoloStage } from './types.js'
+import type {
+  CoordinatorTurnResult,
+  PlannerOutput,
+  QueuedUserInput,
+  ReviewerProcessReview,
+  TurnSpec,
+  YoloCoordinator,
+  YoloStage
+} from './types.js'
 
 export class ScriptedCoordinator implements YoloCoordinator {
   private cursor = 0
@@ -10,6 +18,8 @@ export class ScriptedCoordinator implements YoloCoordinator {
     stage: YoloStage
     goal: string
     mergedUserInputs: QueuedUserInput[]
+    plannerOutput?: PlannerOutput
+    reviewerOutput?: ReviewerProcessReview
   }): Promise<CoordinatorTurnResult> {
     if (this.cursor >= this.scriptedResults.length) {
       throw new Error('ScriptedCoordinator: no scripted result available for this turn')

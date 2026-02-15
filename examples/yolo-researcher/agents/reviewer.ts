@@ -10,10 +10,16 @@ import {
 } from '../runtime/review-engine.js'
 import type {
   AnchoredHardBlockerLabel,
+  CoordinatorTurnResult,
   GateResult,
+  PlannerOutput,
   ReviewEngine,
+  ReviewerCriticalIssue,
+  ReviewerFixPlanItem,
   ReviewerPass,
   ReviewerPersona,
+  ReviewerProcessReview,
+  ReviewerRewritePatch,
   SemanticReviewResult,
   SnapshotManifest,
   YoloStage
@@ -22,6 +28,12 @@ import type {
 interface ReviewerJsonOutput {
   notes?: unknown
   hardBlockers?: unknown
+  verdict?: unknown
+  critical_issues?: unknown
+  fix_plan?: unknown
+  rewrite_patch?: unknown
+  confidence?: unknown
+  notes_for_user?: unknown
 }
 
 interface ReviewerJsonHardBlocker {
@@ -49,16 +61,16 @@ export interface YoloReviewerConfig {
 }
 
 const DEFAULT_IDENTITY = [
-  'You are a strict scientific reviewer persona.',
-  'Ground every claim in provided manifest and gate context.',
-  'Only report anchored hard blockers with concrete asset/run citations.'
+  'You are a strict but practical scientific reviewer persona.',
+  'Your job is critique-to-fix, not abstract scoring.',
+  'Return concrete revision actions and optional rewrite patches.'
 ].join(' ')
 
 const DEFAULT_CONSTRAINTS = [
   'Output strict JSON only.',
   'Do not invent citations.',
-  'Use anchored blocker labels only.',
-  'If uncertain, return notes and no hard blockers.'
+  'Keep critical issues <= 3.',
+  'Prioritize actionable fixes over commentary.'
 ]
 
 const ANCHORED_LABEL_SET = new Set<string>(ANCHORED_LABELS)
@@ -139,25 +151,181 @@ function normalizeHardBlockers(
   return normalized
 }
 
+function normalizeCriticalIssues(raw: unknown): ReviewerCriticalIssue[] {
+  if (!Array.isArray(raw)) return []
+  const normalized: ReviewerCriticalIssue[] = []
+  for (const item of raw) {
+    if (!isObject(item)) continue
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    const severityRaw = typeof item.severity === 'string' ? item.severity.trim() : ''
+    const message = typeof item.message === 'string' ? item.message.trim() : ''
+    if (!id || !message) continue
+    const severity = (severityRaw === 'high' || severityRaw === 'medium' || severityRaw === 'low')
+      ? severityRaw
+      : 'medium'
+    normalized.push({ id, severity, message })
+    if (normalized.length >= 3) break
+  }
+  return normalized
+}
+
+function normalizeFixPlan(raw: unknown): ReviewerFixPlanItem[] {
+  if (!Array.isArray(raw)) return []
+  const normalized: ReviewerFixPlanItem[] = []
+  for (const item of raw) {
+    if (!isObject(item)) continue
+    const issueId = typeof item.issue_id === 'string' ? item.issue_id.trim() : ''
+    const action = typeof item.action === 'string' ? item.action.trim() : ''
+    if (!issueId || !action) continue
+    normalized.push({ issue_id: issueId, action })
+  }
+  return normalized
+}
+
+function normalizeRewritePatch(raw: unknown): ReviewerRewritePatch {
+  if (!isObject(raw)) {
+    return { apply: false, target: 'coordinator_output', patch: {} }
+  }
+
+  const targetRaw = typeof raw.target === 'string' ? raw.target.trim() : ''
+  const target = (targetRaw === 'planner_output' || targetRaw === 'coordinator_output')
+    ? targetRaw
+    : 'coordinator_output'
+
+  return {
+    apply: raw.apply === true,
+    target,
+    patch: isObject(raw.patch) ? raw.patch : {}
+  }
+}
+
+function normalizeProcessReview(raw: ReviewerJsonOutput): ReviewerProcessReview {
+  const verdictRaw = typeof raw.verdict === 'string' ? raw.verdict.trim() : ''
+  const verdict = (verdictRaw === 'pass' || verdictRaw === 'revise' || verdictRaw === 'block')
+    ? verdictRaw
+    : 'revise'
+
+  const criticalIssues = normalizeCriticalIssues(raw.critical_issues)
+  const fixPlan = normalizeFixPlan(raw.fix_plan)
+  const rewritePatch = normalizeRewritePatch(raw.rewrite_patch)
+  const confidenceRaw = raw.confidence
+  const confidence = (typeof confidenceRaw === 'number' && Number.isFinite(confidenceRaw))
+    ? Math.max(0, Math.min(1, confidenceRaw))
+    : 0.65
+  const notesForUser = typeof raw.notes_for_user === 'string' && raw.notes_for_user.trim()
+    ? raw.notes_for_user.trim()
+    : 'Review completed. Apply fix plan before next turn if issues remain.'
+
+  return {
+    verdict,
+    critical_issues: criticalIssues,
+    fix_plan: fixPlan,
+    rewrite_patch: rewritePatch,
+    confidence,
+    notes_for_user: notesForUser
+  }
+}
+
 function buildPersonaPrompt(input: {
   persona: ReviewerPersona
   stage: YoloStage
   manifest: SnapshotManifest
   gateResult: GateResult
+  plannerOutput?: PlannerOutput
+  coordinatorOutput?: CoordinatorTurnResult
 }): string {
   return [
-    'Run one semantic review pass.',
+    'Run one critique-to-fix semantic review pass.',
     `Persona: ${input.persona}`,
     `Stage: ${input.stage}`,
     'Return STRICT JSON schema:',
-    '{"notes": string[], "hardBlockers": [{"label": "claim_without_direct_evidence"|"causality_gap"|"parity_violation_unresolved"|"reproducibility_gap"|"overclaim", "citations": string[], "assetRefs": string[]}]}',
+    '{"verdict":"pass|revise|block","critical_issues":[{"id":string,"severity":"high|medium|low","message":string}],"fix_plan":[{"issue_id":string,"action":string}],"rewrite_patch":{"apply":boolean,"target":"planner_output|coordinator_output","patch":object},"confidence":number,"notes_for_user":string,"notes":string[],"hardBlockers":[{"label":"claim_without_direct_evidence"|"causality_gap"|"parity_violation_unresolved"|"reproducibility_gap"|"overclaim","citations":string[],"assetRefs":string[]}]}',
     'Rules:',
-    '- hardBlockers must use anchored labels only.',
-    '- each hardBlocker must cite concrete asset/run ids.',
-    '- include unresolved concerns in notes.',
+    '- Prefer revise over block unless missing structure makes progress impossible.',
+    '- critical_issues <= 3, each with concrete fix action.',
+    '- rewrite_patch should be minimal and machine-applicable.',
+    '- hardBlockers optional; include only anchored labels with concrete citations.',
+    `PlannerOutput: ${JSON.stringify(input.plannerOutput ?? null)}`,
+    `CoordinatorOutput: ${JSON.stringify(input.coordinatorOutput ?? null)}`,
     `SnapshotManifest: ${JSON.stringify(input.manifest)}`,
     `GateResult: ${JSON.stringify(input.gateResult)}`
   ].join('\n')
+}
+
+function summarizeNotesForUser(reviewerPasses: ReviewerPass[]): string {
+  const lines = reviewerPasses
+    .map((pass) => pass.processReview?.notes_for_user)
+    .filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+  if (lines.length === 0) return 'No additional review notes.'
+  return lines.slice(0, 3).join(' | ')
+}
+
+function aggregateProcessReview(
+  reviewerPasses: ReviewerPass[],
+  consensusBlockers: SemanticReviewResult['consensusBlockers']
+): ReviewerProcessReview {
+  const processPasses = reviewerPasses
+    .map((pass) => pass.processReview)
+    .filter((item): item is ReviewerProcessReview => Boolean(item))
+
+  const blockVotes = processPasses.filter((pass) => pass.verdict === 'block').length
+  const reviseVotes = processPasses.filter((pass) => pass.verdict === 'revise').length
+
+  const verdict: ReviewerProcessReview['verdict'] = blockVotes >= 2
+    ? 'block'
+    : (reviseVotes > 0 || blockVotes > 0 ? 'revise' : 'pass')
+
+  const issueMap = new Map<string, ReviewerCriticalIssue>()
+  for (const pass of processPasses) {
+    for (const issue of pass.critical_issues) {
+      if (!issueMap.has(issue.id)) issueMap.set(issue.id, issue)
+      if (issueMap.size >= 3) break
+    }
+    if (issueMap.size >= 3) break
+  }
+
+  if (issueMap.size === 0 && consensusBlockers.length > 0) {
+    for (const blocker of consensusBlockers.slice(0, 3)) {
+      issueMap.set(blocker.label, {
+        id: blocker.label,
+        severity: 'high',
+        message: `Consensus blocker detected: ${blocker.label}`
+      })
+    }
+  }
+
+  const fixPlanMap = new Map<string, ReviewerFixPlanItem>()
+  for (const pass of processPasses) {
+    for (const fix of pass.fix_plan) {
+      if (!fixPlanMap.has(fix.issue_id)) {
+        fixPlanMap.set(fix.issue_id, fix)
+      }
+    }
+  }
+  if (fixPlanMap.size === 0) {
+    for (const issue of issueMap.values()) {
+      fixPlanMap.set(issue.id, {
+        issue_id: issue.id,
+        action: 'Address this issue with a concrete artifact/prompt revision before next turn.'
+      })
+    }
+  }
+
+  const rewritePatch = processPasses.find((pass) => pass.rewrite_patch.apply)?.rewrite_patch
+    ?? { apply: false, target: 'coordinator_output', patch: {} }
+
+  const confidence = processPasses.length > 0
+    ? processPasses.reduce((acc, pass) => acc + pass.confidence, 0) / processPasses.length
+    : 0.5
+
+  return {
+    verdict,
+    critical_issues: Array.from(issueMap.values()).slice(0, 3),
+    fix_plan: Array.from(fixPlanMap.values()),
+    rewrite_patch: rewritePatch,
+    confidence: Math.max(0, Math.min(1, confidence)),
+    notes_for_user: summarizeNotesForUser(reviewerPasses)
+  }
 }
 
 class LlmBackedReviewEngine implements ReviewEngine {
@@ -172,13 +340,23 @@ class LlmBackedReviewEngine implements ReviewEngine {
     stage: YoloStage
     manifest: SnapshotManifest
     gateResult: GateResult
+    plannerOutput?: PlannerOutput
+    coordinatorOutput?: CoordinatorTurnResult
   }): Promise<SemanticReviewResult> {
     if (input.phase !== 'P3') {
       return {
         enabled: false,
         reviewerPasses: [],
         consensusBlockers: [],
-        advisoryNotes: [`semantic review disabled for phase ${input.phase}`]
+        advisoryNotes: [`semantic review disabled for phase ${input.phase}`],
+        processReview: {
+          verdict: 'pass',
+          critical_issues: [],
+          fix_plan: [],
+          rewrite_patch: { apply: false, target: 'coordinator_output', patch: {} },
+          confidence: 0.5,
+          notes_for_user: `semantic review disabled for phase ${input.phase}`
+        }
       }
     }
 
@@ -187,6 +365,7 @@ class LlmBackedReviewEngine implements ReviewEngine {
       personas.map(async (persona) => this.runPersonaPass(persona, input))
     )
     const consensusBlockers = buildConsensusBlockers(reviewerPasses)
+    const processReview = aggregateProcessReview(reviewerPasses, consensusBlockers)
     const advisoryNotes: string[] = []
     if (this.unavailableReason) {
       advisoryNotes.push(this.unavailableReason)
@@ -196,12 +375,14 @@ class LlmBackedReviewEngine implements ReviewEngine {
     } else {
       advisoryNotes.push('semantic review found no consensus blockers')
     }
+    advisoryNotes.push(`process review verdict: ${processReview.verdict}`)
 
     return {
       enabled: true,
       reviewerPasses,
       consensusBlockers,
-      advisoryNotes
+      advisoryNotes,
+      processReview
     }
   }
 
@@ -211,22 +392,42 @@ class LlmBackedReviewEngine implements ReviewEngine {
       stage: YoloStage
       manifest: SnapshotManifest
       gateResult: GateResult
+      plannerOutput?: PlannerOutput
+      coordinatorOutput?: CoordinatorTurnResult
     }
   ): Promise<ReviewerPass> {
     const heuristicBlockers = buildHeuristicBlockers(input.manifest, input.gateResult)
-    const fallbackPass = (reason: string): ReviewerPass => ({
-      persona,
-      notes: [
-        `${persona} review fallback: ${reason}`,
-        `${persona} review pass for ${input.stage}`,
-        `manifest=${input.manifest.id}`
-      ],
-      hardBlockers: heuristicBlockers.map((item) => ({
-        label: item.label,
-        citations: item.citations,
-        assetRefs: item.assetRefs
-      }))
-    })
+    const fallbackPass = (reason: string): ReviewerPass => {
+      const fallbackVerdict: ReviewerProcessReview['verdict'] = heuristicBlockers.length > 0 ? 'revise' : 'pass'
+      return {
+        persona,
+        notes: [
+          `${persona} review fallback: ${reason}`,
+          `${persona} review pass for ${input.stage}`,
+          `manifest=${input.manifest.id}`
+        ],
+        hardBlockers: heuristicBlockers.map((item) => ({
+          label: item.label,
+          citations: item.citations,
+          assetRefs: item.assetRefs
+        })),
+        processReview: {
+          verdict: fallbackVerdict,
+          critical_issues: heuristicBlockers.slice(0, 3).map((item) => ({
+            id: item.label,
+            severity: 'high',
+            message: `Heuristic blocker detected: ${item.label}`
+          })),
+          fix_plan: heuristicBlockers.slice(0, 3).map((item) => ({
+            issue_id: item.label,
+            action: 'Provide direct evidence or repair structural gap before proceeding.'
+          })),
+          rewrite_patch: { apply: false, target: 'coordinator_output', patch: {} },
+          confidence: 0.45,
+          notes_for_user: `${persona} fallback review generated due to runtime failure.`
+        }
+      }
+    }
 
     try {
       const agent = await this.getAgent(persona)
@@ -234,7 +435,9 @@ class LlmBackedReviewEngine implements ReviewEngine {
         persona,
         stage: input.stage,
         manifest: input.manifest,
-        gateResult: input.gateResult
+        gateResult: input.gateResult,
+        plannerOutput: input.plannerOutput,
+        coordinatorOutput: input.coordinatorOutput
       })
       const runResult = await agent.run(prompt)
       if (!runResult.success) {
@@ -251,10 +454,12 @@ class LlmBackedReviewEngine implements ReviewEngine {
         notes.push(`${persona} review pass for ${input.stage}`)
       }
       const hardBlockers = normalizeHardBlockers(parsed.hardBlockers, notes)
+      const processReview = normalizeProcessReview(parsed)
       return {
         persona,
         notes,
-        hardBlockers
+        hardBlockers,
+        processReview
       }
     } catch (error) {
       return fallbackPass(error instanceof Error ? error.message : String(error))
@@ -324,5 +529,7 @@ export function createYoloReviewEngine(config: YoloReviewerConfig): ReviewEngine
 export const __private = {
   parseReviewerJson,
   normalizeHardBlockers,
+  normalizeProcessReview,
+  aggregateProcessReview,
   buildPersonaPrompt
 }

@@ -86,6 +86,8 @@ describe('yolo coordinator', () => {
     expect(result.metrics.stepCount).toBe(4)
     expect(result.metrics.turnTokens).toBe(150)
     expect(result.metrics.turnCostUsd).toBe(0.003)
+    expect(result.executionTrace?.length).toBeGreaterThan(0)
+    expect(result.askUser?.required).toBe(false)
   })
 
   it('prefers ask_user tool payload over json field', async () => {
@@ -136,7 +138,7 @@ describe('yolo coordinator', () => {
     expect(result.askUser?.checkpoint).toBe('claim-freeze')
   })
 
-  it('falls back to RiskRegister when output has no assets', async () => {
+  it('falls back to Note when output has no assets', async () => {
     const coordinator = createYoloCoordinator({
       projectPath: process.cwd(),
       model: 'gpt-5-mini',
@@ -174,7 +176,7 @@ describe('yolo coordinator', () => {
     })
 
     expect(result.assets).toHaveLength(1)
-    expect(result.assets[0]?.type).toBe('RiskRegister')
+    expect(result.assets[0]?.type).toBe('Note')
   })
 
   it('returns failure summary and fallback asset when agent run fails', async () => {
@@ -202,6 +204,6 @@ describe('yolo coordinator', () => {
     })
 
     expect(result.summary).toContain('Coordinator run failed')
-    expect(result.assets[0]?.type).toBe('RiskRegister')
+    expect(result.assets[0]?.type).toBe('Note')
   })
 })

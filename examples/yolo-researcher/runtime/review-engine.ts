@@ -134,7 +134,19 @@ export class DisabledReviewEngine implements ReviewEngine {
       enabled: false,
       reviewerPasses: [],
       consensusBlockers: [],
-      advisoryNotes: ['semantic review disabled']
+      advisoryNotes: ['semantic review disabled'],
+      processReview: {
+        verdict: 'pass',
+        critical_issues: [],
+        fix_plan: [],
+        rewrite_patch: {
+          apply: false,
+          target: 'coordinator_output',
+          patch: {}
+        },
+        confidence: 0.5,
+        notes_for_user: 'semantic review disabled'
+      }
     }
   }
 }

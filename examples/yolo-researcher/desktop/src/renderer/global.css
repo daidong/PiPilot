@@ -121,6 +121,13 @@ html.light body {
 .t-accent-violet { color: var(--color-accent-violet); }
 .t-accent-slate { color: var(--color-accent-slate); }
 
+/* Semantic card colors — border + subtle background combos */
+.t-card-teal { border-color: rgba(20,184,166,0.3); background: rgba(20,184,166,0.05); }
+.t-card-amber { border-color: rgba(245,158,11,0.3); background: rgba(245,158,11,0.05); }
+.t-card-emerald { border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.05); }
+.t-card-rose { border-color: rgba(244,63,94,0.3); background: rgba(244,63,94,0.05); }
+.t-card-sky { border-color: rgba(56,189,248,0.3); background: rgba(56,189,248,0.05); }
+
 .drag-region {
   -webkit-app-region: drag;
 }

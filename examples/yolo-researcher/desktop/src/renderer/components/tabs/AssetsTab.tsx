@@ -29,7 +29,7 @@ export function AssetsTab({ assetRecords, onExportInventory }: AssetsTabProps) {
             Export Inventory
           </button>
         </div>
-        <div className="mt-1 text-[10px] t-text-muted">
+        <div className="mt-1 text-[11px] t-text-muted">
           Every piece of evidence, claim, decision, and analysis produced during the research session.
         </div>
         <div className="mt-2 flex flex-wrap gap-1">

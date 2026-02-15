@@ -154,7 +154,7 @@ export function EvidenceTab({
                       width: nodeW,
                       height: nodeH,
                     }}
-                    className={`overflow-hidden rounded-lg border px-2 py-1 text-left text-[10px] ${tone} ${
+                    className={`overflow-hidden rounded-lg border px-2 py-1 text-left text-[11px] ${tone} ${
                       selectedGraphNodeId === node.id ? 'ring-2 ring-white/60' : ''
                     }`}
                   >
@@ -234,7 +234,7 @@ export function EvidenceTab({
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-medium" title={row.id}>{friendlyAssetId(row.id)}</div>
-                <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide">
+                <div className="flex items-center gap-1 text-[11px] uppercase tracking-wide">
                   <span className="rounded-full border t-border px-2 py-0.5">{row.tier}</span>
                   <span className="rounded-full border t-border px-2 py-0.5">{row.coverageStatus}</span>
                 </div>

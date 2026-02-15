@@ -12,9 +12,9 @@ export function buildDefaultP0Constraints(): TurnConstraints {
     maxNewAssets: 6,
     maxDiscoveryOps: 20,
     maxReadBytes: 250_000,
-    maxPromptTokens: 12_000,
+    maxPromptTokens: 30_000,
     maxCompletionTokens: 4_000,
-    maxTurnTokens: 16_000,
+    maxTurnTokens: 30_000,
     maxTurnCostUsd: 2
   }
 }
@@ -46,7 +46,7 @@ export function createConservativeFallbackSpec(input: {
       action: 'advance'
     },
     objective: 'consolidate current state and report blockers',
-    expectedAssets: ['RiskRegister'],
+    expectedAssets: ['Note'],
     constraints: input.constraints ?? buildDefaultP0Constraints()
   }
 }

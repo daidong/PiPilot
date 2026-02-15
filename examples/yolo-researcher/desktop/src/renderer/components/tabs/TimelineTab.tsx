@@ -1,5 +1,5 @@
 import type { TurnReport, StageId, GateStatus } from '@/lib/types'
-import { STAGES, STAGE_LABELS, turnGateStatus, friendlyStage, cleanStageRefs } from '@/lib/formatters'
+import { STAGES, STAGE_LABELS, turnGateStatus, friendlyStage, friendlyAction, cleanStageRefs } from '@/lib/formatters'
 
 interface TimelineTabProps {
   filteredTurns: TurnReport[]
@@ -75,7 +75,7 @@ export function TimelineTab({
             {filteredTurns.map((turn) => (
               <div
                 key={turn.turnNumber}
-                className={`rounded-xl border p-3 ${turn.nonProgress ? 'border-amber-500/40 bg-amber-500/5' : 't-border'} ${selectedTurn?.turnNumber === turn.turnNumber ? 'ring-1 ring-teal-500/50' : ''}`}
+                className={`rounded-xl border p-3 ${turn.nonProgress ? 't-card-amber' : 't-border'} ${selectedTurn?.turnNumber === turn.turnNumber ? 'ring-1 ring-teal-500/50' : ''}`}
               >
                 <div className="flex items-center justify-between text-xs t-text-secondary">
                   <span>Cycle {turn.turnNumber}</span>
@@ -83,6 +83,11 @@ export function TimelineTab({
                 </div>
                 <div className="mt-1 text-sm font-medium">{cleanStageRefs(turn.turnSpec?.objective ?? '')}</div>
                 <div className="mt-1 text-xs t-text-secondary">{cleanStageRefs(turn.summary ?? '')}</div>
+                {turn.execution?.action && (
+                  <div className="mt-1 text-[11px] t-accent-teal">
+                    {friendlyAction(turn.execution.action)}
+                  </div>
+                )}
                 <div className="mt-2 text-[11px] t-text-muted">
                   {turn.assetDiff?.created?.length ?? 0} new artifacts · {(turn.consumedBudgets?.turnTokens ?? 0).toLocaleString()} tokens · ${turn.consumedBudgets?.turnCostUsd?.toFixed?.(3) ?? '0.000'}
                 </div>
@@ -120,6 +125,23 @@ export function TimelineTab({
             <div>Tokens used: {(selectedTurn.consumedBudgets?.turnTokens ?? 0).toLocaleString()}</div>
             <div>Cost: ${(selectedTurn.consumedBudgets?.turnCostUsd ?? 0).toFixed(3)}</div>
             <div>Progress: {selectedTurn.nonProgress ? 'No new progress' : 'Made progress'}</div>
+            <div>Main action: {friendlyAction(selectedTurn.execution?.action) || 'n/a'}</div>
+            <div>Action rationale: {cleanStageRefs(selectedTurn.execution?.actionRationale ?? 'n/a')}</div>
+            <div>
+              Tooling mode: {selectedTurn.execution?.tooling?.mode ?? 'unknown'}
+              {selectedTurn.execution?.tooling?.degradeReason
+                ? ` (${selectedTurn.execution.tooling.degradeReason})`
+                : ''}
+            </div>
+            <div>
+              Tool calls:
+              {(selectedTurn.execution?.toolCalls ?? []).length > 0
+                ? ` ${(selectedTurn.execution?.toolCalls ?? [])
+                    .slice(0, 5)
+                    .map((item) => item.tool)
+                    .join(', ')}`
+                : ' none'}
+            </div>
             <div>
               Quality Review: {selectedTurn.reviewerSnapshot?.status === 'completed' ? 'Completed' : selectedTurn.reviewerSnapshot?.status ?? 'Not run'}
               {selectedTurn.reviewerSnapshot?.status === 'completed'

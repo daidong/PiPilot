@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowUp, ArrowDown, X } from 'lucide-react'
-import { friendlyStage } from '@/lib/formatters'
+import { friendlyStage, formatEvent } from '@/lib/formatters'
 import type {
   YoloSnapshot,
   TurnReport,
@@ -56,14 +56,39 @@ function AccordionSection({ title, defaultOpen = false, tone, children }: {
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium t-hoverable"
+        aria-expanded={open}
       >
         <span>{title}</span>
-        <span className="t-text-muted">{open ? '−' : '+'}</span>
+        <span className="t-text-muted">{open ? '\u2212' : '+'}</span>
       </button>
       {open && <div className="border-t t-border px-3 py-3">{children}</div>}
     </div>
   )
 }
+
+// Key governance metrics shown by default
+const KEY_GOVERNANCE: { key: keyof GovernanceSummary; label: string }[] = [
+  { key: 'overrideDecisionCount', label: 'Override decisions' },
+  { key: 'semanticConsensusBlockerCount', label: 'Consensus blockers' },
+  { key: 'invalidatedNodeCount', label: 'Invalidated nodes' },
+  { key: 'maintenanceErrorCount', label: 'Critical / error alerts' },
+  { key: 'readinessGateFailureAlertCount', label: 'Readiness failures' },
+  { key: 'semanticReviewerCount', label: 'Quality reviewers' },
+]
+
+// Extended governance metrics hidden behind "Show all"
+const EXTENDED_GOVERNANCE: { key: keyof GovernanceSummary; label: string }[] = [
+  { key: 'claimFreezeDecisionCount', label: 'Claim-freeze decisions' },
+  { key: 'maintenanceAlertCount', label: 'Maintenance alerts' },
+  { key: 'readinessRequiredFailedCount', label: 'Readiness required-fail' },
+  { key: 'crossBranchDefaultedCount', label: 'Cross-branch defaulted' },
+  { key: 'crossBranchAutoUpgradedCount', label: 'Cross-branch auto-upgraded' },
+  { key: 'invalidCountableLinkCount', label: 'Invalid countable links' },
+  { key: 'missingParityContractLinkCount', label: 'Missing parity links' },
+  { key: 'causalityMissingClaimCount', label: 'Causality missing claims' },
+  { key: 'missingClaimDecisionBindingCount', label: 'Claim-freeze binding gaps' },
+  { key: 'directEvidenceMissingClaimCount', label: 'Direct-evidence gaps' },
+]
 
 export function SystemTab({
   snapshot,
@@ -84,23 +109,26 @@ export function SystemTab({
   onQueueOpenChange,
   actions,
 }: SystemTabProps) {
-  // Local form state for external wait
-  const [waitTitle, setWaitTitle] = useState('Collect external experiment artifacts')
-  const [waitRule, setWaitRule] = useState('Upload experiment outputs and run metadata')
-  const [waitResumeAction, setWaitResumeAction] = useState('Validate logs and continue next planning turn')
+  // Local form state for external wait — cleared defaults
+  const [waitTitle, setWaitTitle] = useState('')
+  const [waitRule, setWaitRule] = useState('')
+  const [waitResumeAction, setWaitResumeAction] = useState('')
   const [waitDetails, setWaitDetails] = useState('')
-  const [waitResolutionNote, setWaitResolutionNote] = useState('External artifacts uploaded and verified')
-  const [waitCancelReason, setWaitCancelReason] = useState('External dependency no longer required')
-  const [fullTextCitation, setFullTextCitation] = useState('Doe et al. (2024) systems paper')
-  const [fullTextRequiredFiles, setFullTextRequiredFiles] = useState('paper.pdf')
-  const [fullTextReason, setFullTextReason] = useState('Paywall or auth blocked programmatic retrieval')
+  const [waitResolutionNote, setWaitResolutionNote] = useState('')
+  const [waitCancelReason, setWaitCancelReason] = useState('')
+  const [fullTextCitation, setFullTextCitation] = useState('')
+  const [fullTextRequiredFiles, setFullTextRequiredFiles] = useState('')
+  const [fullTextReason, setFullTextReason] = useState('')
 
-  // Local form state for resource extension
-  const [resourceDeltaTurns, setResourceDeltaTurns] = useState('2')
-  const [resourceDeltaTokens, setResourceDeltaTokens] = useState('20000')
-  const [resourceDeltaCostUsd, setResourceDeltaCostUsd] = useState('2')
-  const [resourceRationale, setResourceRationale] = useState('Need additional budget to complete planned evaluation scope')
-  const [resourceDecisionNote, setResourceDecisionNote] = useState('Approved by user')
+  // Local form state for resource extension — cleared defaults
+  const [resourceDeltaTurns, setResourceDeltaTurns] = useState('')
+  const [resourceDeltaTokens, setResourceDeltaTokens] = useState('')
+  const [resourceDeltaCostUsd, setResourceDeltaCostUsd] = useState('')
+  const [resourceRationale, setResourceRationale] = useState('')
+  const [resourceDecisionNote, setResourceDecisionNote] = useState('')
+
+  // Show all governance toggle
+  const [showAllGovernance, setShowAllGovernance] = useState(false)
 
   return (
     <div className="flex flex-col gap-3">
@@ -157,47 +185,33 @@ export function SystemTab({
         </div>
       </AccordionSection>
 
-      {/* Governance Overview — collapsed, reformatted as 2-column grid table */}
+      {/* Governance Overview — collapsed, 6 key metrics + "Show all" toggle */}
       <AccordionSection
         title="Governance Overview"
         tone={governanceSummary.maintenanceErrorCount > 0 || governanceSummary.invalidatedNodeCount > 0
-          ? 'border-amber-500/40 bg-amber-500/5'
+          ? 't-card-amber'
           : undefined}
       >
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          <div className="t-text-secondary">Override decisions</div>
-          <div className="font-medium">{governanceSummary.overrideDecisionCount}</div>
-          <div className="t-text-secondary">Claim-freeze decisions</div>
-          <div className="font-medium">{governanceSummary.claimFreezeDecisionCount}</div>
-          <div className="t-text-secondary">Invalidated nodes</div>
-          <div className="font-medium">{governanceSummary.invalidatedNodeCount}</div>
-          <div className="t-text-secondary">Maintenance alerts</div>
-          <div className="font-medium">{governanceSummary.maintenanceAlertCount}</div>
-          <div className="t-text-secondary">Critical / error</div>
-          <div className="font-medium">{governanceSummary.maintenanceErrorCount}</div>
-          <div className="t-text-secondary">Readiness alerts</div>
-          <div className="font-medium">{governanceSummary.readinessGateFailureAlertCount}</div>
-          <div className="t-text-secondary">Readiness required-fail</div>
-          <div className="font-medium">{governanceSummary.readinessRequiredFailedCount}</div>
-          <div className="t-text-secondary">Semantic reviewers</div>
-          <div className="font-medium">{governanceSummary.semanticReviewerCount}</div>
-          <div className="t-text-secondary">Consensus blockers</div>
-          <div className="font-medium">{governanceSummary.semanticConsensusBlockerCount}</div>
-          <div className="t-text-secondary">Cross-branch defaulted</div>
-          <div className="font-medium">{governanceSummary.crossBranchDefaultedCount}</div>
-          <div className="t-text-secondary">Cross-branch auto-upgraded</div>
-          <div className="font-medium">{governanceSummary.crossBranchAutoUpgradedCount}</div>
-          <div className="t-text-secondary">Invalid countable links</div>
-          <div className="font-medium">{governanceSummary.invalidCountableLinkCount}</div>
-          <div className="t-text-secondary">Missing parity links</div>
-          <div className="font-medium">{governanceSummary.missingParityContractLinkCount}</div>
-          <div className="t-text-secondary">Causality missing claims</div>
-          <div className="font-medium">{governanceSummary.causalityMissingClaimCount}</div>
-          <div className="t-text-secondary">Claim-freeze binding gaps</div>
-          <div className="font-medium">{governanceSummary.missingClaimDecisionBindingCount}</div>
-          <div className="t-text-secondary">Direct-evidence gaps</div>
-          <div className="font-medium">{governanceSummary.directEvidenceMissingClaimCount}</div>
+          {KEY_GOVERNANCE.map(({ key, label }) => (
+            <div key={key} className="contents">
+              <div className="t-text-secondary">{label}</div>
+              <div className="font-medium">{governanceSummary[key]}</div>
+            </div>
+          ))}
+          {showAllGovernance && EXTENDED_GOVERNANCE.map(({ key, label }) => (
+            <div key={key} className="contents">
+              <div className="t-text-secondary">{label}</div>
+              <div className="font-medium">{governanceSummary[key]}</div>
+            </div>
+          ))}
         </div>
+        <button
+          onClick={() => setShowAllGovernance((v) => !v)}
+          className="mt-2 text-[11px] t-accent-teal hover:underline"
+        >
+          {showAllGovernance ? 'Show less' : `Show all (${KEY_GOVERNANCE.length + EXTENDED_GOVERNANCE.length} metrics)`}
+        </button>
       </AccordionSection>
 
       {/* Input Queue */}
@@ -223,7 +237,7 @@ export function SystemTab({
                     <button
                       onClick={() => actions.removeQueueItem(item.id)}
                       className="rounded-md border border-rose-500/40 p-1 t-accent-rose hover:bg-rose-500/10"
-                      title="Remove"
+                      aria-label="Remove queued input"
                     >
                       <X size={12} />
                     </button>
@@ -239,7 +253,7 @@ export function SystemTab({
                       onClick={() => actions.moveQueueItem(item.id, index - 1)}
                       disabled={index === 0}
                       className="rounded-md border t-border p-1 disabled:opacity-40"
-                      title="Move up"
+                      aria-label="Move up in queue"
                     >
                       <ArrowUp size={12} />
                     </button>
@@ -247,7 +261,7 @@ export function SystemTab({
                       onClick={() => actions.moveQueueItem(item.id, index + 1)}
                       disabled={index === queuedInputs.length - 1}
                       className="rounded-md border t-border p-1 disabled:opacity-40"
-                      title="Move down"
+                      aria-label="Move down in queue"
                     >
                       <ArrowDown size={12} />
                     </button>
@@ -261,7 +275,7 @@ export function SystemTab({
 
       {/* External Wait (P1+) */}
       {selectedPhase !== 'P0' && (
-        <AccordionSection title="External Wait" tone="border-sky-500/30 bg-sky-500/5">
+        <AccordionSection title="External Wait" tone="t-card-sky">
           <div className="text-xs">
             {snapshot?.state === 'WAITING_EXTERNAL' ? (
               <div className="space-y-2">
@@ -290,7 +304,7 @@ export function SystemTab({
                   Validate Uploads
                 </button>
                 {waitValidation && waitValidation.taskId === pendingWaitTask?.id && (
-                  <div className={`rounded-lg border px-2 py-1 text-[11px] ${waitValidation.ok ? 'border-emerald-500/40 bg-emerald-500/10 t-accent-emerald' : 'border-rose-500/40 bg-rose-500/10 t-accent-rose'}`}>
+                  <div className={`rounded-lg border px-2 py-1 text-[11px] ${waitValidation.ok ? 't-card-emerald t-accent-emerald' : 't-card-rose t-accent-rose'}`}>
                     {waitValidation.ok
                       ? `Validation passed${waitValidation.requiredUploads.length > 0 ? ` · required files present (${waitValidation.requiredUploads.join(', ')})` : ''}`
                       : `Validation failed · ${waitValidation.reason ?? 'missing required uploads'}`}
@@ -306,18 +320,24 @@ export function SystemTab({
                     )}
                   </div>
                 )}
-                <input
-                  value={waitResolutionNote}
-                  onChange={(e) => setWaitResolutionNote(e.target.value)}
-                  className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30"
-                  placeholder="Resolution note..."
-                />
-                <input
-                  value={waitCancelReason}
-                  onChange={(e) => setWaitCancelReason(e.target.value)}
-                  className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30"
-                  placeholder="Cancel reason..."
-                />
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Resolution note</label>
+                  <input
+                    value={waitResolutionNote}
+                    onChange={(e) => setWaitResolutionNote(e.target.value)}
+                    className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                    placeholder="Resolution note..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Cancel reason</label>
+                  <input
+                    value={waitCancelReason}
+                    onChange={(e) => setWaitCancelReason(e.target.value)}
+                    className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                    placeholder="Cancel reason..."
+                  />
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => actions.resolveWaitTask(waitResolutionNote)}
@@ -335,10 +355,22 @@ export function SystemTab({
               </div>
             ) : (
               <div className="space-y-2">
-                <input value={waitTitle} onChange={(e) => setWaitTitle(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Task title..." />
-                <input value={waitRule} onChange={(e) => setWaitRule(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Completion rule..." />
-                <input value={waitResumeAction} onChange={(e) => setWaitResumeAction(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Resume action..." />
-                <input value={waitDetails} onChange={(e) => setWaitDetails(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Optional details..." />
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Task title</label>
+                  <input value={waitTitle} onChange={(e) => setWaitTitle(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Task title..." />
+                </div>
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Completion rule</label>
+                  <input value={waitRule} onChange={(e) => setWaitRule(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Completion rule..." />
+                </div>
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Resume action</label>
+                  <input value={waitResumeAction} onChange={(e) => setWaitResumeAction(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Resume action..." />
+                </div>
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Details (optional)</label>
+                  <input value={waitDetails} onChange={(e) => setWaitDetails(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Optional details..." />
+                </div>
                 <button
                   onClick={() => actions.requestWaitExternal({ title: waitTitle, completionRule: waitRule, resumeAction: waitResumeAction, details: waitDetails })}
                   className="rounded-md border border-sky-400/40 px-3 py-2 font-medium t-accent-sky hover:bg-sky-500/10"
@@ -355,9 +387,18 @@ export function SystemTab({
                 <div className="mt-2 border-t border-sky-500/20 pt-2 text-[11px] t-accent-sky">
                   Missing Full-text Shortcut
                 </div>
-                <input value={fullTextCitation} onChange={(e) => setFullTextCitation(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Citation..." />
-                <input value={fullTextRequiredFiles} onChange={(e) => setFullTextRequiredFiles(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Required files (comma-separated)..." />
-                <input value={fullTextReason} onChange={(e) => setFullTextReason(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Reason full text is missing..." />
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Citation</label>
+                  <input value={fullTextCitation} onChange={(e) => setFullTextCitation(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Citation..." />
+                </div>
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Required files</label>
+                  <input value={fullTextRequiredFiles} onChange={(e) => setFullTextRequiredFiles(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Required files (comma-separated)..." />
+                </div>
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Reason full text is missing</label>
+                  <input value={fullTextReason} onChange={(e) => setFullTextReason(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30" placeholder="Reason full text is missing..." />
+                </div>
                 <button
                   onClick={() => actions.requestFullTextWait({ citation: fullTextCitation, requiredFiles: fullTextRequiredFiles, reason: fullTextReason })}
                   className="rounded-md border border-sky-400/40 px-3 py-2 font-medium t-accent-sky hover:bg-sky-500/10"
@@ -372,7 +413,7 @@ export function SystemTab({
 
       {/* Resource Extension (P1+) */}
       {selectedPhase !== 'P0' && (
-        <AccordionSection title="Resource Extension" tone="border-amber-500/30 bg-amber-500/5">
+        <AccordionSection title="Resource Extension" tone="t-card-amber">
           <div className="text-xs">
             {snapshot?.pendingResourceExtension ? (
               <div className="space-y-2">
@@ -387,12 +428,15 @@ export function SystemTab({
                   </div>
                   <div className="mt-1 text-[11px] t-text-muted">{snapshot.pendingResourceExtension.rationale}</div>
                 </div>
-                <input
-                  value={resourceDecisionNote}
-                  onChange={(e) => setResourceDecisionNote(e.target.value)}
-                  className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-                  placeholder="Decision note..."
-                />
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Decision note</label>
+                  <input
+                    value={resourceDecisionNote}
+                    onChange={(e) => setResourceDecisionNote(e.target.value)}
+                    className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                    placeholder="Decision note..."
+                  />
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => actions.resolveResourceExtension(true, resourceDecisionNote)}
@@ -410,17 +454,29 @@ export function SystemTab({
               </div>
             ) : (
               <div className="space-y-2">
-                <textarea
-                  value={resourceRationale}
-                  onChange={(e) => setResourceRationale(e.target.value)}
-                  rows={2}
-                  className="w-full resize-none rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-                  placeholder="Why extension is needed..."
-                />
+                <div>
+                  <label className="block text-[11px] t-text-muted mb-1">Rationale</label>
+                  <textarea
+                    value={resourceRationale}
+                    onChange={(e) => setResourceRationale(e.target.value)}
+                    rows={2}
+                    className="w-full resize-none rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                    placeholder="Why extension is needed..."
+                  />
+                </div>
                 <div className="grid grid-cols-3 gap-2">
-                  <input value={resourceDeltaTurns} onChange={(e) => setResourceDeltaTurns(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="+turns" />
-                  <input value={resourceDeltaTokens} onChange={(e) => setResourceDeltaTokens(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="+tokens" />
-                  <input value={resourceDeltaCostUsd} onChange={(e) => setResourceDeltaCostUsd(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="+cost usd" />
+                  <div>
+                    <label className="block text-[11px] t-text-muted mb-1">+turns</label>
+                    <input value={resourceDeltaTurns} onChange={(e) => setResourceDeltaTurns(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="+turns" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] t-text-muted mb-1">+tokens</label>
+                    <input value={resourceDeltaTokens} onChange={(e) => setResourceDeltaTokens(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="+tokens" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] t-text-muted mb-1">+cost usd</label>
+                    <input value={resourceDeltaCostUsd} onChange={(e) => setResourceDeltaCostUsd(e.target.value)} className="w-full rounded-lg border t-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30" placeholder="+cost usd" />
+                  </div>
                 </div>
                 <button
                   onClick={() => actions.requestResourceExtension({ rationale: resourceRationale, deltaTurns: resourceDeltaTurns, deltaTokens: resourceDeltaTokens, deltaCostUsd: resourceDeltaCostUsd })}
@@ -508,20 +564,23 @@ export function SystemTab({
           </div>
 
           <div>
-            <div className="font-medium mb-2">Raw Event Feed</div>
+            <div className="font-medium mb-2">Event Feed</div>
             {rawEvents.length === 0 ? (
-              <div className="t-text-muted">No raw events yet.</div>
+              <div className="t-text-muted">No events yet.</div>
             ) : (
               <div className="space-y-1">
-                {rawEvents.slice(0, 40).map((event, index) => (
-                  <div key={`raw-event-${index}`} className="rounded-md border t-border px-2 py-1">
-                    <div className="t-text-muted">{new Date(String(event?.timestamp || Date.now())).toLocaleTimeString()}</div>
-                    <div className="font-medium">{String(event?.type ?? 'event')}</div>
-                    <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all text-[10px] t-text-secondary">
-                      {JSON.stringify(event, null, 2)}
-                    </pre>
-                  </div>
-                ))}
+                {rawEvents.slice(0, 40).map((event, index) => {
+                  const formatted = formatEvent(event)
+                  return (
+                    <div key={`raw-event-${index}`} className="rounded-md border t-border px-2 py-1">
+                      <div className="flex items-center gap-2">
+                        <span className="t-text-muted">{new Date(formatted.at).toLocaleTimeString()}</span>
+                        <span className="font-medium">{formatted.type}</span>
+                      </div>
+                      <div className="mt-0.5 t-text-secondary">{formatted.text}</div>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

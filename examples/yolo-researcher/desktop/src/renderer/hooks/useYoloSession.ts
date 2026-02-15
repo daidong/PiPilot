@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type {
+  ActivityItem,
   YoloSnapshot,
   TurnReport,
   EventRecord,
@@ -26,6 +27,9 @@ import type {
   EvidenceGraphEdge,
   EvidenceGraphLane,
   SessionActions,
+  InteractionContext,
+  DrawerChatMessage,
+  DrawerState,
 } from '@/lib/types'
 import {
   STAGES,
@@ -56,6 +60,7 @@ export function useYoloSession() {
   const [queuedInputs, setQueuedInputs] = useState<QueuedUserInput[]>([])
   const [waitTasks, setWaitTasks] = useState<ExternalWaitTask[]>([])
   const [waitValidation, setWaitValidation] = useState<WaitTaskValidationResult | null>(null)
+  const [activityFeed, setActivityFeed] = useState<ActivityItem[]>([])
   const [isStarting, setIsStarting] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -72,6 +77,13 @@ export function useYoloSession() {
   const [selectedTurnNumber, setSelectedTurnNumber] = useState<number | null>(null)
   const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null)
   const [showSupersedesEdges, setShowSupersedesEdges] = useState(true)
+  const legacyEvidenceEnabled = activeTab === 'evidence'
+
+  // ─── Group C: Drawer state ──────────────────────────────────────────
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerInteraction, setDrawerInteraction] = useState<InteractionContext | null>(null)
+  const [drawerChat, setDrawerChat] = useState<DrawerChatMessage[]>([])
+  const [drawerChatLoading, setDrawerChatLoading] = useState(false)
 
   // ─── Computed values ───────────────────────────────────────────────
   const activeTurn = useMemo(
@@ -163,6 +175,7 @@ export function useYoloSession() {
   }, [assetRecords])
 
   const claimMatrixRows: ClaimMatrixRow[] = useMemo(() => {
+    if (!legacyEvidenceEnabled) return []
     const claims = assetRecords.filter((asset) => /claim/i.test(asset.type))
     const evidenceLinks = assetRecords.filter((asset) => /evidencelink/i.test(asset.type))
     const linkedByClaim = new Map<string, Array<{ id: string; policy: 'countable' | 'cite_only' | 'needs_revalidate' }>>()
@@ -241,9 +254,10 @@ export function useYoloSession() {
         if (rankA !== rankB) return rankA - rankB
         return a.id.localeCompare(b.id)
       })
-  }, [assetRecords])
+  }, [assetRecords, legacyEvidenceEnabled])
 
   const latestClaimEvidenceTable: LatestClaimEvidenceTable | null = useMemo(() => {
+    if (!legacyEvidenceEnabled) return null
     const latest = assetRecords
       .filter((asset) => asset.type === 'ClaimEvidenceTable')
       .sort((a, b) => a.createdByTurn - b.createdByTurn || a.id.localeCompare(b.id))
@@ -303,14 +317,32 @@ export function useYoloSession() {
       secondaryPass: completeness.assertedSecondaryCoveragePass === true,
       rows
     }
-  }, [assetRecords])
+  }, [assetRecords, legacyEvidenceEnabled])
 
   const matrixRows = useMemo(() => {
+    if (!legacyEvidenceEnabled) return []
     if (latestClaimEvidenceTable?.rows.length) return latestClaimEvidenceTable.rows
     return claimMatrixRows
-  }, [latestClaimEvidenceTable, claimMatrixRows])
+  }, [latestClaimEvidenceTable, claimMatrixRows, legacyEvidenceEnabled])
 
   const evidenceGraph: EvidenceGraphData = useMemo(() => {
+    if (!legacyEvidenceEnabled) {
+      return {
+        nodes: [],
+        nodeById: new Map<string, EvidenceGraphNode>(),
+        edges: [],
+        graphW: 0,
+        graphH: 0,
+        nodeW: 160,
+        nodeH: 52,
+        counts: {
+          claims: 0,
+          links: 0,
+          evidence: 0,
+          decisions: 0
+        }
+      }
+    }
     const recentAssets = [...assetRecords]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .slice(-220)
@@ -433,7 +465,7 @@ export function useYoloSession() {
         decisions: positioned.filter((node) => node.lane === 'decision').length
       }
     }
-  }, [assetRecords])
+  }, [assetRecords, legacyEvidenceEnabled])
 
   const selectedGraphNode = useMemo(
     () => (selectedGraphNodeId ? evidenceGraph.nodeById.get(selectedGraphNodeId) ?? null : null),
@@ -446,6 +478,19 @@ export function useYoloSession() {
   )
 
   const completeCoverageSummary: CoverageSummary = useMemo(() => {
+    if (!legacyEvidenceEnabled) {
+      return {
+        source: 'disabled',
+        assertedPrimary: 0,
+        coveredPrimary: 0,
+        primaryRatio: null,
+        assertedSecondary: 0,
+        coveredSecondary: 0,
+        secondaryRatio: null,
+        primaryPass: true,
+        secondaryPass: true
+      }
+    }
     if (latestClaimEvidenceTable) {
       return {
         source: 'ClaimEvidenceTable',
@@ -485,7 +530,7 @@ export function useYoloSession() {
       primaryPass: primaryRatio >= 1,
       secondaryPass: secondaryRatio >= 0.85
     }
-  }, [latestClaimEvidenceTable, claimMatrixRows])
+  }, [latestClaimEvidenceTable, claimMatrixRows, legacyEvidenceEnabled])
 
   const canPause = snapshot?.state === 'EXECUTING' || snapshot?.state === 'PLANNING'
   const canResume = snapshot?.state === 'PAUSED' || snapshot?.state === 'WAITING_FOR_USER' || snapshot?.state === 'STOPPED'
@@ -716,6 +761,7 @@ export function useYoloSession() {
     setRawEvents([])
     setBranchSnapshot(null)
     setAssetRecords([])
+    setActivityFeed([])
     setActiveTab('timeline')
     setQueuedInputs([])
     setWaitTasks([])
@@ -726,6 +772,10 @@ export function useYoloSession() {
     setActionNotice(null)
     setIsStarting(false)
     setIsStopping(false)
+    setDrawerOpen(false)
+    setDrawerInteraction(null)
+    setDrawerChat([])
+    setDrawerChatLoading(false)
   }
 
   // ─── IPC listeners ─────────────────────────────────────────────────
@@ -770,6 +820,28 @@ export function useYoloSession() {
         void refreshAssets()
       }
     })
+    const unsubActivity = api.onYoloActivity((payload: ActivityItem) => {
+      if (payload.kind === 'llm_text') {
+        // Replace the existing llm_text entry with the same id (accumulated buffer)
+        setActivityFeed((prev) => {
+          const idx = prev.findIndex((item) => item.kind === 'llm_text' && item.id === payload.id)
+          if (idx >= 0) {
+            const next = [...prev]
+            next[idx] = payload
+            return next
+          }
+          return [payload, ...prev].slice(0, 50)
+        })
+      } else {
+        setActivityFeed((prev) => [payload, ...prev].slice(0, 50))
+      }
+    })
+    const unsubDrawer = api.onDrawerStateChanged((payload: DrawerState) => {
+      setDrawerInteraction(payload.interaction)
+      setDrawerChat(payload.chatHistory)
+      if (payload.interaction) setDrawerOpen(true)
+      if (!payload.interaction) setDrawerOpen(false)
+    })
     const unsubClosed = api.onProjectClosed(() => resetSession())
 
     api.yoloGetSnapshot().then((s: YoloSnapshot | null) => setSnapshot(s)).catch(() => {})
@@ -778,7 +850,7 @@ export function useYoloSession() {
     void refreshWaitTasks()
 
     return () => {
-      unsubState(); unsubTurn(); unsubQuestion(); unsubEvent(); unsubClosed()
+      unsubState(); unsubTurn(); unsubQuestion(); unsubEvent(); unsubActivity(); unsubDrawer(); unsubClosed()
     }
   }, [])
 
@@ -797,6 +869,14 @@ export function useYoloSession() {
       await refreshWaitTasks()
     },
 
+    async closeProject() {
+      try {
+        await api.closeProject()
+      } catch {
+        // Best effort — resetSession will be triggered by the onProjectClosed listener
+      }
+    },
+
     async startYolo() {
       setIsStarting(true)
       setActionError(null)
@@ -808,6 +888,30 @@ export function useYoloSession() {
         await refreshQueue()
         await refreshWaitTasks()
         // isStarting is cleared by the IPC state listener when state moves beyond IDLE
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : String(error))
+        setIsStarting(false)
+      }
+    },
+
+    async restartYolo() {
+      setIsStarting(true)
+      setActionError(null)
+      setActionNotice(null)
+      setActivityFeed([])
+      try {
+        // Stop current session first to force a fresh start
+        await api.yoloStop().catch(() => {})
+        const started = await api.yoloStart(goal, { ...defaultOptions, phase: selectedPhase })
+        setSnapshot(started)
+        setTurnReports([])
+        setEvents([])
+        setRawEvents([])
+        setBranchSnapshot(null)
+        setAssetRecords([])
+        await refreshHistory()
+        await refreshQueue()
+        await refreshWaitTasks()
       } catch (error) {
         setActionError(error instanceof Error ? error.message : String(error))
         setIsStarting(false)
@@ -871,6 +975,12 @@ export function useYoloSession() {
 
     async submitQuickReply(text: string) {
       await api.yoloEnqueueInput(text, 'urgent')
+      await refreshQueue()
+    },
+
+    async yoloEnqueueInput(text: string, priority?: 'urgent' | 'normal') {
+      if (!text.trim()) return
+      await api.yoloEnqueueInput(text.trim(), priority ?? 'normal')
       await refreshQueue()
     },
 
@@ -1077,6 +1187,40 @@ export function useYoloSession() {
     setSelectedGraphNodeId,
     setShowSupersedesEdges,
     setQueueOpen,
+
+    async openDrawer() {
+      const state = await api.drawerGetState()
+      setDrawerInteraction(state.interaction)
+      setDrawerChat(state.chatHistory)
+      setDrawerOpen(true)
+    },
+
+    closeDrawer() {
+      setDrawerOpen(false)
+    },
+
+    async sendDrawerChat(message: string) {
+      if (!drawerInteraction) return
+      setDrawerChatLoading(true)
+      const userMsg: DrawerChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: message,
+        timestamp: new Date().toISOString()
+      }
+      setDrawerChat((prev) => [...prev, userMsg])
+      try {
+        const response = await api.drawerChat({ message, interactionId: drawerInteraction.interactionId })
+        setDrawerChat((prev) => [...prev, response])
+      } finally {
+        setDrawerChatLoading(false)
+      }
+    },
+
+    async executeDrawerAction(actionId: string, text?: string) {
+      if (!drawerInteraction) return
+      await api.drawerAction({ interactionId: drawerInteraction.interactionId, actionId, text })
+    },
   }
 
   return {
@@ -1089,6 +1233,7 @@ export function useYoloSession() {
     rawEvents,
     branchSnapshot,
     assetRecords,
+    activityFeed,
     queuedInputs,
     waitTasks,
     waitValidation,
@@ -1135,6 +1280,12 @@ export function useYoloSession() {
     governanceSummary,
     stageGates,
     quickOptions,
+
+    // Drawer
+    drawerOpen,
+    drawerInteraction,
+    drawerChat,
+    drawerChatLoading,
 
     // Actions
     actions,

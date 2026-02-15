@@ -1,15 +1,31 @@
-import { createAgent, definePack, defineTool, packs } from '../../../src/index.js'
-import type { AgentRunResult, Pack, Tool } from '../../../src/index.js'
+import { createAgent, definePack, defineTool, packs, createTokenTracker } from '../../../src/index.js'
+import type { AgentRunResult, Pack, Tool, TokenTracker } from '../../../src/index.js'
+import { createLiteratureSearchTool } from './literature-subagent.js'
+import { createDataAnalyzeTool } from './data-subagent.js'
+import { createWritingTools } from './writing-subagent.js'
+import { yoloResearcherSkills } from '../skills/index.js'
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type {
+  ActivityEvent,
   AskUserRequest,
+  CoordinatorExecutionTraceItem,
+  CoordinatorToolCallSummary,
+  CoordinatorToolingStatus,
   CoordinatorTurnMetrics,
   CoordinatorTurnResult,
+  PlannerOutput,
   QueuedUserInput,
+  ReviewerProcessReview,
   TurnSpec,
   YoloCoordinator,
-  YoloStage
+  YoloRuntimeMode,
+  YoloStage,
+  YoloTurnAction
 } from '../runtime/types.js'
+import { randomId, nowIso } from '../runtime/utils.js'
 
 interface CoordinatorJsonAsset {
   type: string
@@ -18,15 +34,19 @@ interface CoordinatorJsonAsset {
 }
 
 interface CoordinatorJsonOutput {
-  summary?: string
-  assets?: CoordinatorJsonAsset[]
-  askUser?: AskUserRequest
+  action?: unknown
+  actionRationale?: unknown
+  summary?: unknown
+  assets?: unknown
+  askUser?: unknown
+  execution_trace?: unknown
 }
 
 interface TurnTelemetryAccumulator {
   toolCalls: number
   discoveryOps: number
   readBytes: number
+  toolSummaries: CoordinatorToolCallSummary[]
   lastAskUser?: AskUserRequest
 }
 
@@ -45,7 +65,20 @@ export interface YoloCoordinatorConfig {
   debug?: boolean
   identityPrompt?: string
   constraints?: string[]
+  mode?: YoloRuntimeMode
   allowBash?: boolean
+  enableLiteratureTools?: boolean
+  enableLiteratureSubagent?: boolean
+  literatureSubagentMaxCallsPerTurn?: number
+  enableDataSubagent?: boolean
+  dataSubagentMaxCallsPerTurn?: number
+  enableWritingSubagent?: boolean
+  writingSubagentMaxCallsPerTurn?: number
+  enableResearchSkills?: boolean
+  externalSkillsDir?: string
+  watchExternalSkills?: boolean
+  braveApiKey?: string
+  onActivity?: (event: ActivityEvent) => void
   createAgentInstance?: (callbacks: {
     onToolCall: (name: string, args: unknown) => void
     onToolResult: (name: string, result: unknown, args?: unknown) => void
@@ -61,28 +94,67 @@ export interface AgentLike {
 
 const DEFAULT_IDENTITY = [
   'You are YOLO coordinator for one bounded research turn.',
-  'Prioritize concrete auditable assets over long prose.',
-  'If missing critical information, call ask_user tool.'
+  'Progress-first and contract-first.',
+  'Prioritize concrete auditable outputs over process abstractions.',
+  'If blocked, call ask_user.'
 ].join(' ')
 
 const DEFAULT_CONSTRAINTS: string[] = [
   'Produce machine-readable output only as specified.',
-  'Do not fabricate evidence. If blocked, call ask_user.',
-  'Keep branch action aligned with TurnSpec constraints.'
+  'Keep outputs aligned to three core assets: ResearchQuestion, ExperimentRequest, ResultInsight.',
+  'Do not fabricate evidence or external results.',
+  'If missing critical context, call ask_user.'
 ]
 
-const DISCOVERY_TOOL_SET = new Set(['glob', 'grep', 'read'])
+const DISCOVERY_TOOL_SET = new Set(['glob', 'grep', 'read', 'literature-search', 'data-analyze'])
+const COORDINATOR_DIR = dirname(fileURLToPath(import.meta.url))
+const DEFAULT_EXTERNAL_SKILLS_DIR = join(COORDINATOR_DIR, '..', 'skills', 'default-project-skills')
+const VALID_ACTIONS = new Set<YoloTurnAction>([
+  'explore',
+  'refine_question',
+  'issue_experiment_request',
+  'digest_uploaded_results'
+])
+
+type TurnIntent = 'literature' | 'data' | 'writing' | 'local'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function summarizeForTelemetry(value: unknown, limit: number = 180): string | undefined {
+  if (value === undefined || value === null) return undefined
+  const text = typeof value === 'string'
+    ? value
+    : JSON.stringify(value)
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (!compact) return undefined
+  if (compact.length <= limit) return compact
+  return `${compact.slice(0, limit)}...`
+}
+
+function normalizeTurnAction(value: unknown): YoloTurnAction | undefined {
+  if (typeof value !== 'string') return undefined
+  const action = value.trim() as YoloTurnAction
+  if (!VALID_ACTIONS.has(action)) return undefined
+  return action
+}
+
+function normalizeActionRationale(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim()
+  return normalized || undefined
+}
+
 function normalizeAskUser(value: unknown): AskUserRequest | undefined {
   if (!isObject(value)) return undefined
-  if (typeof value.question !== 'string' || !value.question.trim()) return undefined
+  const required = typeof value.required === 'boolean' ? value.required : true
+  const question = typeof value.question === 'string' ? value.question.trim() : ''
+  if (required && !question) return undefined
 
   const normalized: AskUserRequest = {
-    question: value.question.trim()
+    required,
+    question: question || 'Need input from user to proceed.'
   }
 
   if (Array.isArray(value.options)) {
@@ -90,6 +162,12 @@ function normalizeAskUser(value: unknown): AskUserRequest | undefined {
   }
 
   if (typeof value.context === 'string') normalized.context = value.context
+  if (Array.isArray(value.required_files)) {
+    normalized.requiredFiles = value.required_files
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
   if (typeof value.checkpoint === 'string') {
     const checkpoint = value.checkpoint as AskUserRequest['checkpoint']
     if (checkpoint === 'problem-freeze' || checkpoint === 'baseline-freeze' || checkpoint === 'claim-freeze' || checkpoint === 'final-scope') {
@@ -101,7 +179,138 @@ function normalizeAskUser(value: unknown): AskUserRequest | undefined {
   return normalized
 }
 
-function normalizeAssets(value: unknown): CoordinatorJsonAsset[] {
+function normalizeExecutionTrace(value: unknown): CoordinatorExecutionTraceItem[] {
+  if (!Array.isArray(value)) return []
+  const normalized: CoordinatorExecutionTraceItem[] = []
+  for (const item of value) {
+    if (!isObject(item)) continue
+    if (typeof item.tool !== 'string' || !item.tool.trim()) continue
+    if (typeof item.reason !== 'string' || !item.reason.trim()) continue
+    if (typeof item.result_summary !== 'string' || !item.result_summary.trim()) continue
+    normalized.push({
+      tool: item.tool.trim(),
+      reason: item.reason.trim(),
+      result_summary: item.result_summary.trim()
+    })
+  }
+  return normalized
+}
+
+function inferIntent(input: {
+  stage: YoloStage
+  goal: string
+  turnSpec: TurnSpec
+  plannerOutput?: PlannerOutput
+}): TurnIntent {
+  const focus = `${input.goal} ${input.turnSpec.objective} ${input.plannerOutput?.planContract.current_focus ?? ''}`.toLowerCase()
+  const plannedTools = (input.plannerOutput?.planContract.tool_plan ?? [])
+    .map((item) => item.tool.toLowerCase())
+    .join(' ')
+
+  if (plannedTools.includes('data') || focus.includes('csv') || focus.includes('trace') || focus.includes('percentile')) {
+    return 'data'
+  }
+  if (plannedTools.includes('writing') || focus.includes('draft') || focus.includes('write') || focus.includes('outline')) {
+    return 'writing'
+  }
+  if (plannedTools.includes('literature') || focus.includes('paper') || focus.includes('related work') || focus.includes('prior art')) {
+    return 'literature'
+  }
+  if (input.stage === 'S2' || input.stage === 'S3') {
+    return 'writing'
+  }
+  return 'local'
+}
+
+function preferredToolsForIntent(intent: TurnIntent, tooling: CoordinatorToolingStatus): string[] {
+  const byIntent: Record<TurnIntent, string[]> = {
+    literature: ['literature-search', 'read', 'grep'],
+    data: ['data-analyze', 'read', 'bash'],
+    writing: ['writing-draft', 'writing-outline', 'read'],
+    local: ['read', 'grep', 'bash']
+  }
+  const candidates = byIntent[intent]
+  return candidates.filter((tool) => {
+    if (tool === 'literature-search') return tooling.enabledPacks.includes('literature-search')
+    if (tool.startsWith('writing-')) return tooling.enabledPacks.includes('writing')
+    if (tool === 'data-analyze') return tooling.enabledPacks.includes('data-analyze')
+    if (tool === 'bash') return tooling.enabledPacks.includes('exec')
+    return true
+  })
+}
+
+function buildContextCompilerView(input: {
+  turnSpec: TurnSpec
+  goal: string
+  mergedUserInputs: QueuedUserInput[]
+  plannerOutput?: PlannerOutput
+  reviewerOutput?: ReviewerProcessReview
+}): {
+  currentFocus: string
+  latestInsight: string
+  needFromUser: string
+} {
+  const currentFocus = input.plannerOutput?.planContract.current_focus
+    ?? input.turnSpec.objective
+  const latestInsight = input.mergedUserInputs.length > 0
+    ? input.mergedUserInputs[input.mergedUserInputs.length - 1]?.text ?? 'No recent user insight.'
+    : 'No recent user insight.'
+  const needFromUser = input.plannerOutput?.planContract.need_from_user?.request
+    ?? input.reviewerOutput?.notes_for_user
+    ?? 'Only ask user when blocked or external execution is required.'
+
+  return {
+    currentFocus,
+    latestInsight,
+    needFromUser
+  }
+}
+
+function normalizeLeanAssetType(rawType: string): string {
+  const key = rawType.trim().toLowerCase().replace(/[^a-z]/g, '')
+  if (!key) return 'Note'
+
+  if (
+    key === 'researchquestion'
+    || key === 'problemdefinitionpack'
+    || key === 'problemdefinition'
+    || key === 'problemstatement'
+    || key === 'hypothesis'
+    || key === 'question'
+  ) {
+    return 'ResearchQuestion'
+  }
+
+  if (
+    key === 'experimentrequest'
+    || key === 'experimentrequirement'
+    || key === 'experimentrequirements'
+    || key === 'measurementplan'
+    || key === 'instrumentationspec'
+  ) {
+    return 'ExperimentRequest'
+  }
+
+  if (
+    key === 'resultinsight'
+    || key === 'resultinsights'
+    || key === 'insight'
+    || key === 'finding'
+    || key === 'findings'
+    || key === 'analysisresult'
+  ) {
+    return 'ResultInsight'
+  }
+
+  if (key === 'note' || key === 'notes') return 'Note'
+  return 'Note'
+}
+
+function normalizeAssets(
+  value: unknown,
+  mode: YoloRuntimeMode,
+  action: YoloTurnAction | undefined
+): CoordinatorJsonAsset[] {
   if (!Array.isArray(value)) return []
 
   const normalized: CoordinatorJsonAsset[] = []
@@ -110,8 +319,12 @@ function normalizeAssets(value: unknown): CoordinatorJsonAsset[] {
     if (typeof entry.type !== 'string' || !entry.type.trim()) continue
     if (!isObject(entry.payload)) continue
 
+    const resolvedType = mode === 'lean_v2'
+      ? normalizeLeanAssetType(entry.type)
+      : entry.type.trim()
+
     const asset: CoordinatorJsonAsset = {
-      type: entry.type.trim(),
+      type: (mode === 'lean_v2' && action === 'explore') ? 'Note' : resolvedType,
       payload: entry.payload
     }
 
@@ -123,6 +336,14 @@ function normalizeAssets(value: unknown): CoordinatorJsonAsset[] {
   }
 
   return normalized
+}
+
+function inferActionFromAssets(assets: CoordinatorJsonAsset[]): YoloTurnAction {
+  const types = new Set(assets.map((asset) => asset.type))
+  if (types.has('ExperimentRequest')) return 'issue_experiment_request'
+  if (types.has('ResultInsight')) return 'digest_uploaded_results'
+  if (types.size > 0 && Array.from(types).every((type) => type === 'Note')) return 'explore'
+  return 'refine_question'
 }
 
 function parseCoordinatorJson(rawOutput: string): CoordinatorJsonOutput | undefined {
@@ -163,6 +384,11 @@ function buildTurnPrompt(input: {
   stage: YoloStage
   goal: string
   mergedUserInputs: QueuedUserInput[]
+  plannerOutput?: PlannerOutput
+  reviewerOutput?: ReviewerProcessReview
+}, options: {
+  mode: YoloRuntimeMode
+  tooling: CoordinatorToolingStatus
 }): string {
   const mergedInputs = input.mergedUserInputs.map((item) => ({
     id: item.id,
@@ -170,23 +396,58 @@ function buildTurnPrompt(input: {
     priority: item.priority,
     source: item.source
   }))
+  const intent = inferIntent({
+    stage: input.stage,
+    goal: input.goal,
+    turnSpec: input.turnSpec,
+    plannerOutput: input.plannerOutput
+  })
+  const preferredTools = preferredToolsForIntent(intent, options.tooling)
+  const contextView = buildContextCompilerView(input)
   const stageGuidance = (input.stage === 'S2' || input.stage === 'S3' || input.stage === 'S4')
     ? [
         'For S2-S4, do NOT run heavy/system experiments in-process.',
-        'Instead, produce an ExperimentRequirement asset to outsource execution to the user.',
-        'ExperimentRequirement payload should include: why, objective, method, expectedResult, requiredFiles.'
+        'Instead, produce an ExperimentRequest asset to outsource execution to the user.',
+        'Write for a junior PhD who did not design this study.',
+        'ExperimentRequest payload must include: why, objective, setup, method or methodSteps, controls, metrics, expectedResult, requiredFiles, outputFormat, submissionChecklist.',
+        'Method must be step-by-step and executable without hidden assumptions.'
       ].join(' ')
     : 'For this stage, keep outputs auditable and scoped to one bounded turn.'
+
+  const toolModeNote = options.tooling.mode === 'local-only'
+    ? `Tooling mode is local-only. ${options.tooling.degradeReason ?? 'External literature search unavailable.'}`
+    : 'Tooling mode supports local investigation plus literature/data/writing subagents.'
 
   return [
     'Execute exactly one YOLO turn.',
     'Return STRICT JSON with schema:',
-    '{"summary": string, "assets": [{"type": string, "payload": object, "supersedes"?: string}], "askUser"?: {"question": string, "options"?: string[], "context"?: string, "checkpoint"?: "problem-freeze"|"baseline-freeze"|"claim-freeze"|"final-scope", "blocking"?: boolean}}',
-    'Do not wrap JSON in prose unless unavoidable. If uncertain, call ask_user tool.',
+    '{"action":"explore|refine_question|issue_experiment_request|digest_uploaded_results","actionRationale":string,"summary":string,"assets":[{"type":string,"payload":object,"supersedes"?:string}],"askUser":{"required":boolean,"question":string,"blocking":boolean,"required_files"?:string[],"options"?:string[],"context"?:string,"checkpoint"?: "problem-freeze"|"baseline-freeze"|"claim-freeze"|"final-scope"},"execution_trace":[{"tool":string,"reason":string,"result_summary":string}]}',
+    'v2 contract:',
+    '- Use core asset types: ResearchQuestion, ExperimentRequest, ResultInsight.',
+    '- Use Note for exploration or free-form observations.',
+    '- If action=explore, output Note assets only.',
+    '- If action=issue_experiment_request, include at least one executable ExperimentRequest.',
+    '- For ExperimentRequest, use plain language and concrete instructions suitable for a junior PhD.',
+    '- Include command templates or pseudocode where useful.',
+    '- Include explicit upload checklist and expected file formats.',
+    '- For unfamiliar domains or prior-art questions, call literature-search first, then reason from returned coverage and persisted paper records.',
+    '- For dataset or measurement-file questions, use data-analyze instead of manual arithmetic in prompt space.',
+    '- For writing/refinement requests, use writing-outline or writing-draft to produce structured drafts.',
+    '- If action=digest_uploaded_results, include ResultInsight and link it to ExperimentRequest + uploaded artifacts in payload.',
+    '- askUser.required=true only when user action is genuinely required this turn.',
+    '- execution_trace must summarize concrete tool usage; if no tools are used, include one item with tool=\"none\" and why.',
+    'Do not wrap JSON in prose unless unavoidable. If uncertain, call ask_user.',
+    `Runtime mode: ${options.mode}`,
+    toolModeNote,
+    `Intent routing: ${intent}`,
+    `Preferred tools (ordered): ${preferredTools.join(', ') || 'none'}`,
+    `Context compiler: ${JSON.stringify(contextView)}`,
     stageGuidance,
     `Goal: ${input.goal}`,
     `Stage: ${input.stage}`,
     `TurnSpec: ${JSON.stringify(input.turnSpec)}`,
+    `PlannerOutput: ${JSON.stringify(input.plannerOutput ?? null)}`,
+    `ReviewerOutput: ${JSON.stringify(input.reviewerOutput ?? null)}`,
     `MergedUserInputs: ${JSON.stringify(mergedInputs)}`
   ].join('\n\n')
 }
@@ -200,13 +461,23 @@ function collectReadBytes(result: unknown): number {
 }
 
 function createAskUserTool(onAskUser: (request: AskUserRequest) => void) {
-  return defineTool<AskUserRequest, { accepted: boolean }>({
+  return defineTool<{
+    required?: boolean
+    question: string
+    options?: string[]
+    context?: string
+    required_files?: string[]
+    checkpoint?: AskUserRequest['checkpoint']
+    blocking?: boolean
+  }, { accepted: boolean }>({
     name: 'ask_user',
     description: 'Request clarification or approval from the supervising user. Use for blocking uncertainties.',
     parameters: {
+      required: { type: 'boolean', required: false, description: 'Whether this is an actionable user request for this turn.' },
       question: { type: 'string', required: true, description: 'Question to ask the user.' },
       options: { type: 'array', required: false, description: 'Optional choices for user response.' },
       context: { type: 'string', required: false, description: 'Optional context shown with the question.' },
+      required_files: { type: 'array', required: false, description: 'Optional required file list for user upload.' },
       checkpoint: {
         type: 'string',
         required: false,
@@ -217,7 +488,12 @@ function createAskUserTool(onAskUser: (request: AskUserRequest) => void) {
     },
     execute: async (input) => {
       onAskUser({
-        ...input,
+        required: input.required ?? true,
+        question: input.question,
+        options: input.options,
+        context: input.context,
+        requiredFiles: Array.isArray(input.required_files) ? input.required_files : undefined,
+        checkpoint: input.checkpoint,
         blocking: input.blocking ?? true
       })
       return { success: true, data: { accepted: true } }
@@ -225,9 +501,13 @@ function createAskUserTool(onAskUser: (request: AskUserRequest) => void) {
   })
 }
 
-function buildCoordinatorMetrics(runResult: AgentRunResult, telemetry: TurnTelemetryAccumulator): CoordinatorTurnMetrics {
+function buildCoordinatorMetrics(runResult: AgentRunResult, telemetry: TurnTelemetryAccumulator, subagentTracker?: TokenTracker): CoordinatorTurnMetrics {
   const usageTokens = runResult.usage?.tokens
   const usageCost = runResult.usage?.cost
+
+  // Include subagent costs in the total turn cost
+  const subagentSummary = subagentTracker?.getSummary()
+  const subagentCostUsd = subagentSummary?.cost?.totalCost ?? 0
 
   return {
     toolCalls: telemetry.toolCalls,
@@ -237,7 +517,7 @@ function buildCoordinatorMetrics(runResult: AgentRunResult, telemetry: TurnTelem
     promptTokens: usageTokens?.promptTokens ?? 0,
     completionTokens: usageTokens?.completionTokens ?? 0,
     turnTokens: usageTokens?.totalTokens ?? 0,
-    turnCostUsd: usageCost?.totalCost ?? 0,
+    turnCostUsd: (usageCost?.totalCost ?? 0) + subagentCostUsd,
     discoveryOps: telemetry.discoveryOps
   }
 }
@@ -253,9 +533,31 @@ function chooseSummary(rawOutput: string, parsed: CoordinatorJsonOutput | undefi
   return `${text.slice(0, 240)}...`
 }
 
-function fallbackRiskAsset(reason: string, rawOutput: string): CoordinatorJsonAsset {
+function buildExecutionTrace(
+  parsed: CoordinatorJsonOutput | undefined,
+  telemetry: TurnTelemetryAccumulator
+): CoordinatorExecutionTraceItem[] {
+  const normalized = normalizeExecutionTrace(parsed?.execution_trace)
+  if (normalized.length > 0) return normalized
+
+  if (telemetry.toolSummaries.length === 0) {
+    return [{
+      tool: 'none',
+      reason: 'No external tools were required for this bounded turn.',
+      result_summary: 'Coordinator produced output without tool calls.'
+    }]
+  }
+
+  return telemetry.toolSummaries.slice(0, 8).map((item) => ({
+    tool: item.tool,
+    reason: item.argsPreview ? `Invoked with ${item.argsPreview}` : 'Invoked for turn execution.',
+    result_summary: item.resultPreview ?? 'Tool result captured in telemetry.'
+  }))
+}
+
+function fallbackNoteAsset(reason: string, rawOutput: string): CoordinatorJsonAsset {
   return {
-    type: 'RiskRegister',
+    type: 'Note',
     payload: {
       reason,
       outputExcerpt: rawOutput.slice(0, 1000)
@@ -263,7 +565,135 @@ function fallbackRiskAsset(reason: string, rawOutput: string): CoordinatorJsonAs
   }
 }
 
-function defaultAgentFactory(config: YoloCoordinatorConfig, callbacks: CoordinatorCallbacks): AgentLike {
+function createDefaultToolingStatus(reason: string): CoordinatorToolingStatus {
+  return {
+    mode: 'local-only',
+    literatureEnabled: false,
+    enabledPacks: ['safe', 'ask_user'],
+    degradeReason: reason
+  }
+}
+
+async function buildSelectedPacks(config: YoloCoordinatorConfig, askUserPack: Pack, subagentTracker?: TokenTracker): Promise<{
+  selectedPacks: Pack[]
+  tooling: CoordinatorToolingStatus
+}> {
+  const selectedPacks: Pack[] = [packs.safe(), askUserPack]
+  const enabledPacks: string[] = ['safe', 'ask_user']
+
+  const allowBash = config.allowBash ?? (config.mode === 'lean_v2')
+  if (allowBash) {
+    selectedPacks.push(packs.exec({ approvalMode: 'dangerous' }))
+    enabledPacks.push('exec')
+  }
+
+  const enableLiterature = config.enableLiteratureTools ?? (config.mode === 'lean_v2')
+  const enableDataSubagent = config.enableDataSubagent ?? (config.mode === 'lean_v2')
+  const enableWritingSubagent = config.enableWritingSubagent ?? (config.mode === 'lean_v2')
+  const enableResearchSkills = config.enableResearchSkills ?? (config.mode === 'lean_v2')
+
+  selectedPacks.push(packs.docs())
+  enabledPacks.push('docs')
+
+  const enableLiteratureSubagent = (config.enableLiteratureSubagent ?? (config.mode === 'lean_v2')) && enableLiterature
+  if (enableLiteratureSubagent) {
+    const literatureSearchTool = createLiteratureSearchTool({
+      apiKey: config.apiKey,
+      model: config.model,
+      projectPath: config.projectPath,
+      sessionId: 'yolo',
+      maxCallsPerTurn: config.literatureSubagentMaxCallsPerTurn ?? 1,
+      tokenTracker: subagentTracker
+    })
+    const literaturePack: Pack = definePack({
+      id: 'yolo-literature-subagent',
+      description: 'YOLO local literature study subagent for deep paper search/review/synthesis with local paper persistence.',
+      tools: [literatureSearchTool as unknown as Tool]
+    })
+    selectedPacks.push(literaturePack)
+    enabledPacks.push('literature-search')
+  }
+
+  if (enableDataSubagent) {
+    const dataAnalyzeTool = createDataAnalyzeTool({
+      apiKey: config.apiKey,
+      model: config.model,
+      projectPath: config.projectPath,
+      sessionId: 'yolo',
+      maxCallsPerTurn: config.dataSubagentMaxCallsPerTurn ?? 2,
+      tokenTracker: subagentTracker
+    })
+    const dataPack: Pack = definePack({
+      id: 'yolo-data-subagent',
+      description: 'YOLO local data analysis subagent (Python execution + structured outputs).',
+      tools: [dataAnalyzeTool as unknown as Tool]
+    })
+    selectedPacks.push(dataPack)
+    enabledPacks.push('data-analyze')
+  }
+
+  if (enableWritingSubagent) {
+    const writingTools = createWritingTools({
+      apiKey: config.apiKey,
+      model: config.model,
+      maxCallsPerTurn: config.writingSubagentMaxCallsPerTurn ?? 2,
+      tokenTracker: subagentTracker
+    })
+    const writingPack: Pack = definePack({
+      id: 'yolo-writing-subagent',
+      description: 'YOLO local writing subagent for outline and draft generation.',
+      tools: [
+        writingTools.writingOutlineTool as unknown as Tool,
+        writingTools.writingDraftTool as unknown as Tool
+      ]
+    })
+    selectedPacks.push(writingPack)
+    enabledPacks.push('writing')
+  }
+
+  if (enableResearchSkills) {
+    selectedPacks.push(definePack({
+      id: 'yolo-research-skills',
+      description: 'Local yolo-researcher skills for literature, writing, and data analysis.',
+      skills: yoloResearcherSkills,
+      skillLoadingConfig: {
+        lazy: ['academic-writing-skill', 'literature-skill', 'data-analysis-skill']
+      }
+    }))
+    enabledPacks.push('skills')
+  }
+
+  let webDegradeReason: string | undefined
+
+  if (enableLiterature) {
+    try {
+      const webPack = await packs.web({ braveApiKey: config.braveApiKey })
+      selectedPacks.push(webPack)
+      enabledPacks.push('web')
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      webDegradeReason = `literature web search unavailable: ${reason}`
+    }
+  } else {
+    webDegradeReason = 'literature tools disabled by config'
+  }
+
+  return {
+    selectedPacks,
+    tooling: {
+      mode: enableLiterature ? 'full' : 'local-only',
+      literatureEnabled: enableLiterature,
+      enabledPacks,
+      degradeReason: webDegradeReason
+    }
+  }
+}
+
+async function defaultAgentFactory(config: YoloCoordinatorConfig, callbacks: CoordinatorCallbacks): Promise<{
+  agent: AgentLike
+  tooling: CoordinatorToolingStatus
+  subagentTracker: TokenTracker
+}> {
   const askUserTool = createAskUserTool(callbacks.onAskUser)
   const askUserPack: Pack = definePack({
     id: 'yolo-ask-user',
@@ -271,10 +701,17 @@ function defaultAgentFactory(config: YoloCoordinatorConfig, callbacks: Coordinat
     tools: [askUserTool as unknown as Tool]
   })
 
-  const selectedPacks: Pack[] = [packs.safe(), askUserPack]
-  if (config.allowBash) {
-    selectedPacks.push(packs.exec({ approvalMode: 'dangerous' }))
-  }
+  // Shared tracker for all subagent LLM calls (writing, data, literature)
+  const subagentTracker = createTokenTracker()
+  subagentTracker.startRun(`subagent-${Date.now()}`)
+
+  const { selectedPacks, tooling } = await buildSelectedPacks(config, askUserPack, subagentTracker)
+
+  // Accumulate streaming text so each activity event contains the full running buffer
+  let streamBuffer = ''
+  let streamEventId = randomId('act')
+  const externalSkillsDir = config.externalSkillsDir ?? DEFAULT_EXTERNAL_SKILLS_DIR
+  const hasExternalSkillsDir = existsSync(externalSkillsDir)
 
   const agent = createAgent({
     projectPath: config.projectPath,
@@ -286,32 +723,70 @@ function defaultAgentFactory(config: YoloCoordinatorConfig, callbacks: Coordinat
     identity: config.identityPrompt ?? DEFAULT_IDENTITY,
     constraints: [...(config.constraints ?? DEFAULT_CONSTRAINTS)],
     packs: selectedPacks,
+    externalSkillsDir: hasExternalSkillsDir ? externalSkillsDir : undefined,
+    watchExternalSkills: config.watchExternalSkills ?? false,
     skipConfigFile: true,
-    onToolCall: (name, _args) => {
-      callbacks.onToolCall(name, _args)
+    onToolCall: (name, args) => {
+      // Reset stream buffer when a tool call starts (new generation segment)
+      streamBuffer = ''
+      streamEventId = randomId('act')
+      callbacks.onToolCall(name, args)
     },
     onToolResult: (name, result, args) => callbacks.onToolResult(name, result, args),
-    // Enable token tracking so usage/cost data flows into turn reports
+    onStream: (text) => {
+      streamBuffer += text
+      // Keep the tail (~10 lines worth of content)
+      const preview = streamBuffer.length > 2000
+        ? '...' + streamBuffer.slice(-1997)
+        : streamBuffer
+      config.onActivity?.({
+        id: streamEventId,
+        timestamp: nowIso(),
+        kind: 'llm_text',
+        agent: 'coordinator',
+        preview
+      })
+    },
     onUsage: () => {}
   })
 
   return {
-    ensureInit: () => agent.ensureInit(),
-    run: (prompt: string) => agent.run(prompt),
-    destroy: () => agent.destroy()
+    agent: {
+      ensureInit: () => agent.ensureInit(),
+      run: (prompt: string) => agent.run(prompt),
+      destroy: () => agent.destroy()
+    },
+    tooling,
+    subagentTracker
   }
 }
 
 export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordinator {
   let initialized = false
   let agent: AgentLike | undefined
+  let toolingStatus: CoordinatorToolingStatus = createDefaultToolingStatus('agent not initialized yet')
   let currentTelemetry: TurnTelemetryAccumulator | undefined
+  let subagentTracker: TokenTracker | undefined
 
   const callbacks: CoordinatorCallbacks = {
-    onToolCall: (name) => {
+    onToolCall: (name, args) => {
       if (!currentTelemetry) return
       currentTelemetry.toolCalls += 1
       if (DISCOVERY_TOOL_SET.has(name)) currentTelemetry.discoveryOps += 1
+      if (currentTelemetry.toolSummaries.length < 24) {
+        currentTelemetry.toolSummaries.push({
+          tool: name,
+          argsPreview: summarizeForTelemetry(args)
+        })
+      }
+      config.onActivity?.({
+        id: randomId('act'),
+        timestamp: nowIso(),
+        kind: 'tool_call',
+        agent: 'coordinator',
+        tool: name,
+        preview: summarizeForTelemetry(args, 120)
+      })
     },
     onToolResult: (name, result, args) => {
       if (!currentTelemetry) return
@@ -321,6 +796,20 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
       if (name === 'read') {
         currentTelemetry.readBytes += collectReadBytes(result)
       }
+      for (let i = currentTelemetry.toolSummaries.length - 1; i >= 0; i -= 1) {
+        const item = currentTelemetry.toolSummaries[i]
+        if (item.tool !== name || item.resultPreview) continue
+        item.resultPreview = summarizeForTelemetry(result)
+        break
+      }
+      config.onActivity?.({
+        id: randomId('act'),
+        timestamp: nowIso(),
+        kind: 'tool_result',
+        agent: 'coordinator',
+        tool: name,
+        preview: summarizeForTelemetry(result, 120)
+      })
     },
     onAskUser: (request) => {
       if (!currentTelemetry) return
@@ -330,9 +819,14 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
 
   const getAgent = async (): Promise<AgentLike> => {
     if (!agent) {
-      agent = config.createAgentInstance
-        ? config.createAgentInstance(callbacks)
-        : defaultAgentFactory(config, callbacks)
+      if (config.createAgentInstance) {
+        agent = config.createAgentInstance(callbacks)
+      } else {
+        const built = await defaultAgentFactory(config, callbacks)
+        agent = built.agent
+        toolingStatus = built.tooling
+        subagentTracker = built.subagentTracker
+      }
     }
 
     if (!initialized) {
@@ -348,13 +842,17 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
       const telemetry: TurnTelemetryAccumulator = {
         toolCalls: 0,
         discoveryOps: 0,
-        readBytes: 0
+        readBytes: 0,
+        toolSummaries: []
       }
       currentTelemetry = telemetry
       let runResult: AgentRunResult
       try {
-        const runPrompt = buildTurnPrompt(input)
         const coordinatorAgent = await getAgent()
+        const runPrompt = buildTurnPrompt(input, {
+          mode: config.mode ?? 'legacy',
+          tooling: toolingStatus
+        })
         runResult = await coordinatorAgent.run(runPrompt)
       } finally {
         currentTelemetry = undefined
@@ -362,25 +860,48 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
 
       if (!runResult.success) {
         return {
+          action: 'refine_question',
+          actionRationale: 'Coordinator failed to execute turn; produced fallback Note to preserve auditability.',
           summary: runResult.error ? `Coordinator run failed: ${runResult.error}` : 'Coordinator run failed',
-          assets: [fallbackRiskAsset('coordinator_run_failed', runResult.output)],
-          metrics: buildCoordinatorMetrics(runResult, telemetry)
+          assets: [fallbackNoteAsset('coordinator_run_failed', runResult.output)],
+          askUser: {
+            required: true,
+            question: 'Run failed. Do you want to retry this turn with tighter scope?',
+            blocking: true
+          },
+          executionTrace: buildExecutionTrace(undefined, telemetry),
+          metrics: buildCoordinatorMetrics(runResult, telemetry, subagentTracker),
+          toolCalls: telemetry.toolSummaries,
+          tooling: toolingStatus
         }
       }
 
       const parsed = parseCoordinatorJson(runResult.output)
-      const normalizedAssets = normalizeAssets(parsed?.assets)
-      const askUser = telemetry.lastAskUser ?? normalizeAskUser(parsed?.askUser)
+      const requestedAction = normalizeTurnAction(parsed?.action)
+      const normalizedAssets = normalizeAssets(parsed?.assets, config.mode ?? 'legacy', requestedAction)
+      const action = requestedAction ?? inferActionFromAssets(normalizedAssets)
+      const actionRationale = normalizeActionRationale(parsed?.actionRationale)
+        ?? `Selected action "${action}" based on generated assets.`
+      const askUser = telemetry.lastAskUser ?? normalizeAskUser(parsed?.askUser) ?? {
+        required: false,
+        question: 'No user action required this turn.',
+        blocking: false
+      }
 
       const assets = normalizedAssets.length > 0
         ? normalizedAssets
-        : [fallbackRiskAsset('coordinator_output_missing_assets', runResult.output)]
+        : [fallbackNoteAsset('coordinator_output_missing_assets', runResult.output)]
 
       return {
+        action,
+        actionRationale,
         summary: chooseSummary(runResult.output, parsed),
         assets,
         askUser,
-        metrics: buildCoordinatorMetrics(runResult, telemetry)
+        executionTrace: buildExecutionTrace(parsed, telemetry),
+        metrics: buildCoordinatorMetrics(runResult, telemetry, subagentTracker),
+        toolCalls: telemetry.toolSummaries,
+        tooling: toolingStatus
       }
     }
   }
@@ -398,7 +919,14 @@ export const __private = {
   parseCoordinatorJson,
   normalizeAssets,
   normalizeAskUser,
+  normalizeExecutionTrace,
+  inferIntent,
+  preferredToolsForIntent,
+  buildContextCompilerView,
+  normalizeTurnAction,
+  inferActionFromAssets,
   buildTurnPrompt,
   collectReadBytes,
+  buildExecutionTrace,
   buildCoordinatorMetrics
 }

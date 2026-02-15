@@ -4,14 +4,16 @@ import * as path from 'node:path'
 import { FileAssetStore } from './asset-store.js'
 import { DegenerateBranchManager, type BranchNode } from './branch-manager.js'
 import { CheckpointBroker } from './checkpoint-broker.js'
-import { StructuralGateEngine, StubGateEngine } from './gate-engine.js'
+import { LeanGateEngine, StructuralGateEngine, StubGateEngine } from './gate-engine.js'
 import { DisabledReviewEngine } from './review-engine.js'
 import { UserIngressManager } from './user-ingress-manager.js'
 import {
+  buildDefaultP0Constraints,
   createConservativeFallbackSpec,
   isTurnSpecValid
 } from './planner.js'
 import type {
+  ActivityEvent,
   AssetRecord,
   AskUserRequest,
   CoordinatorTurnResult,
@@ -20,9 +22,11 @@ import type {
   GateResult,
   PendingResourceExtension,
   PlannerInput,
+  PlannerOutput,
   QueuedUserInput,
   ReadinessSnapshot,
   ReviewEngine,
+  ReviewerProcessReview,
   RuntimeCheckpoint,
   RuntimeLease,
   SemanticReviewResult,
@@ -73,6 +77,7 @@ interface YoloSessionDeps {
   branchManager?: DegenerateBranchManager
   checkpointBroker?: CheckpointBroker
   ingressManager?: UserIngressManager
+  onActivity?: (event: ActivityEvent) => void
   now?: () => string
   runtimeRollupIntervalSec?: number
 }
@@ -175,9 +180,11 @@ export class YoloSession {
   private readonly branchManager: DegenerateBranchManager
   private readonly checkpointBroker: CheckpointBroker
   private readonly ingressManager: UserIngressManager
+  private readonly onActivity?: (event: ActivityEvent) => void
   private readonly now: () => string
   private readonly runtimeOwnerId: string
   private readonly runtimeRollupIntervalSec: number
+  private readonly runtimeMode: YoloSessionOptions['mode']
 
   constructor(
     private readonly projectPath: string,
@@ -207,8 +214,14 @@ export class YoloSession {
     this.checkpointBroker = deps.checkpointBroker ?? new CheckpointBroker()
     this.ingressManager = deps.ingressManager ?? new UserIngressManager(this.sessionDir)
     this.planner = deps.planner
-    this.gateEngine = deps.gateEngine ?? (this.options.phase === 'P0' ? new StubGateEngine() : new StructuralGateEngine())
+    this.runtimeMode = this.options.mode ?? 'legacy'
+    this.gateEngine = deps.gateEngine ?? (
+      this.runtimeMode === 'lean_v2'
+        ? new LeanGateEngine()
+        : (this.options.phase === 'P0' ? new StubGateEngine() : new StructuralGateEngine())
+    )
     this.reviewEngine = deps.reviewEngine ?? new DisabledReviewEngine()
+    this.onActivity = deps.onActivity
     this.now = deps.now ?? nowIso
     this.runtimeOwnerId = randomId('owner')
     this.runtimeRollupIntervalSec = Math.max(0, Math.floor(deps.runtimeRollupIntervalSec ?? DEFAULT_RUNTIME_ROLLUP_INTERVAL_SEC))
@@ -999,14 +1012,16 @@ export class YoloSession {
     if (!this.isPhaseAtLeast('P2')) return false
     if (!(await fileExists(this.runtimeCheckpointsLatestPath))) return false
 
-    const latest = await readJsonFile<{ fileName?: string }>(this.runtimeCheckpointsLatestPath)
+    const latest = await this.tryReadJsonFile<{ fileName?: string }>(this.runtimeCheckpointsLatestPath)
+    if (!latest) return false
     const fileName = latest.fileName?.trim()
     if (!fileName) return false
 
     const checkpointPath = path.join(this.runtimeCheckpointsDir, fileName)
     if (!(await fileExists(checkpointPath))) return false
 
-    const checkpoint = await readJsonFile<RuntimeCheckpoint>(checkpointPath)
+    const checkpoint = await this.tryReadJsonFile<RuntimeCheckpoint>(checkpointPath)
+    if (!checkpoint) return false
     const restoredState: SessionPersistedState = {
       ...checkpoint.sessionState,
       updatedAt: this.now()
@@ -1216,6 +1231,7 @@ export class YoloSession {
         }
       }
 
+      this.onActivity?.({ id: randomId('act'), timestamp: this.now(), kind: 'planner_start', agent: 'planner' })
       const plannerOutputRaw = await this.planner.generate(plannerInput)
       const plannerOutputValidated = isTurnSpecValid(plannerOutputRaw.turnSpec)
         ? plannerOutputRaw
@@ -1270,6 +1286,14 @@ export class YoloSession {
         await emit('amendment_requested', { reason: plannerAdjustmentReason })
       }
 
+      this.onActivity?.({
+        id: randomId('act'),
+        timestamp: this.now(),
+        kind: 'planner_end',
+        agent: 'planner',
+        preview: plannerOutput.turnSpec.objective?.slice(0, 120)
+      })
+
       await emit('planner_spec_generated', {
         objective: plannerOutput.turnSpec.objective,
         stage: plannerOutput.turnSpec.stage,
@@ -1304,14 +1328,26 @@ export class YoloSession {
         stage: plannerOutput.turnSpec.stage
       })
 
+      this.onActivity?.({ id: randomId('act'), timestamp: this.now(), kind: 'coordinator_start', agent: 'coordinator' })
       const coordinatorResult = await this.coordinator.runTurn({
         turnSpec: plannerOutput.turnSpec,
         stage: plannerOutput.turnSpec.stage,
         goal: this.goal,
-        mergedUserInputs: mergedInputs
+        mergedUserInputs: mergedInputs,
+        plannerOutput
+      })
+      this.onActivity?.({
+        id: randomId('act'),
+        timestamp: this.now(),
+        kind: 'coordinator_end',
+        agent: 'coordinator',
+        preview: coordinatorResult.summary?.slice(0, 120)
       })
 
-      this.enforceHardConstraints(plannerOutput.turnSpec, coordinatorResult)
+      const constraintAdvisories = this.enforceHardConstraints(plannerOutput.turnSpec, coordinatorResult)
+      for (const note of constraintAdvisories) {
+        advisoryNotes.push(note)
+      }
 
       if (this.options.phase === 'P0' && coordinatorResult.metrics.discoveryOps > plannerOutput.turnSpec.constraints.maxDiscoveryOps) {
         advisoryNotes.push('maxDiscoveryOps exceeded in P0 (advisory only).')
@@ -1328,23 +1364,31 @@ export class YoloSession {
         assets: runKeyDedup.assets
       })
       const existingAssets = await this.assetStore.list()
-      const evidencePolicyNormalization = this.normalizeCrossBranchEvidenceLinkPolicies(existingAssets, stagedAssets.records)
-      if (evidencePolicyNormalization.updatedLinkIds.length > 0) {
-        const updatedSet = new Set(evidencePolicyNormalization.updatedLinkIds)
-        for (const record of stagedAssets.records) {
-          if (!updatedSet.has(record.id)) continue
-          await writeJsonFile(path.join(this.assetStore.stagingDir, `${record.id}.json`), record)
+      const evidencePolicyNormalization = this.isLeanMode()
+        ? {
+            updatedLinkIds: [] as string[],
+            defaultedCiteOnlyLinkIds: [] as string[],
+            autoUpgradedCountableLinkIds: [] as string[]
+          }
+        : this.normalizeCrossBranchEvidenceLinkPolicies(existingAssets, stagedAssets.records)
+      if (!this.isLeanMode()) {
+        if (evidencePolicyNormalization.updatedLinkIds.length > 0) {
+          const updatedSet = new Set(evidencePolicyNormalization.updatedLinkIds)
+          for (const record of stagedAssets.records) {
+            if (!updatedSet.has(record.id)) continue
+            await writeJsonFile(path.join(this.assetStore.stagingDir, `${record.id}.json`), record)
+          }
         }
-      }
-      if (evidencePolicyNormalization.defaultedCiteOnlyLinkIds.length > 0) {
-        advisoryNotes.push(
-          `cross-branch evidence defaulted to cite_only: ${evidencePolicyNormalization.defaultedCiteOnlyLinkIds.join(', ')}`
-        )
-      }
-      if (evidencePolicyNormalization.autoUpgradedCountableLinkIds.length > 0) {
-        advisoryNotes.push(
-          `cross-branch evidence auto-upgraded to countable: ${evidencePolicyNormalization.autoUpgradedCountableLinkIds.join(', ')}`
-        )
+        if (evidencePolicyNormalization.defaultedCiteOnlyLinkIds.length > 0) {
+          advisoryNotes.push(
+            `cross-branch evidence defaulted to cite_only: ${evidencePolicyNormalization.defaultedCiteOnlyLinkIds.join(', ')}`
+          )
+        }
+        if (evidencePolicyNormalization.autoUpgradedCountableLinkIds.length > 0) {
+          advisoryNotes.push(
+            `cross-branch evidence auto-upgraded to countable: ${evidencePolicyNormalization.autoUpgradedCountableLinkIds.join(', ')}`
+          )
+        }
       }
       const supersedesRepairs = this.repairSupersedesIntegrity(existingAssets, stagedAssets.records)
       if (supersedesRepairs.length > 0) {
@@ -1389,41 +1433,55 @@ export class YoloSession {
       })
 
       let allRecords = [...existingAssets, ...stagedAssets.records]
-      const evidencePolicy = this.computeEvidenceLinkPolicySummary(allRecords)
-      const invalidCountableLinkIds = new Set(evidencePolicy.invalidCountableLinkIds)
-      if (invalidCountableLinkIds.size > 0) {
-        advisoryNotes.push(
-          `invalid countable links downgraded for coverage: ${Array.from(invalidCountableLinkIds).join(', ')}`
-        )
-      }
-      const causality = this.computeCausalitySummary(allRecords, invalidCountableLinkIds)
-      const directEvidence = this.computeDirectEvidenceSummary(allRecords, invalidCountableLinkIds)
-      const claimCoverage = this.computeClaimCoverageSummary(allRecords, invalidCountableLinkIds)
-      const claimGovernance = this.computeClaimGovernanceSummary(
-        allRecords,
-        claimCoverage
-      )
-      const claimDecisionBinding = this.computeClaimDecisionBindingSummary(allRecords)
-      const reproducibility = this.computeReproducibilitySummary(allRecords, invalidCountableLinkIds)
-      if (this.shouldGenerateClaimEvidenceTableAsset(plannerOutput.turnSpec.stage)) {
-        const claimEvidenceTable = this.buildClaimEvidenceTablePayload(
+      const lean = this.computeLeanManifestSummary(allRecords)
+      let evidencePolicy: SnapshotManifest['evidencePolicy'] | undefined
+      let causality: SnapshotManifest['causality'] | undefined
+      let directEvidence: SnapshotManifest['directEvidence'] | undefined
+      let claimCoverage: SnapshotManifest['claimCoverage'] | undefined
+      let claimGovernance: SnapshotManifest['claimGovernance'] | undefined
+      let claimDecisionBinding: SnapshotManifest['claimDecisionBinding'] | undefined
+      let reproducibility: SnapshotManifest['reproducibility'] | undefined
+      const invalidCountableLinkIds = new Set<string>()
+
+      if (!this.isLeanMode()) {
+        evidencePolicy = this.computeEvidenceLinkPolicySummary(allRecords)
+        for (const id of evidencePolicy.invalidCountableLinkIds) {
+          invalidCountableLinkIds.add(id)
+        }
+        if (invalidCountableLinkIds.size > 0) {
+          advisoryNotes.push(
+            `invalid countable links downgraded for coverage: ${Array.from(invalidCountableLinkIds).join(', ')}`
+          )
+        }
+        causality = this.computeCausalitySummary(allRecords, invalidCountableLinkIds)
+        directEvidence = this.computeDirectEvidenceSummary(allRecords, invalidCountableLinkIds)
+        claimCoverage = this.computeClaimCoverageSummary(allRecords, invalidCountableLinkIds)
+        claimGovernance = this.computeClaimGovernanceSummary(
           allRecords,
-          invalidCountableLinkIds,
           claimCoverage
         )
-        const derivedAsset = await this.stageDerivedAsset({
-          turnNumber,
-          attempt,
-          type: 'ClaimEvidenceTable',
-          payload: {
-            ...claimEvidenceTable,
-            sourceManifestId: `manifest-t${turnNumber}-a${attempt}`
-          }
-        })
-        stagedAssets.records.push(derivedAsset)
-        allRecords = [...allRecords, derivedAsset]
-        await emit('asset_created', { assetId: derivedAsset.id, type: derivedAsset.type })
-        advisoryNotes.push(`final claim-evidence table generated: ${derivedAsset.id}`)
+        claimDecisionBinding = this.computeClaimDecisionBindingSummary(allRecords)
+        reproducibility = this.computeReproducibilitySummary(allRecords, invalidCountableLinkIds)
+        if (this.shouldGenerateClaimEvidenceTableAsset(plannerOutput.turnSpec.stage)) {
+          const claimEvidenceTable = this.buildClaimEvidenceTablePayload(
+            allRecords,
+            invalidCountableLinkIds,
+            claimCoverage
+          )
+          const derivedAsset = await this.stageDerivedAsset({
+            turnNumber,
+            attempt,
+            type: 'ClaimEvidenceTable',
+            payload: {
+              ...claimEvidenceTable,
+              sourceManifestId: `manifest-t${turnNumber}-a${attempt}`
+            }
+          })
+          stagedAssets.records.push(derivedAsset)
+          allRecords = [...allRecords, derivedAsset]
+          await emit('asset_created', { assetId: derivedAsset.id, type: derivedAsset.type })
+          advisoryNotes.push(`final claim-evidence table generated: ${derivedAsset.id}`)
+        }
       }
       const allAssetIds = sortStrings(allRecords.map((item) => item.id))
 
@@ -1431,7 +1489,8 @@ export class YoloSession {
         id: `manifest-t${turnNumber}-a${attempt}`,
         stage: plannerOutput.turnSpec.stage,
         assetIds: allAssetIds,
-        evidenceLinkIds: allAssetIds.filter((id) => id.startsWith('EvidenceLink-')),
+        evidenceLinkIds: this.collectEvidenceLinkIds(allRecords),
+        lean,
         claimCoverage,
         claimGovernance,
         claimDecisionBinding,
@@ -1454,7 +1513,9 @@ export class YoloSession {
         phase: this.options.phase,
         stage: plannerOutput.turnSpec.stage,
         manifest: snapshotManifest,
-        gateResult
+        gateResult,
+        plannerOutput,
+        coordinatorOutput: coordinatorResult
       }))
       await emit('semantic_review_evaluated', {
         stage: plannerOutput.turnSpec.stage,
@@ -1466,8 +1527,18 @@ export class YoloSession {
         semanticReview,
         gateIntervention.askUser
       )
+      const rewriteApplied = this.applyReviewerRewritePatch(
+        plannerOutput,
+        coordinatorResult,
+        semanticReview.processReview
+      )
+      const plannerOutputForReport = rewriteApplied.plannerOutput
+      const coordinatorResultPatched = rewriteApplied.coordinatorResult
+      if (rewriteApplied.notes.length > 0) {
+        advisoryNotes.push(...rewriteApplied.notes)
+      }
       const coordinatorResultWithIntervention: CoordinatorTurnResult = {
-        ...coordinatorResult,
+        ...coordinatorResultPatched,
         askUser: semanticIntervention.askUser
       }
       await emit('gate_evaluated', {
@@ -1513,6 +1584,7 @@ export class YoloSession {
             status: 'completed',
             reviewerPasses: semanticReview.reviewerPasses,
             consensusBlockers: semanticReview.consensusBlockers,
+            processReview: semanticReview.processReview,
             notes: semanticReview.advisoryNotes
           }
         : {
@@ -1527,7 +1599,7 @@ export class YoloSession {
         startedAt,
         finishedAt,
         turnSpec: plannerOutput.turnSpec,
-        plannerSpec: plannerOutput,
+        plannerSpec: plannerOutputForReport,
         consumedBudgets: { ...coordinatorResult.metrics },
         assetDiff: {
           created: stagedAssets.records.map((item) => item.id),
@@ -1548,7 +1620,7 @@ export class YoloSession {
         },
         reviewerSnapshot,
         riskDelta: advisoryNotes,
-        nextStepRationale: plannerOutput.rationale,
+        nextStepRationale: plannerOutputForReport.rationale,
         mergedUserInputIds: mergedInputs.map((item) => item.id),
         nonProgress,
         plannerInputManifest: {
@@ -1557,7 +1629,14 @@ export class YoloSession {
           selectedAssetSnapshotIds: snapshotManifest.assetIds
         },
         readinessSnapshot,
-        summary: coordinatorResult.summary
+        summary: coordinatorResultPatched.summary,
+        execution: {
+          action: coordinatorResultPatched.action,
+          actionRationale: coordinatorResultPatched.actionRationale,
+          executionTrace: coordinatorResultPatched.executionTrace,
+          toolCalls: coordinatorResultPatched.toolCalls,
+          tooling: coordinatorResultPatched.tooling
+        }
       }
 
       const stagedTurnReportPath = path.join(this.turnsStagingDir, `${turnNumber}.report.json`)
@@ -1596,6 +1675,7 @@ export class YoloSession {
         state,
         turnNumber,
         stage: plannerOutput.turnSpec.stage,
+        turnAction: coordinatorResultWithIntervention.action,
         createdAssets: stagedAssets.records,
         mergedInputs,
         existingAskUser: coordinatorResultWithIntervention.askUser
@@ -1619,7 +1699,11 @@ export class YoloSession {
           blocking: pendingQuestion.blocking ?? true,
           checkpoint: pendingQuestion.checkpoint
         })
-      } else if (nextState === 'WAITING_FOR_USER' && coordinatorResultWithIntervention.askUser) {
+      } else if (
+        nextState === 'WAITING_FOR_USER'
+        && coordinatorResultWithIntervention.askUser
+        && (coordinatorResultWithIntervention.askUser.required ?? true)
+      ) {
         const askUserInput = this.withAutoCheckpointReferences(coordinatorResultWithIntervention.askUser, allRecords)
         const pendingQuestion = this.checkpointBroker.emitQuestion(askUserInput)
         state.pendingQuestion = pendingQuestion
@@ -1752,27 +1836,79 @@ export class YoloSession {
     } satisfies YoloEvent<'state_transition'>)
   }
 
-  private enforceHardConstraints(turnSpec: TurnReport['turnSpec'], result: CoordinatorTurnResult): void {
+  private enforceHardConstraints(turnSpec: TurnReport['turnSpec'], result: CoordinatorTurnResult): string[] {
     const c = turnSpec.constraints
     const m = result.metrics
+    const baseline = this.isLeanMode() ? buildDefaultP0Constraints() : undefined
+    const maxToolCalls = baseline ? Math.max(c.maxToolCalls, baseline.maxToolCalls) : c.maxToolCalls
+    const maxWallClockSec = baseline ? Math.max(c.maxWallClockSec, baseline.maxWallClockSec) : c.maxWallClockSec
+    const maxStepCount = baseline ? Math.max(c.maxStepCount, baseline.maxStepCount) : c.maxStepCount
+    const maxNewAssets = baseline ? Math.max(c.maxNewAssets, baseline.maxNewAssets) : c.maxNewAssets
+    const maxDiscoveryOps = baseline ? Math.max(c.maxDiscoveryOps, baseline.maxDiscoveryOps) : c.maxDiscoveryOps
+    const maxReadBytes = baseline ? Math.max(c.maxReadBytes, baseline.maxReadBytes) : c.maxReadBytes
+    const maxPromptTokens = baseline ? Math.max(c.maxPromptTokens, baseline.maxPromptTokens) : c.maxPromptTokens
+    const maxCompletionTokens = baseline ? Math.max(c.maxCompletionTokens, baseline.maxCompletionTokens) : c.maxCompletionTokens
+    const maxTurnTokens = baseline ? Math.max(c.maxTurnTokens, baseline.maxTurnTokens) : c.maxTurnTokens
+    const maxTurnCostUsd = baseline ? Math.max(c.maxTurnCostUsd, baseline.maxTurnCostUsd) : c.maxTurnCostUsd
+    const advisoryNotes: string[] = []
 
     const violations: string[] = []
-    if (m.toolCalls > c.maxToolCalls) violations.push(`toolCalls ${m.toolCalls} > ${c.maxToolCalls}`)
-    if (m.wallClockSec > c.maxWallClockSec) violations.push(`wallClockSec ${m.wallClockSec} > ${c.maxWallClockSec}`)
-    if (m.stepCount > c.maxStepCount) violations.push(`stepCount ${m.stepCount} > ${c.maxStepCount}`)
-    if (result.assets.length > c.maxNewAssets) violations.push(`newAssets ${result.assets.length} > ${c.maxNewAssets}`)
-    if (m.readBytes > c.maxReadBytes) violations.push(`readBytes ${m.readBytes} > ${c.maxReadBytes}`)
-    if (this.options.phase !== 'P0' && m.discoveryOps > c.maxDiscoveryOps) {
-      violations.push(`discoveryOps ${m.discoveryOps} > ${c.maxDiscoveryOps}`)
+    const checkWithTolerance = (
+      name: string,
+      value: number,
+      target: number,
+      tolerance: number,
+      strict: boolean
+    ) => {
+      if (value <= target) return
+      const hardCapRaw = target * tolerance
+      const hardCap = Number.isInteger(target)
+        ? Math.ceil(hardCapRaw)
+        : Math.round(hardCapRaw * 1000) / 1000
+      if (value > hardCap) {
+        if (strict) {
+          violations.push(`${name} ${value} > ${hardCap}`)
+        } else {
+          advisoryNotes.push(`lean advisory: soft-limit exceeded for ${name} (${value} > ${hardCap}); continuing`)
+        }
+      } else {
+        advisoryNotes.push(`lean advisory: ${name} ${value} exceeded target ${target} (within tolerance)`)
+      }
     }
-    if (m.promptTokens > c.maxPromptTokens) violations.push(`promptTokens ${m.promptTokens} > ${c.maxPromptTokens}`)
-    if (m.completionTokens > c.maxCompletionTokens) violations.push(`completionTokens ${m.completionTokens} > ${c.maxCompletionTokens}`)
-    if (m.turnTokens > c.maxTurnTokens) violations.push(`turnTokens ${m.turnTokens} > ${c.maxTurnTokens}`)
-    if (m.turnCostUsd > c.maxTurnCostUsd) violations.push(`turnCostUsd ${m.turnCostUsd} > ${c.maxTurnCostUsd}`)
+
+    if (this.isLeanMode()) {
+      checkWithTolerance('toolCalls', m.toolCalls, maxToolCalls, 1.25, false)
+      checkWithTolerance('wallClockSec', m.wallClockSec, maxWallClockSec, 1.25, false)
+      checkWithTolerance('stepCount', m.stepCount, maxStepCount, 1.25, false)
+      checkWithTolerance('newAssets', result.assets.length, maxNewAssets, 1.25, false)
+      checkWithTolerance('readBytes', m.readBytes, maxReadBytes, 1.25, false)
+      if (this.options.phase !== 'P0') {
+        checkWithTolerance('discoveryOps', m.discoveryOps, maxDiscoveryOps, 1.25, false)
+      }
+      checkWithTolerance('promptTokens', m.promptTokens, maxPromptTokens, 1.2, false)
+      checkWithTolerance('completionTokens', m.completionTokens, maxCompletionTokens, 1.2, false)
+      checkWithTolerance('turnTokens', m.turnTokens, maxTurnTokens, 1.2, false)
+      checkWithTolerance('turnCostUsd', m.turnCostUsd, maxTurnCostUsd, 1.2, false)
+    } else {
+      if (m.toolCalls > maxToolCalls) violations.push(`toolCalls ${m.toolCalls} > ${maxToolCalls}`)
+      if (m.wallClockSec > maxWallClockSec) violations.push(`wallClockSec ${m.wallClockSec} > ${maxWallClockSec}`)
+      if (m.stepCount > maxStepCount) violations.push(`stepCount ${m.stepCount} > ${maxStepCount}`)
+      if (result.assets.length > maxNewAssets) violations.push(`newAssets ${result.assets.length} > ${maxNewAssets}`)
+      if (m.readBytes > maxReadBytes) violations.push(`readBytes ${m.readBytes} > ${maxReadBytes}`)
+      if (this.options.phase !== 'P0' && m.discoveryOps > maxDiscoveryOps) {
+        violations.push(`discoveryOps ${m.discoveryOps} > ${maxDiscoveryOps}`)
+      }
+      if (m.promptTokens > maxPromptTokens) violations.push(`promptTokens ${m.promptTokens} > ${maxPromptTokens}`)
+      if (m.completionTokens > maxCompletionTokens) violations.push(`completionTokens ${m.completionTokens} > ${maxCompletionTokens}`)
+      if (m.turnTokens > maxTurnTokens) violations.push(`turnTokens ${m.turnTokens} > ${maxTurnTokens}`)
+      if (m.turnCostUsd > maxTurnCostUsd) violations.push(`turnCostUsd ${m.turnCostUsd} > ${maxTurnCostUsd}`)
+    }
 
     if (violations.length > 0) {
       throw new Error(`hard constraint violation: ${violations.join('; ')}`)
     }
+
+    return advisoryNotes
   }
 
   private countConsecutiveStageTurns(
@@ -1791,6 +1927,9 @@ export class YoloSession {
     plannerInput: PlannerInput,
     turnSpec: TurnReport['turnSpec']
   ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string } {
+    if (this.isLeanMode()) {
+      return { turnSpec, updated: false }
+    }
     // Keep P0/P1 lightweight and avoid overriding planner stage intent there.
     if (!this.isPhaseAtLeast('P2')) {
       return { turnSpec, updated: false }
@@ -1838,6 +1977,9 @@ export class YoloSession {
     state: SessionPersistedState,
     turnSpec: TurnReport['turnSpec']
   ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string } {
+    if (this.isLeanMode()) {
+      return { turnSpec, updated: false }
+    }
     if (state.nonProgressTurns < 3) {
       return { turnSpec, updated: false }
     }
@@ -1869,6 +2011,9 @@ export class YoloSession {
     state: SessionPersistedState,
     turnSpec: TurnReport['turnSpec']
   ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string; invalidateCurrentNode?: boolean } {
+    if (this.isLeanMode()) {
+      return { turnSpec, updated: false }
+    }
     const gateFailures = this.getGateFailureCount(state, state.activeNodeId, state.activeStage)
     if (gateFailures < 2) {
       return { turnSpec, updated: false }
@@ -1902,6 +2047,9 @@ export class YoloSession {
     state: SessionPersistedState,
     turnSpec: TurnReport['turnSpec']
   ): { turnSpec: TurnReport['turnSpec']; updated: boolean; reason?: string } {
+    if (this.isLeanMode()) {
+      return { turnSpec, updated: false }
+    }
     const remainingTurns = Math.max(0, this.options.budget.maxTurns - state.budgetUsed.turns)
     const remainingTokens = Math.max(0, this.options.budget.maxTokens - state.budgetUsed.tokens)
     const remainingCostUsd = Math.max(0, this.options.budget.maxCostUsd - state.budgetUsed.costUsd)
@@ -2010,6 +2158,13 @@ export class YoloSession {
     const prior = previousStatuses ?? {}
     const stageStatuses: Partial<Record<YoloStage, 'pass' | 'fail' | 'none'>> = { ...prior }
     stageStatuses[currentStage] = currentStageStatus
+
+    if (this.isLeanMode()) {
+      return {
+        stageStatuses,
+        regressions: []
+      }
+    }
 
     const maxStageIndex = STAGE_ORDER.indexOf(currentStage)
     const stagesToCheck = STAGE_ORDER.slice(0, Math.max(0, maxStageIndex + 1))
@@ -2123,6 +2278,9 @@ export class YoloSession {
     gateResult: GateResult,
     existingAskUser: AskUserRequest | undefined
   ): { askUser: AskUserRequest | undefined; synthesized: boolean; blockerLabels: string[] } {
+    if (this.isLeanMode()) {
+      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
+    }
     if (existingAskUser && (existingAskUser.blocking ?? true)) {
       return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
     }
@@ -2150,6 +2308,7 @@ export class YoloSession {
 
     return {
       askUser: {
+        required: true,
         question: `Scope negotiation required before continuing: ${matched.join(', ')}.`,
         checkpoint: 'final-scope',
         blocking: true,
@@ -2165,30 +2324,152 @@ export class YoloSession {
     semanticReview: SemanticReviewResult,
     existingAskUser: AskUserRequest | undefined
   ): { askUser: AskUserRequest | undefined; synthesized: boolean; blockerLabels: string[] } {
+    if (this.isLeanMode()) {
+      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
+    }
     if (existingAskUser && (existingAskUser.blocking ?? true)) {
       return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
     }
     if (!semanticReview.enabled) {
       return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
     }
-    if (semanticReview.consensusBlockers.length === 0) {
-      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
-    }
-
     const labels = sortStrings(Array.from(new Set(semanticReview.consensusBlockers.map((item) => item.label))))
     const details = semanticReview.consensusBlockers
       .map((item) => `${item.label}(${item.voteCount}/3)`)
       .join(', ')
+    const processVerdict = semanticReview.processReview?.verdict
+    const shouldBlockByProcess = processVerdict === 'block'
+
+    if (labels.length === 0 && !shouldBlockByProcess) {
+      return { askUser: existingAskUser, synthesized: false, blockerLabels: [] }
+    }
+
+    const contextParts = [`stage=${stage}`]
+    if (details) contextParts.push(`consensus=${details}`)
+    if (processVerdict) contextParts.push(`processVerdict=${processVerdict}`)
+    if (semanticReview.processReview?.notes_for_user) {
+      contextParts.push(`reviewNotes=${semanticReview.processReview.notes_for_user}`)
+    }
 
     return {
       askUser: {
-        question: `Semantic review consensus blocker detected: ${labels.join(', ')}.`,
+        required: true,
+        question: labels.length > 0
+          ? `Semantic review requires intervention: ${labels.join(', ')}.`
+          : 'Semantic review marked this turn as blocked; user intervention is required.',
         checkpoint: 'final-scope',
         blocking: true,
-        context: `stage=${stage}; consensus=${details}`
+        context: contextParts.join('; ')
       },
       synthesized: true,
       blockerLabels: labels
+    }
+  }
+
+  private applyReviewerRewritePatch(
+    plannerOutput: PlannerOutput,
+    coordinatorResult: CoordinatorTurnResult,
+    processReview: ReviewerProcessReview | undefined
+  ): { plannerOutput: PlannerOutput; coordinatorResult: CoordinatorTurnResult; notes: string[] } {
+    if (!processReview?.rewrite_patch?.apply) {
+      return { plannerOutput, coordinatorResult, notes: [] }
+    }
+    const patch = processReview.rewrite_patch.patch
+    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+      return { plannerOutput, coordinatorResult, notes: ['review rewrite_patch ignored: patch payload is not an object'] }
+    }
+
+    const notes: string[] = []
+    const asObject = patch as Record<string, unknown>
+
+    if (processReview.rewrite_patch.target === 'planner_output') {
+      const nextContract = { ...plannerOutput.planContract }
+      if (typeof asObject.current_focus === 'string' && asObject.current_focus.trim()) {
+        nextContract.current_focus = asObject.current_focus.trim()
+      }
+      if (typeof asObject.why_now === 'string' && asObject.why_now.trim()) {
+        nextContract.why_now = asObject.why_now.trim()
+      }
+      if (typeof asObject.done_definition === 'string' && asObject.done_definition.trim()) {
+        nextContract.done_definition = asObject.done_definition.trim()
+      }
+      if (typeof asObject.notes_for_user === 'string' && asObject.notes_for_user.trim()) {
+        nextContract.need_from_user = {
+          ...nextContract.need_from_user,
+          request: asObject.notes_for_user.trim()
+        }
+      }
+      const nextPlannerOutput: PlannerOutput = {
+        ...plannerOutput,
+        turnSpec: {
+          ...plannerOutput.turnSpec,
+          objective: nextContract.current_focus
+        },
+        rationale: nextContract.why_now,
+        planContract: nextContract
+      }
+      notes.push('review rewrite_patch applied to planner_output')
+      return {
+        plannerOutput: nextPlannerOutput,
+        coordinatorResult,
+        notes
+      }
+    }
+
+    const nextCoordinator: CoordinatorTurnResult = { ...coordinatorResult }
+    if (typeof asObject.summary === 'string' && asObject.summary.trim()) {
+      nextCoordinator.summary = asObject.summary.trim()
+    }
+    if (typeof asObject.actionRationale === 'string' && asObject.actionRationale.trim()) {
+      nextCoordinator.actionRationale = asObject.actionRationale.trim()
+    }
+    if (
+      typeof asObject.action === 'string'
+      && (
+        asObject.action === 'explore'
+        || asObject.action === 'refine_question'
+        || asObject.action === 'issue_experiment_request'
+        || asObject.action === 'digest_uploaded_results'
+      )
+    ) {
+      nextCoordinator.action = asObject.action
+    }
+    if (typeof asObject.askUser === 'object' && asObject.askUser !== null && !Array.isArray(asObject.askUser)) {
+      const ask = asObject.askUser as Record<string, unknown>
+      if (typeof ask.question === 'string' && ask.question.trim()) {
+        nextCoordinator.askUser = {
+          required: typeof ask.required === 'boolean' ? ask.required : true,
+          question: ask.question.trim(),
+          blocking: typeof ask.blocking === 'boolean' ? ask.blocking : true,
+          context: typeof ask.context === 'string' ? ask.context : undefined,
+          options: Array.isArray(ask.options)
+            ? ask.options.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            : undefined,
+          requiredFiles: Array.isArray(ask.required_files)
+            ? ask.required_files.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            : undefined
+        }
+      }
+    }
+    if (Array.isArray(asObject.execution_trace)) {
+      const trace = asObject.execution_trace
+        .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
+        .map((item) => ({
+          tool: typeof item.tool === 'string' ? item.tool.trim() : '',
+          reason: typeof item.reason === 'string' ? item.reason.trim() : '',
+          result_summary: typeof item.result_summary === 'string' ? item.result_summary.trim() : ''
+        }))
+        .filter((item) => item.tool && item.reason && item.result_summary)
+      if (trace.length > 0) {
+        nextCoordinator.executionTrace = trace
+      }
+    }
+
+    notes.push('review rewrite_patch applied to coordinator_output')
+    return {
+      plannerOutput,
+      coordinatorResult: nextCoordinator,
+      notes
     }
   }
 
@@ -2298,7 +2579,7 @@ export class YoloSession {
       return 'STOPPED'
     }
 
-    if (result.askUser && (result.askUser.blocking ?? true)) {
+    if (result.askUser && (result.askUser.required ?? true) && (result.askUser.blocking ?? true)) {
       return 'WAITING_FOR_USER'
     }
 
@@ -2313,19 +2594,20 @@ export class YoloSession {
     state: SessionPersistedState
     turnNumber: number
     stage: YoloStage
+    turnAction?: CoordinatorTurnResult['action']
     createdAssets: AssetRecord[]
     mergedInputs: QueuedUserInput[]
     existingAskUser?: AskUserRequest
   }): Promise<{ task: ExternalWaitTask; question: AskUserRequest } | null> {
     if (this.options.phase === 'P0') return null
-    if (input.existingAskUser) return null
-    if (input.mergedInputs.length > 0) return null
+    if (input.existingAskUser && (input.existingAskUser.required ?? true) && (input.existingAskUser.blocking ?? true)) return null
     if (input.stage !== 'S2' && input.stage !== 'S3' && input.stage !== 'S4') return null
     if (input.createdAssets.some((asset) => asset.type === 'RunRecord')) return null
 
     const experimentAsset = input.createdAssets
       .filter((asset) => (
-        asset.type === 'ExperimentRequirement'
+        asset.type === 'ExperimentRequest'
+        || asset.type === 'ExperimentRequirement'
       ))
       .at(-1)
     if (!experimentAsset) return null
@@ -2337,13 +2619,40 @@ export class YoloSession {
       ?? 'No objective provided.'
     const method = this.readStringField(payload, ['method', 'plan', 'procedure', 'approach'])
       ?? 'No method plan provided.'
+    const methodSteps = this.readStringListField(payload, ['methodSteps', 'steps', 'procedureSteps', 'executionSteps'])
+    const setup = this.readStringField(payload, ['setup', 'environment', 'setupRequirements'])
+      ?? 'Use the same machine and runtime for all variants; record OS, CPU, memory, shell, and agent/tool-runner version.'
+    const controls = this.readStringField(payload, ['controls', 'controlPlan'])
+      ?? 'Keep workload, machine state, and run order controls stable across variants.'
+    const metrics = this.readStringField(payload, ['metrics', 'measurementPlan', 'measurements'])
+      ?? 'Report p50/p95/p99 for first-byte latency, end-to-end latency, and stderr handling overhead.'
     const expectedResult = this.readStringField(payload, [
       'expectedResult',
       'expectedOutcome',
       'expected',
       'successCriteria'
     ]) ?? 'No expected result provided.'
+    const outputFormat = this.readStringField(payload, [
+      'outputFormat',
+      'deliverables',
+      'reportFormat',
+      'submissionFormat'
+    ]) ?? 'Submit raw traces + summary table + short interpretation note.'
+    const submissionChecklist = this.readStringListField(payload, [
+      'submissionChecklist',
+      'uploadChecklist',
+      'checklist'
+    ])
     const requiredFiles = this.extractExperimentRequiredFiles(payload)
+    const protocolLines = methodSteps.length > 0 ? methodSteps : [method]
+    const uploadChecklist = requiredFiles.length > 0
+      ? requiredFiles.map((name) => `upload ${name}`)
+      : [
+          'upload at least one raw trace file (for example *.jsonl or *.csv)',
+          'upload one summary file with p50/p95/p99 metrics',
+          'upload one short note describing anomalies and caveats'
+        ]
+    const combinedChecklist = [...uploadChecklist, ...submissionChecklist]
 
     const uploadTurnNumber = input.turnNumber + 1
     const uploadDirAbs = await this.ingressManager.ensureTurnIngressDir(uploadTurnNumber)
@@ -2368,13 +2677,35 @@ export class YoloSession {
       resumeAction: `ingest uploaded experiment outputs and continue ${input.stage} analysis`,
       uploadDir: uploadDirRel,
       details: [
-        `experimentAsset=${experimentAsset.id}`,
-        `why=${why}`,
-        `objective=${objective}`,
-        `method=${method}`,
-        `expectedResult=${expectedResult}`,
-        requiredFiles.length > 0 ? `requiredFiles=${requiredFiles.join(',')}` : ''
-      ].filter(Boolean).join(' | '),
+        `Experiment Request: ${experimentAsset.id}`,
+        '',
+        'Why this experiment:',
+        why,
+        '',
+        'Objective:',
+        objective,
+        '',
+        'Setup / Environment:',
+        setup,
+        '',
+        'Execution protocol:',
+        ...protocolLines.map((line, idx) => `${idx + 1}. ${line}`),
+        '',
+        'Controls:',
+        controls,
+        '',
+        'Metrics to report:',
+        metrics,
+        '',
+        'Expected result:',
+        expectedResult,
+        '',
+        'Output format:',
+        outputFormat,
+        '',
+        'Submission checklist:',
+        ...combinedChecklist.map((line, idx) => `${idx + 1}. ${line}`)
+      ].join('\n'),
       createdAt: this.now()
     }
 
@@ -2384,16 +2715,17 @@ export class YoloSession {
     return {
       task,
       question: {
-        question: `External experiment artifacts required for ${input.stage}. Please upload results to continue.`,
+        required: true,
+        question: `External experiment execution is needed for ${input.stage}. Please run the protocol and upload results to continue.`,
         options: ['Uploaded', 'Need clarification'],
         context: [
-          `waitTask=${task.id}`,
-          `uploadDir=${task.uploadDir ?? ''}`,
-          `objective=${objective}`,
-          `method=${method}`,
-          `expectedResult=${expectedResult}`,
-          requiredFiles.length > 0 ? `requiredFiles=${requiredFiles.join(', ')}` : ''
-        ].filter(Boolean).join(' | '),
+          `Task ID: ${task.id}`,
+          `Upload folder: ${task.uploadDir ?? ''}`,
+          `Objective: ${objective}`,
+          `Protocol steps: ${protocolLines.length}`,
+          `Expected result: ${expectedResult}`,
+          `Required uploads: ${requiredFiles.length > 0 ? requiredFiles.join(', ') : 'raw trace + summary + notes'}`
+        ].join('\n'),
         blocking: false
       }
     }
@@ -2403,6 +2735,12 @@ export class YoloSession {
     if (!this.isPhaseAtLeast('P2')) return false
     if (turnReport.turnSpec.stage !== 'S5') return false
     if (turnReport.gateImpact.status !== 'pass') return false
+
+    if (this.isLeanMode()) {
+      const lean = turnReport.gateImpact.snapshotManifest.lean
+      if (!lean) return false
+      return lean.resultInsightCount > 0 && lean.resultInsightLinkedCount >= lean.resultInsightCount
+    }
 
     const coverage = turnReport.gateImpact.snapshotManifest.claimCoverage
     if (!coverage) return false
@@ -2415,6 +2753,83 @@ export class YoloSession {
       : coverage.coveredSecondary / coverage.assertedSecondary
 
     return primaryRatio >= 1 && secondaryRatio >= 0.85
+  }
+
+  private isLeanMode(): boolean {
+    return this.runtimeMode === 'lean_v2'
+  }
+
+  private collectEvidenceLinkIds(records: AssetRecord[]): string[] {
+    return sortStrings(
+      records
+        .filter((record) => record.type === 'EvidenceLink')
+        .map((record) => record.id)
+    )
+  }
+
+  private computeLeanManifestSummary(records: AssetRecord[]): NonNullable<SnapshotManifest['lean']> {
+    let experimentRequestCount = 0
+    let experimentRequestExecutableCount = 0
+    let resultInsightCount = 0
+    let resultInsightLinkedCount = 0
+
+    for (const record of records) {
+      const payload = record.payload as Record<string, unknown>
+      if (record.type === 'ExperimentRequest' || record.type === 'ExperimentRequirement') {
+        experimentRequestCount += 1
+        if (this.isExecutableExperimentRequestPayload(payload)) {
+          experimentRequestExecutableCount += 1
+        }
+        continue
+      }
+
+      if (record.type === 'ResultInsight') {
+        resultInsightCount += 1
+        if (this.isResultInsightLinkedPayload(payload)) {
+          resultInsightLinkedCount += 1
+        }
+      }
+    }
+
+    return {
+      experimentRequestCount,
+      experimentRequestExecutableCount,
+      resultInsightCount,
+      resultInsightLinkedCount
+    }
+  }
+
+  private isExecutableExperimentRequestPayload(payload: Record<string, unknown>): boolean {
+    const objective = this.readStringField(payload, ['objective', 'goal', 'experimentGoal'])
+    const method = this.readStringField(payload, ['method', 'plan', 'procedure', 'approach'])
+    const methodSteps = this.readStringListField(payload, ['methodSteps', 'steps', 'procedureSteps', 'executionSteps'])
+    const expectedResult = this.readStringField(payload, ['expectedResult', 'expectedOutcome', 'expected', 'successCriteria'])
+    // Lean v2 treats required file names as guidance, not a strict executable contract.
+    return Boolean(objective && expectedResult && (method || methodSteps.length > 0))
+  }
+
+  private isResultInsightLinkedPayload(payload: Record<string, unknown>): boolean {
+    const requestRef = this.readStringField(payload, [
+      'experimentRequestId',
+      'requestId',
+      'requestRef',
+      'sourceRequestId',
+      'linkedRequestId'
+    ])
+
+    const uploadRefs = new Set<string>()
+    this.collectStringIds(payload.attachmentManifestId, uploadRefs)
+    this.collectStringIds(payload.attachmentManifestIds, uploadRefs)
+    this.collectStringIds(payload.uploadManifestId, uploadRefs)
+    this.collectStringIds(payload.uploadManifestIds, uploadRefs)
+    this.collectStringIds(payload.sourceUploadIds, uploadRefs)
+    this.collectStringIds(payload.sourceUploadFiles, uploadRefs)
+    this.collectStringIds(payload.uploadedFiles, uploadRefs)
+    this.collectStringIds(payload.artifactIds, uploadRefs)
+    this.collectStringIds(payload.artifactPaths, uploadRefs)
+
+    const uploadPath = this.readStringField(payload, ['uploadDir', 'uploadSummaryPath', 'attachmentManifestPath'])
+    return Boolean(requestRef && (uploadRefs.size > 0 || uploadPath))
   }
 
   private getBudgetExhaustionReason(state: SessionPersistedState): string | undefined {
@@ -2523,18 +2938,29 @@ export class YoloSession {
         continue
       }
       if (checkName === 'required_files') {
+        const strictPass = missing.length === 0
+        if (this.isLeanMode() && hasAnyUpload) {
+          checks.push({
+            name: checkName,
+            passed: true,
+            detail: strictPass ? undefined : `lean advisory: missing hinted upload(s): ${missing.join(', ')}`
+          })
+          continue
+        }
         checks.push({
           name: checkName,
-          passed: missing.length === 0,
-          detail: missing.length === 0 ? undefined : `missing required upload(s): ${missing.join(', ')}`
+          passed: strictPass,
+          detail: strictPass ? undefined : `missing required upload(s): ${missing.join(', ')}`
         })
         continue
       }
 
       checks.push({
         name: checkName,
-        passed: false,
-        detail: `unknown checklist check: ${checkName}`
+        passed: this.isLeanMode(),
+        detail: this.isLeanMode()
+          ? `lean advisory: unknown checklist check ignored: ${checkName}`
+          : `unknown checklist check: ${checkName}`
       })
     }
 
@@ -2669,6 +3095,27 @@ export class YoloSession {
     return events
   }
 
+  private isJsonParseError(error: unknown): boolean {
+    if (error instanceof SyntaxError) return true
+    const message = error instanceof Error ? error.message : String(error)
+    return (
+      message.includes('Unexpected end of JSON input')
+      || message.includes('JSON')
+      || message.includes('Unexpected token')
+    )
+  }
+
+  private async tryReadJsonFile<T>(filePath: string): Promise<T | null> {
+    try {
+      return await readJsonFile<T>(filePath)
+    } catch (error) {
+      if (this.isJsonParseError(error)) {
+        return null
+      }
+      throw error
+    }
+  }
+
   private isPhaseAtLeast(phase: 'P2' | 'P3'): boolean {
     return PHASE_ORDER[this.options.phase] >= PHASE_ORDER[phase]
   }
@@ -2680,15 +3127,17 @@ export class YoloSession {
     let acquiredAt = now
 
     if (await fileExists(this.runtimeLeasePath)) {
-      const existing = await readJsonFile<RuntimeLease>(this.runtimeLeasePath)
-      if (existing.ownerId !== this.runtimeOwnerId) {
-        takeoverFromOwnerId = existing.ownerId
-        const staleAfterSec = existing.staleAfterSec || DEFAULT_RUNTIME_LEASE_STALE_SEC
-        const heartbeatMs = Date.parse(existing.heartbeatAt)
-        const stale = Number.isFinite(heartbeatMs) && (Date.now() - heartbeatMs > staleAfterSec * 1000)
-        takeoverReason = stale ? 'stale_lease' : 'restart_or_takeover'
-      } else {
-        acquiredAt = existing.acquiredAt
+      const existing = await this.tryReadJsonFile<RuntimeLease>(this.runtimeLeasePath)
+      if (existing) {
+        if (existing.ownerId !== this.runtimeOwnerId) {
+          takeoverFromOwnerId = existing.ownerId
+          const staleAfterSec = existing.staleAfterSec || DEFAULT_RUNTIME_LEASE_STALE_SEC
+          const heartbeatMs = Date.parse(existing.heartbeatAt)
+          const stale = Number.isFinite(heartbeatMs) && (Date.now() - heartbeatMs > staleAfterSec * 1000)
+          takeoverReason = stale ? 'stale_lease' : 'restart_or_takeover'
+        } else {
+          acquiredAt = existing.acquiredAt
+        }
       }
     }
 
@@ -2711,7 +3160,11 @@ export class YoloSession {
       return
     }
 
-    const lease = await readJsonFile<RuntimeLease>(this.runtimeLeasePath)
+    const lease = await this.tryReadJsonFile<RuntimeLease>(this.runtimeLeasePath)
+    if (!lease) {
+      await this.acquireRuntimeLease()
+      return
+    }
     const now = this.now()
     if (lease.ownerId === this.runtimeOwnerId) {
       lease.heartbeatAt = now
@@ -2789,8 +3242,8 @@ export class YoloSession {
     const rollupMetaPath = path.join(this.runtimeCheckpointsDir, 'rollup-meta.json')
     let lastRollupAt: string | undefined
     if (await fileExists(rollupMetaPath)) {
-      const parsed = await readJsonFile<{ lastRollupAt?: string }>(rollupMetaPath)
-      lastRollupAt = parsed.lastRollupAt
+      const parsed = await this.tryReadJsonFile<{ lastRollupAt?: string }>(rollupMetaPath)
+      lastRollupAt = parsed?.lastRollupAt
     }
 
     const due = (() => {
@@ -3804,6 +4257,14 @@ export class YoloSession {
       if (normalized) return normalized
     }
     return undefined
+  }
+
+  private readStringListField(record: Record<string, unknown>, keys: string[]): string[] {
+    const values = new Set<string>()
+    for (const key of keys) {
+      this.collectStringIds(record[key], values)
+    }
+    return sortStrings(Array.from(values))
   }
 
   private withAutoCheckpointReferences(request: AskUserRequest, records: AssetRecord[]): AskUserRequest {

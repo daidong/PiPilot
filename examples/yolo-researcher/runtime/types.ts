@@ -1,8 +1,15 @@
 import type { BranchNode } from './branch-manager.js'
 
 export type YoloPhase = 'P0' | 'P1' | 'P2' | 'P3'
+export type YoloRuntimeMode = 'legacy' | 'lean_v2'
 
 export type YoloStage = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
+
+export type YoloTurnAction =
+  | 'explore'
+  | 'refine_question'
+  | 'issue_experiment_request'
+  | 'digest_uploaded_results'
 
 export type YoloRuntimeState =
   | 'IDLE'
@@ -30,6 +37,7 @@ export interface YoloSessionOptions {
     reviewer?: string
   }
   phase: YoloPhase
+  mode?: YoloRuntimeMode
 }
 
 export interface TurnConstraints {
@@ -98,11 +106,36 @@ export interface PlannerInput {
   }
 }
 
+export interface PlannerToolPlanStep {
+  step: number
+  tool: string
+  goal: string
+  output_contract: string
+}
+
+export interface PlannerNeedFromUser {
+  required: boolean
+  request: string
+  required_files?: string[]
+}
+
+export interface PlannerContract {
+  current_focus: string
+  why_now: string
+  action: YoloTurnAction
+  tool_plan: PlannerToolPlanStep[]
+  expected_output: string[]
+  need_from_user: PlannerNeedFromUser
+  done_definition: string
+  risk_flags: string[]
+}
+
 export interface PlannerOutput {
   turnSpec: TurnSpec
   suggestedPrompt: string
   rationale: string
   uncertaintyNote: string
+  planContract: PlannerContract
 }
 
 export interface TurnPlanner {
@@ -112,8 +145,10 @@ export interface TurnPlanner {
 export interface AskUserRequest {
   id?: string
   question: string
+  required?: boolean
   options?: string[]
   context?: string
+  requiredFiles?: string[]
   referencedAssetIds?: string[]
   checkpoint?: 'problem-freeze' | 'baseline-freeze' | 'claim-freeze' | 'final-scope'
   blocking?: boolean
@@ -198,11 +233,35 @@ export interface CoordinatorTurnMetrics {
   discoveryOps: number
 }
 
+export interface CoordinatorToolCallSummary {
+  tool: string
+  argsPreview?: string
+  resultPreview?: string
+}
+
+export interface CoordinatorToolingStatus {
+  mode: 'full' | 'local-only'
+  literatureEnabled: boolean
+  enabledPacks: string[]
+  degradeReason?: string
+}
+
+export interface CoordinatorExecutionTraceItem {
+  tool: string
+  reason: string
+  result_summary: string
+}
+
 export interface CoordinatorTurnResult {
+  action?: YoloTurnAction
+  actionRationale?: string
   summary: string
   assets: NewAssetInput[]
   metrics: CoordinatorTurnMetrics
   askUser?: AskUserRequest
+  executionTrace?: CoordinatorExecutionTraceItem[]
+  toolCalls?: CoordinatorToolCallSummary[]
+  tooling?: CoordinatorToolingStatus
 }
 
 export interface YoloCoordinator {
@@ -211,6 +270,8 @@ export interface YoloCoordinator {
     stage: YoloStage
     goal: string
     mergedUserInputs: QueuedUserInput[]
+    plannerOutput?: PlannerOutput
+    reviewerOutput?: ReviewerProcessReview
   }): Promise<CoordinatorTurnResult>
 }
 
@@ -219,6 +280,12 @@ export interface SnapshotManifest {
   stage: YoloStage
   assetIds: string[]
   evidenceLinkIds: string[]
+  lean?: {
+    experimentRequestCount: number
+    experimentRequestExecutableCount: number
+    resultInsightCount: number
+    resultInsightLinkedCount: number
+  }
   claimCoverage?: {
     assertedPrimary: number
     assertedSecondary: number
@@ -290,10 +357,39 @@ export interface ReviewerHardBlockerVote {
   assetRefs: string[]
 }
 
+export type ReviewerVerdict = 'pass' | 'revise' | 'block'
+
+export interface ReviewerCriticalIssue {
+  id: string
+  severity: 'high' | 'medium' | 'low'
+  message: string
+}
+
+export interface ReviewerFixPlanItem {
+  issue_id: string
+  action: string
+}
+
+export interface ReviewerRewritePatch {
+  apply: boolean
+  target: 'planner_output' | 'coordinator_output'
+  patch: Record<string, unknown>
+}
+
+export interface ReviewerProcessReview {
+  verdict: ReviewerVerdict
+  critical_issues: ReviewerCriticalIssue[]
+  fix_plan: ReviewerFixPlanItem[]
+  rewrite_patch: ReviewerRewritePatch
+  confidence: number
+  notes_for_user: string
+}
+
 export interface ReviewerPass {
   persona: ReviewerPersona
   notes: string[]
   hardBlockers: ReviewerHardBlockerVote[]
+  processReview?: ReviewerProcessReview
 }
 
 export interface ConsensusBlocker {
@@ -309,6 +405,7 @@ export interface SemanticReviewResult {
   reviewerPasses: ReviewerPass[]
   consensusBlockers: ConsensusBlocker[]
   advisoryNotes: string[]
+  processReview?: ReviewerProcessReview
 }
 
 export interface ReviewEngine {
@@ -317,6 +414,8 @@ export interface ReviewEngine {
     stage: YoloStage
     manifest: SnapshotManifest
     gateResult: GateResult
+    plannerOutput?: PlannerOutput
+    coordinatorOutput?: CoordinatorTurnResult
   }): SemanticReviewResult | Promise<SemanticReviewResult>
 }
 
@@ -448,6 +547,7 @@ export interface TurnReport {
         status: 'completed'
         reviewerPasses: ReviewerPass[]
         consensusBlockers: ConsensusBlocker[]
+        processReview?: ReviewerProcessReview
         notes: string[]
       }
   riskDelta: string[]
@@ -457,6 +557,13 @@ export interface TurnReport {
   plannerInputManifest: PlannerInputManifest
   readinessSnapshot?: ReadinessSnapshot
   summary: string
+  execution?: {
+    action?: YoloTurnAction
+    actionRationale?: string
+    executionTrace?: CoordinatorExecutionTraceItem[]
+    toolCalls?: CoordinatorToolCallSummary[]
+    tooling?: CoordinatorToolingStatus
+  }
 }
 
 export interface SessionPersistedState {
@@ -524,4 +631,22 @@ export interface TurnExecutionResult {
   turnReport: TurnReport
   newState: YoloRuntimeState
   branchNode: BranchNode
+}
+
+export type ActivityEventKind =
+  | 'planner_start'
+  | 'planner_end'
+  | 'coordinator_start'
+  | 'coordinator_end'
+  | 'tool_call'
+  | 'tool_result'
+  | 'llm_text'
+
+export interface ActivityEvent {
+  id: string
+  timestamp: string
+  kind: ActivityEventKind
+  agent: 'planner' | 'coordinator'
+  tool?: string
+  preview?: string
 }

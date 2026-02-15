@@ -6,6 +6,7 @@ interface YoloSessionOptions {
   budget: { maxTurns: number; maxTokens: number; maxCostUsd: number; deadlineIso?: string }
   models: { planner: string; coordinator: string; reviewer?: string }
   phase: 'P0' | 'P1' | 'P2' | 'P3'
+  mode?: 'legacy' | 'lean_v2'
 }
 
 interface QueuedUserInput {
@@ -98,6 +99,28 @@ interface AssetRecord {
   createdByAttempt: number
 }
 
+interface DrawerChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+}
+
+interface InteractionContext {
+  interactionId: string
+  kind: string
+  title: string
+  urgency: 'blocking' | 'advisory'
+  sections: Array<{ label: string; content: string; collapsible?: boolean }>
+  actions: Array<{ id: string; label: string; variant: string }>
+  quickReplies?: string[]
+}
+
+interface DrawerState {
+  interaction: InteractionContext | null
+  chatHistory: DrawerChatMessage[]
+}
+
 export interface ElectronAPI {
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
   pickFolder: () => Promise<{ projectPath: string; sessionId: string } | null>
@@ -160,6 +183,13 @@ export interface ElectronAPI {
   onYoloTurnReport: (cb: (payload: any) => void) => () => void
   onYoloQuestion: (cb: (payload: any) => void) => () => void
   onYoloEvent: (cb: (payload: any) => void) => () => void
+  onYoloActivity: (cb: (payload: any) => void) => () => void
+
+  drawerGetState: () => Promise<DrawerState>
+  drawerChat: (payload: { message: string; interactionId: string }) => Promise<DrawerChatMessage>
+  drawerAction: (payload: { interactionId: string; actionId: string; text?: string }) => Promise<{ success: boolean }>
+  drawerClearChat: () => Promise<void>
+  onDrawerStateChanged: (cb: (payload: DrawerState) => void) => () => void
 }
 
 const api: ElectronAPI = {
@@ -221,6 +251,21 @@ const api: ElectronAPI = {
     const handler = (_: any, payload: any) => cb(payload)
     ipcRenderer.on('yolo:event', handler)
     return () => ipcRenderer.removeListener('yolo:event', handler)
+  },
+  onYoloActivity: (cb) => {
+    const handler = (_: any, payload: any) => cb(payload)
+    ipcRenderer.on('yolo:activity', handler)
+    return () => ipcRenderer.removeListener('yolo:activity', handler)
+  },
+
+  drawerGetState: () => ipcRenderer.invoke('drawer:get-state'),
+  drawerChat: (payload) => ipcRenderer.invoke('drawer:chat', payload),
+  drawerAction: (payload) => ipcRenderer.invoke('drawer:action', payload),
+  drawerClearChat: () => ipcRenderer.invoke('drawer:clear-chat'),
+  onDrawerStateChanged: (cb) => {
+    const handler = (_: any, payload: any) => cb(payload)
+    ipcRenderer.on('drawer:state-changed', handler)
+    return () => ipcRenderer.removeListener('drawer:state-changed', handler)
   }
 }
 

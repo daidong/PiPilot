@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto'
 
 import { YoloSession } from '../runtime/session.js'
-import type { ReviewEngine, TurnPlanner, YoloCoordinator, YoloSessionOptions } from '../runtime/types.js'
+import type { ActivityEvent, ReviewEngine, TurnPlanner, YoloCoordinator, YoloSessionOptions } from '../runtime/types.js'
 import { createYoloCoordinator } from './coordinator.js'
 import type { YoloCoordinatorConfig } from './coordinator.js'
 import { createYoloPlanner } from './planner.js'
@@ -14,6 +14,7 @@ export interface CreateYoloSessionConfig {
   goal: string
   options: YoloSessionOptions
   sessionId?: string
+  onActivity?: (event: ActivityEvent) => void
   coordinator?: YoloCoordinator
   planner?: TurnPlanner
   reviewEngine?: ReviewEngine
@@ -40,7 +41,20 @@ export function createYoloSession(config: CreateYoloSessionConfig): YoloSession 
     debug: config.coordinatorConfig?.debug,
     identityPrompt: config.coordinatorConfig?.identityPrompt,
     constraints: config.coordinatorConfig?.constraints,
+    mode: config.options.mode ?? 'legacy',
     allowBash: config.coordinatorConfig?.allowBash,
+    enableLiteratureTools: config.coordinatorConfig?.enableLiteratureTools,
+    enableLiteratureSubagent: config.coordinatorConfig?.enableLiteratureSubagent,
+    literatureSubagentMaxCallsPerTurn: config.coordinatorConfig?.literatureSubagentMaxCallsPerTurn,
+    enableDataSubagent: config.coordinatorConfig?.enableDataSubagent,
+    dataSubagentMaxCallsPerTurn: config.coordinatorConfig?.dataSubagentMaxCallsPerTurn,
+    enableWritingSubagent: config.coordinatorConfig?.enableWritingSubagent,
+    writingSubagentMaxCallsPerTurn: config.coordinatorConfig?.writingSubagentMaxCallsPerTurn,
+    enableResearchSkills: config.coordinatorConfig?.enableResearchSkills,
+    externalSkillsDir: config.coordinatorConfig?.externalSkillsDir,
+    watchExternalSkills: config.coordinatorConfig?.watchExternalSkills,
+    braveApiKey: config.coordinatorConfig?.braveApiKey,
+    onActivity: config.onActivity,
     createAgentInstance: config.coordinatorConfig?.createAgentInstance
   })
 
@@ -74,7 +88,10 @@ export function createYoloSession(config: CreateYoloSessionConfig): YoloSession 
       : undefined
   )
 
-  const deps: { planner: TurnPlanner; reviewEngine?: ReviewEngine } = { planner }
+  const deps: { planner: TurnPlanner; reviewEngine?: ReviewEngine; onActivity?: (event: ActivityEvent) => void } = {
+    planner,
+    onActivity: config.onActivity
+  }
   if (reviewEngine) deps.reviewEngine = reviewEngine
 
   return new YoloSession(

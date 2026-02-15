@@ -1,5 +1,14 @@
 // All shared types for the YOLO Researcher desktop UI
 
+export interface ActivityItem {
+  id: string
+  timestamp: string
+  kind: string
+  agent?: string
+  tool?: string
+  preview?: string
+}
+
 export type YoloState =
   | 'IDLE'
   | 'PLANNING'
@@ -21,6 +30,7 @@ export interface YoloSnapshot {
   sessionId: string
   goal: string
   phase: 'P0' | 'P1' | 'P2' | 'P3'
+  mode?: 'legacy' | 'lean_v2'
   state: YoloState
   currentTurn: number
   activeStage: StageId
@@ -71,6 +81,21 @@ export interface TurnReport {
   turnNumber: number
   turnSpec: { objective: string; stage: string }
   summary: string
+  execution?: {
+    action?: 'explore' | 'refine_question' | 'issue_experiment_request' | 'digest_uploaded_results'
+    actionRationale?: string
+    toolCalls?: Array<{
+      tool: string
+      argsPreview?: string
+      resultPreview?: string
+    }>
+    tooling?: {
+      mode: 'full' | 'local-only'
+      literatureEnabled: boolean
+      enabledPacks: string[]
+      degradeReason?: string
+    }
+  }
   gateImpact?: {
     status: string
     gateResult?: { passed: boolean }
@@ -329,16 +354,64 @@ export interface EvidenceGraphData {
   }
 }
 
+// ─── InteractionDrawer types ─────────────────────────────
+
+export type InteractionKind =
+  | 'experiment_request'
+  | 'fulltext_upload'
+  | 'gate_blocker'
+  | 'checkpoint_decision'
+  | 'resource_extension'
+  | 'general_question'
+  | 'failure_recovery'
+
+export interface InteractionContextSection {
+  label: string
+  content: string
+  collapsible?: boolean
+}
+
+export interface InteractionAction {
+  id: string
+  label: string
+  variant: 'primary' | 'secondary' | 'danger' | 'ghost'
+}
+
+export interface InteractionContext {
+  interactionId: string
+  kind: InteractionKind
+  title: string
+  urgency: 'blocking' | 'advisory'
+  sections: InteractionContextSection[]
+  actions: InteractionAction[]
+  quickReplies?: string[]
+}
+
+export interface DrawerChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+}
+
+export interface DrawerState {
+  interaction: InteractionContext | null
+  chatHistory: DrawerChatMessage[]
+}
+
 // Actions interface returned by useYoloSession
 export interface SessionActions {
   pickFolder: () => Promise<void>
+  closeProject: () => Promise<void>
   startYolo: () => Promise<void>
+  restartYolo: () => Promise<void>
   pauseYolo: () => Promise<void>
   resumeYolo: () => Promise<void>
   stopYolo: () => Promise<void>
   restoreFromCheckpoint: () => Promise<void>
   submitReply: (text: string) => Promise<void>
   submitQuickReply: (text: string) => Promise<void>
+  yoloEnqueueInput: (text: string, priority?: 'urgent' | 'normal') => Promise<void>
   exportSummary: () => Promise<void>
   exportClaimEvidenceTable: () => Promise<void>
   exportAssetInventory: () => Promise<void>
@@ -384,4 +457,8 @@ export interface SessionActions {
   setSelectedGraphNodeId: (nodeId: string | null) => void
   setShowSupersedesEdges: (show: boolean | ((prev: boolean) => boolean)) => void
   setQueueOpen: (open: boolean | ((prev: boolean) => boolean)) => void
+  openDrawer: () => Promise<void>
+  closeDrawer: () => void
+  sendDrawerChat: (message: string) => Promise<void>
+  executeDrawerAction: (actionId: string, text?: string) => Promise<void>
 }

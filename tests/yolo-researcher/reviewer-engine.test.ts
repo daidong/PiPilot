@@ -66,6 +66,8 @@ describe('LLM-backed reviewer engine', () => {
     expect(result.consensusBlockers).toHaveLength(1)
     expect(result.consensusBlockers[0]?.label).toBe('causality_gap')
     expect(result.consensusBlockers[0]?.voteCount).toBe(2)
+    expect(result.processReview?.verdict).toBe('revise')
+    expect(result.processReview?.critical_issues.length).toBeGreaterThan(0)
   })
 
   it('downgrades non-anchored or uncited blockers to advisory notes', async () => {

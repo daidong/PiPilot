@@ -5,7 +5,7 @@ export { createYoloPlanner } from './agents/planner.js'
 export { createYoloReviewEngine } from './agents/reviewer.js'
 export { FileAssetStore } from './runtime/asset-store.js'
 export { DegenerateBranchManager } from './runtime/branch-manager.js'
-export { StubGateEngine, StructuralGateEngine } from './runtime/gate-engine.js'
+export { StubGateEngine, StructuralGateEngine, LeanGateEngine } from './runtime/gate-engine.js'
 export { DisabledReviewEngine } from './runtime/review-engine.js'
 export { CheckpointBroker } from './runtime/checkpoint-broker.js'
 export { UserIngressManager } from './runtime/user-ingress-manager.js'
@@ -21,12 +21,17 @@ export {
 
 export type {
   YoloPhase,
+  YoloRuntimeMode,
   YoloStage,
+  YoloTurnAction,
   YoloRuntimeState,
   YoloSessionOptions,
   TurnConstraints,
   TurnSpec,
   PlannerInput,
+  PlannerToolPlanStep,
+  PlannerNeedFromUser,
+  PlannerContract,
   PlannerOutput,
   TurnPlanner,
   AskUserRequest,
@@ -37,6 +42,9 @@ export type {
   NewAssetInput,
   AssetRecord,
   CoordinatorTurnMetrics,
+  CoordinatorToolCallSummary,
+  CoordinatorToolingStatus,
+  CoordinatorExecutionTraceItem,
   CoordinatorTurnResult,
   YoloCoordinator,
   SnapshotManifest,
@@ -45,6 +53,11 @@ export type {
   AnchoredHardBlockerLabel,
   ReviewerPersona,
   ReviewerHardBlockerVote,
+  ReviewerVerdict,
+  ReviewerCriticalIssue,
+  ReviewerFixPlanItem,
+  ReviewerRewritePatch,
+  ReviewerProcessReview,
   ReviewerPass,
   ConsensusBlocker,
   SemanticReviewResult,

@@ -10,6 +10,24 @@ import type {
   EventRecord,
 } from './types'
 
+// Translate raw planner action identifiers to user-facing labels
+const ACTION_LABELS: Record<string, string> = {
+  explore: 'Exploring',
+  refine_question: 'Refining question',
+  issue_experiment_request: 'Requesting experiment',
+  digest_uploaded_results: 'Digesting results',
+  synthesize: 'Synthesizing',
+  deep_dive: 'Deep diving',
+  validate: 'Validating',
+  compare: 'Comparing',
+  collect_evidence: 'Collecting evidence',
+  resolve_conflict: 'Resolving conflict',
+}
+export function friendlyAction(action: string | undefined): string {
+  if (!action) return ''
+  return ACTION_LABELS[action] ?? action.replace(/_/g, ' ')
+}
+
 export const STAGES: StageId[] = ['S1', 'S2', 'S3', 'S4', 'S5']
 
 export const STAGE_LABELS: Record<StageId, string> = {
@@ -130,7 +148,8 @@ export function buildStateSummary(
 
 export const defaultOptions = {
   budget: { maxTurns: 12, maxTokens: 120000, maxCostUsd: 12 },
-  models: { planner: 'gpt-5.2', coordinator: 'gpt-5.2' }
+  models: { planner: 'gpt-5.2', coordinator: 'gpt-5.2' },
+  mode: 'lean_v2' as const
 }
 
 export function stateTone(state?: YoloState): string {
@@ -321,6 +340,93 @@ export function formatEvent(payload: any): EventRecord {
   }
 }
 
+// ─── Experiment details parser ──────────────────────────────────────────
+
+export interface ExperimentDetails {
+  assetRef?: string
+  why?: string
+  objective?: string
+  setup?: string
+  protocol?: string[]
+  controls?: string
+  metrics?: string
+  expectedResult?: string
+  outputFormat?: string
+  checklist?: string[]
+}
+
+const EXPERIMENT_SECTIONS = [
+  'Why this experiment:',
+  'Objective:',
+  'Setup / Environment:',
+  'Execution protocol:',
+  'Controls:',
+  'Metrics to report:',
+  'Expected result:',
+  'Output format:',
+  'Submission checklist:',
+] as const
+
+/**
+ * Parse the `details` string from an ExternalWaitTask into structured sections.
+ * Returns null if the text doesn't look like a structured experiment request.
+ */
+export function parseExperimentDetails(details: string): ExperimentDetails | null {
+  // Quick check: must contain at least 3 known section headers to be parseable
+  const headerHits = EXPERIMENT_SECTIONS.filter((h) => details.includes(h))
+  if (headerHits.length < 3) return null
+
+  const result: ExperimentDetails = {}
+
+  // Extract asset ref from first line ("Experiment Request: ...")
+  const firstLine = details.split('\n')[0]?.trim() ?? ''
+  if (firstLine.startsWith('Experiment Request:')) {
+    result.assetRef = firstLine.replace('Experiment Request:', '').trim()
+  }
+
+  // Split by known headers and collect content
+  function extract(header: string): string | undefined {
+    const idx = details.indexOf(header)
+    if (idx === -1) return undefined
+    const start = idx + header.length
+    // Find the next header after this one
+    let end = details.length
+    for (const h of EXPERIMENT_SECTIONS) {
+      if (h === header) continue
+      const hIdx = details.indexOf(h, start)
+      if (hIdx !== -1 && hIdx < end) end = hIdx
+    }
+    return details.slice(start, end).trim() || undefined
+  }
+
+  result.why = extract('Why this experiment:')
+  result.objective = extract('Objective:')
+  result.setup = extract('Setup / Environment:')
+  result.controls = extract('Controls:')
+  result.metrics = extract('Metrics to report:')
+  result.expectedResult = extract('Expected result:')
+  result.outputFormat = extract('Output format:')
+
+  // Parse numbered-list sections
+  const protocolRaw = extract('Execution protocol:')
+  if (protocolRaw) {
+    result.protocol = protocolRaw
+      .split('\n')
+      .map((line) => line.replace(/^\d+\.\s*/, '').trim())
+      .filter(Boolean)
+  }
+
+  const checklistRaw = extract('Submission checklist:')
+  if (checklistRaw) {
+    result.checklist = checklistRaw
+      .split('\n')
+      .map((line) => line.replace(/^\d+\.\s*/, '').trim())
+      .filter(Boolean)
+  }
+
+  return result
+}
+
 // ─── User-facing question/context translation ──────────────────────────
 
 const BLOCKER_LABELS: Record<string, string> = {
@@ -403,11 +509,19 @@ export function friendlyQuestionContext(context: string | undefined): string | u
   const waitMatch = context.match(/waitTask=/)
   if (waitMatch) {
     const uploadDir = context.match(/uploadDir=([^|]+)/)?.[1]?.trim()
+    const why = context.match(/why=([^|]+)/)?.[1]?.trim()
+    const objective = context.match(/objective=([^|]+)/)?.[1]?.trim()
+    const method = context.match(/method=([^|]+)/)?.[1]?.trim()
+    const expected = context.match(/expectedResult=([^|]+)/)?.[1]?.trim()
     const files = context.match(/requiredFiles=([^|]+)/)?.[1]?.trim()
     const parts: string[] = []
     if (uploadDir) parts.push(`Upload folder: ${uploadDir}`)
+    if (why) parts.push(`Why: ${why}`)
+    if (objective) parts.push(`Objective: ${objective}`)
+    if (method) parts.push(`Method: ${method}`)
+    if (expected) parts.push(`Expected result: ${expected}`)
     if (files && files !== 'any full-text artifact') parts.push(`Required files: ${files}`)
-    return parts.length > 0 ? parts.join('. ') : undefined
+    return parts.length > 0 ? parts.join('\n') : undefined
   }
 
   // "deltaTurns=+2 | deltaTokens=+20000 | deltaCostUsd=+2.000 | rationale=..."

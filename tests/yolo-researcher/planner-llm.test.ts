@@ -100,6 +100,8 @@ describe('LLM-backed TurnPlanner', () => {
     expect(result.suggestedPrompt).toBe('Turn 3: propose claims')
     expect(result.rationale).toBe('S2 focus on claims and evidence.')
     expect(result.uncertaintyNote).toBe('May need more data.')
+    expect(result.planContract.current_focus.length).toBeGreaterThan(0)
+    expect(result.planContract.action).toBe('issue_experiment_request')
   })
 
   // 2. Handles code-fenced JSON (tier 2 parsing)
@@ -167,7 +169,7 @@ describe('LLM-backed TurnPlanner', () => {
     })
 
     const result = await planner.generate(buildInput())
-    expect(result.turnSpec.objective).toBe('consolidate current state and report blockers')
+    expect(result.turnSpec.objective).toContain('investigate causal mechanisms')
   })
 
   // 7. Normalizes P0 branch action: fork → advance
@@ -200,8 +202,8 @@ describe('LLM-backed TurnPlanner', () => {
 
     const defaults = buildDefaultP0Constraints()
     const result = await planner.generate(buildInput())
-    expect(result.turnSpec.constraints.maxToolCalls).toBe(8)
-    expect(result.turnSpec.constraints.maxWallClockSec).toBe(120)
+    expect(result.turnSpec.constraints.maxToolCalls).toBe(defaults.maxToolCalls)
+    expect(result.turnSpec.constraints.maxWallClockSec).toBe(defaults.maxWallClockSec)
     // Missing fields filled from defaults
     expect(result.turnSpec.constraints.maxStepCount).toBe(defaults.maxStepCount)
     expect(result.turnSpec.constraints.maxReadBytes).toBe(defaults.maxReadBytes)
@@ -210,12 +212,12 @@ describe('LLM-backed TurnPlanner', () => {
   // 9. Stage-specific prompt content (S1 vs S5)
   it('includes stage-specific guidance in prompt', () => {
     const s1Prompt = buildPlannerPrompt(buildInput({ stage: 'S1' }))
-    expect(s1Prompt).toContain('S1 (Problem Definition)')
-    expect(s1Prompt).toContain('Hypothesis')
+    expect(s1Prompt).toContain('S1 (Define)')
+    expect(s1Prompt).toContain('ResearchQuestion')
 
     const s5Prompt = buildPlannerPrompt(buildInput({ stage: 'S5' }))
-    expect(s5Prompt).toContain('S5 (Writing & Closure)')
-    expect(s5Prompt).toContain('claim-evidence completeness')
+    expect(s5Prompt).toContain('S5 (Closure)')
+    expect(s5Prompt).toContain('final ResultInsight')
   })
 
   // 10. Budget-aware prompt content (healthy vs critical)

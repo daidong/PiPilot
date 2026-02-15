@@ -65,6 +65,16 @@ function stageRequiresDirectEvidenceMapping(stage: SnapshotManifest['stage']): b
   return stage === 'S4' || stage === 'S5'
 }
 
+function stageRequiresExecutableExperimentRequest(stage: SnapshotManifest['stage']): boolean {
+  // Lean v2 keeps hard gates minimal and avoids forcing request completeness too early.
+  return stage === 'S3' || stage === 'S4'
+}
+
+function stageRequiresBoundResultInsight(stage: SnapshotManifest['stage']): boolean {
+  // Final bound-insight requirement is enforced at closure stage only.
+  return stage === 'S5'
+}
+
 function safeRatio(numerator: number, denominator: number): number {
   if (denominator <= 0) return 1
   return numerator / denominator
@@ -316,6 +326,109 @@ export class StructuralGateEngine implements GateEngine {
       advisoryNotes: [
         `assetTypes=${JSON.stringify(Object.fromEntries(typeCounts.entries()))}`,
         `manifestId=${manifest.id}`
+      ]
+    }
+  }
+}
+
+export class LeanGateEngine implements GateEngine {
+  evaluate(manifest: SnapshotManifest): GateResult {
+    const uniqueAssetIds = new Set(manifest.assetIds)
+    const hasDuplicateAssetIds = uniqueAssetIds.size !== manifest.assetIds.length
+    const danglingEvidenceLinkIds = manifest.evidenceLinkIds.filter((id) => !uniqueAssetIds.has(id))
+
+    const lean = manifest.lean
+    const experimentRequestCount = lean?.experimentRequestCount ?? 0
+    const executableExperimentRequestCount = lean?.experimentRequestExecutableCount ?? 0
+    const resultInsightCount = lean?.resultInsightCount ?? 0
+    const boundResultInsightCount = lean?.resultInsightLinkedCount ?? 0
+
+    const gMin1Required = stageRequiresExecutableExperimentRequest(manifest.stage)
+    const gMin2Required = stageRequiresBoundResultInsight(manifest.stage)
+    const gMin1Passed = !gMin1Required || executableExperimentRequestCount > 0
+    const gMin2Passed = !gMin2Required
+      || (
+        resultInsightCount > 0
+        && boundResultInsightCount >= resultInsightCount
+      )
+
+    const structuralChecks: GateResult['structuralChecks'] = [
+      {
+        name: 'manifest_has_assets',
+        passed: manifest.assetIds.length > 0,
+        detail: `assetCount=${manifest.assetIds.length}`
+      },
+      {
+        name: 'manifest_has_branch_binding',
+        passed: Boolean(manifest.branchNodeId?.trim()),
+        detail: `branchNodeId=${manifest.branchNodeId || 'missing'}`
+      },
+      {
+        name: 'manifest_has_plan_snapshot_hash',
+        passed: Boolean(manifest.planSnapshotHash?.trim()),
+        detail: `planSnapshotHash=${manifest.planSnapshotHash || 'missing'}`
+      },
+      {
+        name: 'manifest_asset_ids_unique',
+        passed: !hasDuplicateAssetIds,
+        detail: hasDuplicateAssetIds ? 'duplicate asset ids detected' : `uniqueAssetCount=${uniqueAssetIds.size}`
+      },
+      {
+        name: 'evidence_links_are_subset_of_assets',
+        passed: danglingEvidenceLinkIds.length === 0,
+        detail: danglingEvidenceLinkIds.length === 0
+          ? `evidenceLinkCount=${manifest.evidenceLinkIds.length}`
+          : `danglingEvidenceLinks=${danglingEvidenceLinkIds.join(', ')}`
+      },
+      {
+        name: 'g_min_1_experiment_request_executable',
+        passed: gMin1Passed,
+        detail: `required=${gMin1Required}; executable=${executableExperimentRequestCount}; total=${experimentRequestCount}`
+      },
+      {
+        name: 'g_min_2_result_insight_bound',
+        passed: gMin2Passed,
+        detail: `required=${gMin2Required}; linked=${boundResultInsightCount}; total=${resultInsightCount}`
+      }
+    ]
+
+    const hardBlockers: GateResult['hardBlockers'] = []
+    if (manifest.assetIds.length === 0) {
+      hardBlockers.push({ label: 'reproducibility_gap', assetRefs: [] })
+    }
+    if (!manifest.branchNodeId?.trim()) {
+      hardBlockers.push({ label: 'reproducibility_gap', assetRefs: [] })
+    }
+    if (!manifest.planSnapshotHash?.trim()) {
+      hardBlockers.push({ label: 'reproducibility_gap', assetRefs: [] })
+    }
+    if (hasDuplicateAssetIds) {
+      hardBlockers.push({ label: 'reproducibility_gap', assetRefs: manifest.assetIds })
+    }
+    if (danglingEvidenceLinkIds.length > 0) {
+      hardBlockers.push({ label: 'reproducibility_gap', assetRefs: danglingEvidenceLinkIds })
+    }
+    if (!gMin1Passed) {
+      hardBlockers.push({
+        label: 'experiment_request_not_executable',
+        assetRefs: manifest.assetIds.filter((id) => id.startsWith('ExperimentRequest-'))
+      })
+    }
+    if (!gMin2Passed) {
+      hardBlockers.push({
+        label: 'result_insight_not_bound',
+        assetRefs: manifest.assetIds.filter((id) => id.startsWith('ResultInsight-'))
+      })
+    }
+
+    return {
+      stage: manifest.stage,
+      passed: structuralChecks.every((check) => check.passed) && hardBlockers.length === 0,
+      structuralChecks,
+      hardBlockers,
+      advisoryNotes: [
+        `manifestId=${manifest.id}`,
+        `leanSummary={"experimentRequest":{"total":${experimentRequestCount},"executable":${executableExperimentRequestCount}},"resultInsight":{"total":${resultInsightCount},"linked":${boundResultInsightCount}}}`
       ]
     }
   }

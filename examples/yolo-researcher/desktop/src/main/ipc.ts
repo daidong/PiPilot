@@ -16,6 +16,13 @@ import {
   type YoloSessionOptions
 } from '@yolo-researcher/index'
 
+interface DrawerChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+}
+
 interface WindowRuntimeState {
   projectPath: string
   yoloSession: ReturnType<typeof createYoloSession> | null
@@ -25,6 +32,13 @@ interface WindowRuntimeState {
   pauseRequested: boolean
   stopRequested: boolean
   lastBroadcastState?: SessionPersistedState['state']
+  drawerChatHistory: DrawerChatMessage[]
+  activeInteractionId: string | null
+}
+
+interface DrawerChatPersistedState {
+  activeInteractionId: string | null
+  chatHistory: DrawerChatMessage[]
 }
 
 const windowStates = new Map<number, WindowRuntimeState>()
@@ -71,7 +85,9 @@ function createWindowRuntimeState(): WindowRuntimeState {
     loopRunning: false,
     pauseRequested: false,
     stopRequested: false,
-    lastBroadcastState: undefined
+    lastBroadcastState: undefined,
+    drawerChatHistory: [],
+    activeInteractionId: null
   }
 }
 
@@ -113,6 +129,8 @@ function clearWindowState(state: WindowRuntimeState): void {
   state.pauseRequested = false
   state.stopRequested = false
   state.lastBroadcastState = undefined
+  state.drawerChatHistory = []
+  state.activeInteractionId = null
 }
 
 function desktopStatePath(): string {
@@ -182,6 +200,10 @@ function sessionMetaPath(projectPath: string): string {
   return join(projectPath, '.yolo-researcher', 'desktop-runtime.json')
 }
 
+function drawerChatStatePath(projectPath: string, sessionId: string): string {
+  return join(projectPath, '.yolo-researcher', 'drawer-chat', `${sessionId}.json`)
+}
+
 function parseJsonFile<T>(filePath: string): T | null {
   try {
     const raw = readFileSync(filePath, 'utf-8')
@@ -189,6 +211,71 @@ function parseJsonFile<T>(filePath: string): T | null {
   } catch {
     return null
   }
+}
+
+function waitTaskFilePath(projectPath: string, sessionId: string, taskId: string): string {
+  return join(projectPath, 'yolo', sessionId, 'wait-tasks', `${taskId}.json`)
+}
+
+function readDrawerChatPersistedState(projectPath: string, sessionId: string): DrawerChatPersistedState {
+  const parsed = parseJsonFile<DrawerChatPersistedState>(drawerChatStatePath(projectPath, sessionId))
+  if (!parsed) {
+    return {
+      activeInteractionId: null,
+      chatHistory: []
+    }
+  }
+  const chatHistory = Array.isArray(parsed.chatHistory)
+    ? parsed.chatHistory
+      .filter((item): item is DrawerChatMessage => Boolean(
+        item
+        && typeof item === 'object'
+        && (item.role === 'user' || item.role === 'assistant')
+        && typeof item.content === 'string'
+        && typeof item.timestamp === 'string'
+      ))
+      .slice(-60)
+    : []
+  return {
+    activeInteractionId: typeof parsed.activeInteractionId === 'string' ? parsed.activeInteractionId : null,
+    chatHistory
+  }
+}
+
+function writeDrawerChatPersistedState(
+  projectPath: string,
+  sessionId: string,
+  value: DrawerChatPersistedState
+): void {
+  const dir = join(projectPath, '.yolo-researcher', 'drawer-chat')
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  writeFileSync(drawerChatStatePath(projectPath, sessionId), `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: 'utf-8',
+    flag: 'w'
+  })
+}
+
+function hydrateDrawerStateFromDisk(
+  runtimeState: WindowRuntimeState,
+  projectPath: string,
+  sessionId: string
+): void {
+  const persisted = readDrawerChatPersistedState(projectPath, sessionId)
+  runtimeState.activeInteractionId = persisted.activeInteractionId
+  runtimeState.drawerChatHistory = persisted.chatHistory
+}
+
+function persistDrawerStateToDisk(
+  runtimeState: WindowRuntimeState,
+  projectPath: string,
+  sessionId: string
+): void {
+  writeDrawerChatPersistedState(projectPath, sessionId, {
+    activeInteractionId: runtimeState.activeInteractionId,
+    chatHistory: runtimeState.drawerChatHistory.slice(-60)
+  })
 }
 
 function readSessionStateFromDisk(projectPath: string, sessionId: string): SessionPersistedState | null {
@@ -701,6 +788,7 @@ function uniqueDestinationPath(targetDir: string, sourcePath: string): string {
 function buildFallbackOptions(snapshot: SessionPersistedState): YoloSessionOptions {
   return {
     phase: snapshot.phase,
+    mode: 'legacy',
     budget: {
       maxTurns: Math.max(snapshot.currentTurn + 10, snapshot.budgetUsed.turns + 10),
       maxTokens: Math.max(snapshot.budgetUsed.tokens + 120_000, 120_000),
@@ -724,14 +812,22 @@ async function restoreSessionFromDisk(
 
   const savedMeta = readSessionMeta(projectPath)
   const restoredGoal = savedMeta?.goal ?? persisted.goal
-  const restoredOptions = savedMeta?.options ?? buildFallbackOptions(persisted)
+  const restoredOptions: YoloSessionOptions = {
+    ...(savedMeta?.options ?? buildFallbackOptions(persisted)),
+    mode: savedMeta?.options?.mode ?? 'legacy'
+  }
 
   state.yoloSession = createYoloSession({
     projectPath,
     sessionId,
     goal: restoredGoal,
     options: restoredOptions,
-    plannerConfig: {}
+    onActivity: (event) => safeSend(win, 'yolo:activity', event),
+    plannerConfig: {},
+    coordinatorConfig: {
+      allowBash: restoredOptions.mode === 'lean_v2',
+      enableLiteratureTools: restoredOptions.mode === 'lean_v2'
+    }
   })
   state.sessionOptions = restoredOptions
   await state.yoloSession.init()
@@ -745,9 +841,10 @@ async function restoreSessionFromDisk(
   state.yoloTurnReports = loadTurnReportsFromDisk(projectPath, sessionId)
   state.pauseRequested = false
   state.lastBroadcastState = undefined
+  hydrateDrawerStateFromDisk(state, projectPath, sessionId)
 
   await pushStateWithEvent(win, state, state.yoloSession, 'session_restored')
-  pushQuestionIfAny(win, snapshot)
+  pushQuestionIfAny(win, snapshot, state)
   safeSend(win, 'yolo:event', {
     type: 'session_restored',
     sessionId,
@@ -783,6 +880,7 @@ async function pushState(
     : { checkpointCount: 0 }
   safeSend(win, 'yolo:state', {
     ...snapshot,
+    mode: state.sessionOptions?.mode,
     budgetCaps: state.sessionOptions?.budget,
     runtimeStatus
   })
@@ -809,9 +907,14 @@ async function pushStateWithEvent(
   return snapshot
 }
 
-function pushQuestionIfAny(win: BrowserWindow, snapshot: SessionPersistedState): void {
+function pushQuestionIfAny(win: BrowserWindow, snapshot: SessionPersistedState, state?: WindowRuntimeState): void {
   if (snapshot.pendingQuestion) {
     safeSend(win, 'yolo:question', snapshot.pendingQuestion)
+    // Also push drawer state if state is available
+    if (state) {
+      const assets = loadAssetsFromDisk(state.projectPath, snapshot.sessionId)
+      pushDrawerState(win, state, snapshot, assets)
+    }
   }
 }
 
@@ -830,9 +933,13 @@ async function runYoloLoop(win: BrowserWindow, state: WindowRuntimeState): Promi
       }
 
       const currentSnapshot = await pushStateWithEvent(win, state, state.yoloSession, 'loop_iter')
-      pushQuestionIfAny(win, currentSnapshot)
+      pushQuestionIfAny(win, currentSnapshot, state)
 
-      if (isTerminalOrBlocked(currentSnapshot.state)) break
+      if (isTerminalOrBlocked(currentSnapshot.state)) {
+        const assets = loadAssetsFromDisk(state.projectPath, currentSnapshot.sessionId)
+        pushDrawerState(win, state, currentSnapshot, assets)
+        break
+      }
 
       safeSend(win, 'yolo:event', {
         type: 'turn_planning',
@@ -864,7 +971,11 @@ async function runYoloLoop(win: BrowserWindow, state: WindowRuntimeState): Promi
       })
 
       const afterTurn = await pushStateWithEvent(win, state, state.yoloSession, 'turn_complete')
-      pushQuestionIfAny(win, afterTurn)
+      pushQuestionIfAny(win, afterTurn, state)
+      if (isTerminalOrBlocked(afterTurn.state)) {
+        const turnAssets = loadAssetsFromDisk(state.projectPath, afterTurn.sessionId)
+        pushDrawerState(win, state, afterTurn, turnAssets)
+      }
       if (afterTurn.state === 'COMPLETE') {
         const assets = loadAssetsFromDisk(state.projectPath, afterTurn.sessionId)
         const bundle = exportFinalBundleToDisk(state.projectPath, afterTurn, state.yoloTurnReports, assets)
@@ -897,6 +1008,483 @@ async function runYoloLoop(win: BrowserWindow, state: WindowRuntimeState): Promi
     state.loopRunning = false
     state.stopRequested = false
   }
+}
+
+// ─── InteractionDrawer types (main-process local) ────────────────────
+
+type InteractionKind =
+  | 'experiment_request'
+  | 'fulltext_upload'
+  | 'gate_blocker'
+  | 'checkpoint_decision'
+  | 'resource_extension'
+  | 'general_question'
+  | 'failure_recovery'
+
+interface InteractionContextSection {
+  label: string
+  content: string
+  collapsible?: boolean
+}
+
+interface InteractionAction {
+  id: string
+  label: string
+  variant: 'primary' | 'secondary' | 'danger' | 'ghost'
+}
+
+interface InteractionContext {
+  interactionId: string
+  kind: InteractionKind
+  title: string
+  urgency: 'blocking' | 'advisory'
+  sections: InteractionContextSection[]
+  actions: InteractionAction[]
+  quickReplies?: string[]
+}
+
+interface DrawerState {
+  interaction: InteractionContext | null
+  chatHistory: DrawerChatMessage[]
+}
+
+// ─── LLM helpers ─────────────────────────────────────────────────────
+
+function resolveApiKey(): string | undefined {
+  return [
+    process.env['OPENAI_API_KEY'],
+    process.env['ANTHROPIC_API_KEY'],
+    process.env['DEEPSEEK_API_KEY'],
+    process.env['GOOGLE_API_KEY'],
+    process.env['GEMINI_API_KEY']
+  ].find((v): v is string => typeof v === 'string' && v.trim().length > 0)?.trim()
+}
+
+// ─── Experiment details parser (local copy to avoid cross-build import) ──
+
+interface ExperimentDetails {
+  assetRef?: string
+  why?: string
+  objective?: string
+  setup?: string
+  protocol?: string[]
+  controls?: string
+  metrics?: string
+  expectedResult?: string
+  outputFormat?: string
+  checklist?: string[]
+}
+
+const EXPERIMENT_SECTIONS = [
+  'Why this experiment:',
+  'Objective:',
+  'Setup / Environment:',
+  'Execution protocol:',
+  'Controls:',
+  'Metrics to report:',
+  'Expected result:',
+  'Output format:',
+  'Submission checklist:',
+] as const
+
+function parseExperimentDetailsLocal(details: string): ExperimentDetails | null {
+  const headerHits = EXPERIMENT_SECTIONS.filter((h) => details.includes(h))
+  if (headerHits.length < 3) return null
+
+  const result: ExperimentDetails = {}
+  const firstLine = details.split('\n')[0]?.trim() ?? ''
+  if (firstLine.startsWith('Experiment Request:')) {
+    result.assetRef = firstLine.replace('Experiment Request:', '').trim()
+  }
+
+  function extract(header: string): string | undefined {
+    const idx = details.indexOf(header)
+    if (idx === -1) return undefined
+    const start = idx + header.length
+    let end = details.length
+    for (const h of EXPERIMENT_SECTIONS) {
+      if (h === header) continue
+      const hIdx = details.indexOf(h, start)
+      if (hIdx !== -1 && hIdx < end) end = hIdx
+    }
+    return details.slice(start, end).trim() || undefined
+  }
+
+  result.why = extract('Why this experiment:')
+  result.objective = extract('Objective:')
+  result.setup = extract('Setup / Environment:')
+  result.controls = extract('Controls:')
+  result.metrics = extract('Metrics to report:')
+  result.expectedResult = extract('Expected result:')
+  result.outputFormat = extract('Output format:')
+
+  const protocolRaw = extract('Execution protocol:')
+  if (protocolRaw) {
+    result.protocol = protocolRaw.split('\n').map((line) => line.replace(/^\d+\.\s*/, '').trim()).filter(Boolean)
+  }
+  const checklistRaw = extract('Submission checklist:')
+  if (checklistRaw) {
+    result.checklist = checklistRaw.split('\n').map((line) => line.replace(/^\d+\.\s*/, '').trim()).filter(Boolean)
+  }
+  return result
+}
+
+// ─── InteractionDrawer context assembly ──────────────────────────────
+
+function assembleInteractionContext(
+  runtimeState: WindowRuntimeState,
+  snapshot: SessionPersistedState,
+  turnReports: TurnReport[],
+  assets: AssetRecord[]
+): InteractionContext | null {
+  const sessionState = snapshot.state
+
+  // Find active wait task if any
+  let waitTask: ExternalWaitTask | null = null
+  if (snapshot.pendingExternalTaskId?.trim()) {
+    waitTask = parseJsonFile<ExternalWaitTask>(
+      waitTaskFilePath(runtimeState.projectPath, snapshot.sessionId, snapshot.pendingExternalTaskId.trim())
+    )
+  }
+
+  const pendingQuestion = snapshot.pendingQuestion
+  const questionText = `${pendingQuestion?.question ?? ''} ${pendingQuestion?.context ?? ''}`.toLowerCase()
+  const latestTurn = turnReports[turnReports.length - 1]
+  const latestGateBlockers = latestTurn?.gateImpact?.gateResult?.hardBlockers ?? []
+  const latestConsensusBlockers = latestTurn?.reviewerSnapshot?.status === 'completed'
+    ? (latestTurn.reviewerSnapshot.consensusBlockers ?? [])
+    : []
+  const looksLikeGateBlocker = Boolean(
+    pendingQuestion
+    && pendingQuestion.checkpoint === 'final-scope'
+    && (
+      questionText.includes('blocker')
+      || questionText.includes('consensus')
+      || questionText.includes('scope negotiation')
+      || latestGateBlockers.length > 0
+      || latestConsensusBlockers.length > 0
+    )
+  )
+
+  // Detect interaction kind (first match wins)
+  let kind: InteractionKind | null = null
+
+  if (sessionState === 'WAITING_EXTERNAL' && waitTask) {
+    // Check if it's an experiment request by trying to parse details
+    const parsed = waitTask.details ? parseExperimentDetailsLocal(waitTask.details) : null
+    kind = parsed ? 'experiment_request' : 'fulltext_upload'
+  } else if (sessionState === 'WAITING_FOR_USER' && snapshot.pendingResourceExtension) {
+    kind = 'resource_extension'
+  } else if (sessionState === 'WAITING_FOR_USER' && looksLikeGateBlocker) {
+    kind = 'gate_blocker'
+  } else if (sessionState === 'WAITING_FOR_USER' && snapshot.pendingQuestion?.checkpoint) {
+    kind = 'checkpoint_decision'
+  } else if (sessionState === 'WAITING_FOR_USER' && snapshot.pendingQuestion) {
+    kind = 'general_question'
+  } else if (sessionState === 'FAILED' || sessionState === 'CRASHED') {
+    kind = 'failure_recovery'
+  }
+
+  if (!kind) return null
+
+  const sections: InteractionContextSection[] = []
+  const actions: InteractionAction[] = []
+  let quickReplies: string[] | undefined
+  let title = ''
+  let interactionId = ''
+  const urgency: 'blocking' | 'advisory' = 'blocking'
+
+  // Find the originating turn for experiment requests
+  const originTurn = [...turnReports].reverse().find((t) => t.execution?.action === 'issue_experiment_request')
+
+  switch (kind) {
+    case 'experiment_request': {
+      const parsed = waitTask!.details ? parseExperimentDetailsLocal(waitTask!.details) : null
+      interactionId = waitTask!.id
+      title = waitTask!.title || 'Experiment Request'
+
+      if (originTurn) {
+        sections.push({
+          label: 'What Led To This',
+          content: `${originTurn.turnSpec.objective}${originTurn.execution?.actionRationale ? `\n\n${originTurn.execution.actionRationale}` : ''}`,
+          collapsible: true
+        })
+      }
+      if (parsed) {
+        if (parsed.why) sections.push({ label: 'Why This Experiment', content: parsed.why })
+        if (parsed.objective) sections.push({ label: 'Objective', content: parsed.objective })
+        if (parsed.setup) sections.push({ label: 'Setup / Environment', content: parsed.setup, collapsible: true })
+        if (parsed.protocol?.length) {
+          sections.push({ label: 'Execution Protocol', content: parsed.protocol.map((s, i) => `${i + 1}. ${s}`).join('\n'), collapsible: true })
+        }
+        if (parsed.controls) sections.push({ label: 'Controls', content: parsed.controls, collapsible: true })
+        if (parsed.metrics) sections.push({ label: 'Metrics to Report', content: parsed.metrics })
+        if (parsed.expectedResult) sections.push({ label: 'Expected Result', content: parsed.expectedResult })
+        if (parsed.outputFormat) sections.push({ label: 'Output Format', content: parsed.outputFormat, collapsible: true })
+        if (parsed.checklist?.length) {
+          sections.push({ label: 'Submission Checklist', content: parsed.checklist.map((s, i) => `${i + 1}. ${s}`).join('\n'), collapsible: true })
+        }
+      } else if (waitTask!.details) {
+        sections.push({ label: 'Details', content: waitTask!.details, collapsible: true })
+      }
+
+      if (waitTask!.requiredArtifacts?.length) {
+        sections.push({
+          label: 'Required Files',
+          content: waitTask!.requiredArtifacts.map((a) => `${a.kind}: ${a.description}${a.pathHint ? ` (${a.pathHint})` : ''}`).join('\n')
+        })
+      }
+
+      actions.push(
+        { id: 'upload', label: 'Upload Files', variant: 'primary' },
+        { id: 'resolve', label: 'Done & Resume', variant: 'primary' },
+        { id: 'skip', label: 'Skip', variant: 'ghost' }
+      )
+      break
+    }
+
+    case 'fulltext_upload': {
+      interactionId = waitTask!.id
+      title = waitTask!.title || 'Full-Text Upload Required'
+
+      if (waitTask!.reason) sections.push({ label: 'Citation', content: waitTask!.reason })
+      if (waitTask!.requiredArtifacts?.length) {
+        sections.push({
+          label: 'Required Files',
+          content: waitTask!.requiredArtifacts.map((a) => `${a.kind}: ${a.description}${a.pathHint ? ` (${a.pathHint})` : ''}`).join('\n')
+        })
+      }
+      if (waitTask!.uploadDir) {
+        sections.push({ label: 'Upload Directory', content: waitTask!.uploadDir })
+      }
+
+      actions.push(
+        { id: 'upload', label: 'Upload Files', variant: 'primary' },
+        { id: 'resolve', label: 'Done & Resume', variant: 'primary' },
+        { id: 'skip', label: 'Skip', variant: 'ghost' }
+      )
+      break
+    }
+
+    case 'checkpoint_decision': {
+      const q = snapshot.pendingQuestion!
+      interactionId = q.id ?? `checkpoint-${snapshot.currentTurn}`
+      title = q.checkpoint === 'problem-freeze' ? 'Problem Definition Checkpoint'
+        : q.checkpoint === 'baseline-freeze' ? 'Baseline Checkpoint'
+        : q.checkpoint === 'claim-freeze' ? 'Claim Freeze Checkpoint'
+        : q.checkpoint === 'final-scope' ? 'Final Scope Checkpoint'
+        : 'Checkpoint Decision'
+
+      sections.push({ label: 'Question', content: q.question })
+      if (q.context) sections.push({ label: 'Context', content: q.context, collapsible: true })
+
+      // Explain what each checkpoint type means
+      const meaning: Record<string, string> = {
+        'problem-freeze': 'Confirming this locks the problem definition. The research will proceed based on this framing.',
+        'baseline-freeze': 'Confirming this freezes the measurement baseline. Future cycles will compare against this reference.',
+        'claim-freeze': 'Confirming this freezes the claims. No new claims can be added after this point.',
+        'final-scope': 'Confirming this locks the final research scope. The system will begin synthesis.',
+      }
+      if (q.checkpoint && meaning[q.checkpoint]) {
+        sections.push({ label: 'What This Means', content: meaning[q.checkpoint] })
+      }
+
+      sections.push({
+        label: 'Current Progress',
+        content: `Cycle ${snapshot.currentTurn} · Stage ${snapshot.activeStage} · ${assets.length} artifacts`
+      })
+
+      if (q.options?.length) {
+        quickReplies = q.options
+        for (const opt of q.options) {
+          actions.push({ id: 'quick_reply', label: opt, variant: 'primary' })
+        }
+      } else {
+        actions.push(
+          { id: 'confirm', label: 'Confirm', variant: 'primary' },
+          { id: 'quick_reply', label: 'Reject', variant: 'danger' }
+        )
+        quickReplies = ['Confirm', 'Edit', 'Reject']
+      }
+      actions.push({ id: 'submit_text', label: 'Send Custom Reply', variant: 'secondary' })
+      break
+    }
+
+    case 'gate_blocker': {
+      const q = snapshot.pendingQuestion!
+      interactionId = q.id ?? `gate-blocker-${snapshot.currentTurn}`
+      title = 'Gate Blocker Requires Decision'
+
+      sections.push({ label: 'Decision Request', content: q.question })
+      if (q.context) sections.push({ label: 'Context', content: q.context, collapsible: true })
+
+      const hardBlockerLabels = latestGateBlockers
+        .map((item) => item.label)
+        .filter((label, index, arr) => arr.indexOf(label) === index)
+      if (hardBlockerLabels.length > 0) {
+        sections.push({
+          label: 'Gate Blockers',
+          content: hardBlockerLabels.join(', ')
+        })
+      }
+      const consensusLabels = latestConsensusBlockers
+        .map((item) => item.label)
+        .filter((label, index, arr) => arr.indexOf(label) === index)
+      if (consensusLabels.length > 0) {
+        sections.push({
+          label: 'Semantic Consensus',
+          content: consensusLabels.join(', ')
+        })
+      }
+      sections.push({
+        label: 'What Happens Next',
+        content: 'Provide scope decision or mitigation so the autonomous loop can resume with a concrete direction.'
+      })
+
+      quickReplies = q.options?.length
+        ? q.options
+        : ['Narrow scope and continue', 'Need alternative plan', 'Override and proceed']
+      for (const reply of quickReplies) {
+        actions.push({ id: 'quick_reply', label: reply, variant: 'primary' })
+      }
+      actions.push({ id: 'submit_text', label: 'Send Custom Decision', variant: 'secondary' })
+      break
+    }
+
+    case 'resource_extension': {
+      const ext = snapshot.pendingResourceExtension!
+      interactionId = ext.id
+      title = 'Budget Extension Request'
+
+      sections.push({ label: 'Rationale', content: ext.rationale })
+      const delta = ext.delta
+      const parts: string[] = []
+      if (delta.maxTurns) parts.push(`+${delta.maxTurns} cycles`)
+      if (delta.maxTokens) parts.push(`+${delta.maxTokens.toLocaleString()} tokens`)
+      if (delta.maxCostUsd) parts.push(`+$${delta.maxCostUsd.toFixed(2)}`)
+      sections.push({ label: 'Requested Increase', content: parts.join(', ') || 'No specific amount' })
+
+      const used = snapshot.budgetUsed
+      sections.push({
+        label: 'Current Budget Usage',
+        content: `${used.turns} cycles · ${used.tokens.toLocaleString()} tokens · $${used.costUsd.toFixed(2)}`
+      })
+
+      actions.push(
+        { id: 'approve', label: 'Approve', variant: 'primary' },
+        { id: 'reject', label: 'Reject', variant: 'danger' }
+      )
+      break
+    }
+
+    case 'general_question': {
+      const q = snapshot.pendingQuestion!
+      interactionId = q.id ?? `question-${snapshot.currentTurn}`
+      title = 'Question From Research Agent'
+
+      sections.push({ label: 'Question', content: q.question })
+      if (q.context) sections.push({ label: 'Context', content: q.context, collapsible: true })
+
+      if (q.options?.length) {
+        quickReplies = q.options
+        for (const opt of q.options) {
+          actions.push({ id: 'quick_reply', label: opt, variant: 'primary' })
+        }
+      }
+      actions.push({ id: 'submit_text', label: 'Send Custom Reply', variant: 'secondary' })
+      break
+    }
+
+    case 'failure_recovery': {
+      interactionId = `failure-${snapshot.currentTurn}`
+      title = 'Research Session Failed'
+
+      // Determine error info
+      const lastTurn = turnReports[turnReports.length - 1]
+      const reason = lastTurn?.summary ?? 'Unknown runtime failure'
+      const lower = reason.toLowerCase()
+      const category = lower.includes('budget') ? 'Budget Exhausted'
+        : lower.includes('deadlock') ? 'Unrecoverable Deadlock'
+        : lower.includes('gate') || lower.includes('constraint') ? 'Quality Gate Failure'
+        : 'Runtime Error'
+
+      sections.push({ label: 'Error', content: `${category}: ${reason}` })
+      if (lastTurn) {
+        sections.push({ label: 'Last Insight', content: lastTurn.summary, collapsible: true })
+      }
+      sections.push({
+        label: 'Recovery Options',
+        content: 'You can restart the session from scratch or restore from the latest checkpoint.'
+      })
+
+      actions.push(
+        { id: 'restart', label: 'Restart', variant: 'primary' },
+        { id: 'restore', label: 'Restore Checkpoint', variant: 'secondary' }
+      )
+      break
+    }
+  }
+
+  return { interactionId, kind, title, urgency, sections, actions, quickReplies }
+}
+
+function buildDrawerSystemPrompt(
+  snapshot: SessionPersistedState,
+  context: InteractionContext,
+  turnReports: TurnReport[]
+): string {
+  const lines: string[] = [
+    'You are a research advisor helping the user understand a decision point in their autonomous research session. Answer concisely based on the context below.',
+    '',
+    `Research Goal: ${snapshot.goal}`,
+    `Current Phase: ${snapshot.phase}, Stage: ${snapshot.activeStage}`,
+    `Cycle: ${snapshot.currentTurn}, Budget: $${snapshot.budgetUsed.costUsd.toFixed(2)} spent`,
+    '',
+    `## Current Decision: ${context.title}`,
+  ]
+
+  for (const section of context.sections) {
+    lines.push(`### ${section.label}`)
+    lines.push(section.content)
+    lines.push('')
+  }
+
+  // Add recent research activity
+  const recentTurns = turnReports.slice(-3)
+  if (recentTurns.length > 0) {
+    lines.push('## Recent Research Activity')
+    for (const turn of recentTurns) {
+      lines.push(`- Cycle ${turn.turnNumber}: ${turn.summary}`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function pushDrawerState(
+  win: BrowserWindow,
+  state: WindowRuntimeState,
+  snapshot: SessionPersistedState,
+  assets: AssetRecord[]
+): void {
+  const interaction = assembleInteractionContext(state, snapshot, state.yoloTurnReports, assets)
+  const drawerState: DrawerState = {
+    interaction,
+    chatHistory: state.drawerChatHistory
+  }
+  // Update active interaction tracking
+  if (interaction) {
+    if (state.activeInteractionId !== interaction.interactionId) {
+      // New interaction — clear chat history
+      state.drawerChatHistory = []
+      drawerState.chatHistory = []
+      state.activeInteractionId = interaction.interactionId
+    }
+  } else {
+    state.activeInteractionId = null
+  }
+  persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
+  safeSend(win, 'drawer:state-changed', drawerState)
 }
 
 export function registerWindow(win: BrowserWindow): void {
@@ -981,6 +1569,11 @@ export function registerIpcHandlers(): void {
       throw new Error('Goal is required.')
     }
 
+    const normalizedOptions: YoloSessionOptions = {
+      ...options,
+      mode: options.mode ?? 'lean_v2'
+    }
+
     const trimmedGoal = goal.trim()
     let sessionId = loadOrCreateSessionId(state.projectPath)
 
@@ -989,7 +1582,8 @@ export function registerIpcHandlers(): void {
       if (
         current.goal !== trimmedGoal
         || isSessionTerminal(current.state)
-        || state.sessionOptions?.phase !== options.phase
+        || state.sessionOptions?.phase !== normalizedOptions.phase
+        || state.sessionOptions?.mode !== normalizedOptions.mode
       ) {
         await stopSessionIfNeeded(state)
         sessionId = crypto.randomUUID()
@@ -1000,11 +1594,12 @@ export function registerIpcHandlers(): void {
         writeSessionMeta(state.projectPath, {
           sessionId,
           goal: trimmedGoal,
-          options,
+          options: normalizedOptions,
           updatedAt: new Date().toISOString()
         })
-        state.sessionOptions = options
+        state.sessionOptions = normalizedOptions
         state.pauseRequested = false
+        hydrateDrawerStateFromDisk(state, state.projectPath, sessionId)
         await pushStateWithEvent(win, state, state.yoloSession, 'session_continue')
         void runYoloLoop(win, state)
         return state.yoloSession.getSnapshot()
@@ -1014,28 +1609,36 @@ export function registerIpcHandlers(): void {
     writeSessionMeta(state.projectPath, {
       sessionId,
       goal: trimmedGoal,
-      options,
+      options: normalizedOptions,
       updatedAt: new Date().toISOString()
     })
 
     state.yoloSession = createYoloSession({
       projectPath: state.projectPath,
       goal: trimmedGoal,
-      options,
+      options: normalizedOptions,
       sessionId,
-      plannerConfig: {}
+      onActivity: (event) => safeSend(win, 'yolo:activity', event),
+      plannerConfig: {},
+      coordinatorConfig: {
+        allowBash: normalizedOptions.mode === 'lean_v2',
+        enableLiteratureTools: normalizedOptions.mode === 'lean_v2'
+      }
     })
-    state.sessionOptions = options
+    state.sessionOptions = normalizedOptions
     state.yoloTurnReports = loadTurnReportsFromDisk(state.projectPath, sessionId)
     state.pauseRequested = false
     state.lastBroadcastState = undefined
+    state.drawerChatHistory = []
+    state.activeInteractionId = null
+    persistDrawerStateToDisk(state, state.projectPath, sessionId)
 
     await state.yoloSession.init()
     await pushStateWithEvent(win, state, state.yoloSession, 'session_started')
     safeSend(win, 'yolo:event', {
       type: 'session_started',
       goal: trimmedGoal,
-      phase: options.phase
+      phase: normalizedOptions.phase
     })
 
     void runYoloLoop(win, state)
@@ -1177,6 +1780,7 @@ export function registerIpcHandlers(): void {
     const snapshot = await state.yoloSession.getSnapshot()
     return {
       ...snapshot,
+      mode: state.sessionOptions?.mode,
       budgetCaps: state.sessionOptions?.budget,
       runtimeStatus: state.projectPath
         ? loadRuntimeStatusFromDisk(state.projectPath, snapshot.sessionId)
@@ -1247,7 +1851,7 @@ export function registerIpcHandlers(): void {
     if (!state.yoloSession) throw new Error('No active YOLO session.')
     const task = await state.yoloSession.requestFullTextUploadWait(payload)
     const snapshot = await pushStateWithEvent(win, state, state.yoloSession, 'fulltext_wait_requested')
-    pushQuestionIfAny(win, snapshot)
+    pushQuestionIfAny(win, snapshot, state)
     safeSend(win, 'yolo:event', {
       type: 'fulltext_wait_requested',
       id: task.id,
@@ -1309,6 +1913,8 @@ export function registerIpcHandlers(): void {
       approved: result.approved,
       budget: result.budget
     })
+    const extAssets = loadAssetsFromDisk(state.projectPath, snapshot.sessionId)
+    pushDrawerState(win, state, snapshot, extAssets)
     if (snapshot.state === 'PLANNING') {
       void runYoloLoop(win, state)
     }
@@ -1412,6 +2018,8 @@ export function registerIpcHandlers(): void {
       id: task.id,
       state: snapshot.state
     })
+    const resolvedAssets = loadAssetsFromDisk(state.projectPath, snapshot.sessionId)
+    pushDrawerState(win, state, snapshot, resolvedAssets)
     if (snapshot.state === 'PLANNING') {
       void runYoloLoop(win, state)
     }
@@ -1455,5 +2063,258 @@ export function registerIpcHandlers(): void {
       turn: snapshot.currentTurn
     })
     return bundle
+  })
+
+  // ─── InteractionDrawer IPC handlers ──────────────────────────────────
+
+  handleWindow('drawer:get-state', async ({ state }): Promise<DrawerState> => {
+    if (!state.yoloSession) {
+      return { interaction: null, chatHistory: [] }
+    }
+    const snapshot = await state.yoloSession.getSnapshot()
+    hydrateDrawerStateFromDisk(state, state.projectPath, snapshot.sessionId)
+    const assets = loadAssetsFromDisk(state.projectPath, snapshot.sessionId)
+    const interaction = assembleInteractionContext(state, snapshot, state.yoloTurnReports, assets)
+    // Track interaction id changes
+    if (interaction && state.activeInteractionId !== interaction.interactionId) {
+      state.drawerChatHistory = []
+      state.activeInteractionId = interaction.interactionId
+    } else if (!interaction) {
+      state.activeInteractionId = null
+    }
+    persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
+    return { interaction, chatHistory: state.drawerChatHistory }
+  })
+
+  handleWindow('drawer:chat', async (
+    { state },
+    payload: { message: string; interactionId: string }
+  ): Promise<DrawerChatMessage> => {
+    if (!state.yoloSession) throw new Error('No active YOLO session.')
+
+    // Build system prompt from assembled context
+    const snapshot = await state.yoloSession.getSnapshot()
+    hydrateDrawerStateFromDisk(state, state.projectPath, snapshot.sessionId)
+    const assets = loadAssetsFromDisk(state.projectPath, snapshot.sessionId)
+    const context = assembleInteractionContext(state, snapshot, state.yoloTurnReports, assets)
+
+    if (!context) {
+      const fallbackMsg: DrawerChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: 'No active interaction context is available. The session may have moved past this decision point.',
+        timestamp: new Date().toISOString()
+      }
+      state.drawerChatHistory.push(fallbackMsg)
+      persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
+      return fallbackMsg
+    }
+    if (payload.interactionId !== context.interactionId) {
+      throw new Error('Stale interaction id for drawer chat. Please reopen the drawer and try again.')
+    }
+    if (state.activeInteractionId !== context.interactionId) {
+      state.activeInteractionId = context.interactionId
+      state.drawerChatHistory = []
+    }
+
+    const userMsg: DrawerChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: payload.message,
+      timestamp: new Date().toISOString()
+    }
+    state.drawerChatHistory.push(userMsg)
+    persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
+
+    const systemPrompt = buildDrawerSystemPrompt(snapshot, context, state.yoloTurnReports)
+
+    // Build messages array for the LLM
+    const llmMessages = state.drawerChatHistory.map((msg) => ({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content
+    }))
+
+    let assistantContent = 'I apologize, but I was unable to generate a response. Please try again or check your API key configuration.'
+
+    try {
+      const modelId = state.sessionOptions?.models?.planner ?? 'gpt-4o'
+      const apiKey = resolveApiKey()
+      if (!apiKey) {
+        assistantContent = 'No API key found. Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, or another provider key in your environment.'
+      } else {
+        // Dynamic imports for packages not in the desktop app's direct dependencies.
+        // These are externalized by electron-vite and resolved from the monorepo root at runtime.
+        const aiModule = await import(/* @vite-ignore */ 'ai')
+        const frameworkModule = await import(/* @vite-ignore */ 'agent-foundry')
+        const model = frameworkModule.getLanguageModelByModelId(modelId, { apiKey })
+        const result = await aiModule.generateText({
+          model,
+          system: systemPrompt,
+          messages: llmMessages
+        })
+        assistantContent = result.text || assistantContent
+      }
+    } catch (err) {
+      assistantContent = `Error generating response: ${err instanceof Error ? err.message : String(err)}`
+    }
+
+    const assistantMsg: DrawerChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: assistantContent,
+      timestamp: new Date().toISOString()
+    }
+    state.drawerChatHistory.push(assistantMsg)
+    persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
+    return assistantMsg
+  })
+
+  handleWindow('drawer:action', async (
+    { win, state },
+    payload: { interactionId: string; actionId: string; text?: string }
+  ): Promise<{ success: boolean }> => {
+    if (!state.yoloSession) throw new Error('No active YOLO session.')
+
+    const snapshot = await state.yoloSession.getSnapshot()
+    hydrateDrawerStateFromDisk(state, state.projectPath, snapshot.sessionId)
+    const context = assembleInteractionContext(
+      state,
+      snapshot,
+      state.yoloTurnReports,
+      loadAssetsFromDisk(state.projectPath, snapshot.sessionId)
+    )
+    if (!context) {
+      throw new Error('No active interaction to apply action.')
+    }
+    if (payload.interactionId !== context.interactionId) {
+      throw new Error('Stale interaction id for drawer action. Please reopen the drawer and retry.')
+    }
+    const allowedActionIds = new Set(context.actions.map((item) => item.id))
+    const { actionId, text } = payload
+    if (!allowedActionIds.has(actionId)) {
+      throw new Error(`Action "${actionId}" is not allowed for this interaction.`)
+    }
+
+    switch (actionId) {
+      case 'upload': {
+        const uploadDirAbs = await state.yoloSession.ensureIngressUploadDir()
+        const uploadDirRel = relative(state.yoloSession.sessionDir, uploadDirAbs)
+        mkdirSync(uploadDirAbs, { recursive: true })
+
+        const picked = await dialog.showOpenDialog(win, {
+          properties: ['openFile', 'multiSelections']
+        })
+        if (!picked.canceled && picked.filePaths.length > 0) {
+          for (const sourcePath of picked.filePaths) {
+            const destPath = uniqueDestinationPath(uploadDirAbs, sourcePath)
+            copyFileSync(sourcePath, destPath)
+          }
+          safeSend(win, 'yolo:event', {
+            type: 'ingress_files_added',
+            uploadDir: uploadDirRel,
+            fileCount: picked.filePaths.length
+          })
+        }
+        break
+      }
+
+      case 'resolve': {
+        const taskId = snapshot.pendingExternalTaskId
+        if (taskId) {
+          await state.yoloSession.resolveExternalWaitTask(taskId, text ?? 'Resolved from drawer')
+          const afterSnapshot = await pushStateWithEvent(win, state, state.yoloSession, 'wait_external_resolved')
+          safeSend(win, 'yolo:event', { type: 'wait_external_resolved', id: taskId, state: afterSnapshot.state })
+          if (afterSnapshot.state === 'PLANNING') void runYoloLoop(win, state)
+        }
+        break
+      }
+
+      case 'skip': {
+        const taskId = snapshot.pendingExternalTaskId
+        if (taskId) {
+          await state.yoloSession.cancelExternalWaitTask(taskId, text ?? 'Skipped from drawer')
+          const afterSnapshot = await pushStateWithEvent(win, state, state.yoloSession, 'wait_external_cancelled')
+          safeSend(win, 'yolo:event', { type: 'wait_external_cancelled', id: taskId, state: afterSnapshot.state })
+          if (afterSnapshot.state === 'PLANNING') void runYoloLoop(win, state)
+        }
+        break
+      }
+
+      case 'approve': {
+        const result = await state.yoloSession.resolveResourceExtension({ approved: true, note: text })
+        if (state.sessionOptions) state.sessionOptions.budget = { ...result.budget }
+        const afterSnapshot = await pushStateWithEvent(win, state, state.yoloSession, 'resource_extension_resolved')
+        safeSend(win, 'yolo:event', {
+          type: 'resource_extension_resolved',
+          requestId: result.requestId,
+          approved: true,
+          budget: result.budget
+        })
+        if (afterSnapshot.state === 'PLANNING') void runYoloLoop(win, state)
+        break
+      }
+
+      case 'reject': {
+        // Detect if this is a resource extension reject or something else
+        if (snapshot.pendingResourceExtension) {
+          const result = await state.yoloSession.resolveResourceExtension({ approved: false, note: text })
+          await pushStateWithEvent(win, state, state.yoloSession, 'resource_extension_resolved')
+          safeSend(win, 'yolo:event', {
+            type: 'resource_extension_resolved',
+            requestId: result.requestId,
+            approved: false,
+            budget: result.budget
+          })
+        }
+        break
+      }
+
+      case 'confirm':
+      case 'quick_reply':
+      case 'submit_text': {
+        const reply = text ?? 'Confirm'
+        state.yoloSession.enqueueInput(reply, 'urgent', 'chat')
+        const decisionAssetId = await state.yoloSession.recordCheckpointDecision(reply)
+        if (decisionAssetId) {
+          safeSend(win, 'yolo:event', { type: 'checkpoint_confirmed', decisionAssetId })
+        }
+        await state.yoloSession.resume()
+        await pushStateWithEvent(win, state, state.yoloSession, 'user_reply_resume')
+        void runYoloLoop(win, state)
+        break
+      }
+
+      case 'restart': {
+        await state.yoloSession.stop().catch(() => {})
+        await pushStateWithEvent(win, state, state.yoloSession, 'stop')
+        // The renderer should call yolo:start after this
+        break
+      }
+
+      case 'restore': {
+        const restored = await state.yoloSession.restoreFromLatestCheckpoint()
+        const afterSnapshot = await pushStateWithEvent(win, state, state.yoloSession, restored ? 'restore_checkpoint' : 'restore_checkpoint_noop')
+        safeSend(win, 'yolo:event', { type: 'checkpoint_restored', restored, turn: afterSnapshot.currentTurn, state: afterSnapshot.state })
+        if (restored && afterSnapshot.state === 'PLANNING') void runYoloLoop(win, state)
+        break
+      }
+    }
+
+    // Clear chat history after action and push updated drawer state
+    state.drawerChatHistory = []
+    state.activeInteractionId = null
+    persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
+    const updatedSnapshot = await state.yoloSession.getSnapshot()
+    const updatedAssets = loadAssetsFromDisk(state.projectPath, updatedSnapshot.sessionId)
+    pushDrawerState(win, state, updatedSnapshot, updatedAssets)
+
+    return { success: true }
+  })
+
+  handleWindow('drawer:clear-chat', async ({ state }) => {
+    state.drawerChatHistory = []
+    if (!state.yoloSession) return
+    const snapshot = await state.yoloSession.getSnapshot()
+    persistDrawerStateToDisk(state, state.projectPath, snapshot.sessionId)
   })
 }

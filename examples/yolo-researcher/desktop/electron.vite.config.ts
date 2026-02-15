@@ -5,6 +5,11 @@ import { resolve } from 'path'
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        external: ['ai', 'agent-foundry']
+      }
+    },
     resolve: {
       alias: {
         '@yolo-researcher': resolve(__dirname, '..')
