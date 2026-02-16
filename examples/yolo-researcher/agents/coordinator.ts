@@ -94,7 +94,8 @@ const DEFAULT_IDENTITY = [
   'You are YOLO coordinator for one bounded research turn.',
   'Progress-first and contract-first.',
   'Prioritize concrete auditable outputs over process abstractions.',
-  'If blocked, call ask_user.'
+  'Be resourceful — use every tool at your disposal, try alternative approaches when one path fails, and make things happen.',
+  'Make reasonable assumptions and push forward. Only ask the user when truly blocked.'
 ].join('\n')
 
 const DEFAULT_CONSTRAINTS: string[] = [
@@ -102,14 +103,16 @@ const DEFAULT_CONSTRAINTS: string[] = [
   'Keep outputs aligned to three core assets: ResearchQuestion, ExperimentRequest, ResultInsight.',
   'Do not fabricate evidence or external results.',
   'Never fabricate citations, DOIs, or paper details.',
-  'If full text is required but unavailable, call ask_user instead of guessing.',
+  'If full text is required but unavailable, note the gap and proceed with available information.',
   'Use relative paths in asset payloads and tool arguments.',
   'Follow PlannerOutput.planContract.tool_plan as the primary execution strategy when provided.',
-  'For unfamiliar domains or prior-art questions, call literature-search first, then reason from returned results.',
+  'For unfamiliar domains or prior-art questions, try literature-search if available, then reason from returned results.',
   'For dataset or measurement-file questions, use data-analyze instead of manual computation in prompt space.',
   'For writing/refinement requests, use writing-outline or writing-draft to produce structured drafts.',
   'Use ctx-get only when background/literature context retrieval is truly needed; otherwise prefer explicit tools.',
-  'If missing critical context, call ask_user.'
+  'Make reasonable assumptions based on the research topic and standard conventions unless the user specifies otherwise. Do NOT ask about obvious details you can infer or look up.',
+  'Only call ask_user when you truly cannot proceed (e.g., missing credentials, fundamentally ambiguous goal). Do NOT ask about details you can reasonably assume or look up yourself.',
+  'Be resourceful: when one approach fails, try alternatives. Use literature-search, data-analyze, writing tools, and file operations to find answers yourself before asking the user.'
 ]
 
 const DISCOVERY_TOOL_SET = new Set([
@@ -160,7 +163,7 @@ function normalizeActionRationale(value: unknown): string | undefined {
 
 function normalizeAskUser(value: unknown): AskUserRequest | undefined {
   if (!isObject(value)) return undefined
-  const required = typeof value.required === 'boolean' ? value.required : true
+  const required = typeof value.required === 'boolean' ? value.required : false
   const question = typeof value.question === 'string' ? value.question.trim() : ''
   if (required && !question) return undefined
 
@@ -351,58 +354,41 @@ function tryParseJson(input: string): CoordinatorJsonOutput | undefined {
 function buildCoordinatorStageGuidance(stage: YoloStage): string {
   if (stage === 'S1') {
     return [
-      '## S1 (Define) — Literature-first question refinement',
+      '## S1 (Define) — Understand the topic and refine the research question',
       '',
-      'The primary goal of S1 is to define a crisp, testable research question.',
-      'CRITICAL: You MUST conduct a literature review BEFORE finalizing the research question.',
-      'Understanding prior art shapes what questions are worth asking and what experiments are feasible.',
-      '',
-      '### Required S1 workflow:',
-      '1. **Explore** the problem space — understand what the user is asking and why it matters',
-      '2. **Survey related work** — call literature-search to find prior art, competing approaches, published baselines',
+      '### Research workflow:',
+      '1. **Understand the topic** — if unfamiliar, start with keyword searches and background reading',
+      '2. **Literature search** — survey related work to find existing approaches, published baselines, and gaps',
       '3. **Synthesize findings** — produce a Note asset summarizing related work (include "relatedWork" or "literatureReview" in the payload)',
-      '4. **Refine the question** — use literature findings to tighten scope, identify gaps, and formulate falsifiable sub-questions',
+      '4. **Refine the question** — use literature findings to tighten scope, identify gaps, and formulate testable sub-questions',
+      '5. **Propose directions** — based on the literature landscape, propose concrete research ideas and hypotheses',
       '',
-      '### Gate requirement:',
-      'The gate will BLOCK advancement to S2 if no literature Note exists.',
-      'A literature Note must contain related work content (prior art, paper references, survey of existing approaches).',
-      '',
-      'Keep outputs auditable and scoped to one bounded turn.',
-      'Literature review is NOT a one-time task — it can and should be revisited in later stages for targeted deep-dives.'
+      'After understanding the landscape, move quickly toward experiment design.',
+      'If the research question is clear and you have enough context, proceed to action=issue_experiment_request.',
+      'Make standard research assumptions rather than asking the user for trivial details.',
+      'Keep outputs auditable and scoped to one bounded turn.'
     ].join('\n')
   }
 
   if (stage === 'S2' || stage === 'S3' || stage === 'S4') {
     return [
-      '## ExperimentRequest quality requirements',
+      '## ExperimentRequest design',
       '',
-      'For S2-S4, do NOT run heavy/system experiments in-process.',
-      'Instead, produce an ExperimentRequest asset to outsource execution to the user.',
-      'Write for a junior PhD who did not design this study — the request MUST be self-contained and unambiguous.',
+      'Produce an ExperimentRequest asset that can be executed.',
+      'Either run the experiment yourself if the environment is available, or prepare a clear spec for the user.',
       '',
-      '### Mandatory sections (all required — gate will reject if missing):',
-      '1. **goal**: Why this experiment matters (2-3 sentences linking to hypothesis/claim)',
-      '2. **preconditions**: Specific software, hardware, access requirements with versions and paths',
-      '3. **filesProduced**: Every output file with column-level schema (column_name:type for TSV/CSV, field descriptions for JSON)',
-      '4. **methodSteps**: Numbered steps with exact copy-pasteable commands. Use `<PLACEHOLDER>` for variable parts.',
-      '5. **frozenPrompts**: If sending prompts to an LLM/agent, include exact verbatim text. NEVER reference "the prompt from step X".',
-      '6. **controls**: What is constant, what varies, what baselines exist',
-      '7. **metrics**: What to measure, from which output file, with extraction logic (exact command or formula)',
-      '8. **expectedResult**: What success looks like — specific numbers, file counts, row counts, metric ranges',
-      '9. **outputFormat**: File schemas with column definitions, data types, and units',
-      '10. **submissionChecklist**: Checkbox list of every required upload file with expected row counts',
+      '### Key sections:',
+      '1. **goal**: What this experiment tests and why it matters (link to hypothesis/claim)',
+      '2. **methodSteps**: Numbered steps with concrete commands. Use `<PLACEHOLDER>` for variable parts.',
+      '3. **expectedResult**: What success looks like — specific enough to verify',
+      '4. **filesProduced**: Output files with basic schema',
+      '5. **metrics**: What to measure and how to extract it from outputs',
+      '6. **controls**: What varies, what stays constant',
       '',
-      '### Quality rules:',
-      '- No forward references to undefined tools/scripts — provide inline or confirm existence',
-      '- No "if unknown, detect later" — resolve all unknowns before issuing',
-      '- Warmup vs measure phases must have explicit boundaries (e.g., "discard first N trials")',
-      '- Include time-basis warnings when joining data from different clock sources',
-      '- Every `<PLACEHOLDER>` must be defined in preconditions with fill-in instructions',
-      '- Every command must be copy-pasteable after placeholder substitution',
-      '',
-      '### Literature deep-dive:',
-      'If the experiment design has open questions about prior approaches, published baselines, or competing methods,',
-      'call literature-search for a targeted deep-dive before finalizing the ExperimentRequest.'
+      'Make reasonable assumptions based on the research topic rather than asking.',
+      'Start with the simplest experiment that can test the hypothesis.',
+      'Missing details can be iterated — do NOT block on perfection.',
+      'If you need something from the user, include it in the ExperimentRequest spec rather than calling ask_user.'
     ].join('\n')
   }
 
@@ -442,7 +428,7 @@ function buildTurnPrompt(input: {
     'Return STRICT JSON only (no prose).',
     'Minimum required JSON shape:',
     '{"action":"explore|refine_question|issue_experiment_request|digest_uploaded_results","actionRationale":"string","summary":"string","assets":[{"type":"string","payload":{}}],"askUser":{"required":"boolean","question":"string","blocking":"boolean"},"execution_trace":[{"tool":"string","reason":"string","result_summary":"string"}]}',
-    'If you cannot complete safely, set askUser.required=true and ask a concrete blocking question.',
+    'If you are genuinely blocked and cannot proceed with any reasonable assumption, set askUser.required=true and askUser.blocking=true. Do NOT ask about trivial details you can reasonably assume or look up — make assumptions and iterate.',
     input.researchContext
       ? `## User Research Context (research.md)\n\n${input.researchContext}`
       : undefined,
@@ -495,13 +481,13 @@ function createAskUserTool(onAskUser: (request: AskUserRequest) => void) {
     },
     execute: async (input) => {
       onAskUser({
-        required: input.required ?? true,
+        required: input.required ?? false,
         question: input.question,
         options: input.options,
         context: input.context,
         requiredFiles: Array.isArray(input.required_files) ? input.required_files : undefined,
         checkpoint: input.checkpoint,
-        blocking: input.blocking ?? true
+        blocking: input.blocking ?? false
       })
       return { success: true, data: { accepted: true } }
     }

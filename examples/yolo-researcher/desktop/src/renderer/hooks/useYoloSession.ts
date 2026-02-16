@@ -30,6 +30,8 @@ import type {
   InteractionContext,
   DrawerChatMessage,
   DrawerState,
+  PaperRecord,
+  ReviewRecord,
 } from '@/lib/types'
 import {
   STAGES,
@@ -70,6 +72,10 @@ export function useYoloSession() {
   // ─── Group A2: Research.md state ──────────────────────────────────
   const [researchMd, setResearchMd] = useState('')
   const [researchMdLoaded, setResearchMdLoaded] = useState(false)
+
+  // ─── Group A3: Paper library state ──────────────────────────────
+  const [papers, setPapers] = useState<PaperRecord[]>([])
+  const [reviews, setReviews] = useState<ReviewRecord[]>([])
 
   // ─── Group B: View/UI state ────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabId>('timeline')
@@ -768,6 +774,19 @@ export function useYoloSession() {
     }
   }
 
+  async function loadPapers() {
+    try {
+      const [paperList, reviewList] = await Promise.all([
+        api.listPapers().catch(() => []),
+        api.listReviews().catch(() => []),
+      ])
+      setPapers(paperList || [])
+      setReviews(reviewList || [])
+    } catch {
+      // Ignore — paper library may not exist yet
+    }
+  }
+
   function resetSession() {
     setProjectPath('')
     setSnapshot(null)
@@ -784,6 +803,8 @@ export function useYoloSession() {
     setGoalSessionId(null)
     setResearchMd('')
     setResearchMdLoaded(false)
+    setPapers([])
+    setReviews([])
     setSelectedPhase('P3')
     setActionError(null)
     setActionNotice(null)
@@ -806,6 +827,7 @@ export function useYoloSession() {
       await refreshQueue()
       await refreshWaitTasks()
       await loadResearchMd()
+      await loadPapers()
     })
 
     const unsubState = api.onYoloState((payload: YoloSnapshot) => {
@@ -824,6 +846,7 @@ export function useYoloSession() {
       void refreshQueue()
       void refreshBranchSnapshot()
       void refreshAssets()
+      void loadPapers()
     })
     const unsubQuestion = api.onYoloQuestion((payload: any) => {
       setEvents((prev) => [{ at: new Date().toISOString(), type: 'question', text: `Question: ${payload?.question ?? ''}` }, ...prev].slice(0, 80))
@@ -892,6 +915,7 @@ export function useYoloSession() {
       await refreshQueue()
       await refreshWaitTasks()
       await loadResearchMd()
+      await loadPapers()
     },
 
     async closeProject() {
@@ -1238,6 +1262,19 @@ export function useYoloSession() {
       }
     },
 
+    async refreshPapers() {
+      await loadPapers()
+    },
+
+    async readReview(reviewId: string) {
+      try {
+        const result = await api.readReview(reviewId)
+        return result?.content ?? ''
+      } catch {
+        return ''
+      }
+    },
+
     setGoal,
     setSelectedPhase,
     setActiveTab,
@@ -1298,6 +1335,8 @@ export function useYoloSession() {
     activityFeed,
     researchMd,
     researchMdLoaded,
+    papers,
+    reviews,
     queuedInputs,
     waitTasks,
     waitValidation,

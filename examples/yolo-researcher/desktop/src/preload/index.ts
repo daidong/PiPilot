@@ -215,6 +215,11 @@ export interface ElectronAPI {
   openFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
   readTextFile: (filePath: string) => Promise<{ success: boolean; error?: string; content?: string; path?: string }>
   openFolderWith: (app: 'finder' | 'zed' | 'cursor' | 'vscode') => Promise<{ success: boolean; error?: string }>
+
+  // Paper library operations
+  listPapers: () => Promise<any[]>
+  listReviews: () => Promise<any[]>
+  readReview: (reviewId: string) => Promise<{ content: string }>
 }
 
 const api: ElectronAPI = {
@@ -307,7 +312,12 @@ const api: ElectronAPI = {
   dropToDir: (fileName, base64Content, targetDirRelPath) => ipcRenderer.invoke('file:drop-to-dir', fileName, base64Content, targetDirRelPath),
   openFile: (filePath) => ipcRenderer.invoke('file:open-external', filePath),
   readTextFile: (filePath) => ipcRenderer.invoke('file:read-text', filePath),
-  openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app)
+  openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app),
+
+  // Paper library operations
+  listPapers: () => ipcRenderer.invoke('papers:list'),
+  listReviews: () => ipcRenderer.invoke('papers:list-reviews'),
+  readReview: (reviewId) => ipcRenderer.invoke('papers:read-review', reviewId),
 }
 
 contextBridge.exposeInMainWorld('api', api)

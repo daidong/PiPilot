@@ -437,12 +437,8 @@ export class LeanGateEngine implements GateEngine {
         assetRefs: manifest.assetIds.filter((id) => id.startsWith('ResultInsight-'))
       })
     }
-    if (!gMin3Passed) {
-      hardBlockers.push({
-        label: 'literature_evidence_missing',
-        assetRefs: []
-      })
-    }
+    // Literature gate is advisory — it warns but does not hard-block stage advancement.
+    // The agent should naturally conduct literature review as part of good research methodology.
 
     const validationNotes = erValidationFailures.map(
       (f) => `ExperimentRequest ${f.assetId}: missing [${f.missingFields.join(', ')}]${f.warnings.length > 0 ? '; warnings: ' + f.warnings.join('; ') : ''}`
@@ -456,7 +452,7 @@ export class LeanGateEngine implements GateEngine {
       advisoryNotes: [
         `manifestId=${manifest.id}`,
         `leanSummary={"experimentRequest":{"total":${experimentRequestCount},"executable":${executableExperimentRequestCount}},"resultInsight":{"total":${resultInsightCount},"linked":${boundResultInsightCount}},"literatureNotes":${literatureNoteCount}}`,
-        ...(!gMin3Passed ? ['Literature review required before advancing beyond S1. Produce at least one Note with related work / prior art content using literature-search.'] : []),
+        ...(!gMin3Passed ? ['Advisory: No literature Note found yet. A literature review strengthens experiment design and helps identify gaps. Consider using literature-search.'] : []),
         ...validationNotes
       ]
     }

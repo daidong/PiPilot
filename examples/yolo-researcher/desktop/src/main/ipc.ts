@@ -2861,6 +2861,93 @@ export function registerIpcHandlers(): void {
     return { success: true }
   })
 
+  // ─── Paper library handlers ─────────────────────────────────────────
+
+  handleWindow('papers:list', ({ state }) => {
+    if (!state.projectPath) return []
+    const dir = join(state.projectPath, '.yolo-researcher', 'papers')
+    if (!existsSync(dir)) return []
+    const papers: Array<Record<string, unknown>> = []
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.json')) continue
+      try {
+        const raw = JSON.parse(readFileSync(join(dir, file), 'utf-8'))
+        if (raw.type === 'paper' && raw.id && raw.title) {
+          papers.push({
+            id: raw.id,
+            title: raw.title,
+            authors: Array.isArray(raw.authors) ? raw.authors : [],
+            year: typeof raw.year === 'number' ? raw.year : undefined,
+            venue: typeof raw.venue === 'string' ? raw.venue : undefined,
+            abstract: typeof raw.abstract === 'string' ? raw.abstract : '',
+            doi: typeof raw.doi === 'string' ? raw.doi : '',
+            url: typeof raw.url === 'string' ? raw.url : undefined,
+            pdfUrl: typeof raw.pdfUrl === 'string' ? raw.pdfUrl : undefined,
+            relevanceScore: typeof raw.relevanceScore === 'number' ? raw.relevanceScore : undefined,
+            citationCount: typeof raw.citationCount === 'number' ? raw.citationCount : undefined,
+            citeKey: typeof raw.citeKey === 'string' ? raw.citeKey : '',
+            tags: Array.isArray(raw.tags) ? raw.tags : [],
+            searchKeywords: Array.isArray(raw.searchKeywords) ? raw.searchKeywords : undefined,
+            externalSource: typeof raw.externalSource === 'string' ? raw.externalSource : undefined,
+            createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
+            updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
+          })
+        }
+      } catch {
+        // Skip invalid paper records.
+      }
+    }
+    papers.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    return papers
+  })
+
+  handleWindow('papers:list-reviews', ({ state }) => {
+    if (!state.projectPath) return []
+    const dir = join(state.projectPath, '.yolo-researcher', 'reviews')
+    if (!existsSync(dir)) return []
+    const reviews: Array<{ id: string; path: string; createdAt: string; paperCount: number }> = []
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.md')) continue
+      const stem = file.replace(/\.md$/, '')
+      const mdPath = join(dir, file)
+      try {
+        const stats = statSync(mdPath)
+        let paperCount = 0
+        const companionPath = join(dir, `${stem}-papers.json`)
+        if (existsSync(companionPath)) {
+          try {
+            const companionData = JSON.parse(readFileSync(companionPath, 'utf-8'))
+            if (Array.isArray(companionData)) paperCount = companionData.length
+          } catch {
+            // Skip invalid companion file.
+          }
+        }
+        reviews.push({
+          id: stem,
+          path: relative(state.projectPath, mdPath),
+          createdAt: stats.mtime.toISOString(),
+          paperCount,
+        })
+      } catch {
+        // Skip unreadable files.
+      }
+    }
+    reviews.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    return reviews
+  })
+
+  handleWindow('papers:read-review', ({ state }, reviewId: string) => {
+    if (!state.projectPath) return { content: '' }
+    const mdPath = join(state.projectPath, '.yolo-researcher', 'reviews', `${reviewId}.md`)
+    if (!existsSync(mdPath)) return { content: '' }
+    try {
+      const content = readFileSync(mdPath, 'utf-8')
+      return { content }
+    } catch {
+      return { content: '' }
+    }
+  })
+
   handleWindow('folder:open-with', async ({ state }, appName: 'finder' | 'zed' | 'cursor' | 'vscode') => {
     if (!state.projectPath) return { success: false, error: 'No project open' }
     const { exec } = await import('node:child_process')

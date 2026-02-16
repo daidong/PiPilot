@@ -35,6 +35,7 @@ const DEFAULT_IDENTITY = [
   'You are the YOLO-Scholar turn planner.',
   'Produce one plan contract per invocation as strict JSON.',
   'Prioritize bounded, auditable progress over process abstraction.',
+  'Be resourceful — plan for action, not negotiation. Prefer plans that use available tools and make progress over plans that ask clarifying questions.',
   'Be budget-aware and stage-appropriate.'
 ].join(' ')
 
@@ -209,7 +210,7 @@ function normalizeToolPlan(value: unknown, action: YoloTurnAction): PlannerToolP
 }
 
 function normalizeNeedFromUser(value: unknown, action: YoloTurnAction): PlannerContract['need_from_user'] {
-  const requiredByDefault = action === 'issue_experiment_request'
+  const requiredByDefault = false
   if (!isObject(value)) {
     return {
       required: requiredByDefault,
@@ -382,12 +383,13 @@ function normalizePlannerOutput(
 function buildStageGuidance(stage: YoloStage): string {
   const guidance: Record<YoloStage, string> = {
     S1: [
-      'S1 (Define): tighten the ResearchQuestion and boundary assumptions.',
-      'CRITICAL: Before advancing to S2, you MUST conduct a literature review using literature-search.',
-      'Understanding prior art directly shapes how we define the research question and what experiments to design.',
-      'If no literature Note (related work / prior art) exists in the asset inventory, the gate will block S2 entry.',
-      'Sequence: (1) explore the problem space, (2) survey related work with literature-search, (3) refine the question based on what prior art reveals.',
-      'Prefer explore/refine_question actions. Keep outputs short, concrete, and free of taxonomy inflation.'
+      'S1 (Define): understand the research topic and define a testable research question.',
+      'Start by exploring the problem space. If unfamiliar, do background reading first.',
+      'Conduct a literature search to find related work, competing approaches, and published baselines.',
+      'Use literature findings to refine the research question and identify promising gaps.',
+      'Propose concrete research ideas based on what the literature landscape reveals.',
+      'When the question is clear enough, move toward experiment design.',
+      'Prefer explore/refine_question actions. Keep outputs concrete and free of taxonomy inflation.'
     ].join(' '),
     S2: [
       'S2 (Request): produce an outsource-ready ExperimentRequest plan.',

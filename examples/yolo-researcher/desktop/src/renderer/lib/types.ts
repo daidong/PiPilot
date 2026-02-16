@@ -24,7 +24,7 @@ export type YoloState =
 
 export type StageId = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
 export type GateStatus = 'pass' | 'fail' | 'none'
-export type TabId = 'timeline' | 'branches' | 'assets' | 'evidence' | 'system' | 'events'
+export type TabId = 'timeline' | 'branches' | 'assets' | 'evidence' | 'system' | 'events' | 'papers'
 
 export interface YoloSnapshot {
   sessionId: string
@@ -435,6 +435,35 @@ export interface EvidenceGraphData {
   }
 }
 
+// ─── Paper library types ──────────────────────────────────
+
+export interface PaperRecord {
+  id: string
+  title: string
+  authors: string[]
+  year?: number
+  venue?: string
+  abstract: string
+  doi: string
+  url?: string
+  pdfUrl?: string
+  relevanceScore?: number
+  citationCount?: number
+  citeKey: string
+  tags: string[]
+  searchKeywords?: string[]
+  externalSource?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReviewRecord {
+  id: string
+  path: string
+  createdAt: string
+  paperCount: number
+}
+
 // ─── InteractionDrawer types ─────────────────────────────
 
 export type InteractionKind =
@@ -529,6 +558,8 @@ export interface SessionActions {
   removeQueueItem: (id: string) => Promise<void>
   saveResearchMd: (content: string) => Promise<void>
   saveGoalToResearchMd: (goal: string) => Promise<void>
+  refreshPapers: () => Promise<void>
+  readReview: (reviewId: string) => Promise<string>
   setGoal: (goal: string) => void
   setSelectedPhase: (phase: 'P0' | 'P1' | 'P2' | 'P3') => void
   setActiveTab: (tab: TabId) => void

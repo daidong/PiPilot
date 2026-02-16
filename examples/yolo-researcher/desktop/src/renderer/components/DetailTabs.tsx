@@ -8,6 +8,7 @@ import { AssetsTab } from './tabs/AssetsTab'
 import { EvidenceTab } from './tabs/EvidenceTab'
 import { SystemTab } from './tabs/SystemTab'
 import { EventsTab } from './tabs/EventsTab'
+import { PapersTab } from './tabs/PapersTab'
 
 const PRIMARY_TABS: { id: TabId; label: string }[] = [
   { id: 'timeline', label: 'Thinking' },
@@ -19,6 +20,7 @@ const PRIMARY_TABS: { id: TabId; label: string }[] = [
 const SECONDARY_TABS: { id: TabId; label: string }[] = [
   { id: 'branches', label: 'Branches' },
   { id: 'evidence', label: 'Evidence' },
+  { id: 'papers', label: 'Papers' },
 ]
 
 interface DetailTabsProps {
@@ -169,6 +171,14 @@ export function DetailTabs({ session }: DetailTabsProps) {
         )}
         {activeTab === 'events' && (
           <EventsTab events={session.events} />
+        )}
+        {activeTab === 'papers' && (
+          <PapersTab
+            papers={session.papers}
+            reviews={session.reviews}
+            onRefresh={actions.refreshPapers}
+            onReadReview={actions.readReview}
+          />
         )}
       </div>
     </section>
