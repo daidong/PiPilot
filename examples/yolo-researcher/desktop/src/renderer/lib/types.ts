@@ -527,6 +527,8 @@ export interface SessionActions {
   setQueuePriority: (id: string, priority: 'urgent' | 'normal') => Promise<void>
   moveQueueItem: (id: string, toIndex: number) => Promise<void>
   removeQueueItem: (id: string) => Promise<void>
+  saveResearchMd: (content: string) => Promise<void>
+  saveGoalToResearchMd: (goal: string) => Promise<void>
   setGoal: (goal: string) => void
   setSelectedPhase: (phase: 'P0' | 'P1' | 'P2' | 'P3') => void
   setActiveTab: (tab: TabId) => void

@@ -1,83 +1,89 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0.8" y2="1">
-      <stop offset="0%" stop-color="#0c4a4e"/>
-      <stop offset="40%" stop-color="#115e59"/>
-      <stop offset="100%" stop-color="#0f3d3e"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0%" stop-color="#0a3d40"/>
+      <stop offset="50%" stop-color="#0d4f4f"/>
+      <stop offset="100%" stop-color="#082e30"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.45">
-      <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.28"/>
+    <radialGradient id="vignette" cx="0.5" cy="0.5" r="0.7">
+      <stop offset="60%" stop-color="#0d4f4f" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.25"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.5">
+      <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.18"/>
+      <stop offset="70%" stop-color="#14b8a6" stop-opacity="0.04"/>
       <stop offset="100%" stop-color="#14b8a6" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="nodeGlow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0%" stop-color="#2dd4bf" stop-opacity="0.6"/>
+      <stop offset="0%" stop-color="#2dd4bf" stop-opacity="0.5"/>
       <stop offset="100%" stop-color="#2dd4bf" stop-opacity="0"/>
     </radialGradient>
-    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
-      <feDropShadow dx="0" dy="0" stdDeviation="8" flood-color="#2dd4bf" flood-opacity="0.3"/>
-    </filter>
   </defs>
 
-  <!-- Background rounded square -->
-  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <!-- Full canvas fill — no transparent corners -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
 
-  <!-- Subtle inner border -->
-  <rect x="8" y="8" width="1008" height="1008" rx="218" fill="none" stroke="#5eead4" stroke-width="2" opacity="0.08"/>
+  <!-- Vignette overlay -->
+  <rect width="1024" height="1024" fill="url(#vignette)"/>
 
-  <!-- Center glow -->
-  <circle cx="512" cy="440" r="380" fill="url(#glow)"/>
-
-  <!-- Y shape with soft glow — the research branching tree -->
-  <g filter="url(#shadow)">
-    <!-- Trunk: bottom to junction -->
-    <line x1="512" y1="770" x2="512" y2="460" stroke="#ccfbf1" stroke-width="54" stroke-linecap="round"/>
-    <!-- Left branch -->
-    <line x1="512" y1="460" x2="285" y2="235" stroke="#ccfbf1" stroke-width="48" stroke-linecap="round"/>
-    <!-- Right branch -->
-    <line x1="512" y1="460" x2="739" y2="235" stroke="#ccfbf1" stroke-width="48" stroke-linecap="round"/>
+  <!-- Subtle grid pattern (research notebook feel) -->
+  <g opacity="0.03" stroke="#5eead4" stroke-width="1">
+    <line x1="256" y1="0" x2="256" y2="1024"/>
+    <line x1="512" y1="0" x2="512" y2="1024"/>
+    <line x1="768" y1="0" x2="768" y2="1024"/>
+    <line x1="0" y1="256" x2="1024" y2="256"/>
+    <line x1="0" y1="512" x2="1024" y2="512"/>
+    <line x1="0" y1="768" x2="1024" y2="768"/>
   </g>
 
-  <!-- Sub-branch from left (thinner, representing deeper exploration) -->
-  <line x1="370" y1="322" x2="220" y2="310" stroke="#99f6e4" stroke-width="14" stroke-linecap="round" opacity="0.55"/>
-  <!-- Sub-branch from right -->
-  <line x1="654" y1="322" x2="804" y2="310" stroke="#99f6e4" stroke-width="14" stroke-linecap="round" opacity="0.55"/>
+  <!-- Center glow -->
+  <circle cx="512" cy="440" r="400" fill="url(#glow)"/>
 
-  <!-- Node dots — evidence endpoints -->
-  <!-- Left main branch tip -->
-  <circle cx="285" cy="235" r="42" fill="url(#nodeGlow)"/>
-  <circle cx="285" cy="235" r="28" fill="#2dd4bf"/>
-  <circle cx="285" cy="235" r="42" fill="none" stroke="#5eead4" stroke-width="3" opacity="0.4"/>
+  <!-- Y branching tree -->
+  <!-- Trunk: bottom to junction -->
+  <line x1="512" y1="760" x2="512" y2="460" stroke="#ccfbf1" stroke-width="48" stroke-linecap="round" opacity="0.95"/>
+  <!-- Left branch -->
+  <line x1="512" y1="460" x2="290" y2="240" stroke="#ccfbf1" stroke-width="42" stroke-linecap="round" opacity="0.9"/>
+  <!-- Right branch -->
+  <line x1="512" y1="460" x2="734" y2="240" stroke="#ccfbf1" stroke-width="42" stroke-linecap="round" opacity="0.9"/>
 
-  <!-- Right main branch tip -->
-  <circle cx="739" cy="235" r="42" fill="url(#nodeGlow)"/>
-  <circle cx="739" cy="235" r="28" fill="#2dd4bf"/>
-  <circle cx="739" cy="235" r="42" fill="none" stroke="#5eead4" stroke-width="3" opacity="0.4"/>
+  <!-- Sub-branches (thinner — deeper exploration) -->
+  <line x1="374" y1="324" x2="230" y2="315" stroke="#5eead4" stroke-width="10" stroke-linecap="round" opacity="0.4"/>
+  <line x1="650" y1="324" x2="794" y2="315" stroke="#5eead4" stroke-width="10" stroke-linecap="round" opacity="0.4"/>
 
-  <!-- Left sub-branch tip -->
-  <circle cx="220" cy="310" r="12" fill="#5eead4" opacity="0.7"/>
-  <circle cx="220" cy="310" r="20" fill="none" stroke="#5eead4" stroke-width="2" opacity="0.3"/>
+  <!-- Orbital arc — the autonomous loop -->
+  <ellipse cx="512" cy="470" rx="310" ry="78" fill="none" stroke="#5eead4" stroke-width="2" opacity="0.1" stroke-dasharray="14 8"/>
 
-  <!-- Right sub-branch tip -->
-  <circle cx="804" cy="310" r="12" fill="#5eead4" opacity="0.7"/>
-  <circle cx="804" cy="310" r="20" fill="none" stroke="#5eead4" stroke-width="2" opacity="0.3"/>
+  <!-- Node: left branch tip -->
+  <circle cx="290" cy="240" r="36" fill="url(#nodeGlow)"/>
+  <circle cx="290" cy="240" r="22" fill="#2dd4bf"/>
+  <circle cx="290" cy="240" r="8" fill="#ccfbf1" opacity="0.7"/>
 
-  <!-- Center junction node (the branch point) -->
-  <circle cx="512" cy="460" r="48" fill="url(#nodeGlow)"/>
-  <circle cx="512" cy="460" r="32" fill="#5eead4"/>
-  <circle cx="512" cy="460" r="48" fill="none" stroke="#99f6e4" stroke-width="3" opacity="0.35"/>
+  <!-- Node: right branch tip -->
+  <circle cx="734" cy="240" r="36" fill="url(#nodeGlow)"/>
+  <circle cx="734" cy="240" r="22" fill="#2dd4bf"/>
+  <circle cx="734" cy="240" r="8" fill="#ccfbf1" opacity="0.7"/>
 
-  <!-- Bottom root node -->
-  <circle cx="512" cy="770" r="26" fill="#2dd4bf"/>
-  <circle cx="512" cy="770" r="38" fill="none" stroke="#2dd4bf" stroke-width="3" opacity="0.35"/>
+  <!-- Node: left sub-branch tip -->
+  <circle cx="230" cy="315" r="8" fill="#5eead4" opacity="0.6"/>
 
-  <!-- Subtle orbital arc — representing the autonomous loop -->
-  <ellipse cx="512" cy="470" rx="340" ry="95" fill="none" stroke="#5eead4" stroke-width="2.5" opacity="0.12" stroke-dasharray="16 10"/>
+  <!-- Node: right sub-branch tip -->
+  <circle cx="794" cy="315" r="8" fill="#5eead4" opacity="0.6"/>
 
-  <!-- Small decorative particles / stars -->
-  <circle cx="180" cy="520" r="4" fill="#5eead4" opacity="0.3"/>
-  <circle cx="850" cy="440" r="3.5" fill="#5eead4" opacity="0.25"/>
-  <circle cx="340" cy="720" r="3" fill="#5eead4" opacity="0.2"/>
-  <circle cx="720" cy="680" r="3.5" fill="#5eead4" opacity="0.22"/>
-  <circle cx="160" cy="340" r="3" fill="#99f6e4" opacity="0.18"/>
-  <circle cx="870" cy="650" r="2.5" fill="#99f6e4" opacity="0.15"/>
+  <!-- Node: center junction -->
+  <circle cx="512" cy="460" r="40" fill="url(#nodeGlow)"/>
+  <circle cx="512" cy="460" r="26" fill="#5eead4"/>
+  <circle cx="512" cy="460" r="10" fill="#ccfbf1" opacity="0.6"/>
+
+  <!-- Node: bottom root -->
+  <circle cx="512" cy="760" r="22" fill="#2dd4bf"/>
+  <circle cx="512" cy="760" r="8" fill="#ccfbf1" opacity="0.5"/>
+
+  <!-- Decorative particles -->
+  <circle cx="175" cy="510" r="3" fill="#5eead4" opacity="0.2"/>
+  <circle cx="845" cy="420" r="2.5" fill="#5eead4" opacity="0.18"/>
+  <circle cx="350" cy="700" r="2" fill="#5eead4" opacity="0.15"/>
+  <circle cx="710" cy="660" r="2.5" fill="#5eead4" opacity="0.16"/>
+  <circle cx="155" cy="350" r="2" fill="#99f6e4" opacity="0.12"/>
+  <circle cx="860" cy="630" r="2" fill="#99f6e4" opacity="0.1"/>
 </svg>

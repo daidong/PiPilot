@@ -1,23 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FailureInfo, InteractionContext, TurnReport, YoloSnapshot } from '@/lib/types'
+import type { InteractionContext, TurnReport, YoloSnapshot } from '@/lib/types'
 import { cleanStageRefs, friendlyAction, friendlyState } from '@/lib/formatters'
-import { AlertTriangle, ArrowRight } from 'lucide-react'
+import { AlertTriangle, ArrowRight, FileText, Pencil } from 'lucide-react'
 
 interface HeroSectionProps {
   snapshot: YoloSnapshot | null
   goal: string
-  selectedPhase: 'P0' | 'P1' | 'P2' | 'P3'
   activeTurn: TurnReport | null
-  failureInfo: FailureInfo | null
   isStarting: boolean
   drawerInteraction: InteractionContext | null
   totalCreatedAssets: number
+  researchMd: string
+  researchMdLoaded: boolean
   onGoalChange: (goal: string) => void
-  onPhaseChange: (phase: 'P0' | 'P1' | 'P2' | 'P3') => void
+  onSaveGoalToResearchMd: (goal: string) => void
   onStart: () => void
   onResume: () => void
-  onRestart: () => void
-  onRestoreCheckpoint: () => void
   onOpenDrawer: () => void
 }
 
@@ -28,21 +26,21 @@ function hasBlockingNeed(snapshot: YoloSnapshot | null, drawerInteraction: Inter
 export function HeroSection({
   snapshot,
   goal,
-  selectedPhase,
   activeTurn,
-  failureInfo,
   isStarting,
   drawerInteraction,
   totalCreatedAssets,
+  researchMd,
+  researchMdLoaded,
   onGoalChange,
-  onPhaseChange,
+  onSaveGoalToResearchMd,
   onStart,
   onResume,
-  onRestart,
-  onRestoreCheckpoint,
   onOpenDrawer,
 }: HeroSectionProps) {
   const [insightExpanded, setInsightExpanded] = useState(false)
+  const [goalEditing, setGoalEditing] = useState(false)
+  const [goalDraft, setGoalDraft] = useState('')
   const state = snapshot?.state
   const displayState = state === 'WAITING_FOR_USER' ? 'Running (waiting for your input)' : friendlyState(state)
   const latestExecution = activeTurn?.execution
@@ -86,48 +84,110 @@ export function HeroSection({
     )
   }
 
+  // Goal Board — shown when session is active
+  const goalBoard = hasSession ? (
+    <section className="mb-3 rounded-2xl border t-border t-bg-surface p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <FileText size={14} className="t-text-secondary" />
+          <span className="text-[11px] uppercase tracking-wide t-text-secondary">Goal Board</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {researchMdLoaded && (
+            <span className="text-[10px] t-text-muted">
+              research.md · {researchMd.length}/5000 chars
+            </span>
+          )}
+          {!goalEditing && (
+            <button
+              onClick={() => { setGoalDraft(goal); setGoalEditing(true) }}
+              className="flex items-center gap-1 rounded-md border t-border px-1.5 py-0.5 text-[10px] t-hoverable"
+            >
+              <Pencil size={10} /> Edit
+            </button>
+          )}
+        </div>
+      </div>
+      {goalEditing ? (
+        <div>
+          <textarea
+            value={goalDraft}
+            onChange={(e) => setGoalDraft(e.target.value)}
+            rows={3}
+            className="mb-2 w-full resize-none rounded-xl border t-border bg-transparent p-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/40"
+            placeholder="Research goal..."
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                onSaveGoalToResearchMd(goalDraft)
+                setGoalEditing(false)
+              }}
+              className="rounded-md bg-teal-500 px-3 py-1 text-[11px] font-medium text-white hover:bg-teal-400 transition-colors"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => setGoalEditing(false)}
+              className="rounded-md border t-border px-3 py-1 text-[11px] t-hoverable"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="text-sm line-clamp-2 t-text-secondary">{goal || 'No goal set.'}</div>
+      )}
+    </section>
+  ) : null
+
   // COMPLETE state: show concrete summary
   if (state === 'COMPLETE') {
     const totalCycles = snapshot?.currentTurn ?? 0
     const totalCost = snapshot?.budgetUsed?.costUsd ?? 0
     return (
-      <section className="rounded-2xl border t-border t-bg-surface p-4">
-        <div className="mb-3">
-          <div className="text-[11px] uppercase tracking-wide t-text-secondary">Mission Board</div>
-          <div className="text-sm font-medium t-accent-emerald">
-            Run complete · {totalCycles} cycles · {totalCreatedAssets} artifacts · ${totalCost.toFixed(2)} spent
+      <>
+        {goalBoard}
+        <section className="rounded-2xl border t-border t-bg-surface p-4">
+          <div className="mb-3">
+            <div className="text-[11px] uppercase tracking-wide t-text-secondary">Mission Board</div>
+            <div className="text-sm font-medium t-accent-emerald">
+              Run complete · {totalCycles} cycles · {totalCreatedAssets} artifacts · ${totalCost.toFixed(2)} spent
+            </div>
           </div>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <article className="rounded-xl border t-card-emerald p-3">
-            <div className="text-[11px] uppercase tracking-wide t-text-secondary">Summary</div>
-            <div className={`mt-2 text-xs ${insightExpanded ? 'whitespace-pre-wrap' : 'line-clamp-4'}`}>
-              {latestInsightText || 'Research complete.'}
-            </div>
-            {latestInsightText && canExpandInsight && (
-              <button
-                onClick={() => setInsightExpanded((v) => !v)}
-                className="mt-2 text-[11px] t-accent-teal hover:underline"
-              >
-                {insightExpanded ? '收起' : '查看全文'}
-              </button>
-            )}
-          </article>
-          <article className="rounded-xl border t-card-teal p-3">
-            <div className="text-[11px] uppercase tracking-wide t-text-secondary">Final Metrics</div>
-            <div className="mt-2 text-xs t-text-secondary">
-              <div>{totalCycles} research cycles completed</div>
-              <div>{totalCreatedAssets} total artifacts created</div>
-              <div>${totalCost.toFixed(2)} total cost</div>
-              <div>{(snapshot?.budgetUsed?.tokens ?? 0).toLocaleString()} tokens consumed</div>
-            </div>
-          </article>
-        </div>
-      </section>
+          <div className="grid gap-3 md:grid-cols-2">
+            <article className="rounded-xl border t-card-emerald p-3">
+              <div className="text-[11px] uppercase tracking-wide t-text-secondary">Summary</div>
+              <div className={`mt-2 text-xs ${insightExpanded ? 'whitespace-pre-wrap' : 'line-clamp-4'}`}>
+                {latestInsightText || 'Research complete.'}
+              </div>
+              {latestInsightText && canExpandInsight && (
+                <button
+                  onClick={() => setInsightExpanded((v) => !v)}
+                  className="mt-2 text-[11px] t-accent-teal hover:underline"
+                >
+                  {insightExpanded ? '收起' : '查看全文'}
+                </button>
+              )}
+            </article>
+            <article className="rounded-xl border t-card-teal p-3">
+              <div className="text-[11px] uppercase tracking-wide t-text-secondary">Final Metrics</div>
+              <div className="mt-2 text-xs t-text-secondary">
+                <div>{totalCycles} research cycles completed</div>
+                <div>{totalCreatedAssets} total artifacts created</div>
+                <div>${totalCost.toFixed(2)} total cost</div>
+                <div>{(snapshot?.budgetUsed?.tokens ?? 0).toLocaleString()} tokens consumed</div>
+              </div>
+            </article>
+          </div>
+        </section>
+      </>
     )
   }
 
   return (
+    <>
+    {goalBoard}
     <section className="rounded-2xl border t-border t-bg-surface p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
@@ -251,5 +311,6 @@ export function HeroSection({
         </article>
       </div>
     </section>
+    </>
   )
 }

@@ -348,6 +348,68 @@ function tryParseJson(input: string): CoordinatorJsonOutput | undefined {
   }
 }
 
+function buildCoordinatorStageGuidance(stage: YoloStage): string {
+  if (stage === 'S1') {
+    return [
+      '## S1 (Define) — Literature-first question refinement',
+      '',
+      'The primary goal of S1 is to define a crisp, testable research question.',
+      'CRITICAL: You MUST conduct a literature review BEFORE finalizing the research question.',
+      'Understanding prior art shapes what questions are worth asking and what experiments are feasible.',
+      '',
+      '### Required S1 workflow:',
+      '1. **Explore** the problem space — understand what the user is asking and why it matters',
+      '2. **Survey related work** — call literature-search to find prior art, competing approaches, published baselines',
+      '3. **Synthesize findings** — produce a Note asset summarizing related work (include "relatedWork" or "literatureReview" in the payload)',
+      '4. **Refine the question** — use literature findings to tighten scope, identify gaps, and formulate falsifiable sub-questions',
+      '',
+      '### Gate requirement:',
+      'The gate will BLOCK advancement to S2 if no literature Note exists.',
+      'A literature Note must contain related work content (prior art, paper references, survey of existing approaches).',
+      '',
+      'Keep outputs auditable and scoped to one bounded turn.',
+      'Literature review is NOT a one-time task — it can and should be revisited in later stages for targeted deep-dives.'
+    ].join('\n')
+  }
+
+  if (stage === 'S2' || stage === 'S3' || stage === 'S4') {
+    return [
+      '## ExperimentRequest quality requirements',
+      '',
+      'For S2-S4, do NOT run heavy/system experiments in-process.',
+      'Instead, produce an ExperimentRequest asset to outsource execution to the user.',
+      'Write for a junior PhD who did not design this study — the request MUST be self-contained and unambiguous.',
+      '',
+      '### Mandatory sections (all required — gate will reject if missing):',
+      '1. **goal**: Why this experiment matters (2-3 sentences linking to hypothesis/claim)',
+      '2. **preconditions**: Specific software, hardware, access requirements with versions and paths',
+      '3. **filesProduced**: Every output file with column-level schema (column_name:type for TSV/CSV, field descriptions for JSON)',
+      '4. **methodSteps**: Numbered steps with exact copy-pasteable commands. Use `<PLACEHOLDER>` for variable parts.',
+      '5. **frozenPrompts**: If sending prompts to an LLM/agent, include exact verbatim text. NEVER reference "the prompt from step X".',
+      '6. **controls**: What is constant, what varies, what baselines exist',
+      '7. **metrics**: What to measure, from which output file, with extraction logic (exact command or formula)',
+      '8. **expectedResult**: What success looks like — specific numbers, file counts, row counts, metric ranges',
+      '9. **outputFormat**: File schemas with column definitions, data types, and units',
+      '10. **submissionChecklist**: Checkbox list of every required upload file with expected row counts',
+      '',
+      '### Quality rules:',
+      '- No forward references to undefined tools/scripts — provide inline or confirm existence',
+      '- No "if unknown, detect later" — resolve all unknowns before issuing',
+      '- Warmup vs measure phases must have explicit boundaries (e.g., "discard first N trials")',
+      '- Include time-basis warnings when joining data from different clock sources',
+      '- Every `<PLACEHOLDER>` must be defined in preconditions with fill-in instructions',
+      '- Every command must be copy-pasteable after placeholder substitution',
+      '',
+      '### Literature deep-dive:',
+      'If the experiment design has open questions about prior approaches, published baselines, or competing methods,',
+      'call literature-search for a targeted deep-dive before finalizing the ExperimentRequest.'
+    ].join('\n')
+  }
+
+  // S5
+  return 'For this stage, consolidate final insights and keep outputs auditable and scoped to one bounded turn.'
+}
+
 function buildTurnPrompt(input: {
   turnSpec: TurnSpec
   stage: YoloStage
@@ -355,6 +417,7 @@ function buildTurnPrompt(input: {
   mergedUserInputs: QueuedUserInput[]
   plannerOutput?: PlannerOutput
   reviewerOutput?: ReviewerProcessReview
+  researchContext?: string
 }, options: {
   mode: YoloRuntimeMode
   tooling: CoordinatorToolingStatus
@@ -366,15 +429,7 @@ function buildTurnPrompt(input: {
     source: item.source
   }))
   const contextView = buildContextCompilerView(input)
-  const stageGuidance = (input.stage === 'S2' || input.stage === 'S3' || input.stage === 'S4')
-    ? [
-        'For S2-S4, do NOT run heavy/system experiments in-process.',
-        'Instead, produce an ExperimentRequest asset to outsource execution to the user.',
-        'Write for a junior PhD who did not design this study.',
-        'ExperimentRequest payload must include: why, objective, setup, method or methodSteps, controls, metrics, expectedResult, requiredFiles, outputFormat, submissionChecklist.',
-        'Method must be step-by-step and executable without hidden assumptions.'
-      ].join(' ')
-    : 'For this stage, keep outputs auditable and scoped to one bounded turn.'
+  const stageGuidance = buildCoordinatorStageGuidance(input.stage)
 
   const toolAvailabilityNote = [
     `Tooling mode: ${options.tooling.mode}.`,
@@ -388,6 +443,9 @@ function buildTurnPrompt(input: {
     'Minimum required JSON shape:',
     '{"action":"explore|refine_question|issue_experiment_request|digest_uploaded_results","actionRationale":"string","summary":"string","assets":[{"type":"string","payload":{}}],"askUser":{"required":"boolean","question":"string","blocking":"boolean"},"execution_trace":[{"tool":"string","reason":"string","result_summary":"string"}]}',
     'If you cannot complete safely, set askUser.required=true and ask a concrete blocking question.',
+    input.researchContext
+      ? `## User Research Context (research.md)\n\n${input.researchContext}`
+      : undefined,
     stageGuidance,
     `Runtime mode: ${options.mode}`,
     toolAvailabilityNote,
@@ -398,7 +456,7 @@ function buildTurnPrompt(input: {
     `PlannerOutput: ${JSON.stringify(input.plannerOutput ?? null)}`,
     `ReviewerOutput: ${JSON.stringify(input.reviewerOutput ?? null)}`,
     `MergedUserInputs: ${JSON.stringify(mergedInputs)}`
-  ].join('\n\n')
+  ].filter(Boolean).join('\n\n')
 }
 
 function collectReadBytes(result: unknown): number {

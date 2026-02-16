@@ -216,7 +216,7 @@ function normalizeNeedFromUser(value: unknown, action: YoloTurnAction): PlannerC
       request: requiredByDefault
         ? 'Please execute the experiment request and upload required files.'
         : 'No external input required for this turn.',
-      required_files: requiredByDefault ? ['raw_traces.jsonl', 'summary_percentiles.csv', 'env_info.txt'] : []
+      required_files: []  // Let the coordinator and experiment-request skill determine required files per experiment
     }
   }
 
@@ -383,22 +383,28 @@ function buildStageGuidance(stage: YoloStage): string {
   const guidance: Record<YoloStage, string> = {
     S1: [
       'S1 (Define): tighten the ResearchQuestion and boundary assumptions.',
-      'Prefer explore/refine_question unless there is already enough context for an executable request.',
-      'Keep outputs short, concrete, and free of taxonomy inflation.'
+      'CRITICAL: Before advancing to S2, you MUST conduct a literature review using literature-search.',
+      'Understanding prior art directly shapes how we define the research question and what experiments to design.',
+      'If no literature Note (related work / prior art) exists in the asset inventory, the gate will block S2 entry.',
+      'Sequence: (1) explore the problem space, (2) survey related work with literature-search, (3) refine the question based on what prior art reveals.',
+      'Prefer explore/refine_question actions. Keep outputs short, concrete, and free of taxonomy inflation.'
     ].join(' '),
     S2: [
       'S2 (Request): produce an outsource-ready ExperimentRequest plan.',
       'Focus on objective, setup, method steps, controls, metrics, expected result, and upload checklist.',
-      'Do not propose in-process heavy/system experiments.'
+      'Do not propose in-process heavy/system experiments.',
+      'Literature review can be revisited here for targeted deep-dives on specific sub-questions (e.g., prior benchmarks, competing methods).'
     ].join(' '),
     S3: [
       'S3 (Bridge): improve ExperimentRequest quality or digest newly uploaded results.',
       'Prefer one high-quality executable request over multiple shallow tasks.',
-      'Make `need_from_user` explicit when external execution is required.'
+      'Make `need_from_user` explicit when external execution is required.',
+      'If experiment design has open questions about prior art, call literature-search before finalizing.'
     ].join(' '),
     S4: [
       'S4 (Digest): convert uploaded results into ResultInsight with clear bottlenecks and next optimization direction.',
-      'Avoid process-heavy artifacts; prioritize direct technical insight.'
+      'Avoid process-heavy artifacts; prioritize direct technical insight.',
+      'When interpreting results, consider calling literature-search to contextualize findings against published baselines.'
     ].join(' '),
     S5: [
       'S5 (Closure): consolidate final ResultInsight and actionable recommendations.',
@@ -474,6 +480,10 @@ function buildPlannerPrompt(input: PlannerInput): string {
       '- For S2-S4, prioritize actionable ExperimentRequest quality over workflow abstraction.'
     ].join('\n'),
 
+    input.researchContext
+      ? `## User Research Context (research.md)\n\n${input.researchContext}`
+      : '',
+
     buildStageGuidance(input.stage),
     buildBranchGuidance(input.phase),
     buildBudgetGuidance(input.remainingBudget),
@@ -529,7 +539,7 @@ function buildPlannerPrompt(input: PlannerInput): string {
       : 'No branch dossier for active branch yet.'
   ]
 
-  return sections.join('\n\n')
+  return sections.filter(Boolean).join('\n\n')
 }
 
 function createFallbackPlanContract(input: PlannerInput): PlannerContract {

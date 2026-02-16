@@ -67,6 +67,10 @@ export function useYoloSession() {
   const [actionNotice, setActionNotice] = useState<string | null>(null)
   const [selectedPhase, setSelectedPhase] = useState<'P0' | 'P1' | 'P2' | 'P3'>('P3')
 
+  // ─── Group A2: Research.md state ──────────────────────────────────
+  const [researchMd, setResearchMd] = useState('')
+  const [researchMdLoaded, setResearchMdLoaded] = useState(false)
+
   // ─── Group B: View/UI state ────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabId>('timeline')
   const [queueOpen, setQueueOpen] = useState(true)
@@ -752,6 +756,18 @@ export function useYoloSession() {
     await Promise.all([refreshBranchSnapshot(), refreshAssets()])
   }
 
+  async function loadResearchMd() {
+    try {
+      const result = await api.readResearchMd()
+      if (result.success) {
+        setResearchMd(result.content ?? '')
+        setResearchMdLoaded(true)
+      }
+    } catch {
+      // Ignore — research.md may not exist yet
+    }
+  }
+
   function resetSession() {
     setProjectPath('')
     setSnapshot(null)
@@ -766,6 +782,8 @@ export function useYoloSession() {
     setWaitTasks([])
     setWaitValidation(null)
     setGoalSessionId(null)
+    setResearchMd('')
+    setResearchMdLoaded(false)
     setSelectedPhase('P3')
     setActionError(null)
     setActionNotice(null)
@@ -787,6 +805,7 @@ export function useYoloSession() {
       await refreshHistory()
       await refreshQueue()
       await refreshWaitTasks()
+      await loadResearchMd()
     })
 
     const unsubState = api.onYoloState((payload: YoloSnapshot) => {
@@ -872,6 +891,7 @@ export function useYoloSession() {
       await refreshHistory()
       await refreshQueue()
       await refreshWaitTasks()
+      await loadResearchMd()
     },
 
     async closeProject() {
@@ -1181,6 +1201,43 @@ export function useYoloSession() {
       await refreshQueue()
     },
 
+    async saveResearchMd(content: string) {
+      setActionError(null)
+      setActionNotice(null)
+      const result = await api.saveResearchMd(content)
+      if (!result.success) {
+        setActionError(result.error ?? 'Failed to save research.md')
+      } else {
+        setActionNotice('research.md saved')
+        await loadResearchMd()
+      }
+    },
+
+    async saveGoalToResearchMd(newGoal: string) {
+      const KEYWORD = 'Users Overall Research Goal:'
+      let updated: string
+      if (researchMd.includes(KEYWORD)) {
+        updated = researchMd.replace(
+          new RegExp(`${KEYWORD}[^\\n]*`),
+          `${KEYWORD}\n${newGoal}`
+        )
+      } else {
+        updated = `${KEYWORD}\n${newGoal}\n\n${researchMd}`
+      }
+      if (updated.length > 5000) {
+        setActionError('research.md would exceed 5000 character limit.')
+        return
+      }
+      const result = await api.saveResearchMd(updated)
+      if (!result.success) {
+        setActionError(result.error ?? 'Failed to save research.md')
+      } else {
+        setGoal(newGoal)
+        setActionNotice('Goal updated in research.md')
+        await loadResearchMd()
+      }
+    },
+
     setGoal,
     setSelectedPhase,
     setActiveTab,
@@ -1239,6 +1296,8 @@ export function useYoloSession() {
     branchSnapshot,
     assetRecords,
     activityFeed,
+    researchMd,
+    researchMdLoaded,
     queuedInputs,
     waitTasks,
     waitValidation,

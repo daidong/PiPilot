@@ -868,8 +868,10 @@ function isTerminalOrBlocked(state: SessionPersistedState['state']): boolean {
 }
 
 function isSessionTerminal(state: SessionPersistedState['state']): boolean {
-  // STOPPED is NOT terminal — users can extend budget and resume from STOPPED.
-  return state === 'COMPLETE' || state === 'FAILED'
+  // STOPPED and CRASHED are terminal for the purpose of yolo:start — calling start
+  // (not resume) on a stopped/crashed session should create a fresh session.
+  // Resuming from STOPPED still works via the dedicated yolo:resume handler.
+  return state === 'COMPLETE' || state === 'FAILED' || state === 'STOPPED' || state === 'CRASHED'
 }
 
 async function pushState(
@@ -2017,6 +2019,8 @@ export function registerIpcHandlers(): void {
         persistSessionId(state.projectPath, sessionId)
         state.yoloSession = null
         state.yoloTurnReports = []
+        state.loopRunning = false
+        state.stopRequested = false
       } else {
         writeSessionMeta(state.projectPath, {
           sessionId,
@@ -2837,6 +2841,24 @@ export function registerIpcHandlers(): void {
     } catch (err: any) {
       return { success: false, error: err.message }
     }
+  })
+
+  // ─── research.md handlers ───────────────────────────────────────────
+
+  handleWindow('research:read', ({ state }) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const mdPath = resolve(state.projectPath, 'research.md')
+    if (!existsSync(mdPath)) return { success: true, content: '', exists: false }
+    const content = readFileSync(mdPath, 'utf-8')
+    return { success: true, content, exists: true }
+  })
+
+  handleWindow('research:save', ({ state }, content: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    if (content.length > 5000) return { success: false, error: 'Content exceeds 5000 character limit.' }
+    const mdPath = resolve(state.projectPath, 'research.md')
+    writeFileSync(mdPath, content, 'utf-8')
+    return { success: true }
   })
 
   handleWindow('folder:open-with', async ({ state }, appName: 'finder' | 'zed' | 'cursor' | 'vscode') => {

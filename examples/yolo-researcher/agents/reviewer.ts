@@ -263,19 +263,23 @@ function buildPersonaPrompt(input: {
   gateResult: GateResult
   plannerOutput?: PlannerOutput
   coordinatorOutput?: CoordinatorTurnResult
+  researchContext?: string
 }): string {
   return [
     'Run one critique-to-fix semantic review pass.',
     'Return STRICT JSON only (no prose).',
     'Minimum required JSON shape:',
     '{"verdict":"pass|revise|block","critical_issues":[{"id":"string","severity":"high|medium|low","message":"string"}],"fix_plan":[{"issue_id":"string","action":"string"}],"rewrite_patch":{"apply":"boolean","target":"planner_output|coordinator_output","patch":{}},"confidence":"number","notes_for_user":"string","notes":["string"],"hardBlockers":[{"label":"claim_without_direct_evidence|causality_gap|parity_violation_unresolved|reproducibility_gap|overclaim","citations":["string"],"assetRefs":["string"]}]}',
+    input.researchContext
+      ? `## User Research Context (research.md)\n\n${input.researchContext}`
+      : undefined,
     `Persona: ${input.persona}`,
     `Stage: ${input.stage}`,
     `PlannerOutput: ${JSON.stringify(input.plannerOutput ?? null)}`,
     `CoordinatorOutput: ${JSON.stringify(input.coordinatorOutput ?? null)}`,
     `SnapshotManifest: ${JSON.stringify(input.manifest)}`,
     `GateResult: ${JSON.stringify(input.gateResult)}`
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 function summarizeNotesForUser(reviewerPasses: ReviewerPass[]): string {
@@ -377,6 +381,7 @@ class LlmBackedReviewEngine implements ReviewEngine {
     gateResult: GateResult
     plannerOutput?: PlannerOutput
     coordinatorOutput?: CoordinatorTurnResult
+    researchContext?: string
   }): Promise<SemanticReviewResult> {
     if (input.phase !== 'P3') {
       return {
@@ -478,6 +483,7 @@ class LlmBackedReviewEngine implements ReviewEngine {
       gateResult: GateResult
       plannerOutput?: PlannerOutput
       coordinatorOutput?: CoordinatorTurnResult
+      researchContext?: string
     }
   ): Promise<ReviewerPass> {
     const heuristicBlockers = buildHeuristicBlockers(input.manifest, input.gateResult)
@@ -522,7 +528,8 @@ class LlmBackedReviewEngine implements ReviewEngine {
         manifest: input.manifest,
         gateResult: input.gateResult,
         plannerOutput: input.plannerOutput,
-        coordinatorOutput: input.coordinatorOutput
+        coordinatorOutput: input.coordinatorOutput,
+        researchContext: input.researchContext
       })
       const runResult = await agent.run(prompt)
       if (!runResult.success) {

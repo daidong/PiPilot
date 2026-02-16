@@ -200,6 +200,10 @@ export interface ElectronAPI {
   drawerClearChat: () => Promise<void>
   onDrawerStateChanged: (cb: (payload: DrawerState) => void) => () => void
 
+  // research.md operations
+  readResearchMd: () => Promise<{ success: boolean; content?: string; exists?: boolean; error?: string }>
+  saveResearchMd: (content: string) => Promise<{ success: boolean; error?: string }>
+
   // File tree operations
   listTree: (options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => Promise<FileTreeNode[]>
   searchTree: (query: string, options?: { showIgnored?: boolean; maxResults?: number }) => Promise<FileTreeNode[]>
@@ -288,6 +292,10 @@ const api: ElectronAPI = {
     ipcRenderer.on('drawer:state-changed', handler)
     return () => ipcRenderer.removeListener('drawer:state-changed', handler)
   },
+
+  // research.md operations
+  readResearchMd: () => ipcRenderer.invoke('research:read'),
+  saveResearchMd: (content) => ipcRenderer.invoke('research:save', content),
 
   // File tree operations
   listTree: (options) => ipcRenderer.invoke('file:list-tree', options),

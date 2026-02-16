@@ -75,6 +75,12 @@ function stageRequiresBoundResultInsight(stage: SnapshotManifest['stage']): bool
   return stage === 'S5'
 }
 
+function stageRequiresLiteratureEvidence(stage: SnapshotManifest['stage']): boolean {
+  // Literature review must exist before advancing beyond S1.
+  // S2+ stages rely on prior-art awareness for experiment design and analysis.
+  return stage === 'S2' || stage === 'S3' || stage === 'S4' || stage === 'S5'
+}
+
 function safeRatio(numerator: number, denominator: number): number {
   if (denominator <= 0) return 1
   return numerator / denominator
@@ -342,15 +348,21 @@ export class LeanGateEngine implements GateEngine {
     const executableExperimentRequestCount = lean?.experimentRequestExecutableCount ?? 0
     const resultInsightCount = lean?.resultInsightCount ?? 0
     const boundResultInsightCount = lean?.resultInsightLinkedCount ?? 0
+    const literatureNoteCount = lean?.literatureNoteCount ?? 0
+
+    const erValidationFailures = lean?.experimentRequestValidationFailures ?? []
+    const allERsValid = erValidationFailures.length === 0
 
     const gMin1Required = stageRequiresExecutableExperimentRequest(manifest.stage)
     const gMin2Required = stageRequiresBoundResultInsight(manifest.stage)
-    const gMin1Passed = !gMin1Required || executableExperimentRequestCount > 0
+    const gMin3Required = stageRequiresLiteratureEvidence(manifest.stage)
+    const gMin1Passed = !gMin1Required || (executableExperimentRequestCount > 0 && allERsValid)
     const gMin2Passed = !gMin2Required
       || (
         resultInsightCount > 0
         && boundResultInsightCount >= resultInsightCount
       )
+    const gMin3Passed = !gMin3Required || literatureNoteCount > 0
 
     const structuralChecks: GateResult['structuralChecks'] = [
       {
@@ -383,12 +395,17 @@ export class LeanGateEngine implements GateEngine {
       {
         name: 'g_min_1_experiment_request_executable',
         passed: gMin1Passed,
-        detail: `required=${gMin1Required}; executable=${executableExperimentRequestCount}; total=${experimentRequestCount}`
+        detail: `required=${gMin1Required}; executable=${executableExperimentRequestCount}; total=${experimentRequestCount}; validationFailures=${erValidationFailures.length}`
       },
       {
         name: 'g_min_2_result_insight_bound',
         passed: gMin2Passed,
         detail: `required=${gMin2Required}; linked=${boundResultInsightCount}; total=${resultInsightCount}`
+      },
+      {
+        name: 'g_min_3_literature_evidence',
+        passed: gMin3Passed,
+        detail: `required=${gMin3Required}; literatureNotes=${literatureNoteCount}`
       }
     ]
 
@@ -420,6 +437,16 @@ export class LeanGateEngine implements GateEngine {
         assetRefs: manifest.assetIds.filter((id) => id.startsWith('ResultInsight-'))
       })
     }
+    if (!gMin3Passed) {
+      hardBlockers.push({
+        label: 'literature_evidence_missing',
+        assetRefs: []
+      })
+    }
+
+    const validationNotes = erValidationFailures.map(
+      (f) => `ExperimentRequest ${f.assetId}: missing [${f.missingFields.join(', ')}]${f.warnings.length > 0 ? '; warnings: ' + f.warnings.join('; ') : ''}`
+    )
 
     return {
       stage: manifest.stage,
@@ -428,7 +455,9 @@ export class LeanGateEngine implements GateEngine {
       hardBlockers,
       advisoryNotes: [
         `manifestId=${manifest.id}`,
-        `leanSummary={"experimentRequest":{"total":${experimentRequestCount},"executable":${executableExperimentRequestCount}},"resultInsight":{"total":${resultInsightCount},"linked":${boundResultInsightCount}}}`
+        `leanSummary={"experimentRequest":{"total":${experimentRequestCount},"executable":${executableExperimentRequestCount}},"resultInsight":{"total":${resultInsightCount},"linked":${boundResultInsightCount}},"literatureNotes":${literatureNoteCount}}`,
+        ...(!gMin3Passed ? ['Literature review required before advancing beyond S1. Produce at least one Note with related work / prior art content using literature-search.'] : []),
+        ...validationNotes
       ]
     }
   }

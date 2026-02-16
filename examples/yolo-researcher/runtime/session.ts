@@ -270,6 +270,12 @@ export class YoloSession {
       await writeTextFile(dossierPath, renderZonedMarkdown(`Branch Dossier ${branchInit.tree.activeBranchId}`, initialBranchState, ''))
     }
 
+    // Auto-create research.md if it doesn't exist
+    const researchMdPath = path.join(this.projectPath, 'research.md')
+    if (!(await fileExists(researchMdPath))) {
+      await writeTextFile(researchMdPath, `Users Overall Research Goal:\n${this.goal}\n`)
+    }
+
     if (!(await fileExists(this.sessionPath))) {
       const sessionState = defaultSessionState({
         sessionId: this.sessionId,
@@ -1173,6 +1179,8 @@ export class YoloSession {
       const branchDossierPath = path.join(this.branchDossiersDir, `${activeNode.branchId}.md`)
       const branchDossierContent = await readTextFileOrEmpty(branchDossierPath)
       const branchDossierHash = sha256Hex(branchDossierContent)
+      const researchMdPath = path.join(this.projectPath, 'research.md')
+      const researchContext = await readTextFileOrEmpty(researchMdPath)
 
       // Build turn summaries from recent turn reports (last 5)
       const turnNumbers = await this.listTurnReports()
@@ -1220,6 +1228,7 @@ export class YoloSession {
         branchDossierHash,
         planContent,
         branchDossierContent,
+        researchContext,
         previousStageGateStatus: { ...state.stageGateStatus },
         lastTurnSummaries,
         assetInventory,
@@ -1311,7 +1320,8 @@ export class YoloSession {
         stage: plannerOutput.turnSpec.stage,
         goal: this.goal,
         mergedUserInputs: mergedInputs,
-        plannerOutput
+        plannerOutput,
+        researchContext
       })
       this.onActivity?.({
         id: randomId('act'),
@@ -1487,7 +1497,8 @@ export class YoloSession {
         manifest: snapshotManifest,
         gateResult,
         plannerOutput,
-        coordinatorOutput: coordinatorResult
+        coordinatorOutput: coordinatorResult,
+        researchContext
       }))
       await emit('semantic_review_evaluated', {
         stage: plannerOutput.turnSpec.stage,
@@ -2434,8 +2445,14 @@ export class YoloSession {
   private computeLeanManifestSummary(records: AssetRecord[]): NonNullable<SnapshotManifest['lean']> {
     let experimentRequestCount = 0
     let experimentRequestExecutableCount = 0
+    const experimentRequestValidationFailures: Array<{
+      assetId: string
+      missingFields: string[]
+      warnings: string[]
+    }> = []
     let resultInsightCount = 0
     let resultInsightLinkedCount = 0
+    let literatureNoteCount = 0
 
     for (const record of records) {
       const payload = record.payload as Record<string, unknown>
@@ -2443,6 +2460,14 @@ export class YoloSession {
         experimentRequestCount += 1
         if (this.isExecutableExperimentRequestPayload(payload)) {
           experimentRequestExecutableCount += 1
+        }
+        const validation = this.validateExperimentRequestPayload(record.id, payload)
+        if (!validation.valid) {
+          experimentRequestValidationFailures.push({
+            assetId: validation.assetId,
+            missingFields: validation.missingFields,
+            warnings: validation.warnings
+          })
         }
         continue
       }
@@ -2452,15 +2477,100 @@ export class YoloSession {
         if (this.isResultInsightLinkedPayload(payload)) {
           resultInsightLinkedCount += 1
         }
+        continue
+      }
+
+      if (record.type === 'Note' && this.isLiteratureNotePayload(payload)) {
+        literatureNoteCount += 1
       }
     }
 
     return {
       experimentRequestCount,
       experimentRequestExecutableCount,
+      experimentRequestValidationFailures,
       resultInsightCount,
-      resultInsightLinkedCount
+      resultInsightLinkedCount,
+      literatureNoteCount
     }
+  }
+
+  /**
+   * Detect whether a Note asset represents literature review / related work content.
+   *
+   * Heuristic: check for literature-related keywords in payload field names and values.
+   * This covers Notes produced by the literature-search tool as well as manually tagged Notes.
+   */
+  private isLiteratureNotePayload(payload: Record<string, unknown>): boolean {
+    // Check payload field names for literature-related keys
+    const literatureFieldKeys = [
+      'relatedWork', 'related_work', 'literatureReview', 'literature_review',
+      'literatureSurvey', 'literature_survey', 'priorArt', 'prior_art',
+      'papers', 'citations', 'references', 'survey',
+      'paperScores', 'paper_scores', 'searchResults', 'search_results'
+    ]
+    for (const key of literatureFieldKeys) {
+      const val = payload[key]
+      if (val !== undefined && val !== null && val !== '') return true
+    }
+
+    // Check if the Note's title/topic/type indicates literature content
+    const textIndicators = [
+      payload.title, payload.topic, payload.subType, payload.sub_type,
+      payload.noteType, payload.note_type, payload.category
+    ]
+    const literaturePatterns = /literature|related.?work|prior.?art|survey|paper.?review|citation/i
+    for (const val of textIndicators) {
+      if (typeof val === 'string' && literaturePatterns.test(val)) return true
+    }
+
+    // Check if the content field mentions literature-search tool usage
+    const content = typeof payload.content === 'string' ? payload.content
+      : typeof payload.text === 'string' ? payload.text
+        : typeof payload.summary === 'string' ? payload.summary
+          : undefined
+    if (content && content.length > 50) {
+      // Only count if the content substantively discusses papers/related work
+      const paperMentionCount = (content.match(/\b(?:paper|study|finding|author|et\s+al|doi|arxiv|published|conference|journal)\b/gi) || []).length
+      if (paperMentionCount >= 3) return true
+    }
+
+    return false
+  }
+
+  private validateExperimentRequestPayload(
+    assetId: string,
+    payload: Record<string, unknown>
+  ): { valid: boolean; assetId: string; missingFields: string[]; warnings: string[] } {
+    const requiredFields: Array<{ name: string; keys: string[] }> = [
+      { name: 'goal', keys: ['goal', 'objective', 'experimentGoal', 'why'] },
+      { name: 'preconditions', keys: ['preconditions', 'prerequisites', 'setup', 'requirements'] },
+      { name: 'methodSteps', keys: ['methodSteps', 'steps', 'procedureSteps', 'executionSteps', 'method', 'plan', 'procedure'] },
+      { name: 'metrics', keys: ['metrics', 'measurements', 'measures'] },
+      { name: 'expectedResult', keys: ['expectedResult', 'expectedOutcome', 'expected', 'successCriteria'] }
+    ]
+
+    const missingFields: string[] = []
+    for (const field of requiredFields) {
+      const strVal = this.readStringField(payload, field.keys)
+      const listVal = this.readStringListField(payload, field.keys)
+      if (!strVal && listVal.length === 0) {
+        missingFields.push(field.name)
+      } else if (strVal && strVal.length < 20) {
+        missingFields.push(field.name)  // too short to be useful
+      }
+    }
+
+    const warnings: string[] = []
+    const methodStr = this.readStringField(payload, ['methodSteps', 'steps', 'method', 'plan', 'procedure'])
+    if (methodStr && !methodStr.includes('```')) {
+      warnings.push('methodSteps should include code-fenced commands')
+    }
+    if (!this.readStringField(payload, ['submissionChecklist', 'checklist', 'uploadChecklist'])) {
+      warnings.push('Missing submissionChecklist — executor won\'t know what to upload')
+    }
+
+    return { valid: missingFields.length === 0, assetId, missingFields, warnings }
   }
 
   private isExecutableExperimentRequestPayload(payload: Record<string, unknown>): boolean {

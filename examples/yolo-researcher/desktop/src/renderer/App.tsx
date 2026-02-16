@@ -71,18 +71,16 @@ export default function App() {
           <HeroSection
             snapshot={snapshot}
             goal={session.goal}
-            selectedPhase={session.selectedPhase}
             activeTurn={session.activeTurn}
-            failureInfo={session.failureInfo}
             isStarting={session.isStarting}
             drawerInteraction={session.drawerInteraction}
             totalCreatedAssets={totalCreatedAssets}
+            researchMd={session.researchMd}
+            researchMdLoaded={session.researchMdLoaded}
             onGoalChange={actions.setGoal}
-            onPhaseChange={actions.setSelectedPhase}
+            onSaveGoalToResearchMd={actions.saveGoalToResearchMd}
             onStart={actions.startYolo}
             onResume={actions.resumeYolo}
-            onRestart={actions.startYolo}
-            onRestoreCheckpoint={actions.restoreFromCheckpoint}
             onOpenDrawer={actions.openDrawer}
           />
         </div>

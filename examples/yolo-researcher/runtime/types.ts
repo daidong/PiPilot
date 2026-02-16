@@ -91,6 +91,7 @@ export interface PlannerInput {
   branchDossierHash: string
   planContent: string
   branchDossierContent: string
+  researchContext: string
   previousStageGateStatus: Record<YoloStage, 'pass' | 'fail' | 'none'>
   lastTurnSummaries: Array<{
     turnNumber: number
@@ -280,6 +281,7 @@ export interface YoloCoordinator {
     mergedUserInputs: QueuedUserInput[]
     plannerOutput?: PlannerOutput
     reviewerOutput?: ReviewerProcessReview
+    researchContext?: string
   }): Promise<CoordinatorTurnResult>
 }
 
@@ -291,8 +293,14 @@ export interface SnapshotManifest {
   lean?: {
     experimentRequestCount: number
     experimentRequestExecutableCount: number
+    experimentRequestValidationFailures: Array<{
+      assetId: string
+      missingFields: string[]
+      warnings: string[]
+    }>
     resultInsightCount: number
     resultInsightLinkedCount: number
+    literatureNoteCount: number
   }
   claimCoverage?: {
     assertedPrimary: number
@@ -424,6 +432,7 @@ export interface ReviewEngine {
     gateResult: GateResult
     plannerOutput?: PlannerOutput
     coordinatorOutput?: CoordinatorTurnResult
+    researchContext?: string
   }): SemanticReviewResult | Promise<SemanticReviewResult>
   destroy?(): Promise<void>
 }
