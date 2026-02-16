@@ -30,6 +30,7 @@ interface ExternalWaitTask {
   resumeAction: string
   uploadDir?: string
   details?: string
+  experimentRequestId?: string
   createdAt: string
   resolvedAt?: string
   resolutionNote?: string

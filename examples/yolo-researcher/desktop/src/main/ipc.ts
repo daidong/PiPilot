@@ -1333,8 +1333,10 @@ function assembleInteractionContext(
   let interactionId = ''
   const urgency: 'blocking' | 'advisory' = 'blocking'
 
-  // Find the originating turn for experiment requests
-  const originTurn = [...turnReports].reverse().find((t) => t.execution?.action === 'issue_experiment_request')
+  // Find the originating turn for experiment requests — match by asset type (more robust than action string)
+  const originTurn = [...turnReports].reverse().find((t) =>
+    t.assetDiff?.created?.some((id) => id.startsWith('ExperimentRequest'))
+  )
 
   switch (kind) {
     case 'experiment_request': {

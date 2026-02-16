@@ -148,7 +148,7 @@ export interface TurnReport {
   plannerSpec?: PlannerSpec
   nextStepRationale?: string
   execution?: {
-    action?: 'explore' | 'refine_question' | 'issue_experiment_request' | 'digest_uploaded_results'
+    action?: string
     actionRationale?: string
     executionTrace?: ExecutionTraceItem[]
     toolCalls?: Array<{
@@ -296,6 +296,7 @@ export interface ExternalWaitTask {
   resumeAction: string
   uploadDir?: string
   details?: string
+  experimentRequestId?: string
   createdAt: string
   resolvedAt?: string
   resolutionNote?: string

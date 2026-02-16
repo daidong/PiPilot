@@ -23,8 +23,7 @@ import type {
   TurnSpec,
   YoloCoordinator,
   YoloRuntimeMode,
-  YoloStage,
-  YoloTurnAction
+  YoloStage
 } from '../runtime/types.js'
 import { randomId, nowIso } from '../runtime/utils.js'
 
@@ -126,12 +125,6 @@ const DISCOVERY_TOOL_SET = new Set([
 
 const COORDINATOR_DIR = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_EXTERNAL_SKILLS_DIR = join(COORDINATOR_DIR, '..', 'skills', 'default-project-skills')
-const VALID_ACTIONS = new Set<YoloTurnAction>([
-  'explore',
-  'refine_question',
-  'issue_experiment_request',
-  'digest_uploaded_results'
-])
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -148,11 +141,10 @@ function summarizeForTelemetry(value: unknown, limit: number = 180): string | un
   return `${compact.slice(0, limit)}...`
 }
 
-function normalizeTurnAction(value: unknown): YoloTurnAction | undefined {
+function normalizeTurnAction(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
-  const action = value.trim() as YoloTurnAction
-  if (!VALID_ACTIONS.has(action)) return undefined
-  return action
+  const trimmed = value.trim()
+  return trimmed || undefined
 }
 
 function normalizeActionRationale(value: unknown): string | undefined {
@@ -280,8 +272,7 @@ function normalizeLeanAssetType(rawType: string): string {
 
 function normalizeAssets(
   value: unknown,
-  mode: YoloRuntimeMode,
-  action: YoloTurnAction | undefined
+  mode: YoloRuntimeMode
 ): CoordinatorJsonAsset[] {
   if (!Array.isArray(value)) return []
 
@@ -296,7 +287,7 @@ function normalizeAssets(
       : entry.type.trim()
 
     const asset: CoordinatorJsonAsset = {
-      type: (mode === 'lean_v2' && action === 'explore') ? 'Note' : resolvedType,
+      type: resolvedType,
       payload: entry.payload
     }
 
@@ -310,12 +301,13 @@ function normalizeAssets(
   return normalized
 }
 
-function inferActionFromAssets(assets: CoordinatorJsonAsset[]): YoloTurnAction {
-  const types = new Set(assets.map((asset) => asset.type))
-  if (types.has('ExperimentRequest')) return 'issue_experiment_request'
-  if (types.has('ResultInsight')) return 'digest_uploaded_results'
-  if (types.size > 0 && Array.from(types).every((type) => type === 'Note')) return 'explore'
-  return 'refine_question'
+function inferActionFromAssets(assets: CoordinatorJsonAsset[]): string {
+  const types = new Set(assets.map((a) => a.type))
+  if (types.has('ExperimentRequest')) return 'design_experiment'
+  if (types.has('ResultInsight')) return 'analyze_results'
+  if (types.has('ResearchQuestion')) return 'refine_question'
+  if (types.size > 0 && [...types].every((t) => t === 'Note')) return 'explore'
+  return 'general_research'
 }
 
 function parseCoordinatorJson(rawOutput: string): CoordinatorJsonOutput | undefined {
@@ -364,7 +356,7 @@ function buildCoordinatorStageGuidance(stage: YoloStage): string {
       '5. **Propose directions** — based on the literature landscape, propose concrete research ideas and hypotheses',
       '',
       'After understanding the landscape, move quickly toward experiment design.',
-      'If the research question is clear and you have enough context, proceed to action=issue_experiment_request.',
+      'If the research question is clear and you have enough context, proceed to creating an ExperimentRequest asset.',
       'Make standard research assumptions rather than asking the user for trivial details.',
       'Keep outputs auditable and scoped to one bounded turn.'
     ].join('\n')
@@ -427,7 +419,7 @@ function buildTurnPrompt(input: {
     'Execute exactly one YOLO turn.',
     'Return STRICT JSON only (no prose).',
     'Minimum required JSON shape:',
-    '{"action":"explore|refine_question|issue_experiment_request|digest_uploaded_results","actionRationale":"string","summary":"string","assets":[{"type":"string","payload":{}}],"askUser":{"required":"boolean","question":"string","blocking":"boolean"},"execution_trace":[{"tool":"string","reason":"string","result_summary":"string"}]}',
+    '{"action":"string — describe what you did (e.g. \'literature_review\', \'ran_local_experiment\', \'design_experiment\')","actionRationale":"string","summary":"string","assets":[{"type":"string","payload":{}}],"askUser":{"required":"boolean","question":"string","blocking":"boolean"},"execution_trace":[{"tool":"string","reason":"string","result_summary":"string"}]}',
     'If you are genuinely blocked and cannot proceed with any reasonable assumption, set askUser.required=true and askUser.blocking=true. Do NOT ask about trivial details you can reasonably assume or look up — make assumptions and iterate.',
     input.researchContext
       ? `## User Research Context (research.md)\n\n${input.researchContext}`
@@ -853,7 +845,7 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
 
       if (!runResult.success) {
         return {
-          action: 'refine_question',
+          action: 'coordinator_fallback',
           actionRationale: 'Coordinator failed to execute turn; produced fallback Note to preserve auditability.',
           summary: runResult.error ? `Coordinator run failed: ${runResult.error}` : 'Coordinator run failed',
           assets: [fallbackNoteAsset('coordinator_run_failed', runResult.output)],
@@ -871,7 +863,7 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
 
       const parsed = parseCoordinatorJson(runResult.output)
       const requestedAction = normalizeTurnAction(parsed?.action)
-      const normalizedAssets = normalizeAssets(parsed?.assets, config.mode ?? 'legacy', requestedAction)
+      const normalizedAssets = normalizeAssets(parsed?.assets, config.mode ?? 'legacy')
       const action = requestedAction ?? inferActionFromAssets(normalizedAssets)
       const actionRationale = normalizeActionRationale(parsed?.actionRationale)
         ?? `Selected action "${action}" based on generated assets.`

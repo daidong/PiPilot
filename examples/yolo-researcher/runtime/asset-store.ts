@@ -155,6 +155,15 @@ export class FileAssetStore {
     return readJsonFile<AssetRecord>(filePath)
   }
 
+  async updatePayload(id: string, fields: Record<string, unknown>): Promise<AssetRecord | undefined> {
+    const filePath = path.join(this.assetsDir, `${id}.json`)
+    if (!(await fileExists(filePath))) return undefined
+    const record = await readJsonFile<AssetRecord>(filePath)
+    record.payload = { ...record.payload, ...fields }
+    await writeJsonFile(filePath, record)
+    return record
+  }
+
   async removeAssetsForTurns(turnNumbers: number[]): Promise<string[]> {
     const targets = new Set(turnNumbers.map((value) => `-t${formatTurnNumber(value)}-`))
     const names = await fs.readdir(this.assetsDir)

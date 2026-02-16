@@ -880,6 +880,14 @@ export class YoloSession {
     await writeJsonFile(taskPath, resolved)
     await this.appendWaitTaskHistory(resolved, 'satisfied')
 
+    if (resolved.experimentRequestId) {
+      await this.assetStore.updatePayload(resolved.experimentRequestId, {
+        fulfillmentStatus: 'fulfilled',
+        fulfilledByWaitTaskId: resolved.id,
+        fulfilledAt: this.now()
+      })
+    }
+
     const state = await this.readSessionState()
     if (state.pendingExternalTaskId === resolved.id) {
       const from = state.state
@@ -935,6 +943,14 @@ export class YoloSession {
     }
     await writeJsonFile(taskPath, cancelled)
     await this.appendWaitTaskHistory(cancelled, 'canceled')
+
+    if (cancelled.experimentRequestId) {
+      await this.assetStore.updatePayload(cancelled.experimentRequestId, {
+        fulfillmentStatus: 'canceled',
+        canceledByWaitTaskId: cancelled.id,
+        canceledAt: this.now()
+      })
+    }
 
     const state = await this.readSessionState()
     if (state.pendingExternalTaskId === cancelled.id) {
@@ -2054,16 +2070,8 @@ export class YoloSession {
     if (typeof asObject.actionRationale === 'string' && asObject.actionRationale.trim()) {
       nextCoordinator.actionRationale = asObject.actionRationale.trim()
     }
-    if (
-      typeof asObject.action === 'string'
-      && (
-        asObject.action === 'explore'
-        || asObject.action === 'refine_question'
-        || asObject.action === 'issue_experiment_request'
-        || asObject.action === 'digest_uploaded_results'
-      )
-    ) {
-      nextCoordinator.action = asObject.action
+    if (typeof asObject.action === 'string' && asObject.action.trim()) {
+      nextCoordinator.action = asObject.action.trim()
     }
     if (typeof asObject.askUser === 'object' && asObject.askUser !== null && !Array.isArray(asObject.askUser)) {
       const ask = asObject.askUser as Record<string, unknown>
@@ -2188,7 +2196,6 @@ export class YoloSession {
     existingAskUser?: AskUserRequest
   }): Promise<{ task: ExternalWaitTask; question: AskUserRequest } | null> {
     if (input.existingAskUser && (input.existingAskUser.required ?? true) && (input.existingAskUser.blocking ?? true)) return null
-    if (input.stage !== 'S2' && input.stage !== 'S3' && input.stage !== 'S4') return null
     if (input.createdAssets.some((asset) => asset.type === 'RunRecord')) return null
 
     const experimentAsset = input.createdAssets
@@ -2252,6 +2259,7 @@ export class YoloSession {
       branchId: input.state.activeBranchId,
       nodeId: input.state.activeNodeId,
       title: `Collect externally executed experiment artifacts for ${input.stage}`,
+      experimentRequestId: experimentAsset.id,
       reason: why,
       requiredArtifacts: requiredFiles.map((fileName) => ({
         kind: 'experiment_result',
@@ -2313,7 +2321,7 @@ export class YoloSession {
           `Expected result: ${expectedResult}`,
           `Required uploads: ${requiredFiles.length > 0 ? requiredFiles.join(', ') : 'raw trace + summary + notes'}`
         ].join('\n'),
-        blocking: false
+        blocking: true
       }
     }
   }

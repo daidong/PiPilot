@@ -11,8 +11,7 @@ import type {
   TurnConstraints,
   TurnPlanner,
   TurnSpec,
-  YoloStage,
-  YoloTurnAction
+  YoloStage
 } from '../runtime/types.js'
 
 export interface YoloPlannerConfig {
@@ -48,12 +47,6 @@ const DEFAULT_CONSTRAINTS = [
 ]
 
 const VALID_BRANCH_ACTIONS = new Set(['advance', 'fork', 'revisit', 'merge', 'prune'])
-const VALID_TURN_ACTIONS = new Set<YoloTurnAction>([
-  'explore',
-  'refine_question',
-  'issue_experiment_request',
-  'digest_uploaded_results'
-])
 
 // ---------------------------------------------------------------------------
 // JSON Parsing (3-tier fallback)
@@ -113,68 +106,44 @@ function normalizeStringArray(value: unknown, maxItems?: number): string[] {
   return typeof maxItems === 'number' ? output.slice(0, maxItems) : output
 }
 
-function normalizeTurnAction(value: unknown, fallback: YoloTurnAction): YoloTurnAction {
-  if (typeof value !== 'string') return fallback
-  const action = value.trim() as YoloTurnAction
-  return VALID_TURN_ACTIONS.has(action) ? action : fallback
+function normalizeTurnAction(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed || undefined
 }
 
-function inferActionFromExpectedOutput(expectedOutput: string[]): YoloTurnAction | undefined {
-  const lowered = expectedOutput.map((item) => item.toLowerCase())
-  if (lowered.some((item) => item.includes('experimentrequest') || item.includes('experiment'))) {
-    return 'issue_experiment_request'
-  }
-  if (lowered.some((item) => item.includes('resultinsight') || item.includes('insight') || item.includes('digest'))) {
-    return 'digest_uploaded_results'
-  }
-  if (lowered.length > 0 && lowered.every((item) => item.includes('note'))) {
-    return 'explore'
-  }
-  return undefined
+function defaultExpectedOutputForStage(stage: YoloStage): string[] {
+  if (stage === 'S1') return ['Note', 'ResearchQuestion']
+  if (stage === 'S2' || stage === 'S3') return ['ExperimentRequest']
+  if (stage === 'S4') return ['ResultInsight']
+  return ['Note']
 }
 
-function defaultActionForStage(stage: YoloStage): YoloTurnAction {
-  if (stage === 'S2' || stage === 'S3') return 'issue_experiment_request'
-  if (stage === 'S4' || stage === 'S5') return 'digest_uploaded_results'
-  return 'refine_question'
+function defaultToolPlanForStage(stage: YoloStage): PlannerToolPlanStep[] {
+  if (stage === 'S1') return [
+    { step: 1, tool: 'literature-search', goal: 'Survey related work and prior art.', output_contract: 'Key findings as Note.' },
+    { step: 2, tool: 'writing-outline', goal: 'Synthesize findings into a research question.', output_contract: 'ResearchQuestion.' }
+  ]
+  if (stage === 'S2' || stage === 'S3') return [
+    { step: 1, tool: 'literature-search', goal: 'Find prior benchmarks relevant to experiment design.', output_contract: 'Targeted literature findings.' },
+    { step: 2, tool: 'writing-draft', goal: 'Draft executable experiment request.', output_contract: 'ExperimentRequest with method steps.' }
+  ]
+  if (stage === 'S4') return [
+    { step: 1, tool: 'data-analyze', goal: 'Analyze uploaded results and extract key metrics.', output_contract: 'ResultInsight with findings.' }
+  ]
+  return [
+    { step: 1, tool: 'writing-draft', goal: 'Consolidate final insights.', output_contract: 'Final synthesis Note.' }
+  ]
 }
 
-function defaultExpectedOutputForAction(action: YoloTurnAction): string[] {
-  switch (action) {
-    case 'explore':
-      return ['Note']
-    case 'issue_experiment_request':
-      return ['ExperimentRequest']
-    case 'digest_uploaded_results':
-      return ['ResultInsight']
-    case 'refine_question':
-    default:
-      return ['ResearchQuestion']
-  }
-}
-
-function normalizeExpectedOutput(value: unknown, action: YoloTurnAction): string[] {
+function normalizeExpectedOutput(value: unknown, stage: YoloStage): string[] {
   const raw = normalizeStringArray(value)
   if (raw.length > 0) return raw
-  return defaultExpectedOutputForAction(action)
+  return defaultExpectedOutputForStage(stage)
 }
 
-function defaultToolForAction(action: YoloTurnAction): string {
-  if (action === 'explore') return 'literature-search'
-  if (action === 'issue_experiment_request') return 'writing-draft'
-  if (action === 'digest_uploaded_results') return 'data-analyze'
-  return 'writing-outline'
-}
-
-function normalizeToolPlan(value: unknown, action: YoloTurnAction): PlannerToolPlanStep[] {
-  if (!Array.isArray(value)) {
-    return [{
-      step: 1,
-      tool: defaultToolForAction(action),
-      goal: 'Execute one bounded step that advances the current focus.',
-      output_contract: 'Return one concrete output that can be committed this turn.'
-    }]
-  }
+function normalizeToolPlan(value: unknown, stage: YoloStage): PlannerToolPlanStep[] {
+  if (!Array.isArray(value)) return defaultToolPlanForStage(stage)
 
   const normalized: PlannerToolPlanStep[] = []
   for (const item of value) {
@@ -201,15 +170,10 @@ function normalizeToolPlan(value: unknown, action: YoloTurnAction): PlannerToolP
     return normalized
   }
 
-  return [{
-    step: 1,
-    tool: defaultToolForAction(action),
-    goal: 'Execute one bounded step that advances the current focus.',
-    output_contract: 'Return one concrete output that can be committed this turn.'
-  }]
+  return defaultToolPlanForStage(stage)
 }
 
-function normalizeNeedFromUser(value: unknown, action: YoloTurnAction): PlannerContract['need_from_user'] {
+function normalizeNeedFromUser(value: unknown): PlannerContract['need_from_user'] {
   const requiredByDefault = false
   if (!isObject(value)) {
     return {
@@ -237,11 +201,8 @@ function normalizePlanContract(raw: unknown, input: PlannerInput): PlannerContra
   const root = isObject(raw.planContract) ? raw.planContract : raw
   const turnSpec = isObject(raw.turnSpec) ? raw.turnSpec : (isObject(raw) ? raw : undefined)
 
-  const fallbackAction = defaultActionForStage(input.stage)
-  const expectedOutputHint = normalizeExpectedOutput(root.expected_output, fallbackAction)
-  const inferredAction = inferActionFromExpectedOutput(expectedOutputHint) ?? fallbackAction
-  const action = normalizeTurnAction(root.action, inferredAction)
-  const expectedOutput = normalizeExpectedOutput(root.expected_output, action)
+  const action = normalizeTurnAction(root.action) ?? `stage_${input.stage.toLowerCase()}_default`
+  const expectedOutput = normalizeExpectedOutput(root.expected_output, input.stage)
 
   const objectiveFallback = normalizeString(root.objective)
     ?? normalizeString(turnSpec?.objective)
@@ -252,7 +213,7 @@ function normalizePlanContract(raw: unknown, input: PlannerInput): PlannerContra
     ?? 'This is the highest-leverage bounded step given current stage and budget.'
   const doneDefinition = normalizeString(root.done_definition)
     ?? `Complete one auditable ${expectedOutput.join('/')} output for this turn.`
-  const toolPlan = normalizeToolPlan(root.tool_plan, action)
+  const toolPlan = normalizeToolPlan(root.tool_plan, input.stage)
 
   return {
     current_focus: currentFocus,
@@ -260,15 +221,15 @@ function normalizePlanContract(raw: unknown, input: PlannerInput): PlannerContra
     action,
     tool_plan: toolPlan,
     expected_output: expectedOutput,
-    need_from_user: normalizeNeedFromUser(root.need_from_user, action),
+    need_from_user: normalizeNeedFromUser(root.need_from_user),
     done_definition: doneDefinition,
     risk_flags: normalizeStringArray(root.risk_flags, 5)
   }
 }
 
-function normalizeExpectedAssetsFromContract(contract: PlannerContract): string[] {
+function normalizeExpectedAssetsFromContract(contract: PlannerContract, stage: YoloStage): string[] {
   if (contract.expected_output.length > 0) return contract.expected_output
-  return defaultExpectedOutputForAction(contract.action)
+  return defaultExpectedOutputForStage(stage)
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +287,7 @@ function buildTurnSpecFromContract(
 
   const expectedAssets = Array.isArray(raw.expectedAssets)
     ? raw.expectedAssets.filter((item): item is string => typeof item === 'string')
-    : normalizeExpectedAssetsFromContract(contract)
+    : normalizeExpectedAssetsFromContract(contract, stage)
 
   return {
     turnNumber: input.turnNumber,
@@ -338,7 +299,7 @@ function buildTurnSpecFromContract(
       targetNodeId: typeof branch.targetNodeId === 'string' ? branch.targetNodeId : undefined
     },
     objective: normalizeString(raw.objective) ?? contract.current_focus,
-    expectedAssets: expectedAssets.length > 0 ? expectedAssets : normalizeExpectedAssetsFromContract(contract),
+    expectedAssets: expectedAssets.length > 0 ? expectedAssets : normalizeExpectedAssetsFromContract(contract, stage),
     constraints: normalizeConstraints(raw.constraints)
   }
 }
@@ -381,17 +342,16 @@ function buildStageGuidance(stage: YoloStage): string {
   const guidance: Record<YoloStage, string> = {
     S1: [
       'S1 (Define): understand the research topic and define a testable research question.',
-      'Start by exploring the problem space. If unfamiliar, do background reading first.',
-      'Conduct a literature search to find related work, competing approaches, and published baselines.',
-      'Use literature findings to refine the research question and identify promising gaps.',
-      'Propose concrete research ideas based on what the literature landscape reveals.',
-      'When the question is clear enough, move toward experiment design.',
-      'Prefer explore/refine_question actions. Keep outputs concrete and free of taxonomy inflation.'
+      'Start with literature-search to find related work.',
+      'Use bash to run quick local experiments when feasible.',
+      'Combine with writing-outline to produce a focused research question.',
+      'Multi-tool plans are encouraged.',
+      'Keep outputs concrete and free of taxonomy inflation.'
     ].join(' '),
     S2: [
       'S2 (Request): produce an outsource-ready ExperimentRequest plan.',
       'Focus on objective, setup, method steps, controls, metrics, expected result, and upload checklist.',
-      'Do not propose in-process heavy/system experiments.',
+      'Use bash to run experiments locally when the environment supports it, rather than only writing protocols for the user.',
       'Literature review can be revisited here for targeted deep-dives on specific sub-questions (e.g., prior benchmarks, competing methods).'
     ].join(' '),
     S3: [
@@ -449,7 +409,7 @@ function buildPlannerPrompt(input: PlannerInput): string {
       JSON.stringify({
         planContract: {
           current_focus: 'string',
-          action: 'explore|refine_question|issue_experiment_request|digest_uploaded_results',
+          action: 'string — free-form intent label describing what this turn will do',
           tool_plan: [{ step: 'number', tool: 'string', goal: 'string', output_contract: 'string' }],
           done_definition: 'string',
           need_from_user: {
@@ -470,7 +430,10 @@ function buildPlannerPrompt(input: PlannerInput): string {
       }, null, 2),
       'Rules:',
       '- tool_plan must be 1-5 concrete steps.',
-      '- planContract.action and expected_output must be consistent.',
+      '- Each step should name an available tool (literature-search, bash, writing-draft, data-analyze, etc.).',
+      '- Multi-tool plans are encouraged: combine literature-search + bash + writing-draft in one turn when useful.',
+      '- action is a free-form label for logging — it does NOT restrict which tools the coordinator may use.',
+      '- planContract.action and expected_output should be consistent in intent.',
       '- Prefer the smallest plan that can move the research forward now.',
       '- Avoid process/taxonomy artifacts unless directly needed for this turn.',
       '- For S2-S4, prioritize actionable ExperimentRequest quality over workflow abstraction.'
@@ -538,18 +501,12 @@ function buildPlannerPrompt(input: PlannerInput): string {
 }
 
 function createFallbackPlanContract(input: PlannerInput): PlannerContract {
-  const action = defaultActionForStage(input.stage)
   return {
     current_focus: 'consolidate current state and report blockers',
     why_now: 'Planner fallback path preserves forward progress with conservative scope.',
-    action,
-    tool_plan: [{
-      step: 1,
-      tool: defaultToolForAction(action),
-      goal: 'Produce one conservative, auditable turn output.',
-      output_contract: 'Return one bounded asset and list blockers clearly.'
-    }],
-    expected_output: defaultExpectedOutputForAction(action),
+    action: 'fallback_consolidation',
+    tool_plan: defaultToolPlanForStage(input.stage),
+    expected_output: defaultExpectedOutputForStage(input.stage),
     need_from_user: {
       required: false,
       request: 'No external input required for fallback planning.',

@@ -11,11 +11,10 @@ export type YoloRuntimeMode = 'legacy' | 'lean_v2'
 
 export type YoloStage = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
 
-export type YoloTurnAction =
-  | 'explore'
-  | 'refine_question'
-  | 'issue_experiment_request'
-  | 'digest_uploaded_results'
+// Free-form string describing the turn's intent (e.g. 'explore', 'design_experiment',
+// 'literature_review', 'run_experiment', 'analyze_results').
+// Used for display/logging only — does NOT gate tool selection.
+export type YoloTurnAction = string
 
 export type YoloRuntimeState =
   | 'IDLE'
@@ -174,6 +173,7 @@ export interface ExternalWaitTask {
   resumeAction: string
   uploadDir?: string
   details?: string
+  experimentRequestId?: string
   createdAt: string
   resolvedAt?: string
   resolutionNote?: string
