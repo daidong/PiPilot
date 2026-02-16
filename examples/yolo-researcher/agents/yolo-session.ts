@@ -70,30 +70,26 @@ export function createYoloSession(config: CreateYoloSessionConfig): YoloSession 
     createAgentInstance: config.plannerConfig?.createAgentInstance
   })
 
-  const reviewEngine = config.reviewEngine ?? (
-    config.options.phase === 'P3'
-      ? createYoloReviewEngine({
-          projectPath: config.projectPath,
-          model: config.reviewerConfig?.model
-            ?? config.options.models.reviewer
-            ?? config.options.models.coordinator,
-          apiKey: config.reviewerConfig?.apiKey,
-          maxSteps: config.reviewerConfig?.maxSteps,
-          maxTokens: config.reviewerConfig?.maxTokens,
-          debug: config.reviewerConfig?.debug,
-          identityPrompt: config.reviewerConfig?.identityPrompt,
-          constraints: config.reviewerConfig?.constraints,
-          onActivity: config.onActivity,
-          createAgentInstance: config.reviewerConfig?.createAgentInstance
-        })
-      : undefined
-  )
+  const reviewEngine = config.reviewEngine ?? createYoloReviewEngine({
+    projectPath: config.projectPath,
+    model: config.reviewerConfig?.model
+      ?? config.options.models.reviewer
+      ?? config.options.models.coordinator,
+    apiKey: config.reviewerConfig?.apiKey,
+    maxSteps: config.reviewerConfig?.maxSteps,
+    maxTokens: config.reviewerConfig?.maxTokens,
+    debug: config.reviewerConfig?.debug,
+    identityPrompt: config.reviewerConfig?.identityPrompt,
+    constraints: config.reviewerConfig?.constraints,
+    onActivity: config.onActivity,
+    createAgentInstance: config.reviewerConfig?.createAgentInstance
+  })
 
-  const deps: { planner: TurnPlanner; reviewEngine?: ReviewEngine; onActivity?: (event: ActivityEvent) => void } = {
+  const deps: { planner: TurnPlanner; reviewEngine: ReviewEngine; onActivity?: (event: ActivityEvent) => void } = {
     planner,
+    reviewEngine,
     onActivity: config.onActivity
   }
-  if (reviewEngine) deps.reviewEngine = reviewEngine
 
   return new YoloSession(
     config.projectPath,

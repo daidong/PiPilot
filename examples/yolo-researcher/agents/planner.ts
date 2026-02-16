@@ -42,7 +42,7 @@ const DEFAULT_IDENTITY = [
 const DEFAULT_CONSTRAINTS = [
   'Output strict JSON only.',
   'Do not fabricate asset references.',
-  'Keep tool_plan <= 3 steps.',
+  'Keep tool_plan <= 5 steps.',
   'Use plain language and concrete execution intent.',
   'Do not use ctx-get in planner; rely on provided turn context only.'
 ]
@@ -193,7 +193,7 @@ function normalizeToolPlan(value: unknown, action: YoloTurnAction): PlannerToolP
       goal,
       output_contract: outputContract
     })
-    if (normalized.length >= 3) break
+    if (normalized.length >= 5) break
   }
 
   if (normalized.length > 0) {
@@ -307,12 +307,9 @@ function normalizeConstraints(raw: unknown): TurnConstraints {
 }
 
 function normalizeBranchAction(
-  action: unknown,
-  phase: string
+  action: unknown
 ): TurnSpec['branch']['action'] {
   if (typeof action !== 'string' || !VALID_BRANCH_ACTIONS.has(action)) return 'advance'
-  // P0 is advance-only
-  if (phase === 'P0') return 'advance'
   return action as TurnSpec['branch']['action']
 }
 
@@ -337,7 +334,7 @@ function buildTurnSpecFromContract(
     branch: {
       activeBranchId: input.activeBranchId,
       activeNodeId: input.activeNodeId,
-      action: normalizeBranchAction(branch.action, input.phase),
+      action: normalizeBranchAction(branch.action),
       targetNodeId: typeof branch.targetNodeId === 'string' ? branch.targetNodeId : undefined
     },
     objective: normalizeString(raw.objective) ?? contract.current_focus,
@@ -416,10 +413,7 @@ function buildStageGuidance(stage: YoloStage): string {
   return guidance[stage]
 }
 
-function buildBranchGuidance(phase: string): string {
-  if (phase === 'P0') {
-    return 'Lean default branch policy: runtime manages branching; treat turnSpec.branch as optional and keep action=advance unless an explicit override is essential.'
-  }
+function buildBranchGuidance(): string {
   return 'Lean default branch policy: runtime manages branching; omit turnSpec.branch unless there is a clear, explicit need to override. Prefer action=advance.'
 }
 
@@ -475,7 +469,7 @@ function buildPlannerPrompt(input: PlannerInput): string {
         }
       }, null, 2),
       'Rules:',
-      '- tool_plan must be 1-3 concrete steps.',
+      '- tool_plan must be 1-5 concrete steps.',
       '- planContract.action and expected_output must be consistent.',
       '- Prefer the smallest plan that can move the research forward now.',
       '- Avoid process/taxonomy artifacts unless directly needed for this turn.',
@@ -487,7 +481,7 @@ function buildPlannerPrompt(input: PlannerInput): string {
       : '',
 
     buildStageGuidance(input.stage),
-    buildBranchGuidance(input.phase),
+    buildBranchGuidance(),
     buildBudgetGuidance(input.remainingBudget),
 
     [
@@ -495,7 +489,6 @@ function buildPlannerPrompt(input: PlannerInput): string {
       `Turn: ${input.turnNumber}`,
       `State: ${input.state}`,
       `Stage: ${input.stage}`,
-      `Phase: ${input.phase}`,
       `Goal: ${input.goal}`,
       `Active branch: ${input.activeBranchId}`,
       `Active node: ${input.activeNodeId}`,

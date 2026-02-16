@@ -5,7 +5,6 @@ type Priority = 'urgent' | 'normal'
 interface YoloSessionOptions {
   budget: { maxTurns: number; maxTokens: number; maxCostUsd: number; deadlineIso?: string }
   models: { planner: string; coordinator: string; reviewer?: string }
-  phase: 'P0' | 'P1' | 'P2' | 'P3'
   mode?: 'legacy' | 'lean_v2'
 }
 

@@ -1,4 +1,4 @@
-import { Check, X as XIcon, Minus } from 'lucide-react'
+import { Check, X as XIcon, Minus, AlertTriangle } from 'lucide-react'
 import type { TabId } from '@/lib/types'
 import type { YoloSessionReturn } from '@/hooks/useYoloSession'
 import { STAGES, STAGE_LABELS } from '@/lib/formatters'
@@ -44,14 +44,18 @@ export function DetailTabs({ session }: DetailTabsProps) {
                 className={`flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] ${
                   info.status === 'pass'
                     ? 'border-emerald-500/40 t-accent-emerald'
-                    : info.status === 'fail'
-                      ? 'border-rose-500/40 t-accent-rose'
-                      : 't-border t-text-muted'
+                    : info.status === 'advisory'
+                      ? 'border-amber-500/40 t-accent-amber'
+                      : info.status === 'fail'
+                        ? 'border-rose-500/40 t-accent-rose'
+                        : 't-border t-text-muted'
                 }`}
                 title={`${STAGE_LABELS[stage]}: ${info.status}`}
               >
                 {info.status === 'pass' ? (
                   <Check size={11} />
+                ) : info.status === 'advisory' ? (
+                  <AlertTriangle size={11} />
                 ) : info.status === 'fail' ? (
                   <XIcon size={11} />
                 ) : (
@@ -152,7 +156,6 @@ export function DetailTabs({ session }: DetailTabsProps) {
             governanceSummary={session.governanceSummary}
             maintenanceAlerts={session.maintenanceAlerts}
             queueOpen={session.queueOpen}
-            selectedPhase={session.selectedPhase}
             onQueueOpenChange={actions.setQueueOpen}
             actions={{
               setQueuePriority: actions.setQueuePriority,

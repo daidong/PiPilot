@@ -20,7 +20,8 @@ interface HeroSectionProps {
 }
 
 function hasBlockingNeed(snapshot: YoloSnapshot | null, drawerInteraction: InteractionContext | null): boolean {
-  return drawerInteraction !== null
+  if (!drawerInteraction) return false
+  return drawerInteraction.urgency === 'blocking'
 }
 
 export function HeroSection({
@@ -196,8 +197,14 @@ export function HeroSection({
             {hasNeed ? 'Current Focus · Need From You · Latest Insight' : 'Current Focus · Latest Insight'}
           </div>
         </div>
-        <div className={`rounded-md border px-2 py-1 text-[11px] ${hasNeed ? 'border-amber-500/40 t-accent-amber' : 'border-emerald-500/40 t-accent-emerald'}`}>
-          {hasNeed ? 'Action Needed' : 'No Blocker'}
+        <div className={`rounded-md border px-2 py-1 text-[11px] ${
+          hasNeed
+            ? 'border-amber-500/40 t-accent-amber'
+            : drawerInteraction
+              ? 'border-sky-500/40 t-accent-sky'
+              : 'border-emerald-500/40 t-accent-emerald'
+        }`}>
+          {hasNeed ? 'Action Needed' : drawerInteraction ? 'Advisory' : 'No Blocker'}
         </div>
       </div>
 

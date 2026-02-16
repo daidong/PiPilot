@@ -39,13 +39,6 @@ export const STAGE_LABELS: Record<StageId, string> = {
   S5: 'Final Synthesis',
 }
 
-const PHASE_LABELS: Record<string, string> = {
-  P0: 'Core Loop',
-  P1: 'External Collaboration',
-  P2: 'Synthesis',
-  P3: 'Quality Review',
-}
-
 export function isStageId(value: string): value is StageId {
   return STAGES.includes(value as StageId)
 }
@@ -57,15 +50,11 @@ export function friendlyStage(id: string | undefined | null): string {
   return label ?? id
 }
 
-// Replace internal stage/phase refs in LLM-generated text with user-facing labels.
+// Replace internal stage refs in LLM-generated text with user-facing labels.
 export function cleanStageRefs(text: string): string {
-  const withStages = text.replace(/\bS([1-5])\b/g, (_, num) => {
+  return text.replace(/\bS([1-5])\b/g, (_, num) => {
     const stage = `S${num}` as StageId
     return STAGE_LABELS[stage] ?? stage
-  })
-  return withStages.replace(/\bP([0-3])\b/g, (_, num) => {
-    const phase = `P${num}`
-    return PHASE_LABELS[phase] ?? phase
   })
 }
 
@@ -116,7 +105,11 @@ export function friendlyAssetId(id: string): string {
 
 export function turnGateStatus(turn: TurnReport): GateStatus {
   const status = turn.gateImpact?.status
-  if (status === 'pass' || turn.gateImpact?.gateResult?.passed === true) return 'pass'
+  if (status === 'pass' || turn.gateImpact?.gateResult?.passed === true) {
+    // Gate passed structurally — check for advisory warnings in riskDelta
+    const hasAdvisory = turn.riskDelta?.some((note: string) => note.startsWith('Advisory:')) ?? false
+    return hasAdvisory ? 'advisory' : 'pass'
+  }
   if (status === 'fail' || status === 'rollback-needed' || turn.gateImpact?.gateResult?.passed === false) return 'fail'
   return 'none'
 }

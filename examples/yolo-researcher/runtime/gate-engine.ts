@@ -425,18 +425,8 @@ export class LeanGateEngine implements GateEngine {
     if (danglingEvidenceLinkIds.length > 0) {
       hardBlockers.push({ label: 'reproducibility_gap', assetRefs: danglingEvidenceLinkIds })
     }
-    if (!gMin1Passed) {
-      hardBlockers.push({
-        label: 'experiment_request_not_executable',
-        assetRefs: manifest.assetIds.filter((id) => id.startsWith('ExperimentRequest-'))
-      })
-    }
-    if (!gMin2Passed) {
-      hardBlockers.push({
-        label: 'result_insight_not_bound',
-        assetRefs: manifest.assetIds.filter((id) => id.startsWith('ResultInsight-'))
-      })
-    }
+    // G_MIN_1 is advisory — tracks quality but does not hard-block stage advancement.
+    // G_MIN_2 is advisory — insight linking is good practice but not a gate requirement.
     // Literature gate is advisory — it warns but does not hard-block stage advancement.
     // The agent should naturally conduct literature review as part of good research methodology.
 
@@ -452,7 +442,9 @@ export class LeanGateEngine implements GateEngine {
       advisoryNotes: [
         `manifestId=${manifest.id}`,
         `leanSummary={"experimentRequest":{"total":${experimentRequestCount},"executable":${executableExperimentRequestCount}},"resultInsight":{"total":${resultInsightCount},"linked":${boundResultInsightCount}},"literatureNotes":${literatureNoteCount}}`,
-        ...(!gMin3Passed ? ['Advisory: No literature Note found yet. A literature review strengthens experiment design and helps identify gaps. Consider using literature-search.'] : []),
+        ...(!gMin1Passed ? [`Advisory: ExperimentRequest quality check did not pass (${executableExperimentRequestCount} executable of ${experimentRequestCount} total). Ensure requests include goal, method steps, and expected result.`] : []),
+      ...(!gMin2Passed ? [`Advisory: ResultInsight linking incomplete (${boundResultInsightCount} linked of ${resultInsightCount} total). Link insights to their originating experiment for traceability.`] : []),
+      ...(!gMin3Passed ? ['Advisory: No literature Note found yet. A literature review strengthens experiment design and helps identify gaps. Consider using literature-search.'] : []),
         ...validationNotes
       ]
     }

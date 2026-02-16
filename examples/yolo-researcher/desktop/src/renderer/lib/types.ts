@@ -23,13 +23,12 @@ export type YoloState =
   | 'CRASHED'
 
 export type StageId = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
-export type GateStatus = 'pass' | 'fail' | 'none'
+export type GateStatus = 'pass' | 'advisory' | 'fail' | 'none'
 export type TabId = 'timeline' | 'branches' | 'assets' | 'evidence' | 'system' | 'events' | 'papers'
 
 export interface YoloSnapshot {
   sessionId: string
   goal: string
-  phase: 'P0' | 'P1' | 'P2' | 'P3'
   mode?: 'legacy' | 'lean_v2'
   state: YoloState
   currentTurn: number
@@ -221,7 +220,6 @@ export interface TurnReport {
     }>
   }
   readinessSnapshot?: {
-    phase?: 'P0' | 'P1' | 'P2' | 'P3'
     stage?: StageId
     pass?: boolean
     requiredFailed?: Array<'TG0' | 'TG1' | 'TG2' | 'TG3' | 'TG4'>
@@ -561,7 +559,6 @@ export interface SessionActions {
   refreshPapers: () => Promise<void>
   readReview: (reviewId: string) => Promise<string>
   setGoal: (goal: string) => void
-  setSelectedPhase: (phase: 'P0' | 'P1' | 'P2' | 'P3') => void
   setActiveTab: (tab: TabId) => void
   setSelectedStage: (stage: StageId) => void
   setTimelineStageFilter: (filter: 'ALL' | StageId) => void

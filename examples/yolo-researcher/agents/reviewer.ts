@@ -375,7 +375,6 @@ class LlmBackedReviewEngine implements ReviewEngine {
   }
 
   async evaluate(input: {
-    phase: 'P0' | 'P1' | 'P2' | 'P3'
     stage: YoloStage
     manifest: SnapshotManifest
     gateResult: GateResult
@@ -383,19 +382,19 @@ class LlmBackedReviewEngine implements ReviewEngine {
     coordinatorOutput?: CoordinatorTurnResult
     researchContext?: string
   }): Promise<SemanticReviewResult> {
-    if (input.phase !== 'P3') {
+    if (input.stage !== 'S5') {
       return {
         enabled: false,
         reviewerPasses: [],
         consensusBlockers: [],
-        advisoryNotes: [`semantic review disabled for phase ${input.phase}`],
+        advisoryNotes: ['semantic review runs only at S5 (Final Synthesis)'],
         processReview: {
           verdict: 'pass',
           critical_issues: [],
           fix_plan: [],
           rewrite_patch: { apply: false, target: 'coordinator_output', patch: {} },
           confidence: 0.5,
-          notes_for_user: `semantic review disabled for phase ${input.phase}`
+          notes_for_user: 'semantic review runs only at S5 (Final Synthesis)'
         }
       }
     }

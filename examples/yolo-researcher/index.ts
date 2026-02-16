@@ -22,7 +22,6 @@ export {
 
 export type {
   AgentLike,
-  YoloPhase,
   YoloRuntimeMode,
   YoloStage,
   YoloTurnAction,

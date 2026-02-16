@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
-import type { YoloPhase, YoloStage } from './types.js'
+import type { YoloStage } from './types.js'
 import { ensureDir, fileExists, readJsonFile, writeJsonFile } from './utils.js'
 
 export interface BranchNode {
@@ -33,8 +33,7 @@ export class DegenerateBranchManager {
   readonly treePath: string
 
   constructor(
-    private readonly sessionDir: string,
-    private readonly phase: YoloPhase = 'P0'
+    private readonly sessionDir: string
   ) {
     this.branchesDir = path.join(sessionDir, 'branches')
     this.nodesDir = path.join(this.branchesDir, 'nodes')
@@ -150,7 +149,6 @@ export class DegenerateBranchManager {
     createdByTurn?: number
     createdByAttempt?: number
   }): Promise<{ previousNode: BranchNode; nextNode: BranchNode }> {
-    this.ensureMultiBranchEnabled('fork')
     if (!input?.stage) throw new Error('fork requires stage')
     if (!input.summary?.trim()) throw new Error('fork requires summary')
 
@@ -195,7 +193,6 @@ export class DegenerateBranchManager {
     targetNodeId?: string
     allowInvalidatedOverride?: boolean
   }): Promise<{ previousNode: BranchNode; nextNode: BranchNode }> {
-    this.ensureMultiBranchEnabled('revisit')
     if (!input?.targetNodeId) throw new Error('revisit requires targetNodeId')
 
     const tree = await this.getTree()
@@ -225,7 +222,6 @@ export class DegenerateBranchManager {
     createdByTurn?: number
     createdByAttempt?: number
   }): Promise<{ previousNode: BranchNode; nextNode: BranchNode }> {
-    this.ensureMultiBranchEnabled('merge')
     if (!input?.targetNodeId) throw new Error('merge requires targetNodeId')
     if (!input.stage) throw new Error('merge requires stage')
     if (!input.summary?.trim()) throw new Error('merge requires summary')
@@ -275,8 +271,6 @@ export class DegenerateBranchManager {
     targetNodeId?: string
     allowInvalidatedOverride?: boolean
   } = {}): Promise<{ previousNode: BranchNode; nextNode: BranchNode }> {
-    this.ensureMultiBranchEnabled('prune')
-
     const tree = await this.getTree()
     const previousNode = await this.getActiveNode()
 
@@ -346,12 +340,6 @@ export class DegenerateBranchManager {
 
   private async writeNode(node: BranchNode): Promise<void> {
     await writeJsonFile(this.nodePath(node.nodeId), node)
-  }
-
-  private ensureMultiBranchEnabled(action: 'fork' | 'revisit' | 'merge' | 'prune'): void {
-    if (this.phase === 'P0') {
-      throw new Error(`not implemented in P0: upgrade to P1 for multi-branch search (${action})`)
-    }
   }
 
   private async requireNode(nodeId: string): Promise<BranchNode> {

@@ -7,7 +7,6 @@ export interface AgentLike {
   destroy?: () => Promise<void>
 }
 
-export type YoloPhase = 'P0' | 'P1' | 'P2' | 'P3'
 export type YoloRuntimeMode = 'legacy' | 'lean_v2'
 
 export type YoloStage = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
@@ -43,7 +42,6 @@ export interface YoloSessionOptions {
     coordinator: string
     reviewer?: string
   }
-  phase: YoloPhase
   mode?: YoloRuntimeMode
 }
 
@@ -80,7 +78,6 @@ export interface PlannerInput {
   state: YoloRuntimeState
   stage: YoloStage
   goal: string
-  phase: YoloPhase
   activeBranchId: string
   activeNodeId: string
   nonProgressTurns: number
@@ -426,7 +423,6 @@ export interface SemanticReviewResult {
 
 export interface ReviewEngine {
   evaluate(input: {
-    phase: YoloPhase
     stage: YoloStage
     manifest: SnapshotManifest
     gateResult: GateResult
@@ -507,7 +503,6 @@ export interface PlannerInputManifest {
 
 export interface ReadinessSnapshot {
   checkedAt: string
-  phase: YoloPhase
   stage: YoloStage
   gates: Record<
     'TG0' | 'TG1' | 'TG2' | 'TG3' | 'TG4',
@@ -587,7 +582,6 @@ export interface TurnReport {
 export interface SessionPersistedState {
   sessionId: string
   goal: string
-  phase: YoloPhase
   state: YoloRuntimeState
   createdAt: string
   updatedAt: string

@@ -4,7 +4,7 @@ import * as path from 'node:path'
 import { FileAssetStore } from './asset-store.js'
 import { DegenerateBranchManager, type BranchNode } from './branch-manager.js'
 import { CheckpointBroker } from './checkpoint-broker.js'
-import { LeanGateEngine, StructuralGateEngine, StubGateEngine } from './gate-engine.js'
+import { LeanGateEngine, StructuralGateEngine } from './gate-engine.js'
 import { DisabledReviewEngine } from './review-engine.js'
 import { UserIngressManager } from './user-ingress-manager.js'
 import {
@@ -60,7 +60,6 @@ const SYSTEM_STATE_START = '<!-- SYSTEM_STATE_START -->'
 const SYSTEM_STATE_END = '<!-- SYSTEM_STATE_END -->'
 const AGENT_NOTES_START = '<!-- AGENT_NOTES_START -->'
 const AGENT_NOTES_END = '<!-- AGENT_NOTES_END -->'
-const PHASE_ORDER: Record<YoloSessionOptions['phase'], number> = { P0: 0, P1: 1, P2: 2, P3: 3 }
 const DEFAULT_RUNTIME_LEASE_STALE_SEC = 180
 const DEFAULT_RUNTIME_ROLLUP_INTERVAL_SEC = 24 * 60 * 60
 const WAIT_TASK_REMINDER_SEC = 60 * 60
@@ -91,7 +90,6 @@ function defaultSessionState(input: {
   return {
     sessionId: input.sessionId,
     goal: input.goal,
-    phase: input.options.phase,
     state: 'IDLE',
     createdAt: now,
     updatedAt: now,
@@ -208,7 +206,7 @@ export class YoloSession {
     this.runtimeCheckpointsLatestPath = path.join(this.runtimeCheckpointsDir, 'latest.json')
 
     this.assetStore = deps.assetStore ?? new FileAssetStore(this.sessionDir)
-    this.branchManager = deps.branchManager ?? new DegenerateBranchManager(this.sessionDir, this.options.phase)
+    this.branchManager = deps.branchManager ?? new DegenerateBranchManager(this.sessionDir)
     this.checkpointBroker = deps.checkpointBroker ?? new CheckpointBroker()
     this.ingressManager = deps.ingressManager ?? new UserIngressManager(this.sessionDir)
     this.planner = deps.planner
@@ -216,7 +214,7 @@ export class YoloSession {
     this.gateEngine = deps.gateEngine ?? (
       this.runtimeMode === 'lean_v2'
         ? new LeanGateEngine()
-        : (this.options.phase === 'P0' ? new StubGateEngine() : new StructuralGateEngine())
+        : new StructuralGateEngine()
     )
     this.reviewEngine = deps.reviewEngine ?? new DisabledReviewEngine()
     this.onActivity = deps.onActivity
@@ -232,11 +230,9 @@ export class YoloSession {
     await ensureDir(this.branchDossiersDir)
     await ensureDir(this.waitTasksDir)
     await ensureDir(this.waitTaskHistoryDir)
-    if (this.isPhaseAtLeast('P2')) {
-      await ensureDir(this.runtimeDir)
-      await ensureDir(this.runtimeCheckpointsDir)
-      await this.acquireRuntimeLease()
-    }
+    await ensureDir(this.runtimeDir)
+    await ensureDir(this.runtimeCheckpointsDir)
+    await this.acquireRuntimeLease()
     await this.ingressManager.init()
     await this.assetStore.init()
 
@@ -692,9 +688,6 @@ export class YoloSession {
     uploadTurnNumber?: number
   }): Promise<ExternalWaitTask> {
     await this.init()
-    if (this.options.phase === 'P0') {
-      throw new Error('WAITING_EXTERNAL is not available in P0; upgrade to P1+')
-    }
     if (!input.title.trim()) throw new Error('wait task title is required')
     if (!input.completionRule.trim()) throw new Error('wait task completionRule is required')
     if (!input.resumeAction.trim()) throw new Error('wait task resumeAction is required')
@@ -762,9 +755,6 @@ export class YoloSession {
     reason?: string
   }): Promise<ExternalWaitTask> {
     await this.init()
-    if (this.options.phase === 'P0') {
-      throw new Error('full-text wait flow is not available in P0; upgrade to P1+')
-    }
 
     const citation = input.citation.trim()
     if (!citation) throw new Error('citation is required')
@@ -1015,7 +1005,6 @@ export class YoloSession {
 
   async restoreFromLatestCheckpoint(): Promise<boolean> {
     await this.init()
-    if (!this.isPhaseAtLeast('P2')) return false
     if (!(await fileExists(this.runtimeCheckpointsLatestPath))) return false
 
     const latest = await this.tryReadJsonFile<{ fileName?: string }>(this.runtimeCheckpointsLatestPath)
@@ -1090,48 +1079,30 @@ export class YoloSession {
       await transition('PLANNING', 'turn planning started')
       const advisoryNotes: string[] = []
 
-      const preflight = this.resolveReadinessPreflight(state.activeStage)
-      if (!preflight.initialSnapshot.pass) {
-        const failed = preflight.initialSnapshot.requiredFailed.join(', ')
-        if (preflight.downgradedFrom && preflight.downgradedTo) {
-          const message = [
-            `readiness required gates failed for phase ${preflight.downgradedFrom}: ${failed}`,
-            `downgraded phase to ${preflight.downgradedTo}`
-          ].join('; ')
-          advisoryNotes.push(message)
-          await emit('maintenance_alert', {
-            kind: 'readiness_gate_failure',
-            severity: 'warning',
-            message,
-            refs: preflight.initialSnapshot.requiredFailed
-          })
-          this.options.phase = preflight.downgradedTo
-          state.phase = preflight.downgradedTo
-          state.updatedAt = this.now()
-        } else {
-          const stopReason = preflight.stopReason
-            ?? `readiness required gates failed for phase ${this.options.phase}: ${failed}`
-          await emit('maintenance_alert', {
-            kind: 'readiness_gate_failure',
-            severity: 'error',
-            message: stopReason,
-            refs: preflight.initialSnapshot.requiredFailed
-          })
-          await emit('state_transition', {
-            from: state.state,
-            to: 'STOPPED',
-            reason: stopReason
-          })
-          state.state = 'STOPPED'
-          state.updatedAt = this.now()
-          await this.writeSessionState(state)
-          await this.writeRuntimeCheckpoint(state, 'state_transition')
-          throw new Error(stopReason)
-        }
+      const readinessCheck = this.evaluateReadinessSnapshot(state.activeStage)
+      if (!readinessCheck.pass) {
+        const failed = readinessCheck.requiredFailed.join(', ')
+        const stopReason = `readiness required gates failed: ${failed}`
+        await emit('maintenance_alert', {
+          kind: 'readiness_gate_failure',
+          severity: 'error',
+          message: stopReason,
+          refs: readinessCheck.requiredFailed
+        })
+        await emit('state_transition', {
+          from: state.state,
+          to: 'STOPPED',
+          reason: stopReason
+        })
+        state.state = 'STOPPED'
+        state.updatedAt = this.now()
+        await this.writeSessionState(state)
+        await this.writeRuntimeCheckpoint(state, 'state_transition')
+        throw new Error(stopReason)
       }
 
       const mergedInputs = this.checkpointBroker.drainAtTurnBoundary()
-      const ingressReview = this.options.phase === 'P0' ? null : await this.ingressManager.reviewTurnIngress(turnNumber)
+      const ingressReview = await this.ingressManager.reviewTurnIngress(turnNumber)
       if (ingressReview) {
         const ingressManifestAsset = await this.assetStore.appendOutOfTurnAsset({
           turnNumber,
@@ -1217,7 +1188,6 @@ export class YoloSession {
         state: 'PLANNING',
         stage: state.activeStage,
         goal: this.goal,
-        phase: this.options.phase,
         activeBranchId: state.activeBranchId,
         activeNodeId: state.activeNodeId,
         nonProgressTurns: state.nonProgressTurns,
@@ -1288,7 +1258,7 @@ export class YoloSession {
 
       const readinessSnapshot = this.evaluateReadinessSnapshot(plannerOutput.turnSpec.stage)
       if (!readinessSnapshot.pass) {
-        const message = `readiness required gates failed for phase ${readinessSnapshot.phase}: ${readinessSnapshot.requiredFailed.join(', ')}`
+        const message = `readiness required gates failed: ${readinessSnapshot.requiredFailed.join(', ')}`
         advisoryNotes.push(message)
         await emit('maintenance_alert', {
           kind: 'readiness_gate_failure',
@@ -1334,10 +1304,6 @@ export class YoloSession {
       const constraintAdvisories = this.enforceHardConstraints(plannerOutput.turnSpec, coordinatorResult)
       for (const note of constraintAdvisories) {
         advisoryNotes.push(note)
-      }
-
-      if (this.options.phase === 'P0' && coordinatorResult.metrics.discoveryOps > plannerOutput.turnSpec.constraints.maxDiscoveryOps) {
-        advisoryNotes.push('maxDiscoveryOps exceeded in P0 (advisory only).')
       }
 
       const runKeyDedup = await this.dedupeRunRecordAssetsByRunKey(coordinatorResult.assets)
@@ -1492,7 +1458,6 @@ export class YoloSession {
 
       const gateResult = this.gateEngine.evaluate(snapshotManifest)
       const semanticReview = await Promise.resolve(this.reviewEngine.evaluate({
-        phase: this.options.phase,
         stage: plannerOutput.turnSpec.stage,
         manifest: snapshotManifest,
         gateResult,
@@ -1782,9 +1747,7 @@ export class YoloSession {
 
   private async writeSessionState(state: SessionPersistedState): Promise<void> {
     await writeJsonFile(this.sessionPath, state)
-    if (this.isPhaseAtLeast('P2')) {
-      await this.heartbeatRuntimeLease()
-    }
+    await this.heartbeatRuntimeLease()
   }
 
   private async transitionOutOfTurn(
@@ -1859,9 +1822,7 @@ export class YoloSession {
       checkWithTolerance('stepCount', m.stepCount, maxStepCount, 1.25, false)
       checkWithTolerance('newAssets', result.assets.length, maxNewAssets, 1.25, false)
       checkWithTolerance('readBytes', m.readBytes, maxReadBytes, 1.25, false)
-      if (this.options.phase !== 'P0') {
-        checkWithTolerance('discoveryOps', m.discoveryOps, maxDiscoveryOps, 1.25, false)
-      }
+      checkWithTolerance('discoveryOps', m.discoveryOps, maxDiscoveryOps, 1.25, false)
       checkWithTolerance('promptTokens', m.promptTokens, maxPromptTokens, 1.2, false)
       checkWithTolerance('completionTokens', m.completionTokens, maxCompletionTokens, 1.2, false)
       checkWithTolerance('turnTokens', m.turnTokens, maxTurnTokens, 1.2, false)
@@ -1872,7 +1833,7 @@ export class YoloSession {
       if (m.stepCount > maxStepCount) violations.push(`stepCount ${m.stepCount} > ${maxStepCount}`)
       if (result.assets.length > maxNewAssets) violations.push(`newAssets ${result.assets.length} > ${maxNewAssets}`)
       if (m.readBytes > maxReadBytes) violations.push(`readBytes ${m.readBytes} > ${maxReadBytes}`)
-      if (this.options.phase !== 'P0' && m.discoveryOps > maxDiscoveryOps) {
+      if (m.discoveryOps > maxDiscoveryOps) {
         violations.push(`discoveryOps ${m.discoveryOps} > ${maxDiscoveryOps}`)
       }
       if (m.promptTokens > maxPromptTokens) violations.push(`promptTokens ${m.promptTokens} > ${maxPromptTokens}`)
@@ -1971,10 +1932,6 @@ export class YoloSession {
     attempt: number,
     options: { invalidateCurrentNode?: boolean } = {}
   ): Promise<{ previousNode: BranchNode; nextNode: BranchNode }> {
-    if (this.options.phase === 'P0' && action !== 'advance') {
-      throw new Error(`not implemented in P0: branch action ${action}`)
-    }
-
     // Validate that targetNodeId exists — LLM planner may hallucinate node IDs.
     // If invalid, fall back to 'advance' to keep the session running.
     let validatedTargetNodeId = targetNodeId
@@ -2147,45 +2104,12 @@ export class YoloSession {
     }
   }
 
-  private resolveReadinessPreflight(stage: YoloStage): {
-    initialSnapshot: ReadinessSnapshot
-    downgradedFrom?: YoloSessionOptions['phase']
-    downgradedTo?: YoloSessionOptions['phase']
-    stopReason?: string
-  } {
-    const phaseOrder: YoloSessionOptions['phase'][] = ['P0', 'P1', 'P2', 'P3']
-    const currentPhase = this.options.phase
-    const initialSnapshot = this.evaluateReadinessSnapshot(stage, currentPhase)
-    if (initialSnapshot.pass) {
-      return { initialSnapshot }
-    }
-
-    const currentRank = phaseOrder.indexOf(currentPhase)
-    for (let idx = currentRank - 1; idx >= 0; idx -= 1) {
-      const candidatePhase = phaseOrder[idx]
-      const candidateSnapshot = this.evaluateReadinessSnapshot(stage, candidatePhase)
-      if (!candidateSnapshot.pass) continue
-      return {
-        initialSnapshot,
-        downgradedFrom: currentPhase,
-        downgradedTo: candidatePhase
-      }
-    }
-
-    return {
-      initialSnapshot,
-      stopReason: [
-        `readiness required gates failed for phase ${currentPhase}: ${initialSnapshot.requiredFailed.join(', ')}`,
-        'cannot downgrade below P0'
-      ].join('; ')
-    }
-  }
+  // resolveReadinessPreflight removed — always run at full capability
 
   private evaluateReadinessSnapshot(
-    stage: YoloStage,
-    phase: YoloSessionOptions['phase'] = this.options.phase
+    stage: YoloStage
   ): ReadinessSnapshot {
-    const required = this.requiredReadinessGates(phase)
+    const required = new Set<'TG0' | 'TG1' | 'TG2' | 'TG3' | 'TG4'>(['TG0', 'TG1', 'TG2', 'TG3', 'TG4'])
     const modelConfigured = Boolean(
       this.options.models.planner.trim()
       && this.options.models.coordinator.trim()
@@ -2226,21 +2150,11 @@ export class YoloSession {
 
     return {
       checkedAt: this.now(),
-      phase,
       stage,
       gates,
       requiredFailed,
       pass: requiredFailed.length === 0
     }
-  }
-
-  private requiredReadinessGates(
-    phase: YoloSessionOptions['phase']
-  ): Set<'TG0' | 'TG1' | 'TG2' | 'TG3' | 'TG4'> {
-    if (phase === 'P0') return new Set(['TG0'])
-    if (phase === 'P1') return new Set(['TG0', 'TG4'])
-    if (phase === 'P2') return new Set(['TG0', 'TG1', 'TG2', 'TG4'])
-    return new Set(['TG0', 'TG1', 'TG2', 'TG3', 'TG4'])
   }
 
   private selectNextState(
@@ -2273,7 +2187,6 @@ export class YoloSession {
     mergedInputs: QueuedUserInput[]
     existingAskUser?: AskUserRequest
   }): Promise<{ task: ExternalWaitTask; question: AskUserRequest } | null> {
-    if (this.options.phase === 'P0') return null
     if (input.existingAskUser && (input.existingAskUser.required ?? true) && (input.existingAskUser.blocking ?? true)) return null
     if (input.stage !== 'S2' && input.stage !== 'S3' && input.stage !== 'S4') return null
     if (input.createdAssets.some((asset) => asset.type === 'RunRecord')) return null
@@ -2406,7 +2319,6 @@ export class YoloSession {
   }
 
   private shouldTransitionToComplete(turnReport: TurnReport): boolean {
-    if (!this.isPhaseAtLeast('P2')) return false
     if (turnReport.turnSpec.stage !== 'S5') return false
     // In lean_v2, gate artifacts are advisory/advanced and should not block closure.
     if (!this.isLeanMode() && turnReport.gateImpact.status !== 'pass') return false
@@ -2414,7 +2326,8 @@ export class YoloSession {
     if (this.isLeanMode()) {
       const lean = turnReport.gateImpact.snapshotManifest.lean
       if (!lean) return false
-      return lean.resultInsightCount > 0 && lean.resultInsightLinkedCount >= lean.resultInsightCount
+      // Completion requires at least one ResultInsight. Linking is advisory.
+      return lean.resultInsightCount > 0
     }
 
     const coverage = turnReport.gateImpact.snapshotManifest.claimCoverage
@@ -2625,7 +2538,6 @@ export class YoloSession {
     const planSystemState = {
       sessionId: state.sessionId,
       goal: state.goal,
-      phase: state.phase,
       runtimeState: state.state,
       activeStage: state.activeStage,
       activeBranchId: state.activeBranchId,
@@ -2889,10 +2801,6 @@ export class YoloSession {
     }
   }
 
-  private isPhaseAtLeast(phase: 'P2' | 'P3'): boolean {
-    return PHASE_ORDER[this.options.phase] >= PHASE_ORDER[phase]
-  }
-
   private async acquireRuntimeLease(): Promise<RuntimeLease> {
     const now = this.now()
     let takeoverFromOwnerId: string | undefined
@@ -2960,8 +2868,6 @@ export class YoloSession {
     state: SessionPersistedState,
     trigger: RuntimeCheckpoint['trigger']
   ): Promise<void> {
-    if (!this.isPhaseAtLeast('P2')) return
-
     const createdAt = this.now()
     await this.writeRuntimeCheckpointRecord(state, trigger, createdAt)
     await this.maybeWritePeriodicRollupCheckpoint(state, createdAt)
@@ -3039,10 +2945,6 @@ export class YoloSession {
   private async dedupeRunRecordAssetsByRunKey(
     assets: CoordinatorTurnResult['assets']
   ): Promise<{ assets: CoordinatorTurnResult['assets']; duplicateRunKeys: string[] }> {
-    if (!this.isPhaseAtLeast('P2')) {
-      return { assets, duplicateRunKeys: [] }
-    }
-
     const existingRunKeys = new Set<string>()
     const runRecords = await this.assetStore.list('RunRecord')
     for (const record of runRecords) {
@@ -3238,7 +3140,7 @@ export class YoloSession {
   }
 
   private shouldGenerateClaimEvidenceTableAsset(stage: YoloStage): boolean {
-    return stage === 'S5' && this.isPhaseAtLeast('P2')
+    return stage === 'S5'
   }
 
   private async stageDerivedAsset(input: {
@@ -4218,8 +4120,6 @@ export class YoloSession {
   }
 
   private async runMaintenanceChecks(): Promise<void> {
-    if (!this.isPhaseAtLeast('P2')) return
-
     const state = await this.readSessionState()
     const maintenance = state.maintenance ?? { budgetAlertLevel: 'none', waitTaskAlerts: {} }
     if (!maintenance.budgetAlertLevel) maintenance.budgetAlertLevel = 'none'

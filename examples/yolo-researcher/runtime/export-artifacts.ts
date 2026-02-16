@@ -15,7 +15,6 @@ export interface ClaimEvidenceExportRow {
 
 export interface ClaimEvidenceTableExport {
   sessionId: string
-  phase: SessionPersistedState['phase']
   state: SessionPersistedState['state']
   currentTurn: number
   activeStage: SessionPersistedState['activeStage']
@@ -31,7 +30,6 @@ export interface ClaimEvidenceTableExport {
 
 export interface AssetInventoryExport {
   sessionId: string
-  phase: SessionPersistedState['phase']
   state: SessionPersistedState['state']
   currentTurn: number
   generatedAt: string
@@ -49,7 +47,6 @@ export interface AssetInventoryExport {
 
 export interface FinalBundleManifest {
   sessionId: string
-  phase: SessionPersistedState['phase']
   state: SessionPersistedState['state']
   currentTurn: number
   generatedAt: string
@@ -207,7 +204,6 @@ export function buildClaimEvidenceTableExport(
     const payload = latestTable.payload as Record<string, unknown>
     return {
       sessionId: snapshot.sessionId,
-      phase: snapshot.phase,
       state: snapshot.state,
       currentTurn: snapshot.currentTurn,
       activeStage: snapshot.activeStage,
@@ -228,7 +224,6 @@ export function buildClaimEvidenceTableExport(
   const coverage = computeCoverageFromClaimEvidenceRows(rows)
   return {
     sessionId: snapshot.sessionId,
-    phase: snapshot.phase,
     state: snapshot.state,
     currentTurn: snapshot.currentTurn,
     activeStage: snapshot.activeStage,
@@ -261,7 +256,6 @@ export function buildAssetInventoryExport(
 
   return {
     sessionId: snapshot.sessionId,
-    phase: snapshot.phase,
     state: snapshot.state,
     currentTurn: snapshot.currentTurn,
     generatedAt,
@@ -289,7 +283,6 @@ export function buildFinalBundleManifest(
 ): FinalBundleManifest {
   return {
     sessionId: snapshot.sessionId,
-    phase: snapshot.phase,
     state: snapshot.state,
     currentTurn: snapshot.currentTurn,
     generatedAt,

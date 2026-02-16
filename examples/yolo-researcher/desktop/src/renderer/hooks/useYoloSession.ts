@@ -67,8 +67,6 @@ export function useYoloSession() {
   const [isStopping, setIsStopping] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
-  const [selectedPhase, setSelectedPhase] = useState<'P0' | 'P1' | 'P2' | 'P3'>('P3')
-
   // ─── Group A2: Research.md state ──────────────────────────────────
   const [researchMd, setResearchMd] = useState('')
   const [researchMdLoaded, setResearchMdLoaded] = useState(false)
@@ -677,10 +675,6 @@ export function useYoloSession() {
   }, [snapshot?.activeStage])
 
   useEffect(() => {
-    if (snapshot?.phase) setSelectedPhase(snapshot.phase)
-  }, [snapshot?.phase])
-
-  useEffect(() => {
     if (!snapshot?.sessionId) return
     if (goalSessionId === snapshot.sessionId) return
     setGoal(snapshot.goal || '')
@@ -805,7 +799,6 @@ export function useYoloSession() {
     setResearchMdLoaded(false)
     setPapers([])
     setReviews([])
-    setSelectedPhase('P3')
     setActionError(null)
     setActionNotice(null)
     setIsStarting(false)
@@ -931,7 +924,7 @@ export function useYoloSession() {
       setActionError(null)
       setActionNotice(null)
       try {
-        const started = await api.yoloStart(goal, { ...defaultOptions, phase: selectedPhase })
+        const started = await api.yoloStart(goal, defaultOptions)
         setSnapshot(started)
         await refreshHistory()
         await refreshQueue()
@@ -951,7 +944,7 @@ export function useYoloSession() {
       try {
         // Stop current session first to force a fresh start
         await api.yoloStop().catch(() => {})
-        const started = await api.yoloStart(goal, { ...defaultOptions, phase: selectedPhase })
+        const started = await api.yoloStart(goal, defaultOptions)
         setSnapshot(started)
         setTurnReports([])
         setEvents([])
@@ -1276,7 +1269,6 @@ export function useYoloSession() {
     },
 
     setGoal,
-    setSelectedPhase,
     setActiveTab,
     setSelectedStage,
     setTimelineStageFilter,
@@ -1344,7 +1336,6 @@ export function useYoloSession() {
     isStopping,
     actionError,
     actionNotice,
-    selectedPhase,
     activeTab,
     queueOpen,
     selectedStage,

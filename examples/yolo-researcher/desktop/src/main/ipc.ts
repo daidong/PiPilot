@@ -571,7 +571,6 @@ function buildSessionSummary(input: {
   return {
     sessionId: snapshot.sessionId,
     goal: snapshot.goal,
-    phase: snapshot.phase,
     state: snapshot.state,
     currentTurn: snapshot.currentTurn,
     activeStage: snapshot.activeStage,
@@ -600,7 +599,6 @@ function buildSessionSummary(input: {
       },
       readiness: latestReadiness
         ? {
-            phase: latestReadiness.phase,
             stage: latestReadiness.stage,
             pass: latestReadiness.pass,
             requiredFailed: latestReadiness.requiredFailed ?? []
@@ -789,7 +787,6 @@ function uniqueDestinationPath(targetDir: string, sourcePath: string): string {
 
 function buildFallbackOptions(snapshot: SessionPersistedState): YoloSessionOptions {
   return {
-    phase: snapshot.phase,
     mode: 'legacy',
     budget: {
       maxTurns: Math.max(snapshot.currentTurn + 10, snapshot.budgetUsed.turns + 10),
@@ -2011,7 +2008,6 @@ export function registerIpcHandlers(): void {
       if (
         current.goal !== trimmedGoal
         || isSessionTerminal(current.state)
-        || state.sessionOptions?.phase !== normalizedOptions.phase
         || state.sessionOptions?.mode !== normalizedOptions.mode
       ) {
         await stopSessionIfNeeded(state)
@@ -2068,8 +2064,7 @@ export function registerIpcHandlers(): void {
     await pushStateWithEvent(win, state, state.yoloSession, 'session_started')
     safeSend(win, 'yolo:event', {
       type: 'session_started',
-      goal: trimmedGoal,
-      phase: normalizedOptions.phase
+      goal: trimmedGoal
     })
 
     void runYoloLoop(win, state)

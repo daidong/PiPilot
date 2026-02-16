@@ -38,7 +38,6 @@ const session = createYoloSession({
   projectPath: '/path/to/project',
   goal: 'Investigate whether B-tree fanout affects SSD write amplification',
   options: {
-    phase: 'P0',
     budget: { maxTurns: 20, maxTokens: 200_000, maxCostUsd: 50 },
     models: { planner: 'gpt-4o-mini', coordinator: 'gpt-4o' }
   }
@@ -148,17 +147,6 @@ Research progresses through five stages, but not strictly linearly — branches 
 | S4 | Evaluation & Analysis | end-to-end comparisons, ablation, parity |
 | S5 | Paper Drafting | DraftSection, claim-evidence table, threats |
 
-### Phased Delivery (P0–P3)
-
-Each phase adds capabilities while keeping the same core interfaces.
-
-| Phase | Scope | Components Active |
-|-------|-------|-------------------|
-| P0 | Runtime skeleton | YoloSession, StubGateEngine, degenerate single-branch, basic checkpoints |
-| P1 | Literature YOLO | + StructuralGateEngine, full BranchManager (fork/revisit/merge/prune), WAITING_EXTERNAL, UserIngressManager |
-| P2 | Draft YOLO | + Runtime lease/heartbeat, durable checkpoint cadence, long-horizon robustness |
-| P3 | Full YOLO-Scholar | + Semantic ReviewEngine (Novelty/System/Evaluation/Writing personas), full S1–S5 pipeline |
-
 ### Runtime State Machine
 
 ```
@@ -250,15 +238,13 @@ Consensus rule: if >=2/3 reviewer passes flag the same blocker with citations, t
 
 Non-linear search control using a branch tree, while evidence remains shared globally.
 
-| Operation | Description | Phase |
-|-----------|-------------|-------|
-| `advance` | Continue current node | P0+ |
-| `fork` | Create child branch for alternative approach | P1+ |
-| `revisit` | Jump to ancestor node, reopen obligations | P1+ |
-| `merge` | Merge branch conclusions with conflict notes | P1+ |
-| `prune` | Archive low-value branch with rationale | P1+ |
-
-P0 runs in degenerate single-branch mode (advance only).
+| Operation | Description |
+|-----------|-------------|
+| `advance` | Continue current node |
+| `fork` | Create child branch for alternative approach |
+| `revisit` | Jump to ancestor node, reopen obligations |
+| `merge` | Merge branch conclusions with conflict notes |
+| `prune` | Archive low-value branch with rationale |
 
 ## Persistence Layout
 
@@ -302,14 +288,14 @@ The desktop UI is a structured research supervision interface — **not a chat i
 
 ### Views
 
-| View | Description | Phase |
-|------|-------------|-------|
-| Mission Control | Stage progress, runtime state, current turn, budget summary | P0+ |
-| Turn Timeline | Vertical audit trail of turn reports with filters | P0+ |
-| Checkpoint Dialog | Modal cards for freeze decisions, side-panel for questions | P0+ |
-| Branch Explorer | Interactive branch tree visualization | P1+ |
-| Evidence Map | Asset inventory + claim-evidence matrix | P1+ |
-| Diagnostics | Per-turn tool call sequence, token usage (DevTools-style) | P2+ |
+| View | Description |
+|------|-------------|
+| Mission Control | Stage progress, runtime state, current turn, budget summary |
+| Turn Timeline | Vertical audit trail of turn reports with filters |
+| Checkpoint Dialog | Modal cards for freeze decisions, side-panel for questions |
+| Branch Explorer | Interactive branch tree visualization |
+| Evidence Map | Asset inventory + claim-evidence matrix |
+| Diagnostics | Per-turn tool call sequence, token usage (DevTools-style) |
 
 ### IPC Contract
 
@@ -342,7 +328,6 @@ const session = createYoloSession({
   projectPath: string,          // Project root directory
   goal: string,                 // Research goal
   options: {
-    phase: 'P0' | 'P1' | 'P2' | 'P3',
     budget: {
       maxTurns: number,
       maxTokens: number,
@@ -424,8 +409,7 @@ const engine = createYoloReviewEngine({
 })
 
 const review = await engine.evaluate({
-  phase: 'P3',                  // Only active in P3
-  stage, manifest, gateResult
+  stage, manifest, gateResult   // Only runs at S5 (Final Synthesis)
 })
 // review.enabled: boolean
 // review.reviewerPasses: ReviewerPass[]
@@ -434,11 +418,11 @@ const review = await engine.evaluate({
 
 ## Testing
 
-The test suite covers all phases and key contracts:
+The test suite covers key contracts:
 
 ```
 tests/yolo-researcher/
-├── p0-runtime-skeleton.test.ts     # P0 session lifecycle, turn commit, events
+├── p0-runtime-skeleton.test.ts     # Session lifecycle, turn commit, events
 ├── p0-conformance.test.ts          # RFC §19 conformance (24 tests)
 ├── p2-runtime-robustness.test.ts   # Crash recovery, lease, checkpoints
 ├── p3-semantic-review.test.ts      # Consensus blockers, reviewer personas

@@ -26,6 +26,7 @@ interface TimelineTabProps {
 
 const GATE_LABELS: Record<GateStatus, string> = {
   pass: 'Passed',
+  advisory: 'Advisory',
   fail: 'Failed',
   none: 'Not Evaluated',
 }
@@ -92,7 +93,9 @@ function ThinkingCard({
             <span className={`rounded-md border px-1.5 py-0.5 text-[10px] ${
               gateStatus === 'pass'
                 ? 'border-emerald-500/40 t-accent-emerald'
-                : 'border-rose-500/40 t-accent-rose'
+                : gateStatus === 'advisory'
+                  ? 'border-amber-500/40 t-accent-amber'
+                  : 'border-rose-500/40 t-accent-rose'
             }`}>
               {GATE_LABELS[gateStatus]}
             </span>
@@ -282,7 +285,13 @@ function ThinkingCard({
           {gateStatus !== 'none' && (
             <div className="mt-1.5 text-[11px]">
               <span className="font-medium t-text-secondary">Gate: </span>
-              <span className={gateStatus === 'pass' ? 't-accent-emerald' : 't-accent-rose'}>
+              <span className={
+                gateStatus === 'pass'
+                  ? 't-accent-emerald'
+                  : gateStatus === 'advisory'
+                    ? 't-accent-amber'
+                    : 't-accent-rose'
+              }>
                 {GATE_LABELS[gateStatus]}
               </span>
             </div>
@@ -348,6 +357,7 @@ export function TimelineTab({
         >
           <option value="ALL">All</option>
           <option value="pass">Passed</option>
+          <option value="advisory">Advisory</option>
           <option value="fail">Failed</option>
           <option value="none">Not Evaluated</option>
         </select>

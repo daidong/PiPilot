@@ -27,7 +27,6 @@ interface SystemTabProps {
   governanceSummary: GovernanceSummary
   maintenanceAlerts: any[]
   queueOpen: boolean
-  selectedPhase: 'P0' | 'P1' | 'P2' | 'P3'
   onQueueOpenChange: (open: boolean | ((prev: boolean) => boolean)) => void
   actions: {
     setQueuePriority: (id: string, priority: 'urgent' | 'normal') => Promise<void>
@@ -67,13 +66,13 @@ function AccordionSection({ title, defaultOpen = false, tone, children }: {
 }
 
 // Key governance metrics shown by default
-const KEY_GOVERNANCE: { key: keyof GovernanceSummary; label: string }[] = [
-  { key: 'overrideDecisionCount', label: 'Override decisions' },
-  { key: 'semanticConsensusBlockerCount', label: 'Consensus blockers' },
-  { key: 'invalidatedNodeCount', label: 'Invalidated nodes' },
-  { key: 'maintenanceErrorCount', label: 'Critical / error alerts' },
-  { key: 'readinessGateFailureAlertCount', label: 'Readiness failures' },
-  { key: 'semanticReviewerCount', label: 'Quality reviewers' },
+const KEY_GOVERNANCE: { key: keyof GovernanceSummary; label: string; severity: 'blocker' | 'advisory' }[] = [
+  { key: 'overrideDecisionCount', label: 'Override decisions', severity: 'blocker' },
+  { key: 'semanticConsensusBlockerCount', label: 'Consensus blockers', severity: 'blocker' },
+  { key: 'invalidatedNodeCount', label: 'Invalidated nodes', severity: 'blocker' },
+  { key: 'maintenanceErrorCount', label: 'Critical / error alerts', severity: 'blocker' },
+  { key: 'readinessGateFailureAlertCount', label: 'Readiness failures', severity: 'advisory' },
+  { key: 'semanticReviewerCount', label: 'Quality reviewers', severity: 'advisory' },
 ]
 
 // Extended governance metrics hidden behind "Show all"
@@ -105,7 +104,6 @@ export function SystemTab({
   governanceSummary,
   maintenanceAlerts,
   queueOpen,
-  selectedPhase,
   onQueueOpenChange,
   actions,
 }: SystemTabProps) {
@@ -193,12 +191,15 @@ export function SystemTab({
           : undefined}
       >
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          {KEY_GOVERNANCE.map(({ key, label }) => (
-            <div key={key} className="contents">
-              <div className="t-text-secondary">{label}</div>
-              <div className="font-medium">{governanceSummary[key]}</div>
-            </div>
-          ))}
+          {KEY_GOVERNANCE.map(({ key, label, severity }) => {
+            const count = governanceSummary[key]
+            return (
+              <div key={key} className="contents">
+                <div className="t-text-secondary">{label}</div>
+                <div className={`font-medium ${count > 0 ? (severity === 'blocker' ? 't-accent-rose' : 't-accent-amber') : ''}`}>{count}</div>
+              </div>
+            )
+          })}
           {showAllGovernance && EXTENDED_GOVERNANCE.map(({ key, label }) => (
             <div key={key} className="contents">
               <div className="t-text-secondary">{label}</div>
@@ -273,9 +274,8 @@ export function SystemTab({
         </div>
       </AccordionSection>
 
-      {/* External Wait (P1+) */}
-      {selectedPhase !== 'P0' && (
-        <AccordionSection title="External Wait" tone="t-card-sky">
+      {/* External Wait */}
+      <AccordionSection title="External Wait" tone="t-card-sky">
           <div className="text-xs">
             {snapshot?.state === 'WAITING_EXTERNAL' ? (
               <div className="space-y-2">
@@ -409,11 +409,9 @@ export function SystemTab({
             )}
           </div>
         </AccordionSection>
-      )}
 
-      {/* Resource Extension (P1+) */}
-      {selectedPhase !== 'P0' && (
-        <AccordionSection title="Resource Extension" tone="t-card-amber">
+      {/* Resource Extension */}
+      <AccordionSection title="Resource Extension" tone="t-card-amber">
           <div className="text-xs">
             {snapshot?.pendingResourceExtension ? (
               <div className="space-y-2">
@@ -488,7 +486,6 @@ export function SystemTab({
             )}
           </div>
         </AccordionSection>
-      )}
 
       {/* Diagnostics */}
       <AccordionSection title="Diagnostics">
