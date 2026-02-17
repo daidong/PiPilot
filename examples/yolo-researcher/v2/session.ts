@@ -362,6 +362,7 @@ export class YoloSession {
     const stdoutPath = path.join(turnDir, 'stdout.txt')
     const stderrPath = path.join(turnDir, 'stderr.txt')
     const exitCodePath = path.join(turnDir, 'exit_code.txt')
+    const resultPath = path.join(turnDir, 'result.json')
 
     await writeText(cmdPath, `${action.cmd}\n`)
 
@@ -379,19 +380,29 @@ export class YoloSession {
       await writeText(stdoutPath, '')
       await writeText(stderrPath, message)
       await writeText(exitCodePath, '-1\n')
+      await writeText(resultPath, `${JSON.stringify({
+        exit_code: -1,
+        runtime,
+        cmd: action.cmd,
+        cwd,
+        duration_sec: 0,
+        timestamp: new Date().toISOString(),
+        blocked_by_fingerprint: blockedBy.fingerprint
+      }, null, 2)}\n`)
 
       return {
         status: 'blocked',
         keyObservation: `Command blocked: ${blockedBy.errorLine}`,
         evidencePaths: [
           this.toEvidencePath(cmdPath),
+          this.toEvidencePath(resultPath),
           this.toEvidencePath(stderrPath),
           this.toEvidencePath(exitCodePath)
         ],
         failureEntry: null,
         blockedBy,
         autoProjectUpdate: {
-          keyArtifacts: [this.toEvidencePath(stderrPath)]
+          keyArtifacts: [this.toEvidencePath(resultPath), this.toEvidencePath(stderrPath)]
         },
         updateSummary: ['Next: switch runtime, fix dependency/permission, or ask user.']
       }
@@ -411,12 +422,36 @@ export class YoloSession {
     await writeText(exitCodePath, `${outcome.exitCode}\n`)
 
     const cmdEvidence = this.toEvidencePath(cmdPath)
+    const resultEvidence = this.toEvidencePath(resultPath)
     const stdoutEvidence = this.toEvidencePath(stdoutPath)
     const stderrEvidence = this.toEvidencePath(stderrPath)
     const exitEvidence = this.toEvidencePath(exitCodePath)
+    const durationSecRaw = (new Date(outcome.endedAt).getTime() - new Date(outcome.startedAt).getTime()) / 1000
+    const durationSec = Number.isFinite(durationSecRaw)
+      ? Math.max(0, Number(durationSecRaw.toFixed(3)))
+      : undefined
+
+    const errorLine = outcome.exitCode === 0
+      ? ''
+      : (firstNonEmptyLine(outcome.stderr, outcome.stdout) || `exit code ${outcome.exitCode}`)
+    const deterministicFingerprint = (
+      outcome.exitCode !== 0 && isDeterministicFailure(errorLine)
+        ? buildFailureFingerprint(action.cmd, errorLine, runtime)
+        : null
+    )
+
+    await writeText(resultPath, `${JSON.stringify({
+      exit_code: outcome.exitCode,
+      runtime,
+      cmd: action.cmd,
+      cwd,
+      duration_sec: durationSec,
+      timestamp: outcome.endedAt,
+      ...(deterministicFingerprint ? { failure_fingerprint: deterministicFingerprint } : {})
+    }, null, 2)}\n`)
 
     const baseUpdate: ProjectUpdate = {
-      keyArtifacts: [cmdEvidence, stdoutEvidence, stderrEvidence, exitEvidence]
+      keyArtifacts: [cmdEvidence, resultEvidence, stdoutEvidence, stderrEvidence, exitEvidence]
     }
 
     if (outcome.exitCode === 0) {
@@ -424,14 +459,15 @@ export class YoloSession {
         await this.failureStore.clearBlockedAfterVerifiedSuccess({
           cmd: action.cmd,
           runtime,
-          evidencePath: stdoutEvidence
+          resolved: action.blockedOverrideReason.trim(),
+          evidencePath: resultEvidence
         })
       }
 
       return {
         status: 'success',
         keyObservation: 'Command executed successfully.',
-        evidencePaths: [cmdEvidence, stdoutEvidence, stderrEvidence, exitEvidence],
+        evidencePaths: [cmdEvidence, resultEvidence, stdoutEvidence, stderrEvidence, exitEvidence],
         failureEntry: null,
         blockedBy: null,
         autoProjectUpdate: baseUpdate,
@@ -439,15 +475,13 @@ export class YoloSession {
       }
     }
 
-    const errorLine = firstNonEmptyLine(outcome.stderr, outcome.stdout) || `exit code ${outcome.exitCode}`
     let failureEntry: FailureEntry | null = null
 
-    if (isDeterministicFailure(errorLine)) {
-      const fingerprint = buildFailureFingerprint(action.cmd, errorLine, runtime)
+    if (deterministicFingerprint) {
       failureEntry = await this.failureStore.recordDeterministicFailure({
         cmd: action.cmd,
         runtime,
-        fingerprint,
+        fingerprint: deterministicFingerprint,
         errorLine,
         evidencePath: stderrEvidence,
         alternatives: action.alternatives ?? []
@@ -457,7 +491,7 @@ export class YoloSession {
     return {
       status: 'failure',
       keyObservation: `Command failed: ${errorLine}`,
-      evidencePaths: [cmdEvidence, stdoutEvidence, stderrEvidence, exitEvidence],
+      evidencePaths: [cmdEvidence, resultEvidence, stdoutEvidence, stderrEvidence, exitEvidence],
       failureEntry,
       blockedBy: null,
       autoProjectUpdate: baseUpdate,

@@ -65,6 +65,7 @@ describe('yolo-researcher v2 runtime contract', () => {
 
     const turnDir = path.join(base, 'runs', 'turn-0001')
     await expect(fs.access(path.join(turnDir, 'action.md'))).resolves.toBeUndefined()
+    await expect(fs.access(path.join(turnDir, 'result.json'))).resolves.toBeUndefined()
     await expect(fs.access(path.join(turnDir, 'cmd.txt'))).resolves.toBeUndefined()
     await expect(fs.access(path.join(turnDir, 'stdout.txt'))).resolves.toBeUndefined()
     await expect(fs.access(path.join(turnDir, 'stderr.txt'))).resolves.toBeUndefined()
@@ -73,10 +74,16 @@ describe('yolo-researcher v2 runtime contract', () => {
 
     const stdout = await readText(path.join(turnDir, 'stdout.txt'))
     const exitCode = await readText(path.join(turnDir, 'exit_code.txt'))
+    const result = JSON.parse(await readText(path.join(turnDir, 'result.json'))) as Record<string, unknown>
     const projectMd = await readText(path.join(base, 'PROJECT.md'))
 
     expect(stdout).toContain('v2-ok')
     expect(exitCode.trim()).toBe('0')
+    expect(result.exit_code).toBe(0)
+    expect(result.runtime).toBe('host')
+    expect(result.cmd).toBe(`node -e "console.log('v2-ok')"`)
+    expect(typeof result.cwd).toBe('string')
+    expect(typeof result.timestamp).toBe('string')
     expect(projectMd).toContain('runs/turn-0001/stdout.txt')
   })
 

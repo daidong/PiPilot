@@ -1,6 +1,6 @@
 export type AtomicActionKind = 'Read' | 'Exec' | 'Edit' | 'Write' | 'Ask' | 'Stop'
 
-export type FailureStatus = 'WARN' | 'BLOCKED'
+export type FailureStatus = 'WARN' | 'BLOCKED' | 'UNBLOCKED'
 
 export interface EvidenceLine {
   text: string
@@ -26,6 +26,8 @@ export interface FailureEntry {
   cmd: string
   fingerprint: string
   errorLine: string
+  was?: string
+  resolved?: string
   evidencePath: string
   attempts: number
   alternatives: string[]

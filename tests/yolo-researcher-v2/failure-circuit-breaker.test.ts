@@ -63,9 +63,61 @@ describe('yolo-researcher v2 failure circuit breaker', () => {
     const base = path.join(projectPath, 'yolo', 'rq-failure-001')
     const failuresMd = await readText(path.join(base, 'FAILURES.md'))
     const turn4Exit = await readText(path.join(base, 'runs', 'turn-0004', 'exit_code.txt'))
+    const turn4Result = JSON.parse(await readText(path.join(base, 'runs', 'turn-0004', 'result.json'))) as Record<string, unknown>
 
     expect(failuresMd).toContain('[WARN][host]')
-    expect(failuresMd).toContain('Recovered after blocked override')
+    expect(failuresMd).toContain('[UNBLOCKED][host]')
+    expect(failuresMd).toContain('was: BLOCKED (ModuleNotFoundError: missing_dep)')
+    expect(failuresMd).toContain('resolved: Dependency installed; verify once.')
+    expect(failuresMd).toContain('evidence: runs/turn-0005/result.json')
     expect(turn4Exit.trim()).toBe('-1')
+    expect(turn4Result.exit_code).toBe(-1)
+    expect(turn4Result.runtime).toBe('host')
+  })
+
+  it('lets old BLOCKED fingerprints expire after moving beyond the last-10-turn window', async () => {
+    const projectPath = await createTempDir('yolo-v2-window-')
+    tempDirs.push(projectPath)
+
+    const flakyCmd = `node -e "console.error('ModuleNotFoundError: missing_dep'); process.exit(1);"`
+    const successCmd = `node -e "console.log('steady-state')"`
+    const actions = [
+      { intent: 'fail-1', action: { kind: 'Exec' as const, cmd: flakyCmd, runtime: 'host' as const } },
+      { intent: 'fail-2', action: { kind: 'Exec' as const, cmd: flakyCmd, runtime: 'host' as const } },
+      { intent: 'fail-3', action: { kind: 'Exec' as const, cmd: flakyCmd, runtime: 'host' as const } },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        intent: `success-${i + 1}`,
+        action: { kind: 'Exec' as const, cmd: successCmd, runtime: 'host' as const }
+      })),
+      { intent: 'fail-after-window', action: { kind: 'Exec' as const, cmd: flakyCmd, runtime: 'host' as const } }
+    ]
+
+    const session = createYoloSession({
+      projectPath,
+      projectId: 'rq-window-001',
+      goal: 'Verify BLOCKED expiry window',
+      agent: new ScriptedSingleAgent(actions)
+    })
+
+    await session.init()
+
+    let lastStatus = ''
+    for (let i = 0; i < actions.length; i += 1) {
+      const result = await session.runNextTurn()
+      lastStatus = result.status
+    }
+
+    expect(lastStatus).toBe('failure')
+
+    const turn14 = JSON.parse(await readText(path.join(
+      projectPath,
+      'yolo',
+      'rq-window-001',
+      'runs',
+      'turn-0014',
+      'result.json'
+    ))) as Record<string, unknown>
+    expect(turn14.exit_code).toBe(1)
+    expect(typeof turn14.failure_fingerprint).toBe('string')
   })
 })

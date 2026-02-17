@@ -1,9 +1,18 @@
 import * as path from 'node:path'
 
 import type { FailureEntry, FailureStatus } from './types.js'
-import { fileExists, normalizeText, readTextOrEmpty, toIso, writeText } from './utils.js'
+import {
+  fileExists,
+  formatTurnId,
+  listTurnNumbers,
+  normalizeText,
+  readTextOrEmpty,
+  toIso,
+  writeText
+} from './utils.js'
 
 const HEADER = '# Failures / Blockers (Do not retry blindly)'
+const FAILURE_WINDOW_TURNS = 10
 
 function normalizeCmd(value: string): string {
   return normalizeText(value)
@@ -16,7 +25,7 @@ function parseFailures(raw: string): FailureEntry[] {
 
   while (index < lines.length) {
     const line = (lines[index] ?? '').trimEnd()
-    const head = /^- \[(WARN|BLOCKED)\]\[([^\]]+)\]\s+(.+)$/.exec(line.trim())
+    const head = /^- \[(WARN|BLOCKED|UNBLOCKED)\]\[([^\]]+)\]\s+(.+)$/.exec(line.trim())
     if (!head) {
       index += 1
       continue
@@ -32,8 +41,10 @@ function parseFailures(raw: string): FailureEntry[] {
       cmd,
       fingerprint: '',
       errorLine: '',
+      was: '',
+      resolved: '',
       evidencePath: '',
-      attempts: status === 'BLOCKED' ? 3 : 2,
+      attempts: status === 'BLOCKED' ? 3 : status === 'WARN' ? 2 : 0,
       alternatives: [],
       updatedAt: ''
     }
@@ -46,11 +57,15 @@ function parseFailures(raw: string): FailureEntry[] {
 
       if (trimmed.startsWith('error:')) {
         entry.errorLine = trimmed.slice('error:'.length).trim()
+      } else if (trimmed.startsWith('was:')) {
+        entry.was = trimmed.slice('was:'.length).trim()
+      } else if (trimmed.startsWith('resolved:')) {
+        entry.resolved = trimmed.slice('resolved:'.length).trim()
       } else if (trimmed.startsWith('evidence:')) {
         entry.evidencePath = trimmed.slice('evidence:'.length).trim()
       } else if (trimmed.startsWith('attempts:')) {
         const value = Number(trimmed.slice('attempts:'.length).trim())
-        if (Number.isFinite(value) && value > 0) entry.attempts = Math.floor(value)
+        if (Number.isFinite(value) && value >= 0) entry.attempts = Math.floor(value)
       } else if (trimmed.startsWith('fingerprint:')) {
         entry.fingerprint = trimmed.slice('fingerprint:'.length).trim()
       } else if (trimmed.startsWith('updated_at:')) {
@@ -73,6 +88,9 @@ function parseFailures(raw: string): FailureEntry[] {
     if (!entry.fingerprint) {
       entry.fingerprint = `${normalizeCmd(entry.cmd)}|${normalizeText(entry.errorLine)}|${normalizeText(entry.runtime)}`
     }
+    if (!entry.updatedAt) {
+      entry.updatedAt = toIso(new Date(0))
+    }
 
     entries.push(entry)
   }
@@ -81,6 +99,17 @@ function parseFailures(raw: string): FailureEntry[] {
 }
 
 function renderEntry(entry: FailureEntry): string[] {
+  if (entry.status === 'UNBLOCKED') {
+    return [
+      `- [UNBLOCKED][${entry.runtime}] ${entry.cmd}`,
+      `  was: ${entry.was || `BLOCKED (${entry.errorLine || 'unknown'})`}`,
+      `  resolved: ${entry.resolved || 'minimal verification passed'}`,
+      `  evidence: ${entry.evidencePath}`,
+      `  fingerprint: ${entry.fingerprint}`,
+      `  updated_at: ${entry.updatedAt}`
+    ]
+  }
+
   const lines: string[] = [
     `- [${entry.status}][${entry.runtime}] ${entry.cmd}`,
     `  error: ${entry.errorLine}`,
@@ -122,11 +151,20 @@ function renderFailures(entries: FailureEntry[]): string {
   return `${lines.join('\n')}\n`
 }
 
+function latestByUpdatedAt(entries: FailureEntry[]): FailureEntry | null {
+  if (entries.length === 0) return null
+  return entries.reduce((latest, current) => (
+    current.updatedAt.localeCompare(latest.updatedAt) > 0 ? current : latest
+  ))
+}
+
 export class FailureStore {
   readonly filePath: string
+  private readonly runsDir: string
 
   constructor(private readonly yoloRoot: string, private readonly now: () => Date) {
     this.filePath = path.join(yoloRoot, 'FAILURES.md')
+    this.runsDir = path.join(yoloRoot, 'runs')
   }
 
   async init(): Promise<void> {
@@ -148,13 +186,43 @@ export class FailureStore {
     const entries = await this.load()
     const cmdNorm = normalizeCmd(cmd)
     const runtimeNorm = normalizeText(runtime)
-    for (const entry of entries) {
-      if (entry.status !== 'BLOCKED') continue
-      if (normalizeCmd(entry.cmd) !== cmdNorm) continue
-      if (normalizeText(entry.runtime) !== runtimeNorm) continue
-      return entry
+    const matching = entries.filter((entry) => (
+      normalizeCmd(entry.cmd) === cmdNorm
+      && normalizeText(entry.runtime) === runtimeNorm
+    ))
+    const latest = latestByUpdatedAt(matching)
+    if (!latest) return null
+    if (latest.status !== 'BLOCKED') return null
+
+    const attempts = await this.countRecentFailuresByFingerprint(latest.fingerprint)
+    return attempts >= 3 ? latest : null
+  }
+
+  private async countRecentFailuresByFingerprint(fingerprint: string): Promise<number> {
+    const fingerprintNorm = normalizeText(fingerprint)
+    if (!fingerprintNorm) return 0
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    const selected = turnNumbers.slice(-FAILURE_WINDOW_TURNS)
+
+    let count = 0
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const value = normalizeText(parsed.failure_fingerprint)
+        if (value && value === fingerprintNorm) {
+          count += 1
+        }
+      } catch {
+        // Ignore malformed historical JSON.
+      }
     }
-    return null
+
+    return count
   }
 
   async recordDeterministicFailure(input: {
@@ -165,10 +233,12 @@ export class FailureStore {
     evidencePath: string
     alternatives: string[]
   }): Promise<FailureEntry | null> {
+    const attempts = await this.countRecentFailuresByFingerprint(input.fingerprint)
+    if (attempts < 2) {
+      return null
+    }
+
     const entries = await this.load()
-    const existingIndex = entries.findIndex((entry) => entry.fingerprint === input.fingerprint)
-    const existing = existingIndex >= 0 ? entries[existingIndex] : null
-    const attempts = (existing?.attempts ?? 0) + 1
 
     const status: FailureStatus = attempts >= 3 ? 'BLOCKED' : 'WARN'
     const next: FailureEntry = {
@@ -177,17 +247,15 @@ export class FailureStore {
       cmd: input.cmd,
       fingerprint: input.fingerprint,
       errorLine: input.errorLine,
+      was: '',
+      resolved: '',
       evidencePath: input.evidencePath,
       attempts,
       alternatives: input.alternatives,
       updatedAt: toIso(this.now)
     }
 
-    if (existingIndex >= 0) {
-      entries[existingIndex] = next
-    } else {
-      entries.push(next)
-    }
+    entries.push(next)
 
     await this.save(entries)
     return next
@@ -196,32 +264,37 @@ export class FailureStore {
   async clearBlockedAfterVerifiedSuccess(input: {
     cmd: string
     runtime: string
+    resolved: string
     evidencePath: string
   }): Promise<boolean> {
     const entries = await this.load()
     const cmdNorm = normalizeCmd(input.cmd)
     const runtimeNorm = normalizeText(input.runtime)
-
-    let changed = false
-    const nextEntries = entries.map((entry) => {
-      if (entry.status !== 'BLOCKED') return entry
-      if (normalizeCmd(entry.cmd) !== cmdNorm) return entry
-      if (normalizeText(entry.runtime) !== runtimeNorm) return entry
-      changed = true
-      return {
-        ...entry,
-        status: 'WARN' as const,
-        attempts: 1,
-        errorLine: `Recovered after blocked override; verify once more before full retries. Previous: ${entry.errorLine}`,
-        evidencePath: input.evidencePath,
-        updatedAt: toIso(this.now)
-      }
-    })
-
-    if (changed) {
-      await this.save(nextEntries)
+    const matching = entries.filter((entry) => (
+      normalizeCmd(entry.cmd) === cmdNorm
+      && normalizeText(entry.runtime) === runtimeNorm
+    ))
+    const latest = latestByUpdatedAt(matching)
+    if (!latest || latest.status !== 'BLOCKED') {
+      return false
     }
 
-    return changed
+    const unblocked: FailureEntry = {
+      status: 'UNBLOCKED',
+      runtime: input.runtime,
+      cmd: input.cmd,
+      fingerprint: latest.fingerprint,
+      errorLine: latest.errorLine,
+      was: `BLOCKED (${latest.errorLine || 'unknown'})`,
+      resolved: input.resolved.trim() || 'minimal verification passed',
+      evidencePath: input.evidencePath,
+      attempts: 0,
+      alternatives: [],
+      updatedAt: toIso(this.now)
+    }
+
+    entries.push(unblocked)
+    await this.save(entries)
+    return true
   }
 }
