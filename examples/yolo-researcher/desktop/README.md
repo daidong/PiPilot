@@ -22,7 +22,7 @@ npm run dev
 This desktop app is intentionally v2-only:
 
 - One project folder at a time
-- One v2 session (`yolo/<project_id>/`) per selected project
+- One v2 session rooted at workspace
 - Evidence-first inspection of:
   - `PROJECT.md`
   - `FAILURES.md`

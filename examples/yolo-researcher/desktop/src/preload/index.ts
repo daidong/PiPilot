@@ -5,7 +5,6 @@ export type TurnFileName = 'action.md' | 'cmd.txt' | 'stdout.txt' | 'stderr.txt'
 
 export interface StartPayload {
   goal: string
-  projectId?: string
   model?: string
   defaultRuntime?: RuntimeKind
   autoRun?: boolean
@@ -22,7 +21,6 @@ export interface TurnListItem {
 
 export interface DesktopOverview {
   projectPath: string
-  projectId: string
   goal: string
   model: string
   defaultRuntime: RuntimeKind
@@ -44,6 +42,12 @@ export interface TurnArtifactMeta {
   sizeBytes: number
 }
 
+export interface QueuedUserInput {
+  id: string
+  text: string
+  submittedAt: string
+}
+
 export interface ElectronAPI {
   getCurrentSession: () => Promise<DesktopOverview>
   pickFolder: () => Promise<DesktopOverview | null>
@@ -53,6 +57,7 @@ export interface ElectronAPI {
   yoloRunTurn: () => Promise<any>
   yoloRunLoop: (maxTurns?: number) => Promise<DesktopOverview>
   yoloStop: () => Promise<DesktopOverview>
+  yoloSubmitUserInput: (text: string) => Promise<QueuedUserInput>
   yoloGetOverview: () => Promise<DesktopOverview>
 
   yoloGetProjectMarkdown: () => Promise<string>
@@ -64,6 +69,7 @@ export interface ElectronAPI {
 
   onYoloEvent: (cb: (payload: any) => void) => () => void
   onYoloTurnResult: (cb: (payload: any) => void) => () => void
+  onYoloActivity: (cb: (payload: any) => void) => () => void
   onProjectClosed: (cb: () => void) => () => void
 }
 
@@ -76,6 +82,7 @@ const api: ElectronAPI = {
   yoloRunTurn: () => ipcRenderer.invoke('yolo:run-turn'),
   yoloRunLoop: (maxTurns) => ipcRenderer.invoke('yolo:run-loop', maxTurns),
   yoloStop: () => ipcRenderer.invoke('yolo:stop'),
+  yoloSubmitUserInput: (text) => ipcRenderer.invoke('yolo:submit-user-input', text),
   yoloGetOverview: () => ipcRenderer.invoke('yolo:get-overview'),
 
   yoloGetProjectMarkdown: () => ipcRenderer.invoke('yolo:get-project-markdown'),
@@ -94,6 +101,11 @@ const api: ElectronAPI = {
     const handler = (_: unknown, payload: any) => cb(payload)
     ipcRenderer.on('yolo:turn-result', handler)
     return () => ipcRenderer.removeListener('yolo:turn-result', handler)
+  },
+  onYoloActivity: (cb) => {
+    const handler = (_: unknown, payload: any) => cb(payload)
+    ipcRenderer.on('yolo:activity', handler)
+    return () => ipcRenderer.removeListener('yolo:activity', handler)
   },
   onProjectClosed: (cb) => {
     const handler = () => cb()

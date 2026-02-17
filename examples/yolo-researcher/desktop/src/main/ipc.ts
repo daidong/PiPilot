@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   createLlmSingleAgent,
@@ -13,7 +14,6 @@ type TurnFileName = 'action.md' | 'cmd.txt' | 'stdout.txt' | 'stderr.txt' | 'exi
 
 interface StartPayload {
   goal: string
-  projectId?: string
   model?: string
   defaultRuntime?: RuntimeKind
   autoRun?: boolean
@@ -30,7 +30,6 @@ interface TurnListItem {
 
 interface DesktopOverview {
   projectPath: string
-  projectId: string
   goal: string
   model: string
   defaultRuntime: RuntimeKind
@@ -42,7 +41,6 @@ interface DesktopOverview {
 
 interface DesktopStateFile {
   lastProjectPath?: string
-  lastProjectId?: string
   lastGoal?: string
   lastModel?: string
   lastRuntime?: RuntimeKind
@@ -50,7 +48,6 @@ interface DesktopStateFile {
 
 interface WindowRuntimeState {
   projectPath: string
-  projectId: string
   goal: string
   model: string
   defaultRuntime: RuntimeKind
@@ -61,17 +58,87 @@ interface WindowRuntimeState {
   executingTurn: boolean
 }
 
-const DEFAULT_PROJECT_ID = 'research-v2'
-const DEFAULT_MODEL = 'gpt-5-mini'
+const DEFAULT_MODEL = 'gpt-5.2'
 const DEFAULT_RUNTIME: RuntimeKind = 'host'
+const DEFAULT_LOOP_TURNS = 12
 const MAX_LOOP_TURNS = 200
 const windowStates = new Map<number, WindowRuntimeState>()
 let handlersRegistered = false
+const REQUIRED_BOOTSTRAP_SKILL_ID = 'literature-search'
+const REQUIRED_COMMUNITY_SKILL_ID = 'markitdown'
+
+function resolveDefaultSkillsSourceDir(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  return resolve(moduleDir, '..', '..', '..', 'skills', 'default-project-skills')
+}
+
+function resolveCommunitySkillsSourceDir(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  return resolve(moduleDir, '..', '..', '..', '..', '..', 'src', 'skills', 'community-builtin')
+}
+
+function workspaceSkillsDir(projectPath: string): string {
+  return join(projectPath, '.agentfoundry', 'skills')
+}
+
+function syncDefaultSkillsToWorkspace(projectPath: string): { sourceDir: string; targetDir: string; copiedSkills: number } {
+  const sourceDir = resolveDefaultSkillsSourceDir()
+  const targetDir = workspaceSkillsDir(projectPath)
+
+  if (!existsSync(sourceDir)) {
+    throw new Error(`Default skills source not found: ${sourceDir}`)
+  }
+
+  const sourceEntries = readdirSync(sourceDir, { withFileTypes: true })
+  const skillDirs = sourceEntries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => existsSync(join(sourceDir, name, 'SKILL.md')))
+
+  if (skillDirs.length === 0) {
+    throw new Error(`No default skills found under: ${sourceDir}`)
+  }
+
+  rmSync(targetDir, { recursive: true, force: true })
+  mkdirSync(targetDir, { recursive: true })
+
+  for (const skillId of skillDirs) {
+    const from = join(sourceDir, skillId)
+    const to = join(targetDir, skillId)
+    cpSync(from, to, { recursive: true, force: true })
+  }
+
+  return { sourceDir, targetDir, copiedSkills: skillDirs.length }
+}
+
+function assertWorkspaceSkillsReady(projectPath: string): void {
+  const skillsDir = workspaceSkillsDir(projectPath)
+  if (!existsSync(skillsDir)) {
+    throw new Error(`Workspace skills directory is missing: ${skillsDir}`)
+  }
+
+  const requiredSkillFile = join(skillsDir, REQUIRED_BOOTSTRAP_SKILL_ID, 'SKILL.md')
+  if (!existsSync(requiredSkillFile)) {
+    throw new Error(`Required skill is missing: ${requiredSkillFile}`)
+  }
+}
+
+function assertCommunitySkillsReady(): string {
+  const communityDir = resolveCommunitySkillsSourceDir()
+  if (!existsSync(communityDir)) {
+    throw new Error(`Community skills directory is missing: ${communityDir}`)
+  }
+
+  const requiredSkillFile = join(communityDir, REQUIRED_COMMUNITY_SKILL_ID, 'SKILL.md')
+  if (!existsSync(requiredSkillFile)) {
+    throw new Error(`Required community skill is missing: ${requiredSkillFile}`)
+  }
+  return communityDir
+}
 
 function createWindowRuntimeState(): WindowRuntimeState {
   return {
     projectPath: '',
-    projectId: '',
     goal: '',
     model: DEFAULT_MODEL,
     defaultRuntime: DEFAULT_RUNTIME,
@@ -124,16 +191,6 @@ function writeDesktopState(state: DesktopStateFile): void {
   }
 }
 
-function sanitizeProjectId(input: string | undefined): string {
-  const normalized = (input ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '')
-  return normalized || DEFAULT_PROJECT_ID
-}
-
 function parseTurnNumber(name: string): number | null {
   const match = /^turn-(\d{4})$/.exec(name)
   if (!match) return null
@@ -141,12 +198,12 @@ function parseTurnNumber(name: string): number | null {
   return Number.isInteger(value) && value > 0 ? value : null
 }
 
-function sessionRoot(projectPath: string, projectId: string): string {
-  return join(projectPath, 'yolo', projectId)
+function sessionRoot(projectPath: string): string {
+  return projectPath
 }
 
-function inferGoalFromProjectMd(projectPath: string, projectId: string): string {
-  const mdPath = join(sessionRoot(projectPath, projectId), 'PROJECT.md')
+function inferGoalFromProjectMd(projectPath: string): string {
+  const mdPath = join(sessionRoot(projectPath), 'PROJECT.md')
   if (!existsSync(mdPath)) return ''
   try {
     const raw = readFileSync(mdPath, 'utf-8')
@@ -160,38 +217,6 @@ function inferGoalFromProjectMd(projectPath: string, projectId: string): string 
   }
 }
 
-function listProjectIds(projectPath: string): string[] {
-  const yoloDir = join(projectPath, 'yolo')
-  if (!existsSync(yoloDir)) return []
-
-  return readdirSync(yoloDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b))
-}
-
-function discoverLatestProjectId(projectPath: string): string {
-  const ids = listProjectIds(projectPath)
-  if (ids.length === 0) return DEFAULT_PROJECT_ID
-
-  let latestId = ids[0]
-  let latestMtime = -1
-
-  for (const id of ids) {
-    try {
-      const stats = statSync(sessionRoot(projectPath, id))
-      if (stats.mtimeMs > latestMtime) {
-        latestMtime = stats.mtimeMs
-        latestId = id
-      }
-    } catch {
-      // Ignore unreadable directories.
-    }
-  }
-
-  return latestId ?? DEFAULT_PROJECT_ID
-}
-
 function readFirstNonEmptyLine(raw: string, prefix: string): string {
   const line = raw
     .split(/\r?\n/)
@@ -200,8 +225,8 @@ function readFirstNonEmptyLine(raw: string, prefix: string): string {
   return line ? line.slice(prefix.length).trim() : ''
 }
 
-function listTurnsFromDisk(projectPath: string, projectId: string): TurnListItem[] {
-  const runsDir = join(sessionRoot(projectPath, projectId), 'runs')
+function listTurnsFromDisk(projectPath: string): TurnListItem[] {
+  const runsDir = join(sessionRoot(projectPath), 'runs')
   if (!existsSync(runsDir)) return []
 
   const numbers = readdirSync(runsDir, { withFileTypes: true })
@@ -231,20 +256,20 @@ function listTurnsFromDisk(projectPath: string, projectId: string): TurnListItem
       turnNumber,
       status,
       summary,
-      actionPath: evidencePath(projectId, turnNumber, 'action.md'),
-      turnDir: evidenceTurnDirPath(projectId, turnNumber)
+      actionPath: evidencePath(turnNumber, 'action.md'),
+      turnDir: evidenceTurnDirPath(turnNumber)
     })
   }
 
   return turns
 }
 
-function evidenceTurnDirPath(projectId: string, turnNumber: number): string {
-  return `yolo/${projectId}/runs/turn-${turnNumber.toString().padStart(4, '0')}`
+function evidenceTurnDirPath(turnNumber: number): string {
+  return `runs/turn-${turnNumber.toString().padStart(4, '0')}`
 }
 
-function evidencePath(projectId: string, turnNumber: number, fileName: string): string {
-  return `${evidenceTurnDirPath(projectId, turnNumber)}/${fileName}`
+function evidencePath(turnNumber: number, fileName: string): string {
+  return `${evidenceTurnDirPath(turnNumber)}/${fileName}`
 }
 
 function resolveApiKey(): string | undefined {
@@ -273,13 +298,12 @@ async function destroyRuntime(state: WindowRuntimeState): Promise<void> {
 }
 
 async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview> {
-  const turns = state.projectPath && state.projectId
-    ? listTurnsFromDisk(state.projectPath, state.projectId)
+  const turns = state.projectPath
+    ? listTurnsFromDisk(state.projectPath)
     : []
 
   return {
     projectPath: state.projectPath,
-    projectId: state.projectId,
     goal: state.goal,
     model: state.model,
     defaultRuntime: state.defaultRuntime,
@@ -291,9 +315,9 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
 }
 
 async function loadCurrentProjectControlFile(state: WindowRuntimeState, fileName: 'PROJECT.md' | 'FAILURES.md'): Promise<string> {
-  if (!state.projectPath || !state.projectId) return ''
+  if (!state.projectPath) return ''
 
-  const filePath = join(sessionRoot(state.projectPath, state.projectId), fileName)
+  const filePath = join(sessionRoot(state.projectPath), fileName)
   if (!existsSync(filePath)) return ''
   return readFileSync(filePath, 'utf-8')
 }
@@ -307,7 +331,19 @@ function clampTurns(value: number | undefined): number {
 }
 
 function isTurnTerminal(status: TurnExecutionResult['status']): boolean {
-  return status === 'ask_user' || status === 'stopped' || status === 'blocked'
+  return status === 'ask_user' || status === 'stopped'
+}
+
+function describeExecutedAction(result: TurnExecutionResult): string {
+  if (result.primaryAction?.trim()) return result.primaryAction.trim()
+  return 'agent.run'
+}
+
+function inferNextTurnNumber(state: WindowRuntimeState): number | null {
+  if (!state.projectPath) return null
+  const turns = listTurnsFromDisk(state.projectPath)
+  const last = turns[turns.length - 1]?.turnNumber ?? 0
+  return last + 1
 }
 
 async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Promise<TurnExecutionResult> {
@@ -315,14 +351,33 @@ async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Pro
   if (state.executingTurn) throw new Error('A turn is already running.')
 
   state.executingTurn = true
+  const turnStartTime = Date.now()
+  const nextTurn = inferNextTurnNumber(state)
+  safeSend(win, 'yolo:activity', {
+    id: `${Date.now()}-start`,
+    timestamp: new Date().toISOString(),
+    type: 'turn_started',
+    summary: nextTurn ? `Starting turn-${String(nextTurn).padStart(4, '0')}` : 'Starting turn'
+  })
   try {
     const result = await state.yoloSession.runNextTurn()
+    const durationMs = Date.now() - turnStartTime
+    const actionLabel = describeExecutedAction(result)
     safeSend(win, 'yolo:turn-result', result)
     safeSend(win, 'yolo:event', {
       type: 'turn_completed',
       turnNumber: result.turnNumber,
       status: result.status,
-      summary: result.summary
+      summary: `Agent: ${actionLabel}`,
+      observation: result.summary,
+      intent: result.intent
+    })
+    safeSend(win, 'yolo:activity', {
+      id: `${Date.now()}-done`,
+      timestamp: new Date().toISOString(),
+      type: 'turn_completed',
+      summary: `Turn ${result.turnNumber} -> ${result.status}`,
+      detail: `Agent: ${actionLabel}\nintent: ${result.intent}\n${result.summary} (${durationMs}ms)`
     })
     return result
   } finally {
@@ -343,19 +398,44 @@ async function runLoop(win: BrowserWindow, state: WindowRuntimeState, requestedT
     for (let index = 0; index < maxTurns; index += 1) {
       if (state.stopRequested) {
         safeSend(win, 'yolo:event', { type: 'loop_stopped', reason: 'stop_requested' })
+        safeSend(win, 'yolo:activity', {
+          id: `${Date.now()}-stop`,
+          timestamp: new Date().toISOString(),
+          type: 'loop_stopped',
+          summary: 'Loop stopped by user request'
+        })
         break
       }
+
+      safeSend(win, 'yolo:activity', {
+        id: `${Date.now()}-progress`,
+        timestamp: new Date().toISOString(),
+        type: 'loop_progress',
+        summary: `Loop turn ${index + 1}/${maxTurns}`
+      })
 
       const result = await runSingleTurn(state, win)
 
       if (isTurnTerminal(result.status)) {
         safeSend(win, 'yolo:event', { type: 'loop_stopped', reason: result.status })
+        safeSend(win, 'yolo:activity', {
+          id: `${Date.now()}-terminal`,
+          timestamp: new Date().toISOString(),
+          type: 'loop_stopped',
+          summary: `Loop stopped: ${result.status}`
+        })
         break
       }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     safeSend(win, 'yolo:event', { type: 'loop_error', message })
+    safeSend(win, 'yolo:activity', {
+      id: `${Date.now()}-error`,
+      timestamp: new Date().toISOString(),
+      type: 'loop_error',
+      summary: `Loop error: ${message}`
+    })
     throw error
   } finally {
     state.loopRunning = false
@@ -372,11 +452,17 @@ async function restoreWindowStateFromDisk(state: WindowRuntimeState): Promise<vo
   if (!existsSync(saved.lastProjectPath)) return
 
   const projectPath = saved.lastProjectPath
-  const projectId = sanitizeProjectId(saved.lastProjectId || discoverLatestProjectId(projectPath))
-  const goal = saved.lastGoal?.trim() || inferGoalFromProjectMd(projectPath, projectId)
+  try {
+    syncDefaultSkillsToWorkspace(projectPath)
+    assertWorkspaceSkillsReady(projectPath)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`Failed to sync default skills for restored workspace "${projectPath}": ${reason}`)
+  }
+
+  const goal = saved.lastGoal?.trim() || inferGoalFromProjectMd(projectPath)
 
   state.projectPath = projectPath
-  state.projectId = projectId
   state.goal = goal
   state.model = saved.lastModel?.trim() || DEFAULT_MODEL
   state.defaultRuntime = saved.lastRuntime ?? DEFAULT_RUNTIME
@@ -390,7 +476,6 @@ function persistWindowState(state: WindowRuntimeState): void {
 
   writeDesktopState({
     lastProjectPath: state.projectPath,
-    lastProjectId: state.projectId,
     lastGoal: state.goal,
     lastModel: state.model,
     lastRuntime: state.defaultRuntime
@@ -399,6 +484,9 @@ function persistWindowState(state: WindowRuntimeState): void {
 
 async function initializeSession(state: WindowRuntimeState, payload: StartPayload): Promise<void> {
   assertProjectSelected(state)
+  syncDefaultSkillsToWorkspace(state.projectPath)
+  assertWorkspaceSkillsReady(state.projectPath)
+  const communitySkillsDir = assertCommunitySkillsReady()
   if (state.loopRunning || state.executingTurn) {
     throw new Error('Cannot start/rebind while a turn is running.')
   }
@@ -406,13 +494,11 @@ async function initializeSession(state: WindowRuntimeState, payload: StartPayloa
   const goal = payload.goal?.trim()
   if (!goal) throw new Error('Goal is required.')
 
-  const projectId = sanitizeProjectId(payload.projectId || state.projectId || discoverLatestProjectId(state.projectPath))
   const model = payload.model?.trim() || state.model || DEFAULT_MODEL
   const defaultRuntime = payload.defaultRuntime ?? state.defaultRuntime ?? DEFAULT_RUNTIME
 
   const needsFreshSession = (
     !state.yoloSession
-    || state.projectId !== projectId
     || state.goal !== goal
     || state.model !== model
     || state.defaultRuntime !== defaultRuntime
@@ -425,12 +511,14 @@ async function initializeSession(state: WindowRuntimeState, payload: StartPayloa
       projectPath: state.projectPath,
       model,
       apiKey: resolveApiKey(),
-      enableNetwork: false
+      enableNetwork: true,
+      capabilityProfile: 'full',
+      autoApprove: true,
+      communitySkillsDir
     })
 
     const session = createYoloSession({
       projectPath: state.projectPath,
-      projectId,
       goal,
       defaultRuntime,
       agent
@@ -442,7 +530,6 @@ async function initializeSession(state: WindowRuntimeState, payload: StartPayloa
     state.yoloSession = session
   }
 
-  state.projectId = projectId
   state.goal = goal
   state.model = model
   state.defaultRuntime = defaultRuntime
@@ -450,21 +537,21 @@ async function initializeSession(state: WindowRuntimeState, payload: StartPayloa
 }
 
 function readTurnFileFromDisk(state: WindowRuntimeState, turnNumber: number, fileName: TurnFileName): { exists: boolean; content: string; relativePath: string } {
-  if (!state.projectPath || !state.projectId) return { exists: false, content: '', relativePath: '' }
-  const turnDir = join(sessionRoot(state.projectPath, state.projectId), 'runs', `turn-${turnNumber.toString().padStart(4, '0')}`)
+  if (!state.projectPath) return { exists: false, content: '', relativePath: '' }
+  const turnDir = join(sessionRoot(state.projectPath), 'runs', `turn-${turnNumber.toString().padStart(4, '0')}`)
   const filePath = join(turnDir, fileName)
   if (!existsSync(filePath)) {
     return {
       exists: false,
       content: '',
-      relativePath: evidencePath(state.projectId, turnNumber, fileName)
+      relativePath: evidencePath(turnNumber, fileName)
     }
   }
 
   return {
     exists: true,
     content: readFileSync(filePath, 'utf-8'),
-    relativePath: evidencePath(state.projectId, turnNumber, fileName)
+    relativePath: evidencePath(turnNumber, fileName)
   }
 }
 
@@ -483,7 +570,6 @@ export async function closeProjectForWindow(win: BrowserWindow): Promise<void> {
   }
   await destroyRuntime(state)
   state.projectPath = ''
-  state.projectId = ''
   state.goal = ''
   state.model = DEFAULT_MODEL
   state.defaultRuntime = DEFAULT_RUNTIME
@@ -514,19 +600,24 @@ export function registerIpcHandlers(): void {
     await destroyRuntime(state)
 
     const projectPath = picked.filePaths[0]
-    const projectId = discoverLatestProjectId(projectPath)
+    const synced = syncDefaultSkillsToWorkspace(projectPath)
 
     state.projectPath = projectPath
-    state.projectId = sanitizeProjectId(projectId)
-    state.goal = inferGoalFromProjectMd(projectPath, state.projectId)
+    state.goal = inferGoalFromProjectMd(projectPath)
     state.model = DEFAULT_MODEL
     state.defaultRuntime = DEFAULT_RUNTIME
     persistWindowState(state)
 
     safeSend(win, 'yolo:event', {
       type: 'project_selected',
-      projectPath,
-      projectId: state.projectId
+      projectPath
+    })
+    safeSend(win, 'yolo:activity', {
+      id: `${Date.now()}-skills-sync`,
+      timestamp: new Date().toISOString(),
+      type: 'loop_progress',
+      summary: `Synced ${synced.copiedSkills} default skills to workspace`,
+      detail: `source: ${synced.sourceDir}\ntarget: ${synced.targetDir}`
     })
 
     return buildOverview(state)
@@ -543,14 +634,13 @@ export function registerIpcHandlers(): void {
 
     safeSend(win, 'yolo:event', {
       type: 'session_started',
-      projectId: overview.projectId,
       goal: overview.goal,
       model: overview.model,
       runtime: overview.defaultRuntime
     })
 
     if (payload.autoRun && state.yoloSession) {
-      void runLoop(win, state, payload.maxTurns ?? 10).catch(() => undefined)
+      void runLoop(win, state, payload.maxTurns ?? DEFAULT_LOOP_TURNS).catch(() => undefined)
     }
 
     return overview
@@ -563,7 +653,7 @@ export function registerIpcHandlers(): void {
   handleWindow('yolo:run-loop', async ({ win, state }, maxTurns?: number) => {
     if (!state.yoloSession) throw new Error('No active v2 session. Call yolo:start first.')
     if (state.executingTurn) throw new Error('A turn is already running.')
-    await runLoop(win, state, maxTurns ?? 10)
+    await runLoop(win, state, maxTurns ?? DEFAULT_LOOP_TURNS)
     return buildOverview(state)
   })
 
@@ -571,6 +661,26 @@ export function registerIpcHandlers(): void {
     state.stopRequested = true
     safeSend(win, 'yolo:event', { type: 'stop_requested' })
     return buildOverview(state)
+  })
+
+  handleWindow('yolo:submit-user-input', async ({ win, state }, text: string) => {
+    if (!state.yoloSession) throw new Error('No active v2 session. Call yolo:start first.')
+    const normalized = text?.trim()
+    if (!normalized) throw new Error('User input text is required.')
+
+    const queued = await state.yoloSession.submitUserInput(normalized)
+    safeSend(win, 'yolo:event', {
+      type: 'user_input_submitted',
+      submittedAt: queued.submittedAt
+    })
+    safeSend(win, 'yolo:activity', {
+      id: `${Date.now()}-user-input`,
+      timestamp: new Date().toISOString(),
+      type: 'user_input_submitted',
+      summary: 'User input submitted',
+      detail: normalized.slice(0, 240)
+    })
+    return queued
   })
 
   handleWindow('yolo:get-overview', async ({ state }) => {
@@ -592,8 +702,8 @@ export function registerIpcHandlers(): void {
   })
 
   handleWindow('yolo:list-turns', async ({ state }) => {
-    if (!state.projectPath || !state.projectId) return [] as TurnListItem[]
-    return listTurnsFromDisk(state.projectPath, state.projectId)
+    if (!state.projectPath) return [] as TurnListItem[]
+    return listTurnsFromDisk(state.projectPath)
   })
 
   handleWindow('yolo:read-turn-file', async ({ state }, turnNumber: number, fileName: TurnFileName) => {
@@ -604,11 +714,11 @@ export function registerIpcHandlers(): void {
   })
 
   handleWindow('yolo:list-turn-artifacts', async ({ state }, turnNumber: number) => {
-    if (!state.projectPath || !state.projectId) return [] as Array<{ name: string; relativePath: string; sizeBytes: number }>
+    if (!state.projectPath) return [] as Array<{ name: string; relativePath: string; sizeBytes: number }>
     if (!Number.isInteger(turnNumber) || turnNumber <= 0) throw new Error('turnNumber must be a positive integer')
 
     const artifactsDir = join(
-      sessionRoot(state.projectPath, state.projectId),
+      sessionRoot(state.projectPath),
       'runs',
       `turn-${turnNumber.toString().padStart(4, '0')}`,
       'artifacts'
@@ -622,7 +732,7 @@ export function registerIpcHandlers(): void {
         const fullPath = join(artifactsDir, entry.name)
         return {
           name: entry.name,
-          relativePath: evidencePath(state.projectId, turnNumber, `artifacts/${entry.name}`),
+          relativePath: evidencePath(turnNumber, `artifacts/${entry.name}`),
           sizeBytes: statSync(fullPath).size
         }
       })
@@ -632,14 +742,14 @@ export function registerIpcHandlers(): void {
   })
 
   handleWindow('yolo:read-artifact-file', async ({ state }, turnNumber: number, fileName: string) => {
-    if (!state.projectPath || !state.projectId) return { exists: false, content: '', relativePath: '' }
+    if (!state.projectPath) return { exists: false, content: '', relativePath: '' }
     if (!Number.isInteger(turnNumber) || turnNumber <= 0) throw new Error('turnNumber must be a positive integer')
     if (!fileName.trim() || fileName.includes('/') || fileName.includes('..') || fileName.includes('\\')) {
       throw new Error('Invalid artifact file name')
     }
 
     const artifactsDir = join(
-      sessionRoot(state.projectPath, state.projectId),
+      sessionRoot(state.projectPath),
       'runs',
       `turn-${turnNumber.toString().padStart(4, '0')}`,
       'artifacts'
@@ -650,14 +760,14 @@ export function registerIpcHandlers(): void {
       return {
         exists: false,
         content: '',
-        relativePath: evidencePath(state.projectId, turnNumber, `artifacts/${basename(fileName)}`)
+        relativePath: evidencePath(turnNumber, `artifacts/${basename(fileName)}`)
       }
     }
 
     return {
       exists: true,
       content: readFileSync(filePath, 'utf-8'),
-      relativePath: evidencePath(state.projectId, turnNumber, `artifacts/${basename(fileName)}`)
+      relativePath: evidencePath(turnNumber, `artifacts/${basename(fileName)}`)
     }
   })
 }

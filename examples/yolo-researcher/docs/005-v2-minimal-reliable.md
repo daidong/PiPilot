@@ -1,342 +1,306 @@
-# YOLO-Researcher v2: Minimal & Reliable
+# YOLO-Researcher v2: Minimal & Reliable (Thin Native Protocol)
 
 > **Design Axiom**: The system does not pursue quality through architectural complexity.
-> Instead, it pursues **minimal discipline to prevent death + evidence-driven progressive strengthening**.
+> It pursues **minimal discipline to avoid death + evidence-driven progressive strengthening**.
 
 ---
 
 ## 0. Goals
 
-Build a highly autonomous YOLO researcher: given a research topic prompt, it continuously drives the full research process (clarify → analyze → innovate → experiment → summarize → write), with:
+Build a highly autonomous researcher that can run long tasks with:
 
-- **Cross-session continuity**: No "amnesia", no repeated mistakes.
-- **Resistance to repeated failures**: The same error does not appear over and over.
-- **Resistance to hallucination spread**: One inaccurate LLM output does not corrupt everything.
-- **Low fixed overhead**: Token/context budget goes to reading code, running experiments, and writing papers — not to protocols and orchestration.
+- **Cross-session continuity** (no amnesia)
+- **Failure memory** (no blind retries forever)
+- **Evidence discipline** (facts must be backed by artifacts)
+- **Low fixed overhead** (budget goes to real work, not protocol ceremony)
 
 ---
 
-## 1. Design Philosophy & Key Principles
+## 1. Non-Negotiable Principles
 
-### 1.1 Simplicity First
+### 1.1 Single-Agent Native Runtime
 
-No multi-agent pipeline. No heavy protocols. No multi-layer Gate/Reviewer.
-A single agent autonomous loop can run the entire process; everything else is an **optional accelerator**, not a correctness dependency.
+No mandatory multi-agent orchestration. No heavy intermediate protocol.
+A single agent executes tools/skills/subagents directly and returns one turn report.
 
 ### 1.2 Evidence First
 
-The most dangerous thing in research is not "being not smart enough" — it is **"looks reasonable but has no evidence"**. Therefore:
+Allowed truth sources:
 
-- **Sources of truth** are restricted to: raw tool output, code patches, experiment artifacts.
-- LLM-written content may only be:
-  - **Decisions**
-  - **Hypotheses**
-  - **Next actions**
-  - **Pointers** to evidence paths
-- Any "factual claim" must point to a file under `runs/turn-xxxx/`. Otherwise it must be tagged `[HYP]`.
+- raw tool output
+- code patch files
+- generated experiment artifacts
 
-This principle directly prevents "inaccurate summary / memory drift causing disaster".
+LLM text without evidence is hypothesis only.
 
-### 1.3 Append-Only, Never Rewrite History
+### 1.3 Append-Only Recovery
 
-LLM errors are inevitable, but we guarantee errors never overwrite evidence and history:
+Every turn writes to a new directory `runs/turn-xxxx/`.
+History is not rewritten.
 
-- Every turn writes actions and evidence into a new directory `runs/turn-xxxx/` (append-only).
-- The main files receive only small incremental updates: update current plan and pointers, never bulk-rewrite the past.
-- This way, **"errors are confined to the latest turn"** and are easy to roll back or correct.
+### 1.4 Failure = Learned Constraint
 
-### 1.4 Failure = Learning (Failure Memory + Circuit Breaker)
-
-Repeated occurrences of the same operation/error are a systemic problem:
-
-- **Deterministic failures** (e.g., `ModuleNotFoundError`, permission errors, path not found) — once repeated 2–3 times, automatically marked as `BLOCKED`.
-- `BLOCKED` entries must be written into `FAILURES.md` and forcefully avoided in subsequent turns. The agent must switch to an alternative route or ask the user for information.
+Deterministic repeated failures are promoted to `WARN`/`BLOCKED` and prevent dead loops.
 
 ---
 
-## 2. Minimal Persistence: Directory Structure & File Contracts
-
-v2 persistence is deliberately compressed to the minimum: **2 main files + evidence directories**.
+## 2. Minimal Persistence Contracts
 
 ```
-yolo/<project_id>/
-├── PROJECT.md          # Single control panel: goal/plan/state/key pointers (short)
-├── FAILURES.md         # Failure & blocker list: paths not to retry (short)
-└── runs/
-    ├── turn-0001/
-    │   ├── action.md   # This turn's "what/why" (short)
-    │   ├── result.json # Execution metadata (see §2.3)
-    │   ├── cmd.txt     # Command run (if any)
-    │   ├── stdout.txt  # Raw output (if any)
-    │   ├── stderr.txt  # Raw error (if any)
-    │   ├── patch.diff  # Code changes (if any)
-    │   └── artifacts/  # Result files/figures/tables/intermediates
-    └── turn-0002/...
+PROJECT.md
+FAILURES.md
+user-input-queue.json
+runs/
+├── turn-0001/
+│   ├── action.md
+│   ├── result.json
+│   ├── cmd.txt
+│   ├── stdout.txt
+│   ├── stderr.txt
+│   ├── exit_code.txt
+│   └── artifacts/
+│       ├── tool-events.jsonl
+│       └── ...
+└── turn-0002/...
 ```
 
-### 2.1 PROJECT.md: Single Control Panel (Must Be Short)
+### 2.1 PROJECT.md (Control Panel)
 
-PROJECT.md is **navigation**, not a **fact warehouse**. Its job: let the agent quickly find the main thread on every startup.
+`PROJECT.md` is navigation, not a narrative dump.
 
-Fixed structure (do not expand arbitrarily):
+Required sections:
 
-| Section | Purpose | Rules |
-|---------|---------|-------|
-| **Goal & Success Criteria** | Target + verifiable success criteria | As specific as possible |
-| **Current Plan (Next 3–5 actions)** | Next steps, max 3–5 items | Short and actionable |
-| **Facts (with evidence pointers)** | Reproducible facts only | Every item must have an evidence path (`runs/turn-xxxx/...`) |
-| **Constraints / Environment** | Environment constraints (docker/host, deps, permissions, network) | Must have evidence pointers |
-| **Hypotheses [HYP]** | Unverified conjectures | Must be tagged `[HYP]`, forbidden from mixing into Facts |
-| **Key Artifacts** | Key output pointers | Experiment result dirs, draft paths, key patches |
+- Goal & Success Criteria
+- Current Plan (3–5 concrete next actions)
+- Facts (must include `runs/turn-xxxx/...` evidence pointers)
+- Constraints / Environment (with evidence pointers)
+- Hypotheses `[HYP]`
+- Key Artifacts
 
-**Core discipline: Every sentence in Facts and Constraints must link to an evidence file.**
+Size discipline:
 
-**Size limits** (any one exceeded triggers compression):
+- total lines <= 150
+- facts <= 20
+- key artifacts <= 20
+- old facts are demoted to `Facts (Archived)` as pointer entries (append-only)
 
-- Total lines: ≤ 150
-- Facts entries: ≤ 20
-- Key Artifacts entries: ≤ 20
+### 2.2 FAILURES.md (Do-Not-Retry Memory)
 
-**Compression strategy** (monotonic and safe — demote, never rewrite):
+`FAILURES.md` is only for deterministic failure memory.
+Not a full error journal.
 
-- Old Facts → `Facts (Archived)` section: **demote to index entry** — keep only the original conclusion sentence + its evidence path. This is not summarization (no new text is generated); it is demotion to a pointer.
-- Always preserve in the active section: Constraints, Current Plan, most recent 5–10 Facts relevant to current stage.
-- **Forbidden compression actions**: rewriting a Fact in different words, merging multiple Facts into one, generating a narrative summary of archived Facts. The only allowed operation is moving a Fact verbatim (or truncated to one line) into the Archived section with its evidence pointer intact.
+Statuses:
 
-### 2.2 FAILURES.md: Only Deterministic Failures/Blockers, Not a Journal
+- `[WARN]`
+- `[BLOCKED]`
+- `[UNBLOCKED]`
 
-FAILURES.md is not for reviewing all errors. Its purpose is to form a **"do not retry" list** that breaks deadlocks.
+Entry must include at least:
 
-Entry format — minimal but must include evidence:
+- runtime
+- command
+- error line
+- evidence path
+- fingerprint
+- timestamp
 
-```markdown
-- [BLOCKED][docker] python -m openevolve.llm
-  error: ModuleNotFoundError: No module named 'openevolve.llm'
-  evidence: runs/turn-0012/stderr.txt
-  attempts: 3
-  alternatives:
-    - run on host environment
-    - install missing package in docker
-    - fix import/module path
+### 2.3 result.json (Mandatory for Every Turn)
 
-- [WARN][host] pip install openevolve
-  error: Permission denied: /usr/local/lib/python3.11
-  evidence: runs/turn-0015/stderr.txt
-  attempts: 2
-  alternatives:
-    - use --user flag
-    - use venv
-```
+Every turn writes `result.json`.
 
-**`BLOCKED` semantics**: Under current constraints unchanged, retrying will only waste turn budget.
-
-### 2.3 result.json: Execution Metadata (Mandatory for Exec Actions)
-
-Every `Exec` turn must write a `result.json` alongside the raw output files. This is the structured contract for execution results:
+Current v2 contract:
 
 ```json
 {
-  "exit_code": 1,
-  "runtime": "docker",
-  "cmd": "python -m openevolve.llm",
-  "cwd": "/workspace/openevolve",
-  "duration_sec": 12.3,
-  "timestamp": "2026-02-16T20:47:43Z"
+  "status": "success|failure|blocked|ask_user|stopped",
+  "intent": "...",
+  "summary": "...",
+  "primary_action": "...",
+  "exit_code": 0,
+  "runtime": "host|docker|venv",
+  "cmd": "...",
+  "cwd": "...",
+  "duration_sec": 1.234,
+  "timestamp": "2026-02-17T02:17:23.000Z",
+  "tool_events_path": "runs/turn-0001/artifacts/tool-events.jsonl",
+  "tool_events_count": 2,
+  "failure_fingerprint": "... (optional)",
+  "unblock_verified": true
 }
 ```
 
-| Field | Required | Purpose |
-|-------|----------|---------|
-| `exit_code` | Yes | Machine-readable success/failure signal |
-| `runtime` | Yes | Which environment was used (docker/host/venv) |
-| `cmd` | Yes | Exact command executed |
-| `cwd` | Yes | Working directory at execution time |
-| `duration_sec` | No | Wall-clock time (useful for timeout tuning) |
-| `timestamp` | No | When execution occurred |
+Notes:
 
-For non-Exec actions (Read/Edit/Write/Ask/Stop), `result.json` is optional.
+- `cmd/stdout/stderr/exit_code` are synthesized from the latest `bash` tool event when available.
+- Non-bash turns still write `result.json`; `cmd` falls back to `primary_action`.
 
-### 2.4 BLOCKED Unblock Protocol
+### 2.4 User Input Bridge
 
-`BLOCKED` is not permanent. It means "under current constraints, retrying is wasteful." When constraints change, entries can be unblocked:
+If agent asks user (`status=ask_user`):
 
-**Unblock triggers** (any one is sufficient):
+- write `runs/turn-xxxx/artifacts/ask-user.md`
+- wait for UI submission
+- queue stored in `user-input-queue.json`
+- next turn materializes queue into `runs/turn-yyyy/artifacts/user-input-*.md`
+- successful native run consumes queue
 
-| Trigger | Example | Action |
-|---------|---------|--------|
-| **Environment change** | Package installed, Dockerfile rebuilt, venv recreated | Agent writes `[UNBLOCKED]` with evidence of the change |
-| **User explicit unblock** | User says "I fixed the docker image, try again" | Agent writes `[UNBLOCKED]` citing user instruction |
-| **Minimal verification passes** | `python -c "import openevolve.llm"` exits 0 | Agent writes `[UNBLOCKED]` with evidence from the verification run |
+### 2.5 BLOCKED Unblock Protocol
 
-**Unblock format** in FAILURES.md:
+`BLOCKED` is not permanent.
 
-```markdown
-- [UNBLOCKED][docker] python -m openevolve.llm
-  was: BLOCKED (ModuleNotFoundError)
-  resolved: package installed via pip install -e .
-  evidence: runs/turn-0025/result.json (exit_code: 0)
-```
+Allowed unblock evidence:
 
-**Rules**:
+- environment changed (deps fixed / runtime changed)
+- explicit user confirmation of remediation
+- minimal verification command succeeds
 
-- `[UNBLOCKED]` entries stay in FAILURES.md as history (append-only principle).
-- ToolRunner only checks the **latest status** for a given fingerprint: if the most recent entry is `[UNBLOCKED]`, execution is allowed.
-- If the same fingerprint gets re-blocked after unblocking, the count resets from 0 (it's a new situation).
+When verification succeeds, append `[UNBLOCKED]` with:
+
+- `was:` previous blocked reason
+- `resolved:` remediation
+- `evidence:` verification result path
 
 ---
 
-## 3. Execution Model: Single Agent Atomic Loop (One Turn = One Atomic Action)
+## 3. Execution Model (Thin Native)
 
-### 3.1 Turn Structure
+### 3.1 Turn Flow
 
-Every turn has exactly four steps, each lightweight:
-
-```
-Load  → Read PROJECT.md + FAILURES.md + last 3 runs/turn-xxxx/action.md
-Decide → Choose one "atomic action" (do exactly one thing)
-Act    → Call tools to execute (bash/read/edit/literature…), preserve raw output
-Flush  → Write runs/turn-xxxx/*, small updates to PROJECT.md & FAILURES.md
-```
-
-**Default window size**: The "last N turns" lookback window defaults to **N = 3**. This value is used consistently across:
-
-- Load phase: read last 3 `action.md` files for recent context.
-- Failure fingerprint matching: scan last 10 turns for repeated failures (§5.2).
-
-These defaults may be overridden via project config, but must always have explicit values.
-
-**Atomic action is key**: prevents "step 3 fails but agent hallucinates continuing steps 4 and 5".
-
-### 3.2 Atomic Action Set (Minimal)
-
-No complex protocol needed. The agent simply writes its intent clearly:
-
-| Action | Description | Boundary |
-|--------|-------------|----------|
-| **Read** | Read code / literature / data | One file or one search query |
-| **Exec** | Run one command | **Exactly one shell command or one script invocation**. Multi-step experiments must be wrapped in a single script; the agent must not chain sequential commands within one turn |
-| **Edit** | Make one small patch | One logical change (may touch multiple lines in one file, but one file per turn) |
-| **Write** | Write a note / draft / experiment record | One artifact file |
-| **Ask** | Ask the user a blocking question | One question |
-| **Stop** | Complete / output milestone deliverable | Declare completion of a milestone |
-
-**Why strict Exec boundary**: "Run one experiment" can hide multi-step complexity (setup env → install deps → run → collect). Each step should be its own turn so that failures are isolated and evidence is granular. If a multi-step workflow is needed, write a wrapper script in one turn (Write action), then execute it in the next turn (Exec action).
-
-### 3.3 Cross-Session Recovery Protocol
+Each turn stays minimal:
 
 ```
-First startup:
-  1. Create PROJECT.md (initialize from user's goal)
-  2. Create empty FAILURES.md
-  3. Begin turn-0001
-
-Recovery startup:
-  1. Read PROJECT.md → restore goal and plan
-  2. Read FAILURES.md → know what not to do
-  3. Read last 3 runs/turn-xxxx/action.md → know where we left off
-  4. If PROJECT.md "Current Plan" conflicts with recent runs
-     → trust runs evidence
-     → correct PROJECT.md in the new turn (not during startup)
-  5. Continue next turn
+Load  -> Read PROJECT.md + FAILURES.md + last N action.md (+ pending user inputs)
+Run   -> agent.runTurn(context) with native tools/skills/subagents
+Flush -> write turn artifacts + update PROJECT.md/FAILURES.md pointers
 ```
+
+Defaults:
+
+- recent context window: last **3** turns
+- failure fingerprint window: last **10** turns
+
+### 3.2 Native Turn Contract
+
+Agent returns one JSON outcome:
+
+```json
+{
+  "intent": "why this turn",
+  "status": "success|failure|ask_user|stopped",
+  "summary": "one concise observation",
+  "primaryAction": "short label of what was done",
+  "askQuestion": "required when ask_user",
+  "stopReason": "required when stopped",
+  "projectUpdate": {
+    "currentPlan": ["3-5 concrete items"],
+    "facts": [{"text":"...", "evidencePath":"runs/turn-xxxx/..."}],
+    "constraints": [{"text":"...", "evidencePath":"runs/turn-xxxx/..."}],
+    "hypotheses": ["[HYP] ..."],
+    "keyArtifacts": ["runs/turn-xxxx/..."],
+    "defaultRuntime": "host|docker|venv"
+  },
+  "updateSummary": ["<=5 pointer lines"],
+  "toolEvents": ["optional captured tool call/result records"],
+  "rawOutput": "optional raw model output"
+}
+```
+
+Rules:
+
+- one turn returns one report
+- multi-step internal tool usage is allowed, but report must stay concise
+- ask user only when truly blocked by external info/permission
 
 ---
 
-## 4. Tool Execution: Raw Output Pass-Through (No Translation, No Loss)
+## 4. Tool / Skill / Subagent Execution
 
-The tool system must guarantee:
+v2 runtime allows native use of all registered capabilities:
 
-- **stdout/stderr/exit_code/traceback saved in full**
-- **Failures are reproducible** (cmd + cwd + key environment info optionally saved)
-- **Never wrap errors** into "tool execution failure" while losing raw information
+- built-in tools
+- project/community skills
+- subagent execution tools
 
-### 4.1 ToolRunner Behavior
+No extra action protocol layer is required between agent and runtime.
 
-ToolRunner does exactly three things:
-
-1. **BLOCKED interception**: Check FAILURES.md — if same cmd + same runtime has `BLOCKED` → reject immediately, return evidence pointer. Let Agent change runtime or strategy.
-2. **Execute**: Run in the specified runtime environment.
-3. **Dump raw results**: Write stdout/stderr/exit_code verbatim to `runs/turn-xxxx/`.
-
-ToolRunner does NOT:
-
-- Interpret errors
-- Decide retry strategy
-- Translate or summarize output
-
-### 4.2 Explicit Runtime Selection
-
-The agent must **explicitly specify runtime** (docker/host/venv) for every `Exec` action. No magic auto-selection.
-
-- If omitted, use `default_runtime` from PROJECT.md.
-- If that runtime is `BLOCKED` in FAILURES.md for the same class of operation, ToolRunner rejects deterministically.
-
-This keeps ToolRunner as a **dumb pipe**: no reasoning, no retrying, no summarizing — but it can perform deterministic BLOCKED interception to prevent death loops.
+Raw execution evidence is preserved through tool events and turn artifacts.
 
 ---
 
-## 5. Failure Learning: Minimal Circuit Breaker
+## 5. Failure Learning Circuit Breaker (Minimal)
 
-### 5.1 Failure Fingerprint (Simple Version)
+### 5.1 Fingerprint
 
-No complex embedding/indexing. Simplest fingerprint:
+Deterministic failure fingerprint:
 
 ```
-fingerprint = normalize(cmd) + normalize(error_line_1) + env(docker/host/venv)
+fingerprint = normalize(cmd) + normalize(error_line_1) + normalize(runtime)
 ```
 
-### 5.2 Trigger Rules
+### 5.2 Trigger Thresholds (Last 10 Turns)
 
-| Condition | Action |
-|-----------|--------|
-| Same fingerprint appears ≥ 2 times in last 10 turns | Write to FAILURES.md as `[WARN]` |
-| Same fingerprint appears ≥ 3 times in last 10 turns | Upgrade to `[BLOCKED]`; subsequent turns forbidden from retrying same path; must switch strategy or ask user |
+- same fingerprint >= 2 -> append `[WARN]`
+- same fingerprint >= 3 (historical count) -> append `[BLOCKED]` (triggers on 4th failure turn)
+- when blocked fingerprint later verifies successfully -> append `[UNBLOCKED]`
 
-### 5.3 "Alternatives First" Discipline
+### 5.3 After BLOCKED, Next Move Must Change Something
 
-Once `BLOCKED` is hit, the next turn's action may only be:
+Allowed next direction:
 
-- **Switch environment** (docker → host or vice versa)
-- **Minimal verification** (smaller check, not re-running the big command)
-- **Resolve dependency/permission** (install, change path, add config)
-- **Ask user** (request missing information/permissions/resources)
+- switch runtime
+- do minimal verification
+- remediate dependency/permission/path
+- ask user for missing external input
 
----
+Forbidden:
 
-## 6. Research Progression: Driven by Artifacts, Not State Machines
-
-No complex S1–S5 state machine needed. Research progresses through a **minimal artifact contract**.
-
-Key research artifacts live in `runs/.../artifacts/` and are pointer-referenced in PROJECT.md's Key Artifacts. Common artifacts:
-
-| Artifact | Purpose |
-|----------|---------|
-| `problem_statement.md` | Problem definition, success criteria, hypotheses |
-| `literature_map.md` | Literature landscape / key takeaways |
-| `idea_candidates.md` | Candidate innovations with risks |
-| `exp-xxxx/` | Experiment directory (commands, logs, results, figures) |
-| `paper_draft.md` | Writing draft (grows incrementally) |
-
-**Progression logic is simple**: whichever artifact is missing, work on it; when working on it, must include evidence / reproducible steps.
+- blind immediate retry of same failing route
 
 ---
 
-## 7. Anti-Hallucination: Two Hard Rules
+## 6. Research Progression (Artifact-Driven)
 
-### 7.1 Facts Must Have Evidence Paths
+No heavyweight stage machine is required.
+Progress is driven by missing/weak artifacts and evidence gaps.
 
-- No evidence → write to `Hypotheses [HYP]`
-- Has evidence → write to `Facts`, with `runs/turn-xxxx/...` path attached
+Typical artifacts:
 
-### 7.2 Control Files Are Navigation, Not Truth
+- `problem_statement.md`
+- `literature_map.md`
+- `idea_candidates.md`
+- `exp-xxxx/`
+- `paper_draft.md`
 
-PROJECT.md should NOT contain lengthy derivations or arguments (those get contaminated by errors). Long content goes into `runs/` artifacts. PROJECT.md holds only pointers and conclusions — and conclusions must have evidence.
+### 6.1 Deliverable Checklist & Stagnation Guard
+
+The system infers research stage by scanning `runs/turn-xxxx/artifacts/` for deliverable filenames.
+When 4 of the last 5 turns repeat the same action type (`action_type`), stagnation mode activates.
+During stagnation, repeating the dominant action type counts as progress only when:
+- stage advances via new deliverables, or
+- blocker transitions occur (`failure_recorded` / `blocked_cleared`).
+Otherwise the turn is downgraded to `no_delta` and fed into the redundancy breaker.
+
+Canonical deliverable filenames (from §6 above):
+- S1: `problem_statement.md`
+- S2: `literature_map.md`
+- S3: `idea_candidates.md`
+- S4: `experiment_plan.md` or `exp-xxxx/`
+- S5: `paper_draft.md` or `outline.md`
+
+---
+
+## 7. Anti-Hallucination Hard Rules
+
+1. Facts and constraints require evidence paths under `runs/turn-xxxx/`.
+2. No evidence -> write as `[HYP]`.
+3. PROJECT.md remains short pointer-based control panel.
+4. Raw output files are never replaced by summaries.
 
 ---
 
 ## 8. Templates
 
-### 8.1 PROJECT.md Template
+### 8.1 PROJECT.md
 
 ```markdown
 # Project: <title>
@@ -352,132 +316,100 @@ PROJECT.md should NOT contain lengthy derivations or arguments (those get contam
 
 ## Facts (must include evidence pointers)
 - ... (evidence: runs/turn-0007/stdout.txt)
-- ... (evidence: runs/turn-0012/artifacts/result.csv)
 
 ## Constraints / Environment (must include evidence pointers)
-- Docker python=3.11 lacks package X (evidence: runs/turn-0012/stderr.txt)
-- ...
+- ... (evidence: runs/turn-0012/stderr.txt)
 
 ## Hypotheses [HYP] (unverified)
 - [HYP] ...
-- [HYP] ...
 
 ## Key Artifacts
-- Experiments: runs/turn-0015/artifacts/exp-0001/
-- Draft: runs/turn-0020/artifacts/paper_draft.md
-- Patch: runs/turn-0018/patch.diff
+- runs/turn-0015/artifacts/exp-0001/
 ```
 
-### 8.2 FAILURES.md Template
+### 8.2 FAILURES.md
 
 ```markdown
 # Failures / Blockers (Do not retry blindly)
 
-- [WARN][docker] <cmd>
+- [WARN][host] <cmd>
   error: <one-line error>
   evidence: runs/turn-xxxx/stderr.txt
+  fingerprint: <...>
   attempts: 2
+  updated_at: <iso>
   alternatives:
-    - ...
     - ...
 
 - [BLOCKED][host] <cmd>
   error: <one-line error>
   evidence: runs/turn-yyyy/stderr.txt
+  fingerprint: <...>
   attempts: 3
+  updated_at: <iso>
   alternatives:
     - ...
-    - ...
+
+- [UNBLOCKED][host] <cmd>
+  was: BLOCKED (...)
+  resolved: <what changed>
+  evidence: runs/turn-zzzz/result.json
+  fingerprint: <...>
+  updated_at: <iso>
 ```
 
-### 8.3 runs/turn-xxxx/action.md Template
+### 8.3 runs/turn-xxxx/action.md
 
 ```markdown
-# Turn xxxx
+# Turn turn-xxxx
 
 ## Intent
-- Why this action: ...
-- Expected outcome: ...
+- Why this turn: ...
+- Expected outcome: Produce fresh evidence and update pointers only.
 
 ## Action
-- Tool: bash/read/edit/...
-- Command or target: ...
+- Tool: Agent
+- Command or target: <primaryAction>
 
 ## Result
-- Status: success/failure
+- Status: success/failure/blocked/ask_user/stopped
 - Key observation: ...
-- Evidence: stdout/stderr/patch/artifacts paths
+- Evidence: runs/turn-xxxx/...
 
 ## Update (<=5 lines, pointers only)
-- PROJECT.md: updated Facts #4 (evidence: stdout.txt)
-- FAILURES.md: added [WARN] docker python -m ...
-- Next: switch to host env, verify openevolve package exists
+- PROJECT.md: applied structured update from native turn.
+- PROJECT.md: applied runtime-generated evidence pointers.
+- FAILURES.md: WARN recorded for fingerprint ...
 ```
 
-**Update section rules**:
+---
 
-- ≤ 5 lines, write change pointers only (which item updated, which blocker added, what minimal verification is next).
-- No speculative long-form planning.
-- All conjectures must go to `PROJECT.md > Hypotheses [HYP]`, ideally with evidence pointers or "command to verify".
+## 9. Optional Accelerators (Never Correctness Dependencies)
+
+- Mechanical event log views
+- Retrieval index for artifacts
+- Lightweight stuck checker
+- On-demand review reports (`[HYP]` only, cannot write Facts, cannot gate execution)
+
+Deleting any accelerator must not break base correctness.
 
 ---
 
-## 9. Progressive Extension Roadmap (Stay Simple, Don't Break Correctness)
+## 10. Why This Fixes v1 Pain Points
 
-After v2 minimal is stable, add **only accelerators, never correctness dependencies**:
-
-### Accelerator A: Mechanical Event Log
-
-Record only tool call metadata (cmd/exit_code/paths) for debugging. Never injected into agent context.
-
-### Accelerator B: Retrieval Index
-
-Index only `runs/*/action.md` and artifacts for fast evidence lookup. If the index breaks, correctness is unaffected.
-
-### Accelerator C: Lightweight Self-Check
-
-Every N turns, check if stuck on BLOCKED, or if the plan hasn't progressed. Only provides hints, never gates.
-
-### Accelerator D: On-Demand Lightweight Review
-
-**Trigger conditions** (all mechanical, LLM does not judge "what is high risk"):
-
-- Consecutive ≥ 2 failures (deterministic)
-- Patch touches build/environment files (mechanical: `Dockerfile`, `requirements*.txt`, `pyproject.toml`, `Makefile`, `*.yml` CI files, etc.)
-- Single patch exceeds threshold (mechanical: diff lines > N)
-
-**Review output constraints**:
-
-- May only write **suggestions and risk points** (tagged `[HYP]`, must reference evidence paths).
-- May NOT write Facts.
-- May NOT trigger any mandatory process: no "must pass to continue" conclusions. Only "suggest verifying X next" checklists.
-
-**Review is written to**: `runs/turn-xxxx/review.md`
-
-**Principle**: Deleting this accelerator does not affect system correctness (FAILURES.md provides the safety net).
-
----
-
-## 10. How This Design Solves v1's Core Problems
-
-| v1 Problem | v2 Solution |
-|------------|-------------|
-| Memory disabled/skipped | PROJECT.md + FAILURES.md + runs/ are permanent, always read |
-| Sessions isolated | `project_id` is fixed; cross-session reads from the same directory |
-| Information lost through layers | Raw stdout/stderr/patch always saved; ToolRunner is a dumb pipe |
-| Repeated failures not broken | FAILURES.md + BLOCKED mechanically prevents retry |
-| Architecture bloated | Core = one loop + simple file I/O + tool wrappers |
-| Token budget wasted on orchestration | ~700 tokens fixed overhead (vs. ~6000+ in v1) |
-| Errors propagate through summaries | Facts must have evidence pointers; no evidence = [HYP] |
-| Reviewer becomes hidden gate | Reviewer is optional accelerator; cannot write Facts, cannot block |
+- No cross-session amnesia -> persistent control files + append-only runs
+- No silent loss -> raw outputs + result contract per turn
+- No infinite retry loops -> deterministic circuit breaker
+- No protocol bloat -> thin native turn contract
+- No summary drift -> evidence pointer discipline
 
 ---
 
 ## Appendix: Immovable Skeleton
 
-These four properties form the **immovable skeleton** of v2. Any future extension must not violate them:
+Future extensions must keep these four invariants:
 
-1. **Evidence pointer discipline** — Facts must point to `runs/`; no evidence = `[HYP]`.
-2. **Append-only `runs/` + PROJECT.md as navigation only** — errors contaminate at most the latest turn.
-3. **Atomic actions** — one turn does one thing.
-4. **Accelerators are not correctness dependencies** — delete any accelerator, system still works correctly.
+1. **Evidence pointer discipline** (`runs/turn-xxxx` for Facts/Constraints)
+2. **Append-only runs + short PROJECT navigation**
+3. **One turn = one native outcome report**
+4. **Accelerators are optional, never correctness-critical**

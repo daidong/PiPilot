@@ -1,26 +1,29 @@
-# YOLO-Researcher v2 (Minimal & Reliable)
+# YOLO-Researcher v2 (Thin Native Protocol)
 
-This implementation follows `docs/005-v2-minimal-reliable.md` directly.
+This implementation is v2-native only: one loop API (`runTurn`) and direct tool/skill/subagent execution inside the agent runtime.
 
 Design axiom:
-- The system does not rely on complex architecture for quality.
-- The system relies on minimal discipline to avoid failure loops, plus evidence-driven strengthening.
+- Minimal discipline to avoid failure loops.
+- Evidence-driven strengthening over time.
 
 ## What Is Implemented
 
-- Single-agent atomic loop: `Load -> Decide -> Act -> Flush`
-- Minimal persistence only:
-  - `yolo/<project_id>/PROJECT.md`
-  - `yolo/<project_id>/FAILURES.md`
-  - `yolo/<project_id>/runs/turn-xxxx/*`
-- Raw tool output pass-through for `Exec`:
+- Single-agent native loop: `Load -> runTurn -> Flush`.
+- Minimal persistence:
+  - `PROJECT.md`
+  - `FAILURES.md`
+  - `runs/turn-xxxx/*`
+- Native tool event capture:
+  - `runs/turn-xxxx/artifacts/tool-events.jsonl`
+- Synthesized terminal snapshots from last bash tool call:
   - `cmd.txt`, `stdout.txt`, `stderr.txt`, `exit_code.txt`
+- Unified turn result contract:
+  - `runs/turn-xxxx/result.json`
+  - includes `exit_code/runtime/cmd/cwd/duration_sec/timestamp`
 - Deterministic failure learning:
   - repeated fingerprint -> `WARN` / `BLOCKED`
-  - `BLOCKED` interception before execution
-- Explicit unblock path:
-  - `blockedOverrideReason` for post-remediation minimal verification
-  - successful override downgrades `BLOCKED` entry
+  - fingerprint window = last 10 turns
+  - successful verification writes `[UNBLOCKED]` record
 
 ## Public API
 
@@ -39,21 +42,45 @@ import { createYoloSession, ScriptedSingleAgent } from './examples/yolo-research
 
 const session = createYoloSession({
   projectPath: '/path/to/repo',
-  projectId: 'demo-rq1',
-  goal: 'Test whether command X succeeds in host runtime',
+  goal: 'Capture one reproducible baseline probe',
   defaultRuntime: 'host',
   agent: new ScriptedSingleAgent([
     {
       intent: 'Run one reproducible probe command',
-      expectedOutcome: 'Capture full raw output',
-      action: { kind: 'Exec', cmd: 'node -v', runtime: 'host' },
+      status: 'success',
+      summary: 'Captured baseline output.',
+      primaryAction: 'bash: node -v',
+      toolEvents: [
+        {
+          timestamp: new Date().toISOString(),
+          phase: 'call',
+          tool: 'bash',
+          input: { command: 'node -v' }
+        },
+        {
+          timestamp: new Date().toISOString(),
+          phase: 'result',
+          tool: 'bash',
+          success: true,
+          result: {
+            success: true,
+            data: { stdout: 'v20.x\n', stderr: '', exitCode: 0 }
+          }
+        }
+      ],
       projectUpdate: {
-        currentPlan: ['Record verified environment fact', 'Run next minimal probe']
+        currentPlan: [
+          'Capture one environment constraint with evidence',
+          'Run a second minimal verification command',
+          'Summarize confirmed baseline behavior'
+        ]
       }
     },
     {
-      intent: 'Stop after first probe',
-      action: { kind: 'Stop', reason: 'Milestone reached' }
+      intent: 'Stop after first milestone',
+      status: 'stopped',
+      summary: 'Milestone reached.',
+      stopReason: 'Baseline captured.'
     }
   ])
 })
@@ -69,41 +96,43 @@ import { createYoloSession, createLlmSingleAgent } from './examples/yolo-researc
 
 const agent = createLlmSingleAgent({
   projectPath: '/path/to/repo',
-  model: 'gpt-5-mini',
+  model: 'gpt-5.2',
   apiKey: process.env.OPENAI_API_KEY,
-  enableNetwork: false
+  enableNetwork: true,
+  capabilityProfile: 'full',
+  autoApprove: true
 })
 
 const session = createYoloSession({
   projectPath: '/path/to/repo',
-  projectId: 'rq-lsm-001',
-  goal: 'Investigate LSM compaction bottleneck and produce reproducible evidence',
+  goal: 'Investigate bottlenecks and produce reproducible evidence-backed improvements',
   agent,
   defaultRuntime: 'host'
 })
 
 await session.init()
-await session.runUntilStop(20)
+await session.runUntilStop(12)
 ```
 
 ## Runtime Layout
 
 ```text
-yolo/<project_id>/
-├── PROJECT.md
-├── FAILURES.md
-└── runs/
-    ├── turn-0001/
-    │   ├── action.md
-    │   ├── cmd.txt
-    │   ├── stdout.txt
-    │   ├── stderr.txt
-    │   ├── exit_code.txt
-    │   ├── patch.diff
-    │   └── artifacts/
-    └── turn-0002/
+PROJECT.md
+FAILURES.md
+runs/
+  turn-0001/
+    action.md
+    cmd.txt
+    stdout.txt
+    stderr.txt
+    exit_code.txt
+    result.json
+    artifacts/
+      tool-events.jsonl
+      ...
+  turn-0002/
 ```
 
 ## UI Scope
 
-Desktop UI is not in the v2 correctness path. Runtime correctness depends only on file contracts above.
+Desktop UI is not in the v2 correctness path. Runtime correctness depends on the file contracts above.

@@ -6,10 +6,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createYoloSession, ScriptedSingleAgent } from '../../examples/yolo-researcher/index.js'
 import { cleanupTempDir, createTempDir } from '../test-utils.js'
 
-async function readText(filePath: string): Promise<string> {
-  return fs.readFile(filePath, 'utf-8')
-}
-
 describe('yolo-researcher v2 recovery and evidence discipline', () => {
   const tempDirs: string[] = []
 
@@ -26,12 +22,35 @@ describe('yolo-researcher v2 recovery and evidence discipline', () => {
 
     const firstSession = createYoloSession({
       projectPath,
-      projectId: 'rq-recover-001',
       goal: 'Recovery test',
       agent: new ScriptedSingleAgent([
         {
-          intent: 'Read seed file',
-          action: { kind: 'Read', targetPath: 'seed.txt' },
+          intent: 'Capture first baseline evidence',
+          status: 'success',
+          summary: 'Baseline turn completed.',
+          primaryAction: 'bash: cat seed.txt',
+          toolEvents: [
+            {
+              timestamp: new Date().toISOString(),
+              phase: 'call',
+              tool: 'bash',
+              input: { command: 'cat seed.txt' }
+            },
+            {
+              timestamp: new Date().toISOString(),
+              phase: 'result',
+              tool: 'bash',
+              success: true,
+              result: {
+                success: true,
+                data: {
+                  stdout: 'seed-data\n',
+                  stderr: '',
+                  exitCode: 0
+                }
+              }
+            }
+          ],
           projectUpdate: {
             facts: [
               {
@@ -50,12 +69,13 @@ describe('yolo-researcher v2 recovery and evidence discipline', () => {
 
     const restartedSession = createYoloSession({
       projectPath,
-      projectId: 'rq-recover-001',
       goal: 'Recovery test',
       agent: new ScriptedSingleAgent([
         {
           intent: 'Stop after recovery check',
-          action: { kind: 'Stop', reason: 'Recovery verified.' }
+          status: 'stopped',
+          summary: 'Recovery verified.',
+          stopReason: 'Recovery verified.'
         }
       ])
     })
@@ -69,18 +89,19 @@ describe('yolo-researcher v2 recovery and evidence discipline', () => {
     expect(secondTurn.turnNumber).toBe(2)
   })
 
-  it('rejects Facts updates without runs/turn evidence paths', async () => {
+  it('rejects Facts updates without runs/turn evidence paths as failed turn, not process crash', async () => {
     const projectPath = await createTempDir('yolo-v2-evidence-')
     tempDirs.push(projectPath)
 
     const session = createYoloSession({
       projectPath,
-      projectId: 'rq-evidence-001',
       goal: 'Evidence pointer validation',
       agent: new ScriptedSingleAgent([
         {
           intent: 'Try writing an invalid fact',
-          action: { kind: 'Write', targetPath: 'note.md', content: 'tmp' },
+          status: 'success',
+          summary: 'Attempted to persist fact with invalid evidence path.',
+          primaryAction: 'agent.run',
           projectUpdate: {
             facts: [
               {
@@ -94,9 +115,11 @@ describe('yolo-researcher v2 recovery and evidence discipline', () => {
     })
 
     await session.init()
-    await expect(session.runNextTurn()).rejects.toThrow('evidence path must start with runs/turn-xxxx/')
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('failure')
+    expect(turn.summary).toContain('PROJECT.md update rejected')
 
-    const failuresMd = await readText(path.join(projectPath, 'yolo', 'rq-evidence-001', 'FAILURES.md'))
+    const failuresMd = await fs.readFile(path.join(projectPath, 'FAILURES.md'), 'utf-8')
     expect(failuresMd).toContain('# Failures / Blockers')
   })
 })

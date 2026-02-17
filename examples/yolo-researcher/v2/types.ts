@@ -1,6 +1,32 @@
-export type AtomicActionKind = 'Read' | 'Exec' | 'Edit' | 'Write' | 'Ask' | 'Stop'
-
 export type FailureStatus = 'WARN' | 'BLOCKED' | 'UNBLOCKED'
+
+export interface StagnationInfo {
+  stagnant: boolean
+  dominantAction: string
+  count: number
+  window: number
+}
+
+export type ResearchStage = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
+
+export interface DeliverableRequirement {
+  stage: ResearchStage
+  label: string
+  patterns: string[]  // at least one must match in artifact dirs
+}
+
+export interface StageStatus {
+  currentStage: ResearchStage
+  label: string
+  missingDeliverables: string[]
+  completedDeliverables: string[]
+}
+
+export interface ClaimEvidence {
+  claim: string
+  evidencePaths: string[]
+  status: 'uncovered' | 'partial' | 'covered'
+}
 
 export interface EvidenceLine {
   text: string
@@ -14,10 +40,12 @@ export interface ProjectControlPanel {
   currentPlan: string[]
   facts: EvidenceLine[]
   archivedFacts: EvidenceLine[]
+  done: EvidenceLine[]
   constraints: EvidenceLine[]
   hypotheses: string[]
   keyArtifacts: string[]
   defaultRuntime: string
+  claims: ClaimEvidence[]
 }
 
 export interface FailureEntry {
@@ -40,6 +68,16 @@ export interface RecentTurnContext {
   summary: string
 }
 
+export interface QueuedUserInput {
+  id: string
+  text: string
+  submittedAt: string
+}
+
+export interface PendingUserInput extends QueuedUserInput {
+  evidencePath: string
+}
+
 export interface TurnContext {
   turnNumber: number
   projectRoot: string
@@ -48,116 +86,71 @@ export interface TurnContext {
   project: ProjectControlPanel
   failures: FailureEntry[]
   recentTurns: RecentTurnContext[]
+  pendingUserInputs: PendingUserInput[]
+  stagnation?: StagnationInfo
 }
-
-export interface ReadAction {
-  kind: 'Read'
-  targetPath: string
-}
-
-export interface ExecAction {
-  kind: 'Exec'
-  cmd: string
-  runtime?: string
-  cwd?: string
-  timeoutMs?: number
-  env?: Record<string, string>
-  alternatives?: string[]
-  blockedOverrideReason?: string
-}
-
-export interface EditAction {
-  kind: 'Edit'
-  targetPath: string
-  newContent: string
-}
-
-export interface WriteAction {
-  kind: 'Write'
-  targetPath: string
-  content: string
-}
-
-export interface AskAction {
-  kind: 'Ask'
-  question: string
-}
-
-export interface StopAction {
-  kind: 'Stop'
-  reason: string
-}
-
-export type AtomicAction = ReadAction | ExecAction | EditAction | WriteAction | AskAction | StopAction
 
 export interface ProjectUpdate {
   goal?: string
   successCriteria?: string[]
   currentPlan?: string[]
   facts?: EvidenceLine[]
+  done?: EvidenceLine[]
   constraints?: EvidenceLine[]
   hypotheses?: string[]
   keyArtifacts?: string[]
   defaultRuntime?: string
+  claims?: ClaimEvidence[]
 }
 
-export interface TurnDecision {
+export interface ToolEventRecord {
+  timestamp: string
+  phase: 'call' | 'result'
+  tool: string
+  input?: unknown
+  result?: unknown
+  success?: boolean
+  error?: string
+}
+
+export interface TurnRunOutcome {
   intent: string
-  expectedOutcome?: string
-  action: AtomicAction
+  status: 'success' | 'failure' | 'ask_user' | 'stopped'
+  summary: string
+  primaryAction?: string
+  askQuestion?: string
+  stopReason?: string
   projectUpdate?: ProjectUpdate
   updateSummary?: string[]
+  toolEvents?: ToolEventRecord[]
+  rawOutput?: string
 }
 
 export interface YoloSingleAgent {
-  decide(context: TurnContext): Promise<TurnDecision>
+  runTurn: (context: TurnContext) => Promise<TurnRunOutcome>
 }
 
-export interface ExecRequest {
-  cmd: string
-  runtime: string
-  cwd: string
-  timeoutMs?: number
-  env?: Record<string, string>
-}
-
-export interface ExecOutcome {
-  cmd: string
-  runtime: string
-  cwd: string
-  stdout: string
-  stderr: string
-  exitCode: number
-  timedOut: boolean
-  startedAt: string
-  endedAt: string
-}
-
-export interface ToolRunner {
-  runExec(input: ExecRequest): Promise<ExecOutcome>
-}
-
-export type TurnStatus = 'success' | 'failure' | 'blocked' | 'ask_user' | 'stopped'
+export type TurnStatus = 'success' | 'failure' | 'blocked' | 'ask_user' | 'stopped' | 'no_delta'
 
 export interface TurnExecutionResult {
   turnNumber: number
   turnDir: string
   status: TurnStatus
   intent: string
-  action: AtomicAction
+  primaryAction: string
+  toolEventsCount: number
   summary: string
   evidencePaths: string[]
   blockedBy?: FailureEntry
+  stageStatus?: StageStatus
 }
 
 export interface CreateYoloSessionConfig {
   projectPath: string
-  projectId: string
   goal: string
   successCriteria?: string[]
   defaultRuntime?: string
   recentTurnsToLoad?: number
   agent: YoloSingleAgent
-  toolRunner?: ToolRunner
   now?: () => Date
 }
