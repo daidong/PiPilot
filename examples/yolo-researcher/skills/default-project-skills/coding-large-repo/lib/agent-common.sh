@@ -184,3 +184,169 @@ clrepo_pick_provider() {
       ;;
   esac
 }
+
+clrepo_has_repo_markers() {
+  local dir="${1:-.}"
+  [[ -d "$dir/.git" ]] \
+    || [[ -f "$dir/package.json" ]] \
+    || [[ -f "$dir/pyproject.toml" ]] \
+    || [[ -f "$dir/requirements.txt" ]] \
+    || [[ -f "$dir/setup.py" ]] \
+    || [[ -f "$dir/go.mod" ]] \
+    || [[ -f "$dir/Cargo.toml" ]]
+}
+
+clrepo_collect_repo_candidates() {
+  local entry=""
+  local rel=""
+  local found_depth1="false"
+
+  for entry in ./*; do
+    [[ -d "$entry" ]] || continue
+    rel="${entry#./}"
+    [[ "$rel" == .* ]] && continue
+    if clrepo_has_repo_markers "$entry"; then
+      echo "$rel"
+      found_depth1="true"
+    fi
+  done
+
+  if [[ "$found_depth1" == "true" ]]; then
+    return 0
+  fi
+
+  for entry in ./*/*; do
+    [[ -d "$entry" ]] || continue
+    rel="${entry#./}"
+    [[ "$rel" == .* ]] && continue
+    if clrepo_has_repo_markers "$entry"; then
+      echo "$rel"
+    fi
+  done
+}
+
+clrepo_choose_candidate_from_hint() {
+  local hint="${1-}"
+  shift || true
+  local hint_lc=""
+  local candidate=""
+  local candidate_lc=""
+  local base=""
+  local base_lc=""
+  local bounded_hint=""
+
+  hint_lc="$(printf '%s' "$hint" | tr '[:upper:]' '[:lower:]')"
+  bounded_hint=" $hint_lc "
+  [[ -n "$hint_lc" ]] || return 1
+
+  for candidate in "$@"; do
+    candidate_lc="$(printf '%s' "$candidate" | tr '[:upper:]' '[:lower:]')"
+    base="$(basename "$candidate")"
+    base_lc="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$hint_lc" == *"$candidate_lc/"* || "$hint_lc" == *"/$candidate_lc"* || "$hint_lc" == *"$base_lc/"* ]]; then
+      echo "$candidate"
+      return 0
+    fi
+    if [[ "$bounded_hint" == *[![:alnum:]_]$base_lc[![:alnum:]_]* ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+clrepo_resolve_cwd() {
+  local requested_cwd="${1-}"
+  local hint_text="${2-}"
+  local resolved_ref="${3:-}"
+  local reason_ref="${4:-}"
+  local resolved="."
+  local reason="default_root"
+  local matched=""
+
+  if [[ -n "$requested_cwd" ]]; then
+    resolved="$requested_cwd"
+    reason="explicit_arg"
+  else
+    local candidates_text=""
+    local -a candidates=()
+    local line=""
+    candidates_text="$(clrepo_collect_repo_candidates)"
+    if [[ -n "$candidates_text" ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        candidates+=("$line")
+      done <<< "$candidates_text"
+    fi
+
+    if [[ "${#candidates[@]}" -gt 0 ]]; then
+      if matched="$(clrepo_choose_candidate_from_hint "$hint_text" "${candidates[@]}" 2>/dev/null || true)"; then
+        if [[ -n "$matched" ]]; then
+          resolved="$matched"
+          reason="hint_match"
+        fi
+      fi
+      if [[ "$reason" == "default_root" && "${#candidates[@]}" -eq 1 ]]; then
+        if ! clrepo_has_repo_markers "."; then
+          resolved="${candidates[0]}"
+          reason="single_nested_repo"
+        fi
+      fi
+    fi
+  fi
+
+  if [[ -n "$resolved_ref" ]]; then
+    printf -v "$resolved_ref" '%s' "$resolved"
+  else
+    echo "$resolved"
+  fi
+  if [[ -n "$reason_ref" ]]; then
+    printf -v "$reason_ref" '%s' "$reason"
+  fi
+}
+
+clrepo_runtime_log_dir_for_cwd() {
+  local cwd_path="${1:-.}"
+  printf '%s/.yolo-researcher/logs/coding-large-repo' "$cwd_path"
+}
+
+clrepo_runtime_tmp_dir_for_cwd() {
+  local cwd_path="${1:-.}"
+  printf '%s/.yolo-researcher/tmp/coding-large-repo' "$cwd_path"
+}
+
+clrepo_agent_session_root_for_cwd() {
+  local cwd_path="${1:-.}"
+  printf '%s/agent-sessions' "$(clrepo_runtime_tmp_dir_for_cwd "$cwd_path")"
+}
+
+clrepo_find_agent_session_dir() {
+  local session_id="${1:-}"
+  if [[ -z "$session_id" ]]; then
+    return 1
+  fi
+
+  local direct="$CODING_LARGE_REPO_TMP_DIR/agent-sessions/$session_id"
+  if [[ -d "$direct" ]]; then
+    printf '%s' "$direct"
+    return 0
+  fi
+
+  local local_root=""
+  local_root="$(clrepo_agent_session_root_for_cwd ".")"
+  local local_direct="$local_root/$session_id"
+  if [[ -d "$local_direct" ]]; then
+    printf '%s' "$local_direct"
+    return 0
+  fi
+
+  local match=""
+  match="$(find . -maxdepth 8 -type d -path "*/.yolo-researcher/tmp/coding-large-repo/agent-sessions/$session_id" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$match" && -d "$match" ]]; then
+    printf '%s' "$match"
+    return 0
+  fi
+
+  return 1
+}

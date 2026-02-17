@@ -65,18 +65,19 @@ if [[ -z "$SESSION_ID" ]]; then
   fail "--session-id is required" 2
 fi
 
-SESSION_DIR="$CODING_LARGE_REPO_TMP_DIR/agent-sessions/$SESSION_ID"
-LOG_PATH="$SESSION_DIR/agent.log"
-
-if [[ ! -d "$SESSION_DIR" ]]; then
+SESSION_DIR="$(clrepo_find_agent_session_dir "$SESSION_ID" || true)"
+if [[ -z "$SESSION_DIR" ]]; then
   fail "session not found: $SESSION_ID" 2
 fi
+
+LOG_PATH="$SESSION_DIR/agent.log"
 
 if [[ ! -f "$LOG_PATH" ]]; then
   fail "log file not found: $LOG_PATH" 2
 fi
 
 clrepo_print_kv session_id "$SESSION_ID"
+clrepo_print_kv session_dir "$SESSION_DIR"
 clrepo_print_kv log_path "$LOG_PATH"
 clrepo_print_kv tail_lines "$TAIL_LINES"
 echo "log_begin:"
@@ -85,9 +86,10 @@ echo "log_end"
 
 TAIL_PREVIEW="$(tail -n "$TAIL_LINES" "$LOG_PATH" 2>/dev/null || true)"
 TAIL_PREVIEW="$(clrepo_compact_text "$TAIL_PREVIEW" 500)"
-RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-log\",\"status\":\"ok\",\"session_id\":%s,\"log_path\":%s,\"tail_lines\":%s,\"tail_preview\":%s}' \
+RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-log\",\"status\":\"ok\",\"session_id\":%s,\"session_dir\":%s,\"log_path\":%s,\"tail_lines\":%s,\"tail_preview\":%s}' \
   "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
   "$(clrepo_json_string_or_null "$SESSION_ID")" \
+  "$(clrepo_json_string_or_null "$SESSION_DIR")" \
   "$(clrepo_json_string_or_null "$LOG_PATH")" \
   "$(clrepo_json_number_or_null "$TAIL_LINES")" \
   "$(clrepo_json_string_or_null "$TAIL_PREVIEW")")"

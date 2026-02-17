@@ -36,7 +36,7 @@ usage: delegate-coding-agent.sh --task "<task>" [options]
 
 Options:
   --provider <auto|codex|claude>     Default: auto (prefer codex, fallback claude)
-  --cwd <path>                       Working directory for the coding agent. Default: .
+  --cwd <path>                       Working directory for the coding agent. Default: auto-detected.
   --model <name>                     Optional model override passed through to provider.
   --timeout-sec <seconds>            Optional timeout. Uses timeout/gtimeout if available.
   --async <auto|always|never>        Default: auto (long tasks auto-route to agent-start).
@@ -48,7 +48,8 @@ EOF
 
 TASK=""
 PROVIDER="auto"
-CWD="."
+CWD=""
+CWD_EXPLICIT="false"
 MODEL=""
 TIMEOUT_SEC=""
 ASYNC_MODE="${CODING_LARGE_REPO_DELEGATE_ASYNC_MODE:-auto}"
@@ -67,6 +68,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cwd)
       CWD="${2:-}"
+      CWD_EXPLICIT="true"
       shift 2
       ;;
     --model)
@@ -105,11 +107,21 @@ if [[ -z "$TASK" ]]; then
   fail "--task is required" 2
 fi
 
+REQUESTED_CWD=""
+if [[ "$CWD_EXPLICIT" == "true" ]]; then
+  REQUESTED_CWD="$CWD"
+fi
+CWD_REASON="default_root"
+clrepo_resolve_cwd "$REQUESTED_CWD" "$TASK" CWD CWD_REASON
+
 if [[ ! -d "$CWD" ]]; then
   fail "cwd does not exist: $CWD" 2
 fi
 
-mkdir -p "$CODING_LARGE_REPO_LOG_DIR" "$CODING_LARGE_REPO_TMP_DIR"
+ABS_CWD="$(cd "$CWD" && pwd)"
+RUNTIME_LOG_DIR="$(clrepo_runtime_log_dir_for_cwd "$ABS_CWD")"
+RUNTIME_TMP_DIR="$(clrepo_runtime_tmp_dir_for_cwd "$ABS_CWD")"
+mkdir -p "$RUNTIME_LOG_DIR" "$RUNTIME_TMP_DIR"
 
 case "$PROVIDER" in
   auto|codex|claude)
@@ -128,8 +140,8 @@ case "$ASYNC_MODE" in
 esac
 
 STAMP="$(date +"%Y%m%d-%H%M%S")-$RANDOM"
-RUN_LOG_PATH="$CODING_LARGE_REPO_LOG_DIR/delegate-$STAMP.log"
-LAST_MESSAGE_PATH="$CODING_LARGE_REPO_TMP_DIR/coding-agent-last-message-$STAMP.txt"
+RUN_LOG_PATH="$RUNTIME_LOG_DIR/delegate-$STAMP.log"
+LAST_MESSAGE_PATH="$RUNTIME_TMP_DIR/coding-agent-last-message-$STAMP.txt"
 AUTO_ASYNC_TASK_CHARS="${CODING_LARGE_REPO_DELEGATE_AUTO_ASYNC_TASK_CHARS:-280}"
 AUTO_ASYNC_TIMEOUT_SEC="${CODING_LARGE_REPO_DELEGATE_AUTO_ASYNC_TIMEOUT_SEC:-180}"
 DELEGATE_SYNC_ONLY="${CODING_LARGE_REPO_DELEGATE_SYNC_ONLY:-0}"
@@ -261,13 +273,18 @@ else
 fi
 
 : > "$RUN_LOG_PATH"
-{
-  echo "[coding-large-repo] requested_provider: $PROVIDER"
-  echo "[coding-large-repo] async_mode: $ASYNC_MODE"
-  echo "[coding-large-repo] cwd: $CWD"
-  echo "[coding-large-repo] task_chars: ${#TASK}"
-  echo "[coding-large-repo] provider_attempt_order: ${ATTEMPT_ORDER[*]}"
-  echo "[coding-large-repo] command output is written to log_path (tail shown on failures)."
+  {
+    echo "[coding-large-repo] requested_provider: $PROVIDER"
+    echo "[coding-large-repo] async_mode: $ASYNC_MODE"
+    echo "[coding-large-repo] requested_cwd: ${REQUESTED_CWD:-<auto>}"
+    echo "[coding-large-repo] cwd: $CWD"
+    echo "[coding-large-repo] abs_cwd: $ABS_CWD"
+    echo "[coding-large-repo] cwd_reason: $CWD_REASON"
+    echo "[coding-large-repo] runtime_log_dir: $RUNTIME_LOG_DIR"
+    echo "[coding-large-repo] runtime_tmp_dir: $RUNTIME_TMP_DIR"
+    echo "[coding-large-repo] task_chars: ${#TASK}"
+    echo "[coding-large-repo] provider_attempt_order: ${ATTEMPT_ORDER[*]}"
+    echo "[coding-large-repo] command output is written to log_path (tail shown on failures)."
 } >> "$RUN_LOG_PATH"
 
 build_run_cmd_for_provider() {
@@ -299,8 +316,6 @@ build_run_cmd_for_provider() {
   fi
 
   if [[ "$provider_name" == "claude" ]]; then
-    local abs_cwd=""
-    abs_cwd="$(cd "$CWD" && pwd)"
     RUN_CMD=(
       claude
       -p "$TASK"
@@ -308,7 +323,7 @@ build_run_cmd_for_provider() {
       --tools "$CLAUDE_TOOLS"
       --dangerously-skip-permissions
       --permission-mode bypassPermissions
-      --add-dir "$abs_cwd"
+      --add-dir "$ABS_CWD"
     )
     if [[ -n "$MODEL" ]]; then
       RUN_CMD+=(--model "$MODEL")
@@ -400,7 +415,7 @@ if [[ -f "$LAST_MESSAGE_PATH" ]]; then
   LAST_MESSAGE="$(clrepo_compact_text "$LAST_MESSAGE" 500)"
 fi
 
-RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"delegate-coding-agent\",\"provider\":%s,\"requested_provider\":%s,\"attempted_providers\":%s,\"attempt_count\":%s,\"fallback_used\":%s,\"fallback_reason\":%s,\"status\":%s,\"exit_code\":%s,\"cwd\":%s,\"task_chars\":%s,\"log_path\":%s,\"last_message_path\":%s,\"last_message\":%s}' \
+RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"delegate-coding-agent\",\"provider\":%s,\"requested_provider\":%s,\"attempted_providers\":%s,\"attempt_count\":%s,\"fallback_used\":%s,\"fallback_reason\":%s,\"status\":%s,\"exit_code\":%s,\"requested_cwd\":%s,\"cwd\":%s,\"cwd_reason\":%s,\"task_chars\":%s,\"log_path\":%s,\"last_message_path\":%s,\"last_message\":%s}' \
   "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
   "$(clrepo_json_string_or_null "$FINAL_PROVIDER")" \
   "$(clrepo_json_string_or_null "$PROVIDER")" \
@@ -410,7 +425,9 @@ RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"delegate-coding-agent\",\
   "$(clrepo_json_string_or_null "$FALLBACK_REASON")" \
   "$(clrepo_json_string_or_null "$STATUS_LABEL")" \
   "$(clrepo_json_number_or_null "$STATUS")" \
+  "$(clrepo_json_string_or_null "$REQUESTED_CWD")" \
   "$(clrepo_json_string_or_null "$CWD")" \
+  "$(clrepo_json_string_or_null "$CWD_REASON")" \
   "$(clrepo_json_number_or_null "${#TASK}")" \
   "$(clrepo_json_string_or_null "$RUN_LOG_PATH")" \
   "$(clrepo_json_string_or_null "$EMITTED_LAST_MESSAGE_PATH")" \

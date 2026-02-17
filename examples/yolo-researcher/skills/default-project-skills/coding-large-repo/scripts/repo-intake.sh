@@ -38,6 +38,10 @@ fi
 
 cd "$ROOT"
 
+PREFERRED_CWD="."
+PREFERRED_CWD_REASON="default_root"
+clrepo_resolve_cwd "" "$(pwd)" PREFERRED_CWD PREFERRED_CWD_REASON
+
 git_branch="no-git"
 git_dirty="n/a"
 
@@ -103,6 +107,8 @@ if [[ ${#coding_agents[@]} -eq 0 ]]; then
 fi
 
 echo "repo_root: $(pwd)"
+echo "preferred_cwd: ${PREFERRED_CWD}"
+echo "preferred_cwd_reason: ${PREFERRED_CWD_REASON}"
 echo "git_branch: ${git_branch}"
 echo "git_dirty: ${git_dirty}"
 echo "detected_stacks: ${stacks[*]}"
@@ -114,9 +120,9 @@ for cmd in "${verify_cmds[@]}"; do
 done
 if [[ "${coding_agents[*]}" != "none" ]]; then
   echo "suggested_delegate_commands:"
-  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"delegate-coding-agent\",\"args\":[\"--task\",\"<task>\",\"--provider\",\"auto\",\"--cwd\",\".\"]})"
-  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"delegate-coding-agent\",\"args\":[\"--task\",\"<long-task>\",\"--provider\",\"auto\",\"--cwd\",\".\",\"--async\",\"always\"]})"
-  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"agent-start\",\"args\":[\"--task\",\"<long-task>\",\"--provider\",\"auto\",\"--cwd\",\".\"]})"
+  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"delegate-coding-agent\",\"args\":[\"--task\",\"<task>\",\"--provider\",\"auto\",\"--cwd\",\"$PREFERRED_CWD\"]})"
+  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"delegate-coding-agent\",\"args\":[\"--task\",\"<long-task>\",\"--provider\",\"auto\",\"--cwd\",\"$PREFERRED_CWD\",\"--async\",\"always\"]})"
+  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"agent-start\",\"args\":[\"--task\",\"<long-task>\",\"--provider\",\"auto\",\"--cwd\",\"$PREFERRED_CWD\"]})"
 fi
 
 STACKS_JOINED="${stacks[*]}"
@@ -128,9 +134,11 @@ for cmd in "${verify_cmds[@]}"; do
   VERIFY_JOINED="$VERIFY_JOINED$cmd"
 done
 CODING_AGENTS_JOINED="${coding_agents[*]}"
-RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"repo-intake\",\"status\":\"completed\",\"exit_code\":0,\"repo_root\":%s,\"git_branch\":%s,\"git_dirty\":%s,\"detected_stacks\":%s,\"coding_agents\":%s,\"docker_runtime\":%s,\"suggested_verify_commands\":%s}' \
+RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"repo-intake\",\"status\":\"completed\",\"exit_code\":0,\"repo_root\":%s,\"preferred_cwd\":%s,\"preferred_cwd_reason\":%s,\"git_branch\":%s,\"git_dirty\":%s,\"detected_stacks\":%s,\"coding_agents\":%s,\"docker_runtime\":%s,\"suggested_verify_commands\":%s}' \
   "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
   "$(clrepo_json_string_or_null "$(pwd)")" \
+  "$(clrepo_json_string_or_null "$PREFERRED_CWD")" \
+  "$(clrepo_json_string_or_null "$PREFERRED_CWD_REASON")" \
   "$(clrepo_json_string_or_null "$git_branch")" \
   "$(clrepo_json_string_or_null "$git_dirty")" \
   "$(clrepo_json_string_or_null "$STACKS_JOINED")" \

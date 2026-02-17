@@ -36,7 +36,7 @@ usage: agent-start.sh --task "<task>" [options]
 
 Options:
   --provider <auto|codex|claude>     Default: auto
-  --cwd <path>                       Default: .
+  --cwd <path>                       Default: auto-detected.
   --model <name>                     Optional model override.
   --timeout-sec <seconds>            Optional timeout passed to delegate script.
   --claude-tools <csv>               Default: Bash,Read,Edit,Write
@@ -47,7 +47,8 @@ EOF
 
 TASK=""
 PROVIDER="auto"
-CWD="."
+CWD=""
+CWD_EXPLICIT="false"
 MODEL=""
 TIMEOUT_SEC=""
 CLAUDE_TOOLS="Bash,Read,Edit,Write"
@@ -65,6 +66,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cwd)
       CWD="${2:-}"
+      CWD_EXPLICIT="true"
       shift 2
       ;;
     --model)
@@ -99,9 +101,18 @@ if [[ -z "$TASK" ]]; then
   fail "--task is required" 2
 fi
 
+REQUESTED_CWD=""
+if [[ "$CWD_EXPLICIT" == "true" ]]; then
+  REQUESTED_CWD="$CWD"
+fi
+CWD_REASON="default_root"
+clrepo_resolve_cwd "$REQUESTED_CWD" "$TASK" CWD CWD_REASON
+
 if [[ ! -d "$CWD" ]]; then
   fail "cwd does not exist: $CWD" 2
 fi
+
+ABS_CWD="$(cd "$CWD" && pwd)"
 
 # Fail fast for provider resolution so start returns actionable errors.
 if ! clrepo_pick_provider "$PROVIDER" >/dev/null; then
@@ -112,7 +123,7 @@ if [[ -z "$SESSION_ID" ]]; then
   SESSION_ID="coding-agent-$(date +"%Y%m%d-%H%M%S")-$RANDOM"
 fi
 
-SESSION_ROOT="$CODING_LARGE_REPO_TMP_DIR/agent-sessions"
+SESSION_ROOT="$(clrepo_agent_session_root_for_cwd "$ABS_CWD")"
 SESSION_DIR="$SESSION_ROOT/$SESSION_ID"
 LOG_PATH="$SESSION_DIR/agent.log"
 EXIT_PATH="$SESSION_DIR/exit_code"
@@ -135,7 +146,7 @@ declare -a DELEGATE_CMD=(
   "$SCRIPT_DIR/delegate-coding-agent.sh"
   --task "$TASK"
   --provider "$PROVIDER"
-  --cwd "$CWD"
+  --cwd "$ABS_CWD"
   --claude-tools "$CLAUDE_TOOLS"
 )
 
@@ -175,7 +186,11 @@ printf '%s\n' "$PID" > "$PID_PATH"
 {
   echo "session_id=$SESSION_ID"
   echo "requested_provider=$PROVIDER"
+  echo "requested_cwd=${REQUESTED_CWD:-<auto>}"
   echo "cwd=$CWD"
+  echo "abs_cwd=$ABS_CWD"
+  echo "cwd_reason=$CWD_REASON"
+  echo "session_root=$SESSION_ROOT"
   echo "log_path=$LOG_PATH"
   echo "exit_path=$EXIT_PATH"
   echo "pid_path=$PID_PATH"
@@ -189,18 +204,23 @@ clrepo_print_kv state "running"
 clrepo_print_kv pid "$PID"
 clrepo_print_kv log_path "$LOG_PATH"
 clrepo_print_kv session_dir "$SESSION_DIR"
+clrepo_print_kv session_root "$SESSION_ROOT"
 NEXT_POLL_CMD="skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"agent-poll\",\"args\":[\"--session-id\",\"$SESSION_ID\"]})"
 NEXT_LOG_CMD="skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"agent-log\",\"args\":[\"--session-id\",\"$SESSION_ID\",\"--tail-lines\",\"120\"]})"
 echo "next_poll: $NEXT_POLL_CMD"
 echo "next_log: $NEXT_LOG_CMD"
 
-RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-start\",\"status\":\"running\",\"session_id\":%s,\"requested_provider\":%s,\"pid\":%s,\"cwd\":%s,\"log_path\":%s,\"session_dir\":%s,\"next_poll\":%s,\"next_log\":%s}' \
+RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-start\",\"status\":\"running\",\"session_id\":%s,\"requested_provider\":%s,\"pid\":%s,\"requested_cwd\":%s,\"cwd\":%s,\"abs_cwd\":%s,\"cwd_reason\":%s,\"log_path\":%s,\"session_root\":%s,\"session_dir\":%s,\"next_poll\":%s,\"next_log\":%s}' \
   "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
   "$(clrepo_json_string_or_null "$SESSION_ID")" \
   "$(clrepo_json_string_or_null "$PROVIDER")" \
   "$(clrepo_json_number_or_null "$PID")" \
+  "$(clrepo_json_string_or_null "$REQUESTED_CWD")" \
   "$(clrepo_json_string_or_null "$CWD")" \
+  "$(clrepo_json_string_or_null "$ABS_CWD")" \
+  "$(clrepo_json_string_or_null "$CWD_REASON")" \
   "$(clrepo_json_string_or_null "$LOG_PATH")" \
+  "$(clrepo_json_string_or_null "$SESSION_ROOT")" \
   "$(clrepo_json_string_or_null "$SESSION_DIR")" \
   "$(clrepo_json_string_or_null "$NEXT_POLL_CMD")" \
   "$(clrepo_json_string_or_null "$NEXT_LOG_CMD")")"

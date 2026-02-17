@@ -65,12 +65,12 @@ if [[ -z "$SESSION_ID" ]]; then
   fail "--session-id is required" 2
 fi
 
-SESSION_DIR="$CODING_LARGE_REPO_TMP_DIR/agent-sessions/$SESSION_ID"
-PID_PATH="$SESSION_DIR/pid"
-
-if [[ ! -d "$SESSION_DIR" ]]; then
+SESSION_DIR="$(clrepo_find_agent_session_dir "$SESSION_ID" || true)"
+if [[ -z "$SESSION_DIR" ]]; then
   fail "session not found: $SESSION_ID" 2
 fi
+
+PID_PATH="$SESSION_DIR/pid"
 
 if [[ ! -f "$PID_PATH" ]]; then
   fail "pid file not found for session: $SESSION_ID" 2
@@ -87,9 +87,10 @@ if kill -0 "$PID" >/dev/null 2>&1; then
   clrepo_print_kv pid "$PID"
   clrepo_print_kv signal "$SIGNAL"
   clrepo_print_kv state "kill_sent"
-  RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-kill\",\"status\":\"kill_sent\",\"session_id\":%s,\"pid\":%s,\"signal\":%s}' \
+  RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-kill\",\"status\":\"kill_sent\",\"session_id\":%s,\"session_dir\":%s,\"pid\":%s,\"signal\":%s}' \
     "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
     "$(clrepo_json_string_or_null "$SESSION_ID")" \
+    "$(clrepo_json_string_or_null "$SESSION_DIR")" \
     "$(clrepo_json_number_or_null "$PID")" \
     "$(clrepo_json_string_or_null "$SIGNAL")")"
   emit_result "$RESULT_JSON"
@@ -97,9 +98,10 @@ else
   clrepo_print_kv session_id "$SESSION_ID"
   clrepo_print_kv pid "$PID"
   clrepo_print_kv state "not_running"
-  RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-kill\",\"status\":\"not_running\",\"session_id\":%s,\"pid\":%s,\"signal\":%s}' \
+  RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-kill\",\"status\":\"not_running\",\"session_id\":%s,\"session_dir\":%s,\"pid\":%s,\"signal\":%s}' \
     "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
     "$(clrepo_json_string_or_null "$SESSION_ID")" \
+    "$(clrepo_json_string_or_null "$SESSION_DIR")" \
     "$(clrepo_json_number_or_null "$PID")" \
     "$(clrepo_json_string_or_null "$SIGNAL")")"
   emit_result "$RESULT_JSON"

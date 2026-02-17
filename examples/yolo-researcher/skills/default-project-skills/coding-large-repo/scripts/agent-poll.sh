@@ -65,15 +65,15 @@ if [[ -z "$SESSION_ID" ]]; then
   fail "--session-id is required" 2
 fi
 
-SESSION_DIR="$CODING_LARGE_REPO_TMP_DIR/agent-sessions/$SESSION_ID"
+SESSION_DIR="$(clrepo_find_agent_session_dir "$SESSION_ID" || true)"
+if [[ -z "$SESSION_DIR" ]]; then
+  fail "session not found: $SESSION_ID" 2
+fi
+
 LOG_PATH="$SESSION_DIR/agent.log"
 EXIT_PATH="$SESSION_DIR/exit_code"
 PID_PATH="$SESSION_DIR/pid"
 META_PATH="$SESSION_DIR/meta.env"
-
-if [[ ! -d "$SESSION_DIR" ]]; then
-  fail "session not found: $SESSION_ID" 2
-fi
 
 PID=""
 if [[ -f "$PID_PATH" ]]; then
@@ -136,6 +136,7 @@ clrepo_print_kv pid "${PID:-n/a}"
 clrepo_print_kv exit_code "$EXIT_CODE"
 clrepo_print_kv log_path "$LOG_PATH"
 clrepo_print_kv meta_path "$META_PATH"
+clrepo_print_kv session_dir "$SESSION_DIR"
 
 if [[ -f "$LOG_PATH" ]]; then
   echo "log_tail_begin:"
@@ -151,13 +152,14 @@ if [[ -f "$LOG_PATH" ]]; then
   TAIL_PREVIEW="$(clrepo_compact_text "$TAIL_PREVIEW" 500)"
 fi
 
-RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-poll\",\"status\":%s,\"state_reason\":%s,\"session_id\":%s,\"pid\":%s,\"exit_code\":%s,\"log_path\":%s,\"meta_path\":%s,\"tail_preview\":%s}' \
+RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"agent-poll\",\"status\":%s,\"state_reason\":%s,\"session_id\":%s,\"pid\":%s,\"exit_code\":%s,\"session_dir\":%s,\"log_path\":%s,\"meta_path\":%s,\"tail_preview\":%s}' \
   "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
   "$(clrepo_json_string_or_null "$STATE")" \
   "$(clrepo_json_string_or_null "$STATE_REASON")" \
   "$(clrepo_json_string_or_null "$SESSION_ID")" \
   "$(clrepo_json_number_or_null "${PID:-}")" \
   "$(clrepo_json_number_or_null "${EXIT_CODE:-}")" \
+  "$(clrepo_json_string_or_null "$SESSION_DIR")" \
   "$(clrepo_json_string_or_null "$LOG_PATH")" \
   "$(clrepo_json_string_or_null "$META_PATH")" \
   "$(clrepo_json_string_or_null "$TAIL_PREVIEW")")"

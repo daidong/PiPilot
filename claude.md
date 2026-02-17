@@ -1,6 +1,6 @@
 always reply to me staring with "Hey, Captain!"
 
-always coding in english and all the comments should be in english as well.
+设计公理： 系统不追求复杂架构保证质量，而追求最小纪律保证不死 + 证据驱动逐步变强
 
 # AgentFoundry Development Guide
 
