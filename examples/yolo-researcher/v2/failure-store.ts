@@ -13,6 +13,7 @@ import {
 
 const HEADER = '# Failures / Blockers (Do not retry blindly)'
 const FAILURE_WINDOW_TURNS = 10
+const REDUNDANCY_RUNTIME = 'redundant'
 
 function normalizeCmd(value: string): string {
   return normalizeText(value)
@@ -158,6 +159,15 @@ function latestByUpdatedAt(entries: FailureEntry[]): FailureEntry | null {
   ))
 }
 
+function matchingCmdRuntime(entries: FailureEntry[], cmd: string, runtime: string): FailureEntry[] {
+  const cmdNorm = normalizeCmd(cmd)
+  const runtimeNorm = normalizeText(runtime)
+  return entries.filter((entry) => (
+    normalizeCmd(entry.cmd) === cmdNorm
+    && normalizeText(entry.runtime) === runtimeNorm
+  ))
+}
+
 export class FailureStore {
   readonly filePath: string
   private readonly runsDir: string
@@ -184,18 +194,20 @@ export class FailureStore {
 
   async findBlocked(cmd: string, runtime: string): Promise<FailureEntry | null> {
     const entries = await this.load()
-    const cmdNorm = normalizeCmd(cmd)
-    const runtimeNorm = normalizeText(runtime)
-    const matching = entries.filter((entry) => (
-      normalizeCmd(entry.cmd) === cmdNorm
-      && normalizeText(entry.runtime) === runtimeNorm
-    ))
+    const matching = matchingCmdRuntime(entries, cmd, runtime)
     const latest = latestByUpdatedAt(matching)
     if (!latest) return null
     if (latest.status !== 'BLOCKED') return null
 
     const attempts = await this.countRecentFailuresByFingerprint(latest.fingerprint)
     return attempts >= 3 ? latest : null
+  }
+
+  async findRedundancyBlocked(fingerprint: string): Promise<FailureEntry | null> {
+    const entries = await this.load()
+    const latest = latestByUpdatedAt(matchingCmdRuntime(entries, fingerprint, REDUNDANCY_RUNTIME))
+    if (!latest || latest.status !== 'BLOCKED') return null
+    return latest
   }
 
   private async countRecentFailuresByFingerprint(fingerprint: string): Promise<number> {
@@ -268,12 +280,7 @@ export class FailureStore {
     evidencePath: string
   }): Promise<boolean> {
     const entries = await this.load()
-    const cmdNorm = normalizeCmd(input.cmd)
-    const runtimeNorm = normalizeText(input.runtime)
-    const matching = entries.filter((entry) => (
-      normalizeCmd(entry.cmd) === cmdNorm
-      && normalizeText(entry.runtime) === runtimeNorm
-    ))
+    const matching = matchingCmdRuntime(entries, input.cmd, input.runtime)
     const latest = latestByUpdatedAt(matching)
     if (!latest || latest.status !== 'BLOCKED') {
       return false
@@ -287,6 +294,66 @@ export class FailureStore {
       errorLine: latest.errorLine,
       was: `BLOCKED (${latest.errorLine || 'unknown'})`,
       resolved: input.resolved.trim() || 'minimal verification passed',
+      evidencePath: input.evidencePath,
+      attempts: 0,
+      alternatives: [],
+      updatedAt: toIso(this.now)
+    }
+
+    entries.push(unblocked)
+    await this.save(entries)
+    return true
+  }
+
+  async recordRedundancyBlocked(input: {
+    fingerprint: string
+    errorLine: string
+    evidencePath: string
+  }): Promise<FailureEntry> {
+    const entries = await this.load()
+    const matching = matchingCmdRuntime(entries, input.fingerprint, REDUNDANCY_RUNTIME)
+    const latest = latestByUpdatedAt(matching)
+
+    const next: FailureEntry = {
+      status: 'BLOCKED',
+      runtime: REDUNDANCY_RUNTIME,
+      cmd: input.fingerprint,
+      fingerprint: input.fingerprint,
+      errorLine: input.errorLine,
+      was: '',
+      resolved: '',
+      evidencePath: input.evidencePath,
+      attempts: Math.max(1, (latest?.attempts ?? 0) + 1),
+      alternatives: [
+        'switch to a different artifact type (patch.diff / experiment plan / telemetry contract)',
+        'perform one minimal verification that yields new evidence',
+        'reuse existing evidence and move to synthesis with new deliverable'
+      ],
+      updatedAt: toIso(this.now)
+    }
+
+    entries.push(next)
+    await this.save(entries)
+    return next
+  }
+
+  async clearRedundancyBlocked(input: {
+    fingerprint: string
+    resolved: string
+    evidencePath: string
+  }): Promise<boolean> {
+    const entries = await this.load()
+    const latest = latestByUpdatedAt(matchingCmdRuntime(entries, input.fingerprint, REDUNDANCY_RUNTIME))
+    if (!latest || latest.status !== 'BLOCKED') return false
+
+    const unblocked: FailureEntry = {
+      status: 'UNBLOCKED',
+      runtime: REDUNDANCY_RUNTIME,
+      cmd: input.fingerprint,
+      fingerprint: latest.fingerprint,
+      errorLine: latest.errorLine,
+      was: `BLOCKED (${latest.errorLine || 'no-delta repetition'})`,
+      resolved: input.resolved.trim() || 'new delta produced',
       evidencePath: input.evidencePath,
       attempts: 0,
       alternatives: [],

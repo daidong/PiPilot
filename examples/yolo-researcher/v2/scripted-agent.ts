@@ -1,24 +1,23 @@
-import type { TurnContext, TurnDecision, YoloSingleAgent } from './types.js'
+import type { TurnContext, TurnRunOutcome, YoloSingleAgent } from './types.js'
 
 export class ScriptedSingleAgent implements YoloSingleAgent {
   private cursor = 0
 
-  constructor(private readonly scriptedDecisions: TurnDecision[]) {}
+  constructor(private readonly scriptedOutcomes: TurnRunOutcome[]) {}
 
-  async decide(_context: TurnContext): Promise<TurnDecision> {
-    if (this.cursor >= this.scriptedDecisions.length) {
+  async runTurn(_context: TurnContext): Promise<TurnRunOutcome> {
+    if (this.cursor >= this.scriptedOutcomes.length) {
       return {
-        intent: 'No more scripted decisions; stop cleanly.',
-        action: {
-          kind: 'Stop',
-          reason: 'Script exhausted.'
-        },
-        updateSummary: ['No more scripted actions available.']
+        intent: 'No more scripted outcomes; stop cleanly.',
+        status: 'stopped',
+        summary: 'Script exhausted.',
+        stopReason: 'Script exhausted.',
+        updateSummary: ['No more scripted outcomes available.']
       }
     }
 
-    const decision = this.scriptedDecisions[this.cursor]
+    const outcome = this.scriptedOutcomes[this.cursor]
     this.cursor += 1
-    return decision
+    return outcome
   }
 }
