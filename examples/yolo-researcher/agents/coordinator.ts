@@ -17,6 +17,7 @@ import type {
   CoordinatorToolingStatus,
   CoordinatorTurnMetrics,
   CoordinatorTurnResult,
+  PlannerIntentRoute,
   PlannerOutput,
   QueuedUserInput,
   ReviewerProcessReview,
@@ -31,6 +32,35 @@ interface CoordinatorJsonAsset {
   type: string
   payload: Record<string, unknown>
   supersedes?: string
+}
+
+interface IoExecStartEvent {
+  traceId?: unknown
+  command?: unknown
+  cwd?: unknown
+  caller?: unknown
+}
+
+interface IoExecChunkEvent {
+  traceId?: unknown
+  stream?: unknown
+  chunk?: unknown
+  caller?: unknown
+}
+
+interface IoExecEndEvent {
+  traceId?: unknown
+  exitCode?: unknown
+  durationMs?: unknown
+  signal?: unknown
+  caller?: unknown
+}
+
+interface IoExecErrorEvent {
+  traceId?: unknown
+  error?: unknown
+  durationMs?: unknown
+  caller?: unknown
 }
 
 interface CoordinatorJsonOutput {
@@ -108,6 +138,14 @@ const DEFAULT_CONSTRAINTS: string[] = [
   'For unfamiliar domains or prior-art questions, try literature-search if available, then reason from returned results.',
   'For dataset or measurement-file questions, use data-analyze instead of manual computation in prompt space.',
   'For writing/refinement requests, use writing-outline or writing-draft to produce structured drafts.',
+  'For medium/large repository code modifications, use skill-script-run with skillId="coding-large-repo" (repo-intake -> change-plan -> delegate-coding-agent -> verify-targets; use agent-start/agent-poll for long runs) before broad bash loops.',
+  'Keep coding delegation on host via delegate-coding-agent; run verify-targets with Docker-preferred runtime (`--runtime auto`) unless there is a clear reason to force host.',
+  'When skill-script-run returns data.structuredResult (schema: coding-large-repo.result.v1), treat it as authoritative status for next-step decisions.',
+  'For CloudLab/Powder distributed experiments, use skill-script-run with skillId="cloudlab-distributed-experiments" (portal-intake -> experiment-create -> experiment-wait-ready -> experiment-hosts -> distributed-ssh -> collect-artifacts -> experiment-terminate).',
+  'When CloudLab resources are constrained or profile drift is suspected, add cloudlab resgroup-search/resgroup-create and profile-create/profile-update steps before experiment-create.',
+  'When skill-script-run returns data.structuredResult (schema: cloudlab-distributed-experiments.result.v1), use it as authoritative lifecycle/host/run status for retries and escalation.',
+  'For experiment or runtime questions, attempt local bash execution first when feasible and record concrete outcomes.',
+  'If local execution fails, try at least one fallback approach before ask_user, and include failure evidence in ask_user.context.',
   'Use ctx-get only when background/literature context retrieval is truly needed; otherwise prefer explicit tools.',
   'Make reasonable assumptions based on the research topic and standard conventions unless the user specifies otherwise. Do NOT ask about obvious details you can infer or look up.',
   'Only call ask_user when you truly cannot proceed (e.g., missing credentials, fundamentally ambiguous goal). Do NOT ask about details you can reasonably assume or look up yourself.',
@@ -130,15 +168,209 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function compactAndLimit(text: string, limit: number): string | undefined {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (!compact) return undefined
+  if (compact.length <= limit) return compact
+  return `${compact.slice(0, limit)}...`
+}
+
 function summarizeForTelemetry(value: unknown, limit: number = 180): string | undefined {
   if (value === undefined || value === null) return undefined
   const text = typeof value === 'string'
     ? value
     : JSON.stringify(value)
-  const compact = text.replace(/\s+/g, ' ').trim()
-  if (!compact) return undefined
-  if (compact.length <= limit) return compact
-  return `${compact.slice(0, limit)}...`
+  return compactAndLimit(text, limit)
+}
+
+function formatStructuredToolError(rawError: string, limit: number): string | undefined {
+  try {
+    const parsed = JSON.parse(rawError) as {
+      error?: { category?: unknown; source?: unknown; data?: { reason?: unknown } }
+      guidance?: unknown
+    }
+    const category = typeof parsed.error?.category === 'string' ? parsed.error.category : undefined
+    const source = typeof parsed.error?.source === 'string' ? parsed.error.source : undefined
+    const reason = typeof parsed.error?.data?.reason === 'string' ? parsed.error.data.reason : undefined
+    const guidance = typeof parsed.guidance === 'string' ? parsed.guidance : undefined
+    const parts = [category, source, reason, guidance].filter((item): item is string => Boolean(item))
+    if (parts.length === 0) return undefined
+    return compactAndLimit(parts.join(' | '), limit)
+  } catch {
+    return undefined
+  }
+}
+
+function extractToolResultOutputHint(data: unknown, limit: number): string | undefined {
+  if (!isObject(data)) return undefined
+  const stderr = typeof data.stderr === 'string' ? data.stderr : ''
+  const stdout = typeof data.stdout === 'string' ? data.stdout : ''
+  const sourceText = stderr.trim() ? stderr : stdout
+  return compactAndLimit(sourceText, limit)
+}
+
+function parseJsonObjectLine(payload: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(payload)
+    if (!isObject(parsed)) return undefined
+    return parsed
+  } catch {
+    return undefined
+  }
+}
+
+function parseStructuredResultFromStdout(stdout: string): Record<string, unknown> | undefined {
+  const marker = 'AF_RESULT_JSON:'
+  const lines = stdout.split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]?.trim()
+    if (!line || !line.startsWith(marker)) continue
+    const payload = line.slice(marker.length).trim()
+    if (!payload) continue
+    const parsed = parseJsonObjectLine(payload)
+    if (parsed) return parsed
+  }
+  return undefined
+}
+
+function extractStructuredResultBySchema(data: unknown, wantedSchema: string): Record<string, unknown> | undefined {
+  if (!isObject(data)) return undefined
+
+  const structuredCandidate = isObject(data.structuredResult)
+    ? data.structuredResult
+    : undefined
+  const fromStdout = typeof data.stdout === 'string'
+    ? parseStructuredResultFromStdout(data.stdout)
+    : undefined
+  const fromStderr = typeof data.stderr === 'string'
+    ? parseStructuredResultFromStdout(data.stderr)
+    : undefined
+  const structured = structuredCandidate ?? fromStdout ?? fromStderr
+  if (!structured) return undefined
+
+  const schema = typeof structured.schema === 'string' ? structured.schema : ''
+  if (schema !== wantedSchema) return undefined
+  return structured
+}
+
+function extractCodingLargeRepoStructuredResult(data: unknown): Record<string, unknown> | undefined {
+  return extractStructuredResultBySchema(data, 'coding-large-repo.result.v1')
+}
+
+function extractCloudlabStructuredResult(data: unknown): Record<string, unknown> | undefined {
+  return extractStructuredResultBySchema(data, 'cloudlab-distributed-experiments.result.v1')
+}
+
+function formatCodingLargeRepoStructuredResult(data: unknown, limit: number): string | undefined {
+  const structured = extractCodingLargeRepoStructuredResult(data)
+  if (!structured) return undefined
+
+  const script = typeof structured.script === 'string' ? structured.script : 'unknown-script'
+  const status = typeof structured.status === 'string' ? structured.status : 'unknown'
+  const provider = typeof structured.provider === 'string' ? structured.provider : undefined
+  const exitCode = typeof structured.exit_code === 'number' && Number.isFinite(structured.exit_code)
+    ? String(structured.exit_code)
+    : undefined
+  const requestedRuntime = typeof structured.requested_runtime === 'string'
+    ? structured.requested_runtime
+    : undefined
+  const effectiveRuntime = typeof structured.effective_runtime === 'string'
+    ? structured.effective_runtime
+    : undefined
+  const fallbackUsed = typeof structured.fallback_used === 'boolean'
+    ? structured.fallback_used
+    : undefined
+  const dockerRuntime = typeof structured.docker_runtime === 'string'
+    ? structured.docker_runtime
+    : undefined
+  const sessionId = typeof structured.session_id === 'string' ? structured.session_id : undefined
+  const logPath = typeof structured.log_path === 'string' ? structured.log_path : undefined
+  const lastMessage = typeof structured.last_message === 'string' ? structured.last_message : undefined
+
+  const parts = [
+    `coding-large-repo/${script}`,
+    `status=${status}`,
+    provider ? `provider=${provider}` : undefined,
+    exitCode ? `exit=${exitCode}` : undefined,
+    requestedRuntime ? `requested_runtime=${requestedRuntime}` : undefined,
+    effectiveRuntime ? `effective_runtime=${effectiveRuntime}` : undefined,
+    fallbackUsed !== undefined ? `fallback=${String(fallbackUsed)}` : undefined,
+    dockerRuntime ? `docker_runtime=${dockerRuntime}` : undefined,
+    sessionId ? `session=${sessionId}` : undefined,
+    logPath ? `log=${logPath}` : undefined,
+    lastMessage ? `last_message=${lastMessage}` : undefined
+  ].filter((item): item is string => Boolean(item))
+
+  if (parts.length === 0) return undefined
+  return compactAndLimit(parts.join(' | '), limit)
+}
+
+function formatCloudlabStructuredResult(data: unknown, limit: number): string | undefined {
+  const structured = extractCloudlabStructuredResult(data)
+  if (!structured) return undefined
+
+  const script = typeof structured.script === 'string' ? structured.script : 'unknown-script'
+  const status = typeof structured.status === 'string' ? structured.status : 'unknown'
+  const exitCode = typeof structured.exit_code === 'number' && Number.isFinite(structured.exit_code)
+    ? String(structured.exit_code)
+    : undefined
+  const experimentId = typeof structured.experiment_id === 'string' ? structured.experiment_id : undefined
+  const hostCount = typeof structured.host_count === 'number' && Number.isFinite(structured.host_count)
+    ? String(structured.host_count)
+    : undefined
+  const failedHosts = typeof structured.failed_hosts === 'number' && Number.isFinite(structured.failed_hosts)
+    ? String(structured.failed_hosts)
+    : undefined
+  const outDir = typeof structured.out_dir === 'string' ? structured.out_dir : undefined
+  const summaryPath = typeof structured.summary_path === 'string' ? structured.summary_path : undefined
+  const terminateState = typeof structured.terminate_state === 'string' ? structured.terminate_state : undefined
+  const portalUrl = typeof structured.portal_url === 'string' ? structured.portal_url : undefined
+
+  const parts = [
+    `cloudlab-distributed-experiments/${script}`,
+    `status=${status}`,
+    exitCode ? `exit=${exitCode}` : undefined,
+    experimentId ? `experiment=${experimentId}` : undefined,
+    hostCount ? `hosts=${hostCount}` : undefined,
+    failedHosts ? `failed_hosts=${failedHosts}` : undefined,
+    terminateState ? `terminate_state=${terminateState}` : undefined,
+    portalUrl ? `portal=${portalUrl}` : undefined,
+    outDir ? `out_dir=${outDir}` : undefined,
+    summaryPath ? `summary=${summaryPath}` : undefined
+  ].filter((item): item is string => Boolean(item))
+
+  if (parts.length === 0) return undefined
+  return compactAndLimit(parts.join(' | '), limit)
+}
+
+function summarizeToolResultForTelemetry(result: unknown, limit: number = 180): string | undefined {
+  if (isObject(result)) {
+    const codingStructuredSummary = formatCodingLargeRepoStructuredResult(result.data, limit)
+    if (codingStructuredSummary) return codingStructuredSummary
+    const cloudlabStructuredSummary = formatCloudlabStructuredResult(result.data, limit)
+    if (cloudlabStructuredSummary) return cloudlabStructuredSummary
+  }
+
+  if (!isObject(result)) return summarizeForTelemetry(result, limit)
+  if (result.success !== false) return summarizeForTelemetry(result, limit)
+
+  const rawError = typeof result.error === 'string' ? compactAndLimit(result.error, limit) : undefined
+  const structuredError = typeof result.error === 'string'
+    ? formatStructuredToolError(result.error, limit)
+    : undefined
+  const outputHint = extractToolResultOutputHint(result.data, limit)
+
+  let message = structuredError ?? rawError
+  if (!message && result.error !== undefined && result.error !== null) {
+    message = compactAndLimit(String(result.error), limit)
+  }
+  if (!message) {
+    message = outputHint
+  } else if (outputHint && /^Command exited with code\s+\d+\s*$/.test(message)) {
+    message = compactAndLimit(`${message}: ${outputHint}`, limit)
+  }
+
+  return message ?? summarizeForTelemetry(result, limit)
 }
 
 function normalizeTurnAction(value: unknown): string | undefined {
@@ -233,6 +465,27 @@ function buildContextCompilerView(input: {
 function normalizeLeanAssetType(rawType: string): string {
   const key = rawType.trim().toLowerCase().replace(/[^a-z]/g, '')
   if (!key) return 'Note'
+
+  if (
+    key === 'runrecord'
+    || key === 'runrecords'
+    || key === 'benchmarkrun'
+    || key === 'executionrecord'
+  ) {
+    return 'RunRecord'
+  }
+
+  if (
+    key === 'evidencelink'
+    || key === 'evidencelinks'
+    || key === 'evidenceref'
+    || key === 'evidencereference'
+  ) {
+    return 'EvidenceLink'
+  }
+
+  if (key === 'claim' || key === 'claims') return 'Claim'
+  if (key === 'decision' || key === 'decisions') return 'Decision'
 
   if (
     key === 'researchquestion'
@@ -351,10 +604,13 @@ function buildCoordinatorStageGuidance(stage: YoloStage): string {
       '### Research workflow:',
       '1. **Understand the topic** — if unfamiliar, start with keyword searches and background reading',
       '2. **Literature search** — survey related work to find existing approaches, published baselines, and gaps',
-      '3. **Synthesize findings** — produce a Note asset summarizing related work (include "relatedWork" or "literatureReview" in the payload)',
-      '4. **Refine the question** — use literature findings to tighten scope, identify gaps, and formulate testable sub-questions',
-      '5. **Propose directions** — based on the literature landscape, propose concrete research ideas and hypotheses',
+      '3. **Local smoke check** — run one tiny local command that validates basic feasibility or tooling assumptions',
+      '4. **Synthesize findings** — produce a Note asset summarizing related work (include "relatedWork" or "literatureReview" in the payload)',
+      '5. **Refine the question** — use literature findings to tighten scope, identify gaps, and formulate testable sub-questions',
+      '6. **Propose directions** — based on the literature landscape, propose concrete research ideas and hypotheses',
       '',
+      'If the turn includes repository-scale coding work, start with coding-large-repo/repo-intake via skill-script-run before editing.',
+      'If the turn includes CloudLab/Powder distributed infra work, run cloudlab-distributed-experiments/portal-intake via skill-script-run before experiment lifecycle actions.',
       'After understanding the landscape, move quickly toward experiment design.',
       'If the research question is clear and you have enough context, proceed to creating an ExperimentRequest asset.',
       'Make standard research assumptions rather than asking the user for trivial details.',
@@ -367,7 +623,12 @@ function buildCoordinatorStageGuidance(stage: YoloStage): string {
       '## ExperimentRequest design',
       '',
       'Produce an ExperimentRequest asset that can be executed.',
-      'Either run the experiment yourself if the environment is available, or prepare a clear spec for the user.',
+      'Local-first policy: run a minimal executable slice yourself before outsourcing.',
+      'For non-trivial code changes, run coding-large-repo/change-plan before edits, delegate implementation with coding-large-repo/delegate-coding-agent (or agent-start/agent-poll), then run coding-large-repo/verify-targets with Docker-preferred runtime (`--runtime auto`) and consume runtime/fallback fields from structured result.',
+      'For CloudLab/Powder distributed experiments, use cloudlab-distributed-experiments scripts to run lifecycle + host orchestration + artifact collection before requesting user execution.',
+      'Use cloudlab resgroup-search/resgroup-create for reservation guarantees and profile-create/profile-update when profile scripts must be updated.',
+      'Only outsource to user when local execution is blocked by permissions, credentials, hardware constraints, or impractical runtime.',
+      'When local execution succeeds, emit RunRecord evidence and then refine ExperimentRequest with verified commands.',
       '',
       '### Key sections:',
       '1. **goal**: What this experiment tests and why it matters (link to hypothesis/claim)',
@@ -380,7 +641,7 @@ function buildCoordinatorStageGuidance(stage: YoloStage): string {
       'Make reasonable assumptions based on the research topic rather than asking.',
       'Start with the simplest experiment that can test the hypothesis.',
       'Missing details can be iterated — do NOT block on perfection.',
-      'If you need something from the user, include it in the ExperimentRequest spec rather than calling ask_user.'
+      'If you must ask the user, include concrete blocked attempts and why alternatives failed.'
     ].join('\n')
   }
 
@@ -393,6 +654,7 @@ function buildTurnPrompt(input: {
   stage: YoloStage
   goal: string
   mergedUserInputs: QueuedUserInput[]
+  intentRoute?: PlannerIntentRoute
   plannerOutput?: PlannerOutput
   reviewerOutput?: ReviewerProcessReview
   researchContext?: string
@@ -408,6 +670,14 @@ function buildTurnPrompt(input: {
   }))
   const contextView = buildContextCompilerView(input)
   const stageGuidance = buildCoordinatorStageGuidance(input.stage)
+  const intentRouteNote = input.intentRoute
+    ? [
+        `IntentRoute: ${JSON.stringify(input.intentRoute)}`,
+        input.intentRoute.isCoding
+          ? 'Intent router marks this turn as coding-heavy. Prioritize coding-large-repo workflow, local run evidence, and verification before delegation.'
+          : 'Intent router marks this turn as non-coding. Prioritize literature/data/writing flow unless coding or CloudLab/distributed infra execution is explicitly required.'
+      ].join('\n')
+    : 'IntentRoute: null'
 
   const toolAvailabilityNote = [
     `Tooling mode: ${options.tooling.mode}.`,
@@ -420,11 +690,21 @@ function buildTurnPrompt(input: {
     'Return STRICT JSON only (no prose).',
     'Minimum required JSON shape:',
     '{"action":"string — describe what you did (e.g. \'literature_review\', \'ran_local_experiment\', \'design_experiment\')","actionRationale":"string","summary":"string","assets":[{"type":"string","payload":{}}],"askUser":{"required":"boolean","question":"string","blocking":"boolean"},"execution_trace":[{"tool":"string","reason":"string","result_summary":"string"}]}',
-    'If you are genuinely blocked and cannot proceed with any reasonable assumption, set askUser.required=true and askUser.blocking=true. Do NOT ask about trivial details you can reasonably assume or look up — make assumptions and iterate.',
+    'For medium/large codebase modifications, prefer skill-script-run with skillId="coding-large-repo" (repo-intake -> change-plan -> delegate-coding-agent -> verify-targets; use agent-start/agent-poll for long runs) before open-ended bash loops.',
+    'For coding-large-repo verification, use Docker-preferred runtime (`--runtime auto`) and inspect structured runtime fields (`effective_runtime`, `fallback_used`) before escalating.',
+    'When a coding-large-repo script returns data.structuredResult (schema `coding-large-repo.result.v1`), use it as the canonical status signal for continue/retry/escalate decisions.',
+    'For CloudLab/Powder distributed experiment execution, prefer skill-script-run with skillId="cloudlab-distributed-experiments" (portal-intake -> experiment-create -> experiment-wait-ready -> experiment-hosts -> distributed-ssh -> collect-artifacts -> experiment-terminate).',
+    'Use cloudlab reservation/profile scripts (resgroup-search/resgroup-create/profile-create/profile-update) when needed to secure capacity or refresh experiment definitions.',
+    'When a cloudlab script returns data.structuredResult (schema `cloudlab-distributed-experiments.result.v1`), use it as canonical lifecycle/run status before deciding retry/escalate/ask_user.',
+    'If the turn involves experiments or local tooling, attempt at least one local execution before asking the user.',
+    'If local execution fails, try one fallback approach (alternative command, reduced workload, or permission probe) before asking the user.',
+    'If you are genuinely blocked and cannot proceed with any reasonable assumption, set askUser.required=true and askUser.blocking=true and include attempted commands/errors in askUser.context.',
+    'Do NOT ask about trivial details you can reasonably assume or look up — make assumptions and iterate.',
     input.researchContext
       ? `## User Research Context (research.md)\n\n${input.researchContext}`
       : undefined,
     stageGuidance,
+    intentRouteNote,
     `Runtime mode: ${options.mode}`,
     toolAvailabilityNote,
     `Context compiler: ${JSON.stringify(contextView)}`,
@@ -559,6 +839,114 @@ function createDefaultToolingStatus(reason: string): CoordinatorToolingStatus {
   }
 }
 
+function bridgeRuntimeExecEventsToActivity(
+  agent: { runtime?: { eventBus?: { on: (event: string, handler: (payload: unknown) => void) => () => void } } },
+  onActivity?: (event: ActivityEvent) => void
+): () => void {
+  const eventBus = agent.runtime?.eventBus
+  if (!eventBus || !onActivity) return () => {}
+
+  const unsubs: Array<() => void> = []
+
+  unsubs.push(eventBus.on('io:exec:start', (payload) => {
+    const raw = isObject(payload) ? payload as IoExecStartEvent : {}
+    const traceId = typeof raw.traceId === 'string' ? raw.traceId : ''
+    if (!traceId) return
+    const command = typeof raw.command === 'string' ? raw.command : ''
+    const caller = typeof raw.caller === 'string' ? raw.caller : undefined
+    const cwd = typeof raw.cwd === 'string' ? raw.cwd : undefined
+    onActivity({
+      id: randomId('act'),
+      timestamp: nowIso(),
+      kind: 'command_start',
+      agent: 'coordinator',
+      tool: caller ?? 'shell',
+      preview: compactAndLimit(command.split('\n')[0] ?? command, 140),
+      traceId,
+      command,
+      cwd,
+      caller
+    })
+  }))
+
+  unsubs.push(eventBus.on('io:exec:chunk', (payload) => {
+    const raw = isObject(payload) ? payload as IoExecChunkEvent : {}
+    const traceId = typeof raw.traceId === 'string' ? raw.traceId : ''
+    if (!traceId) return
+    const chunk = typeof raw.chunk === 'string' ? raw.chunk : ''
+    if (!chunk) return
+    const stream = raw.stream === 'stderr' ? 'stderr' : 'stdout'
+    const caller = typeof raw.caller === 'string' ? raw.caller : undefined
+    onActivity({
+      id: randomId('act'),
+      timestamp: nowIso(),
+      kind: 'command_chunk',
+      agent: 'coordinator',
+      tool: caller ?? 'shell',
+      preview: compactAndLimit(chunk, 120),
+      traceId,
+      stream,
+      chunk,
+      caller
+    })
+  }))
+
+  unsubs.push(eventBus.on('io:exec:end', (payload) => {
+    const raw = isObject(payload) ? payload as IoExecEndEvent : {}
+    const traceId = typeof raw.traceId === 'string' ? raw.traceId : ''
+    if (!traceId) return
+    const exitCode = typeof raw.exitCode === 'number' && Number.isFinite(raw.exitCode) ? raw.exitCode : undefined
+    const durationMs = typeof raw.durationMs === 'number' && Number.isFinite(raw.durationMs) ? raw.durationMs : undefined
+    const signal = typeof raw.signal === 'string' ? raw.signal : undefined
+    const caller = typeof raw.caller === 'string' ? raw.caller : undefined
+    const endPreview = [
+      exitCode !== undefined ? `exit=${exitCode}` : undefined,
+      durationMs !== undefined ? `duration=${(durationMs / 1000).toFixed(2)}s` : undefined,
+      signal ? `signal=${signal}` : undefined
+    ].filter(Boolean).join(' | ')
+    onActivity({
+      id: randomId('act'),
+      timestamp: nowIso(),
+      kind: 'command_end',
+      agent: 'coordinator',
+      tool: caller ?? 'shell',
+      preview: endPreview || 'command finished',
+      traceId,
+      exitCode,
+      durationMs,
+      signal,
+      caller
+    })
+  }))
+
+  unsubs.push(eventBus.on('io:exec:error', (payload) => {
+    const raw = isObject(payload) ? payload as IoExecErrorEvent : {}
+    const traceId = typeof raw.traceId === 'string' ? raw.traceId : ''
+    if (!traceId) return
+    const error = typeof raw.error === 'string' ? raw.error : 'Unknown execution error'
+    const durationMs = typeof raw.durationMs === 'number' && Number.isFinite(raw.durationMs) ? raw.durationMs : undefined
+    const caller = typeof raw.caller === 'string' ? raw.caller : undefined
+    onActivity({
+      id: randomId('act'),
+      timestamp: nowIso(),
+      kind: 'command_error',
+      agent: 'coordinator',
+      tool: caller ?? 'shell',
+      preview: compactAndLimit(error, 140),
+      traceId,
+      error,
+      durationMs,
+      caller
+    })
+  }))
+
+  return () => {
+    for (const unsub of unsubs) {
+      unsub()
+    }
+  }
+}
+
 async function buildSelectedPacks(config: YoloCoordinatorConfig, askUserPack: Pack, subagentTracker?: TokenTracker): Promise<{
   selectedPacks: Pack[]
   tooling: CoordinatorToolingStatus
@@ -568,7 +956,7 @@ async function buildSelectedPacks(config: YoloCoordinatorConfig, askUserPack: Pa
 
   const allowBash = config.allowBash ?? (config.mode === 'lean_v2')
   if (allowBash) {
-    selectedPacks.push(packs.exec({ approvalMode: 'dangerous' }))
+    selectedPacks.push(packs.exec({ approvalMode: 'none' }))
     enabledPacks.push('exec')
   }
 
@@ -734,12 +1122,16 @@ async function defaultAgentFactory(config: YoloCoordinatorConfig, callbacks: Coo
     },
     onUsage: () => {}
   })
+  const unsubExecBridge = bridgeRuntimeExecEventsToActivity(agent as unknown as { runtime?: { eventBus?: { on: (event: string, handler: (payload: unknown) => void) => () => void } } }, config.onActivity)
 
   return {
     agent: {
       ensureInit: () => agent.ensureInit(),
       run: (prompt: string) => agent.run(prompt),
-      destroy: () => agent.destroy()
+      destroy: async () => {
+        unsubExecBridge()
+        await agent.destroy()
+      }
     },
     tooling,
     subagentTracker
@@ -784,7 +1176,7 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
       for (let i = currentTelemetry.toolSummaries.length - 1; i >= 0; i -= 1) {
         const item = currentTelemetry.toolSummaries[i]
         if (item.tool !== name || item.resultPreview) continue
-        item.resultPreview = summarizeForTelemetry(result)
+        item.resultPreview = summarizeToolResultForTelemetry(result)
         break
       }
       config.onActivity?.({
@@ -793,7 +1185,7 @@ export function createYoloCoordinator(config: YoloCoordinatorConfig): YoloCoordi
         kind: 'tool_result',
         agent: 'coordinator',
         tool: name,
-        preview: summarizeForTelemetry(result, 120)
+        preview: summarizeToolResultForTelemetry(result, 120)
       })
     },
     onAskUser: (request) => {
@@ -905,6 +1297,8 @@ export const __private = {
   normalizeAssets,
   normalizeAskUser,
   normalizeExecutionTrace,
+  parseStructuredResultFromStdout,
+  formatCodingLargeRepoStructuredResult,
   buildContextCompilerView,
   normalizeTurnAction,
   inferActionFromAssets,

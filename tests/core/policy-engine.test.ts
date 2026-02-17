@@ -163,6 +163,30 @@ describe('PolicyEngine', () => {
       const result = await policyEngine.evaluateBefore(context)
 
       expect(result.allowed).toBe(false)
+      expect(result.policyId).toBe('approval-policy')
+    })
+
+    it('should include policyId when approval is required but no handler is configured', async () => {
+      policyEngine.register({
+        id: 'approval-policy',
+        phase: 'guard',
+        match: (ctx) => ctx.tool === 'write',
+        decide: () => ({ action: 'require_approval', message: 'Needs approval' })
+      })
+
+      const context: PolicyContext = {
+        tool: 'write',
+        input: { path: '/test/file.txt' },
+        agentId: 'test-agent',
+        sessionId: 'test-session',
+        step: 1
+      }
+
+      const result = await policyEngine.evaluateBefore(context)
+
+      expect(result.allowed).toBe(false)
+      expect(result.reason).toBe('Approval required but no handler configured')
+      expect(result.policyId).toBe('approval-policy')
     })
   })
 

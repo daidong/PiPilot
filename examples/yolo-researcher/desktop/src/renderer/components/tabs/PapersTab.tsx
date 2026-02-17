@@ -33,8 +33,8 @@ export function PapersTab({ papers, reviews, onRefresh, onReadReview }: PapersTa
 
   // Review state
   const [expandedReviewId, setExpandedReviewId] = useState<string | null>(null)
-  const [reviewContent, setReviewContent] = useState<string>('')
-  const [reviewLoading, setReviewLoading] = useState(false)
+  const [reviewContentById, setReviewContentById] = useState<Record<string, string>>({})
+  const [loadingReviewIds, setLoadingReviewIds] = useState<Set<string>>(new Set())
 
   // Reset visible count when filters change
   useEffect(() => { setVisibleCount(PAGE_SIZE) }, [activeSourceFilters, searchQuery, sortByRelevance])
@@ -98,18 +98,27 @@ export function PapersTab({ papers, reviews, onRefresh, onReadReview }: PapersTa
   async function handleExpandReview(reviewId: string) {
     if (expandedReviewId === reviewId) {
       setExpandedReviewId(null)
-      setReviewContent('')
       return
     }
     setExpandedReviewId(reviewId)
-    setReviewLoading(true)
+    if (reviewContentById[reviewId] || loadingReviewIds.has(reviewId)) return
+
+    setLoadingReviewIds((prev) => {
+      const next = new Set(prev)
+      next.add(reviewId)
+      return next
+    })
     try {
       const content = await onReadReview(reviewId)
-      setReviewContent(content)
+      setReviewContentById((prev) => ({ ...prev, [reviewId]: content }))
     } catch {
-      setReviewContent('Failed to load review content.')
+      setReviewContentById((prev) => ({ ...prev, [reviewId]: 'Failed to load review content.' }))
     } finally {
-      setReviewLoading(false)
+      setLoadingReviewIds((prev) => {
+        const next = new Set(prev)
+        next.delete(reviewId)
+        return next
+      })
     }
   }
 
@@ -326,6 +335,8 @@ export function PapersTab({ papers, reviews, onRefresh, onReadReview }: PapersTa
           <div className="space-y-2">
             {reviews.map((review) => {
               const isExpanded = expandedReviewId === review.id
+              const reviewLoading = loadingReviewIds.has(review.id)
+              const reviewContent = reviewContentById[review.id]
               return (
                 <div
                   key={review.id}

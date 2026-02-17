@@ -1,5 +1,6 @@
 import type {
   CoordinatorTurnResult,
+  PlannerIntentRoute,
   PlannerOutput,
   QueuedUserInput,
   ReviewerProcessReview,
@@ -18,6 +19,7 @@ export class ScriptedCoordinator implements YoloCoordinator {
     stage: YoloStage
     goal: string
     mergedUserInputs: QueuedUserInput[]
+    intentRoute?: PlannerIntentRoute
     plannerOutput?: PlannerOutput
     reviewerOutput?: ReviewerProcessReview
   }): Promise<CoordinatorTurnResult> {

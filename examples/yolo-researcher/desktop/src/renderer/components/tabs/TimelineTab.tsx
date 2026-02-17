@@ -71,6 +71,8 @@ function ThinkingCard({
   const gateStatus = turnGateStatus(turn)
   const plan = turn.plannerSpec?.planContract
   const hasPlanData = Boolean(plan)
+  const narrativeSections = turn.narrative?.sections ?? []
+  const hasNarrative = narrativeSections.length > 0
   const hasExecTrace = Boolean(turn.execution?.executionTrace?.length)
   const hasReview = turn.reviewerSnapshot?.status === 'completed'
   const hasProcessReview = Boolean(turn.reviewerSnapshot?.processReview)
@@ -121,6 +123,39 @@ function ThinkingCard({
       {/* Objective (always visible) */}
       {turn.turnSpec?.objective && (
         <div className="mt-1.5 text-xs">{cleanStageRefs(turn.turnSpec.objective)}</div>
+      )}
+
+      {/* Agent Narrative Section */}
+      {hasNarrative && (
+        <Section title="Agent Narrative" defaultOpen={isLatest}>
+          <div className="space-y-2">
+            {narrativeSections.map((section) => {
+              const bullets = section.content
+                .split('\n')
+                .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
+                .filter(Boolean)
+              return (
+                <div key={section.id} className="rounded-lg t-bg-elevated px-2 py-1.5 text-[11px]">
+                  <div className="font-medium t-accent-teal">{section.title}</div>
+                  <div className="mt-0.5 space-y-0.5 t-text-secondary">
+                    {bullets.map((line, index) => (
+                      <div key={`${section.id}-line-${index}`}>- {cleanStageRefs(line)}</div>
+                    ))}
+                  </div>
+                  {section.evidenceRefs.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {section.evidenceRefs.slice(0, 6).map((ref) => (
+                        <span key={`${section.id}-${ref}`} className="rounded-full border t-border-subtle px-1.5 py-0.5 text-[10px] t-text-muted">
+                          {ref}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </Section>
       )}
 
       {/* Plan Section */}

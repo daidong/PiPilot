@@ -1,7 +1,7 @@
-import { useState } from 'react'
 import { Play, Pause, Square, Sun, Moon, RotateCcw } from 'lucide-react'
 import type { YoloSnapshot, BudgetUsageInfo } from '@/lib/types'
-import { stateTone, friendlyState } from '@/lib/formatters'
+import type { AppTheme } from '@/hooks/useTheme'
+import { missionStateLabel, stateTone } from '@/lib/formatters'
 
 interface TopBarProps {
   projectPath: string
@@ -13,11 +13,13 @@ interface TopBarProps {
   canStop: boolean
   isStarting: boolean
   isStopping: boolean
+  theme: AppTheme
   onStart: () => void
   onPause: () => void
   onResume: () => void
   onStop: () => void
   onRestart: () => void
+  onToggleTheme: () => void
 }
 
 export function TopBar({
@@ -30,49 +32,22 @@ export function TopBar({
   canStop,
   isStarting,
   isStopping,
+  theme,
   onStart,
   onPause,
   onResume,
   onStop,
   onRestart,
+  onToggleTheme,
 }: TopBarProps) {
   const rawState = snapshot?.state ?? 'IDLE'
   const isIdle = !snapshot?.sessionId
   const state = isStopping ? 'STOPPING' : (isIdle && isStarting) ? 'STARTING' : rawState
-
-  const [isDark, setIsDark] = useState(
-    () => document.documentElement.classList.contains('dark')
-  )
-
-  function toggleTheme() {
-    const next = isDark ? 'light' : 'dark'
-    document.documentElement.classList.remove('dark', 'light')
-    document.documentElement.classList.add(next)
-    localStorage.setItem('yolo-theme', next)
-    setIsDark(!isDark)
-  }
+  const isDark = theme === 'dark'
 
   const showSpinnerBadge = state === 'STARTING' || state === 'STOPPING'
-  const missionStateLabel = (
-    state === 'STARTING' ? 'Starting'
-    : state === 'STOPPING' ? 'Stopping'
-    : state === 'PLANNING' || state === 'EXECUTING' || state === 'TURN_COMPLETE' ? 'Running'
-    : state === 'WAITING_FOR_USER' ? 'Need Your Input'
-    : state === 'WAITING_EXTERNAL' ? 'Need External Input'
-    : state === 'IDLE' ? 'Ready'
-    : friendlyState(state)
-  )
-  const missionToneClass = (
-    state === 'STARTING'
-      ? 'border-teal-500/40 t-accent-teal'
-      : state === 'STOPPING'
-        ? 'border-rose-500/40 t-accent-rose'
-        : state === 'PLANNING' || state === 'EXECUTING' || state === 'TURN_COMPLETE'
-          ? 'border-teal-500/40 t-accent-teal'
-          : state === 'WAITING_FOR_USER' || state === 'WAITING_EXTERNAL'
-            ? 'border-amber-500/40 t-accent-amber'
-            : stateTone(snapshot?.state)
-  )
+  const missionLabel = missionStateLabel(state)
+  const missionToneClass = stateTone(state)
 
   return (
     <header className="no-drag sticky top-0 z-10 border-b t-border t-bg-surface px-4 pt-8 pb-3">
@@ -86,7 +61,7 @@ export function TopBar({
                 state === 'STOPPING' ? 'border-rose-500 border-t-transparent' : 'border-teal-500 border-t-transparent'
               }`} />
             )}
-            {missionStateLabel}
+            {missionLabel}
           </div>
         </div>
 
@@ -110,7 +85,7 @@ export function TopBar({
         <div className="ml-auto flex items-center gap-1.5">
           {/* Theme toggle */}
           <button
-            onClick={toggleTheme}
+            onClick={onToggleTheme}
             className="rounded-lg border t-border px-2.5 py-1.5 text-xs t-text-secondary t-hoverable"
             aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           >

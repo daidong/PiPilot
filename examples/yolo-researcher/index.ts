@@ -2,6 +2,7 @@ export { YoloSession } from './runtime/session.js'
 export { createYoloSession } from './agents/yolo-session.js'
 export { createYoloCoordinator, createStaticYoloCoordinator } from './agents/coordinator.js'
 export { createYoloPlanner } from './agents/planner.js'
+export { createYoloIntentRouter } from './agents/intent-router.js'
 export { createYoloReviewEngine } from './agents/reviewer.js'
 export { FileAssetStore } from './runtime/asset-store.js'
 export { DegenerateBranchManager } from './runtime/branch-manager.js'
@@ -24,6 +25,7 @@ export type {
   AgentLike,
   YoloRuntimeMode,
   YoloStage,
+  PlannerIntentRoute,
   YoloTurnAction,
   YoloRuntimeState,
   YoloSessionOptions,
@@ -35,6 +37,7 @@ export type {
   PlannerContract,
   PlannerOutput,
   TurnPlanner,
+  IntentRouter,
   AskUserRequest,
   ExternalWaitTask,
   PendingResourceExtension,
@@ -79,6 +82,7 @@ export type { BranchNode } from './runtime/branch-manager.js'
 export type { CreateYoloSessionConfig } from './agents/yolo-session.js'
 export type { YoloCoordinatorConfig } from './agents/coordinator.js'
 export type { YoloPlannerConfig } from './agents/planner.js'
+export type { YoloIntentRouterConfig } from './agents/intent-router.js'
 export type { YoloReviewerConfig } from './agents/reviewer.js'
 export type {
   ClaimEvidenceCoverageStatus,

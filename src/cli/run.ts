@@ -56,6 +56,43 @@ function summarizeToolInput(tool: string, input: unknown): string {
   }
 }
 
+const TOOL_ERROR_LIMIT = 160
+
+function compactAndLimit(text: string, limit: number = TOOL_ERROR_LIMIT): string {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (!compact) return ''
+  if (compact.length <= limit) return compact
+  return `${compact.slice(0, limit)}...`
+}
+
+function formatStructuredToolError(rawError: string): string | undefined {
+  try {
+    const parsed = JSON.parse(rawError) as {
+      error?: { category?: unknown; source?: unknown; data?: { reason?: unknown } }
+      guidance?: unknown
+    }
+    const category = typeof parsed.error?.category === 'string' ? parsed.error.category : undefined
+    const source = typeof parsed.error?.source === 'string' ? parsed.error.source : undefined
+    const reason = typeof parsed.error?.data?.reason === 'string' ? parsed.error.data.reason : undefined
+    const guidance = typeof parsed.guidance === 'string' ? parsed.guidance : undefined
+    const parts = [category, source, reason, guidance].filter((item): item is string => Boolean(item))
+    if (parts.length === 0) return undefined
+    return compactAndLimit(parts.join(' | '))
+  } catch {
+    return undefined
+  }
+}
+
+function extractResultOutputHint(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const record = data as Record<string, unknown>
+  const stderr = typeof record.stderr === 'string' ? record.stderr : ''
+  const stdout = typeof record.stdout === 'string' ? record.stdout : ''
+  const sourceText = stderr.trim() ? stderr : stdout
+  const compact = compactAndLimit(sourceText)
+  return compact || undefined
+}
+
 /**
  * Format a tool result log line for stderr output.
  */
@@ -66,12 +103,22 @@ function formatToolResultLog(
 ): string {
   const summary = summarizeToolInput(tool, args)
   const detail = summary ? ` ${summary}` : ''
-  const res = result as { success?: boolean; error?: string } | undefined
+  const res = result as { success?: boolean; error?: unknown; data?: unknown } | undefined
 
   if (res?.success === false) {
-    const errMsg = res.error
-      ? ` -- ${res.error.length > 80 ? res.error.slice(0, 77) + '...' : res.error}`
-      : ''
+    const structured = typeof res.error === 'string' ? formatStructuredToolError(res.error) : undefined
+    const raw = typeof res.error === 'string' ? compactAndLimit(res.error) : undefined
+    const outputHint = extractResultOutputHint(res.data)
+    let errorText = structured ?? raw
+    if (!errorText && res.error !== undefined && res.error !== null) {
+      errorText = compactAndLimit(String(res.error))
+    }
+    if (!errorText && outputHint) {
+      errorText = outputHint
+    } else if (errorText && outputHint && /^Command exited with code\s+\d+\s*$/.test(errorText)) {
+      errorText = compactAndLimit(`${errorText}: ${outputHint}`)
+    }
+    const errMsg = errorText ? ` -- ${errorText}` : ''
     return `  \u2717 ${tool}${detail}${errMsg}\n`
   }
   return `  \u2713 ${tool}${detail}\n`

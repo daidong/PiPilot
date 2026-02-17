@@ -1,17 +1,20 @@
 import { useState, useRef, useEffect } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useYoloSession } from '@/hooks/useYoloSession'
+import { useTheme } from '@/hooks/useTheme'
 import { FolderGate } from '@/components/FolderGate'
 import { TopBar } from '@/components/TopBar'
 import { HeroSection } from '@/components/HeroSection'
 import { DetailTabs } from '@/components/DetailTabs'
 import { WorkspaceFolder } from '@/components/WorkspaceFolder'
 import { ActivityFeed } from '@/components/ActivityFeed'
+import { ExecutionConsole } from '@/components/ExecutionConsole'
 import { InteractionDrawer } from '@/components/InteractionDrawer'
 import { ChatInput } from '@/components/ChatInput'
 
 export default function App() {
   const session = useYoloSession()
+  const { theme, toggleTheme } = useTheme()
   const { projectPath, snapshot, actions, actionError, actionNotice, totalCreatedAssets } = session
   const [exportOpen, setExportOpen] = useState(false)
   const exportRef = useRef<HTMLDivElement>(null)
@@ -47,11 +50,13 @@ export default function App() {
         canStop={session.canStop}
         isStarting={session.isStarting}
         isStopping={session.isStopping}
+        theme={theme}
         onStart={actions.startYolo}
         onPause={actions.pauseYolo}
         onResume={actions.resumeYolo}
         onStop={actions.stopYolo}
         onRestart={actions.restartYolo}
+        onToggleTheme={toggleTheme}
       />
 
       {/* Main content area — shrinks when drawer is open */}
@@ -85,10 +90,17 @@ export default function App() {
           />
         </div>
 
-        {/* Zone 2b: Live activity feed (visible during execution) */}
-        {session.activityFeed.length > 0 && (
+        {/* Zone 2b: Live execution panel */}
+        {(session.activityFeed.length > 0 || session.executionCommands.length > 0) && (
           <div className="px-4 pt-3">
-            <ActivityFeed items={session.activityFeed} />
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              <div className="min-h-0">
+                <ActivityFeed items={session.activityFeed} />
+              </div>
+              <div className="min-h-0">
+                <ExecutionConsole commands={session.executionCommands} />
+              </div>
+            </div>
           </div>
         )}
 

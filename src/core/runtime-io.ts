@@ -61,6 +61,18 @@ const DEFAULT_IGNORE_PATTERNS = [
   '**/venv/**'
 ]
 
+const MAX_EXEC_EVENT_CHUNK_CHARS = 4000
+
+function clipExecChunk(chunk: string): { value: string; truncated: boolean } {
+  if (chunk.length <= MAX_EXEC_EVENT_CHUNK_CHARS) {
+    return { value: chunk, truncated: false }
+  }
+  return {
+    value: `${chunk.slice(0, MAX_EXEC_EVENT_CHUNK_CHARS)}\n...[chunk truncated]`,
+    truncated: true
+  }
+}
+
 /**
  * RuntimeIO configuration
  */
@@ -531,7 +543,9 @@ export class RuntimeIO implements IRuntimeIO {
     // Use potentially mutated input
     const mutatedCommand = (result.input as { command: string })?.command ?? command
 
+    const projectRoot = await this.getProjectRoot()
     const execCwd = await this.resolveCwd(options?.cwd)
+    const cwdRel = path.relative(projectRoot, execCwd).replace(/\\/g, '/') || '.'
 
     return new Promise((resolve) => {
       const timeout = Math.min(options?.timeout ?? this.limits.timeout, this.limits.timeout)
@@ -545,20 +559,49 @@ export class RuntimeIO implements IRuntimeIO {
 
       let stdout = ''
       let stderr = ''
+      let stdoutTruncated = false
+      let stderrTruncated = false
+
+      this.config.eventBus.emit('io:exec:start', {
+        traceId,
+        command: mutatedCommand,
+        cwd: cwdRel,
+        caller: options?.caller
+      })
 
       child.stdout?.on('data', (data) => {
-        stdout += data.toString()
+        const chunk = data.toString()
+        stdout += chunk
+        const eventChunk = clipExecChunk(chunk)
+        this.config.eventBus.emit('io:exec:chunk', {
+          traceId,
+          stream: 'stdout',
+          chunk: eventChunk.value,
+          truncated: eventChunk.truncated,
+          caller: options?.caller
+        })
         // Limit output size
         if (stdout.length > this.limits.maxBytes) {
           stdout = stdout.slice(0, this.limits.maxBytes)
+          stdoutTruncated = true
           child.kill()
         }
       })
 
       child.stderr?.on('data', (data) => {
-        stderr += data.toString()
+        const chunk = data.toString()
+        stderr += chunk
+        const eventChunk = clipExecChunk(chunk)
+        this.config.eventBus.emit('io:exec:chunk', {
+          traceId,
+          stream: 'stderr',
+          chunk: eventChunk.value,
+          truncated: eventChunk.truncated,
+          caller: options?.caller
+        })
         if (stderr.length > this.limits.maxBytes) {
           stderr = stderr.slice(0, this.limits.maxBytes)
+          stderrTruncated = true
         }
       })
 
@@ -573,6 +616,16 @@ export class RuntimeIO implements IRuntimeIO {
           data: { command: mutatedCommand, exitCode, signal, traceId }
         })
 
+        this.config.eventBus.emit('io:exec:end', {
+          traceId,
+          exitCode,
+          signal: signal ?? undefined,
+          durationMs: Date.now() - startTime,
+          caller: options?.caller,
+          stdoutTruncated,
+          stderrTruncated
+        })
+
         resolve({
           success,
           data: { stdout, stderr, exitCode },
@@ -582,6 +635,12 @@ export class RuntimeIO implements IRuntimeIO {
       })
 
       child.on('error', (error) => {
+        this.config.eventBus.emit('io:exec:error', {
+          traceId,
+          error: error.message,
+          durationMs: Date.now() - startTime,
+          caller: options?.caller
+        })
         resolve({
           success: false,
           error: error.message,

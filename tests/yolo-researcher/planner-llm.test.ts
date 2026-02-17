@@ -5,7 +5,14 @@ import { __private } from '../../examples/yolo-researcher/agents/planner.js'
 import { buildDefaultP0Constraints } from '../../examples/yolo-researcher/runtime/planner.js'
 import type { PlannerInput } from '../../examples/yolo-researcher/runtime/types.js'
 
-const { parsePlannerJson, normalizePlannerOutput, buildPlannerPrompt, normalizeBranchAction } = __private
+const {
+  parsePlannerJson,
+  normalizePlannerOutput,
+  buildPlannerPrompt,
+  normalizeBranchAction,
+  hasCodingIntent,
+  hasCloudlabIntent
+} = __private
 
 function buildInput(overrides?: Partial<PlannerInput>): PlannerInput {
   return {
@@ -101,7 +108,7 @@ describe('LLM-backed TurnPlanner', () => {
     expect(result.rationale).toBe('S2 focus on claims and evidence.')
     expect(result.uncertaintyNote).toBe('May need more data.')
     expect(result.planContract.current_focus.length).toBeGreaterThan(0)
-    expect(result.planContract.action).toBe('issue_experiment_request')
+    expect(result.planContract.action).toBe('stage_s2_default')
   })
 
   // 2. Handles code-fenced JSON (tier 2 parsing)
@@ -172,8 +179,8 @@ describe('LLM-backed TurnPlanner', () => {
     expect(result.turnSpec.objective).toContain('investigate causal mechanisms')
   })
 
-  // 7. Normalizes P0 branch action: fork → advance
-  it('normalizes P0 branch action: fork → advance', async () => {
+  // 7. Keeps explicit branch action when provided by planner output
+  it('keeps explicit branch action from planner output', async () => {
     const json = makeValidPlannerJson()
     ;(json.turnSpec.branch as Record<string, unknown>).action = 'fork'
     const planner = createYoloPlanner({
@@ -183,7 +190,7 @@ describe('LLM-backed TurnPlanner', () => {
     })
 
     const result = await planner.generate(buildInput({ phase: 'P0' }))
-    expect(result.turnSpec.branch.action).toBe('advance')
+    expect(result.turnSpec.branch.action).toBe('fork')
   })
 
   // 8. Normalizes partial constraints with defaults
@@ -213,11 +220,33 @@ describe('LLM-backed TurnPlanner', () => {
   it('includes stage-specific guidance in prompt', () => {
     const s1Prompt = buildPlannerPrompt(buildInput({ stage: 'S1' }))
     expect(s1Prompt).toContain('S1 (Define)')
-    expect(s1Prompt).toContain('ResearchQuestion')
+    expect(s1Prompt).toContain('literature-search')
 
     const s5Prompt = buildPlannerPrompt(buildInput({ stage: 'S5' }))
     expect(s5Prompt).toContain('S5 (Closure)')
     expect(s5Prompt).toContain('final ResultInsight')
+  })
+
+  it('includes coding-large-repo guidance for repository-scale coding tasks', () => {
+    const codingPrompt = buildPlannerPrompt(buildInput({
+      stage: 'S2',
+      goal: 'Implement and verify a non-trivial refactor across a large repository'
+    }))
+    expect(codingPrompt).toContain('coding-large-repo')
+    expect(codingPrompt).toContain('skill-script-run')
+    expect(codingPrompt).toContain('delegate-coding-agent')
+    expect(codingPrompt).toContain('--runtime auto')
+  })
+
+  it('includes cloudlab skill guidance for CloudLab distributed tasks', () => {
+    const prompt = buildPlannerPrompt(buildInput({
+      stage: 'S2',
+      goal: 'Run a CloudLab distributed experiment on multi-node cluster and collect artifacts'
+    }))
+    expect(prompt).toContain('cloudlab-distributed-experiments')
+    expect(prompt).toContain('portal-intake')
+    expect(prompt).toContain('distributed-ssh')
+    expect(prompt).toContain('experiment-terminate')
   })
 
   // 10. Budget-aware prompt content (healthy vs critical)
@@ -231,6 +260,42 @@ describe('LLM-backed TurnPlanner', () => {
       remainingBudget: { turns: 1, maxTurns: 12, tokens: 5_000, costUsd: 1 }
     }))
     expect(criticalPrompt).toContain('critical')
+  })
+
+  it('uses coding-large-repo steps in fallback tool_plan when coding intent is present', async () => {
+    const planner = createYoloPlanner({
+      projectPath: process.cwd(),
+      model: 'gpt-5.2',
+      createAgentInstance: () => fakeAgent('this is not valid json')
+    })
+
+    const result = await planner.generate(buildInput({
+      stage: 'S2',
+      goal: 'Fix and refactor repository code paths with local tests'
+    }))
+
+    expect(result.planContract.tool_plan.some((step) => step.tool === 'skill-script-run')).toBe(true)
+    expect(result.planContract.tool_plan.some((step) => step.goal.includes('coding-large-repo'))).toBe(true)
+    expect(result.planContract.tool_plan.some((step) => step.goal.includes('delegate-coding-agent'))).toBe(true)
+    expect(result.planContract.tool_plan.some((step) => step.goal.includes('Docker-preferred'))).toBe(true)
+  })
+
+  it('uses cloudlab skill steps in fallback tool_plan when CloudLab intent is present', async () => {
+    const planner = createYoloPlanner({
+      projectPath: process.cwd(),
+      model: 'gpt-5.2',
+      createAgentInstance: () => fakeAgent('this is not valid json')
+    })
+
+    const result = await planner.generate(buildInput({
+      stage: 'S2',
+      goal: 'Orchestrate CloudLab/Powder multi-node experiment lifecycle and collect outputs'
+    }))
+
+    expect(result.planContract.tool_plan.some((step) => step.tool === 'skill-script-run')).toBe(true)
+    expect(result.planContract.tool_plan.some((step) => step.goal.includes('cloudlab-distributed-experiments'))).toBe(true)
+    expect(result.planContract.tool_plan.some((step) => step.goal.includes('distributed-ssh'))).toBe(true)
+    expect(result.planContract.tool_plan.some((step) => step.goal.includes('experiment-terminate'))).toBe(true)
   })
 })
 
@@ -249,8 +314,8 @@ describe('normalizeBranchAction', () => {
     expect(normalizeBranchAction('fork', 'P1')).toBe('fork')
   })
 
-  it('forces advance in P0 even when fork is requested', () => {
-    expect(normalizeBranchAction('fork', 'P0')).toBe('advance')
+  it('allows fork in P0 when requested', () => {
+    expect(normalizeBranchAction('fork', 'P0')).toBe('fork')
   })
 
   it('returns advance for invalid action strings', () => {
@@ -281,5 +346,78 @@ describe('normalizePlannerOutput', () => {
     const result = normalizePlannerOutput(raw as Record<string, unknown>, buildInput())
     expect(result).toBeDefined()
     expect(result!.turnSpec.objective).toBe('Flat objective')
+  })
+})
+
+describe('hasCodingIntent', () => {
+  it('returns true for explicit repository coding workflow text', () => {
+    const result = hasCodingIntent(buildInput({
+      goal: 'Refactor repository modules, fix regression, and run pytest locally'
+    }))
+    expect(result).toBe(true)
+  })
+
+  it('returns true when code file paths and commands are present', () => {
+    const result = hasCodingIntent(buildInput({
+      goal: 'Update examples/yolo-researcher/agents/planner.ts and run npx vitest'
+    }))
+    expect(result).toBe(true)
+  })
+
+  it('returns true for Chinese coding instructions', () => {
+    const result = hasCodingIntent(buildInput({
+      goal: '请在仓库里修复这个bug，重构脚本并跑单测'
+    }))
+    expect(result).toBe(true)
+  })
+
+  it('returns false for literature-focused requests without coding signals', () => {
+    const result = hasCodingIntent(buildInput({
+      goal: 'Do a literature review, summarize related work, and improve citation coverage'
+    }))
+    expect(result).toBe(false)
+  })
+
+  it('returns false for ambiguous research verbs without coding objects', () => {
+    const result = hasCodingIntent(buildInput({
+      goal: 'Implement the experiment protocol, test hypothesis quality, and build a theoretical model'
+    }))
+    expect(result).toBe(false)
+  })
+
+  it('returns false for generic "make" research phrasing without coding signals', () => {
+    const result = hasCodingIntent(buildInput({
+      goal: 'Make a comparative literature review and summarize benchmark assumptions'
+    }))
+    expect(result).toBe(false)
+  })
+
+  it('prioritizes explicit intent route when available', () => {
+    const result = hasCodingIntent(buildInput({
+      goal: 'Do a literature review only',
+      intentRoute: {
+        label: 'coding_repository',
+        isCoding: true,
+        confidence: 0.9,
+        source: 'router_model'
+      }
+    }))
+    expect(result).toBe(true)
+  })
+})
+
+describe('hasCloudlabIntent', () => {
+  it('returns true for CloudLab/Powder distributed execution requests', () => {
+    const result = hasCloudlabIntent(buildInput({
+      goal: 'Use CloudLab Portal API to run multi-node distributed benchmark and collect artifacts'
+    }))
+    expect(result).toBe(true)
+  })
+
+  it('returns false for generic literature-only requests', () => {
+    const result = hasCloudlabIntent(buildInput({
+      goal: 'Do a literature review of related work and synthesize key citations'
+    }))
+    expect(result).toBe(false)
   })
 })

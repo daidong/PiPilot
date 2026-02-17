@@ -1,8 +1,9 @@
 // Central session hook — owns all state, effects, computed values, and actions
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ActivityItem,
+  ExecutionCommand,
   YoloSnapshot,
   TurnReport,
   EventRecord,
@@ -48,6 +49,112 @@ import {
 
 const api = (window as any).api
 
+type RefreshKey = 'queue' | 'waitTasks' | 'branchSnapshot' | 'assets' | 'history' | 'papers'
+const REFRESH_KEYS: RefreshKey[] = ['queue', 'waitTasks', 'branchSnapshot', 'assets', 'history', 'papers']
+const EXEC_OUTPUT_CHAR_LIMIT = 220_000
+const EXEC_COMMAND_LIMIT = 40
+
+function isExecutionActivity(kind: string): boolean {
+  return kind === 'command_start'
+    || kind === 'command_chunk'
+    || kind === 'command_end'
+    || kind === 'command_error'
+}
+
+function appendOutputWithCap(current: string, addition: string): { output: string; outputChars: number } {
+  const merged = current + addition
+  if (merged.length <= EXEC_OUTPUT_CHAR_LIMIT) {
+    return { output: merged, outputChars: merged.length }
+  }
+  const clipped = merged.slice(merged.length - EXEC_OUTPUT_CHAR_LIMIT)
+  return {
+    output: `[output truncated]\n${clipped}`,
+    outputChars: EXEC_OUTPUT_CHAR_LIMIT
+  }
+}
+
+function updateExecutionCommands(prev: ExecutionCommand[], payload: ActivityItem): ExecutionCommand[] {
+  const traceId = payload.traceId?.trim()
+  if (!traceId) return prev
+
+  const idx = prev.findIndex((item) => item.traceId === traceId)
+  const existing = idx >= 0
+    ? prev[idx]
+    : {
+        traceId,
+        tool: payload.tool,
+        caller: payload.caller,
+        command: payload.command ?? '',
+        cwd: payload.cwd,
+        status: 'running' as const,
+        startedAt: payload.timestamp,
+        output: '',
+        outputChars: 0,
+        chunks: 0
+      }
+
+  let nextItem: ExecutionCommand = existing
+  if (payload.kind === 'command_start') {
+    nextItem = {
+      ...existing,
+      tool: payload.tool ?? existing.tool,
+      caller: payload.caller ?? existing.caller,
+      command: payload.command ?? existing.command,
+      cwd: payload.cwd ?? existing.cwd,
+      status: 'running',
+      startedAt: payload.timestamp
+    }
+  } else if (payload.kind === 'command_chunk') {
+    const stream = payload.stream === 'stderr' ? 'stderr' : 'stdout'
+    const chunk = payload.chunk ?? ''
+    if (!chunk) return prev
+    const separator = existing.output.length > 0 && existing.lastStream && existing.lastStream !== stream
+      ? `\n[${stream}]\n`
+      : existing.output.length === 0 && stream === 'stderr'
+        ? '[stderr]\n'
+        : ''
+    const appended = appendOutputWithCap(existing.output, `${separator}${chunk}`)
+    nextItem = {
+      ...existing,
+      status: 'running',
+      output: appended.output,
+      outputChars: appended.outputChars,
+      chunks: existing.chunks + 1,
+      lastStream: stream
+    }
+  } else if (payload.kind === 'command_end') {
+    const exitCode = typeof payload.exitCode === 'number' ? payload.exitCode : undefined
+    nextItem = {
+      ...existing,
+      status: exitCode === 0 ? 'success' : 'failed',
+      finishedAt: payload.timestamp,
+      durationMs: payload.durationMs,
+      exitCode,
+      signal: payload.signal
+    }
+  } else if (payload.kind === 'command_error') {
+    const errorText = payload.error?.trim()
+    const appended = errorText
+      ? appendOutputWithCap(existing.output, `${existing.output.length > 0 ? '\n' : ''}[runner error] ${errorText}\n`)
+      : { output: existing.output, outputChars: existing.outputChars }
+    nextItem = {
+      ...existing,
+      status: 'error',
+      finishedAt: payload.timestamp,
+      durationMs: payload.durationMs,
+      output: appended.output,
+      outputChars: appended.outputChars
+    }
+  }
+
+  if (idx >= 0) {
+    const next = [...prev]
+    next[idx] = nextItem
+    return next
+  }
+  return [nextItem, ...prev].slice(0, EXEC_COMMAND_LIMIT)
+}
+
 export function useYoloSession() {
   // ─── Group A: Core session state ───────────────────────────────────
   const [projectPath, setProjectPath] = useState('')
@@ -63,6 +170,7 @@ export function useYoloSession() {
   const [waitTasks, setWaitTasks] = useState<ExternalWaitTask[]>([])
   const [waitValidation, setWaitValidation] = useState<WaitTaskValidationResult | null>(null)
   const [activityFeed, setActivityFeed] = useState<ActivityItem[]>([])
+  const [executionCommands, setExecutionCommands] = useState<ExecutionCommand[]>([])
   const [isStarting, setIsStarting] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -92,6 +200,90 @@ export function useYoloSession() {
   const [drawerInteraction, setDrawerInteraction] = useState<InteractionContext | null>(null)
   const [drawerChat, setDrawerChat] = useState<DrawerChatMessage[]>([])
   const [drawerChatLoading, setDrawerChatLoading] = useState(false)
+
+  // ─── Refresh orchestration state ────────────────────────────────────
+  const aliveRef = useRef(true)
+  const refreshEpochRef = useRef<Record<RefreshKey, number>>({
+    queue: 0,
+    waitTasks: 0,
+    branchSnapshot: 0,
+    assets: 0,
+    history: 0,
+    papers: 0,
+  })
+  const refreshInFlightRef = useRef<Record<RefreshKey, Promise<void> | null>>({
+    queue: null,
+    waitTasks: null,
+    branchSnapshot: null,
+    assets: null,
+    history: null,
+    papers: null,
+  })
+  const refreshDirtyRef = useRef<Record<RefreshKey, boolean>>({
+    queue: false,
+    waitTasks: false,
+    branchSnapshot: false,
+    assets: false,
+    history: false,
+    papers: false,
+  })
+  const scheduledRefreshesRef = useRef<Set<RefreshKey>>(new Set())
+  const refreshTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      aliveRef.current = false
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = null
+      }
+      scheduledRefreshesRef.current.clear()
+      for (const key of REFRESH_KEYS) {
+        refreshEpochRef.current[key] += 1
+        refreshDirtyRef.current[key] = false
+      }
+    }
+  }, [])
+
+  function isLatestRefresh(key: RefreshKey, epoch: number): boolean {
+    return aliveRef.current && refreshEpochRef.current[key] === epoch
+  }
+
+  function invalidateAllRefreshes() {
+    for (const key of REFRESH_KEYS) {
+      refreshEpochRef.current[key] += 1
+      refreshDirtyRef.current[key] = false
+    }
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = null
+    }
+    scheduledRefreshesRef.current.clear()
+  }
+
+  async function runSingleFlightRefresh(
+    key: RefreshKey,
+    runner: (epoch: number) => Promise<void>
+  ): Promise<void> {
+    if (refreshInFlightRef.current[key]) {
+      refreshDirtyRef.current[key] = true
+      return refreshInFlightRef.current[key] ?? Promise.resolve()
+    }
+
+    const task = (async () => {
+      do {
+        refreshDirtyRef.current[key] = false
+        const epoch = refreshEpochRef.current[key] + 1
+        refreshEpochRef.current[key] = epoch
+        await runner(epoch)
+      } while (refreshDirtyRef.current[key])
+    })().finally(() => {
+      refreshInFlightRef.current[key] = null
+    })
+
+    refreshInFlightRef.current[key] = task
+    return task
+  }
 
   // ─── Computed values ───────────────────────────────────────────────
   const activeTurn = useMemo(
@@ -710,50 +902,76 @@ export function useYoloSession() {
 
   // ─── Refresh helpers ───────────────────────────────────────────────
   async function refreshQueue() {
-    try {
-      const queue = await api.yoloGetInputQueue()
-      setQueuedInputs(Array.isArray(queue) ? queue : [])
-    } catch { setQueuedInputs([]) }
+    await runSingleFlightRefresh('queue', async (epoch) => {
+      try {
+        const queue = await api.yoloGetInputQueue()
+        if (!isLatestRefresh('queue', epoch)) return
+        setQueuedInputs(Array.isArray(queue) ? queue : [])
+      } catch {
+        if (!isLatestRefresh('queue', epoch)) return
+        setQueuedInputs([])
+      }
+    })
   }
 
   async function refreshWaitTasks() {
-    try {
-      const tasks = await api.yoloListWaitTasks()
-      setWaitTasks(Array.isArray(tasks) ? tasks : [])
-      setWaitValidation((prev) => {
-        if (!prev) return prev
-        const stillExists = (Array.isArray(tasks) ? tasks : []).some((task: ExternalWaitTask) => task.id === prev.taskId)
-        return stillExists ? prev : null
-      })
-    } catch {
-      setWaitTasks([])
-      setWaitValidation(null)
-    }
+    await runSingleFlightRefresh('waitTasks', async (epoch) => {
+      try {
+        const tasks = await api.yoloListWaitTasks()
+        if (!isLatestRefresh('waitTasks', epoch)) return
+        const normalized = Array.isArray(tasks) ? tasks : []
+        setWaitTasks(normalized)
+        setWaitValidation((prev) => {
+          if (!prev) return prev
+          const stillExists = normalized.some((task: ExternalWaitTask) => task.id === prev.taskId)
+          return stillExists ? prev : null
+        })
+      } catch {
+        if (!isLatestRefresh('waitTasks', epoch)) return
+        setWaitTasks([])
+        setWaitValidation(null)
+      }
+    })
   }
 
   async function refreshBranchSnapshot() {
-    try {
-      const next = await api.yoloGetBranchSnapshot()
-      setBranchSnapshot(next ?? null)
-    } catch { setBranchSnapshot(null) }
+    await runSingleFlightRefresh('branchSnapshot', async (epoch) => {
+      try {
+        const next = await api.yoloGetBranchSnapshot()
+        if (!isLatestRefresh('branchSnapshot', epoch)) return
+        setBranchSnapshot(next ?? null)
+      } catch {
+        if (!isLatestRefresh('branchSnapshot', epoch)) return
+        setBranchSnapshot(null)
+      }
+    })
   }
 
   async function refreshAssets() {
-    try {
-      const assets = await api.yoloGetAssets()
-      setAssetRecords(Array.isArray(assets) ? assets : [])
-    } catch { setAssetRecords([]) }
+    await runSingleFlightRefresh('assets', async (epoch) => {
+      try {
+        const assets = await api.yoloGetAssets()
+        if (!isLatestRefresh('assets', epoch)) return
+        setAssetRecords(Array.isArray(assets) ? assets : [])
+      } catch {
+        if (!isLatestRefresh('assets', epoch)) return
+        setAssetRecords([])
+      }
+    })
   }
 
   async function refreshHistory() {
-    const [reports, history] = await Promise.all([
-      api.yoloGetTurnReports().catch(() => []),
-      api.yoloGetEvents().catch(() => [])
-    ])
-    setTurnReports(reports || [])
-    setRawEvents(Array.isArray(history) ? (history as any[]).slice(0, 120) : [])
-    setEvents((history as any[]).map((item) => formatEvent(item)).slice(0, 120))
-    await Promise.all([refreshBranchSnapshot(), refreshAssets()])
+    await runSingleFlightRefresh('history', async (epoch) => {
+      const [reports, history] = await Promise.all([
+        api.yoloGetTurnReports().catch(() => []),
+        api.yoloGetEvents().catch(() => [])
+      ])
+      if (!isLatestRefresh('history', epoch)) return
+      setTurnReports(reports || [])
+      setRawEvents(Array.isArray(history) ? (history as any[]).slice(0, 120) : [])
+      setEvents((history as any[]).map((item) => formatEvent(item)).slice(0, 120))
+      await Promise.all([refreshBranchSnapshot(), refreshAssets()])
+    })
   }
 
   async function loadResearchMd() {
@@ -769,19 +987,66 @@ export function useYoloSession() {
   }
 
   async function loadPapers() {
-    try {
-      const [paperList, reviewList] = await Promise.all([
-        api.listPapers().catch(() => []),
-        api.listReviews().catch(() => []),
-      ])
-      setPapers(paperList || [])
-      setReviews(reviewList || [])
-    } catch {
-      // Ignore — paper library may not exist yet
+    await runSingleFlightRefresh('papers', async (epoch) => {
+      try {
+        const [paperList, reviewList] = await Promise.all([
+          api.listPapers().catch(() => []),
+          api.listReviews().catch(() => []),
+        ])
+        if (!isLatestRefresh('papers', epoch)) return
+        setPapers(paperList || [])
+        setReviews(reviewList || [])
+      } catch {
+        // Ignore — paper library may not exist yet
+      }
+    })
+  }
+
+  function flushScheduledRefreshes() {
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = null
+    }
+    const keys = Array.from(scheduledRefreshesRef.current)
+    scheduledRefreshesRef.current.clear()
+    if (keys.length === 0) return
+
+    for (const key of keys) {
+      switch (key) {
+        case 'queue':
+          void refreshQueue()
+          break
+        case 'waitTasks':
+          void refreshWaitTasks()
+          break
+        case 'branchSnapshot':
+          void refreshBranchSnapshot()
+          break
+        case 'assets':
+          void refreshAssets()
+          break
+        case 'history':
+          void refreshHistory()
+          break
+        case 'papers':
+          void loadPapers()
+          break
+      }
     }
   }
 
+  function scheduleRefresh(...keys: RefreshKey[]) {
+    for (const key of keys) {
+      scheduledRefreshesRef.current.add(key)
+    }
+    if (refreshTimerRef.current !== null) return
+    refreshTimerRef.current = window.setTimeout(() => {
+      flushScheduledRefreshes()
+    }, 30)
+  }
+
   function resetSession() {
+    invalidateAllRefreshes()
     setProjectPath('')
     setSnapshot(null)
     setTurnReports([])
@@ -790,6 +1055,7 @@ export function useYoloSession() {
     setBranchSnapshot(null)
     setAssetRecords([])
     setActivityFeed([])
+    setExecutionCommands([])
     setActiveTab('timeline')
     setQueuedInputs([])
     setWaitTasks([])
@@ -829,17 +1095,11 @@ export function useYoloSession() {
       if (payload.state && payload.state !== 'IDLE') {
         setIsStarting(false)
       }
-      void refreshQueue()
-      void refreshWaitTasks()
-      void refreshBranchSnapshot()
-      void refreshAssets()
+      scheduleRefresh('queue', 'waitTasks', 'branchSnapshot', 'assets')
     })
     const unsubTurn = api.onYoloTurnReport((payload: TurnReport) => {
       setTurnReports((prev) => [...prev, payload])
-      void refreshQueue()
-      void refreshBranchSnapshot()
-      void refreshAssets()
-      void loadPapers()
+      scheduleRefresh('queue', 'branchSnapshot', 'assets', 'papers')
     })
     const unsubQuestion = api.onYoloQuestion((payload: any) => {
       setEvents((prev) => [{ at: new Date().toISOString(), type: 'question', text: `Question: ${payload?.question ?? ''}` }, ...prev].slice(0, 80))
@@ -848,22 +1108,25 @@ export function useYoloSession() {
     const unsubEvent = api.onYoloEvent((payload: any) => {
       setEvents((prev) => [formatEvent(payload), ...prev].slice(0, 80))
       setRawEvents((prev) => [payload, ...prev].slice(0, 120))
-      if (payload?.type === 'input_queue_changed') void refreshQueue()
+      if (payload?.type === 'input_queue_changed') scheduleRefresh('queue')
       if (
         payload?.type === 'wait_external_requested'
         || payload?.type === 'wait_external_resolved'
         || payload?.type === 'wait_external_cancelled'
         || payload?.type === 'fulltext_wait_requested'
-      ) void refreshWaitTasks()
+      ) scheduleRefresh('waitTasks')
       if (payload?.type === 'turn_committed') {
-        void refreshBranchSnapshot()
-        void refreshAssets()
+        scheduleRefresh('branchSnapshot', 'assets')
       }
       if (payload?.type === 'session_restored') {
-        void refreshHistory()
+        scheduleRefresh('history')
       }
     })
     const unsubActivity = api.onYoloActivity((payload: ActivityItem) => {
+      if (isExecutionActivity(payload.kind)) {
+        setExecutionCommands((prev) => updateExecutionCommands(prev, payload))
+        return
+      }
       if (payload.kind === 'llm_text') {
         // Replace the existing llm_text entry with the same id (accumulated buffer)
         setActivityFeed((prev) => {
@@ -890,6 +1153,7 @@ export function useYoloSession() {
     api.yoloGetSnapshot().then((s: YoloSnapshot | null) => setSnapshot(s)).catch(() => {})
 
     return () => {
+      invalidateAllRefreshes()
       unsubState(); unsubTurn(); unsubQuestion(); unsubEvent(); unsubActivity(); unsubDrawer(); unsubClosed()
     }
   }, [])
@@ -941,6 +1205,7 @@ export function useYoloSession() {
       setActionError(null)
       setActionNotice(null)
       setActivityFeed([])
+      setExecutionCommands([])
       try {
         // Stop current session first to force a fresh start
         await api.yoloStop().catch(() => {})
@@ -1325,6 +1590,7 @@ export function useYoloSession() {
     branchSnapshot,
     assetRecords,
     activityFeed,
+    executionCommands,
     researchMd,
     researchMdLoaded,
     papers,

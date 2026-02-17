@@ -76,9 +76,9 @@ function stageRequiresBoundResultInsight(stage: SnapshotManifest['stage']): bool
 }
 
 function stageRequiresLiteratureEvidence(stage: SnapshotManifest['stage']): boolean {
-  // Literature review must exist before advancing beyond S1.
-  // S2+ stages rely on prior-art awareness for experiment design and analysis.
-  return stage === 'S2' || stage === 'S3' || stage === 'S4' || stage === 'S5'
+  // Literature review should happen at S1 before the question is finalized,
+  // and remain a requirement for later stages.
+  return stage === 'S1' || stage === 'S2' || stage === 'S3' || stage === 'S4' || stage === 'S5'
 }
 
 function safeRatio(numerator: number, denominator: number): number {
@@ -427,8 +427,9 @@ export class LeanGateEngine implements GateEngine {
     }
     // G_MIN_1 is advisory — tracks quality but does not hard-block stage advancement.
     // G_MIN_2 is advisory — insight linking is good practice but not a gate requirement.
-    // Literature gate is advisory — it warns but does not hard-block stage advancement.
-    // The agent should naturally conduct literature review as part of good research methodology.
+    if (gMin3Required && !gMin3Passed) {
+      hardBlockers.push({ label: 'reproducibility_gap', assetRefs: [] })
+    }
 
     const validationNotes = erValidationFailures.map(
       (f) => `ExperimentRequest ${f.assetId}: missing [${f.missingFields.join(', ')}]${f.warnings.length > 0 ? '; warnings: ' + f.warnings.join('; ') : ''}`
@@ -443,8 +444,8 @@ export class LeanGateEngine implements GateEngine {
         `manifestId=${manifest.id}`,
         `leanSummary={"experimentRequest":{"total":${experimentRequestCount},"executable":${executableExperimentRequestCount}},"resultInsight":{"total":${resultInsightCount},"linked":${boundResultInsightCount}},"literatureNotes":${literatureNoteCount}}`,
         ...(!gMin1Passed ? [`Advisory: ExperimentRequest quality check did not pass (${executableExperimentRequestCount} executable of ${experimentRequestCount} total). Ensure requests include goal, method steps, and expected result.`] : []),
-      ...(!gMin2Passed ? [`Advisory: ResultInsight linking incomplete (${boundResultInsightCount} linked of ${resultInsightCount} total). Link insights to their originating experiment for traceability.`] : []),
-      ...(!gMin3Passed ? ['Advisory: No literature Note found yet. A literature review strengthens experiment design and helps identify gaps. Consider using literature-search.'] : []),
+        ...(!gMin2Passed ? [`Advisory: ResultInsight linking incomplete (${boundResultInsightCount} linked of ${resultInsightCount} total). Link insights to their originating experiment for traceability.`] : []),
+        ...(!gMin3Passed ? ['Literature gate failed: no literature Note found yet. Run literature-search (local/cache-first) before refining RQ or externalizing experiments.'] : []),
         ...validationNotes
       ]
     }

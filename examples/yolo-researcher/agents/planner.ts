@@ -2,6 +2,7 @@ import { createAgent, packs } from '../../../src/index.js'
 import type { AgentRunResult } from '../../../src/index.js'
 
 import { buildDefaultP0Constraints, createConservativeFallbackSpec } from '../runtime/planner.js'
+import { detectCodingIntentHeuristic } from './intent-router.js'
 import type {
   AgentLike,
   PlannerContract,
@@ -112,6 +113,32 @@ function normalizeTurnAction(value: unknown): string | undefined {
   return trimmed || undefined
 }
 
+function hasCodingIntent(input: PlannerInput): boolean {
+  if (input.intentRoute) return input.intentRoute.isCoding
+  return detectCodingIntentHeuristic(input).isCoding
+}
+
+const CLOUDLAB_INTENT_PATTERNS: readonly RegExp[] = [
+  /\b(cloudlab|powder|emulab|portal api|portal-cli|resgroup|reservation group|geni-lib|cluster reservation)\b/i,
+  /\b(distributed experiment|distributed benchmark|multi-node|multinode|cluster node|artifact evaluation)\b/i,
+  /(云实验|分布式实验|多节点|集群实验|CloudLab|Powder|Portal API)/i
+]
+
+function hasCloudlabIntent(input: PlannerInput): boolean {
+  const corpus = [
+    input.goal,
+    input.researchContext,
+    input.planContent,
+    input.branchDossierContent,
+    ...input.mergedUserInputs.map((item) => item.text)
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+
+  if (!corpus) return false
+  return CLOUDLAB_INTENT_PATTERNS.some((pattern) => pattern.test(corpus))
+}
+
 function defaultExpectedOutputForStage(stage: YoloStage): string[] {
   if (stage === 'S1') return ['Note', 'ResearchQuestion']
   if (stage === 'S2' || stage === 'S3') return ['ExperimentRequest']
@@ -119,17 +146,125 @@ function defaultExpectedOutputForStage(stage: YoloStage): string[] {
   return ['Note']
 }
 
-function defaultToolPlanForStage(stage: YoloStage): PlannerToolPlanStep[] {
+function defaultToolPlanForStage(stage: YoloStage, input?: PlannerInput): PlannerToolPlanStep[] {
+  const codingIntent = input ? hasCodingIntent(input) : false
+  const cloudlabIntent = input ? hasCloudlabIntent(input) : false
+
+  if (codingIntent && !cloudlabIntent && stage === 'S1') return [
+    {
+      step: 1,
+      tool: 'skill-script-run',
+      goal: 'Run coding-large-repo/repo-intake to capture repository state and candidate verification commands.',
+      output_contract: 'Repo intake summary with branch, dirty-state, and verify command candidates.'
+    },
+    {
+      step: 2,
+      tool: 'bash',
+      goal: 'Execute one minimal local verification command to confirm the environment for coding changes.',
+      output_contract: 'A concrete local command outcome with pass/fail notes.'
+    },
+    {
+      step: 3,
+      tool: 'literature-search',
+      goal: 'Collect targeted prior-art context that informs implementation scope or baseline behavior.',
+      output_contract: 'Key findings as Note.'
+    }
+  ]
+
+  if (codingIntent && !cloudlabIntent && (stage === 'S2' || stage === 'S3')) return [
+    {
+      step: 1,
+      tool: 'skill-script-run',
+      goal: 'Run coding-large-repo/change-plan to generate a scoped edit plan before touching files.',
+      output_contract: 'A scoped coding change plan path and checklist.'
+    },
+    {
+      step: 2,
+      tool: 'skill-script-run',
+      goal: 'Run coding-large-repo/delegate-coding-agent to execute implementation via Codex/Claude with concrete command evidence.',
+      output_contract: 'A coding-agent execution record (provider, command, exit status, log path).'
+    },
+    {
+      step: 3,
+      tool: 'skill-script-run',
+      goal: 'Run coding-large-repo/verify-targets for focused regression validation (Docker-preferred runtime with host fallback) and log capture.',
+      output_contract: 'Verification status, effective runtime, fallback indicator, and log path for audit evidence.'
+    },
+    {
+      step: 4,
+      tool: 'writing-draft',
+      goal: 'Summarize implementation deltas, verification evidence, and remaining blockers.',
+      output_contract: 'ExperimentRequest or Note with executable next actions.'
+    }
+  ]
+
+  if (cloudlabIntent && stage === 'S1') return [
+    {
+      step: 1,
+      tool: 'literature-search',
+      goal: 'Survey CloudLab/Powder prior-art and reproducibility baselines before freezing the research question.',
+      output_contract: 'Key prior-art findings as Note.'
+    },
+    {
+      step: 2,
+      tool: 'skill-script-run',
+      goal: 'Run cloudlab-distributed-experiments/portal-intake to validate token, portal endpoint, and local orchestration readiness.',
+      output_contract: 'Structured readiness report with blocked prerequisites (if any).'
+    },
+    {
+      step: 3,
+      tool: 'writing-outline',
+      goal: 'Refine a testable CloudLab experiment question and minimum viable benchmark path.',
+      output_contract: 'ResearchQuestion.'
+    }
+  ]
+
+  if (cloudlabIntent && (stage === 'S2' || stage === 'S3')) return [
+    {
+      step: 1,
+      tool: 'literature-search',
+      goal: 'Collect benchmark and methodology references relevant to the CloudLab experiment setup.',
+      output_contract: 'Targeted baseline citations and experimental caveats.'
+    },
+    {
+      step: 2,
+      tool: 'skill-script-run',
+      goal: 'Run cloudlab-distributed-experiments lifecycle scripts (portal-intake/create/wait-ready/hosts) for a minimal local reproducibility slice.',
+      output_contract: 'Experiment id, readiness status, and host inventory evidence.'
+    },
+    {
+      step: 3,
+      tool: 'skill-script-run',
+      goal: 'Run cloudlab-distributed-experiments/distributed-ssh and collect-artifacts for at least one concrete command path.',
+      output_contract: 'Per-host execution logs and collected output summary.'
+    },
+    {
+      step: 4,
+      tool: 'skill-script-run',
+      goal: 'Run cloudlab-distributed-experiments/experiment-terminate after evidence capture to avoid resource leaks.',
+      output_contract: 'Structured teardown confirmation.'
+    },
+    {
+      step: 5,
+      tool: 'writing-draft',
+      goal: 'Produce executable ExperimentRequest with verified command sequence and explicit fallback boundaries.',
+      output_contract: 'ExperimentRequest.'
+    }
+  ]
+
   if (stage === 'S1') return [
     { step: 1, tool: 'literature-search', goal: 'Survey related work and prior art.', output_contract: 'Key findings as Note.' },
-    { step: 2, tool: 'writing-outline', goal: 'Synthesize findings into a research question.', output_contract: 'ResearchQuestion.' }
+    { step: 2, tool: 'bash', goal: 'Run one small local smoke check to validate environment and feasibility of the first benchmark path.', output_contract: 'A concrete local command outcome with pass/fail notes.' },
+    { step: 3, tool: 'writing-outline', goal: 'Synthesize findings into a focused research question and a first runnable hypothesis.', output_contract: 'ResearchQuestion.' }
   ]
   if (stage === 'S2' || stage === 'S3') return [
     { step: 1, tool: 'literature-search', goal: 'Find prior benchmarks relevant to experiment design.', output_contract: 'Targeted literature findings.' },
-    { step: 2, tool: 'writing-draft', goal: 'Draft executable experiment request.', output_contract: 'ExperimentRequest with method steps.' }
+    { step: 2, tool: 'bash', goal: 'Run a minimal local baseline or dry-run command before outsourcing; capture concrete blockers if execution fails.', output_contract: 'At least one local execution attempt with command-level evidence.' },
+    { step: 3, tool: 'writing-draft', goal: 'Draft executable experiment request with locally validated commands and explicit external-only gaps.', output_contract: 'ExperimentRequest with method steps and clear fallback boundaries.' }
   ]
   if (stage === 'S4') return [
-    { step: 1, tool: 'data-analyze', goal: 'Analyze uploaded results and extract key metrics.', output_contract: 'ResultInsight with findings.' }
+    { step: 1, tool: 'data-analyze', goal: 'Analyze uploaded and local run results to extract key metrics.', output_contract: 'ResultInsight with findings.' },
+    { step: 2, tool: 'bash', goal: 'If findings are ambiguous, run one local sanity-check command to confirm direction.', output_contract: 'A concise local sanity-check record (or explicit failure reason).' }
   ]
   return [
     { step: 1, tool: 'writing-draft', goal: 'Consolidate final insights.', output_contract: 'Final synthesis Note.' }
@@ -142,8 +277,8 @@ function normalizeExpectedOutput(value: unknown, stage: YoloStage): string[] {
   return defaultExpectedOutputForStage(stage)
 }
 
-function normalizeToolPlan(value: unknown, stage: YoloStage): PlannerToolPlanStep[] {
-  if (!Array.isArray(value)) return defaultToolPlanForStage(stage)
+function normalizeToolPlan(value: unknown, stage: YoloStage, input?: PlannerInput): PlannerToolPlanStep[] {
+  if (!Array.isArray(value)) return defaultToolPlanForStage(stage, input)
 
   const normalized: PlannerToolPlanStep[] = []
   for (const item of value) {
@@ -170,7 +305,7 @@ function normalizeToolPlan(value: unknown, stage: YoloStage): PlannerToolPlanSte
     return normalized
   }
 
-  return defaultToolPlanForStage(stage)
+  return defaultToolPlanForStage(stage, input)
 }
 
 function normalizeNeedFromUser(value: unknown): PlannerContract['need_from_user'] {
@@ -213,7 +348,7 @@ function normalizePlanContract(raw: unknown, input: PlannerInput): PlannerContra
     ?? 'This is the highest-leverage bounded step given current stage and budget.'
   const doneDefinition = normalizeString(root.done_definition)
     ?? `Complete one auditable ${expectedOutput.join('/')} output for this turn.`
-  const toolPlan = normalizeToolPlan(root.tool_plan, input.stage)
+  const toolPlan = normalizeToolPlan(root.tool_plan, input.stage, input)
 
   return {
     current_focus: currentFocus,
@@ -343,21 +478,31 @@ function buildStageGuidance(stage: YoloStage): string {
     S1: [
       'S1 (Define): understand the research topic and define a testable research question.',
       'Start with literature-search to find related work.',
-      'Use bash to run quick local experiments when feasible.',
+      'For repository-scale coding tasks, begin with skill-script-run using skillId="coding-large-repo" and script="repo-intake".',
+      'For CloudLab/Powder distributed infra tasks, run skill-script-run with skillId="cloudlab-distributed-experiments" and script="portal-intake" after literature-search.',
+      'Use bash to run at least one small local smoke-check command when feasible.',
       'Combine with writing-outline to produce a focused research question.',
+      'If a local command fails, try one alternative path before asking the user.',
       'Multi-tool plans are encouraged.',
       'Keep outputs concrete and free of taxonomy inflation.'
     ].join(' '),
     S2: [
       'S2 (Request): produce an outsource-ready ExperimentRequest plan.',
       'Focus on objective, setup, method steps, controls, metrics, expected result, and upload checklist.',
-      'Use bash to run experiments locally when the environment supports it, rather than only writing protocols for the user.',
+      'Default to local-first: attempt a minimal runnable slice with bash before asking the user to execute.',
+      'For non-trivial code modifications, include skill-script-run steps with skillId="coding-large-repo" (repo-intake/change-plan/delegate-coding-agent/verify-targets; use agent-start/agent-poll for long runs). Keep verify-targets Docker-preferred (`--runtime auto`) and rely on host fallback only when Docker is unavailable.',
+      'For CloudLab/Powder distributed experiments, prefer skill-script-run with skillId=\"cloudlab-distributed-experiments\" (portal-intake -> experiment-create -> experiment-wait-ready -> experiment-hosts -> distributed-ssh -> collect-artifacts -> experiment-terminate).',
+      'When CloudLab capacity or setup is uncertain, include resgroup-search/resgroup-create and profile-create/profile-update before experiment-create.',
+      'Only set need_from_user.required=true after local attempts are blocked by permissions, missing credentials, missing hardware, or unacceptable runtime cost.',
       'Literature review can be revisited here for targeted deep-dives on specific sub-questions (e.g., prior benchmarks, competing methods).'
     ].join(' '),
     S3: [
       'S3 (Bridge): improve ExperimentRequest quality or digest newly uploaded results.',
       'Prefer one high-quality executable request over multiple shallow tasks.',
-      'Make `need_from_user` explicit when external execution is required.',
+      'When the turn includes codebase edits, keep coding-large-repo skill-script-run steps explicit in tool_plan (delegate-coding-agent or agent-start/poll) before broad bash loops.',
+      'When the turn includes CloudLab/Powder infra execution, keep cloudlab-distributed-experiments skill-script-run steps explicit in tool_plan and include teardown.',
+      'Add reservation/profile management sub-steps when resource contention or profile drift is likely.',
+      'Make `need_from_user` explicit only when external execution is genuinely required after local attempts.',
       'If experiment design has open questions about prior art, call literature-search before finalizing.'
     ].join(' '),
     S4: [
@@ -431,9 +576,15 @@ function buildPlannerPrompt(input: PlannerInput): string {
       'Rules:',
       '- tool_plan must be 1-5 concrete steps.',
       '- Each step should name an available tool (literature-search, bash, writing-draft, data-analyze, etc.).',
+      '- For medium/large repository code changes, prefer skill-script-run with skillId="coding-large-repo" (repo-intake -> change-plan -> delegate-coding-agent -> verify-targets; use agent-start/agent-poll for long runs) before open-ended bash edits.',
+      '- For CloudLab/Powder distributed experiment orchestration, prefer skill-script-run with skillId="cloudlab-distributed-experiments" (portal-intake -> experiment-create -> experiment-wait-ready -> experiment-hosts -> distributed-ssh -> collect-artifacts -> experiment-terminate).',
+      '- Add cloudlab reservation/profile scripts (resgroup-search/resgroup-create/profile-create/profile-update) when resource guarantees or profile updates are needed.',
+      '- Keep coding delegation on host (delegate-coding-agent), but run verify-targets with Docker-preferred runtime (`--runtime auto`) unless there is a clear reason to force host.',
       '- Multi-tool plans are encouraged: combine literature-search + bash + writing-draft in one turn when useful.',
       '- action is a free-form label for logging — it does NOT restrict which tools the coordinator may use.',
       '- planContract.action and expected_output should be consistent in intent.',
+      '- Default to local-first execution: include bash/data-analyze steps when experiments can be probed locally.',
+      '- Keep need_from_user.required=false unless you are truly blocked after concrete local attempts.',
       '- Prefer the smallest plan that can move the research forward now.',
       '- Avoid process/taxonomy artifacts unless directly needed for this turn.',
       '- For S2-S4, prioritize actionable ExperimentRequest quality over workflow abstraction.'
@@ -452,6 +603,9 @@ function buildPlannerPrompt(input: PlannerInput): string {
       `Turn: ${input.turnNumber}`,
       `State: ${input.state}`,
       `Stage: ${input.stage}`,
+      input.intentRoute
+        ? `IntentRoute: label=${input.intentRoute.label}; coding=${String(input.intentRoute.isCoding)}; confidence=${input.intentRoute.confidence.toFixed(2)}; source=${input.intentRoute.source}`
+        : undefined,
       `Goal: ${input.goal}`,
       `Active branch: ${input.activeBranchId}`,
       `Active node: ${input.activeNodeId}`,
@@ -505,7 +659,7 @@ function createFallbackPlanContract(input: PlannerInput): PlannerContract {
     current_focus: 'consolidate current state and report blockers',
     why_now: 'Planner fallback path preserves forward progress with conservative scope.',
     action: 'fallback_consolidation',
-    tool_plan: defaultToolPlanForStage(input.stage),
+    tool_plan: defaultToolPlanForStage(input.stage, input),
     expected_output: defaultExpectedOutputForStage(input.stage),
     need_from_user: {
       required: false,
@@ -624,6 +778,8 @@ export const __private = {
   buildTurnSpecFromContract,
   normalizeConstraints,
   normalizeBranchAction,
+  hasCodingIntent,
+  hasCloudlabIntent,
   buildPlannerPrompt,
   createFallbackOutput
 }

@@ -7,6 +7,34 @@ export interface ActivityItem {
   agent?: string
   tool?: string
   preview?: string
+  traceId?: string
+  command?: string
+  cwd?: string
+  caller?: string
+  stream?: 'stdout' | 'stderr'
+  chunk?: string
+  exitCode?: number
+  durationMs?: number
+  signal?: string
+  error?: string
+}
+
+export interface ExecutionCommand {
+  traceId: string
+  tool?: string
+  caller?: string
+  command: string
+  cwd?: string
+  status: 'running' | 'success' | 'failed' | 'error'
+  startedAt: string
+  finishedAt?: string
+  durationMs?: number
+  exitCode?: number
+  signal?: string
+  output: string
+  outputChars: number
+  chunks: number
+  lastStream?: 'stdout' | 'stderr'
 }
 
 export type YoloState =
@@ -139,12 +167,34 @@ export interface ReviewerProcessReview {
   notes_for_user: string
 }
 
+export type TurnNarrativeSectionId =
+  | 'observed'
+  | 'inferred'
+  | 'planned'
+  | 'executed'
+  | 'result'
+  | 'next'
+
+export interface TurnNarrativeSection {
+  id: TurnNarrativeSectionId
+  title: string
+  content: string
+  evidenceRefs: string[]
+}
+
+export interface TurnNarrative {
+  schema: 'turn-narrative.v1'
+  generatedBy: 'session_synthesized'
+  sections: TurnNarrativeSection[]
+}
+
 // ─── Turn report ────────────────────────────────────────────
 
 export interface TurnReport {
   turnNumber: number
   turnSpec: { objective: string; stage: string }
   summary: string
+  narrative?: TurnNarrative
   plannerSpec?: PlannerSpec
   nextStepRationale?: string
   execution?: {

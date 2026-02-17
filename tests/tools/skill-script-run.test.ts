@@ -170,4 +170,87 @@ describe('skill-script-run tool', () => {
     expect(result.data?.command).toContain('skill-scripts')
     expect(result.data?.command).not.toContain('app.asar/dist/skills')
   })
+
+  it('extracts AF_RESULT_JSON payload into structuredResult', async () => {
+    const scriptPath = path.join(tempDir, '.agentfoundry', 'skills', 'structured', 'scripts', 'audit.sh')
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true })
+    await fs.writeFile(
+      scriptPath,
+      [
+        'echo "provider: codex"',
+        'echo "AF_RESULT_JSON: {\\"schema\\":\\"coding-large-repo.result.v1\\",\\"script\\":\\"delegate-coding-agent\\",\\"provider\\":\\"codex\\",\\"status\\":\\"completed\\",\\"exit_code\\":0}"'
+      ].join('\n'),
+      'utf-8'
+    )
+
+    context.runtime.skillManager?.register(defineScriptSkill('structured', scriptPath))
+
+    const result = await skillScriptRunTool.execute({
+      skillId: 'structured',
+      script: 'audit',
+      args: []
+    }, context)
+
+    expect(result.success).toBe(true)
+    expect(result.data?.structuredResult).toBeDefined()
+    expect(result.data?.structuredResult?.schema).toBe('coding-large-repo.result.v1')
+    expect(result.data?.structuredResult?.provider).toBe('codex')
+    expect(result.data?.structuredResult?.status).toBe('completed')
+  })
+
+  it('extracts AF_RESULT_JSON payload on non-zero exits for machine-readable failures', async () => {
+    const scriptPath = path.join(tempDir, '.agentfoundry', 'skills', 'structured-failure', 'scripts', 'audit.sh')
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true })
+    await fs.writeFile(
+      scriptPath,
+      [
+        'echo "error: blocked"',
+        'echo "AF_RESULT_JSON: {\\"schema\\":\\"coding-large-repo.result.v1\\",\\"script\\":\\"verify-targets\\",\\"status\\":\\"error\\",\\"exit_code\\":2,\\"error\\":\\"blocked\\"}"',
+        'exit 2'
+      ].join('\n'),
+      'utf-8'
+    )
+
+    context.runtime.skillManager?.register(defineScriptSkill('structured-failure', scriptPath))
+
+    const result = await skillScriptRunTool.execute({
+      skillId: 'structured-failure',
+      script: 'audit',
+      args: []
+    }, context)
+
+    expect(result.success).toBe(false)
+    expect(result.data?.exitCode).toBe(2)
+    expect(result.data?.structuredResult).toBeDefined()
+    expect(result.data?.structuredResult?.script).toBe('verify-targets')
+    expect(result.data?.structuredResult?.status).toBe('error')
+  })
+
+  it('extracts AF_RESULT_JSON payload from stderr when stdout lacks marker', async () => {
+    const scriptPath = path.join(tempDir, '.agentfoundry', 'skills', 'structured-stderr', 'scripts', 'audit.sh')
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true })
+    await fs.writeFile(
+      scriptPath,
+      [
+        'echo "error: provider unavailable" >&2',
+        'echo "AF_RESULT_JSON: {\\"schema\\":\\"coding-large-repo.result.v1\\",\\"script\\":\\"delegate-coding-agent\\",\\"status\\":\\"error\\",\\"exit_code\\":143,\\"error\\":\\"signal_terminated\\"}" >&2',
+        'exit 143'
+      ].join('\n'),
+      'utf-8'
+    )
+
+    context.runtime.skillManager?.register(defineScriptSkill('structured-stderr', scriptPath))
+
+    const result = await skillScriptRunTool.execute({
+      skillId: 'structured-stderr',
+      script: 'audit',
+      args: []
+    }, context)
+
+    expect(result.success).toBe(false)
+    expect(result.data?.exitCode).toBe(143)
+    expect(result.data?.structuredResult).toBeDefined()
+    expect(result.data?.structuredResult?.script).toBe('delegate-coding-agent')
+    expect(result.data?.structuredResult?.status).toBe('error')
+  })
 })

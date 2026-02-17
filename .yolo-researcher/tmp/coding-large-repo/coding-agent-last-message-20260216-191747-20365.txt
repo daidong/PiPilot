@@ -1,0 +1,1 @@
+I found a large set of pre-existing local changes and untracked files in this worktree that I did not create. To avoid conflicting with your in-progress edits, should I proceed with the refactor by working only in an isolated area (for example `src/team/*` + matching tests/docs), or should I build on top of the currently modified files?

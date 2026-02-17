@@ -130,11 +130,11 @@ export class PolicyEngine {
           })
 
           if (!approved) {
-            return { allowed: false, reason: 'User denied approval' }
+            return { allowed: false, reason: 'User denied approval', policyId: policy.id }
           }
         } else {
           // No approval handler configured, deny by default
-          return { allowed: false, reason: 'Approval required but no handler configured' }
+          return { allowed: false, reason: 'Approval required but no handler configured', policyId: policy.id }
         }
       }
     }

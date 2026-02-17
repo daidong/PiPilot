@@ -11,6 +11,14 @@ export type YoloRuntimeMode = 'legacy' | 'lean_v2'
 
 export type YoloStage = 'S1' | 'S2' | 'S3' | 'S4' | 'S5'
 
+export interface PlannerIntentRoute {
+  label: string
+  isCoding: boolean
+  confidence: number
+  source: 'router_model' | 'router_heuristic' | 'router_fallback'
+  rationale?: string
+}
+
 // Free-form string describing the turn's intent (e.g. 'explore', 'design_experiment',
 // 'literature_review', 'run_experiment', 'analyze_results').
 // Used for display/logging only — does NOT gate tool selection.
@@ -40,6 +48,7 @@ export interface YoloSessionOptions {
     planner: string
     coordinator: string
     reviewer?: string
+    intentRouter?: string
   }
   mode?: YoloRuntimeMode
 }
@@ -103,6 +112,7 @@ export interface PlannerInput {
     createdByTurn: number
   }>
   mergedUserInputs: QueuedUserInput[]
+  intentRoute?: PlannerIntentRoute
   remainingBudget: {
     turns: number
     maxTurns: number
@@ -143,8 +153,33 @@ export interface PlannerOutput {
   planContract: PlannerContract
 }
 
+export type TurnNarrativeSectionId =
+  | 'observed'
+  | 'inferred'
+  | 'planned'
+  | 'executed'
+  | 'result'
+  | 'next'
+
+export interface TurnNarrativeSection {
+  id: TurnNarrativeSectionId
+  title: string
+  content: string
+  evidenceRefs: string[]
+}
+
+export interface TurnNarrative {
+  schema: 'turn-narrative.v1'
+  generatedBy: 'session_synthesized'
+  sections: TurnNarrativeSection[]
+}
+
 export interface TurnPlanner {
   generate(input: PlannerInput): Promise<PlannerOutput>
+}
+
+export interface IntentRouter {
+  route(input: PlannerInput): Promise<PlannerIntentRoute>
 }
 
 export interface AskUserRequest {
@@ -276,6 +311,7 @@ export interface YoloCoordinator {
     stage: YoloStage
     goal: string
     mergedUserInputs: QueuedUserInput[]
+    intentRoute?: PlannerIntentRoute
     plannerOutput?: PlannerOutput
     reviewerOutput?: ReviewerProcessReview
     researchContext?: string
@@ -477,6 +513,7 @@ export interface YoloEventPayloadByType {
       | 'budget_drift_critical'
       | 'gate_regression'
       | 'readiness_gate_failure'
+      | 'proof_gate_blocked'
     severity: 'warning' | 'error'
     message: string
     refs?: string[]
@@ -499,6 +536,7 @@ export interface PlannerInputManifest {
   planSnapshotHash: string
   branchDossierHash: string
   selectedAssetSnapshotIds: string[]
+  intentRoute?: PlannerIntentRoute
 }
 
 export interface ReadinessSnapshot {
@@ -570,6 +608,7 @@ export interface TurnReport {
   plannerInputManifest: PlannerInputManifest
   readinessSnapshot?: ReadinessSnapshot
   summary: string
+  narrative?: TurnNarrative
   execution?: {
     action?: YoloTurnAction
     actionRationale?: string
@@ -655,6 +694,10 @@ export type ActivityEventKind =
   | 'tool_call'
   | 'tool_result'
   | 'llm_text'
+  | 'command_start'
+  | 'command_chunk'
+  | 'command_end'
+  | 'command_error'
 
 export interface ActivityEvent {
   id: string
@@ -663,4 +706,14 @@ export interface ActivityEvent {
   agent: 'planner' | 'coordinator' | 'reviewer'
   tool?: string
   preview?: string
+  traceId?: string
+  command?: string
+  cwd?: string
+  caller?: string
+  stream?: 'stdout' | 'stderr'
+  chunk?: string
+  exitCode?: number
+  durationMs?: number
+  signal?: string
+  error?: string
 }

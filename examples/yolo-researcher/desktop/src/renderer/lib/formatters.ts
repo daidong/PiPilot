@@ -93,6 +93,19 @@ export function friendlyState(state: string | undefined | null): string {
   return STATE_LABELS[state] ?? state
 }
 
+export type MissionUiState = YoloState | 'STARTING'
+
+export function missionStateLabel(state: MissionUiState | undefined | null): string {
+  if (!state) return 'Ready'
+  if (state === 'STARTING') return 'Starting'
+  if (state === 'STOPPING') return 'Stopping'
+  if (state === 'PLANNING' || state === 'EXECUTING' || state === 'TURN_COMPLETE') return 'Running'
+  if (state === 'WAITING_FOR_USER') return 'Need Your Input'
+  if (state === 'WAITING_EXTERNAL') return 'Need External Input'
+  if (state === 'IDLE') return 'Ready'
+  return friendlyState(state)
+}
+
 // Make raw asset IDs more readable: "RiskRegister_v1-t004-a1-003" → "RiskRegister v1 (#3, cycle 4)"
 export function friendlyAssetId(id: string): string {
   const m = id.match(/^(.+)-t(\d+)-a(\d+)-(\d+)$/)
@@ -156,9 +169,14 @@ export const defaultOptions = {
   mode: 'lean_v2' as const
 }
 
-export function stateTone(state?: YoloState): string {
+export function stateTone(state?: MissionUiState): string {
   switch (state) {
+    case 'STARTING':
     case 'EXECUTING': return 'bg-teal-500/20 t-accent-teal border-teal-500/40'
+    case 'PLANNING':
+    case 'TURN_COMPLETE': return 'bg-teal-500/20 t-accent-teal border-teal-500/40'
+    case 'STOPPING': return 'bg-rose-500/20 t-accent-rose border-rose-500/40'
+    case 'WAITING_EXTERNAL':
     case 'WAITING_FOR_USER': return 'bg-amber-500/20 t-accent-amber border-amber-500/40'
     case 'PAUSED': return 'bg-slate-500/20 t-accent-slate border-slate-500/40'
     case 'FAILED':

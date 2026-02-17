@@ -26,6 +26,7 @@ export interface SkillScriptRunOutput {
   stdout: string
   stderr: string
   exitCode: number
+  structuredResult?: Record<string, unknown>
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -33,6 +34,40 @@ function normalizeStringArray(value: unknown): string[] {
   return value
     .map(item => typeof item === 'string' ? item.trim() : '')
     .filter(Boolean)
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function tryParseJsonObject(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value)
+    if (!isObject(parsed)) return undefined
+    return parsed
+  } catch {
+    return undefined
+  }
+}
+
+function extractStructuredResultFromText(text: string): Record<string, unknown> | undefined {
+  const marker = 'AF_RESULT_JSON:'
+  const lines = text.split(/\r?\n/)
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]?.trim()
+    if (!line || !line.startsWith(marker)) continue
+    const payload = line.slice(marker.length).trim()
+    if (!payload) continue
+    const parsed = tryParseJsonObject(payload)
+    if (parsed) return parsed
+  }
+
+  return undefined
+}
+
+function extractStructuredResultFromOutput(stdout: string, stderr: string): Record<string, unknown> | undefined {
+  return extractStructuredResultFromText(stdout) ?? extractStructuredResultFromText(stderr)
 }
 
 function shellEscape(value: string): string {
@@ -250,6 +285,7 @@ export const skillScriptRunTool: Tool<SkillScriptRunInput, SkillScriptRunOutput>
       }
 
       const output = execResult.data!
+      const structuredResult = extractStructuredResultFromOutput(output.stdout, output.stderr)
       return {
         success: output.exitCode === 0,
         data: {
@@ -258,7 +294,8 @@ export const skillScriptRunTool: Tool<SkillScriptRunInput, SkillScriptRunOutput>
           command,
           stdout: output.stdout,
           stderr: output.stderr,
-          exitCode: output.exitCode
+          exitCode: output.exitCode,
+          structuredResult
         },
         error: output.exitCode !== 0 ? `Script exited with code ${output.exitCode}` : undefined
       }

@@ -112,6 +112,13 @@ describe('policyDenialFeedback', () => {
     const feedback = policyDenialFeedback('bash', 'no shell access')
     expect(feedback.facts.category).toBe('policy_denied')
     expect(feedback.guidance).toContain('different tool or approach')
+    expect(feedback.facts.data?.policyId).toBe('unknown')
+  })
+
+  it('should include policyId when provided', () => {
+    const feedback = policyDenialFeedback('bash', 'approval required', 'require-approval-destructive')
+    expect(feedback.facts.source).toBe('policy:require-approval-destructive')
+    expect(feedback.facts.data?.policyId).toBe('require-approval-destructive')
   })
 })
 

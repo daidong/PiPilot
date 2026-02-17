@@ -1,9 +1,11 @@
 import * as crypto from 'node:crypto'
 
 import { YoloSession } from '../runtime/session.js'
-import type { ActivityEvent, ReviewEngine, TurnPlanner, YoloCoordinator, YoloSessionOptions } from '../runtime/types.js'
+import type { ActivityEvent, IntentRouter, ReviewEngine, TurnPlanner, YoloCoordinator, YoloSessionOptions } from '../runtime/types.js'
 import { createYoloCoordinator } from './coordinator.js'
 import type { YoloCoordinatorConfig } from './coordinator.js'
+import { createYoloIntentRouter } from './intent-router.js'
+import type { YoloIntentRouterConfig } from './intent-router.js'
 import { createYoloPlanner } from './planner.js'
 import type { YoloPlannerConfig } from './planner.js'
 import { createYoloReviewEngine } from './reviewer.js'
@@ -17,11 +19,15 @@ export interface CreateYoloSessionConfig {
   onActivity?: (event: ActivityEvent) => void
   coordinator?: YoloCoordinator
   planner?: TurnPlanner
+  intentRouter?: IntentRouter
   reviewEngine?: ReviewEngine
   coordinatorConfig?: Omit<YoloCoordinatorConfig, 'projectPath' | 'model'> & {
     model?: string
   }
   plannerConfig?: Omit<YoloPlannerConfig, 'projectPath' | 'model'> & {
+    model?: string
+  }
+  intentRouterConfig?: Omit<YoloIntentRouterConfig, 'projectPath'> & {
     model?: string
   }
   reviewerConfig?: Omit<YoloReviewerConfig, 'projectPath' | 'model'> & {
@@ -70,6 +76,18 @@ export function createYoloSession(config: CreateYoloSessionConfig): YoloSession 
     createAgentInstance: config.plannerConfig?.createAgentInstance
   })
 
+  const intentRouter = config.intentRouter ?? createYoloIntentRouter({
+    projectPath: config.projectPath,
+    model: config.intentRouterConfig?.model ?? config.options.models.intentRouter,
+    apiKey: config.intentRouterConfig?.apiKey,
+    maxSteps: config.intentRouterConfig?.maxSteps,
+    maxTokens: config.intentRouterConfig?.maxTokens,
+    debug: config.intentRouterConfig?.debug,
+    identityPrompt: config.intentRouterConfig?.identityPrompt,
+    constraints: config.intentRouterConfig?.constraints,
+    createAgentInstance: config.intentRouterConfig?.createAgentInstance
+  })
+
   const reviewEngine = config.reviewEngine ?? createYoloReviewEngine({
     projectPath: config.projectPath,
     model: config.reviewerConfig?.model
@@ -85,8 +103,14 @@ export function createYoloSession(config: CreateYoloSessionConfig): YoloSession 
     createAgentInstance: config.reviewerConfig?.createAgentInstance
   })
 
-  const deps: { planner: TurnPlanner; reviewEngine: ReviewEngine; onActivity?: (event: ActivityEvent) => void } = {
+  const deps: {
+    planner: TurnPlanner
+    reviewEngine: ReviewEngine
+    intentRouter: IntentRouter
+    onActivity?: (event: ActivityEvent) => void
+  } = {
     planner,
+    intentRouter,
     reviewEngine,
     onActivity: config.onActivity
   }

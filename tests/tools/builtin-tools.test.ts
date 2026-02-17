@@ -305,6 +305,18 @@ describe('Built-in Tools', () => {
 
       expect(result.success).toBe(false) // bash returns failure for non-zero exit code
       expect(result.data?.exitCode).toBe(1)
+      expect(result.error).toBe('Command exited with code 1')
+    })
+
+    it('should include stderr snippet when command fails with stderr output', async () => {
+      const result = await bash.execute({
+        command: 'echo "boom" >&2; exit 2'
+      }, context)
+
+      expect(result.success).toBe(false)
+      expect(result.data?.exitCode).toBe(2)
+      expect(result.error).toContain('Command exited with code 2')
+      expect(result.error).toContain('boom')
     })
 
     it('should respect cwd option', async () => {

@@ -1,8 +1,9 @@
 import crypto from 'node:crypto'
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { rename as fsRename } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   buildAssetInventoryExport,
@@ -168,6 +169,96 @@ function setLastProjectPath(projectPath: string | ''): void {
     return
   }
   writeDesktopState({})
+}
+
+function resolveDefaultProjectSkillsDir(): string | undefined {
+  const envOverride = (
+    process.env.AGENT_FOUNDRY_YOLO_DEFAULT_PROJECT_SKILLS_DIR
+    || process.env.AGENT_FOUNDRY_DEFAULT_PROJECT_SKILLS_DIR
+    || ''
+  ).trim()
+
+  const appPath = app.getAppPath()
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  const cwd = process.cwd()
+  const resourcesPathCandidate = (process as { resourcesPath?: unknown }).resourcesPath
+  const resourcesPath = typeof resourcesPathCandidate === 'string' ? resourcesPathCandidate : undefined
+
+  const candidates = [
+    envOverride,
+    join(appPath, 'skills', 'yolo-researcher-default-project-skills'),
+    join(appPath, 'out', 'skills', 'yolo-researcher-default-project-skills'),
+    join(appPath, 'out', 'main', 'skills', 'yolo-researcher-default-project-skills'),
+    join(appPath, 'skills', 'default-project-skills'),
+    join(appPath, 'out', 'skills', 'default-project-skills'),
+    join(appPath, 'out', 'main', 'skills', 'default-project-skills'),
+    resourcesPath ? join(resourcesPath, 'skills', 'yolo-researcher-default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'skills', 'yolo-researcher-default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'skills', 'yolo-researcher-default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'main', 'skills', 'yolo-researcher-default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'skills', 'default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'skills', 'default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'skills', 'default-project-skills') : '',
+    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'main', 'skills', 'default-project-skills') : '',
+    resolve(moduleDir, '..', 'skills', 'yolo-researcher-default-project-skills'),
+    resolve(moduleDir, '..', 'skills', 'default-project-skills'),
+    resolve(moduleDir, '..', '..', 'skills', 'yolo-researcher-default-project-skills'),
+    resolve(moduleDir, '..', '..', 'skills', 'default-project-skills'),
+    resolve(moduleDir, '..', '..', '..', 'skills', 'yolo-researcher-default-project-skills'),
+    resolve(moduleDir, '..', '..', '..', 'skills', 'default-project-skills'),
+    resolve(moduleDir, '..', '..', '..', '..', 'examples', 'yolo-researcher', 'skills', 'default-project-skills'),
+    resolve(cwd, 'out', 'skills', 'yolo-researcher-default-project-skills'),
+    resolve(cwd, 'out', 'main', 'skills', 'yolo-researcher-default-project-skills'),
+    resolve(cwd, 'examples', 'yolo-researcher', 'skills', 'default-project-skills'),
+    resolve(cwd, '..', 'skills', 'default-project-skills'),
+    resolve(cwd, '..', '..', 'skills', 'default-project-skills')
+  ].filter(Boolean)
+
+  return [...new Set(candidates)].find(candidate => existsSync(candidate))
+}
+
+function seedDefaultProjectSkills(projectPath: string): void {
+  const sourceRoot = resolveDefaultProjectSkillsDir()
+  if (!sourceRoot || !existsSync(sourceRoot)) return
+
+  const targetRoot = join(projectPath, '.agentfoundry', 'skills')
+  mkdirSync(targetRoot, { recursive: true })
+
+  const forceSyncValue = (
+    process.env.AGENT_FOUNDRY_YOLO_FORCE_PROJECT_SKILLS_SYNC
+    || process.env.AGENT_FOUNDRY_FORCE_PROJECT_SKILLS_SYNC
+    || '1'
+  ).trim().toLowerCase()
+  const forceSync = !['0', 'false', 'off', 'no'].includes(forceSyncValue)
+
+  let synced = 0
+  let replaced = 0
+  let skipped = 0
+  for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const sourceSkillDir = join(sourceRoot, entry.name)
+    const sourceSkillFile = join(sourceSkillDir, 'SKILL.md')
+    if (!existsSync(sourceSkillFile)) continue
+
+    const targetSkillDir = join(targetRoot, entry.name)
+    if (existsSync(targetSkillDir)) {
+      if (!forceSync) {
+        skipped += 1
+        continue
+      }
+      rmSync(targetSkillDir, { recursive: true, force: true })
+      replaced += 1
+    }
+    cpSync(sourceSkillDir, targetSkillDir, { recursive: true })
+    synced += 1
+  }
+
+  if (synced > 0 || skipped > 0) {
+    const summary = forceSync
+      ? `synced ${synced} default project skill(s) (replaced ${replaced})`
+      : `seeded ${synced} default project skill(s) (skipped ${skipped} existing)`
+    console.log(`[YoloResearcher] ${summary} from ${sourceRoot}`)
+  }
 }
 
 function sessionStatePath(projectPath: string, sessionId: string): string {
@@ -1267,6 +1358,21 @@ function findRelatedExperimentAsset(
   return null
 }
 
+function formatTurnNarrativeForUi(turn?: TurnReport | null): string | null {
+  if (!turn?.narrative?.sections?.length) return null
+  const parts: string[] = []
+  for (const section of turn.narrative.sections) {
+    const title = typeof section.title === 'string' ? section.title.trim() : ''
+    const content = typeof section.content === 'string' ? section.content.trim() : ''
+    if (!title || !content) continue
+    parts.push(`${title}\n${content}`)
+    if (Array.isArray(section.evidenceRefs) && section.evidenceRefs.length > 0) {
+      parts.push(`Evidence: ${section.evidenceRefs.slice(0, 6).join(', ')}`)
+    }
+  }
+  return parts.length > 0 ? parts.join('\n\n') : null
+}
+
 // ─── InteractionDrawer context assembly ──────────────────────────────
 
 function assembleInteractionContext(
@@ -1289,6 +1395,7 @@ function assembleInteractionContext(
   const questionText = `${pendingQuestion?.question ?? ''} ${pendingQuestion?.context ?? ''}`.toLowerCase()
   const relatedExperiment = findRelatedExperimentAsset(pendingQuestion, assets)
   const latestTurn = turnReports[turnReports.length - 1]
+  const latestNarrativeText = formatTurnNarrativeForUi(latestTurn)
   const latestGateBlockers = latestTurn?.gateImpact?.gateResult?.hardBlockers ?? []
   const latestConsensusBlockers = latestTurn?.reviewerSnapshot?.status === 'completed'
     ? (latestTurn.reviewerSnapshot.consensusBlockers ?? [])
@@ -1337,6 +1444,7 @@ function assembleInteractionContext(
   const originTurn = [...turnReports].reverse().find((t) =>
     t.assetDiff?.created?.some((id) => id.startsWith('ExperimentRequest'))
   )
+  const originNarrativeText = formatTurnNarrativeForUi(originTurn)
 
   switch (kind) {
     case 'experiment_request': {
@@ -1344,6 +1452,13 @@ function assembleInteractionContext(
       interactionId = waitTask!.id
       title = waitTask!.title || 'Experiment Request'
 
+      if (originNarrativeText || latestNarrativeText) {
+        sections.push({
+          label: 'Agent Narrative',
+          content: originNarrativeText ?? latestNarrativeText ?? '',
+          collapsible: true
+        })
+      }
       if (originTurn) {
         sections.push({
           label: 'What Led To This',
@@ -1388,6 +1503,13 @@ function assembleInteractionContext(
       interactionId = waitTask!.id
       title = waitTask!.title || 'Full-Text Upload Required'
 
+      if (latestNarrativeText) {
+        sections.push({
+          label: 'Agent Narrative',
+          content: latestNarrativeText,
+          collapsible: true
+        })
+      }
       if (waitTask!.reason) sections.push({ label: 'Citation', content: waitTask!.reason })
       if (waitTask!.requiredArtifacts?.length) {
         sections.push({
@@ -1416,6 +1538,13 @@ function assembleInteractionContext(
         : q.checkpoint === 'final-scope' ? 'Final Scope Checkpoint'
         : 'Checkpoint Decision'
 
+      if (latestNarrativeText) {
+        sections.push({
+          label: 'Agent Narrative',
+          content: latestNarrativeText,
+          collapsible: true
+        })
+      }
       sections.push({ label: 'Question', content: q.question })
       if (q.context) sections.push({ label: 'Context', content: q.context, collapsible: true })
 
@@ -1456,6 +1585,13 @@ function assembleInteractionContext(
       interactionId = q.id ?? `gate-blocker-${snapshot.currentTurn}`
       title = 'Gate Blocker Requires Decision'
 
+      if (latestNarrativeText) {
+        sections.push({
+          label: 'Agent Narrative',
+          content: latestNarrativeText,
+          collapsible: true
+        })
+      }
       sections.push({ label: 'Decision Request', content: q.question })
       if (q.context) sections.push({ label: 'Context', content: q.context, collapsible: true })
 
@@ -1497,6 +1633,13 @@ function assembleInteractionContext(
       interactionId = ext.id
       title = 'Budget Extension Request'
 
+      if (latestNarrativeText) {
+        sections.push({
+          label: 'Agent Narrative',
+          content: latestNarrativeText,
+          collapsible: true
+        })
+      }
       sections.push({ label: 'Rationale', content: ext.rationale })
       const delta = ext.delta
       const parts: string[] = []
@@ -1523,6 +1666,13 @@ function assembleInteractionContext(
       interactionId = q.id ?? `question-${snapshot.currentTurn}`
       title = 'Question From Research Agent'
 
+      if (latestNarrativeText) {
+        sections.push({
+          label: 'Agent Narrative',
+          content: latestNarrativeText,
+          collapsible: true
+        })
+      }
       sections.push({ label: 'Question', content: q.question })
       if (relatedExperiment) {
         sections.push({
@@ -1617,6 +1767,13 @@ function assembleInteractionContext(
       interactionId = `failure-${snapshot.currentTurn}`
       title = 'Research Session Failed'
 
+      if (latestNarrativeText) {
+        sections.push({
+          label: 'Last Agent Narrative',
+          content: latestNarrativeText,
+          collapsible: true
+        })
+      }
       // Determine error info
       const lastTurn = turnReports[turnReports.length - 1]
       const reason = lastTurn?.summary ?? 'Unknown runtime failure'
@@ -1945,6 +2102,7 @@ export function registerIpcHandlers(): void {
       const remembered = getLastProjectPath()
       if (remembered) {
         state.projectPath = remembered
+        seedDefaultProjectSkills(remembered)
         try {
           await restoreSessionFromDisk(win, state, remembered)
         } catch {
@@ -1970,6 +2128,7 @@ export function registerIpcHandlers(): void {
       mkdirSync(metaDir, { recursive: true })
       writeFileSync(join(metaDir, '.keep'), '', { flag: 'a' })
     }
+    seedDefaultProjectSkills(picked)
 
     state.projectPath = picked
     setLastProjectPath(picked)
@@ -2001,6 +2160,7 @@ export function registerIpcHandlers(): void {
       ...options,
       mode: options.mode ?? 'lean_v2'
     }
+    seedDefaultProjectSkills(state.projectPath)
 
     const trimmedGoal = goal.trim()
     let sessionId = loadOrCreateSessionId(state.projectPath)

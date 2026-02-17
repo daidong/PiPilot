@@ -199,11 +199,16 @@ export function policyDenialFeedback(
   contextOrPolicyId?: FeedbackContext | string
 ): ErrorFeedback {
   const policyId = typeof contextOrPolicyId === 'string' ? contextOrPolicyId : undefined
+  const safePolicyId = sanitizeErrorContent(policyId || 'unknown', 64)
   return {
     facts: {
       category: 'policy_denied',
-      source: `policy:${sanitizeErrorContent(policyId || 'unknown', 64)}`,
-      data: { tool: sanitizeErrorContent(toolName, 64), reason: sanitizeErrorContent(reason, 200) }
+      source: `policy:${safePolicyId}`,
+      data: {
+        tool: sanitizeErrorContent(toolName, 64),
+        reason: sanitizeErrorContent(reason, 200),
+        policyId: safePolicyId
+      }
     },
     guidance: `The tool "${sanitizeErrorContent(toolName, 64)}" was blocked by a security policy: ${sanitizeErrorContent(reason, 200)}. Try a different tool or approach.`
   }

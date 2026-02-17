@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { InteractionContext, TurnReport, YoloSnapshot } from '@/lib/types'
-import { cleanStageRefs, friendlyAction, friendlyState } from '@/lib/formatters'
+import { cleanStageRefs, friendlyAction, missionStateLabel } from '@/lib/formatters'
 import { AlertTriangle, ArrowRight, FileText, Pencil } from 'lucide-react'
 
 interface HeroSectionProps {
@@ -43,7 +43,7 @@ export function HeroSection({
   const [goalEditing, setGoalEditing] = useState(false)
   const [goalDraft, setGoalDraft] = useState('')
   const state = snapshot?.state
-  const displayState = state === 'WAITING_FOR_USER' ? 'Running (waiting for your input)' : friendlyState(state)
+  const displayState = missionStateLabel(state)
   const latestExecution = activeTurn?.execution
   const hasNeed = hasBlockingNeed(snapshot, drawerInteraction)
   const hasSession = Boolean(snapshot?.sessionId)

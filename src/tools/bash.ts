@@ -17,6 +17,24 @@ export interface BashOutput {
   exitCode: number
 }
 
+const FAILURE_SNIPPET_LIMIT = 200
+
+function summarizeShellOutput(text: string): string | undefined {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (!compact) return undefined
+  if (compact.length <= FAILURE_SNIPPET_LIMIT) return compact
+  return `${compact.slice(0, FAILURE_SNIPPET_LIMIT)}...`
+}
+
+function buildCommandFailureError(output: BashOutput): string {
+  const base = `Command exited with code ${output.exitCode}`
+  const stderrSnippet = summarizeShellOutput(output.stderr)
+  if (stderrSnippet) return `${base}: ${stderrSnippet}`
+  const stdoutSnippet = summarizeShellOutput(output.stdout)
+  if (stdoutSnippet) return `${base} (stdout): ${stdoutSnippet}`
+  return base
+}
+
 export const bash: Tool<BashInput, BashOutput> = defineTool({
   name: 'bash',
   description: 'Execute bash commands. Used to run system commands, build scripts, etc.',
@@ -54,7 +72,8 @@ export const bash: Tool<BashInput, BashOutput> = defineTool({
   execute: async (input, { runtime }) => {
     const result = await runtime.io.exec(input.command, {
       cwd: input.cwd,
-      timeout: input.timeout
+      timeout: input.timeout,
+      caller: 'bash'
     })
 
     if (!result.success && !result.data) {
@@ -66,7 +85,7 @@ export const bash: Tool<BashInput, BashOutput> = defineTool({
     return {
       success: output.exitCode === 0,
       data: output,
-      error: output.exitCode !== 0 ? `Command exited with code ${output.exitCode}` : undefined
+      error: output.exitCode !== 0 ? buildCommandFailureError(output) : undefined
     }
   }
 })

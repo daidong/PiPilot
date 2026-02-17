@@ -118,6 +118,9 @@ examples/yolo-researcher/
 │   └── utils.ts                # File I/O, hashing utilities
 ├── docs/
 │   └── 002-yolo-mode.md        # RFC-002 design specification
+├── skills/
+│   ├── *.ts                    # Built-in procedural skills (literature/data/writing/experiment)
+│   └── default-project-skills/ # External SKILL.md packs (e.g., coding-large-repo, cloudlab-distributed-experiments, matplotlib)
 └── desktop/                    # Electron desktop app
     ├── package.json            # React 19, Lucide, TailwindCSS 4, Electron 33
     ├── electron.vite.config.ts # Build configuration

@@ -16,11 +16,15 @@ import type {
   ActivityEvent,
   AssetRecord,
   AskUserRequest,
+  CoordinatorToolCallSummary,
   CoordinatorTurnResult,
   ExternalWaitTask,
   GateEngine,
+  IntentRouter,
   PendingResourceExtension,
   PlannerInput,
+  PlannerIntentRoute,
+  PlannerNeedFromUser,
   PlannerOutput,
   QueuedUserInput,
   ReadinessSnapshot,
@@ -32,6 +36,7 @@ import type {
   SnapshotManifest,
   TurnExecutionResult,
   TurnPlanner,
+  TurnNarrative,
   TurnReport,
   WaitTaskValidationResult,
   YoloCoordinator,
@@ -68,6 +73,7 @@ const STAGE_ORDER: YoloStage[] = ['S1', 'S2', 'S3', 'S4', 'S5']
 
 interface YoloSessionDeps {
   planner: TurnPlanner
+  intentRouter?: IntentRouter
   gateEngine?: GateEngine
   reviewEngine?: ReviewEngine
   assetStore?: FileAssetStore
@@ -170,6 +176,7 @@ export class YoloSession {
   readonly runtimeCheckpointsLatestPath: string
 
   private readonly planner: TurnPlanner
+  private readonly intentRouter?: IntentRouter
   private readonly gateEngine: GateEngine
   private readonly reviewEngine: ReviewEngine
   private readonly assetStore: FileAssetStore
@@ -210,6 +217,7 @@ export class YoloSession {
     this.checkpointBroker = deps.checkpointBroker ?? new CheckpointBroker()
     this.ingressManager = deps.ingressManager ?? new UserIngressManager(this.sessionDir)
     this.planner = deps.planner
+    this.intentRouter = deps.intentRouter
     this.runtimeMode = this.options.mode ?? 'legacy'
     this.gateEngine = deps.gateEngine ?? (
       this.runtimeMode === 'lean_v2'
@@ -1227,6 +1235,16 @@ export class YoloSession {
         }
       }
 
+      let intentRoute: PlannerIntentRoute | undefined
+      if (this.intentRouter) {
+        try {
+          intentRoute = await this.intentRouter.route(plannerInput)
+          plannerInput.intentRoute = intentRoute
+        } catch {
+          // Intent routing is advisory; planner should continue with native fallback behavior.
+        }
+      }
+
       this.onActivity?.({ id: randomId('act'), timestamp: this.now(), kind: 'planner_start', agent: 'planner' })
       const plannerOutputRaw = await this.planner.generate(plannerInput)
       const plannerOutputValidated = isTurnSpecValid(plannerOutputRaw.turnSpec)
@@ -1241,6 +1259,17 @@ export class YoloSession {
             })
           }
       const plannerOutput = plannerOutputValidated
+      const requestedStage = plannerOutput.turnSpec.stage
+      if (this.shouldHoldAtS1ForLiteratureFirst(requestedStage, state.stageGateStatus)) {
+        const s1Status = state.stageGateStatus.S1 ?? 'none'
+        plannerOutput.turnSpec = {
+          ...plannerOutput.turnSpec,
+          stage: 'S1'
+        }
+        advisoryNotes.push(
+          `literature-first stage guard: requested ${requestedStage} but S1 gate is ${s1Status}; forcing S1 until S1 passes.`
+        )
+      }
       const invalidateCurrentNode = false
       if (state.nonProgressTurns >= 3) {
         advisoryNotes.push(
@@ -1306,6 +1335,7 @@ export class YoloSession {
         stage: plannerOutput.turnSpec.stage,
         goal: this.goal,
         mergedUserInputs: mergedInputs,
+        intentRoute,
         plannerOutput,
         researchContext
       })
@@ -1500,6 +1530,43 @@ export class YoloSession {
         ...coordinatorResultPatched,
         askUser: coordinatorResultPatched.askUser
       }
+      const proofGate = this.evaluateS2S3ProofGate({
+        stage: requestedStage,
+        createdAssets: stagedAssets.records,
+        toolCalls: coordinatorResultPatched.toolCalls,
+        turnAction: coordinatorResultPatched.action,
+        plannerNeedFromUser: plannerOutputForReport.planContract?.need_from_user,
+        askUser: coordinatorResultPatched.askUser
+      })
+      if (proofGate.blockExternalDelegation) {
+        advisoryNotes.push(
+          `proof gate blocked externalization in ${requestedStage}: missing local run/verify evidence`
+        )
+        coordinatorResultWithIntervention.action = 'proof_gate_blocked_local_evidence_required'
+        coordinatorResultWithIntervention.actionRationale = [
+          coordinatorResultPatched.actionRationale ?? 'No rationale provided.',
+          'Proof gate: S2/S3 external delegation requires local run/verify evidence first.',
+          `Evidence seen: ${proofGate.evidenceTags.join(', ') || 'none'}`
+        ].join(' ')
+        if (proofGate.askUserWasExternal) {
+          coordinatorResultWithIntervention.askUser = {
+            required: false,
+            question: 'Proof gate blocked external delegation this turn.',
+            blocking: false,
+            context: [
+              'S2/S3 requires local run/verify evidence before asking user to execute.',
+              `Evidence seen: ${proofGate.evidenceTags.join(', ') || 'none'}`,
+              'Run at least one local command (bash / verify-targets / delegate-coding-agent) or emit a RunRecord first.'
+            ].join('\n')
+          }
+        }
+        await emit('maintenance_alert', {
+          kind: 'proof_gate_blocked',
+          severity: 'warning',
+          message: `proof gate blocked external delegation in ${requestedStage} due to missing local evidence`,
+          refs: proofGate.evidenceTags.length > 0 ? proofGate.evidenceTags : ['no-local-evidence']
+        })
+      }
       await emit('gate_evaluated', {
         stage: plannerOutput.turnSpec.stage,
         passed: gateResult.passed,
@@ -1541,6 +1608,19 @@ export class YoloSession {
             notes: semanticReview.advisoryNotes
           }
       const finishedAt = this.now()
+      const turnNarrative = this.buildTurnNarrative({
+        stage: plannerOutput.turnSpec.stage,
+        objective: plannerOutput.turnSpec.objective,
+        intentRoute,
+        plannerOutput: plannerOutputForReport,
+        coordinatorResult: coordinatorResultWithIntervention,
+        gatePassed: gateResult.passed,
+        gateBlockers: gateResult.hardBlockers.map((item) => item.label),
+        proofGateBlocked: proofGate.blockExternalDelegation,
+        proofEvidenceTags: proofGate.evidenceTags,
+        reviewerProcessReview: semanticReview.processReview,
+        createdAssets: stagedAssets.records
+      })
 
       const turnReport: TurnReport = {
         turnNumber,
@@ -1575,10 +1655,12 @@ export class YoloSession {
         plannerInputManifest: {
           planSnapshotHash,
           branchDossierHash,
-          selectedAssetSnapshotIds: snapshotManifest.assetIds
+          selectedAssetSnapshotIds: snapshotManifest.assetIds,
+          intentRoute
         },
         readinessSnapshot,
         summary: coordinatorResultPatched.summary,
+        narrative: turnNarrative,
         execution: {
           action: coordinatorResultPatched.action,
           actionRationale: coordinatorResultPatched.actionRationale,
@@ -1627,7 +1709,10 @@ export class YoloSession {
         turnAction: coordinatorResultWithIntervention.action,
         createdAssets: stagedAssets.records,
         mergedInputs,
-        existingAskUser: coordinatorResultWithIntervention.askUser
+        toolCalls: coordinatorResultWithIntervention.toolCalls,
+        plannerNeedFromUser: plannerOutputForReport.planContract?.need_from_user,
+        existingAskUser: coordinatorResultWithIntervention.askUser,
+        proofGateBlockedExternal: proofGate.blockExternalDelegation
       })
       if (experimentOutsource) {
         nextState = 'WAITING_EXTERNAL'
@@ -1656,12 +1741,16 @@ export class YoloSession {
         let askUserInput = this.withAutoCheckpointReferences(coordinatorResultWithIntervention.askUser, allRecords)
         askUserInput = this.withFallbackAskUserContext(askUserInput, {
           objective: plannerOutput.turnSpec.objective,
-          currentFocus: plannerOutputForReport.planContract.current_focus,
-          whyNow: plannerOutputForReport.planContract.why_now,
-          needFromUser: plannerOutputForReport.planContract.need_from_user?.request,
-          doneDefinition: plannerOutputForReport.planContract.done_definition,
+          currentFocus: plannerOutputForReport.planContract?.current_focus,
+          whyNow: plannerOutputForReport.planContract?.why_now,
+          needFromUser: plannerOutputForReport.planContract?.need_from_user?.request,
+          doneDefinition: plannerOutputForReport.planContract?.done_definition,
           actionRationale: coordinatorResultWithIntervention.actionRationale,
-          summary: coordinatorResultPatched.summary
+          summary: coordinatorResultPatched.summary,
+          executionTrace: coordinatorResultWithIntervention.executionTrace,
+          toolCalls: coordinatorResultWithIntervention.toolCalls,
+          proofGateBlocked: proofGate.blockExternalDelegation,
+          proofEvidenceTags: proofGate.evidenceTags
         })
         const pendingQuestion = this.checkpointBroker.emitQuestion(askUserInput)
         state.pendingQuestion = pendingQuestion
@@ -2186,6 +2275,140 @@ export class YoloSession {
     return 'TURN_COMPLETE'
   }
 
+  private shouldHoldAtS1ForLiteratureFirst(
+    requestedStage: YoloStage,
+    stageGateStatus: Partial<Record<YoloStage, 'pass' | 'fail' | 'none'>>
+  ): boolean {
+    if (requestedStage === 'S1') return false
+    return stageGateStatus.S1 !== 'pass'
+  }
+
+  private shouldEnforceS2S3ProofGate(stage: YoloStage): boolean {
+    return stage === 'S2' || stage === 'S3'
+  }
+
+  private collectLocalProofEvidenceTags(
+    createdAssets: AssetRecord[],
+    toolCalls?: CoordinatorToolCallSummary[]
+  ): string[] {
+    const tags = new Set<string>()
+
+    if (createdAssets.some((asset) => asset.type === 'RunRecord')) {
+      tags.add('asset:RunRecord')
+    }
+
+    for (const call of toolCalls ?? []) {
+      const tool = call.tool.toLowerCase()
+      const argsPreview = (call.argsPreview ?? '').toLowerCase()
+      const resultPreview = (call.resultPreview ?? '').toLowerCase()
+      const combined = `${argsPreview} ${resultPreview}`
+
+      if (tool === 'bash' && (argsPreview || resultPreview)) {
+        tags.add('tool:bash')
+        continue
+      }
+
+      if (tool !== 'skill-script-run') continue
+      if (combined.includes('coding-large-repo')) {
+        if (combined.includes('verify-targets')) {
+          tags.add('tool:verify-targets')
+        }
+        if (combined.includes('delegate-coding-agent')) {
+          tags.add('tool:delegate-coding-agent')
+        }
+        if (combined.includes('agent-poll')) {
+          tags.add('tool:agent-poll')
+        }
+        continue
+      }
+
+      if (combined.includes('cloudlab-distributed-experiments')) {
+        tags.add('tool:cloudlab-distributed')
+        if (combined.includes('experiment-create')) tags.add('tool:cloudlab-create')
+        if (combined.includes('experiment-wait-ready')) tags.add('tool:cloudlab-wait-ready')
+        if (combined.includes('distributed-ssh')) tags.add('tool:cloudlab-distributed-ssh')
+        if (combined.includes('collect-artifacts')) tags.add('tool:cloudlab-collect-artifacts')
+        if (combined.includes('experiment-terminate')) tags.add('tool:cloudlab-terminate')
+      }
+    }
+
+    return sortStrings(Array.from(tags))
+  }
+
+  private asksForExternalExecution(askUser?: AskUserRequest): boolean {
+    if (!askUser || !(askUser.required ?? false)) return false
+    const haystack = [
+      askUser.question ?? '',
+      askUser.context ?? '',
+      ...(askUser.requiredFiles ?? [])
+    ].join(' ')
+    if (!haystack.trim()) return false
+    return /(external|outsource|handoff|user[_\s-]?run|manual|operator|human|upload|run the experiment|执行|外包|上传|人工)/i.test(haystack)
+  }
+
+  private actionRequestsExternalExecution(turnAction?: CoordinatorTurnResult['action']): boolean {
+    return typeof turnAction === 'string'
+      && /(external|outsource|handoff|user[_\s-]?run|manual|operator)/i.test(turnAction)
+  }
+
+  private hasExternalDelegationSignal(input: {
+    turnAction?: CoordinatorTurnResult['action']
+    plannerNeedFromUser?: PlannerNeedFromUser
+    askUser?: AskUserRequest
+    createdAssets: AssetRecord[]
+  }): boolean {
+    if (input.plannerNeedFromUser?.required === true) return true
+    if (this.actionRequestsExternalExecution(input.turnAction)) return true
+    if (this.asksForExternalExecution(input.askUser)) return true
+
+    const experimentAsset = input.createdAssets
+      .filter((asset) => (
+        asset.type === 'ExperimentRequest'
+        || asset.type === 'ExperimentRequirement'
+      ))
+      .at(-1)
+    if (!experimentAsset) return false
+
+    return this.payloadRequestsExternalExecution(experimentAsset.payload as Record<string, unknown>)
+  }
+
+  private evaluateS2S3ProofGate(input: {
+    stage: YoloStage
+    createdAssets: AssetRecord[]
+    toolCalls?: CoordinatorToolCallSummary[]
+    turnAction?: CoordinatorTurnResult['action']
+    plannerNeedFromUser?: PlannerNeedFromUser
+    askUser?: AskUserRequest
+  }): {
+    blockExternalDelegation: boolean
+    evidenceTags: string[]
+    askUserWasExternal: boolean
+  } {
+    const askUserWasExternal = this.asksForExternalExecution(input.askUser)
+    if (!this.shouldEnforceS2S3ProofGate(input.stage)) {
+      return {
+        blockExternalDelegation: false,
+        evidenceTags: [],
+        askUserWasExternal
+      }
+    }
+
+    if (!this.hasExternalDelegationSignal(input)) {
+      return {
+        blockExternalDelegation: false,
+        evidenceTags: [],
+        askUserWasExternal
+      }
+    }
+
+    const evidenceTags = this.collectLocalProofEvidenceTags(input.createdAssets, input.toolCalls)
+    return {
+      blockExternalDelegation: evidenceTags.length === 0,
+      evidenceTags,
+      askUserWasExternal
+    }
+  }
+
   private async maybeCreateExperimentOutsourceWaitTask(input: {
     state: SessionPersistedState
     turnNumber: number
@@ -2193,8 +2416,12 @@ export class YoloSession {
     turnAction?: CoordinatorTurnResult['action']
     createdAssets: AssetRecord[]
     mergedInputs: QueuedUserInput[]
+    toolCalls?: CoordinatorToolCallSummary[]
+    plannerNeedFromUser?: PlannerNeedFromUser
     existingAskUser?: AskUserRequest
+    proofGateBlockedExternal?: boolean
   }): Promise<{ task: ExternalWaitTask; question: AskUserRequest } | null> {
+    if (input.proofGateBlockedExternal) return null
     if (input.existingAskUser && (input.existingAskUser.required ?? true) && (input.existingAskUser.blocking ?? true)) return null
     if (input.createdAssets.some((asset) => asset.type === 'RunRecord')) return null
 
@@ -2207,6 +2434,13 @@ export class YoloSession {
     if (!experimentAsset) return null
 
     const payload = experimentAsset.payload as Record<string, unknown>
+    const plannerRequestsExternal = input.plannerNeedFromUser?.required === true
+    const actionRequestsExternal = this.actionRequestsExternalExecution(input.turnAction)
+    const payloadRequestsExternal = this.payloadRequestsExternalExecution(payload)
+    if (!plannerRequestsExternal && !actionRequestsExternal && !payloadRequestsExternal) {
+      return null
+    }
+
     const why = this.readStringField(payload, ['why', 'rationale', 'reason'])
       ?? 'No rationale provided.'
     const objective = this.readStringField(payload, ['objective', 'goal', 'experimentGoal'])
@@ -2239,6 +2473,20 @@ export class YoloSession {
     ])
     const requiredFiles = this.extractExperimentRequiredFiles(payload)
     const protocolLines = methodSteps.length > 0 ? methodSteps : [method]
+    const localAttemptLines = (input.toolCalls ?? [])
+      .slice(0, 5)
+      .map((call, index) => {
+        const tool = this.compactNarrativeText(call.tool ?? '', 30) || 'tool'
+        const args = this.compactNarrativeText(call.argsPreview ?? '', 120)
+        const result = this.compactNarrativeText(call.resultPreview ?? '', 160)
+        const detailParts = [
+          args ? `args=${args}` : '',
+          result ? `result=${result}` : ''
+        ].filter(Boolean)
+        return detailParts.length > 0
+          ? `${index + 1}. ${tool} (${detailParts.join(' ; ')})`
+          : `${index + 1}. ${tool}`
+      })
     const uploadChecklist = requiredFiles.length > 0
       ? requiredFiles.map((name) => `upload ${name}`)
       : [
@@ -2286,6 +2534,9 @@ export class YoloSession {
         'Execution protocol:',
         ...protocolLines.map((line, idx) => `${idx + 1}. ${line}`),
         '',
+        'Local attempts already tried:',
+        ...(localAttemptLines.length > 0 ? localAttemptLines : ['1. no local attempt evidence recorded']),
+        '',
         'Controls:',
         controls,
         '',
@@ -2318,12 +2569,53 @@ export class YoloSession {
           `Upload folder: ${task.uploadDir ?? ''}`,
           `Objective: ${objective}`,
           `Protocol steps: ${protocolLines.length}`,
+          `Local attempts logged: ${localAttemptLines.length}`,
           `Expected result: ${expectedResult}`,
           `Required uploads: ${requiredFiles.length > 0 ? requiredFiles.join(', ') : 'raw trace + summary + notes'}`
         ].join('\n'),
         blocking: true
       }
     }
+  }
+
+  private payloadRequestsExternalExecution(payload: Record<string, unknown>): boolean {
+    const booleanLikeKeys = [
+      'requiresUserExecution',
+      'userExecutionRequired',
+      'requiresExternalExecution',
+      'externalExecutionRequired',
+      'needsUserHelp',
+      'outsource',
+      'manualExecution'
+    ]
+    for (const key of booleanLikeKeys) {
+      const value = payload[key]
+      if (typeof value === 'boolean') {
+        if (value) return true
+        continue
+      }
+      if (typeof value !== 'string') continue
+      const normalized = value.trim().toLowerCase()
+      if (!normalized) continue
+      if (['true', 'yes', 'required', 'external', 'manual', 'user', 'operator', 'outsource', '1'].includes(normalized)) {
+        return true
+      }
+      if (['false', 'no', 'local', 'agent', 'self', '0'].includes(normalized)) {
+        return false
+      }
+    }
+
+    const modeKeys = ['executionMode', 'runMode', 'executor', 'executionOwner']
+    for (const key of modeKeys) {
+      const value = payload[key]
+      if (typeof value !== 'string') continue
+      const normalized = value.trim().toLowerCase()
+      if (!normalized) continue
+      if (/(external|outsource|manual|operator|user|human)/.test(normalized)) return true
+      if (/(local|auto|self|agent|coordinator)/.test(normalized)) return false
+    }
+
+    return false
   }
 
   private shouldTransitionToComplete(turnReport: TurnReport): boolean {
@@ -3950,6 +4242,203 @@ export class YoloSession {
     return sortStrings(Array.from(values))
   }
 
+  private compactNarrativeText(value: string, maxChars = 220): string {
+    const normalized = value.replace(/\s+/g, ' ').trim()
+    if (!normalized) return ''
+    if (normalized.length <= maxChars) return normalized
+    return `${normalized.slice(0, Math.max(0, maxChars - 3))}...`
+  }
+
+  private collectNarrativeEvidenceRefs(candidates: Array<string | undefined>, limit = 8): string[] {
+    const refs: string[] = []
+    const seen = new Set<string>()
+    for (const value of candidates) {
+      if (typeof value !== 'string') continue
+      const normalized = value.trim()
+      if (!normalized || seen.has(normalized)) continue
+      seen.add(normalized)
+      refs.push(normalized)
+      if (refs.length >= limit) break
+    }
+    return refs
+  }
+
+  private appendNarrativeSection(lines: string[], title: string, bullets: string[]): void {
+    const validBullets = bullets
+      .map((item) => this.compactNarrativeText(item))
+      .filter(Boolean)
+    if (validBullets.length === 0) return
+    lines.push(title)
+    for (const bullet of validBullets) {
+      lines.push(`- ${bullet}`)
+    }
+  }
+
+  private buildTurnNarrative(input: {
+    stage: YoloStage
+    objective: string
+    intentRoute?: PlannerIntentRoute
+    plannerOutput: PlannerOutput
+    coordinatorResult: CoordinatorTurnResult
+    gatePassed: boolean
+    gateBlockers: string[]
+    proofGateBlocked: boolean
+    proofEvidenceTags: string[]
+    reviewerProcessReview?: ReviewerProcessReview
+    createdAssets: AssetRecord[]
+  }): TurnNarrative {
+    const toolNames = new Set<string>()
+    const executionTrace = input.coordinatorResult.executionTrace ?? []
+    const toolCalls = input.coordinatorResult.toolCalls ?? []
+    for (const step of executionTrace) {
+      const tool = typeof step.tool === 'string' ? step.tool.trim() : ''
+      if (tool) toolNames.add(tool)
+    }
+    for (const call of toolCalls) {
+      const tool = typeof call.tool === 'string' ? call.tool.trim() : ''
+      if (tool) toolNames.add(tool)
+    }
+    const toolRefs = Array.from(toolNames).map((tool) => `tool:${tool}`)
+    const createdAssetTypes = sortStrings(Array.from(new Set(input.createdAssets.map((asset) => asset.type))))
+    const createdAssetRefs = input.createdAssets.slice(0, 4).map((asset) => `asset:${asset.id}`)
+    const plan = input.plannerOutput.planContract
+    const gateRef = input.gatePassed ? 'gate:pass' : 'gate:fail'
+    const proofRefs = input.proofEvidenceTags.map((tag) => `proof:${tag}`)
+    const intentRef = input.intentRoute?.label ? `intent:${input.intentRoute.label}` : undefined
+
+    const observationBullets: string[] = [
+      `Stage ${input.stage} objective: ${this.compactNarrativeText(input.objective, 180)}.`,
+      toolRefs.length > 0
+        ? `Observed tool usage: ${Array.from(toolNames).slice(0, 4).join(', ')}.`
+        : 'No external tool call was required in this turn.',
+      input.createdAssets.length > 0
+        ? `Created ${input.createdAssets.length} asset(s): ${createdAssetTypes.slice(0, 4).join(', ')}.`
+        : 'No new assets were created in this turn.'
+    ]
+
+    const inferredWhy = this.compactNarrativeText(
+      plan?.why_now
+      || input.coordinatorResult.actionRationale
+      || input.coordinatorResult.summary
+      || 'No explicit rationale was recorded.',
+      240
+    )
+    const inferredBullets: string[] = [
+      `Primary reasoning: ${inferredWhy}`
+    ]
+    if (input.proofGateBlocked) {
+      inferredBullets.push('Proof gate blocked external delegation because local run/verify evidence is missing.')
+    }
+    if (input.gateBlockers.length > 0) {
+      inferredBullets.push(`Current blockers: ${input.gateBlockers.slice(0, 3).join(', ')}.`)
+    }
+    if (input.reviewerProcessReview?.verdict) {
+      inferredBullets.push(
+        `Reviewer verdict: ${input.reviewerProcessReview.verdict} (${Math.round((input.reviewerProcessReview.confidence ?? 0) * 100)}% confidence).`
+      )
+    }
+
+    const planBullets = plan?.tool_plan?.length
+      ? plan.tool_plan
+        .slice(0, 4)
+        .map((step) => `Step ${step.step}: use ${step.tool} to ${this.compactNarrativeText(step.goal, 160)}.`)
+      : ['Planner did not provide explicit tool steps for this turn.']
+
+    const executionBullets = executionTrace.length > 0
+      ? executionTrace
+        .slice(0, 4)
+        .map((step, index) => (
+          `${index + 1}. ${step.tool}: ${this.compactNarrativeText(step.reason, 120)} -> ${this.compactNarrativeText(step.result_summary, 140)}`
+        ))
+      : toolRefs.length > 0
+        ? [`Tool calls were recorded (${Array.from(toolNames).slice(0, 4).join(', ')}), but execution trace entries were not available.`]
+        : ['No execution trace entries were recorded.']
+
+    const resultBullets: string[] = [
+      `Turn summary: ${this.compactNarrativeText(input.coordinatorResult.summary || 'No summary returned.', 220)}.`,
+      input.gatePassed
+        ? 'Structural gate result: pass.'
+        : `Structural gate result: fail${input.gateBlockers.length > 0 ? ` (${input.gateBlockers.slice(0, 2).join(', ')})` : ''}.`,
+      input.coordinatorResult.askUser?.required
+        ? 'This turn requests user input before autonomous execution can continue.'
+        : 'No blocking user input was requested by this turn.'
+    ]
+
+    let nextStepLine = 'Proceed to the next cycle using the current branch state.'
+    if (input.proofGateBlocked) {
+      nextStepLine = 'Run at least one local run/verify step and emit evidence before attempting external delegation again.'
+    } else if (input.coordinatorResult.askUser?.required) {
+      nextStepLine = `Wait for user response: ${this.compactNarrativeText(input.coordinatorResult.askUser.question, 200)}`
+    } else if (!input.gatePassed) {
+      nextStepLine = 'Address the current gate blockers, then retry with a narrower and verifiable slice.'
+    } else if (plan?.done_definition?.trim()) {
+      nextStepLine = `Continue until done-definition is satisfied: ${this.compactNarrativeText(plan.done_definition, 200)}`
+    }
+
+    return {
+      schema: 'turn-narrative.v1',
+      generatedBy: 'session_synthesized',
+      sections: [
+        {
+          id: 'observed',
+          title: 'What I Observed',
+          content: observationBullets.join('\n'),
+          evidenceRefs: this.collectNarrativeEvidenceRefs([
+            `stage:${input.stage}`,
+            intentRef,
+            ...toolRefs,
+            ...createdAssetRefs
+          ])
+        },
+        {
+          id: 'inferred',
+          title: 'What I Inferred',
+          content: inferredBullets.join('\n'),
+          evidenceRefs: this.collectNarrativeEvidenceRefs([
+            gateRef,
+            ...proofRefs,
+            input.reviewerProcessReview?.verdict ? `review:${input.reviewerProcessReview.verdict}` : undefined
+          ])
+        },
+        {
+          id: 'planned',
+          title: 'What I Planned',
+          content: planBullets.join('\n'),
+          evidenceRefs: this.collectNarrativeEvidenceRefs([
+            ...(plan?.tool_plan ?? []).map((step) => `tool:${step.tool}`)
+          ])
+        },
+        {
+          id: 'executed',
+          title: 'What I Executed',
+          content: executionBullets.join('\n'),
+          evidenceRefs: this.collectNarrativeEvidenceRefs([
+            ...toolRefs
+          ])
+        },
+        {
+          id: 'result',
+          title: 'What Result I Got',
+          content: resultBullets.join('\n'),
+          evidenceRefs: this.collectNarrativeEvidenceRefs([
+            gateRef,
+            ...createdAssetRefs,
+            input.coordinatorResult.askUser?.required ? 'ask_user:required' : 'ask_user:not_required'
+          ])
+        },
+        {
+          id: 'next',
+          title: 'What I Will Do Next',
+          content: nextStepLine,
+          evidenceRefs: this.collectNarrativeEvidenceRefs([
+            input.proofGateBlocked ? 'next:local_proof_required' : undefined,
+            input.coordinatorResult.askUser?.required ? 'next:wait_user' : 'next:continue_autonomous'
+          ])
+        }
+      ]
+    }
+  }
+
   private withAutoCheckpointReferences(request: AskUserRequest, records: AssetRecord[]): AskUserRequest {
     if (request.checkpoint !== 'claim-freeze') return request
     const existingRefs = this.normalizeIdList(request.referencedAssetIds)
@@ -3976,6 +4465,10 @@ export class YoloSession {
       doneDefinition?: string
       actionRationale?: string
       summary?: string
+      executionTrace?: CoordinatorTurnResult['executionTrace']
+      toolCalls?: CoordinatorToolCallSummary[]
+      proofGateBlocked?: boolean
+      proofEvidenceTags?: string[]
     }
   ): AskUserRequest {
     const existing = typeof request.context === 'string' ? request.context.trim() : ''
@@ -3986,38 +4479,58 @@ export class YoloSession {
       }
     }
 
-    const lines: string[] = []
     const focus = (input.currentFocus ?? '').trim() || input.objective.trim() || 'current research objective'
-    lines.push(`Current focus: ${focus}`)
-
     const why = (input.whyNow ?? '').trim() || (input.actionRationale ?? '').trim() || (input.summary ?? '').trim()
-    if (why) {
-      lines.push(`Why this is asked now: ${why}`)
-    }
-
     const need = (input.needFromUser ?? '').trim()
-    if (need) {
-      lines.push(`What is needed from you: ${need}`)
+    const executionLines = (input.executionTrace ?? [])
+      .slice(0, 3)
+      .map((item, index) => {
+        const tool = this.compactNarrativeText(item.tool ?? '', 32) || 'tool'
+        const reason = this.compactNarrativeText(item.reason ?? '', 100)
+        const result = this.compactNarrativeText(item.result_summary ?? '', 120)
+        return `${index + 1}. ${tool}: ${reason}${result ? ` -> ${result}` : ''}`
+      })
+    if (executionLines.length === 0) {
+      const toolNames = (input.toolCalls ?? [])
+        .map((item) => (typeof item.tool === 'string' ? item.tool.trim() : ''))
+        .filter(Boolean)
+      if (toolNames.length > 0) {
+        executionLines.push(`Tool calls seen: ${Array.from(new Set(toolNames)).slice(0, 4).join(', ')}`)
+      }
     }
 
-    if (Array.isArray(request.requiredFiles) && request.requiredFiles.length > 0) {
-      lines.push(`Files expected: ${request.requiredFiles.join(', ')}`)
-    }
-
-    if (/\(\d+\)|\d\)/.test(request.question)) {
-      lines.push('Reply format: answer each numbered item inline, for example "1) ... 2) ...".')
-    }
+    const lines: string[] = []
+    this.appendNarrativeSection(lines, 'What I Observed', [
+      `Current focus: ${focus}`,
+      why ? `Reason this question appeared now: ${why}` : ''
+    ])
+    this.appendNarrativeSection(lines, 'What I Inferred', [
+      input.proofGateBlocked ? 'Proof gate is active: external delegation is blocked until local evidence exists.' : '',
+      Array.isArray(input.proofEvidenceTags) && input.proofEvidenceTags.length > 0
+        ? `Evidence tags currently present: ${input.proofEvidenceTags.join(', ')}`
+        : ''
+    ])
+    this.appendNarrativeSection(lines, 'What I Executed', executionLines)
+    this.appendNarrativeSection(lines, 'What I Need From You', [
+      need || `Please answer: ${request.question}`,
+      Array.isArray(request.requiredFiles) && request.requiredFiles.length > 0
+        ? `Files expected: ${request.requiredFiles.join(', ')}`
+        : ''
+    ])
 
     const doneDefinition = (input.doneDefinition ?? '').trim()
-    if (doneDefinition) {
-      lines.push(`After your reply, the run continues when this is satisfied: ${doneDefinition}`)
-    } else {
-      lines.push(`After your reply, the run resumes this objective: ${focus}`)
-    }
+    this.appendNarrativeSection(lines, 'What Happens Next', [
+      doneDefinition
+        ? `After your reply, run continues when this is satisfied: ${doneDefinition}`
+        : `After your reply, run resumes objective: ${focus}`,
+      /\(\d+\)|\d\)/.test(request.question)
+        ? 'Reply format: answer each numbered item inline, for example "1) ... 2) ...".'
+        : ''
+    ])
 
     return {
       ...request,
-      context: lines.join('\n')
+      context: lines.join('\n\n')
     }
   }
 
