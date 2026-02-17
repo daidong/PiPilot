@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "lucide-react": "^0.469.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@electron-toolkit/utils": "^4.0.0",

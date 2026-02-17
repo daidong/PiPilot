@@ -35,13 +35,13 @@ usage() {
 usage: verify-targets.sh --cmd "<command>" [options]
 
 Examples:
-  verify-targets.sh --cmd "npx vitest run tests/yolo-researcher/coordinator.test.ts"
+  verify-targets.sh --cmd "npx vitest run tests/yolo-researcher-v2/runtime-contract.test.ts"
   verify-targets.sh --cmd "pytest -q tests/test_runtime.py::test_resume" --cwd "."
   verify-targets.sh --cmd "pytest -q tests/test_runtime.py::test_resume" --runtime docker --docker-image my-repo-dev:latest
 
 Options:
   --cmd <command>                    Required verification command.
-  --cwd <path>                       Working directory. Default: .
+  --cwd <path>                       Working directory. Default: auto-detected.
   --timeout-sec <seconds>            Optional timeout for each attempt.
   --runtime <auto|docker|host>       Default: auto (prefer docker, fallback to host).
   --docker-image <image>             Optional image. Falls back to $CODING_LARGE_REPO_DOCKER_IMAGE.
@@ -54,7 +54,8 @@ EOF
 }
 
 CMD=""
-CWD="."
+CWD=""
+CWD_EXPLICIT="false"
 TIMEOUT_SEC=""
 RUNTIME="auto"
 DOCKER_IMAGE="${CODING_LARGE_REPO_DOCKER_IMAGE:-}"
@@ -63,6 +64,7 @@ DOCKER_CPUS="${CODING_LARGE_REPO_DOCKER_CPUS:-}"
 DOCKER_MEMORY="${CODING_LARGE_REPO_DOCKER_MEMORY:-}"
 DOCKER_PIDS_LIMIT="${CODING_LARGE_REPO_DOCKER_PIDS_LIMIT:-512}"
 HOST_FALLBACK="true"
+DOCKER_ENV_PASSTHROUGH="${CODING_LARGE_REPO_DOCKER_ENV_PASSTHROUGH:-OPENAI_API_KEY OPENAI_API_BASE OPENAI_BASE_URL OPENAI_ORG_ID ANTHROPIC_API_KEY DEEPSEEK_API_KEY GOOGLE_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY AZURE_OPENAI_API_KEY AZURE_OPENAI_ENDPOINT AZURE_API_VERSION}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cwd)
       CWD="${2:-}"
+      CWD_EXPLICIT="true"
       shift 2
       ;;
     --timeout-sec)
@@ -122,6 +125,13 @@ if [[ -z "$CMD" ]]; then
   fail "--cmd is required" 2
 fi
 
+REQUESTED_CWD=""
+if [[ "$CWD_EXPLICIT" == "true" ]]; then
+  REQUESTED_CWD="$CWD"
+fi
+CWD_REASON="default_root"
+clrepo_resolve_cwd "$REQUESTED_CWD" "$CMD" CWD CWD_REASON
+
 case "$RUNTIME" in
   auto|docker|host)
     ;;
@@ -143,7 +153,9 @@ if [[ ! -d "$CWD" ]]; then
 fi
 
 ABS_CWD="$(cd "$CWD" && pwd)"
-LOG_DIR=".yolo-researcher/logs/coding-large-repo"
+# Keep verify logs anchored to the target repository (resolved --cwd),
+# not the caller process cwd.
+LOG_DIR="$ABS_CWD/.yolo-researcher/logs/coding-large-repo"
 mkdir -p "$LOG_DIR"
 STAMP="$(date +"%Y%m%d-%H%M%S")-$RANDOM"
 LOG_PATH="$LOG_DIR/verify-$STAMP.log"
@@ -170,6 +182,8 @@ FALLBACK_REASON=""
 RESOLVED_DOCKER_IMAGE=""
 
 echo "[coding-large-repo] cwd: $ABS_CWD" | tee "$LOG_PATH"
+echo "[coding-large-repo] requested_cwd: ${REQUESTED_CWD:-<auto>}" | tee -a "$LOG_PATH"
+echo "[coding-large-repo] cwd_reason: $CWD_REASON" | tee -a "$LOG_PATH"
 echo "[coding-large-repo] cmd: $CMD" | tee -a "$LOG_PATH"
 echo "[coding-large-repo] requested_runtime: $REQUESTED_RUNTIME" | tee -a "$LOG_PATH"
 echo "[coding-large-repo] command output is written to log_path (tail shown on failures)." | tee -a "$LOG_PATH"
@@ -261,6 +275,26 @@ run_docker() {
   fi
 
   declare -a docker_cmd
+  declare -a docker_env_args
+  declare -a docker_env_names
+
+  docker_env_args=()
+  docker_env_names=()
+  local env_passthrough_lc
+  env_passthrough_lc="$(printf '%s' "$DOCKER_ENV_PASSTHROUGH" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$env_passthrough_lc" != "none" ]]; then
+    # Accept either comma- or whitespace-separated env names.
+    local env_list
+    env_list="$(printf '%s' "$DOCKER_ENV_PASSTHROUGH" | tr ',' ' ')"
+    local env_name
+    for env_name in $env_list; do
+      if [[ -n "${!env_name:-}" ]]; then
+        docker_env_args+=(-e "$env_name")
+        docker_env_names+=("$env_name")
+      fi
+    done
+  fi
+
   docker_cmd=(
     docker
     run
@@ -277,6 +311,9 @@ run_docker() {
   if [[ -n "$DOCKER_MEMORY" ]]; then
     docker_cmd+=(--memory "$DOCKER_MEMORY")
   fi
+  if [[ ${#docker_env_args[@]} -gt 0 ]]; then
+    docker_cmd+=("${docker_env_args[@]}")
+  fi
   docker_cmd+=(
     "$RESOLVED_DOCKER_IMAGE"
     -lc "$CMD"
@@ -284,6 +321,11 @@ run_docker() {
 
   echo "[coding-large-repo] docker attempt start" | tee -a "$LOG_PATH"
   echo "[coding-large-repo] docker image: $RESOLVED_DOCKER_IMAGE" | tee -a "$LOG_PATH"
+  if [[ ${#docker_env_names[@]} -gt 0 ]]; then
+    echo "[coding-large-repo] docker env passthrough: ${docker_env_names[*]}" | tee -a "$LOG_PATH"
+  else
+    echo "[coding-large-repo] docker env passthrough: (none)" | tee -a "$LOG_PATH"
+  fi
   echo "[coding-large-repo] docker command: $(clrepo_join_shell_words "${docker_cmd[@]}")" | tee -a "$LOG_PATH"
 
   local status=0
@@ -369,11 +411,13 @@ if [[ "$FINAL_STATUS" == "0" ]]; then
   STATUS_LABEL="completed"
 fi
 
-RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"verify-targets\",\"status\":%s,\"exit_code\":%s,\"cwd\":%s,\"cmd\":%s,\"timeout_sec\":%s,\"requested_runtime\":%s,\"effective_runtime\":%s,\"docker_attempted\":%s,\"docker_available\":%s,\"docker_image\":%s,\"docker_exit_code\":%s,\"host_attempted\":%s,\"host_exit_code\":%s,\"fallback_used\":%s,\"fallback_reason\":%s,\"log_path\":%s}' \
+RESULT_JSON="$(printf '{\"schema\":\"%s\",\"script\":\"verify-targets\",\"status\":%s,\"exit_code\":%s,\"requested_cwd\":%s,\"cwd\":%s,\"cwd_reason\":%s,\"cmd\":%s,\"timeout_sec\":%s,\"requested_runtime\":%s,\"effective_runtime\":%s,\"docker_attempted\":%s,\"docker_available\":%s,\"docker_image\":%s,\"docker_exit_code\":%s,\"host_attempted\":%s,\"host_exit_code\":%s,\"fallback_used\":%s,\"fallback_reason\":%s,\"log_path\":%s}' \
   "$(clrepo_json_escape "$CODING_LARGE_REPO_RESULT_SCHEMA")" \
   "$(clrepo_json_string_or_null "$STATUS_LABEL")" \
   "$(clrepo_json_number_or_null "$FINAL_STATUS")" \
+  "$(clrepo_json_string_or_null "$REQUESTED_CWD")" \
   "$(clrepo_json_string_or_null "$ABS_CWD")" \
+  "$(clrepo_json_string_or_null "$CWD_REASON")" \
   "$(clrepo_json_string_or_null "$CMD")" \
   "$(clrepo_json_number_or_null "$TIMEOUT_SEC")" \
   "$(clrepo_json_string_or_null "$REQUESTED_RUNTIME")" \

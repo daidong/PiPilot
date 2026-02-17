@@ -66,7 +66,7 @@ Recommended script usage:
 `skill-script-run({"skillId":"coding-large-repo","script":"agent-log","args":["--session-id","coding-agent-<id>","--tail-lines","120"]})`
 
 7. Verify:
-`skill-script-run({"skillId":"coding-large-repo","script":"verify-targets","args":["--cmd","npx vitest run tests/yolo-researcher/coordinator.test.ts","--cwd","."]})`
+`skill-script-run({"skillId":"coding-large-repo","script":"verify-targets","args":["--cmd","npx vitest run tests/yolo-researcher-v2/runtime-contract.test.ts","--cwd","."]})`
 
 `skill-script-run({"skillId":"coding-large-repo","script":"verify-targets","args":["--cmd","pytest -q tests/test_runtime.py::test_resume","--runtime","docker","--docker-image","my-repo-dev:latest","--cwd","."]})`
 
