@@ -259,6 +259,34 @@ export class YoloSession {
     if (!decision.action?.kind) {
       throw new Error('TurnDecision.action.kind is required')
     }
+
+    const action = decision.action as Record<string, unknown>
+    const requireNonEmpty = (field: string): string => {
+      const value = action[field]
+      if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(`${decision.action.kind} action.${field} is required`)
+      }
+      return value
+    }
+
+    switch (decision.action.kind) {
+      case 'Exec':
+        requireNonEmpty('cmd')
+        break
+      case 'Read':
+      case 'Write':
+      case 'Edit':
+        requireNonEmpty('targetPath')
+        break
+      case 'Ask':
+        requireNonEmpty('question')
+        break
+      case 'Stop':
+        requireNonEmpty('reason')
+        break
+      default:
+        break
+    }
   }
 
   private ensureSafeTargetPath(inputPath: string): string {

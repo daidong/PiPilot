@@ -79,4 +79,25 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(exitCode.trim()).toBe('0')
     expect(projectMd).toContain('runs/turn-0001/stdout.txt')
   })
+
+  it('fails fast with a clear error when Exec cmd is missing', async () => {
+    const projectPath = await createTempDir('yolo-v2-invalid-exec-')
+    tempDirs.push(projectPath)
+
+    const session = createYoloSession({
+      projectPath,
+      projectId: 'rq-invalid-exec',
+      goal: 'Reject malformed exec action',
+      defaultRuntime: 'host',
+      agent: {
+        decide: async () => ({
+          intent: 'Execute command',
+          action: { kind: 'Exec' } as any
+        })
+      }
+    })
+
+    await session.init()
+    await expect(session.runNextTurn()).rejects.toThrow('Exec action.cmd is required')
+  })
 })

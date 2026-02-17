@@ -52,7 +52,8 @@ export async function listTurnNumbers(runsDir: string): Promise<number[]> {
     .sort((a, b) => a - b)
 }
 
-export function normalizeText(value: string): string {
+export function normalizeText(value: unknown): string {
+  if (typeof value !== 'string') return ''
   return value
     .toLowerCase()
     .replace(/\s+/g, ' ')

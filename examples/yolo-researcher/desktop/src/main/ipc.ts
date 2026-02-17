@@ -550,7 +550,7 @@ export function registerIpcHandlers(): void {
     })
 
     if (payload.autoRun && state.yoloSession) {
-      void runLoop(win, state, payload.maxTurns ?? 10)
+      void runLoop(win, state, payload.maxTurns ?? 10).catch(() => undefined)
     }
 
     return overview
