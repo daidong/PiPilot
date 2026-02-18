@@ -1,8 +1,14 @@
 import * as path from 'node:path'
+import * as fs from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 
-import { ensureDir, writeText } from '../utils.js'
+import { ensureDir, fileExists, readTextOrEmpty, writeText } from '../utils.js'
 
 export type LiteratureStudyMode = 'quick' | 'standard' | 'deep'
+
+const CACHE_SCHEMA_VERSION = 'litstudy-cache.v1'
+const SOURCE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const REQUEST_CACHE_ARTIFACTS = ['plan.json', 'papers.json', 'coverage.json', 'summary.json', 'review.md'] as const
 
 interface StudyPaper {
   id: string
@@ -49,6 +55,7 @@ export interface RunLiteratureStudyInput {
   context?: string
   mode: LiteratureStudyMode
   targetPaperCount: number
+  projectRootAbs: string
   outputDirAbs: string
   outputDirRel: string
   timeoutMs: number
@@ -70,8 +77,43 @@ export interface RunLiteratureStudyResult {
     summaryPath: string
     durationMs: number
     errors: string[]
+    cache: {
+      requestHit: boolean
+      sourceHits: number
+      sourceMisses: number
+      paperCacheHits: number
+      paperCacheWrites: number
+    }
   }
   error?: string
+}
+
+interface SourceCacheRecord {
+  schema: string
+  source: string
+  query: string
+  limit: number
+  fetchedAt: string
+  papers: StudyPaper[]
+}
+
+interface PaperCacheRecord {
+  schema: string
+  items: Record<string, { updatedAt: string; paper: StudyPaper }>
+}
+
+interface RequestCacheRecord {
+  schema: string
+  createdAt: string
+  payload: {
+    mode: LiteratureStudyMode
+    query: string
+    targetPaperCount: number
+    totalPapersFound: number
+    papersAutoSaved: number
+    coverage: StudyCoverage
+    errors: string[]
+  }
 }
 
 function normalizeWhitespace(value: string): string {
@@ -84,6 +126,72 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 64) || 'literature'
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`
+}
+
+function hashValue(value: unknown): string {
+  return createHash('sha256').update(stableStringify(value)).digest('hex')
+}
+
+function parseJsonObject<T>(raw: string): T | null {
+  if (!raw.trim()) return null
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return null
+  }
+}
+
+function nowIso(): string {
+  return new Date().toISOString()
+}
+
+function buildCacheRoot(projectRootAbs: string): string {
+  return path.join(projectRootAbs, '.yolo-researcher', 'cache', 'literature-study')
+}
+
+function normalizeCacheText(value: string): string {
+  return normalizeWhitespace(value).toLowerCase()
+}
+
+function getRequestCacheKey(input: {
+  query: string
+  context?: string
+  mode: LiteratureStudyMode
+  targetPaperCount: number
+}): string {
+  return hashValue({
+    schema: CACHE_SCHEMA_VERSION,
+    query: normalizeCacheText(input.query),
+    context: normalizeCacheText(input.context || ''),
+    mode: input.mode,
+    targetPaperCount: input.targetPaperCount
+  })
+}
+
+function getSourceCacheKey(source: string, query: string, limit: number): string {
+  return hashValue({
+    schema: CACHE_SCHEMA_VERSION,
+    source,
+    query: normalizeCacheText(query),
+    limit
+  })
+}
+
+function getPaperCacheKey(paper: StudyPaper): string {
+  const doi = normalizeCacheText(paper.doi || '')
+  if (doi) return `doi:${doi}`
+  const title = normalizeCacheText(paper.title || '')
+  if (title) return `title:${title}`
+  const id = normalizeCacheText(paper.id || '')
+  if (id) return `id:${id}`
+  return ''
 }
 
 function tokenize(text: string): string[] {
@@ -367,6 +475,117 @@ function buildCoverage(subTopics: StudySubTopic[], papers: StudyPaper[], queries
   return { score, subTopics: rows, queriesExecuted }
 }
 
+function preferString(current: string, next: string): string {
+  const left = normalizeWhitespace(current || '')
+  const right = normalizeWhitespace(next || '')
+  if (!left) return right
+  if (!right) return left
+  return right.length > left.length ? right : left
+}
+
+function preferAuthors(current: string[], next: string[]): string[] {
+  if (next.length > current.length) return next
+  return current.length > 0 ? current : next
+}
+
+function mergePaper(cached: StudyPaper | null, incoming: StudyPaper): StudyPaper {
+  if (!cached) return incoming
+  return {
+    id: preferString(cached.id, incoming.id),
+    title: preferString(cached.title, incoming.title),
+    authors: preferAuthors(cached.authors, incoming.authors),
+    abstract: preferString(cached.abstract, incoming.abstract),
+    year: Math.max(cached.year || 0, incoming.year || 0),
+    venue: preferString(cached.venue || '', incoming.venue || '') || null,
+    citationCount: Math.max(cached.citationCount || 0, incoming.citationCount || 0) || null,
+    url: preferString(cached.url, incoming.url),
+    source: preferString(cached.source, incoming.source),
+    doi: preferString(cached.doi || '', incoming.doi || '') || null,
+    relevanceScore: 0
+  }
+}
+
+function cacheArtifactsDir(requestCacheDir: string): string {
+  return path.join(requestCacheDir, 'artifacts')
+}
+
+async function copyRequestArtifacts(sourceDir: string, targetDir: string): Promise<boolean> {
+  await ensureDir(targetDir)
+  for (const fileName of REQUEST_CACHE_ARTIFACTS) {
+    const src = path.join(sourceDir, fileName)
+    if (!(await fileExists(src))) return false
+    await fs.copyFile(src, path.join(targetDir, fileName))
+  }
+  return true
+}
+
+async function loadRequestCache(requestCacheDir: string): Promise<RequestCacheRecord | null> {
+  const recordPath = path.join(requestCacheDir, 'result.json')
+  const parsed = parseJsonObject<RequestCacheRecord>(await readTextOrEmpty(recordPath))
+  if (!parsed || parsed.schema !== CACHE_SCHEMA_VERSION || !parsed.payload) return null
+  const artifactsDir = cacheArtifactsDir(requestCacheDir)
+  for (const fileName of REQUEST_CACHE_ARTIFACTS) {
+    if (!(await fileExists(path.join(artifactsDir, fileName)))) return null
+  }
+  return parsed
+}
+
+async function storeRequestCache(
+  requestCacheDir: string,
+  outputDirAbs: string,
+  payload: RequestCacheRecord['payload']
+): Promise<void> {
+  const artifactsDir = cacheArtifactsDir(requestCacheDir)
+  await ensureDir(requestCacheDir)
+  const copied = await copyRequestArtifacts(outputDirAbs, artifactsDir)
+  if (!copied) return
+  const record: RequestCacheRecord = {
+    schema: CACHE_SCHEMA_VERSION,
+    createdAt: nowIso(),
+    payload
+  }
+  await writeText(path.join(requestCacheDir, 'result.json'), `${JSON.stringify(record, null, 2)}\n`)
+}
+
+async function loadPaperCache(paperCachePath: string): Promise<PaperCacheRecord> {
+  const parsed = parseJsonObject<PaperCacheRecord>(await readTextOrEmpty(paperCachePath))
+  if (parsed && parsed.schema === CACHE_SCHEMA_VERSION && parsed.items && typeof parsed.items === 'object') {
+    return parsed
+  }
+  return {
+    schema: CACHE_SCHEMA_VERSION,
+    items: {}
+  }
+}
+
+async function loadSourceCache(sourceCachePath: string, source: string, query: string, limit: number): Promise<StudyPaper[] | null> {
+  const parsed = parseJsonObject<SourceCacheRecord>(await readTextOrEmpty(sourceCachePath))
+  if (!parsed || parsed.schema !== CACHE_SCHEMA_VERSION) return null
+  if (parsed.source !== source || parsed.limit !== limit) return null
+  if (normalizeCacheText(parsed.query) !== normalizeCacheText(query)) return null
+  const fetchedAtMs = Date.parse(parsed.fetchedAt)
+  if (!Number.isFinite(fetchedAtMs) || Date.now() - fetchedAtMs > SOURCE_CACHE_TTL_MS) return null
+  return Array.isArray(parsed.papers) ? parsed.papers : null
+}
+
+async function storeSourceCache(
+  sourceCachePath: string,
+  source: string,
+  query: string,
+  limit: number,
+  papers: StudyPaper[]
+): Promise<void> {
+  const record: SourceCacheRecord = {
+    schema: CACHE_SCHEMA_VERSION,
+    source,
+    query,
+    limit,
+    fetchedAt: nowIso(),
+    papers
+  }
+  await writeText(sourceCachePath, `${JSON.stringify(record, null, 2)}\n`)
+}
+
 function renderReviewMarkdown(input: {
   query: string
   mode: LiteratureStudyMode
@@ -404,25 +623,108 @@ export async function runLiteratureStudy(input: RunLiteratureStudyInput): Promis
   if (!query) return { success: false, error: 'query is required' }
 
   const startedAt = Date.now()
+  const cacheRoot = buildCacheRoot(input.projectRootAbs)
+  const requestCacheKey = getRequestCacheKey({
+    query,
+    context: input.context,
+    mode: input.mode,
+    targetPaperCount: input.targetPaperCount
+  })
+  const requestCacheDir = path.join(cacheRoot, 'requests', requestCacheKey)
+  const sourceCacheDir = path.join(cacheRoot, 'sources')
+  const paperCachePath = path.join(cacheRoot, 'papers', 'paper-cache.json')
+
+  const planPathAbs = path.join(input.outputDirAbs, 'plan.json')
+  const paperListPathAbs = path.join(input.outputDirAbs, 'papers.json')
+  const coveragePathAbs = path.join(input.outputDirAbs, 'coverage.json')
+  const summaryPathAbs = path.join(input.outputDirAbs, 'summary.json')
+  const reviewPathAbs = path.join(input.outputDirAbs, 'review.md')
+  const toRel = (abs: string) => `${input.outputDirRel}/${path.basename(abs)}`
+
+  const cachedRequest = await loadRequestCache(requestCacheDir)
+  if (cachedRequest) {
+    const copied = await copyRequestArtifacts(cacheArtifactsDir(requestCacheDir), input.outputDirAbs)
+    if (copied) {
+      return {
+        success: true,
+        data: {
+          mode: cachedRequest.payload.mode,
+          query: cachedRequest.payload.query,
+          targetPaperCount: cachedRequest.payload.targetPaperCount,
+          totalPapersFound: cachedRequest.payload.totalPapersFound,
+          papersAutoSaved: cachedRequest.payload.papersAutoSaved,
+          coverage: cachedRequest.payload.coverage,
+          planPath: toRel(planPathAbs),
+          reviewPath: toRel(reviewPathAbs),
+          paperListPath: toRel(paperListPathAbs),
+          coveragePath: toRel(coveragePathAbs),
+          summaryPath: toRel(summaryPathAbs),
+          durationMs: Date.now() - startedAt,
+          errors: cachedRequest.payload.errors,
+          cache: {
+            requestHit: true,
+            sourceHits: 0,
+            sourceMisses: 0,
+            paperCacheHits: 0,
+            paperCacheWrites: 0
+          }
+        }
+      }
+    }
+  }
+
   const subTopics = buildSubTopics(query, input.context || '', input.mode, input.targetPaperCount)
   const queryBatches = buildQueryBatches(query, subTopics, input.mode)
   const errors: string[] = []
   const queriesExecuted: string[] = []
   const results: StudyPaper[] = []
+  let sourceHits = 0
+  let sourceMisses = 0
+  let paperCacheHits = 0
+  let paperCacheWrites = 0
 
   const perSourceLimit = input.mode === 'quick' ? 5 : input.mode === 'deep' ? 12 : 8
+  const paperCache = await loadPaperCache(paperCachePath)
 
   for (const batch of queryBatches) {
     for (const candidateQuery of batch.queries) {
       queriesExecuted.push(candidateQuery)
       for (const source of batch.sources) {
+        const sourceCachePath = path.join(sourceCacheDir, `${source}-${getSourceCacheKey(source, candidateQuery, perSourceLimit)}.json`)
         try {
-          const papers = await searchSource(source, candidateQuery, perSourceLimit, input.timeoutMs)
+          const cachedPapers = await loadSourceCache(sourceCachePath, source, candidateQuery, perSourceLimit)
+          const papers = cachedPapers ?? await searchSource(source, candidateQuery, perSourceLimit, input.timeoutMs)
+          if (cachedPapers) {
+            sourceHits += 1
+          } else {
+            sourceMisses += 1
+            await storeSourceCache(sourceCachePath, source, candidateQuery, perSourceLimit, papers)
+          }
+
           for (const paper of papers) {
-            const score = scorePaperRelevance(query, paper)
-            results.push({ ...paper, relevanceScore: score })
+            const paperKey = getPaperCacheKey(paper)
+            const cachedPaper = paperKey ? paperCache.items[paperKey]?.paper || null : null
+            if (cachedPaper) paperCacheHits += 1
+            const mergedPaper = mergePaper(cachedPaper, paper)
+            const normalizedForCache: StudyPaper = { ...mergedPaper, relevanceScore: 0 }
+
+            if (paperKey) {
+              const existingSerialized = cachedPaper ? stableStringify(cachedPaper) : ''
+              const nextSerialized = stableStringify(normalizedForCache)
+              if (!cachedPaper || existingSerialized !== nextSerialized) {
+                paperCache.items[paperKey] = {
+                  updatedAt: nowIso(),
+                  paper: normalizedForCache
+                }
+                paperCacheWrites += 1
+              }
+            }
+
+            const score = scorePaperRelevance(query, mergedPaper)
+            results.push({ ...mergedPaper, relevanceScore: score })
           }
         } catch (error) {
+          sourceMisses += 1
           const message = error instanceof Error ? error.message : String(error)
           errors.push(`${source}[${candidateQuery}]: ${message}`)
         }
@@ -440,11 +742,6 @@ export async function runLiteratureStudy(input: RunLiteratureStudyInput): Promis
   const durationMs = Date.now() - startedAt
 
   await ensureDir(input.outputDirAbs)
-  const planPathAbs = path.join(input.outputDirAbs, 'plan.json')
-  const paperListPathAbs = path.join(input.outputDirAbs, 'papers.json')
-  const coveragePathAbs = path.join(input.outputDirAbs, 'coverage.json')
-  const summaryPathAbs = path.join(input.outputDirAbs, 'summary.json')
-  const reviewPathAbs = path.join(input.outputDirAbs, 'review.md')
 
   await writeText(planPathAbs, `${JSON.stringify({
     topic: query,
@@ -475,7 +772,19 @@ export async function runLiteratureStudy(input: RunLiteratureStudyInput): Promis
     durationMs
   }))
 
-  const toRel = (abs: string) => `${input.outputDirRel}/${path.basename(abs)}`
+  if (paperCacheWrites > 0) {
+    await writeText(paperCachePath, `${JSON.stringify(paperCache, null, 2)}\n`)
+  }
+
+  await storeRequestCache(requestCacheDir, input.outputDirAbs, {
+    mode: input.mode,
+    query,
+    targetPaperCount: input.targetPaperCount,
+    totalPapersFound: topPapers.length,
+    papersAutoSaved: topPapers.length,
+    coverage,
+    errors
+  })
 
   return {
     success: true,
@@ -492,7 +801,14 @@ export async function runLiteratureStudy(input: RunLiteratureStudyInput): Promis
       coveragePath: toRel(coveragePathAbs),
       summaryPath: toRel(summaryPathAbs),
       durationMs,
-      errors
+      errors,
+      cache: {
+        requestHit: false,
+        sourceHits,
+        sourceMisses,
+        paperCacheHits,
+        paperCacheWrites
+      }
     }
   }
 }

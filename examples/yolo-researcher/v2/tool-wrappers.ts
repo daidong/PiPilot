@@ -320,6 +320,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
         context: safeString(input.context).trim() || undefined,
         mode,
         targetPaperCount,
+        projectRootAbs: projectPath,
         outputDirAbs,
         outputDirRel: outputDir,
         timeoutMs
@@ -342,6 +343,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
           coverage: result.data.coverage,
           durationMs: result.data.durationMs,
           errors: result.data.errors,
+          cache: result.data.cache,
           outputDir,
           planPath: result.data.planPath,
           reviewPath: result.data.reviewPath,
@@ -358,7 +360,10 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
             coveragePath: result.data.coveragePath,
             summaryPath: result.data.summaryPath,
             coverageScore: result.data.coverage.score,
-            totalPapersFound: result.data.totalPapersFound
+            totalPapersFound: result.data.totalPapersFound,
+            cacheRequestHit: result.data.cache.requestHit,
+            cacheSourceHits: result.data.cache.sourceHits,
+            cacheSourceMisses: result.data.cache.sourceMisses
           }
         }
       }
