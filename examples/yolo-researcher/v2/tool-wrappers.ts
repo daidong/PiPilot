@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { isAbsolute, join, parse } from 'node:path'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { isAbsolute, join, parse, relative, resolve } from 'node:path'
 
 import { definePack, defineTool } from '../../../src/index.js'
 import type { Pack } from '../../../src/types/pack.js'
@@ -42,6 +42,9 @@ interface SkillScriptRunToolLike {
   }, context?: ToolContext) => Promise<SkillScriptRunResult>
 }
 
+const TURN_ARTIFACTS_DIR_RE = /^runs\/turn-\d{4}\/artifacts(?:\/.*)?$/
+const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
+
 function toObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -58,6 +61,57 @@ function safeNumber(value: unknown, fallback: number): number {
 
 function safeBoolean(value: unknown, fallback: boolean = false): boolean {
   return typeof value === 'boolean' ? value : fallback
+}
+
+function toPosixPath(value: string): string {
+  return value.replace(/\\/g, '/')
+}
+
+function normalizeRelativePath(raw: string): string {
+  return toPosixPath(raw.trim().replace(/^\.\//, '')).replace(/^\/+/, '')
+}
+
+function resolveProjectRelativePath(projectPath: string, rawPath: string): string {
+  if (!rawPath.trim()) return ''
+  if (isAbsolute(rawPath)) {
+    const rel = toPosixPath(relative(resolve(projectPath), resolve(rawPath)))
+    if (!rel || rel === '.' || rel === '..' || rel.startsWith('../')) return ''
+    return rel
+  }
+
+  const rel = normalizeRelativePath(rawPath)
+  if (!rel || rel === '.' || rel === '..' || rel.startsWith('../')) return ''
+  return rel
+}
+
+function resolveTurnArtifactsDir(context?: ToolContext): string {
+  const fromState = normalizeRelativePath(
+    safeString(context?.runtime?.sessionState.get<string>('yolo.turnArtifactsDir') || '')
+  )
+  if (fromState && TURN_ARTIFACTS_DIR_RE.test(fromState)) return fromState
+  return 'runs/turn-0001/artifacts'
+}
+
+function coerceCanonicalOutputDir(
+  projectPath: string,
+  context: ToolContext | undefined,
+  rawOutputDir: unknown,
+  category: string
+): string {
+  const currentTurnArtifactsDir = resolveTurnArtifactsDir(context)
+  const fallbackDir = `${currentTurnArtifactsDir}/${category}`
+  const provided = resolveProjectRelativePath(projectPath, safeString(rawOutputDir))
+  if (!provided) return fallbackDir
+  if (!TURN_ARTIFACTS_DIR_RE.test(provided)) return fallbackDir
+  if (!provided.startsWith(currentTurnArtifactsDir)) return fallbackDir
+  return provided
+}
+
+function normalizeCanonicalResultPath(projectPath: string, rawPath: unknown): string {
+  const resolved = resolveProjectRelativePath(projectPath, safeString(rawPath))
+  if (!resolved) return ''
+  if (!EVIDENCE_PATH_RE.test(resolved)) return ''
+  return resolved
 }
 
 function toStringArray(value: unknown): string[] {
@@ -262,7 +316,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       const mode = safeString(input.mode).trim().toLowerCase() === 'quick' ? 'quick' : 'sweep'
       const script = mode === 'quick' ? 'search-papers' : 'search-sweep'
       const projectRootArg = safeString(input.projectRoot).trim() || '.'
-      const outputDir = safeString(input.outputDir).trim() || '.yolo-researcher/library/literature'
+      const outputDir = coerceCanonicalOutputDir(projectPath, context, input.outputDir, 'literature')
       const timeoutMs = Math.max(30_000, safeNumber(input.timeoutMs, 180_000))
 
       const args: string[] = ['--query', query]
@@ -306,8 +360,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
 
       const resultData = toObject(runResult.data)
       const structured = extractStructured(resultData)
-      const jsonPath = safeString(structured.jsonPath || resultData?.jsonPath).trim()
-      const markdownPath = safeString(structured.markdownPath || resultData?.markdownPath).trim()
+      const jsonPath = normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath)
+      const markdownPath = normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath)
       const paperCount = safeNumber(structured.paperCount || resultData?.paperCount, 0)
       const errors = toStringArray(structured.errors || resultData?.errors)
 
@@ -346,7 +400,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       const taskType = safeString(input.taskType).trim() || 'analyze'
       const instructions = safeString(input.instructions).trim()
       const projectRootArg = safeString(input.projectRoot).trim() || '.'
-      const outputDir = safeString(input.outputDir).trim() || '.yolo-researcher/library/data-analysis'
+      const outputDir = coerceCanonicalOutputDir(projectPath, context, input.outputDir, 'data-analysis')
       const timeoutMs = Math.max(30_000, safeNumber(input.timeoutMs, 180_000))
 
       const args: string[] = [
@@ -379,15 +433,18 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
 
       const resultData = toObject(runResult.data)
       const structured = extractStructured(resultData)
+      const outputs = toStringArray(structured.outputs || resultData?.outputs)
+        .map((entry) => normalizeCanonicalResultPath(projectPath, entry))
+        .filter(Boolean)
       return {
         success: true,
         data: {
           filePath,
           taskType,
           outputDir,
-          jsonPath: safeString(structured.jsonPath || resultData?.jsonPath).trim() || undefined,
-          markdownPath: safeString(structured.markdownPath || resultData?.markdownPath).trim() || undefined,
-          outputs: toStringArray(structured.outputs || resultData?.outputs),
+          jsonPath: normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath) || undefined,
+          markdownPath: normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath) || undefined,
+          outputs,
           warnings: toStringArray(structured.warnings || resultData?.warnings),
           rowCount: safeNumber(structured.rowCount || resultData?.rowCount, 0),
           columnCount: safeNumber(structured.columnCount || resultData?.columnCount, 0),
@@ -419,7 +476,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       const literatureContext = safeString(input.literatureContext).trim()
       const model = safeString(input.model).trim()
       const projectRootArg = safeString(input.projectRoot).trim() || '.'
-      const outputDir = safeString(input.outputDir).trim() || '.yolo-researcher/library/writing'
+      const outputDir = coerceCanonicalOutputDir(projectPath, context, input.outputDir, 'writing')
       const timeoutMs = Math.max(30_000, safeNumber(input.timeoutMs, 180_000))
 
       const args: string[] = [
@@ -460,8 +517,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
           topic,
           docType,
           outputDir,
-          jsonPath: safeString(structured.jsonPath || resultData?.jsonPath).trim() || undefined,
-          markdownPath: safeString(structured.markdownPath || resultData?.markdownPath).trim() || undefined,
+          jsonPath: normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath) || undefined,
+          markdownPath: normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath) || undefined,
           sectionCount: safeNumber(structured.sectionCount || resultData?.sectionCount, 0),
           estimatedTotalWords: safeNumber(structured.estimatedTotalWords || resultData?.estimatedTotalWords, 0),
           source: safeString(structured.source || resultData?.source).trim() || undefined,
@@ -496,7 +553,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       const citationHints = safeString(input.citationHints).trim()
       const model = safeString(input.model).trim()
       const projectRootArg = safeString(input.projectRoot).trim() || '.'
-      const outputDir = safeString(input.outputDir).trim() || '.yolo-researcher/library/writing'
+      const outputDir = coerceCanonicalOutputDir(projectPath, context, input.outputDir, 'writing')
       const timeoutMs = Math.max(30_000, safeNumber(input.timeoutMs, 180_000))
 
       const args: string[] = [
@@ -537,8 +594,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
         data: {
           sectionHeading,
           outputDir,
-          jsonPath: safeString(structured.jsonPath || resultData?.jsonPath).trim() || undefined,
-          markdownPath: safeString(structured.markdownPath || resultData?.markdownPath).trim() || undefined,
+          jsonPath: normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath) || undefined,
+          markdownPath: normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath) || undefined,
           wordCount: safeNumber(structured.wordCount || resultData?.wordCount, 0),
           source: safeString(structured.source || resultData?.source).trim() || undefined,
           warning: safeString(structured.warning || resultData?.warning).trim() || undefined,
@@ -564,7 +621,11 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       }
 
       const outputName = `${parse(fileName).name}.extracted.md`
-      const outputPath = join(projectPath, outputName)
+      const outputDirRel = `${resolveTurnArtifactsDir(context)}/converted`
+      const outputDirAbs = join(projectPath, outputDirRel)
+      mkdirSync(outputDirAbs, { recursive: true })
+      const outputPath = join(outputDirAbs, outputName)
+      const outputFile = normalizeRelativePath(`${outputDirRel}/${outputName}`)
       const extNoDot = normalizeExtension(parse(fileName).ext)
       const timeoutMs = Math.max(30_000, safeNumber(input.timeoutMs, 240_000))
 
@@ -678,7 +739,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       return {
         success: true,
         data: {
-          outputFile: outputName,
+          outputFile,
           lines,
           bytes: text.length,
           converterSkill: usedConverter,
@@ -688,7 +749,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
           headings: headings.length > 0
             ? headings.map((h) => `L${h.line}: ${h.text}`).join('\n')
             : undefined,
-          message: `Extracted ${lines} lines. Use read({ path: "${outputName}", offset, limit }) for targeted sections.`
+          message: `Extracted ${lines} lines. Use read({ path: "${outputFile}", offset, limit }) for targeted sections.`
         }
       }
     }

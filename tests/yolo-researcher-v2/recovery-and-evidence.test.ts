@@ -89,7 +89,7 @@ describe('yolo-researcher v2 recovery and evidence discipline', () => {
     expect(secondTurn.turnNumber).toBe(2)
   })
 
-  it('rejects Facts updates without runs/turn evidence paths as failed turn, not process crash', async () => {
+  it('skips invalid Facts evidence paths without failing the turn', async () => {
     const projectPath = await createTempDir('yolo-v2-evidence-')
     tempDirs.push(projectPath)
 
@@ -116,8 +116,8 @@ describe('yolo-researcher v2 recovery and evidence discipline', () => {
 
     await session.init()
     const turn = await session.runNextTurn()
-    expect(turn.status).toBe('failure')
-    expect(turn.summary).toContain('PROJECT.md update rejected')
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).not.toContain('PROJECT.md update rejected')
 
     const failuresMd = await fs.readFile(path.join(projectPath, 'FAILURES.md'), 'utf-8')
     expect(failuresMd).toContain('# Failures / Blockers')

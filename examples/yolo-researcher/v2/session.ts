@@ -10,6 +10,8 @@ import type {
   EvidenceLine,
   FailureEntry,
   PendingUserInput,
+  PlanBoardItem,
+  PlannerCheckpointInfo,
   ProjectUpdate,
   QueuedUserInput,
   RecentTurnContext,
@@ -37,7 +39,6 @@ import {
 const DEFAULT_RUNTIME = 'host'
 const DEFAULT_RECENT_TURNS_TO_LOAD = 3
 const LITERATURE_BODY_LIMIT = 40_000
-const LITERATURE_INDEX_LIMIT = 800
 const LITERATURE_HOST_HINTS = [
   'arxiv.org',
   'api.semanticscholar.org',
@@ -54,6 +55,20 @@ const LITERATURE_HOST_HINTS = [
 const REDUNDANCY_WINDOW_TURNS = 20
 const SYSTEM_ARTIFACT_NAMES = new Set(['tool-events.jsonl', 'agent-output.txt', 'ask-user.md'])
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
+const PLAN_ID_RE = /^P\d+$/i
+const REPO_SCAN_SKIP_DIRS = new Set([
+  '.git',
+  '.agentfoundry',
+  'node_modules',
+  'dist',
+  'build',
+  'out',
+  '.next',
+  '.turbo',
+  'coverage'
+])
+const REPO_SCAN_MAX_DEPTH = 3
+const REPO_SCAN_MAX_RESULTS = 12
 
 const DELIVERABLE_PATTERNS: string[] = [
   'problem_statement',   // S1
@@ -107,6 +122,16 @@ function summarizeRecentAction(rawActionMd: string): string {
 
 function safeString(value: unknown, fallback: string = ''): string {
   return typeof value === 'string' ? value : fallback
+}
+
+function normalizePlanId(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim().toUpperCase()
+  if (!trimmed) return ''
+  if (PLAN_ID_RE.test(trimmed)) return trimmed
+  const numeric = trimmed.replace(/[^0-9]/g, '')
+  if (!numeric) return ''
+  return `P${Number.parseInt(numeric, 10)}`
 }
 
 function toPlainObject(value: unknown): Record<string, unknown> | null {
@@ -195,6 +220,12 @@ function stageRank(stage: StageStatus['currentStage']): number {
   return 5
 }
 
+interface ParsedDoneDefinitionRules {
+  deliverables: string[]
+  evidenceMin: number
+  invalidRows: string[]
+}
+
 export class YoloSession {
   readonly yoloRoot: string
   readonly runsDir: string
@@ -247,16 +278,20 @@ export class YoloSession {
 
     const pendingUserInputs = await this.materializePendingUserInputs(artifactsDir)
     const stagnation = await this.detectStagnation()
+    const plannerCheckpoint = await this.detectPlannerCheckpoint(project, failures, turnNumber)
+    const workspaceGitRepos = await this.discoverWorkspaceGitRepos()
     const context: TurnContext = {
       turnNumber,
       projectRoot: this.config.projectPath,
       yoloRoot: this.yoloRoot,
       runsDir: this.runsDir,
+      workspaceGitRepos,
       project,
       failures,
       recentTurns: await this.loadRecentTurns(this.config.recentTurnsToLoad ?? DEFAULT_RECENT_TURNS_TO_LOAD),
       pendingUserInputs,
-      stagnation: stagnation.stagnant ? stagnation : undefined
+      stagnation: stagnation.stagnant ? stagnation : undefined,
+      plannerCheckpoint: plannerCheckpoint.due ? plannerCheckpoint : undefined
     }
 
     return this.runNativeTurn({
@@ -321,6 +356,55 @@ export class YoloSession {
     if (normalized === 'ask_user') return 'ask_user'
     if (normalized === 'stopped') return 'stopped'
     return 'failure'
+  }
+
+  private async discoverWorkspaceGitRepos(): Promise<string[]> {
+    const projectRoot = path.resolve(this.config.projectPath)
+    const queue: Array<{ abs: string; rel: string; depth: number }> = [{ abs: projectRoot, rel: '.', depth: 0 }]
+    const found: string[] = []
+
+    while (queue.length > 0 && found.length < REPO_SCAN_MAX_RESULTS) {
+      const current = queue.shift()!
+      if (current.depth > REPO_SCAN_MAX_DEPTH) continue
+
+      if (current.depth > 0) {
+        const gitPath = path.join(current.abs, '.git')
+        try {
+          const details = await fs.stat(gitPath)
+          if (details.isDirectory() || details.isFile()) {
+            found.push(current.rel)
+            continue
+          }
+        } catch {
+          // Not a git repo root.
+        }
+      }
+
+      if (current.depth >= REPO_SCAN_MAX_DEPTH) continue
+
+      let entries: Awaited<ReturnType<typeof fs.readdir>>
+      try {
+        entries = await fs.readdir(current.abs, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        if (REPO_SCAN_SKIP_DIRS.has(entry.name)) continue
+        const nextAbs = path.join(current.abs, entry.name)
+        const nextRel = current.rel === '.'
+          ? entry.name
+          : `${current.rel}/${entry.name}`
+        queue.push({ abs: nextAbs, rel: toPosixPath(nextRel), depth: current.depth + 1 })
+      }
+    }
+
+    if (await fileExists(path.join(projectRoot, '.git'))) {
+      return dedupeStrings(['.', ...found])
+    }
+
+    return dedupeStrings(found)
   }
 
   private inferPrimaryActionFromToolEvents(toolEvents: ToolEventRecord[]): string {
@@ -483,15 +567,28 @@ export class YoloSession {
   private async collectBusinessArtifactEvidencePaths(artifactsDir: string): Promise<string[]> {
     if (!(await fileExists(artifactsDir))) return []
 
-    const entries = await fs.readdir(artifactsDir, { withFileTypes: true })
     const paths: string[] = []
+    const walk = async (dir: string): Promise<void> => {
+      let entries: Awaited<ReturnType<typeof fs.readdir>>
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
 
-    for (const entry of entries) {
-      if (!entry.isFile()) continue
-      if (this.isSystemArtifactFile(entry.name)) continue
-      const fullPath = path.join(artifactsDir, entry.name)
-      paths.push(this.toEvidencePath(fullPath))
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          await walk(fullPath)
+          continue
+        }
+        if (!entry.isFile()) continue
+        if (this.isSystemArtifactFile(entry.name)) continue
+        paths.push(this.toEvidencePath(fullPath))
+      }
     }
+
+    await walk(artifactsDir)
 
     return paths.sort((a, b) => a.localeCompare(b))
   }
@@ -561,6 +658,22 @@ export class YoloSession {
     return normalized
   }
 
+  private collectWorkspaceWriteTouches(toolEvents: ToolEventRecord[]): string[] {
+    const touched: string[] = []
+    for (const event of toolEvents) {
+      if (event.phase !== 'call') continue
+      const tool = normalizeText(event.tool || '')
+      if (tool !== 'write' && tool !== 'edit') continue
+      const input = toPlainObject(event.input)
+      const rawPath = safeString(input?.path).trim()
+      if (!rawPath) continue
+      const normalized = this.normalizeProjectPathPointer(rawPath)
+      if (!normalized) continue
+      touched.push(toPosixPath(normalized))
+    }
+    return dedupeStrings(touched)
+  }
+
   private async assertYoloEvidencePathExists(evidencePath: string, label: string): Promise<void> {
     const normalized = this.normalizeProjectPathPointer(evidencePath)
     if (!EVIDENCE_PATH_RE.test(normalized)) {
@@ -570,6 +683,34 @@ export class YoloSession {
     const absolutePath = path.join(this.yoloRoot, normalized)
     if (!(await fileExists(absolutePath))) {
       throw new Error(`${label} evidence path does not exist under workspace session root: ${normalized}`)
+    }
+  }
+
+  private async splitExistingEvidencePaths(
+    paths: string[],
+    allowMissingPaths: Set<string> = new Set<string>()
+  ): Promise<{ existing: string[]; missing: string[] }> {
+    const existing: string[] = []
+    const missing: string[] = []
+
+    for (const rawPath of paths) {
+      const normalized = this.normalizeProjectPathPointer(rawPath)
+      if (!normalized || !EVIDENCE_PATH_RE.test(normalized)) continue
+      if (allowMissingPaths.has(normalized)) {
+        existing.push(normalized)
+        continue
+      }
+      const absolutePath = path.join(this.yoloRoot, normalized)
+      if (await fileExists(absolutePath)) {
+        existing.push(normalized)
+      } else {
+        missing.push(normalized)
+      }
+    }
+
+    return {
+      existing: dedupeStrings(existing),
+      missing: dedupeStrings(missing)
     }
   }
 
@@ -636,7 +777,249 @@ export class YoloSession {
       normalized.keyArtifacts = dedupeStrings(keyArtifacts)
     }
 
+    if (update.planBoard) {
+      normalized.planBoard = []
+      for (const item of update.planBoard) {
+        const evidencePaths: string[] = []
+        for (const rawPath of item.evidencePaths ?? []) {
+          const pointer = this.normalizeProjectPathPointer(rawPath)
+          if (!pointer) continue
+          await this.assertYoloEvidencePathExists(pointer, `Plan Board ${item.id}`)
+          evidencePaths.push(pointer)
+        }
+        normalized.planBoard.push({
+          ...item,
+          id: normalizePlanId(item.id) || item.id,
+          doneDefinition: dedupeStrings(item.doneDefinition ?? []),
+          evidencePaths: dedupeStrings(evidencePaths),
+          nextMinStep: item.nextMinStep?.trim() || undefined,
+          dropReason: item.dropReason?.trim() || undefined,
+          replacedBy: normalizePlanId(item.replacedBy ?? '') || null
+        })
+      }
+    }
+
     return normalized
+  }
+
+  private filterProjectUpdateForGovernanceWindow(input: {
+    update: ProjectUpdate
+    plannerCheckpointDue: boolean
+  }): { update: ProjectUpdate | null; notes: string[] } {
+    const notes: string[] = []
+    const next: ProjectUpdate = { ...input.update }
+
+    if (!input.plannerCheckpointDue) {
+      if (next.planBoard) {
+        delete next.planBoard
+        notes.push('Plan Board update ignored: structural edits are allowed only during planner checkpoint turns.')
+      }
+      if (next.currentPlan) {
+        delete next.currentPlan
+        notes.push('Current Plan rewrite ignored: structural edits are allowed only during planner checkpoint turns.')
+      }
+    }
+
+    return {
+      update: Object.keys(next).length > 0 ? next : null,
+      notes
+    }
+  }
+
+  private async resolveWorkspaceFileForEvidence(rawPath: string): Promise<string | null> {
+    const trimmed = rawPath.trim()
+    if (!trimmed) return null
+
+    const candidates = path.isAbsolute(trimmed)
+      ? [trimmed]
+      : [path.resolve(this.config.projectPath, trimmed), path.resolve(this.yoloRoot, trimmed)]
+    const seen = new Set<string>()
+
+    for (const candidate of candidates) {
+      const normalizedCandidate = path.normalize(candidate)
+      if (seen.has(normalizedCandidate)) continue
+      seen.add(normalizedCandidate)
+
+      try {
+        const safePath = this.ensureSafeTargetPath(normalizedCandidate)
+        const stat = await fs.stat(safePath)
+        if (stat.isFile()) return safePath
+      } catch {
+        // Ignore invalid or missing candidates.
+      }
+    }
+
+    return null
+  }
+
+  private async snapshotEvidenceIntoTurn(input: {
+    sourceAbsPath: string
+    artifactsDir: string
+    usedFileNames: Set<string>
+  }): Promise<string> {
+    const evidenceDir = path.join(input.artifactsDir, 'evidence')
+    await ensureDir(evidenceDir)
+
+    const parsed = path.parse(input.sourceAbsPath)
+    const safeStem = slugifyForFile(parsed.name || 'evidence')
+    const ext = parsed.ext || '.txt'
+
+    let fileName = `${safeStem}${ext}`
+    let index = 2
+    while (input.usedFileNames.has(fileName) || await fileExists(path.join(evidenceDir, fileName))) {
+      fileName = `${safeStem}-${index}${ext}`
+      index += 1
+    }
+    input.usedFileNames.add(fileName)
+
+    const targetPath = path.join(evidenceDir, fileName)
+    await fs.copyFile(input.sourceAbsPath, targetPath)
+    return this.toEvidencePath(targetPath)
+  }
+
+  private async repairProjectUpdateEvidencePaths(input: {
+    update: ProjectUpdate
+    artifactsDir: string
+    validationMessage: string
+  }): Promise<{ update: ProjectUpdate; notes: string[] } | null> {
+    if (!/evidence path|keyArtifacts path/i.test(input.validationMessage)) {
+      return null
+    }
+
+    const notes: string[] = []
+    const repaired: ProjectUpdate = { ...input.update }
+    const usedFileNames = new Set<string>()
+    let changed = false
+
+    const normalizeOrSnapshot = async (rawPath: string, label: string): Promise<string | null> => {
+      const normalized = this.normalizeProjectPathPointer(rawPath)
+      if (normalized && EVIDENCE_PATH_RE.test(normalized)) {
+        const absolutePath = path.join(this.yoloRoot, normalized)
+        if (await fileExists(absolutePath)) {
+          return normalized
+        }
+      }
+
+      const sourceAbsPath = await this.resolveWorkspaceFileForEvidence(rawPath)
+      if (!sourceAbsPath) return null
+
+      const snapshotPath = await this.snapshotEvidenceIntoTurn({
+        sourceAbsPath,
+        artifactsDir: input.artifactsDir,
+        usedFileNames
+      })
+      changed = true
+      notes.push(`PROJECT.md repair: snapshot ${label} evidence -> ${snapshotPath}`)
+      return snapshotPath
+    }
+
+    if (repaired.facts) {
+      const nextFacts: EvidenceLine[] = []
+      for (const line of repaired.facts) {
+        const repairedPath = await normalizeOrSnapshot(line.evidencePath, 'Facts')
+        if (!repairedPath) {
+          return null
+        }
+        if (repairedPath !== line.evidencePath.trim()) changed = true
+        nextFacts.push({ ...line, evidencePath: repairedPath })
+      }
+      repaired.facts = nextFacts
+    }
+
+    if (repaired.constraints) {
+      const nextConstraints: EvidenceLine[] = []
+      for (const line of repaired.constraints) {
+        const repairedPath = await normalizeOrSnapshot(line.evidencePath, 'Constraints')
+        if (!repairedPath) {
+          return null
+        }
+        if (repairedPath !== line.evidencePath.trim()) changed = true
+        nextConstraints.push({ ...line, evidencePath: repairedPath })
+      }
+      repaired.constraints = nextConstraints
+    }
+
+    if (repaired.done) {
+      const nextDone: EvidenceLine[] = []
+      for (const line of repaired.done) {
+        const repairedPath = await normalizeOrSnapshot(line.evidencePath, 'Done')
+        if (!repairedPath) {
+          return null
+        }
+        if (repairedPath !== line.evidencePath.trim()) changed = true
+        nextDone.push({ ...line, evidencePath: repairedPath })
+      }
+      repaired.done = nextDone
+    }
+
+    if (repaired.claims) {
+      const nextClaims = []
+      for (const claim of repaired.claims) {
+        const nextEvidencePaths: string[] = []
+        for (const entry of claim.evidencePaths) {
+          const repairedPath = await normalizeOrSnapshot(entry, `Claim "${claim.claim}"`)
+          if (!repairedPath) {
+            return null
+          }
+          if (repairedPath !== entry.trim()) changed = true
+          nextEvidencePaths.push(repairedPath)
+        }
+
+        const dedupedEvidencePaths = dedupeStrings(nextEvidencePaths)
+        const nextStatus = dedupedEvidencePaths.length === 0 && claim.status !== 'uncovered'
+          ? 'uncovered'
+          : claim.status
+        if (nextStatus !== claim.status) {
+          changed = true
+          notes.push(`PROJECT.md repair: downgraded claim "${claim.claim}" status to uncovered (no evidence paths)`)
+        }
+        nextClaims.push({
+          ...claim,
+          evidencePaths: dedupedEvidencePaths,
+          status: nextStatus
+        })
+      }
+      repaired.claims = nextClaims
+    }
+
+    if (repaired.planBoard) {
+      const nextPlanBoard = []
+      for (const item of repaired.planBoard) {
+        const nextEvidencePaths: string[] = []
+        for (const entry of item.evidencePaths ?? []) {
+          const repairedPath = await normalizeOrSnapshot(entry, `Plan ${item.id}`)
+          if (!repairedPath) {
+            return null
+          }
+          if (repairedPath !== entry.trim()) changed = true
+          nextEvidencePaths.push(repairedPath)
+        }
+        nextPlanBoard.push({
+          ...item,
+          evidencePaths: dedupeStrings(nextEvidencePaths)
+        })
+      }
+      repaired.planBoard = nextPlanBoard
+    }
+
+    if (repaired.keyArtifacts) {
+      const nextArtifacts: string[] = []
+      for (const entry of repaired.keyArtifacts) {
+        const repairedPath = await normalizeOrSnapshot(entry, 'keyArtifacts')
+        if (!repairedPath) {
+          return null
+        }
+        if (repairedPath !== entry.trim()) changed = true
+        nextArtifacts.push(repairedPath)
+      }
+      repaired.keyArtifacts = dedupeStrings(nextArtifacts)
+    }
+
+    if (!changed) return null
+    return {
+      update: repaired,
+      notes: dedupeStrings(notes)
+    }
   }
 
   private async writeToolEventsJsonl(eventsPath: string, toolEvents: ToolEventRecord[]): Promise<void> {
@@ -700,6 +1083,22 @@ export class YoloSession {
     const intent = outcome.intent?.trim() || 'Native turn execution'
     let summary = outcome.summary?.trim() || 'Turn completed without summary.'
     const primaryAction = outcome.primaryAction?.trim() || this.inferPrimaryActionFromToolEvents(toolEvents)
+    const plannerCheckpointDue = Boolean(input.context.plannerCheckpoint?.due)
+    const statusChange = safeString(outcome.statusChange).trim()
+    const deltaText = safeString(outcome.delta).trim()
+    const dropReason = safeString(outcome.dropReason).trim()
+    const replacedBy = outcome.replacedBy === null
+      ? null
+      : (normalizePlanId(outcome.replacedBy ?? '') || undefined)
+    const rawActivePlanId = normalizePlanId(outcome.activePlanId ?? '')
+    const activePlanId = rawActivePlanId
+
+    const normalizedOutcomeEvidencePathsRaw = dedupeStrings(
+      (outcome.evidencePaths ?? [])
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => this.normalizeProjectPathPointer(entry))
+        .filter((entry) => EVIDENCE_PATH_RE.test(entry))
+    )
     const bashSnapshot = this.extractLastBashSnapshot(toolEvents, runtime)
 
     const cmd = bashSnapshot?.cmd || primaryAction || 'agent.run'
@@ -718,6 +1117,19 @@ export class YoloSession {
     await writeText(stdoutPath, stdout)
     await writeText(stderrPath, stderr)
     await writeText(exitCodePath, `${exitCode}\n`)
+
+    const implicitTurnEvidencePaths = new Set<string>([
+      this.toEvidencePath(cmdPath),
+      this.toEvidencePath(stdoutPath),
+      this.toEvidencePath(stderrPath),
+      this.toEvidencePath(exitCodePath),
+      this.toEvidencePath(resultPath),
+      this.toEvidencePath(toolEventsPath)
+    ])
+    const {
+      existing: normalizedOutcomeEvidencePaths,
+      missing: missingOutcomeEvidencePaths
+    } = await this.splitExistingEvidencePaths(normalizedOutcomeEvidencePathsRaw, implicitTurnEvidencePaths)
 
     const turnEndedAt = this.now()
     const durationSecRaw = (turnEndedAt.getTime() - turnStartedAt.getTime()) / 1000
@@ -807,6 +1219,23 @@ export class YoloSession {
 
     const businessArtifactEvidencePaths = await this.collectBusinessArtifactEvidencePaths(input.artifactsDir)
     evidencePaths.push(...businessArtifactEvidencePaths)
+    evidencePaths.push(...normalizedOutcomeEvidencePaths)
+
+    const uniqueEvidencePaths = dedupeStrings(evidencePaths)
+    const explicitPlanEvidencePaths = dedupeStrings([
+      ...normalizedOutcomeEvidencePaths,
+      ...businessArtifactEvidencePaths
+    ])
+    const defaultPlanEvidencePaths = [
+      this.toEvidencePath(resultPath),
+      this.toEvidencePath(cmdPath),
+      this.toEvidencePath(stdoutPath),
+      this.toEvidencePath(stderrPath)
+    ]
+    const planEvidencePaths = dedupeStrings([
+      ...explicitPlanEvidencePaths,
+      ...defaultPlanEvidencePaths
+    ])
 
     const deltaReasons: string[] = []
     if (bashSnapshot?.cmd?.trim() && bashSnapshot.exitCode === 0) {
@@ -850,7 +1279,63 @@ export class YoloSession {
       }
     }
 
+    const projectedPlanUpdate = plannerCheckpointDue ? outcome.projectUpdate : undefined
+    const projectedPlanIds = new Set<string>(input.context.project.planBoard.map((item) => item.id))
+    if (plannerCheckpointDue && Array.isArray(projectedPlanUpdate?.planBoard)) {
+      for (const item of projectedPlanUpdate.planBoard) {
+        const id = normalizePlanId(item.id)
+        if (id) projectedPlanIds.add(id)
+      }
+    }
+    const planExists = activePlanId
+      ? projectedPlanIds.has(activePlanId)
+      : false
+    const hasPlanProgressSignal = Boolean(statusChange && deltaText && explicitPlanEvidencePaths.length > 0)
+    const workspaceWriteTouches = this.collectWorkspaceWriteTouches(toolEvents)
+    const projectedPlanItem = this.resolveProjectedPlanItem(
+      activePlanId,
+      input.context.project.planBoard,
+      projectedPlanUpdate
+    )
+    const doneDefinitionCheck = this.validatePlanProgressAgainstDoneDefinition({
+      status: finalStatus,
+      activePlanId,
+      statusChange,
+      explicitEvidencePaths: explicitPlanEvidencePaths,
+      cumulativeEvidencePaths: dedupeStrings([...(projectedPlanItem?.evidencePaths ?? []), ...explicitPlanEvidencePaths]),
+      planItem: projectedPlanItem,
+      workspaceWriteTouches
+    })
+    if (doneDefinitionCheck.deliverableTouched && !deltaReasons.includes('plan_deliverable_touched')) {
+      deltaReasons.push('plan_deliverable_touched')
+    }
+
     let blockedReason: string | null = null
+    if (finalStatus === 'success' && !activePlanId) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: missing active_plan_id. ${summary}`
+      blockedReason = 'missing_active_plan_id'
+    }
+    if (finalStatus === 'success' && !planExists) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: unknown active_plan_id (${activePlanId}). ${summary}`
+      blockedReason = 'unknown_active_plan_id'
+    }
+    if (finalStatus === 'success' && !hasPlanProgressSignal) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: missing plan delta signal for ${activePlanId}. ${summary}`
+      blockedReason = 'missing_plan_delta'
+    }
+    if (finalStatus === 'success' && !doneDefinitionCheck.ok) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: ${doneDefinitionCheck.reason}. ${summary}`
+      blockedReason = doneDefinitionCheck.reason
+    }
+    if (finalStatus === 'success' && !doneDefinitionCheck.deliverableTouched && !clearedBlocked) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: missing_plan_deliverable_touch. ${summary}`
+      blockedReason = 'missing_plan_deliverable_touch'
+    }
     if (finalStatus === 'success' && deltaReasons.length === 0) {
       finalStatus = 'no_delta'
       summary = `NO_DELTA: ${summary}`
@@ -870,15 +1355,83 @@ export class YoloSession {
       deltaReasons.push('redundancy_blocked')
     }
 
-    const uniqueEvidencePaths = dedupeStrings(evidencePaths)
-
     let clearedRedundancyBlocked = false
-    if (finalStatus === 'success' && deltaReasons.length > 0 && actionFingerprint) {
-      clearedRedundancyBlocked = await this.failureStore.clearRedundancyBlocked({
-        fingerprint: actionFingerprint,
-        resolved: 'New delta artifact produced for previously blocked fingerprint.',
-        evidencePath: this.toEvidencePath(resultPath)
+
+    const updateSummaryLines = [
+      ...(outcome.updateSummary ?? []).map((line) => line.trim()).filter(Boolean)
+    ]
+    if (missingOutcomeEvidencePaths.length > 0) {
+      const preview = missingOutcomeEvidencePaths[0]
+      updateSummaryLines.push(`Ignored ${missingOutcomeEvidencePaths.length} missing outcome evidence path(s); first=${preview}`)
+    }
+
+    let projectUpdated = false
+    if (outcome.projectUpdate) {
+      const governanceFiltered = this.filterProjectUpdateForGovernanceWindow({
+        update: outcome.projectUpdate,
+        plannerCheckpointDue
       })
+      updateSummaryLines.push(...governanceFiltered.notes)
+
+      const candidateUpdate = governanceFiltered.update
+      if (!candidateUpdate) {
+        updateSummaryLines.push('PROJECT.md structured update skipped: no eligible fields for this turn.')
+      } else {
+      try {
+        const normalizedProjectUpdate = await this.normalizeAndValidateProjectUpdate(candidateUpdate)
+        await this.projectStore.applyUpdate(normalizedProjectUpdate)
+        projectUpdated = true
+        updateSummaryLines.push('PROJECT.md: applied structured update from native turn.')
+      } catch (error) {
+        let message = error instanceof Error ? error.message : String(error)
+        let repaired = false
+
+        const repairAttempt = await this.repairProjectUpdateEvidencePaths({
+          update: candidateUpdate,
+          artifactsDir: input.artifactsDir,
+          validationMessage: message
+        })
+
+        if (repairAttempt) {
+          try {
+            const normalizedRepairedUpdate = await this.normalizeAndValidateProjectUpdate(repairAttempt.update)
+            await this.projectStore.applyUpdate(normalizedRepairedUpdate)
+            projectUpdated = true
+            repaired = true
+            updateSummaryLines.push('PROJECT.md: applied structured update after same-turn evidence repair.')
+            updateSummaryLines.push(...repairAttempt.notes.slice(0, 3))
+          } catch (repairError) {
+            message = repairError instanceof Error ? repairError.message : String(repairError)
+          }
+        }
+
+        if (!repaired) {
+          updateSummaryLines.push(`PROJECT.md structured update skipped: ${message}`)
+        }
+      }
+      }
+    }
+
+    let planDeltaApplied = false
+    let planDeltaWarning = ''
+    if (activePlanId) {
+      const planDelta = await this.projectStore.applyTurnPlanDelta({
+        activePlanId,
+        statusChange,
+        delta: deltaText,
+        evidencePaths: planEvidencePaths,
+        turnStatus: finalStatus,
+        dropReason,
+        replacedBy,
+        allowStructuralPlanChanges: plannerCheckpointDue
+      })
+      planDeltaApplied = planDelta.applied
+      planDeltaWarning = planDelta.warning?.trim() || ''
+      if (!planDeltaApplied && finalStatus === 'success') {
+        finalStatus = 'no_delta'
+        blockedReason = blockedReason || 'plan_delta_not_applied'
+        summary = `NO_DELTA: ${planDeltaWarning || 'plan delta not applied'}. ${summary}`
+      }
     }
 
     const doneEntries = (
@@ -890,45 +1443,40 @@ export class YoloSession {
         : []
     )
 
+    const curatedKeyArtifacts = dedupeStrings([
+      ...businessArtifactEvidencePaths,
+      ...normalizedOutcomeEvidencePaths,
+      ...literatureCache.libraryPaths
+    ])
     const autoProjectUpdate: ProjectUpdate = {
-      keyArtifacts: dedupeStrings([...uniqueEvidencePaths, ...literatureCache.libraryPaths]),
+      ...(curatedKeyArtifacts.length > 0 ? { keyArtifacts: curatedKeyArtifacts } : {}),
       ...(doneEntries.length > 0 ? { done: doneEntries } : {})
     }
-
-    const updateSummaryLines = [
-      ...(outcome.updateSummary ?? []).map((line) => line.trim()).filter(Boolean)
-    ]
-
-    let projectUpdated = false
-    if (outcome.projectUpdate) {
-      try {
-        const normalizedProjectUpdate = await this.normalizeAndValidateProjectUpdate(outcome.projectUpdate)
-        await this.projectStore.applyUpdate(normalizedProjectUpdate)
-        projectUpdated = true
-        updateSummaryLines.push('PROJECT.md: applied structured update from native turn.')
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        finalStatus = 'failure'
-        summary = `PROJECT.md update rejected: ${message}`
-        updateSummaryLines.push(`PROJECT.md update rejected: ${message}`)
-        if (exitCode === 0) {
-          exitCode = 1
-          await writeText(exitCodePath, '1\n')
-        }
-      }
-    }
-
     await this.projectStore.applyUpdate(autoProjectUpdate)
     projectUpdated = true
     updateSummaryLines.push('PROJECT.md: applied runtime-generated evidence pointers.')
 
+    if (finalStatus === 'success' && deltaReasons.length > 0 && actionFingerprint) {
+      clearedRedundancyBlocked = await this.failureStore.clearRedundancyBlocked({
+        fingerprint: actionFingerprint,
+        resolved: 'New delta artifact produced for previously blocked fingerprint.',
+        evidencePath: this.toEvidencePath(resultPath)
+      })
+    }
+
     if (consumedPendingUserInputs) {
       updateSummaryLines.push(`User input: consumed ${input.pendingUserInputs.length} queued item(s).`)
     }
-
+    let persistedProject = input.context.project
     if (projectUpdated) {
       const panel = await this.projectStore.load()
+      persistedProject = panel
       updateSummaryLines.push(`PROJECT.md: plan=${panel.currentPlan.length}, facts=${panel.facts.length}, artifacts=${panel.keyArtifacts.length}`)
+      if (planDeltaApplied) {
+        updateSummaryLines.push(`Plan Board: updated ${activePlanId} (${statusChange || finalStatus}).`)
+      } else if (activePlanId && planDeltaWarning) {
+        updateSummaryLines.push(`Plan Board warning: ${planDeltaWarning}`)
+      }
     }
 
     if (failureEntry) {
@@ -945,10 +1493,13 @@ export class YoloSession {
       updateSummaryLines.push('PROJECT.md: Done (Do-not-repeat) updated with action fingerprint.')
     }
     if (literatureCache.cachedCount > 0) {
-      updateSummaryLines.push(`Literature cache: saved ${literatureCache.cachedCount} document(s) under yolo library.`)
+      updateSummaryLines.push(`Literature cache: saved ${literatureCache.cachedCount} document(s) under turn artifacts.`)
     }
     if (finalStatus === 'no_delta') {
       updateSummaryLines.push('NO_DELTA: no new verifiable artifact/evidence package was produced this turn.')
+    }
+    if (input.context.plannerCheckpoint?.due) {
+      updateSummaryLines.push(`Planner checkpoint due: ${input.context.plannerCheckpoint.reasons.join(', ')}`)
     }
 
     const boundedUpdates = updateSummaryLines
@@ -961,19 +1512,24 @@ export class YoloSession {
     const stageStatus = this.inferStage(producedDeliverables)
 
     // Fix 6e: Claims coverage
-    const claimsCoverage = input.context.project.claims.length > 0
+    const claimsCoverage = persistedProject.claims.length > 0
       ? {
-        claims_total: input.context.project.claims.length,
-        claims_covered: input.context.project.claims.filter(c => c.status === 'covered').length,
-        claims_coverage: Number((input.context.project.claims.filter(c => c.status === 'covered').length / input.context.project.claims.length).toFixed(2))
+        claims_total: persistedProject.claims.length,
+        claims_covered: persistedProject.claims.filter(c => c.status === 'covered').length,
+        claims_coverage: Number((persistedProject.claims.filter(c => c.status === 'covered').length / persistedProject.claims.length).toFixed(2))
       }
       : {}
+    const goalConstraintsFingerprint = this.computeGoalConstraintsFingerprint(persistedProject)
 
     await writeText(resultPath, `${JSON.stringify({
       status: finalStatus,
       intent,
       summary,
       primary_action: primaryAction,
+      active_plan_id: activePlanId || null,
+      status_change: statusChange || null,
+      delta: deltaText || null,
+      plan_evidence_paths: planEvidencePaths,
       action_fingerprint: actionFingerprint,
       action_type: actionType,
       exit_code: exitCode,
@@ -986,6 +1542,9 @@ export class YoloSession {
       tool_events_count: toolEvents.length,
       delta_reasons: deltaReasons,
       stage_status: stageStatus,
+      planner_checkpoint_due: input.context.plannerCheckpoint?.due ?? false,
+      planner_checkpoint_reasons: input.context.plannerCheckpoint?.reasons ?? [],
+      goal_constraints_fingerprint: goalConstraintsFingerprint,
       ...(deterministicFingerprint ? { failure_fingerprint: deterministicFingerprint } : {}),
       ...(clearedBlocked ? { unblock_verified: true } : {}),
       ...(blockedReason ? { blocked_reason: blockedReason } : {}),
@@ -997,6 +1556,10 @@ export class YoloSession {
       intent,
       status: finalStatus,
       primaryAction,
+      activePlanId: activePlanId || undefined,
+      statusChange: statusChange || undefined,
+      delta: deltaText || undefined,
+      planEvidencePaths,
       keyObservation: summary,
       evidencePaths: uniqueEvidencePaths,
       updateSummary: boundedUpdates
@@ -1010,9 +1573,243 @@ export class YoloSession {
       summary,
       evidencePaths: uniqueEvidencePaths,
       primaryAction,
+      activePlanId: activePlanId || undefined,
       toolEventsCount: toolEvents.length,
       blockedBy: finalStatus === 'blocked' ? failureEntry ?? undefined : undefined,
       stageStatus
+    }
+  }
+
+  private async loadRecentTurnStatuses(limit: number): Promise<string[]> {
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    const selected = turnNumbers.slice(-Math.max(0, limit))
+    const statuses: string[] = []
+
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const status = normalizeText(parsed.status)
+        if (status) statuses.push(status)
+      } catch {
+        // Ignore malformed historical records.
+      }
+    }
+
+    return statuses
+  }
+
+  private detectTop3AllBlocked(project: TurnContext['project']): boolean {
+    const open = project.planBoard
+      .filter((item) => item.status !== 'DONE' && item.status !== 'DROPPED')
+      .sort((a, b) => a.priority - b.priority)
+      .slice(0, 3)
+    return open.length > 0 && open.every((item) => item.status === 'BLOCKED')
+  }
+
+  private resolveProjectedPlanItem(
+    activePlanId: string,
+    currentBoard: PlanBoardItem[],
+    update?: ProjectUpdate
+  ): PlanBoardItem | null {
+    if (!activePlanId) return null
+
+    const updatedBoard = Array.isArray(update?.planBoard) ? update.planBoard : []
+    for (const item of updatedBoard) {
+      if (normalizePlanId(item.id) === activePlanId) {
+        return {
+          ...item,
+          doneDefinition: [...(item.doneDefinition ?? [])],
+          evidencePaths: [...(item.evidencePaths ?? [])]
+        }
+      }
+    }
+
+    return currentBoard.find((item) => item.id === activePlanId) ?? null
+  }
+
+  private parseDoneDefinitionRules(lines: string[]): ParsedDoneDefinitionRules {
+    const deliverables: string[] = []
+    const invalidRows: string[] = []
+    let evidenceMin = 1
+
+    for (const row of lines) {
+      const line = row.trim()
+      if (!line) continue
+
+      if (/^deliverable\s*:/i.test(line)) {
+        const rawValue = line.split(':').slice(1).join(':').trim()
+        const normalized = toPosixPath(rawValue.toLowerCase())
+        if (!normalized) {
+          invalidRows.push(line)
+          continue
+        }
+        deliverables.push(normalized)
+        continue
+      }
+
+      if (/^evidence_min\s*:/i.test(line)) {
+        const rawValue = line.split(':').slice(1).join(':').trim()
+        const parsed = Number.parseInt(rawValue, 10)
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          invalidRows.push(line)
+          continue
+        }
+        evidenceMin = parsed
+        continue
+      }
+
+      invalidRows.push(line)
+    }
+
+    return {
+      deliverables: dedupeStrings(deliverables),
+      evidenceMin,
+      invalidRows
+    }
+  }
+
+  private collectTouchedDeliverables(
+    evidencePaths: string[],
+    deliverables: string[],
+    workspaceWriteTouches: string[] = []
+  ): string[] {
+    const normalizedEvidence = evidencePaths.map((value) => toPosixPath(value.trim().toLowerCase()))
+    const normalizedWrites = workspaceWriteTouches.map((value) => toPosixPath(value.trim().toLowerCase()))
+    const touched: string[] = []
+    for (const deliverable of deliverables) {
+      if (
+        normalizedEvidence.some((entry) => entry.includes(deliverable))
+        || normalizedWrites.some((entry) => entry.includes(deliverable))
+      ) {
+        touched.push(deliverable)
+      }
+    }
+    return dedupeStrings(touched)
+  }
+
+  private validatePlanProgressAgainstDoneDefinition(input: {
+    status: TurnStatus
+    activePlanId: string
+    statusChange: string
+    explicitEvidencePaths: string[]
+    cumulativeEvidencePaths: string[]
+    planItem: PlanBoardItem | null
+    workspaceWriteTouches: string[]
+  }): { ok: boolean; reason: string; deliverableTouched: boolean } {
+    if (input.status !== 'success') return { ok: true, reason: '', deliverableTouched: false }
+    if (!input.activePlanId) return { ok: false, reason: 'missing_active_plan_id', deliverableTouched: false }
+    if (input.explicitEvidencePaths.length === 0) {
+      return { ok: false, reason: 'missing_explicit_plan_evidence', deliverableTouched: false }
+    }
+
+    const doneDefinition = (input.planItem?.doneDefinition ?? [])
+      .map((line) => line.trim())
+      .filter(Boolean)
+    if (doneDefinition.length === 0) {
+      return { ok: false, reason: 'missing_plan_done_definition', deliverableTouched: false }
+    }
+
+    const parsedRules = this.parseDoneDefinitionRules(doneDefinition)
+    if (parsedRules.invalidRows.length > 0) {
+      return { ok: false, reason: 'done_definition_non_mechanical', deliverableTouched: false }
+    }
+    if (parsedRules.deliverables.length === 0) {
+      return { ok: false, reason: 'done_definition_missing_deliverable', deliverableTouched: false }
+    }
+
+    const touchedThisTurn = this.collectTouchedDeliverables(
+      input.explicitEvidencePaths,
+      parsedRules.deliverables,
+      input.workspaceWriteTouches
+    )
+    const deliverableTouched = touchedThisTurn.length > 0
+
+    const doneTransition = /->\s*DONE/i.test(input.statusChange)
+    if (!doneTransition) return { ok: true, reason: '', deliverableTouched }
+
+    const coveredAll = this.collectTouchedDeliverables(
+      input.cumulativeEvidencePaths,
+      parsedRules.deliverables,
+      input.workspaceWriteTouches
+    )
+    const uncovered = parsedRules.deliverables.filter((target) => !coveredAll.includes(target))
+    if (uncovered.length > 0) {
+      return { ok: false, reason: `done_definition_unmet:${uncovered.slice(0, 3).join(',')}`, deliverableTouched }
+    }
+
+    if (input.cumulativeEvidencePaths.length < parsedRules.evidenceMin) {
+      return { ok: false, reason: `done_definition_evidence_min_unmet:${parsedRules.evidenceMin}`, deliverableTouched }
+    }
+
+    return { ok: true, reason: '', deliverableTouched }
+  }
+
+  private computeGoalConstraintsFingerprint(project: TurnContext['project']): string {
+    const goal = normalizeText(project.goal)
+    const constraints = project.constraints
+      .map((entry) => `${normalizeText(entry.text)}|${normalizeText(entry.evidencePath)}`)
+      .sort((a, b) => a.localeCompare(b))
+    return createHash('sha256')
+      .update(`${goal}\n${constraints.join('\n')}`)
+      .digest('hex')
+  }
+
+  private async didGoalOrConstraintsChange(project: TurnContext['project'], nextTurnNumber: number): Promise<boolean> {
+    if (nextTurnNumber <= 1) return false
+    const previousResultPath = path.join(this.runsDir, formatTurnId(nextTurnNumber - 1), 'result.json')
+    if (!(await fileExists(previousResultPath))) return false
+
+    const raw = await readTextOrEmpty(previousResultPath)
+    if (!raw.trim()) return false
+
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      const previous = safeString(parsed.goal_constraints_fingerprint).trim()
+      if (!previous) return false
+      return previous !== this.computeGoalConstraintsFingerprint(project)
+    } catch {
+      return false
+    }
+  }
+
+  private async detectPlannerCheckpoint(
+    project: TurnContext['project'],
+    failures: FailureEntry[],
+    nextTurnNumber: number
+  ): Promise<PlannerCheckpointInfo> {
+    const reasons: string[] = []
+
+    if (nextTurnNumber > 1 && (nextTurnNumber - 1) % 4 === 0) {
+      reasons.push('periodic_4_turn_checkpoint')
+    }
+
+    const recentStatuses = await this.loadRecentTurnStatuses(2)
+    if (recentStatuses.length === 2 && recentStatuses.every((status) => status === 'no_delta')) {
+      reasons.push('two_consecutive_no_delta')
+    }
+
+    const latestRedundantBlocked = failures
+      .filter((entry) => entry.status === 'BLOCKED' && normalizeText(entry.runtime) === 'redundant')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+    if (latestRedundantBlocked) {
+      reasons.push('redundancy_blocked')
+    }
+
+    if (this.detectTop3AllBlocked(project)) {
+      reasons.push('top3_all_blocked')
+    }
+
+    if (await this.didGoalOrConstraintsChange(project, nextTurnNumber)) {
+      reasons.push('goal_or_constraints_changed')
+    }
+
+    return {
+      due: reasons.length > 0,
+      reasons
     }
   }
 
@@ -1256,8 +2053,8 @@ export class YoloSession {
       return { evidencePath: null, cachedCount: 0, libraryPaths: [] }
     }
 
-    const literatureDir = path.join(this.yoloRoot, 'library', 'literature')
-    const indexPath = path.join(literatureDir, 'index.json')
+    const literatureDir = path.join(input.artifactsDir, 'literature')
+    await ensureDir(literatureDir)
     const scriptLibraryPathSet = new Set<string>()
     const normalizeArtifactPath = (raw: unknown): string => {
       if (typeof raw !== 'string') return ''
@@ -1266,7 +2063,9 @@ export class YoloSession {
 
       if (path.isAbsolute(trimmed)) {
         try {
-          return this.toProjectRelativePath(this.ensureSafeTargetPath(trimmed))
+          const normalized = this.toProjectRelativePath(this.ensureSafeTargetPath(trimmed))
+          if (!EVIDENCE_PATH_RE.test(normalized)) return ''
+          return normalized
         } catch {
           return ''
         }
@@ -1274,6 +2073,7 @@ export class YoloSession {
 
       const normalized = toPosixPath(trimmed.replace(/^\.\//, ''))
       if (!normalized) return ''
+      if (!EVIDENCE_PATH_RE.test(normalized)) return ''
       return normalized
     }
 
@@ -1392,53 +2192,14 @@ export class YoloSession {
         status,
         fetchedAt,
         turnNumber: input.turnNumber,
-        jsonPath: this.toProjectRelativePath(jsonPath),
-        markdownPath: this.toProjectRelativePath(markdownPath),
+        jsonPath: this.toEvidencePath(jsonPath),
+        markdownPath: this.toEvidencePath(markdownPath),
         excerptChars: excerpt.length
       })
     }
 
     if (records.length === 0 && scriptLibraryPathSet.size === 0) {
       return { evidencePath: null, cachedCount: 0, libraryPaths: [] }
-    }
-
-    if (records.length > 0) {
-      let existingIndex: Array<Record<string, unknown>> = []
-      try {
-        const raw = await readTextOrEmpty(indexPath)
-        const parsed = JSON.parse(raw) as unknown
-        if (Array.isArray(parsed)) {
-          existingIndex = parsed.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-        }
-      } catch {
-        existingIndex = []
-      }
-
-      const mergedById = new Map<string, Record<string, unknown>>()
-      for (const row of existingIndex) {
-        const id = safeString(row.id).trim()
-        if (!id) continue
-        mergedById.set(id, row)
-      }
-      for (const record of records) {
-        mergedById.set(record.id, {
-          id: record.id,
-          url: record.url,
-          title: record.title || null,
-          sourceHost: record.sourceHost,
-          fetchedAt: record.fetchedAt,
-          turnNumber: record.turnNumber,
-          jsonPath: record.jsonPath,
-          markdownPath: record.markdownPath,
-          excerptChars: record.excerptChars
-        })
-      }
-
-      const nextIndex = Array.from(mergedById.values())
-        .sort((a, b) => safeString(b.fetchedAt).localeCompare(safeString(a.fetchedAt)))
-        .slice(0, LITERATURE_INDEX_LIMIT)
-
-      await writeText(indexPath, `${JSON.stringify(nextIndex, null, 2)}\n`)
     }
 
     const manifestPath = path.join(input.artifactsDir, 'literature-cache.json')
@@ -1466,6 +2227,10 @@ export class YoloSession {
     intent: string
     status: TurnStatus
     primaryAction: string
+    activePlanId?: string
+    statusChange?: string
+    delta?: string
+    planEvidencePaths: string[]
     keyObservation: string
     evidencePaths: string[]
     updateSummary: string[]
@@ -1484,6 +2249,12 @@ export class YoloSession {
       '## Action',
       '- Tool: Agent',
       `- Command or target: ${input.primaryAction || 'agent.run'}`,
+      '',
+      '## Plan Delta',
+      `- active_plan_id: ${input.activePlanId || '(missing)'}`,
+      `- status_change: ${input.statusChange || '(none)'}`,
+      `- delta: ${input.delta || '(none)'}`,
+      `- plan_evidence: ${input.planEvidencePaths.length > 0 ? input.planEvidencePaths.join(', ') : '(none)'}`,
       '',
       '## Result',
       `- Status: ${input.status}`,

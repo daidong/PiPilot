@@ -9,6 +9,7 @@ export interface TurnListItem {
   summary: string
   actionPath: string
   turnDir: string
+  partial?: boolean
 }
 
 export interface DesktopOverview {
@@ -17,6 +18,7 @@ export interface DesktopOverview {
   model: string
   defaultRuntime: RuntimeKind
   loopRunning: boolean
+  pausedForUserInput: boolean
   hasSession: boolean
   turnCount: number
   lastTurn: TurnListItem | null
@@ -70,6 +72,7 @@ export interface DesktopApi {
   onYoloEvent: (cb: (payload: any) => void) => () => void
   onYoloTurnResult: (cb: (payload: any) => void) => () => void
   onYoloActivity: (cb: (payload: ActivityItem) => void) => () => void
+  onYoloTerminal: (cb: (payload: TerminalLiveEvent) => void) => () => void
   onProjectClosed: (cb: () => void) => () => void
 }
 
@@ -87,21 +90,40 @@ export interface ActivityItem {
   detail?: string
 }
 
-export interface TerminalChunk {
+export interface TerminalLiveEvent {
+  id: string
   turnNumber: number
-  stream: 'stdout' | 'stderr'
-  text: string
+  phase: 'start' | 'chunk' | 'end' | 'error'
   timestamp: string
+  traceId?: string
+  caller?: string
+  command?: string
+  cwd?: string
+  stream?: 'stdout' | 'stderr'
+  chunk?: string
+  truncated?: boolean
+  exitCode?: number
+  signal?: string
+  durationMs?: number
+  error?: string
 }
 
 export const TURN_FILES: TurnFileName[] = ['action.md', 'stdout.txt', 'stderr.txt', 'cmd.txt', 'exit_code.txt', 'result.json', 'patch.diff']
 export const DEFAULT_MAX_LOOP_TURNS = 12
 
-export function toneForStatus(status: string): string {
+export function displayStatus(status: string): string {
   const normalized = status.toLowerCase()
+  if (normalized === 'ask_user') return 'paused'
+  return normalized
+}
+
+export function toneForStatus(status: string): string {
+  const normalized = displayStatus(status)
   if (normalized === 'success') return 'border-emerald-400/50 bg-emerald-500/10 text-emerald-200'
   if (normalized === 'failure' || normalized === 'blocked') return 'border-rose-400/50 bg-rose-500/10 text-rose-200'
-  if (normalized === 'ask_user') return 'border-amber-400/50 bg-amber-500/10 text-amber-200'
+  if (normalized === 'paused') return 'border-amber-400/50 bg-amber-500/10 text-amber-200'
+  if (normalized === 'no_delta') return 'border-amber-400/50 bg-amber-500/10 text-amber-200'
+  if (normalized === 'partial') return 'border-sky-400/50 bg-sky-500/10 text-sky-200'
   if (normalized === 'stopped') return 'border-sky-400/50 bg-sky-500/10 text-sky-200'
   return 'border-zinc-500/50 bg-zinc-500/10 text-zinc-200'
 }

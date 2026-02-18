@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createYoloSession, ScriptedSingleAgent } from '../../examples/yolo-researcher/index.js'
+import { ProjectStore } from '../../examples/yolo-researcher/v2/project-store.js'
 import { cleanupTempDir, createTempDir } from '../test-utils.js'
 
 function failureOutcome(cmd: string, errorLine: string) {
@@ -44,6 +45,10 @@ function successOutcome(cmd: string, stdout: string) {
     status: 'success' as const,
     summary: 'Command executed successfully.',
     primaryAction: `bash: ${cmd}`,
+    activePlanId: 'P1',
+    statusChange: 'P1 ACTIVE -> ACTIVE',
+    delta: 'Verification command produced successful output.',
+    evidencePaths: ['runs/turn-0001/stdout.txt'],
     toolEvents: [
       {
         timestamp: new Date().toISOString(),
@@ -73,6 +78,25 @@ async function readText(filePath: string): Promise<string> {
   return fs.readFile(filePath, 'utf-8')
 }
 
+async function seedActivePlanDoneDefinition(projectPath: string, doneDefinition: string[]): Promise<void> {
+  const store = new ProjectStore(projectPath, 'Seed plan', ['Define measurable success criteria.'], 'host')
+  await store.init()
+  const panel = await store.load()
+  const active = panel.planBoard.find((item) => item.id === 'P1') ?? panel.planBoard[0]
+  if (!active) return
+
+  await store.applyUpdate({
+    planBoard: [{
+      id: active.id,
+      title: active.title,
+      status: 'ACTIVE',
+      doneDefinition,
+      evidencePaths: [],
+      priority: active.priority
+    }]
+  })
+}
+
 describe('yolo-researcher v2 failure circuit breaker', () => {
   const tempDirs: string[] = []
 
@@ -84,6 +108,7 @@ describe('yolo-researcher v2 failure circuit breaker', () => {
   it('escalates deterministic failures to BLOCKED and writes UNBLOCKED after verified success', async () => {
     const projectPath = await createTempDir('yolo-v2-fail-')
     tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: stdout.txt', 'evidence_min: 1'])
 
     const flakyCmd = 'python -c "import missing_dep"'
     const errorLine = 'ModuleNotFoundError: missing_dep'

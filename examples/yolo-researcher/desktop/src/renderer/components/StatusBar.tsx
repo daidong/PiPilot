@@ -10,8 +10,12 @@ interface StatusBarProps {
 function statusInfo(overview: DesktopOverview | null): { color: string; pulse: boolean; label: string } {
   if (!overview?.projectPath) return { color: 'var(--color-text-muted)', pulse: false, label: 'No project' }
   if (overview.loopRunning) return { color: 'var(--color-accent-teal)', pulse: true, label: 'Running' }
+  if (overview.pausedForUserInput) return { color: 'var(--color-accent-amber)', pulse: true, label: 'Paused' }
+  if (overview.lastTurn?.partial) return { color: 'var(--color-accent-sky)', pulse: false, label: 'Partial' }
   const lastStatus = overview.lastTurn?.status?.toLowerCase()
-  if (lastStatus === 'ask_user') return { color: 'var(--color-accent-amber)', pulse: true, label: 'Waiting' }
+  if (lastStatus === 'ask_user' || lastStatus === 'paused') return { color: 'var(--color-accent-amber)', pulse: true, label: 'Paused' }
+  if (lastStatus === 'no_delta') return { color: 'var(--color-accent-amber)', pulse: false, label: 'No Delta' }
+  if (lastStatus === 'partial') return { color: 'var(--color-accent-sky)', pulse: false, label: 'Partial' }
   if (lastStatus === 'failure' || lastStatus === 'blocked') return { color: 'var(--color-accent-rose)', pulse: false, label: 'Error' }
   return { color: 'var(--color-text-secondary)', pulse: false, label: 'Idle' }
 }

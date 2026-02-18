@@ -31,6 +31,6 @@ Use this skill to produce writing artifacts through executable scripts, not free
 3. Save returned artifact paths into turn evidence.
 
 # Examples
-`skill-script-run({"skillId":"academic-writing","script":"outline","args":["--topic","Agentic efficiency for OpenEvolve","--doc-type","paper","--project-root","."]})`
+`skill-script-run({"skillId":"academic-writing","script":"outline","args":["--topic","Agentic efficiency for OpenEvolve","--doc-type","paper","--project-root",".","--output-dir","runs/turn-0001/artifacts/writing"]})`
 
-`skill-script-run({"skillId":"academic-writing","script":"draft-section","args":["--section-heading","Method","--instructions","Explain scheduler and novelty-tier policy","--citation-hints","Mouret2015;Pugh2016","--project-root","."]})`
+`skill-script-run({"skillId":"academic-writing","script":"draft-section","args":["--section-heading","Method","--instructions","Explain scheduler and novelty-tier policy","--citation-hints","Mouret2015;Pugh2016","--project-root",".","--output-dir","runs/turn-0001/artifacts/writing"]})`

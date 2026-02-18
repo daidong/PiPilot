@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DesktopOverview, TurnListItem, UiEvent, ActivityItem, RuntimeKind, StartPayload } from './lib/types'
+import type { DesktopOverview, TurnListItem, UiEvent, ActivityItem, TerminalLiveEvent, RuntimeKind, StartPayload } from './lib/types'
 import { DEFAULT_MAX_LOOP_TURNS, nowLabel } from './lib/types'
 import StatusBar from './components/StatusBar'
 import ControlPanel from './components/ControlPanel'
@@ -7,6 +7,7 @@ import MainTabs, { type TabId } from './components/MainTabs'
 import EvidenceView from './components/EvidenceView'
 import ActivityView from './components/ActivityView'
 import TerminalView from './components/TerminalView'
+import PauseModal from './components/PauseModal'
 
 interface PendingQuestion {
   turnNumber: number
@@ -52,6 +53,7 @@ export default function App() {
 
   const [events, setEvents] = useState<UiEvent[]>([])
   const [activities, setActivities] = useState<ActivityItem[]>([])
+  const [terminalEvents, setTerminalEvents] = useState<TerminalLiveEvent[]>([])
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const [replyDraft, setReplyDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -60,7 +62,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('evidence')
 
   const canOperate = Boolean(overview?.projectPath)
-  const canRunTurns = canOperate && Boolean(overview?.hasSession)
+  const hasSession = canOperate && Boolean(overview?.hasSession)
+  const pausedForUserInput = Boolean(overview?.pausedForUserInput || pendingQuestion)
+  const canRunTurns = hasSession && !pausedForUserInput
 
   const appendEvent = useCallback((text: string) => {
     setEvents((prev) => {
@@ -82,6 +86,7 @@ export default function App() {
       setFailuresMarkdown('')
       setCurrentPlan([])
       setTurns([])
+      setTerminalEvents([])
       setPendingQuestion(null)
       return current
     }
@@ -98,7 +103,8 @@ export default function App() {
     setTurns(turnList)
 
     const latestTurn = turnList[turnList.length - 1] ?? null
-    if (!latestTurn || latestTurn.status.toLowerCase() !== 'ask_user') {
+    const latestStatus = latestTurn?.status?.toLowerCase() || ''
+    if (!latestTurn || (latestStatus !== 'ask_user' && latestStatus !== 'paused')) {
       setPendingQuestion(null)
     } else {
       try {
@@ -150,12 +156,21 @@ export default function App() {
     })
 
     const offTurn = api.onYoloTurnResult((payload) => {
-      appendEvent(`turn ${payload?.turnNumber ?? '?'} -> ${payload?.status ?? 'unknown'}`)
+      const status = String(payload?.status ?? 'unknown').toLowerCase() === 'ask_user'
+        ? 'paused'
+        : (payload?.status ?? 'unknown')
+      appendEvent(`turn ${payload?.turnNumber ?? '?'} -> ${status}`)
       void refreshCore().catch(() => undefined)
     })
 
     const offActivity = api.onYoloActivity((item: ActivityItem) => {
       setActivities((prev) => [item, ...prev].slice(0, 500))
+    })
+    const offTerminal = api.onYoloTerminal((item: TerminalLiveEvent) => {
+      setTerminalEvents((prev) => {
+        const next = [...prev, item]
+        return next.length > 3000 ? next.slice(next.length - 3000) : next
+      })
     })
 
     const offClosed = api.onProjectClosed(() => {
@@ -165,6 +180,7 @@ export default function App() {
       setFailuresMarkdown('')
       setCurrentPlan([])
       setTurns([])
+      setTerminalEvents([])
       setGoalDraft('')
       setPendingQuestion(null)
       setReplyDraft('')
@@ -175,6 +191,7 @@ export default function App() {
       offEvent()
       offTurn()
       offActivity()
+      offTerminal()
       offClosed()
     }
   }, [api, appendEvent, refreshCore])
@@ -191,6 +208,7 @@ export default function App() {
       const payload: StartPayload = { goal: goalDraft, model: modelDraft, defaultRuntime: runtimeDraft, autoRun, maxTurns: maxLoopTurns }
       const next = await api.yoloStart(payload)
       setOverview(next)
+      setTerminalEvents([])
       appendEvent('session started')
       await refreshCore()
     } catch (err) {
@@ -230,7 +248,7 @@ export default function App() {
 
   const submitReply = useCallback(async () => {
     if (!pendingQuestion) return
-    if (!canRunTurns) {
+    if (!hasSession) {
       setError('No active session. Start a session first.')
       return
     }
@@ -256,7 +274,7 @@ export default function App() {
       setSubmittingReply(false)
       setBusy(false)
     }
-  }, [api, appendEvent, canRunTurns, pendingQuestion, refreshCore, replyDraft])
+  }, [api, appendEvent, hasSession, pendingQuestion, refreshCore, replyDraft])
 
   const requestStop = useCallback(async () => {
     if (!canRunTurns) return
@@ -280,6 +298,7 @@ export default function App() {
       const result = await api.pickFolder()
       if (result) {
         setOverview(result)
+        setTerminalEvents([])
         setGoalDraft(result.goal || '')
         appendEvent(`folder selected: ${result.projectPath}`)
         await refreshCore()
@@ -301,6 +320,7 @@ export default function App() {
       setFailuresMarkdown('')
       setCurrentPlan([])
       setTurns([])
+      setTerminalEvents([])
       setGoalDraft('')
       setPendingQuestion(null)
       setReplyDraft('')
@@ -341,16 +361,12 @@ export default function App() {
           setAutoRun={setAutoRun}
           maxLoopTurns={maxLoopTurns}
           setMaxLoopTurns={setMaxLoopTurns}
-          pendingQuestion={pendingQuestion}
-          replyDraft={replyDraft}
-          setReplyDraft={setReplyDraft}
-          submittingReply={submittingReply}
+          pausedForUserInput={pausedForUserInput}
           busy={busy}
           onStart={startSession}
           onRunTurn={runOneTurn}
           onRunLoop={runBatch}
           onStop={requestStop}
-          onSubmitReply={submitReply}
         />
         <main className="flex-1 overflow-hidden">
           <MainTabs activeTab={activeTab} onTabChange={setActiveTab}>
@@ -366,11 +382,24 @@ export default function App() {
               <ActivityView activities={activities} />
             )}
             {activeTab === 'terminal' && (
-              <TerminalView overview={overview} turns={turns} />
+              <TerminalView overview={overview} turns={turns} terminalEvents={terminalEvents} />
             )}
           </MainTabs>
         </main>
       </div>
+
+      {pendingQuestion && (
+        <PauseModal
+          turnNumber={pendingQuestion.turnNumber}
+          question={pendingQuestion.question}
+          evidencePath={pendingQuestion.evidencePath}
+          replyText={replyDraft}
+          onReplyTextChange={setReplyDraft}
+          onSubmit={submitReply}
+          disabled={busy}
+          submitting={submittingReply}
+        />
+      )}
     </div>
   )
 }

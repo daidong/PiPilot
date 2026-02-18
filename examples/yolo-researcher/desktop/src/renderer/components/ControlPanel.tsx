@@ -1,7 +1,6 @@
 import { useRef, useEffect, useState } from 'react'
 import type { DesktopOverview, RuntimeKind, UiEvent } from '../lib/types'
 import { DEFAULT_MAX_LOOP_TURNS } from '../lib/types'
-import QuestionPanel from './QuestionPanel'
 
 interface ControlPanelProps {
   overview: DesktopOverview | null
@@ -17,20 +16,12 @@ interface ControlPanelProps {
   setAutoRun: (v: boolean) => void
   maxLoopTurns: number
   setMaxLoopTurns: (v: number) => void
-  pendingQuestion: {
-    turnNumber: number
-    question: string
-    evidencePath?: string
-  } | null
-  replyDraft: string
-  setReplyDraft: (v: string) => void
-  submittingReply: boolean
+  pausedForUserInput: boolean
   busy: boolean
   onStart: () => void
   onRunTurn: () => void
   onRunLoop: () => void
   onStop: () => void
-  onSubmitReply: () => void
 }
 
 interface ModelOption {
@@ -75,19 +66,15 @@ export default function ControlPanel({
   setAutoRun,
   maxLoopTurns,
   setMaxLoopTurns,
-  pendingQuestion,
-  replyDraft,
-  setReplyDraft,
-  submittingReply,
+  pausedForUserInput,
   busy,
   onStart,
   onRunTurn,
   onRunLoop,
-  onStop,
-  onSubmitReply
+  onStop
 }: ControlPanelProps) {
   const canOperate = Boolean(overview?.projectPath)
-  const canRunTurns = canOperate && Boolean(overview?.hasSession)
+  const canRunTurns = canOperate && Boolean(overview?.hasSession) && !pausedForUserInput
   const [settingsOpen, setSettingsOpen] = useState(false)
   const eventsRef = useRef<HTMLDivElement>(null)
 
@@ -120,6 +107,12 @@ export default function ControlPanel({
               placeholder="Describe the research objective..."
             />
           </div>
+
+          {pausedForUserInput && (
+            <div className="rounded-lg border px-3 py-2 text-[11px] leading-relaxed t-card-amber">
+              Session paused for user input. Submit reply in the pause dialog to resume turns.
+            </div>
+          )}
 
           <div className="rounded-lg border p-3" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-elevated)' }}>
             <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>Current Plan</label>
@@ -265,19 +258,6 @@ export default function ControlPanel({
           )}
         </div>
       </div>
-
-      {pendingQuestion && (
-        <QuestionPanel
-          turnNumber={pendingQuestion.turnNumber}
-          question={pendingQuestion.question}
-          evidencePath={pendingQuestion.evidencePath}
-          replyText={replyDraft}
-          onReplyTextChange={setReplyDraft}
-          onSubmit={onSubmitReply}
-          disabled={busy}
-          submitting={submittingReply}
-        />
-      )}
 
       {/* Live Events — V1 ActivityFeed inspired */}
       <div className="flex min-h-0 flex-1 flex-col px-4 py-3">

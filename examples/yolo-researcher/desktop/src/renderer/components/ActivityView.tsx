@@ -8,8 +8,14 @@ interface ActivityViewProps {
 const TYPE_CONFIG: Record<string, { label: string; cardClass: string; accentClass: string; dotColor: string }> = {
   turn_started:    { label: 'Turn started',    cardClass: 't-card-teal',    accentClass: 't-accent-teal',    dotColor: 'var(--color-accent-teal)' },
   turn_completed:  { label: 'Turn completed',  cardClass: 't-card-emerald', accentClass: 't-accent-emerald', dotColor: 'var(--color-accent-emerald)' },
+  tool_call:       { label: 'Tool call',       cardClass: 't-card-sky',     accentClass: 't-accent-sky',     dotColor: 'var(--color-accent-sky)' },
+  tool_result:     { label: 'Tool result',     cardClass: 't-card-sky',     accentClass: 't-accent-teal',    dotColor: 'var(--color-accent-teal)' },
+  terminal_start:  { label: 'Terminal start',  cardClass: 't-card-teal',    accentClass: 't-accent-teal',    dotColor: 'var(--color-accent-teal)' },
+  terminal_end:    { label: 'Terminal end',    cardClass: 't-card-emerald', accentClass: 't-accent-emerald', dotColor: 'var(--color-accent-emerald)' },
+  terminal_error:  { label: 'Terminal error',  cardClass: 't-card-rose',    accentClass: 't-accent-rose',    dotColor: 'var(--color-accent-rose)' },
   loop_progress:   { label: 'Loop progress',   cardClass: 't-card-sky',     accentClass: 't-accent-sky',     dotColor: 'var(--color-accent-sky)' },
   loop_stopped:    { label: 'Loop stopped',     cardClass: 't-card-amber',   accentClass: 't-accent-amber',   dotColor: 'var(--color-accent-amber)' },
+  loop_paused:     { label: 'Loop paused',      cardClass: 't-card-amber',   accentClass: 't-accent-amber',   dotColor: 'var(--color-accent-amber)' },
   loop_error:      { label: 'Loop error',       cardClass: 't-card-rose',    accentClass: 't-accent-rose',    dotColor: 'var(--color-accent-rose)' },
   session_started: { label: 'Session started',  cardClass: 't-card-teal',    accentClass: 't-accent-violet',  dotColor: 'var(--color-accent-violet)' },
   user_input_submitted: { label: 'User input',  cardClass: 't-card-amber',   accentClass: 't-accent-amber',   dotColor: 'var(--color-accent-amber)' }

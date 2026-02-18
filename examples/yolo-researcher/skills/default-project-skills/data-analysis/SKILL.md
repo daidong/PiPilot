@@ -29,4 +29,4 @@ Use this skill when a turn needs concrete dataset analysis outputs rather than c
 3. Persist returned paths as turn evidence.
 
 # Example
-`skill-script-run({"skillId":"data-analysis","script":"analyze-dataset","args":["--file","data/metrics.csv","--task","analyze","--instructions","Summarize key metrics and outliers","--project-root","."]})`
+`skill-script-run({"skillId":"data-analysis","script":"analyze-dataset","args":["--file","data/metrics.csv","--task","analyze","--instructions","Summarize key metrics and outliers","--project-root",".","--output-dir","runs/turn-0001/artifacts/data-analysis"]})`

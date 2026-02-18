@@ -17,6 +17,7 @@ export interface TurnListItem {
   summary: string
   actionPath: string
   turnDir: string
+  partial?: boolean
 }
 
 export interface DesktopOverview {
@@ -25,6 +26,7 @@ export interface DesktopOverview {
   model: string
   defaultRuntime: RuntimeKind
   loopRunning: boolean
+  pausedForUserInput: boolean
   hasSession: boolean
   turnCount: number
   lastTurn: TurnListItem | null
@@ -46,6 +48,24 @@ export interface QueuedUserInput {
   id: string
   text: string
   submittedAt: string
+}
+
+export interface TerminalLiveEvent {
+  id: string
+  turnNumber: number
+  phase: 'start' | 'chunk' | 'end' | 'error'
+  timestamp: string
+  traceId?: string
+  caller?: string
+  command?: string
+  cwd?: string
+  stream?: 'stdout' | 'stderr'
+  chunk?: string
+  truncated?: boolean
+  exitCode?: number
+  signal?: string
+  durationMs?: number
+  error?: string
 }
 
 export interface ElectronAPI {
@@ -70,6 +90,7 @@ export interface ElectronAPI {
   onYoloEvent: (cb: (payload: any) => void) => () => void
   onYoloTurnResult: (cb: (payload: any) => void) => () => void
   onYoloActivity: (cb: (payload: any) => void) => () => void
+  onYoloTerminal: (cb: (payload: TerminalLiveEvent) => void) => () => void
   onProjectClosed: (cb: () => void) => () => void
 }
 
@@ -106,6 +127,11 @@ const api: ElectronAPI = {
     const handler = (_: unknown, payload: any) => cb(payload)
     ipcRenderer.on('yolo:activity', handler)
     return () => ipcRenderer.removeListener('yolo:activity', handler)
+  },
+  onYoloTerminal: (cb) => {
+    const handler = (_: unknown, payload: TerminalLiveEvent) => cb(payload)
+    ipcRenderer.on('yolo:terminal', handler)
+    return () => ipcRenderer.removeListener('yolo:terminal', handler)
   },
   onProjectClosed: (cb) => {
     const handler = () => cb()

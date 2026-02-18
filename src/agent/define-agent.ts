@@ -131,6 +131,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     // Merge Packs
     const allPacks = [...definition.packs, ...(config.packs ?? [])]
+    const policiesEnabled = config.disablePolicies !== true
 
     // Phase 1.4: Create SkillManager for lazy-loaded procedural knowledge
     const skillManager = new SkillManager({
@@ -140,7 +141,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
     for (const pack of allPacks) {
       if (pack.tools) toolRegistry.registerAll(pack.tools)
-      if (pack.policies) policyEngine.registerAll(pack.policies)
+      if (policiesEnabled && pack.policies) policyEngine.registerAll(pack.policies)
       if (pack.contextSources) contextManager.registerAll(pack.contextSources)
 
       // Register Skills with skillLoadingConfig support
@@ -230,12 +231,12 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
     }
 
     // Register definition-level policies
-    if (definition.policies) {
+    if (policiesEnabled && definition.policies) {
       policyEngine.registerAll(definition.policies)
     }
 
     // Register config-level policies
-    if (config.policies) {
+    if (policiesEnabled && config.policies) {
       policyEngine.registerAll(config.policies)
     }
 

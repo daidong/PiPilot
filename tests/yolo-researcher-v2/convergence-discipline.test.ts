@@ -75,6 +75,25 @@ async function writeArtifact(runsDir: string, turnNumber: number, fileName: stri
   await fs.writeFile(path.join(dir, fileName), content, 'utf-8')
 }
 
+async function seedActivePlanDoneDefinition(projectPath: string, doneDefinition: string[]): Promise<void> {
+  const store = new ProjectStore(projectPath, 'Seed plan', ['Define measurable success criteria.'], 'host')
+  await store.init()
+  const panel = await store.load()
+  const active = panel.planBoard.find((item) => item.id === 'P1') ?? panel.planBoard[0]
+  if (!active) return
+
+  await store.applyUpdate({
+    planBoard: [{
+      id: active.id,
+      title: active.title,
+      status: 'ACTIVE',
+      doneDefinition,
+      evidencePaths: [],
+      priority: active.priority
+    }]
+  })
+}
+
 describe('yolo-researcher v2 convergence discipline', () => {
   const tempDirs: string[] = []
 
@@ -112,6 +131,7 @@ describe('yolo-researcher v2 convergence discipline', () => {
   it('bash with non-empty stdout → success', async () => {
     const projectPath = await createTempDir('yolo-v2-bash-output-')
     tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: stdout.txt', 'evidence_min: 1'])
 
     const session = createYoloSession({
       projectPath,
@@ -123,6 +143,10 @@ describe('yolo-researcher v2 convergence discipline', () => {
           status: 'success',
           summary: 'Bash produced output.',
           primaryAction: `bash: node -e "console.log('v2-ok')"`,
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Captured command output evidence.',
+          evidencePaths: ['runs/turn-0001/stdout.txt'],
           toolEvents: bashSuccessEvent(`node -e "console.log('v2-ok')"`, 'v2-ok\n'),
           projectUpdate: {
             currentPlan: ['Step 1: verify', 'Step 2: analyze', 'Step 3: report']
@@ -246,6 +270,7 @@ describe('yolo-researcher v2 convergence discipline', () => {
   it('stagnation allows deliverable artifact', async () => {
     const projectPath = await createTempDir('yolo-v2-stag-allow-')
     tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: literature_map.md', 'evidence_min: 1'])
 
     const yoloRoot = projectPath
     const runsDir = path.join(yoloRoot, 'runs')
@@ -289,6 +314,10 @@ describe('yolo-researcher v2 convergence discipline', () => {
             status: 'success',
             summary: 'Created literature map.',
             primaryAction: 'write: literature_map.md',
+            activePlanId: 'P1',
+            statusChange: 'P1 ACTIVE -> ACTIVE',
+            delta: 'Added literature_map deliverable artifact.',
+            evidencePaths: [`runs/${turnId}/artifacts/literature_map.md`],
             projectUpdate: {
               currentPlan: ['Analyze papers', 'Generate ideas', 'Draft paper']
             }
@@ -307,6 +336,7 @@ describe('yolo-researcher v2 convergence discipline', () => {
   it('stagnation allows exp-xxxx directory when it advances stage', async () => {
     const projectPath = await createTempDir('yolo-v2-stag-exp-dir-')
     tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: exp-001', 'evidence_min: 1'])
 
     const yoloRoot = projectPath
     const runsDir = path.join(yoloRoot, 'runs')
@@ -347,6 +377,10 @@ describe('yolo-researcher v2 convergence discipline', () => {
             status: 'success',
             summary: 'Created exp-001 deliverable.',
             primaryAction: 'synthesize: experiment deliverable',
+            activePlanId: 'P1',
+            statusChange: 'P1 ACTIVE -> ACTIVE',
+            delta: 'Added exp-001 experiment deliverable.',
+            evidencePaths: [`runs/${turnId}/artifacts/exp-001/README.md`],
             projectUpdate: {
               currentPlan: ['Run experiment', 'Analyze results', 'Draft paper']
             }

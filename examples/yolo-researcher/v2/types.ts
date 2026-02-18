@@ -1,5 +1,24 @@
 export type FailureStatus = 'WARN' | 'BLOCKED' | 'UNBLOCKED'
 
+export type PlanItemStatus = 'TODO' | 'ACTIVE' | 'DONE' | 'BLOCKED' | 'DROPPED'
+
+export interface PlanBoardItem {
+  id: string
+  title: string
+  status: PlanItemStatus
+  doneDefinition: string[]
+  evidencePaths: string[]
+  nextMinStep?: string
+  dropReason?: string
+  replacedBy?: string | null
+  priority: number
+}
+
+export interface PlannerCheckpointInfo {
+  due: boolean
+  reasons: string[]
+}
+
 export interface StagnationInfo {
   stagnant: boolean
   dominantAction: string
@@ -37,6 +56,7 @@ export interface ProjectControlPanel {
   title: string
   goal: string
   successCriteria: string[]
+  planBoard: PlanBoardItem[]
   currentPlan: string[]
   facts: EvidenceLine[]
   archivedFacts: EvidenceLine[]
@@ -83,16 +103,19 @@ export interface TurnContext {
   projectRoot: string
   yoloRoot: string
   runsDir: string
+  workspaceGitRepos?: string[]
   project: ProjectControlPanel
   failures: FailureEntry[]
   recentTurns: RecentTurnContext[]
   pendingUserInputs: PendingUserInput[]
   stagnation?: StagnationInfo
+  plannerCheckpoint?: PlannerCheckpointInfo
 }
 
 export interface ProjectUpdate {
   goal?: string
   successCriteria?: string[]
+  planBoard?: PlanBoardItem[]
   currentPlan?: string[]
   facts?: EvidenceLine[]
   done?: EvidenceLine[]
@@ -118,6 +141,12 @@ export interface TurnRunOutcome {
   status: 'success' | 'failure' | 'ask_user' | 'stopped'
   summary: string
   primaryAction?: string
+  activePlanId?: string
+  statusChange?: string
+  delta?: string
+  evidencePaths?: string[]
+  dropReason?: string
+  replacedBy?: string | null
   askQuestion?: string
   stopReason?: string
   projectUpdate?: ProjectUpdate
@@ -138,6 +167,7 @@ export interface TurnExecutionResult {
   status: TurnStatus
   intent: string
   primaryAction: string
+  activePlanId?: string
   toolEventsCount: number
   summary: string
   evidencePaths: string[]

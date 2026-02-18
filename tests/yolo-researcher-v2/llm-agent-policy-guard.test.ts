@@ -139,8 +139,8 @@ describe('yolo-researcher v2 llm-agent destructive policy guard', () => {
             mode: 'sweep',
             script: 'search-sweep',
             paperCount: 30,
-            jsonPath: '.yolo-researcher/library/literature/sweep-1.json',
-            markdownPath: '.yolo-researcher/library/literature/sweep-1.md'
+            jsonPath: 'runs/turn-0001/artifacts/literature/sweep-1.json',
+            markdownPath: 'runs/turn-0001/artifacts/literature/sweep-1.md'
           }
         }
       }

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { DesktopOverview, TurnListItem } from '../lib/types'
+import type { DesktopOverview, TurnListItem, TerminalLiveEvent } from '../lib/types'
 import { MONO_FONT } from '../lib/types'
 
 interface TerminalViewProps {
   overview: DesktopOverview | null
   turns: TurnListItem[]
+  terminalEvents: TerminalLiveEvent[]
 }
 
 interface ExecResultMeta {
@@ -16,7 +17,27 @@ interface ExecResultMeta {
   timestamp?: string
 }
 
-export default function TerminalView({ overview, turns }: TerminalViewProps) {
+interface LiveSnapshot {
+  turnNumber: number
+  command: string
+  cwd: string
+  caller: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  running: boolean
+  timestamp: string
+}
+
+const LIVE_OUTPUT_CAP = 200_000
+
+function appendWithCap(base: string, chunk: string, cap: number = LIVE_OUTPUT_CAP): string {
+  const next = `${base}${chunk}`
+  if (next.length <= cap) return next
+  return next.slice(next.length - cap)
+}
+
+export default function TerminalView({ overview, turns, terminalEvents }: TerminalViewProps) {
   const api = window.api
   const canOperate = Boolean(overview?.projectPath)
 
@@ -30,17 +51,44 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
 
   const latestTurn = turns[turns.length - 1]?.turnNumber ?? null
 
+  const liveRunningTurn = useMemo(() => {
+    const runningByTurn = new Map<number, boolean>()
+    for (const event of terminalEvents) {
+      if (event.phase === 'start') runningByTurn.set(event.turnNumber, true)
+      if (event.phase === 'end' || event.phase === 'error') runningByTurn.set(event.turnNumber, false)
+    }
+
+    let running: number | null = null
+    for (const [turnNumber, isRunning] of runningByTurn) {
+      if (isRunning) running = turnNumber
+    }
+    return running
+  }, [terminalEvents])
+
+  const turnOptions = useMemo(() => {
+    const values = turns.slice(-8).map((item) => item.turnNumber)
+    if (liveRunningTurn && !values.includes(liveRunningTurn)) values.push(liveRunningTurn)
+    return values.sort((a, b) => a - b)
+  }, [turns, liveRunningTurn])
+
   useEffect(() => {
-    if (turns.length === 0) {
+    if (turns.length === 0 && !liveRunningTurn) {
       setSelectedTurn(null)
       return
     }
 
-    const hasSelected = turns.some((turn) => turn.turnNumber === selectedTurn)
-    if (!hasSelected) {
-      setSelectedTurn(latestTurn)
+    const hasSelectedInTurns = turns.some((turn) => turn.turnNumber === selectedTurn)
+    const hasSelectedInLive = typeof selectedTurn === 'number'
+      && terminalEvents.some((event) => event.turnNumber === selectedTurn)
+
+    if (!hasSelectedInTurns && !hasSelectedInLive) {
+      if (followTail && liveRunningTurn) {
+        setSelectedTurn(liveRunningTurn)
+      } else {
+        setSelectedTurn(latestTurn ?? liveRunningTurn ?? null)
+      }
     }
-  }, [turns, selectedTurn, latestTurn])
+  }, [turns, terminalEvents, selectedTurn, latestTurn, liveRunningTurn, followTail])
 
   const loadTurnData = useCallback(async (turnNumber: number | null) => {
     if (!turnNumber || !canOperate) {
@@ -91,8 +139,8 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
 
   useEffect(() => {
     if (!followTail) return
-    if (!overview?.loopRunning) return
-    if (!selectedTurn || !latestTurn || selectedTurn !== latestTurn) return
+    if (!selectedTurn) return
+    if (!overview?.loopRunning && selectedTurn !== liveRunningTurn) return
 
     const timer = setInterval(() => {
       void loadTurnData(selectedTurn)
@@ -101,7 +149,72 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
     return () => {
       clearInterval(timer)
     }
-  }, [followTail, overview?.loopRunning, selectedTurn, latestTurn, loadTurnData])
+  }, [followTail, overview?.loopRunning, selectedTurn, liveRunningTurn, loadTurnData])
+
+  const liveSnapshot = useMemo<LiveSnapshot | null>(() => {
+    if (!selectedTurn) return null
+    const events = terminalEvents.filter((event) => event.turnNumber === selectedTurn)
+    if (events.length === 0) return null
+
+    let command = ''
+    let cwd = ''
+    let caller = ''
+    let out = ''
+    let err = ''
+    let liveExitCode: number | null = null
+    let running = false
+    let ts = events[0]?.timestamp || ''
+
+    for (const event of events) {
+      ts = event.timestamp || ts
+
+      if (event.phase === 'start') {
+        command = event.command || command
+        cwd = event.cwd || cwd
+        caller = event.caller || caller
+        out = ''
+        err = ''
+        liveExitCode = null
+        running = true
+        continue
+      }
+
+      if (event.phase === 'chunk') {
+        const chunk = event.chunk || ''
+        if (event.stream === 'stderr') {
+          err = appendWithCap(err, chunk)
+        } else {
+          out = appendWithCap(out, chunk)
+        }
+        continue
+      }
+
+      if (event.phase === 'end') {
+        liveExitCode = typeof event.exitCode === 'number' ? event.exitCode : liveExitCode
+        running = false
+        continue
+      }
+
+      if (event.phase === 'error') {
+        if (event.error?.trim()) {
+          err = appendWithCap(err, `${event.error.trim()}\n`)
+        }
+        running = false
+      }
+    }
+
+    return {
+      turnNumber: selectedTurn,
+      command,
+      cwd,
+      caller,
+      stdout: out,
+      stderr: err,
+      exitCode: liveExitCode,
+      running,
+      timestamp: ts
+    }
+  }, [selectedTurn, terminalEvents])
 
   const exitCodeNum = useMemo(() => {
     if (exitCode) {
@@ -114,20 +227,30 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
     return null
   }, [exitCode, resultMeta])
 
-  const exitColor = exitCodeNum === 0 ? 'var(--color-accent-emerald)' : exitCodeNum !== null ? 'var(--color-accent-rose)' : 'var(--color-text-muted)'
-  const statusTone = exitCodeNum === 0
+  const hasDiskData = Boolean(cmd || stdout || stderr || exitCode || resultMeta)
+  const useLiveData = Boolean(liveSnapshot && (liveSnapshot.running || !hasDiskData))
+
+  const displayCmd = useLiveData ? (liveSnapshot?.command || cmd) : cmd
+  const displayStdout = useLiveData ? (liveSnapshot?.stdout || stdout) : stdout
+  const displayStderr = useLiveData ? (liveSnapshot?.stderr || stderr) : stderr
+  const effectiveExitCode = useLiveData && typeof liveSnapshot?.exitCode === 'number'
+    ? liveSnapshot.exitCode
+    : exitCodeNum
+
+  const exitColor = effectiveExitCode === 0 ? 'var(--color-accent-emerald)' : effectiveExitCode !== null ? 'var(--color-accent-rose)' : 'var(--color-text-muted)'
+  const statusTone = effectiveExitCode === 0
     ? 'border-emerald-500/35 bg-emerald-500/10'
-    : exitCodeNum !== null
+    : effectiveExitCode !== null
       ? 'border-rose-500/35 bg-rose-500/10'
       : ''
 
-  const silentSuccess = exitCodeNum === 0 && !stdout.trim() && !stderr.trim()
+  const silentSuccess = effectiveExitCode === 0 && !displayStdout.trim() && !displayStderr.trim()
   const monoFont = MONO_FONT
 
   const durationLabel = typeof resultMeta?.duration_sec === 'number' ? `${resultMeta.duration_sec.toFixed(2)}s` : ''
-  const runtimeLabel = resultMeta?.runtime?.trim() || ''
-  const cwdLabel = resultMeta?.cwd?.trim() || ''
-  const timestampRaw = resultMeta?.timestamp?.trim() || ''
+  const runtimeLabel = (useLiveData ? liveSnapshot?.caller : undefined) || resultMeta?.runtime?.trim() || ''
+  const cwdLabel = (useLiveData ? liveSnapshot?.cwd : undefined) || resultMeta?.cwd?.trim() || ''
+  const timestampRaw = (useLiveData ? liveSnapshot?.timestamp : undefined) || resultMeta?.timestamp?.trim() || ''
   const timestampLabel = timestampRaw && Number.isFinite(Date.parse(timestampRaw))
     ? new Date(timestampRaw).toLocaleTimeString()
     : ''
@@ -141,6 +264,11 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
           <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
             {turns.length} turns
           </span>
+          {useLiveData && (
+            <span className="rounded-full border px-2 py-0.5 text-[10px]" style={{ borderColor: 'var(--color-accent-teal)', color: 'var(--color-accent-teal)' }}>
+              live
+            </span>
+          )}
           <div className="flex-1" />
           <button
             onClick={() => setFollowTail((v) => !v)}
@@ -152,38 +280,36 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
         </div>
 
         <div className="flex flex-wrap gap-1 mb-2">
-          {turns.length === 0 && (
+          {turnOptions.length === 0 && (
             <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>(no turns)</span>
           )}
-          {turns.slice(-8).map((t) => {
-            const isActive = t.turnNumber === selectedTurn
+          {turnOptions.map((turnNumber) => {
+            const isActive = turnNumber === selectedTurn
             return (
               <button
-                key={t.turnNumber}
+                key={turnNumber}
                 type="button"
-                onClick={() => setSelectedTurn(t.turnNumber)}
-                className={`max-w-full truncate rounded-md border px-2 py-1 text-[10px] transition-colors ${
-                  isActive ? '' : ''
-                }`}
+                onClick={() => setSelectedTurn(turnNumber)}
+                className="max-w-full truncate rounded-md border px-2 py-1 text-[10px] transition-colors"
                 style={isActive
                   ? { borderColor: 'var(--color-accent)', background: 'var(--color-bg-selected)', color: 'var(--color-accent-teal)' }
                   : { borderColor: 'var(--color-border-subtle)', color: 'var(--color-text-muted)' }
                 }
-                title={`Turn ${t.turnNumber}`}
+                title={`Turn ${turnNumber}`}
               >
-                {t.turnNumber.toString().padStart(4, '0')}
+                {turnNumber.toString().padStart(4, '0')}
               </button>
             )
           })}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-[10px]">
-          {exitCodeNum !== null && (
+          {effectiveExitCode !== null && (
             <span
               className={`rounded-full border px-2 py-0.5 font-semibold ${statusTone}`}
               style={{ color: exitColor }}
             >
-              exit {exitCodeNum}
+              exit {effectiveExitCode}
             </span>
           )}
           {runtimeLabel && (
@@ -204,11 +330,11 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
         </div>
       </div>
 
-      {cmd && (
+      {displayCmd && (
         <div className="shrink-0 rounded-lg border px-4 py-3" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-surface)' }}>
           <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>Command</div>
           <pre className="mt-1.5 text-xs whitespace-pre-wrap break-words" style={{ fontFamily: monoFont, color: 'var(--color-accent-teal)' }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>$ </span>{cmd.trim()}
+            <span style={{ color: 'var(--color-text-muted)' }}>$ </span>{displayCmd.trim()}
           </pre>
           {cwdLabel && (
             <div className="mt-1.5 text-[10px] truncate" style={{ color: 'var(--color-text-muted)' }} title={cwdLabel}>
@@ -233,7 +359,7 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
             className="flex-1 overflow-auto px-4 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
             style={{ fontFamily: monoFont, color: 'var(--color-terminal-text)', background: 'var(--color-terminal-bg)' }}
           >
-            {stdout || '(empty)'}
+            {displayStdout || '(empty)'}
           </pre>
         </div>
 
@@ -245,7 +371,7 @@ export default function TerminalView({ overview, turns }: TerminalViewProps) {
             className="flex-1 overflow-auto px-4 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
             style={{ fontFamily: monoFont, color: 'var(--color-terminal-stderr)', background: 'var(--color-terminal-bg)' }}
           >
-            {stderr || '(empty)'}
+            {displayStderr || '(empty)'}
           </pre>
         </div>
       </div>

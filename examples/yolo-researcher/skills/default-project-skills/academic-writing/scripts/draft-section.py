@@ -176,7 +176,7 @@ def main() -> int:
     parser.add_argument("--citation-hints", default="", help="Optional citation keys/hints")
     parser.add_argument("--model", default="gpt-5.2", help="Model id for optional API-assisted drafting")
     parser.add_argument("--project-root", default=".", help="Project root directory")
-    parser.add_argument("--output-dir", default=".yolo-researcher/library/writing", help="Relative output dir")
+    parser.add_argument("--output-dir", required=True, help="Relative output dir")
     args = parser.parse_args()
 
     section_heading = args.section_heading.strip()

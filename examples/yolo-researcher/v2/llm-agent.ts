@@ -25,9 +25,34 @@ export interface LlmSingleAgentConfig {
   communitySkillsDir?: string
   watchExternalSkills?: boolean
   watchCommunitySkills?: boolean
+  disablePolicies?: boolean
+  onToolEvent?: (event: LlmRealtimeToolEvent) => void
+  onExecEvent?: (event: LlmRealtimeExecEvent) => void
 }
 
-const MAX_OUTCOME_ATTEMPTS = 3
+export interface LlmRealtimeToolEvent extends ToolEventRecord {
+  turnNumber: number
+}
+
+export interface LlmRealtimeExecEvent {
+  turnNumber: number
+  timestamp: string
+  phase: 'start' | 'chunk' | 'end' | 'error'
+  traceId?: string
+  caller?: string
+  command?: string
+  cwd?: string
+  stream?: 'stdout' | 'stderr'
+  chunk?: string
+  truncated?: boolean
+  exitCode?: number
+  signal?: string
+  durationMs?: number
+  error?: string
+}
+
+const MAX_OUTCOME_ATTEMPTS = 5
+const MAX_FAILURE_RECOVERY_ATTEMPTS = 2
 const BOOTSTRAP_PLAN_PREFIX = 'bootstrap pending: replace with 3-5 goal-specific next actions'
 const TOOL_EVENT_STRING_LIMIT = 6000
 const FETCH_EVENT_STRING_LIMIT = 80_000
@@ -430,6 +455,7 @@ async function buildAgentPacks(profile: CapabilityProfile, enableNetwork: boolea
 function normalizePlanText(text: string): string {
   return text
     .toLowerCase()
+    .replace(/^p\d+\s*[:|-]\s*/i, '')
     .replace(/\s+/g, ' ')
     .replace(/[.。]$/u, '')
     .trim()
@@ -524,6 +550,24 @@ function validatePlanRewriteProjectUpdate(projectUpdate: unknown): void {
   }
 }
 
+function renderPlanBoardForPrompt(context: TurnContext): string {
+  const rows = context.project.planBoard
+    .slice()
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, 12)
+    .map((item) => {
+      const doneDefinition = item.doneDefinition.length > 0
+        ? item.doneDefinition.slice(0, 2).join(' | ')
+        : '(missing done_definition)'
+      const evidenceHint = item.evidencePaths.length > 0
+        ? item.evidencePaths[item.evidencePaths.length - 1]
+        : '(none)'
+      return `- ${item.id} [${item.status}] ${item.title} :: done=${doneDefinition} :: evidence=${evidenceHint}`
+    })
+
+  return rows.length > 0 ? rows.join('\n') : '- none'
+}
+
 function buildNativeTurnPrompt(context: TurnContext): string {
   const recent = context.recentTurns
     .map((turn) => `- ${turn.actionPath}: ${turn.summary}`)
@@ -543,10 +587,39 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     .join('\n')
 
   const planNeedsRewrite = requiresPlanRewrite(context.project.currentPlan)
+  const plannerCheckpointDue = Boolean(context.plannerCheckpoint?.due)
   const literatureBootstrapNeeded = goalNeedsLiteratureBootstrap(context.project.goal) && !hasLiteratureArtifacts(context)
-  const literatureLibraryPath = `${context.yoloRoot}/library/literature`
   const artifactPaths = canonicalTurnArtifactPaths(context)
-  const hasProblemStatement = context.project.keyArtifacts.some((entry) => /problem_statement/i.test(entry))
+  const literatureOutputDir = `${artifactPaths.canonicalRelativeFromProject}/literature`
+  const literatureOutputDirAbs = toPosixPath(join(context.projectRoot, literatureOutputDir))
+  const hasProblemStatement = [
+    ...context.project.keyArtifacts,
+    ...context.project.done.map((entry) => entry.evidencePath),
+    ...context.project.planBoard.flatMap((item) => item.evidencePaths)
+  ].some((entry) => /problem_statement/i.test(entry))
+  const workspaceGitRepos = (context.workspaceGitRepos ?? []).slice(0, 8)
+  const planBoardView = renderPlanBoardForPrompt(context)
+  const plannerCheckpointReasons = context.plannerCheckpoint?.reasons ?? []
+  const activePlan = context.project.planBoard
+    .slice()
+    .sort((a, b) => a.priority - b.priority)
+    .find((item) => item.status === 'ACTIVE')
+  const top3PlanItems = context.project.planBoard
+    .slice()
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, 3)
+  const top3NeedsLiterature = top3PlanItems.some((item) => {
+    if (item.status === 'DONE' || item.status === 'DROPPED') return false
+    const text = `${item.title}\n${item.doneDefinition.join('\n')}`.toLowerCase()
+    return /(literature|prior art|related work|survey|paper|citation|novelty|reading[_ -]?list|matrix|arxiv|openalex|doi)/.test(text)
+  })
+  const hasRecentSweepEvidence = context.project.done
+    .slice(-8)
+    .some((item) => {
+      const text = `${item.text}\n${item.evidencePath}`.toLowerCase()
+      return /(literature|reading[_ -]?list|matrix|openalex|arxiv|scholar|doi|search[-_ ]?sweep|sweep)/.test(text)
+    })
+  const literatureSweepRecommended = top3NeedsLiterature && !hasRecentSweepEvidence
 
   return [
     'You are YOLO-Researcher v2 native runner.',
@@ -554,27 +627,63 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     'This turn is native: you may use ALL available tools/skills/subagents directly.',
     'Do real work, produce evidence, then return one JSON report.',
     '',
+    'Mode rule (critical):',
+    `- plannerCheckpoint=${plannerCheckpointDue ? 'TRUE' : 'FALSE'}.`,
+    ...(plannerCheckpointDue && plannerCheckpointReasons.length > 0
+      ? [`- plannerCheckpoint reasons: ${plannerCheckpointReasons.join(', ')}`]
+      : []),
+    ...(plannerCheckpointDue
+      ? [
+        '- This is a PLANNING turn.',
+        '- You MAY update Plan Board structure (Top-3 ordering, add/drop/merge items, edit done_definition).',
+        '- Keep this turn governance-only. Avoid heavy evidence collection or long multi-tool execution.'
+      ]
+      : [
+        '- This is an EXECUTION turn.',
+        '- You MUST NOT modify Plan Board structure (no add/drop/merge/replace/reorder Top-3, no done_definition edits).',
+        '- Pick exactly ONE activePlanId (prefer existing ACTIVE, else choose one from Top-3) and work only on it.'
+      ]),
+    '',
+    'Deliverable rule (critical):',
+    '- A SUCCESS turn must update at least one deliverable file for activePlanId, or resolve a blocker with evidence.',
+    '- Adding only supporting evidence snippets/cite seeds without deliverable update is NOT success (downgrade to no_delta).',
+    '',
+    'Read-back rule (critical):',
+    '- Before new fetch/sweep, read current activePlanId deliverable file(s) and confirm the exact missing gap first.',
+    '',
     'Hard rules:',
-    '1) Prefer autonomous execution. Ask user only when external input/permission is truly required.',
-    '2) For research/prior-art/novelty goals, run literature-search({mode:"sweep"}) early; fallback to fetch only if literature-search is unavailable.',
+    '1) Prefer autonomous execution. Retry concrete fixes before asking user.',
+    literatureSweepRecommended
+      ? '2) Literature sweep is recommended now: Top-3 still has unmet literature deliverables and recent sweep evidence is missing. Run literature-search({mode:"sweep"}) before deep code reading.'
+      : '2) Literature sweep is conditional: only run literature-search({mode:"sweep"}) when Top-3 literature deliverables are unmet and recent sweep evidence is missing; otherwise prioritize consolidating existing literature into deliverables.',
     '3) Do not do exhaustive repo reading. Use high-leverage slices first (README, rg, entrypoints).',
     '4) For large repos, prefer coding-large-repo via skill-script-run before manual deep reads.',
     '5) Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). If path is dirty, choose a new target directory name.',
     '6) Never clone or create long-lived workspaces under runs/turn-xxxx/.',
     `7) Write turn artifacts only under "${artifactPaths.canonicalRelativeFromProject}" (absolute: ${artifactPaths.canonicalAbsolute}).`,
-    '8) Facts/Constraints evidencePath must use "runs/turn-xxxx/...". No evidence -> hypotheses.',
-    '9) Persist processed literature artifacts locally for future retrieval.',
+    '8) projectUpdate evidence paths must use "runs/turn-xxxx/...". Never use work/, absolute paths, or other roots in evidencePath fields.',
+    '9) Persist processed literature artifacts under current turn artifacts.',
     '10) Respect Done(Do-not-repeat): avoid repeating identical action fingerprints unless you will produce a new artifact type.',
-    '11) Prefer typed wrapper tools over raw skill-script-run when available: literature-search, data-analyze, writing-outline, writing-draft, convert_to_markdown.',
-    '12) For PDF/DOCX conversion, use convert_to_markdown before ad-hoc python parsing.',
-    '13) If wrapper calls fail due missing skills/scripts, run skills-health-check and report concrete missing pieces.',
+    '11) Bind this turn to exactly one plan item via activePlanId.',
+    '12) Success is valid only if this turn touches at least one deliverable for activePlanId (from done_definition "deliverable:" rows), OR clears a blocker.',
+    '13) Do not silently drop unfinished plan items. Dropping requires dropReason + evidencePaths + replacedBy.',
+    '14) done_definition must be mechanical only: use "deliverable: <path-or-file-token>" and optional "evidence_min: <n>".',
+    '15) Do not mark ACTIVE -> DONE unless done_definition is satisfied by cumulative plan evidence.',
+    '16) Plan structure edits (planBoard/currentPlan rewrite, drop/replace, done_definition edits, Top-3 reorder) are allowed ONLY when planner checkpoint is due.',
+    '17) If repeated attempts in this turn still fail, return ask_user with one concrete blocking question and pause.',
+    '18) If using git_* tools, always set cwd to a concrete repo path; never assume project root itself is a git repo.',
     '',
     `Turn: ${context.turnNumber}`,
     `Goal: ${context.project.goal}`,
     `Default runtime: ${context.project.defaultRuntime}`,
-    `Literature library (local cache): ${literatureLibraryPath}`,
+    `Literature output dir (relative): ${literatureOutputDir}`,
+    `Literature output dir (absolute): ${literatureOutputDirAbs}`,
     `Turn artifact dir (relative): ${artifactPaths.canonicalRelativeFromProject}`,
     `Turn artifact dir (absolute): ${artifactPaths.canonicalAbsolute}`,
+    `Workspace git repos: ${workspaceGitRepos.length > 0 ? workspaceGitRepos.join(', ') : '(none discovered)'}`,
+    'Evidence snapshot rule:',
+    '- If source proof is in work/... or any non-runs path, create a snapshot file under runs/turn-xxxx/artifacts/evidence/... first.',
+    '- Then cite ONLY that runs/turn-xxxx/... snapshot path in facts/constraints/claims/planBoard evidence fields.',
     ...(hasProblemStatement
       ? []
       : [
@@ -587,19 +696,32 @@ function buildNativeTurnPrompt(context: TurnContext): string {
         'Research bootstrap gate:',
         '- No literature evidence is recorded yet for this goal.',
         '- In this turn, run literature-search({query:"<query>",mode:"sweep"}) before deep code reading.',
-        '- Use outputDir ".yolo-researcher/library/literature".',
+        `- Use outputDir "${literatureOutputDir}".`,
         `- Save at least one processed artifact under "${artifactPaths.canonicalRelativeFromProject}", and keep references in projectUpdate.keyArtifacts.`
       ]
       : []),
     '',
-    'Current Plan:',
+    'Plan Board (stable IDs):',
+    planBoardView,
+    '',
+    `Current active plan: ${activePlan ? `${activePlan.id} ${activePlan.title}` : '(none)'}`,
+    '',
+    'Current Plan (derived):',
     ...context.project.currentPlan.map((item, idx) => `${idx + 1}. ${item}`),
-    ...(planNeedsRewrite
+    ...(planNeedsRewrite && plannerCheckpointDue
       ? [
         '',
         'Plan quality gate:',
         '- Current Plan is bootstrap/template.',
-        '- In this turn, projectUpdate.currentPlan is REQUIRED and must contain 3-5 concrete goal-specific next actions.'
+        '- Planner checkpoint is due: projectUpdate.currentPlan is REQUIRED with 3-5 concrete goal-specific next actions.'
+      ]
+      : []),
+    ...(planNeedsRewrite && !plannerCheckpointDue
+      ? [
+        '',
+        'Plan quality gate:',
+        '- Current Plan is bootstrap/template.',
+        '- Planner checkpoint is NOT due: do not rewrite planBoard/currentPlan in this turn; focus on deliverable execution only.'
       ]
       : []),
     '',
@@ -614,6 +736,17 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '',
     'Done (do-not-repeat):',
     done || '- none',
+    ...(context.plannerCheckpoint?.due
+      ? [
+        '',
+        `Planner checkpoint due: ${context.plannerCheckpoint.reasons.join(', ')}`,
+        '- Governance window open: you may refresh Plan Board Top-3 priorities and done_definition fields.'
+      ]
+      : [
+        '',
+        'Planner checkpoint not due:',
+        '- Do NOT rewrite planBoard/currentPlan in projectUpdate this turn.'
+      ]),
     '',
     'Focus: Each turn should advance ONE deliverable.',
     'Do not combine literature search + code analysis + writing in a single turn.',
@@ -651,10 +784,18 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '  "status": "success|failure|ask_user|stopped",',
     '  "summary": "one concise observation",',
     '  "primaryAction": "short label of what was actually done",',
+    '  "activePlanId": "P<number> for this turn",',
+    '  "statusChange": "e.g. P2 TODO -> ACTIVE or P2 ACTIVE -> DONE",',
+    '  "delta": "what changed for this plan item",',
+    '  "evidencePaths": ["runs/turn-xxxx/..."],',
+    '  "dropReason": "required when statusChange drops item to DROPPED",',
+    '  "replacedBy": "P<number>|null when dropping",',
     '  "askQuestion": "required when status=ask_user",',
     '  "stopReason": "required when status=stopped",',
     '  "projectUpdate": {',
-    '    "currentPlan": ["up to 5 items"],',
+    '    "planBoard": [{"id":"P2","title":"...","status":"TODO|ACTIVE|DONE|BLOCKED|DROPPED","doneDefinition":["deliverable: runs/turn-0001/artifacts/problem_statement.md","evidence_min: 1"],"evidencePaths":["runs/turn-0001/..."],"nextMinStep":"...","priority":1}], // ONLY when planner checkpoint is due',
+    '    "currentPlan": ["up to 5 items"], // ONLY when planner checkpoint is due',
+    '    // If proof comes from work/... first write snapshot to runs/turn-xxxx/artifacts/evidence/*.md',
     '    "facts": [{"text":"...","evidencePath":"runs/turn-0001/..."}],',
     '    "constraints": [{"text":"...","evidencePath":"runs/turn-0001/..."}],',
     '    "hypotheses": ["[HYP] ..."],',
@@ -673,6 +814,16 @@ function buildNativeRepairPrompt(input: {
   previousOutput: string
   requirePlanRewrite: boolean
 }): string {
+  const artifactPaths = canonicalTurnArtifactPaths(input.context)
+  const evidencePathRepairHints = /evidence path|runs\/turn-\d{4}/i.test(input.validationError)
+    ? [
+      '- Evidence path repair required:',
+      '- Do NOT use work/... or absolute file paths in projectUpdate evidence fields.',
+      `- If proof comes from work/... first write a snapshot under "${artifactPaths.canonicalRelativeFromProject}/evidence/".`,
+      '- Then reference only runs/turn-xxxx/... in facts/constraints/claims/planBoard.evidencePaths.'
+    ]
+    : []
+
   return [
     'Your previous native turn JSON is invalid for YOLO v2.',
     `Validation error: ${input.validationError}`,
@@ -687,8 +838,13 @@ function buildNativeRepairPrompt(input: {
     '- intent: non-empty string',
     '- status: success|failure|ask_user|stopped',
     '- summary: non-empty string',
+    '- activePlanId: P<number> (required for status=success)',
+    '- statusChange: required for status=success',
+    '- delta: required for status=success',
+    '- evidencePaths: at least one runs/turn-xxxx/... path for status=success',
     '- askQuestion: required when status=ask_user',
     '- stopReason: required when status=stopped',
+    ...evidencePathRepairHints,
     ...(input.requirePlanRewrite
       ? ['- projectUpdate.currentPlan: REQUIRED, 3-5 concrete goal-specific actions (no placeholders)']
       : []),
@@ -762,7 +918,7 @@ function buildLiteratureBootstrapRepairPrompt(input: {
     '',
     'Recovery requirements (execute now in this turn):',
     '- Call `literature-search` with mode="sweep".',
-    '- Include query + bounded limits and outputDir=".yolo-researcher/library/literature".',
+    `- Include query + bounded limits and outputDir="${artifactPaths.canonicalRelativeFromProject}/literature".`,
     '- Do not stop at one-shot random OpenAlex query dumps.',
     '- Persist produced literature artifacts and include paths in projectUpdate.keyArtifacts.',
     '- Continue with next concrete action only after search-sweep completes.',
@@ -778,6 +934,77 @@ function buildLiteratureBootstrapRepairPrompt(input: {
     input.previousOutput.slice(0, 4000),
     '```'
   ].join('\n')
+}
+
+function resolveCurrentActivePlanId(context: TurnContext): string {
+  const active = context.project.planBoard
+    .slice()
+    .sort((a, b) => a.priority - b.priority)
+    .find((item) => item.status === 'ACTIVE')
+  return active?.id || ''
+}
+
+function buildFailureRecoveryPrompt(input: {
+  context: TurnContext
+  previousOutput: string
+  failedSummary: string
+  failedPrimaryAction: string
+  failureAttempt: number
+  requirePlanRewrite: boolean
+}): string {
+  const activePlanId = resolveCurrentActivePlanId(input.context)
+  const artifactPaths = canonicalTurnArtifactPaths(input.context)
+
+  return [
+    'Previous attempt ended with status=failure.',
+    `Failure summary: ${input.failedSummary || 'unknown failure'}`,
+    `Failure action: ${input.failedPrimaryAction || 'agent.run'}`,
+    `Recovery attempt: ${input.failureAttempt}/${MAX_FAILURE_RECOVERY_ATTEMPTS}`,
+    '',
+    `Turn: ${input.context.turnNumber}`,
+    `Goal: ${input.context.project.goal}`,
+    `Default runtime: ${input.context.project.defaultRuntime}`,
+    '',
+    'Recovery requirements (execute now in this SAME turn):',
+    `- Keep focus on active plan item: ${activePlanId || 'current ACTIVE item'}.`,
+    '- For runtime/tool errors, run targeted troubleshooting search first (web/docs) using exact error signature before next blind retry.',
+    '- Try a different concrete remediation than previous attempt (different command/tool/input).',
+    '- Produce at least one new verifiable artifact under runs/turn-xxxx/artifacts.',
+    '- Do NOT mark ACTIVE -> DONE unless done_definition is satisfied by this turn evidence.',
+    '- If still blocked after retries, return status=ask_user with one concrete question that unblocks execution.',
+    `- Evidence paths must stay under "${artifactPaths.canonicalRelativeFromProject}".`,
+    '',
+    'Return ONE corrected JSON outcome only.',
+    'Allowed status: success|failure|ask_user|stopped.',
+    ...(input.requirePlanRewrite
+      ? ['projectUpdate.currentPlan is REQUIRED with 3-5 concrete goal-specific actions.']
+      : []),
+    '',
+    'Previous output:',
+    '```',
+    input.previousOutput.slice(0, 4000),
+    '```'
+  ].join('\n')
+}
+
+function buildEscalationAskQuestion(input: {
+  goal: string
+  activePlanId: string
+  failureSummary: string
+  suggestedNeed?: string
+}): string {
+  const targetPlan = input.activePlanId || 'current ACTIVE plan item'
+  const reason = input.failureSummary.trim() || 'execution remained blocked after retries'
+  const suggestion = input.suggestedNeed?.trim()
+    ? `Need from you: ${input.suggestedNeed.trim()}`
+    : 'Need from you: choose one unblock path (credentials/environment fix/scope change).'
+
+  return [
+    `Paused at ${targetPlan}.`,
+    `Goal: ${input.goal}`,
+    `Blocker: ${reason}`,
+    suggestion
+  ].join(' ')
 }
 
 function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
@@ -798,11 +1025,34 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
 
   const askQuestion = typeof row.askQuestion === 'string' ? row.askQuestion.trim() : ''
   const stopReason = typeof row.stopReason === 'string' ? row.stopReason.trim() : ''
+  const activePlanId = typeof row.activePlanId === 'string' ? row.activePlanId.trim().toUpperCase() : ''
+  const statusChange = typeof row.statusChange === 'string' ? row.statusChange.trim() : ''
+  const delta = typeof row.delta === 'string' ? row.delta.trim() : ''
+  const evidencePaths = Array.isArray(row.evidencePaths)
+    ? row.evidencePaths.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : []
+  const dropReason = typeof row.dropReason === 'string' ? row.dropReason.trim() : ''
+  const replacedBy = row.replacedBy === null
+    ? null
+    : typeof row.replacedBy === 'string'
+      ? row.replacedBy.trim().toUpperCase()
+      : undefined
   if (status === 'ask_user' && !askQuestion) {
     throw new Error('turn outcome.askQuestion is required when status=ask_user')
   }
   if (status === 'stopped' && !stopReason) {
     throw new Error('turn outcome.stopReason is required when status=stopped')
+  }
+  if (status === 'success') {
+    if (!activePlanId) throw new Error('turn outcome.activePlanId is required when status=success')
+    if (!/^P\d+$/i.test(activePlanId)) throw new Error('turn outcome.activePlanId must be P<number> when status=success')
+    if (!statusChange) throw new Error('turn outcome.statusChange is required when status=success')
+    if (!delta) throw new Error('turn outcome.delta is required when status=success')
+    if (evidencePaths.length === 0) throw new Error('turn outcome.evidencePaths is required when status=success')
+  }
+  if (/->\s*DROPPED/i.test(statusChange)) {
+    if (!dropReason) throw new Error('turn outcome.dropReason is required when dropping a plan item')
+    if (replacedBy === undefined) throw new Error('turn outcome.replacedBy (Pn|null) is required when dropping a plan item')
   }
 
   return {
@@ -810,6 +1060,12 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
     status: status as TurnRunOutcome['status'],
     summary,
     primaryAction: typeof row.primaryAction === 'string' ? row.primaryAction.trim() : undefined,
+    activePlanId: activePlanId || undefined,
+    statusChange: statusChange || undefined,
+    delta: delta || undefined,
+    evidencePaths: evidencePaths.length > 0 ? evidencePaths : undefined,
+    dropReason: dropReason || undefined,
+    replacedBy,
     askQuestion: askQuestion || undefined,
     stopReason: stopReason || undefined,
     projectUpdate: typeof row.projectUpdate === 'object' && row.projectUpdate
@@ -824,6 +1080,8 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
 export class LlmSingleAgent implements YoloSingleAgent {
   private readonly agentPromise: Promise<ReturnType<typeof createAgent>>
   private currentToolEvents: ToolEventRecord[] | null = null
+  private currentTurnNumber: number | null = null
+  private readonly realtimeUnsubscribers: Array<() => void> = []
 
   constructor(private readonly config: LlmSingleAgentConfig) {
     const capabilityProfile = config.capabilityProfile ?? 'full'
@@ -845,13 +1103,14 @@ export class LlmSingleAgent implements YoloSingleAgent {
   }): Promise<ReturnType<typeof createAgent>> {
     const packList = await buildAgentPacks(input.capabilityProfile, input.enableNetwork, this.config.projectPath)
 
-    return createAgent({
+    const agent = createAgent({
       projectPath: this.config.projectPath,
       model: this.config.model,
       apiKey: this.config.apiKey,
       maxSteps: this.config.maxSteps ?? (input.capabilityProfile === 'full' ? 16 : 8),
       maxTokens: this.config.maxTokens ?? (input.capabilityProfile === 'full' ? 8_000 : 4_000),
       packs: packList,
+      disablePolicies: this.config.disablePolicies ?? true,
       externalSkillsDir: input.externalSkillsDir,
       communitySkillsDir: this.config.communitySkillsDir,
       watchExternalSkills: this.config.watchExternalSkills ?? true,
@@ -860,22 +1119,24 @@ export class LlmSingleAgent implements YoloSingleAgent {
         ? undefined
         : async () => true,
       onToolCall: (tool, input) => {
-        if (!this.currentToolEvents) return
         const stringLimit = tool === 'fetch' ? FETCH_EVENT_STRING_LIMIT : TOOL_EVENT_STRING_LIMIT
-        this.currentToolEvents.push({
+        const event: ToolEventRecord = {
           timestamp: new Date().toISOString(),
           phase: 'call',
           tool,
           input: sanitizeForEvent(input, 0, stringLimit)
-        })
+        }
+        if (this.currentToolEvents) {
+          this.currentToolEvents.push(event)
+        }
+        this.emitRealtimeToolEvent(event)
       },
       onToolResult: (tool, result, args) => {
-        if (!this.currentToolEvents) return
         const stringLimit = tool === 'fetch' ? FETCH_EVENT_STRING_LIMIT : TOOL_EVENT_STRING_LIMIT
         const resultObj = result && typeof result === 'object'
           ? result as Record<string, unknown>
           : null
-        this.currentToolEvents.push({
+        const event: ToolEventRecord = {
           timestamp: new Date().toISOString(),
           phase: 'result',
           tool,
@@ -883,13 +1144,23 @@ export class LlmSingleAgent implements YoloSingleAgent {
           result: sanitizeForEvent(result, 0, stringLimit),
           success: typeof resultObj?.success === 'boolean' ? resultObj.success : undefined,
           error: typeof resultObj?.error === 'string' ? truncateText(resultObj.error) : undefined
-        })
+        }
+        if (this.currentToolEvents) {
+          this.currentToolEvents.push(event)
+        }
+        this.emitRealtimeToolEvent(event)
       },
       constraints: [
         'One turn = one native execution report. You may perform multiple tool calls inside the turn.',
         'Prefer evidence-producing actions. Save turn artifacts under runs/turn-xxxx/artifacts and use evidencePath as runs/turn-xxxx/...',
+        'Never use work/... or absolute paths in projectUpdate evidence fields; snapshot to runs/turn-xxxx/artifacts/evidence first.',
         'For research/prior-art goals, run literature-search(mode="sweep") early and persist processed literature artifacts locally.',
-        'Use wrapper tools over raw skill-script-run when possible: literature-search, data-analyze, writing-outline, writing-draft, convert_to_markdown.',
+        'Bind every success turn to one plan item via activePlanId + statusChange + delta + evidencePaths.',
+        'Success is valid only if this turn touches active plan deliverable (done_definition deliverable:) or clears a blocker.',
+        'Use mechanical done_definition rows only: deliverable:<path-or-token> and optional evidence_min:<n>.',
+        'ACTIVE -> DONE is valid only when cumulative plan evidence satisfies done_definition.',
+        'Rewrite planBoard/currentPlan only on planner checkpoint turns.',
+        'Do not silently drop unfinished plan items; dropping needs dropReason + evidencePaths + replacedBy.',
         'Be resourceful before asking user; Ask is last resort when truly blocked.',
         'Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). Prefer fresh target dirs.',
         'Do not Stop unless milestone completion or explicit stop/safety condition.',
@@ -897,6 +1168,74 @@ export class LlmSingleAgent implements YoloSingleAgent {
       ],
       identity: 'You are a single-agent autonomous researcher that follows YOLO v2 thin protocol.'
     })
+
+    this.attachRealtimeExecBridge(agent)
+    return agent
+  }
+
+  private emitRealtimeToolEvent(event: ToolEventRecord): void {
+    const turnNumber = this.currentTurnNumber
+    if (!this.config.onToolEvent || typeof turnNumber !== 'number') return
+
+    try {
+      this.config.onToolEvent({
+        ...event,
+        turnNumber
+      })
+    } catch {
+      // Best-effort telemetry callback only.
+    }
+  }
+
+  private attachRealtimeExecBridge(agent: ReturnType<typeof createAgent>): void {
+    if (!this.config.onExecEvent) return
+
+    const emitExec = (phase: LlmRealtimeExecEvent['phase'], payload: unknown): void => {
+      const turnNumber = this.currentTurnNumber
+      if (typeof turnNumber !== 'number') return
+
+      const row = toPlainObject(payload)
+      const streamCandidate = safeString(row?.stream).trim().toLowerCase()
+      const stream = streamCandidate === 'stdout' || streamCandidate === 'stderr'
+        ? streamCandidate
+        : undefined
+      const traceId = safeString(row?.traceId).trim() || undefined
+      const caller = safeString(row?.caller).trim() || undefined
+      const command = safeString(row?.command).trim() || undefined
+      const cwd = safeString(row?.cwd).trim() || undefined
+      const chunk = safeString(row?.chunk)
+      const error = safeString(row?.error).trim() || undefined
+      const truncated = typeof row?.truncated === 'boolean' ? row.truncated : undefined
+      const exitCode = typeof row?.exitCode === 'number' ? row.exitCode : undefined
+      const signal = safeString(row?.signal).trim() || undefined
+      const durationMs = typeof row?.durationMs === 'number' ? row.durationMs : undefined
+
+      try {
+        this.config.onExecEvent?.({
+          turnNumber,
+          timestamp: new Date().toISOString(),
+          phase,
+          traceId,
+          caller,
+          command,
+          cwd,
+          stream,
+          chunk: chunk || undefined,
+          truncated,
+          exitCode,
+          signal,
+          durationMs,
+          error
+        })
+      } catch {
+        // Best-effort telemetry callback only.
+      }
+    }
+
+    this.realtimeUnsubscribers.push(agent.runtime.eventBus.on('io:exec:start', (payload) => emitExec('start', payload)))
+    this.realtimeUnsubscribers.push(agent.runtime.eventBus.on('io:exec:chunk', (payload) => emitExec('chunk', payload)))
+    this.realtimeUnsubscribers.push(agent.runtime.eventBus.on('io:exec:end', (payload) => emitExec('end', payload)))
+    this.realtimeUnsubscribers.push(agent.runtime.eventBus.on('io:exec:error', (payload) => emitExec('error', payload)))
   }
 
   async runTurn(context: TurnContext): Promise<TurnRunOutcome> {
@@ -904,6 +1243,14 @@ export class LlmSingleAgent implements YoloSingleAgent {
     try {
       agent = await this.agentPromise
       await agent.ensureInit()
+      const turnPaths = canonicalTurnArtifactPaths(context)
+      agent.runtime.sessionState.set('yolo.turnId', turnPaths.turnId)
+      agent.runtime.sessionState.set('yolo.turnArtifactsDir', turnPaths.canonicalRelativeFromProject)
+      agent.runtime.sessionState.set('yolo.turnArtifactsAbsDir', turnPaths.canonicalAbsolute)
+      if (Array.isArray(context.workspaceGitRepos) && context.workspaceGitRepos.length > 0) {
+        agent.runtime.sessionState.set('yolo.workspaceGitRepos', context.workspaceGitRepos)
+        agent.runtime.sessionState.set('git.defaultCwd', context.workspaceGitRepos[0])
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return {
@@ -914,12 +1261,16 @@ export class LlmSingleAgent implements YoloSingleAgent {
       }
     }
 
-    const requirePlanRewrite = requiresPlanRewrite(context.project.currentPlan)
+    const requirePlanRewrite = Boolean(context.plannerCheckpoint?.due) && requiresPlanRewrite(context.project.currentPlan)
     const literatureBootstrapNeeded = goalNeedsLiteratureBootstrap(context.project.goal) && !hasLiteratureArtifacts(context)
 
     let prompt = buildNativeTurnPrompt(context)
     let rawOutput = ''
     let lastValidationError = ''
+    let failureRecoveryAttempts = 0
+    let runtimeFailureAttempts = 0
+    const fallbackActivePlanId = resolveCurrentActivePlanId(context)
+    this.currentTurnNumber = context.turnNumber
     this.currentToolEvents = []
 
     try {
@@ -928,11 +1279,32 @@ export class LlmSingleAgent implements YoloSingleAgent {
         rawOutput = result.output || rawOutput
 
         if (!result.success) {
+          const failureMessage = (result.error || 'Agent run failed without error details.').trim()
+          runtimeFailureAttempts += 1
+          if (runtimeFailureAttempts <= MAX_FAILURE_RECOVERY_ATTEMPTS && attempt < MAX_OUTCOME_ATTEMPTS) {
+            prompt = buildFailureRecoveryPrompt({
+              context,
+              previousOutput: result.output || '',
+              failedSummary: failureMessage,
+              failedPrimaryAction: 'agent.run',
+              failureAttempt: runtimeFailureAttempts,
+              requirePlanRewrite
+            })
+            continue
+          }
+
           return {
-            intent: 'Handle agent runtime error safely',
-            status: 'failure',
-            summary: result.error || 'Agent run failed without error details.',
+            intent: 'Pause for user input after repeated runtime failures',
+            status: 'ask_user',
+            summary: `Paused: ${failureMessage}`,
             primaryAction: 'agent.run',
+            activePlanId: fallbackActivePlanId || undefined,
+            askQuestion: buildEscalationAskQuestion({
+              goal: context.project.goal,
+              activePlanId: fallbackActivePlanId,
+              failureSummary: failureMessage,
+              suggestedNeed: 'confirm runtime/environment fix or allow narrowing scope'
+            }),
             toolEvents: this.currentToolEvents,
             rawOutput
           }
@@ -949,15 +1321,23 @@ export class LlmSingleAgent implements YoloSingleAgent {
             const usage = detectLiteratureSearchUsage(this.currentToolEvents ?? [])
             if (!usage.invoked || !usage.fullMode || !usage.fullModeSuccess) {
               if (attempt >= MAX_OUTCOME_ATTEMPTS) {
+                const failureSummary = !usage.invoked
+                  ? 'Literature bootstrap missing: literature-search(mode="sweep") was never executed.'
+                  : !usage.fullMode
+                    ? `Literature bootstrap incomplete (${usage.detail || 'non-full search'}); retry budget exhausted.`
+                    : `Literature bootstrap failed after invocation: ${usage.lastError || 'search-sweep did not complete successfully'}.`
                 return {
-                  intent: 'Enforce literature bootstrap before deep research turns',
-                  status: 'failure',
-                  summary: !usage.invoked
-                    ? 'Literature bootstrap missing: literature-search(mode="sweep") was never executed.'
-                    : !usage.fullMode
-                      ? `Literature bootstrap incomplete (${usage.detail || 'non-full search'}); retry budget exhausted.`
-                      : `Literature bootstrap failed after invocation: ${usage.lastError || 'search-sweep did not complete successfully'}.`,
+                  intent: 'Pause for user input after literature bootstrap retries exhausted',
+                  status: 'ask_user',
+                  summary: `Paused: ${failureSummary}`,
                   primaryAction: 'literature-search: sweep',
+                  activePlanId: fallbackActivePlanId || undefined,
+                  askQuestion: buildEscalationAskQuestion({
+                    goal: context.project.goal,
+                    activePlanId: fallbackActivePlanId,
+                    failureSummary,
+                    suggestedNeed: 'confirm literature source/tool availability or provide alternate source constraints'
+                  }),
                   toolEvents: this.currentToolEvents,
                   rawOutput
                 }
@@ -976,11 +1356,19 @@ export class LlmSingleAgent implements YoloSingleAgent {
           const destructiveBlock = detectDestructivePolicyBlockedBash(this.currentToolEvents ?? [])
           if (destructiveBlock) {
             if (attempt >= MAX_OUTCOME_ATTEMPTS) {
+              const failureSummary = `Policy blocked destructive command (${destructiveBlock.errorLine}); safe retry attempts exhausted.`
               return {
-                intent: 'Recover from policy-blocked destructive command',
-                status: 'failure',
-                summary: `Policy blocked destructive command (${destructiveBlock.errorLine}); safe retry attempts exhausted.`,
+                intent: 'Pause for user input after policy-blocked retries exhausted',
+                status: 'ask_user',
+                summary: `Paused: ${failureSummary}`,
                 primaryAction: 'bash: safe repo bootstrap',
+                activePlanId: fallbackActivePlanId || undefined,
+                askQuestion: buildEscalationAskQuestion({
+                  goal: context.project.goal,
+                  activePlanId: fallbackActivePlanId,
+                  failureSummary,
+                  suggestedNeed: 'approve alternate non-destructive directory/repo strategy'
+                }),
                 toolEvents: this.currentToolEvents,
                 rawOutput
               }
@@ -994,6 +1382,41 @@ export class LlmSingleAgent implements YoloSingleAgent {
               requirePlanRewrite
             })
             continue
+          }
+
+          if (outcome.status === 'failure') {
+            failureRecoveryAttempts += 1
+            const failedSummary = outcome.summary || 'Native attempt failed.'
+            const failedPrimaryAction = outcome.primaryAction || 'agent.run'
+            const activePlanId = outcome.activePlanId?.trim().toUpperCase() || fallbackActivePlanId
+
+            if (failureRecoveryAttempts <= MAX_FAILURE_RECOVERY_ATTEMPTS && attempt < MAX_OUTCOME_ATTEMPTS) {
+              prompt = buildFailureRecoveryPrompt({
+                context,
+                previousOutput: result.output,
+                failedSummary,
+                failedPrimaryAction,
+                failureAttempt: failureRecoveryAttempts,
+                requirePlanRewrite
+              })
+              continue
+            }
+
+            return {
+              intent: 'Pause for user input after repeated native failures',
+              status: 'ask_user',
+              summary: `Paused after ${failureRecoveryAttempts} failed attempt(s): ${failedSummary}`,
+              primaryAction: failedPrimaryAction,
+              activePlanId: activePlanId || undefined,
+              askQuestion: buildEscalationAskQuestion({
+                goal: context.project.goal,
+                activePlanId,
+                failureSummary: failedSummary
+              }),
+              updateSummary: outcome.updateSummary,
+              toolEvents: this.currentToolEvents,
+              rawOutput
+            }
           }
 
           return {
@@ -1016,19 +1439,34 @@ export class LlmSingleAgent implements YoloSingleAgent {
       }
 
       return {
-        intent: 'Handle invalid native turn output safely',
-        status: 'failure',
-        summary: `Native turn output invalid after ${MAX_OUTCOME_ATTEMPTS} attempts: ${lastValidationError || 'unknown error'}`,
+        intent: 'Pause for user input after invalid native output retries exhausted',
+        status: 'ask_user',
+        summary: `Paused: native turn output remained invalid after ${MAX_OUTCOME_ATTEMPTS} attempts`,
         primaryAction: 'agent.run',
+        activePlanId: fallbackActivePlanId || undefined,
+        askQuestion: buildEscalationAskQuestion({
+          goal: context.project.goal,
+          activePlanId: fallbackActivePlanId,
+          failureSummary: lastValidationError || 'native output invalid after repeated retries',
+          suggestedNeed: 'decide whether to continue with stricter constraints or reset this turn'
+        }),
         toolEvents: this.currentToolEvents,
         rawOutput
       }
     } finally {
       this.currentToolEvents = null
+      this.currentTurnNumber = null
     }
   }
 
   async destroy(): Promise<void> {
+    for (const unsubscribe of this.realtimeUnsubscribers.splice(0)) {
+      try {
+        unsubscribe()
+      } catch {
+        // Ignore bridge cleanup errors.
+      }
+    }
     const agent = await this.agentPromise
     await agent.destroy()
   }

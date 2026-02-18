@@ -82,8 +82,7 @@ describe('yolo-researcher v2 user input bridge', () => {
     const replyFile = await fs.readFile(path.join(projectPath, 'reply.txt'), 'utf-8')
     expect(replyFile).toContain('Use docker runtime')
 
-    const projectMd = await fs.readFile(path.join(projectPath, 'PROJECT.md'), 'utf-8')
-    expect(projectMd).toContain('runs/turn-0002/artifacts/user-input-')
+    expect(secondTurn.evidencePaths.some((entry) => /runs\/turn-0002\/artifacts\/user-input-/.test(entry))).toBe(true)
 
     const queue = await fs.readFile(path.join(projectPath, 'user-input-queue.json'), 'utf-8')
     expect(JSON.parse(queue)).toEqual([])

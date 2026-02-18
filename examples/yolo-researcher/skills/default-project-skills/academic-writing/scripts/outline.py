@@ -243,7 +243,7 @@ def main() -> int:
     parser.add_argument("--literature-context", default="", help="Related-work context")
     parser.add_argument("--model", default="gpt-5.2", help="Model id for optional API-assisted drafting")
     parser.add_argument("--project-root", default=".", help="Project root directory")
-    parser.add_argument("--output-dir", default=".yolo-researcher/library/writing", help="Relative output dir")
+    parser.add_argument("--output-dir", required=True, help="Relative output dir")
     args = parser.parse_args()
 
     topic = args.topic.strip()

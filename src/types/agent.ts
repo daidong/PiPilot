@@ -68,6 +68,8 @@ export interface AgentConfig {
   packs?: Pack[]
   /** Additional policies */
   policies?: Policy[]
+  /** Disable all policy registration (pack/definition/config policies) */
+  disablePolicies?: boolean
   /** Maximum number of steps */
   maxSteps?: number
   /** Maximum number of tokens */

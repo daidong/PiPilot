@@ -26,6 +26,7 @@ interface TurnListItem {
   summary: string
   actionPath: string
   turnDir: string
+  partial?: boolean
 }
 
 interface DesktopOverview {
@@ -34,6 +35,7 @@ interface DesktopOverview {
   model: string
   defaultRuntime: RuntimeKind
   loopRunning: boolean
+  pausedForUserInput: boolean
   hasSession: boolean
   turnCount: number
   lastTurn: TurnListItem | null
@@ -62,6 +64,8 @@ const DEFAULT_MODEL = 'gpt-5.2'
 const DEFAULT_RUNTIME: RuntimeKind = 'host'
 const DEFAULT_LOOP_TURNS = 12
 const MAX_LOOP_TURNS = 200
+const ACTIVITY_DETAIL_LIMIT = 420
+const TERMINAL_CHUNK_UI_LIMIT = 12_000
 const windowStates = new Map<number, WindowRuntimeState>()
 let handlersRegistered = false
 const REQUIRED_BOOTSTRAP_SKILL_ID = 'literature-search'
@@ -170,6 +174,30 @@ function safeSend(win: BrowserWindow, channel: string, payload?: unknown): void 
   }
 }
 
+function makeUiEventId(tag: string): string {
+  return `${Date.now()}-${tag}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function clipText(value: string, limit: number): string {
+  if (value.length <= limit) return value
+  return `${value.slice(0, Math.max(1, limit - 1))}…`
+}
+
+function summarizeUnknown(value: unknown, limit: number = ACTIVITY_DETAIL_LIMIT): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return clipText(value.trim(), limit)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return clipText(JSON.stringify(value), limit)
+  } catch {
+    return clipText(String(value), limit)
+  }
+}
+
+function formatTurnLabel(turnNumber: number): string {
+  return `turn-${String(turnNumber).padStart(4, '0')}`
+}
+
 function desktopStatePath(): string {
   return join(app.getPath('userData'), 'yolo-researcher-v2-desktop-state.json')
 }
@@ -225,6 +253,32 @@ function readFirstNonEmptyLine(raw: string, prefix: string): string {
   return line ? line.slice(prefix.length).trim() : ''
 }
 
+function parseResultSummaryFromDisk(resultPath: string): { status: string; summary: string } | null {
+  if (!existsSync(resultPath)) return null
+  try {
+    const raw = readFileSync(resultPath, 'utf-8')
+    const data = JSON.parse(raw) as Record<string, unknown>
+    const status = typeof data.status === 'string' ? data.status.trim() : ''
+    const summary = typeof data.summary === 'string' ? data.summary.trim() : ''
+    if (!status && !summary) return null
+    return {
+      status: status || 'unknown',
+      summary: summary || 'No summary.'
+    }
+  } catch {
+    return null
+  }
+}
+
+function hasArtifactFiles(artifactsDir: string): boolean {
+  if (!existsSync(artifactsDir)) return false
+  try {
+    return readdirSync(artifactsDir, { withFileTypes: true }).some((entry) => entry.isFile())
+  } catch {
+    return false
+  }
+}
+
 function listTurnsFromDisk(projectPath: string): TurnListItem[] {
   const runsDir = join(sessionRoot(projectPath), 'runs')
   if (!existsSync(runsDir)) return []
@@ -238,9 +292,17 @@ function listTurnsFromDisk(projectPath: string): TurnListItem[] {
   const turns: TurnListItem[] = []
   for (const turnNumber of numbers) {
     const turnDirName = `turn-${turnNumber.toString().padStart(4, '0')}`
-    const actionPath = join(runsDir, turnDirName, 'action.md')
+    const turnDir = join(runsDir, turnDirName)
+    const actionPath = join(turnDir, 'action.md')
+    const resultPath = join(turnDir, 'result.json')
+    const resultSummary = parseResultSummaryFromDisk(resultPath)
+    const artifactsDir = join(turnDir, 'artifacts')
+    const hasArtifacts = hasArtifactFiles(artifactsDir)
+    const hasExecEvidence = ['cmd.txt', 'stdout.txt', 'stderr.txt', 'exit_code.txt', 'patch.diff']
+      .some((fileName) => existsSync(join(turnDir, fileName)))
     let status = 'unknown'
     let summary = 'No summary.'
+    let partial = false
 
     if (existsSync(actionPath)) {
       try {
@@ -250,6 +312,20 @@ function listTurnsFromDisk(projectPath: string): TurnListItem[] {
       } catch {
         status = 'unknown'
       }
+      if (resultSummary) {
+        if (status === 'unknown' && resultSummary.status) status = resultSummary.status
+        if (summary === 'No summary.' && resultSummary.summary) summary = resultSummary.summary
+      }
+    } else if (resultSummary) {
+      partial = true
+      status = resultSummary.status || 'partial'
+      summary = resultSummary.summary || 'Partial turn with result metadata.'
+    } else if (hasArtifacts || hasExecEvidence) {
+      partial = true
+      status = 'partial'
+      summary = hasArtifacts
+        ? 'Partial turn with artifacts; action/result metadata missing.'
+        : 'Partial turn with execution evidence; action/result metadata missing.'
     }
 
     turns.push({
@@ -257,11 +333,36 @@ function listTurnsFromDisk(projectPath: string): TurnListItem[] {
       status,
       summary,
       actionPath: evidencePath(turnNumber, 'action.md'),
-      turnDir: evidenceTurnDirPath(turnNumber)
+      turnDir: evidenceTurnDirPath(turnNumber),
+      partial
     })
   }
 
   return turns
+}
+
+function queuedUserInputCount(projectPath: string): number {
+  const queuePath = join(sessionRoot(projectPath), 'user-input-queue.json')
+  if (!existsSync(queuePath)) return 0
+  try {
+    const raw = readFileSync(queuePath, 'utf-8')
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return 0
+    return parsed
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry) => entry as Record<string, unknown>)
+      .filter((entry) => typeof entry.text === 'string' && entry.text.trim().length > 0)
+      .length
+  } catch {
+    return 0
+  }
+}
+
+function isPausedForUserInput(projectPath: string, turns: TurnListItem[]): boolean {
+  const latestTurn = turns[turns.length - 1] ?? null
+  if (!latestTurn) return false
+  if ((latestTurn.status || '').toLowerCase() !== 'ask_user') return false
+  return queuedUserInputCount(projectPath) === 0
 }
 
 function evidenceTurnDirPath(turnNumber: number): string {
@@ -301,6 +402,9 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
   const turns = state.projectPath
     ? listTurnsFromDisk(state.projectPath)
     : []
+  const pausedForUserInput = state.projectPath
+    ? isPausedForUserInput(state.projectPath, turns)
+    : false
 
   return {
     projectPath: state.projectPath,
@@ -308,6 +412,7 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
     model: state.model,
     defaultRuntime: state.defaultRuntime,
     loopRunning: state.loopRunning,
+    pausedForUserInput,
     hasSession: state.yoloSession !== null,
     turnCount: turns.length,
     lastTurn: turns.length > 0 ? turns[turns.length - 1] ?? null : null
@@ -349,6 +454,12 @@ function inferNextTurnNumber(state: WindowRuntimeState): number | null {
 async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Promise<TurnExecutionResult> {
   if (!state.yoloSession) throw new Error('No active v2 session. Call yolo:start first.')
   if (state.executingTurn) throw new Error('A turn is already running.')
+  if (state.projectPath) {
+    const turns = listTurnsFromDisk(state.projectPath)
+    if (isPausedForUserInput(state.projectPath, turns)) {
+      throw new Error('Session is paused for user input. Submit reply first.')
+    }
+  }
 
   state.executingTurn = true
   const turnStartTime = Date.now()
@@ -363,6 +474,7 @@ async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Pro
     const result = await state.yoloSession.runNextTurn()
     const durationMs = Date.now() - turnStartTime
     const actionLabel = describeExecutedAction(result)
+    const statusLabel = result.status === 'ask_user' ? 'paused' : result.status
     safeSend(win, 'yolo:turn-result', result)
     safeSend(win, 'yolo:event', {
       type: 'turn_completed',
@@ -376,7 +488,7 @@ async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Pro
       id: `${Date.now()}-done`,
       timestamp: new Date().toISOString(),
       type: 'turn_completed',
-      summary: `Turn ${result.turnNumber} -> ${result.status}`,
+      summary: `Turn ${result.turnNumber} -> ${statusLabel}`,
       detail: `Agent: ${actionLabel}\nintent: ${result.intent}\n${result.summary} (${durationMs}ms)`
     })
     return result
@@ -415,6 +527,17 @@ async function runLoop(win: BrowserWindow, state: WindowRuntimeState, requestedT
       })
 
       const result = await runSingleTurn(state, win)
+
+      if (result.status === 'ask_user') {
+        safeSend(win, 'yolo:event', { type: 'loop_paused', reason: 'ask_user' })
+        safeSend(win, 'yolo:activity', {
+          id: `${Date.now()}-paused`,
+          timestamp: new Date().toISOString(),
+          type: 'loop_paused',
+          summary: 'Loop paused: waiting for user input'
+        })
+        break
+      }
 
       if (isTurnTerminal(result.status)) {
         safeSend(win, 'yolo:event', { type: 'loop_stopped', reason: result.status })
@@ -482,7 +605,7 @@ function persistWindowState(state: WindowRuntimeState): void {
   })
 }
 
-async function initializeSession(state: WindowRuntimeState, payload: StartPayload): Promise<void> {
+async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, payload: StartPayload): Promise<void> {
   assertProjectSelected(state)
   syncDefaultSkillsToWorkspace(state.projectPath)
   assertWorkspaceSkillsReady(state.projectPath)
@@ -507,6 +630,68 @@ async function initializeSession(state: WindowRuntimeState, payload: StartPayloa
   if (needsFreshSession) {
     await destroyRuntime(state)
 
+    const terminalChunkBuffer = new Map<string, {
+      turnNumber: number
+      stream: 'stdout' | 'stderr'
+      timestamp: string
+      traceId?: string
+      caller?: string
+      chunk: string
+      truncated?: boolean
+    }>()
+    let terminalChunkFlushTimer: NodeJS.Timeout | null = null
+
+    const flushTerminalChunks = (): void => {
+      terminalChunkFlushTimer = null
+      if (terminalChunkBuffer.size === 0) return
+
+      for (const entry of terminalChunkBuffer.values()) {
+        safeSend(win, 'yolo:terminal', {
+          id: makeUiEventId('terminal'),
+          turnNumber: entry.turnNumber,
+          phase: 'chunk',
+          timestamp: entry.timestamp,
+          traceId: entry.traceId,
+          caller: entry.caller,
+          stream: entry.stream,
+          chunk: clipText(entry.chunk, TERMINAL_CHUNK_UI_LIMIT),
+          truncated: entry.truncated
+        })
+      }
+      terminalChunkBuffer.clear()
+    }
+
+    const enqueueTerminalChunk = (event: {
+      turnNumber: number
+      timestamp: string
+      traceId?: string
+      caller?: string
+      stream?: 'stdout' | 'stderr'
+      chunk?: string
+      truncated?: boolean
+    }): void => {
+      const stream = event.stream === 'stderr' ? 'stderr' : 'stdout'
+      const key = `${event.turnNumber}:${stream}`
+      const prev = terminalChunkBuffer.get(key)
+      const merged = prev
+        ? clipText(`${prev.chunk}${event.chunk || ''}`, TERMINAL_CHUNK_UI_LIMIT * 2)
+        : clipText(event.chunk || '', TERMINAL_CHUNK_UI_LIMIT * 2)
+
+      terminalChunkBuffer.set(key, {
+        turnNumber: event.turnNumber,
+        stream,
+        timestamp: event.timestamp,
+        traceId: event.traceId || prev?.traceId,
+        caller: event.caller || prev?.caller,
+        chunk: merged,
+        truncated: Boolean(event.truncated || prev?.truncated)
+      })
+
+      if (!terminalChunkFlushTimer) {
+        terminalChunkFlushTimer = setTimeout(flushTerminalChunks, 50)
+      }
+    }
+
     const agent = createLlmSingleAgent({
       projectPath: state.projectPath,
       model,
@@ -514,7 +699,101 @@ async function initializeSession(state: WindowRuntimeState, payload: StartPayloa
       enableNetwork: true,
       capabilityProfile: 'full',
       autoApprove: true,
-      communitySkillsDir
+      communitySkillsDir,
+      onToolEvent: (event) => {
+        const toolName = (event.tool || 'tool').trim() || 'tool'
+        const turnLabel = formatTurnLabel(event.turnNumber)
+        if (event.phase === 'call') {
+          const inputSnippet = summarizeUnknown(event.input)
+          safeSend(win, 'yolo:activity', {
+            id: makeUiEventId('tool-call'),
+            timestamp: event.timestamp || new Date().toISOString(),
+            type: 'tool_call',
+            summary: `${turnLabel} · ${toolName} call`,
+            detail: inputSnippet ? `input: ${inputSnippet}` : undefined
+          })
+          return
+        }
+
+        const successText = event.success === true ? 'ok' : event.success === false ? 'failed' : 'result'
+        const errorSnippet = summarizeUnknown(event.error)
+        const resultSnippet = summarizeUnknown(event.result)
+        safeSend(win, 'yolo:activity', {
+          id: makeUiEventId('tool-result'),
+          timestamp: event.timestamp || new Date().toISOString(),
+          type: 'tool_result',
+          summary: `${turnLabel} · ${toolName} ${successText}`,
+          detail: errorSnippet
+            ? `error: ${errorSnippet}`
+            : (resultSnippet ? `result: ${resultSnippet}` : undefined)
+        })
+      },
+      onExecEvent: (event) => {
+        const baseTimestamp = event.timestamp || new Date().toISOString()
+        if (event.phase === 'chunk') {
+          enqueueTerminalChunk({
+            turnNumber: event.turnNumber,
+            timestamp: baseTimestamp,
+            traceId: event.traceId,
+            caller: event.caller,
+            stream: event.stream,
+            chunk: event.chunk,
+            truncated: event.truncated
+          })
+        } else {
+          flushTerminalChunks()
+          safeSend(win, 'yolo:terminal', {
+            id: makeUiEventId('terminal'),
+            turnNumber: event.turnNumber,
+            phase: event.phase,
+            timestamp: baseTimestamp,
+            traceId: event.traceId,
+            caller: event.caller,
+            command: event.command,
+            cwd: event.cwd,
+            stream: event.stream,
+            chunk: event.chunk ? clipText(event.chunk, TERMINAL_CHUNK_UI_LIMIT) : undefined,
+            truncated: event.truncated,
+            exitCode: event.exitCode,
+            signal: event.signal,
+            durationMs: event.durationMs,
+            error: event.error
+          })
+        }
+
+        const turnLabel = formatTurnLabel(event.turnNumber)
+        if (event.phase === 'start') {
+          safeSend(win, 'yolo:activity', {
+            id: makeUiEventId('terminal-start'),
+            timestamp: event.timestamp || new Date().toISOString(),
+            type: 'terminal_start',
+            summary: `${turnLabel} · exec started (${event.caller || 'runtime.io'})`,
+            detail: event.command ? `cmd: ${clipText(event.command, ACTIVITY_DETAIL_LIMIT)}` : undefined
+          })
+          return
+        }
+
+        if (event.phase === 'end') {
+          safeSend(win, 'yolo:activity', {
+            id: makeUiEventId('terminal-end'),
+            timestamp: event.timestamp || new Date().toISOString(),
+            type: 'terminal_end',
+            summary: `${turnLabel} · exec finished (exit ${typeof event.exitCode === 'number' ? event.exitCode : '?'})`,
+            detail: typeof event.durationMs === 'number' ? `duration: ${event.durationMs}ms` : undefined
+          })
+          return
+        }
+
+        if (event.phase === 'error') {
+          safeSend(win, 'yolo:activity', {
+            id: makeUiEventId('terminal-error'),
+            timestamp: event.timestamp || new Date().toISOString(),
+            type: 'terminal_error',
+            summary: `${turnLabel} · exec error`,
+            detail: summarizeUnknown(event.error)
+          })
+        }
+      }
     })
 
     const session = createYoloSession({
@@ -629,7 +908,7 @@ export function registerIpcHandlers(): void {
   })
 
   handleWindow('yolo:start', async ({ win, state }, payload: StartPayload) => {
-    await initializeSession(state, payload)
+    await initializeSession(win, state, payload)
     const overview = await buildOverview(state)
 
     safeSend(win, 'yolo:event', {

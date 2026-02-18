@@ -169,7 +169,7 @@ def main() -> int:
     parser.add_argument("--task", default="analyze", choices=["analyze", "visualize", "transform", "model"], help="Task type")
     parser.add_argument("--instructions", default="", help="Optional instructions")
     parser.add_argument("--project-root", default=".", help="Project root")
-    parser.add_argument("--output-dir", default=".yolo-researcher/library/data-analysis", help="Relative output dir")
+    parser.add_argument("--output-dir", required=True, help="Relative output dir")
     args = parser.parse_args()
 
     project_root = os.path.abspath(args.project_root)

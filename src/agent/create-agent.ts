@@ -506,6 +506,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     : yamlConfig
       ? []
       : [packs.standard()]
+  const policiesEnabled = config.disablePolicies !== true
 
   // Create SkillManager (lazy-loaded procedural knowledge)
   const skillManager = new SkillManager({
@@ -521,7 +522,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     }
 
     // Register policies
-    if (pack.policies) {
+    if (policiesEnabled && pack.policies) {
       policyEngine.registerAll(pack.policies)
     }
 
@@ -626,7 +627,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   }
 
   // Register additional policies
-  if (config.policies) {
+  if (policiesEnabled && config.policies) {
     policyEngine.registerAll(config.policies)
   }
 

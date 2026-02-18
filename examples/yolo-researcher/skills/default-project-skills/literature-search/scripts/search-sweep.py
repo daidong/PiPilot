@@ -340,7 +340,7 @@ def main() -> int:
         "--out",
         "--library",
         dest="output_dir",
-        default=".yolo-researcher/library/literature",
+        required=True,
         help="Output directory relative to project root (compat: --out-dir/--out/--library)",
     )
     parser.add_argument("--skip-arxiv", action="store_true", help="Skip arXiv source")
