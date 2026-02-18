@@ -166,7 +166,7 @@ export interface DestructivePolicyBlock {
 export interface LiteratureSearchUsage {
   invoked: boolean
   fullMode: boolean
-  via: 'literature-search' | 'skill-script-run' | ''
+  via: 'literature-study' | 'literature-search' | 'skill-script-run' | ''
   detail: string
   success: boolean
   fullModeSuccess: boolean
@@ -220,6 +220,44 @@ export function detectLiteratureSearchUsage(toolEvents: ToolEventRecord[]): Lite
   for (const event of toolEvents) {
     const tool = (event.tool || '').trim().toLowerCase()
     const input = toPlainObject(event.input)
+
+    if (tool === 'literature-study') {
+      invoked = true
+      via = 'literature-study'
+
+      const modeFromInput = safeString(input?.mode).trim().toLowerCase()
+      const mode = modeFromInput === 'quick' ? 'quick' : (modeFromInput === 'deep' ? 'deep' : 'standard')
+      const isFullModeCall = mode !== 'quick'
+      detail = `literature-study(${mode})`
+      if (isFullModeCall) fullMode = true
+
+      if (event.phase !== 'result') continue
+      const resultObj = toPlainObject(event.result)
+      const dataObj = toPlainObject(resultObj?.data)
+      const structured = toPlainObject(dataObj?.structuredResult)
+      const modeFromResult = safeString(dataObj?.mode || structured?.mode).trim().toLowerCase()
+      const isFullModeResult = modeFromResult
+        ? modeFromResult !== 'quick'
+        : isFullModeCall
+      if (isFullModeResult) fullMode = true
+
+      const eventSuccess = typeof event.success === 'boolean'
+        ? event.success
+        : typeof resultObj?.success === 'boolean'
+          ? resultObj.success
+          : false
+      if (eventSuccess) {
+        success = true
+        if (isFullModeResult) fullModeSuccess = true
+      } else {
+        const errorText = extractToolErrorText(event)
+        if (errorText) {
+          const line = firstNonEmptyLine(errorText)
+          if (line) lastError = line
+        }
+      }
+      continue
+    }
 
     if (tool === 'literature-search') {
       invoked = true
@@ -654,8 +692,8 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     'Hard rules:',
     '1) Prefer autonomous execution. Retry concrete fixes before asking user.',
     literatureSweepRecommended
-      ? '2) Literature sweep is recommended now: Top-3 still has unmet literature deliverables and recent sweep evidence is missing. Run literature-search({mode:"sweep"}) before deep code reading.'
-      : '2) Literature sweep is conditional: only run literature-search({mode:"sweep"}) when Top-3 literature deliverables are unmet and recent sweep evidence is missing; otherwise prioritize consolidating existing literature into deliverables.',
+      ? '2) Literature study is recommended now: Top-3 still has unmet literature deliverables and recent sweep evidence is missing. Run literature-study({mode:"standard"}) before deep code reading.'
+      : '2) Literature study is conditional: run literature-study({mode:"standard"}) when Top-3 literature deliverables are unmet and recent evidence is missing; otherwise prioritize consolidating existing literature into deliverables.',
     '3) Do not do exhaustive repo reading. Use high-leverage slices first (README, rg, entrypoints).',
     '4) If you will modify files inside a git repo, you MUST use coding-large-repo workflow first: repo-intake -> change-plan -> delegate-coding-agent/agent-start.',
     '5) Direct write/edit repo code changes without coding-large-repo delegate flow are invalid and will be downgraded to no_delta.',
@@ -693,8 +731,8 @@ function buildNativeTurnPrompt(context: TurnContext): string {
         '',
         'Research bootstrap gate:',
         '- No literature evidence is recorded yet for this goal.',
-        '- In this turn, run literature-search({query:"<query>",mode:"sweep"}) before deep code reading.',
-        `- Use outputDir "${literatureOutputDir}".`,
+        '- In this turn, run literature-study({query:"<query>",mode:"standard"}) before deep code reading.',
+        `- Use outputDir "${literatureOutputDir}" (or "${artifactPaths.canonicalRelativeFromProject}/literature-study").`,
         `- Save at least one processed artifact under "${artifactPaths.canonicalRelativeFromProject}", and keep references in projectUpdate.keyArtifacts.`
       ]
       : []),
@@ -895,10 +933,10 @@ function buildLiteratureBootstrapRepairPrompt(input: {
   return [
     'Literature bootstrap requirement was not satisfied in your previous attempt.',
     input.usage.invoked
-      ? `Detected literature call, but it did not complete a successful full sweep: ${input.usage.detail || 'unknown'}`
-      : 'No literature-search call detected.',
+      ? `Detected literature call, but it did not complete a successful full study: ${input.usage.detail || 'unknown'}`
+      : 'No literature-study/literature-search call detected.',
     ...(input.usage.lastError
-      ? [`Last literature-search error: ${input.usage.lastError}`]
+      ? [`Last literature tool error: ${input.usage.lastError}`]
       : []),
     '',
     `Turn: ${input.context.turnNumber}`,
@@ -906,11 +944,12 @@ function buildLiteratureBootstrapRepairPrompt(input: {
     `Default runtime: ${input.context.project.defaultRuntime}`,
     '',
     'Recovery requirements (execute now in this turn):',
-    '- Call `literature-search` with mode="sweep".',
-    `- Include query + bounded limits and outputDir="${artifactPaths.canonicalRelativeFromProject}/literature".`,
+    '- Preferred: call `literature-study` with mode="standard".',
+    '- Fallback: call `literature-search` with mode="sweep" if study path fails.',
+    `- Include query + bounded limits and outputDir under "${artifactPaths.canonicalRelativeFromProject}/literature-study" or "${artifactPaths.canonicalRelativeFromProject}/literature".`,
     '- Do not stop at one-shot random OpenAlex query dumps.',
     '- Persist produced literature artifacts and include paths in projectUpdate.keyArtifacts.',
-    '- Continue with next concrete action only after search-sweep completes.',
+    '- Continue with next concrete action only after full study/sweep completes.',
     '',
     'Return ONE corrected JSON outcome only.',
     'Allowed status: success|failure|ask_user|stopped.',
@@ -1139,7 +1178,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
         'One turn = one native execution report. You may perform multiple tool calls inside the turn.',
         'Prefer evidence-producing actions. Save turn artifacts under runs/turn-xxxx/artifacts and use evidencePath as runs/turn-xxxx/...',
         'Never use work/... or absolute paths in projectUpdate evidence fields; snapshot to runs/turn-xxxx/artifacts/evidence first.',
-        'For research/prior-art goals, run literature-search(mode="sweep") early and persist processed literature artifacts locally.',
+        'For research/prior-art goals, run literature-study(mode="standard") early (fallback: literature-search(mode="sweep")) and persist processed literature artifacts locally.',
         'When modifying files inside a git repo, use coding-large-repo workflow (repo-intake/change-plan/delegate-coding-agent or agent-start) before code edits.',
         'Runtime derives active_plan_id/status_change/delta/evidence_paths from tool events + file writes.',
         'Success is valid only if this turn touches a plan deliverable (done_definition deliverable:) or clears a blocker.',
@@ -1306,15 +1345,15 @@ export class LlmSingleAgent implements YoloSingleAgent {
             if (!usage.invoked || !usage.fullMode || !usage.fullModeSuccess) {
               if (attempt >= MAX_OUTCOME_ATTEMPTS) {
                 const failureSummary = !usage.invoked
-                  ? 'Literature bootstrap missing: literature-search(mode="sweep") was never executed.'
+                  ? 'Literature bootstrap missing: literature-study(mode="standard") or literature-search(mode="sweep") was never executed.'
                   : !usage.fullMode
-                    ? `Literature bootstrap incomplete (${usage.detail || 'non-full search'}); retry budget exhausted.`
-                    : `Literature bootstrap failed after invocation: ${usage.lastError || 'search-sweep did not complete successfully'}.`
+                    ? `Literature bootstrap incomplete (${usage.detail || 'non-full study'}); retry budget exhausted.`
+                    : `Literature bootstrap failed after invocation: ${usage.lastError || 'full literature study did not complete successfully'}.`
                 return {
                   intent: 'Pause for user input after literature bootstrap retries exhausted',
                   status: 'ask_user',
                   summary: `Paused: ${failureSummary}`,
-                  primaryAction: 'literature-search: sweep',
+                  primaryAction: 'literature-study: standard',
                   activePlanId: fallbackActivePlanId || undefined,
                   askQuestion: buildEscalationAskQuestion({
                     goal: context.project.goal,

@@ -2630,13 +2630,23 @@ export class YoloSession {
       const inputObj = toPlainObject(event.input)
 
       const isLiteratureSkillRun = tool === 'skill-script-run' && safeString(inputObj?.skillId).trim() === 'literature-search'
-      const isLiteratureWrapper = tool === 'literature-search'
+      const isLiteratureWrapper = tool === 'literature-search' || tool === 'literature-study'
       if (isLiteratureSkillRun || isLiteratureWrapper) {
         const structured = toPlainObject(dataObj?.structuredResult)
         const jsonPath = normalizeArtifactPath(structured?.jsonPath ?? dataObj?.jsonPath)
         const markdownPath = normalizeArtifactPath(structured?.markdownPath ?? dataObj?.markdownPath)
         if (jsonPath) scriptLibraryPathSet.add(jsonPath)
         if (markdownPath) scriptLibraryPathSet.add(markdownPath)
+        const studyPlanPath = normalizeArtifactPath(structured?.planPath ?? dataObj?.planPath)
+        const studyReviewPath = normalizeArtifactPath(structured?.reviewPath ?? dataObj?.reviewPath)
+        const studyPaperListPath = normalizeArtifactPath(structured?.paperListPath ?? dataObj?.paperListPath)
+        const studyCoveragePath = normalizeArtifactPath(structured?.coveragePath ?? dataObj?.coveragePath)
+        const studySummaryPath = normalizeArtifactPath(structured?.summaryPath ?? dataObj?.summaryPath)
+        if (studyPlanPath) scriptLibraryPathSet.add(studyPlanPath)
+        if (studyReviewPath) scriptLibraryPathSet.add(studyReviewPath)
+        if (studyPaperListPath) scriptLibraryPathSet.add(studyPaperListPath)
+        if (studyCoveragePath) scriptLibraryPathSet.add(studyCoveragePath)
+        if (studySummaryPath) scriptLibraryPathSet.add(studySummaryPath)
       }
     }
     const records: Array<{

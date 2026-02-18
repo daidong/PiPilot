@@ -745,6 +745,61 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(projectMd).toContain('runs/turn-0001/artifacts/literature/sweep-20260217-wrapper.md')
   })
 
+  it('captures literature-study artifact paths into project key artifacts', async () => {
+    const projectPath = await createTempDir('yolo-v2-literature-study-wrapper-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: literature-cache.json'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Bootstrap prior-art evidence using literature-study',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run literature study pipeline',
+          status: 'success',
+          summary: 'Literature study completed with coverage report.',
+          primaryAction: 'literature-study: standard',
+          toolEvents: [
+            {
+              timestamp: new Date().toISOString(),
+              phase: 'call',
+              tool: 'literature-study',
+              input: { query: 'OpenEvolve agentic optimization', mode: 'standard' }
+            },
+            {
+              timestamp: new Date().toISOString(),
+              phase: 'result',
+              tool: 'literature-study',
+              success: true,
+              input: { query: 'OpenEvolve agentic optimization', mode: 'standard' },
+              result: {
+                success: true,
+                data: {
+                  mode: 'standard',
+                  planPath: 'runs/turn-0001/artifacts/literature-study/plan.json',
+                  reviewPath: 'runs/turn-0001/artifacts/literature-study/review.md',
+                  paperListPath: 'runs/turn-0001/artifacts/literature-study/papers.json',
+                  coveragePath: 'runs/turn-0001/artifacts/literature-study/coverage.json',
+                  summaryPath: 'runs/turn-0001/artifacts/literature-study/summary.json'
+                }
+              }
+            }
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(['success', 'no_delta']).toContain(turn.status)
+
+    const projectMd = await readText(path.join(projectPath, 'PROJECT.md'))
+    expect(projectMd).toContain('runs/turn-0001/artifacts/literature-study/review.md')
+    expect(projectMd).toContain('runs/turn-0001/artifacts/literature-study/papers.json')
+    expect(projectMd).toContain('runs/turn-0001/artifacts/literature-study/coverage.json')
+  })
+
   it('writes plan delta fields and updates plan board status', async () => {
     const projectPath = await createTempDir('yolo-v2-plan-delta-')
     tempDirs.push(projectPath)

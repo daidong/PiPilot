@@ -5,6 +5,7 @@ import { definePack, defineTool } from '../../../src/index.js'
 import type { Pack } from '../../../src/types/pack.js'
 import type { SkillScriptMetadata } from '../../../src/types/skill.js'
 import type { ToolContext } from '../../../src/types/tool.js'
+import { runLiteratureStudy } from './literature-study/engine.js'
 
 interface ScriptCandidate {
   skillId: string
@@ -292,6 +293,78 @@ function summarizeRunError(result: SkillScriptRunResult): string {
 }
 
 export function createYoloToolWrapperPack(projectPath: string, debug: boolean = false): Pack {
+  const literatureStudyTool = defineTool({
+    name: 'literature-study',
+    description: 'Internal yolo literature study pipeline (planner/search/review/coverage) with canonical artifact outputs.',
+    parameters: {
+      query: { type: 'string', required: true, description: 'Literature study query' },
+      context: { type: 'string', required: false, description: 'Additional context to refine study plan' },
+      mode: { type: 'string', required: false, description: 'quick|standard|deep (default: standard)' },
+      targetPaperCount: { type: 'number', required: false, description: 'Target top papers to keep (default: 40)' },
+      timeoutMs: { type: 'number', required: false, description: 'Per-request timeout in ms (default: 15000)' },
+      outputDir: { type: 'string', required: false, description: 'Output dir relative to project root' }
+    },
+    execute: async (input, context) => {
+      const query = safeString(input.query).trim()
+      if (!query) return { success: false, error: 'query is required' }
+
+      const modeRaw = safeString(input.mode).trim().toLowerCase()
+      const mode = modeRaw === 'quick' || modeRaw === 'deep' ? modeRaw : 'standard'
+      const targetPaperCount = Math.max(8, Math.min(120, Math.floor(safeNumber(input.targetPaperCount, 40))))
+      const timeoutMs = Math.max(8_000, Math.min(40_000, Math.floor(safeNumber(input.timeoutMs, 15_000))))
+      const outputDir = coerceCanonicalOutputDir(projectPath, context, input.outputDir, 'literature-study')
+      const outputDirAbs = resolve(projectPath, outputDir)
+
+      const result = await runLiteratureStudy({
+        query,
+        context: safeString(input.context).trim() || undefined,
+        mode,
+        targetPaperCount,
+        outputDirAbs,
+        outputDirRel: outputDir,
+        timeoutMs
+      })
+
+      if (!result.success || !result.data) {
+        return {
+          success: false,
+          error: result.error || 'literature-study failed'
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          query,
+          mode: result.data.mode,
+          totalPapersFound: result.data.totalPapersFound,
+          papersAutoSaved: result.data.papersAutoSaved,
+          coverage: result.data.coverage,
+          durationMs: result.data.durationMs,
+          errors: result.data.errors,
+          outputDir,
+          planPath: result.data.planPath,
+          reviewPath: result.data.reviewPath,
+          paperListPath: result.data.paperListPath,
+          coveragePath: result.data.coveragePath,
+          summaryPath: result.data.summaryPath,
+          structuredResult: {
+            mode: result.data.mode,
+            script: 'literature-study',
+            outputDir,
+            planPath: result.data.planPath,
+            reviewPath: result.data.reviewPath,
+            paperListPath: result.data.paperListPath,
+            coveragePath: result.data.coveragePath,
+            summaryPath: result.data.summaryPath,
+            coverageScore: result.data.coverage.score,
+            totalPapersFound: result.data.totalPapersFound
+          }
+        }
+      }
+    }
+  })
+
   const literatureSearchTool = defineTool({
     name: 'literature-search',
     description: 'Typed wrapper for literature-search skill. Runs search-sweep/search-papers with canonical args and normalized output.',
@@ -816,6 +889,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
     id: 'yolo-wrapper-tools',
     description: 'Typed wrappers for tools/skills integration and runtime diagnostics.',
     tools: [
+      literatureStudyTool as any,
       literatureSearchTool as any,
       dataAnalyzeTool as any,
       writingOutlineTool as any,

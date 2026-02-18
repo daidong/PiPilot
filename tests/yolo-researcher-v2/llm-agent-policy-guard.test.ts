@@ -153,6 +153,40 @@ describe('yolo-researcher v2 llm-agent destructive policy guard', () => {
     expect(usage.via).toBe('literature-search')
   })
 
+  it('detects successful standard literature-study as full bootstrap', () => {
+    const events: ToolEventRecord[] = [
+      {
+        timestamp: new Date().toISOString(),
+        phase: 'call',
+        tool: 'literature-study',
+        input: {
+          query: 'AlphaEvolve optimization',
+          mode: 'standard'
+        }
+      },
+      {
+        timestamp: new Date().toISOString(),
+        phase: 'result',
+        tool: 'literature-study',
+        success: true,
+        result: {
+          success: true,
+          data: {
+            mode: 'standard',
+            reviewPath: 'runs/turn-0001/artifacts/literature-study/review.md',
+            paperListPath: 'runs/turn-0001/artifacts/literature-study/papers.json'
+          }
+        }
+      }
+    ]
+
+    const usage = detectLiteratureSearchUsage(events)
+    expect(usage.invoked).toBe(true)
+    expect(usage.fullMode).toBe(true)
+    expect(usage.fullModeSuccess).toBe(true)
+    expect(usage.via).toBe('literature-study')
+  })
+
   it('treats failed full sweep as unsatisfied bootstrap', () => {
     const events: ToolEventRecord[] = [
       {
