@@ -12,6 +12,7 @@ import type { Pack } from '../types/pack.js'
 import { defineTool } from '../factories/define-tool.js'
 import { defineGuardPolicy } from '../factories/define-policy.js'
 import type { Tool } from '../types/tool.js'
+import type { Runtime } from '../types/runtime.js'
 import { gitWorkflowSkill } from '../skills/builtin/index.js'
 import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
@@ -92,7 +93,9 @@ async function discoverNestedGitRepo(projectPath: string): Promise<string | null
   return null
 }
 
-async function resolveGitCwd(runtime: { io: { exec: Function }; projectPath: string; sessionState: { get: <T>(key: string) => T | undefined; set: (key: string, value: unknown) => void } }, rawCwd?: unknown): Promise<string> {
+type GitCwdRuntime = Pick<Runtime, 'io' | 'projectPath' | 'sessionState'>
+
+async function resolveGitCwd(runtime: GitCwdRuntime, rawCwd?: unknown): Promise<string> {
   const explicit = normalizeGitCwd(rawCwd)
   if (explicit) {
     runtime.sessionState.set(GIT_DEFAULT_CWD_SESSION_KEY, explicit)
@@ -134,7 +137,7 @@ const gitStatus: Tool = defineTool({
     }
   },
   execute: async (input, { runtime }) => {
-    const cwd = await resolveGitCwd(runtime as Parameters<typeof resolveGitCwd>[0], (input as { cwd?: string } | undefined)?.cwd)
+    const cwd = await resolveGitCwd(runtime, (input as { cwd?: string } | undefined)?.cwd)
     const result = await runtime.io.exec('git status --short', {
       caller: 'git.status',
       cwd
@@ -181,7 +184,7 @@ const gitDiff: Tool = defineTool({
   },
   execute: async (input, { runtime }) => {
     const { staged, file, cwd: rawCwd } = input as { staged?: boolean; file?: string; cwd?: string }
-    const cwd = await resolveGitCwd(runtime as Parameters<typeof resolveGitCwd>[0], rawCwd)
+    const cwd = await resolveGitCwd(runtime, rawCwd)
 
     let cmd = 'git diff'
     if (staged) cmd += ' --staged'
@@ -225,7 +228,7 @@ const gitAdd: Tool = defineTool({
   },
   execute: async (input, { runtime }) => {
     const { files, cwd: rawCwd } = input as { files: string[]; cwd?: string }
-    const cwd = await resolveGitCwd(runtime as Parameters<typeof resolveGitCwd>[0], rawCwd)
+    const cwd = await resolveGitCwd(runtime, rawCwd)
     const fileList = files.join(' ')
 
     const result = await runtime.io.exec(`git add ${fileList}`, {
@@ -261,7 +264,7 @@ const gitCommit: Tool = defineTool({
   },
   execute: async (input, { runtime }) => {
     const { message, cwd: rawCwd } = input as { message: string; cwd?: string }
-    const cwd = await resolveGitCwd(runtime as Parameters<typeof resolveGitCwd>[0], rawCwd)
+    const cwd = await resolveGitCwd(runtime, rawCwd)
 
     // Use heredoc to handle multi-line messages
     const escapedMessage = message.replace(/"/g, '\\"')
@@ -312,7 +315,7 @@ const gitLog: Tool = defineTool({
   },
   execute: async (input, { runtime }) => {
     const { limit, oneline, cwd: rawCwd } = input as { limit?: number; oneline?: boolean; cwd?: string }
-    const cwd = await resolveGitCwd(runtime as Parameters<typeof resolveGitCwd>[0], rawCwd)
+    const cwd = await resolveGitCwd(runtime, rawCwd)
 
     let cmd = `git log -${limit ?? 10}`
     if (oneline !== false) cmd += ' --oneline'
