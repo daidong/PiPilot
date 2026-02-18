@@ -657,7 +657,7 @@ describe('yolo-researcher v2 runtime contract', () => {
 
     await session.init()
     const turn = await session.runNextTurn()
-    expect(turn.status).toBe('no_delta')
+    expect(turn.status).toBe('success')
 
     const result = JSON.parse(await readText(path.join(
       projectPath,
@@ -665,7 +665,7 @@ describe('yolo-researcher v2 runtime contract', () => {
       'turn-0001',
       'result.json'
     ))) as Record<string, unknown>
-    expect(result.status).toBe('no_delta')
+    expect(result.status).toBe('success')
   })
 
   it('skips projectUpdate evidence paths that do not exist under workspace runs', async () => {
@@ -1367,6 +1367,97 @@ describe('yolo-researcher v2 runtime contract', () => {
     const deltaReasons = Array.isArray(result.delta_reasons) ? result.delta_reasons.map(String) : []
     expect(deltaReasons).toContain('plan_deliverable_touched')
     expect(result.blocked_reason).toBeUndefined()
+  })
+
+  it('treats mixed done_definition narrative rows as non-blocking when mechanical rules are present', async () => {
+    const projectPath = await createTempDir('yolo-v2-done-definition-narrative-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'Goal: land runnable harness',
+      '- deliverable: artifacts/narrative_ok.md',
+      'Notes: this row is narrative and should not block runtime',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Allow mechanical deliverable touch despite narrative rows',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Write the deliverable artifact',
+          status: 'success',
+          summary: 'Narrative-friendly done_definition turn succeeded.',
+          primaryAction: 'write: runs/turn-0001/artifacts/narrative_ok.md',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Created narrative_ok artifact.',
+          toolEvents: [
+            ...writeSuccessEvent('runs/turn-0001/artifacts/narrative_ok.md', '# ok\n'),
+            ...bashSuccessEvent(`node -e "console.log('narrative-done-def-ok')"`, 'narrative-done-def-ok\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    const deltaReasons = Array.isArray(result.delta_reasons) ? result.delta_reasons.map(String) : []
+    expect(deltaReasons).toContain('plan_deliverable_touched')
+    expect(result.blocked_reason).toBeUndefined()
+  })
+
+  it('reuses the next turn number when a trailing turn directory is empty', async () => {
+    const projectPath = await createTempDir('yolo-v2-empty-turn-dir-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: artifacts/probe.txt', 'evidence_min: 2'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Ignore empty trailing turn directories',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'First run writes probe artifact',
+          status: 'success',
+          summary: 'first',
+          primaryAction: 'write: runs/turn-0001/artifacts/probe.txt',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Created probe artifact.',
+          toolEvents: [
+            ...writeSuccessEvent('runs/turn-0001/artifacts/probe.txt', 'one\n'),
+            ...bashSuccessEvent(`node -e "console.log('first-turn')"`, 'first-turn\n')
+          ]
+        },
+        {
+          intent: 'Second run should use turn-0002, not skip to turn-0003',
+          status: 'success',
+          summary: 'second',
+          primaryAction: 'write: runs/turn-0002/artifacts/probe.txt',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Updated probe artifact.',
+          toolEvents: [
+            ...writeSuccessEvent('runs/turn-0002/artifacts/probe.txt', 'two\n'),
+            ...bashSuccessEvent(`node -e "console.log('second-turn')"`, 'second-turn\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const first = await session.runNextTurn()
+    expect(first.turnNumber).toBe(1)
+
+    await fs.mkdir(path.join(projectPath, 'runs', 'turn-0002', 'artifacts'), { recursive: true })
+
+    const second = await session.runNextTurn()
+    expect(second.turnNumber).toBe(2)
+    await expect(fs.access(path.join(projectPath, 'runs', 'turn-0002', 'result.json'))).resolves.toBeUndefined()
   })
 
   it('applies micro-checkpoint deliverable alignment when active plan deliverable mismatches this turn output', async () => {

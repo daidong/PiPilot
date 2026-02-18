@@ -21,6 +21,19 @@ export interface TurnListItem {
   partial?: boolean
 }
 
+export interface ProgressReasonCount {
+  reason: string
+  count: number
+}
+
+export interface ProgressHealthSnapshot {
+  windowTurns: number
+  successRate: number
+  deliverableTouchRate: number
+  fallbackAttributionRate: number
+  noDeltaTopReasons: ProgressReasonCount[]
+}
+
 export interface DesktopOverview {
   projectPath: string
   goal: string
@@ -32,6 +45,7 @@ export interface DesktopOverview {
   hasSession: boolean
   turnCount: number
   lastTurn: TurnListItem | null
+  progressHealth: ProgressHealthSnapshot
   usage: {
     promptTokens: number
     completionTokens: number

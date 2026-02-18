@@ -51,6 +51,11 @@ const SUPPORTED_MODELS: ModelOption[] = [
 
 const MODEL_IDS = SUPPORTED_MODELS.map((m) => m.id)
 
+function formatRatio(value: number): string {
+  if (!Number.isFinite(value)) return '0%'
+  return `${Math.round(value * 100)}%`
+}
+
 export default function ControlPanel({
   overview,
   goalDraft,
@@ -126,6 +131,40 @@ export default function ControlPanel({
               </div>
             )}
           </div>
+
+          {overview?.progressHealth && (
+            <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
+              <label className="t-text-muted mb-1.5 block text-[10px] font-semibold uppercase tracking-wider">Progress Health (Last {overview.progressHealth.windowTurns})</label>
+              <div className="grid grid-cols-3 gap-2 text-[10px]">
+                <div className="t-bg-surface rounded-md px-2 py-1.5">
+                  <div className="t-text-muted">Success</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.successRate)}</div>
+                </div>
+                <div className="t-bg-surface rounded-md px-2 py-1.5">
+                  <div className="t-text-muted">Deliverable Touch</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.deliverableTouchRate)}</div>
+                </div>
+                <div className="t-bg-surface rounded-md px-2 py-1.5">
+                  <div className="t-text-muted">Fallback Attr.</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.fallbackAttributionRate)}</div>
+                </div>
+              </div>
+              <div className="mt-2 text-[10px]">
+                <div className="t-text-muted mb-1">No-Delta Top Reasons</div>
+                {overview.progressHealth.noDeltaTopReasons.length === 0 ? (
+                  <div className="t-text-muted">none</div>
+                ) : (
+                  <div className="space-y-0.5">
+                    {overview.progressHealth.noDeltaTopReasons.map((item) => (
+                      <div key={item.reason} className="t-text-secondary">
+                        {item.reason} ({item.count})
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Max turns + auto-run */}
           <div className="grid grid-cols-2 gap-2">

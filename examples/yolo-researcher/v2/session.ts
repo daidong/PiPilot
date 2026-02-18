@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import { execFile as execFileCallback } from 'node:child_process'
 import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 
 import { FailureStore } from './failure-store.js'
 import { ProjectStore } from './project-store.js'
@@ -267,6 +268,14 @@ interface RecentTurnResultMeta {
 
 type EnvConstraintCategory = 'api_key' | 'repo_checkout' | 'resource'
 
+interface RuntimeVersionInfo {
+  packageVersion: string
+  gitCommit: string
+  buildTime: string
+  desktopVersion: string
+  nodeVersion: string
+}
+
 export class YoloSession {
   readonly yoloRoot: string
   readonly runsDir: string
@@ -277,6 +286,7 @@ export class YoloSession {
   private readonly projectStore: ProjectStore
   private readonly failureStore: FailureStore
   private readonly now: () => Date
+  private runtimeVersionInfoPromise: Promise<RuntimeVersionInfo> | null = null
   private initialized = false
 
   constructor(private readonly config: CreateYoloSessionConfig) {
@@ -308,7 +318,7 @@ export class YoloSession {
   async runNextTurn(): Promise<TurnExecutionResult> {
     await this.init()
 
-    const project = await this.projectStore.load()
+    let project = await this.projectStore.load()
     const failures = await this.failureStore.load()
     const turnNumber = await this.computeNextTurnNumber()
     const turnDir = path.join(this.runsDir, formatTurnId(turnNumber))
@@ -316,6 +326,12 @@ export class YoloSession {
 
     await ensureDir(turnDir)
     await ensureDir(artifactsDir)
+
+    const preflight = await this.runPreTurnCalibration({
+      project,
+      turnNumber
+    })
+    project = preflight.project
 
     const pendingUserInputs = await this.materializePendingUserInputs(artifactsDir)
     const stagnation = await this.detectStagnation()
@@ -340,7 +356,8 @@ export class YoloSession {
       turnNumber,
       turnDir,
       artifactsDir,
-      pendingUserInputs
+      pendingUserInputs,
+      preflightNotes: preflight.notes
     })
   }
 
@@ -354,6 +371,184 @@ export class YoloSession {
       }
     }
     return results
+  }
+
+  private async runPreTurnCalibration(input: {
+    project: TurnContext['project']
+    turnNumber: number
+  }): Promise<{ project: TurnContext['project']; notes: string[] }> {
+    const candidate = input.project.planBoard
+      .filter((item) => item.status !== 'DONE' && item.status !== 'DROPPED')
+      .sort((a, b) => a.priority - b.priority)
+      .find((item) => item.status === 'ACTIVE')
+      ?? input.project.planBoard
+        .filter((item) => item.status !== 'DONE' && item.status !== 'DROPPED')
+        .sort((a, b) => a.priority - b.priority)[0]
+
+    if (!candidate) return { project: input.project, notes: [] }
+
+    const parsed = this.parseDoneDefinitionRules(candidate.doneDefinition ?? [])
+    const retryAfterTouchMiss = await this.didPreviousTurnMissDeliverableTouch({
+      turnNumber: input.turnNumber,
+      activePlanId: candidate.id
+    })
+    if (!retryAfterTouchMiss && parsed.invalidRows.length === 0 && parsed.deliverables.length > 0) {
+      return { project: input.project, notes: [] }
+    }
+
+    const inferredDeliverable = await this.inferPreflightDeliverableCandidate({
+      project: input.project,
+      activePlanId: candidate.id,
+      turnNumber: input.turnNumber,
+      fallbackText: candidate.nextMinStep ?? ''
+    })
+    if (!inferredDeliverable) {
+      return { project: input.project, notes: [] }
+    }
+
+    const aligned = this.alignDoneDefinitionDeliverable(candidate.doneDefinition ?? [], inferredDeliverable)
+    if (JSON.stringify(aligned) === JSON.stringify(candidate.doneDefinition ?? [])) {
+      return { project: input.project, notes: [] }
+    }
+
+    await this.projectStore.applyUpdate({
+      planBoard: [{
+        id: candidate.id,
+        title: candidate.title,
+        status: candidate.status,
+        doneDefinition: aligned,
+        evidencePaths: [...(candidate.evidencePaths ?? [])],
+        nextMinStep: candidate.nextMinStep,
+        dropReason: candidate.dropReason,
+        replacedBy: candidate.replacedBy ?? null,
+        priority: candidate.priority
+      }]
+    })
+
+    return {
+      project: await this.projectStore.load(),
+      notes: [`Preflight calibration: aligned ${candidate.id} done_definition -> deliverable: ${inferredDeliverable}`]
+    }
+  }
+
+  private async didPreviousTurnMissDeliverableTouch(input: {
+    turnNumber: number
+    activePlanId: string
+  }): Promise<boolean> {
+    if (input.turnNumber <= 1) return false
+    const previousResultPath = path.join(this.runsDir, formatTurnId(input.turnNumber - 1), 'result.json')
+    const raw = await readTextOrEmpty(previousResultPath)
+    if (!raw.trim()) return false
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      return (
+        normalizeText(parsed.status) === 'no_delta'
+        && normalizeText(parsed.blocked_reason) === 'missing_plan_deliverable_touch'
+        && normalizePlanId(parsed.active_plan_id) === input.activePlanId
+      )
+    } catch {
+      return false
+    }
+  }
+
+  private async inferPreflightDeliverableCandidate(input: {
+    project: TurnContext['project']
+    activePlanId: string
+    turnNumber: number
+    fallbackText: string
+  }): Promise<string> {
+    const prioritized: string[] = []
+    const fallback: string[] = []
+
+    if (input.turnNumber > 1) {
+      const previousResultPath = path.join(this.runsDir, formatTurnId(input.turnNumber - 1), 'result.json')
+      const raw = await readTextOrEmpty(previousResultPath)
+      if (raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw) as Record<string, unknown>
+          const evidencePaths = Array.isArray(parsed.evidence_paths)
+            ? parsed.evidence_paths.filter((entry): entry is string => typeof entry === 'string')
+            : []
+          const deliverables = evidencePaths.map((entry) => this.toDeliverableCandidate(entry)).filter(Boolean)
+          if (
+            normalizePlanId(parsed.active_plan_id ?? '') === input.activePlanId
+            && normalizeText(parsed.status) === 'no_delta'
+            && normalizeText(parsed.blocked_reason) === 'missing_plan_deliverable_touch'
+          ) {
+            prioritized.push(...deliverables)
+          } else {
+            fallback.push(...deliverables)
+          }
+        } catch {
+          // Ignore malformed previous result rows.
+        }
+      }
+    }
+
+    const fromPlanEvidence = input.project.planBoard
+      .find((item) => item.id === input.activePlanId)
+      ?.evidencePaths
+      ?? []
+    fallback.push(...fromPlanEvidence.map((entry) => this.toDeliverableCandidate(entry)).filter(Boolean))
+    fallback.push(...(input.project.keyArtifacts ?? []).map((entry) => this.toDeliverableCandidate(entry)).filter(Boolean))
+
+    const hinted = this.extractDeliverableHintsFromText(input.fallbackText)
+    fallback.push(...hinted)
+
+    return dedupeStrings([...prioritized, ...fallback])[0] || ''
+  }
+
+  private extractDeliverableHintsFromText(raw: string): string[] {
+    if (!raw.trim()) return []
+    const matches = raw.match(/artifacts\/[a-z0-9_./-]+/gi) ?? []
+    return dedupeStrings(matches.map((entry) => this.toDeliverableCandidate(entry)).filter(Boolean))
+  }
+
+  private async resolveRuntimeVersionInfo(): Promise<RuntimeVersionInfo> {
+    if (!this.runtimeVersionInfoPromise) {
+      this.runtimeVersionInfoPromise = (async () => {
+        const modulePath = fileURLToPath(import.meta.url)
+        const moduleDir = path.dirname(modulePath)
+        const repoRoot = path.resolve(moduleDir, '..', '..', '..')
+
+        let packageVersion = ''
+        try {
+          const packageRaw = await readTextOrEmpty(path.join(repoRoot, 'package.json'))
+          if (packageRaw.trim()) {
+            const parsed = JSON.parse(packageRaw) as Record<string, unknown>
+            packageVersion = safeString(parsed.version).trim()
+          }
+        } catch {
+          packageVersion = ''
+        }
+
+        let gitCommit = ''
+        try {
+          const { stdout } = await execFile('git', ['-C', repoRoot, 'rev-parse', '--short', 'HEAD'])
+          gitCommit = stdout.trim()
+        } catch {
+          gitCommit = ''
+        }
+
+        let buildTime = ''
+        try {
+          const stat = await fs.stat(modulePath)
+          buildTime = stat.mtime.toISOString()
+        } catch {
+          buildTime = ''
+        }
+
+        return {
+          packageVersion,
+          gitCommit,
+          buildTime,
+          desktopVersion: safeString((process as unknown as { versions?: Record<string, string> }).versions?.electron).trim(),
+          nodeVersion: process.version
+        }
+      })()
+    }
+
+    return this.runtimeVersionInfoPromise
   }
 
   async getRecentTurns(limit: number = DEFAULT_RECENT_TURNS_TO_LOAD): Promise<RecentTurnContext[]> {
@@ -733,13 +928,26 @@ export class YoloSession {
   }): string[] {
     const normalizedRows: string[] = []
     const normalizedPlanId = normalizePlanId(input.planId) || input.planId || 'P?'
+    let evidenceMinSeen = false
 
     for (const rawLine of input.lines) {
       const line = rawLine.trim()
       if (!line) continue
 
-      if (!/^deliverable\s*:/i.test(line)) {
-        normalizedRows.push(line)
+      if (/^evidence_min\s*:/i.test(line)) {
+        const rawValue = line.split(':').slice(1).join(':').trim()
+        const parsed = Number.parseInt(rawValue, 10)
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          input.notes.push(`Plan ${normalizedPlanId} done_definition dropped invalid evidence_min row: ${line}`)
+          continue
+        }
+        normalizedRows.push(`evidence_min: ${parsed}`)
+        evidenceMinSeen = true
+        continue
+      }
+
+      if (!/^deliverables?\s*:/i.test(line)) {
+        input.notes.push(`Plan ${normalizedPlanId} done_definition dropped non-mechanical row: ${line}`)
         continue
       }
 
@@ -758,6 +966,10 @@ export class YoloSession {
       normalizedRows.push(`deliverable: ${normalized.value}`)
     }
 
+    if (!evidenceMinSeen && normalizedRows.some((row) => /^deliverable\s*:/i.test(row))) {
+      normalizedRows.push('evidence_min: 1')
+    }
+
     return normalizedRows
   }
 
@@ -766,63 +978,45 @@ export class YoloSession {
     businessArtifactEvidencePaths: string[]
     planEvidencePaths: string[]
   }): string[] {
-    const toDeliverable = (rawPath: string): string => {
-      const normalized = this.normalizeProjectPathPointer(rawPath).toLowerCase()
-      if (!normalized) return ''
-      const scoped = TURN_SCOPED_DELIVERABLE_RE.exec(normalized)
-      const deliverable = scoped?.[2] ? scoped[2] : normalized
-      if (!deliverable.startsWith('artifacts/')) return ''
-
-      const base = path.posix.basename(deliverable)
-      if (SYSTEM_ARTIFACT_NAMES.has(base)) return ''
-      if (/^planning_checkpoint_.*\.md$/i.test(base)) return ''
-      if (deliverable.startsWith('artifacts/evidence/')) return ''
-
-      return deliverable
-    }
-
     return dedupeStrings([
-      ...input.workspaceWriteTouches.map(toDeliverable).filter(Boolean),
-      ...input.businessArtifactEvidencePaths.map(toDeliverable).filter(Boolean),
-      ...input.planEvidencePaths.map(toDeliverable).filter(Boolean)
+      ...input.workspaceWriteTouches.map((entry) => this.toDeliverableCandidate(entry)).filter(Boolean),
+      ...input.businessArtifactEvidencePaths.map((entry) => this.toDeliverableCandidate(entry)).filter(Boolean),
+      ...input.planEvidencePaths.map((entry) => this.toDeliverableCandidate(entry)).filter(Boolean)
     ])
+  }
+
+  private toDeliverableCandidate(rawPath: string): string {
+    const normalized = this.normalizeProjectPathPointer(rawPath).toLowerCase()
+    if (!normalized) return ''
+    const scoped = TURN_SCOPED_DELIVERABLE_RE.exec(normalized)
+    const deliverable = scoped?.[2] ? scoped[2] : normalized
+    if (!deliverable.startsWith('artifacts/')) return ''
+
+    const base = path.posix.basename(deliverable)
+    if (SYSTEM_ARTIFACT_NAMES.has(base)) return ''
+    if (/^planning_checkpoint_.*\.md$/i.test(base)) return ''
+    if (deliverable.startsWith('artifacts/evidence/')) return ''
+
+    return deliverable
   }
 
   private alignDoneDefinitionDeliverable(doneDefinition: string[], deliverable: string): string[] {
     const normalizedTarget = this.normalizeDeliverableTarget(deliverable).value
     if (!normalizedTarget) return doneDefinition
 
-    const nextRows: string[] = []
-    let replaced = false
-    let alreadyPresent = false
+    const parsed = this.parseDoneDefinitionRules(doneDefinition)
+    const deliverables = dedupeStrings([
+      normalizedTarget,
+      ...parsed.deliverables.filter((item) => item !== normalizedTarget)
+    ])
+    const evidenceMin = Number.isFinite(parsed.evidenceMin) && parsed.evidenceMin >= 1
+      ? parsed.evidenceMin
+      : 1
 
-    for (const row of doneDefinition) {
-      const line = row.trim()
-      if (!line) continue
-      if (!/^deliverable\s*:/i.test(line)) {
-        nextRows.push(line)
-        continue
-      }
-
-      const current = this.normalizeDeliverableTarget(line.split(':').slice(1).join(':').trim()).value
-      if (current === normalizedTarget) {
-        alreadyPresent = true
-      }
-      if (!replaced) {
-        nextRows.push(`deliverable: ${normalizedTarget}`)
-        replaced = true
-      }
-    }
-
-    if (!replaced) {
-      nextRows.unshift(`deliverable: ${normalizedTarget}`)
-    }
-
-    if (!alreadyPresent && !nextRows.some((line) => /^evidence_min\s*:/i.test(line))) {
-      nextRows.push('evidence_min: 1')
-    }
-
-    return nextRows
+    return [
+      ...deliverables.map((item) => `deliverable: ${item}`),
+      `evidence_min: ${evidenceMin}`
+    ]
   }
 
   private collectWorkspaceWriteTouches(toolEvents: ToolEventRecord[]): string[] {
@@ -1708,6 +1902,7 @@ export class YoloSession {
     turnDir: string
     artifactsDir: string
     pendingUserInputs: PendingUserInput[]
+    preflightNotes: string[]
   }): Promise<TurnExecutionResult> {
     const runtime = input.context.project.defaultRuntime || this.config.defaultRuntime || DEFAULT_RUNTIME
     const cmdPath = path.join(input.turnDir, 'cmd.txt')
@@ -2143,7 +2338,7 @@ export class YoloSession {
       summary = `NO_DELTA: unknown active_plan_id (${activePlanId}). ${summary}`
       blockedReason = 'unknown_active_plan_id'
     }
-    if (finalStatus === 'success' && !doneDefinitionCheck.ok) {
+    if (finalStatus === 'success' && !doneDefinitionCheck.ok && coTouchedDeliverablePlanIds.length === 0) {
       finalStatus = 'no_delta'
       summary = `NO_DELTA: ${doneDefinitionCheck.reason}. ${summary}`
       blockedReason = doneDefinitionCheck.reason
@@ -2193,6 +2388,7 @@ export class YoloSession {
     let clearedRedundancyBlocked = false
 
     const updateSummaryLines = [
+      ...input.preflightNotes.map((line) => line.trim()).filter(Boolean),
       ...(outcome.updateSummary ?? []).map((line) => line.trim()).filter(Boolean)
     ]
     if (planAttribution.reason) {
@@ -2203,6 +2399,9 @@ export class YoloSession {
     }
     if (coTouchedDeliverablePlanIds.length > 0) {
       updateSummaryLines.push(`Plan co-touch deliverable hit: ${coTouchedDeliverablePlanIds.join(', ')}`)
+    }
+    if (!doneDefinitionCheck.ok && coTouchedDeliverablePlanIds.length > 0) {
+      updateSummaryLines.push(`Primary plan gate bypassed via co-touch deliverable accounting (${doneDefinitionCheck.reason}).`)
     }
     if (microCheckpointApplied && activePlanId && microCheckpointDeliverable) {
       updateSummaryLines.push(`Micro-checkpoint: aligned ${activePlanId} deliverable -> ${microCheckpointDeliverable}`)
@@ -2475,6 +2674,7 @@ export class YoloSession {
       : {}
     const goalConstraintsFingerprint = this.computeGoalConstraintsFingerprint(persistedProject)
     const planBoardHash = this.computePlanBoardFingerprint(persistedProject)
+    const runtimeVersion = await this.resolveRuntimeVersionInfo()
 
     await writeText(resultPath, `${JSON.stringify({
       status: finalStatus,
@@ -2503,6 +2703,7 @@ export class YoloSession {
       planner_checkpoint_due: input.context.plannerCheckpoint?.due ?? false,
       planner_checkpoint_reasons: input.context.plannerCheckpoint?.reasons ?? [],
       plan_board_hash: planBoardHash,
+      runtime_version: runtimeVersion,
       plan_attribution_reason: planAttribution.reason,
       plan_attribution_ambiguous: planAttribution.ambiguous,
       co_touched_plan_ids: coTouchedPlanIds,
@@ -2864,30 +3065,33 @@ export class YoloSession {
     for (const row of lines) {
       const line = row.trim()
       if (!line) continue
+      const normalizedLine = line
+        .replace(/^[-*]\s+/, '')
+        .replace(/^\d+[.)]\s+/, '')
+        .trim()
+      if (!normalizedLine) continue
 
-      if (/^deliverable\s*:/i.test(line)) {
-        const rawValue = line.split(':').slice(1).join(':').trim()
+      if (/^deliverables?\s*:/i.test(normalizedLine)) {
+        const rawValue = normalizedLine.split(':').slice(1).join(':').trim()
         const normalized = this.normalizeDeliverableTarget(rawValue).value
         if (!normalized) {
-          invalidRows.push(line)
+          invalidRows.push(normalizedLine)
           continue
         }
         deliverables.push(normalized)
         continue
       }
 
-      if (/^evidence_min\s*:/i.test(line)) {
-        const rawValue = line.split(':').slice(1).join(':').trim()
+      if (/^evidence_min\s*:/i.test(normalizedLine)) {
+        const rawValue = normalizedLine.split(':').slice(1).join(':').trim()
         const parsed = Number.parseInt(rawValue, 10)
         if (!Number.isFinite(parsed) || parsed < 1) {
-          invalidRows.push(line)
+          invalidRows.push(normalizedLine)
           continue
         }
         evidenceMin = parsed
         continue
       }
-
-      invalidRows.push(line)
     }
 
     return {
@@ -3201,7 +3405,53 @@ export class YoloSession {
 
   private async computeNextTurnNumber(): Promise<number> {
     const numbers = await listTurnNumbers(this.runsDir)
-    return (numbers[numbers.length - 1] ?? 0) + 1
+    for (let index = numbers.length - 1; index >= 0; index -= 1) {
+      const number = numbers[index]
+      if (await this.hasTurnFootprint(number)) {
+        return number + 1
+      }
+    }
+    return 1
+  }
+
+  private async hasTurnFootprint(turnNumber: number): Promise<boolean> {
+    const turnDir = path.join(this.runsDir, formatTurnId(turnNumber))
+    const markerFiles = [
+      'action.md',
+      'result.json',
+      'cmd.txt',
+      'stdout.txt',
+      'stderr.txt',
+      'exit_code.txt',
+      'patch.diff'
+    ]
+    for (const fileName of markerFiles) {
+      if (await fileExists(path.join(turnDir, fileName))) return true
+    }
+
+    return this.hasAnyFileRecursive(path.join(turnDir, 'artifacts'))
+  }
+
+  private async hasAnyFileRecursive(dirPath: string): Promise<boolean> {
+    if (!(await fileExists(dirPath))) return false
+    const stack = [dirPath]
+
+    while (stack.length > 0) {
+      const current = stack.pop()
+      if (!current) continue
+      let entries: fs.Dirent[]
+      try {
+        entries = await fs.readdir(current, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (entry.isFile()) return true
+        if (entry.isDirectory()) stack.push(path.join(current, entry.name))
+      }
+    }
+
+    return false
   }
 
   private async loadRecentTurns(limit: number): Promise<RecentTurnContext[]> {

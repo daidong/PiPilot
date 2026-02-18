@@ -12,6 +12,19 @@ export interface UsageSnapshot {
   callCount: number
 }
 
+export interface ProgressReasonCount {
+  reason: string
+  count: number
+}
+
+export interface ProgressHealthSnapshot {
+  windowTurns: number
+  successRate: number
+  deliverableTouchRate: number
+  fallbackAttributionRate: number
+  noDeltaTopReasons: ProgressReasonCount[]
+}
+
 export interface UsageEvent {
   promptTokens: number
   completionTokens: number
@@ -43,6 +56,7 @@ export interface DesktopOverview {
   turnCount: number
   lastTurn: TurnListItem | null
   usage: UsageSnapshot
+  progressHealth: ProgressHealthSnapshot
 }
 
 export interface TurnFileContent {

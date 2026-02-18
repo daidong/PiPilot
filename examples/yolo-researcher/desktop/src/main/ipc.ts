@@ -42,6 +42,20 @@ interface DesktopOverview {
   turnCount: number
   lastTurn: TurnListItem | null
   usage: UsageSnapshot
+  progressHealth: ProgressHealthSnapshot
+}
+
+interface ProgressReasonCount {
+  reason: string
+  count: number
+}
+
+interface ProgressHealthSnapshot {
+  windowTurns: number
+  successRate: number
+  deliverableTouchRate: number
+  fallbackAttributionRate: number
+  noDeltaTopReasons: ProgressReasonCount[]
 }
 
 interface UsageSnapshot {
@@ -456,11 +470,21 @@ function parseResultSummaryFromDisk(resultPath: string): { status: string; summa
 
 function hasArtifactFiles(artifactsDir: string): boolean {
   if (!existsSync(artifactsDir)) return false
-  try {
-    return readdirSync(artifactsDir, { withFileTypes: true }).some((entry) => entry.isFile())
-  } catch {
-    return false
+  const stack = [artifactsDir]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    if (!current) continue
+    try {
+      const entries = readdirSync(current, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.isFile()) return true
+        if (entry.isDirectory()) stack.push(join(current, entry.name))
+      }
+    } catch {
+      continue
+    }
   }
+  return false
 }
 
 function listTurnsFromDisk(projectPath: string): TurnListItem[] {
@@ -479,16 +503,21 @@ function listTurnsFromDisk(projectPath: string): TurnListItem[] {
     const turnDir = join(runsDir, turnDirName)
     const actionPath = join(turnDir, 'action.md')
     const resultPath = join(turnDir, 'result.json')
+    const hasAction = existsSync(actionPath)
+    const hasResult = existsSync(resultPath)
     const resultSummary = parseResultSummaryFromDisk(resultPath)
     const artifactsDir = join(turnDir, 'artifacts')
     const hasArtifacts = hasArtifactFiles(artifactsDir)
     const hasExecEvidence = ['cmd.txt', 'stdout.txt', 'stderr.txt', 'exit_code.txt', 'patch.diff']
       .some((fileName) => existsSync(join(turnDir, fileName)))
+    if (!hasAction && !hasResult && !hasArtifacts && !hasExecEvidence) {
+      continue
+    }
     let status = 'unknown'
     let summary = 'No summary.'
     let partial = false
 
-    if (existsSync(actionPath)) {
+    if (hasAction) {
       try {
         const raw = readFileSync(actionPath, 'utf-8')
         status = readFirstNonEmptyLine(raw, '- Status:') || 'unknown'
@@ -596,6 +625,15 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
       || (state.manualPauseForInput && queuedUserInputCount(state.projectPath) === 0)
     )
     : false
+  const progressHealth = state.projectPath
+    ? computeProgressHealthFromDisk(state.projectPath, turns, 20)
+    : {
+      windowTurns: 20,
+      successRate: 0,
+      deliverableTouchRate: 0,
+      fallbackAttributionRate: 0,
+      noDeltaTopReasons: []
+    }
 
   return {
     projectPath: state.projectPath,
@@ -608,7 +646,8 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
     hasSession: state.yoloSession !== null,
     turnCount: turns.length,
     lastTurn: turns.length > 0 ? turns[turns.length - 1] ?? null : null,
-    usage: { ...state.usage }
+    usage: { ...state.usage },
+    progressHealth
   }
 }
 
@@ -653,6 +692,65 @@ function inferNextTurnNumber(state: WindowRuntimeState): number | null {
   const turns = listTurnsFromDisk(state.projectPath)
   const last = turns[turns.length - 1]?.turnNumber ?? 0
   return last + 1
+}
+
+function computeProgressHealthFromDisk(projectPath: string, turns: TurnListItem[], windowTurns: number = 20): ProgressHealthSnapshot {
+  const selected = turns.slice(-Math.max(1, windowTurns))
+  let considered = 0
+  let successCount = 0
+  let deliverableTouchCount = 0
+  let fallbackAttributionCount = 0
+  const noDeltaReasons = new Map<string, number>()
+
+  for (const turn of selected) {
+    const resultPath = join(sessionRoot(projectPath), `runs/turn-${String(turn.turnNumber).padStart(4, '0')}/result.json`)
+    if (!existsSync(resultPath)) continue
+    try {
+      const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as Record<string, unknown>
+      const status = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : ''
+      if (!status) continue
+      considered += 1
+      if (status === 'success') successCount += 1
+
+      const deltaReasons = Array.isArray(parsed.delta_reasons)
+        ? parsed.delta_reasons.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim().toLowerCase())
+        : []
+      if (deltaReasons.includes('plan_deliverable_touched') || deltaReasons.includes('co_plan_deliverable_touched')) {
+        deliverableTouchCount += 1
+      }
+
+      const attributionReason = typeof parsed.plan_attribution_reason === 'string'
+        ? parsed.plan_attribution_reason.trim().toLowerCase()
+        : ''
+      if (attributionReason.startsWith('fallback_')) {
+        fallbackAttributionCount += 1
+      }
+
+      if (status === 'no_delta') {
+        const reason = typeof parsed.blocked_reason === 'string' && parsed.blocked_reason.trim()
+          ? parsed.blocked_reason.trim()
+          : 'no_delta'
+        noDeltaReasons.set(reason, (noDeltaReasons.get(reason) ?? 0) + 1)
+      }
+    } catch {
+      continue
+    }
+  }
+
+  const ratio = (value: number): number => (
+    considered > 0 ? Number((value / considered).toFixed(2)) : 0
+  )
+
+  return {
+    windowTurns: selected.length,
+    successRate: ratio(successCount),
+    deliverableTouchRate: ratio(deliverableTouchCount),
+    fallbackAttributionRate: ratio(fallbackAttributionCount),
+    noDeltaTopReasons: [...noDeltaReasons.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 3)
+      .map(([reason, count]) => ({ reason, count }))
+  }
 }
 
 async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Promise<TurnExecutionResult> {
