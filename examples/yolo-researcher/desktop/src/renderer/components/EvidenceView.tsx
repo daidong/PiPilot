@@ -22,6 +22,11 @@ interface TurnResultMeta {
   activePlanId?: string
   statusChange?: string
   delta?: string
+  blockedReason?: string
+  planAttributionReason?: string
+  planAttributionAmbiguous?: boolean
+  plannerCheckpointDue?: boolean
+  plannerCheckpointReasons?: string[]
 }
 
 const HIGHLIGHT_SCAN_TURNS = 20
@@ -57,6 +62,26 @@ function readStringField(data: Record<string, unknown> | null, key: string): str
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed || undefined
+}
+
+function readBooleanField(data: Record<string, unknown> | null, key: string): boolean | undefined {
+  if (!data) return undefined
+  const value = data[key]
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function readStringListField(data: Record<string, unknown> | null, key: string): string[] {
+  if (!data) return []
+  const value = data[key]
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function formatReasonToken(value: string): string {
+  return value.replace(/[_-]+/g, ' ').trim()
 }
 
 function scoreArtifactName(name: string): { score: number; reason: string } {
@@ -152,7 +177,12 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           summary: readStringField(parsed, 'summary') ?? selectedTurnObject?.summary ?? 'No summary.',
           activePlanId: readStringField(parsed, 'active_plan_id'),
           statusChange: readStringField(parsed, 'status_change'),
-          delta: readStringField(parsed, 'delta')
+          delta: readStringField(parsed, 'delta'),
+          blockedReason: readStringField(parsed, 'blocked_reason'),
+          planAttributionReason: readStringField(parsed, 'plan_attribution_reason'),
+          planAttributionAmbiguous: readBooleanField(parsed, 'plan_attribution_ambiguous'),
+          plannerCheckpointDue: readBooleanField(parsed, 'planner_checkpoint_due'),
+          plannerCheckpointReasons: readStringListField(parsed, 'planner_checkpoint_reasons')
         })
       })
       .catch(() => {
@@ -204,7 +234,12 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           summary,
           activePlanId: readStringField(row.parsedResult, 'active_plan_id'),
           statusChange: readStringField(row.parsedResult, 'status_change'),
-          delta: readStringField(row.parsedResult, 'delta')
+          delta: readStringField(row.parsedResult, 'delta'),
+          blockedReason: readStringField(row.parsedResult, 'blocked_reason'),
+          planAttributionReason: readStringField(row.parsedResult, 'plan_attribution_reason'),
+          planAttributionAmbiguous: readBooleanField(row.parsedResult, 'plan_attribution_ambiguous'),
+          plannerCheckpointDue: readBooleanField(row.parsedResult, 'planner_checkpoint_due'),
+          plannerCheckpointReasons: readStringListField(row.parsedResult, 'planner_checkpoint_reasons')
         })
 
         for (const artifact of row.turnArtifacts) {
@@ -372,11 +407,30 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     <div className="mt-1 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
                       {truncateText(milestone?.summary ?? turn.summary, 140)}
                     </div>
-                    {(milestone?.activePlanId || milestone?.statusChange) && (
-                      <div className="mt-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
-                        {milestone?.activePlanId ? `plan=${milestone.activePlanId}` : ''}
-                        {milestone?.activePlanId && milestone?.statusChange ? ' · ' : ''}
-                        {milestone?.statusChange ? `change=${milestone.statusChange}` : ''}
+                    {(milestone?.activePlanId || milestone?.statusChange || milestone?.planAttributionReason || milestone?.blockedReason || (milestone?.plannerCheckpointReasons?.length ?? 0) > 0) && (
+                      <div className="mt-1 space-y-0.5 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                        {(milestone?.activePlanId || milestone?.statusChange) && (
+                          <div>
+                            {milestone?.activePlanId ? `plan=${milestone.activePlanId}` : ''}
+                            {milestone?.activePlanId && milestone?.statusChange ? ' · ' : ''}
+                            {milestone?.statusChange ? `change=${milestone.statusChange}` : ''}
+                          </div>
+                        )}
+                        {milestone?.planAttributionReason && (
+                          <div>
+                            attribution={formatReasonToken(milestone.planAttributionReason)}
+                            {milestone.planAttributionAmbiguous ? ' (ambiguous)' : ''}
+                          </div>
+                        )}
+                        {milestone?.blockedReason && (
+                          <div>reject={formatReasonToken(milestone.blockedReason)}</div>
+                        )}
+                        {(milestone?.plannerCheckpointReasons?.length ?? 0) > 0 && (
+                          <div>
+                            checkpoint={milestone?.plannerCheckpointDue ? 'due' : 'guard'}:{' '}
+                            {milestone?.plannerCheckpointReasons?.slice(0, 2).map(formatReasonToken).join(', ')}
+                          </div>
+                        )}
                       </div>
                     )}
                   </button>
@@ -509,11 +563,31 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                 <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
                   {selectedSummary}
                 </p>
-                {(selectedResultMeta?.activePlanId || selectedResultMeta?.statusChange || selectedResultMeta?.delta) && (
+                {(selectedResultMeta?.activePlanId
+                  || selectedResultMeta?.statusChange
+                  || selectedResultMeta?.delta
+                  || selectedResultMeta?.planAttributionReason
+                  || selectedResultMeta?.blockedReason
+                  || (selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0
+                ) && (
                   <div className="mt-2 space-y-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
                     {selectedResultMeta?.activePlanId && <div>plan: {selectedResultMeta.activePlanId}</div>}
                     {selectedResultMeta?.statusChange && <div>change: {selectedResultMeta.statusChange}</div>}
                     {selectedResultMeta?.delta && <div>delta: {truncateText(selectedResultMeta.delta, 120)}</div>}
+                    {selectedResultMeta?.planAttributionReason && (
+                      <div>
+                        attribution: {formatReasonToken(selectedResultMeta.planAttributionReason)}
+                        {selectedResultMeta.planAttributionAmbiguous ? ' (ambiguous)' : ''}
+                      </div>
+                    )}
+                    {selectedResultMeta?.blockedReason && (
+                      <div>reject: {formatReasonToken(selectedResultMeta.blockedReason)}</div>
+                    )}
+                    {(selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0 && (
+                      <div>
+                        checkpoint: {selectedResultMeta?.plannerCheckpointDue ? 'due' : 'guard'} ({selectedResultMeta?.plannerCheckpointReasons?.map(formatReasonToken).join(', ')})
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
