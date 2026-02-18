@@ -8,6 +8,8 @@ interface StatusBarProps {
   busy: boolean
 }
 
+type StatusTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral'
+
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
@@ -21,17 +23,21 @@ function formatCost(value: number): string {
   return `$${value.toFixed(2)}`
 }
 
-function statusInfo(overview: DesktopOverview | null): { color: string; pulse: boolean; label: string } {
-  if (!overview?.projectPath) return { color: 'var(--color-text-muted)', pulse: false, label: 'No project' }
-  if (overview.loopRunning) return { color: 'var(--color-accent-teal)', pulse: true, label: 'Running' }
-  if (overview.pausedForUserInput) return { color: 'var(--color-accent-amber)', pulse: true, label: 'Paused' }
-  if (overview.lastTurn?.partial) return { color: 'var(--color-accent-sky)', pulse: false, label: 'Partial' }
+function statusInfo(overview: DesktopOverview | null): { tone: StatusTone; pulse: boolean; label: string } {
+  if (!overview?.projectPath) return { tone: 'neutral', pulse: false, label: 'No project' }
+  if (overview.loopRunning) return { tone: 'info', pulse: true, label: 'Running' }
+  if (overview.pausedForUserInput) return { tone: 'warning', pulse: true, label: 'Paused' }
+  if (overview.lastTurn?.partial) return { tone: 'info', pulse: false, label: 'Partial' }
   const lastStatus = overview.lastTurn?.status?.toLowerCase()
-  if (lastStatus === 'ask_user' || lastStatus === 'paused') return { color: 'var(--color-accent-amber)', pulse: true, label: 'Paused' }
-  if (lastStatus === 'no_delta') return { color: 'var(--color-accent-amber)', pulse: false, label: 'No Delta' }
-  if (lastStatus === 'partial') return { color: 'var(--color-accent-sky)', pulse: false, label: 'Partial' }
-  if (lastStatus === 'failure' || lastStatus === 'blocked') return { color: 'var(--color-accent-rose)', pulse: false, label: 'Error' }
-  return { color: 'var(--color-text-secondary)', pulse: false, label: 'Idle' }
+  if (lastStatus === 'ask_user' || lastStatus === 'paused') return { tone: 'warning', pulse: true, label: 'Paused' }
+  if (lastStatus === 'no_delta') return { tone: 'warning', pulse: false, label: 'No Delta' }
+  if (lastStatus === 'partial') return { tone: 'info', pulse: false, label: 'Partial' }
+  if (lastStatus === 'failure' || lastStatus === 'blocked') return { tone: 'danger', pulse: false, label: 'Error' }
+  return { tone: 'neutral', pulse: false, label: 'Idle' }
+}
+
+function dotClassForTone(tone: StatusTone): string {
+  return `t-dot-${tone}`
 }
 
 export default function StatusBar({ overview, usage, onPickFolder, onClose, busy }: StatusBarProps) {
@@ -43,68 +49,56 @@ export default function StatusBar({ overview, usage, onPickFolder, onClose, busy
 
   return (
     <header
-      className="no-drag sticky top-0 z-10 flex shrink-0 items-center border-b px-4 pt-7 pb-3"
-      style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-surface)' }}
+      className="no-drag t-bg-surface t-border sticky top-0 z-10 flex shrink-0 items-center border-b px-4 pt-7 pb-3"
     >
       <div className="flex items-center gap-4 flex-1 min-w-0">
         {/* YOLO serif title — V1 signature */}
-        <h1 className="text-lg font-semibold whitespace-nowrap" style={{ fontFamily: "'Playfair Display', serif" }}>YOLO</h1>
+        <h1 className="t-font-brand text-lg font-semibold whitespace-nowrap">YOLO</h1>
 
         {/* State badge with optional spinner */}
         <div
-          className="flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
-          style={{
-            borderColor: info.pulse ? `${info.color}55` : 'var(--color-border)',
-            background: info.pulse ? `${info.color}15` : 'transparent',
-            color: info.color
-          }}
+          className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${info.pulse ? `t-status-${info.tone}` : 't-btn-neutral'}`}
         >
           {info.pulse && (
-            <div
-              className="h-3 w-3 rounded-full border-[1.5px] animate-spin-slow"
-              style={{ borderColor: info.color, borderTopColor: 'transparent' }}
-            />
+            <div className="h-3 w-3 rounded-full border-[1.5px] border-current border-t-transparent animate-spin-slow" />
           )}
           {!info.pulse && (
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: info.color }}
-            />
+            <span className={`inline-block h-2 w-2 rounded-full ${dotClassForTone(info.tone)}`} />
           )}
           {info.label}
           {turnNum && (
-            <span style={{ color: 'var(--color-text-muted)' }}>turn-{turnNum}</span>
+            <span className="t-text-muted">turn-{turnNum}</span>
           )}
         </div>
 
         {/* Budget mini bar — V1 TopBar pattern */}
         {hasProject && (
-          <div className="flex items-center gap-3 text-[11px] whitespace-nowrap" style={{ color: 'var(--color-text-secondary)' }}>
+          <div className="t-text-secondary flex items-center gap-3 text-[11px] whitespace-nowrap">
             <span>
-              <span style={{ color: 'var(--color-text-muted)' }}>Tokens</span>{' '}
-              <span style={{ color: 'var(--color-accent-soft)' }}>{formatTokens(usage.totalTokens)}</span>
+              <span className="t-text-muted">Tokens</span>{' '}
+              <span className="t-text-info">{formatTokens(usage.totalTokens)}</span>
             </span>
             <span>
-              <span style={{ color: 'var(--color-text-muted)' }}>Cost</span>{' '}
-              <span style={{ color: 'var(--color-accent-teal)' }}>{formatCost(usage.totalCost)}</span>
+              <span className="t-text-muted">Cost</span>{' '}
+              <span className="t-text-info">{formatCost(usage.totalCost)}</span>
             </span>
             <span>
-              <span style={{ color: 'var(--color-text-muted)' }}>Cached</span>{' '}
-              <span style={{ color: 'var(--color-accent-sky)' }}>{Math.round(cacheHitRate * 100)}%</span>
+              <span className="t-text-muted">Cached</span>{' '}
+              <span className="t-text-info">{Math.round(cacheHitRate * 100)}%</span>
             </span>
             <span>
-              <span style={{ color: 'var(--color-text-muted)' }}>Cycles</span>{' '}
+              <span className="t-text-muted">Cycles</span>{' '}
               {turnCount}
             </span>
             {overview?.model && (
               <>
-                <span style={{ color: 'var(--color-text-muted)' }}>Model</span>{' '}
-                <span style={{ color: 'var(--color-accent-soft)' }}>{overview.model}</span>
+                <span className="t-text-muted">Model</span>{' '}
+                <span className="t-text-info">{overview.model}</span>
               </>
             )}
             {overview?.defaultRuntime && (
               <>
-                <span style={{ color: 'var(--color-text-muted)' }}>Runtime</span>{' '}
+                <span className="t-text-muted">Runtime</span>{' '}
                 {overview.defaultRuntime}
               </>
             )}
@@ -115,7 +109,7 @@ export default function StatusBar({ overview, usage, onPickFolder, onClose, busy
 
         {/* Project path */}
         {overview?.projectPath && (
-          <span className="max-w-[260px] truncate text-[11px]" style={{ color: 'var(--color-text-muted)' }} title={overview.projectPath}>
+          <span className="t-text-muted max-w-[260px] truncate text-[11px]" title={overview.projectPath}>
             {overview.projectPath}
           </span>
         )}
@@ -126,8 +120,7 @@ export default function StatusBar({ overview, usage, onPickFolder, onClose, busy
             type="button"
             onClick={onPickFolder}
             disabled={busy}
-            className="rounded-lg border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
+            className="t-btn-neutral rounded-lg border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40"
           >
             Open
           </button>
@@ -136,8 +129,7 @@ export default function StatusBar({ overview, usage, onPickFolder, onClose, busy
               type="button"
               onClick={onClose}
               disabled={busy}
-              className="rounded-lg border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40"
-              style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
+              className="t-btn-neutral rounded-lg border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40"
             >
               Close
             </button>

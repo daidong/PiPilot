@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DesktopOverview, TurnListItem, TerminalLiveEvent } from '../lib/types'
-import { MONO_FONT } from '../lib/types'
 
 interface TerminalViewProps {
   overview: DesktopOverview | null
@@ -35,6 +34,16 @@ function appendWithCap(base: string, chunk: string, cap: number = LIVE_OUTPUT_CA
   const next = `${base}${chunk}`
   if (next.length <= cap) return next
   return next.slice(next.length - cap)
+}
+
+function selectableClass(isActive: boolean): string {
+  return isActive ? 't-selectable-active t-border-action' : 't-selectable-idle t-border-subtle'
+}
+
+function statusTextClass(exitCode: number | null): string {
+  if (exitCode === 0) return 't-text-success'
+  if (exitCode !== null) return 't-text-danger'
+  return 't-text-muted'
 }
 
 export default function TerminalView({ overview, turns, terminalEvents }: TerminalViewProps) {
@@ -237,15 +246,13 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
     ? liveSnapshot.exitCode
     : exitCodeNum
 
-  const exitColor = effectiveExitCode === 0 ? 'var(--color-accent-emerald)' : effectiveExitCode !== null ? 'var(--color-accent-rose)' : 'var(--color-text-muted)'
   const statusTone = effectiveExitCode === 0
-    ? 'border-emerald-500/35 bg-emerald-500/10'
+    ? 't-status-success'
     : effectiveExitCode !== null
-      ? 'border-rose-500/35 bg-rose-500/10'
-      : ''
+      ? 't-status-danger'
+      : 't-status-neutral'
 
   const silentSuccess = effectiveExitCode === 0 && !displayStdout.trim() && !displayStderr.trim()
-  const monoFont = MONO_FONT
 
   const durationLabel = typeof resultMeta?.duration_sec === 'number' ? `${resultMeta.duration_sec.toFixed(2)}s` : ''
   const runtimeLabel = (useLiveData ? liveSnapshot?.caller : undefined) || resultMeta?.runtime?.trim() || ''
@@ -257,23 +264,22 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
 
   return (
     <div className="flex h-full flex-col p-4 gap-3">
-      <div className="rounded-lg border p-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-surface)' }}>
+      <div className="t-bg-surface t-border rounded-lg border p-3">
         <div className="mb-2 flex items-center gap-2">
-          <span style={{ color: 'var(--color-accent-teal)', fontFamily: monoFont, fontSize: '13px' }}>&#9654;</span>
-          <span className="text-[11px] font-medium" style={{ color: 'var(--color-text)' }}>Execution Console</span>
-          <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+          <span className="t-text-info t-font-mono text-[13px]">&#9654;</span>
+          <span className="t-text text-[11px] font-medium">Execution Console</span>
+          <span className="t-text-muted text-[11px]">
             {turns.length} turns
           </span>
           {useLiveData && (
-            <span className="rounded-full border px-2 py-0.5 text-[10px]" style={{ borderColor: 'var(--color-accent-teal)', color: 'var(--color-accent-teal)' }}>
+            <span className="t-status-info rounded-full border px-2 py-0.5 text-[10px]">
               live
             </span>
           )}
           <div className="flex-1" />
           <button
             onClick={() => setFollowTail((v) => !v)}
-            className="rounded-md border px-1.5 py-0.5 text-[10px]"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+            className="t-btn-neutral rounded-md border px-1.5 py-0.5 text-[10px]"
           >
             {followTail ? 'Auto-refresh on' : 'Auto-refresh off'}
           </button>
@@ -281,7 +287,7 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
 
         <div className="flex flex-wrap gap-1 mb-2">
           {turnOptions.length === 0 && (
-            <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>(no turns)</span>
+            <span className="t-text-muted text-[11px]">(no turns)</span>
           )}
           {turnOptions.map((turnNumber) => {
             const isActive = turnNumber === selectedTurn
@@ -290,11 +296,7 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
                 key={turnNumber}
                 type="button"
                 onClick={() => setSelectedTurn(turnNumber)}
-                className="max-w-full truncate rounded-md border px-2 py-1 text-[10px] transition-colors"
-                style={isActive
-                  ? { borderColor: 'var(--color-accent)', background: 'var(--color-bg-selected)', color: 'var(--color-accent-teal)' }
-                  : { borderColor: 'var(--color-border-subtle)', color: 'var(--color-text-muted)' }
-                }
+                className={`max-w-full truncate rounded-md border px-2 py-1 text-[10px] transition-colors ${selectableClass(isActive)}`}
                 title={`Turn ${turnNumber}`}
               >
                 {turnNumber.toString().padStart(4, '0')}
@@ -306,24 +308,23 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
         <div className="flex flex-wrap items-center gap-2 text-[10px]">
           {effectiveExitCode !== null && (
             <span
-              className={`rounded-full border px-2 py-0.5 font-semibold ${statusTone}`}
-              style={{ color: exitColor }}
+              className={`rounded-full border px-2 py-0.5 font-semibold ${statusTone} ${statusTextClass(effectiveExitCode)}`}
             >
               exit {effectiveExitCode}
             </span>
           )}
           {runtimeLabel && (
-            <span className="rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--color-border-subtle)', color: 'var(--color-text-secondary)' }}>
+            <span className="t-btn-neutral rounded-full border px-2 py-0.5">
               {runtimeLabel}
             </span>
           )}
           {durationLabel && (
-            <span className="rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--color-border-subtle)', color: 'var(--color-text-secondary)' }}>
+            <span className="t-btn-neutral rounded-full border px-2 py-0.5">
               {durationLabel}
             </span>
           )}
           {timestampLabel && (
-            <span className="rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--color-border-subtle)', color: 'var(--color-text-muted)' }}>
+            <span className="t-btn-neutral t-text-muted rounded-full border px-2 py-0.5">
               {timestampLabel}
             </span>
           )}
@@ -331,13 +332,13 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
       </div>
 
       {displayCmd && (
-        <div className="shrink-0 rounded-lg border px-4 py-3" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-surface)' }}>
-          <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>Command</div>
-          <pre className="mt-1.5 text-xs whitespace-pre-wrap break-words" style={{ fontFamily: monoFont, color: 'var(--color-accent-teal)' }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>$ </span>{displayCmd.trim()}
+        <div className="t-bg-surface t-border-subtle shrink-0 rounded-lg border px-4 py-3">
+          <div className="t-text-muted text-[10px] font-semibold uppercase tracking-wider">Command</div>
+          <pre className="t-font-mono t-text-info mt-1.5 text-xs whitespace-pre-wrap break-words">
+            <span className="t-text-muted">$ </span>{displayCmd.trim()}
           </pre>
           {cwdLabel && (
-            <div className="mt-1.5 text-[10px] truncate" style={{ color: 'var(--color-text-muted)' }} title={cwdLabel}>
+            <div className="t-text-muted mt-1.5 truncate text-[10px]" title={cwdLabel}>
               cwd: {cwdLabel}
             </div>
           )}
@@ -345,31 +346,29 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
       )}
 
       {silentSuccess && (
-        <div className="shrink-0 rounded-lg border px-3 py-2 text-[11px]" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }}>
+        <div className="t-bg-elevated t-border-subtle t-text-secondary shrink-0 rounded-lg border px-3 py-2 text-[11px]">
           Command succeeded but produced no stdout/stderr. This is normal for some non-interactive commands.
         </div>
       )}
 
       <div className="flex flex-1 flex-col overflow-hidden gap-2 min-h-0">
-        <div className="flex min-h-0 flex-1 flex-col rounded-lg border overflow-hidden" style={{ borderColor: 'var(--color-border-subtle)' }}>
-          <div className="shrink-0 px-4 py-1.5" style={{ background: 'var(--color-bg-surface)' }}>
-            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-emerald)' }}>stdout</span>
+        <div className="t-border-subtle flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+          <div className="t-bg-surface shrink-0 px-4 py-1.5">
+            <span className="t-text-success text-[10px] font-semibold uppercase tracking-wider">stdout</span>
           </div>
           <pre
-            className="flex-1 overflow-auto px-4 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
-            style={{ fontFamily: monoFont, color: 'var(--color-terminal-text)', background: 'var(--color-terminal-bg)' }}
+            className="t-font-mono t-pre-terminal flex-1 overflow-auto px-4 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
           >
             {displayStdout || '(empty)'}
           </pre>
         </div>
 
-        <div className="flex flex-col rounded-lg border overflow-hidden" style={{ borderColor: 'var(--color-border-subtle)', maxHeight: '30%', minHeight: '80px' }}>
-          <div className="shrink-0 px-4 py-1.5" style={{ background: 'var(--color-bg-surface)' }}>
-            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-rose)' }}>stderr</span>
+        <div className="t-border-subtle flex max-h-[30%] min-h-[80px] flex-col overflow-hidden rounded-lg border">
+          <div className="t-bg-surface shrink-0 px-4 py-1.5">
+            <span className="t-text-danger text-[10px] font-semibold uppercase tracking-wider">stderr</span>
           </div>
           <pre
-            className="flex-1 overflow-auto px-4 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
-            style={{ fontFamily: monoFont, color: 'var(--color-terminal-stderr)', background: 'var(--color-terminal-bg)' }}
+            className="t-font-mono t-pre-terminal-stderr flex-1 overflow-auto px-4 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
           >
             {displayStderr || '(empty)'}
           </pre>

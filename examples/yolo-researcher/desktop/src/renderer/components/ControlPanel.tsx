@@ -51,12 +51,6 @@ const SUPPORTED_MODELS: ModelOption[] = [
 
 const MODEL_IDS = SUPPORTED_MODELS.map((m) => m.id)
 
-const inputStyle = {
-  background: 'var(--color-input-bg)',
-  borderColor: 'var(--color-input-border)',
-  color: 'var(--color-text)'
-}
-
 export default function ControlPanel({
   overview,
   goalDraft,
@@ -91,41 +85,38 @@ export default function ControlPanel({
 
   return (
     <aside
-      className="flex w-80 shrink-0 flex-col overflow-y-auto border-r"
-      style={{ background: 'var(--color-bg-surface)', borderColor: 'var(--color-border)' }}
+      className="t-bg-surface t-border flex w-80 shrink-0 flex-col overflow-y-auto border-r"
     >
       {/* Mission Board — V1 HeroSection inspired */}
-      <div className="border-b px-4 py-4" style={{ borderColor: 'var(--color-border)' }}>
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>Mission Board</div>
-        <div className="text-sm font-medium mb-4" style={{ color: 'var(--color-text)' }}>Configure & Launch</div>
+      <div className="t-border border-b px-4 py-4">
+        <div className="t-text-muted mb-1 text-[11px] font-semibold uppercase tracking-wider">Mission Board</div>
+        <div className="t-text mb-4 text-sm font-medium">Configure & Launch</div>
 
         <div className="space-y-3">
-          {/* Goal — teal card */}
-          <div className="rounded-lg border p-3 t-card-teal">
-            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-teal)' }}>Research Goal</label>
+          <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
+            <label className="t-text-muted mb-1.5 block text-[10px] font-semibold uppercase tracking-wider">Research Goal</label>
             <textarea
               value={goalDraft}
               onChange={(e) => setGoalDraft(e.target.value)}
               rows={3}
-              className="w-full resize-none rounded-lg border bg-transparent px-3 py-2 text-xs outline-none transition-colors focus:border-teal-500"
-              style={{ borderColor: 'rgba(20,184,166,0.2)', color: 'var(--color-text)' }}
+              className="t-input w-full resize-none rounded-lg border bg-transparent px-3 py-2 text-xs transition-colors"
               placeholder="Describe the research objective..."
             />
           </div>
 
           {pausedForUserInput && (
-            <div className="rounded-lg border px-3 py-2 text-[11px] leading-relaxed t-card-amber">
+            <div className="t-status-warning rounded-lg border px-3 py-2 text-[11px] leading-relaxed">
               Session paused for user input. You can submit via the queue box below (or pause dialog when prompted).
             </div>
           )}
 
-          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-elevated)' }}>
-            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>Current Plan</label>
+          <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
+            <label className="t-text-muted mb-1.5 block text-[10px] font-semibold uppercase tracking-wider">Current Plan</label>
             {currentPlan.length === 0 ? (
-              <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>No plan yet.</div>
+              <div className="t-text-muted text-[11px]">No plan yet.</div>
             ) : (
               <div className="max-h-36 overflow-auto pr-1">
-                <ol className="space-y-1 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                <ol className="t-text-secondary space-y-1 text-[11px]">
                   {currentPlan.map((item, idx) => (
                     <li key={`${idx}-${item}`} className="leading-relaxed">
                       {idx + 1}. {item}
@@ -139,23 +130,22 @@ export default function ControlPanel({
           {/* Max turns + auto-run */}
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="mb-1 block text-[10px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>Max turns</label>
+              <label className="t-text-secondary mb-1 block text-[10px] font-medium">Max turns</label>
               <input
                 type="number"
                 min={1}
                 max={200}
                 value={maxLoopTurns}
                 onChange={(e) => setMaxLoopTurns(Number(e.target.value) || DEFAULT_MAX_LOOP_TURNS)}
-                className="w-full rounded-lg border px-3 py-2 text-xs outline-none transition-colors focus:border-teal-500"
-                style={inputStyle}
+                className="t-input w-full rounded-lg border px-3 py-2 text-xs transition-colors"
               />
             </div>
-            <label className="flex items-end gap-2 pb-2 text-[11px] cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>
+            <label className="t-text-secondary flex cursor-pointer items-end gap-2 pb-2 text-[11px]">
               <input
                 type="checkbox"
                 checked={autoRun}
                 onChange={(e) => setAutoRun(e.target.checked)}
-                className="h-4 w-4 rounded accent-teal-500"
+                className="t-checkbox-accent h-4 w-4 rounded"
               />
               Auto-run
             </label>
@@ -167,8 +157,7 @@ export default function ControlPanel({
               type="button"
               onClick={onStart}
               disabled={busy || !canOperate}
-              className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-30"
-              style={{ background: 'var(--color-action-start)' }}
+              className="t-btn-accent flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors hover:opacity-90 disabled:opacity-30"
             >
               {busy && (
                 <div className="h-3 w-3 rounded-full border-[1.5px] border-white border-t-transparent animate-spin-slow" />
@@ -179,8 +168,7 @@ export default function ControlPanel({
               type="button"
               onClick={onRunTurn}
               disabled={busy || !canRunTurns}
-              className="rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-30"
-              style={{ background: 'var(--color-action-turn)' }}
+              className="t-btn-neutral rounded-lg border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-30"
             >
               1 Turn
             </button>
@@ -188,8 +176,7 @@ export default function ControlPanel({
               type="button"
               onClick={onRunLoop}
               disabled={busy || !canRunTurns}
-              className="rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-30"
-              style={{ background: 'var(--color-action-loop)' }}
+              className="t-btn-accent rounded-lg px-3 py-2 text-xs font-medium transition-colors hover:opacity-90 disabled:opacity-30"
             >
               Continue
             </button>
@@ -197,36 +184,33 @@ export default function ControlPanel({
               type="button"
               onClick={onStop}
               disabled={!canPause}
-              className="flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:opacity-90 disabled:opacity-30"
-              style={{ borderColor: 'var(--color-action-stop)', color: 'var(--color-action-stop-text)' }}
+              className="t-btn-danger-ghost flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:opacity-90 disabled:opacity-30"
             >
               Pause
             </button>
           </div>
 
           {/* Queue user input for next turn */}
-          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-elevated)' }}>
-            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+          <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
+            <label className="t-text-muted mb-1.5 block text-[10px] font-semibold uppercase tracking-wider">
               Inject Input (Next Turn)
             </label>
             <textarea
               value={queuedInputDraft}
               onChange={(e) => setQueuedInputDraft(e.target.value)}
               rows={2}
-              className="w-full resize-y rounded-lg border px-3 py-2 text-xs outline-none transition-colors focus:border-teal-500"
-              style={inputStyle}
+              className="t-input w-full resize-y rounded-lg border px-3 py-2 text-xs transition-colors"
               placeholder="Add context/instructions to be injected into the next turn..."
             />
             <div className="mt-2 flex items-center justify-between">
-              <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+              <div className="t-text-muted text-[10px]">
                 {overview?.loopRunning ? 'Can queue while loop is running.' : 'Will apply on the next turn.'}
               </div>
               <button
                 type="button"
                 onClick={onQueueInput}
                 disabled={!hasSession || !queuedInputDraft.trim() || submittingQueuedInput}
-                className="rounded-lg px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-30"
-                style={{ background: 'var(--color-action-turn)' }}
+                className="t-btn-accent rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors hover:opacity-90 disabled:opacity-30"
               >
                 {submittingQueuedInput ? 'Queueing...' : 'Queue Input'}
               </button>
@@ -237,23 +221,21 @@ export default function ControlPanel({
           <button
             type="button"
             onClick={() => setSettingsOpen(!settingsOpen)}
-            className="flex w-full items-center gap-1.5 text-[11px] transition-colors"
-            style={{ color: 'var(--color-text-muted)' }}
+            className="t-text-muted flex w-full items-center gap-1.5 text-[11px] transition-colors"
           >
             <span className={`text-[9px] transition-transform ${settingsOpen ? 'rotate-90' : ''}`}>&#9654;</span>
             Settings
           </button>
           {settingsOpen && (
-            <div className="rounded-lg border p-3 space-y-2 t-card-sky">
+            <div className="t-bg-elevated t-border-subtle space-y-2 rounded-lg border p-3">
               <div>
-                <label className="mb-1 block text-[10px] font-medium" style={{ color: 'var(--color-accent-sky)' }}>Model</label>
+                <label className="t-text-secondary mb-1 block text-[10px] font-medium">Model</label>
                 <select
                   value={MODEL_IDS.includes(modelDraft) ? modelDraft : '__custom__'}
                   onChange={(e) => {
                     if (e.target.value !== '__custom__') setModelDraft(e.target.value)
                   }}
-                  className="w-full rounded-lg border px-2 py-1.5 text-xs outline-none focus:border-sky-500"
-                  style={inputStyle}
+                  className="t-input w-full rounded-lg border px-2 py-1.5 text-xs"
                 >
                   <optgroup label="OpenAI">
                     {SUPPORTED_MODELS.filter((m) => m.provider === 'OpenAI').map((m) => (
@@ -272,32 +254,29 @@ export default function ControlPanel({
                     value={modelDraft}
                     onChange={(e) => setModelDraft(e.target.value)}
                     placeholder="Enter model ID..."
-                    className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs outline-none focus:border-sky-500"
-                    style={inputStyle}
+                    className="t-input mt-1 w-full rounded-lg border px-2 py-1.5 text-xs"
                   />
                 )}
               </div>
               <div>
-                <label className="mb-1 block text-[10px] font-medium" style={{ color: 'var(--color-accent-sky)' }}>Runtime</label>
+                <label className="t-text-secondary mb-1 block text-[10px] font-medium">Runtime</label>
                 <select
                   value={runtimeDraft}
                   onChange={(e) => setRuntimeDraft(e.target.value as RuntimeKind)}
-                  className="w-full rounded-lg border px-2 py-1.5 text-xs outline-none focus:border-sky-500"
-                  style={inputStyle}
+                  className="t-input w-full rounded-lg border px-2 py-1.5 text-xs"
                 >
                   <option value="host">host</option>
                   <option value="docker">docker</option>
                   <option value="venv">venv</option>
                 </select>
-                <label className="mt-2 mb-1 block text-[10px] font-medium" style={{ color: 'var(--color-accent-sky)' }}>
+                <label className="t-text-secondary mt-2 mb-1 block text-[10px] font-medium">
                   Local system notes (optional)
                 </label>
                 <textarea
                   value={runtimeSystemInfoDraft}
                   onChange={(e) => setRuntimeSystemInfoDraft(e.target.value)}
                   rows={3}
-                  className="w-full resize-y rounded-lg border px-2 py-1.5 text-xs outline-none focus:border-sky-500"
-                  style={inputStyle}
+                  className="t-input w-full resize-y rounded-lg border px-2 py-1.5 text-xs"
                   placeholder="Example: macOS 14.6, Python 3.11 via pyenv, uv installed, Docker unavailable."
                 />
               </div>

@@ -30,22 +30,61 @@
 
 /* === Theme tokens via CSS custom properties === */
 html.dark {
-  --color-bg-base: #0a0a0a;
-  --color-bg-surface: #171717;
-  --color-bg-elevated: #262626;
-  --color-bg-hover: rgba(255 255 255 / 0.06);
-  --color-bg-selected: rgba(255, 255, 255, 0.1);
-  --color-border: #262626;
-  --color-border-subtle: #1f1f1f;
-  --color-border-action: rgba(255, 255, 255, 0.2);
-  --color-text: #f5f5f5;
-  --color-text-secondary: #a3a3a3;
-  --color-text-muted: #525252;
+  --sys-surface-canvas: #0a0a0a;
+  --sys-surface-panel: #171717;
+  --sys-surface-raised: #262626;
+  --sys-surface-hover: rgba(255 255 255 / 0.06);
+  --sys-surface-selected: rgba(255, 255, 255, 0.1);
+
+  --sys-border-default: #262626;
+  --sys-border-subtle: #1f1f1f;
+  --sys-border-strong: rgba(255, 255, 255, 0.2);
+  --sys-border-focus: rgba(20, 184, 166, 0.5);
+
+  --sys-text-primary: #f5f5f5;
+  --sys-text-secondary: #a3a3a3;
+  --sys-text-muted: #525252;
+  --sys-text-inverse: #0a0a0a;
+
+  --sys-accent-primary: #14b8a6;
+  --sys-accent-primary-hover: #2dd4bf;
+  --sys-accent-soft-bg: rgba(20, 184, 166, 0.1);
+  --sys-accent-soft-border: rgba(20, 184, 166, 0.35);
+  --sys-accent-on-primary: #ffffff;
+
+  --sys-status-success-fg: #6ee7b7;
+  --sys-status-success-bg: rgba(16, 185, 129, 0.1);
+  --sys-status-success-border: rgba(16, 185, 129, 0.35);
+  --sys-status-warning-fg: #fcd34d;
+  --sys-status-warning-bg: rgba(245, 158, 11, 0.1);
+  --sys-status-warning-border: rgba(245, 158, 11, 0.35);
+  --sys-status-danger-fg: #fda4af;
+  --sys-status-danger-bg: rgba(244, 63, 94, 0.1);
+  --sys-status-danger-border: rgba(244, 63, 94, 0.35);
+  --sys-status-info-fg: #7dd3fc;
+  --sys-status-info-bg: rgba(56, 189, 248, 0.1);
+  --sys-status-info-border: rgba(56, 189, 248, 0.35);
+  --sys-status-neutral-fg: #cbd5e1;
+  --sys-status-neutral-bg: rgba(148, 163, 184, 0.1);
+  --sys-status-neutral-border: rgba(148, 163, 184, 0.35);
+
+  /* Legacy aliases (phase-1 compatibility) */
+  --color-bg-base: var(--sys-surface-canvas);
+  --color-bg-surface: var(--sys-surface-panel);
+  --color-bg-elevated: var(--sys-surface-raised);
+  --color-bg-hover: var(--sys-surface-hover);
+  --color-bg-selected: var(--sys-surface-selected);
+  --color-border: var(--sys-border-default);
+  --color-border-subtle: var(--sys-border-subtle);
+  --color-border-action: var(--sys-border-strong);
+  --color-text: var(--sys-text-primary);
+  --color-text-secondary: var(--sys-text-secondary);
+  --color-text-muted: var(--sys-text-muted);
   --color-input-bg: #171717;
   --color-input-border: #404040;
-  --color-input-focus: rgba(20, 184, 166, 0.5);
-  --color-accent: #14b8a6;
-  --color-accent-soft: #2dd4bf;
+  --color-input-focus: var(--sys-border-focus);
+  --color-accent: var(--sys-accent-primary);
+  --color-accent-soft: var(--sys-accent-primary-hover);
   --color-graph-bg: rgba(2, 6, 23, 0.4);
   --color-code-text: #5eead4;
   --color-code-bg: rgba(94, 234, 212, 0.08);
@@ -73,22 +112,61 @@ html.dark {
 }
 
 html.light {
-  --color-bg-base: #ffffff;
-  --color-bg-surface: #f5f5f5;
-  --color-bg-elevated: #e5e5e5;
-  --color-bg-hover: rgba(0 0 0 / 0.04);
-  --color-bg-selected: rgba(0, 0, 0, 0.07);
-  --color-border: #e5e5e5;
-  --color-border-subtle: #f0f0f0;
-  --color-border-action: rgba(0, 0, 0, 0.15);
-  --color-text: #171717;
-  --color-text-secondary: #525252;
-  --color-text-muted: #a3a3a3;
+  --sys-surface-canvas: #ffffff;
+  --sys-surface-panel: #f5f5f5;
+  --sys-surface-raised: #e5e5e5;
+  --sys-surface-hover: rgba(0 0 0 / 0.04);
+  --sys-surface-selected: rgba(0, 0, 0, 0.07);
+
+  --sys-border-default: #e5e5e5;
+  --sys-border-subtle: #f0f0f0;
+  --sys-border-strong: rgba(0, 0, 0, 0.15);
+  --sys-border-focus: rgba(13, 148, 136, 0.4);
+
+  --sys-text-primary: #171717;
+  --sys-text-secondary: #525252;
+  --sys-text-muted: #a3a3a3;
+  --sys-text-inverse: #ffffff;
+
+  --sys-accent-primary: #0d9488;
+  --sys-accent-primary-hover: #14b8a6;
+  --sys-accent-soft-bg: rgba(13, 148, 136, 0.1);
+  --sys-accent-soft-border: rgba(13, 148, 136, 0.35);
+  --sys-accent-on-primary: #ffffff;
+
+  --sys-status-success-fg: #059669;
+  --sys-status-success-bg: rgba(16, 185, 129, 0.1);
+  --sys-status-success-border: rgba(16, 185, 129, 0.35);
+  --sys-status-warning-fg: #b45309;
+  --sys-status-warning-bg: rgba(245, 158, 11, 0.1);
+  --sys-status-warning-border: rgba(245, 158, 11, 0.35);
+  --sys-status-danger-fg: #e11d48;
+  --sys-status-danger-bg: rgba(244, 63, 94, 0.1);
+  --sys-status-danger-border: rgba(244, 63, 94, 0.35);
+  --sys-status-info-fg: #0369a1;
+  --sys-status-info-bg: rgba(56, 189, 248, 0.1);
+  --sys-status-info-border: rgba(56, 189, 248, 0.35);
+  --sys-status-neutral-fg: #475569;
+  --sys-status-neutral-bg: rgba(100, 116, 139, 0.1);
+  --sys-status-neutral-border: rgba(100, 116, 139, 0.35);
+
+  /* Legacy aliases (phase-1 compatibility) */
+  --color-bg-base: var(--sys-surface-canvas);
+  --color-bg-surface: var(--sys-surface-panel);
+  --color-bg-elevated: var(--sys-surface-raised);
+  --color-bg-hover: var(--sys-surface-hover);
+  --color-bg-selected: var(--sys-surface-selected);
+  --color-border: var(--sys-border-default);
+  --color-border-subtle: var(--sys-border-subtle);
+  --color-border-action: var(--sys-border-strong);
+  --color-text: var(--sys-text-primary);
+  --color-text-secondary: var(--sys-text-secondary);
+  --color-text-muted: var(--sys-text-muted);
   --color-input-bg: #ffffff;
   --color-input-border: #d4d4d4;
-  --color-input-focus: rgba(13, 148, 136, 0.4);
-  --color-accent: #0d9488;
-  --color-accent-soft: #14b8a6;
+  --color-input-focus: var(--sys-border-focus);
+  --color-accent: var(--sys-accent-primary);
+  --color-accent-soft: var(--sys-accent-primary-hover);
   --color-graph-bg: rgba(241, 245, 249, 0.7);
   --color-code-text: #0f766e;
   --color-code-bg: rgba(15, 118, 110, 0.08);
@@ -141,7 +219,60 @@ html.light body {
 .t-text { color: var(--color-text); }
 .t-text-secondary { color: var(--color-text-secondary); }
 .t-text-muted { color: var(--color-text-muted); }
+.t-text-success { color: var(--sys-status-success-fg); }
+.t-text-warning { color: var(--sys-status-warning-fg); }
+.t-text-danger { color: var(--sys-status-danger-fg); }
 .t-hoverable:hover { background: var(--color-bg-hover); }
+.t-font-brand { font-family: 'Playfair Display', serif; }
+.t-font-mono { font-family: 'SF Mono', Monaco, Menlo, 'Fira Code', monospace; }
+
+/* Input + interactive primitives */
+.t-input {
+  background: var(--color-input-bg);
+  border-color: var(--color-input-border);
+  color: var(--color-text);
+}
+.t-input:focus {
+  border-color: var(--sys-border-focus);
+  box-shadow: 0 0 0 1px var(--sys-border-focus);
+  outline: none;
+}
+
+.t-btn-accent {
+  background: var(--sys-accent-primary);
+  color: var(--sys-accent-on-primary);
+}
+.t-btn-accent:hover {
+  background: var(--sys-accent-primary-hover);
+}
+.t-btn-neutral {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+.t-btn-neutral:hover {
+  background: var(--color-bg-selected);
+}
+.t-btn-danger-ghost {
+  background: transparent;
+  border-color: var(--sys-status-danger-border);
+  color: var(--sys-status-danger-fg);
+}
+.t-btn-danger-ghost:hover {
+  background: var(--sys-status-danger-bg);
+}
+.t-btn-warning-ghost {
+  background: transparent;
+  border-color: var(--sys-status-warning-border);
+  color: var(--sys-status-warning-fg);
+}
+.t-btn-warning-ghost:hover {
+  background: var(--sys-status-warning-bg);
+}
+
+.t-checkbox-accent {
+  accent-color: var(--sys-accent-primary);
+}
 
 /* Accent text colors — adapt between light and dark themes */
 .t-accent-teal { color: var(--color-accent-teal); }
@@ -151,6 +282,72 @@ html.light body {
 .t-accent-sky { color: var(--color-accent-sky); }
 .t-accent-violet { color: var(--color-accent-violet); }
 .t-accent-slate { color: var(--color-accent-slate); }
+
+/* Semantic status tones */
+.t-status-success {
+  border-color: var(--sys-status-success-border);
+  background: var(--sys-status-success-bg);
+  color: var(--sys-status-success-fg);
+}
+.t-status-warning {
+  border-color: var(--sys-status-warning-border);
+  background: var(--sys-status-warning-bg);
+  color: var(--sys-status-warning-fg);
+}
+.t-status-danger {
+  border-color: var(--sys-status-danger-border);
+  background: var(--sys-status-danger-bg);
+  color: var(--sys-status-danger-fg);
+}
+.t-status-info {
+  border-color: var(--sys-status-info-border);
+  background: var(--sys-status-info-bg);
+  color: var(--sys-status-info-fg);
+}
+.t-status-neutral {
+  border-color: var(--sys-status-neutral-border);
+  background: var(--sys-status-neutral-bg);
+  color: var(--sys-status-neutral-fg);
+}
+
+/* Dot tokens for dynamic status markers */
+.t-dot-success { background: var(--sys-status-success-fg); }
+.t-dot-warning { background: var(--sys-status-warning-fg); }
+.t-dot-danger { background: var(--sys-status-danger-fg); }
+.t-dot-info { background: var(--sys-status-info-fg); }
+.t-dot-neutral { background: var(--sys-status-neutral-fg); }
+.t-dot-on-accent { background: var(--sys-accent-on-primary); }
+
+/* Selectable chips/buttons */
+.t-selectable-active {
+  background: var(--sys-accent-primary);
+  color: var(--sys-accent-on-primary);
+}
+.t-selectable-idle {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+}
+
+/* Compact badge text tones */
+.t-text-info { color: var(--sys-status-info-fg); }
+.t-text-on-accent { color: var(--sys-accent-on-primary); }
+
+/* Reusable pre blocks */
+.t-pre-panel {
+  background: var(--color-bg-base);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text);
+}
+.t-pre-terminal {
+  background: var(--color-terminal-bg);
+  border-color: var(--color-border-subtle);
+  color: var(--color-terminal-text);
+}
+.t-pre-terminal-stderr {
+  background: var(--color-terminal-bg);
+  border-color: var(--color-border-subtle);
+  color: var(--color-terminal-stderr);
+}
 
 /* Semantic card colors — border + subtle background combos */
 .t-card-teal { border-color: rgba(20,184,166,0.3); background: rgba(20,184,166,0.05); }

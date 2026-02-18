@@ -142,13 +142,13 @@ export function displayStatus(status: string): string {
 
 export function toneForStatus(status: string): string {
   const normalized = displayStatus(status)
-  if (normalized === 'success') return 'border-emerald-400/50 bg-emerald-500/10 text-emerald-200'
-  if (normalized === 'failure' || normalized === 'blocked') return 'border-rose-400/50 bg-rose-500/10 text-rose-200'
-  if (normalized === 'paused') return 'border-amber-400/50 bg-amber-500/10 text-amber-200'
-  if (normalized === 'no_delta') return 'border-amber-400/50 bg-amber-500/10 text-amber-200'
-  if (normalized === 'partial') return 'border-sky-400/50 bg-sky-500/10 text-sky-200'
-  if (normalized === 'stopped') return 'border-sky-400/50 bg-sky-500/10 text-sky-200'
-  return 'border-zinc-500/50 bg-zinc-500/10 text-zinc-200'
+  if (normalized === 'success') return 't-status-success'
+  if (normalized === 'failure' || normalized === 'blocked') return 't-status-danger'
+  if (normalized === 'paused') return 't-status-warning'
+  if (normalized === 'no_delta') return 't-status-warning'
+  if (normalized === 'partial') return 't-status-info'
+  if (normalized === 'stopped') return 't-status-info'
+  return 't-status-neutral'
 }
 
 export function nowLabel(): string {

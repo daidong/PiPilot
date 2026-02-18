@@ -28,23 +28,23 @@ export default function QuestionPanel({
   const canSubmit = !disabled && !submitting && Boolean(replyText.trim())
 
   return (
-    <section className="flex-none border-b px-4 py-3" style={{ borderColor: 'var(--color-border)' }}>
-      <div className="rounded-lg border p-3 t-card-amber">
+    <section className="t-border flex-none border-b px-4 py-3">
+      <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
         <div className="mb-1.5 flex items-center justify-between gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-amber)' }}>
+          <div className="t-text-muted text-[11px] font-semibold uppercase tracking-wider">
             Blocking Question
           </div>
-          <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+          <span className="t-text-muted text-[10px]">
             turn-{turnNumber.toString().padStart(4, '0')}
           </span>
         </div>
 
-        <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--color-text)' }}>
+        <p className="t-text text-xs leading-relaxed whitespace-pre-wrap">
           {question}
         </p>
 
         {evidencePath && (
-          <div className="mt-1.5 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+          <div className="t-text-muted mt-1.5 text-[10px]">
             {evidencePath}
           </div>
         )}
@@ -56,8 +56,7 @@ export default function QuestionPanel({
               type="button"
               onClick={() => onReplyTextChange(option)}
               disabled={disabled || submitting}
-              className="rounded-md border px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-40"
-              style={{ borderColor: 'rgba(245,158,11,0.35)', color: 'var(--color-accent-amber)' }}
+              className="t-btn-warning-ghost rounded-md border px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-40"
             >
               {option}
             </button>
@@ -70,16 +69,14 @@ export default function QuestionPanel({
             onChange={(event) => onReplyTextChange(event.target.value)}
             rows={2}
             disabled={disabled || submitting}
-            className="flex-1 resize-y rounded-lg border bg-transparent px-3 py-2 text-xs outline-none focus:border-amber-500"
-            style={{ borderColor: 'var(--color-input-border)', color: 'var(--color-text)' }}
+            className="t-input flex-1 resize-y rounded-lg border bg-transparent px-3 py-2 text-xs"
             placeholder="Provide the missing info or decision..."
           />
           <button
             type="button"
             onClick={onSubmit}
             disabled={!canSubmit}
-            className="self-end rounded-lg px-3 py-2 text-[11px] font-semibold text-black transition-opacity disabled:opacity-40"
-            style={{ background: 'var(--color-action-loop)' }}
+            className="t-btn-accent self-end rounded-lg px-3 py-2 text-[11px] font-semibold transition-opacity disabled:opacity-40"
           >
             {submitting ? 'Sending...' : 'Send & Continue'}
           </button>

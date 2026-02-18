@@ -100,13 +100,21 @@ function normalizedTurnStatus(status: string, partial?: boolean): string {
   return normalized
 }
 
-function statusDotColor(status: string, partial?: boolean): string {
+function statusDotClass(status: string, partial?: boolean): string {
   const normalized = normalizedTurnStatus(status, partial)
-  if (normalized === 'success') return 'var(--color-accent-emerald)'
-  if (normalized === 'failure' || normalized === 'blocked') return 'var(--color-accent-rose)'
-  if (normalized === 'paused' || normalized === 'no_delta') return 'var(--color-accent-amber)'
-  if (normalized === 'partial' || normalized === 'stopped') return 'var(--color-accent-sky)'
-  return 'var(--color-text-muted)'
+  if (normalized === 'success') return 't-dot-success'
+  if (normalized === 'failure' || normalized === 'blocked') return 't-dot-danger'
+  if (normalized === 'paused' || normalized === 'no_delta') return 't-dot-warning'
+  if (normalized === 'partial' || normalized === 'stopped') return 't-dot-info'
+  return 't-dot-neutral'
+}
+
+function selectableClass(isActive: boolean): string {
+  return isActive ? 't-selectable-active' : 't-selectable-idle'
+}
+
+function reasonToneClass(isActive: boolean): string {
+  return isActive ? 't-text-on-accent' : 't-text-info'
 }
 
 function truncateText(text: string, max = 180): string {
@@ -339,53 +347,50 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto p-4">
-      <section className="shrink-0 rounded-lg border p-4 t-card-teal">
+      <section className="t-bg-surface t-border shrink-0 rounded-lg border p-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-teal)' }}>
+          <h3 className="t-text-muted text-[11px] font-semibold uppercase tracking-wider">
             PROJECT.md
           </h3>
           <button
             type="button"
             onClick={() => setProjectPanelOpen((prev) => !prev)}
-            className="rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors"
-            style={{ borderColor: 'var(--color-border-subtle)', color: 'var(--color-text-secondary)', background: 'var(--color-bg-elevated)' }}
+            className="t-btn-neutral rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors"
           >
             {projectPanelOpen ? 'Collapse' : 'Expand'}
           </button>
         </div>
         {projectPanelOpen && (
           <pre
-            className="md-prose mt-2 max-h-[360px] overflow-auto rounded-lg border p-4 text-[12px] leading-relaxed"
-            style={{ background: 'var(--color-bg-base)', borderColor: 'var(--color-border-subtle)', color: 'var(--color-text)' }}
+            className="md-prose t-bg-base t-border-subtle t-text mt-2 max-h-[360px] overflow-auto rounded-lg border p-4 text-[12px] leading-relaxed"
           >
             {projectMarkdown || '(empty)'}
           </pre>
         )}
       </section>
 
-      <section className="shrink-0 rounded-lg border p-4 t-card-sky">
-        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-sky)' }}>
+      <section className="t-bg-surface t-border shrink-0 rounded-lg border p-4">
+        <h3 className="t-text-muted mb-3 text-[11px] font-semibold uppercase tracking-wider">
           Progress Highlights
         </h3>
         <div className="grid gap-4 xl:grid-cols-2">
           <div>
-            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+            <div className="t-text-muted mb-1.5 text-[10px] font-semibold uppercase tracking-wider">
               Key Artifacts
             </div>
-            <div className="max-h-[220px] space-y-1 overflow-auto rounded-lg border p-2" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-base)' }}>
-              {highlights.length === 0 && <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>No highlighted artifacts yet.</div>}
+            <div className="t-bg-base t-border-subtle max-h-[220px] space-y-1 overflow-auto rounded-lg border p-2">
+              {highlights.length === 0 && <div className="t-text-muted text-[11px]">No highlighted artifacts yet.</div>}
               {highlights.map((artifact) => (
                 <button
                   key={`${artifact.turnNumber}:${artifact.name}:${artifact.reason}`}
                   type="button"
                   onClick={() => openArtifact(artifact.turnNumber, artifact.name)}
-                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] transition-colors"
-                  style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }}
+                  className="t-bg-elevated t-text-secondary flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] transition-colors"
                 >
-                  <span className="rounded-full border px-1.5 py-0.5 text-[9px]" style={{ borderColor: 'var(--color-border-action)', color: 'var(--color-accent-soft)' }}>
+                  <span className="t-border-action t-text-info rounded-full border px-1.5 py-0.5 text-[9px]">
                     {artifact.reason}
                   </span>
-                  <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                  <span className="t-text-muted text-[10px]">
                     t-{artifact.turnNumber.toString().padStart(4, '0')}
                   </span>
                   <span className="truncate">{artifact.name}</span>
@@ -395,11 +400,11 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           </div>
 
           <div>
-            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+            <div className="t-text-muted mb-1.5 text-[10px] font-semibold uppercase tracking-wider">
               Recent Milestones
             </div>
-            <div className="max-h-[220px] space-y-1 overflow-auto rounded-lg border p-2" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-base)' }}>
-              {turns.length === 0 && <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>No milestones yet.</div>}
+            <div className="t-bg-base t-border-subtle max-h-[220px] space-y-1 overflow-auto rounded-lg border p-2">
+              {turns.length === 0 && <div className="t-text-muted text-[11px]">No milestones yet.</div>}
               {turns.slice(-10).reverse().map((turn, index) => {
                 const milestone = milestones.find((item) => item.turnNumber === turn.turnNumber) ?? milestones[index]
                 const status = normalizedTurnStatus(milestone?.status ?? turn.status, turn.partial)
@@ -408,20 +413,19 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     key={turn.turnNumber}
                     type="button"
                     onClick={() => selectTurn(turn.turnNumber)}
-                    className="w-full rounded-md border px-2.5 py-1.5 text-left transition-colors"
-                    style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-elevated)' }}
+                    className="t-bg-elevated t-border-subtle w-full rounded-md border px-2.5 py-1.5 text-left transition-colors"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold" style={{ color: 'var(--color-text-secondary)' }}>
+                      <span className="t-text-secondary text-[11px] font-semibold">
                         turn-{turn.turnNumber.toString().padStart(4, '0')}
                       </span>
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${toneForStatus(status)}`}>{status}</span>
                     </div>
-                    <div className="mt-1 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                    <div className="t-text-secondary mt-1 text-[11px]">
                       {truncateText(milestone?.summary ?? turn.summary, 140)}
                     </div>
                     {(milestone?.activePlanId || milestone?.statusChange || milestone?.planAttributionReason || milestone?.blockedReason || (milestone?.plannerCheckpointReasons?.length ?? 0) > 0) && (
-                      <div className="mt-1 space-y-0.5 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                      <div className="t-text-muted mt-1 space-y-0.5 text-[10px]">
                         {(milestone?.activePlanId || milestone?.statusChange) && (
                           <div>
                             {milestone?.activePlanId ? `plan=${milestone.activePlanId}` : ''}
@@ -454,33 +458,28 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
         </div>
       </section>
 
-      <section className="rounded-lg border p-4" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-surface)' }}>
-        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+      <section className="t-bg-surface t-border rounded-lg border p-4">
+        <h3 className="t-text-muted mb-3 text-[11px] font-semibold uppercase tracking-wider">
           Turn Evidence Browser
         </h3>
 
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-          {turns.length === 0 && <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>No turns yet.</span>}
+          {turns.length === 0 && <span className="t-text-muted text-xs">No turns yet.</span>}
           {turns.map((turn) => {
             const isSelected = turn.turnNumber === selectedTurn
             return (
-              <button
-                key={turn.turnNumber}
-                type="button"
-                onClick={() => selectTurn(turn.turnNumber)}
-                className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors"
-                style={isSelected
-                  ? { background: 'var(--color-accent)', color: '#fff' }
-                  : { background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }
-                }
-                title={turn.partial ? 'partial turn' : undefined}
-              >
+                <button
+                  key={turn.turnNumber}
+                  type="button"
+                  onClick={() => selectTurn(turn.turnNumber)}
+                  className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors ${selectableClass(isSelected)}`}
+                  title={turn.partial ? 'partial turn' : undefined}
+                >
                 <span
-                  className="inline-block h-2 w-2 rounded-full"
-                  style={{ background: isSelected ? '#fff' : statusDotColor(turn.status, turn.partial) }}
+                  className={`inline-block h-2 w-2 rounded-full ${isSelected ? 't-dot-on-accent' : statusDotClass(turn.status, turn.partial)}`}
                 />
                 {turn.turnNumber.toString().padStart(4, '0')}
-                {turn.partial && <span className="text-[9px]" style={{ color: isSelected ? '#fff' : 'var(--color-accent-sky)' }}>partial</span>}
+                {turn.partial && <span className={`text-[9px] ${isSelected ? 't-text-on-accent' : 't-text-info'}`}>partial</span>}
               </button>
             )
           })}
@@ -490,7 +489,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
             <div className="space-y-4">
               <div>
-                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                <div className="t-text-muted mb-1.5 text-[10px] font-semibold uppercase tracking-wider">
                   Turn Files
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -501,11 +500,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                         key={fileName}
                         type="button"
                         onClick={() => selectFile(fileName)}
-                        className="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors"
-                        style={isActive
-                          ? { background: 'var(--color-action-turn)', color: '#fff' }
-                          : { background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }
-                        }
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${selectableClass(isActive)}`}
                       >
                         {fileName}
                       </button>
@@ -515,11 +510,11 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
               </div>
 
               <div>
-                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                <div className="t-text-muted mb-1.5 text-[10px] font-semibold uppercase tracking-wider">
                   Recommended Artifacts
                 </div>
-                <div className="max-h-[130px] space-y-1 overflow-auto rounded-lg border p-2" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-base)' }}>
-                  {recommendedArtifacts.length === 0 && <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>No highlighted artifacts for this turn.</div>}
+                <div className="t-bg-base t-border-subtle max-h-[130px] space-y-1 overflow-auto rounded-lg border p-2">
+                  {recommendedArtifacts.length === 0 && <div className="t-text-muted text-[11px]">No highlighted artifacts for this turn.</div>}
                   {recommendedArtifacts.map((artifact) => {
                     const isActive = selectedArtifact === artifact.name
                     return (
@@ -527,13 +522,9 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                         key={`recommended:${artifact.name}`}
                         type="button"
                         onClick={() => setSelectedArtifact(artifact.name)}
-                        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[11px] font-medium transition-colors"
-                        style={isActive
-                          ? { background: 'var(--color-action-loop)', color: '#fff' }
-                          : { background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }
-                        }
+                        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[11px] font-medium transition-colors ${selectableClass(isActive)}`}
                       >
-                        <span className="rounded-full border px-1.5 py-0.5 text-[9px]" style={{ borderColor: 'var(--color-border-action)', color: isActive ? '#fff' : 'var(--color-accent-soft)' }}>
+                        <span className={`t-border-action rounded-full border px-1.5 py-0.5 text-[9px] ${reasonToneClass(isActive)}`}>
                           {artifact.reason}
                         </span>
                         <span className="truncate">{artifact.name}</span>
@@ -544,11 +535,11 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
               </div>
 
               <div>
-                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                <div className="t-text-muted mb-1.5 text-[10px] font-semibold uppercase tracking-wider">
                   All Artifacts
                 </div>
                 <div className="max-h-[150px] space-y-1 overflow-auto">
-                  {artifacts.length === 0 && <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>None</div>}
+                  {artifacts.length === 0 && <div className="t-text-muted text-[11px]">None</div>}
                   {artifacts.map((artifact) => {
                     const isActive = selectedArtifact === artifact.name
                     return (
@@ -556,11 +547,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                         key={artifact.name}
                         type="button"
                         onClick={() => setSelectedArtifact(artifact.name)}
-                        className="block w-full truncate rounded-md px-2.5 py-1 text-left text-[11px] font-medium transition-colors"
-                        style={isActive
-                          ? { background: 'var(--color-action-loop)', color: '#fff' }
-                          : { background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }
-                        }
+                        className={`block w-full truncate rounded-md px-2.5 py-1 text-left text-[11px] font-medium transition-colors ${selectableClass(isActive)}`}
                       >
                         {artifact.name}
                       </button>
@@ -569,11 +556,11 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                 </div>
               </div>
 
-              <div className="rounded-lg border p-3 t-card-emerald">
+              <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
                 <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold ${toneForStatus(selectedStatus)}`}>
                   {selectedStatus}
                 </span>
-                <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+                <p className="t-text-secondary mt-1.5 text-[11px] leading-relaxed">
                   {selectedSummary}
                 </p>
                 {(selectedResultMeta?.activePlanId
@@ -583,7 +570,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                   || selectedResultMeta?.blockedReason
                   || (selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0
                 ) && (
-                  <div className="mt-2 space-y-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                  <div className="t-text-muted mt-2 space-y-1 text-[10px]">
                     {selectedResultMeta?.activePlanId && <div>plan: {selectedResultMeta.activePlanId}</div>}
                     {selectedResultMeta?.statusChange && <div>change: {selectedResultMeta.statusChange}</div>}
                     {selectedResultMeta?.delta && <div>delta: {truncateText(selectedResultMeta.delta, 120)}</div>}
@@ -608,15 +595,13 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
 
             <div className="min-w-0">
               <div
-                className="mb-2 rounded-lg px-3 py-1.5 text-[11px] font-mono"
-                style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-muted)' }}
+                className="t-bg-elevated t-text-muted mb-2 rounded-lg px-3 py-1.5 text-[11px] font-mono"
               >
                 turn-{selectedTurnObject.turnNumber.toString().padStart(4, '0')} / {selectedArtifact || selectedTurnFile}
-                {filePathLabel && <span style={{ color: 'var(--color-text-muted)' }}> — {filePathLabel}</span>}
+                {filePathLabel && <span className="t-text-muted"> — {filePathLabel}</span>}
               </div>
               <pre
-                className="max-h-[560px] overflow-auto rounded-lg border p-4 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
-                style={{ background: 'var(--color-terminal-bg)', borderColor: 'var(--color-border-subtle)', color: 'var(--color-terminal-text)' }}
+                className="t-pre-terminal max-h-[560px] overflow-auto rounded-lg border p-4 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
               >
                 {fileContent || '(no content)'}
               </pre>
@@ -625,15 +610,14 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
         )}
       </section>
 
-      <section className="shrink-0 rounded-lg border p-4 t-card-amber">
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-amber)' }}>
+      <section className="t-bg-surface t-border shrink-0 rounded-lg border p-4">
+        <h3 className="t-text-muted mb-2 text-[11px] font-semibold uppercase tracking-wider">
           FAILURES.md
         </h3>
         <pre
           className={`md-prose overflow-auto rounded-lg border p-4 text-[12px] leading-relaxed ${
             showExpandedFailures ? 'max-h-[220px]' : 'max-h-[120px]'
-          }`}
-          style={{ background: 'var(--color-bg-base)', borderColor: 'var(--color-border-subtle)', color: 'var(--color-text)' }}
+          } t-pre-panel`}
         >
           {failuresMarkdown || '(empty)'}
         </pre>
