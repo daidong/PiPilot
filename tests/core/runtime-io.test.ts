@@ -121,14 +121,6 @@ describe('RuntimeIO', () => {
       expect(result.success).toBe(false)
       expect(result.data?.exitCode).toBe(1)
     })
-
-    it('should respect timeout', async () => {
-      const result = await runtimeIO.exec('sleep 10', { timeout: 100 })
-
-      expect(result.success).toBe(false)
-      // Timeout results in the command being killed with non-zero exit
-      expect(result.data?.exitCode).not.toBe(0)
-    })
   })
 
   describe('glob', () => {

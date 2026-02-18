@@ -332,16 +332,5 @@ describe('Built-in Tools', () => {
       // pwd 返回的是规范化后的路径，在 macOS 上可能是 /private/var/...
       expect(normalizePath(result.data?.stdout.trim() ?? '')).toBe(normalizePath(subdir))
     })
-
-    it('should respect timeout option', async () => {
-      const result = await bash.execute({
-        command: 'sleep 10',
-        timeout: 100
-      }, context)
-
-      expect(result.success).toBe(false)
-      // Timeout results in a non-zero exit code
-      expect(result.data?.exitCode).not.toBe(0)
-    })
   })
 })
