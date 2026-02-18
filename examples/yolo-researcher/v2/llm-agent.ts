@@ -1213,6 +1213,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
         'Rewrite planBoard/currentPlan only on planner checkpoint turns.',
         'Be resourceful before asking user; Ask is last resort when truly blocked.',
         'Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). Prefer fresh target dirs.',
+        'If privileged execution is required, use only: sudo -n /usr/local/bin/agent-root-task <subcommand> ...',
         'Do not Stop unless milestone completion or explicit stop/safety condition.',
         'Use available tools/skills before asking user. Treat ask_user as escalation, not default.',
         ...(runtimeSystemInfo
