@@ -263,7 +263,7 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
     : ''
 
   return (
-    <div className="flex h-full flex-col p-4 gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-4">
       <div className="t-bg-surface t-border rounded-lg border p-3">
         <div className="mb-2 flex items-center gap-2">
           <span className="t-text-info t-font-mono text-[13px]">&#9654;</span>
@@ -334,7 +334,7 @@ export default function TerminalView({ overview, turns, terminalEvents }: Termin
       {displayCmd && (
         <div className="t-bg-surface t-border-subtle shrink-0 rounded-lg border px-4 py-3">
           <div className="t-text-muted text-[10px] font-semibold uppercase tracking-wider">Command</div>
-          <pre className="t-font-mono t-text-info mt-1.5 text-xs whitespace-pre-wrap break-words">
+          <pre className="t-font-mono t-text-info mt-1.5 max-h-40 overflow-auto text-xs whitespace-pre-wrap break-words">
             <span className="t-text-muted">$ </span>{displayCmd.trim()}
           </pre>
           {cwdLabel && (
