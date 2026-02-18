@@ -128,6 +128,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
   const [highlights, setHighlights] = useState<HighlightArtifact[]>([])
   const [milestones, setMilestones] = useState<TurnResultMeta[]>([])
   const [selectedResultMeta, setSelectedResultMeta] = useState<TurnResultMeta | null>(null)
+  const [projectPanelOpen, setProjectPanelOpen] = useState(false)
 
   const selectedTurnObject = useMemo(
     () => turns.find((t) => t.turnNumber === selectedTurn) ?? null,
@@ -339,15 +340,27 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto p-4">
       <section className="shrink-0 rounded-lg border p-4 t-card-teal">
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-teal)' }}>
-          PROJECT.md
-        </h3>
-        <pre
-          className="md-prose max-h-[360px] overflow-auto rounded-lg border p-4 text-[12px] leading-relaxed"
-          style={{ background: 'var(--color-bg-base)', borderColor: 'var(--color-border-subtle)', color: 'var(--color-text)' }}
-        >
-          {projectMarkdown || '(empty)'}
-        </pre>
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-accent-teal)' }}>
+            PROJECT.md
+          </h3>
+          <button
+            type="button"
+            onClick={() => setProjectPanelOpen((prev) => !prev)}
+            className="rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors"
+            style={{ borderColor: 'var(--color-border-subtle)', color: 'var(--color-text-secondary)', background: 'var(--color-bg-elevated)' }}
+          >
+            {projectPanelOpen ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+        {projectPanelOpen && (
+          <pre
+            className="md-prose mt-2 max-h-[360px] overflow-auto rounded-lg border p-4 text-[12px] leading-relaxed"
+            style={{ background: 'var(--color-bg-base)', borderColor: 'var(--color-border-subtle)', color: 'var(--color-text)' }}
+          >
+            {projectMarkdown || '(empty)'}
+          </pre>
+        )}
       </section>
 
       <section className="shrink-0 rounded-lg border p-4 t-card-sky">

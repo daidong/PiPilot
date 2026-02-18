@@ -77,6 +77,7 @@ const REPO_SCAN_SKIP_DIRS = new Set([
 ])
 const REPO_SCAN_MAX_DEPTH = 3
 const REPO_SCAN_MAX_RESULTS = 12
+const CODING_LARGE_REPO_CODE_EDIT_SCRIPTS = new Set(['delegate-coding-agent', 'agent-start'])
 
 const DELIVERABLE_PATTERNS: string[] = [
   'problem_statement',   // S1
@@ -689,6 +690,65 @@ export class YoloSession {
       touched.push(toPosixPath(normalized))
     }
     return dedupeStrings(touched)
+  }
+
+  private detectCodingLargeRepoUsage(toolEvents: ToolEventRecord[]): {
+    used: boolean
+    usedCodeEditWorkflow: boolean
+    script: string
+  } {
+    let used = false
+    let usedCodeEditWorkflow = false
+    let script = ''
+
+    for (const event of toolEvents) {
+      if (event.phase !== 'call') continue
+      const tool = normalizeText(event.tool || '')
+      if (tool !== 'skill-script-run') continue
+      const input = toPlainObject(event.input)
+      const skillId = normalizeText(safeString(input?.skillId))
+      if (skillId !== 'coding-large-repo') continue
+
+      used = true
+      const scriptName = normalizeText(safeString(input?.script))
+      if (scriptName) script = scriptName
+      if (CODING_LARGE_REPO_CODE_EDIT_SCRIPTS.has(scriptName)) {
+        usedCodeEditWorkflow = true
+      }
+    }
+
+    return { used, usedCodeEditWorkflow, script }
+  }
+
+  private detectRepoCodeTouch(input: {
+    workspaceWriteTouches: string[]
+    workspaceGitRepos: string[]
+  }): { touched: boolean; repo: string; path: string } {
+    const touches = input.workspaceWriteTouches
+      .map((item) => toPosixPath(item.trim().replace(/^\.\/+/, '')))
+      .filter((item) => item.length > 0)
+      .filter((item) => !item.startsWith('runs/'))
+
+    const allRepos = dedupeStrings(
+      input.workspaceGitRepos
+        .map((item) => toPosixPath(item.trim().replace(/^\.\/+/, '')))
+        .filter(Boolean)
+    )
+    const nestedRepos = allRepos.filter((item) => item !== '.')
+    const repos = nestedRepos.length > 0 ? nestedRepos : allRepos
+
+    for (const target of touches) {
+      for (const repo of repos) {
+        if (repo === '.') {
+          return { touched: true, repo, path: target }
+        }
+        if (target === repo || target.startsWith(`${repo}/`)) {
+          return { touched: true, repo, path: target }
+        }
+      }
+    }
+
+    return { touched: false, repo: '', path: '' }
   }
 
   private async writeWorkspaceChangeArtifacts(input: {
@@ -1393,6 +1453,11 @@ export class YoloSession {
     }, null, 2)}\n`)
 
     const workspaceWriteTouches = this.collectWorkspaceWriteTouches(toolEvents)
+    const codingLargeRepoUsage = this.detectCodingLargeRepoUsage(toolEvents)
+    const repoCodeTouch = this.detectRepoCodeTouch({
+      workspaceWriteTouches,
+      workspaceGitRepos: input.context.workspaceGitRepos ?? []
+    })
     const workspaceChangeArtifacts = await this.writeWorkspaceChangeArtifacts({
       artifactsDir: input.artifactsDir,
       workspaceWriteTouches,
@@ -1673,6 +1738,14 @@ export class YoloSession {
       finalStatus = 'no_delta'
       summary = `NO_DELTA: missing_plan_deliverable_touch. ${summary}`
       blockedReason = 'missing_plan_deliverable_touch'
+    }
+    if (finalStatus === 'success' && repoCodeTouch.touched && !codingLargeRepoUsage.usedCodeEditWorkflow) {
+      finalStatus = 'no_delta'
+      const scriptHint = codingLargeRepoUsage.used
+        ? `observed coding-large-repo/${codingLargeRepoUsage.script || 'unknown'} (code edits require delegate-coding-agent or agent-start)`
+        : 'coding-large-repo workflow missing'
+      summary = `NO_DELTA: repo_code_edit_without_coding_large_repo (${repoCodeTouch.path}). ${scriptHint}. ${summary}`
+      blockedReason = 'repo_code_edit_without_coding_large_repo'
     }
     if (finalStatus === 'success' && deltaReasons.length === 0) {
       finalStatus = 'no_delta'

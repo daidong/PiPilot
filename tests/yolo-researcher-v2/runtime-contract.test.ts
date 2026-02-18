@@ -62,6 +62,42 @@ function writeSuccessEvent(filePath: string, content: string = 'ok') {
   ]
 }
 
+function codingLargeRepoDelegateEvents(cwd: string = '.') {
+  return [
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'skill-script-run',
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'delegate-coding-agent',
+        args: ['--task', 'apply repo patch', '--cwd', cwd]
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'skill-script-run',
+      success: true,
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'delegate-coding-agent'
+      },
+      result: {
+        success: true,
+        data: {
+          structuredResult: {
+            schema: 'coding-large-repo.result.v1',
+            script: 'delegate-coding-agent',
+            status: 'completed',
+            exit_code: 0
+          }
+        }
+      }
+    }
+  ]
+}
+
 async function readText(filePath: string): Promise<string> {
   return fs.readFile(filePath, 'utf-8')
 }
@@ -310,6 +346,86 @@ describe('yolo-researcher v2 runtime contract', () => {
 
     const patch = await readText(path.join(projectPath, 'runs', 'turn-0001', 'artifacts', 'patch.diff'))
     expect(patch).toContain('diff --git a/src/sample.ts b/src/sample.ts')
+  })
+
+  it('downgrades git-repo code edits without coding-large-repo delegate flow', async () => {
+    const projectPath = await createTempDir('yolo-v2-coding-repo-gate-')
+    tempDirs.push(projectPath)
+
+    const repoRoot = path.join(projectPath, 'external', 'openevolve')
+    const targetPath = path.join(repoRoot, 'openevolve', 'iteration.py')
+    await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, '# baseline\n', 'utf-8')
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: external/openevolve/openevolve/iteration.py'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Modify nested git repo safely',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Directly edit repo file without coding-large-repo workflow',
+          status: 'success',
+          summary: 'Edited target code path.',
+          primaryAction: `write: external/openevolve/openevolve/iteration.py`,
+          evidencePaths: ['runs/turn-0001/stdout.txt'],
+          toolEvents: [
+            ...writeSuccessEvent('external/openevolve/openevolve/iteration.py', '# changed\n'),
+            ...bashSuccessEvent(`node -e "console.log('repo-edit-no-skill')"`, 'repo-edit-no-skill\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('repo_code_edit_without_coding_large_repo')
+
+    const result = JSON.parse(await readText(path.join(
+      projectPath,
+      'runs',
+      'turn-0001',
+      'result.json'
+    ))) as Record<string, unknown>
+    expect(result.blocked_reason).toBe('repo_code_edit_without_coding_large_repo')
+  })
+
+  it('accepts git-repo code edits when coding-large-repo delegate flow is invoked', async () => {
+    const projectPath = await createTempDir('yolo-v2-coding-repo-allowed-')
+    tempDirs.push(projectPath)
+
+    const repoRoot = path.join(projectPath, 'external', 'openevolve')
+    const targetPath = path.join(repoRoot, 'openevolve', 'iteration.py')
+    await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, '# baseline\n', 'utf-8')
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: external/openevolve/openevolve/iteration.py'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Modify nested git repo safely',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run coding-large-repo delegate flow before editing repo file',
+          status: 'success',
+          summary: 'Edited repo code through delegate workflow.',
+          primaryAction: 'skill-script-run: coding-large-repo/delegate-coding-agent',
+          evidencePaths: ['runs/turn-0001/stdout.txt'],
+          toolEvents: [
+            ...codingLargeRepoDelegateEvents('external/openevolve'),
+            ...writeSuccessEvent('external/openevolve/openevolve/iteration.py', '# changed by delegate\n'),
+            ...bashSuccessEvent(`node -e "console.log('repo-edit-with-skill')"`, 'repo-edit-with-skill\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
   })
 
   it('marks successful turns without delta evidence as no_delta', async () => {
