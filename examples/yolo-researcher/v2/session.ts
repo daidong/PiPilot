@@ -761,6 +761,70 @@ export class YoloSession {
     return normalizedRows
   }
 
+  private inferDeliverableCandidatesForMicroCheckpoint(input: {
+    workspaceWriteTouches: string[]
+    businessArtifactEvidencePaths: string[]
+    planEvidencePaths: string[]
+  }): string[] {
+    const toDeliverable = (rawPath: string): string => {
+      const normalized = this.normalizeProjectPathPointer(rawPath).toLowerCase()
+      if (!normalized) return ''
+      const scoped = TURN_SCOPED_DELIVERABLE_RE.exec(normalized)
+      const deliverable = scoped?.[2] ? scoped[2] : normalized
+      if (!deliverable.startsWith('artifacts/')) return ''
+
+      const base = path.posix.basename(deliverable)
+      if (SYSTEM_ARTIFACT_NAMES.has(base)) return ''
+      if (/^planning_checkpoint_.*\.md$/i.test(base)) return ''
+      if (deliverable.startsWith('artifacts/evidence/')) return ''
+
+      return deliverable
+    }
+
+    return dedupeStrings([
+      ...input.workspaceWriteTouches.map(toDeliverable).filter(Boolean),
+      ...input.businessArtifactEvidencePaths.map(toDeliverable).filter(Boolean),
+      ...input.planEvidencePaths.map(toDeliverable).filter(Boolean)
+    ])
+  }
+
+  private alignDoneDefinitionDeliverable(doneDefinition: string[], deliverable: string): string[] {
+    const normalizedTarget = this.normalizeDeliverableTarget(deliverable).value
+    if (!normalizedTarget) return doneDefinition
+
+    const nextRows: string[] = []
+    let replaced = false
+    let alreadyPresent = false
+
+    for (const row of doneDefinition) {
+      const line = row.trim()
+      if (!line) continue
+      if (!/^deliverable\s*:/i.test(line)) {
+        nextRows.push(line)
+        continue
+      }
+
+      const current = this.normalizeDeliverableTarget(line.split(':').slice(1).join(':').trim()).value
+      if (current === normalizedTarget) {
+        alreadyPresent = true
+      }
+      if (!replaced) {
+        nextRows.push(`deliverable: ${normalizedTarget}`)
+        replaced = true
+      }
+    }
+
+    if (!replaced) {
+      nextRows.unshift(`deliverable: ${normalizedTarget}`)
+    }
+
+    if (!alreadyPresent && !nextRows.some((line) => /^evidence_min\s*:/i.test(line))) {
+      nextRows.push('evidence_min: 1')
+    }
+
+    return nextRows
+  }
+
   private collectWorkspaceWriteTouches(toolEvents: ToolEventRecord[]): string[] {
     const touched: string[] = []
     for (const event of toolEvents) {
@@ -775,6 +839,59 @@ export class YoloSession {
       touched.push(toPosixPath(normalized))
     }
     return dedupeStrings(touched)
+  }
+
+  private async detectOpenAIPythonScriptIssue(input: {
+    workspaceWriteTouches: string[]
+    toolEvents: ToolEventRecord[]
+  }): Promise<{ path: string; reason: string } | null> {
+    const eventContentByPath = new Map<string, string>()
+    for (const event of input.toolEvents) {
+      if (event.phase !== 'call') continue
+      const tool = normalizeText(event.tool || '')
+      if (tool !== 'write' && tool !== 'edit') continue
+      const eventInput = toPlainObject(event.input)
+      const rawPath = safeString(eventInput?.path).trim()
+      if (!rawPath) continue
+      const normalizedPath = this.normalizeProjectPathPointer(rawPath)
+      if (!normalizedPath) continue
+      const content = safeString(eventInput?.content)
+      if (!content.trim()) continue
+      eventContentByPath.set(normalizedPath, content)
+    }
+
+    for (const rawPath of input.workspaceWriteTouches) {
+      const normalized = this.normalizeProjectPathPointer(rawPath)
+      if (!/^runs\/turn-\d{4}\/artifacts\/.+\.py$/i.test(normalized)) continue
+
+      let content = eventContentByPath.get(normalized) || ''
+      if (!content.trim()) {
+        const absolutePath = path.join(this.yoloRoot, normalized)
+        if (!(await fileExists(absolutePath))) continue
+        content = await readTextOrEmpty(absolutePath)
+      }
+      if (!content.trim()) continue
+
+      const usesOpenAi = /(?:^|\n)\s*import\s+openai\b|from\s+openai\s+import\s+OpenAI/i.test(content)
+      if (!usesOpenAi) continue
+
+      if (/openai\.ChatCompletion\.create\s*\(/i.test(content)) {
+        return { path: normalized, reason: 'legacy_chatcompletion_api' }
+      }
+
+      const hasV1Client = /from\s+openai\s+import\s+OpenAI/i.test(content)
+        && /OpenAI\s*\(/.test(content)
+      if (!hasV1Client) {
+        return { path: normalized, reason: 'missing_openai_v1_client' }
+      }
+
+      const hasPreflightLog = /openai[-_ ]preflight|api_key_present|openai\.__version__/i.test(content)
+      if (!hasPreflightLog) {
+        return { path: normalized, reason: 'missing_openai_preflight_log' }
+      }
+    }
+
+    return null
   }
 
   private detectCodingLargeRepoUsage(toolEvents: ToolEventRecord[]): {
@@ -1898,27 +2015,19 @@ export class YoloSession {
       input.context.project.planBoard,
       projectedPlanUpdate
     )
-    let statusChange = this.deriveRuntimeStatusChange({
-      activePlanId,
-      finalStatus,
-      planItem: projectedPlanItem,
+    let statusChange = ''
+    let doneDefinitionCheck = {
+      ok: true,
+      reason: '',
+      deliverableTouched: false,
       doneReady: false
-    })
-    let doneDefinitionCheck = this.validatePlanProgressAgainstDoneDefinition({
-      status: finalStatus,
-      activePlanId,
-      statusChange,
-      explicitEvidencePaths: planEvidencePaths,
-      cumulativeEvidencePaths: dedupeStrings([...(projectedPlanItem?.evidencePaths ?? []), ...planEvidencePaths]),
-      planItem: projectedPlanItem,
-      workspaceWriteTouches
-    })
-    if (finalStatus === 'success' && doneDefinitionCheck.ok && doneDefinitionCheck.doneReady) {
+    }
+    const recomputeDoneDefinitionCheck = () => {
       statusChange = this.deriveRuntimeStatusChange({
         activePlanId,
         finalStatus,
         planItem: projectedPlanItem,
-        doneReady: true
+        doneReady: false
       })
       doneDefinitionCheck = this.validatePlanProgressAgainstDoneDefinition({
         status: finalStatus,
@@ -1929,9 +2038,82 @@ export class YoloSession {
         planItem: projectedPlanItem,
         workspaceWriteTouches
       })
+      if (finalStatus === 'success' && doneDefinitionCheck.ok && doneDefinitionCheck.doneReady) {
+        statusChange = this.deriveRuntimeStatusChange({
+          activePlanId,
+          finalStatus,
+          planItem: projectedPlanItem,
+          doneReady: true
+        })
+        doneDefinitionCheck = this.validatePlanProgressAgainstDoneDefinition({
+          status: finalStatus,
+          activePlanId,
+          statusChange,
+          explicitEvidencePaths: planEvidencePaths,
+          cumulativeEvidencePaths: dedupeStrings([...(projectedPlanItem?.evidencePaths ?? []), ...planEvidencePaths]),
+          planItem: projectedPlanItem,
+          workspaceWriteTouches
+        })
+      }
     }
+    recomputeDoneDefinitionCheck()
+
+    let microCheckpointApplied = false
+    let microCheckpointDeliverable = ''
+    if (finalStatus === 'success' && activePlanId && projectedPlanItem && !doneDefinitionCheck.deliverableTouched && !clearedBlocked) {
+      const deliverableCandidates = this.inferDeliverableCandidatesForMicroCheckpoint({
+        workspaceWriteTouches,
+        businessArtifactEvidencePaths,
+        planEvidencePaths
+      })
+      const inferredDeliverable = deliverableCandidates[0] || ''
+      if (inferredDeliverable) {
+        const alignedDoneDefinition = this.alignDoneDefinitionDeliverable(
+          projectedPlanItem.doneDefinition ?? [],
+          inferredDeliverable
+        )
+        const before = JSON.stringify(projectedPlanItem.doneDefinition ?? [])
+        const after = JSON.stringify(alignedDoneDefinition)
+        if (before !== after) {
+          projectedPlanItem = {
+            ...projectedPlanItem,
+            doneDefinition: alignedDoneDefinition
+          }
+          microCheckpointApplied = true
+          microCheckpointDeliverable = inferredDeliverable
+          recomputeDoneDefinitionCheck()
+        }
+      }
+    }
+
+    const coTouchedDeliverablePlanIds = dedupeStrings(
+      coTouchedPlanIds.filter((coPlanId) => {
+        const coPlanItem = this.resolveProjectedPlanItem(
+          coPlanId,
+          input.context.project.planBoard,
+          projectedPlanUpdate
+        )
+        if (!coPlanItem) return false
+        const doneDefinition = (coPlanItem.doneDefinition ?? [])
+          .map((line) => line.trim())
+          .filter(Boolean)
+        if (doneDefinition.length === 0) return false
+        const parsedRules = this.parseDoneDefinitionRules(doneDefinition)
+        if (parsedRules.invalidRows.length > 0 || parsedRules.deliverables.length === 0) return false
+        const touched = this.collectTouchedDeliverables(
+          planEvidencePaths,
+          parsedRules.deliverables,
+          workspaceWriteTouches
+        )
+        return touched.length > 0
+      })
+    )
+
     if (doneDefinitionCheck.deliverableTouched && !deltaReasons.includes('plan_deliverable_touched')) {
       deltaReasons.push('plan_deliverable_touched')
+    }
+    if (coTouchedDeliverablePlanIds.length > 0 && !deltaReasons.includes('co_plan_deliverable_touched')) {
+      deltaReasons.push('co_plan_deliverable_touched')
     }
     let deltaText = this.deriveRuntimeDelta({
       actionLabel: hintedDeltaText || primaryAction,
@@ -1966,7 +2148,8 @@ export class YoloSession {
       summary = `NO_DELTA: ${doneDefinitionCheck.reason}. ${summary}`
       blockedReason = doneDefinitionCheck.reason
     }
-    if (finalStatus === 'success' && !doneDefinitionCheck.deliverableTouched && !clearedBlocked) {
+    const hasAnyPlanDeliverableTouch = doneDefinitionCheck.deliverableTouched || coTouchedDeliverablePlanIds.length > 0
+    if (finalStatus === 'success' && !hasAnyPlanDeliverableTouch && !clearedBlocked) {
       finalStatus = 'no_delta'
       summary = `NO_DELTA: missing_plan_deliverable_touch. ${summary}`
       blockedReason = 'missing_plan_deliverable_touch'
@@ -1978,6 +2161,15 @@ export class YoloSession {
         : 'coding-large-repo workflow missing'
       summary = `NO_DELTA: repo_code_edit_without_coding_large_repo (${repoCodeTouch.path}). ${scriptHint}. ${summary}`
       blockedReason = 'repo_code_edit_without_coding_large_repo'
+    }
+    const openaiScriptIssue = await this.detectOpenAIPythonScriptIssue({
+      workspaceWriteTouches,
+      toolEvents
+    })
+    if (finalStatus === 'success' && openaiScriptIssue) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: openai_script_compat_issue (${openaiScriptIssue.reason} at ${openaiScriptIssue.path}). ${summary}`
+      blockedReason = 'openai_script_compat_issue'
     }
     if (finalStatus === 'success' && deltaReasons.length === 0) {
       finalStatus = 'no_delta'
@@ -2008,6 +2200,12 @@ export class YoloSession {
     }
     if (coTouchedPlanIds.length > 0) {
       updateSummaryLines.push(`Plan co-touch: ${coTouchedPlanIds.join(', ')}`)
+    }
+    if (coTouchedDeliverablePlanIds.length > 0) {
+      updateSummaryLines.push(`Plan co-touch deliverable hit: ${coTouchedDeliverablePlanIds.join(', ')}`)
+    }
+    if (microCheckpointApplied && activePlanId && microCheckpointDeliverable) {
+      updateSummaryLines.push(`Micro-checkpoint: aligned ${activePlanId} deliverable -> ${microCheckpointDeliverable}`)
     }
     if (missingOutcomeEvidencePaths.length > 0) {
       const preview = missingOutcomeEvidencePaths[0]
@@ -2083,6 +2281,27 @@ export class YoloSession {
     let planDeltaWarning = ''
     const coPlanStatusChanges: string[] = []
     const coPlanWarnings: string[] = []
+    if (microCheckpointApplied && activePlanId && projectedPlanItem) {
+      try {
+        await this.projectStore.applyUpdate({
+          planBoard: [{
+            id: projectedPlanItem.id,
+            title: projectedPlanItem.title,
+            status: projectedPlanItem.status,
+            doneDefinition: [...(projectedPlanItem.doneDefinition ?? [])],
+            evidencePaths: [...(projectedPlanItem.evidencePaths ?? [])],
+            nextMinStep: projectedPlanItem.nextMinStep,
+            dropReason: projectedPlanItem.dropReason,
+            replacedBy: projectedPlanItem.replacedBy ?? null,
+            priority: projectedPlanItem.priority
+          }]
+        })
+        projectUpdated = true
+      } catch (microCheckpointError) {
+        const message = microCheckpointError instanceof Error ? microCheckpointError.message : String(microCheckpointError)
+        updateSummaryLines.push(`Micro-checkpoint apply skipped: ${message}`)
+      }
+    }
     if (activePlanId) {
       const planDelta = await this.projectStore.applyTurnPlanDelta({
         activePlanId,
@@ -2287,7 +2506,10 @@ export class YoloSession {
       plan_attribution_reason: planAttribution.reason,
       plan_attribution_ambiguous: planAttribution.ambiguous,
       co_touched_plan_ids: coTouchedPlanIds,
+      co_touched_deliverable_plan_ids: coTouchedDeliverablePlanIds,
       co_plan_status_changes: coPlanStatusChanges,
+      micro_checkpoint_applied: microCheckpointApplied,
+      ...(microCheckpointDeliverable ? { micro_checkpoint_deliverable: microCheckpointDeliverable } : {}),
       goal_constraints_fingerprint: goalConstraintsFingerprint,
       ...(deterministicFingerprint ? { failure_fingerprint: deterministicFingerprint } : {}),
       ...(clearedBlocked ? { unblock_verified: true } : {}),

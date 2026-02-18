@@ -20,6 +20,7 @@ const MIN_FACTS_TO_KEEP_DURING_COMPRESSION = 5
 const DEFAULT_FACTS_TO_KEEP_DURING_COMPRESSION = 10
 const MAX_PLAN_ITEMS = 5
 const MAX_PLAN_BOARD_ITEMS = 40
+const MAX_PLAN_EVIDENCE_PATHS = 40
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
 const PLAN_ID_RE = /^P\d+$/i
 const BOOTSTRAP_PLAN_PLACEHOLDER = 'Bootstrap pending: replace with 3-5 goal-specific next actions in the next turn.'
@@ -92,6 +93,12 @@ function dedupePlanText(lines: string[]): string[] {
   return dedupePreserveOrder(lines.map((line) => line.trim())).filter(Boolean)
 }
 
+function normalizePlanEvidencePaths(paths: string[]): string[] {
+  return dedupePreserveOrder(paths.map((entry) => entry.trim()))
+    .filter((entry) => EVIDENCE_PATH_RE.test(entry))
+    .slice(-MAX_PLAN_EVIDENCE_PATHS)
+}
+
 function dedupePlanBoardItems(items: PlanBoardItem[]): PlanBoardItem[] {
   const byId = new Map<string, PlanBoardItem>()
   for (const item of items) {
@@ -104,7 +111,7 @@ function dedupePlanBoardItems(items: PlanBoardItem[]): PlanBoardItem[] {
       title: item.title.trim(),
       status,
       doneDefinition: dedupePlanText(item.doneDefinition ?? []),
-      evidencePaths: dedupePreserveOrder((item.evidencePaths ?? []).map((entry) => entry.trim()).filter(Boolean)),
+      evidencePaths: normalizePlanEvidencePaths(item.evidencePaths ?? []),
       nextMinStep: item.nextMinStep?.trim() || undefined,
       dropReason: item.dropReason?.trim() || undefined,
       replacedBy: typeof item.replacedBy === 'string'
@@ -153,7 +160,7 @@ function normalizePlanBoard(items: PlanBoardItem[]): PlanBoardItem[] {
     .map((item, index) => ({
       ...item,
       priority: Number.isFinite(item.priority) ? item.priority : index + 1,
-      evidencePaths: item.evidencePaths.filter((entry) => EVIDENCE_PATH_RE.test(entry))
+      evidencePaths: normalizePlanEvidencePaths(item.evidencePaths)
     }))
 
   normalized = ensureSingleActiveItem(normalized)
@@ -291,7 +298,7 @@ function mergePlanBoardWithCarryForward(currentBoard: PlanBoardItem[], incomingB
       doneDefinition: incoming.doneDefinition.length > 0
         ? [...incoming.doneDefinition]
         : [...(previous?.doneDefinition ?? [])],
-      evidencePaths: dedupePreserveOrder([
+      evidencePaths: normalizePlanEvidencePaths([
         ...(previous?.evidencePaths ?? []),
         ...incoming.evidencePaths
       ]),
@@ -929,11 +936,10 @@ export class ProjectStore {
       return { panel: current, applied: false, warning: `active_plan_id not found: ${targetId}` }
     }
 
-    const evidencePaths = dedupePreserveOrder((input.evidencePaths ?? []).map((entry) => entry.trim()))
-      .filter((entry) => EVIDENCE_PATH_RE.test(entry))
+    const evidencePaths = normalizePlanEvidencePaths(input.evidencePaths ?? [])
     const board = current.planBoard.map((item) => ({ ...item, evidencePaths: [...item.evidencePaths], doneDefinition: [...item.doneDefinition] }))
     const target = { ...board[targetIndex]! }
-    target.evidencePaths = dedupePreserveOrder([...target.evidencePaths, ...evidencePaths])
+    target.evidencePaths = normalizePlanEvidencePaths([...target.evidencePaths, ...evidencePaths])
 
     let nextStatus = parsedStatusChange.toStatus
     if (!nextStatus) {

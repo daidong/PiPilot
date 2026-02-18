@@ -1369,6 +1369,50 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(result.blocked_reason).toBeUndefined()
   })
 
+  it('applies micro-checkpoint deliverable alignment when active plan deliverable mismatches this turn output', async () => {
+    const projectPath = await createTempDir('yolo-v2-micro-checkpoint-deliverable-align-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/unit_test_acceptance.json',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Align active deliverable to turn output and avoid no_delta',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Generate benchmark results artifact',
+          status: 'success',
+          summary: 'Benchmark results generated.',
+          primaryAction: 'write: runs/turn-0001/artifacts/benchmark_results.json',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Created benchmark results.',
+          toolEvents: [
+            ...writeSuccessEvent('runs/turn-0001/artifacts/benchmark_results.json', '{"rho":0.9}\n'),
+            ...bashSuccessEvent(`node -e "console.log('micro-checkpoint-ok')"`, 'micro-checkpoint-ok\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.micro_checkpoint_applied).toBe(true)
+    expect(result.micro_checkpoint_deliverable).toBe('artifacts/benchmark_results.json')
+    expect(result.blocked_reason).toBeUndefined()
+
+    const store = new ProjectStore(projectPath, 'Micro checkpoint verify', ['Define measurable success criteria.'], 'host')
+    const panel = await store.load()
+    const p1 = panel.planBoard.find((item) => item.id === 'P1')
+    expect(p1?.doneDefinition.some((line) => line.trim().toLowerCase() === 'deliverable: artifacts/benchmark_results.json')).toBe(true)
+  })
+
   it('co-updates shared-deliverable plans within the same successful turn', async () => {
     const projectPath = await createTempDir('yolo-v2-shared-deliverable-co-update-')
     tempDirs.push(projectPath)
@@ -1437,8 +1481,56 @@ describe('yolo-researcher v2 runtime contract', () => {
     const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
     expect(result.active_plan_id).toBe('P1')
     expect(result.co_touched_plan_ids).toEqual(['P2'])
+    expect(result.co_touched_deliverable_plan_ids).toEqual(['P2'])
+    const deltaReasons = Array.isArray(result.delta_reasons) ? result.delta_reasons.map(String) : []
+    expect(deltaReasons).toContain('co_plan_deliverable_touched')
     expect(Array.isArray(result.co_plan_status_changes)).toBe(true)
     expect((result.co_plan_status_changes as string[])).toContain('P2 TODO -> DONE')
+  })
+
+  it('downgrades legacy OpenAI Python script usage to force openai>=1.x compatibility', async () => {
+    const projectPath = await createTempDir('yolo-v2-openai-compat-gate-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/run_calibration_live.py',
+      'evidence_min: 1'
+    ])
+
+    const legacyScript = [
+      'import openai',
+      'def run_one(model):',
+      '  return openai.ChatCompletion.create(model=model, messages=[{"role":"user","content":"hi"}])',
+      ''
+    ].join('\n')
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Reject legacy openai ChatCompletion usage',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Write legacy OpenAI calibration script',
+          status: 'success',
+          summary: 'Legacy script written.',
+          primaryAction: 'write: runs/turn-0001/artifacts/run_calibration_live.py',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Created calibration script.',
+          toolEvents: [
+            ...writeSuccessEvent('runs/turn-0001/artifacts/run_calibration_live.py', legacyScript),
+            ...bashSuccessEvent(`node -e "console.log('legacy-openai-script')"`, 'legacy-openai-script\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('openai_script_compat_issue')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.blocked_reason).toBe('openai_script_compat_issue')
   })
 
   it('applies redundancy checkpoint cooldown instead of triggering planner checkpoint every turn', async () => {
