@@ -16,6 +16,7 @@ interface StartPayload {
   goal: string
   model?: string
   defaultRuntime?: RuntimeKind
+  runtimeSystemInfo?: string
   autoRun?: boolean
   maxTurns?: number
 }
@@ -34,11 +35,22 @@ interface DesktopOverview {
   goal: string
   model: string
   defaultRuntime: RuntimeKind
+  runtimeSystemInfo: string
   loopRunning: boolean
   pausedForUserInput: boolean
   hasSession: boolean
   turnCount: number
   lastTurn: TurnListItem | null
+  usage: UsageSnapshot
+}
+
+interface UsageSnapshot {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cachedTokens: number
+  totalCost: number
+  callCount: number
 }
 
 interface DesktopStateFile {
@@ -46,6 +58,7 @@ interface DesktopStateFile {
   lastGoal?: string
   lastModel?: string
   lastRuntime?: RuntimeKind
+  lastRuntimeSystemInfo?: string
 }
 
 interface WindowRuntimeState {
@@ -53,11 +66,13 @@ interface WindowRuntimeState {
   goal: string
   model: string
   defaultRuntime: RuntimeKind
+  runtimeSystemInfo: string
   yoloSession: ReturnType<typeof createYoloSession> | null
   yoloAgent: { destroy?: () => Promise<void> } | null
   loopRunning: boolean
   stopRequested: boolean
   executingTurn: boolean
+  usage: UsageSnapshot
 }
 
 const DEFAULT_MODEL = 'gpt-5.2'
@@ -146,11 +161,20 @@ function createWindowRuntimeState(): WindowRuntimeState {
     goal: '',
     model: DEFAULT_MODEL,
     defaultRuntime: DEFAULT_RUNTIME,
+    runtimeSystemInfo: '',
     yoloSession: null,
     yoloAgent: null,
     loopRunning: false,
     stopRequested: false,
-    executingTurn: false
+    executingTurn: false,
+    usage: {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      cachedTokens: 0,
+      totalCost: 0,
+      callCount: 0
+    }
   }
 }
 
@@ -411,11 +435,13 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
     goal: state.goal,
     model: state.model,
     defaultRuntime: state.defaultRuntime,
+    runtimeSystemInfo: state.runtimeSystemInfo,
     loopRunning: state.loopRunning,
     pausedForUserInput,
     hasSession: state.yoloSession !== null,
     turnCount: turns.length,
-    lastTurn: turns.length > 0 ? turns[turns.length - 1] ?? null : null
+    lastTurn: turns.length > 0 ? turns[turns.length - 1] ?? null : null,
+    usage: { ...state.usage }
   }
 }
 
@@ -433,6 +459,17 @@ function clampTurns(value: number | undefined): number {
   if (normalized < 1) return 1
   if (normalized > MAX_LOOP_TURNS) return MAX_LOOP_TURNS
   return normalized
+}
+
+function resetUsageSnapshot(state: WindowRuntimeState): void {
+  state.usage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedTokens: 0,
+    totalCost: 0,
+    callCount: 0
+  }
 }
 
 function isTurnTerminal(status: TurnExecutionResult['status']): boolean {
@@ -589,6 +626,7 @@ async function restoreWindowStateFromDisk(state: WindowRuntimeState): Promise<vo
   state.goal = goal
   state.model = saved.lastModel?.trim() || DEFAULT_MODEL
   state.defaultRuntime = saved.lastRuntime ?? DEFAULT_RUNTIME
+  state.runtimeSystemInfo = saved.lastRuntimeSystemInfo?.trim() || ''
 }
 
 function persistWindowState(state: WindowRuntimeState): void {
@@ -601,7 +639,8 @@ function persistWindowState(state: WindowRuntimeState): void {
     lastProjectPath: state.projectPath,
     lastGoal: state.goal,
     lastModel: state.model,
-    lastRuntime: state.defaultRuntime
+    lastRuntime: state.defaultRuntime,
+    lastRuntimeSystemInfo: state.runtimeSystemInfo
   })
 }
 
@@ -619,16 +658,19 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
 
   const model = payload.model?.trim() || state.model || DEFAULT_MODEL
   const defaultRuntime = payload.defaultRuntime ?? state.defaultRuntime ?? DEFAULT_RUNTIME
+  const runtimeSystemInfo = payload.runtimeSystemInfo?.trim() ?? state.runtimeSystemInfo ?? ''
 
   const needsFreshSession = (
     !state.yoloSession
     || state.goal !== goal
     || state.model !== model
     || state.defaultRuntime !== defaultRuntime
+    || state.runtimeSystemInfo !== runtimeSystemInfo
   )
 
   if (needsFreshSession) {
     await destroyRuntime(state)
+    resetUsageSnapshot(state)
 
     const terminalChunkBuffer = new Map<string, {
       turnNumber: number
@@ -700,6 +742,7 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
       capabilityProfile: 'full',
       autoApprove: true,
       communitySkillsDir,
+      runtimeSystemInfo,
       onToolEvent: (event) => {
         const toolName = (event.tool || 'tool').trim() || 'tool'
         const turnLabel = formatTurnLabel(event.turnNumber)
@@ -793,6 +836,30 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
             detail: summarizeUnknown(event.error)
           })
         }
+      },
+      onUsage: (usage, cost) => {
+        const promptTokens = usage.promptTokens ?? 0
+        const completionTokens = usage.completionTokens ?? 0
+        const cachedTokens = usage.cacheReadInputTokens ?? 0
+        const totalTokens = usage.totalTokens ?? (promptTokens + completionTokens)
+        const totalCost = cost.totalCost ?? 0
+
+        state.usage.promptTokens += promptTokens
+        state.usage.completionTokens += completionTokens
+        state.usage.cachedTokens += cachedTokens
+        state.usage.totalTokens += totalTokens
+        state.usage.totalCost += totalCost
+        state.usage.callCount += 1
+
+        safeSend(win, 'yolo:usage', {
+          promptTokens,
+          completionTokens,
+          cachedTokens,
+          totalTokens,
+          totalCost,
+          cacheHitRate: promptTokens > 0 ? cachedTokens / promptTokens : 0,
+          callCount: 1
+        })
       }
     })
 
@@ -812,6 +879,7 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
   state.goal = goal
   state.model = model
   state.defaultRuntime = defaultRuntime
+  state.runtimeSystemInfo = runtimeSystemInfo
   persistWindowState(state)
 }
 
@@ -852,6 +920,8 @@ export async function closeProjectForWindow(win: BrowserWindow): Promise<void> {
   state.goal = ''
   state.model = DEFAULT_MODEL
   state.defaultRuntime = DEFAULT_RUNTIME
+  state.runtimeSystemInfo = ''
+  resetUsageSnapshot(state)
   persistWindowState(state)
   safeSend(win, 'project:closed')
 }
@@ -885,6 +955,8 @@ export function registerIpcHandlers(): void {
     state.goal = inferGoalFromProjectMd(projectPath)
     state.model = DEFAULT_MODEL
     state.defaultRuntime = DEFAULT_RUNTIME
+    state.runtimeSystemInfo = ''
+    resetUsageSnapshot(state)
     persistWindowState(state)
 
     safeSend(win, 'yolo:event', {

@@ -3,6 +3,25 @@ export const MONO_FONT = "'SF Mono', Monaco, Menlo, 'Fira Code', monospace"
 export type RuntimeKind = 'host' | 'docker' | 'venv'
 export type TurnFileName = 'action.md' | 'cmd.txt' | 'stdout.txt' | 'stderr.txt' | 'exit_code.txt' | 'patch.diff' | 'result.json'
 
+export interface UsageSnapshot {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cachedTokens: number
+  totalCost: number
+  callCount: number
+}
+
+export interface UsageEvent {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cachedTokens: number
+  totalCost: number
+  cacheHitRate: number
+  callCount: number
+}
+
 export interface TurnListItem {
   turnNumber: number
   status: string
@@ -17,11 +36,13 @@ export interface DesktopOverview {
   goal: string
   model: string
   defaultRuntime: RuntimeKind
+  runtimeSystemInfo: string
   loopRunning: boolean
   pausedForUserInput: boolean
   hasSession: boolean
   turnCount: number
   lastTurn: TurnListItem | null
+  usage: UsageSnapshot
 }
 
 export interface TurnFileContent {
@@ -46,6 +67,7 @@ export interface StartPayload {
   goal: string
   model?: string
   defaultRuntime?: RuntimeKind
+  runtimeSystemInfo?: string
   autoRun?: boolean
   maxTurns?: number
 }
@@ -73,6 +95,7 @@ export interface DesktopApi {
   onYoloTurnResult: (cb: (payload: any) => void) => () => void
   onYoloActivity: (cb: (payload: ActivityItem) => void) => () => void
   onYoloTerminal: (cb: (payload: TerminalLiveEvent) => void) => () => void
+  onYoloUsage: (cb: (payload: UsageEvent) => void) => () => void
   onProjectClosed: (cb: () => void) => () => void
 }
 

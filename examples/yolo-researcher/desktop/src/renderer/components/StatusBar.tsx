@@ -1,10 +1,24 @@
-import type { DesktopOverview } from '../lib/types'
+import type { DesktopOverview, UsageSnapshot } from '../lib/types'
 
 interface StatusBarProps {
   overview: DesktopOverview | null
+  usage: UsageSnapshot
   onPickFolder: () => void
   onClose: () => void
   busy: boolean
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
+  return String(value)
+}
+
+function formatCost(value: number): string {
+  if (value <= 0) return '$0.0000'
+  if (value < 0.01) return `$${value.toFixed(4)}`
+  if (value < 1) return `$${value.toFixed(3)}`
+  return `$${value.toFixed(2)}`
 }
 
 function statusInfo(overview: DesktopOverview | null): { color: string; pulse: boolean; label: string } {
@@ -20,11 +34,12 @@ function statusInfo(overview: DesktopOverview | null): { color: string; pulse: b
   return { color: 'var(--color-text-secondary)', pulse: false, label: 'Idle' }
 }
 
-export default function StatusBar({ overview, onPickFolder, onClose, busy }: StatusBarProps) {
+export default function StatusBar({ overview, usage, onPickFolder, onClose, busy }: StatusBarProps) {
   const info = statusInfo(overview)
   const hasProject = Boolean(overview?.projectPath)
   const turnCount = overview?.turnCount ?? 0
   const turnNum = overview?.lastTurn ? overview.lastTurn.turnNumber.toString().padStart(4, '0') : null
+  const cacheHitRate = usage.promptTokens > 0 ? usage.cachedTokens / usage.promptTokens : 0
 
   return (
     <header
@@ -65,6 +80,18 @@ export default function StatusBar({ overview, onPickFolder, onClose, busy }: Sta
         {/* Budget mini bar — V1 TopBar pattern */}
         {hasProject && (
           <div className="flex items-center gap-3 text-[11px] whitespace-nowrap" style={{ color: 'var(--color-text-secondary)' }}>
+            <span>
+              <span style={{ color: 'var(--color-text-muted)' }}>Tokens</span>{' '}
+              <span style={{ color: 'var(--color-accent-soft)' }}>{formatTokens(usage.totalTokens)}</span>
+            </span>
+            <span>
+              <span style={{ color: 'var(--color-text-muted)' }}>Cost</span>{' '}
+              <span style={{ color: 'var(--color-accent-teal)' }}>{formatCost(usage.totalCost)}</span>
+            </span>
+            <span>
+              <span style={{ color: 'var(--color-text-muted)' }}>Cached</span>{' '}
+              <span style={{ color: 'var(--color-accent-sky)' }}>{Math.round(cacheHitRate * 100)}%</span>
+            </span>
             <span>
               <span style={{ color: 'var(--color-text-muted)' }}>Cycles</span>{' '}
               {turnCount}

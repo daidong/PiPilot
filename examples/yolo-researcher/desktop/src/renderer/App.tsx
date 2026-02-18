@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DesktopOverview, TurnListItem, UiEvent, ActivityItem, TerminalLiveEvent, RuntimeKind, StartPayload } from './lib/types'
+import type {
+  DesktopOverview,
+  TurnListItem,
+  UiEvent,
+  ActivityItem,
+  TerminalLiveEvent,
+  RuntimeKind,
+  StartPayload,
+  UsageSnapshot,
+  UsageEvent
+} from './lib/types'
 import { DEFAULT_MAX_LOOP_TURNS, nowLabel } from './lib/types'
 import StatusBar from './components/StatusBar'
 import ControlPanel from './components/ControlPanel'
@@ -13,6 +23,15 @@ interface PendingQuestion {
   turnNumber: number
   question: string
   evidencePath?: string
+}
+
+const EMPTY_USAGE: UsageSnapshot = {
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  cachedTokens: 0,
+  totalCost: 0,
+  callCount: 0
 }
 
 function parseCurrentPlan(markdown: string): string[] {
@@ -48,8 +67,10 @@ export default function App() {
   const [goalDraft, setGoalDraft] = useState('')
   const [modelDraft, setModelDraft] = useState('gpt-5.2')
   const [runtimeDraft, setRuntimeDraft] = useState<RuntimeKind>('host')
+  const [runtimeSystemInfoDraft, setRuntimeSystemInfoDraft] = useState('')
   const [autoRun, setAutoRun] = useState(true)
   const [maxLoopTurns, setMaxLoopTurns] = useState(DEFAULT_MAX_LOOP_TURNS)
+  const [usage, setUsage] = useState<UsageSnapshot>(EMPTY_USAGE)
 
   const [events, setEvents] = useState<UiEvent[]>([])
   const [activities, setActivities] = useState<ActivityItem[]>([])
@@ -88,6 +109,7 @@ export default function App() {
       setTurns([])
       setTerminalEvents([])
       setPendingQuestion(null)
+      setUsage(EMPTY_USAGE)
       return current
     }
 
@@ -125,9 +147,11 @@ export default function App() {
     }
 
     if (!goalDraft.trim()) setGoalDraft(current.goal)
+    if (!runtimeSystemInfoDraft.trim()) setRuntimeSystemInfoDraft(current.runtimeSystemInfo || '')
+    setUsage(current.usage || EMPTY_USAGE)
 
     return current
-  }, [api, goalDraft])
+  }, [api, goalDraft, runtimeSystemInfoDraft])
 
   // Boot + event listeners
   useEffect(() => {
@@ -172,6 +196,16 @@ export default function App() {
         return next.length > 3000 ? next.slice(next.length - 3000) : next
       })
     })
+    const offUsage = api.onYoloUsage((item: UsageEvent) => {
+      setUsage((prev) => ({
+        promptTokens: prev.promptTokens + (item.promptTokens || 0),
+        completionTokens: prev.completionTokens + (item.completionTokens || 0),
+        totalTokens: prev.totalTokens + (item.totalTokens || 0),
+        cachedTokens: prev.cachedTokens + (item.cachedTokens || 0),
+        totalCost: prev.totalCost + (item.totalCost || 0),
+        callCount: prev.callCount + (item.callCount || 0)
+      }))
+    })
 
     const offClosed = api.onProjectClosed(() => {
       appendEvent('project closed')
@@ -182,6 +216,8 @@ export default function App() {
       setTurns([])
       setTerminalEvents([])
       setGoalDraft('')
+      setRuntimeSystemInfoDraft('')
+      setUsage(EMPTY_USAGE)
       setPendingQuestion(null)
       setReplyDraft('')
     })
@@ -192,6 +228,7 @@ export default function App() {
       offTurn()
       offActivity()
       offTerminal()
+      offUsage()
       offClosed()
     }
   }, [api, appendEvent, refreshCore])
@@ -205,9 +242,18 @@ export default function App() {
     setBusy(true)
     setError('')
     try {
-      const payload: StartPayload = { goal: goalDraft, model: modelDraft, defaultRuntime: runtimeDraft, autoRun, maxTurns: maxLoopTurns }
+      const payload: StartPayload = {
+        goal: goalDraft,
+        model: modelDraft,
+        defaultRuntime: runtimeDraft,
+        runtimeSystemInfo: runtimeSystemInfoDraft.trim() || undefined,
+        autoRun,
+        maxTurns: maxLoopTurns
+      }
+      setUsage(EMPTY_USAGE)
       const next = await api.yoloStart(payload)
       setOverview(next)
+      setUsage(next.usage || EMPTY_USAGE)
       setTerminalEvents([])
       appendEvent('session started')
       await refreshCore()
@@ -216,7 +262,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [api, appendEvent, autoRun, canOperate, goalDraft, maxLoopTurns, modelDraft, refreshCore, runtimeDraft])
+  }, [api, appendEvent, autoRun, canOperate, goalDraft, maxLoopTurns, modelDraft, refreshCore, runtimeDraft, runtimeSystemInfoDraft])
 
   const runOneTurn = useCallback(async () => {
     if (!canRunTurns) return
@@ -300,6 +346,8 @@ export default function App() {
         setOverview(result)
         setTerminalEvents([])
         setGoalDraft(result.goal || '')
+        setRuntimeSystemInfoDraft(result.runtimeSystemInfo || '')
+        setUsage(result.usage || EMPTY_USAGE)
         appendEvent(`folder selected: ${result.projectPath}`)
         await refreshCore()
       }
@@ -322,6 +370,8 @@ export default function App() {
       setTurns([])
       setTerminalEvents([])
       setGoalDraft('')
+      setRuntimeSystemInfoDraft('')
+      setUsage(EMPTY_USAGE)
       setPendingQuestion(null)
       setReplyDraft('')
       appendEvent('project closed')
@@ -334,7 +384,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col t-bg-base t-text">
-      <StatusBar overview={overview} onPickFolder={pickFolder} onClose={closeProject} busy={busy} />
+      <StatusBar overview={overview} usage={usage} onPickFolder={pickFolder} onClose={closeProject} busy={busy} />
 
       {error && (
         <div
@@ -356,6 +406,8 @@ export default function App() {
           setModelDraft={setModelDraft}
           runtimeDraft={runtimeDraft}
           setRuntimeDraft={setRuntimeDraft}
+          runtimeSystemInfoDraft={runtimeSystemInfoDraft}
+          setRuntimeSystemInfoDraft={setRuntimeSystemInfoDraft}
           autoRun={autoRun}
           setAutoRun={setAutoRun}
           maxLoopTurns={maxLoopTurns}

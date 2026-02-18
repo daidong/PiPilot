@@ -7,6 +7,7 @@ export interface StartPayload {
   goal: string
   model?: string
   defaultRuntime?: RuntimeKind
+  runtimeSystemInfo?: string
   autoRun?: boolean
   maxTurns?: number
 }
@@ -25,11 +26,30 @@ export interface DesktopOverview {
   goal: string
   model: string
   defaultRuntime: RuntimeKind
+  runtimeSystemInfo: string
   loopRunning: boolean
   pausedForUserInput: boolean
   hasSession: boolean
   turnCount: number
   lastTurn: TurnListItem | null
+  usage: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+    cachedTokens: number
+    totalCost: number
+    callCount: number
+  }
+}
+
+export interface UsageEvent {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cachedTokens: number
+  totalCost: number
+  cacheHitRate: number
+  callCount: number
 }
 
 export interface TurnFileContent {
@@ -91,6 +111,7 @@ export interface ElectronAPI {
   onYoloTurnResult: (cb: (payload: any) => void) => () => void
   onYoloActivity: (cb: (payload: any) => void) => () => void
   onYoloTerminal: (cb: (payload: TerminalLiveEvent) => void) => () => void
+  onYoloUsage: (cb: (payload: UsageEvent) => void) => () => void
   onProjectClosed: (cb: () => void) => () => void
 }
 
@@ -132,6 +153,11 @@ const api: ElectronAPI = {
     const handler = (_: unknown, payload: TerminalLiveEvent) => cb(payload)
     ipcRenderer.on('yolo:terminal', handler)
     return () => ipcRenderer.removeListener('yolo:terminal', handler)
+  },
+  onYoloUsage: (cb) => {
+    const handler = (_: unknown, payload: UsageEvent) => cb(payload)
+    ipcRenderer.on('yolo:usage', handler)
+    return () => ipcRenderer.removeListener('yolo:usage', handler)
   },
   onProjectClosed: (cb) => {
     const handler = () => cb()

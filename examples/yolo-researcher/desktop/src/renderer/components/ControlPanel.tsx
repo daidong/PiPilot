@@ -11,6 +11,8 @@ interface ControlPanelProps {
   setModelDraft: (v: string) => void
   runtimeDraft: RuntimeKind
   setRuntimeDraft: (v: RuntimeKind) => void
+  runtimeSystemInfoDraft: string
+  setRuntimeSystemInfoDraft: (v: string) => void
   autoRun: boolean
   setAutoRun: (v: boolean) => void
   maxLoopTurns: number
@@ -60,6 +62,8 @@ export default function ControlPanel({
   setModelDraft,
   runtimeDraft,
   setRuntimeDraft,
+  runtimeSystemInfoDraft,
+  setRuntimeSystemInfoDraft,
   autoRun,
   setAutoRun,
   maxLoopTurns,
@@ -246,6 +250,17 @@ export default function ControlPanel({
                   <option value="docker">docker</option>
                   <option value="venv">venv</option>
                 </select>
+                <label className="mt-2 mb-1 block text-[10px] font-medium" style={{ color: 'var(--color-accent-sky)' }}>
+                  Local system notes (optional)
+                </label>
+                <textarea
+                  value={runtimeSystemInfoDraft}
+                  onChange={(e) => setRuntimeSystemInfoDraft(e.target.value)}
+                  rows={3}
+                  className="w-full resize-y rounded-lg border px-2 py-1.5 text-xs outline-none focus:border-sky-500"
+                  style={inputStyle}
+                  placeholder="Example: macOS 14.6, Python 3.11 via pyenv, uv installed, Docker unavailable."
+                />
               </div>
             </div>
           )}

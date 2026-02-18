@@ -10,6 +10,7 @@ import { createYoloToolWrapperPack } from './tool-wrappers.js'
 import type { ClaimEvidence, ToolEventRecord, TurnContext, TurnRunOutcome, YoloSingleAgent } from './types.js'
 import type { Pack } from '../../../src/types/pack.js'
 import type { ResourceLimits } from '../../../src/types/runtime.js'
+import type { DetailedTokenUsage, TokenCost } from '../../../src/llm/provider.types.js'
 
 export type CapabilityProfile = 'minimal' | 'full'
 
@@ -28,8 +29,10 @@ export interface LlmSingleAgentConfig {
   watchCommunitySkills?: boolean
   disablePolicies?: boolean
   ioLimits?: Partial<ResourceLimits>
+  runtimeSystemInfo?: string
   onToolEvent?: (event: LlmRealtimeToolEvent) => void
   onExecEvent?: (event: LlmRealtimeExecEvent) => void
+  onUsage?: (usage: DetailedTokenUsage, cost: TokenCost) => void
 }
 
 export interface LlmRealtimeToolEvent extends ToolEventRecord {
@@ -1140,6 +1143,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
       ...(this.config.ioLimits ?? {})
     }
 
+    const runtimeSystemInfo = (this.config.runtimeSystemInfo || '').trim()
     const agent = createAgent({
       projectPath: this.config.projectPath,
       model: this.config.model,
@@ -1188,6 +1192,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
         }
         this.emitRealtimeToolEvent(event)
       },
+      onUsage: this.config.onUsage,
       constraints: [
         'One turn = one native execution report. You may perform multiple tool calls inside the turn.',
         'Prefer evidence-producing actions. Save turn artifacts under runs/turn-xxxx/artifacts and use evidencePath as runs/turn-xxxx/...',
@@ -1202,7 +1207,10 @@ export class LlmSingleAgent implements YoloSingleAgent {
         'Be resourceful before asking user; Ask is last resort when truly blocked.',
         'Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). Prefer fresh target dirs.',
         'Do not Stop unless milestone completion or explicit stop/safety condition.',
-        'Use available tools/skills before asking user. Treat ask_user as escalation, not default.'
+        'Use available tools/skills before asking user. Treat ask_user as escalation, not default.',
+        ...(runtimeSystemInfo
+          ? [`Runtime/system hint from user: ${runtimeSystemInfo}`]
+          : [])
       ],
       identity: 'You are a single-agent autonomous researcher that follows YOLO v2 thin protocol.'
     })
