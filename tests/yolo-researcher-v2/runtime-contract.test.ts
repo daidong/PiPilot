@@ -145,6 +145,7 @@ describe('yolo-researcher v2 runtime contract', () => {
     await expect(fs.access(path.join(turnDir, 'stderr.txt'))).resolves.toBeUndefined()
     await expect(fs.access(path.join(turnDir, 'exit_code.txt'))).resolves.toBeUndefined()
     await expect(fs.access(path.join(turnDir, 'artifacts', 'tool-events.jsonl'))).resolves.toBeUndefined()
+    await expect(fs.access(path.join(turnDir, 'artifacts', 'changed_files.json'))).resolves.toBeUndefined()
 
     const stdout = await readText(path.join(turnDir, 'stdout.txt'))
     const exitCode = await readText(path.join(turnDir, 'exit_code.txt'))
@@ -160,6 +161,8 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(typeof result.timestamp).toBe('string')
     expect(typeof result.duration_sec).toBe('number')
     expect(result.tool_events_count).toBe(2)
+    expect(Array.isArray(result.evidence_paths)).toBe(true)
+    expect(typeof result.evidence_refs).toBe('object')
     expect(projectMd).toContain('runs/turn-0001/stdout.txt')
     expect(projectMd).toContain('## Done (Do-not-repeat)')
     expect(projectMd).toContain('bash:node -e console.log(v2-ok)')
@@ -220,6 +223,41 @@ describe('yolo-researcher v2 runtime contract', () => {
     ))
     expect(askArtifact).toContain('# Blocking Question')
     expect(askArtifact).toContain('conservative patch or aggressive refactor')
+  })
+
+  it('auto-attaches turn evidence bundle to projectUpdate rows missing explicit evidence', async () => {
+    const projectPath = await createTempDir('yolo-v2-evidence-bundle-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: stdout.txt'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Attach runtime evidence to structured updates',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async () => ({
+          intent: 'Emit structured updates without explicit evidence paths',
+          status: 'success',
+          summary: 'Completed one bounded execution.',
+          primaryAction: `bash: node -e "console.log('bundle-ok')"`,
+          toolEvents: bashSuccessEvent(`node -e "console.log('bundle-ok')"`, 'bundle-ok\n'),
+          projectUpdate: {
+            facts: [{ text: 'Observed stable runtime output token.' } as unknown as { text: string; evidencePath: string }],
+            constraints: ['CPU budget remains limited.'] as unknown as { text: string; evidencePath: string }[],
+            claims: [{ claim: 'Runtime-derived control metadata is deterministic.', status: 'partial' } as unknown as { claim: string; evidencePaths: string[]; status: 'uncovered' | 'partial' | 'covered' }]
+          }
+        })
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const projectMd = await readText(path.join(projectPath, 'PROJECT.md'))
+    expect(projectMd).toContain('Observed stable runtime output token. (evidence: runs/turn-0001/result.json)')
+    expect(projectMd).toContain('CPU budget remains limited. (evidence: runs/turn-0001/result.json)')
+    expect(projectMd).toContain('Runtime-derived control metadata is deterministic.')
   })
 
   it('marks successful turns without delta evidence as no_delta', async () => {
@@ -646,7 +684,7 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(projectMd).not.toContain('P1 [DONE]')
   })
 
-  it('rejects DROPPED status transition without drop reason and replacement binding', async () => {
+  it('ignores LLM-authored DROPPED transition and keeps runtime-derived plan control', async () => {
     const projectPath = await createTempDir('yolo-v2-plan-drop-')
     tempDirs.push(projectPath)
     await seedActivePlanDoneDefinition(projectPath, ['deliverable: stdout.txt'])
@@ -672,12 +710,12 @@ describe('yolo-researcher v2 runtime contract', () => {
 
     await session.init()
     const turn = await session.runNextTurn()
-    expect(turn.status).toBe('no_delta')
-    expect(turn.summary).toContain('NO_DELTA')
+    expect(turn.status).toBe('success')
 
     const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
-    expect(result.status).toBe('no_delta')
-    expect(result.blocked_reason).toBe('plan_delta_not_applied')
+    expect(result.status).toBe('success')
+    expect(result.active_plan_id).toBe('P1')
+    expect(result.status_change).toBe('P1 ACTIVE -> DONE')
 
     const projectMd = await readText(path.join(projectPath, 'PROJECT.md'))
     expect(projectMd).not.toContain('P1 [DROPPED]')

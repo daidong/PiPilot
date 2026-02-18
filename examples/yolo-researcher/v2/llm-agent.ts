@@ -641,15 +641,15 @@ function buildNativeTurnPrompt(context: TurnContext): string {
       : [
         '- This is an EXECUTION turn.',
         '- You MUST NOT modify Plan Board structure (no add/drop/merge/replace/reorder Top-3, no done_definition edits).',
-        '- Pick exactly ONE activePlanId (prefer existing ACTIVE, else choose one from Top-3) and work only on it.'
+        '- Advance one concrete deliverable in this turn; runtime will attribute plan binding post-turn.'
       ]),
     '',
     'Deliverable rule (critical):',
-    '- A SUCCESS turn must update at least one deliverable file for activePlanId, or resolve a blocker with evidence.',
-    '- Adding only supporting evidence snippets/cite seeds without deliverable update is NOT success (downgrade to no_delta).',
+    '- A SUCCESS hint should correspond to at least one deliverable update or blocker clear with evidence.',
+    '- Adding only supporting evidence snippets/cite seeds without deliverable update is NOT success and may be downgraded to no_delta.',
     '',
     'Read-back rule (critical):',
-    '- Before new fetch/sweep, read current activePlanId deliverable file(s) and confirm the exact missing gap first.',
+    '- Before new fetch/sweep, read current deliverable files and confirm the exact missing gap first.',
     '',
     'Hard rules:',
     '1) Prefer autonomous execution. Retry concrete fixes before asking user.',
@@ -664,14 +664,11 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '8) projectUpdate evidence paths must use "runs/turn-xxxx/...". Never use work/, absolute paths, or other roots in evidencePath fields.',
     '9) Persist processed literature artifacts under current turn artifacts.',
     '10) Respect Done(Do-not-repeat): avoid repeating identical action fingerprints unless you will produce a new artifact type.',
-    '11) Bind this turn to exactly one plan item via activePlanId.',
-    '12) Success is valid only if this turn touches at least one deliverable for activePlanId (from done_definition "deliverable:" rows), OR clears a blocker.',
-    '13) Do not silently drop unfinished plan items. Dropping requires dropReason + evidencePaths + replacedBy.',
-    '14) done_definition must be mechanical only: use "deliverable: <path-or-file-token>" and optional "evidence_min: <n>".',
-    '15) Do not mark ACTIVE -> DONE unless done_definition is satisfied by cumulative plan evidence.',
-    '16) Plan structure edits (planBoard/currentPlan rewrite, drop/replace, done_definition edits, Top-3 reorder) are allowed ONLY when planner checkpoint is due.',
-    '17) If repeated attempts in this turn still fail, return ask_user with one concrete blocking question and pause.',
-    '18) If using git_* tools, always set cwd to a concrete repo path; never assume project root itself is a git repo.',
+    '11) Runtime derives active_plan_id/status_change/delta/evidence_paths from observed execution; do not invent them.',
+    '12) done_definition must be mechanical only: use "deliverable: <path-or-file-token>" and optional "evidence_min: <n>".',
+    '13) Plan structure edits (planBoard/currentPlan rewrite, drop/replace, done_definition edits, Top-3 reorder) are allowed ONLY when planner checkpoint is due.',
+    '14) If repeated attempts in this turn still fail, return ask_user with one concrete blocking question and pause.',
+    '15) If using git_* tools, always set cwd to a concrete repo path; never assume project root itself is a git repo.',
     '',
     `Turn: ${context.turnNumber}`,
     `Goal: ${context.project.goal}`,
@@ -781,15 +778,10 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     'Return JSON only with schema:',
     '{',
     '  "intent": "why this turn",',
-    '  "status": "success|failure|ask_user|stopped",',
+    '  "status": "success|failure|ask_user|stopped", // or use statusHint with same enum',
     '  "summary": "one concise observation",',
     '  "primaryAction": "short label of what was actually done",',
-    '  "activePlanId": "P<number> for this turn",',
-    '  "statusChange": "e.g. P2 TODO -> ACTIVE or P2 ACTIVE -> DONE",',
-    '  "delta": "what changed for this plan item",',
-    '  "evidencePaths": ["runs/turn-xxxx/..."],',
-    '  "dropReason": "required when statusChange drops item to DROPPED",',
-    '  "replacedBy": "P<number>|null when dropping",',
+    '  "statusHint": "success|failure|ask_user|stopped (optional alias of status)",',
     '  "askQuestion": "required when status=ask_user",',
     '  "stopReason": "required when status=stopped",',
     '  "projectUpdate": {',
@@ -836,12 +828,8 @@ function buildNativeRepairPrompt(input: {
     'Allowed status: success|failure|ask_user|stopped.',
     'Required fields:',
     '- intent: non-empty string',
-    '- status: success|failure|ask_user|stopped',
+    '- status or statusHint: success|failure|ask_user|stopped',
     '- summary: non-empty string',
-    '- activePlanId: P<number> (required for status=success)',
-    '- statusChange: required for status=success',
-    '- delta: required for status=success',
-    '- evidencePaths: at least one runs/turn-xxxx/... path for status=success',
     '- askQuestion: required when status=ask_user',
     '- stopReason: required when status=stopped',
     ...evidencePathRepairHints,
@@ -1015,12 +1003,15 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
   const row = value as Record<string, unknown>
   const intent = typeof row.intent === 'string' ? row.intent.trim() : ''
   const summary = typeof row.summary === 'string' ? row.summary.trim() : ''
-  const status = typeof row.status === 'string' ? row.status.trim().toLowerCase() : ''
+  const rawStatus = typeof row.status === 'string'
+    ? row.status
+    : (typeof row.statusHint === 'string' ? row.statusHint : '')
+  const status = rawStatus.trim().toLowerCase()
 
   if (!intent) throw new Error('turn outcome.intent is required')
   if (!summary) throw new Error('turn outcome.summary is required')
   if (!['success', 'failure', 'ask_user', 'stopped'].includes(status)) {
-    throw new Error('turn outcome.status is invalid')
+    throw new Error('turn outcome.status/statusHint is invalid')
   }
 
   const askQuestion = typeof row.askQuestion === 'string' ? row.askQuestion.trim() : ''
@@ -1042,13 +1033,6 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
   }
   if (status === 'stopped' && !stopReason) {
     throw new Error('turn outcome.stopReason is required when status=stopped')
-  }
-  if (status === 'success') {
-    if (!activePlanId) throw new Error('turn outcome.activePlanId is required when status=success')
-    if (!/^P\d+$/i.test(activePlanId)) throw new Error('turn outcome.activePlanId must be P<number> when status=success')
-    if (!statusChange) throw new Error('turn outcome.statusChange is required when status=success')
-    if (!delta) throw new Error('turn outcome.delta is required when status=success')
-    if (evidencePaths.length === 0) throw new Error('turn outcome.evidencePaths is required when status=success')
   }
   if (/->\s*DROPPED/i.test(statusChange)) {
     if (!dropReason) throw new Error('turn outcome.dropReason is required when dropping a plan item')
@@ -1155,12 +1139,10 @@ export class LlmSingleAgent implements YoloSingleAgent {
         'Prefer evidence-producing actions. Save turn artifacts under runs/turn-xxxx/artifacts and use evidencePath as runs/turn-xxxx/...',
         'Never use work/... or absolute paths in projectUpdate evidence fields; snapshot to runs/turn-xxxx/artifacts/evidence first.',
         'For research/prior-art goals, run literature-search(mode="sweep") early and persist processed literature artifacts locally.',
-        'Bind every success turn to one plan item via activePlanId + statusChange + delta + evidencePaths.',
-        'Success is valid only if this turn touches active plan deliverable (done_definition deliverable:) or clears a blocker.',
+        'Runtime derives active_plan_id/status_change/delta/evidence_paths from tool events + file writes.',
+        'Success is valid only if this turn touches a plan deliverable (done_definition deliverable:) or clears a blocker.',
         'Use mechanical done_definition rows only: deliverable:<path-or-token> and optional evidence_min:<n>.',
-        'ACTIVE -> DONE is valid only when cumulative plan evidence satisfies done_definition.',
         'Rewrite planBoard/currentPlan only on planner checkpoint turns.',
-        'Do not silently drop unfinished plan items; dropping needs dropReason + evidencePaths + replacedBy.',
         'Be resourceful before asking user; Ask is last resort when truly blocked.',
         'Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). Prefer fresh target dirs.',
         'Do not Stop unless milestone completion or explicit stop/safety condition.',

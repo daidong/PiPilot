@@ -53,7 +53,13 @@ const LITERATURE_HOST_HINTS = [
   'paperswithcode.com'
 ]
 const REDUNDANCY_WINDOW_TURNS = 20
-const SYSTEM_ARTIFACT_NAMES = new Set(['tool-events.jsonl', 'agent-output.txt', 'ask-user.md'])
+const SYSTEM_ARTIFACT_NAMES = new Set([
+  'tool-events.jsonl',
+  'agent-output.txt',
+  'ask-user.md',
+  'changed_files.json',
+  'patch.diff'
+])
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
 const PLAN_ID_RE = /^P\d+$/i
 const REPO_SCAN_SKIP_DIRS = new Set([
@@ -224,6 +230,13 @@ interface ParsedDoneDefinitionRules {
   deliverables: string[]
   evidenceMin: number
   invalidRows: string[]
+}
+
+interface PlanAttributionResult {
+  activePlanId: string
+  ambiguous: boolean
+  reason: string
+  deliverablesTouched: string[]
 }
 
 export class YoloSession {
@@ -674,6 +687,52 @@ export class YoloSession {
     return dedupeStrings(touched)
   }
 
+  private async writeWorkspaceChangeArtifacts(input: {
+    artifactsDir: string
+    workspaceWriteTouches: string[]
+    turnNumber: number
+  }): Promise<{
+    changedFilesPath: string
+    patchPath: string | null
+    changedFiles: string[]
+  }> {
+    const changedFiles = dedupeStrings(
+      input.workspaceWriteTouches
+        .map((entry) => toPosixPath(entry.trim()))
+        .filter(Boolean)
+    )
+    const changedFilesPath = path.join(input.artifactsDir, 'changed_files.json')
+    await writeText(changedFilesPath, `${JSON.stringify({
+      turnNumber: input.turnNumber,
+      changed_files: changedFiles
+    }, null, 2)}\n`)
+
+    let patchPath: string | null = null
+    if (changedFiles.length > 0) {
+      patchPath = path.join(input.artifactsDir, 'patch.diff')
+      const lines = [
+        '# runtime workspace change snapshot',
+        `# turn: ${formatTurnId(input.turnNumber)}`,
+        '# note: lightweight patch index generated from observed write/edit tool calls.',
+        ''
+      ]
+      for (const file of changedFiles) {
+        lines.push(`diff --runtime a/${file} b/${file}`)
+      }
+      await writeText(patchPath, `${lines.join('\n')}\n`)
+    }
+
+    return { changedFilesPath, patchPath, changedFiles }
+  }
+
+  private buildEvidenceRefMap(evidencePaths: string[]): Record<string, string> {
+    const mapping: Record<string, string> = {}
+    for (let index = 0; index < evidencePaths.length; index += 1) {
+      mapping[`E${index + 1}`] = evidencePaths[index]!
+    }
+    return mapping
+  }
+
   private async assertYoloEvidencePathExists(evidencePath: string, label: string): Promise<void> {
     const normalized = this.normalizeProjectPathPointer(evidencePath)
     if (!EVIDENCE_PATH_RE.test(normalized)) {
@@ -712,6 +771,95 @@ export class YoloSession {
       existing: dedupeStrings(existing),
       missing: dedupeStrings(missing)
     }
+  }
+
+  private resolveEvidenceReference(rawPath: string, evidenceRefMap: Record<string, string>): string {
+    const token = rawPath.trim().toUpperCase()
+    if (/^E\d+$/.test(token) && evidenceRefMap[token]) {
+      return evidenceRefMap[token]!
+    }
+    return rawPath
+  }
+
+  private attachRuntimeEvidenceToProjectUpdate(input: {
+    update: ProjectUpdate
+    evidenceRefMap: Record<string, string>
+    fallbackEvidencePath: string
+  }): { update: ProjectUpdate; notes: string[] } {
+    const notes: string[] = []
+    const next: ProjectUpdate = { ...input.update }
+
+    const normalizeEvidenceRows = (rows: unknown[] | undefined, label: string): EvidenceLine[] | undefined => {
+      if (!Array.isArray(rows)) return undefined
+      const out: EvidenceLine[] = []
+      for (const row of rows) {
+        if (typeof row === 'string') {
+          const text = row.trim()
+          if (!text) continue
+          out.push({ text, evidencePath: input.fallbackEvidencePath })
+          notes.push(`${label}: attached fallback evidence bundle for 1 text-only row.`)
+          continue
+        }
+        const record = toPlainObject(row)
+        const text = safeString(record?.text).trim()
+        if (!text) continue
+        const rawPath = safeString(record?.evidencePath).trim()
+        const resolved = rawPath
+          ? this.resolveEvidenceReference(rawPath, input.evidenceRefMap)
+          : input.fallbackEvidencePath
+        if (!rawPath) {
+          notes.push(`${label}: attached fallback evidence bundle for 1 row without evidencePath.`)
+        }
+        out.push({
+          text,
+          evidencePath: resolved || input.fallbackEvidencePath
+        })
+      }
+      return out
+    }
+
+    const facts = normalizeEvidenceRows(next.facts as unknown[] | undefined, 'Facts')
+    if (facts) next.facts = facts
+    const constraints = normalizeEvidenceRows(next.constraints as unknown[] | undefined, 'Constraints')
+    if (constraints) next.constraints = constraints
+    const done = normalizeEvidenceRows(next.done as unknown[] | undefined, 'Done')
+    if (done) next.done = done
+
+    if (Array.isArray(next.claims)) {
+      const claims = []
+      for (const row of next.claims as unknown[]) {
+        const record = toPlainObject(row)
+        const claimText = safeString(record?.claim).trim()
+        if (!claimText) continue
+        const statusRaw = normalizeText(safeString(record?.status).trim())
+        const status = statusRaw === 'covered' || statusRaw === 'partial' || statusRaw === 'uncovered'
+          ? statusRaw
+          : 'uncovered'
+        const rawEvidence = Array.isArray(record?.evidencePaths)
+          ? record?.evidencePaths
+          : (typeof record?.evidencePath === 'string' ? [record.evidencePath] : [])
+        const evidencePaths = dedupeStrings(
+          rawEvidence
+            .filter((value): value is string => typeof value === 'string')
+            .map((value) => this.resolveEvidenceReference(value, input.evidenceRefMap).trim())
+            .filter(Boolean)
+        )
+        const linkedEvidence = evidencePaths.length > 0
+          ? evidencePaths
+          : [input.fallbackEvidencePath]
+        if (evidencePaths.length === 0) {
+          notes.push(`Claim "${claimText}": attached fallback evidence bundle.`)
+        }
+        claims.push({
+          claim: claimText,
+          status,
+          evidencePaths: linkedEvidence
+        })
+      }
+      next.claims = claims
+    }
+
+    return { update: next, notes: dedupeStrings(notes) }
   }
 
   private async normalizeAndValidateEvidenceLines(lines: EvidenceLine[], label: string): Promise<EvidenceLine[]> {
@@ -1084,14 +1232,12 @@ export class YoloSession {
     let summary = outcome.summary?.trim() || 'Turn completed without summary.'
     const primaryAction = outcome.primaryAction?.trim() || this.inferPrimaryActionFromToolEvents(toolEvents)
     const plannerCheckpointDue = Boolean(input.context.plannerCheckpoint?.due)
-    const statusChange = safeString(outcome.statusChange).trim()
-    const deltaText = safeString(outcome.delta).trim()
+    const hintedDeltaText = safeString(outcome.delta).trim()
     const dropReason = safeString(outcome.dropReason).trim()
     const replacedBy = outcome.replacedBy === null
       ? null
       : (normalizePlanId(outcome.replacedBy ?? '') || undefined)
-    const rawActivePlanId = normalizePlanId(outcome.activePlanId ?? '')
-    const activePlanId = rawActivePlanId
+    const hintedActivePlanId = normalizePlanId(outcome.activePlanId ?? '')
 
     const normalizedOutcomeEvidencePathsRaw = dedupeStrings(
       (outcome.evidencePaths ?? [])
@@ -1117,6 +1263,18 @@ export class YoloSession {
     await writeText(stdoutPath, stdout)
     await writeText(stderrPath, stderr)
     await writeText(exitCodePath, `${exitCode}\n`)
+    await writeText(resultPath, `${JSON.stringify({
+      status: finalStatus,
+      phase: 'provisional',
+      timestamp: toIso(this.now())
+    }, null, 2)}\n`)
+
+    const workspaceWriteTouches = this.collectWorkspaceWriteTouches(toolEvents)
+    const workspaceChangeArtifacts = await this.writeWorkspaceChangeArtifacts({
+      artifactsDir: input.artifactsDir,
+      workspaceWriteTouches,
+      turnNumber: input.turnNumber
+    })
 
     const implicitTurnEvidencePaths = new Set<string>([
       this.toEvidencePath(cmdPath),
@@ -1124,8 +1282,12 @@ export class YoloSession {
       this.toEvidencePath(stderrPath),
       this.toEvidencePath(exitCodePath),
       this.toEvidencePath(resultPath),
-      this.toEvidencePath(toolEventsPath)
+      this.toEvidencePath(toolEventsPath),
+      this.toEvidencePath(workspaceChangeArtifacts.changedFilesPath)
     ])
+    if (workspaceChangeArtifacts.patchPath) {
+      implicitTurnEvidencePaths.add(this.toEvidencePath(workspaceChangeArtifacts.patchPath))
+    }
     const {
       existing: normalizedOutcomeEvidencePaths,
       missing: missingOutcomeEvidencePaths
@@ -1193,8 +1355,12 @@ export class YoloSession {
       this.toEvidencePath(stdoutPath),
       this.toEvidencePath(stderrPath),
       this.toEvidencePath(exitCodePath),
-      this.toEvidencePath(toolEventsPath)
+      this.toEvidencePath(toolEventsPath),
+      this.toEvidencePath(workspaceChangeArtifacts.changedFilesPath)
     ]
+    if (workspaceChangeArtifacts.patchPath) {
+      evidencePaths.push(this.toEvidencePath(workspaceChangeArtifacts.patchPath))
+    }
 
     if (typeof outcome.rawOutput === 'string' && outcome.rawOutput.trim()) {
       evidencePaths.push(this.toEvidencePath(rawOutputPath))
@@ -1222,9 +1388,15 @@ export class YoloSession {
     evidencePaths.push(...normalizedOutcomeEvidencePaths)
 
     const uniqueEvidencePaths = dedupeStrings(evidencePaths)
+    const evidenceRefMap = this.buildEvidenceRefMap(uniqueEvidencePaths)
+    const runtimeControlEvidencePaths = dedupeStrings([
+      this.toEvidencePath(workspaceChangeArtifacts.changedFilesPath),
+      ...(workspaceChangeArtifacts.patchPath ? [this.toEvidencePath(workspaceChangeArtifacts.patchPath)] : [])
+    ])
     const explicitPlanEvidencePaths = dedupeStrings([
       ...normalizedOutcomeEvidencePaths,
-      ...businessArtifactEvidencePaths
+      ...businessArtifactEvidencePaths,
+      ...runtimeControlEvidencePaths
     ])
     const defaultPlanEvidencePaths = [
       this.toEvidencePath(resultPath),
@@ -1245,6 +1417,7 @@ export class YoloSession {
       }
     }
     if (businessArtifactEvidencePaths.length > 0) deltaReasons.push('artifact_file')
+    if (workspaceChangeArtifacts.changedFiles.length > 0) deltaReasons.push('workspace_file')
     if (failureEntry) deltaReasons.push('failure_recorded')
     if (clearedBlocked) deltaReasons.push('blocked_cleared')
 
@@ -1287,30 +1460,76 @@ export class YoloSession {
         if (id) projectedPlanIds.add(id)
       }
     }
+    const planAttribution = this.derivePlanAttribution({
+      currentBoard: input.context.project.planBoard,
+      projectedUpdate: projectedPlanUpdate,
+      explicitEvidencePaths: explicitPlanEvidencePaths,
+      workspaceWriteTouches,
+      hintedActivePlanId,
+      clearedBlocked
+    })
+    let activePlanId = planAttribution.activePlanId
     const planExists = activePlanId
       ? projectedPlanIds.has(activePlanId)
       : false
-    const hasPlanProgressSignal = Boolean(statusChange && deltaText && explicitPlanEvidencePaths.length > 0)
-    const workspaceWriteTouches = this.collectWorkspaceWriteTouches(toolEvents)
-    const projectedPlanItem = this.resolveProjectedPlanItem(
+    let projectedPlanItem = this.resolveProjectedPlanItem(
       activePlanId,
       input.context.project.planBoard,
       projectedPlanUpdate
     )
-    const doneDefinitionCheck = this.validatePlanProgressAgainstDoneDefinition({
+    let statusChange = this.deriveRuntimeStatusChange({
+      activePlanId,
+      finalStatus,
+      planItem: projectedPlanItem,
+      doneReady: false
+    })
+    let doneDefinitionCheck = this.validatePlanProgressAgainstDoneDefinition({
       status: finalStatus,
       activePlanId,
       statusChange,
-      explicitEvidencePaths: explicitPlanEvidencePaths,
-      cumulativeEvidencePaths: dedupeStrings([...(projectedPlanItem?.evidencePaths ?? []), ...explicitPlanEvidencePaths]),
+      explicitEvidencePaths: planEvidencePaths,
+      cumulativeEvidencePaths: dedupeStrings([...(projectedPlanItem?.evidencePaths ?? []), ...planEvidencePaths]),
       planItem: projectedPlanItem,
       workspaceWriteTouches
     })
+    if (finalStatus === 'success' && doneDefinitionCheck.ok && doneDefinitionCheck.doneReady) {
+      statusChange = this.deriveRuntimeStatusChange({
+        activePlanId,
+        finalStatus,
+        planItem: projectedPlanItem,
+        doneReady: true
+      })
+      doneDefinitionCheck = this.validatePlanProgressAgainstDoneDefinition({
+        status: finalStatus,
+        activePlanId,
+        statusChange,
+        explicitEvidencePaths: planEvidencePaths,
+        cumulativeEvidencePaths: dedupeStrings([...(projectedPlanItem?.evidencePaths ?? []), ...planEvidencePaths]),
+        planItem: projectedPlanItem,
+        workspaceWriteTouches
+      })
+    }
     if (doneDefinitionCheck.deliverableTouched && !deltaReasons.includes('plan_deliverable_touched')) {
       deltaReasons.push('plan_deliverable_touched')
     }
+    let deltaText = this.deriveRuntimeDelta({
+      actionLabel: hintedDeltaText || primaryAction,
+      businessArtifacts: businessArtifactEvidencePaths,
+      workspaceWriteTouches: workspaceChangeArtifacts.changedFiles,
+      deliverablesTouched: planAttribution.deliverablesTouched,
+      clearedBlocked,
+      failureRecorded: Boolean(failureEntry)
+    })
+    if (hintedDeltaText && !planAttribution.deliverablesTouched.length) {
+      deltaText = hintedDeltaText
+    }
 
     let blockedReason: string | null = null
+    if (finalStatus === 'success' && planAttribution.ambiguous) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: multiple plan deliverables touched in one turn. ${summary}`
+      blockedReason = 'multiple_plan_deliverables_touched'
+    }
     if (finalStatus === 'success' && !activePlanId) {
       finalStatus = 'no_delta'
       summary = `NO_DELTA: missing active_plan_id. ${summary}`
@@ -1320,11 +1539,6 @@ export class YoloSession {
       finalStatus = 'no_delta'
       summary = `NO_DELTA: unknown active_plan_id (${activePlanId}). ${summary}`
       blockedReason = 'unknown_active_plan_id'
-    }
-    if (finalStatus === 'success' && !hasPlanProgressSignal) {
-      finalStatus = 'no_delta'
-      summary = `NO_DELTA: missing plan delta signal for ${activePlanId}. ${summary}`
-      blockedReason = 'missing_plan_delta'
     }
     if (finalStatus === 'success' && !doneDefinitionCheck.ok) {
       finalStatus = 'no_delta'
@@ -1360,6 +1574,9 @@ export class YoloSession {
     const updateSummaryLines = [
       ...(outcome.updateSummary ?? []).map((line) => line.trim()).filter(Boolean)
     ]
+    if (planAttribution.reason) {
+      updateSummaryLines.push(`Plan attribution: ${planAttribution.reason}${activePlanId ? ` -> ${activePlanId}` : ''}`)
+    }
     if (missingOutcomeEvidencePaths.length > 0) {
       const preview = missingOutcomeEvidencePaths[0]
       updateSummaryLines.push(`Ignored ${missingOutcomeEvidencePaths.length} missing outcome evidence path(s); first=${preview}`)
@@ -1377,8 +1594,14 @@ export class YoloSession {
       if (!candidateUpdate) {
         updateSummaryLines.push('PROJECT.md structured update skipped: no eligible fields for this turn.')
       } else {
+      const evidenceAttached = this.attachRuntimeEvidenceToProjectUpdate({
+        update: candidateUpdate,
+        evidenceRefMap,
+        fallbackEvidencePath: this.toEvidencePath(resultPath)
+      })
+      updateSummaryLines.push(...evidenceAttached.notes.slice(0, 2))
       try {
-        const normalizedProjectUpdate = await this.normalizeAndValidateProjectUpdate(candidateUpdate)
+        const normalizedProjectUpdate = await this.normalizeAndValidateProjectUpdate(evidenceAttached.update)
         await this.projectStore.applyUpdate(normalizedProjectUpdate)
         projectUpdated = true
         updateSummaryLines.push('PROJECT.md: applied structured update from native turn.')
@@ -1387,7 +1610,7 @@ export class YoloSession {
         let repaired = false
 
         const repairAttempt = await this.repairProjectUpdateEvidencePaths({
-          update: candidateUpdate,
+          update: evidenceAttached.update,
           artifactsDir: input.artifactsDir,
           validationMessage: message
         })
@@ -1446,6 +1669,7 @@ export class YoloSession {
     const curatedKeyArtifacts = dedupeStrings([
       ...businessArtifactEvidencePaths,
       ...normalizedOutcomeEvidencePaths,
+      ...runtimeControlEvidencePaths,
       ...literatureCache.libraryPaths
     ])
     const autoProjectUpdate: ProjectUpdate = {
@@ -1529,6 +1753,8 @@ export class YoloSession {
       active_plan_id: activePlanId || null,
       status_change: statusChange || null,
       delta: deltaText || null,
+      evidence_paths: uniqueEvidencePaths,
+      evidence_refs: evidenceRefMap,
       plan_evidence_paths: planEvidencePaths,
       action_fingerprint: actionFingerprint,
       action_type: actionType,
@@ -1544,6 +1770,8 @@ export class YoloSession {
       stage_status: stageStatus,
       planner_checkpoint_due: input.context.plannerCheckpoint?.due ?? false,
       planner_checkpoint_reasons: input.context.plannerCheckpoint?.reasons ?? [],
+      plan_attribution_reason: planAttribution.reason,
+      plan_attribution_ambiguous: planAttribution.ambiguous,
       goal_constraints_fingerprint: goalConstraintsFingerprint,
       ...(deterministicFingerprint ? { failure_fingerprint: deterministicFingerprint } : {}),
       ...(clearedBlocked ? { unblock_verified: true } : {}),
@@ -1631,6 +1859,125 @@ export class YoloSession {
     return currentBoard.find((item) => item.id === activePlanId) ?? null
   }
 
+  private derivePlanAttribution(input: {
+    currentBoard: PlanBoardItem[]
+    projectedUpdate?: ProjectUpdate
+    explicitEvidencePaths: string[]
+    workspaceWriteTouches: string[]
+    hintedActivePlanId: string
+    clearedBlocked: boolean
+  }): PlanAttributionResult {
+    const projectedBoard = Array.isArray(input.projectedUpdate?.planBoard)
+      ? input.projectedUpdate.planBoard
+      : input.currentBoard
+    const candidates = projectedBoard
+      .filter((item) => item.status !== 'DONE' && item.status !== 'DROPPED')
+      .sort((a, b) => a.priority - b.priority)
+
+    const scored = candidates
+      .map((item) => {
+        const parsed = this.parseDoneDefinitionRules(item.doneDefinition ?? [])
+        if (parsed.invalidRows.length > 0 || parsed.deliverables.length === 0) {
+          return { item, score: 0, touched: [] as string[] }
+        }
+        const touched = this.collectTouchedDeliverables(
+          input.explicitEvidencePaths,
+          parsed.deliverables,
+          input.workspaceWriteTouches
+        )
+        return { item, score: touched.length, touched }
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        return a.item.priority - b.item.priority
+      })
+
+    if (scored.length > 0) {
+      const bestScore = scored[0]!.score
+      const best = scored.filter((entry) => entry.score === bestScore)
+      if (best.length === 1) {
+        const row = best[0]!
+        return {
+          activePlanId: row.item.id,
+          ambiguous: false,
+          reason: 'deliverable_attribution',
+          deliverablesTouched: row.touched
+        }
+      }
+      return {
+        activePlanId: '',
+        ambiguous: true,
+        reason: 'multiple_plan_deliverables_touched',
+        deliverablesTouched: dedupeStrings(best.flatMap((entry) => entry.touched))
+      }
+    }
+
+    const active = candidates.find((item) => item.status === 'ACTIVE')
+    if (active) {
+      return { activePlanId: active.id, ambiguous: false, reason: 'fallback_active', deliverablesTouched: [] }
+    }
+
+    if (input.hintedActivePlanId) {
+      const hinted = candidates.find((item) => item.id === input.hintedActivePlanId)
+      if (hinted) {
+        return { activePlanId: hinted.id, ambiguous: false, reason: 'fallback_hint', deliverablesTouched: [] }
+      }
+    }
+
+    const topTodo = candidates.find((item) => item.status === 'TODO')
+    if (topTodo) {
+      return { activePlanId: topTodo.id, ambiguous: false, reason: 'fallback_top_todo', deliverablesTouched: [] }
+    }
+
+    if (input.clearedBlocked) {
+      const blocked = candidates.find((item) => item.status === 'BLOCKED')
+      if (blocked) {
+        return { activePlanId: blocked.id, ambiguous: false, reason: 'fallback_blocker_clear', deliverablesTouched: [] }
+      }
+    }
+
+    return { activePlanId: '', ambiguous: false, reason: 'no_plan_candidate', deliverablesTouched: [] }
+  }
+
+  private deriveRuntimeStatusChange(input: {
+    activePlanId: string
+    finalStatus: TurnStatus
+    planItem: PlanBoardItem | null
+    doneReady: boolean
+  }): string {
+    if (!input.activePlanId) return ''
+    const fromStatus = input.planItem?.status ?? 'TODO'
+    if (input.finalStatus === 'blocked') return `${input.activePlanId} ${fromStatus} -> BLOCKED`
+    if (input.finalStatus !== 'success') return `${input.activePlanId} ${fromStatus} -> ${fromStatus}`
+    if (input.doneReady) return `${input.activePlanId} ${fromStatus} -> DONE`
+    if (fromStatus === 'TODO' || fromStatus === 'BLOCKED') return `${input.activePlanId} ${fromStatus} -> ACTIVE`
+    if (fromStatus === 'DONE') return `${input.activePlanId} DONE -> DONE`
+    return `${input.activePlanId} ACTIVE -> ACTIVE`
+  }
+
+  private deriveRuntimeDelta(input: {
+    actionLabel: string
+    businessArtifacts: string[]
+    workspaceWriteTouches: string[]
+    deliverablesTouched: string[]
+    clearedBlocked: boolean
+    failureRecorded: boolean
+  }): string {
+    if (input.deliverablesTouched.length > 0) {
+      return `Touched deliverable(s): ${input.deliverablesTouched.slice(0, 3).join(', ')}`
+    }
+    if (input.businessArtifacts.length > 0) {
+      return `Updated artifacts: ${input.businessArtifacts.slice(0, 3).join(', ')}`
+    }
+    if (input.workspaceWriteTouches.length > 0) {
+      return `Updated workspace files: ${input.workspaceWriteTouches.slice(0, 3).join(', ')}`
+    }
+    if (input.clearedBlocked) return 'Cleared previously blocked execution path.'
+    if (input.failureRecorded) return 'Recorded deterministic failure evidence.'
+    return input.actionLabel.trim() ? `Executed: ${input.actionLabel.trim()}` : 'Executed runtime turn.'
+  }
+
   private parseDoneDefinitionRules(lines: string[]): ParsedDoneDefinitionRules {
     const deliverables: string[] = []
     const invalidRows: string[] = []
@@ -1699,26 +2046,26 @@ export class YoloSession {
     cumulativeEvidencePaths: string[]
     planItem: PlanBoardItem | null
     workspaceWriteTouches: string[]
-  }): { ok: boolean; reason: string; deliverableTouched: boolean } {
-    if (input.status !== 'success') return { ok: true, reason: '', deliverableTouched: false }
-    if (!input.activePlanId) return { ok: false, reason: 'missing_active_plan_id', deliverableTouched: false }
+  }): { ok: boolean; reason: string; deliverableTouched: boolean; doneReady: boolean } {
+    if (input.status !== 'success') return { ok: true, reason: '', deliverableTouched: false, doneReady: false }
+    if (!input.activePlanId) return { ok: false, reason: 'missing_active_plan_id', deliverableTouched: false, doneReady: false }
     if (input.explicitEvidencePaths.length === 0) {
-      return { ok: false, reason: 'missing_explicit_plan_evidence', deliverableTouched: false }
+      return { ok: false, reason: 'missing_explicit_plan_evidence', deliverableTouched: false, doneReady: false }
     }
 
     const doneDefinition = (input.planItem?.doneDefinition ?? [])
       .map((line) => line.trim())
       .filter(Boolean)
     if (doneDefinition.length === 0) {
-      return { ok: false, reason: 'missing_plan_done_definition', deliverableTouched: false }
+      return { ok: false, reason: 'missing_plan_done_definition', deliverableTouched: false, doneReady: false }
     }
 
     const parsedRules = this.parseDoneDefinitionRules(doneDefinition)
     if (parsedRules.invalidRows.length > 0) {
-      return { ok: false, reason: 'done_definition_non_mechanical', deliverableTouched: false }
+      return { ok: false, reason: 'done_definition_non_mechanical', deliverableTouched: false, doneReady: false }
     }
     if (parsedRules.deliverables.length === 0) {
-      return { ok: false, reason: 'done_definition_missing_deliverable', deliverableTouched: false }
+      return { ok: false, reason: 'done_definition_missing_deliverable', deliverableTouched: false, doneReady: false }
     }
 
     const touchedThisTurn = this.collectTouchedDeliverables(
@@ -1727,25 +2074,26 @@ export class YoloSession {
       input.workspaceWriteTouches
     )
     const deliverableTouched = touchedThisTurn.length > 0
-
-    const doneTransition = /->\s*DONE/i.test(input.statusChange)
-    if (!doneTransition) return { ok: true, reason: '', deliverableTouched }
-
     const coveredAll = this.collectTouchedDeliverables(
       input.cumulativeEvidencePaths,
       parsedRules.deliverables,
       input.workspaceWriteTouches
     )
     const uncovered = parsedRules.deliverables.filter((target) => !coveredAll.includes(target))
+    const doneReady = uncovered.length === 0 && input.cumulativeEvidencePaths.length >= parsedRules.evidenceMin
+
+    const doneTransition = /->\s*DONE/i.test(input.statusChange)
+    if (!doneTransition) return { ok: true, reason: '', deliverableTouched, doneReady }
+
     if (uncovered.length > 0) {
-      return { ok: false, reason: `done_definition_unmet:${uncovered.slice(0, 3).join(',')}`, deliverableTouched }
+      return { ok: false, reason: `done_definition_unmet:${uncovered.slice(0, 3).join(',')}`, deliverableTouched, doneReady }
     }
 
     if (input.cumulativeEvidencePaths.length < parsedRules.evidenceMin) {
-      return { ok: false, reason: `done_definition_evidence_min_unmet:${parsedRules.evidenceMin}`, deliverableTouched }
+      return { ok: false, reason: `done_definition_evidence_min_unmet:${parsedRules.evidenceMin}`, deliverableTouched, doneReady }
     }
 
-    return { ok: true, reason: '', deliverableTouched }
+    return { ok: true, reason: '', deliverableTouched, doneReady }
   }
 
   private computeGoalConstraintsFingerprint(project: TurnContext['project']): string {
