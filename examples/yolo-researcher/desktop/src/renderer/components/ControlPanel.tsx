@@ -1,10 +1,9 @@
-import { useRef, useEffect, useState } from 'react'
-import type { DesktopOverview, RuntimeKind, UiEvent } from '../lib/types'
+import { useState } from 'react'
+import type { DesktopOverview, RuntimeKind } from '../lib/types'
 import { DEFAULT_MAX_LOOP_TURNS } from '../lib/types'
 
 interface ControlPanelProps {
   overview: DesktopOverview | null
-  events: UiEvent[]
   goalDraft: string
   setGoalDraft: (v: string) => void
   currentPlan: string[]
@@ -54,7 +53,6 @@ const inputStyle = {
 
 export default function ControlPanel({
   overview,
-  events,
   goalDraft,
   setGoalDraft,
   currentPlan,
@@ -76,21 +74,14 @@ export default function ControlPanel({
   const canOperate = Boolean(overview?.projectPath)
   const canRunTurns = canOperate && Boolean(overview?.hasSession) && !pausedForUserInput
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const eventsRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (eventsRef.current) {
-      eventsRef.current.scrollTop = 0
-    }
-  }, [events.length])
 
   return (
     <aside
-      className="flex w-80 shrink-0 flex-col overflow-hidden border-r"
+      className="flex w-80 shrink-0 flex-col overflow-y-auto border-r"
       style={{ background: 'var(--color-bg-surface)', borderColor: 'var(--color-border)' }}
     >
       {/* Mission Board — V1 HeroSection inspired */}
-      <div className="flex-none border-b px-4 py-4" style={{ borderColor: 'var(--color-border)' }}>
+      <div className="border-b px-4 py-4" style={{ borderColor: 'var(--color-border)' }}>
         <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>Mission Board</div>
         <div className="text-sm font-medium mb-4" style={{ color: 'var(--color-text)' }}>Configure & Launch</div>
 
@@ -119,13 +110,15 @@ export default function ControlPanel({
             {currentPlan.length === 0 ? (
               <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>No plan yet.</div>
             ) : (
-              <ol className="space-y-1 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
-                {currentPlan.map((item, idx) => (
-                  <li key={`${idx}-${item}`} className="leading-relaxed">
-                    {idx + 1}. {item}
-                  </li>
-                ))}
-              </ol>
+              <div className="max-h-36 overflow-auto pr-1">
+                <ol className="space-y-1 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                  {currentPlan.map((item, idx) => (
+                    <li key={`${idx}-${item}`} className="leading-relaxed">
+                      {idx + 1}. {item}
+                    </li>
+                  ))}
+                </ol>
+              </div>
             )}
           </div>
 
@@ -256,34 +249,6 @@ export default function ControlPanel({
               </div>
             </div>
           )}
-        </div>
-      </div>
-
-      {/* Live Events — V1 ActivityFeed inspired */}
-      <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
-        <div className="mb-2 flex items-center gap-2">
-          <span className="inline-block h-1.5 w-1.5 rounded-full animate-status-pulse" style={{ background: 'var(--color-accent)' }} />
-          <h2 className="flex-none text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
-            Live Events
-          </h2>
-          <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{events.length}</span>
-        </div>
-        <div ref={eventsRef} className="flex-1 space-y-1.5 overflow-auto pr-1">
-          {events.length === 0 && (
-            <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-              No events yet. Events will appear here when agents start working.
-            </div>
-          )}
-          {events.map((item) => (
-            <div
-              key={item.id}
-              className="rounded-lg border px-3 py-2"
-              style={{ background: 'var(--color-bg-base)', borderColor: 'var(--color-border-subtle)' }}
-            >
-              <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{item.at}</div>
-              <div className="mt-0.5 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>{item.text}</div>
-            </div>
-          ))}
         </div>
       </div>
     </aside>

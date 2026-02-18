@@ -120,7 +120,8 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       eventBus,
       agentId,
       sessionId,
-      getCurrentStep: () => currentStep
+      getCurrentStep: () => currentStep,
+      limits: config.ioLimits
     })
 
     ;(runtime as any).io = runtimeIO

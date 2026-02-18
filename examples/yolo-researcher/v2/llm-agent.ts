@@ -9,6 +9,7 @@ import { createYoloToolWrapperPack } from './tool-wrappers.js'
 
 import type { ClaimEvidence, ToolEventRecord, TurnContext, TurnRunOutcome, YoloSingleAgent } from './types.js'
 import type { Pack } from '../../../src/types/pack.js'
+import type { ResourceLimits } from '../../../src/types/runtime.js'
 
 export type CapabilityProfile = 'minimal' | 'full'
 
@@ -26,6 +27,7 @@ export interface LlmSingleAgentConfig {
   watchExternalSkills?: boolean
   watchCommunitySkills?: boolean
   disablePolicies?: boolean
+  ioLimits?: Partial<ResourceLimits>
   onToolEvent?: (event: LlmRealtimeToolEvent) => void
   onExecEvent?: (event: LlmRealtimeExecEvent) => void
 }
@@ -53,6 +55,13 @@ export interface LlmRealtimeExecEvent {
 
 const MAX_OUTCOME_ATTEMPTS = 5
 const MAX_FAILURE_RECOVERY_ATTEMPTS = 2
+const DEFAULT_LONG_TASK_IO_LIMITS: Partial<ResourceLimits> = {
+  timeout: 6 * 60 * 60 * 1000,       // 6 hours
+  maxBytes: 512 * 1024 * 1024,       // 512MB per stdout/stderr stream
+  maxWriteBytes: 50 * 1024 * 1024,   // 50MB
+  maxLines: 1_000_000,
+  maxResults: 20_000
+}
 const BOOTSTRAP_PLAN_PREFIX = 'bootstrap pending: replace with 3-5 goal-specific next actions'
 const TOOL_EVENT_STRING_LIMIT = 6000
 const FETCH_EVENT_STRING_LIMIT = 80_000
@@ -1126,6 +1135,10 @@ export class LlmSingleAgent implements YoloSingleAgent {
     externalSkillsDir: string
   }): Promise<ReturnType<typeof createAgent>> {
     const packList = await buildAgentPacks(input.capabilityProfile, input.enableNetwork, this.config.projectPath)
+    const ioLimits = {
+      ...DEFAULT_LONG_TASK_IO_LIMITS,
+      ...(this.config.ioLimits ?? {})
+    }
 
     const agent = createAgent({
       projectPath: this.config.projectPath,
@@ -1133,6 +1146,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
       apiKey: this.config.apiKey,
       maxSteps: this.config.maxSteps ?? (input.capabilityProfile === 'full' ? 16 : 8),
       maxTokens: this.config.maxTokens ?? (input.capabilityProfile === 'full' ? 8_000 : 4_000),
+      ioLimits,
       packs: packList,
       disablePolicies: this.config.disablePolicies ?? true,
       externalSkillsDir: input.externalSkillsDir,

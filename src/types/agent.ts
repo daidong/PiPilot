@@ -10,6 +10,7 @@ import type { Runtime } from './runtime.js'
 import type { UsageSummary } from '../llm/provider.types.js'
 import type { SkillTelemetryConfig } from './skill.js'
 import type { KernelV2Config } from '../kernel-v2/types.js'
+import type { ResourceLimits } from './runtime.js'
 
 /**
  * Model configuration
@@ -74,6 +75,8 @@ export interface AgentConfig {
   maxSteps?: number
   /** Maximum number of tokens */
   maxTokens?: number
+  /** Runtime IO limits (timeout/maxBytes/etc.) */
+  ioLimits?: Partial<ResourceLimits>
   /** Temperature for LLM generation */
   temperature?: number
   /** Reasoning effort for reasoning models (low, medium, high, max) */

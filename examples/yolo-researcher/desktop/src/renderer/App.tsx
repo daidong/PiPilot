@@ -349,7 +349,6 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <ControlPanel
           overview={overview}
-          events={events}
           goalDraft={goalDraft}
           setGoalDraft={setGoalDraft}
           currentPlan={currentPlan}

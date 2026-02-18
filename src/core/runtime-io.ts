@@ -73,6 +73,28 @@ function clipExecChunk(chunk: string): { value: string; truncated: boolean } {
   }
 }
 
+function appendWithinLimit(
+  current: string,
+  chunk: string,
+  limit: number,
+  alreadyTruncated: boolean
+): { value: string; truncated: boolean } {
+  if (alreadyTruncated || limit <= 0) {
+    return { value: current, truncated: true }
+  }
+
+  const remaining = limit - current.length
+  if (remaining <= 0) {
+    return { value: current.slice(0, limit), truncated: true }
+  }
+
+  if (chunk.length <= remaining) {
+    return { value: current + chunk, truncated: false }
+  }
+
+  return { value: current + chunk.slice(0, remaining), truncated: true }
+}
+
 /**
  * RuntimeIO configuration
  */
@@ -571,7 +593,6 @@ export class RuntimeIO implements IRuntimeIO {
 
       child.stdout?.on('data', (data) => {
         const chunk = data.toString()
-        stdout += chunk
         const eventChunk = clipExecChunk(chunk)
         this.config.eventBus.emit('io:exec:chunk', {
           traceId,
@@ -580,17 +601,13 @@ export class RuntimeIO implements IRuntimeIO {
           truncated: eventChunk.truncated,
           caller: options?.caller
         })
-        // Limit output size
-        if (stdout.length > this.limits.maxBytes) {
-          stdout = stdout.slice(0, this.limits.maxBytes)
-          stdoutTruncated = true
-          child.kill()
-        }
+        const next = appendWithinLimit(stdout, chunk, this.limits.maxBytes, stdoutTruncated)
+        stdout = next.value
+        stdoutTruncated = next.truncated
       })
 
       child.stderr?.on('data', (data) => {
         const chunk = data.toString()
-        stderr += chunk
         const eventChunk = clipExecChunk(chunk)
         this.config.eventBus.emit('io:exec:chunk', {
           traceId,
@@ -599,10 +616,9 @@ export class RuntimeIO implements IRuntimeIO {
           truncated: eventChunk.truncated,
           caller: options?.caller
         })
-        if (stderr.length > this.limits.maxBytes) {
-          stderr = stderr.slice(0, this.limits.maxBytes)
-          stderrTruncated = true
-        }
+        const next = appendWithinLimit(stderr, chunk, this.limits.maxBytes, stderrTruncated)
+        stderr = next.value
+        stderrTruncated = next.truncated
       })
 
       child.on('close', (code, signal) => {

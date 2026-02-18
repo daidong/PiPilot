@@ -479,7 +479,8 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     eventBus,
     agentId,
     sessionId,
-    getCurrentStep: () => currentStep
+    getCurrentStep: () => currentStep,
+    limits: config.ioLimits
   })
 
   // Update runtime

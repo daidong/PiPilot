@@ -51,9 +51,8 @@ export const bash: Tool<BashInput, BashOutput> = defineTool({
     },
     timeout: {
       type: 'number',
-      description: 'Timeout in milliseconds, defaults to 60000',
-      required: false,
-      default: 60000
+      description: 'Optional timeout in milliseconds. If omitted, runtime IO limit timeout is used.',
+      required: false
     }
   },
   activity: {
@@ -70,9 +69,12 @@ export const bash: Tool<BashInput, BashOutput> = defineTool({
     }
   },
   execute: async (input, { runtime }) => {
+    const normalizedTimeout = typeof input.timeout === 'number' && Number.isFinite(input.timeout) && input.timeout > 0
+      ? input.timeout
+      : undefined
     const result = await runtime.io.exec(input.command, {
       cwd: input.cwd,
-      timeout: input.timeout,
+      timeout: normalizedTimeout,
       caller: 'bash'
     })
 
