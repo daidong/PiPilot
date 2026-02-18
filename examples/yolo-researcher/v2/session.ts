@@ -66,6 +66,13 @@ const SYSTEM_ARTIFACT_NAMES = new Set([
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
 const TURN_SCOPED_DELIVERABLE_RE = /^runs\/turn-(\d{4}|\*)\/(.+)$/i
 const GOVERNANCE_CHECKPOINT_ARTIFACT_RE = /^runs\/turn-\d{4}\/artifacts\/planning_checkpoint_[^/]+\.md$/i
+const ENV_ASSERTION_API_KEY_RE = /\b(api key|openai_api_key|anthropic_api_key|provider)\b/i
+const ENV_ASSERTION_REPO_RE = /\b(git checkout|repo checkout|repository|git repo|not a git repository)\b/i
+const ENV_ASSERTION_RESOURCE_RE = /\b(resource unavailable|policy[_ -]?denied|blocked by (a )?policy|network (is )?disabled|timed? out|timeout)\b/i
+const ENV_ASSERTION_NEGATION_RE = /\b(no|not|missing|without|cannot|unable|blocked)\b/i
+const ENV_PROOF_API_KEY_RE = /\b(api key|openai_api_key|anthropic_api_key|missing.*key|not set|not configured|unauthorized|401|authentication)\b/i
+const ENV_PROOF_REPO_RE = /\b(not a git repository|no such file|pathspec|repository|git checkout|git status|\.git)\b/i
+const ENV_PROOF_RESOURCE_RE = /\b(resource unavailable|policy[_ -]?denied|blocked by (a )?policy|timeout|timed out|network (is )?disabled)\b/i
 const PLAN_ID_RE = /^P\d+$/i
 const REPO_SCAN_SKIP_DIRS = new Set([
   '.git',
@@ -255,6 +262,8 @@ interface RecentTurnResultMeta {
   planBoardHash: string
   governanceOnlyTurn: boolean
 }
+
+type EnvConstraintCategory = 'api_key' | 'repo_checkout' | 'resource'
 
 export class YoloSession {
   readonly yoloRoot: string
@@ -1205,6 +1214,118 @@ export class YoloSession {
     }
   }
 
+  private classifyEnvironmentConstraint(text: string): EnvConstraintCategory | null {
+    const normalized = normalizeText(text)
+    if (!ENV_ASSERTION_NEGATION_RE.test(normalized)) return null
+    if (ENV_ASSERTION_API_KEY_RE.test(normalized)) return 'api_key'
+    if (ENV_ASSERTION_REPO_RE.test(normalized)) return 'repo_checkout'
+    if (ENV_ASSERTION_RESOURCE_RE.test(normalized)) return 'resource'
+    return null
+  }
+
+  private hasEnvironmentConstraintProof(input: {
+    category: EnvConstraintCategory
+    evidenceText: string
+    toolSignalText: string
+  }): boolean {
+    const merged = `${input.evidenceText}\n${input.toolSignalText}`
+    if (input.category === 'api_key') return ENV_PROOF_API_KEY_RE.test(merged)
+    if (input.category === 'repo_checkout') return ENV_PROOF_REPO_RE.test(merged)
+    return ENV_PROOF_RESOURCE_RE.test(merged)
+  }
+
+  private collectFailedToolSignalText(toolEvents: ToolEventRecord[]): string {
+    const chunks: string[] = []
+    for (const event of toolEvents) {
+      if (event.phase !== 'result') continue
+
+      const resultObj = toPlainObject(event.result)
+      const dataObj = toPlainObject(resultObj?.data)
+      const eventSuccess = typeof event.success === 'boolean'
+        ? event.success
+        : (typeof resultObj?.success === 'boolean' ? resultObj.success : false)
+      if (eventSuccess) continue
+
+      const fragment = [
+        safeString(event.tool).trim(),
+        safeString(event.error).trim(),
+        safeString(dataObj?.stderr).trim(),
+        safeString(dataObj?.stdout).trim()
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+      if (fragment) chunks.push(fragment)
+    }
+
+    return normalizeText(chunks.join('\n')).slice(0, 20_000)
+  }
+
+  private async readEvidencePreviewText(evidencePath: string): Promise<string> {
+    const pointer = this.normalizeProjectPathPointer(evidencePath)
+    if (!pointer || !EVIDENCE_PATH_RE.test(pointer)) return ''
+    const absolutePath = path.join(this.yoloRoot, pointer)
+    if (!(await fileExists(absolutePath))) return ''
+    return normalizeText((await readTextOrEmpty(absolutePath)).slice(0, 20_000))
+  }
+
+  private async demoteSpeculativeEnvironmentConstraints(input: {
+    update: ProjectUpdate
+    toolEvents: ToolEventRecord[]
+  }): Promise<{ update: ProjectUpdate; notes: string[] }> {
+    const constraints = input.update.constraints
+    if (!constraints || constraints.length === 0) {
+      return { update: input.update, notes: [] }
+    }
+
+    const toolSignalText = this.collectFailedToolSignalText(input.toolEvents)
+    const nextConstraints: EvidenceLine[] = []
+    const demotedHypotheses: string[] = []
+
+    for (const row of constraints) {
+      const text = row.text.trim()
+      if (!text) continue
+      const category = this.classifyEnvironmentConstraint(text)
+      if (!category) {
+        nextConstraints.push(row)
+        continue
+      }
+
+      const evidenceText = await this.readEvidencePreviewText(row.evidencePath)
+      const hasProof = this.hasEnvironmentConstraintProof({
+        category,
+        evidenceText,
+        toolSignalText
+      })
+      if (hasProof) {
+        nextConstraints.push(row)
+        continue
+      }
+
+      demotedHypotheses.push(text)
+    }
+
+    if (demotedHypotheses.length === 0) {
+      return { update: input.update, notes: [] }
+    }
+
+    const nextUpdate: ProjectUpdate = {
+      ...input.update,
+      constraints: nextConstraints
+    }
+    nextUpdate.hypotheses = dedupeStrings([
+      ...(input.update.hypotheses ?? []),
+      ...demotedHypotheses
+    ])
+
+    return {
+      update: nextUpdate,
+      notes: dedupeStrings([
+        `Demoted ${demotedHypotheses.length} speculative environment constraint(s) to hypotheses (missing tool-backed proof).`
+      ])
+    }
+  }
+
   private filterProjectUpdateForGovernanceWindow(input: {
     update: ProjectUpdate
     plannerCheckpointDue: boolean
@@ -1874,8 +1995,13 @@ export class YoloSession {
         fallbackEvidencePath: this.toEvidencePath(resultPath)
       })
       updateSummaryLines.push(...evidenceAttached.notes.slice(0, 2))
+      const groundedUpdate = await this.demoteSpeculativeEnvironmentConstraints({
+        update: evidenceAttached.update,
+        toolEvents
+      })
+      updateSummaryLines.push(...groundedUpdate.notes.slice(0, 2))
       try {
-        const normalizedProjectUpdate = await this.normalizeAndValidateProjectUpdate(evidenceAttached.update)
+        const normalizedProjectUpdate = await this.normalizeAndValidateProjectUpdate(groundedUpdate.update)
         await this.projectStore.applyUpdate(normalizedProjectUpdate.update)
         projectUpdated = true
         updateSummaryLines.push(...normalizedProjectUpdate.notes.slice(0, 2))
@@ -1885,17 +2011,22 @@ export class YoloSession {
         let repaired = false
 
         const repairAttempt = await this.repairProjectUpdateEvidencePaths({
-          update: evidenceAttached.update,
+          update: groundedUpdate.update,
           artifactsDir: input.artifactsDir,
           validationMessage: message
         })
 
         if (repairAttempt) {
           try {
-            const normalizedRepairedUpdate = await this.normalizeAndValidateProjectUpdate(repairAttempt.update)
+            const groundedRepairedUpdate = await this.demoteSpeculativeEnvironmentConstraints({
+              update: repairAttempt.update,
+              toolEvents
+            })
+            const normalizedRepairedUpdate = await this.normalizeAndValidateProjectUpdate(groundedRepairedUpdate.update)
             await this.projectStore.applyUpdate(normalizedRepairedUpdate.update)
             projectUpdated = true
             repaired = true
+            updateSummaryLines.push(...groundedRepairedUpdate.notes.slice(0, 2))
             updateSummaryLines.push(...normalizedRepairedUpdate.notes.slice(0, 2))
             updateSummaryLines.push('PROJECT.md: applied structured update after same-turn evidence repair.')
             updateSummaryLines.push(...repairAttempt.notes.slice(0, 3))

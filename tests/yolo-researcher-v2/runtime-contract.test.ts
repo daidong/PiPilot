@@ -36,6 +36,35 @@ function bashSuccessEvent(command: string, stdout: string, cwd?: string) {
   ]
 }
 
+function bashFailureEvent(command: string, stderr: string, cwd?: string) {
+  return [
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'bash',
+      input: {
+        command,
+        ...(cwd ? { cwd } : {})
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'bash',
+      success: false,
+      result: {
+        success: false,
+        error: stderr,
+        data: {
+          stdout: '',
+          stderr,
+          exitCode: 1
+        }
+      }
+    }
+  ]
+}
+
 function writeSuccessEvent(filePath: string, content: string = 'ok') {
   return [
     {
@@ -304,6 +333,84 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(projectMd).toContain('Observed stable runtime output token. (evidence: runs/turn-0001/result.json)')
     expect(projectMd).toContain('CPU budget remains limited. (evidence: runs/turn-0001/result.json)')
     expect(projectMd).toContain('Runtime-derived control metadata is deterministic.')
+  })
+
+  it('demotes speculative environment constraints to hypotheses when no tool-backed proof exists', async () => {
+    const projectPath = await createTempDir('yolo-v2-constraint-demote-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: stdout.txt', 'evidence_min: 1'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Avoid ungrounded environment blockers',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async () => ({
+          intent: 'Publish one env blocker claim without proof',
+          status: 'success',
+          summary: 'Finished one bounded check.',
+          primaryAction: `bash: node -e "console.log('ok')"`,
+          toolEvents: bashSuccessEvent(`node -e "console.log('ok')"`, 'ok\n'),
+          projectUpdate: {
+            constraints: [{
+              text: 'No LLM provider/API key is configured in this workspace.',
+              evidencePath: 'runs/turn-0001/stdout.txt'
+            }]
+          }
+        })
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const store = new ProjectStore(projectPath, 'Avoid ungrounded environment blockers', ['Define measurable success criteria.'], 'host')
+    await store.init()
+    const panel = await store.load()
+
+    expect(panel.constraints.some((row) => /no llm provider\/api key is configured/i.test(row.text))).toBe(false)
+    expect(panel.hypotheses.some((row) => /no llm provider\/api key is configured/i.test(row))).toBe(true)
+  })
+
+  it('keeps environment constraints when stderr/tool evidence explicitly proves them', async () => {
+    const projectPath = await createTempDir('yolo-v2-constraint-keep-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: stdout.txt', 'evidence_min: 1'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Retain grounded environment blockers',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async () => ({
+          intent: 'Record true env blocker from tool failure',
+          status: 'failure',
+          summary: 'Tool reported missing API key.',
+          primaryAction: `bash: python - <<'PY'\nraise SystemExit('OPENAI_API_KEY missing')\nPY`,
+          toolEvents: bashFailureEvent(
+            `python - <<'PY'\nraise SystemExit('OPENAI_API_KEY missing')\nPY`,
+            'OPENAI_API_KEY missing: provider not configured'
+          ),
+          projectUpdate: {
+            constraints: [{
+              text: 'No LLM provider/API key is configured in this workspace.',
+              evidencePath: 'runs/turn-0001/stderr.txt'
+            }]
+          }
+        })
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('failure')
+
+    const store = new ProjectStore(projectPath, 'Retain grounded environment blockers', ['Define measurable success criteria.'], 'host')
+    await store.init()
+    const panel = await store.load()
+
+    expect(panel.constraints.some((row) => /no llm provider\/api key is configured/i.test(row.text))).toBe(true)
   })
 
   ;(HAS_GIT ? it : it.skip)('writes patch.diff with real git diff hunks for touched repo files', async () => {
