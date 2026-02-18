@@ -250,7 +250,6 @@ export default function App() {
         autoRun,
         maxTurns: maxLoopTurns
       }
-      setUsage(EMPTY_USAGE)
       const next = await api.yoloStart(payload)
       setOverview(next)
       setUsage(next.usage || EMPTY_USAGE)

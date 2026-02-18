@@ -53,6 +53,16 @@ interface UsageSnapshot {
   callCount: number
 }
 
+interface PersistedUsageTotals {
+  totals?: {
+    tokens?: number
+    promptTokens?: number
+    cachedTokens?: number
+    cost?: number
+    calls?: number
+  }
+}
+
 interface DesktopStateFile {
   lastProjectPath?: string
   lastGoal?: string
@@ -269,6 +279,154 @@ function inferGoalFromProjectMd(projectPath: string): string {
   }
 }
 
+function toFiniteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function usageSnapshotFromTotals(raw: PersistedUsageTotals | null): UsageSnapshot {
+  const tokens = toFiniteNumber(raw?.totals?.tokens)
+  const promptTokens = toFiniteNumber(raw?.totals?.promptTokens)
+  const cachedTokens = toFiniteNumber(raw?.totals?.cachedTokens)
+  const totalCost = toFiniteNumber(raw?.totals?.cost)
+  const callCount = toFiniteNumber(raw?.totals?.calls)
+  return {
+    promptTokens,
+    completionTokens: Math.max(0, tokens - promptTokens),
+    totalTokens: tokens,
+    cachedTokens,
+    totalCost,
+    callCount
+  }
+}
+
+function readUsageSnapshotFromUsageFile(projectPath: string): UsageSnapshot | null {
+  const usagePath = join(projectPath, '.agentfoundry', 'usage.json')
+  if (!existsSync(usagePath)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(usagePath, 'utf-8')) as PersistedUsageTotals
+    const snapshot = usageSnapshotFromTotals(parsed)
+    if (snapshot.totalTokens <= 0 && snapshot.callCount <= 0) return null
+    return snapshot
+  } catch {
+    return null
+  }
+}
+
+function readUsageSnapshotFromTraceSummaries(projectPath: string): UsageSnapshot | null {
+  const tracesDir = join(projectPath, '.agentfoundry', 'traces')
+  if (!existsSync(tracesDir)) return null
+  let promptTokens = 0
+  let completionTokens = 0
+  let totalTokens = 0
+  let cachedTokens = 0
+  let totalCost = 0
+  let callCount = 0
+
+  try {
+    const files = readdirSync(tracesDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.summary.json'))
+      .map((entry) => entry.name)
+
+    for (const fileName of files) {
+      const raw = JSON.parse(readFileSync(join(tracesDir, fileName), 'utf-8')) as Record<string, any>
+      const usage = raw.usage as Record<string, any> | undefined
+      const tokens = usage?.tokens as Record<string, any> | undefined
+      const cost = usage?.cost as Record<string, any> | undefined
+      promptTokens += toFiniteNumber(tokens?.promptTokens)
+      completionTokens += toFiniteNumber(tokens?.completionTokens)
+      totalTokens += toFiniteNumber(tokens?.totalTokens)
+      cachedTokens += toFiniteNumber(tokens?.cacheReadInputTokens)
+      totalCost += toFiniteNumber(cost?.totalCost)
+      callCount += toFiniteNumber(usage?.callCount)
+    }
+  } catch {
+    return null
+  }
+
+  if (totalTokens <= 0 && callCount <= 0) return null
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: totalTokens || (promptTokens + completionTokens),
+    cachedTokens,
+    totalCost,
+    callCount
+  }
+}
+
+function readUsageSnapshotFromTraceJsonl(projectPath: string): UsageSnapshot | null {
+  const tracesDir = join(projectPath, '.agentfoundry', 'traces')
+  if (!existsSync(tracesDir)) return null
+
+  let promptTokens = 0
+  let completionTokens = 0
+  let totalTokens = 0
+  let cachedTokens = 0
+  let callCount = 0
+
+  try {
+    const files = readdirSync(tracesDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.startsWith('trace-'))
+      .map((entry) => entry.name)
+
+    for (const fileName of files) {
+      const raw = readFileSync(join(tracesDir, fileName), 'utf-8')
+      const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      for (const line of lines) {
+        let row: Record<string, any>
+        try {
+          row = JSON.parse(line) as Record<string, any>
+        } catch {
+          continue
+        }
+        if (row.type !== 'llm.response') continue
+        const data = row.data as Record<string, any> | undefined
+        const usage = data?.usage as Record<string, any> | undefined
+        if (!usage) continue
+
+        const prompt = toFiniteNumber(usage.promptTokens ?? usage.inputTokens)
+        const completion = toFiniteNumber(usage.completionTokens ?? usage.outputTokens)
+        const total = toFiniteNumber(usage.totalTokens) || (prompt + completion)
+        const cached = toFiniteNumber(usage.cacheReadInputTokens ?? usage.cachedTokens)
+
+        promptTokens += prompt
+        completionTokens += completion
+        totalTokens += total
+        cachedTokens += cached
+        callCount += 1
+      }
+    }
+  } catch {
+    return null
+  }
+
+  if (totalTokens <= 0 && callCount <= 0) return null
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: totalTokens || (promptTokens + completionTokens),
+    cachedTokens,
+    totalCost: 0,
+    callCount
+  }
+}
+
+function loadUsageSnapshotFromDisk(projectPath: string): UsageSnapshot {
+  return (
+    readUsageSnapshotFromUsageFile(projectPath)
+    || readUsageSnapshotFromTraceSummaries(projectPath)
+    || readUsageSnapshotFromTraceJsonl(projectPath)
+    || {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      cachedTokens: 0,
+      totalCost: 0,
+      callCount: 0
+    }
+  )
+}
+
 function readFirstNonEmptyLine(raw: string, prefix: string): string {
   const line = raw
     .split(/\r?\n/)
@@ -423,6 +581,9 @@ async function destroyRuntime(state: WindowRuntimeState): Promise<void> {
 }
 
 async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview> {
+  if (state.projectPath && state.usage.callCount === 0 && state.usage.totalTokens === 0) {
+    state.usage = loadUsageSnapshotFromDisk(state.projectPath)
+  }
   const turns = state.projectPath
     ? listTurnsFromDisk(state.projectPath)
     : []
@@ -627,6 +788,7 @@ async function restoreWindowStateFromDisk(state: WindowRuntimeState): Promise<vo
   state.model = saved.lastModel?.trim() || DEFAULT_MODEL
   state.defaultRuntime = saved.lastRuntime ?? DEFAULT_RUNTIME
   state.runtimeSystemInfo = saved.lastRuntimeSystemInfo?.trim() || ''
+  state.usage = loadUsageSnapshotFromDisk(projectPath)
 }
 
 function persistWindowState(state: WindowRuntimeState): void {
@@ -670,7 +832,6 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
 
   if (needsFreshSession) {
     await destroyRuntime(state)
-    resetUsageSnapshot(state)
 
     const terminalChunkBuffer = new Map<string, {
       turnNumber: number
@@ -956,7 +1117,7 @@ export function registerIpcHandlers(): void {
     state.model = DEFAULT_MODEL
     state.defaultRuntime = DEFAULT_RUNTIME
     state.runtimeSystemInfo = ''
-    resetUsageSnapshot(state)
+    state.usage = loadUsageSnapshotFromDisk(projectPath)
     persistWindowState(state)
 
     safeSend(win, 'yolo:event', {
