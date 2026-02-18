@@ -56,6 +56,7 @@ const LITERATURE_HOST_HINTS = [
 ]
 const REDUNDANCY_WINDOW_TURNS = 20
 const CHECKPOINT_REASON_COOLDOWN_TURNS = 3
+const MAX_BUSINESS_ARTIFACT_EVIDENCE_PATHS = 80
 const SYSTEM_ARTIFACT_NAMES = new Set([
   'tool-events.jsonl',
   'agent-output.txt',
@@ -252,6 +253,7 @@ interface PlanAttributionResult {
   ambiguous: boolean
   reason: string
   deliverablesTouched: string[]
+  coTouchedPlanIds: string[]
 }
 
 interface RecentTurnResultMeta {
@@ -617,6 +619,15 @@ export class YoloSession {
 
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name)
+        const relativeFromArtifacts = toPosixPath(path.relative(artifactsDir, fullPath))
+        if (
+          relativeFromArtifacts === 'workspace'
+          || relativeFromArtifacts.startsWith('workspace/')
+          || relativeFromArtifacts.includes('/.git/')
+          || relativeFromArtifacts.startsWith('.git/')
+        ) {
+          continue
+        }
         if (entry.isDirectory()) {
           await walk(fullPath)
           continue
@@ -629,7 +640,9 @@ export class YoloSession {
 
     await walk(artifactsDir)
 
-    return paths.sort((a, b) => a.localeCompare(b))
+    return paths
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, MAX_BUSINESS_ARTIFACT_EVIDENCE_PATHS)
   }
 
   private async collectArtifactEntryNames(artifactsDir: string): Promise<string[]> {
@@ -1170,11 +1183,13 @@ export class YoloSession {
       for (const rawPath of update.keyArtifacts) {
         const pointer = this.normalizeProjectPathPointer(rawPath)
         if (!pointer) continue
-        if (EVIDENCE_PATH_RE.test(pointer)) {
-          const absolutePath = path.join(this.yoloRoot, pointer)
-          if (!(await fileExists(absolutePath))) {
-            throw new Error(`keyArtifacts path does not exist under workspace session root: ${pointer}`)
-          }
+        if (!EVIDENCE_PATH_RE.test(pointer)) {
+          notes.push(`Dropped keyArtifact outside runs scope: ${pointer}`)
+          continue
+        }
+        const absolutePath = path.join(this.yoloRoot, pointer)
+        if (!(await fileExists(absolutePath))) {
+          throw new Error(`keyArtifacts path does not exist under workspace session root: ${pointer}`)
         }
         keyArtifacts.push(pointer)
       }
@@ -1511,12 +1526,20 @@ export class YoloSession {
       for (const item of repaired.planBoard) {
         const nextEvidencePaths: string[] = []
         for (const entry of item.evidencePaths ?? []) {
-          const repairedPath = await normalizeOrSnapshot(entry, `Plan ${item.id}`)
-          if (!repairedPath) {
-            return null
+          const normalized = this.normalizeProjectPathPointer(entry)
+          if (!normalized || !EVIDENCE_PATH_RE.test(normalized)) {
+            changed = true
+            notes.push(`PROJECT.md repair: dropped non-runs Plan ${item.id} evidence path.`)
+            continue
           }
-          if (repairedPath !== entry.trim()) changed = true
-          nextEvidencePaths.push(repairedPath)
+          const exists = await fileExists(path.join(this.yoloRoot, normalized))
+          if (!exists) {
+            changed = true
+            notes.push(`PROJECT.md repair: dropped missing Plan ${item.id} evidence path: ${normalized}`)
+            continue
+          }
+          if (normalized !== entry.trim()) changed = true
+          nextEvidencePaths.push(normalized)
         }
         nextPlanBoard.push({
           ...item,
@@ -1529,12 +1552,20 @@ export class YoloSession {
     if (repaired.keyArtifacts) {
       const nextArtifacts: string[] = []
       for (const entry of repaired.keyArtifacts) {
-        const repairedPath = await normalizeOrSnapshot(entry, 'keyArtifacts')
-        if (!repairedPath) {
-          return null
+        const normalized = this.normalizeProjectPathPointer(entry)
+        if (!normalized || !EVIDENCE_PATH_RE.test(normalized)) {
+          changed = true
+          notes.push(`PROJECT.md repair: dropped keyArtifact outside runs scope.`)
+          continue
         }
-        if (repairedPath !== entry.trim()) changed = true
-        nextArtifacts.push(repairedPath)
+        const exists = await fileExists(path.join(this.yoloRoot, normalized))
+        if (!exists) {
+          changed = true
+          notes.push(`PROJECT.md repair: dropped missing keyArtifact: ${normalized}`)
+          continue
+        }
+        if (normalized !== entry.trim()) changed = true
+        nextArtifacts.push(normalized)
       }
       repaired.keyArtifacts = dedupeStrings(nextArtifacts)
     }
@@ -1856,6 +1887,9 @@ export class YoloSession {
       clearedBlocked
     })
     let activePlanId = planAttribution.activePlanId
+    const coTouchedPlanIds = dedupeStrings(
+      planAttribution.coTouchedPlanIds.filter((id) => id && id !== activePlanId)
+    )
     const planExists = activePlanId
       ? projectedPlanIds.has(activePlanId)
       : false
@@ -1972,6 +2006,9 @@ export class YoloSession {
     if (planAttribution.reason) {
       updateSummaryLines.push(`Plan attribution: ${planAttribution.reason}${activePlanId ? ` -> ${activePlanId}` : ''}`)
     }
+    if (coTouchedPlanIds.length > 0) {
+      updateSummaryLines.push(`Plan co-touch: ${coTouchedPlanIds.join(', ')}`)
+    }
     if (missingOutcomeEvidencePaths.length > 0) {
       const preview = missingOutcomeEvidencePaths[0]
       updateSummaryLines.push(`Ignored ${missingOutcomeEvidencePaths.length} missing outcome evidence path(s); first=${preview}`)
@@ -2044,6 +2081,8 @@ export class YoloSession {
 
     let planDeltaApplied = false
     let planDeltaWarning = ''
+    const coPlanStatusChanges: string[] = []
+    const coPlanWarnings: string[] = []
     if (activePlanId) {
       const planDelta = await this.projectStore.applyTurnPlanDelta({
         activePlanId,
@@ -2061,6 +2100,65 @@ export class YoloSession {
         finalStatus = 'no_delta'
         blockedReason = blockedReason || 'plan_delta_not_applied'
         summary = `NO_DELTA: ${planDeltaWarning || 'plan delta not applied'}. ${summary}`
+      }
+    }
+    if (finalStatus === 'success' && planDeltaApplied && coTouchedPlanIds.length > 0) {
+      for (const coPlanId of coTouchedPlanIds) {
+        const coPlanItem = this.resolveProjectedPlanItem(
+          coPlanId,
+          input.context.project.planBoard,
+          projectedPlanUpdate
+        )
+        if (!coPlanItem) {
+          coPlanWarnings.push(`co-plan not found: ${coPlanId}`)
+          continue
+        }
+
+        const fromStatus = coPlanItem.status
+        let coStatusChange = `${coPlanId} ${fromStatus} -> ${fromStatus}`
+        let coCheck = this.validatePlanProgressAgainstDoneDefinition({
+          status: finalStatus,
+          activePlanId: coPlanId,
+          statusChange: coStatusChange,
+          explicitEvidencePaths: planEvidencePaths,
+          cumulativeEvidencePaths: dedupeStrings([...(coPlanItem.evidencePaths ?? []), ...planEvidencePaths]),
+          planItem: coPlanItem,
+          workspaceWriteTouches
+        })
+        if (!coCheck.ok) {
+          coPlanWarnings.push(`co-plan skipped ${coPlanId}: ${coCheck.reason}`)
+          continue
+        }
+
+        if (coCheck.doneReady) {
+          coStatusChange = `${coPlanId} ${fromStatus} -> DONE`
+          coCheck = this.validatePlanProgressAgainstDoneDefinition({
+            status: finalStatus,
+            activePlanId: coPlanId,
+            statusChange: coStatusChange,
+            explicitEvidencePaths: planEvidencePaths,
+            cumulativeEvidencePaths: dedupeStrings([...(coPlanItem.evidencePaths ?? []), ...planEvidencePaths]),
+            planItem: coPlanItem,
+            workspaceWriteTouches
+          })
+          if (!coCheck.ok) {
+            coPlanWarnings.push(`co-plan skipped ${coPlanId}: ${coCheck.reason}`)
+            continue
+          }
+        }
+
+        const coPlanDelta = await this.projectStore.applyTurnPlanDelta({
+          activePlanId: coPlanId,
+          statusChange: coStatusChange,
+          evidencePaths: planEvidencePaths,
+          turnStatus: finalStatus,
+          allowStructuralPlanChanges: plannerCheckpointDue
+        })
+        if (coPlanDelta.applied) {
+          coPlanStatusChanges.push(coStatusChange)
+          continue
+        }
+        coPlanWarnings.push(`co-plan delta not applied ${coPlanId}: ${coPlanDelta.warning || 'unknown'}`)
       }
     }
 
@@ -2107,6 +2205,12 @@ export class YoloSession {
         updateSummaryLines.push(`Plan Board: updated ${activePlanId} (${statusChange || finalStatus}).`)
       } else if (activePlanId && planDeltaWarning) {
         updateSummaryLines.push(`Plan Board warning: ${planDeltaWarning}`)
+      }
+      if (coPlanStatusChanges.length > 0) {
+        updateSummaryLines.push(`Plan Board: co-updated ${coPlanStatusChanges.join('; ')}`)
+      }
+      if (coPlanWarnings.length > 0) {
+        updateSummaryLines.push(`Plan Board co-update warning: ${coPlanWarnings[0]}`)
       }
     }
 
@@ -2182,6 +2286,8 @@ export class YoloSession {
       plan_board_hash: planBoardHash,
       plan_attribution_reason: planAttribution.reason,
       plan_attribution_ambiguous: planAttribution.ambiguous,
+      co_touched_plan_ids: coTouchedPlanIds,
+      co_plan_status_changes: coPlanStatusChanges,
       goal_constraints_fingerprint: goalConstraintsFingerprint,
       ...(deterministicFingerprint ? { failure_fingerprint: deterministicFingerprint } : {}),
       ...(clearedBlocked ? { unblock_verified: true } : {}),
@@ -2401,6 +2507,7 @@ export class YoloSession {
       })
 
     if (scored.length > 0) {
+      const touchedPlanIds = dedupeStrings(scored.map((entry) => entry.item.id))
       const bestScore = scored[0]!.score
       const best = scored.filter((entry) => entry.score === bestScore)
       if (best.length === 1) {
@@ -2409,42 +2516,84 @@ export class YoloSession {
           activePlanId: row.item.id,
           ambiguous: false,
           reason: 'deliverable_attribution',
-          deliverablesTouched: row.touched
+          deliverablesTouched: row.touched,
+          coTouchedPlanIds: touchedPlanIds.filter((id) => id !== row.item.id)
         }
       }
+      const touched = dedupeStrings(best.flatMap((entry) => entry.touched))
+
+      if (input.hintedActivePlanId) {
+        const hinted = best.find((entry) => entry.item.id === input.hintedActivePlanId)
+        if (hinted) {
+          return {
+            activePlanId: hinted.item.id,
+            ambiguous: false,
+            reason: 'deliverable_attribution_hint_tiebreak',
+            deliverablesTouched: touched,
+            coTouchedPlanIds: touchedPlanIds.filter((id) => id !== hinted.item.id)
+          }
+        }
+      }
+
+      const activeBest = best.find((entry) => entry.item.status === 'ACTIVE')
+      if (activeBest) {
+        return {
+          activePlanId: activeBest.item.id,
+          ambiguous: false,
+          reason: 'deliverable_attribution_active_tiebreak',
+          deliverablesTouched: touched,
+          coTouchedPlanIds: touchedPlanIds.filter((id) => id !== activeBest.item.id)
+        }
+      }
+
+      const stablePick = [...best].sort((a, b) => {
+        if (a.item.priority !== b.item.priority) return a.item.priority - b.item.priority
+        return a.item.id.localeCompare(b.item.id)
+      })[0]
+      if (stablePick) {
+        return {
+          activePlanId: stablePick.item.id,
+          ambiguous: false,
+          reason: 'deliverable_attribution_priority_tiebreak',
+          deliverablesTouched: touched,
+          coTouchedPlanIds: touchedPlanIds.filter((id) => id !== stablePick.item.id)
+        }
+      }
+
       return {
         activePlanId: '',
         ambiguous: true,
         reason: 'multiple_plan_deliverables_touched',
-        deliverablesTouched: dedupeStrings(best.flatMap((entry) => entry.touched))
+        deliverablesTouched: touched,
+        coTouchedPlanIds: []
       }
     }
 
     const active = candidates.find((item) => item.status === 'ACTIVE')
     if (active) {
-      return { activePlanId: active.id, ambiguous: false, reason: 'fallback_active', deliverablesTouched: [] }
+      return { activePlanId: active.id, ambiguous: false, reason: 'fallback_active', deliverablesTouched: [], coTouchedPlanIds: [] }
     }
 
     if (input.hintedActivePlanId) {
       const hinted = candidates.find((item) => item.id === input.hintedActivePlanId)
       if (hinted) {
-        return { activePlanId: hinted.id, ambiguous: false, reason: 'fallback_hint', deliverablesTouched: [] }
+        return { activePlanId: hinted.id, ambiguous: false, reason: 'fallback_hint', deliverablesTouched: [], coTouchedPlanIds: [] }
       }
     }
 
     const topTodo = candidates.find((item) => item.status === 'TODO')
     if (topTodo) {
-      return { activePlanId: topTodo.id, ambiguous: false, reason: 'fallback_top_todo', deliverablesTouched: [] }
+      return { activePlanId: topTodo.id, ambiguous: false, reason: 'fallback_top_todo', deliverablesTouched: [], coTouchedPlanIds: [] }
     }
 
     if (input.clearedBlocked) {
       const blocked = candidates.find((item) => item.status === 'BLOCKED')
       if (blocked) {
-        return { activePlanId: blocked.id, ambiguous: false, reason: 'fallback_blocker_clear', deliverablesTouched: [] }
+        return { activePlanId: blocked.id, ambiguous: false, reason: 'fallback_blocker_clear', deliverablesTouched: [], coTouchedPlanIds: [] }
       }
     }
 
-    return { activePlanId: '', ambiguous: false, reason: 'no_plan_candidate', deliverablesTouched: [] }
+    return { activePlanId: '', ambiguous: false, reason: 'no_plan_candidate', deliverablesTouched: [], coTouchedPlanIds: [] }
   }
 
   private deriveRuntimeStatusChange(input: {

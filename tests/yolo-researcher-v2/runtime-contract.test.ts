@@ -413,6 +413,75 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(panel.constraints.some((row) => /no llm provider\/api key is configured/i.test(row.text))).toBe(true)
   })
 
+  it('does not ingest artifacts/workspace repo trees into plan evidence', async () => {
+    const projectPath = await createTempDir('yolo-v2-ignore-workspace-artifacts-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: artifacts/exp_run_metrics.json', 'evidence_min: 1'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Avoid evidence pollution from workspace clones under turn artifacts',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async (context) => {
+          const turnId = `turn-${String(context.turnNumber).padStart(4, '0')}`
+          const artifactsDir = path.join(context.runsDir, turnId, 'artifacts')
+          await fs.mkdir(path.join(artifactsDir, 'workspace', 'openevolve', '.git'), { recursive: true })
+          await fs.mkdir(path.join(artifactsDir, 'workspace', 'openevolve', 'examples'), { recursive: true })
+          await fs.writeFile(path.join(artifactsDir, 'workspace', 'openevolve', '.git', 'config'), '[core]\n', 'utf-8')
+          await fs.writeFile(path.join(artifactsDir, 'workspace', 'openevolve', 'examples', 'README.md'), '# demo\n', 'utf-8')
+          await fs.writeFile(path.join(artifactsDir, 'exp_run_metrics.json'), '{"auc":0.9}\n', 'utf-8')
+
+          return {
+            intent: 'Write one deliverable and a local workspace clone payload under artifacts',
+            status: 'success',
+            summary: 'Wrote deliverable.',
+            primaryAction: `write: runs/${turnId}/artifacts/exp_run_metrics.json`,
+            toolEvents: writeSuccessEvent(`runs/${turnId}/artifacts/exp_run_metrics.json`, '{"auc":0.9}\n')
+          }
+        }
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(['success', 'no_delta']).toContain(turn.status)
+
+    const projectMd = await readText(path.join(projectPath, 'PROJECT.md'))
+    expect(projectMd).not.toContain('artifacts/workspace/openevolve')
+    expect(projectMd).toContain('runs/turn-0001/artifacts/exp_run_metrics.json')
+  })
+
+  it('caps plan board evidence paths to prevent unbounded growth', async () => {
+    const projectPath = await createTempDir('yolo-v2-plan-evidence-cap-')
+    tempDirs.push(projectPath)
+    const store = new ProjectStore(projectPath, 'Plan evidence cap', ['Define measurable success criteria.'], 'host')
+    await store.init()
+
+    const allEvidence = Array.from(
+      { length: 80 },
+      (_, idx) => `runs/turn-${String(idx + 1).padStart(4, '0')}/artifacts/evidence-${idx + 1}.md`
+    )
+    for (const entry of allEvidence) {
+      const absPath = path.join(projectPath, entry)
+      await fs.mkdir(path.dirname(absPath), { recursive: true })
+      await fs.writeFile(absPath, '# evidence\n', 'utf-8')
+    }
+
+    const applied = await store.applyTurnPlanDelta({
+      activePlanId: 'P1',
+      turnStatus: 'success',
+      evidencePaths: allEvidence
+    })
+
+    expect(applied.applied).toBe(true)
+    const panel = await store.load()
+    const p1 = panel.planBoard.find((item) => item.id === 'P1')
+    expect(p1).toBeTruthy()
+    expect((p1?.evidencePaths.length ?? 0)).toBeLessThanOrEqual(40)
+    expect(p1?.evidencePaths).toContain(allEvidence[allEvidence.length - 1]!)
+  })
+
   ;(HAS_GIT ? it : it.skip)('writes patch.diff with real git diff hunks for touched repo files', async () => {
     const projectPath = await createTempDir('yolo-v2-git-patch-')
     tempDirs.push(projectPath)
@@ -1298,6 +1367,78 @@ describe('yolo-researcher v2 runtime contract', () => {
     const deltaReasons = Array.isArray(result.delta_reasons) ? result.delta_reasons.map(String) : []
     expect(deltaReasons).toContain('plan_deliverable_touched')
     expect(result.blocked_reason).toBeUndefined()
+  })
+
+  it('co-updates shared-deliverable plans within the same successful turn', async () => {
+    const projectPath = await createTempDir('yolo-v2-shared-deliverable-co-update-')
+    tempDirs.push(projectPath)
+
+    const store = new ProjectStore(projectPath, 'Shared deliverable test', ['Define measurable success criteria.'], 'host')
+    await store.init()
+    const seeded = await store.load()
+    const p1 = seeded.planBoard.find((item) => item.id === 'P1') ?? seeded.planBoard[0]
+    if (!p1) {
+      throw new Error('expected seeded P1 plan item')
+    }
+
+    const sharedDoneDefinition = ['deliverable: artifacts/shared.md', 'evidence_min: 1']
+    await store.applyUpdate({
+      planBoard: [
+        {
+          id: 'P1',
+          title: p1.title,
+          status: 'ACTIVE',
+          doneDefinition: sharedDoneDefinition,
+          evidencePaths: [],
+          priority: 1
+        },
+        {
+          id: 'P2',
+          title: 'Secondary shared deliverable',
+          status: 'TODO',
+          doneDefinition: sharedDoneDefinition,
+          evidencePaths: [],
+          priority: 2
+        }
+      ]
+    })
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Shared deliverable should progress both plans',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Write shared deliverable once',
+          status: 'success',
+          summary: 'Shared deliverable written.',
+          primaryAction: 'write: runs/turn-0001/artifacts/shared.md',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Created shared artifact.',
+          toolEvents: [
+            ...writeSuccessEvent('runs/turn-0001/artifacts/shared.md', '# shared\n'),
+            ...bashSuccessEvent(`node -e "console.log('shared-ok')"`, 'shared-ok\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const after = await store.load()
+    const afterP1 = after.planBoard.find((item) => item.id === 'P1')
+    const afterP2 = after.planBoard.find((item) => item.id === 'P2')
+    expect(afterP1?.status).toBe('DONE')
+    expect(afterP2?.status).toBe('DONE')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.active_plan_id).toBe('P1')
+    expect(result.co_touched_plan_ids).toEqual(['P2'])
+    expect(Array.isArray(result.co_plan_status_changes)).toBe(true)
+    expect((result.co_plan_status_changes as string[])).toContain('P2 TODO -> DONE')
   })
 
   it('applies redundancy checkpoint cooldown instead of triggering planner checkpoint every turn', async () => {
