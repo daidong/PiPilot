@@ -681,9 +681,9 @@ function buildNativeTurnPrompt(context: TurnContext): string {
       : []),
     ...(plannerCheckpointDue
       ? [
-        '- This is a PLANNING turn.',
+        '- This turn has a CHECKPOINT STEP (not planning-only mode).',
         '- You MAY update Plan Board structure (Top-3 ordering, add/drop/merge items, edit done_definition).',
-        '- Keep this turn governance-only. Avoid heavy evidence collection or long multi-tool execution.'
+        '- Keep governance edits brief, then execute one concrete deliverable action in the same turn.'
       ]
       : [
         '- This is an EXECUTION turn.',
@@ -758,7 +758,7 @@ function buildNativeTurnPrompt(context: TurnContext): string {
         '',
         'Plan quality gate:',
         '- Current Plan is bootstrap/template.',
-        '- Planner checkpoint is due: projectUpdate.currentPlan is REQUIRED with 3-5 concrete goal-specific next actions.'
+        '- Planner checkpoint is due: you MAY refresh projectUpdate.currentPlan (3-5 concrete actions), then execute one deliverable action.'
       ]
       : []),
     ...(planNeedsRewrite && !plannerCheckpointDue
@@ -833,7 +833,7 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '  "askQuestion": "required when status=ask_user",',
     '  "stopReason": "required when status=stopped",',
     '  "projectUpdate": {',
-    '    "planBoard": [{"id":"P2","title":"...","status":"TODO|ACTIVE|DONE|BLOCKED|DROPPED","doneDefinition":["deliverable: runs/turn-0001/artifacts/problem_statement.md","evidence_min: 1"],"evidencePaths":["runs/turn-0001/..."],"nextMinStep":"...","priority":1}], // ONLY when planner checkpoint is due',
+    '    "planBoard": [{"id":"P2","title":"...","status":"TODO|ACTIVE|DONE|BLOCKED|DROPPED","doneDefinition":["deliverable: artifacts/problem_statement.md","evidence_min: 1"],"evidencePaths":["runs/turn-0001/..."],"nextMinStep":"...","priority":1}], // ONLY when planner checkpoint is due',
     '    "currentPlan": ["up to 5 items"], // ONLY when planner checkpoint is due',
     '    // If proof comes from work/... first write snapshot to runs/turn-xxxx/artifacts/evidence/*.md',
     '    "facts": [{"text":"...","evidencePath":"runs/turn-0001/..."}],',
@@ -1196,7 +1196,8 @@ export class LlmSingleAgent implements YoloSingleAgent {
         'When modifying files inside a git repo, use coding-large-repo workflow (repo-intake/change-plan/delegate-coding-agent or agent-start) before code edits.',
         'Runtime derives active_plan_id/status_change/delta/evidence_paths from tool events + file writes.',
         'Success is valid only if this turn touches a plan deliverable (done_definition deliverable:) or clears a blocker.',
-        'Use mechanical done_definition rows only: deliverable:<path-or-token> and optional evidence_min:<n>.',
+        'Use mechanical done_definition rows only: deliverable:<turn-local path or token> and optional evidence_min:<n>.',
+        'For turn artifacts prefer deliverable: artifacts/<name>; avoid fixed runs/turn-xxxx/... deliverable paths.',
         'Rewrite planBoard/currentPlan only on planner checkpoint turns.',
         'Be resourceful before asking user; Ask is last resort when truly blocked.',
         'Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). Prefer fresh target dirs.',

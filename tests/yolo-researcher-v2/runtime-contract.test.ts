@@ -1153,4 +1153,113 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(result.planner_checkpoint_due).toBe(true)
     expect(Array.isArray(result.planner_checkpoint_reasons)).toBe(true)
   })
+
+  it('normalizes fixed-turn deliverable paths and allows turn-local deliverable touch', async () => {
+    const projectPath = await createTempDir('yolo-v2-deliverable-normalize-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: runs/turn-0009/artifacts/implementation_notes.md',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Touch a turn-local deliverable path',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Write implementation notes artifact for active plan',
+          status: 'success',
+          summary: 'Wrote implementation notes.',
+          primaryAction: 'write: runs/turn-0001/artifacts/implementation_notes.md',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Created implementation notes artifact.',
+          toolEvents: [
+            ...writeSuccessEvent('runs/turn-0001/artifacts/implementation_notes.md', '# implementation notes\n'),
+            ...bashSuccessEvent(`node -e "console.log('deliverable-ok')"`, 'deliverable-ok\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    const deltaReasons = Array.isArray(result.delta_reasons) ? result.delta_reasons.map(String) : []
+    expect(deltaReasons).toContain('plan_deliverable_touched')
+    expect(result.blocked_reason).toBeUndefined()
+  })
+
+  it('applies redundancy checkpoint cooldown instead of triggering planner checkpoint every turn', async () => {
+    const projectPath = await createTempDir('yolo-v2-checkpoint-cooldown-')
+    tempDirs.push(projectPath)
+
+    let callCount = 0
+    let turn3Checkpoint: { due: boolean; reasons: string[] } | null = null
+    let turn4Checkpoint: { due: boolean; reasons: string[] } | null = null
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Verify checkpoint cooldown behavior',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async (context) => {
+          callCount += 1
+          if (callCount === 1) {
+            return {
+              intent: 'No-op turn one',
+              status: 'success',
+              summary: 'No artifacts this turn.',
+              primaryAction: 'synthesize: repeated-no-delta-action'
+            }
+          }
+          if (callCount === 2) {
+            return {
+              intent: 'No-op turn two',
+              status: 'success',
+              summary: 'Still no artifacts.',
+              primaryAction: 'synthesize: repeated-no-delta-action'
+            }
+          }
+          if (callCount === 3) {
+            turn3Checkpoint = context.plannerCheckpoint
+              ? { due: context.plannerCheckpoint.due, reasons: [...context.plannerCheckpoint.reasons] }
+              : null
+            return {
+              intent: 'Observe checkpoint after redundancy block',
+              status: 'stopped',
+              summary: 'Observed checkpoint state.',
+              stopReason: 'done'
+            }
+          }
+          turn4Checkpoint = context.plannerCheckpoint
+            ? { due: context.plannerCheckpoint.due, reasons: [...context.plannerCheckpoint.reasons] }
+            : null
+          return {
+            intent: 'Observe checkpoint cooldown window',
+            status: 'stopped',
+            summary: 'Observed checkpoint state during cooldown.',
+            stopReason: 'done'
+          }
+        }
+      }
+    })
+
+    await session.init()
+    const t1 = await session.runNextTurn()
+    const t2 = await session.runNextTurn()
+    const t3 = await session.runNextTurn()
+    const t4 = await session.runNextTurn()
+
+    expect(t1.status).toBe('no_delta')
+    expect(t2.status).toBe('blocked')
+    expect(t3.status).toBe('stopped')
+    expect(t4.status).toBe('stopped')
+    expect(turn3Checkpoint?.due).toBe(true)
+    expect(turn3Checkpoint?.reasons).toContain('redundancy_blocked')
+    expect(turn4Checkpoint).toBeNull()
+  })
 })

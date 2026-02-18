@@ -55,6 +55,7 @@ const LITERATURE_HOST_HINTS = [
   'paperswithcode.com'
 ]
 const REDUNDANCY_WINDOW_TURNS = 20
+const CHECKPOINT_REASON_COOLDOWN_TURNS = 3
 const SYSTEM_ARTIFACT_NAMES = new Set([
   'tool-events.jsonl',
   'agent-output.txt',
@@ -63,6 +64,8 @@ const SYSTEM_ARTIFACT_NAMES = new Set([
   'patch.diff'
 ])
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
+const TURN_SCOPED_DELIVERABLE_RE = /^runs\/turn-(\d{4}|\*)\/(.+)$/i
+const GOVERNANCE_CHECKPOINT_ARTIFACT_RE = /^runs\/turn-\d{4}\/artifacts\/planning_checkpoint_[^/]+\.md$/i
 const PLAN_ID_RE = /^P\d+$/i
 const REPO_SCAN_SKIP_DIRS = new Set([
   '.git',
@@ -242,6 +245,15 @@ interface PlanAttributionResult {
   ambiguous: boolean
   reason: string
   deliverablesTouched: string[]
+}
+
+interface RecentTurnResultMeta {
+  turnNumber: number
+  status: string
+  blockedReason: string
+  plannerCheckpointReasons: string[]
+  planBoardHash: string
+  governanceOnlyTurn: boolean
 }
 
 export class YoloSession {
@@ -676,6 +688,57 @@ export class YoloSession {
     return normalized
   }
 
+  private normalizeDeliverableTarget(rawValue: string): { value: string; rewritten: boolean } {
+    const pointer = this.normalizeProjectPathPointer(rawValue)
+    const normalized = toPosixPath(pointer.trim().replace(/^\.\//, '')).toLowerCase()
+    if (!normalized) return { value: '', rewritten: false }
+
+    const scoped = TURN_SCOPED_DELIVERABLE_RE.exec(normalized)
+    if (scoped?.[2]) {
+      return {
+        value: scoped[2],
+        rewritten: true
+      }
+    }
+
+    return { value: normalized, rewritten: false }
+  }
+
+  private normalizeDoneDefinitionRows(input: {
+    lines: string[]
+    planId: string
+    notes: string[]
+  }): string[] {
+    const normalizedRows: string[] = []
+    const normalizedPlanId = normalizePlanId(input.planId) || input.planId || 'P?'
+
+    for (const rawLine of input.lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+
+      if (!/^deliverable\s*:/i.test(line)) {
+        normalizedRows.push(line)
+        continue
+      }
+
+      const rawValue = line.split(':').slice(1).join(':').trim()
+      const normalized = this.normalizeDeliverableTarget(rawValue)
+      if (!normalized.value) {
+        normalizedRows.push(line)
+        continue
+      }
+
+      if (normalized.rewritten) {
+        input.notes.push(
+          `Plan ${normalizedPlanId} done_definition deliverable normalized to turn-local path: ${normalized.value}`
+        )
+      }
+      normalizedRows.push(`deliverable: ${normalized.value}`)
+    }
+
+    return normalizedRows
+  }
+
   private collectWorkspaceWriteTouches(toolEvents: ToolEventRecord[]): string[] {
     const touched: string[] = []
     for (const event of toolEvents) {
@@ -1062,8 +1125,9 @@ export class YoloSession {
     return normalized
   }
 
-  private async normalizeAndValidateProjectUpdate(update: ProjectUpdate): Promise<ProjectUpdate> {
+  private async normalizeAndValidateProjectUpdate(update: ProjectUpdate): Promise<{ update: ProjectUpdate; notes: string[] }> {
     const normalized: ProjectUpdate = { ...update }
+    const notes: string[] = []
 
     if (update.facts) {
       normalized.facts = await this.normalizeAndValidateEvidenceLines(update.facts, 'Facts')
@@ -1118,10 +1182,15 @@ export class YoloSession {
           await this.assertYoloEvidencePathExists(pointer, `Plan Board ${item.id}`)
           evidencePaths.push(pointer)
         }
+        const doneDefinition = this.normalizeDoneDefinitionRows({
+          lines: item.doneDefinition ?? [],
+          planId: item.id,
+          notes
+        })
         normalized.planBoard.push({
           ...item,
           id: normalizePlanId(item.id) || item.id,
-          doneDefinition: dedupeStrings(item.doneDefinition ?? []),
+          doneDefinition: dedupeStrings(doneDefinition),
           evidencePaths: dedupeStrings(evidencePaths),
           nextMinStep: item.nextMinStep?.trim() || undefined,
           dropReason: item.dropReason?.trim() || undefined,
@@ -1130,7 +1199,10 @@ export class YoloSession {
       }
     }
 
-    return normalized
+    return {
+      update: normalized,
+      notes: dedupeStrings(notes)
+    }
   }
 
   private filterProjectUpdateForGovernanceWindow(input: {
@@ -1573,6 +1645,11 @@ export class YoloSession {
     }
 
     const businessArtifactEvidencePaths = await this.collectBusinessArtifactEvidencePaths(input.artifactsDir)
+    const governanceOnlyTurn = this.isGovernanceOnlyTurn({
+      actionType,
+      businessArtifactEvidencePaths,
+      workspaceWriteTouches: workspaceChangeArtifacts.changedFiles
+    })
     evidencePaths.push(...businessArtifactEvidencePaths)
     evidencePaths.push(...normalizedOutcomeEvidencePaths)
 
@@ -1612,7 +1689,7 @@ export class YoloSession {
 
     // Stagnation enforcement: repeated dominant action type without strong delta
     // (stage advancement or blocker transitions) is treated as no progress.
-    if (input.context.stagnation?.stagnant && finalStatus === 'success') {
+    if (input.context.stagnation?.stagnant && finalStatus === 'success' && !governanceOnlyTurn) {
       const dominantAction = normalizeText(input.context.stagnation.dominantAction)
       const repeatedDominant = dominantAction && actionType === dominantAction
 
@@ -1753,7 +1830,7 @@ export class YoloSession {
       blockedReason = 'no_delta'
     }
 
-    if (finalStatus === 'no_delta' && (doneFingerprintHit || priorFingerprintCount > 0)) {
+    if (finalStatus === 'no_delta' && !governanceOnlyTurn && (doneFingerprintHit || priorFingerprintCount > 0)) {
       const redundant = await this.failureStore.recordRedundancyBlocked({
         fingerprint: actionFingerprint,
         errorLine: 'Repeated action fingerprint produced NO_DELTA.',
@@ -1799,8 +1876,9 @@ export class YoloSession {
       updateSummaryLines.push(...evidenceAttached.notes.slice(0, 2))
       try {
         const normalizedProjectUpdate = await this.normalizeAndValidateProjectUpdate(evidenceAttached.update)
-        await this.projectStore.applyUpdate(normalizedProjectUpdate)
+        await this.projectStore.applyUpdate(normalizedProjectUpdate.update)
         projectUpdated = true
+        updateSummaryLines.push(...normalizedProjectUpdate.notes.slice(0, 2))
         updateSummaryLines.push('PROJECT.md: applied structured update from native turn.')
       } catch (error) {
         let message = error instanceof Error ? error.message : String(error)
@@ -1815,9 +1893,10 @@ export class YoloSession {
         if (repairAttempt) {
           try {
             const normalizedRepairedUpdate = await this.normalizeAndValidateProjectUpdate(repairAttempt.update)
-            await this.projectStore.applyUpdate(normalizedRepairedUpdate)
+            await this.projectStore.applyUpdate(normalizedRepairedUpdate.update)
             projectUpdated = true
             repaired = true
+            updateSummaryLines.push(...normalizedRepairedUpdate.notes.slice(0, 2))
             updateSummaryLines.push('PROJECT.md: applied structured update after same-turn evidence repair.')
             updateSummaryLines.push(...repairAttempt.notes.slice(0, 3))
           } catch (repairError) {
@@ -1941,6 +2020,7 @@ export class YoloSession {
       }
       : {}
     const goalConstraintsFingerprint = this.computeGoalConstraintsFingerprint(persistedProject)
+    const planBoardHash = this.computePlanBoardFingerprint(persistedProject)
 
     await writeText(resultPath, `${JSON.stringify({
       status: finalStatus,
@@ -1964,9 +2044,11 @@ export class YoloSession {
       tool_events_path: this.toEvidencePath(toolEventsPath),
       tool_events_count: toolEvents.length,
       delta_reasons: deltaReasons,
+      governance_only_turn: governanceOnlyTurn,
       stage_status: stageStatus,
       planner_checkpoint_due: input.context.plannerCheckpoint?.due ?? false,
       planner_checkpoint_reasons: input.context.plannerCheckpoint?.reasons ?? [],
+      plan_board_hash: planBoardHash,
       plan_attribution_reason: planAttribution.reason,
       plan_attribution_ambiguous: planAttribution.ambiguous,
       goal_constraints_fingerprint: goalConstraintsFingerprint,
@@ -2027,12 +2109,109 @@ export class YoloSession {
     return statuses
   }
 
+  private async loadRecentTurnResultMetadata(limit: number): Promise<RecentTurnResultMeta[]> {
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    const selected = turnNumbers
+      .slice(-Math.max(0, limit))
+      .reverse() // newest first
+    const rows: RecentTurnResultMeta[] = []
+
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        rows.push({
+          turnNumber,
+          status: normalizeText(parsed.status),
+          blockedReason: normalizeText(parsed.blocked_reason),
+          plannerCheckpointReasons: Array.isArray(parsed.planner_checkpoint_reasons)
+            ? parsed.planner_checkpoint_reasons
+              .filter((value): value is string => typeof value === 'string')
+              .map((value) => normalizeText(value))
+              .filter(Boolean)
+            : [],
+          planBoardHash: safeString(parsed.plan_board_hash).trim(),
+          governanceOnlyTurn: parsed.governance_only_turn === true
+        })
+      } catch {
+        // Ignore malformed historical records.
+      }
+    }
+
+    return rows
+  }
+
+  private shouldRaiseReasonWithCooldown(input: {
+    reason: string
+    recentResults: RecentTurnResultMeta[]
+    nextTurnNumber: number
+    currentPlanBoardHash: string
+  }): boolean {
+    const latestCheckpoint = input.recentResults.find((row) => row.plannerCheckpointReasons.includes(input.reason))
+    if (!latestCheckpoint) return true
+
+    const turnsSince = input.nextTurnNumber - latestCheckpoint.turnNumber
+    const withinCooldown = turnsSince <= CHECKPOINT_REASON_COOLDOWN_TURNS
+    const planChanged = latestCheckpoint.planBoardHash
+      && input.currentPlanBoardHash
+      && latestCheckpoint.planBoardHash !== input.currentPlanBoardHash
+    return !withinCooldown || planChanged
+  }
+
+  private shouldRaiseRedundancyCheckpoint(input: {
+    recentResults: RecentTurnResultMeta[]
+    nextTurnNumber: number
+    currentPlanBoardHash: string
+  }): boolean {
+    const latestRedundantBlocked = input.recentResults.find((row) => row.blockedReason === 'redundant_no_delta')
+    if (!latestRedundantBlocked) return false
+
+    const latestCheckpoint = input.recentResults.find((row) => row.plannerCheckpointReasons.includes('redundancy_blocked'))
+    if (!latestCheckpoint || latestCheckpoint.turnNumber < latestRedundantBlocked.turnNumber) {
+      return true
+    }
+
+    const turnsSince = input.nextTurnNumber - latestCheckpoint.turnNumber
+    const withinCooldown = turnsSince <= CHECKPOINT_REASON_COOLDOWN_TURNS
+    const planChanged = latestCheckpoint.planBoardHash
+      && input.currentPlanBoardHash
+      && latestCheckpoint.planBoardHash !== input.currentPlanBoardHash
+
+    // Once plan structure changed after a redundancy checkpoint, clear this reason.
+    if (planChanged) return false
+    return !withinCooldown
+  }
+
   private detectTop3AllBlocked(project: TurnContext['project']): boolean {
     const open = project.planBoard
       .filter((item) => item.status !== 'DONE' && item.status !== 'DROPPED')
       .sort((a, b) => a.priority - b.priority)
       .slice(0, 3)
     return open.length > 0 && open.every((item) => item.status === 'BLOCKED')
+  }
+
+  private isGovernanceOnlyPath(rawPath: string): boolean {
+    const normalized = toPosixPath(rawPath.trim().toLowerCase())
+    if (!normalized) return false
+    if (normalized === 'project.md') return true
+    return GOVERNANCE_CHECKPOINT_ARTIFACT_RE.test(normalized)
+  }
+
+  private isGovernanceOnlyTurn(input: {
+    actionType: string
+    businessArtifactEvidencePaths: string[]
+    workspaceWriteTouches: string[]
+  }): boolean {
+    if (input.actionType !== 'write' && input.actionType !== 'edit') return false
+    const touched = dedupeStrings([
+      ...input.businessArtifactEvidencePaths,
+      ...input.workspaceWriteTouches
+    ])
+    if (touched.length === 0) return false
+    return touched.every((entry) => this.isGovernanceOnlyPath(entry))
   }
 
   private resolveProjectedPlanItem(
@@ -2186,7 +2365,7 @@ export class YoloSession {
 
       if (/^deliverable\s*:/i.test(line)) {
         const rawValue = line.split(':').slice(1).join(':').trim()
-        const normalized = toPosixPath(rawValue.toLowerCase())
+        const normalized = this.normalizeDeliverableTarget(rawValue).value
         if (!normalized) {
           invalidRows.push(line)
           continue
@@ -2221,8 +2400,17 @@ export class YoloSession {
     deliverables: string[],
     workspaceWriteTouches: string[] = []
   ): string[] {
-    const normalizedEvidence = evidencePaths.map((value) => toPosixPath(value.trim().toLowerCase()))
-    const normalizedWrites = workspaceWriteTouches.map((value) => toPosixPath(value.trim().toLowerCase()))
+    const expandForMatching = (value: string): string[] => {
+      const normalized = toPosixPath(value.trim().toLowerCase())
+      if (!normalized) return []
+      const expanded = [normalized]
+      const scoped = TURN_SCOPED_DELIVERABLE_RE.exec(normalized)
+      if (scoped?.[2]) expanded.push(scoped[2])
+      return expanded
+    }
+
+    const normalizedEvidence = dedupeStrings(evidencePaths.flatMap(expandForMatching))
+    const normalizedWrites = dedupeStrings(workspaceWriteTouches.flatMap(expandForMatching))
     const touched: string[] = []
     for (const deliverable of deliverables) {
       if (
@@ -2293,6 +2481,31 @@ export class YoloSession {
     return { ok: true, reason: '', deliverableTouched, doneReady }
   }
 
+  private computePlanBoardFingerprint(project: TurnContext['project']): string {
+    const rows = [...project.planBoard]
+      .sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority
+        return a.id.localeCompare(b.id)
+      })
+      .map((item) => {
+        const doneRows = (item.doneDefinition ?? [])
+          .map((row) => row.trim().toLowerCase())
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b))
+        return {
+          id: item.id,
+          status: item.status,
+          priority: item.priority,
+          title: normalizeText(item.title),
+          doneDefinition: doneRows
+        }
+      })
+
+    return createHash('sha256')
+      .update(JSON.stringify(rows))
+      .digest('hex')
+  }
+
   private computeGoalConstraintsFingerprint(project: TurnContext['project']): string {
     const goal = normalizeText(project.goal)
     const constraints = project.constraints
@@ -2323,24 +2536,36 @@ export class YoloSession {
 
   private async detectPlannerCheckpoint(
     project: TurnContext['project'],
-    failures: FailureEntry[],
+    _failures: FailureEntry[],
     nextTurnNumber: number
   ): Promise<PlannerCheckpointInfo> {
     const reasons: string[] = []
+    const recentResults = await this.loadRecentTurnResultMetadata(24)
+    const currentPlanBoardHash = this.computePlanBoardFingerprint(project)
 
     if (nextTurnNumber > 1 && (nextTurnNumber - 1) % 4 === 0) {
       reasons.push('periodic_4_turn_checkpoint')
     }
 
     const recentStatuses = await this.loadRecentTurnStatuses(2)
-    if (recentStatuses.length === 2 && recentStatuses.every((status) => status === 'no_delta')) {
+    if (
+      recentStatuses.length === 2
+      && recentStatuses.every((status) => status === 'no_delta')
+      && this.shouldRaiseReasonWithCooldown({
+        reason: 'two_consecutive_no_delta',
+        recentResults,
+        nextTurnNumber,
+        currentPlanBoardHash
+      })
+    ) {
       reasons.push('two_consecutive_no_delta')
     }
 
-    const latestRedundantBlocked = failures
-      .filter((entry) => entry.status === 'BLOCKED' && normalizeText(entry.runtime) === 'redundant')
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
-    if (latestRedundantBlocked) {
+    if (this.shouldRaiseRedundancyCheckpoint({
+      recentResults,
+      nextTurnNumber,
+      currentPlanBoardHash
+    })) {
       reasons.push('redundancy_blocked')
     }
 
@@ -2406,6 +2631,9 @@ export class YoloSession {
 
       try {
         const parsed = JSON.parse(raw) as Record<string, unknown>
+        if (parsed.governance_only_turn === true) {
+          continue
+        }
         let actionType = normalizeText(parsed.action_type)
         if (!actionType) {
           const fingerprint = normalizeText(parsed.action_fingerprint)
