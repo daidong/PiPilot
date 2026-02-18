@@ -1,6 +1,8 @@
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
+import { execFile as execFileCallback } from 'node:child_process'
+import { promisify } from 'node:util'
 
 import { FailureStore } from './failure-store.js'
 import { ProjectStore } from './project-store.js'
@@ -161,6 +163,8 @@ function slugifyForFile(value: string): string {
 function hashStable(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16)
 }
+
+const execFile = promisify(execFileCallback)
 
 function isLikelyLiteratureUrl(rawUrl: string): boolean {
   const input = rawUrl.trim().toLowerCase()
@@ -690,6 +694,7 @@ export class YoloSession {
   private async writeWorkspaceChangeArtifacts(input: {
     artifactsDir: string
     workspaceWriteTouches: string[]
+    workspaceGitRepos: string[]
     turnNumber: number
   }): Promise<{
     changedFilesPath: string
@@ -701,10 +706,15 @@ export class YoloSession {
         .map((entry) => toPosixPath(entry.trim()))
         .filter(Boolean)
     )
+    const gitPatch = await this.collectGitPatchForTouchedFiles({
+      touchedFiles: changedFiles,
+      workspaceGitRepos: input.workspaceGitRepos
+    })
     const changedFilesPath = path.join(input.artifactsDir, 'changed_files.json')
     await writeText(changedFilesPath, `${JSON.stringify({
       turnNumber: input.turnNumber,
-      changed_files: changedFiles
+      changed_files: changedFiles,
+      git_repos_considered: gitPatch.reposConsidered
     }, null, 2)}\n`)
 
     let patchPath: string | null = null
@@ -713,16 +723,129 @@ export class YoloSession {
       const lines = [
         '# runtime workspace change snapshot',
         `# turn: ${formatTurnId(input.turnNumber)}`,
-        '# note: lightweight patch index generated from observed write/edit tool calls.',
+        '# note: git patch is derived from touched files observed in this turn.',
         ''
       ]
-      for (const file of changedFiles) {
-        lines.push(`diff --runtime a/${file} b/${file}`)
+      if (gitPatch.patchText.trim()) {
+        lines.push(gitPatch.patchText.trimEnd())
+      } else {
+        lines.push('# no git patch hunks were available for touched files.')
+        for (const file of changedFiles) {
+          lines.push(`# touched: ${file}`)
+        }
       }
       await writeText(patchPath, `${lines.join('\n')}\n`)
     }
 
     return { changedFilesPath, patchPath, changedFiles }
+  }
+
+  private resolveGitRepoForWorkspacePath(input: {
+    workspacePath: string
+    workspaceGitRepos: string[]
+  }): { repoRel: string; repoFilePath: string } | null {
+    const normalizedPath = toPosixPath(input.workspacePath.trim())
+    if (!normalizedPath) return null
+
+    const repos = dedupeStrings(
+      input.workspaceGitRepos
+        .map((entry) => toPosixPath(entry.trim() || '.'))
+        .filter(Boolean)
+    )
+      .sort((a, b) => b.length - a.length)
+
+    for (const repoRel of repos) {
+      if (repoRel === '.') {
+        return { repoRel, repoFilePath: normalizedPath }
+      }
+      if (normalizedPath === repoRel) {
+        return { repoRel, repoFilePath: '.' }
+      }
+      if (normalizedPath.startsWith(`${repoRel}/`)) {
+        return { repoRel, repoFilePath: normalizedPath.slice(repoRel.length + 1) }
+      }
+    }
+
+    return null
+  }
+
+  private async runGitCommand(repoAbs: string, args: string[]): Promise<{ ok: boolean; stdout: string }> {
+    try {
+      const result = await execFile('git', ['-C', repoAbs, ...args], {
+        cwd: this.config.projectPath,
+        maxBuffer: 10 * 1024 * 1024
+      })
+      return {
+        ok: true,
+        stdout: typeof result.stdout === 'string' ? result.stdout : String(result.stdout ?? '')
+      }
+    } catch (error) {
+      const row = error as { stdout?: string | Buffer }
+      const stdout = typeof row?.stdout === 'string' ? row.stdout : String(row?.stdout ?? '')
+      return { ok: false, stdout }
+    }
+  }
+
+  private async collectGitPatchForTouchedFiles(input: {
+    touchedFiles: string[]
+    workspaceGitRepos: string[]
+  }): Promise<{ patchText: string; reposConsidered: string[] }> {
+    if (input.touchedFiles.length === 0) {
+      return { patchText: '', reposConsidered: [] }
+    }
+
+    const repoToFiles = new Map<string, Set<string>>()
+    for (const file of input.touchedFiles) {
+      const resolved = this.resolveGitRepoForWorkspacePath({
+        workspacePath: file,
+        workspaceGitRepos: input.workspaceGitRepos
+      })
+      if (!resolved) continue
+      if (!repoToFiles.has(resolved.repoRel)) {
+        repoToFiles.set(resolved.repoRel, new Set<string>())
+      }
+      repoToFiles.get(resolved.repoRel)!.add(toPosixPath(resolved.repoFilePath))
+    }
+
+    const patchParts: string[] = []
+    const reposConsidered = [...repoToFiles.keys()].sort((a, b) => a.localeCompare(b))
+    for (const repoRel of reposConsidered) {
+      const files = [...(repoToFiles.get(repoRel) ?? new Set<string>())]
+        .filter((entry) => entry && entry !== '.')
+        .sort((a, b) => a.localeCompare(b))
+      if (files.length === 0) continue
+
+      const repoAbs = repoRel === '.'
+        ? this.config.projectPath
+        : path.resolve(this.config.projectPath, repoRel)
+      const check = await this.runGitCommand(repoAbs, ['rev-parse', '--is-inside-work-tree'])
+      if (!check.ok || !/true/i.test(check.stdout.trim())) continue
+
+      const trackedDiff = await this.runGitCommand(repoAbs, ['diff', '--no-ext-diff', '--binary', '--', ...files])
+      if (trackedDiff.ok && trackedDiff.stdout.trim()) {
+        patchParts.push(`# repo: ${repoRel}`)
+        patchParts.push(trackedDiff.stdout.trimEnd())
+      }
+
+      const untracked = await this.runGitCommand(repoAbs, ['ls-files', '--others', '--exclude-standard', '--', ...files])
+      if (untracked.ok) {
+        const rows = untracked.stdout
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+        if (rows.length > 0) {
+          patchParts.push(`# repo: ${repoRel} (untracked touched files)`)
+          for (const row of rows) {
+            patchParts.push(`# untracked: ${toPosixPath(row)}`)
+          }
+        }
+      }
+    }
+
+    return {
+      patchText: patchParts.join('\n\n'),
+      reposConsidered
+    }
   }
 
   private buildEvidenceRefMap(evidencePaths: string[]): Record<string, string> {
@@ -1273,6 +1396,7 @@ export class YoloSession {
     const workspaceChangeArtifacts = await this.writeWorkspaceChangeArtifacts({
       artifactsDir: input.artifactsDir,
       workspaceWriteTouches,
+      workspaceGitRepos: input.context.workspaceGitRepos ?? [],
       turnNumber: input.turnNumber
     })
 

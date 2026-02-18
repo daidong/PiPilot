@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -83,6 +84,15 @@ async function seedActivePlanDoneDefinition(projectPath: string, doneDefinition:
     }]
   })
 }
+
+const HAS_GIT = (() => {
+  try {
+    execFileSync('git', ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+})()
 
 describe('yolo-researcher v2 runtime contract', () => {
   const tempDirs: string[] = []
@@ -258,6 +268,48 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(projectMd).toContain('Observed stable runtime output token. (evidence: runs/turn-0001/result.json)')
     expect(projectMd).toContain('CPU budget remains limited. (evidence: runs/turn-0001/result.json)')
     expect(projectMd).toContain('Runtime-derived control metadata is deterministic.')
+  })
+
+  ;(HAS_GIT ? it : it.skip)('writes patch.diff with real git diff hunks for touched repo files', async () => {
+    const projectPath = await createTempDir('yolo-v2-git-patch-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: stdout.txt'])
+
+    await fs.mkdir(path.join(projectPath, 'src'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'src', 'sample.ts'), 'export const v = 1\n', 'utf-8')
+
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['add', '.'], { cwd: projectPath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: projectPath, stdio: 'ignore' })
+
+    await fs.writeFile(path.join(projectPath, 'src', 'sample.ts'), 'export const v = 2\n', 'utf-8')
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Capture git patch snapshot for touched files',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Modify source file and verify output',
+          status: 'success',
+          summary: 'Modified source file.',
+          primaryAction: `bash: node -e "console.log('patch-ok')"`,
+          toolEvents: [
+            ...writeSuccessEvent('src/sample.ts', 'export const v = 2'),
+            ...bashSuccessEvent(`node -e "console.log('patch-ok')"`, 'patch-ok\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(['success', 'no_delta']).toContain(turn.status)
+
+    const patch = await readText(path.join(projectPath, 'runs', 'turn-0001', 'artifacts', 'patch.diff'))
+    expect(patch).toContain('diff --git a/src/sample.ts b/src/sample.ts')
   })
 
   it('marks successful turns without delta evidence as no_delta', async () => {
