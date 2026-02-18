@@ -45,9 +45,6 @@ interface SkillScriptRunToolLike {
 
 const TURN_ARTIFACTS_DIR_RE = /^runs\/turn-\d{4}\/artifacts(?:\/.*)?$/
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
-const HAS_SUDO_RE = /\bsudo\b/i
-const CONTROLLED_SUDO_PREFIX_RE = /^\s*sudo\s+-n\s+\/usr\/local\/bin\/agent-root-task(?:\s|$)/i
-const BASH_FAILURE_SNIPPET_LIMIT = 200
 
 function toObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -295,78 +292,7 @@ function summarizeRunError(result: SkillScriptRunResult): string {
   return err || structuredErr || dataErr || 'script execution failed'
 }
 
-function summarizeShellOutput(text: string): string | undefined {
-  const compact = text.replace(/\s+/g, ' ').trim()
-  if (!compact) return undefined
-  if (compact.length <= BASH_FAILURE_SNIPPET_LIMIT) return compact
-  return `${compact.slice(0, Math.max(1, BASH_FAILURE_SNIPPET_LIMIT - 3))}...`
-}
-
-function buildCommandFailureError(output: { stdout: string; stderr: string; exitCode: number }): string {
-  const base = `Command exited with code ${output.exitCode}`
-  const stderrSnippet = summarizeShellOutput(output.stderr)
-  if (stderrSnippet) return `${base}: ${stderrSnippet}`
-  const stdoutSnippet = summarizeShellOutput(output.stdout)
-  if (stdoutSnippet) return `${base} (stdout): ${stdoutSnippet}`
-  return base
-}
-
 export function createYoloToolWrapperPack(projectPath: string, debug: boolean = false): Pack {
-  const guardedBashTool = defineTool({
-    name: 'bash',
-    description: 'Execute shell commands with controlled sudo enforcement for yolo runtime.',
-    parameters: {
-      command: { type: 'string', required: true, description: 'Command to execute' },
-      cwd: { type: 'string', required: false, description: 'Working directory (relative to project root)' },
-      timeout: { type: 'number', required: false, description: 'Optional timeout in milliseconds' }
-    },
-    activity: {
-      formatCall: (a) => {
-        const cmd = (a.command as string) || ''
-        const short = (cmd.split('\n')[0] ?? '').slice(0, 40)
-        return { label: `Run: ${short}${cmd.length > 40 ? '...' : ''}`, icon: 'run' }
-      },
-      formatResult: (r, a) => {
-        const cmd = ((a?.command as string) || '').split(/[\n|&;]/)[0]?.trim().slice(0, 25) || ''
-        const output = (r.data as any)?.output as string || (r.data as any)?.stdout as string || ''
-        const lines = output.split('\n').filter(Boolean).length
-        return { label: lines > 0 ? `${cmd}: ${lines} lines` : `${cmd}: done`, icon: 'run' }
-      }
-    },
-    execute: async (input, { runtime }) => {
-      const command = safeString(input.command)
-      const trimmedCommand = command.trim()
-      if (HAS_SUDO_RE.test(trimmedCommand) && !CONTROLLED_SUDO_PREFIX_RE.test(trimmedCommand)) {
-        return {
-          success: false,
-          error: 'Blocked: only `sudo -n /usr/local/bin/agent-root-task ...` is allowed for privileged operations.'
-        }
-      }
-
-      const timeoutRaw = safeNumber(input.timeout, NaN)
-      const normalizedTimeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0
-        ? timeoutRaw
-        : undefined
-
-      const result = await runtime.io.exec(command, {
-        cwd: safeString(input.cwd) || undefined,
-        timeout: normalizedTimeout,
-        caller: 'bash'
-      })
-
-      if (!result.success && !result.data) {
-        return { success: false, error: result.error }
-      }
-
-      const output = result.data!
-      return {
-        success: output.exitCode === 0,
-        data: output,
-        error: output.exitCode !== 0 ? buildCommandFailureError(output) : undefined
-      }
-    }
-  })
-
   const literatureStudyTool = defineTool({
     name: 'literature-study',
     description: 'Internal yolo literature study pipeline (planner/search/review/coverage) with canonical artifact outputs.',
@@ -968,7 +894,6 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
     id: 'yolo-wrapper-tools',
     description: 'Typed wrappers for tools/skills integration and runtime diagnostics.',
     tools: [
-      guardedBashTool as any,
       literatureStudyTool as any,
       literatureSearchTool as any,
       dataAnalyzeTool as any,
