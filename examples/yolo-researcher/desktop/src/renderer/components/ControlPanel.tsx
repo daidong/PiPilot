@@ -19,6 +19,10 @@ interface ControlPanelProps {
   setMaxLoopTurns: (v: number) => void
   pausedForUserInput: boolean
   busy: boolean
+  queuedInputDraft: string
+  setQueuedInputDraft: (v: string) => void
+  submittingQueuedInput: boolean
+  onQueueInput: () => void
   onStart: () => void
   onRunTurn: () => void
   onRunLoop: () => void
@@ -70,13 +74,19 @@ export default function ControlPanel({
   setMaxLoopTurns,
   pausedForUserInput,
   busy,
+  queuedInputDraft,
+  setQueuedInputDraft,
+  submittingQueuedInput,
+  onQueueInput,
   onStart,
   onRunTurn,
   onRunLoop,
   onStop
 }: ControlPanelProps) {
   const canOperate = Boolean(overview?.projectPath)
+  const hasSession = Boolean(overview?.hasSession)
   const canRunTurns = canOperate && Boolean(overview?.hasSession) && !pausedForUserInput
+  const canPause = canOperate && hasSession && !pausedForUserInput && Boolean(overview?.loopRunning)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   return (
@@ -105,7 +115,7 @@ export default function ControlPanel({
 
           {pausedForUserInput && (
             <div className="rounded-lg border px-3 py-2 text-[11px] leading-relaxed t-card-amber">
-              Session paused for user input. Submit reply in the pause dialog to resume turns.
+              Session paused for user input. You can submit via the queue box below (or pause dialog when prompted).
             </div>
           )}
 
@@ -163,7 +173,7 @@ export default function ControlPanel({
               {busy && (
                 <div className="h-3 w-3 rounded-full border-[1.5px] border-white border-t-transparent animate-spin-slow" />
               )}
-              Start
+              {hasSession ? 'Restart' : 'Start'}
             </button>
             <button
               type="button"
@@ -181,17 +191,46 @@ export default function ControlPanel({
               className="rounded-lg px-3 py-2 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-30"
               style={{ background: 'var(--color-action-loop)' }}
             >
-              Loop
+              Continue
             </button>
             <button
               type="button"
               onClick={onStop}
-              disabled={busy || !canRunTurns}
+              disabled={!canPause}
               className="flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:opacity-90 disabled:opacity-30"
               style={{ borderColor: 'var(--color-action-stop)', color: 'var(--color-action-stop-text)' }}
             >
-              Stop
+              Pause
             </button>
+          </div>
+
+          {/* Queue user input for next turn */}
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--color-border-subtle)', background: 'var(--color-bg-elevated)' }}>
+            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+              Inject Input (Next Turn)
+            </label>
+            <textarea
+              value={queuedInputDraft}
+              onChange={(e) => setQueuedInputDraft(e.target.value)}
+              rows={2}
+              className="w-full resize-y rounded-lg border px-3 py-2 text-xs outline-none transition-colors focus:border-teal-500"
+              style={inputStyle}
+              placeholder="Add context/instructions to be injected into the next turn..."
+            />
+            <div className="mt-2 flex items-center justify-between">
+              <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                {overview?.loopRunning ? 'Can queue while loop is running.' : 'Will apply on the next turn.'}
+              </div>
+              <button
+                type="button"
+                onClick={onQueueInput}
+                disabled={!hasSession || !queuedInputDraft.trim() || submittingQueuedInput}
+                className="rounded-lg px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-30"
+                style={{ background: 'var(--color-action-turn)' }}
+              >
+                {submittingQueuedInput ? 'Queueing...' : 'Queue Input'}
+              </button>
+            </div>
           </div>
 
           {/* Collapsible settings — V1 style */}

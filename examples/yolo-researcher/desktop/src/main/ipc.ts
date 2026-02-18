@@ -81,6 +81,7 @@ interface WindowRuntimeState {
   yoloAgent: { destroy?: () => Promise<void> } | null
   loopRunning: boolean
   stopRequested: boolean
+  manualPauseForInput: boolean
   executingTurn: boolean
   usage: UsageSnapshot
 }
@@ -176,6 +177,7 @@ function createWindowRuntimeState(): WindowRuntimeState {
     yoloAgent: null,
     loopRunning: false,
     stopRequested: false,
+    manualPauseForInput: false,
     executingTurn: false,
     usage: {
       promptTokens: 0,
@@ -572,6 +574,7 @@ function assertProjectSelected(state: WindowRuntimeState): void {
 async function destroyRuntime(state: WindowRuntimeState): Promise<void> {
   state.stopRequested = true
   state.loopRunning = false
+  state.manualPauseForInput = false
   state.executingTurn = false
   if (state.yoloAgent?.destroy) {
     await state.yoloAgent.destroy().catch(() => undefined)
@@ -588,7 +591,10 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
     ? listTurnsFromDisk(state.projectPath)
     : []
   const pausedForUserInput = state.projectPath
-    ? isPausedForUserInput(state.projectPath, turns)
+    ? (
+      isPausedForUserInput(state.projectPath, turns)
+      || (state.manualPauseForInput && queuedUserInputCount(state.projectPath) === 0)
+    )
     : false
 
   return {
@@ -653,6 +659,13 @@ async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Pro
   if (!state.yoloSession) throw new Error('No active v2 session. Call yolo:start first.')
   if (state.executingTurn) throw new Error('A turn is already running.')
   if (state.projectPath) {
+    const queuedInputs = queuedUserInputCount(state.projectPath)
+    if (state.manualPauseForInput && queuedInputs === 0) {
+      throw new Error('Session is paused for user input. Submit input to continue.')
+    }
+    if (state.manualPauseForInput && queuedInputs > 0) {
+      state.manualPauseForInput = false
+    }
     const turns = listTurnsFromDisk(state.projectPath)
     if (isPausedForUserInput(state.projectPath, turns)) {
       throw new Error('Session is paused for user input. Submit reply first.')
@@ -707,12 +720,15 @@ async function runLoop(win: BrowserWindow, state: WindowRuntimeState, requestedT
   try {
     for (let index = 0; index < maxTurns; index += 1) {
       if (state.stopRequested) {
-        safeSend(win, 'yolo:event', { type: 'loop_stopped', reason: 'stop_requested' })
+        const reason = state.manualPauseForInput ? 'pause_requested' : 'stop_requested'
+        safeSend(win, 'yolo:event', { type: 'loop_stopped', reason })
         safeSend(win, 'yolo:activity', {
           id: `${Date.now()}-stop`,
           timestamp: new Date().toISOString(),
           type: 'loop_stopped',
-          summary: 'Loop stopped by user request'
+          summary: state.manualPauseForInput
+            ? 'Loop paused: waiting for user input before next turn'
+            : 'Loop stopped by user request'
         })
         break
       }
@@ -832,6 +848,7 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
 
   if (needsFreshSession) {
     await destroyRuntime(state)
+    state.manualPauseForInput = false
 
     const terminalChunkBuffer = new Map<string, {
       turnNumber: number
@@ -1041,6 +1058,7 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
   state.model = model
   state.defaultRuntime = defaultRuntime
   state.runtimeSystemInfo = runtimeSystemInfo
+  state.manualPauseForInput = false
   persistWindowState(state)
 }
 
@@ -1082,6 +1100,7 @@ export async function closeProjectForWindow(win: BrowserWindow): Promise<void> {
   state.model = DEFAULT_MODEL
   state.defaultRuntime = DEFAULT_RUNTIME
   state.runtimeSystemInfo = ''
+  state.manualPauseForInput = false
   resetUsageSnapshot(state)
   persistWindowState(state)
   safeSend(win, 'project:closed')
@@ -1117,6 +1136,7 @@ export function registerIpcHandlers(): void {
     state.model = DEFAULT_MODEL
     state.defaultRuntime = DEFAULT_RUNTIME
     state.runtimeSystemInfo = ''
+    state.manualPauseForInput = false
     state.usage = loadUsageSnapshotFromDisk(projectPath)
     persistWindowState(state)
 
@@ -1171,7 +1191,14 @@ export function registerIpcHandlers(): void {
 
   handleWindow('yolo:stop', async ({ win, state }) => {
     state.stopRequested = true
-    safeSend(win, 'yolo:event', { type: 'stop_requested' })
+    state.manualPauseForInput = true
+    safeSend(win, 'yolo:event', { type: 'pause_requested' })
+    safeSend(win, 'yolo:activity', {
+      id: `${Date.now()}-pause-request`,
+      timestamp: new Date().toISOString(),
+      type: 'loop_paused',
+      summary: 'Pause requested: will stop before the next turn and wait for input'
+    })
     return buildOverview(state)
   })
 
@@ -1181,6 +1208,7 @@ export function registerIpcHandlers(): void {
     if (!normalized) throw new Error('User input text is required.')
 
     const queued = await state.yoloSession.submitUserInput(normalized)
+    state.manualPauseForInput = false
     safeSend(win, 'yolo:event', {
       type: 'user_input_submitted',
       submittedAt: queued.submittedAt

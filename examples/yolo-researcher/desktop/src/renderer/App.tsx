@@ -77,8 +77,10 @@ export default function App() {
   const [terminalEvents, setTerminalEvents] = useState<TerminalLiveEvent[]>([])
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const [replyDraft, setReplyDraft] = useState('')
+  const [queuedInputDraft, setQueuedInputDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [submittingReply, setSubmittingReply] = useState(false)
+  const [submittingQueuedInput, setSubmittingQueuedInput] = useState(false)
   const [error, setError] = useState('')
   const [activeTab, setActiveTab] = useState<TabId>('evidence')
 
@@ -109,6 +111,7 @@ export default function App() {
       setTurns([])
       setTerminalEvents([])
       setPendingQuestion(null)
+      setQueuedInputDraft('')
       setUsage(EMPTY_USAGE)
       return current
     }
@@ -220,6 +223,7 @@ export default function App() {
       setUsage(EMPTY_USAGE)
       setPendingQuestion(null)
       setReplyDraft('')
+      setQueuedInputDraft('')
     })
 
     return () => {
@@ -323,18 +327,38 @@ export default function App() {
 
   const requestStop = useCallback(async () => {
     if (!canRunTurns) return
-    setBusy(true)
     setError('')
     try {
       await api.yoloStop()
-      appendEvent('stop requested')
+      appendEvent('pause requested')
+      await refreshCore()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [api, appendEvent, canRunTurns, refreshCore])
+
+  const queueUserInput = useCallback(async () => {
+    if (!hasSession) {
+      setError('No active session. Start a session first.')
+      return
+    }
+
+    const input = queuedInputDraft.trim()
+    if (!input) return
+
+    setSubmittingQueuedInput(true)
+    setError('')
+    try {
+      await api.yoloSubmitUserInput(input)
+      appendEvent('queued user input for next turn')
+      setQueuedInputDraft('')
       await refreshCore()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setBusy(false)
+      setSubmittingQueuedInput(false)
     }
-  }, [api, appendEvent, canRunTurns, refreshCore])
+  }, [api, appendEvent, hasSession, queuedInputDraft, refreshCore])
 
   const pickFolder = useCallback(async () => {
     setBusy(true)
@@ -373,6 +397,7 @@ export default function App() {
       setUsage(EMPTY_USAGE)
       setPendingQuestion(null)
       setReplyDraft('')
+      setQueuedInputDraft('')
       appendEvent('project closed')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -413,6 +438,10 @@ export default function App() {
           setMaxLoopTurns={setMaxLoopTurns}
           pausedForUserInput={pausedForUserInput}
           busy={busy}
+          queuedInputDraft={queuedInputDraft}
+          setQueuedInputDraft={setQueuedInputDraft}
+          submittingQueuedInput={submittingQueuedInput}
+          onQueueInput={queueUserInput}
           onStart={startSession}
           onRunTurn={runOneTurn}
           onRunLoop={runBatch}
