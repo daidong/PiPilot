@@ -89,10 +89,10 @@ const semanticGateOutputSchema = z.object({
     z.object({
       id: z.string().min(1).max(512),
       evidence_refs: z.array(z.string().min(1).max(512)).max(20),
-      reason_codes: z.array(z.string().min(1).max(120)).max(12).optional()
+      reason_codes: z.array(z.string().min(1).max(120)).max(12)
     })
-  ).max(20).optional(),
-  notes: z.string().max(1_000).optional()
+  ).max(20),
+  notes: z.string().max(1_000)
 })
 
 const SEMANTIC_GATE_SYSTEM_PROMPT = [
@@ -103,6 +103,8 @@ const SEMANTIC_GATE_SYSTEM_PROMPT = [
   '1) Use only facts present in the provided input JSON.',
   '2) If uncertain or evidence is insufficient, return verdict=abstain, confidence=0.',
   '3) If verdict=touched, touched_deliverables must include only deliverables from plan.deliverables and evidence_refs must come from current turn evidence paths.',
+  '3b) Always include all schema fields: touched_deliverables and notes are REQUIRED. Use touched_deliverables=[] and notes="" when empty.',
+  '3c) For each touched_deliverables entry, reason_codes is REQUIRED. Use reason_codes=[] when there is no specific code.',
   '4) Never invent files, deliverables, or evidence refs.',
   '5) Prefer abstain over weak inference.'
 ].join('\n')

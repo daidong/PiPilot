@@ -27,6 +27,10 @@ interface TurnResultMeta {
   planAttributionAmbiguous?: boolean
   plannerCheckpointDue?: boolean
   plannerCheckpointReasons?: string[]
+  lastFailedCmd?: string
+  lastFailedExitCode?: number
+  lastFailedErrorExcerpt?: string
+  lastFailureKind?: string
 }
 
 const HIGHLIGHT_SCAN_TURNS = 20
@@ -68,6 +72,12 @@ function readBooleanField(data: Record<string, unknown> | null, key: string): bo
   if (!data) return undefined
   const value = data[key]
   return typeof value === 'boolean' ? value : undefined
+}
+
+function readNumberField(data: Record<string, unknown> | null, key: string): number | undefined {
+  if (!data) return undefined
+  const value = data[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function readStringListField(data: Record<string, unknown> | null, key: string): string[] {
@@ -191,7 +201,11 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           planAttributionReason: readStringField(parsed, 'plan_attribution_reason'),
           planAttributionAmbiguous: readBooleanField(parsed, 'plan_attribution_ambiguous'),
           plannerCheckpointDue: readBooleanField(parsed, 'planner_checkpoint_due'),
-          plannerCheckpointReasons: readStringListField(parsed, 'planner_checkpoint_reasons')
+          plannerCheckpointReasons: readStringListField(parsed, 'planner_checkpoint_reasons'),
+          lastFailedCmd: readStringField(parsed, 'last_failed_cmd'),
+          lastFailedExitCode: readNumberField(parsed, 'last_failed_exit_code'),
+          lastFailedErrorExcerpt: readStringField(parsed, 'last_failed_error_excerpt'),
+          lastFailureKind: readStringField(parsed, 'last_failure_kind')
         })
       })
       .catch(() => {
@@ -248,7 +262,11 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           planAttributionReason: readStringField(row.parsedResult, 'plan_attribution_reason'),
           planAttributionAmbiguous: readBooleanField(row.parsedResult, 'plan_attribution_ambiguous'),
           plannerCheckpointDue: readBooleanField(row.parsedResult, 'planner_checkpoint_due'),
-          plannerCheckpointReasons: readStringListField(row.parsedResult, 'planner_checkpoint_reasons')
+          plannerCheckpointReasons: readStringListField(row.parsedResult, 'planner_checkpoint_reasons'),
+          lastFailedCmd: readStringField(row.parsedResult, 'last_failed_cmd'),
+          lastFailedExitCode: readNumberField(row.parsedResult, 'last_failed_exit_code'),
+          lastFailedErrorExcerpt: readStringField(row.parsedResult, 'last_failed_error_excerpt'),
+          lastFailureKind: readStringField(row.parsedResult, 'last_failure_kind')
         })
 
         for (const artifact of row.turnArtifacts) {
@@ -424,7 +442,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     <div className="t-text-secondary mt-1 text-[11px]">
                       {truncateText(milestone?.summary ?? turn.summary, 140)}
                     </div>
-                    {(milestone?.activePlanId || milestone?.statusChange || milestone?.planAttributionReason || milestone?.blockedReason || (milestone?.plannerCheckpointReasons?.length ?? 0) > 0) && (
+                    {(milestone?.activePlanId || milestone?.statusChange || milestone?.planAttributionReason || milestone?.blockedReason || milestone?.lastFailureKind || (milestone?.plannerCheckpointReasons?.length ?? 0) > 0) && (
                       <div className="t-text-muted mt-1 space-y-0.5 text-[10px]">
                         {(milestone?.activePlanId || milestone?.statusChange) && (
                           <div>
@@ -441,6 +459,12 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                         )}
                         {milestone?.blockedReason && (
                           <div>reject={formatReasonToken(milestone.blockedReason)}</div>
+                        )}
+                        {milestone?.lastFailureKind && (
+                          <div>
+                            failure={formatReasonToken(milestone.lastFailureKind)}
+                            {typeof milestone.lastFailedExitCode === 'number' ? ` (exit ${milestone.lastFailedExitCode})` : ''}
+                          </div>
                         )}
                         {(milestone?.plannerCheckpointReasons?.length ?? 0) > 0 && (
                           <div>
@@ -568,6 +592,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                   || selectedResultMeta?.delta
                   || selectedResultMeta?.planAttributionReason
                   || selectedResultMeta?.blockedReason
+                  || selectedResultMeta?.lastFailureKind
                   || (selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0
                 ) && (
                   <div className="t-text-muted mt-2 space-y-1 text-[10px]">
@@ -582,6 +607,18 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     )}
                     {selectedResultMeta?.blockedReason && (
                       <div>reject: {formatReasonToken(selectedResultMeta.blockedReason)}</div>
+                    )}
+                    {selectedResultMeta?.lastFailureKind && (
+                      <div>
+                        failure_kind: {formatReasonToken(selectedResultMeta.lastFailureKind)}
+                        {typeof selectedResultMeta.lastFailedExitCode === 'number' ? ` (exit ${selectedResultMeta.lastFailedExitCode})` : ''}
+                      </div>
+                    )}
+                    {selectedResultMeta?.lastFailedCmd && (
+                      <div>last_failed_cmd: {truncateText(selectedResultMeta.lastFailedCmd, 120)}</div>
+                    )}
+                    {selectedResultMeta?.lastFailedErrorExcerpt && (
+                      <div>error_excerpt: {truncateText(selectedResultMeta.lastFailedErrorExcerpt, 140)}</div>
                     )}
                     {(selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0 && (
                       <div>

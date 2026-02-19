@@ -69,6 +69,17 @@ interface UsageSnapshot {
   callCount: number
 }
 
+interface SemanticGateSnapshot {
+  enabled: boolean
+  mode: string
+  eligible: boolean
+  invoked: boolean
+  accepted: boolean
+  rejectReason: string
+  verdict: string
+  confidence: number
+}
+
 interface PersistedUsageTotals {
   totals?: {
     tokens?: number
@@ -798,6 +809,40 @@ function computeProgressHealthFromDisk(projectPath: string, turns: TurnListItem[
   }
 }
 
+function readSemanticGateSnapshot(projectPath: string, turnNumber: number): SemanticGateSnapshot | null {
+  const resultPath = join(sessionRoot(projectPath), `runs/turn-${String(turnNumber).padStart(4, '0')}/result.json`)
+  if (!existsSync(resultPath)) return null
+
+  try {
+    const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as Record<string, any>
+    const semantic = parsed.semantic_gate
+    if (!semantic || typeof semantic !== 'object') return null
+
+    const output = semantic.output && typeof semantic.output === 'object'
+      ? semantic.output as Record<string, unknown>
+      : {}
+    const mode = typeof semantic.mode === 'string' ? semantic.mode.trim() : 'unknown'
+    const rejectReason = typeof semantic.reject_reason === 'string' ? semantic.reject_reason.trim() : ''
+    const verdict = typeof output.verdict === 'string' ? output.verdict.trim() : 'unknown'
+    const confidence = typeof output.confidence === 'number' && Number.isFinite(output.confidence)
+      ? output.confidence
+      : 0
+
+    return {
+      enabled: semantic.enabled === true,
+      mode,
+      eligible: semantic.eligible === true,
+      invoked: semantic.invoked === true,
+      accepted: semantic.accepted === true,
+      rejectReason,
+      verdict,
+      confidence
+    }
+  } catch {
+    return null
+  }
+}
+
 async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Promise<TurnExecutionResult> {
   if (!state.yoloSession) throw new Error('No active v2 session. Call yolo:start first.')
   if (state.executingTurn) throw new Error('A turn is already running.')
@@ -829,6 +874,22 @@ async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Pro
     const durationMs = Date.now() - turnStartTime
     const actionLabel = describeExecutedAction(result)
     const statusLabel = result.status === 'ask_user' ? 'paused' : result.status
+    if (state.projectPath) {
+      const semanticGate = readSemanticGateSnapshot(state.projectPath, result.turnNumber)
+      if (semanticGate && semanticGate.enabled) {
+        const detail = [
+          `turn=turn-${String(result.turnNumber).padStart(4, '0')}`,
+          `mode=${semanticGate.mode}`,
+          `eligible=${semanticGate.eligible}`,
+          `invoked=${semanticGate.invoked}`,
+          `accepted=${semanticGate.accepted}`,
+          `verdict=${semanticGate.verdict}`,
+          `confidence=${semanticGate.confidence.toFixed(2)}`,
+          semanticGate.rejectReason ? `reason=${semanticGate.rejectReason}` : ''
+        ].filter(Boolean).join(' ')
+        console.info(`[semantic-gate] ${detail}`)
+      }
+    }
     safeSend(win, 'yolo:turn-result', result)
     safeSend(win, 'yolo:event', {
       type: 'turn_completed',

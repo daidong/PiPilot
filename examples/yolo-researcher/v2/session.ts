@@ -81,6 +81,8 @@ const ENV_PROOF_REPO_RE = /\b(not a git repository|no such file|pathspec|reposit
 const ENV_PROOF_RESOURCE_RE = /\b(resource unavailable|policy[_ -]?denied|blocked by (a )?policy|timeout|timed out|network (is )?disabled)\b/i
 const SEMANTIC_HARD_POLICY_RE = /\b(policy[_ -]?denied|blocked by (a )?policy|forbidden|disallowed|not allowed)\b/i
 const SEMANTIC_HARD_PATH_RE = /\b(escapes project root|outside project root|path escape)\b/i
+const TOOL_LAYER_FAILURE_RE = /\b(policy[_ -]?denied|blocked by (a )?policy|approval required|spawn|enoent|eacces|timeout|timed out|killed|signal|failed to execute|tool .* blocked)\b/i
+const NO_OUTPUT_ASSERTION_RE = /\b(no|without|missing|none)\s+(stdout|stderr|output)\b/i
 const PLAN_ID_RE = /^P\d+$/i
 const REPO_SCAN_SKIP_DIRS = new Set([
   '.git',
@@ -306,6 +308,21 @@ interface RuntimeVersionInfo {
   buildTime: string
   desktopVersion: string
   nodeVersion: string
+}
+
+type RuntimeFailureKind = 'tool_invocation_failure' | 'command_failure' | 'unknown_failure'
+
+interface RuntimeFailureSnapshot {
+  tool: string
+  cmd: string
+  cwd: string
+  exitCode: number | null
+  stdout: string
+  stderr: string
+  errorText: string
+  errorExcerpt: string
+  hasOutput: boolean
+  failureKind: RuntimeFailureKind
 }
 
 interface ResolvedSemanticGateConfig {
@@ -776,6 +793,206 @@ export class YoloSession {
     }
 
     return snapshot
+  }
+
+  private classifyRuntimeFailure(input: {
+    tool: string
+    exitCode: number | null
+    stdout: string
+    stderr: string
+    errorText: string
+  }): RuntimeFailureKind {
+    const tool = normalizeText(input.tool)
+    const stdout = input.stdout.trim()
+    const stderr = input.stderr.trim()
+    const errorText = input.errorText.trim()
+    const hasOutput = Boolean(stdout || stderr)
+    const hasExitCode = typeof input.exitCode === 'number'
+
+    if (tool === 'bash') {
+      if (hasOutput || (hasExitCode && input.exitCode !== 0)) {
+        return 'command_failure'
+      }
+      if (TOOL_LAYER_FAILURE_RE.test(errorText)) {
+        return 'tool_invocation_failure'
+      }
+      return 'tool_invocation_failure'
+    }
+
+    const joint = `${errorText}\n${stderr}\n${stdout}`.trim()
+    if (TOOL_LAYER_FAILURE_RE.test(joint)) {
+      return 'tool_invocation_failure'
+    }
+    return 'unknown_failure'
+  }
+
+  private buildFailureExcerpt(input: {
+    stdout: string
+    stderr: string
+    errorText: string
+  }): string {
+    const primary = firstNonEmptyLine(input.stderr, input.stdout, input.errorText) || input.errorText || 'Tool reported failure.'
+    return clipText(primary.replace(/\s+/g, ' ').trim(), 260)
+  }
+
+  private extractLatestFailureSnapshot(toolEvents: ToolEventRecord[]): RuntimeFailureSnapshot | null {
+    const lastCallByTool = new Map<string, { cmd: string; cwd: string }>()
+    let latest: RuntimeFailureSnapshot | null = null
+
+    for (const event of toolEvents) {
+      const toolRaw = event.tool?.trim() || 'tool'
+      const tool = normalizeText(toolRaw) || 'tool'
+
+      if (event.phase === 'call') {
+        const input = toPlainObject(event.input)
+        const command = safeString(input?.command).trim()
+        const targetPath = safeString(input?.path).trim()
+        const url = safeString(input?.url).trim()
+        const cwdRaw = safeString(input?.cwd).trim()
+        let cwd = this.config.projectPath
+        if (cwdRaw) {
+          try {
+            cwd = this.ensureSafeTargetPath(cwdRaw)
+          } catch {
+            cwd = this.config.projectPath
+          }
+        }
+        lastCallByTool.set(tool, {
+          cmd: command || targetPath || url || toolRaw,
+          cwd
+        })
+        continue
+      }
+
+      if (event.phase !== 'result') continue
+      const result = toPlainObject(event.result)
+      const success = typeof event.success === 'boolean'
+        ? event.success
+        : (typeof result?.success === 'boolean' ? result.success : undefined)
+      if (success !== false) continue
+
+      const data = toPlainObject(result?.data)
+      const stdout = safeString(data?.stdout)
+      const stderr = safeString(data?.stderr)
+      const errorText = safeString(result?.error, safeString(event.error)).trim()
+      const exitCode = typeof data?.exitCode === 'number' ? data.exitCode : null
+      const hasOutput = Boolean(stdout.trim() || stderr.trim())
+      const lastCall = lastCallByTool.get(tool)
+      const cmd = lastCall?.cmd?.trim() || toolRaw
+      const cwd = lastCall?.cwd || this.config.projectPath
+      const failureKind = this.classifyRuntimeFailure({
+        tool: toolRaw,
+        exitCode,
+        stdout,
+        stderr,
+        errorText
+      })
+      const errorExcerpt = this.buildFailureExcerpt({
+        stdout,
+        stderr,
+        errorText
+      })
+
+      latest = {
+        tool: toolRaw,
+        cmd,
+        cwd,
+        exitCode,
+        stdout,
+        stderr,
+        errorText,
+        errorExcerpt,
+        hasOutput,
+        failureKind
+      }
+    }
+
+    return latest
+  }
+
+  private stripContradictoryNoOutputClaims(text: string, hasOutput: boolean): string {
+    const trimmed = text.trim()
+    if (!trimmed) return ''
+    if (!hasOutput) return trimmed
+    if (NO_OUTPUT_ASSERTION_RE.test(trimmed)) return ''
+    return trimmed
+  }
+
+  private buildRuntimeAskUserPayload(input: {
+    modelSummary: string
+    modelQuestion: string
+    latestFailure: RuntimeFailureSnapshot | null
+  }): {
+    markdown: string
+    summary: string
+    question: string
+  } {
+    const modelSummary = input.modelSummary.trim()
+    const modelQuestion = input.modelQuestion.trim()
+    const latestFailure = input.latestFailure
+
+    if (!latestFailure) {
+      const question = modelQuestion || modelSummary || 'User input required to proceed.'
+      return {
+        markdown: `# Blocking Question\n\n${question}\n`,
+        summary: modelSummary || 'User input required to proceed.',
+        question
+      }
+    }
+
+    const cleanSummary = this.stripContradictoryNoOutputClaims(modelSummary, latestFailure.hasOutput)
+    const cleanQuestion = this.stripContradictoryNoOutputClaims(modelQuestion, latestFailure.hasOutput)
+    const contradictionFiltered = (
+      (modelSummary && !cleanSummary)
+      || (modelQuestion && !cleanQuestion)
+    )
+
+    let defaultQuestion = 'Please provide the minimal environment detail needed to unblock execution.'
+    if (latestFailure.failureKind === 'command_failure') {
+      defaultQuestion = 'This is a command/test failure (not a bash tool invocation failure). Choose one next step: fix dependency/environment, narrow/skip failing scope, or provide an alternative verification command.'
+    } else if (latestFailure.failureKind === 'tool_invocation_failure') {
+      defaultQuestion = 'This appears to be a tool/runtime invocation failure. Confirm runtime permissions/policies (or provide an alternative execution route) so execution can continue.'
+    }
+
+    const exitText = typeof latestFailure.exitCode === 'number'
+      ? ` (exit ${latestFailure.exitCode})`
+      : ''
+    const baseSummary = `Paused: ${latestFailure.failureKind} on "${latestFailure.cmd}"${exitText}. Error: ${latestFailure.errorExcerpt}`
+    const summary = clipText(
+      cleanSummary && cleanSummary.toLowerCase() !== baseSummary.toLowerCase()
+        ? `${baseSummary} ${cleanSummary}`
+        : baseSummary,
+      420
+    )
+    const question = cleanQuestion || defaultQuestion
+
+    const lines = [
+      '# Blocking Question',
+      '',
+      '## Runtime Failure Summary (auto-generated)',
+      `- classification: ${latestFailure.failureKind}`,
+      `- tool: ${latestFailure.tool}`,
+      `- last_failed_cmd: ${latestFailure.cmd}`,
+      `- exit_code: ${typeof latestFailure.exitCode === 'number' ? latestFailure.exitCode : '(none)'}`,
+      `- error_excerpt: ${latestFailure.errorExcerpt}`,
+      `- output_captured: ${latestFailure.hasOutput ? 'yes' : 'no'}`,
+      '',
+      '## Requested Input',
+      question,
+      ''
+    ]
+
+    if (contradictionFiltered) {
+      lines.push('## Runtime Note')
+      lines.push('- Agent-provided no-output claim was dropped because stdout/stderr evidence exists in tool events.')
+      lines.push('')
+    }
+
+    return {
+      markdown: `${lines.join('\n')}\n`,
+      summary,
+      question
+    }
   }
 
   private normalizeActionFingerprintSegment(value: string): string {
@@ -2052,6 +2269,7 @@ export class YoloSession {
         .map((entry) => this.normalizeProjectPathPointer(entry))
         .filter((entry) => EVIDENCE_PATH_RE.test(entry))
     )
+    const latestFailure = this.extractLatestFailureSnapshot(toolEvents)
     const bashSnapshot = this.extractLastBashSnapshot(toolEvents, runtime)
 
     const cmd = bashSnapshot?.cmd || primaryAction || 'agent.run'
@@ -2184,12 +2402,14 @@ export class YoloSession {
 
     if (finalStatus === 'ask_user') {
       const askPath = path.join(input.artifactsDir, 'ask-user.md')
-      const question = outcome.askQuestion?.trim() || summary
-      await writeText(askPath, `# Blocking Question\n\n${question}\n`)
+      const runtimeAskPayload = this.buildRuntimeAskUserPayload({
+        modelSummary: summary,
+        modelQuestion: outcome.askQuestion?.trim() || '',
+        latestFailure
+      })
+      await writeText(askPath, runtimeAskPayload.markdown)
       evidencePaths.push(this.toEvidencePath(askPath))
-      if (!summary.trim()) {
-        summary = 'User input required to proceed.'
-      }
+      summary = runtimeAskPayload.summary || summary || 'User input required to proceed.'
     }
 
     if (consumedPendingUserInputs) {
@@ -2905,6 +3125,11 @@ export class YoloSession {
       runtime,
       cmd,
       cwd,
+      last_failed_cmd: latestFailure?.cmd || null,
+      last_failed_exit_code: typeof latestFailure?.exitCode === 'number' ? latestFailure.exitCode : null,
+      last_failed_error_excerpt: latestFailure?.errorExcerpt || null,
+      last_failure_kind: latestFailure?.failureKind || null,
+      last_failure_tool: latestFailure?.tool || null,
       duration_sec: durationSec,
       timestamp: toIso(turnEndedAt),
       tool_events_path: this.toEvidencePath(toolEventsPath),

@@ -65,6 +65,30 @@ function bashFailureEvent(command: string, stderr: string, cwd?: string) {
   ]
 }
 
+function bashToolInvocationFailureEvent(command: string, error: string, cwd?: string) {
+  return [
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'bash',
+      input: {
+        command,
+        ...(cwd ? { cwd } : {})
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'bash',
+      success: false,
+      result: {
+        success: false,
+        error
+      }
+    }
+  ]
+}
+
 function writeSuccessEvent(filePath: string, content: string = 'ok') {
   return [
     {
@@ -298,6 +322,100 @@ describe('yolo-researcher v2 runtime contract', () => {
     ))
     expect(askArtifact).toContain('# Blocking Question')
     expect(askArtifact).toContain('conservative patch or aggressive refactor')
+  })
+
+  it('builds ask_user summary from runtime failure facts and filters contradictory no-output claims', async () => {
+    const projectPath = await createTempDir('yolo-v2-ask-user-runtime-facts-')
+    tempDirs.push(projectPath)
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Avoid contradictory ask_user failure narrative',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async () => ({
+          intent: 'Escalate with contradictory narrative',
+          status: 'ask_user',
+          summary: 'pytest failed with no stdout/stderr; needs environment check.',
+          askQuestion: 'No stdout/stderr was returned. Can you confirm if long-lived subprocesses are blocked?',
+          toolEvents: bashFailureEvent(
+            'python -m pytest -q',
+            'ModuleNotFoundError: No module named mlx',
+            '.'
+          )
+        })
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('ask_user')
+    expect(turn.summary.toLowerCase()).not.toContain('no stdout')
+    expect(turn.summary).toContain('command_failure')
+
+    const askArtifact = await readText(path.join(
+      projectPath,
+      'runs',
+      'turn-0001',
+      'artifacts',
+      'ask-user.md'
+    ))
+    expect(askArtifact).toContain('Runtime Failure Summary (auto-generated)')
+    expect(askArtifact).toContain('classification: command_failure')
+    expect(askArtifact).toContain('last_failed_cmd: python -m pytest -q')
+    expect(askArtifact).toContain('error_excerpt: ModuleNotFoundError: No module named mlx')
+    expect(askArtifact).toContain('output_captured: yes')
+    expect(askArtifact.toLowerCase()).not.toContain('no stdout/stderr')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.last_failure_kind).toBe('command_failure')
+    expect(result.last_failed_cmd).toBe('python -m pytest -q')
+    expect(result.last_failed_exit_code).toBe(1)
+    expect(String(result.last_failed_error_excerpt || '')).toContain('ModuleNotFoundError')
+  })
+
+  it('classifies bash policy/tool wrapper failures as tool_invocation_failure', async () => {
+    const projectPath = await createTempDir('yolo-v2-ask-user-tool-failure-')
+    tempDirs.push(projectPath)
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Classify tool-level failures correctly',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async () => ({
+          intent: 'Escalate a tool wrapper failure',
+          status: 'ask_user',
+          summary: 'Need permission clarification.',
+          askQuestion: 'Please confirm runtime permissions.',
+          toolEvents: bashToolInvocationFailureEvent(
+            'python -m pytest -q',
+            'policy_denied: blocked by a security policy',
+            '.'
+          )
+        })
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('ask_user')
+
+    const askArtifact = await readText(path.join(
+      projectPath,
+      'runs',
+      'turn-0001',
+      'artifacts',
+      'ask-user.md'
+    ))
+    expect(askArtifact).toContain('classification: tool_invocation_failure')
+    expect(askArtifact).toContain('output_captured: no')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.last_failure_kind).toBe('tool_invocation_failure')
+    expect(result.last_failed_cmd).toBe('python -m pytest -q')
+    expect(result.last_failed_exit_code).toBeNull()
+    expect(String(result.last_failed_error_excerpt || '')).toContain('policy_denied')
   })
 
   it('auto-attaches turn evidence bundle to projectUpdate rows missing explicit evidence', async () => {
