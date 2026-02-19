@@ -656,6 +656,31 @@ function renderPlanBoardForPrompt(context: TurnContext): string {
   return rows.length > 0 ? rows.join('\n') : '- none'
 }
 
+function normalizeDeliverableTarget(raw: string): string {
+  const trimmed = raw.trim().replace(/^['"`]+|['"`]+$/g, '')
+  if (!trimmed) return ''
+  const normalized = toPosixPath(trimmed)
+  if (!normalized) return ''
+  const match = normalized.match(/^runs\/turn-\d{4}\/(artifacts\/.+)$/i)
+  const scoped = match?.[1] ? match[1] : normalized
+  if (!scoped.startsWith('artifacts/')) return ''
+  return scoped
+}
+
+function extractDeliverablesFromDoneDefinition(doneDefinition: string[]): string[] {
+  const deliverables: string[] = []
+  for (const row of doneDefinition) {
+    const line = row.trim()
+    if (!line) continue
+    if (!/^deliverables?\s*:/i.test(line)) continue
+    const raw = line.split(':').slice(1).join(':').trim()
+    const normalized = normalizeDeliverableTarget(raw)
+    if (!normalized) continue
+    deliverables.push(normalized)
+  }
+  return [...new Set(deliverables)]
+}
+
 function buildNativeTurnPrompt(context: TurnContext): string {
   const recent = context.recentTurns
     .map((turn) => `- ${turn.actionPath}: ${turn.summary}`)
@@ -692,6 +717,10 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     .slice()
     .sort((a, b) => a.priority - b.priority)
     .find((item) => item.status === 'ACTIVE')
+  const activePlanDeliverables = activePlan
+    ? extractDeliverablesFromDoneDefinition(activePlan.doneDefinition ?? [])
+    : []
+  const activePrimaryDeliverable = activePlanDeliverables[0] ?? ''
   const top3PlanItems = context.project.planBoard
     .slice()
     .sort((a, b) => a.priority - b.priority)
@@ -729,7 +758,8 @@ function buildNativeTurnPrompt(context: TurnContext): string {
       : [
         '- This is an EXECUTION turn.',
         '- You MUST NOT modify Plan Board structure (no add/drop/merge/replace/reorder Top-3, no done_definition edits).',
-        '- Advance one concrete deliverable in this turn; runtime will attribute plan binding post-turn.'
+        '- Advance one concrete deliverable in this turn; runtime will attribute plan binding post-turn.',
+        '- Use executing-plans workflow discipline in this turn (read-back -> pick one deliverable -> execute -> verify evidence pointer).'
       ]),
     '',
     'Deliverable rule (critical):',
@@ -739,6 +769,11 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     'Read-back rule (critical):',
     '- Before new fetch/sweep, read current deliverable files and confirm the exact missing gap first.',
     '- Execution preflight: if active plan deliverable and this turn output are misaligned, do a micro-checkpoint first (edit only active plan done_definition deliverable), then execute.',
+    ...(plannerCheckpointDue
+      ? []
+      : [
+        '- executing-plans loop: (1) read current active deliverable, (2) choose exactly one primary target, (3) execute one action that creates/updates that target (or write blocker note), (4) verify target path exists/readable and cite it.'
+      ]),
     '',
     'OpenAI client compatibility (critical):',
     '- For Python scripts, use openai>=1.x API only: `from openai import OpenAI` and `client.chat.completions.create(...)` (or `client.responses.create(...)`).',
@@ -765,6 +800,7 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '15) If repeated attempts in this turn still fail, return ask_user with one concrete blocking question and pause.',
     '16) If using git_* tools, always set cwd to a concrete repo path; never assume project root itself is a git repo.',
     '17) Any generated OpenAI-calling Python script must be openai>=1.x compatible and include preflight logging (sdk/model/key-present).',
+    '18) During execution turns, follow executing-plans discipline and make your intent summary explicitly mention the primary target deliverable filename.',
     '',
     `Turn: ${context.turnNumber}`,
     `Goal: ${context.project.goal}`,
@@ -798,6 +834,15 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     planBoardView,
     '',
     `Current active plan: ${activePlan ? `${activePlan.id} ${activePlan.title}` : '(none)'}`,
+    ...(plannerCheckpointDue
+      ? []
+      : [
+        'Execution card (executing-plans):',
+        `- active plan id: ${activePlan?.id ?? '(none)'}`,
+        `- primary target deliverable: ${activePrimaryDeliverable || '(infer from active plan done_definition before acting)'}`,
+        `- candidate deliverables: ${activePlanDeliverables.length > 0 ? activePlanDeliverables.join(', ') : '(none declared)'}`,
+        '- success in this turn requires at least one candidate deliverable touch or blocker-clear evidence.'
+      ]),
     '',
     'Current Plan (derived):',
     ...context.project.currentPlan.map((item, idx) => `${idx + 1}. ${item}`),
