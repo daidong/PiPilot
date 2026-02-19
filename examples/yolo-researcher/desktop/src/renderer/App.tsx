@@ -100,19 +100,28 @@ export default function App() {
     })
   }, [])
 
+  const resetProjectScopedUi = useCallback(() => {
+    setProjectMarkdown('')
+    setFailuresMarkdown('')
+    setCurrentPlan([])
+    setTurns([])
+    setActivities([])
+    setTerminalEvents([])
+    setPendingQuestion(null)
+    setReplyDraft('')
+    setQueuedInputDraft('')
+    setGoalDraft('')
+    setRuntimeSystemInfoDraft('')
+    setUsage(EMPTY_USAGE)
+    setActiveTab('evidence')
+  }, [])
+
   const refreshCore = useCallback(async () => {
     const current = await api.getCurrentSession()
     setOverview(current)
 
     if (!current.projectPath) {
-      setProjectMarkdown('')
-      setFailuresMarkdown('')
-      setCurrentPlan([])
-      setTurns([])
-      setTerminalEvents([])
-      setPendingQuestion(null)
-      setQueuedInputDraft('')
-      setUsage(EMPTY_USAGE)
+      resetProjectScopedUi()
       return current
     }
 
@@ -154,7 +163,7 @@ export default function App() {
     setUsage(current.usage || EMPTY_USAGE)
 
     return current
-  }, [api, goalDraft, runtimeSystemInfoDraft])
+  }, [api, goalDraft, resetProjectScopedUi, runtimeSystemInfoDraft])
 
   // Boot + event listeners
   useEffect(() => {
@@ -213,17 +222,7 @@ export default function App() {
     const offClosed = api.onProjectClosed(() => {
       appendEvent('project closed')
       setOverview(null)
-      setProjectMarkdown('')
-      setFailuresMarkdown('')
-      setCurrentPlan([])
-      setTurns([])
-      setTerminalEvents([])
-      setGoalDraft('')
-      setRuntimeSystemInfoDraft('')
-      setUsage(EMPTY_USAGE)
-      setPendingQuestion(null)
-      setReplyDraft('')
-      setQueuedInputDraft('')
+      resetProjectScopedUi()
     })
 
     return () => {
@@ -235,7 +234,7 @@ export default function App() {
       offUsage()
       offClosed()
     }
-  }, [api, appendEvent, refreshCore])
+  }, [api, appendEvent, refreshCore, resetProjectScopedUi])
 
   // Actions
   const startSession = useCallback(async () => {
@@ -366,8 +365,8 @@ export default function App() {
     try {
       const result = await api.pickFolder()
       if (result) {
+        resetProjectScopedUi()
         setOverview(result)
-        setTerminalEvents([])
         setGoalDraft(result.goal || '')
         setRuntimeSystemInfoDraft(result.runtimeSystemInfo || '')
         setUsage(result.usage || EMPTY_USAGE)
@@ -379,7 +378,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [api, appendEvent, refreshCore])
+  }, [api, appendEvent, refreshCore, resetProjectScopedUi])
 
   const closeProject = useCallback(async () => {
     setBusy(true)
@@ -387,24 +386,14 @@ export default function App() {
     try {
       const result = await api.closeProject()
       setOverview(result)
-      setProjectMarkdown('')
-      setFailuresMarkdown('')
-      setCurrentPlan([])
-      setTurns([])
-      setTerminalEvents([])
-      setGoalDraft('')
-      setRuntimeSystemInfoDraft('')
-      setUsage(EMPTY_USAGE)
-      setPendingQuestion(null)
-      setReplyDraft('')
-      setQueuedInputDraft('')
+      resetProjectScopedUi()
       appendEvent('project closed')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
-  }, [api, appendEvent])
+  }, [api, appendEvent, resetProjectScopedUi])
 
   return (
     <div className="flex h-screen flex-col t-bg-base t-text">

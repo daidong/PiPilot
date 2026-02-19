@@ -95,7 +95,6 @@ export default function ControlPanel({
       {/* Mission Board — V1 HeroSection inspired */}
       <div className="t-border border-b px-4 py-4">
         <div className="t-text-muted mb-1 text-[11px] font-semibold uppercase tracking-wider">Mission Board</div>
-        <div className="t-text mb-4 text-sm font-medium">Configure & Launch</div>
 
         <div className="space-y-3">
           <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">

@@ -136,3 +136,5 @@ runs/
 ## UI Scope
 
 Desktop UI is not in the v2 correctness path. Runtime correctness depends on the file contracts above.
+
+Known gap: runtime selector (`host|docker|venv`) is currently metadata/prompt labeling, not executor routing. See `docs/010-runtime-selection-execution-gap.md`.
