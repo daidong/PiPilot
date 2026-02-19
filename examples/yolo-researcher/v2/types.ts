@@ -136,6 +136,60 @@ export interface ToolEventRecord {
   error?: string
 }
 
+export type SemanticGateMode = 'off' | 'shadow' | 'enforce_touch_only' | 'enforce_success'
+
+export interface SemanticGateConfig {
+  mode?: SemanticGateMode
+  confidenceThreshold?: number
+  model?: string
+  maxInputChars?: number
+}
+
+export interface SemanticGateTouchedDeliverable {
+  id: string
+  evidence_refs: string[]
+  reason_codes?: string[]
+}
+
+export interface SemanticGateInput {
+  schema: 'yolo.semantic_gate.input.v1'
+  turn: {
+    id: string
+    number: number
+  }
+  active_plan_id: string | null
+  deterministic: {
+    status: TurnStatus
+    blocked_reason: string | null
+  }
+  plan: {
+    done_definition: string[]
+    deliverables: string[]
+  }
+  evidence_summary: {
+    explicit_evidence_paths: string[]
+    business_artifacts: string[]
+    workspace_write_touches: string[]
+    changed_files_count: number
+    has_patch: boolean
+    cmd_exit_code: number
+  }
+  repo_constraints: {
+    hard_violations: string[]
+    coding_large_repo_required: boolean
+  }
+}
+
+export interface SemanticGateOutput {
+  schema?: 'yolo.semantic_gate.output.v1'
+  verdict: 'touched' | 'not_touched' | 'abstain'
+  confidence: number
+  touched_deliverables?: SemanticGateTouchedDeliverable[]
+  notes?: string
+}
+
+export type SemanticGateEvaluator = (input: SemanticGateInput) => Promise<SemanticGateOutput>
+
 export interface TurnRunOutcome {
   intent: string
   status: 'success' | 'failure' | 'ask_user' | 'stopped'
@@ -182,5 +236,7 @@ export interface CreateYoloSessionConfig {
   defaultRuntime?: string
   recentTurnsToLoad?: number
   agent: YoloSingleAgent
+  semanticGate?: SemanticGateConfig
+  semanticGateEvaluator?: SemanticGateEvaluator
   now?: () => Date
 }

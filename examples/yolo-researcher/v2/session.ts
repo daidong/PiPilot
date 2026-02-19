@@ -18,6 +18,10 @@ import type {
   ProjectUpdate,
   QueuedUserInput,
   RecentTurnContext,
+  SemanticGateConfig,
+  SemanticGateInput,
+  SemanticGateOutput,
+  SemanticGateTouchedDeliverable,
   StageStatus,
   StagnationInfo,
   ToolEventRecord,
@@ -75,6 +79,8 @@ const ENV_ASSERTION_NEGATION_RE = /\b(no|not|missing|without|cannot|unable|block
 const ENV_PROOF_API_KEY_RE = /\b(api key|openai_api_key|anthropic_api_key|missing.*key|not set|not configured|unauthorized|401|authentication)\b/i
 const ENV_PROOF_REPO_RE = /\b(not a git repository|no such file|pathspec|repository|git checkout|git status|\.git)\b/i
 const ENV_PROOF_RESOURCE_RE = /\b(resource unavailable|policy[_ -]?denied|blocked by (a )?policy|timeout|timed out|network (is )?disabled)\b/i
+const SEMANTIC_HARD_POLICY_RE = /\b(policy[_ -]?denied|blocked by (a )?policy|forbidden|disallowed|not allowed)\b/i
+const SEMANTIC_HARD_PATH_RE = /\b(escapes project root|outside project root|path escape)\b/i
 const PLAN_ID_RE = /^P\d+$/i
 const REPO_SCAN_SKIP_DIRS = new Set([
   '.git',
@@ -90,6 +96,11 @@ const REPO_SCAN_SKIP_DIRS = new Set([
 const REPO_SCAN_MAX_DEPTH = 3
 const REPO_SCAN_MAX_RESULTS = 12
 const CODING_LARGE_REPO_CODE_EDIT_SCRIPTS = new Set(['delegate-coding-agent', 'agent-start'])
+const DEFAULT_SEMANTIC_GATE_MODE: SemanticGateConfig['mode'] = 'off'
+const DEFAULT_SEMANTIC_GATE_CONFIDENCE = 0.85
+const DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS = 16_000
+const SEMANTIC_GATE_PROMPT_VERSION = 'sg.v1'
+const SEMANTIC_GATE_TEMPERATURE = 0
 
 const DELIVERABLE_PATTERNS: string[] = [
   'problem_statement',   // S1
@@ -175,6 +186,27 @@ function slugifyForFile(value: string): string {
 
 function hashStable(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16)
+}
+
+function clipText(value: string, maxChars: number): string {
+  if (maxChars <= 0) return ''
+  if (value.length <= maxChars) return value
+  return value.slice(0, maxChars)
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (value === null || value === undefined) return value
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
+  if (Array.isArray(value)) return value.map((item) => canonicalizeJson(item))
+  if (typeof value === 'object') {
+    const row = value as Record<string, unknown>
+    const next: Record<string, unknown> = {}
+    for (const key of Object.keys(row).sort((a, b) => a.localeCompare(b))) {
+      next[key] = canonicalizeJson(row[key])
+    }
+    return next
+  }
+  return String(value)
 }
 
 const execFile = promisify(execFileCallback)
@@ -274,6 +306,28 @@ interface RuntimeVersionInfo {
   buildTime: string
   desktopVersion: string
   nodeVersion: string
+}
+
+interface ResolvedSemanticGateConfig {
+  enabled: boolean
+  mode: NonNullable<SemanticGateConfig['mode']>
+  confidenceThreshold: number
+  model: string
+  maxInputChars: number
+}
+
+interface SemanticGateAuditRecord {
+  enabled: boolean
+  mode: NonNullable<SemanticGateConfig['mode']>
+  eligible: boolean
+  invoked: boolean
+  prompt_version: string
+  model_id: string
+  temperature: number
+  input_hash: string
+  output: SemanticGateOutput | null
+  accepted: boolean
+  reject_reason?: string
 }
 
 export class YoloSession {
@@ -1587,6 +1641,27 @@ export class YoloSession {
     return normalizeText(chunks.join('\n')).slice(0, 20_000)
   }
 
+  private collectSemanticHardViolations(input: {
+    blockedReason: string | null
+    toolEvents: ToolEventRecord[]
+  }): string[] {
+    const violations: string[] = []
+    const blocked = normalizeText(input.blockedReason || '')
+    if (blocked && blocked !== 'missing_plan_deliverable_touch') {
+      violations.push(`blocked_reason:${blocked}`)
+    }
+
+    const failedToolSignal = this.collectFailedToolSignalText(input.toolEvents)
+    if (SEMANTIC_HARD_POLICY_RE.test(failedToolSignal)) {
+      violations.push('policy_denied')
+    }
+    if (SEMANTIC_HARD_PATH_RE.test(failedToolSignal)) {
+      violations.push('path_escape')
+    }
+
+    return dedupeStrings(violations)
+  }
+
   private async readEvidencePreviewText(evidencePath: string): Promise<string> {
     const pointer = this.normalizeProjectPathPointer(evidencePath)
     if (!pointer || !EVIDENCE_PATH_RE.test(pointer)) return ''
@@ -1912,6 +1987,19 @@ export class YoloSession {
     const resultPath = path.join(input.turnDir, 'result.json')
     const toolEventsPath = path.join(input.artifactsDir, 'tool-events.jsonl')
     const rawOutputPath = path.join(input.artifactsDir, 'agent-output.txt')
+    const semanticGateConfig = this.resolveSemanticGateConfig()
+    const semanticGateAudit: SemanticGateAuditRecord = {
+      enabled: semanticGateConfig.enabled,
+      mode: semanticGateConfig.mode,
+      eligible: false,
+      invoked: false,
+      prompt_version: SEMANTIC_GATE_PROMPT_VERSION,
+      model_id: semanticGateConfig.model,
+      temperature: SEMANTIC_GATE_TEMPERATURE,
+      input_hash: '',
+      output: null,
+      accepted: false
+    }
 
     const turnStartedAt = this.now()
     let consumedPendingUserInputs = false
@@ -2372,6 +2460,124 @@ export class YoloSession {
       blockedReason = 'no_delta'
     }
 
+    if (finalStatus === 'no_delta' && blockedReason === 'missing_plan_deliverable_touch') {
+      const semanticHardViolations = this.collectSemanticHardViolations({
+        blockedReason,
+        toolEvents
+      })
+      const hasHardViolations = semanticHardViolations.length > 0
+      const hasConcreteWorkEvidence = (
+        workspaceChangeArtifacts.changedFiles.length > 0
+        || Boolean(workspaceChangeArtifacts.patchPath)
+        || businessArtifactEvidencePaths.length > 0
+        || (bashSnapshot?.exitCode === 0 && (
+          (bashSnapshot.stdout?.trim().length ?? 0) > 0
+          || (bashSnapshot.stderr?.trim().length ?? 0) > 0
+        ))
+      )
+      semanticGateAudit.eligible = hasConcreteWorkEvidence && !hasHardViolations
+      if (!semanticGateAudit.eligible && hasHardViolations) {
+        semanticGateAudit.reject_reason = `hard_violation:${semanticHardViolations[0]}`
+      }
+
+      if (semanticGateConfig.enabled && semanticGateAudit.eligible) {
+        const semanticInput = this.buildSemanticGateInput({
+          turnNumber: input.turnNumber,
+          activePlanId,
+          finalStatus,
+          blockedReason,
+          planItem: projectedPlanItem,
+          planEvidencePaths,
+          businessArtifactEvidencePaths,
+          workspaceWriteTouches,
+          changedFiles: workspaceChangeArtifacts.changedFiles,
+          patchPath: workspaceChangeArtifacts.patchPath,
+          exitCode,
+          hardViolations: semanticHardViolations,
+          codingLargeRepoRequired: repoCodeTouch.touched,
+          maxInputChars: semanticGateConfig.maxInputChars
+        })
+        semanticGateAudit.input_hash = semanticInput.inputHash
+        semanticGateAudit.invoked = true
+
+        let semanticRaw: unknown
+        try {
+          if (this.config.semanticGateEvaluator) {
+            semanticRaw = await this.config.semanticGateEvaluator(semanticInput.payload)
+          } else {
+            semanticRaw = {
+              schema: 'yolo.semantic_gate.output.v1',
+              verdict: 'abstain',
+              confidence: 0,
+              notes: 'semanticGateEvaluator not configured'
+            }
+          }
+        } catch (error) {
+          semanticRaw = {
+            schema: 'yolo.semantic_gate.output.v1',
+            verdict: 'abstain',
+            confidence: 0,
+            notes: `semantic evaluator error: ${error instanceof Error ? error.message : String(error)}`
+          }
+        }
+
+        const semanticOutput = this.normalizeSemanticGateOutput(semanticRaw)
+        semanticGateAudit.output = semanticOutput
+        const evidenceRefValidation = await this.validateSemanticGateEvidenceRefs({
+          turnNumber: input.turnNumber,
+          output: semanticOutput
+        })
+
+        const activeRules = this.parseDoneDefinitionRules(projectedPlanItem?.doneDefinition ?? [])
+        const activeDeliverables = new Set(activeRules.deliverables)
+        const touchedDeliverables = dedupeStrings(
+          (semanticOutput.touched_deliverables ?? [])
+            .map((item) => this.normalizeDeliverableTarget(item.id).value)
+            .filter(Boolean)
+        )
+        const hasDeliverableIntersection = touchedDeliverables.some((item) => activeDeliverables.has(item))
+
+        if (!evidenceRefValidation.ok) {
+          semanticGateAudit.reject_reason = evidenceRefValidation.reason
+        } else if (semanticOutput.verdict !== 'touched') {
+          semanticGateAudit.reject_reason = `verdict_${semanticOutput.verdict}`
+        } else if (semanticOutput.confidence < semanticGateConfig.confidenceThreshold) {
+          semanticGateAudit.reject_reason = `confidence_below_threshold:${semanticGateConfig.confidenceThreshold}`
+        } else if (!hasDeliverableIntersection) {
+          semanticGateAudit.reject_reason = 'deliverable_intersection_miss'
+        } else if (semanticGateConfig.mode === 'enforce_touch_only') {
+          semanticGateAudit.accepted = true
+          doneDefinitionCheck = {
+            ...doneDefinitionCheck,
+            deliverableTouched: true
+          }
+          if (!deltaReasons.includes('plan_deliverable_touched')) {
+            deltaReasons.push('plan_deliverable_touched')
+          }
+          if (!deltaReasons.includes('semantic_plan_deliverable_touched')) {
+            deltaReasons.push('semantic_plan_deliverable_touched')
+          }
+
+          finalStatus = 'success'
+          blockedReason = null
+          summary = summary.replace(/^NO_DELTA:\s*missing_plan_deliverable_touch\.?\s*/i, '').trim()
+          if (!summary) {
+            summary = 'Semantic gate confirmed deliverable touch from this turn evidence.'
+          }
+          statusChange = this.deriveRuntimeStatusChange({
+            activePlanId,
+            finalStatus,
+            planItem: projectedPlanItem,
+            doneReady: doneDefinitionCheck.doneReady
+          })
+        } else {
+          semanticGateAudit.reject_reason = semanticGateConfig.mode === 'shadow'
+            ? 'shadow_mode'
+            : `unsupported_mode:${semanticGateConfig.mode}`
+        }
+      }
+    }
+
     if (finalStatus === 'no_delta' && !governanceOnlyTurn && (doneFingerprintHit || priorFingerprintCount > 0)) {
       const redundant = await this.failureStore.recordRedundancyBlocked({
         fingerprint: actionFingerprint,
@@ -2409,6 +2615,12 @@ export class YoloSession {
     if (missingOutcomeEvidencePaths.length > 0) {
       const preview = missingOutcomeEvidencePaths[0]
       updateSummaryLines.push(`Ignored ${missingOutcomeEvidencePaths.length} missing outcome evidence path(s); first=${preview}`)
+    }
+    if (semanticGateAudit.invoked) {
+      const semanticState = semanticGateAudit.accepted
+        ? 'accepted'
+        : (semanticGateAudit.reject_reason || 'rejected')
+      updateSummaryLines.push(`Semantic gate (${semanticGateAudit.mode}): ${semanticState}`)
     }
 
     let projectUpdated = false
@@ -2715,6 +2927,19 @@ export class YoloSession {
       ...(deterministicFingerprint ? { failure_fingerprint: deterministicFingerprint } : {}),
       ...(clearedBlocked ? { unblock_verified: true } : {}),
       ...(blockedReason ? { blocked_reason: blockedReason } : {}),
+      semantic_gate: {
+        enabled: semanticGateAudit.enabled,
+        mode: semanticGateAudit.mode,
+        eligible: semanticGateAudit.eligible,
+        invoked: semanticGateAudit.invoked,
+        prompt_version: semanticGateAudit.prompt_version,
+        model_id: semanticGateAudit.model_id,
+        temperature: semanticGateAudit.temperature,
+        input_hash: semanticGateAudit.input_hash,
+        output: semanticGateAudit.output,
+        accepted: semanticGateAudit.accepted,
+        ...(semanticGateAudit.reject_reason ? { reject_reason: semanticGateAudit.reject_reason } : {})
+      },
       ...claimsCoverage
     }, null, 2)}\n`)
 
@@ -3185,6 +3410,172 @@ export class YoloSession {
     }
 
     return { ok: true, reason: '', deliverableTouched, doneReady }
+  }
+
+  private resolveSemanticGateConfig(): ResolvedSemanticGateConfig {
+    const raw = this.config.semanticGate ?? {}
+    const requestedMode = (raw.mode ?? DEFAULT_SEMANTIC_GATE_MODE)
+    const mode: NonNullable<SemanticGateConfig['mode']> = (
+      requestedMode === 'off'
+      || requestedMode === 'shadow'
+      || requestedMode === 'enforce_touch_only'
+      || requestedMode === 'enforce_success'
+    )
+      ? requestedMode
+      : DEFAULT_SEMANTIC_GATE_MODE
+
+    const confidenceThreshold = (
+      typeof raw.confidenceThreshold === 'number'
+      && Number.isFinite(raw.confidenceThreshold)
+      && raw.confidenceThreshold >= 0
+      && raw.confidenceThreshold <= 1
+    )
+      ? raw.confidenceThreshold
+      : DEFAULT_SEMANTIC_GATE_CONFIDENCE
+
+    const maxInputChars = (
+      typeof raw.maxInputChars === 'number'
+      && Number.isFinite(raw.maxInputChars)
+      && raw.maxInputChars >= 1_000
+    )
+      ? Math.floor(raw.maxInputChars)
+      : DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS
+
+    const model = safeString(raw.model).trim() || 'semantic-gate-local'
+
+    return {
+      enabled: mode !== 'off',
+      mode,
+      confidenceThreshold,
+      model,
+      maxInputChars
+    }
+  }
+
+  private buildSemanticGateInput(input: {
+    turnNumber: number
+    activePlanId: string
+    finalStatus: TurnStatus
+    blockedReason: string | null
+    planItem: PlanBoardItem | null
+    planEvidencePaths: string[]
+    businessArtifactEvidencePaths: string[]
+    workspaceWriteTouches: string[]
+    changedFiles: string[]
+    patchPath: string | null
+    exitCode: number
+    hardViolations: string[]
+    codingLargeRepoRequired: boolean
+    maxInputChars: number
+  }): { payload: SemanticGateInput; inputHash: string } {
+    const parsedRules = this.parseDoneDefinitionRules(input.planItem?.doneDefinition ?? [])
+
+    const payload: SemanticGateInput = {
+      schema: 'yolo.semantic_gate.input.v1',
+      turn: {
+        id: formatTurnId(input.turnNumber),
+        number: input.turnNumber
+      },
+      active_plan_id: input.activePlanId || null,
+      deterministic: {
+        status: input.finalStatus,
+        blocked_reason: input.blockedReason || null
+      },
+      plan: {
+        done_definition: (input.planItem?.doneDefinition ?? []).slice(0, 24),
+        deliverables: parsedRules.deliverables.slice(0, 24)
+      },
+      evidence_summary: {
+        explicit_evidence_paths: dedupeStrings(input.planEvidencePaths).slice(0, 80),
+        business_artifacts: dedupeStrings(input.businessArtifactEvidencePaths).slice(0, 80),
+        workspace_write_touches: dedupeStrings(input.workspaceWriteTouches).slice(0, 80),
+        changed_files_count: input.changedFiles.length,
+        has_patch: Boolean(input.patchPath),
+        cmd_exit_code: input.exitCode
+      },
+      repo_constraints: {
+        hard_violations: dedupeStrings(input.hardViolations).slice(0, 20),
+        coding_large_repo_required: input.codingLargeRepoRequired
+      }
+    }
+
+    const canonical = canonicalizeJson(payload)
+    const canonicalJson = clipText(JSON.stringify(canonical), input.maxInputChars)
+    const inputHash = createHash('sha256').update(canonicalJson).digest('hex')
+    return { payload, inputHash }
+  }
+
+  private normalizeSemanticGateOutput(raw: unknown): SemanticGateOutput {
+    const row = toPlainObject(raw) ?? {}
+    const verdictRaw = safeString(row.verdict).trim().toLowerCase()
+    const verdict = (verdictRaw === 'touched' || verdictRaw === 'not_touched' || verdictRaw === 'abstain')
+      ? verdictRaw
+      : 'abstain'
+
+    const confidenceRaw = typeof row.confidence === 'number' && Number.isFinite(row.confidence)
+      ? row.confidence
+      : 0
+    const confidence = Math.max(0, Math.min(1, confidenceRaw))
+
+    const touchedDeliverablesRaw = Array.isArray(row.touched_deliverables)
+      ? row.touched_deliverables
+      : []
+    const touched_deliverables: SemanticGateTouchedDeliverable[] = touchedDeliverablesRaw
+      .map((item) => {
+        const entry = toPlainObject(item)
+        const id = safeString(entry?.id).trim()
+        const evidenceRefs = Array.isArray(entry?.evidence_refs)
+          ? entry?.evidence_refs
+            .map((value) => safeString(value).trim())
+            .filter(Boolean)
+          : []
+        const reasonCodes = Array.isArray(entry?.reason_codes)
+          ? entry?.reason_codes
+            .map((value) => safeString(value).trim())
+            .filter(Boolean)
+          : []
+        return {
+          id,
+          evidence_refs: dedupeStrings(evidenceRefs),
+          ...(reasonCodes.length > 0 ? { reason_codes: dedupeStrings(reasonCodes) } : {})
+        }
+      })
+      .filter((item) => item.id.length > 0)
+
+    return {
+      schema: 'yolo.semantic_gate.output.v1',
+      verdict,
+      confidence,
+      ...(touched_deliverables.length > 0 ? { touched_deliverables } : {}),
+      ...(safeString(row.notes).trim() ? { notes: safeString(row.notes).trim() } : {})
+    }
+  }
+
+  private async validateSemanticGateEvidenceRefs(input: {
+    turnNumber: number
+    output: SemanticGateOutput
+  }): Promise<{ ok: boolean; reason: string }> {
+    if (input.output.verdict !== 'touched') return { ok: true, reason: '' }
+    const touched = input.output.touched_deliverables ?? []
+    if (touched.length === 0) return { ok: false, reason: 'missing_touched_deliverables' }
+
+    const turnPrefix = `runs/${formatTurnId(input.turnNumber)}/`
+
+    for (const item of touched) {
+      if (!item.id.trim()) return { ok: false, reason: 'missing_touched_deliverable_id' }
+      if (!Array.isArray(item.evidence_refs) || item.evidence_refs.length === 0) {
+        return { ok: false, reason: `missing_evidence_refs:${item.id}` }
+      }
+      for (const ref of item.evidence_refs) {
+        const normalized = this.normalizeProjectPathPointer(ref)
+        if (!EVIDENCE_PATH_RE.test(normalized)) return { ok: false, reason: `invalid_evidence_ref_format:${ref}` }
+        if (!normalized.startsWith(turnPrefix)) return { ok: false, reason: `cross_turn_evidence_ref:${normalized}` }
+        const absolute = path.join(this.yoloRoot, normalized)
+        if (!(await fileExists(absolute))) return { ok: false, reason: `missing_evidence_ref:${normalized}` }
+      }
+    }
+
+    return { ok: true, reason: '' }
   }
 
   private computePlanBoardFingerprint(project: TurnContext['project']): string {

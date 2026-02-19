@@ -1,13 +1,22 @@
 import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
 
-import { createAgent, definePack } from '../../../src/index.js'
+import { createAgent, definePack, generateStructured, getLanguageModelByModelId } from '../../../src/index.js'
 import { packs } from '../../../src/packs/index.js'
 import { yoloResearcherSkills } from '../skills/index.js'
 import { createYoloToolWrapperPack } from './tool-wrappers.js'
 
-import type { ClaimEvidence, ToolEventRecord, TurnContext, TurnRunOutcome, YoloSingleAgent } from './types.js'
+import type {
+  ClaimEvidence,
+  SemanticGateEvaluator,
+  SemanticGateInput,
+  ToolEventRecord,
+  TurnContext,
+  TurnRunOutcome,
+  YoloSingleAgent
+} from './types.js'
 import type { Pack } from '../../../src/types/pack.js'
 import type { ResourceLimits } from '../../../src/types/runtime.js'
 import type { DetailedTokenUsage, TokenCost } from '../../../src/llm/provider.types.js'
@@ -70,6 +79,33 @@ const TOOL_EVENT_STRING_LIMIT = 6000
 const FETCH_EVENT_STRING_LIMIT = 80_000
 const POLICY_BLOCK_RE = /(no[-\s]?destructive|destructive policy|blocked by (a )?policy|policy block|forbidden|not allowed|disallowed)/i
 const DESTRUCTIVE_RM_RE = /\brm\s+-rf\b/i
+const DEFAULT_SEMANTIC_GATE_MAX_TOKENS = 700
+const DEFAULT_SEMANTIC_GATE_TIMEOUT_MS = 25_000
+
+const semanticGateOutputSchema = z.object({
+  verdict: z.enum(['touched', 'not_touched', 'abstain']),
+  confidence: z.number().min(0).max(1),
+  touched_deliverables: z.array(
+    z.object({
+      id: z.string().min(1).max(512),
+      evidence_refs: z.array(z.string().min(1).max(512)).max(20),
+      reason_codes: z.array(z.string().min(1).max(120)).max(12).optional()
+    })
+  ).max(20).optional(),
+  notes: z.string().max(1_000).optional()
+})
+
+const SEMANTIC_GATE_SYSTEM_PROMPT = [
+  'You are a strict semantic gate for YOLO Researcher.',
+  'Task: judge whether this turn semantically touched an active plan deliverable.',
+  'You must return ONLY JSON matching the schema.',
+  'Rules:',
+  '1) Use only facts present in the provided input JSON.',
+  '2) If uncertain or evidence is insufficient, return verdict=abstain, confidence=0.',
+  '3) If verdict=touched, touched_deliverables must include only deliverables from plan.deliverables and evidence_refs must come from current turn evidence paths.',
+  '4) Never invent files, deliverables, or evidence refs.',
+  '5) Prefer abstain over weak inference.'
+].join('\n')
 
 function truncateText(value: string, limit: number = TOOL_EVENT_STRING_LIMIT): string {
   if (value.length <= limit) return value
@@ -1117,6 +1153,94 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
     updateSummary: Array.isArray(row.updateSummary)
       ? row.updateSummary.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
       : undefined
+  }
+}
+
+export interface SemanticGateLlmEvaluatorConfig {
+  model: string
+  apiKey?: string
+  timeoutMs?: number
+  maxTokens?: number
+}
+
+export function createSemanticGateLlmEvaluator(config: SemanticGateLlmEvaluatorConfig): SemanticGateEvaluator {
+  const modelId = (config.model || '').trim()
+  if (!modelId) {
+    throw new Error('createSemanticGateLlmEvaluator: model is required')
+  }
+
+  const languageModel = getLanguageModelByModelId(modelId, {
+    ...(config.apiKey?.trim() ? { apiKey: config.apiKey.trim() } : {})
+  })
+
+  const timeoutMs = (
+    typeof config.timeoutMs === 'number'
+    && Number.isFinite(config.timeoutMs)
+    && config.timeoutMs >= 3_000
+  )
+    ? Math.floor(config.timeoutMs)
+    : DEFAULT_SEMANTIC_GATE_TIMEOUT_MS
+
+  const maxTokens = (
+    typeof config.maxTokens === 'number'
+    && Number.isFinite(config.maxTokens)
+    && config.maxTokens >= 100
+  )
+    ? Math.floor(config.maxTokens)
+    : DEFAULT_SEMANTIC_GATE_MAX_TOKENS
+
+  return async (input: SemanticGateInput) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      const payload = JSON.stringify(input)
+      const result = await generateStructured({
+        model: languageModel,
+        system: SEMANTIC_GATE_SYSTEM_PROMPT,
+        prompt: [
+          'Evaluate the following semantic gate input JSON and return your judgement JSON.',
+          '',
+          payload
+        ].join('\n'),
+        schema: semanticGateOutputSchema,
+        schemaName: 'YoloSemanticGateOutput',
+        temperature: 0,
+        maxTokens,
+        retries: 1,
+        abortSignal: controller.signal
+      })
+
+      return {
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: result.output.verdict,
+        confidence: result.output.confidence,
+        ...(Array.isArray(result.output.touched_deliverables)
+          ? {
+              touched_deliverables: result.output.touched_deliverables.map((item) => ({
+                id: item.id.trim(),
+                evidence_refs: item.evidence_refs.map((row) => row.trim()).filter(Boolean),
+                ...(Array.isArray(item.reason_codes)
+                  ? { reason_codes: item.reason_codes.map((row) => row.trim()).filter(Boolean) }
+                  : {})
+              }))
+            }
+          : {}),
+        ...(typeof result.output.notes === 'string' && result.output.notes.trim()
+          ? { notes: result.output.notes.trim() }
+          : {})
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'abstain',
+        confidence: 0,
+        notes: `semantic evaluator fallback: ${message}`
+      }
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }
 

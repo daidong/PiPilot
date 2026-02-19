@@ -30,6 +30,7 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
     "check:yolo-ui-colors": "node scripts/check-yolo-ui-color-discipline.mjs",
+    "report:yolo-semantic-gate": "node scripts/yolo-semantic-gate-report.mjs",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build",
     "example:no-code-researcher": "npm run build && npm --prefix examples/no-code-researcher run start",

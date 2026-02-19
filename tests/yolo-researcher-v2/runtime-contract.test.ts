@@ -1624,6 +1624,373 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(result.blocked_reason).toBe('openai_script_compat_issue')
   })
 
+  it('semantic gate shadow mode records decision but does not mutate no_delta status', async () => {
+    const projectPath = await createTempDir('yolo-v2-semantic-shadow-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/benchmark_results.json',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Shadow semantic gate should be non-mutating',
+      defaultRuntime: 'host',
+      semanticGate: {
+        mode: 'shadow',
+        confidenceThreshold: 0.85
+      },
+      semanticGateEvaluator: async () => ({
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'touched',
+        confidence: 0.99,
+        touched_deliverables: [{
+          id: 'artifacts/benchmark_results.json',
+          evidence_refs: ['runs/turn-0001/stdout.txt'],
+          reason_codes: ['semantic_match']
+        }]
+      }),
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run an execution-only probe with no deliverable file write',
+          status: 'success',
+          summary: 'Probe finished.',
+          primaryAction: `bash: node -e "console.log('probe-ok')"`,
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Captured command output.',
+          toolEvents: bashSuccessEvent(`node -e "console.log('probe-ok')"`, 'probe-ok\n')
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('missing_plan_deliverable_touch')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, any>
+    expect(result.semantic_gate?.invoked).toBe(true)
+    expect(result.semantic_gate?.accepted).toBe(false)
+    expect(result.semantic_gate?.mode).toBe('shadow')
+    expect(result.semantic_gate?.reject_reason).toBe('shadow_mode')
+  })
+
+  it('semantic gate enforce_touch_only can recover eligible missing_plan_deliverable_touch', async () => {
+    const projectPath = await createTempDir('yolo-v2-semantic-enforce-touch-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/benchmark_results.json',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Allow touch-only semantic correction',
+      defaultRuntime: 'host',
+      semanticGate: {
+        mode: 'enforce_touch_only',
+        confidenceThreshold: 0.85
+      },
+      semanticGateEvaluator: async () => ({
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'touched',
+        confidence: 0.93,
+        touched_deliverables: [{
+          id: 'artifacts/benchmark_results.json',
+          evidence_refs: ['runs/turn-0001/stdout.txt'],
+          reason_codes: ['semantic_match']
+        }]
+      }),
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run execution-only probe with output evidence',
+          status: 'success',
+          summary: 'Probe finished.',
+          primaryAction: `bash: node -e "console.log('probe-ok')"`,
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Captured command output.',
+          toolEvents: bashSuccessEvent(`node -e "console.log('probe-ok')"`, 'probe-ok\n')
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, any>
+    expect(result.semantic_gate?.invoked).toBe(true)
+    expect(result.semantic_gate?.accepted).toBe(true)
+    expect(result.semantic_gate?.mode).toBe('enforce_touch_only')
+    const deltaReasons = Array.isArray(result.delta_reasons) ? result.delta_reasons.map(String) : []
+    expect(deltaReasons).toContain('semantic_plan_deliverable_touched')
+    expect(result.blocked_reason).toBeUndefined()
+  })
+
+  it('semantic gate rejects touched verdict with invalid evidence refs', async () => {
+    const projectPath = await createTempDir('yolo-v2-semantic-invalid-evidence-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/benchmark_results.json',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Reject invalid semantic evidence refs',
+      defaultRuntime: 'host',
+      semanticGate: {
+        mode: 'enforce_touch_only',
+        confidenceThreshold: 0.85
+      },
+      semanticGateEvaluator: async () => ({
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'touched',
+        confidence: 0.99,
+        touched_deliverables: [{
+          id: 'artifacts/benchmark_results.json',
+          evidence_refs: ['runs/turn-9999/stdout.txt'],
+          reason_codes: ['semantic_match']
+        }]
+      }),
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run execution-only probe with output evidence',
+          status: 'success',
+          summary: 'Probe finished.',
+          primaryAction: `bash: node -e "console.log('probe-ok')"`,
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Captured command output.',
+          toolEvents: bashSuccessEvent(`node -e "console.log('probe-ok')"`, 'probe-ok\n')
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('missing_plan_deliverable_touch')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, any>
+    expect(result.semantic_gate?.invoked).toBe(true)
+    expect(result.semantic_gate?.accepted).toBe(false)
+    expect(String(result.semantic_gate?.reject_reason || '')).toContain('cross_turn_evidence_ref')
+  })
+
+  it('semantic gate rejects low-confidence touched verdict', async () => {
+    const projectPath = await createTempDir('yolo-v2-semantic-low-confidence-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/benchmark_results.json',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Reject low-confidence semantic correction',
+      defaultRuntime: 'host',
+      semanticGate: {
+        mode: 'enforce_touch_only',
+        confidenceThreshold: 0.85
+      },
+      semanticGateEvaluator: async () => ({
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'touched',
+        confidence: 0.6,
+        touched_deliverables: [{
+          id: 'artifacts/benchmark_results.json',
+          evidence_refs: ['runs/turn-0001/stdout.txt'],
+          reason_codes: ['semantic_match']
+        }]
+      }),
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run execution-only probe with output evidence',
+          status: 'success',
+          summary: 'Probe finished.',
+          primaryAction: `bash: node -e "console.log('probe-ok')"`,
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Captured command output.',
+          toolEvents: bashSuccessEvent(`node -e "console.log('probe-ok')"`, 'probe-ok\n')
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('missing_plan_deliverable_touch')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, any>
+    expect(result.semantic_gate?.invoked).toBe(true)
+    expect(result.semantic_gate?.accepted).toBe(false)
+    expect(String(result.semantic_gate?.reject_reason || '')).toContain('confidence_below_threshold')
+  })
+
+  it('semantic gate abstain is a no-op', async () => {
+    const projectPath = await createTempDir('yolo-v2-semantic-abstain-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/benchmark_results.json',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Abstain should not mutate no_delta',
+      defaultRuntime: 'host',
+      semanticGate: {
+        mode: 'enforce_touch_only',
+        confidenceThreshold: 0.85
+      },
+      semanticGateEvaluator: async () => ({
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'abstain',
+        confidence: 0
+      }),
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run execution-only probe with output evidence',
+          status: 'success',
+          summary: 'Probe finished.',
+          primaryAction: `bash: node -e "console.log('probe-ok')"`,
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Captured command output.',
+          toolEvents: bashSuccessEvent(`node -e "console.log('probe-ok')"`, 'probe-ok\n')
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('missing_plan_deliverable_touch')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, any>
+    expect(result.semantic_gate?.invoked).toBe(true)
+    expect(result.semantic_gate?.accepted).toBe(false)
+    expect(result.semantic_gate?.reject_reason).toBe('verdict_abstain')
+  })
+
+  it('semantic gate does not run when a hard runtime gate blocks the turn', async () => {
+    const projectPath = await createTempDir('yolo-v2-semantic-hard-block-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/run_calibration_live.py',
+      'evidence_min: 1'
+    ])
+
+    const legacyScript = [
+      'import openai',
+      'def run_one(model):',
+      '  return openai.ChatCompletion.create(model=model, messages=[{"role":"user","content":"hi"}])',
+      ''
+    ].join('\n')
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Semantic correction must not bypass hard runtime blocks',
+      defaultRuntime: 'host',
+      semanticGate: {
+        mode: 'enforce_touch_only',
+        confidenceThreshold: 0.85
+      },
+      semanticGateEvaluator: async () => ({
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'touched',
+        confidence: 0.99,
+        touched_deliverables: [{
+          id: 'artifacts/run_calibration_live.py',
+          evidence_refs: ['runs/turn-0001/artifacts/run_calibration_live.py'],
+          reason_codes: ['deliverable_semantic_match']
+        }]
+      }),
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Write legacy OpenAI calibration script',
+          status: 'success',
+          summary: 'Legacy script written.',
+          primaryAction: 'write: runs/turn-0001/artifacts/run_calibration_live.py',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Created calibration script.',
+          toolEvents: writeSuccessEvent('runs/turn-0001/artifacts/run_calibration_live.py', legacyScript)
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('openai_script_compat_issue')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, any>
+    expect(result.blocked_reason).toBe('openai_script_compat_issue')
+    expect(result.semantic_gate?.invoked).toBe(false)
+    expect(result.semantic_gate?.accepted).toBe(false)
+  })
+
+  it('semantic gate is ineligible when hard violation signal exists in failed tool events', async () => {
+    const projectPath = await createTempDir('yolo-v2-semantic-hard-signal-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, [
+      'deliverable: artifacts/benchmark_results.json',
+      'evidence_min: 1'
+    ])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Hard violation signal should suppress semantic arbitration',
+      defaultRuntime: 'host',
+      semanticGate: {
+        mode: 'enforce_touch_only',
+        confidenceThreshold: 0.85
+      },
+      semanticGateEvaluator: async () => ({
+        schema: 'yolo.semantic_gate.output.v1',
+        verdict: 'touched',
+        confidence: 0.99,
+        touched_deliverables: [{
+          id: 'artifacts/benchmark_results.json',
+          evidence_refs: ['runs/turn-0001/artifacts/evidence/policy_note.md'],
+          reason_codes: ['semantic_match']
+        }]
+      }),
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Produce non-deliverable artifact while tool error indicates policy denial',
+          status: 'success',
+          summary: 'Collected partial evidence.',
+          primaryAction: 'write: runs/turn-0001/artifacts/evidence/policy_note.md',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          delta: 'Captured tool failure note.',
+          toolEvents: [
+            ...bashFailureEvent('sudo rm -rf /tmp/x', 'policy_denied: blocked by a security policy'),
+            ...bashSuccessEvent(`node -e "console.log('still-running')"`, 'still-running\n'),
+            ...writeSuccessEvent('runs/turn-0001/artifacts/evidence/policy_note.md', 'blocked by policy')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('missing_plan_deliverable_touch')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, any>
+    expect(result.semantic_gate?.eligible).toBe(false)
+    expect(result.semantic_gate?.invoked).toBe(false)
+    expect(result.semantic_gate?.accepted).toBe(false)
+    expect(String(result.semantic_gate?.reject_reason || '')).toContain('hard_violation:policy_denied')
+  })
+
   it('applies redundancy checkpoint cooldown instead of triggering planner checkpoint every turn', async () => {
     const projectPath = await createTempDir('yolo-v2-checkpoint-cooldown-')
     tempDirs.push(projectPath)

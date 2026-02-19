@@ -138,3 +138,32 @@ runs/
 Desktop UI is not in the v2 correctness path. Runtime correctness depends on the file contracts above.
 
 Known gap: runtime selector (`host|docker|venv`) is currently metadata/prompt labeling, not executor routing. See `docs/010-runtime-selection-execution-gap.md`.
+
+## Semantic Gate (RFC-012)
+
+`missing_plan_deliverable_touch` false negatives can be inspected/corrected by the hybrid semantic gate.
+
+Modes:
+- `off`
+- `shadow`
+- `enforce_touch_only`
+- `enforce_success` (reserved; do not use)
+
+Desktop default mode is `enforce_touch_only` with live LLM arbitration when model credentials are available.
+Set `YOLO_SEMANTIC_GATE_MODE=off` to disable.
+
+Desktop runtime reads these environment variables at startup:
+
+```bash
+export YOLO_SEMANTIC_GATE_MODE=shadow
+export YOLO_SEMANTIC_GATE_CONFIDENCE=0.85
+export YOLO_SEMANTIC_GATE_MAX_INPUT_CHARS=18000
+export YOLO_SEMANTIC_GATE_MODEL=semantic-gate-local
+```
+
+Summarize outcomes from run artifacts:
+
+```bash
+node scripts/yolo-semantic-gate-report.mjs /path/to/workspace
+node scripts/yolo-semantic-gate-report.mjs /path/to/workspace --json
+```

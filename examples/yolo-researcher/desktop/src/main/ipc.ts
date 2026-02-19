@@ -4,12 +4,14 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
+  createSemanticGateLlmEvaluator,
   createLlmSingleAgent,
   createYoloSession,
   type TurnExecutionResult
 } from '@yolo-researcher/index'
 
 type RuntimeKind = 'host' | 'docker' | 'venv'
+type SemanticGateMode = 'off' | 'shadow' | 'enforce_touch_only' | 'enforce_success'
 type TurnFileName = 'action.md' | 'cmd.txt' | 'stdout.txt' | 'stderr.txt' | 'exit_code.txt' | 'patch.diff' | 'result.json'
 
 interface StartPayload {
@@ -110,6 +112,49 @@ const windowStates = new Map<number, WindowRuntimeState>()
 let handlersRegistered = false
 const REQUIRED_BOOTSTRAP_SKILL_ID = 'literature-search'
 const REQUIRED_COMMUNITY_SKILL_ID = 'markitdown'
+const DEFAULT_SEMANTIC_GATE_MODE: SemanticGateMode = 'enforce_touch_only'
+const DEFAULT_SEMANTIC_GATE_CONFIDENCE = 0.85
+const DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS = 18_000
+const SEMANTIC_GATE_MODES = new Set<SemanticGateMode>([
+  'off',
+  'shadow',
+  'enforce_touch_only',
+  'enforce_success'
+])
+
+function parseBoundedNumberEnv(raw: string | undefined, min: number, max: number): number | undefined {
+  if (!raw) return undefined
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return undefined
+  if (value < min || value > max) return undefined
+  return value
+}
+
+function parseSemanticGateConfigFromEnv(): {
+  mode: SemanticGateMode
+  confidenceThreshold?: number
+  model?: string
+  maxInputChars?: number
+} {
+  const modeRaw = (process.env.YOLO_SEMANTIC_GATE_MODE || '').trim()
+  const mode = SEMANTIC_GATE_MODES.has(modeRaw as SemanticGateMode)
+    ? (modeRaw as SemanticGateMode)
+    : DEFAULT_SEMANTIC_GATE_MODE
+
+  const confidenceThreshold = parseBoundedNumberEnv(process.env.YOLO_SEMANTIC_GATE_CONFIDENCE, 0, 1) ?? DEFAULT_SEMANTIC_GATE_CONFIDENCE
+  const maxInputCharsRaw = parseBoundedNumberEnv(process.env.YOLO_SEMANTIC_GATE_MAX_INPUT_CHARS, 1_000, 200_000)
+  const maxInputChars = typeof maxInputCharsRaw === 'number'
+    ? Math.floor(maxInputCharsRaw)
+    : DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS
+  const model = (process.env.YOLO_SEMANTIC_GATE_MODEL || '').trim() || undefined
+
+  return {
+    mode,
+    confidenceThreshold,
+    maxInputChars,
+    ...(model ? { model } : {})
+  }
+}
 
 function resolveDefaultSkillsSourceDir(): string {
   const moduleDir = dirname(fileURLToPath(import.meta.url))
@@ -1139,14 +1184,57 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
       }
     })
 
+    const semanticGateFromEnv = parseSemanticGateConfigFromEnv()
+    const semanticGate = {
+      ...semanticGateFromEnv,
+      ...(semanticGateFromEnv.model ? {} : { model })
+    }
+    let semanticGateEvaluator: ReturnType<typeof createSemanticGateLlmEvaluator> | undefined
+    let semanticGateEvaluatorError = ''
+    if (semanticGate.mode !== 'off') {
+      try {
+        semanticGateEvaluator = createSemanticGateLlmEvaluator({
+          model: semanticGate.model || model
+        })
+      } catch (error) {
+        semanticGateEvaluatorError = error instanceof Error ? error.message : String(error)
+      }
+    }
     const session = createYoloSession({
       projectPath: state.projectPath,
       goal,
       defaultRuntime,
-      agent
+      agent,
+      semanticGate,
+      ...(semanticGateEvaluator ? { semanticGateEvaluator } : {})
     })
 
     await session.init()
+
+    if (semanticGate.mode !== 'off') {
+      const details = [
+        `mode=${semanticGate.mode}`,
+        typeof semanticGate.confidenceThreshold === 'number' ? `confidence>=${semanticGate.confidenceThreshold}` : '',
+        semanticGate.model ? `model=${semanticGate.model}` : '',
+        typeof semanticGate.maxInputChars === 'number' ? `maxInputChars=${semanticGate.maxInputChars}` : '',
+        semanticGateEvaluator ? 'arbiter=live' : `arbiter=abstain (${semanticGateEvaluatorError || 'evaluator_init_failed'})`
+      ].filter(Boolean).join(', ')
+      safeSend(win, 'yolo:activity', {
+        id: makeUiEventId('semantic-gate-config'),
+        timestamp: new Date().toISOString(),
+        type: 'runtime',
+        summary: 'Semantic gate enabled',
+        detail: details || undefined
+      })
+    } else {
+      safeSend(win, 'yolo:activity', {
+        id: makeUiEventId('semantic-gate-off'),
+        timestamp: new Date().toISOString(),
+        type: 'runtime',
+        summary: 'Semantic gate disabled',
+        detail: 'mode=off (set YOLO_SEMANTIC_GATE_MODE to shadow or enforce_touch_only to enable)'
+      })
+    }
 
     state.yoloAgent = agent
     state.yoloSession = session
