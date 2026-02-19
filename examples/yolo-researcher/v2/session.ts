@@ -365,6 +365,22 @@ interface SemanticGateAuditRecord {
   reject_reason?: string
 }
 
+interface NativeTurnFilePaths {
+  cmdPath: string
+  stdoutPath: string
+  stderrPath: string
+  exitCodePath: string
+  resultPath: string
+  actionPath: string
+  toolEventsPath: string
+  rawOutputPath: string
+}
+
+interface NativeTurnOutcomeExecution {
+  outcome: TurnRunOutcome
+  consumedPendingUserInputs: boolean
+}
+
 export class YoloSession {
   readonly yoloRoot: string
   readonly runsDir: string
@@ -2381,13 +2397,19 @@ export class YoloSession {
     preflightNotes: string[]
   }): Promise<TurnExecutionResult> {
     const runtime = input.context.project.defaultRuntime || this.config.defaultRuntime || DEFAULT_RUNTIME
-    const cmdPath = path.join(input.turnDir, 'cmd.txt')
-    const stdoutPath = path.join(input.turnDir, 'stdout.txt')
-    const stderrPath = path.join(input.turnDir, 'stderr.txt')
-    const exitCodePath = path.join(input.turnDir, 'exit_code.txt')
-    const resultPath = path.join(input.turnDir, 'result.json')
-    const toolEventsPath = path.join(input.artifactsDir, 'tool-events.jsonl')
-    const rawOutputPath = path.join(input.artifactsDir, 'agent-output.txt')
+    const turnPaths = this.buildNativeTurnFilePaths({
+      turnDir: input.turnDir,
+      artifactsDir: input.artifactsDir
+    })
+    const {
+      cmdPath,
+      stdoutPath,
+      stderrPath,
+      exitCodePath,
+      resultPath,
+      toolEventsPath,
+      rawOutputPath
+    } = turnPaths
     const semanticGateConfig = this.resolveSemanticGateConfig()
     const semanticGateAudit: SemanticGateAuditRecord = {
       enabled: semanticGateConfig.enabled,
@@ -2403,25 +2425,10 @@ export class YoloSession {
     }
 
     const turnStartedAt = this.now()
-    let consumedPendingUserInputs = false
-
-    let outcome: TurnRunOutcome
-    try {
-      outcome = await this.config.agent.runTurn(input.context)
-      if (input.pendingUserInputs.length > 0) {
-        await this.clearQueuedUserInputs()
-        consumedPendingUserInputs = true
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      outcome = {
-        intent: 'Handle native turn runtime error',
-        status: 'failure',
-        summary: `Native turn runtime error: ${message}`,
-        primaryAction: 'agent.run',
-        updateSummary: ['Next: inspect runtime error and retry with narrower scope.']
-      }
-    }
+    const { outcome, consumedPendingUserInputs } = await this.executeNativeTurnOutcome({
+      context: input.context,
+      pendingUserInputs: input.pendingUserInputs
+    })
 
     const toolEvents = Array.isArray(outcome.toolEvents) ? outcome.toolEvents : []
     await this.writeToolEventsJsonl(toolEventsPath, toolEvents)
@@ -2468,15 +2475,14 @@ export class YoloSession {
       finalStatus = 'failure'
     }
 
-    await writeText(cmdPath, cmd ? `${cmd}\n` : '')
-    await writeText(stdoutPath, stdout)
-    await writeText(stderrPath, stderr)
-    await writeText(exitCodePath, `${exitCode}\n`)
-    await writeText(resultPath, `${JSON.stringify({
+    await this.writeProvisionalTurnArtifacts({
+      paths: turnPaths,
       status: finalStatus,
-      phase: 'provisional',
-      timestamp: toIso(this.now())
-    }, null, 2)}\n`)
+      cmd,
+      stdout,
+      stderr,
+      exitCode
+    })
 
     const workspaceWriteTouches = this.collectWorkspaceWriteTouches(toolEvents)
     const codingLargeRepoUsage = this.detectCodingLargeRepoUsage(toolEvents)
@@ -3323,7 +3329,7 @@ export class YoloSession {
     const planBoardHash = this.computePlanBoardFingerprint(persistedProject)
     const runtimeVersion = await this.resolveRuntimeVersionInfo()
 
-    await writeText(resultPath, `${JSON.stringify({
+    const resultPayload = {
       status: finalStatus,
       intent,
       summary,
@@ -3396,9 +3402,9 @@ export class YoloSession {
         observation_window_ms: codingAgentSessionObservation.observationWindowMs
       },
       ...claimsCoverage
-    }, null, 2)}\n`)
+    }
 
-    await writeText(path.join(input.turnDir, 'action.md'), this.renderNativeActionMarkdown({
+    const actionMarkdown = this.renderNativeActionMarkdown({
       turnNumber: input.turnNumber,
       intent,
       status: finalStatus,
@@ -3410,7 +3416,13 @@ export class YoloSession {
       keyObservation: summary,
       evidencePaths: uniqueEvidencePaths,
       updateSummary: boundedUpdates
-    }))
+    })
+
+    await this.writeFinalTurnArtifacts({
+      paths: turnPaths,
+      resultPayload,
+      actionMarkdown
+    })
 
     return {
       turnNumber: input.turnNumber,
@@ -3425,6 +3437,79 @@ export class YoloSession {
       blockedBy: finalStatus === 'blocked' ? failureEntry ?? undefined : undefined,
       stageStatus
     }
+  }
+
+  private buildNativeTurnFilePaths(input: { turnDir: string, artifactsDir: string }): NativeTurnFilePaths {
+    return {
+      cmdPath: path.join(input.turnDir, 'cmd.txt'),
+      stdoutPath: path.join(input.turnDir, 'stdout.txt'),
+      stderrPath: path.join(input.turnDir, 'stderr.txt'),
+      exitCodePath: path.join(input.turnDir, 'exit_code.txt'),
+      resultPath: path.join(input.turnDir, 'result.json'),
+      actionPath: path.join(input.turnDir, 'action.md'),
+      toolEventsPath: path.join(input.artifactsDir, 'tool-events.jsonl'),
+      rawOutputPath: path.join(input.artifactsDir, 'agent-output.txt')
+    }
+  }
+
+  private async executeNativeTurnOutcome(input: {
+    context: TurnContext
+    pendingUserInputs: PendingUserInput[]
+  }): Promise<NativeTurnOutcomeExecution> {
+    try {
+      const outcome = await this.config.agent.runTurn(input.context)
+      if (input.pendingUserInputs.length > 0) {
+        await this.clearQueuedUserInputs()
+        return {
+          outcome,
+          consumedPendingUserInputs: true
+        }
+      }
+      return {
+        outcome,
+        consumedPendingUserInputs: false
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        outcome: {
+          intent: 'Handle native turn runtime error',
+          status: 'failure',
+          summary: `Native turn runtime error: ${message}`,
+          primaryAction: 'agent.run',
+          updateSummary: ['Next: inspect runtime error and retry with narrower scope.']
+        },
+        consumedPendingUserInputs: false
+      }
+    }
+  }
+
+  private async writeProvisionalTurnArtifacts(input: {
+    paths: NativeTurnFilePaths
+    status: TurnStatus
+    cmd: string
+    stdout: string
+    stderr: string
+    exitCode: number
+  }): Promise<void> {
+    await writeText(input.paths.cmdPath, input.cmd ? `${input.cmd}\n` : '')
+    await writeText(input.paths.stdoutPath, input.stdout)
+    await writeText(input.paths.stderrPath, input.stderr)
+    await writeText(input.paths.exitCodePath, `${input.exitCode}\n`)
+    await writeText(input.paths.resultPath, `${JSON.stringify({
+      status: input.status,
+      phase: 'provisional',
+      timestamp: toIso(this.now())
+    }, null, 2)}\n`)
+  }
+
+  private async writeFinalTurnArtifacts(input: {
+    paths: NativeTurnFilePaths
+    resultPayload: Record<string, unknown>
+    actionMarkdown: string
+  }): Promise<void> {
+    await writeText(input.paths.resultPath, `${JSON.stringify(input.resultPayload, null, 2)}\n`)
+    await writeText(input.paths.actionPath, input.actionMarkdown)
   }
 
   private async loadRecentTurnStatuses(limit: number): Promise<string[]> {
