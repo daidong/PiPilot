@@ -110,7 +110,7 @@ const REPO_SCAN_SKIP_DIRS = new Set([
 const REPO_SCAN_MAX_DEPTH = 3
 const REPO_SCAN_MAX_RESULTS = 12
 const PATH_ANCHOR_SCAN_MAX_DEPTH = 8
-const CODING_LARGE_REPO_CODE_EDIT_SCRIPTS = new Set(['delegate-coding-agent', 'agent-start'])
+const CODING_LARGE_REPO_CODE_EDIT_SCRIPTS = new Set(['agent-run-to-completion'])
 const CODING_AGENT_STALL_MIN_POLLS = 2
 const CODING_AGENT_STALL_MIN_WINDOW_MS = 90_000
 const DEFAULT_SEMANTIC_GATE_MODE: SemanticGateConfig['mode'] = 'off'
@@ -1744,7 +1744,7 @@ export class YoloSession {
         if (!sessionIdFromArgs) continue
         const session = ensureSession(sessionIdFromArgs)
         touchSessionTime(session, timestampMs)
-        if (scriptFromInput === 'agent-start' || scriptFromInput === 'delegate-coding-agent') {
+        if (scriptFromInput === 'agent-run-to-completion') {
           session.started = true
         }
         if (scriptFromInput === 'agent-poll') {
@@ -1769,7 +1769,7 @@ export class YoloSession {
 
       const session = ensureSession(sessionId)
       touchSessionTime(session, timestampMs)
-      if (script === 'agent-start' || script === 'delegate-coding-agent') {
+      if (script === 'agent-run-to-completion') {
         session.started = true
       }
       if (script === 'agent-poll') {

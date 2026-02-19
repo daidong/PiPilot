@@ -123,7 +123,7 @@ function codingLargeRepoDelegateEvents(cwd: string = '.') {
       tool: 'skill-script-run',
       input: {
         skillId: 'coding-large-repo',
-        script: 'delegate-coding-agent',
+        script: 'agent-run-to-completion',
         args: ['--task', 'apply repo patch', '--cwd', cwd]
       }
     },
@@ -134,14 +134,14 @@ function codingLargeRepoDelegateEvents(cwd: string = '.') {
       success: true,
       input: {
         skillId: 'coding-large-repo',
-        script: 'delegate-coding-agent'
+        script: 'agent-run-to-completion'
       },
       result: {
         success: true,
         data: {
           structuredResult: {
             schema: 'coding-large-repo.result.v1',
-            script: 'delegate-coding-agent',
+            script: 'agent-run-to-completion',
             status: 'completed',
             exit_code: 0
           }
@@ -159,7 +159,7 @@ function codingLargeRepoAsyncRunningEvents(sessionId: string, cwd: string = '.')
       tool: 'skill-script-run',
       input: {
         skillId: 'coding-large-repo',
-        script: 'delegate-coding-agent',
+        script: 'agent-run-to-completion',
         args: ['--task', 'delegate patch', '--cwd', cwd, '--async', 'always', '--session-id', sessionId]
       }
     },
@@ -170,7 +170,7 @@ function codingLargeRepoAsyncRunningEvents(sessionId: string, cwd: string = '.')
       success: true,
       input: {
         skillId: 'coding-large-repo',
-        script: 'delegate-coding-agent'
+        script: 'agent-run-to-completion'
       },
       result: {
         success: true,
@@ -229,7 +229,7 @@ function codingLargeRepoAsyncCompletedEvents(sessionId: string, cwd: string = '.
       tool: 'skill-script-run',
       input: {
         skillId: 'coding-large-repo',
-        script: 'delegate-coding-agent',
+        script: 'agent-run-to-completion',
         args: ['--task', 'delegate patch', '--cwd', cwd, '--async', 'always', '--session-id', sessionId]
       }
     },
@@ -240,7 +240,7 @@ function codingLargeRepoAsyncCompletedEvents(sessionId: string, cwd: string = '.
       success: true,
       input: {
         skillId: 'coding-large-repo',
-        script: 'delegate-coding-agent'
+        script: 'agent-run-to-completion'
       },
       result: {
         success: true,
@@ -846,7 +846,7 @@ describe('yolo-researcher v2 runtime contract', () => {
           intent: 'Run coding-large-repo delegate flow before editing repo file',
           status: 'success',
           summary: 'Edited repo code through delegate workflow.',
-          primaryAction: 'skill-script-run: coding-large-repo/delegate-coding-agent',
+          primaryAction: 'skill-script-run: coding-large-repo/agent-run-to-completion',
           evidencePaths: ['runs/turn-0001/stdout.txt'],
           toolEvents: [
             ...codingLargeRepoDelegateEvents('external/openevolve'),
@@ -883,7 +883,7 @@ describe('yolo-researcher v2 runtime contract', () => {
           intent: 'Run delegate without matching repo target',
           status: 'success',
           summary: 'Edited repo code through delegate workflow.',
-          primaryAction: 'skill-script-run: coding-large-repo/delegate-coding-agent',
+          primaryAction: 'skill-script-run: coding-large-repo/agent-run-to-completion',
           toolEvents: [
             ...codingLargeRepoDelegateEvents('.'),
             ...writeSuccessEvent('external/openevolve/openevolve/iteration.py', '# changed by delegate\n')
@@ -921,7 +921,7 @@ describe('yolo-researcher v2 runtime contract', () => {
           intent: 'Run delegate with explicit repo target',
           status: 'success',
           summary: 'Edited repo code through targeted delegate workflow.',
-          primaryAction: 'skill-script-run: coding-large-repo/delegate-coding-agent',
+          primaryAction: 'skill-script-run: coding-large-repo/agent-run-to-completion',
           repoId: 'openevolve',
           toolEvents: [
             ...codingLargeRepoDelegateEvents('external/openevolve'),

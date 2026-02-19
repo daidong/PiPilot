@@ -30,6 +30,11 @@ fail() {
 
 trap 'status=$?; if [[ "$status" -ne 0 && "$RESULT_EMITTED" -eq 0 ]]; then emit_failure_result "unexpected_failure" "$status"; fi' EXIT
 
+if ! clrepo_require_legacy_entry_opt_in "$SCRIPT_NAME"; then
+  RESULT_EMITTED=1
+  exit 2
+fi
+
 usage() {
   cat <<'EOF'
 usage: agent-kill.sh --session-id "<id>" [--signal <TERM|KILL|INT>]
@@ -64,6 +69,13 @@ if [[ -z "$SESSION_ID" ]]; then
   usage >&2
   fail "--session-id is required" 2
 fi
+case "$SIGNAL" in
+  TERM|KILL|INT)
+    ;;
+  *)
+    fail "invalid --signal: $SIGNAL (expected TERM|KILL|INT)" 2
+    ;;
+esac
 
 SESSION_DIR="$(clrepo_find_agent_session_dir "$SESSION_ID" || true)"
 if [[ -z "$SESSION_DIR" ]]; then

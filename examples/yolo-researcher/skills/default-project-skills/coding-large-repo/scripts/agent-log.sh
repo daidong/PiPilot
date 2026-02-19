@@ -30,6 +30,11 @@ fail() {
 
 trap 'status=$?; if [[ "$status" -ne 0 && "$RESULT_EMITTED" -eq 0 ]]; then emit_failure_result "unexpected_failure" "$status"; fi' EXIT
 
+if ! clrepo_require_legacy_entry_opt_in "$SCRIPT_NAME"; then
+  RESULT_EMITTED=1
+  exit 2
+fi
+
 usage() {
   cat <<'EOF'
 usage: agent-log.sh --session-id "<id>" [--tail-lines <n>]
@@ -63,6 +68,9 @@ done
 if [[ -z "$SESSION_ID" ]]; then
   usage >&2
   fail "--session-id is required" 2
+fi
+if ! clrepo_require_positive_integer "$TAIL_LINES" "--tail-lines"; then
+  fail "invalid --tail-lines: $TAIL_LINES" 2
 fi
 
 SESSION_DIR="$(clrepo_find_agent_session_dir "$SESSION_ID" || true)"

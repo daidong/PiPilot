@@ -30,6 +30,11 @@ fail() {
 
 trap 'status=$?; if [[ "$status" -ne 0 && "$RESULT_EMITTED" -eq 0 ]]; then emit_failure_result "unexpected_failure" "$status"; fi' EXIT
 
+if ! clrepo_require_legacy_entry_opt_in "$SCRIPT_NAME"; then
+  RESULT_EMITTED=1
+  exit 2
+fi
+
 usage() {
   cat <<'EOF'
 usage: agent-poll.sh --session-id "<id>" [--tail-lines <n>]
@@ -64,6 +69,9 @@ if [[ -z "$SESSION_ID" ]]; then
   usage >&2
   fail "--session-id is required" 2
 fi
+if ! clrepo_require_positive_integer "$TAIL_LINES" "--tail-lines"; then
+  fail "invalid --tail-lines: $TAIL_LINES" 2
+fi
 
 SESSION_DIR="$(clrepo_find_agent_session_dir "$SESSION_ID" || true)"
 if [[ -z "$SESSION_DIR" ]]; then
@@ -96,11 +104,24 @@ infer_exit_code_from_log() {
   return 1
 }
 
+pid_matches_session() {
+  if [[ -z "$PID" || -z "$SESSION_DIR" ]]; then
+    return 1
+  fi
+  local runner_path="$SESSION_DIR/runner.sh"
+  if [[ ! -f "$runner_path" ]]; then
+    return 1
+  fi
+  local cmdline=""
+  cmdline="$(ps -o command= -p "$PID" 2>/dev/null || true)"
+  [[ -n "$cmdline" && "$cmdline" == *"$runner_path"* ]]
+}
+
 STATE="unknown"
 EXIT_CODE="n/a"
 STATE_REASON=""
 
-if [[ -n "$PID" ]] && kill -0 "$PID" >/dev/null 2>&1; then
+if [[ -n "$PID" ]] && kill -0 "$PID" >/dev/null 2>&1 && pid_matches_session; then
   STATE="running"
   STATE_REASON="pid_running"
 elif [[ -f "$EXIT_PATH" ]]; then
@@ -113,6 +134,10 @@ elif [[ -f "$EXIT_PATH" ]]; then
     STATE_REASON="exit_file_nonzero"
   fi
 elif [[ -n "$PID" ]]; then
+  if kill -0 "$PID" >/dev/null 2>&1; then
+    STATE="failed"
+    STATE_REASON="pid_mismatch"
+  fi
   inferred_exit_code="$(infer_exit_code_from_log || true)"
   if [[ -n "$inferred_exit_code" ]]; then
     EXIT_CODE="$inferred_exit_code"
@@ -124,8 +149,10 @@ elif [[ -n "$PID" ]]; then
       STATE_REASON="inferred_exit_nonzero"
     fi
   else
-    STATE="failed"
-    STATE_REASON="missing_exit_code"
+    if [[ "$STATE_REASON" != "pid_mismatch" ]]; then
+      STATE="failed"
+      STATE_REASON="missing_exit_code"
+    fi
   fi
 fi
 

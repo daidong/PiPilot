@@ -30,6 +30,11 @@ fail() {
 
 trap 'status=$?; if [[ "$status" -ne 0 && "$RESULT_EMITTED" -eq 0 ]]; then emit_failure_result "unexpected_failure" "$status"; fi' EXIT
 
+if ! clrepo_require_legacy_entry_opt_in "$SCRIPT_NAME"; then
+  RESULT_EMITTED=1
+  exit 2
+fi
+
 ROOT="${1:-.}"
 
 if [[ ! -d "$ROOT" ]]; then
@@ -120,9 +125,7 @@ for cmd in "${verify_cmds[@]}"; do
 done
 if [[ "${coding_agents[*]}" != "none" ]]; then
   echo "suggested_delegate_commands:"
-  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"delegate-coding-agent\",\"args\":[\"--task\",\"<task>\",\"--provider\",\"auto\",\"--cwd\",\"$PREFERRED_CWD\"]})"
-  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"delegate-coding-agent\",\"args\":[\"--task\",\"<long-task>\",\"--provider\",\"auto\",\"--cwd\",\"$PREFERRED_CWD\",\"--async\",\"always\"]})"
-  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"agent-start\",\"args\":[\"--task\",\"<long-task>\",\"--provider\",\"auto\",\"--cwd\",\"$PREFERRED_CWD\"]})"
+  echo "- skill-script-run({\"skillId\":\"coding-large-repo\",\"script\":\"agent-run-to-completion\",\"args\":[\"--task\",\"<task>\",\"--provider\",\"auto\",\"--cwd\",\"$PREFERRED_CWD\",\"--verify-cmd\",\"<targeted verification command>\"]})"
 fi
 
 STACKS_JOINED="${stacks[*]}"

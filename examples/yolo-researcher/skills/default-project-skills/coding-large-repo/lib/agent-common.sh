@@ -71,6 +71,30 @@ clrepo_json_boolean_or_null() {
   esac
 }
 
+clrepo_require_legacy_entry_opt_in() {
+  local script_name="${1:-unknown-script}"
+  if [[ "${CODING_LARGE_REPO_ALLOW_LEGACY_ENTRY:-0}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+    return 0
+  fi
+  echo "error: deprecated entrypoint: ${script_name}. Use agent-run-to-completion." >&2
+  clrepo_emit_error_result_json "$script_name" 2 "deprecated_entrypoint_use_agent_run_to_completion" "error"
+  return 2
+}
+
+clrepo_require_positive_integer() {
+  local value="${1:-}"
+  local label="${2:-value}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "error: $label must be a positive integer." >&2
+    return 1
+  fi
+  if [[ "$value" -le 0 ]]; then
+    echo "error: $label must be greater than zero." >&2
+    return 1
+  fi
+  return 0
+}
+
 clrepo_emit_result_json() {
   local payload="$1"
   echo "AF_RESULT_JSON: $payload"
@@ -89,6 +113,39 @@ clrepo_emit_error_result_json() {
     "$(clrepo_json_number_or_null "$exit_code")" \
     "$(clrepo_json_string_or_null "$error_message")")"
   clrepo_emit_result_json "$payload"
+}
+
+clrepo_extract_result_json_line() {
+  local raw="${1-}"
+  printf '%s\n' "$raw" | sed -n 's/^AF_RESULT_JSON:[[:space:]]*//p' | tail -n 1
+}
+
+clrepo_json_field() {
+  local raw_json="${1-}"
+  local field="${2-}"
+  if [[ -z "$raw_json" || -z "$field" ]]; then
+    return 1
+  fi
+  python3 - "$raw_json" "$field" <<'PY'
+import json
+import sys
+
+payload = sys.argv[1]
+field = sys.argv[2]
+try:
+    data = json.loads(payload)
+except Exception:
+    sys.exit(2)
+value = data.get(field)
+if value is None:
+    sys.exit(1)
+if isinstance(value, bool):
+    print("true" if value else "false")
+elif isinstance(value, (dict, list)):
+    print(json.dumps(value, separators=(",", ":")))
+else:
+    print(str(value))
+PY
 }
 
 clrepo_compact_text() {
@@ -329,6 +386,38 @@ clrepo_runtime_tmp_dir_for_cwd() {
   printf '%s/.yolo-researcher/tmp/coding-large-repo' "$cwd_path"
 }
 
+clrepo_file_size_bytes() {
+  local target="${1:-}"
+  if [[ -z "$target" || ! -f "$target" ]]; then
+    return 1
+  fi
+  if stat -f%z "$target" >/dev/null 2>&1; then
+    stat -f%z "$target"
+    return 0
+  fi
+  if stat -c%s "$target" >/dev/null 2>&1; then
+    stat -c%s "$target"
+    return 0
+  fi
+  wc -c < "$target" | tr -d '[:space:]'
+}
+
+clrepo_file_mtime_epoch() {
+  local target="${1:-}"
+  if [[ -z "$target" || ! -e "$target" ]]; then
+    return 1
+  fi
+  if stat -f%m "$target" >/dev/null 2>&1; then
+    stat -f%m "$target"
+    return 0
+  fi
+  if stat -c%Y "$target" >/dev/null 2>&1; then
+    stat -c%Y "$target"
+    return 0
+  fi
+  return 1
+}
+
 clrepo_agent_session_root_for_cwd() {
   local cwd_path="${1:-.}"
   printf '%s/agent-sessions' "$(clrepo_runtime_tmp_dir_for_cwd "$cwd_path")"
@@ -354,11 +443,13 @@ clrepo_find_agent_session_dir() {
     return 0
   fi
 
-  local match=""
-  match="$(find . -maxdepth 8 -type d -path "*/.yolo-researcher/tmp/coding-large-repo/agent-sessions/$session_id" 2>/dev/null | head -n 1 || true)"
-  if [[ -n "$match" && -d "$match" ]]; then
-    printf '%s' "$match"
-    return 0
+  if [[ "${CODING_LARGE_REPO_SESSION_FIND_FALLBACK:-0}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+    local match=""
+    match="$(find . -maxdepth 8 -type d -path "*/.yolo-researcher/tmp/coding-large-repo/agent-sessions/$session_id" 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$match" && -d "$match" ]]; then
+      printf '%s' "$match"
+      return 0
+    fi
   fi
 
   return 1

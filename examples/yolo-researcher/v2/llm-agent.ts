@@ -773,7 +773,7 @@ function buildNativeTurnPrompt(context: TurnContext): string {
       ? []
       : [
         '- executing-plans loop: (1) read current active deliverable, (2) choose exactly one primary target, (3) execute one action that creates/updates that target (or write blocker note), (4) verify target path exists/readable and cite it.',
-        '- async delegate observation: if you start coding-large-repo async session(s), treat immediate running state as in_flight (not stalled) until bounded observation criteria are met.'
+        '- For git-repo code changes, call coding-large-repo/agent-run-to-completion once with --task + --verify-cmd (+ --deliverable when available).'
       ]),
     '',
     'OpenAI client compatibility (critical):',
@@ -787,8 +787,8 @@ function buildNativeTurnPrompt(context: TurnContext): string {
       ? '2) Literature study is recommended now: Top-3 still has unmet literature deliverables and recent sweep evidence is missing. Run literature-study({mode:"standard"}) before deep code reading.'
       : '2) Literature study is conditional: run literature-study({mode:"standard"}) when Top-3 literature deliverables are unmet and recent evidence is missing; otherwise prioritize consolidating existing literature into deliverables.',
     '3) Do not do exhaustive repo reading. Use high-leverage slices first (README, rg, entrypoints).',
-    '4) If you will modify files inside a git repo, you MUST use coding-large-repo workflow first: repo-intake -> change-plan -> delegate-coding-agent/agent-start.',
-    '5) Direct write/edit repo code changes without coding-large-repo delegate flow are invalid and will be downgraded to no_delta.',
+    '4) If you will modify files inside a git repo, you MUST call coding-large-repo/agent-run-to-completion first.',
+    '5) Direct write/edit repo code changes without coding-large-repo/agent-run-to-completion are invalid and will be downgraded to no_delta.',
     '6) Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). If path is dirty, choose a new target directory name.',
     '7) Never clone or create long-lived workspaces under runs/turn-xxxx/.',
     `8) Write turn artifacts only under "${artifactPaths.canonicalRelativeFromProject}" (absolute: ${artifactPaths.canonicalAbsolute}). Prefer artifact://<relative_path> for tool output targets.`,
@@ -802,8 +802,8 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '16) If using git_* tools, always set cwd to a concrete repo path; never assume project root itself is a git repo.',
     '17) Any generated OpenAI-calling Python script must be openai>=1.x compatible and include preflight logging (sdk/model/key-present).',
     '18) During execution turns, follow executing-plans discipline and make your intent summary explicitly mention the primary target deliverable filename.',
-    '19) For coding-large-repo async sessions, do bounded observation before diagnosing stall: at least 2 polls and a non-trivial wait window when possible.',
-    '20) Only label a delegate session as stalled when non-terminal status persists across repeated polls; otherwise report it as in_flight and continue with the next concrete step.',
+    '19) Use coding-large-repo as a single task-level call; avoid manually chaining agent-start/agent-poll/agent-log/agent-kill.',
+    '20) Prefer --verify-cmd and --deliverable in agent-run-to-completion so completion gates are explicit.',
     '',
     `Turn: ${context.turnNumber}`,
     `Goal: ${context.project.goal}`,
@@ -1385,7 +1385,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
         'Prefer evidence-producing actions. Save turn artifacts under runs/turn-xxxx/artifacts and use evidencePath as runs/turn-xxxx/...',
         'Never use work/... or absolute paths in projectUpdate evidence fields; snapshot to runs/turn-xxxx/artifacts/evidence first.',
         'For research/prior-art goals, run literature-study(mode="standard") early (fallback: literature-search(mode="sweep")) and persist processed literature artifacts locally.',
-        'When modifying files inside a git repo, use coding-large-repo workflow (repo-intake/change-plan/delegate-coding-agent or agent-start) before code edits.',
+        'When modifying files inside a git repo, use coding-large-repo/agent-run-to-completion before code edits.',
         'Runtime derives active_plan_id/status_change/delta/evidence_paths from tool events + file writes.',
         'Success is valid only if this turn touches a plan deliverable (done_definition deliverable:) or clears a blocker.',
         'Use mechanical done_definition rows only: deliverable:<turn-local path or token> and optional evidence_min:<n>.',

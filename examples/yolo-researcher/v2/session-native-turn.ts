@@ -857,7 +857,7 @@ export async function applyNativeTurnStatusGuards(session: any, input: any): Pro
   if (finalStatus === 'success' && input.repoCodeTouch.touched && !input.codingLargeRepoUsage.usedCodeEditWorkflow) {
     finalStatus = 'no_delta'
     const scriptHint = input.codingLargeRepoUsage.used
-      ? `observed coding-large-repo/${input.codingLargeRepoUsage.script || 'unknown'} (code edits require delegate-coding-agent or agent-start)`
+      ? `observed coding-large-repo/${input.codingLargeRepoUsage.script || 'unknown'} (code edits require agent-run-to-completion)`
       : 'coding-large-repo workflow missing'
     summary = `NO_DELTA: repo_code_edit_without_coding_large_repo (${input.repoCodeTouch.path}). ${scriptHint}. ${summary}`
     blockedReason = 'repo_code_edit_without_coding_large_repo'

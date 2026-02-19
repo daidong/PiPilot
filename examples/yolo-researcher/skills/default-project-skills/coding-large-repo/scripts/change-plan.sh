@@ -30,6 +30,11 @@ fail() {
 
 trap 'status=$?; if [[ "$status" -ne 0 && "$RESULT_EMITTED" -eq 0 ]]; then emit_failure_result "unexpected_failure" "$status"; fi' EXIT
 
+if ! clrepo_require_legacy_entry_opt_in "$SCRIPT_NAME"; then
+  RESULT_EMITTED=1
+  exit 2
+fi
+
 TASK="${*:-}"
 
 if [[ -z "$TASK" ]]; then
