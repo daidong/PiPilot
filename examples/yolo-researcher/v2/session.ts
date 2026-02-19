@@ -98,6 +98,8 @@ const REPO_SCAN_SKIP_DIRS = new Set([
 const REPO_SCAN_MAX_DEPTH = 3
 const REPO_SCAN_MAX_RESULTS = 12
 const CODING_LARGE_REPO_CODE_EDIT_SCRIPTS = new Set(['delegate-coding-agent', 'agent-start'])
+const CODING_AGENT_STALL_MIN_POLLS = 2
+const CODING_AGENT_STALL_MIN_WINDOW_MS = 90_000
 const DEFAULT_SEMANTIC_GATE_MODE: SemanticGateConfig['mode'] = 'off'
 const DEFAULT_SEMANTIC_GATE_CONFIDENCE = 0.85
 const DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS = 16_000
@@ -323,6 +325,22 @@ interface RuntimeFailureSnapshot {
   errorExcerpt: string
   hasOutput: boolean
   failureKind: RuntimeFailureKind
+}
+
+interface CodingAgentSessionObservation {
+  observed: boolean
+  sessionIds: string[]
+  startedSessionIds: string[]
+  polledSessionIds: string[]
+  loggedSessionIds: string[]
+  runningSessionIds: string[]
+  completedSessionIds: string[]
+  failedSessionIds: string[]
+  hasTerminal: boolean
+  hasRunningOnly: boolean
+  warmupLikely: boolean
+  pollCount: number
+  observationWindowMs: number
 }
 
 interface ResolvedSemanticGateConfig {
@@ -1387,6 +1405,172 @@ export class YoloSession {
     return { used, usedCodeEditWorkflow, script }
   }
 
+  private extractScriptArgs(rawArgs: unknown): string[] {
+    if (!Array.isArray(rawArgs)) return []
+    return rawArgs
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean)
+  }
+
+  private extractScriptArgValue(args: string[], flag: string): string {
+    if (!flag) return ''
+    for (let idx = 0; idx < args.length; idx += 1) {
+      if (args[idx] !== flag) continue
+      return (args[idx + 1] || '').trim()
+    }
+    return ''
+  }
+
+  private parseToolEventTimestampMs(timestamp: string): number | null {
+    const raw = timestamp.trim()
+    if (!raw) return null
+    const parsed = Date.parse(raw)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  private observeCodingAgentSessions(toolEvents: ToolEventRecord[]): CodingAgentSessionObservation {
+    type SessionState = {
+      firstSeenMs: number | null
+      lastSeenMs: number | null
+      started: boolean
+      polled: boolean
+      logged: boolean
+      pollCount: number
+      statuses: Set<string>
+    }
+
+    const sessions = new Map<string, SessionState>()
+    const ensureSession = (sessionId: string): SessionState => {
+      const existing = sessions.get(sessionId)
+      if (existing) return existing
+      const initial: SessionState = {
+        firstSeenMs: null,
+        lastSeenMs: null,
+        started: false,
+        polled: false,
+        logged: false,
+        pollCount: 0,
+        statuses: new Set<string>()
+      }
+      sessions.set(sessionId, initial)
+      return initial
+    }
+    const touchSessionTime = (session: SessionState, timestampMs: number | null) => {
+      if (typeof timestampMs !== 'number') return
+      if (session.firstSeenMs === null || timestampMs < session.firstSeenMs) {
+        session.firstSeenMs = timestampMs
+      }
+      if (session.lastSeenMs === null || timestampMs > session.lastSeenMs) {
+        session.lastSeenMs = timestampMs
+      }
+    }
+
+    for (const event of toolEvents) {
+      const tool = normalizeText(event.tool || '')
+      if (tool !== 'skill-script-run') continue
+      const eventInput = toPlainObject(event.input)
+      const skillId = normalizeText(safeString(eventInput?.skillId))
+      if (skillId !== 'coding-large-repo') continue
+
+      const scriptFromInput = normalizeText(safeString(eventInput?.script))
+      const args = this.extractScriptArgs(eventInput?.args)
+      const sessionIdFromArgs = this.extractScriptArgValue(args, '--session-id')
+      const timestampMs = this.parseToolEventTimestampMs(event.timestamp)
+
+      if (event.phase === 'call') {
+        if (!sessionIdFromArgs) continue
+        const session = ensureSession(sessionIdFromArgs)
+        touchSessionTime(session, timestampMs)
+        if (scriptFromInput === 'agent-start' || scriptFromInput === 'delegate-coding-agent') {
+          session.started = true
+        }
+        if (scriptFromInput === 'agent-poll') {
+          session.polled = true
+        }
+        if (scriptFromInput === 'agent-log') {
+          session.logged = true
+        }
+        continue
+      }
+
+      if (event.phase !== 'result') continue
+      const resultObj = toPlainObject(event.result)
+      const dataObj = toPlainObject(resultObj?.data)
+      const structuredObj = toPlainObject(dataObj?.structuredResult)
+
+      const scriptFromStructured = normalizeText(safeString(structuredObj?.script))
+      const script = scriptFromStructured || scriptFromInput
+      const status = normalizeText(safeString(structuredObj?.status))
+      const sessionId = safeString(structuredObj?.session_id).trim() || sessionIdFromArgs
+      if (!sessionId) continue
+
+      const session = ensureSession(sessionId)
+      touchSessionTime(session, timestampMs)
+      if (script === 'agent-start' || script === 'delegate-coding-agent') {
+        session.started = true
+      }
+      if (script === 'agent-poll') {
+        session.polled = true
+        session.pollCount += 1
+      }
+      if (script === 'agent-log') {
+        session.logged = true
+      }
+      if (status) {
+        session.statuses.add(status)
+      }
+    }
+
+    const sessionIds = Array.from(sessions.keys())
+    const startedSessionIds: string[] = []
+    const polledSessionIds: string[] = []
+    const loggedSessionIds: string[] = []
+    const runningSessionIds: string[] = []
+    const completedSessionIds: string[] = []
+    const failedSessionIds: string[] = []
+    let pollCount = 0
+    let observationWindowMs = 0
+
+    for (const [sessionId, session] of sessions.entries()) {
+      if (session.started) startedSessionIds.push(sessionId)
+      if (session.polled) polledSessionIds.push(sessionId)
+      if (session.logged) loggedSessionIds.push(sessionId)
+      pollCount += session.pollCount
+
+      if (session.statuses.has('running')) runningSessionIds.push(sessionId)
+      if (session.statuses.has('completed')) completedSessionIds.push(sessionId)
+      if (session.statuses.has('failed') || session.statuses.has('error')) failedSessionIds.push(sessionId)
+
+      if (session.firstSeenMs !== null && session.lastSeenMs !== null) {
+        observationWindowMs = Math.max(
+          observationWindowMs,
+          Math.max(0, session.lastSeenMs - session.firstSeenMs)
+        )
+      }
+    }
+
+    const hasTerminal = completedSessionIds.length > 0 || failedSessionIds.length > 0
+    const hasRunningOnly = runningSessionIds.length > 0 && !hasTerminal
+    const warmupLikely = hasRunningOnly
+      && (pollCount < CODING_AGENT_STALL_MIN_POLLS || observationWindowMs < CODING_AGENT_STALL_MIN_WINDOW_MS)
+
+    return {
+      observed: sessionIds.length > 0,
+      sessionIds,
+      startedSessionIds,
+      polledSessionIds,
+      loggedSessionIds,
+      runningSessionIds,
+      completedSessionIds,
+      failedSessionIds,
+      hasTerminal,
+      hasRunningOnly,
+      warmupLikely,
+      pollCount,
+      observationWindowMs
+    }
+  }
+
   private detectRepoCodeTouch(input: {
     workspaceWriteTouches: string[]
     workspaceGitRepos: string[]
@@ -2296,6 +2480,7 @@ export class YoloSession {
 
     const workspaceWriteTouches = this.collectWorkspaceWriteTouches(toolEvents)
     const codingLargeRepoUsage = this.detectCodingLargeRepoUsage(toolEvents)
+    const codingAgentSessionObservation = this.observeCodingAgentSessions(toolEvents)
     const repoCodeTouch = this.detectRepoCodeTouch({
       workspaceWriteTouches,
       workspaceGitRepos: input.context.workspaceGitRepos ?? []
@@ -2674,6 +2859,32 @@ export class YoloSession {
       summary = `NO_DELTA: openai_script_compat_issue (${openaiScriptIssue.reason} at ${openaiScriptIssue.path}). ${summary}`
       blockedReason = 'openai_script_compat_issue'
     }
+    const onlyRunArtifactsTouched = workspaceWriteTouches.length > 0
+      && workspaceWriteTouches.every((entry) => this.normalizeProjectPathPointer(entry).startsWith('runs/'))
+    if (
+      finalStatus === 'success'
+      && codingLargeRepoUsage.used
+      && codingAgentSessionObservation.observed
+      && codingAgentSessionObservation.hasRunningOnly
+      && !codingAgentSessionObservation.hasTerminal
+      && !repoCodeTouch.touched
+      && onlyRunArtifactsTouched
+      && !clearedBlocked
+    ) {
+      const sessionLabel = codingAgentSessionObservation.sessionIds.slice(0, 2).join(', ') || 'coding-agent-session'
+      if (codingAgentSessionObservation.warmupLikely) {
+        finalStatus = 'no_delta'
+        blockedReason = 'delegate_session_in_warmup'
+        summary = `NO_DELTA: delegate_session_in_warmup (${sessionLabel}). ${summary}`
+      } else {
+        finalStatus = 'no_delta'
+        blockedReason = 'delegate_session_in_flight'
+        summary = `NO_DELTA: delegate_session_in_flight (${sessionLabel}). ${summary}`
+      }
+      if (!deltaReasons.includes('delegate_session_in_flight')) {
+        deltaReasons.push('delegate_session_in_flight')
+      }
+    }
     if (finalStatus === 'success' && deltaReasons.length === 0) {
       finalStatus = 'no_delta'
       summary = `NO_DELTA: ${summary}`
@@ -2841,6 +3052,10 @@ export class YoloSession {
         ? 'accepted'
         : (semanticGateAudit.reject_reason || 'rejected')
       updateSummaryLines.push(`Semantic gate (${semanticGateAudit.mode}): ${semanticState}`)
+    }
+    if (codingAgentSessionObservation.observed && codingAgentSessionObservation.hasRunningOnly) {
+      const stateLabel = codingAgentSessionObservation.warmupLikely ? 'warmup' : 'running'
+      updateSummaryLines.push(`Coding-agent session: ${stateLabel} (polls=${codingAgentSessionObservation.pollCount}).`)
     }
 
     let projectUpdated = false
@@ -3164,6 +3379,21 @@ export class YoloSession {
         output: semanticGateAudit.output,
         accepted: semanticGateAudit.accepted,
         ...(semanticGateAudit.reject_reason ? { reject_reason: semanticGateAudit.reject_reason } : {})
+      },
+      coding_agent_sessions: {
+        observed: codingAgentSessionObservation.observed,
+        session_ids: codingAgentSessionObservation.sessionIds,
+        started_session_ids: codingAgentSessionObservation.startedSessionIds,
+        polled_session_ids: codingAgentSessionObservation.polledSessionIds,
+        logged_session_ids: codingAgentSessionObservation.loggedSessionIds,
+        running_session_ids: codingAgentSessionObservation.runningSessionIds,
+        completed_session_ids: codingAgentSessionObservation.completedSessionIds,
+        failed_session_ids: codingAgentSessionObservation.failedSessionIds,
+        has_terminal: codingAgentSessionObservation.hasTerminal,
+        has_running_only: codingAgentSessionObservation.hasRunningOnly,
+        warmup_likely: codingAgentSessionObservation.warmupLikely,
+        poll_count: codingAgentSessionObservation.pollCount,
+        observation_window_ms: codingAgentSessionObservation.observationWindowMs
       },
       ...claimsCoverage
     }, null, 2)}\n`)

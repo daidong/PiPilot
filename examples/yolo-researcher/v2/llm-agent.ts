@@ -772,7 +772,8 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     ...(plannerCheckpointDue
       ? []
       : [
-        '- executing-plans loop: (1) read current active deliverable, (2) choose exactly one primary target, (3) execute one action that creates/updates that target (or write blocker note), (4) verify target path exists/readable and cite it.'
+        '- executing-plans loop: (1) read current active deliverable, (2) choose exactly one primary target, (3) execute one action that creates/updates that target (or write blocker note), (4) verify target path exists/readable and cite it.',
+        '- async delegate observation: if you start coding-large-repo async session(s), treat immediate running state as in_flight (not stalled) until bounded observation criteria are met.'
       ]),
     '',
     'OpenAI client compatibility (critical):',
@@ -801,6 +802,8 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '16) If using git_* tools, always set cwd to a concrete repo path; never assume project root itself is a git repo.',
     '17) Any generated OpenAI-calling Python script must be openai>=1.x compatible and include preflight logging (sdk/model/key-present).',
     '18) During execution turns, follow executing-plans discipline and make your intent summary explicitly mention the primary target deliverable filename.',
+    '19) For coding-large-repo async sessions, do bounded observation before diagnosing stall: at least 2 polls and a non-trivial wait window when possible.',
+    '20) Only label a delegate session as stalled when non-terminal status persists across repeated polls; otherwise report it as in_flight and continue with the next concrete step.',
     '',
     `Turn: ${context.turnNumber}`,
     `Goal: ${context.project.goal}`,

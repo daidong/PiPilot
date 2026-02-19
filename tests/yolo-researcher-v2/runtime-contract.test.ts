@@ -151,6 +151,146 @@ function codingLargeRepoDelegateEvents(cwd: string = '.') {
   ]
 }
 
+function codingLargeRepoAsyncRunningEvents(sessionId: string, cwd: string = '.') {
+  return [
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'skill-script-run',
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'delegate-coding-agent',
+        args: ['--task', 'delegate patch', '--cwd', cwd, '--async', 'always', '--session-id', sessionId]
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'skill-script-run',
+      success: true,
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'delegate-coding-agent'
+      },
+      result: {
+        success: true,
+        data: {
+          structuredResult: {
+            schema: 'coding-large-repo.result.v1',
+            script: 'agent-start',
+            status: 'running',
+            session_id: sessionId,
+            pid: 321
+          }
+        }
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'skill-script-run',
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'agent-poll',
+        args: ['--session-id', sessionId]
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'skill-script-run',
+      success: true,
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'agent-poll',
+        args: ['--session-id', sessionId]
+      },
+      result: {
+        success: true,
+        data: {
+          structuredResult: {
+            schema: 'coding-large-repo.result.v1',
+            script: 'agent-poll',
+            status: 'running',
+            session_id: sessionId,
+            pid: 321
+          }
+        }
+      }
+    }
+  ]
+}
+
+function codingLargeRepoAsyncCompletedEvents(sessionId: string, cwd: string = '.') {
+  return [
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'skill-script-run',
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'delegate-coding-agent',
+        args: ['--task', 'delegate patch', '--cwd', cwd, '--async', 'always', '--session-id', sessionId]
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'skill-script-run',
+      success: true,
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'delegate-coding-agent'
+      },
+      result: {
+        success: true,
+        data: {
+          structuredResult: {
+            schema: 'coding-large-repo.result.v1',
+            script: 'agent-start',
+            status: 'running',
+            session_id: sessionId,
+            pid: 654
+          }
+        }
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'skill-script-run',
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'agent-poll',
+        args: ['--session-id', sessionId]
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'skill-script-run',
+      success: true,
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'agent-poll',
+        args: ['--session-id', sessionId]
+      },
+      result: {
+        success: true,
+        data: {
+          structuredResult: {
+            schema: 'coding-large-repo.result.v1',
+            script: 'agent-poll',
+            status: 'completed',
+            session_id: sessionId,
+            exit_code: 0
+          }
+        }
+      }
+    }
+  ]
+}
+
 async function readText(filePath: string): Promise<string> {
   return fs.readFile(filePath, 'utf-8')
 }
@@ -720,6 +860,89 @@ describe('yolo-researcher v2 runtime contract', () => {
     await session.init()
     const turn = await session.runNextTurn()
     expect(turn.status).toBe('success')
+  })
+
+  it('downgrades in-flight async delegate observation to no_delta during warmup', async () => {
+    const projectPath = await createTempDir('yolo-v2-coding-agent-warmup-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: artifacts/p8_checkpoint_and_delegate_restart.md'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Avoid early stalled judgement on async delegate sessions',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Start delegate and check immediate status',
+          status: 'success',
+          summary: 'Session looks stalled from immediate log tail.',
+          primaryAction: 'skill-script-run: coding-large-repo/agent-poll',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          toolEvents: [
+            ...codingLargeRepoAsyncRunningEvents('coding-agent-test-warmup', '.'),
+            ...writeSuccessEvent('runs/turn-0001/artifacts/p8_checkpoint_and_delegate_restart.md', '# checkpoint\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+    expect(turn.summary).toContain('delegate_session_in_warmup')
+
+    const result = JSON.parse(await readText(path.join(
+      projectPath,
+      'runs',
+      'turn-0001',
+      'result.json'
+    ))) as Record<string, unknown>
+    expect(result.blocked_reason).toBe('delegate_session_in_warmup')
+    const observation = (result.coding_agent_sessions ?? {}) as Record<string, unknown>
+    expect(observation.observed).toBe(true)
+    expect(observation.has_running_only).toBe(true)
+  })
+
+  it('keeps success when async delegate polling has terminal completion evidence', async () => {
+    const projectPath = await createTempDir('yolo-v2-coding-agent-terminal-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: artifacts/p8_checkpoint_and_delegate_restart.md'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Preserve success once delegate reaches terminal state',
+      defaultRuntime: 'host',
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Poll delegate to completion and record checkpoint',
+          status: 'success',
+          summary: 'Session completed; proceed with next execution step.',
+          primaryAction: 'skill-script-run: coding-large-repo/agent-poll',
+          activePlanId: 'P1',
+          statusChange: 'P1 ACTIVE -> ACTIVE',
+          toolEvents: [
+            ...codingLargeRepoAsyncCompletedEvents('coding-agent-test-done', '.'),
+            ...writeSuccessEvent('runs/turn-0001/artifacts/p8_checkpoint_and_delegate_restart.md', '# checkpoint\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const result = JSON.parse(await readText(path.join(
+      projectPath,
+      'runs',
+      'turn-0001',
+      'result.json'
+    ))) as Record<string, unknown>
+    expect(result.blocked_reason).toBeUndefined()
+    const observation = (result.coding_agent_sessions ?? {}) as Record<string, unknown>
+    expect(observation.observed).toBe(true)
+    expect(observation.has_terminal).toBe(true)
   })
 
   it('marks successful turns without delta evidence as no_delta', async () => {
