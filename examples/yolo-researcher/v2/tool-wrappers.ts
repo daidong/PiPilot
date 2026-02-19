@@ -45,6 +45,7 @@ interface SkillScriptRunToolLike {
 
 const TURN_ARTIFACTS_DIR_RE = /^runs\/turn-\d{4}\/artifacts(?:\/.*)?$/
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
+const ARTIFACT_URI_RE = /^artifact:\/\/(.*)$/i
 
 function toObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -93,6 +94,26 @@ function resolveTurnArtifactsDir(context?: ToolContext): string {
   return 'runs/turn-0001/artifacts'
 }
 
+function resolveArtifactUriPath(context: ToolContext | undefined, rawPath: unknown): string {
+  const raw = safeString(rawPath).trim()
+  if (!raw) return ''
+  const match = ARTIFACT_URI_RE.exec(raw)
+  if (!match) return ''
+
+  const suffix = normalizeRelativePath(match[1] || '')
+  if (
+    !suffix
+    || suffix === '.'
+    || suffix === '..'
+    || suffix.startsWith('../')
+    || suffix.includes('/../')
+    || suffix.endsWith('/..')
+  ) {
+    return resolveTurnArtifactsDir(context)
+  }
+  return `${resolveTurnArtifactsDir(context)}/${suffix}`
+}
+
 function coerceCanonicalOutputDir(
   projectPath: string,
   context: ToolContext | undefined,
@@ -101,15 +122,17 @@ function coerceCanonicalOutputDir(
 ): string {
   const currentTurnArtifactsDir = resolveTurnArtifactsDir(context)
   const fallbackDir = `${currentTurnArtifactsDir}/${category}`
-  const provided = resolveProjectRelativePath(projectPath, safeString(rawOutputDir))
+  const fromArtifactUri = resolveArtifactUriPath(context, rawOutputDir)
+  const provided = resolveProjectRelativePath(projectPath, fromArtifactUri || safeString(rawOutputDir))
   if (!provided) return fallbackDir
   if (!TURN_ARTIFACTS_DIR_RE.test(provided)) return fallbackDir
   if (!provided.startsWith(currentTurnArtifactsDir)) return fallbackDir
   return provided
 }
 
-function normalizeCanonicalResultPath(projectPath: string, rawPath: unknown): string {
-  const resolved = resolveProjectRelativePath(projectPath, safeString(rawPath))
+function normalizeCanonicalResultPath(projectPath: string, context: ToolContext | undefined, rawPath: unknown): string {
+  const fromArtifactUri = resolveArtifactUriPath(context, rawPath)
+  const resolved = resolveProjectRelativePath(projectPath, fromArtifactUri || safeString(rawPath))
   if (!resolved) return ''
   if (!EVIDENCE_PATH_RE.test(resolved)) return ''
   return resolved
@@ -438,8 +461,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
 
       const resultData = toObject(runResult.data)
       const structured = extractStructured(resultData)
-      const jsonPath = normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath)
-      const markdownPath = normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath)
+      const jsonPath = normalizeCanonicalResultPath(projectPath, context, structured.jsonPath || resultData?.jsonPath)
+      const markdownPath = normalizeCanonicalResultPath(projectPath, context, structured.markdownPath || resultData?.markdownPath)
       const paperCount = safeNumber(structured.paperCount || resultData?.paperCount, 0)
       const errors = toStringArray(structured.errors || resultData?.errors)
 
@@ -512,7 +535,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       const resultData = toObject(runResult.data)
       const structured = extractStructured(resultData)
       const outputs = toStringArray(structured.outputs || resultData?.outputs)
-        .map((entry) => normalizeCanonicalResultPath(projectPath, entry))
+        .map((entry) => normalizeCanonicalResultPath(projectPath, context, entry))
         .filter(Boolean)
       return {
         success: true,
@@ -520,8 +543,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
           filePath,
           taskType,
           outputDir,
-          jsonPath: normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath) || undefined,
-          markdownPath: normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath) || undefined,
+          jsonPath: normalizeCanonicalResultPath(projectPath, context, structured.jsonPath || resultData?.jsonPath) || undefined,
+          markdownPath: normalizeCanonicalResultPath(projectPath, context, structured.markdownPath || resultData?.markdownPath) || undefined,
           outputs,
           warnings: toStringArray(structured.warnings || resultData?.warnings),
           rowCount: safeNumber(structured.rowCount || resultData?.rowCount, 0),
@@ -595,8 +618,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
           topic,
           docType,
           outputDir,
-          jsonPath: normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath) || undefined,
-          markdownPath: normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath) || undefined,
+          jsonPath: normalizeCanonicalResultPath(projectPath, context, structured.jsonPath || resultData?.jsonPath) || undefined,
+          markdownPath: normalizeCanonicalResultPath(projectPath, context, structured.markdownPath || resultData?.markdownPath) || undefined,
           sectionCount: safeNumber(structured.sectionCount || resultData?.sectionCount, 0),
           estimatedTotalWords: safeNumber(structured.estimatedTotalWords || resultData?.estimatedTotalWords, 0),
           source: safeString(structured.source || resultData?.source).trim() || undefined,
@@ -672,8 +695,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
         data: {
           sectionHeading,
           outputDir,
-          jsonPath: normalizeCanonicalResultPath(projectPath, structured.jsonPath || resultData?.jsonPath) || undefined,
-          markdownPath: normalizeCanonicalResultPath(projectPath, structured.markdownPath || resultData?.markdownPath) || undefined,
+          jsonPath: normalizeCanonicalResultPath(projectPath, context, structured.jsonPath || resultData?.jsonPath) || undefined,
+          markdownPath: normalizeCanonicalResultPath(projectPath, context, structured.markdownPath || resultData?.markdownPath) || undefined,
           wordCount: safeNumber(structured.wordCount || resultData?.wordCount, 0),
           source: safeString(structured.source || resultData?.source).trim() || undefined,
           warning: safeString(structured.warning || resultData?.warning).trim() || undefined,

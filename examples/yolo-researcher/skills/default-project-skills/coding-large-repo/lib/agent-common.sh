@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CODING_LARGE_REPO_TMP_DIR="${CODING_LARGE_REPO_TMP_DIR:-.yolo-researcher/tmp/coding-large-repo}"
-CODING_LARGE_REPO_LOG_DIR="${CODING_LARGE_REPO_LOG_DIR:-.yolo-researcher/logs/coding-large-repo}"
+if [[ -n "${AF_WORKSPACE_ROOT:-}" ]]; then
+  CODING_LARGE_REPO_TMP_DIR="${CODING_LARGE_REPO_TMP_DIR:-$AF_WORKSPACE_ROOT/.yolo-researcher/tmp/coding-large-repo}"
+  CODING_LARGE_REPO_LOG_DIR="${CODING_LARGE_REPO_LOG_DIR:-$AF_WORKSPACE_ROOT/.yolo-researcher/logs/coding-large-repo}"
+else
+  CODING_LARGE_REPO_TMP_DIR="${CODING_LARGE_REPO_TMP_DIR:-.yolo-researcher/tmp/coding-large-repo}"
+  CODING_LARGE_REPO_LOG_DIR="${CODING_LARGE_REPO_LOG_DIR:-.yolo-researcher/logs/coding-large-repo}"
+fi
 CODING_LARGE_REPO_RESULT_SCHEMA="coding-large-repo.result.v1"
 
 clrepo_print_kv() {
@@ -308,11 +313,19 @@ clrepo_resolve_cwd() {
 
 clrepo_runtime_log_dir_for_cwd() {
   local cwd_path="${1:-.}"
+  if [[ -n "${AF_WORKSPACE_ROOT:-}" ]]; then
+    printf '%s/.yolo-researcher/logs/coding-large-repo' "$AF_WORKSPACE_ROOT"
+    return 0
+  fi
   printf '%s/.yolo-researcher/logs/coding-large-repo' "$cwd_path"
 }
 
 clrepo_runtime_tmp_dir_for_cwd() {
   local cwd_path="${1:-.}"
+  if [[ -n "${AF_WORKSPACE_ROOT:-}" ]]; then
+    printf '%s/.yolo-researcher/tmp/coding-large-repo' "$AF_WORKSPACE_ROOT"
+    return 0
+  fi
   printf '%s/.yolo-researcher/tmp/coding-large-repo' "$cwd_path"
 }
 

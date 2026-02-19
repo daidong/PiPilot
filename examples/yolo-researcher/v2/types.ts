@@ -195,6 +195,7 @@ export interface TurnRunOutcome {
   status: 'success' | 'failure' | 'ask_user' | 'stopped'
   summary: string
   primaryAction?: string
+  repoId?: string
   activePlanId?: string
   statusChange?: string
   delta?: string
@@ -238,5 +239,11 @@ export interface CreateYoloSessionConfig {
   agent: YoloSingleAgent
   semanticGate?: SemanticGateConfig
   semanticGateEvaluator?: SemanticGateEvaluator
+  pathAnchor?: {
+    audit?: boolean
+    mode?: 'recover' | 'fail'
+  }
+  requireRepoTarget?: boolean
+  artifactUriPreferred?: boolean
   now?: () => Date
 }

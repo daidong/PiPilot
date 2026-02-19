@@ -109,6 +109,7 @@ const REPO_SCAN_SKIP_DIRS = new Set([
 ])
 const REPO_SCAN_MAX_DEPTH = 3
 const REPO_SCAN_MAX_RESULTS = 12
+const PATH_ANCHOR_SCAN_MAX_DEPTH = 8
 const CODING_LARGE_REPO_CODE_EDIT_SCRIPTS = new Set(['delegate-coding-agent', 'agent-start'])
 const CODING_AGENT_STALL_MIN_POLLS = 2
 const CODING_AGENT_STALL_MIN_WINDOW_MS = 90_000
@@ -395,6 +396,8 @@ interface NativeTurnStatusGuardInput {
   coTouchedDeliverablePlanIds: string[]
   clearedBlocked: boolean
   repoCodeTouch: { touched: boolean, path: string }
+  resolvedRepoTarget: ResolvedRepoTarget
+  requireRepoTarget: boolean
   codingLargeRepoUsage: { used: boolean, script: string, usedCodeEditWorkflow: boolean }
   openaiScriptIssue: { reason: string, path: string } | null
   codingAgentSessionObservation: CodingAgentSessionObservation
@@ -417,6 +420,7 @@ interface NativeTurnStatusGuardInput {
   bashHasAnyOutputOnSuccess: boolean
   statusChange: string
   failureEntry: FailureEntry | null
+  forcedBlockedReason?: string | null
 }
 
 interface NativeTurnStatusGuardResult {
@@ -504,6 +508,7 @@ interface NativeTurnProjectMutationResult {
   summary: string
   blockedReason: string | null
   updateSummaryLines: string[]
+  plannerCheckpointRejections: string[]
   persistedProject: TurnContext['project']
   planDeltaApplied: boolean
   planDeltaWarning: string
@@ -566,6 +571,31 @@ interface NativeTurnOutcomeExecution {
   consumedPendingUserInputs: boolean
 }
 
+type PathAnchorMode = 'recover' | 'fail'
+
+interface PathRewriteEvent {
+  from: string
+  to: string
+  reason: string
+}
+
+interface PathAnchorAuditResult {
+  detected: boolean
+  count: number
+  samples: string[]
+  rewriteEvents: PathRewriteEvent[]
+  scannedPaths: number
+  nestedRunsCount: number
+  rewrittenCount: number
+  mode: PathAnchorMode
+}
+
+interface ResolvedRepoTarget {
+  repoId: string
+  repoPath: string
+  source: 'repo_id' | 'cwd' | 'none'
+}
+
 export class YoloSession {
   readonly yoloRoot: string
   readonly runsDir: string
@@ -576,6 +606,11 @@ export class YoloSession {
   private readonly projectStore: ProjectStore
   private readonly failureStore: FailureStore
   private readonly now: () => Date
+  private readonly pathAnchorAuditEnabled: boolean
+  private readonly pathAnchorMode: PathAnchorMode
+  private readonly requireRepoTarget: boolean
+  private readonly artifactUriPreferred: boolean
+  private activeTurnArtifactsDirRel = ''
   private runtimeVersionInfoPromise: Promise<RuntimeVersionInfo> | null = null
   private initialized = false
 
@@ -587,6 +622,22 @@ export class YoloSession {
     const fallbackRuntime = config.defaultRuntime?.trim() || DEFAULT_RUNTIME
     this.projectStore = new ProjectStore(this.yoloRoot, config.goal, config.successCriteria ?? [], fallbackRuntime)
     this.failureStore = new FailureStore(this.yoloRoot, this.now)
+    const envAudit = normalizeText(process.env.YOLO_PATH_ANCHOR_AUDIT || '')
+    const envMode = normalizeText(process.env.YOLO_PATH_ANCHOR_MODE || '')
+    const configuredMode = normalizeText(config.pathAnchor?.mode || '')
+    const configuredAudit = typeof config.pathAnchor?.audit === 'boolean' ? config.pathAnchor.audit : undefined
+    this.pathAnchorAuditEnabled = configuredAudit ?? (envAudit ? ['1', 'true', 'yes', 'on'].includes(envAudit) : true)
+    this.pathAnchorMode = (configuredMode === 'fail' || configuredMode === 'recover')
+      ? configuredMode
+      : (envMode === 'fail' ? 'fail' : 'recover')
+    const envRequireRepoTarget = normalizeText(process.env.YOLO_REQUIRE_REPO_TARGET || '')
+    this.requireRepoTarget = typeof config.requireRepoTarget === 'boolean'
+      ? config.requireRepoTarget
+      : ['1', 'true', 'yes', 'on'].includes(envRequireRepoTarget)
+    const envArtifactUriPreferred = normalizeText(process.env.YOLO_ARTIFACT_URI_PREFERRED || '')
+    this.artifactUriPreferred = typeof config.artifactUriPreferred === 'boolean'
+      ? config.artifactUriPreferred
+      : ['1', 'true', 'yes', 'on'].includes(envArtifactUriPreferred)
 
     this.projectFilePath = this.projectStore.filePath
     this.failuresFilePath = this.failureStore.filePath
@@ -1378,6 +1429,17 @@ export class YoloSession {
     const input = rawPath.trim()
     if (!input) return ''
 
+    const artifactUriMatch = /^artifact:\/\/(.*)$/i.exec(input)
+    if (artifactUriMatch) {
+      const suffixRaw = toPosixPath((artifactUriMatch[1] || '').trim().replace(/^\/+/, '').replace(/^\.\//, ''))
+      const suffix = path.posix.normalize(suffixRaw || '.')
+      if (!this.activeTurnArtifactsDirRel) return ''
+      if (!suffix || suffix === '.' || suffix === '..' || suffix.startsWith('../')) {
+        return this.activeTurnArtifactsDirRel
+      }
+      return `${this.activeTurnArtifactsDirRel}/${suffix}`
+    }
+
     let normalized = toPosixPath(input.replace(/^\.\//, ''))
 
     if (path.isAbsolute(input)) {
@@ -1801,6 +1863,263 @@ export class YoloSession {
     }
 
     return { touched: false, repo: '', path: '' }
+  }
+
+  private normalizeRepoId(raw: string): string {
+    const token = normalizeText(raw).replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '')
+    return token || ''
+  }
+
+  private buildWorkspaceRepoRegistry(workspaceGitRepos: string[]): Array<{ repoId: string; repoPath: string }> {
+    const repos = dedupeStrings(
+      workspaceGitRepos
+        .map((entry) => toPosixPath(entry.trim() || '.'))
+        .filter(Boolean)
+    )
+    const sorted = repos.sort((a, b) => a.localeCompare(b))
+    const usedIds = new Set<string>()
+    const registry: Array<{ repoId: string; repoPath: string }> = []
+
+    for (const repoPath of sorted) {
+      const base = repoPath === '.'
+        ? 'root'
+        : (path.posix.basename(repoPath) || repoPath)
+      let repoId = this.normalizeRepoId(base)
+      if (!repoId) repoId = 'repo'
+      if (usedIds.has(repoId)) {
+        repoId = `${repoId}-${hashStable(repoPath)}`
+      }
+      usedIds.add(repoId)
+      registry.push({ repoId, repoPath })
+    }
+
+    return registry
+  }
+
+  private resolveRepoFromCwd(cwd: string, workspaceGitRepos: string[]): string {
+    const normalizedCwd = toPosixPath(cwd.trim().replace(/^\.\/+/, ''))
+    if (!normalizedCwd) return ''
+
+    const repos = dedupeStrings(
+      workspaceGitRepos
+        .map((entry) => toPosixPath(entry.trim() || '.'))
+        .filter(Boolean)
+    )
+      .sort((a, b) => b.length - a.length)
+    for (const repoPath of repos) {
+      if (repoPath === '.') return '.'
+      if (normalizedCwd === repoPath || normalizedCwd.startsWith(`${repoPath}/`)) {
+        return repoPath
+      }
+    }
+    return ''
+  }
+
+  private extractRepoTargetHintsFromToolEvents(toolEvents: ToolEventRecord[]): {
+    repoId: string
+    explicitCwd: string
+  } {
+    let repoId = ''
+    let explicitCwd = ''
+    for (const event of toolEvents) {
+      if (event.phase !== 'call') continue
+      const input = toPlainObject(event.input)
+      if (!input) continue
+
+      const directRepoId = safeString(input.repoId).trim() || safeString(input.repo_id).trim()
+      if (directRepoId) {
+        repoId = directRepoId
+      }
+
+      const eventCwd = safeString(input.cwd).trim()
+      if (eventCwd) {
+        explicitCwd = eventCwd
+      }
+
+      const args = this.extractScriptArgs(input.args)
+      const argRepoId = this.extractScriptArgValue(args, '--repo-id')
+      if (argRepoId) {
+        repoId = argRepoId
+      }
+      const argCwd = this.extractScriptArgValue(args, '--cwd')
+      if (argCwd) {
+        explicitCwd = argCwd
+      }
+    }
+    return { repoId, explicitCwd }
+  }
+
+  private resolveRepoTargetForTurn(input: {
+    outcomeRepoId: string
+    toolEvents: ToolEventRecord[]
+    workspaceGitRepos: string[]
+  }): ResolvedRepoTarget {
+    const registry = this.buildWorkspaceRepoRegistry(input.workspaceGitRepos)
+    const byId = new Map<string, { repoId: string; repoPath: string }>()
+    const byPath = new Map<string, { repoId: string; repoPath: string }>()
+    for (const item of registry) {
+      byId.set(this.normalizeRepoId(item.repoId), item)
+      byPath.set(item.repoPath, item)
+    }
+
+    const eventHints = this.extractRepoTargetHintsFromToolEvents(input.toolEvents)
+    const outcomeRepoIdNormalized = this.normalizeRepoId(input.outcomeRepoId)
+    const hintedRepoId = outcomeRepoIdNormalized || this.normalizeRepoId(eventHints.repoId)
+    if (hintedRepoId) {
+      const hit = byId.get(hintedRepoId)
+      if (hit) {
+        return {
+          repoId: hit.repoId,
+          repoPath: hit.repoPath,
+          source: 'repo_id'
+        }
+      }
+    }
+
+    const eventCwd = eventHints.explicitCwd
+    if (eventCwd) {
+      const repoPath = this.resolveRepoFromCwd(eventCwd, input.workspaceGitRepos)
+      if (repoPath) {
+        const hit = byPath.get(repoPath)
+        if (hit) {
+          return {
+            repoId: hit.repoId,
+            repoPath: hit.repoPath,
+            source: 'cwd'
+          }
+        }
+      }
+    }
+
+    return { repoId: '', repoPath: '', source: 'none' }
+  }
+
+  private async scanPathAnchorViolations(input: {
+    turnNumber: number
+    turnStartedAt: Date
+  }): Promise<{ violations: string[]; scannedPaths: number }> {
+    const turnPrefix = `runs/${formatTurnId(input.turnNumber)}/`
+    const turnStartedMs = input.turnStartedAt.getTime()
+    const violations: string[] = []
+    let scannedPaths = 0
+
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > PATH_ANCHOR_SCAN_MAX_DEPTH) return
+      let entries: fs.Dirent[] = []
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name)
+        const relPath = toPosixPath(path.relative(this.yoloRoot, fullPath))
+        scannedPaths += 1
+        if (!relPath || relPath.startsWith('../')) continue
+        if (entry.isDirectory() && REPO_SCAN_SKIP_DIRS.has(entry.name)) continue
+
+        if (relPath.includes(`/${turnPrefix}`) && !relPath.startsWith(turnPrefix)) {
+          if (entry.isFile()) {
+            try {
+              const stat = await fs.stat(fullPath)
+              if (stat.mtimeMs >= (turnStartedMs - 1_000)) {
+                violations.push(relPath)
+              }
+            } catch {
+              // Ignore transient entries.
+            }
+          }
+        }
+
+        if (entry.isDirectory()) {
+          await walk(fullPath, depth + 1)
+        }
+      }
+    }
+
+    await walk(this.yoloRoot, 0)
+    return {
+      violations: dedupeStrings(violations),
+      scannedPaths
+    }
+  }
+
+  private async recoverPathAnchorViolations(input: {
+    turnNumber: number
+    violations: string[]
+  }): Promise<PathRewriteEvent[]> {
+    const turnPrefix = `runs/${formatTurnId(input.turnNumber)}/`
+    const rewriteEvents: PathRewriteEvent[] = []
+    const usedTargets = new Set<string>()
+
+    for (const fromRelPath of input.violations) {
+      const idx = fromRelPath.lastIndexOf(`/${turnPrefix}`)
+      if (idx < 0) continue
+      const tail = fromRelPath.slice(idx + 1 + turnPrefix.length)
+      const normalizedTail = toPosixPath(tail.trim().replace(/^\/+/, ''))
+      if (!normalizedTail || !normalizedTail.startsWith('artifacts/')) continue
+
+      const targetRelPath = `${turnPrefix}${normalizedTail}`
+      if (usedTargets.has(targetRelPath)) continue
+      usedTargets.add(targetRelPath)
+
+      const fromAbs = path.join(this.yoloRoot, fromRelPath)
+      const toAbs = path.join(this.yoloRoot, targetRelPath)
+      try {
+        await ensureDir(path.dirname(toAbs))
+        await fs.copyFile(fromAbs, toAbs)
+        rewriteEvents.push({
+          from: fromRelPath,
+          to: targetRelPath,
+          reason: 'path_anchor_recover_copy'
+        })
+      } catch {
+        // Best-effort recovery; failures remain visible via violation samples.
+      }
+    }
+
+    return rewriteEvents
+  }
+
+  private async runPathAnchorAudit(input: {
+    turnNumber: number
+    turnStartedAt: Date
+  }): Promise<PathAnchorAuditResult> {
+    if (!this.pathAnchorAuditEnabled) {
+      return {
+        detected: false,
+        count: 0,
+        samples: [],
+        rewriteEvents: [],
+        scannedPaths: 0,
+        nestedRunsCount: 0,
+        rewrittenCount: 0,
+        mode: this.pathAnchorMode
+      }
+    }
+
+    const scanned = await this.scanPathAnchorViolations({
+      turnNumber: input.turnNumber,
+      turnStartedAt: input.turnStartedAt
+    })
+    const rewriteEvents = this.pathAnchorMode === 'recover'
+      ? await this.recoverPathAnchorViolations({
+        turnNumber: input.turnNumber,
+        violations: scanned.violations
+      })
+      : []
+
+    return {
+      detected: scanned.violations.length > 0,
+      count: scanned.violations.length,
+      samples: scanned.violations.slice(0, 10),
+      rewriteEvents,
+      scannedPaths: scanned.scannedPaths,
+      nestedRunsCount: scanned.violations.length,
+      rewrittenCount: rewriteEvents.length,
+      mode: this.pathAnchorMode
+    }
   }
 
   private async writeWorkspaceChangeArtifacts(input: {
@@ -2582,6 +2901,7 @@ export class YoloSession {
     preflightNotes: string[]
   }): Promise<TurnExecutionResult> {
     const runtime = input.context.project.defaultRuntime || this.config.defaultRuntime || DEFAULT_RUNTIME
+    this.activeTurnArtifactsDirRel = `runs/${formatTurnId(input.turnNumber)}/artifacts`
     const turnPaths = this.buildNativeTurnFilePaths({
       turnDir: input.turnDir,
       artifactsDir: input.artifactsDir
@@ -2638,6 +2958,7 @@ export class YoloSession {
       ? null
       : (normalizePlanId(outcome.replacedBy ?? '') || undefined)
     const hintedActivePlanId = normalizePlanId(outcome.activePlanId ?? '')
+    const hintedRepoId = safeString(outcome.repoId).trim()
 
     const normalizedOutcomeEvidencePathsRaw = dedupeStrings(
       (outcome.evidencePaths ?? [])
@@ -2676,12 +2997,25 @@ export class YoloSession {
       workspaceWriteTouches,
       workspaceGitRepos: input.context.workspaceGitRepos ?? []
     })
+    const resolvedRepoTarget = this.resolveRepoTargetForTurn({
+      outcomeRepoId: hintedRepoId,
+      toolEvents,
+      workspaceGitRepos: input.context.workspaceGitRepos ?? []
+    })
     const workspaceChangeArtifacts = await this.writeWorkspaceChangeArtifacts({
       artifactsDir: input.artifactsDir,
       workspaceWriteTouches,
       workspaceGitRepos: input.context.workspaceGitRepos ?? [],
       turnNumber: input.turnNumber
     })
+    const pathAnchorAudit = await this.runPathAnchorAudit({
+      turnNumber: input.turnNumber,
+      turnStartedAt
+    })
+    if (pathAnchorAudit.detected && pathAnchorAudit.mode === 'fail') {
+      finalStatus = 'blocked'
+      summary = `PATH_ANCHOR_VIOLATION: detected ${pathAnchorAudit.count} non-canonical turn artifact write(s). ${summary}`
+    }
 
     const implicitTurnEvidencePaths = new Set<string>([
       this.toEvidencePath(cmdPath),
@@ -2763,7 +3097,8 @@ export class YoloSession {
       this.toEvidencePath(stderrPath),
       this.toEvidencePath(exitCodePath),
       this.toEvidencePath(toolEventsPath),
-      this.toEvidencePath(workspaceChangeArtifacts.changedFilesPath)
+      this.toEvidencePath(workspaceChangeArtifacts.changedFilesPath),
+      ...pathAnchorAudit.rewriteEvents.map((event) => event.to)
     ]
     if (workspaceChangeArtifacts.patchPath) {
       evidencePaths.push(this.toEvidencePath(workspaceChangeArtifacts.patchPath))
@@ -2917,6 +3252,8 @@ export class YoloSession {
       coTouchedDeliverablePlanIds,
       clearedBlocked,
       repoCodeTouch,
+      resolvedRepoTarget,
+      requireRepoTarget: this.requireRepoTarget,
       codingLargeRepoUsage,
       openaiScriptIssue,
       codingAgentSessionObservation,
@@ -2941,7 +3278,10 @@ export class YoloSession {
         && (((bashSnapshot.stdout?.trim().length ?? 0) > 0) || ((bashSnapshot.stderr?.trim().length ?? 0) > 0))
       ),
       statusChange,
-      failureEntry
+      failureEntry,
+      forcedBlockedReason: pathAnchorAudit.detected && pathAnchorAudit.mode === 'fail'
+        ? 'path_anchor_violation'
+        : null
     })
     finalStatus = statusGuardResult.finalStatus
     summary = statusGuardResult.summary
@@ -3007,6 +3347,7 @@ export class YoloSession {
     const coPlanWarnings = projectMutationResult.coPlanWarnings
     const clearedRedundancyBlocked = projectMutationResult.clearedRedundancyBlocked
     const doneEntries = projectMutationResult.doneEntries
+    const plannerCheckpointRejections = projectMutationResult.plannerCheckpointRejections
 
     const boundedUpdates = updateSummaryLines
       .map((line) => line.trim())
@@ -3051,6 +3392,11 @@ export class YoloSession {
       deterministicFingerprint,
       clearedBlocked,
       blockedReason,
+      resolvedRepoTarget,
+      pathAnchorAudit,
+      plannerCheckpointRejections,
+      requireRepoTarget: this.requireRepoTarget,
+      artifactUriPreferred: this.artifactUriPreferred,
       semanticGateAudit,
       codingAgentSessionObservation
     })
@@ -3178,6 +3524,11 @@ export class YoloSession {
     deterministicFingerprint: string | null
     clearedBlocked: boolean
     blockedReason: string | null
+    resolvedRepoTarget: ResolvedRepoTarget
+    pathAnchorAudit: PathAnchorAuditResult
+    plannerCheckpointRejections: string[]
+    requireRepoTarget: boolean
+    artifactUriPreferred: boolean
     semanticGateAudit: SemanticGateAuditRecord
     codingAgentSessionObservation: CodingAgentSessionObservation
   }): Promise<NativeTurnResultPayloadBuildResult> {

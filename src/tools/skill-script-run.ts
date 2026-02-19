@@ -9,7 +9,7 @@ import path from 'node:path'
 
 import { defineTool } from '../factories/define-tool.js'
 import type { SkillScriptMetadata } from '../types/skill.js'
-import type { Tool } from '../types/tool.js'
+import type { Tool, ToolContext } from '../types/tool.js'
 
 export interface SkillScriptRunInput {
   skillId: string
@@ -34,6 +34,28 @@ function normalizeStringArray(value: unknown): string[] {
   return value
     .map(item => typeof item === 'string' ? item.trim() : '')
     .filter(Boolean)
+}
+
+function readSessionStateString(
+  runtime: ToolContext['runtime'],
+  key: string
+): string {
+  const value = runtime.sessionState.get<string>(key)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function buildAgentFoundryEnv(runtime: ToolContext['runtime']): Record<string, string> {
+  const env: Record<string, string> = {}
+  const workspaceRoot = readSessionStateString(runtime, 'yolo.workspaceRoot') || runtime.projectPath
+  const turnId = readSessionStateString(runtime, 'yolo.turnId')
+  const artifactsRel = readSessionStateString(runtime, 'yolo.turnArtifactsDir')
+  const artifactsAbs = readSessionStateString(runtime, 'yolo.turnArtifactsAbsDir')
+
+  if (workspaceRoot) env.AF_WORKSPACE_ROOT = workspaceRoot
+  if (turnId) env.AF_TURN_ID = turnId
+  if (artifactsRel) env.AF_TURN_ARTIFACTS_REL = artifactsRel
+  if (artifactsAbs) env.AF_TURN_ARTIFACTS_ABS = artifactsAbs
+  return env
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -274,6 +296,7 @@ export const skillScriptRunTool: Tool<SkillScriptRunInput, SkillScriptRunOutput>
       const execResult = await runtime.io.exec(command, {
         cwd: input.cwd ?? '.',
         timeout: input.timeout,
+        env: buildAgentFoundryEnv(runtime),
         caller: 'skill-script-run'
       })
 

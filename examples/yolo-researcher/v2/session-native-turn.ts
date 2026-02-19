@@ -324,11 +324,23 @@ export async function applyNativeTurnProjectMutations(session: any, input: any):
   let finalStatus = input.finalStatus
   let summary = input.summary
   let blockedReason = input.blockedReason
+  const plannerCheckpointRejections: string[] = []
 
   const updateSummaryLines = [
     ...input.preflightNotes.map((line: string) => line.trim()).filter(Boolean),
     ...input.outcomeUpdateSummary.map((line: string) => line.trim()).filter(Boolean)
   ]
+  if (!input.plannerCheckpointDue && input.outcomeProjectUpdate) {
+    if (Array.isArray(input.outcomeProjectUpdate.planBoard)) {
+      plannerCheckpointRejections.push('plan_board_update_outside_checkpoint')
+    }
+    if (Array.isArray(input.outcomeProjectUpdate.currentPlan)) {
+      plannerCheckpointRejections.push('current_plan_rewrite_outside_checkpoint')
+    }
+    if (plannerCheckpointRejections.length > 0) {
+      updateSummaryLines.push(`Planner checkpoint guard rejected: ${plannerCheckpointRejections.join(', ')}`)
+    }
+  }
   if (input.planAttribution.reason) {
     updateSummaryLines.push(`Plan attribution: ${input.planAttribution.reason}${input.activePlanId ? ` -> ${input.activePlanId}` : ''}`)
   }
@@ -493,6 +505,7 @@ export async function applyNativeTurnProjectMutations(session: any, input: any):
     summary,
     blockedReason,
     updateSummaryLines,
+    plannerCheckpointRejections,
     persistedProject,
     planDeltaApplied: planDeltaResult.planDeltaApplied,
     planDeltaWarning: planDeltaResult.planDeltaWarning,
@@ -554,8 +567,34 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
       stage_status: stageStatus,
       planner_checkpoint_due: input.plannerCheckpoint?.due ?? false,
       planner_checkpoint_reasons: input.plannerCheckpoint?.reasons ?? [],
+      planner_checkpoint_rejections: input.plannerCheckpointRejections ?? [],
       plan_board_hash: planBoardHash,
       runtime_version: runtimeVersion,
+      repo_target_policy: {
+        require_repo_target: Boolean(input.requireRepoTarget)
+      },
+      artifact_uri_preferred: Boolean(input.artifactUriPreferred),
+      resolved_repo: input.resolvedRepoTarget?.repoId
+        ? {
+          repo_id: input.resolvedRepoTarget.repoId,
+          repo_path: input.resolvedRepoTarget.repoPath,
+          source: input.resolvedRepoTarget.source
+        }
+        : null,
+      path_anchor_violation: {
+        detected: Boolean(input.pathAnchorAudit?.detected),
+        count: Number(input.pathAnchorAudit?.count || 0),
+        samples: Array.isArray(input.pathAnchorAudit?.samples) ? input.pathAnchorAudit.samples : []
+      },
+      path_rewrite_events: Array.isArray(input.pathAnchorAudit?.rewriteEvents)
+        ? input.pathAnchorAudit.rewriteEvents
+        : [],
+      path_anchor_metrics: {
+        scanned_paths: Number(input.pathAnchorAudit?.scannedPaths || 0),
+        nested_runs_count: Number(input.pathAnchorAudit?.nestedRunsCount || 0),
+        rewritten_count: Number(input.pathAnchorAudit?.rewrittenCount || 0),
+        mode: input.pathAnchorAudit?.mode || 'recover'
+      },
       plan_attribution_reason: input.planAttribution.reason,
       plan_attribution_ambiguous: input.planAttribution.ambiguous,
       co_touched_plan_ids: input.coTouchedPlanIds,
@@ -761,6 +800,12 @@ export async function applyNativeTurnStatusGuards(session: any, input: any): Pro
   let statusChange = input.statusChange
   let failureEntry = input.failureEntry
 
+  if (input.forcedBlockedReason) {
+    finalStatus = 'blocked'
+    blockedReason = input.forcedBlockedReason
+    summary = `BLOCKED: ${input.forcedBlockedReason}. ${summary}`
+  }
+
   if (finalStatus === 'success' && input.planAttributionAmbiguous) {
     finalStatus = 'no_delta'
     summary = `NO_DELTA: multiple plan deliverables touched in one turn. ${summary}`
@@ -786,6 +831,28 @@ export async function applyNativeTurnStatusGuards(session: any, input: any): Pro
     finalStatus = 'no_delta'
     summary = `NO_DELTA: missing_plan_deliverable_touch. ${summary}`
     blockedReason = 'missing_plan_deliverable_touch'
+  }
+  if (
+    finalStatus === 'success'
+    && input.repoCodeTouch.touched
+    && input.requireRepoTarget
+    && !input.resolvedRepoTarget?.repoId
+  ) {
+    finalStatus = 'no_delta'
+    blockedReason = 'missing_repo_target'
+    summary = `NO_DELTA: missing_repo_target for repo code touch (${input.repoCodeTouch.path}). ${summary}`
+  }
+  if (
+    finalStatus === 'success'
+    && input.repoCodeTouch.touched
+    && input.requireRepoTarget
+    && input.resolvedRepoTarget?.repoPath
+    && input.repoCodeTouch.repo
+    && input.resolvedRepoTarget.repoPath !== input.repoCodeTouch.repo
+  ) {
+    finalStatus = 'no_delta'
+    blockedReason = 'repo_target_mismatch'
+    summary = `NO_DELTA: repo_target_mismatch (target=${input.resolvedRepoTarget.repoPath}, touched=${input.repoCodeTouch.repo}). ${summary}`
   }
   if (finalStatus === 'success' && input.repoCodeTouch.touched && !input.codingLargeRepoUsage.usedCodeEditWorkflow) {
     finalStatus = 'no_delta'

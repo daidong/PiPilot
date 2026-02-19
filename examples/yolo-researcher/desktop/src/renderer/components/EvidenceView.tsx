@@ -27,10 +27,18 @@ interface TurnResultMeta {
   planAttributionAmbiguous?: boolean
   plannerCheckpointDue?: boolean
   plannerCheckpointReasons?: string[]
+  plannerCheckpointRejections?: string[]
   lastFailedCmd?: string
   lastFailedExitCode?: number
   lastFailedErrorExcerpt?: string
   lastFailureKind?: string
+  resolvedRepoId?: string
+  resolvedRepoPath?: string
+  resolvedRepoSource?: string
+  pathAnchorDetected?: boolean
+  pathAnchorCount?: number
+  pathAnchorMode?: string
+  pathRewriteCount?: number
 }
 
 const HIGHLIGHT_SCAN_TURNS = 20
@@ -88,6 +96,13 @@ function readStringListField(data: Record<string, unknown> | null, key: string):
     .filter((item): item is string => typeof item === 'string')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function readObjectField(data: Record<string, unknown> | null, key: string): Record<string, unknown> | null {
+  if (!data) return null
+  const value = data[key]
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
 }
 
 function formatReasonToken(value: string): string {
@@ -191,6 +206,10 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
         }
 
         const parsed = parseJsonObject(payload.content)
+        const resolvedRepo = readObjectField(parsed, 'resolved_repo')
+        const pathAnchorViolation = readObjectField(parsed, 'path_anchor_violation')
+        const pathAnchorMetrics = readObjectField(parsed, 'path_anchor_metrics')
+        const pathRewriteEvents = parsed?.path_rewrite_events
         setSelectedResultMeta({
           status: readStringField(parsed, 'status') ?? selectedTurnObject?.status ?? 'unknown',
           summary: readStringField(parsed, 'summary') ?? selectedTurnObject?.summary ?? 'No summary.',
@@ -202,10 +221,18 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           planAttributionAmbiguous: readBooleanField(parsed, 'plan_attribution_ambiguous'),
           plannerCheckpointDue: readBooleanField(parsed, 'planner_checkpoint_due'),
           plannerCheckpointReasons: readStringListField(parsed, 'planner_checkpoint_reasons'),
+          plannerCheckpointRejections: readStringListField(parsed, 'planner_checkpoint_rejections'),
           lastFailedCmd: readStringField(parsed, 'last_failed_cmd'),
           lastFailedExitCode: readNumberField(parsed, 'last_failed_exit_code'),
           lastFailedErrorExcerpt: readStringField(parsed, 'last_failed_error_excerpt'),
-          lastFailureKind: readStringField(parsed, 'last_failure_kind')
+          lastFailureKind: readStringField(parsed, 'last_failure_kind'),
+          resolvedRepoId: readStringField(resolvedRepo, 'repo_id'),
+          resolvedRepoPath: readStringField(resolvedRepo, 'repo_path'),
+          resolvedRepoSource: readStringField(resolvedRepo, 'source'),
+          pathAnchorDetected: readBooleanField(pathAnchorViolation, 'detected'),
+          pathAnchorCount: readNumberField(pathAnchorViolation, 'count'),
+          pathAnchorMode: readStringField(pathAnchorMetrics, 'mode'),
+          pathRewriteCount: Array.isArray(pathRewriteEvents) ? pathRewriteEvents.length : 0
         })
       })
       .catch(() => {
@@ -251,6 +278,10 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
       for (const row of rows) {
         const status = readStringField(row.parsedResult, 'status') ?? normalizedTurnStatus(row.turn.status, row.turn.partial)
         const summary = readStringField(row.parsedResult, 'summary') ?? row.turn.summary
+        const resolvedRepo = readObjectField(row.parsedResult, 'resolved_repo')
+        const pathAnchorViolation = readObjectField(row.parsedResult, 'path_anchor_violation')
+        const pathAnchorMetrics = readObjectField(row.parsedResult, 'path_anchor_metrics')
+        const pathRewriteEvents = row.parsedResult?.path_rewrite_events
         nextMilestones.push({
           turnNumber: row.turn.turnNumber,
           status,
@@ -263,10 +294,18 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
           planAttributionAmbiguous: readBooleanField(row.parsedResult, 'plan_attribution_ambiguous'),
           plannerCheckpointDue: readBooleanField(row.parsedResult, 'planner_checkpoint_due'),
           plannerCheckpointReasons: readStringListField(row.parsedResult, 'planner_checkpoint_reasons'),
+          plannerCheckpointRejections: readStringListField(row.parsedResult, 'planner_checkpoint_rejections'),
           lastFailedCmd: readStringField(row.parsedResult, 'last_failed_cmd'),
           lastFailedExitCode: readNumberField(row.parsedResult, 'last_failed_exit_code'),
           lastFailedErrorExcerpt: readStringField(row.parsedResult, 'last_failed_error_excerpt'),
-          lastFailureKind: readStringField(row.parsedResult, 'last_failure_kind')
+          lastFailureKind: readStringField(row.parsedResult, 'last_failure_kind'),
+          resolvedRepoId: readStringField(resolvedRepo, 'repo_id'),
+          resolvedRepoPath: readStringField(resolvedRepo, 'repo_path'),
+          resolvedRepoSource: readStringField(resolvedRepo, 'source'),
+          pathAnchorDetected: readBooleanField(pathAnchorViolation, 'detected'),
+          pathAnchorCount: readNumberField(pathAnchorViolation, 'count'),
+          pathAnchorMode: readStringField(pathAnchorMetrics, 'mode'),
+          pathRewriteCount: Array.isArray(pathRewriteEvents) ? pathRewriteEvents.length : 0
         })
 
         for (const artifact of row.turnArtifacts) {
@@ -442,7 +481,7 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     <div className="t-text-secondary mt-1 text-[11px]">
                       {truncateText(milestone?.summary ?? turn.summary, 140)}
                     </div>
-                    {(milestone?.activePlanId || milestone?.statusChange || milestone?.planAttributionReason || milestone?.blockedReason || milestone?.lastFailureKind || (milestone?.plannerCheckpointReasons?.length ?? 0) > 0) && (
+                    {(milestone?.activePlanId || milestone?.statusChange || milestone?.planAttributionReason || milestone?.blockedReason || milestone?.lastFailureKind || milestone?.resolvedRepoId || milestone?.pathAnchorDetected || (milestone?.plannerCheckpointReasons?.length ?? 0) > 0 || (milestone?.plannerCheckpointRejections?.length ?? 0) > 0) && (
                       <div className="t-text-muted mt-1 space-y-0.5 text-[10px]">
                         {(milestone?.activePlanId || milestone?.statusChange) && (
                           <div>
@@ -470,6 +509,19 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                           <div>
                             checkpoint={milestone?.plannerCheckpointDue ? 'due' : 'guard'}:{' '}
                             {milestone?.plannerCheckpointReasons?.slice(0, 2).map(formatReasonToken).join(', ')}
+                          </div>
+                        )}
+                        {(milestone?.plannerCheckpointRejections?.length ?? 0) > 0 && (
+                          <div>checkpoint_reject={milestone?.plannerCheckpointRejections?.slice(0, 2).map(formatReasonToken).join(', ')}</div>
+                        )}
+                        {milestone?.resolvedRepoId && (
+                          <div>repo={milestone.resolvedRepoId} ({milestone.resolvedRepoPath || '-'})</div>
+                        )}
+                        {milestone?.pathAnchorDetected && (
+                          <div>
+                            path_anchor={milestone.pathAnchorMode || 'recover'}:{' '}
+                            {typeof milestone.pathAnchorCount === 'number' ? milestone.pathAnchorCount : 0}
+                            {typeof milestone.pathRewriteCount === 'number' ? ` (rewrite ${milestone.pathRewriteCount})` : ''}
                           </div>
                         )}
                       </div>
@@ -593,7 +645,10 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                   || selectedResultMeta?.planAttributionReason
                   || selectedResultMeta?.blockedReason
                   || selectedResultMeta?.lastFailureKind
+                  || selectedResultMeta?.resolvedRepoId
+                  || selectedResultMeta?.pathAnchorDetected
                   || (selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0
+                  || (selectedResultMeta?.plannerCheckpointRejections?.length ?? 0) > 0
                 ) && (
                   <div className="t-text-muted mt-2 space-y-1 text-[10px]">
                     {selectedResultMeta?.activePlanId && <div>plan: {selectedResultMeta.activePlanId}</div>}
@@ -623,6 +678,24 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     {(selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0 && (
                       <div>
                         checkpoint: {selectedResultMeta?.plannerCheckpointDue ? 'due' : 'guard'} ({selectedResultMeta?.plannerCheckpointReasons?.map(formatReasonToken).join(', ')})
+                      </div>
+                    )}
+                    {(selectedResultMeta?.plannerCheckpointRejections?.length ?? 0) > 0 && (
+                      <div>
+                        checkpoint_reject: {selectedResultMeta?.plannerCheckpointRejections?.map(formatReasonToken).join(', ')}
+                      </div>
+                    )}
+                    {selectedResultMeta?.resolvedRepoId && (
+                      <div>
+                        resolved_repo: {selectedResultMeta.resolvedRepoId} ({selectedResultMeta.resolvedRepoPath || '-'})
+                        {selectedResultMeta.resolvedRepoSource ? ` via ${selectedResultMeta.resolvedRepoSource}` : ''}
+                      </div>
+                    )}
+                    {selectedResultMeta?.pathAnchorDetected && (
+                      <div>
+                        path_anchor_violation: yes ({typeof selectedResultMeta.pathAnchorCount === 'number' ? selectedResultMeta.pathAnchorCount : 0})
+                        {selectedResultMeta.pathAnchorMode ? ` mode=${selectedResultMeta.pathAnchorMode}` : ''}
+                        {typeof selectedResultMeta.pathRewriteCount === 'number' ? ` rewrite=${selectedResultMeta.pathRewriteCount}` : ''}
                       </div>
                     )}
                   </div>

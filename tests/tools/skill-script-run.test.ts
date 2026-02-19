@@ -113,6 +113,40 @@ describe('skill-script-run tool', () => {
     expect(context.runtime.skillManager?.getState('quick-audit')).toBe('fully-loaded')
   })
 
+  it('injects AF_* runtime anchor env vars for skill scripts', async () => {
+    context.runtime.sessionState.set('yolo.workspaceRoot', tempDir)
+    context.runtime.sessionState.set('yolo.turnId', 'turn-0042')
+    context.runtime.sessionState.set('yolo.turnArtifactsDir', 'runs/turn-0042/artifacts')
+    context.runtime.sessionState.set('yolo.turnArtifactsAbsDir', `${tempDir}/runs/turn-0042/artifacts`)
+
+    const scriptPath = path.join(tempDir, '.agentfoundry', 'skills', 'env-check', 'scripts', 'audit.sh')
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true })
+    await fs.writeFile(
+      scriptPath,
+      [
+        'echo "AF_WORKSPACE_ROOT=$AF_WORKSPACE_ROOT"',
+        'echo "AF_TURN_ID=$AF_TURN_ID"',
+        'echo "AF_TURN_ARTIFACTS_REL=$AF_TURN_ARTIFACTS_REL"',
+        'echo "AF_TURN_ARTIFACTS_ABS=$AF_TURN_ARTIFACTS_ABS"'
+      ].join('\n'),
+      'utf-8'
+    )
+    context.runtime.skillManager?.register(defineScriptSkill('env-check', scriptPath))
+
+    const result = await skillScriptRunTool.execute({
+      skillId: 'env-check',
+      script: 'audit',
+      args: []
+    }, context)
+
+    expect(result.success).toBe(true)
+    const stdout = result.data?.stdout || ''
+    expect(stdout).toContain(`AF_WORKSPACE_ROOT=${tempDir}`)
+    expect(stdout).toContain('AF_TURN_ID=turn-0042')
+    expect(stdout).toContain('AF_TURN_ARTIFACTS_REL=runs/turn-0042/artifacts')
+    expect(stdout).toContain(`AF_TURN_ARTIFACTS_ABS=${tempDir}/runs/turn-0042/artifacts`)
+  })
+
   it('prefers app.asar.unpacked script path when available', async () => {
     const asarScriptPath = path.join(
       tempDir,

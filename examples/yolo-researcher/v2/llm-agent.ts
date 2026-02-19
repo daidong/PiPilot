@@ -791,7 +791,7 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '5) Direct write/edit repo code changes without coding-large-repo delegate flow are invalid and will be downgraded to no_delta.',
     '6) Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). If path is dirty, choose a new target directory name.',
     '7) Never clone or create long-lived workspaces under runs/turn-xxxx/.',
-    `8) Write turn artifacts only under "${artifactPaths.canonicalRelativeFromProject}" (absolute: ${artifactPaths.canonicalAbsolute}).`,
+    `8) Write turn artifacts only under "${artifactPaths.canonicalRelativeFromProject}" (absolute: ${artifactPaths.canonicalAbsolute}). Prefer artifact://<relative_path> for tool output targets.`,
     '9) projectUpdate evidence paths must use "runs/turn-xxxx/...". Never use work/, absolute paths, or other roots in evidencePath fields.',
     '10) Persist processed literature artifacts under current turn artifacts.',
     '11) Respect Done(Do-not-repeat): avoid repeating identical action fingerprints unless you will produce a new artifact type.',
@@ -812,6 +812,7 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     `Literature output dir (absolute): ${literatureOutputDirAbs}`,
     `Turn artifact dir (relative): ${artifactPaths.canonicalRelativeFromProject}`,
     `Turn artifact dir (absolute): ${artifactPaths.canonicalAbsolute}`,
+    'Turn artifact URI base: artifact://',
     `Workspace git repos: ${workspaceGitRepos.length > 0 ? workspaceGitRepos.join(', ') : '(none discovered)'}`,
     'Evidence snapshot rule:',
     '- If source proof is in work/... or any non-runs path, create a snapshot file under runs/turn-xxxx/artifacts/evidence/... first.',
@@ -925,6 +926,7 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '  "status": "success|failure|ask_user|stopped", // or use statusHint with same enum',
     '  "summary": "one concise observation",',
     '  "primaryAction": "short label of what was actually done",',
+    '  "repoId": "optional explicit repo target id (preferred when touching repo code)",',
     '  "statusHint": "success|failure|ask_user|stopped (optional alias of status)",',
     '  "askQuestion": "required when status=ask_user",',
     '  "stopReason": "required when status=stopped",',
@@ -1162,6 +1164,9 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
   const askQuestion = typeof row.askQuestion === 'string' ? row.askQuestion.trim() : ''
   const stopReason = typeof row.stopReason === 'string' ? row.stopReason.trim() : ''
   const activePlanId = typeof row.activePlanId === 'string' ? row.activePlanId.trim().toUpperCase() : ''
+  const repoId = typeof row.repoId === 'string'
+    ? row.repoId.trim()
+    : (typeof row.repo_id === 'string' ? row.repo_id.trim() : '')
   const statusChange = typeof row.statusChange === 'string' ? row.statusChange.trim() : ''
   const delta = typeof row.delta === 'string' ? row.delta.trim() : ''
   const evidencePaths = Array.isArray(row.evidencePaths)
@@ -1189,6 +1194,7 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
     status: status as TurnRunOutcome['status'],
     summary,
     primaryAction: typeof row.primaryAction === 'string' ? row.primaryAction.trim() : undefined,
+    repoId: repoId || undefined,
     activePlanId: activePlanId || undefined,
     statusChange: statusChange || undefined,
     delta: delta || undefined,
@@ -1474,6 +1480,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
       agent.runtime.sessionState.set('yolo.turnId', turnPaths.turnId)
       agent.runtime.sessionState.set('yolo.turnArtifactsDir', turnPaths.canonicalRelativeFromProject)
       agent.runtime.sessionState.set('yolo.turnArtifactsAbsDir', turnPaths.canonicalAbsolute)
+      agent.runtime.sessionState.set('yolo.workspaceRoot', context.projectRoot)
       if (Array.isArray(context.workspaceGitRepos) && context.workspaceGitRepos.length > 0) {
         agent.runtime.sessionState.set('yolo.workspaceGitRepos', context.workspaceGitRepos)
         agent.runtime.sessionState.set('git.defaultCwd', context.workspaceGitRepos[0])

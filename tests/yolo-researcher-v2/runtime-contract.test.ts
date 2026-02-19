@@ -862,6 +862,176 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(turn.status).toBe('success')
   })
 
+  it('enforces explicit repo target policy for code-touch turns when requireRepoTarget=true', async () => {
+    const projectPath = await createTempDir('yolo-v2-repo-target-required-')
+    tempDirs.push(projectPath)
+
+    const repoRoot = path.join(projectPath, 'external', 'openevolve')
+    const targetPath = path.join(repoRoot, 'openevolve', 'iteration.py')
+    await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, '# baseline\n', 'utf-8')
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: external/openevolve/openevolve/iteration.py'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Require explicit repo target on code touch',
+      defaultRuntime: 'host',
+      requireRepoTarget: true,
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run delegate without matching repo target',
+          status: 'success',
+          summary: 'Edited repo code through delegate workflow.',
+          primaryAction: 'skill-script-run: coding-large-repo/delegate-coding-agent',
+          toolEvents: [
+            ...codingLargeRepoDelegateEvents('.'),
+            ...writeSuccessEvent('external/openevolve/openevolve/iteration.py', '# changed by delegate\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('no_delta')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.blocked_reason).toBe('missing_repo_target')
+  })
+
+  it('persists resolved_repo when explicit repo target is provided', async () => {
+    const projectPath = await createTempDir('yolo-v2-repo-target-resolved-')
+    tempDirs.push(projectPath)
+
+    const repoRoot = path.join(projectPath, 'external', 'openevolve')
+    const targetPath = path.join(repoRoot, 'openevolve', 'iteration.py')
+    await fs.mkdir(path.join(repoRoot, '.git'), { recursive: true })
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, '# baseline\n', 'utf-8')
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: external/openevolve/openevolve/iteration.py'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Bind code-touch turn to explicit repo target',
+      defaultRuntime: 'host',
+      requireRepoTarget: true,
+      agent: new ScriptedSingleAgent([
+        {
+          intent: 'Run delegate with explicit repo target',
+          status: 'success',
+          summary: 'Edited repo code through targeted delegate workflow.',
+          primaryAction: 'skill-script-run: coding-large-repo/delegate-coding-agent',
+          repoId: 'openevolve',
+          toolEvents: [
+            ...codingLargeRepoDelegateEvents('external/openevolve'),
+            ...writeSuccessEvent('external/openevolve/openevolve/iteration.py', '# changed by delegate\n')
+          ]
+        }
+      ])
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    const resolvedRepo = (result.resolved_repo ?? {}) as Record<string, unknown>
+    expect(resolvedRepo.repo_id).toBe('openevolve')
+    expect(resolvedRepo.repo_path).toBe('external/openevolve')
+  })
+
+  it('recovers nested non-canonical runs outputs into canonical turn artifacts (path-anchor recover)', async () => {
+    const projectPath = await createTempDir('yolo-v2-path-anchor-recover-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: artifacts/openevolve_repo_intake.md'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Recover nested runs output to canonical turn artifacts',
+      defaultRuntime: 'host',
+      pathAnchor: { audit: true, mode: 'recover' },
+      agent: {
+        runTurn: async (context) => {
+          const nestedFile = path.join(
+            context.projectRoot,
+            'external',
+            'openevolve_repo',
+            'runs',
+            `turn-${String(context.turnNumber).padStart(4, '0')}`,
+            'artifacts',
+            'openevolve_repo_intake.md'
+          )
+          await fs.mkdir(path.dirname(nestedFile), { recursive: true })
+          await fs.writeFile(nestedFile, '# intake\n', 'utf-8')
+          return {
+            intent: 'Write nested turn artifact from repo-local cwd',
+            status: 'success',
+            summary: 'Nested artifact written.',
+            primaryAction: 'write: external/openevolve_repo/runs/turn-0001/artifacts/openevolve_repo_intake.md',
+            toolEvents: writeSuccessEvent('external/openevolve_repo/runs/turn-0001/artifacts/openevolve_repo_intake.md', '# intake\n')
+          }
+        }
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(['success', 'no_delta']).toContain(turn.status)
+
+    const canonicalArtifact = path.join(projectPath, 'runs', 'turn-0001', 'artifacts', 'openevolve_repo_intake.md')
+    await expect(fs.access(canonicalArtifact)).resolves.toBeUndefined()
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    const violation = (result.path_anchor_violation ?? {}) as Record<string, unknown>
+    expect(violation.detected).toBe(true)
+    expect(Number(violation.count)).toBeGreaterThan(0)
+    const rewriteEvents = Array.isArray(result.path_rewrite_events) ? result.path_rewrite_events : []
+    expect(rewriteEvents.length).toBeGreaterThan(0)
+  })
+
+  it('blocks turn when nested non-canonical runs outputs are detected in fail mode', async () => {
+    const projectPath = await createTempDir('yolo-v2-path-anchor-fail-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: artifacts/openevolve_repo_intake.md'])
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Fail on nested runs output drift',
+      defaultRuntime: 'host',
+      pathAnchor: { audit: true, mode: 'fail' },
+      agent: {
+        runTurn: async (context) => {
+          const nestedFile = path.join(
+            context.projectRoot,
+            'external',
+            'openevolve_repo',
+            'runs',
+            `turn-${String(context.turnNumber).padStart(4, '0')}`,
+            'artifacts',
+            'openevolve_repo_intake.md'
+          )
+          await fs.mkdir(path.dirname(nestedFile), { recursive: true })
+          await fs.writeFile(nestedFile, '# intake\n', 'utf-8')
+          return {
+            intent: 'Write nested turn artifact from repo-local cwd',
+            status: 'success',
+            summary: 'Nested artifact written.',
+            primaryAction: 'write: external/openevolve_repo/runs/turn-0001/artifacts/openevolve_repo_intake.md',
+            toolEvents: writeSuccessEvent('external/openevolve_repo/runs/turn-0001/artifacts/openevolve_repo_intake.md', '# intake\n')
+          }
+        }
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('blocked')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.blocked_reason).toBe('path_anchor_violation')
+  })
+
   it('downgrades in-flight async delegate observation to no_delta during warmup', async () => {
     const projectPath = await createTempDir('yolo-v2-coding-agent-warmup-')
     tempDirs.push(projectPath)
