@@ -10,6 +10,7 @@ import { ProjectStore } from './project-store.js'
 import type {
   CreateYoloSessionConfig,
   DeliverableRequirement,
+  EvidenceTrustHint,
   EvidenceLine,
   FailureEntry,
   PendingUserInput,
@@ -95,6 +96,7 @@ const SEMANTIC_HARD_POLICY_RE = /\b(policy[_ -]?denied|blocked by (a )?policy|fo
 const SEMANTIC_HARD_PATH_RE = /\b(escapes project root|outside project root|path escape)\b/i
 const TOOL_LAYER_FAILURE_RE = /\b(policy[_ -]?denied|blocked by (a )?policy|approval required|spawn|enoent|eacces|timeout|timed out|killed|signal|failed to execute|tool .* blocked)\b/i
 const NO_OUTPUT_ASSERTION_RE = /\b(no|without|missing|none)\s+(stdout|stderr|output)\b/i
+const NO_LOG_ASSERTION_RE = /\b(no|without|missing|none)\s+(logs?|log path)\b/i
 const PLAN_ID_RE = /^P\d+$/i
 const REPO_SCAN_SKIP_DIRS = new Set([
   '.git',
@@ -113,9 +115,13 @@ const PATH_ANCHOR_SCAN_MAX_DEPTH = 8
 const CODING_LARGE_REPO_CODE_EDIT_SCRIPTS = new Set(['agent-run-to-completion'])
 const CODING_AGENT_STALL_MIN_POLLS = 2
 const CODING_AGENT_STALL_MIN_WINDOW_MS = 90_000
+const CODING_AGENT_TIMEOUT_RECONCILE_MAX_WAIT_MS = 90_000
+const CODING_AGENT_TIMEOUT_RECONCILE_POLL_MS = 2_000
 const DEFAULT_SEMANTIC_GATE_MODE: SemanticGateConfig['mode'] = 'off'
 const DEFAULT_SEMANTIC_GATE_CONFIDENCE = 0.85
 const DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS = 16_000
+const MAX_TRUSTED_EVIDENCE_PATHS = 400
+const MAX_UNTRUSTED_EVIDENCE_HINTS = 120
 const SEMANTIC_GATE_PROMPT_VERSION = 'sg.v1'
 const SEMANTIC_GATE_TEMPERATURE = 0
 
@@ -338,6 +344,14 @@ interface RuntimeFailureSnapshot {
   errorExcerpt: string
   hasOutput: boolean
   failureKind: RuntimeFailureKind
+  skillId?: string
+  skillScript?: string
+  skillArgs?: string[]
+  toolTimeoutMs?: number | null
+  sessionId?: string
+  logPath?: string
+  deliverable?: string
+  structuredStatus?: string
 }
 
 interface CodingAgentSessionObservation {
@@ -677,6 +691,7 @@ export class YoloSession {
     const pendingUserInputs = await this.materializePendingUserInputs(artifactsDir)
     const stagnation = await this.detectStagnation()
     const plannerCheckpoint = await this.detectPlannerCheckpoint(project, failures, turnNumber)
+    const evidenceTrust = await this.buildEvidenceTrustContext({ project, turnNumber })
     const workspaceGitRepos = await this.discoverWorkspaceGitRepos()
     const context: TurnContext = {
       turnNumber,
@@ -688,6 +703,8 @@ export class YoloSession {
       failures,
       recentTurns: await this.loadRecentTurns(this.config.recentTurnsToLoad ?? DEFAULT_RECENT_TURNS_TO_LOAD),
       pendingUserInputs,
+      trustedEvidencePaths: evidenceTrust.trustedEvidencePaths,
+      untrustedEvidenceHints: evidenceTrust.untrustedEvidenceHints,
       stagnation: stagnation.stagnant ? stagnation : undefined,
       plannerCheckpoint: plannerCheckpoint.due ? plannerCheckpoint : undefined
     }
@@ -712,6 +729,160 @@ export class YoloSession {
       }
     }
     return results
+  }
+
+  private collectProjectEvidencePointers(project: TurnContext['project']): string[] {
+    const collected = [
+      ...project.keyArtifacts,
+      ...project.facts.map((item) => item.evidencePath),
+      ...project.constraints.map((item) => item.evidencePath),
+      ...project.done.map((item) => item.evidencePath),
+      ...project.claims.flatMap((item) => item.evidencePaths),
+      ...project.planBoard.flatMap((item) => item.evidencePaths ?? [])
+    ]
+    return dedupeStrings(
+      collected
+        .map((entry) => this.normalizeProjectPathPointer(entry))
+        .filter((entry) => Boolean(entry) && EVIDENCE_PATH_RE.test(entry))
+    )
+  }
+
+  private extractClaimedEvidenceFromProjectUpdate(projectUpdate: Record<string, unknown>): string[] {
+    const paths: string[] = []
+    const pushPath = (candidate: unknown): void => {
+      if (typeof candidate !== 'string') return
+      const normalized = this.normalizeProjectPathPointer(candidate)
+      if (!normalized || !EVIDENCE_PATH_RE.test(normalized)) return
+      paths.push(normalized)
+    }
+    const readEvidencePathFromRows = (value: unknown): void => {
+      if (!Array.isArray(value)) return
+      for (const row of value) {
+        const plain = toPlainObject(row)
+        if (!plain) continue
+        pushPath(plain.evidencePath)
+      }
+    }
+
+    if (Array.isArray(projectUpdate.keyArtifacts)) {
+      for (const row of projectUpdate.keyArtifacts) pushPath(row)
+    }
+
+    readEvidencePathFromRows(projectUpdate.facts)
+    readEvidencePathFromRows(projectUpdate.constraints)
+    readEvidencePathFromRows(projectUpdate.done)
+
+    if (Array.isArray(projectUpdate.claims)) {
+      for (const row of projectUpdate.claims) {
+        const plain = toPlainObject(row)
+        if (!plain || !Array.isArray(plain.evidencePaths)) continue
+        for (const evidencePath of plain.evidencePaths) pushPath(evidencePath)
+      }
+    }
+
+    if (Array.isArray(projectUpdate.planBoard)) {
+      for (const row of projectUpdate.planBoard) {
+        const plain = toPlainObject(row)
+        if (!plain || !Array.isArray(plain.evidencePaths)) continue
+        for (const evidencePath of plain.evidencePaths) pushPath(evidencePath)
+      }
+    }
+
+    return dedupeStrings(paths)
+  }
+
+  private async loadClaimedEvidencePathsFromTurn(turnNumber: number): Promise<string[]> {
+    const agentOutputPath = path.join(this.runsDir, formatTurnId(turnNumber), 'artifacts', 'agent-output.txt')
+    if (!(await fileExists(agentOutputPath))) return []
+    const raw = await readTextOrEmpty(agentOutputPath)
+    if (!raw.trim()) return []
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      const projectUpdate = toPlainObject(parsed.projectUpdate)
+      if (!projectUpdate) return []
+      return this.extractClaimedEvidenceFromProjectUpdate(projectUpdate)
+    } catch {
+      return []
+    }
+  }
+
+  private async buildEvidenceTrustContext(input: {
+    project: TurnContext['project']
+    turnNumber: number
+  }): Promise<{
+      trustedEvidencePaths: string[]
+      untrustedEvidenceHints: EvidenceTrustHint[]
+    }> {
+    const trusted: string[] = []
+    const hintsByPath = new Map<string, EvidenceTrustHint>()
+    const existenceCache = new Map<string, boolean>()
+
+    const pathExists = async (pointer: string): Promise<boolean> => {
+      if (existenceCache.has(pointer)) return existenceCache.get(pointer) === true
+      const exists = await fileExists(path.join(this.yoloRoot, pointer))
+      existenceCache.set(pointer, exists)
+      return exists
+    }
+
+    const addHint = (hint: EvidenceTrustHint): void => {
+      if (trusted.includes(hint.path)) return
+      const existing = hintsByPath.get(hint.path)
+      if (!existing) {
+        hintsByPath.set(hint.path, hint)
+        return
+      }
+      if (existing.state === 'claimed_only') return
+      if (hint.state === 'claimed_only') {
+        hintsByPath.set(hint.path, hint)
+      }
+    }
+
+    const pointers = this.collectProjectEvidencePointers(input.project)
+    for (const pointer of pointers) {
+      if (await pathExists(pointer)) {
+        trusted.push(pointer)
+      } else {
+        addHint({
+          path: pointer,
+          state: 'stale_or_missing',
+          reason: 'Referenced in PROJECT state but file is currently missing.'
+        })
+      }
+    }
+
+    if (input.turnNumber > 1) {
+      const previousTurn = input.turnNumber - 1
+      const previousResultPath = path.join(this.runsDir, formatTurnId(previousTurn), 'result.json')
+      const resultRaw = await readTextOrEmpty(previousResultPath)
+      if (resultRaw.trim()) {
+        try {
+          const parsed = JSON.parse(resultRaw) as Record<string, unknown>
+          const missedTouch = (
+            normalizeText(parsed.status) === 'no_delta'
+            && normalizeText(parsed.blocked_reason) === 'missing_plan_deliverable_touch'
+          )
+          if (missedTouch) {
+            const claimed = await this.loadClaimedEvidencePathsFromTurn(previousTurn)
+            for (const pointer of claimed) {
+              if (await pathExists(pointer)) continue
+              addHint({
+                path: pointer,
+                state: 'claimed_only',
+                sourceTurn: previousTurn,
+                reason: 'Claimed by previous no_delta turn; verify/create before treating as evidence.'
+              })
+            }
+          }
+        } catch {
+          // Ignore malformed prior turn result rows.
+        }
+      }
+    }
+
+    return {
+      trustedEvidencePaths: dedupeStrings(trusted).slice(0, MAX_TRUSTED_EVIDENCE_PATHS),
+      untrustedEvidenceHints: Array.from(hintsByPath.values()).slice(0, MAX_UNTRUSTED_EVIDENCE_HINTS)
+    }
   }
 
   private async runPreTurnCalibration(input: {
@@ -1071,6 +1242,9 @@ export class YoloSession {
     stdout: string
     stderr: string
     errorText: string
+    skillId?: string
+    skillScript?: string
+    structuredStatus?: string
   }): RuntimeFailureKind {
     const tool = normalizeText(input.tool)
     const stdout = input.stdout.trim()
@@ -1089,6 +1263,27 @@ export class YoloSession {
       return 'tool_invocation_failure'
     }
 
+    if (tool === 'skill-script-run') {
+      const joint = `${errorText}\n${stderr}\n${stdout}`.trim()
+      const skillId = normalizeText(input.skillId || '')
+      const skillScript = normalizeText(input.skillScript || '')
+      const structuredStatus = normalizeText(input.structuredStatus || '')
+
+      if (skillId === 'coding-large-repo' && skillScript === 'agent-run-to-completion') {
+        if (input.exitCode === 143 || structuredStatus === 'running') {
+          return 'command_failure'
+        }
+        if (/\bunknown argument|invalid --|no_delta:|agent session failed|verify-targets failed|max-wait-sec\b/i.test(joint)) {
+          return 'command_failure'
+        }
+      }
+
+      if (TOOL_LAYER_FAILURE_RE.test(joint)) {
+        return 'tool_invocation_failure'
+      }
+      return 'unknown_failure'
+    }
+
     const joint = `${errorText}\n${stderr}\n${stdout}`.trim()
     if (TOOL_LAYER_FAILURE_RE.test(joint)) {
       return 'tool_invocation_failure'
@@ -1101,12 +1296,27 @@ export class YoloSession {
     stderr: string
     errorText: string
   }): string {
-    const primary = firstNonEmptyLine(input.stderr, input.stdout, input.errorText) || input.errorText || 'Tool reported failure.'
+    const stderrLine = firstNonEmptyLine(input.stderr)
+    const stdoutLine = firstNonEmptyLine(input.stdout)
+    const errorLine = firstNonEmptyLine(input.errorText)
+    let primary = stderrLine || stdoutLine || errorLine || input.errorText || 'Tool reported failure.'
+    if (/script exited with code 143/i.test(input.errorText)) {
+      primary = 'Script exited with code 143 (wrapper timeout/termination).'
+    } else if (stderrLine && /unknown argument|error:|no_delta:|agent session failed|verify-targets failed|max-wait-sec/i.test(stderrLine)) {
+      primary = stderrLine
+    }
     return clipText(primary.replace(/\s+/g, ' ').trim(), 260)
   }
 
   private extractLatestFailureSnapshot(toolEvents: ToolEventRecord[]): RuntimeFailureSnapshot | null {
-    const lastCallByTool = new Map<string, { cmd: string; cwd: string }>()
+    const lastCallByTool = new Map<string, {
+      cmd: string
+      cwd: string
+      skillId: string
+      skillScript: string
+      skillArgs: string[]
+      toolTimeoutMs: number | null
+    }>()
     let latest: RuntimeFailureSnapshot | null = null
 
     for (const event of toolEvents) {
@@ -1119,6 +1329,17 @@ export class YoloSession {
         const targetPath = safeString(input?.path).trim()
         const url = safeString(input?.url).trim()
         const cwdRaw = safeString(input?.cwd).trim()
+        const skillId = safeString(input?.skillId).trim()
+        const skillScript = safeString(input?.script).trim()
+        const skillArgs = this.extractScriptArgs(input?.args)
+        const toolTimeoutMs = typeof input?.timeout === 'number' && Number.isFinite(input.timeout)
+          ? Math.max(0, Math.floor(input.timeout))
+          : null
+        const skillCmd = (
+          tool === 'skill-script-run' && (skillId || skillScript)
+            ? `${toolRaw}:${skillId || 'unknown'}/${skillScript || 'unknown'}`
+            : ''
+        )
         let cwd = this.config.projectPath
         if (cwdRaw) {
           try {
@@ -1128,8 +1349,12 @@ export class YoloSession {
           }
         }
         lastCallByTool.set(tool, {
-          cmd: command || targetPath || url || toolRaw,
-          cwd
+          cmd: command || skillCmd || targetPath || url || toolRaw,
+          cwd,
+          skillId,
+          skillScript,
+          skillArgs,
+          toolTimeoutMs
         })
         continue
       }
@@ -1142,6 +1367,7 @@ export class YoloSession {
       if (success !== false) continue
 
       const data = toPlainObject(result?.data)
+      const structured = toPlainObject(data?.structuredResult)
       const stdout = safeString(data?.stdout)
       const stderr = safeString(data?.stderr)
       const errorText = safeString(result?.error, safeString(event.error)).trim()
@@ -1150,18 +1376,46 @@ export class YoloSession {
       const lastCall = lastCallByTool.get(tool)
       const cmd = lastCall?.cmd?.trim() || toolRaw
       const cwd = lastCall?.cwd || this.config.projectPath
+      const sessionIdFromOutput = (
+        `${stdout}\n${stderr}`.match(/(?:^|\n)\s*session_id:\s*([^\s]+)/i)?.[1] || ''
+      ).trim()
+      const logPathFromOutput = (
+        `${stdout}\n${stderr}`.match(/(?:^|\n)\s*(?:agent_)?log_path:\s*([^\s]+)/i)?.[1] || ''
+      ).trim()
+      const sessionId = safeString(structured?.session_id).trim()
+        || this.extractScriptArgValue(lastCall?.skillArgs ?? [], '--session-id')
+        || sessionIdFromOutput
+      const logPath = safeString(structured?.log_path, safeString(structured?.agent_log_path)).trim()
+        || logPathFromOutput
+      const deliverable = this.extractScriptArgValue(lastCall?.skillArgs ?? [], '--deliverable')
+      const structuredStatus = normalizeText(safeString(structured?.status).trim())
       const failureKind = this.classifyRuntimeFailure({
         tool: toolRaw,
         exitCode,
         stdout,
         stderr,
-        errorText
+        errorText,
+        skillId: lastCall?.skillId || '',
+        skillScript: lastCall?.skillScript || '',
+        structuredStatus
       })
-      const errorExcerpt = this.buildFailureExcerpt({
+      let errorExcerpt = this.buildFailureExcerpt({
         stdout,
         stderr,
         errorText
       })
+      const structuredError = safeString(structured?.error).trim()
+      if (structuredError) {
+        errorExcerpt = clipText(structuredError, 260)
+      } else if (
+        failureKind === 'command_failure'
+        && normalizeText(lastCall?.skillId || '') === 'coding-large-repo'
+        && normalizeText(lastCall?.skillScript || '') === 'agent-run-to-completion'
+        && exitCode === 143
+      ) {
+        const sessionLabel = sessionId || 'coding-agent session'
+        errorExcerpt = `wrapper timeout/termination (exit 143) while ${sessionLabel} was still running`
+      }
 
       latest = {
         tool: toolRaw,
@@ -1173,18 +1427,130 @@ export class YoloSession {
         errorText,
         errorExcerpt,
         hasOutput,
-        failureKind
+        failureKind,
+        skillId: lastCall?.skillId || undefined,
+        skillScript: lastCall?.skillScript || undefined,
+        skillArgs: lastCall?.skillArgs?.length ? [...lastCall.skillArgs] : undefined,
+        toolTimeoutMs: lastCall?.toolTimeoutMs ?? undefined,
+        sessionId: sessionId || undefined,
+        logPath: logPath || undefined,
+        deliverable: deliverable || undefined,
+        structuredStatus: structuredStatus || undefined
       }
     }
 
     return latest
   }
 
-  private stripContradictoryNoOutputClaims(text: string, hasOutput: boolean): string {
+  private async reconcileCodingLargeRepoTimeoutFailure(input: {
+    finalStatus: TurnStatus
+    latestFailure: RuntimeFailureSnapshot | null
+    turnStartedAt: Date
+  }): Promise<{
+    recovered: boolean
+    summaryNote: string
+    latestFailure: RuntimeFailureSnapshot | null
+    exitCode: number | null
+  }> {
+    const latestFailure = input.latestFailure
+    if (!latestFailure || input.finalStatus !== 'ask_user') {
+      return {
+        recovered: false,
+        summaryNote: '',
+        latestFailure,
+        exitCode: null
+      }
+    }
+
+    if (
+      normalizeText(latestFailure.tool) !== 'skill-script-run'
+      || normalizeText(latestFailure.skillId || '') !== 'coding-large-repo'
+      || normalizeText(latestFailure.skillScript || '') !== 'agent-run-to-completion'
+      || latestFailure.exitCode !== 143
+    ) {
+      return {
+        recovered: false,
+        summaryNote: '',
+        latestFailure,
+        exitCode: null
+      }
+    }
+
+    const waitBudgetMs = Number.parseInt(process.env.YOLO_CODING_RECONCILE_WAIT_MS || '', 10)
+    const maxWaitMs = Number.isFinite(waitBudgetMs) && waitBudgetMs >= 0
+      ? waitBudgetMs
+      : CODING_AGENT_TIMEOUT_RECONCILE_MAX_WAIT_MS
+    const pollEveryMs = CODING_AGENT_TIMEOUT_RECONCILE_POLL_MS
+    const deadline = Date.now() + maxWaitMs
+    const sessionId = latestFailure.sessionId?.trim() || ''
+    const deliverableRaw = latestFailure.deliverable?.trim() || ''
+    const deliverableAbs = deliverableRaw
+      ? (path.isAbsolute(deliverableRaw) ? deliverableRaw : path.join(this.yoloRoot, deliverableRaw))
+      : ''
+    const turnStartedMs = input.turnStartedAt.getTime()
+
+    while (true) {
+      let sessionExitCode: number | null = null
+      if (sessionId) {
+        const exitCodePath = path.join(
+          this.yoloRoot,
+          '.yolo-researcher',
+          'tmp',
+          'coding-large-repo',
+          'agent-sessions',
+          sessionId,
+          'exit_code'
+        )
+        if (await fileExists(exitCodePath)) {
+          const raw = (await readTextOrEmpty(exitCodePath)).trim()
+          const parsed = Number.parseInt(raw, 10)
+          if (Number.isFinite(parsed)) sessionExitCode = parsed
+        }
+      }
+
+      let deliverableTouched = false
+      if (deliverableAbs && await fileExists(deliverableAbs)) {
+        try {
+          const stat = await fs.stat(deliverableAbs)
+          deliverableTouched = stat.mtimeMs >= turnStartedMs
+        } catch {
+          deliverableTouched = false
+        }
+      }
+
+      if (sessionExitCode === 0 && deliverableTouched) {
+        return {
+          recovered: true,
+          summaryNote: 'Recovered from wrapper timeout: coding-large-repo session completed and deliverable was touched.',
+          latestFailure: null,
+          exitCode: 0
+        }
+      }
+
+      if (Date.now() >= deadline) {
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollEveryMs))
+    }
+
+    return {
+      recovered: false,
+      summaryNote: '',
+      latestFailure,
+      exitCode: null
+    }
+  }
+
+  private stripContradictoryAskClaims(input: {
+    text: string
+    hasOutput: boolean
+    hasLogPath: boolean
+  }): string {
+    const text = input.text
     const trimmed = text.trim()
     if (!trimmed) return ''
-    if (!hasOutput) return trimmed
-    if (NO_OUTPUT_ASSERTION_RE.test(trimmed)) return ''
+    if (input.hasOutput && NO_OUTPUT_ASSERTION_RE.test(trimmed)) return ''
+    if (input.hasLogPath && NO_LOG_ASSERTION_RE.test(trimmed)) return ''
     return trimmed
   }
 
@@ -1210,8 +1576,16 @@ export class YoloSession {
       }
     }
 
-    const cleanSummary = this.stripContradictoryNoOutputClaims(modelSummary, latestFailure.hasOutput)
-    const cleanQuestion = this.stripContradictoryNoOutputClaims(modelQuestion, latestFailure.hasOutput)
+    const cleanSummary = this.stripContradictoryAskClaims({
+      text: modelSummary,
+      hasOutput: latestFailure.hasOutput,
+      hasLogPath: Boolean(latestFailure.logPath)
+    })
+    const cleanQuestion = this.stripContradictoryAskClaims({
+      text: modelQuestion,
+      hasOutput: latestFailure.hasOutput,
+      hasLogPath: Boolean(latestFailure.logPath)
+    })
     const contradictionFiltered = (
       (modelSummary && !cleanSummary)
       || (modelQuestion && !cleanQuestion)
@@ -1234,7 +1608,9 @@ export class YoloSession {
         : baseSummary,
       420
     )
-    const question = cleanQuestion || defaultQuestion
+    const question = cleanQuestion
+      ? `${defaultQuestion}\n\nAgent note: ${cleanQuestion}`
+      : defaultQuestion
 
     const lines = [
       '# Blocking Question',
@@ -1243,18 +1619,23 @@ export class YoloSession {
       `- classification: ${latestFailure.failureKind}`,
       `- tool: ${latestFailure.tool}`,
       `- last_failed_cmd: ${latestFailure.cmd}`,
+      `- skill_id: ${latestFailure.skillId || '(none)'}`,
+      `- script: ${latestFailure.skillScript || '(none)'}`,
+      `- session_id: ${latestFailure.sessionId || '(none)'}`,
       `- exit_code: ${typeof latestFailure.exitCode === 'number' ? latestFailure.exitCode : '(none)'}`,
       `- error_excerpt: ${latestFailure.errorExcerpt}`,
       `- output_captured: ${latestFailure.hasOutput ? 'yes' : 'no'}`,
+      `- log_path: ${latestFailure.logPath || '(none)'}`,
       '',
       '## Requested Input',
-      question,
+      defaultQuestion,
+      ...(cleanQuestion ? ['', '## Agent Supplement (optional)', cleanQuestion] : []),
       ''
     ]
 
     if (contradictionFiltered) {
       lines.push('## Runtime Note')
-      lines.push('- Agent-provided no-output claim was dropped because stdout/stderr evidence exists in tool events.')
+      lines.push('- Agent-provided contradictory no-output/no-log claim was dropped because runtime evidence includes stdout/stderr or log paths.')
       lines.push('')
     }
 
@@ -2966,7 +3347,7 @@ export class YoloSession {
         .map((entry) => this.normalizeProjectPathPointer(entry))
         .filter((entry) => EVIDENCE_PATH_RE.test(entry))
     )
-    const latestFailure = this.extractLatestFailureSnapshot(toolEvents)
+    let latestFailure = this.extractLatestFailureSnapshot(toolEvents)
     const bashSnapshot = this.extractLastBashSnapshot(toolEvents, runtime)
 
     const cmd = bashSnapshot?.cmd || primaryAction || 'agent.run'
@@ -2979,6 +3360,18 @@ export class YoloSession {
 
     if (exitCode !== 0 && finalStatus === 'success') {
       finalStatus = 'failure'
+    }
+
+    const timeoutReconcile = await this.reconcileCodingLargeRepoTimeoutFailure({
+      finalStatus,
+      latestFailure,
+      turnStartedAt
+    })
+    if (timeoutReconcile.recovered) {
+      finalStatus = 'success'
+      latestFailure = timeoutReconcile.latestFailure
+      exitCode = typeof timeoutReconcile.exitCode === 'number' ? timeoutReconcile.exitCode : 0
+      summary = `${timeoutReconcile.summaryNote} ${summary}`.trim()
     }
 
     await this.writeProvisionalTurnArtifacts({
@@ -3169,6 +3562,7 @@ export class YoloSession {
     if (workspaceChangeArtifacts.changedFiles.length > 0) deltaReasons.push('workspace_file')
     if (failureEntry) deltaReasons.push('failure_recorded')
     if (clearedBlocked) deltaReasons.push('blocked_cleared')
+    if (timeoutReconcile.recovered) deltaReasons.push('coding_agent_timeout_reconciled')
 
     // Stagnation enforcement: repeated dominant action type without strong delta
     // (stage advancement or blocker transitions) is treated as no progress.

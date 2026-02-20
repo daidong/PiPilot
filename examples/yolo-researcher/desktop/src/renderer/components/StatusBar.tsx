@@ -26,14 +26,14 @@ function formatCost(value: number): string {
 function statusInfo(overview: DesktopOverview | null): { tone: StatusTone; pulse: boolean; label: string } {
   if (!overview?.projectPath) return { tone: 'neutral', pulse: false, label: 'No project' }
   if (overview.loopRunning) return { tone: 'info', pulse: true, label: 'Running' }
-  if (overview.pausedForUserInput) return { tone: 'warning', pulse: true, label: 'Paused' }
+  if (overview.pausedForUserInput) return { tone: 'warning', pulse: true, label: 'Pause' }
   if (overview.lastTurn?.partial) return { tone: 'info', pulse: false, label: 'Partial' }
   const lastStatus = overview.lastTurn?.status?.toLowerCase()
-  if (lastStatus === 'ask_user' || lastStatus === 'paused') return { tone: 'warning', pulse: true, label: 'Paused' }
+  if (lastStatus === 'ask_user' || lastStatus === 'paused') return { tone: 'warning', pulse: true, label: 'Pause' }
   if (lastStatus === 'no_delta') return { tone: 'warning', pulse: false, label: 'No Delta' }
   if (lastStatus === 'partial') return { tone: 'info', pulse: false, label: 'Partial' }
   if (lastStatus === 'failure' || lastStatus === 'blocked') return { tone: 'danger', pulse: false, label: 'Error' }
-  return { tone: 'neutral', pulse: false, label: 'Idle' }
+  return { tone: 'warning', pulse: false, label: 'Pause' }
 }
 
 function dotClassForTone(tone: StatusTone): string {

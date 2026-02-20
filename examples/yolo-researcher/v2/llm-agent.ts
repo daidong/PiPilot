@@ -81,6 +81,7 @@ const POLICY_BLOCK_RE = /(no[-\s]?destructive|destructive policy|blocked by (a )
 const DESTRUCTIVE_RM_RE = /\brm\s+-rf\b/i
 const DEFAULT_SEMANTIC_GATE_MAX_TOKENS = 700
 const DEFAULT_SEMANTIC_GATE_TIMEOUT_MS = 25_000
+const CODING_LARGE_REPO_TIMEOUT_BUFFER_MS = 180_000
 
 const semanticGateOutputSchema = z.object({
   verdict: z.enum(['touched', 'not_touched', 'abstain']),
@@ -186,6 +187,67 @@ function firstNonEmptyLine(text: string): string {
 
 function toPosixPath(value: string): string {
   return value.replace(/\\/g, '/')
+}
+
+function toStringArgArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((entry) => (typeof entry === 'string' ? entry : String(entry ?? '')))
+}
+
+function parsePositiveInt(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = Number.parseInt(trimmed, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return parsed
+}
+
+export function applyCodingLargeRepoRunGuards(rawInput: unknown): void {
+  if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) return
+  const input = rawInput as Record<string, unknown>
+  const skillId = safeString(input.skillId).trim().toLowerCase()
+  const script = safeString(input.script).trim().toLowerCase()
+  if (skillId !== 'coding-large-repo' || script !== 'agent-run-to-completion') return
+
+  const args = toStringArgArray(input.args)
+  if (args.length > 0) {
+    const hasExplicitCwd = args.includes('--cwd')
+    const rewritten: string[] = []
+    for (let idx = 0; idx < args.length; idx += 1) {
+      const token = args[idx] || ''
+      if (token !== '--repo') {
+        rewritten.push(token)
+        continue
+      }
+
+      const repoValue = (args[idx + 1] || '').trim()
+      if (!hasExplicitCwd) {
+        rewritten.push('--cwd')
+        if (repoValue) rewritten.push(repoValue)
+      }
+      if (repoValue) idx += 1
+    }
+    input.args = rewritten
+  }
+
+  const normalizedArgs = toStringArgArray(input.args)
+  let timeoutSec: number | null = null
+  for (let idx = 0; idx < normalizedArgs.length; idx += 1) {
+    if (normalizedArgs[idx] !== '--timeout-sec') continue
+    timeoutSec = parsePositiveInt(normalizedArgs[idx + 1] || '')
+    break
+  }
+  if (!timeoutSec) return
+
+  const requiredTimeoutMs = timeoutSec * 1000 + CODING_LARGE_REPO_TIMEOUT_BUFFER_MS
+  const currentTimeoutMs = (
+    typeof input.timeout === 'number' && Number.isFinite(input.timeout)
+      ? Math.floor(input.timeout)
+      : null
+  )
+  if (currentTimeoutMs === null || currentTimeoutMs < requiredTimeoutMs) {
+    input.timeout = requiredTimeoutMs
+  }
 }
 
 function formatTurnId(turnNumber: number): string {
@@ -594,12 +656,24 @@ function goalNeedsLiteratureBootstrap(goal: string): boolean {
   )
 }
 
-function hasLiteratureArtifacts(context: TurnContext): boolean {
-  const pool = [
+function getTrustedEvidencePool(context: TurnContext): string[] {
+  const trusted = (context.trustedEvidencePaths ?? [])
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (trusted.length > 0) return [...new Set(trusted)]
+
+  return [...new Set([
     ...context.project.keyArtifacts,
     ...context.project.facts.map((item) => item.evidencePath),
-    ...context.project.constraints.map((item) => item.evidencePath)
-  ]
+    ...context.project.constraints.map((item) => item.evidencePath),
+    ...context.project.done.map((item) => item.evidencePath),
+    ...context.project.planBoard.flatMap((item) => item.evidencePaths)
+  ])]
+}
+
+function hasLiteratureArtifacts(context: TurnContext): boolean {
+  const pool = getTrustedEvidencePool(context)
 
   return pool.some((value) => /literature|paper|arxiv|scholar|openalex|crossref|doi/i.test(value))
 }
@@ -702,14 +776,12 @@ function buildNativeTurnPrompt(context: TurnContext): string {
   const planNeedsRewrite = requiresPlanRewrite(context.project.currentPlan)
   const plannerCheckpointDue = Boolean(context.plannerCheckpoint?.due)
   const literatureBootstrapNeeded = goalNeedsLiteratureBootstrap(context.project.goal) && !hasLiteratureArtifacts(context)
+  const trustedEvidencePool = getTrustedEvidencePool(context)
+  const untrustedEvidenceHints = (context.untrustedEvidenceHints ?? []).slice(0, 8)
   const artifactPaths = canonicalTurnArtifactPaths(context)
   const literatureOutputDir = `${artifactPaths.canonicalRelativeFromProject}/literature`
   const literatureOutputDirAbs = toPosixPath(join(context.projectRoot, literatureOutputDir))
-  const hasProblemStatement = [
-    ...context.project.keyArtifacts,
-    ...context.project.done.map((entry) => entry.evidencePath),
-    ...context.project.planBoard.flatMap((item) => item.evidencePaths)
-  ].some((entry) => /problem_statement/i.test(entry))
+  const hasProblemStatement = trustedEvidencePool.some((entry) => /problem_statement/i.test(entry))
   const workspaceGitRepos = (context.workspaceGitRepos ?? []).slice(0, 8)
   const planBoardView = renderPlanBoardForPrompt(context)
   const plannerCheckpointReasons = context.plannerCheckpoint?.reasons ?? []
@@ -817,6 +889,15 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     'Evidence snapshot rule:',
     '- If source proof is in work/... or any non-runs path, create a snapshot file under runs/turn-xxxx/artifacts/evidence/... first.',
     '- Then cite ONLY that runs/turn-xxxx/... snapshot path in facts/constraints/claims/planBoard evidence fields.',
+    'Evidence trust rule:',
+    '- Treat trusted evidence as directly consumable.',
+    '- Treat untrusted hints as leads only; verify with read/stat or regenerate in this turn before citing as proof.',
+    `Trusted evidence (${trustedEvidencePool.length}):`,
+    ...(trustedEvidencePool.length > 0 ? trustedEvidencePool.slice(-12).map((item) => `- ${item}`) : ['- none']),
+    `Untrusted evidence hints (${context.untrustedEvidenceHints?.length ?? 0}):`,
+    ...(untrustedEvidenceHints.length > 0
+      ? untrustedEvidenceHints.map((item) => `- [${item.state}] ${item.path}${item.sourceTurn ? ` (from turn-${String(item.sourceTurn).padStart(4, '0')})` : ''} :: ${item.reason}`)
+      : ['- none']),
     ...(hasProblemStatement
       ? []
       : [
@@ -1348,6 +1429,9 @@ export class LlmSingleAgent implements YoloSingleAgent {
         ? undefined
         : async () => true,
       onToolCall: (tool, input) => {
+        if (tool === 'skill-script-run') {
+          applyCodingLargeRepoRunGuards(input)
+        }
         const stringLimit = tool === 'fetch' ? FETCH_EVENT_STRING_LIMIT : TOOL_EVENT_STRING_LIMIT
         const event: ToolEventRecord = {
           timestamp: new Date().toISOString(),

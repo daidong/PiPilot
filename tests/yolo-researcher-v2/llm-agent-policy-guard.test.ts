@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  applyCodingLargeRepoRunGuards,
   detectDestructivePolicyBlockedBash,
   detectLiteratureSearchUsage
 } from '../../examples/yolo-researcher/v2/llm-agent.js'
@@ -224,6 +225,31 @@ describe('yolo-researcher v2 llm-agent destructive policy guard', () => {
     expect(usage.fullModeSuccess).toBe(false)
     expect(usage.argError).toBe(true)
     expect(usage.lastError).toContain('Script exited with code 2')
+  })
+
+  it('normalizes coding-large-repo --repo alias to --cwd', () => {
+    const input = {
+      skillId: 'coding-large-repo',
+      script: 'agent-run-to-completion',
+      args: ['--repo', 'repos/openevolve', '--task', 'wire reviewer'],
+      timeout: 60_000
+    } as Record<string, unknown>
+
+    applyCodingLargeRepoRunGuards(input)
+    expect(input.args).toEqual(['--cwd', 'repos/openevolve', '--task', 'wire reviewer'])
+  })
+
+  it('aligns skill-script-run timeout above --timeout-sec for coding-large-repo runs', () => {
+    const input = {
+      skillId: 'coding-large-repo',
+      script: 'agent-run-to-completion',
+      args: ['--task', 'wire reviewer', '--timeout-sec', '600'],
+      timeout: 600_000
+    } as Record<string, unknown>
+
+    applyCodingLargeRepoRunGuards(input)
+    expect(typeof input.timeout).toBe('number')
+    expect(Number(input.timeout)).toBeGreaterThan(600_000)
   })
 
 })

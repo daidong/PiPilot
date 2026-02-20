@@ -98,6 +98,15 @@ export interface PendingUserInput extends QueuedUserInput {
   evidencePath: string
 }
 
+export type EvidenceTrustState = 'claimed_only' | 'stale_or_missing'
+
+export interface EvidenceTrustHint {
+  path: string
+  state: EvidenceTrustState
+  reason: string
+  sourceTurn?: number
+}
+
 export interface TurnContext {
   turnNumber: number
   projectRoot: string
@@ -108,6 +117,8 @@ export interface TurnContext {
   failures: FailureEntry[]
   recentTurns: RecentTurnContext[]
   pendingUserInputs: PendingUserInput[]
+  trustedEvidencePaths?: string[]
+  untrustedEvidenceHints?: EvidenceTrustHint[]
   stagnation?: StagnationInfo
   plannerCheckpoint?: PlannerCheckpointInfo
 }

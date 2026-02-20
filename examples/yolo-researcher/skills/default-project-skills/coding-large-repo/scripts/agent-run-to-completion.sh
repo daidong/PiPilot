@@ -36,6 +36,7 @@ usage: agent-run-to-completion.sh --task "<task>" [options]
 
 Options:
   --cwd <path>                       Default: auto-detected.
+  --repo <path>                      Backward-compatible alias for --cwd.
   --provider <auto|codex|claude>     Default: auto.
   --model <name>                     Optional model override.
   --timeout-sec <seconds>            Optional timeout passed to coding agent and verifier.
@@ -73,6 +74,12 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --cwd)
+      CWD="${2:-}"
+      CWD_EXPLICIT="true"
+      shift 2
+      ;;
+    --repo)
+      # Backward-compatible alias used by older prompts/callers.
       CWD="${2:-}"
       CWD_EXPLICIT="true"
       shift 2

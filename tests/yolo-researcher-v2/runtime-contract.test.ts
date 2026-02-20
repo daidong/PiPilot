@@ -291,6 +291,66 @@ function codingLargeRepoAsyncCompletedEvents(sessionId: string, cwd: string = '.
   ]
 }
 
+function codingLargeRepoRunFailureEvents(input: {
+  sessionId: string
+  deliverable: string
+  cwd?: string
+  exitCode?: number
+  stderr?: string
+  stdout?: string
+}) {
+  const cwd = input.cwd || '.'
+  const exitCode = typeof input.exitCode === 'number' ? input.exitCode : 143
+  const stderr = input.stderr ?? ''
+  const stdout = input.stdout ?? `repo_root: ${cwd}\n`
+
+  return [
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'call' as const,
+      tool: 'skill-script-run',
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'agent-run-to-completion',
+        args: [
+          '--task', 'wire reviewer',
+          '--cwd', cwd,
+          '--deliverable', input.deliverable,
+          '--session-id', input.sessionId,
+          '--timeout-sec', '600'
+        ],
+        timeout: 600_000
+      }
+    },
+    {
+      timestamp: new Date().toISOString(),
+      phase: 'result' as const,
+      tool: 'skill-script-run',
+      success: false,
+      input: {
+        skillId: 'coding-large-repo',
+        script: 'agent-run-to-completion'
+      },
+      result: {
+        success: false,
+        error: `Script exited with code ${exitCode}`,
+        data: {
+          stdout,
+          stderr,
+          exitCode,
+          structuredResult: {
+            schema: 'coding-large-repo.result.v1',
+            script: 'agent-poll',
+            status: 'running',
+            session_id: input.sessionId,
+            log_path: `.yolo-researcher/tmp/coding-large-repo/agent-sessions/${input.sessionId}/agent.log`
+          }
+        }
+      }
+    }
+  ]
+}
+
 async function readText(filePath: string): Promise<string> {
   return fs.readFile(filePath, 'utf-8')
 }
@@ -556,6 +616,128 @@ describe('yolo-researcher v2 runtime contract', () => {
     expect(result.last_failed_cmd).toBe('python -m pytest -q')
     expect(result.last_failed_exit_code).toBeNull()
     expect(String(result.last_failed_error_excerpt || '')).toContain('policy_denied')
+  })
+
+  it('classifies coding-large-repo argument failures as command_failure and exposes runtime facts in ask-user', async () => {
+    const projectPath = await createTempDir('yolo-v2-ask-user-coding-large-repo-failure-')
+    tempDirs.push(projectPath)
+
+    const sessionId = 'coding-agent-test-argfail'
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Report coding-large-repo failure facts deterministically',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async () => ({
+          intent: 'Escalate coding-large-repo failure',
+          status: 'ask_user',
+          summary: 'Tool failed and no logs returned.',
+          askQuestion: 'No logs returned. Is the skill missing?',
+          toolEvents: codingLargeRepoRunFailureEvents({
+            sessionId,
+            deliverable: 'runs/turn-0001/artifacts/openevolve_reviewer_wiring.patch',
+            exitCode: 2,
+            stderr: 'error: unknown argument: --repo'
+          })
+        })
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('ask_user')
+    expect(turn.summary).toContain('command_failure')
+
+    const askArtifact = await readText(path.join(
+      projectPath,
+      'runs',
+      'turn-0001',
+      'artifacts',
+      'ask-user.md'
+    ))
+    expect(askArtifact).toContain('classification: command_failure')
+    expect(askArtifact).toContain('skill_id: coding-large-repo')
+    expect(askArtifact).toContain('script: agent-run-to-completion')
+    expect(askArtifact).toContain('log_path: .yolo-researcher/tmp/coding-large-repo/agent-sessions/coding-agent-test-argfail/agent.log')
+    expect(askArtifact.toLowerCase()).not.toContain('no logs returned')
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.last_failure_kind).toBe('command_failure')
+    expect(result.last_failed_cmd).toBe('skill-script-run:coding-large-repo/agent-run-to-completion')
+    expect(result.last_failed_exit_code).toBe(2)
+  })
+
+  it('reconciles coding-large-repo exit 143 into success when session and deliverable complete in turn window', async () => {
+    const projectPath = await createTempDir('yolo-v2-reconcile-coding-large-repo-')
+    tempDirs.push(projectPath)
+    await seedActivePlanDoneDefinition(projectPath, ['deliverable: artifacts/openevolve_reviewer_wiring.patch', 'evidence_min: 1'])
+
+    const sessionId = 'coding-agent-test-reconcile'
+    const deliverableRel = 'runs/turn-0001/artifacts/openevolve_reviewer_wiring.patch'
+    const sessionExitPath = path.join(
+      projectPath,
+      '.yolo-researcher',
+      'tmp',
+      'coding-large-repo',
+      'agent-sessions',
+      sessionId,
+      'exit_code'
+    )
+    const sessionLogPath = path.join(
+      projectPath,
+      '.yolo-researcher',
+      'tmp',
+      'coding-large-repo',
+      'agent-sessions',
+      sessionId,
+      'agent.log'
+    )
+
+    const session = createYoloSession({
+      projectPath,
+      goal: 'Do not block on wrapper timeout if delegate completed',
+      defaultRuntime: 'host',
+      agent: {
+        runTurn: async () => {
+          await fs.mkdir(path.dirname(sessionExitPath), { recursive: true })
+          await fs.writeFile(sessionExitPath, '0\n')
+          await fs.writeFile(sessionLogPath, 'delegate completed\n')
+          await fs.mkdir(path.join(projectPath, 'runs', 'turn-0001', 'artifacts'), { recursive: true })
+          await fs.writeFile(path.join(projectPath, deliverableRel), 'patch-content\n')
+
+          return {
+            intent: 'Attempt coding-large-repo run with wrapper timeout',
+            status: 'ask_user',
+            summary: 'Wrapper returned exit 143.',
+            askQuestion: 'Please debug runtime.',
+            toolEvents: codingLargeRepoRunFailureEvents({
+              sessionId,
+              deliverable: deliverableRel,
+              exitCode: 143
+            })
+          }
+        }
+      }
+    })
+
+    await session.init()
+    const turn = await session.runNextTurn()
+    expect(turn.status).toBe('success')
+    expect(turn.summary).toContain('Recovered from wrapper timeout')
+
+    const askPath = path.join(projectPath, 'runs', 'turn-0001', 'artifacts', 'ask-user.md')
+    let askExists = true
+    try {
+      await fs.stat(askPath)
+    } catch {
+      askExists = false
+    }
+    expect(askExists).toBe(false)
+
+    const result = JSON.parse(await readText(path.join(projectPath, 'runs', 'turn-0001', 'result.json'))) as Record<string, unknown>
+    expect(result.status).toBe('success')
+    expect(result.last_failed_cmd).toBeNull()
+    expect(result.last_failure_kind).toBeNull()
   })
 
   it('auto-attaches turn evidence bundle to projectUpdate rows missing explicit evidence', async () => {
