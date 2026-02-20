@@ -6,6 +6,7 @@ import type { Pack } from '../../../src/types/pack.js'
 import type { SkillScriptMetadata } from '../../../src/types/skill.js'
 import type { ToolContext } from '../../../src/types/tool.js'
 import { runLiteratureStudy } from './literature-study/engine.js'
+import { parseArtifactUri } from './utils.js'
 
 interface ScriptCandidate {
   skillId: string
@@ -45,7 +46,6 @@ interface SkillScriptRunToolLike {
 
 const TURN_ARTIFACTS_DIR_RE = /^runs\/turn-\d{4}\/artifacts(?:\/.*)?$/
 const EVIDENCE_PATH_RE = /^runs\/turn-\d{4}\/.+/
-const ARTIFACT_URI_RE = /^artifact:\/\/(.*)$/i
 
 function toObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -97,18 +97,20 @@ function resolveTurnArtifactsDir(context?: ToolContext): string {
 function resolveArtifactUriPath(context: ToolContext | undefined, rawPath: unknown): string {
   const raw = safeString(rawPath).trim()
   if (!raw) return ''
-  const match = ARTIFACT_URI_RE.exec(raw)
-  if (!match) return ''
+  const parsed = parseArtifactUri(raw)
+  if (!parsed) return ''
+  if (parsed.scope === 'project') return ''
 
-  const suffix = normalizeRelativePath(match[1] || '')
-  if (
+  const suffix = normalizeRelativePath(parsed.suffix || '')
+  const invalidSuffix = (
     !suffix
-    || suffix === '.'
     || suffix === '..'
     || suffix.startsWith('../')
     || suffix.includes('/../')
     || suffix.endsWith('/..')
-  ) {
+  )
+
+  if (invalidSuffix || suffix === '.') {
     return resolveTurnArtifactsDir(context)
   }
   return `${resolveTurnArtifactsDir(context)}/${suffix}`
@@ -315,7 +317,56 @@ function summarizeRunError(result: SkillScriptRunResult): string {
   return err || structuredErr || dataErr || 'script execution failed'
 }
 
+type LiteratureBudgetProfile = 'test' | 'full'
+
+interface LiteratureBudgetDefaults {
+  studyTargetPaperCount: number
+  studyTimeoutMs: number
+  quickLimit: number
+  sweepLimitPerQuery: number
+  sweepFinalLimit: number
+  sweepMaxSubqueries: number
+  sweepCitationSeedCount: number
+  sweepCitationLimit: number
+  searchTimeoutMs: number
+}
+
+function resolveLiteratureBudgetProfile(): LiteratureBudgetProfile {
+  const raw = safeString(process.env.YOLO_LITERATURE_BUDGET_PROFILE).trim().toLowerCase()
+  return raw === 'full' ? 'full' : 'test'
+}
+
+function getLiteratureBudgetDefaults(profile: LiteratureBudgetProfile): LiteratureBudgetDefaults {
+  if (profile === 'full') {
+    return {
+      studyTargetPaperCount: 40,
+      studyTimeoutMs: 15_000,
+      quickLimit: 8,
+      sweepLimitPerQuery: 8,
+      sweepFinalLimit: 40,
+      sweepMaxSubqueries: 5,
+      sweepCitationSeedCount: 5,
+      sweepCitationLimit: 5,
+      searchTimeoutMs: 180_000
+    }
+  }
+  return {
+    studyTargetPaperCount: 12,
+    studyTimeoutMs: 12_000,
+    quickLimit: 5,
+    sweepLimitPerQuery: 4,
+    sweepFinalLimit: 16,
+    sweepMaxSubqueries: 2,
+    sweepCitationSeedCount: 2,
+    sweepCitationLimit: 3,
+    searchTimeoutMs: 120_000
+  }
+}
+
 export function createYoloToolWrapperPack(projectPath: string, debug: boolean = false): Pack {
+  const literatureBudgetProfile = resolveLiteratureBudgetProfile()
+  const literatureBudgetDefaults = getLiteratureBudgetDefaults(literatureBudgetProfile)
+
   const literatureStudyTool = defineTool({
     name: 'literature-study',
     description: 'Internal yolo literature study pipeline (planner/search/review/coverage) with canonical artifact outputs.',
@@ -323,8 +374,8 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       query: { type: 'string', required: true, description: 'Literature study query' },
       context: { type: 'string', required: false, description: 'Additional context to refine study plan' },
       mode: { type: 'string', required: false, description: 'quick|standard|deep (default: standard)' },
-      targetPaperCount: { type: 'number', required: false, description: 'Target top papers to keep (default: 40)' },
-      timeoutMs: { type: 'number', required: false, description: 'Per-request timeout in ms (default: 15000)' },
+      targetPaperCount: { type: 'number', required: false, description: 'Target top papers to keep (default: profile-based)' },
+      timeoutMs: { type: 'number', required: false, description: 'Per-request timeout in ms (default: profile-based)' },
       outputDir: { type: 'string', required: false, description: 'Output dir relative to project root' }
     },
     execute: async (input, context) => {
@@ -333,8 +384,14 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
 
       const modeRaw = safeString(input.mode).trim().toLowerCase()
       const mode = modeRaw === 'quick' || modeRaw === 'deep' ? modeRaw : 'standard'
-      const targetPaperCount = Math.max(8, Math.min(120, Math.floor(safeNumber(input.targetPaperCount, 40))))
-      const timeoutMs = Math.max(8_000, Math.min(40_000, Math.floor(safeNumber(input.timeoutMs, 15_000))))
+      const targetPaperCount = Math.max(
+        8,
+        Math.min(120, Math.floor(safeNumber(input.targetPaperCount, literatureBudgetDefaults.studyTargetPaperCount)))
+      )
+      const timeoutMs = Math.max(
+        8_000,
+        Math.min(40_000, Math.floor(safeNumber(input.timeoutMs, literatureBudgetDefaults.studyTimeoutMs)))
+      )
       const outputDir = coerceCanonicalOutputDir(projectPath, context, input.outputDir, 'literature-study')
       const outputDirAbs = resolve(projectPath, outputDir)
 
@@ -367,6 +424,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
           durationMs: result.data.durationMs,
           errors: result.data.errors,
           cache: result.data.cache,
+          budgetProfile: literatureBudgetProfile,
           outputDir,
           planPath: result.data.planPath,
           reviewPath: result.data.reviewPath,
@@ -384,6 +442,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
             summaryPath: result.data.summaryPath,
             coverageScore: result.data.coverage.score,
             totalPapersFound: result.data.totalPapersFound,
+            budgetProfile: literatureBudgetProfile,
             cacheRequestHit: result.data.cache.requestHit,
             cacheSourceHits: result.data.cache.sourceHits,
             cacheSourceMisses: result.data.cache.sourceMisses
@@ -399,12 +458,12 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
     parameters: {
       query: { type: 'string', required: true, description: 'Literature query' },
       mode: { type: 'string', required: false, description: 'sweep (default) or quick' },
-      limitPerQuery: { type: 'number', required: false, description: 'Per-source limit for sweep mode (default: 8)' },
-      finalLimit: { type: 'number', required: false, description: 'Final merged top-K in sweep mode (default: 40)' },
-      limit: { type: 'number', required: false, description: 'Per-source limit for quick mode (default: 8)' },
-      maxSubqueries: { type: 'number', required: false, description: 'Max generated subqueries in sweep mode (default: 5)' },
-      citationSeedCount: { type: 'number', required: false, description: 'OpenAlex seed papers for citation expansion (default: 5)' },
-      citationLimit: { type: 'number', required: false, description: 'Citing papers per seed (default: 5)' },
+      limitPerQuery: { type: 'number', required: false, description: 'Per-source limit for sweep mode (default: profile-based)' },
+      finalLimit: { type: 'number', required: false, description: 'Final merged top-K in sweep mode (default: profile-based)' },
+      limit: { type: 'number', required: false, description: 'Per-source limit for quick mode (default: profile-based)' },
+      maxSubqueries: { type: 'number', required: false, description: 'Max generated subqueries in sweep mode (default: profile-based)' },
+      citationSeedCount: { type: 'number', required: false, description: 'OpenAlex seed papers for citation expansion (default: profile-based)' },
+      citationLimit: { type: 'number', required: false, description: 'Citing papers per seed (default: profile-based)' },
       outputDir: { type: 'string', required: false, description: 'Output dir relative to project root' },
       projectRoot: { type: 'string', required: false, description: 'Project root (default: .)' },
       skipArxiv: { type: 'boolean', required: false, description: 'Skip arXiv source' },
@@ -418,18 +477,33 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
       const script = mode === 'quick' ? 'search-papers' : 'search-sweep'
       const projectRootArg = safeString(input.projectRoot).trim() || '.'
       const outputDir = coerceCanonicalOutputDir(projectPath, context, input.outputDir, 'literature')
-      const timeoutMs = Math.max(30_000, safeNumber(input.timeoutMs, 180_000))
+      const timeoutMs = Math.max(30_000, safeNumber(input.timeoutMs, literatureBudgetDefaults.searchTimeoutMs))
 
       const args: string[] = ['--query', query]
       if (mode === 'quick') {
-        const limit = Math.max(1, Math.min(30, Math.floor(safeNumber(input.limit, 8))))
+        const limit = Math.max(1, Math.min(30, Math.floor(safeNumber(input.limit, literatureBudgetDefaults.quickLimit))))
         args.push('--limit', String(limit))
       } else {
-        const limitPerQuery = Math.max(1, Math.min(20, Math.floor(safeNumber(input.limitPerQuery, 8))))
-        const finalLimit = Math.max(1, Math.min(120, Math.floor(safeNumber(input.finalLimit, 40))))
-        const maxSubqueries = Math.max(1, Math.min(8, Math.floor(safeNumber(input.maxSubqueries, 5))))
-        const citationSeedCount = Math.max(0, Math.min(10, Math.floor(safeNumber(input.citationSeedCount, 5))))
-        const citationLimit = Math.max(1, Math.min(20, Math.floor(safeNumber(input.citationLimit, 5))))
+        const limitPerQuery = Math.max(
+          1,
+          Math.min(20, Math.floor(safeNumber(input.limitPerQuery, literatureBudgetDefaults.sweepLimitPerQuery)))
+        )
+        const finalLimit = Math.max(
+          1,
+          Math.min(120, Math.floor(safeNumber(input.finalLimit, literatureBudgetDefaults.sweepFinalLimit)))
+        )
+        const maxSubqueries = Math.max(
+          1,
+          Math.min(8, Math.floor(safeNumber(input.maxSubqueries, literatureBudgetDefaults.sweepMaxSubqueries)))
+        )
+        const citationSeedCount = Math.max(
+          0,
+          Math.min(10, Math.floor(safeNumber(input.citationSeedCount, literatureBudgetDefaults.sweepCitationSeedCount)))
+        )
+        const citationLimit = Math.max(
+          1,
+          Math.min(20, Math.floor(safeNumber(input.citationLimit, literatureBudgetDefaults.sweepCitationLimit)))
+        )
         args.push('--limit-per-query', String(limitPerQuery))
         args.push('--final-limit', String(finalLimit))
         args.push('--max-subqueries', String(maxSubqueries))
@@ -472,6 +546,7 @@ export function createYoloToolWrapperPack(projectPath: string, debug: boolean = 
           query,
           mode,
           script,
+          budgetProfile: literatureBudgetProfile,
           outputDir,
           paperCount,
           errors,

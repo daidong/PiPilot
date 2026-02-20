@@ -34,20 +34,6 @@ const EMPTY_USAGE: UsageSnapshot = {
   callCount: 0
 }
 
-function parseCurrentPlan(markdown: string): string[] {
-  if (!markdown.trim()) return []
-  const sectionMatch = /##\s+Current Plan(?:[^\n]*)\n([\s\S]*?)(?=\n##\s+|$)/i.exec(markdown)
-  if (!sectionMatch?.[1]) return []
-
-  return sectionMatch[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').trim())
-    .filter(Boolean)
-    .slice(0, 5)
-}
-
 function extractBlockingQuestion(markdown: string): string {
   const trimmed = markdown.trim()
   if (!trimmed) return ''
@@ -61,7 +47,6 @@ export default function App() {
   const [overview, setOverview] = useState<DesktopOverview | null>(null)
   const [projectMarkdown, setProjectMarkdown] = useState('')
   const [failuresMarkdown, setFailuresMarkdown] = useState('')
-  const [currentPlan, setCurrentPlan] = useState<string[]>([])
   const [turns, setTurns] = useState<TurnListItem[]>([])
 
   const [goalDraft, setGoalDraft] = useState('')
@@ -103,7 +88,6 @@ export default function App() {
   const resetProjectScopedUi = useCallback(() => {
     setProjectMarkdown('')
     setFailuresMarkdown('')
-    setCurrentPlan([])
     setTurns([])
     setActivities([])
     setTerminalEvents([])
@@ -133,7 +117,6 @@ export default function App() {
 
     setProjectMarkdown(projectMd)
     setFailuresMarkdown(failuresMd)
-    setCurrentPlan(parseCurrentPlan(projectMd))
     setTurns(turnList)
 
     const latestTurn = turnList[turnList.length - 1] ?? null
@@ -414,7 +397,6 @@ export default function App() {
           overview={overview}
           goalDraft={goalDraft}
           setGoalDraft={setGoalDraft}
-          currentPlan={currentPlan}
           modelDraft={modelDraft}
           setModelDraft={setModelDraft}
           runtimeDraft={runtimeDraft}

@@ -1,6 +1,16 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
+const ARTIFACT_URI_RE = /^artifact:\/\/(.*)$/i
+const ARTIFACT_URI_SCOPE_RE = /^(turn|project)(?:\/(.*))?$/i
+
+export type ArtifactUriScope = 'turn' | 'project'
+
+export interface ParsedArtifactUri {
+  scope: ArtifactUriScope
+  suffix: string
+}
+
 export async function ensureDir(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true })
 }
@@ -66,6 +76,29 @@ export function escapeMarkdownInline(value: string): string {
 
 export function toPosixPath(value: string): string {
   return value.replaceAll('\\', '/')
+}
+
+export function parseArtifactUri(rawValue: string): ParsedArtifactUri | null {
+  const raw = rawValue.trim()
+  if (!raw) return null
+  const match = ARTIFACT_URI_RE.exec(raw)
+  if (!match) return null
+
+  const bodyRaw = toPosixPath((match[1] || '').trim().replace(/^\/+/, '').replace(/^\.\//, ''))
+  const body = path.posix.normalize(bodyRaw || '.')
+  const scoped = ARTIFACT_URI_SCOPE_RE.exec(body)
+
+  let scope: ArtifactUriScope = 'turn'
+  let suffixRaw = body
+  if (scoped?.[1]) {
+    scope = scoped[1].toLowerCase() as ArtifactUriScope
+    suffixRaw = toPosixPath((scoped[2] || '').trim().replace(/^\/+/, '').replace(/^\.\//, ''))
+  }
+
+  return {
+    scope,
+    suffix: path.posix.normalize(suffixRaw || '.')
+  }
 }
 
 export function clamp(value: number, min: number, max: number): number {

@@ -36,6 +36,42 @@ function normalizeStringArray(value: unknown): string[] {
     .filter(Boolean)
 }
 
+function toPosix(value: string): string {
+  return value.replace(/\\/g, '/')
+}
+
+function normalizeScriptId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\.[^.]+$/, '')
+}
+
+function normalizeLongOptionToken(token: string): string {
+  if (!token.startsWith('--') || token === '--') return token
+  const eqIndex = token.indexOf('=')
+  const key = eqIndex >= 0 ? token.slice(0, eqIndex) : token
+  const value = eqIndex >= 0 ? token.slice(eqIndex + 1) : ''
+  const optionBody = key.slice(2)
+  if (!optionBody) return token
+  const normalizedBody = optionBody
+    .replace(/_/g, '-')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/-{2,}/g, '-')
+    .toLowerCase()
+  if (normalizedBody === optionBody) return token
+  if (eqIndex >= 0) return `--${normalizedBody}=${value}`
+  return `--${normalizedBody}`
+}
+
+function normalizeScriptArgs(args: string[]): string[] {
+  return args.map(normalizeLongOptionToken)
+}
+
+function hasOptionArg(args: string[], option: string): boolean {
+  return args.some((arg) => arg === option || arg.startsWith(`${option}=`))
+}
+
 function readSessionStateString(
   runtime: ToolContext['runtime'],
   key: string
@@ -56,6 +92,29 @@ function buildAgentFoundryEnv(runtime: ToolContext['runtime']): Record<string, s
   if (artifactsRel) env.AF_TURN_ARTIFACTS_REL = artifactsRel
   if (artifactsAbs) env.AF_TURN_ARTIFACTS_ABS = artifactsAbs
   return env
+}
+
+const SCRIPT_DEFAULT_OUTPUT_SUBDIR = new Map<string, string>([
+  ['academic-writing/outline', 'writing'],
+  ['academic-writing/draft-section', 'writing'],
+  ['literature-search/search-papers', 'literature'],
+  ['literature-search/search-sweep', 'literature'],
+  ['data-analysis/analyze-dataset', 'data-analysis']
+])
+
+function maybeInjectDefaultOutputDir(
+  args: string[],
+  input: { skillId: string; scriptName: string },
+  runtime: ToolContext['runtime']
+): string[] {
+  if (hasOptionArg(args, '--output-dir')) return args
+  const scriptKey = `${normalizeScriptId(input.skillId)}/${normalizeScriptId(input.scriptName)}`
+  const outputSubdir = SCRIPT_DEFAULT_OUTPUT_SUBDIR.get(scriptKey)
+  if (!outputSubdir) return args
+  const turnArtifactsDir = readSessionStateString(runtime, 'yolo.turnArtifactsDir')
+  if (!turnArtifactsDir) return args
+  const outputDir = toPosix(path.posix.join(toPosix(turnArtifactsDir), outputSubdir))
+  return [...args, '--output-dir', outputDir]
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -290,7 +349,15 @@ export const skillScriptRunTool: Tool<SkillScriptRunInput, SkillScriptRunOutput>
         }
       }
 
-      const args = normalizeStringArray(input.args)
+      const normalizedInputArgs = normalizeScriptArgs(normalizeStringArray(input.args))
+      const args = maybeInjectDefaultOutputDir(
+        normalizedInputArgs,
+        {
+          skillId: input.skillId,
+          scriptName: scriptEntry.name || scriptEntry.fileName || input.script
+        },
+        runtime
+      )
       const scriptPath = await resolveScriptPathForExecution(scriptEntry, input.skillId, input.script)
       const command = buildCommand(scriptEntry, args, scriptPath)
       const execResult = await runtime.io.exec(command, {

@@ -20,8 +20,15 @@ export interface ProgressReasonCount {
 export interface ProgressHealthSnapshot {
   windowTurns: number
   successRate: number
-  deliverableTouchRate: number
-  fallbackAttributionRate: number
+  orchestrationMode: 'artifact_gravity_v3_paper' | 'unknown'
+  northstarGateRate: number
+  northstarScoreboardImprovedRate: number
+  northstarArtifactChangeRate: number
+  northstarVerifySuccessRate: number
+  northstarVerifiedGrowthProofRequiredRate: number
+  northstarVerifiedGrowthProofPassRate: number
+  planDeliverableTouchRate: number
+  planFallbackAttributionRate: number
   noDeltaTopReasons: ProgressReasonCount[]
 }
 

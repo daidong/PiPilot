@@ -34,6 +34,33 @@ function defineScriptSkill(skillId: string, scriptPath: string) {
   })
 }
 
+function defineNamedScriptSkill(input: {
+  skillId: string
+  scriptName: string
+  fileName: string
+  scriptPath: string
+  runner?: 'bash' | 'python' | 'node' | 'executable'
+}) {
+  return defineSkill({
+    id: input.skillId,
+    name: `Skill ${input.skillId}`,
+    shortDescription: `Runs ${input.scriptName}`,
+    instructions: {
+      summary: `Run ${input.scriptName} when requested.`
+    },
+    tools: ['skill-script-run'],
+    meta: {
+      scripts: [{
+        name: input.scriptName,
+        fileName: input.fileName,
+        filePath: input.scriptPath,
+        relativePath: `scripts/${input.fileName}`,
+        runner: input.runner ?? 'bash'
+      }]
+    }
+  })
+}
+
 describe('skill-script-run tool', () => {
   let tempDir: string
   let context: ToolContext
@@ -286,5 +313,44 @@ describe('skill-script-run tool', () => {
     expect(result.data?.structuredResult).toBeDefined()
     expect(result.data?.structuredResult?.script).toBe('delegate-coding-agent')
     expect(result.data?.structuredResult?.status).toBe('error')
+  })
+
+  it('normalizes camelCase flags and injects default output-dir for academic-writing wrappers', async () => {
+    context.runtime.sessionState.set('yolo.turnArtifactsDir', 'runs/turn-0042/artifacts')
+
+    const scriptPath = path.join(
+      tempDir,
+      '.agentfoundry',
+      'skills',
+      'academic-writing',
+      'scripts',
+      'draft-section.sh'
+    )
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true })
+    await fs.writeFile(scriptPath, 'printf "%s\\n" "$@"\n', 'utf-8')
+    context.runtime.skillManager?.register(defineNamedScriptSkill({
+      skillId: 'academic-writing',
+      scriptName: 'draft-section',
+      fileName: 'draft-section.sh',
+      scriptPath
+    }))
+
+    const result = await skillScriptRunTool.execute({
+      skillId: 'academic-writing',
+      script: 'draft-section',
+      args: ['--sectionHeading', 'Method']
+    }, context)
+
+    expect(result.success).toBe(true)
+    const rows = (result.data?.stdout || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(rows).toEqual([
+      '--section-heading',
+      'Method',
+      '--output-dir',
+      'runs/turn-0042/artifacts/writing'
+    ])
   })
 })

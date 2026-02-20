@@ -10,8 +10,8 @@ import { createYoloToolWrapperPack } from './tool-wrappers.js'
 
 import type {
   ClaimEvidence,
-  SemanticGateEvaluator,
-  SemanticGateInput,
+  NorthStarSemanticGateEvaluator,
+  NorthStarSemanticGateInput,
   ToolEventRecord,
   TurnContext,
   TurnRunOutcome,
@@ -79,35 +79,56 @@ const TOOL_EVENT_STRING_LIMIT = 6000
 const FETCH_EVENT_STRING_LIMIT = 80_000
 const POLICY_BLOCK_RE = /(no[-\s]?destructive|destructive policy|blocked by (a )?policy|policy block|forbidden|not allowed|disallowed)/i
 const DESTRUCTIVE_RM_RE = /\brm\s+-rf\b/i
-const DEFAULT_SEMANTIC_GATE_MAX_TOKENS = 700
-const DEFAULT_SEMANTIC_GATE_TIMEOUT_MS = 25_000
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_MAX_TOKENS = 1_000
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_TIMEOUT_MS = 30_000
 const CODING_LARGE_REPO_TIMEOUT_BUFFER_MS = 180_000
 
-const semanticGateOutputSchema = z.object({
-  verdict: z.enum(['touched', 'not_touched', 'abstain']),
+const northStarSemanticGateOutputSchema = z.object({
   confidence: z.number().min(0).max(1),
-  touched_deliverables: z.array(
+  dimension_scores: z.object({
+    goal_alignment: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+    evidence_strength: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+    novelty_delta: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+    falsifiability: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+    trajectory_health: z.union([z.literal(0), z.literal(1), z.literal(2)])
+  }),
+  reason_codes: z.array(z.string().min(1).max(120)).max(30),
+  claim_audit: z.object({
+    supported_ids: z.array(z.string().min(1).max(64)).max(100),
+    unsupported_ids: z.array(z.string().min(1).max(64)).max(100),
+    contradicted_ids: z.array(z.string().min(1).max(64)).max(100)
+  }),
+  required_actions: z.array(
     z.object({
-      id: z.string().min(1).max(512),
-      evidence_refs: z.array(z.string().min(1).max(512)).max(20),
-      reason_codes: z.array(z.string().min(1).max(120)).max(12)
+      tier: z.enum(['must_candidate', 'should', 'suggest']),
+      code: z.string().min(1).max(120),
+      description: z.string().min(1).max(300),
+      // Responses API structured schema requires every property to be listed in `required`.
+      // Use nullable required field instead of optional for provider compatibility.
+      due_turn: z.union([z.number().int().min(1).max(1_000_000), z.null()])
     })
-  ).max(20),
-  notes: z.string().max(1_000)
-})
+  ).max(4),
+  summary: z.string().max(1_000),
+  // Runtime derives authoritative verdict from dimension_scores, but provider-side schema
+  // validation is stricter when optional object properties exist.
+  verdict: z.enum(['advance_confirmed', 'advance_weak', 'no_progress', 'regress', 'abstain'])
+}).strict()
 
-const SEMANTIC_GATE_SYSTEM_PROMPT = [
-  'You are a strict semantic gate for YOLO Researcher.',
-  'Task: judge whether this turn semantically touched an active plan deliverable.',
-  'You must return ONLY JSON matching the schema.',
-  'Rules:',
-  '1) Use only facts present in the provided input JSON.',
-  '2) If uncertain or evidence is insufficient, return verdict=abstain, confidence=0.',
-  '3) If verdict=touched, touched_deliverables must include only deliverables from plan.deliverables and evidence_refs must come from current turn evidence paths.',
-  '3b) Always include all schema fields: touched_deliverables and notes are REQUIRED. Use touched_deliverables=[] and notes="" when empty.',
-  '3c) For each touched_deliverables entry, reason_codes is REQUIRED. Use reason_codes=[] when there is no specific code.',
-  '4) Never invent files, deliverables, or evidence refs.',
-  '5) Prefer abstain over weak inference.'
+const NORTHSTAR_SEMANTIC_GATE_SYSTEM_PROMPT = [
+  'You are a strict North Star research progress auditor.',
+  'Judge whether the current turn made meaningful progress toward the stated research objective.',
+  'Do not reward count inflation, wording churn, or unverifiable claims.',
+  'Runtime hard checks are authoritative and cannot be overridden.',
+  'Do not decide final verdict; runtime derives verdict deterministically from dimension scores.',
+  'If uncertain, keep confidence low and reflect uncertainty in scores/reason_codes.',
+  'Use only facts from input JSON. Never invent files or metrics.',
+  'Schema compliance rules:',
+  '1) Include ALL top-level fields required by schema.',
+  '2) claim_audit is required; use empty arrays when no IDs.',
+  '3) required_actions is required; use [] when no actions.',
+  '4) For each required action, include due_turn; use null when unspecified.',
+  '5) verdict is required for schema compatibility; use abstain when uncertain.',
+  'Return JSON only following the schema.'
 ].join('\n')
 
 function truncateText(value: string, limit: number = TOOL_EVENT_STRING_LIMIT): string {
@@ -755,196 +776,119 @@ function extractDeliverablesFromDoneDefinition(doneDefinition: string[]): string
   return [...new Set(deliverables)]
 }
 
-function buildNativeTurnPrompt(context: TurnContext): string {
+function buildArtifactGravityPrompt(context: TurnContext): string {
   const recent = context.recentTurns
     .map((turn) => `- ${turn.actionPath}: ${turn.summary}`)
     .join('\n')
-
   const blocked = context.failures
     .filter((item) => item.status === 'BLOCKED')
     .map((item) => `- [${item.runtime}] ${item.cmd} :: ${item.errorLine}`)
-    .join('\n')
-
-  const pendingUserInputs = context.pendingUserInputs
-    .map((item) => `- ${item.submittedAt} :: ${item.text} (evidence: ${item.evidencePath})`)
     .join('\n')
   const done = context.project.done
     .slice(-8)
     .map((item) => `- ${item.text} (evidence: ${item.evidencePath})`)
     .join('\n')
+  const pendingUserInputs = context.pendingUserInputs
+    .map((item) => `- ${item.submittedAt} :: ${item.text} (evidence: ${item.evidencePath})`)
+    .join('\n')
 
-  const planNeedsRewrite = requiresPlanRewrite(context.project.currentPlan)
-  const plannerCheckpointDue = Boolean(context.plannerCheckpoint?.due)
-  const literatureBootstrapNeeded = goalNeedsLiteratureBootstrap(context.project.goal) && !hasLiteratureArtifacts(context)
-  const trustedEvidencePool = getTrustedEvidencePool(context)
-  const untrustedEvidenceHints = (context.untrustedEvidenceHints ?? []).slice(0, 8)
   const artifactPaths = canonicalTurnArtifactPaths(context)
-  const literatureOutputDir = `${artifactPaths.canonicalRelativeFromProject}/literature`
-  const literatureOutputDirAbs = toPosixPath(join(context.projectRoot, literatureOutputDir))
-  const hasProblemStatement = trustedEvidencePool.some((entry) => /problem_statement/i.test(entry))
-  const workspaceGitRepos = (context.workspaceGitRepos ?? []).slice(0, 8)
-  const planBoardView = renderPlanBoardForPrompt(context)
-  const plannerCheckpointReasons = context.plannerCheckpoint?.reasons ?? []
-  const activePlan = context.project.planBoard
-    .slice()
-    .sort((a, b) => a.priority - b.priority)
-    .find((item) => item.status === 'ACTIVE')
-  const activePlanDeliverables = activePlan
-    ? extractDeliverablesFromDoneDefinition(activePlan.doneDefinition ?? [])
-    : []
-  const activePrimaryDeliverable = activePlanDeliverables[0] ?? ''
-  const top3PlanItems = context.project.planBoard
-    .slice()
-    .sort((a, b) => a.priority - b.priority)
-    .slice(0, 3)
-  const top3NeedsLiterature = top3PlanItems.some((item) => {
-    if (item.status === 'DONE' || item.status === 'DROPPED') return false
-    const text = `${item.title}\n${item.doneDefinition.join('\n')}`.toLowerCase()
-    return /(literature|prior art|related work|survey|paper|citation|novelty|reading[_ -]?list|matrix|arxiv|openalex|doi)/.test(text)
-  })
-  const hasRecentSweepEvidence = context.project.done
-    .slice(-8)
-    .some((item) => {
-      const text = `${item.text}\n${item.evidencePath}`.toLowerCase()
-      return /(literature|reading[_ -]?list|matrix|openalex|arxiv|scholar|doi|search[-_ ]?sweep|sweep)/.test(text)
-    })
-  const literatureSweepRecommended = top3NeedsLiterature && !hasRecentSweepEvidence
+  const northStar = context.northStar
+  const northStarArtifactPaths = northStar?.artifactPaths ?? []
+  const paperMode = context.orchestrationMode === 'artifact_gravity_v3_paper'
+  const pivotAllowed = Boolean(context.northStarPivotAllowed)
+  const semanticFeedback = context.northStarSemantic
+  const semanticOpenActions = semanticFeedback?.openRequiredActions ?? []
+  const semanticMustActions = semanticOpenActions.filter((row) => row.tier === 'must')
+  const semanticAdvisoryActions = semanticOpenActions.filter((row) => row.tier !== 'must')
 
   return [
-    'You are YOLO-Researcher v2 native runner.',
-    'Design axiom: minimal discipline to avoid death + evidence-driven strengthening.',
-    'This turn is native: you may use ALL available tools/skills/subagents directly.',
-    'Do real work, produce evidence, then return one JSON report.',
-    '',
-    'Mode rule (critical):',
-    `- plannerCheckpoint=${plannerCheckpointDue ? 'TRUE' : 'FALSE'}.`,
-    ...(plannerCheckpointDue && plannerCheckpointReasons.length > 0
-      ? [`- plannerCheckpoint reasons: ${plannerCheckpointReasons.join(', ')}`]
-      : []),
-    ...(plannerCheckpointDue
+    `You are YOLO-Researcher ${paperMode ? 'v3-paper' : 'v3'} Artifact-Gravity runner.`,
+    'Mainline progress rule (critical):',
+    ...(paperMode
       ? [
-        '- This turn has a CHECKPOINT STEP (not planning-only mode).',
-        '- You MAY update Plan Board structure (Top-3 ordering, add/drop/merge items, edit done_definition).',
-        '- Keep governance edits brief, then execute one concrete deliverable action in the same turn.'
+        '- Progress is valid only when: Internal checks pass, Scoreboard improves, and External friction quota is satisfied.',
+        '- Repeated check-only pass without scoreboard improvement is NO_DELTA.',
+        '- If consecutive turns skip Internal RealityCheck execution, anti-churn may force NO_DELTA + pivot.'
       ]
       : [
-        '- This is an EXECUTION turn.',
-        '- You MUST NOT modify Plan Board structure (no add/drop/merge/replace/reorder Top-3, no done_definition edits).',
-        '- Advance one concrete deliverable in this turn; runtime will attribute plan binding post-turn.',
-        '- Use executing-plans workflow discipline in this turn (read-back -> pick one deliverable -> execute -> verify evidence pointer).'
+        '- Progress is valid only when NorthStarArtifact changes in this turn OR NorthStar verify cmd succeeds in this turn.',
+        '- Verify-only success is rejected when there is no substantive delta (no non-verify artifact and no workspace/repo change).'
       ]),
-    '',
-    'Deliverable rule (critical):',
-    '- A SUCCESS hint should correspond to at least one deliverable update or blocker clear with evidence.',
-    '- Adding only supporting evidence snippets/cite seeds without deliverable update is NOT success and may be downgraded to no_delta.',
-    '',
-    'Read-back rule (critical):',
-    '- Before new fetch/sweep, read current deliverable files and confirm the exact missing gap first.',
-    '- Execution preflight: if active plan deliverable and this turn output are misaligned, do a micro-checkpoint first (edit only active plan done_definition deliverable), then execute.',
-    ...(plannerCheckpointDue
-      ? []
-      : [
-        '- executing-plans loop: (1) read current active deliverable, (2) choose exactly one primary target, (3) execute one action that creates/updates that target (or write blocker note), (4) verify target path exists/readable and cite it.',
-        '- For git-repo code changes, call coding-large-repo/agent-run-to-completion once with --task + --verify-cmd (+ --deliverable when available).'
-      ]),
-    '',
-    'OpenAI client compatibility (critical):',
-    '- For Python scripts, use openai>=1.x API only: `from openai import OpenAI` and `client.chat.completions.create(...)` (or `client.responses.create(...)`).',
-    '- Never use legacy `openai.ChatCompletion.create`.',
-    '- For any script that calls OpenAI, print a one-line preflight at startup with: SDK version, model, and OPENAI_API_KEY presence.',
-    '',
-    'Hard rules:',
-    '1) Prefer autonomous execution. Retry concrete fixes before asking user.',
-    literatureSweepRecommended
-      ? '2) Literature study is recommended now: Top-3 still has unmet literature deliverables and recent sweep evidence is missing. Run literature-study({mode:"standard"}) before deep code reading.'
-      : '2) Literature study is conditional: run literature-study({mode:"standard"}) when Top-3 literature deliverables are unmet and recent evidence is missing; otherwise prioritize consolidating existing literature into deliverables.',
-    '3) Do not do exhaustive repo reading. Use high-leverage slices first (README, rg, entrypoints).',
-    '4) If you will modify files inside a git repo, you MUST call coding-large-repo/agent-run-to-completion first.',
-    '5) Direct write/edit repo code changes without coding-large-repo/agent-run-to-completion are invalid and will be downgraded to no_delta.',
-    '6) Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). If path is dirty, choose a new target directory name.',
-    '7) Never clone or create long-lived workspaces under runs/turn-xxxx/.',
-    `8) Write turn artifacts only under "${artifactPaths.canonicalRelativeFromProject}" (absolute: ${artifactPaths.canonicalAbsolute}). Prefer artifact://<relative_path> for tool output targets.`,
-    '9) projectUpdate evidence paths must use "runs/turn-xxxx/...". Never use work/, absolute paths, or other roots in evidencePath fields.',
-    '10) Persist processed literature artifacts under current turn artifacts.',
-    '11) Respect Done(Do-not-repeat): avoid repeating identical action fingerprints unless you will produce a new artifact type.',
-    '12) Runtime derives active_plan_id/status_change/delta/evidence_paths from observed execution; do not invent them.',
-    '13) done_definition must be mechanical only: use "deliverable: <path-or-file-token>" and optional "evidence_min: <n>".',
-    '14) Plan structure edits (planBoard/currentPlan rewrite, drop/replace, done_definition edits, Top-3 reorder) are allowed ONLY when planner checkpoint is due.',
-    '15) If repeated attempts in this turn still fail, return ask_user with one concrete blocking question and pause.',
-    '16) If using git_* tools, always set cwd to a concrete repo path; never assume project root itself is a git repo.',
-    '17) Any generated OpenAI-calling Python script must be openai>=1.x compatible and include preflight logging (sdk/model/key-present).',
-    '18) During execution turns, follow executing-plans discipline and make your intent summary explicitly mention the primary target deliverable filename.',
-    '19) Use coding-large-repo as a single task-level call; avoid manually chaining agent-start/agent-poll/agent-log/agent-kill.',
-    '20) Prefer --verify-cmd and --deliverable in agent-run-to-completion so completion gates are explicit.',
+    '- All other work (notes/exploration/plan chatter) is support only and will be NO_DELTA.',
+    '- Do not optimize for plan control-plane fields.',
     '',
     `Turn: ${context.turnNumber}`,
     `Goal: ${context.project.goal}`,
     `Default runtime: ${context.project.defaultRuntime}`,
-    `Literature output dir (relative): ${literatureOutputDir}`,
-    `Literature output dir (absolute): ${literatureOutputDirAbs}`,
     `Turn artifact dir (relative): ${artifactPaths.canonicalRelativeFromProject}`,
     `Turn artifact dir (absolute): ${artifactPaths.canonicalAbsolute}`,
     'Turn artifact URI base: artifact://',
-    `Workspace git repos: ${workspaceGitRepos.length > 0 ? workspaceGitRepos.join(', ') : '(none discovered)'}`,
-    'Evidence snapshot rule:',
-    '- If source proof is in work/... or any non-runs path, create a snapshot file under runs/turn-xxxx/artifacts/evidence/... first.',
-    '- Then cite ONLY that runs/turn-xxxx/... snapshot path in facts/constraints/claims/planBoard evidence fields.',
-    'Evidence trust rule:',
-    '- Treat trusted evidence as directly consumable.',
-    '- Treat untrusted hints as leads only; verify with read/stat or regenerate in this turn before citing as proof.',
-    `Trusted evidence (${trustedEvidencePool.length}):`,
-    ...(trustedEvidencePool.length > 0 ? trustedEvidencePool.slice(-12).map((item) => `- ${item}`) : ['- none']),
-    `Untrusted evidence hints (${context.untrustedEvidenceHints?.length ?? 0}):`,
-    ...(untrustedEvidenceHints.length > 0
-      ? untrustedEvidenceHints.map((item) => `- [${item.state}] ${item.path}${item.sourceTurn ? ` (from turn-${String(item.sourceTurn).padStart(4, '0')})` : ''} :: ${item.reason}`)
-      : ['- none']),
-    ...(hasProblemStatement
-      ? []
-      : [
-        'Deliverable gate: problem_statement.md is still missing.',
-        `Produce it in this turn under "${artifactPaths.canonicalRelativeFromProject}" before broader literature synthesis.`
-      ]),
-    ...(literatureBootstrapNeeded
+    '',
+    'North Star contract:',
+    `- contract: ${northStar?.filePath ?? 'NORTHSTAR.md (missing or invalid)'}`,
+    `- goal: ${northStar?.goal || context.project.goal}`,
+    `- current objective: ${northStar?.currentObjective || '(not specified)'}`,
+    `- objective id/version: ${northStar?.objectiveId || '(none)'}/${northStar?.objectiveVersion || 1}`,
+    `- artifact type: ${northStar?.artifactType || 'unknown'}`,
+    `- artifact paths: ${northStarArtifactPaths.length > 0 ? northStarArtifactPaths.join(', ') : '(none declared)'}`,
+    `- artifact gate: ${northStar?.artifactGate || 'any'}`,
+    ...(paperMode
       ? [
-        '',
-        'Research bootstrap gate:',
-        '- No literature evidence is recorded yet for this goal.',
-        '- In this turn, run literature-study({query:"<query>",mode:"standard"}) before deep code reading.',
-        `- Use outputDir "${literatureOutputDir}" (or "${artifactPaths.canonicalRelativeFromProject}/literature-study").`,
-        `- Save at least one processed artifact under "${artifactPaths.canonicalRelativeFromProject}", and keep references in projectUpdate.keyArtifacts.`
+        `- internal checks: ${(northStar?.internalCheckCommands ?? []).length > 0 ? northStar!.internalCheckCommands.join(' | ') : '(none declared)'}`,
+        `- internal gate: ${northStar?.internalCheckGate || 'any'}`,
+        `- external checks: ${(northStar?.externalCheckCommands ?? []).length > 0 ? northStar!.externalCheckCommands.join(' | ') : '(none declared)'}`,
+        `- external gate: ${northStar?.externalCheckGate || 'any'}`,
+        `- external quota: require one external success every ${northStar?.externalCheckRequireEvery || 3} turns`,
+        `- scoreboard metrics: ${(northStar?.scoreboardMetricPaths ?? []).length > 0 ? northStar!.scoreboardMetricPaths.join(', ') : '(none declared)'}`
+      ]
+      : []),
+    `- verify cmd: ${northStar?.verifyCmd || '(none)'}`,
+    `- next action: ${northStar?.nextAction || '(not specified)'}`,
+    `- pivot allowed (after >=2 no_delta): ${pivotAllowed ? 'YES' : 'NO'}`,
+    ...(paperMode
+      ? [
+        `- last semantic verdict: ${semanticFeedback?.lastVerdict || 'none'}`,
+        `- last semantic reason codes: ${(semanticFeedback?.reasonCodes ?? []).slice(0, 8).join(', ') || '(none)'}`,
+        `- open semantic actions: ${(semanticFeedback?.openRequiredActions ?? []).length}`
       ]
       : []),
     '',
-    'Plan Board (stable IDs):',
-    planBoardView,
-    '',
-    `Current active plan: ${activePlan ? `${activePlan.id} ${activePlan.title}` : '(none)'}`,
-    ...(plannerCheckpointDue
-      ? []
-      : [
-        'Execution card (executing-plans):',
-        `- active plan id: ${activePlan?.id ?? '(none)'}`,
-        `- primary target deliverable: ${activePrimaryDeliverable || '(infer from active plan done_definition before acting)'}`,
-        `- candidate deliverables: ${activePlanDeliverables.length > 0 ? activePlanDeliverables.join(', ') : '(none declared)'}`,
-        '- success in this turn requires at least one candidate deliverable touch or blocker-clear evidence.'
-      ]),
-    '',
-    'Current Plan (derived):',
-    ...context.project.currentPlan.map((item, idx) => `${idx + 1}. ${item}`),
-    ...(planNeedsRewrite && plannerCheckpointDue
+    'Execution rules:',
+    '1) Produce exactly one primary deliverable action around NorthStarArtifact.',
+    ...(paperMode
       ? [
-        '',
-        'Plan quality gate:',
-        '- Current Plan is bootstrap/template.',
-        '- Planner checkpoint is due: you MAY refresh projectUpdate.currentPlan (3-5 concrete actions), then execute one deliverable action.'
+        '2) Execute at least one allowed Internal RealityCheck cmd in this turn and capture command evidence.',
+        '2.1) If external quota is due, execute at least one allowed External RealityCheck cmd this turn.',
+        '2.2) Use check output to improve scoreboard metrics; unchanged metrics will be NO_DELTA.'
+      ]
+      : [
+        '2) If verify cmd exists, run it in this turn and capture command evidence.',
+        '2.1) Do not run verify as the sole action repeatedly; pair it with a real artifact/workspace delta.'
+      ]),
+    '3) Do not rewrite legacy project planning fields in this mode.',
+    '4) NorthStarArtifact paths must be stable project-relative paths; never use runs/turn-xxxx/ paths or any artifact:// URI.',
+    '5) If pivot is necessary and allowed, update only NORTHSTAR.md with a short rationale linked to latest failure evidence.',
+    ...(pivotAllowed
+      ? ['6) Pivot structure edits (path/cmd/realitycheck/scoreboard/external policy) require Pivot rationale + runs/turn-xxxx evidence reference in NORTHSTAR.md.']
+      : ['6) Pivot is locked this turn: do not change NorthStarArtifact.path / Verify.cmd / RealityCheck.cmd / Scoreboard / External policy.']),
+    '7) Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete).',
+    '8) For git-repo code changes, use coding-large-repo/agent-run-to-completion.',
+    '9) Evidence paths in projectUpdate must use runs/turn-xxxx/... only.',
+    ...(paperMode && semanticMustActions.length > 0
+      ? [
+        '10) Runtime-promoted semantic MUST actions are blocking debt; prioritize resolving them this turn unless impossible:',
+        ...(semanticMustActions.slice(0, 3).map((row) => (
+          `- [${row.tier}] ${row.code} (due_turn=${row.due_turn ?? 'n/a'}): ${row.description}`
+        )))
       ]
       : []),
-    ...(planNeedsRewrite && !plannerCheckpointDue
+    ...(paperMode && semanticMustActions.length === 0 && semanticAdvisoryActions.length > 0
       ? [
-        '',
-        'Plan quality gate:',
-        '- Current Plan is bootstrap/template.',
-        '- Planner checkpoint is NOT due: do not rewrite planBoard/currentPlan in this turn; focus on deliverable execution only.'
+        '10) Semantic SHOULD/SUGGEST actions are advisory; integrate when aligned with objective and current constraints:',
+        ...(semanticAdvisoryActions.slice(0, 3).map((row) => (
+          `- [${row.tier}] ${row.code} (due_turn=${row.due_turn ?? 'n/a'}): ${row.description}`
+        )))
       ]
       : []),
     '',
@@ -959,62 +903,17 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '',
     'Done (do-not-repeat):',
     done || '- none',
-    ...(context.plannerCheckpoint?.due
-      ? [
-        '',
-        `Planner checkpoint due: ${context.plannerCheckpoint.reasons.join(', ')}`,
-        '- Governance window open: you may refresh Plan Board Top-3 priorities and done_definition fields.'
-      ]
-      : [
-        '',
-        'Planner checkpoint not due:',
-        '- Do NOT rewrite planBoard/currentPlan in projectUpdate this turn.'
-      ]),
-    '',
-    'Focus: Each turn should advance ONE deliverable.',
-    'Do not combine literature search + code analysis + writing in a single turn.',
-    ...(context.stagnation?.stagnant
-      ? [
-        '',
-        `STAGNATION WARNING: Last ${context.stagnation.count}/${context.stagnation.window} turns used action type "${context.stagnation.dominantAction}".`,
-        'You MUST change strategy this turn:',
-        `- Use a different action/tool type than "${context.stagnation.dominantAction}", OR`,
-        '- Produce a stage-advancing deliverable, OR',
-        '- Clear/record blocker transitions, OR',
-        '- Ask user if truly blocked.',
-        'Expected deliverables: problem_statement.md, literature_map.md, idea_candidates.md, experiment_plan.md, paper_draft.md',
-        'Repeating the dominant action type without stage advancement will be treated as no progress.'
-      ]
-      : []),
-    ...((() => {
-      const claims = context.project.claims
-      if (claims.length === 0) return []
-      const covered = claims.filter((c: ClaimEvidence) => c.status === 'covered').length
-      const uncoveredClaims = claims.filter((c: ClaimEvidence) => c.status === 'uncovered')
-      const lines = [
-        '',
-        `Claims coverage: ${covered}/${claims.length} (${Math.round(covered / claims.length * 100)}%)`
-      ]
-      if (uncoveredClaims.length > 0) {
-        lines.push(`Uncovered: "${uncoveredClaims[0].claim}"`)
-      }
-      return lines
-    })()),
     '',
     'Return JSON only with schema:',
     '{',
     '  "intent": "why this turn",',
-    '  "status": "success|failure|ask_user|stopped", // or use statusHint with same enum',
+    '  "status": "success|failure|ask_user|stopped",',
     '  "summary": "one concise observation",',
     '  "primaryAction": "short label of what was actually done",',
-    '  "repoId": "optional explicit repo target id (preferred when touching repo code)",',
-    '  "statusHint": "success|failure|ask_user|stopped (optional alias of status)",',
+    '  "repoId": "optional explicit repo target id",',
     '  "askQuestion": "required when status=ask_user",',
     '  "stopReason": "required when status=stopped",',
     '  "projectUpdate": {',
-    '    "planBoard": [{"id":"P2","title":"...","status":"TODO|ACTIVE|DONE|BLOCKED|DROPPED","doneDefinition":["deliverable: artifacts/problem_statement.md","evidence_min: 1"],"evidencePaths":["runs/turn-0001/..."],"nextMinStep":"...","priority":1}], // ONLY when planner checkpoint is due',
-    '    "currentPlan": ["up to 5 items"], // ONLY when planner checkpoint is due',
-    '    // If proof comes from work/... first write snapshot to runs/turn-xxxx/artifacts/evidence/*.md',
     '    "facts": [{"text":"...","evidencePath":"runs/turn-0001/..."}],',
     '    "constraints": [{"text":"...","evidencePath":"runs/turn-0001/..."}],',
     '    "hypotheses": ["[HYP] ..."],',
@@ -1025,6 +924,10 @@ function buildNativeTurnPrompt(context: TurnContext): string {
     '  "updateSummary": ["<=5 pointer lines"]',
     '}'
   ].join('\n')
+}
+
+function buildNativeTurnPrompt(context: TurnContext): string {
+  return buildArtifactGravityPrompt(context)
 }
 
 function buildNativeRepairPrompt(input: {
@@ -1039,7 +942,7 @@ function buildNativeRepairPrompt(input: {
       '- Evidence path repair required:',
       '- Do NOT use work/... or absolute file paths in projectUpdate evidence fields.',
       `- If proof comes from work/... first write a snapshot under "${artifactPaths.canonicalRelativeFromProject}/evidence/".`,
-      '- Then reference only runs/turn-xxxx/... in facts/constraints/claims/planBoard.evidencePaths.'
+      '- Then reference only runs/turn-xxxx/... in facts/constraints/claims evidence fields.'
     ]
     : []
 
@@ -1293,17 +1196,17 @@ function normalizeTurnOutcome(value: unknown): TurnRunOutcome {
   }
 }
 
-export interface SemanticGateLlmEvaluatorConfig {
+export interface NorthStarSemanticGateLlmEvaluatorConfig {
   model: string
   apiKey?: string
   timeoutMs?: number
   maxTokens?: number
 }
 
-export function createSemanticGateLlmEvaluator(config: SemanticGateLlmEvaluatorConfig): SemanticGateEvaluator {
+export function createNorthStarSemanticGateLlmEvaluator(config: NorthStarSemanticGateLlmEvaluatorConfig): NorthStarSemanticGateEvaluator {
   const modelId = (config.model || '').trim()
   if (!modelId) {
-    throw new Error('createSemanticGateLlmEvaluator: model is required')
+    throw new Error('createNorthStarSemanticGateLlmEvaluator: model is required')
   }
 
   const languageModel = getLanguageModelByModelId(modelId, {
@@ -1316,7 +1219,7 @@ export function createSemanticGateLlmEvaluator(config: SemanticGateLlmEvaluatorC
     && config.timeoutMs >= 3_000
   )
     ? Math.floor(config.timeoutMs)
-    : DEFAULT_SEMANTIC_GATE_TIMEOUT_MS
+    : DEFAULT_NORTHSTAR_SEMANTIC_GATE_TIMEOUT_MS
 
   const maxTokens = (
     typeof config.maxTokens === 'number'
@@ -1324,9 +1227,9 @@ export function createSemanticGateLlmEvaluator(config: SemanticGateLlmEvaluatorC
     && config.maxTokens >= 100
   )
     ? Math.floor(config.maxTokens)
-    : DEFAULT_SEMANTIC_GATE_MAX_TOKENS
+    : DEFAULT_NORTHSTAR_SEMANTIC_GATE_MAX_TOKENS
 
-  return async (input: SemanticGateInput) => {
+  return async (input: NorthStarSemanticGateInput) => {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -1334,14 +1237,16 @@ export function createSemanticGateLlmEvaluator(config: SemanticGateLlmEvaluatorC
       const payload = JSON.stringify(input)
       const result = await generateStructured({
         model: languageModel,
-        system: SEMANTIC_GATE_SYSTEM_PROMPT,
+        system: NORTHSTAR_SEMANTIC_GATE_SYSTEM_PROMPT,
         prompt: [
-          'Evaluate the following semantic gate input JSON and return your judgement JSON.',
+          'Evaluate the following JSON input.',
+          'Focus on objective alignment, evidence validity, substantive novelty, falsifiability, and trajectory health.',
+          'Output schema: yolo.northstar_semantic_gate.output.v1',
           '',
           payload
         ].join('\n'),
-        schema: semanticGateOutputSchema,
-        schemaName: 'YoloSemanticGateOutput',
+        schema: northStarSemanticGateOutputSchema,
+        schemaName: 'YoloNorthStarSemanticGateOutput',
         temperature: 0,
         maxTokens,
         retries: 1,
@@ -1349,31 +1254,45 @@ export function createSemanticGateLlmEvaluator(config: SemanticGateLlmEvaluatorC
       })
 
       return {
-        schema: 'yolo.semantic_gate.output.v1',
-        verdict: result.output.verdict,
+        schema: 'yolo.northstar_semantic_gate.output.v1',
         confidence: result.output.confidence,
-        ...(Array.isArray(result.output.touched_deliverables)
-          ? {
-              touched_deliverables: result.output.touched_deliverables.map((item) => ({
-                id: item.id.trim(),
-                evidence_refs: item.evidence_refs.map((row) => row.trim()).filter(Boolean),
-                ...(Array.isArray(item.reason_codes)
-                  ? { reason_codes: item.reason_codes.map((row) => row.trim()).filter(Boolean) }
-                  : {})
-              }))
-            }
-          : {}),
-        ...(typeof result.output.notes === 'string' && result.output.notes.trim()
-          ? { notes: result.output.notes.trim() }
-          : {})
+        dimension_scores: result.output.dimension_scores,
+        reason_codes: result.output.reason_codes,
+        claim_audit: result.output.claim_audit,
+        required_actions: result.output.required_actions.map((action) => ({
+          tier: action.tier,
+          code: action.code,
+          description: action.description,
+          ...(typeof action.due_turn === 'number' ? { due_turn: action.due_turn } : {})
+        })),
+        summary: result.output.summary,
+        ...(result.output.verdict ? { verdict: result.output.verdict } : {})
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const cause = error && typeof error === 'object'
+        ? (error as { cause?: unknown }).cause
+        : undefined
+      const causeMessage = cause instanceof Error
+        ? cause.message
+        : (typeof cause === 'string' ? cause : '')
+      const diagnosticMessage = causeMessage && causeMessage !== message
+        ? `${message}; cause=${causeMessage}`
+        : message
       return {
-        schema: 'yolo.semantic_gate.output.v1',
-        verdict: 'abstain',
+        schema: 'yolo.northstar_semantic_gate.output.v1',
         confidence: 0,
-        notes: `semantic evaluator fallback: ${message}`
+        dimension_scores: {
+          goal_alignment: 0,
+          evidence_strength: 0,
+          novelty_delta: 0,
+          falsifiability: 0,
+          trajectory_health: 0
+        },
+        reason_codes: ['evaluator_error'],
+        required_actions: [],
+        summary: `semantic evaluator fallback: ${diagnosticMessage}`,
+        verdict: 'abstain'
       }
     } finally {
       clearTimeout(timer)
@@ -1474,7 +1393,6 @@ export class LlmSingleAgent implements YoloSingleAgent {
         'Success is valid only if this turn touches a plan deliverable (done_definition deliverable:) or clears a blocker.',
         'Use mechanical done_definition rows only: deliverable:<turn-local path or token> and optional evidence_min:<n>.',
         'For turn artifacts prefer deliverable: artifacts/<name>; avoid fixed runs/turn-xxxx/... deliverable paths.',
-        'Rewrite planBoard/currentPlan only on planner checkpoint turns.',
         'Be resourceful before asking user; Ask is last resort when truly blocked.',
         'Never use destructive shell cleanup (rm -rf / sudo rm / recursive delete). Prefer fresh target dirs.',
         'Do not Stop unless milestone completion or explicit stop/safety condition.',
@@ -1579,7 +1497,7 @@ export class LlmSingleAgent implements YoloSingleAgent {
       }
     }
 
-    const requirePlanRewrite = Boolean(context.plannerCheckpoint?.due) && requiresPlanRewrite(context.project.currentPlan)
+    const requirePlanRewrite = false
     const literatureBootstrapNeeded = goalNeedsLiteratureBootstrap(context.project.goal) && !hasLiteratureArtifacts(context)
 
     let prompt = buildNativeTurnPrompt(context)

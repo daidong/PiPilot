@@ -13,16 +13,20 @@ import type {
   EvidenceTrustHint,
   EvidenceLine,
   FailureEntry,
+  NorthStarSemanticGateConfig,
+  NorthStarSemanticGateInput,
+  NorthStarSemanticGateMode,
+  NorthStarSemanticGateOutput,
+  NorthStarSemanticGateRequiredAction,
   PendingUserInput,
   PlanBoardItem,
   PlannerCheckpointInfo,
+  ResolvedOrchestrationMode,
   ProjectUpdate,
   QueuedUserInput,
   RecentTurnContext,
-  SemanticGateConfig,
-  SemanticGateInput,
-  SemanticGateOutput,
-  SemanticGateTouchedDeliverable,
+  NorthStarContract,
+  OrchestrationMode,
   StageStatus,
   StagnationInfo,
   ToolEventRecord,
@@ -38,6 +42,7 @@ import {
   formatTurnId,
   listTurnNumbers,
   normalizeText,
+  parseArtifactUri,
   readTextOrEmpty,
   toIso,
   toPosixPath,
@@ -58,6 +63,44 @@ import {
 
 const DEFAULT_RUNTIME = 'host'
 const DEFAULT_RECENT_TURNS_TO_LOAD = 3
+const DEFAULT_ORCHESTRATION_MODE: OrchestrationMode = 'artifact_gravity_v3_paper'
+const NORTHSTAR_FILE_NAME = 'NORTHSTAR.md'
+const NORTHSTAR_NO_DELTA_PIVOT_THRESHOLD = 2
+const NORTHSTAR_REALITYCHECK_NO_EXEC_PIVOT_THRESHOLD = 2
+const NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_DEFAULT = 3
+const NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_MIN = 1
+const NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_MAX = 20
+const NORTHSTAR_DIRECTORY_DIGEST_LIMIT = 256
+const NORTHSTAR_TRIVIAL_TEXT_DELTA_THRESHOLD = 20
+const NORTHSTAR_NO_IMPROVEMENT_HARD_BLOCK_STREAK = 3
+const NORTHSTAR_NON_MUST_ACTION_OVERDUE_GRACE_TURNS = 2
+const NORTHSTAR_NON_MUST_ACTION_MAX_OPEN = 4
+const NORTHSTAR_VERIFIED_GROWTH_MISSING_PROOF_REASON = 'northstar_verified_growth_missing_content_delta_proof'
+const NORTHSTAR_REPEATED_NO_DELTA_BLOCK_REASON = 'northstar_repeated_no_delta_requires_pivot'
+const NORTHSTAR_EXTERNAL_CHECK_TRIVIAL_DELTA_REASON = 'northstar_external_check_trivial_delta'
+const NORTHSTAR_SCOPED_RUNS_RE = /^runs\/turn-(\d{4}|\*)\//i
+const NORTHSTAR_CODELIKE_PATH_RE = /\.(patch|diff|py|ts|tsx|js|jsx|mjs|cjs|go|rs|java|kt|swift|cpp|cc|c|h|hpp|cs|rb|php|scala|sh|bash|zsh)$/i
+const NORTHSTAR_PAPER_ARTIFACT_PATH_RE = /^artifacts\/[a-z0-9_./-]+$/i
+const NORTHSTAR_SCOREBOARD_PATH_RE = /^artifacts\/[a-z0-9_./-]+\.json$/i
+const NORTHSTAR_EXTERNAL_RESULT_ARTIFACT_RE = /(?:^|\/)(?:results?|smoke|evals?|benchmarks?)(?:\/|\.|_|-)/i
+const NORTHSTAR_VOLATILE_JSON_KEY_RE = /(?:^|_)(?:timestamp|time|ts|date|created_at|updated_at|generated_at|started_at|finished_at|run_id|session_id|uuid)$/i
+const NORTHSTAR_INTERNAL_CHECK_CMD_ALLOWLIST: RegExp[] = [
+  /^python(?:3)?\s+scripts\/check_[a-z0-9_.-]+\.py(?:\s+.+)?$/i,
+  /^uv\s+run\s+python(?:3)?\s+scripts\/check_[a-z0-9_.-]+\.py(?:\s+.+)?$/i,
+  /^node\s+scripts\/check[-_][a-z0-9_.-]+\.m?js(?:\s+.+)?$/i,
+  /^npm\s+run\s+check:[a-z0-9:_-]+(?:\s+--\s+.+)?$/i
+]
+const NORTHSTAR_EXTERNAL_CHECK_CMD_ALLOWLIST: RegExp[] = [
+  /^python(?:3)?\s+scripts\/run_[a-z0-9_.-]+\.py(?:\s+.+)?$/i,
+  /^python(?:3)?\s+experiments\/[a-z0-9_./-]+\.py(?:\s+.+)?$/i,
+  /^uv\s+run\s+python(?:3)?\s+scripts\/run_[a-z0-9_.-]+\.py(?:\s+.+)?$/i,
+  /^uv\s+run\s+python(?:3)?\s+experiments\/[a-z0-9_./-]+\.py(?:\s+.+)?$/i,
+  /^python(?:3)?\s+-m\s+pytest(?:\s+.+)?$/i,
+  /^uv\s+run\s+pytest(?:\s+.+)?$/i,
+  /^node\s+scripts\/run[-_][a-z0-9_.-]+\.m?js(?:\s+.+)?$/i,
+  /^npm\s+run\s+(?:exp|experiment|smoke|eval|bench):[a-z0-9:_-]+(?:\s+--\s+.+)?$/i
+]
+const NORTHSTAR_REALITYCHECK_CMD_DENY_RE = /(?:^|[\s])(curl|wget|git|rm|sudo|chmod|chown|apt|brew|pip(?:3)?\s+install|npm\s+install)(?:[\s]|$)|[;&|`]|(?:\$\()|(?:>>?)/i
 const LITERATURE_BODY_LIMIT = 40_000
 const LITERATURE_HOST_HINTS = [
   'arxiv.org',
@@ -117,13 +160,31 @@ const CODING_AGENT_STALL_MIN_POLLS = 2
 const CODING_AGENT_STALL_MIN_WINDOW_MS = 90_000
 const CODING_AGENT_TIMEOUT_RECONCILE_MAX_WAIT_MS = 90_000
 const CODING_AGENT_TIMEOUT_RECONCILE_POLL_MS = 2_000
-const DEFAULT_SEMANTIC_GATE_MODE: SemanticGateConfig['mode'] = 'off'
-const DEFAULT_SEMANTIC_GATE_CONFIDENCE = 0.85
-const DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS = 16_000
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_MODE: NorthStarSemanticGateMode = 'enforce_downgrade_only'
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_CONFIDENCE = 0.80
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_MAX_INPUT_CHARS = 24_000
+const DEFAULT_NORTHSTAR_SEMANTIC_REQUIRED_ACTION_BUDGET = 1
+const DEFAULT_NORTHSTAR_SEMANTIC_MUST_MAX_OPEN = 1
+const DEFAULT_NORTHSTAR_SEMANTIC_RECENT_WINDOW = 4
 const MAX_TRUSTED_EVIDENCE_PATHS = 400
 const MAX_UNTRUSTED_EVIDENCE_HINTS = 120
-const SEMANTIC_GATE_PROMPT_VERSION = 'sg.v1'
-const SEMANTIC_GATE_TEMPERATURE = 0
+const NORTHSTAR_SEMANTIC_GATE_PROMPT_VERSION = 'nsg.v1'
+const NORTHSTAR_SEMANTIC_GATE_TEMPERATURE = 0
+const NORTHSTAR_SEMANTIC_REASON_LOW_CONFIDENCE = 'low_confidence'
+const NORTHSTAR_SEMANTIC_REASON_INVALID_DIMENSION_SCORES = 'invalid_dimension_scores'
+const NORTHSTAR_SEMANTIC_REASON_VERDICT_MISMATCH = 'verdict_mismatch'
+const NORTHSTAR_SEMANTIC_REASON_INCONSISTENT_METRICS = 'inconsistent_metrics'
+const NORTHSTAR_SEMANTIC_REASON_OBJECTIVE_CONTEXT_MISSING = 'objective_context_missing'
+const NORTHSTAR_SEMANTIC_REASON_INVALID_CHANGE_PROOF_FLAGS = 'invalid_change_proof_flags'
+const NORTHSTAR_SEMANTIC_REASON_MISSING_CONTENT_SNAPSHOT = 'missing_content_snapshot'
+
+function isArtifactGravityMode(mode: OrchestrationMode | ResolvedOrchestrationMode | '' | null | undefined): boolean {
+  return mode === 'artifact_gravity_v3_paper'
+}
+
+function isArtifactGravityPaperMode(mode: OrchestrationMode | ResolvedOrchestrationMode | '' | null | undefined): boolean {
+  return mode === 'artifact_gravity_v3_paper'
+}
 
 const DELIVERABLE_PATTERNS: string[] = [
   'problem_statement',   // S1
@@ -370,26 +431,204 @@ interface CodingAgentSessionObservation {
   observationWindowMs: number
 }
 
-interface ResolvedSemanticGateConfig {
+type NorthStarSemanticVerdict = 'advance_confirmed' | 'advance_weak' | 'no_progress' | 'regress' | 'abstain'
+type NorthStarSemanticReasonCode =
+  | typeof NORTHSTAR_SEMANTIC_REASON_LOW_CONFIDENCE
+  | typeof NORTHSTAR_SEMANTIC_REASON_INVALID_DIMENSION_SCORES
+  | typeof NORTHSTAR_SEMANTIC_REASON_VERDICT_MISMATCH
+  | typeof NORTHSTAR_SEMANTIC_REASON_INCONSISTENT_METRICS
+  | typeof NORTHSTAR_SEMANTIC_REASON_OBJECTIVE_CONTEXT_MISSING
+  | typeof NORTHSTAR_SEMANTIC_REASON_INVALID_CHANGE_PROOF_FLAGS
+  | typeof NORTHSTAR_SEMANTIC_REASON_MISSING_CONTENT_SNAPSHOT
+  | string
+
+interface ResolvedNorthStarSemanticGateConfig {
   enabled: boolean
-  mode: NonNullable<SemanticGateConfig['mode']>
+  mode: NorthStarSemanticGateMode
   confidenceThreshold: number
   model: string
   maxInputChars: number
+  allowUpgrade: boolean
+  requiredActionBudgetPerTurn: number
+  mustActionMaxOpen: number
+  recentWindowTurns: number
 }
 
-interface SemanticGateAuditRecord {
+interface NorthStarSemanticActionPromotionAudit {
+  code: string
+  source_tier: 'must_candidate' | 'should' | 'suggest'
+  final_tier: 'must' | 'should' | 'suggest'
+  deterministic_trigger_codes: string[]
+  notes: string[]
+}
+
+interface NorthStarSemanticGateAuditRecord {
   enabled: boolean
-  mode: NonNullable<SemanticGateConfig['mode']>
+  mode: NorthStarSemanticGateMode
   eligible: boolean
   invoked: boolean
   prompt_version: string
   model_id: string
   temperature: number
   input_hash: string
-  output: SemanticGateOutput | null
+  output: NorthStarSemanticGateOutput | null
   accepted: boolean
   reject_reason?: string
+  derived_verdict?: NorthStarSemanticVerdict
+  effective_verdict?: NorthStarSemanticVerdict
+  reason_codes?: string[]
+  required_actions?: NorthStarSemanticGateRequiredAction[]
+  required_action_promotions?: NorthStarSemanticActionPromotionAudit[]
+  status_mutation?: {
+    from: TurnStatus
+    to: TurnStatus
+    reason: string
+  }
+  verdict_derivation_audit?: {
+    dimension_scores: Record<string, number>
+    derived_verdict: NorthStarSemanticVerdict
+    legacy_verdict: string | null
+    legacy_verdict_ignored: boolean
+  }
+  claim_audit_debt?: string[]
+  low_confidence_coerced?: boolean
+}
+
+interface NormalizedNorthStarClaimQuality {
+  claims_total: number
+  claims_marked_verified: number
+  claims_verified_with_valid_evidence: number
+  claims_marked_verified_with_invalid_evidence: number
+  evidence_valid_coverage: number
+  source_metric_path: string
+  invariant_violation: boolean
+}
+
+interface NorthStarRecentObjective {
+  turn: number
+  objective_id: string
+  objective_version: number
+  change_reason: 'pivot_due_to_regress' | 'scope_narrowing' | 'new_constraint' | 'external_feedback' | 'objective_stable'
+}
+
+interface NorthStarPathSnapshot {
+  path: string
+  exists: boolean
+  hash: string
+  semanticHash: string
+  stableSemanticHash: string
+  significantBytes: number
+  contentKind: 'text' | 'binary' | 'directory' | 'other' | 'missing'
+  textExcerpt: string
+  mtimeMs: number
+  lineCount: number
+  nonEmptyLineCount: number
+  csvRowCount: number
+  csvColumnCount: number
+  claimsStatusCounts: Record<string, number>
+  claimsStatusColumnPresent: boolean
+}
+
+interface NorthStarContentDeltaProof {
+  path: string
+  beforeHash: string
+  afterHash: string
+  beforeSemanticHash: string
+  afterSemanticHash: string
+  beforeStableSemanticHash: string
+  afterStableSemanticHash: string
+  beforeContentKind: NorthStarPathSnapshot['contentKind']
+  afterContentKind: NorthStarPathSnapshot['contentKind']
+  structuredDiff: {
+    significantBytesDelta: number
+    lineCountDelta: number
+    nonEmptyLineDelta: number
+    csvRowDelta: number
+    csvColumnDelta: number
+    claimsStatusDelta: Record<string, number>
+    claimsStatusColumnPresent: boolean
+    changedFields: string[]
+  }
+}
+
+interface NorthStarEvaluation {
+  enabled: boolean
+  objectiveId: string
+  objectiveVersion: number
+  contractPath: string
+  artifactGate: 'any' | 'all'
+  artifactPaths: string[]
+  internalCheckGate: 'any' | 'all'
+  internalCheckCommands: string[]
+  internalCheckExecutedCommands: string[]
+  internalCheckSucceededCommands: string[]
+  internalCheckExecutedCount: number
+  internalCheckSucceededCount: number
+  internalCheckGateSatisfied: boolean
+  externalCheckGate: 'any' | 'all'
+  externalCheckCommands: string[]
+  externalCheckExecutedCommands: string[]
+  externalCheckSucceededCommands: string[]
+  externalCheckExecutedCount: number
+  externalCheckSucceededCount: number
+  externalCheckGateSatisfied: boolean
+  externalCheckCreditGranted: boolean
+  externalCheckCandidateArtifactPaths: string[]
+  externalCheckMeaningfulArtifactPaths: string[]
+  externalCheckVolatileOnlyArtifactPaths: string[]
+  externalCheckUnchangedArtifactPaths: string[]
+  externalCheckRequireEvery: number
+  externalCheckDueThisTurn: boolean
+  externalCheckQuotaSatisfied: boolean
+  externalCheckNoSuccessStreak: number
+  scoreboardMetricPaths: string[]
+  scoreboardMetricPathsValid: boolean
+  scoreboardValues: Record<string, number>
+  scoreboardPreviousValues: Record<string, number>
+  scoreboardImproved: boolean
+  scoreboardRegressed: boolean
+  scoreboardChangedKeys: string[]
+  scoreboardImprovedKeys: string[]
+  scoreboardRegressedKeys: string[]
+  scoreboardReady: boolean
+  realityCheckGate: 'any' | 'all'
+  realityCheckCommands: string[]
+  realityCheckExecutedCommands: string[]
+  realityCheckSucceededCommands: string[]
+  realityCheckExecutedCount: number
+  realityCheckSucceededCount: number
+  realityCheckGateSatisfied: boolean
+  previousGateSatisfied: boolean | null
+  realityCheckNoExecStreak: number
+  antiChurnTriggered: boolean
+  verifyCmd: string
+  artifactChanged: boolean
+  changedArtifacts: string[]
+  baselineSnapshots: NorthStarPathSnapshot[]
+  afterSnapshots: NorthStarPathSnapshot[]
+  contentDeltaProofs: NorthStarContentDeltaProof[]
+  verifiedGrowthKeys: string[]
+  verifiedGrowthTotalDelta: number
+  verifiedGrowthContentProofRequired: boolean
+  verifiedGrowthContentProofSatisfied: boolean
+  verifiedGrowthContentProofPaths: string[]
+  verifiedGrowthMatchedDelta: number
+  verifiedGrowthMissingProofReason: string
+  verifyExecuted: boolean
+  verifySucceeded: boolean
+  gateSatisfied: boolean
+  policyViolations: string[]
+  reason: string
+  noDeltaStreak: number
+  pivotAllowed: boolean
+  pivotRollbackApplied: boolean
+  pivotRollbackViolation: string
+}
+
+interface OrchestrationResolution {
+  mode: ResolvedOrchestrationMode
+  northStar: NorthStarContract | null
+  notes: string[]
 }
 
 interface PlanDoneDefinitionCheck {
@@ -401,6 +640,9 @@ interface PlanDoneDefinitionCheck {
 
 interface NativeTurnStatusGuardInput {
   turnNumber: number
+  orchestrationMode: ResolvedOrchestrationMode
+  northStarContract?: NorthStarContract
+  northStarEvaluation: NorthStarEvaluation
   finalStatus: TurnStatus
   summary: string
   activePlanId: string
@@ -423,11 +665,12 @@ interface NativeTurnStatusGuardInput {
   governanceOnlyTurn: boolean
   resultPath: string
   toolEvents: ToolEventRecord[]
-  semanticGateConfig: ResolvedSemanticGateConfig
-  semanticGateAudit: SemanticGateAuditRecord
+  northStarSemanticGateConfig: ResolvedNorthStarSemanticGateConfig
+  northStarSemanticGateAudit: NorthStarSemanticGateAuditRecord
   projectedPlanItem: PlanBoardItem | null
   planEvidencePaths: string[]
   businessArtifactEvidencePaths: string[]
+  trustedEvidencePaths: string[]
   changedFiles: string[]
   patchPath: string | null
   exitCode: number
@@ -445,9 +688,11 @@ interface NativeTurnStatusGuardResult {
   deltaReasons: string[]
   statusChange: string
   failureEntry: FailureEntry | null
+  northStarSemanticOpenRequiredActions: NorthStarSemanticGateRequiredAction[]
 }
 
 interface NativeTurnPlanDeltaInput {
+  orchestrationMode: ResolvedOrchestrationMode
   activePlanId: string
   statusChange: string
   deltaText: string
@@ -473,6 +718,8 @@ interface NativeTurnPlanDeltaResult {
 }
 
 interface NativeTurnProjectMutationInput {
+  orchestrationMode: ResolvedOrchestrationMode
+  northStarEvaluation: NorthStarEvaluation
   preflightNotes: string[]
   outcomeUpdateSummary: string[]
   planAttribution: PlanAttributionResult
@@ -483,7 +730,7 @@ interface NativeTurnProjectMutationInput {
   microCheckpointApplied: boolean
   microCheckpointDeliverable: string
   missingOutcomeEvidencePaths: string[]
-  semanticGateAudit: SemanticGateAuditRecord
+  northStarSemanticGateAudit: NorthStarSemanticGateAuditRecord
   codingAgentSessionObservation: CodingAgentSessionObservation
   outcomeProjectUpdate?: ProjectUpdate
   plannerCheckpointDue: boolean
@@ -515,6 +762,7 @@ interface NativeTurnProjectMutationInput {
   plannerCheckpoint?: PlannerCheckpointInfo
   failureEntry: FailureEntry | null
   clearedBlocked: boolean
+  northStarSemanticOpenRequiredActions: NorthStarSemanticGateRequiredAction[]
 }
 
 interface NativeTurnProjectMutationResult {
@@ -538,6 +786,7 @@ interface NativeTurnResultPayloadBuildResult {
 }
 
 interface NativeTurnPlanProgressInput {
+  orchestrationMode: ResolvedOrchestrationMode
   plannerCheckpointDue: boolean
   outcomeProjectUpdate?: ProjectUpdate
   currentBoard: PlanBoardItem[]
@@ -624,9 +873,18 @@ export class YoloSession {
   private readonly pathAnchorMode: PathAnchorMode
   private readonly requireRepoTarget: boolean
   private readonly artifactUriPreferred: boolean
+  private readonly configuredOrchestrationMode: OrchestrationMode
+  private latchedOrchestrationMode: ResolvedOrchestrationMode | null = null
   private activeTurnArtifactsDirRel = ''
   private runtimeVersionInfoPromise: Promise<RuntimeVersionInfo> | null = null
   private initialized = false
+
+  private static readonly NORTHSTAR_PIVOT_HARD_VIOLATIONS = new Set<string>([
+    'northstar_pivot_locked',
+    'northstar_missing_pivot_rationale',
+    'northstar_missing_pivot_evidence',
+    'northstar_contract_invalid'
+  ])
 
   constructor(private readonly config: CreateYoloSessionConfig) {
     this.now = config.now ?? (() => new Date())
@@ -652,6 +910,16 @@ export class YoloSession {
     this.artifactUriPreferred = typeof config.artifactUriPreferred === 'boolean'
       ? config.artifactUriPreferred
       : ['1', 'true', 'yes', 'on'].includes(envArtifactUriPreferred)
+    const envOrchestrationMode = normalizeText(process.env.YOLO_ORCHESTRATION_MODE || '')
+    const requestedOrchestrationMode = normalizeText(config.orchestrationMode || envOrchestrationMode)
+    if (
+      requestedOrchestrationMode === 'artifact_gravity_v3_paper'
+      || requestedOrchestrationMode === 'auto'
+    ) {
+      this.configuredOrchestrationMode = requestedOrchestrationMode
+    } else {
+      this.configuredOrchestrationMode = DEFAULT_ORCHESTRATION_MODE
+    }
 
     this.projectFilePath = this.projectStore.filePath
     this.failuresFilePath = this.failureStore.filePath
@@ -678,26 +946,41 @@ export class YoloSession {
     const turnNumber = await this.computeNextTurnNumber()
     const turnDir = path.join(this.runsDir, formatTurnId(turnNumber))
     const artifactsDir = path.join(turnDir, 'artifacts')
+    const evidenceDir = path.join(artifactsDir, 'evidence')
 
     await ensureDir(turnDir)
     await ensureDir(artifactsDir)
+    await ensureDir(evidenceDir)
 
-    const preflight = await this.runPreTurnCalibration({
-      project,
-      turnNumber
-    })
-    project = preflight.project
+    const orchestration = await this.resolveOrchestration(project)
+    const preflightNotes: string[] = [...orchestration.notes]
+
+    if (orchestration.mode === 'artifact_gravity_v3_paper') {
+      await this.ensurePaperBootstrapScaffold()
+    }
 
     const pendingUserInputs = await this.materializePendingUserInputs(artifactsDir)
     const stagnation = await this.detectStagnation()
-    const plannerCheckpoint = await this.detectPlannerCheckpoint(project, failures, turnNumber)
+    const noDeltaStreak = await this.countConsecutiveNoDeltaTurns(12, turnNumber - 1)
+    const noRealityCheckExecutionStreak = isArtifactGravityPaperMode(orchestration.mode)
+      ? await this.countConsecutiveTurnsWithoutRealityCheckExecution(12, turnNumber - 1)
+      : 0
+    const northStarPivotAllowed = (
+      noDeltaStreak >= NORTHSTAR_NO_DELTA_PIVOT_THRESHOLD
+      || (isArtifactGravityPaperMode(orchestration.mode)
+        && noRealityCheckExecutionStreak >= NORTHSTAR_REALITYCHECK_NO_EXEC_PIVOT_THRESHOLD)
+    )
     const evidenceTrust = await this.buildEvidenceTrustContext({ project, turnNumber })
     const workspaceGitRepos = await this.discoverWorkspaceGitRepos()
+    const northStarSemanticFeedback = await this.loadNorthStarSemanticFeedbackForContext(turnNumber - 1)
     const context: TurnContext = {
       turnNumber,
       projectRoot: this.config.projectPath,
       yoloRoot: this.yoloRoot,
       runsDir: this.runsDir,
+      orchestrationMode: orchestration.mode,
+      northStar: orchestration.northStar ?? undefined,
+      northStarPivotAllowed,
       workspaceGitRepos,
       project,
       failures,
@@ -706,7 +989,8 @@ export class YoloSession {
       trustedEvidencePaths: evidenceTrust.trustedEvidencePaths,
       untrustedEvidenceHints: evidenceTrust.untrustedEvidenceHints,
       stagnation: stagnation.stagnant ? stagnation : undefined,
-      plannerCheckpoint: plannerCheckpoint.due ? plannerCheckpoint : undefined
+      plannerCheckpoint: undefined,
+      northStarSemantic: northStarSemanticFeedback
     }
 
     return this.runNativeTurn({
@@ -715,7 +999,7 @@ export class YoloSession {
       turnDir,
       artifactsDir,
       pendingUserInputs,
-      preflightNotes: preflight.notes
+      preflightNotes
     })
   }
 
@@ -729,6 +1013,1247 @@ export class YoloSession {
       }
     }
     return results
+  }
+
+  private getNorthStarFilePath(): string {
+    return path.join(this.yoloRoot, NORTHSTAR_FILE_NAME)
+  }
+
+  private normalizeNorthStarSectionKey(raw: string): string {
+    return normalizeText(raw)
+      .replace(/[()]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  private async resolveOrchestration(project: TurnContext['project']): Promise<OrchestrationResolution> {
+    const requested = this.configuredOrchestrationMode
+    const northStarPath = this.getNorthStarFilePath()
+
+    if (!(await fileExists(northStarPath))) {
+      await this.bootstrapNorthStar(project.goal)
+    }
+
+    const loaded = await this.loadNorthStarContract({
+      filePath: northStarPath,
+      fallbackGoal: project.goal
+    })
+    const hasPaperGate = Boolean(
+      loaded.contract
+      && loaded.contract.artifactPaths.length > 0
+      && loaded.contract.paperArtifactPathsEligible
+      && loaded.contract.internalCheckCommands.length > 0
+      && loaded.contract.internalCheckAllowlistValid
+      && loaded.contract.externalCheckCommands.length > 0
+      && loaded.contract.externalCheckAllowlistValid
+      && loaded.contract.scoreboardMetricPaths.length > 0
+      && loaded.contract.scoreboardMetricPathsValid
+    )
+
+    this.latchedOrchestrationMode = 'artifact_gravity_v3_paper'
+    const incompleteMessage = requested === 'auto'
+      ? 'NORTHSTAR.md paper gate is incomplete; staying in artifact_gravity_v3_paper (auto mode).'
+      : 'NORTHSTAR.md paper gate is incomplete; staying in artifact_gravity_v3_paper (forced mode).'
+    return {
+      mode: 'artifact_gravity_v3_paper',
+      northStar: loaded.contract,
+      notes: dedupeStrings([
+        ...loaded.notes,
+        ...(!hasPaperGate ? [incompleteMessage] : [])
+      ])
+    }
+  }
+
+  private async bootstrapNorthStar(goal: string): Promise<void> {
+    const filePath = this.getNorthStarFilePath()
+    if (await fileExists(filePath)) return
+
+    await this.ensurePaperBootstrapScaffold()
+
+    const template = [
+      '# North Star',
+      '',
+      '## Goal',
+      goal.trim() || 'Define a single project goal.',
+      '',
+      '## Current Objective (this sprint)',
+      '- Raise verified-claim coverage and produce one external smoke result.',
+      '- objective_id: obj-bootstrap-paper-v1',
+      '- objective_version: 1',
+      '',
+      '## Definition of Done (mechanical)',
+      '- [ ] Internal checks pass (gate policy)',
+      '- [ ] Scoreboard improves vs previous turn',
+      '- [ ] External friction quota is satisfied',
+      '- [ ] Evidence bundle exists: runs/turn-xxxx/result.json',
+      '',
+      '## NorthStarArtifact',
+      '- type: paper',
+      '- gate: any',
+      '- path: artifacts/paper_draft.md',
+      '- path: artifacts/claims.csv',
+      '- path: artifacts/results/smoke.json',
+      '',
+      '## RealityCheck (Internal)',
+      '- gate: any',
+      '- cmd: python scripts/check_claims.py artifacts/claims.csv --emit-metrics artifacts/metrics_claims.json',
+      '- cmd: python scripts/check_paper.py artifacts/paper_draft.md artifacts/claims.csv --emit-metrics artifacts/metrics_paper.json',
+      '',
+      '## RealityCheck (External)',
+      '- gate: any',
+      '- cmd: python experiments/run_smoke.py --out artifacts/results/smoke.json',
+      '',
+      '## Gate Policy',
+      '- gate: any',
+      '',
+      '## External Friction Policy',
+      `- require_external_every: ${NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_DEFAULT}`,
+      '',
+      '## Scoreboard',
+      '- path: artifacts/metrics_claims.json',
+      '- path: artifacts/metrics_paper.json',
+      '',
+      '## Semantic Review Policy',
+      '- mode: enforce_downgrade_only',
+      '- confidence_threshold: 0.80',
+      '- allow_upgrade: false',
+      '- required_action_budget_per_turn: 1',
+      '- must_action_max_open: 1',
+      '- recent_window_turns: 4',
+      '',
+      '## Next Action (one line)',
+      'Improve claims evidence quality, run one external smoke check, and update paper sections using verified claims.',
+      '',
+      '## Pivot Rule',
+      '- pivot_allowed_when:',
+      '  - no_delta_streak >= 2',
+      '  - OR realitycheck_no_exec_streak >= 2',
+      '- pivot_action:',
+      '- rationale: (fill only when pivoting after repeated no_delta)',
+      '- evidence: runs/turn-xxxx/result.json',
+      ''
+    ].join('\n')
+
+    await writeText(filePath, template)
+  }
+
+  private async ensurePaperBootstrapScaffold(): Promise<void> {
+    const artifactsDir = path.join(this.config.projectPath, 'artifacts')
+    const scriptsDir = path.join(this.config.projectPath, 'scripts')
+    const experimentsDir = path.join(this.config.projectPath, 'experiments')
+    const resultsDir = path.join(artifactsDir, 'results')
+    await ensureDir(artifactsDir)
+    await ensureDir(scriptsDir)
+    await ensureDir(experimentsDir)
+    await ensureDir(resultsDir)
+
+    const maybeWrite = async (
+      relativePath: string,
+      content: string,
+      shouldUpgrade?: (existingContent: string) => boolean
+    ): Promise<void> => {
+      const absolutePath = path.join(this.config.projectPath, relativePath)
+      if (await fileExists(absolutePath)) {
+        if (!shouldUpgrade) return
+        const existingContent = await readTextOrEmpty(absolutePath)
+        if (!shouldUpgrade(existingContent)) return
+        await writeText(absolutePath, content)
+        return
+      }
+      await ensureDir(path.dirname(absolutePath))
+      await writeText(absolutePath, content)
+    }
+
+    await maybeWrite('artifacts/paper_draft.md', [
+      '# Paper Draft',
+      '',
+      '## Abstract',
+      '',
+      '## Introduction',
+      '',
+      '## Method',
+      '',
+      '## Experiments',
+      '',
+      '## Related Work',
+      '',
+      '## Limitations',
+      '',
+      '## Conclusion',
+      ''
+    ].join('\n'))
+
+    await maybeWrite('artifacts/claims.csv', [
+      'id,type,claim,evidence,status',
+      'C1,method,"Describe baseline method in one sentence.",cite:bootstrap,draft'
+    ].join('\n'))
+
+    await maybeWrite('scripts/check_claims.py', [
+      '#!/usr/bin/env python3',
+      'import argparse',
+      'import csv',
+      'import json',
+      'import os',
+      'import re',
+      'import sys',
+      '',
+      'ID_RE = re.compile(r"^C\\d+$")',
+      'STRONG_EVIDENCE_RE = re.compile(r"^(runs/turn-\\d{4}/|doi:|cite:|arxiv:|pmid:|openalex:)", re.IGNORECASE)',
+      'WEAK_EVIDENCE_RE = re.compile(r"^(logic:|proposal:|link:|note:|hypothesis:)", re.IGNORECASE)',
+      '',
+      'def split_evidence(raw: str) -> list[str]:',
+      '    value = str(raw or "").strip()',
+      '    if not value:',
+      '        return []',
+      '    parts = re.split(r"\\s*[;|]\\s*", value)',
+      '    return [part.strip() for part in parts if part.strip()]',
+      '',
+      'def classify_evidence(raw: str) -> str:',
+      '    entries = split_evidence(raw)',
+      '    if not entries:',
+      '        return "missing"',
+      '    has_strong = False',
+      '    has_weak = False',
+      '    for entry in entries:',
+      '        if STRONG_EVIDENCE_RE.match(entry):',
+      '            has_strong = True',
+      '        elif WEAK_EVIDENCE_RE.match(entry):',
+      '            has_weak = True',
+      '        else:',
+      '            has_weak = True',
+      '    if has_strong:',
+      '        return "strong"',
+      '    if has_weak:',
+      '        return "weak"',
+      '    return "missing"',
+      '',
+      'def main() -> int:',
+      '    parser = argparse.ArgumentParser()',
+      '    parser.add_argument("claims_csv")',
+      '    parser.add_argument("--emit-metrics", default="")',
+      '    args = parser.parse_args()',
+      '',
+      '    if not os.path.exists(args.claims_csv):',
+      '        print(f"missing file: {args.claims_csv}", file=sys.stderr)',
+      '        return 2',
+      '',
+      '    with open(args.claims_csv, "r", encoding="utf-8", newline="") as f:',
+      '        reader = csv.DictReader(f)',
+      '        rows = list(reader)',
+      '',
+      '    required = {"id", "type", "claim", "evidence", "status"}',
+      '    missing_cols = sorted(required - set(rows[0].keys() if rows else []))',
+      '    if missing_cols:',
+      '        print("missing columns: " + ", ".join(missing_cols), file=sys.stderr)',
+      '        return 2',
+      '',
+      '    ids = [str(row.get("id", "")).strip() for row in rows]',
+      '    id_ok = all(ID_RE.match(cid) for cid in ids if cid)',
+      '    unique_ok = len(set(ids)) == len(ids)',
+      '    non_empty_claims = sum(1 for row in rows if str(row.get("claim", "")).strip())',
+      '    evidence_non_empty = sum(1 for row in rows if str(row.get("evidence", "")).strip())',
+      '    total = len(rows)',
+      '    evidence_classification = [classify_evidence(str(row.get("evidence", ""))) for row in rows]',
+      '    evidence_strong = sum(1 for state in evidence_classification if state == "strong")',
+      '    evidence_weak = sum(1 for state in evidence_classification if state == "weak")',
+      '    verified_raw = sum(1 for row in rows if str(row.get("status", "")).strip().lower() == "verified")',
+      '    verified = sum(1 for row, state in zip(rows, evidence_classification) if str(row.get("status", "")).strip().lower() == "verified" and state == "strong")',
+      '    verified_invalid = max(verified_raw - verified, 0)',
+      '    missing_evidence = max(total - evidence_non_empty, 0)',
+      '    evidence_coverage = (evidence_non_empty / total) if total else 0.0',
+      '    evidence_valid_coverage = (evidence_strong / total) if total else 0.0',
+      '',
+      '    metrics = {',
+      '        "claims_total": total,',
+      '        "claims_verified": verified,',
+      '        "claims_verified_raw": verified_raw,',
+      '        "claims_verified_invalid_evidence": verified_invalid,',
+      '        "claims_missing_evidence": missing_evidence,',
+      '        "evidence_invalid_count": evidence_weak,',
+      '        "evidence_coverage": round(evidence_coverage, 6),',
+      '        "evidence_valid_coverage": round(evidence_valid_coverage, 6),',
+      '    }',
+      '',
+      '    if args.emit_metrics:',
+      '        os.makedirs(os.path.dirname(args.emit_metrics) or ".", exist_ok=True)',
+      '        with open(args.emit_metrics, "w", encoding="utf-8") as mf:',
+      '            json.dump(metrics, mf, ensure_ascii=False, indent=2)',
+      '',
+      '    print(json.dumps(metrics, ensure_ascii=False))',
+      '',
+      '    if not id_ok:',
+      '        print("invalid claim ids (expect C<number>)", file=sys.stderr)',
+      '        return 2',
+      '    if not unique_ok:',
+      '        print("duplicate claim ids", file=sys.stderr)',
+      '        return 2',
+      '    if non_empty_claims == 0:',
+      '        print("all claims are empty", file=sys.stderr)',
+      '        return 2',
+      '    if verified_invalid > 0:',
+      '        print("verified claims require verifiable evidence (runs/turn-xxxx, doi:, cite:, arxiv:, pmid:, openalex:)", file=sys.stderr)',
+      '        return 2',
+      '    return 0',
+      '',
+      'if __name__ == "__main__":',
+      '    raise SystemExit(main())',
+      ''
+    ].join('\n'), (existing) => (
+      existing.includes('evidence_non_empty = sum(')
+      && !existing.includes('evidence_valid_coverage')
+      && existing.includes('claims_missing_evidence')
+    ))
+
+    await maybeWrite('scripts/check_paper.py', [
+      '#!/usr/bin/env python3',
+      'import argparse',
+      'import csv',
+      'import json',
+      'import os',
+      'import re',
+      'import sys',
+      '',
+      'REQUIRED_SECTIONS = [',
+      '    "## Abstract",',
+      '    "## Introduction",',
+      '    "## Method",',
+      '    "## Experiments",',
+      '    "## Related Work",',
+      '    "## Limitations",',
+      ']',
+      '',
+      'def load_claim_ids(path: str) -> set[str]:',
+      '    if not os.path.exists(path):',
+      '        return set()',
+      '    with open(path, "r", encoding="utf-8", newline="") as f:',
+      '        rows = list(csv.DictReader(f))',
+      '    return {str(row.get("id", "")).strip() for row in rows if str(row.get("id", "")).strip()}',
+      '',
+      'def main() -> int:',
+      '    parser = argparse.ArgumentParser()',
+      '    parser.add_argument("paper_md")',
+      '    parser.add_argument("claims_csv")',
+      '    parser.add_argument("--emit-metrics", default="")',
+      '    args = parser.parse_args()',
+      '',
+      '    if not os.path.exists(args.paper_md):',
+      '        print(f"missing file: {args.paper_md}", file=sys.stderr)',
+      '        return 2',
+      '',
+      '    text = open(args.paper_md, "r", encoding="utf-8").read()',
+      '    required_missing = [sec for sec in REQUIRED_SECTIONS if sec not in text]',
+      '    todo_count = len(re.findall(r"\\bTODO\\b", text, flags=re.IGNORECASE))',
+      '    cite_needed_count = len(re.findall(r"\\bCITE_NEEDED\\b", text, flags=re.IGNORECASE))',
+      '',
+      '    claim_refs = set(re.findall(r"\\[(C\\d+)\\]", text))',
+      '    known_claim_ids = load_claim_ids(args.claims_csv)',
+      '    missing_claim_refs = sorted(ref for ref in claim_refs if ref not in known_claim_ids)',
+      '',
+      '    metrics = {',
+      '        "paper_todo_count": todo_count,',
+      '        "paper_cite_needed_count": cite_needed_count,',
+      '        "paper_claim_refs_missing": len(missing_claim_refs),',
+      '        "paper_claim_refs_total": len(claim_refs),',
+      '        "paper_required_sections_missing": len(required_missing),',
+      '    }',
+      '',
+      '    if args.emit_metrics:',
+      '        os.makedirs(os.path.dirname(args.emit_metrics) or ".", exist_ok=True)',
+      '        with open(args.emit_metrics, "w", encoding="utf-8") as mf:',
+      '            json.dump(metrics, mf, ensure_ascii=False, indent=2)',
+      '',
+      '    print(json.dumps(metrics, ensure_ascii=False))',
+      '',
+      '    if required_missing:',
+      '        print("missing sections: " + ", ".join(required_missing), file=sys.stderr)',
+      '        return 2',
+      '    if missing_claim_refs:',
+      '        print("unknown claim refs: " + ", ".join(missing_claim_refs), file=sys.stderr)',
+      '        return 2',
+      '    return 0',
+      '',
+      'if __name__ == "__main__":',
+      '    raise SystemExit(main())',
+      ''
+    ].join('\n'))
+
+    await maybeWrite('experiments/run_smoke.py', [
+      '#!/usr/bin/env python3',
+      'import argparse',
+      'import json',
+      'import os',
+      'from datetime import datetime, timezone',
+      '',
+      'def main() -> int:',
+      '    parser = argparse.ArgumentParser()',
+      '    parser.add_argument("--out", required=True)',
+      '    args = parser.parse_args()',
+      '',
+      '    payload = {',
+      '        "smoke_ok": True,',
+      '        "generated_at": datetime.now(timezone.utc).isoformat(),',
+      '        "runtime_ms": 1,',
+      '        "sample_size": 1,',
+      '    }',
+      '    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)',
+      '    with open(args.out, "w", encoding="utf-8") as f:',
+      '        json.dump(payload, f, ensure_ascii=False, indent=2)',
+      '    print(json.dumps({"out": args.out, "smoke_ok": True}, ensure_ascii=False))',
+      '    return 0',
+      '',
+      'if __name__ == "__main__":',
+      '    raise SystemExit(main())',
+      ''
+    ].join('\n'))
+  }
+
+  private normalizeNorthStarPath(rawPath: string): string {
+    const trimmed = rawPath
+      .trim()
+      .replace(/^`+|`+$/g, '')
+      .replace(/^"+|"+$/g, '')
+      .replace(/^'+|'+$/g, '')
+      .replace(/^\.\//, '')
+    if (!trimmed) return ''
+    if (trimmed.includes('<') || trimmed.includes('>')) return ''
+
+    const parsedArtifactUri = parseArtifactUri(trimmed)
+    if (parsedArtifactUri) return ''
+
+    if (path.isAbsolute(trimmed)) return ''
+
+    const normalized = toPosixPath(trimmed)
+    if (!normalized || normalized.startsWith('../') || normalized === '..') return ''
+    if (NORTHSTAR_SCOPED_RUNS_RE.test(normalized)) return ''
+    return normalized
+  }
+
+  private extractNorthStarArtifactPaths(lines: string[]): string[] {
+    const paths: string[] = []
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+
+      const pathMatch = /^(?:[-*]\s*)?path\s*:\s*(.+)$/i.exec(line)
+      if (pathMatch?.[1]) {
+        const candidates = pathMatch[1]
+          .split(/[;,|]/g)
+          .map((value) => this.normalizeNorthStarPath(value))
+          .filter(Boolean)
+        paths.push(...candidates)
+        continue
+      }
+
+      const bulletPath = /^[-*]\s+(.+)$/.exec(line)?.[1] ?? ''
+      if (!bulletPath) continue
+      if (!/[/.]/.test(bulletPath)) continue
+      const normalized = this.normalizeNorthStarPath(bulletPath)
+      if (normalized) paths.push(normalized)
+    }
+
+    return dedupeStrings(paths)
+  }
+
+  private extractNorthStarArtifactGate(lines: string[]): 'any' | 'all' {
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const gateMatch = /^(?:[-*]\s*)?gate\s*:\s*(.+)$/i.exec(line)
+      if (!gateMatch?.[1]) continue
+      const normalized = normalizeText(gateMatch[1])
+      if (normalized === 'all') return 'all'
+      if (normalized === 'any') return 'any'
+    }
+    return 'any'
+  }
+
+  private extractNorthStarVerifyCmd(lines: string[]): string {
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const cmdMatch = /^(?:[-*]\s*)?cmd\s*:\s*(.+)$/i.exec(line)
+      if (!cmdMatch?.[1]) continue
+      const rawValue = cmdMatch[1]
+        .trim()
+        .replace(/^`+|`+$/g, '')
+      const wrappedInMatchingQuotes = (
+        (rawValue.startsWith('"') && rawValue.endsWith('"'))
+        || (rawValue.startsWith('\'') && rawValue.endsWith('\''))
+      )
+      const value = wrappedInMatchingQuotes
+        ? rawValue.slice(1, -1).trim()
+        : rawValue
+      if (!value || value.includes('<') || value.includes('>')) continue
+      return value
+    }
+    return ''
+  }
+
+  private normalizeNorthStarCommand(raw: string): string {
+    const value = raw
+      .trim()
+      .replace(/^`+|`+$/g, '')
+      .replace(/^"+|"+$/g, '')
+      .replace(/^'+|'+$/g, '')
+    if (!value) return ''
+    if (value.includes('<') || value.includes('>')) return ''
+    return value.replace(/\s+/g, ' ').trim()
+  }
+
+  private extractNorthStarCommandLines(lines: string[]): string[] {
+    const commands: string[] = []
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const cmdMatch = /^(?:[-*]\s*)?cmd\s*:\s*(.+)$/i.exec(line)
+      if (cmdMatch?.[1]) {
+        const normalized = this.normalizeNorthStarCommand(cmdMatch[1])
+        if (normalized) commands.push(normalized)
+        continue
+      }
+
+      const bullet = /^[-*]\s+(.+)$/.exec(line)?.[1] ?? ''
+      if (!bullet) continue
+      const normalized = this.normalizeNorthStarCommand(bullet)
+      if (!normalized) continue
+      if (/^(python|python3|uv|node|npm)\b/i.test(normalized)) {
+        commands.push(normalized)
+      }
+    }
+    return dedupeStrings(commands)
+  }
+
+  private commandPassesCheckAllowlist(command: string, kind: 'internal' | 'external'): boolean {
+    const normalized = this.normalizeCommandForMatch(command)
+    if (!normalized) return false
+    if (NORTHSTAR_REALITYCHECK_CMD_DENY_RE.test(normalized)) return false
+    const allowlist = kind === 'internal'
+      ? NORTHSTAR_INTERNAL_CHECK_CMD_ALLOWLIST
+      : NORTHSTAR_EXTERNAL_CHECK_CMD_ALLOWLIST
+    return allowlist.some((pattern) => pattern.test(normalized))
+  }
+
+  private validateCheckCommands(commands: string[], kind: 'internal' | 'external'): { valid: boolean; invalidCommands: string[] } {
+    const invalidCommands = commands.filter((command) => !this.commandPassesCheckAllowlist(command, kind))
+    return {
+      valid: invalidCommands.length === 0,
+      invalidCommands: dedupeStrings(invalidCommands)
+    }
+  }
+
+  private async evaluatePaperArtifactPathEligibility(paths: string[]): Promise<{ eligible: boolean; invalidPaths: string[] }> {
+    if (paths.length === 0) {
+      return {
+        eligible: false,
+        invalidPaths: []
+      }
+    }
+
+    const invalidPaths: string[] = []
+    for (const artifactPath of paths) {
+      const normalized = this.normalizeNorthStarPath(artifactPath)
+      if (!normalized) {
+        invalidPaths.push(artifactPath)
+        continue
+      }
+      if (!NORTHSTAR_PAPER_ARTIFACT_PATH_RE.test(normalized) || !normalized.startsWith('artifacts/')) {
+        invalidPaths.push(normalized)
+        continue
+      }
+      try {
+        const absolutePath = this.ensureSafeTargetPath(normalized)
+        const parent = path.dirname(absolutePath)
+        const parentRelative = toPosixPath(path.relative(this.config.projectPath, parent))
+        if (parentRelative !== 'artifacts' && !parentRelative.startsWith('artifacts/')) {
+          invalidPaths.push(normalized)
+          continue
+        }
+      } catch {
+        invalidPaths.push(normalized)
+      }
+    }
+
+    return {
+      eligible: invalidPaths.length === 0,
+      invalidPaths: dedupeStrings(invalidPaths)
+    }
+  }
+
+  private extractNorthStarGatePolicy(lines: string[]): 'any' | 'all' {
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const gateMatch = /^(?:[-*]\s*)?gate\s*:\s*(.+)$/i.exec(line)
+      if (!gateMatch?.[1]) continue
+      const normalized = normalizeText(gateMatch[1])
+      if (normalized === 'all') return 'all'
+      if (normalized === 'any') return 'any'
+    }
+    return 'any'
+  }
+
+  private extractNorthStarExternalRequireEvery(lines: string[]): number {
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const match = /^(?:[-*]\s*)?require_external_every\s*:\s*(\d+)$/i.exec(line)
+      if (!match?.[1]) continue
+      const parsed = Number.parseInt(match[1], 10)
+      if (!Number.isFinite(parsed)) continue
+      return Math.min(
+        NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_MAX,
+        Math.max(NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_MIN, parsed)
+      )
+    }
+    return NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_DEFAULT
+  }
+
+  private extractNorthStarScoreboardPaths(lines: string[]): string[] {
+    const paths: string[] = []
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const pathMatch = /^(?:[-*]\s*)?path\s*:\s*(.+)$/i.exec(line)
+      const candidate = pathMatch?.[1]
+        ? pathMatch[1]
+        : (/^[-*]\s+(.+)$/.exec(line)?.[1] ?? '')
+      if (!candidate) continue
+      const normalized = this.normalizeNorthStarPath(candidate)
+      if (!normalized) continue
+      paths.push(normalized)
+    }
+    return dedupeStrings(paths)
+  }
+
+  private extractMetricPathsFromCommands(commands: string[]): string[] {
+    const collected: string[] = []
+    for (const command of commands) {
+      const emitMatch = /--emit[-_]metrics\s+([^\s]+)/i.exec(command)
+      if (!emitMatch?.[1]) continue
+      const normalized = this.normalizeNorthStarPath(emitMatch[1])
+      if (!normalized) continue
+      collected.push(normalized)
+    }
+    return dedupeStrings(collected)
+  }
+
+  private validateNorthStarScoreboardPaths(paths: string[]): { valid: boolean; invalidPaths: string[] } {
+    const invalidPaths: string[] = []
+    for (const metricPath of paths) {
+      const normalized = this.normalizeNorthStarPath(metricPath)
+      if (!normalized) {
+        invalidPaths.push(metricPath)
+        continue
+      }
+      if (!NORTHSTAR_SCOREBOARD_PATH_RE.test(normalized)) {
+        invalidPaths.push(normalized)
+      }
+    }
+    return {
+      valid: invalidPaths.length === 0,
+      invalidPaths: dedupeStrings(invalidPaths)
+    }
+  }
+
+  private extractFirstMeaningfulSectionLine(lines: string[]): string {
+    for (const rawLine of lines) {
+      const normalized = rawLine
+        .trim()
+        .replace(/^[-*]\s+/, '')
+        .replace(/^\d+[.)]\s+/, '')
+        .trim()
+      if (!normalized) continue
+      return normalized
+    }
+    return ''
+  }
+
+  private parseNorthStarObjectiveMetadata(lines: string[], fallbackObjective: string): {
+    objectiveId: string
+    objectiveVersion: number
+  } {
+    let objectiveId = ''
+    let objectiveVersion = 0
+    let objectiveSeed = ''
+
+    for (const rawLine of lines) {
+      const line = rawLine
+        .trim()
+        .replace(/^[-*]\s+/, '')
+        .trim()
+      if (!line) continue
+
+      const idMatch = /^objective[_\s-]?id\s*:\s*(.+)$/i.exec(line)
+      if (idMatch?.[1]) {
+        objectiveId = idMatch[1].trim()
+        continue
+      }
+
+      const versionMatch = /^objective[_\s-]?version\s*:\s*(\d+)$/i.exec(line)
+      if (versionMatch?.[1]) {
+        const parsed = Number.parseInt(versionMatch[1], 10)
+        if (Number.isFinite(parsed) && parsed > 0) objectiveVersion = parsed
+        continue
+      }
+
+      if (!objectiveSeed && !/:/.test(line)) {
+        objectiveSeed = line
+      }
+    }
+
+    const seed = objectiveSeed || fallbackObjective || 'northstar-objective'
+    if (!objectiveId) {
+      objectiveId = `obj-${hashStable(normalizeText(seed) || seed)}`
+    }
+    if (!objectiveVersion || !Number.isFinite(objectiveVersion) || objectiveVersion < 1) {
+      objectiveVersion = 1
+    }
+
+    return {
+      objectiveId,
+      objectiveVersion
+    }
+  }
+
+  private parseNorthStarSemanticReviewPolicy(lines: string[]): NorthStarContract['semanticReviewPolicy'] {
+    let mode: NorthStarSemanticGateMode = DEFAULT_NORTHSTAR_SEMANTIC_GATE_MODE
+    let confidenceThreshold = DEFAULT_NORTHSTAR_SEMANTIC_GATE_CONFIDENCE
+    let allowUpgrade = false
+    let requiredActionBudgetPerTurn = DEFAULT_NORTHSTAR_SEMANTIC_REQUIRED_ACTION_BUDGET
+    let mustActionMaxOpen = DEFAULT_NORTHSTAR_SEMANTIC_MUST_MAX_OPEN
+    let recentWindowTurns = DEFAULT_NORTHSTAR_SEMANTIC_RECENT_WINDOW
+
+    for (const rawLine of lines) {
+      const line = rawLine
+        .trim()
+        .replace(/^[-*]\s+/, '')
+        .trim()
+      if (!line) continue
+
+      const modeMatch = /^mode\s*:\s*(.+)$/i.exec(line)
+      if (modeMatch?.[1]) {
+        const value = normalizeText(modeMatch[1]).replace(/\s+/g, '_')
+        if (
+          value === 'off'
+          || value === 'shadow'
+          || value === 'enforce_downgrade_only'
+          || value === 'enforce_balanced'
+        ) {
+          mode = value
+        }
+        continue
+      }
+
+      const confidenceMatch = /^confidence[_\s-]?threshold\s*:\s*([0-9]*\.?[0-9]+)$/i.exec(line)
+      if (confidenceMatch?.[1]) {
+        const parsed = Number(confidenceMatch[1])
+        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+          confidenceThreshold = parsed
+        }
+        continue
+      }
+
+      const allowUpgradeMatch = /^allow[_\s-]?upgrade\s*:\s*(true|false|yes|no|on|off|1|0)$/i.exec(line)
+      if (allowUpgradeMatch?.[1]) {
+        const normalized = normalizeText(allowUpgradeMatch[1])
+        allowUpgrade = normalized === 'true' || normalized === 'yes' || normalized === 'on' || normalized === '1'
+        continue
+      }
+
+      const budgetMatch = /^required[_\s-]?action[_\s-]?budget[_\s-]?per[_\s-]?turn\s*:\s*(\d+)$/i.exec(line)
+      if (budgetMatch?.[1]) {
+        const parsed = Number.parseInt(budgetMatch[1], 10)
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          requiredActionBudgetPerTurn = Math.min(3, Math.max(0, parsed))
+        }
+        continue
+      }
+
+      const mustMaxMatch = /^must[_\s-]?action[_\s-]?max[_\s-]?open\s*:\s*(\d+)$/i.exec(line)
+      if (mustMaxMatch?.[1]) {
+        const parsed = Number.parseInt(mustMaxMatch[1], 10)
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          mustActionMaxOpen = Math.min(3, Math.max(0, parsed))
+        }
+        continue
+      }
+
+      const recentWindowMatch = /^recent[_\s-]?window[_\s-]?turns\s*:\s*(\d+)$/i.exec(line)
+      if (recentWindowMatch?.[1]) {
+        const parsed = Number.parseInt(recentWindowMatch[1], 10)
+        if (Number.isFinite(parsed) && parsed >= 1) {
+          recentWindowTurns = Math.min(12, Math.max(1, parsed))
+        }
+      }
+    }
+
+    return {
+      mode,
+      confidenceThreshold,
+      allowUpgrade,
+      requiredActionBudgetPerTurn,
+      mustActionMaxOpen,
+      recentWindowTurns
+    }
+  }
+
+  private async loadNorthStarContract(input: {
+    filePath: string
+    fallbackGoal: string
+  }): Promise<{ contract: NorthStarContract | null; notes: string[] }> {
+    if (!(await fileExists(input.filePath))) {
+      return {
+        contract: null,
+        notes: ['NORTHSTAR.md not found.']
+      }
+    }
+
+    const raw = await readTextOrEmpty(input.filePath)
+    if (!raw.trim()) {
+      return {
+        contract: null,
+        notes: ['NORTHSTAR.md is empty.']
+      }
+    }
+
+    const sections = new Map<string, string[]>()
+    let activeSection = ''
+    for (const rawLine of raw.split(/\r?\n/)) {
+      const headingMatch = /^\s*##\s+(.+?)\s*$/.exec(rawLine)
+      if (headingMatch?.[1]) {
+        activeSection = this.normalizeNorthStarSectionKey(headingMatch[1])
+        if (!sections.has(activeSection)) sections.set(activeSection, [])
+        continue
+      }
+      if (!sections.has(activeSection)) sections.set(activeSection, [])
+      sections.get(activeSection)!.push(rawLine)
+    }
+
+    const section = (...keys: string[]): string[] => {
+      for (const key of keys) {
+        const normalized = this.normalizeNorthStarSectionKey(key)
+        if (sections.has(normalized)) return sections.get(normalized) ?? []
+      }
+      return []
+    }
+    const sectionPrefix = (...keys: string[]): string[] => {
+      const rows: string[] = []
+      for (const [sectionKey, sectionLines] of sections.entries()) {
+        for (const key of keys) {
+          const normalized = this.normalizeNorthStarSectionKey(key)
+          if (sectionKey === normalized || sectionKey.startsWith(`${normalized} `)) {
+            rows.push(...sectionLines)
+            break
+          }
+        }
+      }
+      return rows
+    }
+
+    const goal = this.extractFirstMeaningfulSectionLine(section('goal')) || input.fallbackGoal
+    const currentObjectiveSection = section('current objective', 'current objective this sprint')
+    const currentObjective = this.extractFirstMeaningfulSectionLine(currentObjectiveSection)
+    const objectiveMeta = this.parseNorthStarObjectiveMetadata(currentObjectiveSection, currentObjective || goal)
+    const nextAction = this.extractFirstMeaningfulSectionLine(section('next action', 'next action one line'))
+    const artifactSectionLines = section('northstarartifact', 'north star artifact')
+    const verifySectionLines = sectionPrefix('verify')
+    const genericRealityCheckSectionLines = section('realitycheck', 'reality check')
+    let internalRealityCheckSectionLines = sectionPrefix('realitycheck internal', 'reality check internal')
+    let externalRealityCheckSectionLines = sectionPrefix('realitycheck external', 'reality check external')
+    if (internalRealityCheckSectionLines.length === 0 && externalRealityCheckSectionLines.length === 0) {
+      internalRealityCheckSectionLines = genericRealityCheckSectionLines
+    }
+    const gatePolicySectionLines = section('gate policy')
+    const semanticReviewPolicySectionLines = section('semantic review policy')
+    const externalFrictionPolicyLines = section('external friction policy')
+    const scoreboardSectionLines = section('scoreboard')
+    const artifactType = this.extractFirstMeaningfulSectionLine(
+      artifactSectionLines.filter((line) => /type\s*:/i.test(line))
+    ).replace(/^type\s*:\s*/i, '').trim()
+    const artifactGate = this.extractNorthStarArtifactGate(artifactSectionLines)
+    const artifactPaths = this.extractNorthStarArtifactPaths(artifactSectionLines)
+    const paperArtifactEligibility = await this.evaluatePaperArtifactPathEligibility(artifactPaths)
+    const fallbackRealityCheckGate = this.extractNorthStarGatePolicy(gatePolicySectionLines)
+    const internalCheckCommands = this.extractNorthStarCommandLines(internalRealityCheckSectionLines)
+    const externalCheckCommands = this.extractNorthStarCommandLines(externalRealityCheckSectionLines)
+    const internalCheckGate = internalRealityCheckSectionLines.length > 0
+      ? this.extractNorthStarGatePolicy(internalRealityCheckSectionLines)
+      : fallbackRealityCheckGate
+    const externalCheckGate = externalRealityCheckSectionLines.length > 0
+      ? this.extractNorthStarGatePolicy(externalRealityCheckSectionLines)
+      : 'any'
+    const internalCheckValidation = this.validateCheckCommands(internalCheckCommands, 'internal')
+    const externalCheckValidation = this.validateCheckCommands(externalCheckCommands, 'external')
+    const externalCheckRequireEvery = this.extractNorthStarExternalRequireEvery(externalFrictionPolicyLines)
+    const scoreboardMetricPaths = dedupeStrings([
+      ...this.extractNorthStarScoreboardPaths(scoreboardSectionLines),
+      ...this.extractMetricPathsFromCommands(internalCheckCommands)
+    ])
+    const scoreboardValidation = this.validateNorthStarScoreboardPaths(scoreboardMetricPaths)
+    const realityCheckCommands = dedupeStrings([...internalCheckCommands, ...externalCheckCommands])
+    const realityCheckGate = fallbackRealityCheckGate
+    const realityCheckAllowlistValid = internalCheckValidation.valid && externalCheckValidation.valid
+    const verifyCmd = this.extractNorthStarVerifyCmd(verifySectionLines)
+    const verifySuccessSignal = this.extractFirstMeaningfulSectionLine(
+      verifySectionLines.filter((line) => /success signal\s*:/i.test(line))
+    ).replace(/^success signal\s*:\s*/i, '').trim()
+    const semanticReviewPolicy = this.parseNorthStarSemanticReviewPolicy(semanticReviewPolicySectionLines)
+
+    const notes: string[] = []
+    if (artifactSectionLines.some((line) => NORTHSTAR_SCOPED_RUNS_RE.test(line.trim()))) {
+      notes.push('NORTHSTAR.md path under runs/turn-xxxx is invalid; use stable project-relative artifact paths.')
+    }
+    if (artifactSectionLines.some((line) => /\bartifact:\/\//i.test(line)) && artifactPaths.length === 0) {
+      notes.push('NORTHSTAR.md does not accept artifact:// URIs; use plain project-relative paths.')
+    }
+    if (artifactPaths.length === 0) {
+      notes.push('NORTHSTAR.md has no valid NorthStarArtifact path.')
+    }
+    if (!paperArtifactEligibility.eligible && artifactPaths.length > 0) {
+      notes.push(`NORTHSTAR.md paper artifact paths must be stable artifacts/* paths (invalid: ${paperArtifactEligibility.invalidPaths.join(', ') || 'unknown'}).`)
+    }
+    if (internalCheckCommands.length === 0) {
+      notes.push('NORTHSTAR.md has no RealityCheck (Internal) cmd entries.')
+    }
+    if (!internalCheckValidation.valid && internalCheckValidation.invalidCommands.length > 0) {
+      notes.push(`NORTHSTAR.md internal RealityCheck allowlist rejected cmd(s): ${internalCheckValidation.invalidCommands.join(' | ')}`)
+    }
+    if (externalCheckCommands.length === 0) {
+      notes.push('NORTHSTAR.md has no RealityCheck (External) cmd entries.')
+    }
+    if (!externalCheckValidation.valid && externalCheckValidation.invalidCommands.length > 0) {
+      notes.push(`NORTHSTAR.md external RealityCheck allowlist rejected cmd(s): ${externalCheckValidation.invalidCommands.join(' | ')}`)
+    }
+    if (scoreboardMetricPaths.length === 0) {
+      notes.push('NORTHSTAR.md has no Scoreboard metric path entries.')
+    }
+    if (!scoreboardValidation.valid && scoreboardValidation.invalidPaths.length > 0) {
+      notes.push(`NORTHSTAR.md Scoreboard path rejected (must be artifacts/*.json): ${scoreboardValidation.invalidPaths.join(', ')}`)
+    }
+    if (!verifyCmd) {
+      notes.push('NORTHSTAR.md has no verify cmd; artifact-diff gate only.')
+    }
+
+    const contract: NorthStarContract = {
+      filePath: this.toEvidencePath(input.filePath),
+      goal: goal.trim(),
+      currentObjective: currentObjective.trim(),
+      objectiveId: objectiveMeta.objectiveId,
+      objectiveVersion: objectiveMeta.objectiveVersion,
+      artifactType: artifactType || 'unknown',
+      artifactGate,
+      artifactPaths,
+      paperArtifactPathsEligible: paperArtifactEligibility.eligible,
+      internalCheckCommands,
+      internalCheckGate,
+      internalCheckAllowlistValid: internalCheckValidation.valid,
+      externalCheckCommands,
+      externalCheckGate,
+      externalCheckAllowlistValid: externalCheckValidation.valid,
+      externalCheckRequireEvery,
+      scoreboardMetricPaths,
+      scoreboardMetricPathsValid: scoreboardValidation.valid,
+      scoreboardMetricPathsInvalid: scoreboardValidation.invalidPaths,
+      realityCheckCommands,
+      realityCheckGate,
+      realityCheckAllowlistValid,
+      verifyCmd: verifyCmd || undefined,
+      verifySuccessSignal: verifySuccessSignal || undefined,
+      semanticReviewPolicy,
+      nextAction: nextAction.trim()
+    }
+
+    return {
+      contract,
+      notes: dedupeStrings(notes)
+    }
+  }
+
+  private async countConsecutiveNoDeltaTurns(limit: number = 12, maxTurnNumber: number = Number.MAX_SAFE_INTEGER): Promise<number> {
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    if (turnNumbers.length === 0) return 0
+
+    let count = 0
+    const selected = turnNumbers
+      .filter((turnNumber) => turnNumber <= maxTurnNumber)
+      .slice(-Math.max(0, limit))
+      .reverse()
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const status = normalizeText(parsed.status)
+        const blockedReason = normalizeText(parsed.blocked_reason)
+        const noDeltaEquivalent = (
+          status === 'no_delta'
+          || (status === 'blocked' && blockedReason === 'redundant_no_delta')
+        )
+        if (!noDeltaEquivalent) break
+        count += 1
+      } catch {
+        continue
+      }
+    }
+
+    return count
+  }
+
+  private async countConsecutiveTurnsWithoutRealityCheckExecution(
+    limit: number = 12,
+    maxTurnNumber: number = Number.MAX_SAFE_INTEGER
+  ): Promise<number> {
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    if (turnNumbers.length === 0) return 0
+
+    let count = 0
+    const selected = turnNumbers
+      .filter((turnNumber) => turnNumber <= maxTurnNumber)
+      .slice(-Math.max(0, limit))
+      .reverse()
+
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const northStar = toPlainObject(parsed.northstar)
+        const executedCount = typeof northStar?.internal_check_executed_count === 'number'
+          ? northStar.internal_check_executed_count
+          : (typeof northStar?.reality_check_executed_count === 'number'
+              ? northStar.reality_check_executed_count
+              : 0)
+        if (executedCount > 0) break
+        count += 1
+      } catch {
+        continue
+      }
+    }
+
+    return count
+  }
+
+  private async countConsecutiveTurnsWithoutExternalCheckSuccess(
+    limit: number = 20,
+    maxTurnNumber: number = Number.MAX_SAFE_INTEGER
+  ): Promise<number> {
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    if (turnNumbers.length === 0) return 0
+
+    let count = 0
+    const selected = turnNumbers
+      .filter((turnNumber) => turnNumber <= maxTurnNumber)
+      .slice(-Math.max(0, limit))
+      .reverse()
+
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const northStar = toPlainObject(parsed.northstar)
+        if (northStar && typeof northStar.external_check_credit_granted === 'boolean') {
+          if (northStar.external_check_credit_granted) break
+          count += 1
+          continue
+        }
+
+        const meaningfulCount = typeof northStar?.external_check_meaningful_artifact_count === 'number'
+          ? northStar.external_check_meaningful_artifact_count
+          : 0
+        if (meaningfulCount > 0) break
+
+        const succeededCount = typeof northStar?.external_check_succeeded_count === 'number'
+          ? northStar.external_check_succeeded_count
+          : 0
+        if (succeededCount > 0) break
+        count += 1
+      } catch {
+        continue
+      }
+    }
+
+    return count
+  }
+
+  private flattenNumericMetrics(
+    value: unknown,
+    prefix: string,
+    target: Record<string, number>,
+    depth: number = 0
+  ): void {
+    if (depth > 4 || value === null || value === undefined) return
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      if (prefix) target[prefix] = value
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => {
+        this.flattenNumericMetrics(entry, prefix ? `${prefix}[${index}]` : `[${index}]`, target, depth + 1)
+      })
+      return
+    }
+    if (typeof value !== 'object') return
+
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const childPrefix = prefix ? `${prefix}.${key}` : key
+      this.flattenNumericMetrics(entry, childPrefix, target, depth + 1)
+    }
+  }
+
+  private async loadNorthStarScoreboardValues(metricPaths: string[]): Promise<Record<string, number>> {
+    const values: Record<string, number> = {}
+    for (const metricPath of metricPaths) {
+      const normalized = this.normalizeNorthStarPath(metricPath)
+      if (!normalized) continue
+      let absolutePath = ''
+      try {
+        absolutePath = this.ensureSafeTargetPath(normalized)
+      } catch {
+        continue
+      }
+      if (!(await fileExists(absolutePath))) continue
+      const raw = await readTextOrEmpty(absolutePath)
+      if (!raw.trim()) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        continue
+      }
+      const flattened: Record<string, number> = {}
+      this.flattenNumericMetrics(parsed, '', flattened)
+      for (const [metricKey, metricValue] of Object.entries(flattened)) {
+        values[`${normalized}:${metricKey}`] = metricValue
+      }
+    }
+    return values
+  }
+
+  private async loadPreviousNorthStarScoreboard(maxTurnNumber: number): Promise<Record<string, number>> {
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    const selected = turnNumbers
+      .filter((turnNumber) => turnNumber <= maxTurnNumber)
+      .reverse()
+
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const northStar = toPlainObject(parsed.northstar)
+        const previousValues = toPlainObject(northStar?.scoreboard_values)
+        if (!previousValues) continue
+        const normalized: Record<string, number> = {}
+        for (const [key, value] of Object.entries(previousValues)) {
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            normalized[key] = value
+          }
+        }
+        if (Object.keys(normalized).length > 0) return normalized
+      } catch {
+        continue
+      }
+    }
+
+    return {}
+  }
+
+  private metricDirection(metricKey: string): 'up' | 'down' | 'neutral' {
+    const normalized = normalizeText(metricKey)
+    if (!normalized) return 'neutral'
+    if (/(missing|todo|cite_needed|error|errors|fail|failed|latency|runtime|cost|regret|loss|violation)/.test(normalized)) {
+      return 'down'
+    }
+    if (/(verified|coverage|pass|accuracy|auc|f1|precision|recall|score|quality|gain|improvement|uplist|success)/.test(normalized)) {
+      return 'up'
+    }
+    if (/(claims_total|paper_claim_refs_total|\btotal\b|\bcount\b|\brows?\b|\bnum\b)/.test(normalized)) {
+      return 'neutral'
+    }
+    return 'neutral'
+  }
+
+  private compareScoreboard(
+    previous: Record<string, number>,
+    current: Record<string, number>
+  ): {
+    ready: boolean
+    improved: boolean
+    regressed: boolean
+    changedKeys: string[]
+    improvedKeys: string[]
+    regressedKeys: string[]
+  } {
+    const currentKeys = Object.keys(current)
+    if (currentKeys.length === 0) {
+      return {
+        ready: false,
+        improved: false,
+        regressed: false,
+        changedKeys: [],
+        improvedKeys: [],
+        regressedKeys: []
+      }
+    }
+
+    if (Object.keys(previous).length === 0) {
+      return {
+        ready: true,
+        improved: true,
+        regressed: false,
+        changedKeys: currentKeys,
+        improvedKeys: currentKeys,
+        regressedKeys: []
+      }
+    }
+
+    const changedKeys: string[] = []
+    const improvedKeys: string[] = []
+    const regressedKeys: string[] = []
+
+    for (const key of currentKeys) {
+      const direction = this.metricDirection(key)
+      if (!(key in previous)) {
+        changedKeys.push(key)
+        if (direction !== 'neutral') {
+          improvedKeys.push(key)
+        }
+        continue
+      }
+      const before = previous[key]
+      const after = current[key]
+      if (!Number.isFinite(before) || !Number.isFinite(after)) continue
+      if (after === before) continue
+      changedKeys.push(key)
+      if (direction === 'neutral') continue
+      if ((direction === 'up' && after > before) || (direction === 'down' && after < before)) {
+        improvedKeys.push(key)
+      } else if ((direction === 'up' && after < before) || (direction === 'down' && after > before)) {
+        regressedKeys.push(key)
+      }
+    }
+
+    return {
+      ready: true,
+      improved: improvedKeys.length > 0,
+      regressed: regressedKeys.length > 0,
+      changedKeys: dedupeStrings(changedKeys),
+      improvedKeys: dedupeStrings(improvedKeys),
+      regressedKeys: dedupeStrings(regressedKeys)
+    }
   }
 
   private collectProjectEvidencePointers(project: TurnContext['project']): string[] {
@@ -1101,6 +2626,8 @@ export class YoloSession {
   private normalizeNativeStatus(status: unknown): TurnStatus {
     const normalized = typeof status === 'string' ? status.trim().toLowerCase() : ''
     if (normalized === 'success') return 'success'
+    if (normalized === 'no_delta') return 'no_delta'
+    if (normalized === 'blocked') return 'blocked'
     if (normalized === 'ask_user') return 'ask_user'
     if (normalized === 'stopped') return 'stopped'
     return 'failure'
@@ -1810,12 +3337,20 @@ export class YoloSession {
     const input = rawPath.trim()
     if (!input) return ''
 
-    const artifactUriMatch = /^artifact:\/\/(.*)$/i.exec(input)
-    if (artifactUriMatch) {
-      const suffixRaw = toPosixPath((artifactUriMatch[1] || '').trim().replace(/^\/+/, '').replace(/^\.\//, ''))
-      const suffix = path.posix.normalize(suffixRaw || '.')
+    const parsedArtifactUri = parseArtifactUri(input)
+    if (parsedArtifactUri) {
+      if (parsedArtifactUri.scope === 'project') return ''
+      const suffix = parsedArtifactUri.suffix
+      const invalidSuffix = (
+        !suffix
+        || suffix === '..'
+        || suffix.startsWith('../')
+        || suffix.includes('/../')
+        || suffix.endsWith('/..')
+      )
+
       if (!this.activeTurnArtifactsDirRel) return ''
-      if (!suffix || suffix === '.' || suffix === '..' || suffix.startsWith('../')) {
+      if (invalidSuffix || suffix === '.') {
         return this.activeTurnArtifactsDirRel
       }
       return `${this.activeTurnArtifactsDirRel}/${suffix}`
@@ -1966,6 +3501,1264 @@ export class YoloSession {
       touched.push(toPosixPath(normalized))
     }
     return dedupeStrings(touched)
+  }
+
+  private normalizeCommandForMatch(rawCommand: string): string {
+    return normalizeText(rawCommand)
+      .replace(/^bash:\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  private isVerifyCommandMatch(observedCommand: string, verifyCommand: string): boolean {
+    const observed = this.normalizeCommandForMatch(observedCommand)
+    const verify = this.normalizeCommandForMatch(verifyCommand)
+    if (!observed || !verify) return false
+    if (observed === verify) return true
+    if (observed.includes(verify)) return true
+    if (verify.length >= 16 && verify.includes(observed)) return true
+    return false
+  }
+
+  private evaluateVerifyCommandFromToolEvents(toolEvents: ToolEventRecord[], verifyCmd: string): {
+    executed: boolean
+    succeeded: boolean
+  } {
+    if (!verifyCmd.trim()) {
+      return {
+        executed: false,
+        succeeded: false
+      }
+    }
+
+    let lastBashCallCommand = ''
+    let executed = false
+    let succeeded = false
+
+    for (const event of toolEvents) {
+      const tool = normalizeText(event.tool || '')
+      if (tool !== 'bash') continue
+
+      if (event.phase === 'call') {
+        const input = toPlainObject(event.input)
+        const command = safeString(input?.command).trim()
+        if (command) {
+          lastBashCallCommand = command
+        }
+        continue
+      }
+      if (event.phase !== 'result') continue
+
+      const resultInput = toPlainObject(event.input)
+      const command = safeString(resultInput?.command).trim() || lastBashCallCommand || 'bash'
+      if (!this.isVerifyCommandMatch(command, verifyCmd)) continue
+      executed = true
+
+      const result = toPlainObject(event.result)
+      const data = toPlainObject(result?.data)
+      const successFlag = typeof event.success === 'boolean'
+        ? event.success
+        : (typeof result?.success === 'boolean' ? result.success : undefined)
+      const exitCode = typeof data?.exitCode === 'number'
+        ? data.exitCode
+        : (successFlag === true ? 0 : 1)
+
+      if (successFlag === true && exitCode === 0) {
+        succeeded = true
+      }
+    }
+
+    return {
+      executed,
+      succeeded
+    }
+  }
+
+  private evaluateRealityCheckFromToolEvents(toolEvents: ToolEventRecord[], commands: string[]): {
+    executedCommands: string[]
+    succeededCommands: string[]
+  } {
+    if (commands.length === 0) {
+      return {
+        executedCommands: [],
+        succeededCommands: []
+      }
+    }
+
+    const executed = new Set<string>()
+    const succeeded = new Set<string>()
+    let lastBashCallCommand = ''
+
+    for (const event of toolEvents) {
+      const tool = normalizeText(event.tool || '')
+      if (tool !== 'bash') continue
+
+      if (event.phase === 'call') {
+        const input = toPlainObject(event.input)
+        const command = safeString(input?.command).trim()
+        if (command) lastBashCallCommand = command
+        continue
+      }
+      if (event.phase !== 'result') continue
+
+      const resultInput = toPlainObject(event.input)
+      const observedCommand = safeString(resultInput?.command).trim() || lastBashCallCommand || 'bash'
+      const matchedCommands = commands.filter((command) => this.isVerifyCommandMatch(observedCommand, command))
+      if (matchedCommands.length === 0) continue
+
+      const result = toPlainObject(event.result)
+      const data = toPlainObject(result?.data)
+      const successFlag = typeof event.success === 'boolean'
+        ? event.success
+        : (typeof result?.success === 'boolean' ? result.success : undefined)
+      const exitCode = typeof data?.exitCode === 'number'
+        ? data.exitCode
+        : (successFlag === true ? 0 : 1)
+      const turnSucceeded = successFlag === true && exitCode === 0
+
+      for (const matched of matchedCommands) {
+        executed.add(matched)
+        if (turnSucceeded) {
+          succeeded.add(matched)
+        }
+      }
+    }
+
+    return {
+      executedCommands: Array.from(executed.values()),
+      succeededCommands: Array.from(succeeded.values())
+    }
+  }
+
+  private async loadPreviousNorthStarGateSatisfied(maxTurnNumber: number): Promise<boolean | null> {
+    const turnNumbers = await listTurnNumbers(this.runsDir)
+    const selected = turnNumbers
+      .filter((turnNumber) => turnNumber <= maxTurnNumber)
+      .reverse()
+
+    for (const turnNumber of selected) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const northStar = toPlainObject(parsed.northstar)
+        if (typeof northStar?.gate_satisfied === 'boolean') {
+          return northStar.gate_satisfied
+        }
+      } catch {
+        continue
+      }
+    }
+    return null
+  }
+
+  private buildEmptyNorthStarPathSnapshot(pathValue: string): NorthStarPathSnapshot {
+    return {
+      path: pathValue,
+      exists: false,
+      hash: '__missing__',
+      semanticHash: '__missing__',
+      stableSemanticHash: '__missing__',
+      significantBytes: 0,
+      contentKind: 'missing',
+      textExcerpt: '',
+      mtimeMs: 0,
+      lineCount: 0,
+      nonEmptyLineCount: 0,
+      csvRowCount: 0,
+      csvColumnCount: 0,
+      claimsStatusCounts: {},
+      claimsStatusColumnPresent: false
+    }
+  }
+
+  private parseCsvRow(line: string): string[] {
+    const cells: string[] = []
+    let current = ''
+    let quoted = false
+
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index]
+      if (char === '"') {
+        if (quoted && line[index + 1] === '"') {
+          current += '"'
+          index += 1
+        } else {
+          quoted = !quoted
+        }
+        continue
+      }
+
+      if (char === ',' && !quoted) {
+        cells.push(current.trim())
+        current = ''
+        continue
+      }
+
+      current += char
+    }
+    cells.push(current.trim())
+    return cells
+  }
+
+  private summarizeNorthStarTextStructure(input: {
+    content: string
+    normalizedPath: string
+  }): {
+    lineCount: number
+    nonEmptyLineCount: number
+    csvRowCount: number
+    csvColumnCount: number
+    claimsStatusCounts: Record<string, number>
+    claimsStatusColumnPresent: boolean
+  } {
+    const normalizedContent = input.content.replace(/\r\n/g, '\n')
+    const lines = normalizedContent.split('\n')
+    const lineCount = lines.length
+    const nonEmptyLineCount = lines.filter((line) => line.trim().length > 0).length
+
+    const isCsv = input.normalizedPath.toLowerCase().endsWith('.csv')
+    if (!isCsv) {
+      return {
+        lineCount,
+        nonEmptyLineCount,
+        csvRowCount: 0,
+        csvColumnCount: 0,
+        claimsStatusCounts: {},
+        claimsStatusColumnPresent: false
+      }
+    }
+
+    const nonEmptyLines = lines.map((line) => line.trim()).filter(Boolean)
+    if (nonEmptyLines.length === 0) {
+      return {
+        lineCount,
+        nonEmptyLineCount,
+        csvRowCount: 0,
+        csvColumnCount: 0,
+        claimsStatusCounts: {},
+        claimsStatusColumnPresent: false
+      }
+    }
+
+    const header = this.parseCsvRow(nonEmptyLines[0] || '')
+    const csvColumnCount = header.length
+    const dataRows = nonEmptyLines.slice(1)
+    const csvRowCount = dataRows.length
+    const normalizedHeader = header.map((cell) => normalizeText(cell).replace(/[^a-z0-9]+/g, '_'))
+
+    let statusIndex = normalizedHeader.findIndex((cell) => cell === 'status')
+    if (statusIndex < 0) {
+      statusIndex = normalizedHeader.findIndex((cell) => cell.endsWith('_status'))
+    }
+
+    const claimsStatusCounts: Record<string, number> = {}
+    if (statusIndex >= 0) {
+      for (const row of dataRows) {
+        const cells = this.parseCsvRow(row)
+        const statusRaw = normalizeText(cells[statusIndex] || '').replace(/\s+/g, '_')
+        if (!statusRaw) continue
+        claimsStatusCounts[statusRaw] = (claimsStatusCounts[statusRaw] ?? 0) + 1
+      }
+    }
+
+    return {
+      lineCount,
+      nonEmptyLineCount,
+      csvRowCount,
+      csvColumnCount,
+      claimsStatusCounts,
+      claimsStatusColumnPresent: statusIndex >= 0
+    }
+  }
+
+  private diffNumericCounts(before: Record<string, number>, after: Record<string, number>): Record<string, number> {
+    const keys = new Set<string>([...Object.keys(before), ...Object.keys(after)])
+    const delta: Record<string, number> = {}
+    for (const key of keys) {
+      const beforeValue = Number.isFinite(before[key]) ? before[key] : 0
+      const afterValue = Number.isFinite(after[key]) ? after[key] : 0
+      const diff = afterValue - beforeValue
+      if (diff !== 0) {
+        delta[key] = diff
+      }
+    }
+    return delta
+  }
+
+  private scoreMetricLeaf(metricKey: string): string {
+    const metricPart = metricKey.includes(':')
+      ? metricKey.split(':').slice(1).join(':')
+      : metricKey
+    const withoutIndexes = metricPart.replace(/\[\d+\]/g, '')
+    const leaf = withoutIndexes.split('.').map((segment) => segment.trim()).filter(Boolean).pop() || withoutIndexes
+    return normalizeText(leaf).replace(/\s+/g, '_')
+  }
+
+  private collectVerifiedGrowthFromScoreboard(input: {
+    previous: Record<string, number>
+    current: Record<string, number>
+  }): { keys: string[]; totalDelta: number } {
+    const keys: string[] = []
+    let totalDelta = 0
+    for (const [metricKey, value] of Object.entries(input.current)) {
+      if (!Number.isFinite(value)) continue
+      if (this.scoreMetricLeaf(metricKey) !== 'claims_verified') continue
+      const before = Number.isFinite(input.previous[metricKey]) ? input.previous[metricKey] : 0
+      const delta = value - before
+      if (delta > 0) {
+        keys.push(metricKey)
+        totalDelta += delta
+      }
+    }
+    return {
+      keys: dedupeStrings(keys),
+      totalDelta
+    }
+  }
+
+  private buildNorthStarContentDeltaProof(input: {
+    before?: NorthStarPathSnapshot
+    after: NorthStarPathSnapshot
+  }): NorthStarContentDeltaProof | null {
+    const before = input.before ?? this.buildEmptyNorthStarPathSnapshot(input.after.path)
+    const after = input.after
+    const hashChanged = before.exists !== after.exists || before.hash !== after.hash
+    if (!hashChanged) return null
+
+    const claimsStatusDelta = this.diffNumericCounts(before.claimsStatusCounts, after.claimsStatusCounts)
+    const structuredDiff = {
+      significantBytesDelta: after.significantBytes - before.significantBytes,
+      lineCountDelta: after.lineCount - before.lineCount,
+      nonEmptyLineDelta: after.nonEmptyLineCount - before.nonEmptyLineCount,
+      csvRowDelta: after.csvRowCount - before.csvRowCount,
+      csvColumnDelta: after.csvColumnCount - before.csvColumnCount,
+      claimsStatusDelta,
+      claimsStatusColumnPresent: before.claimsStatusColumnPresent || after.claimsStatusColumnPresent,
+      changedFields: [] as string[]
+    }
+
+    if (before.hash !== after.hash) structuredDiff.changedFields.push('hash')
+    if (before.semanticHash !== after.semanticHash) structuredDiff.changedFields.push('semantic_hash')
+    if (before.stableSemanticHash !== after.stableSemanticHash) structuredDiff.changedFields.push('stable_semantic_hash')
+    if (structuredDiff.significantBytesDelta !== 0) structuredDiff.changedFields.push('significant_bytes')
+    if (structuredDiff.lineCountDelta !== 0) structuredDiff.changedFields.push('line_count')
+    if (structuredDiff.nonEmptyLineDelta !== 0) structuredDiff.changedFields.push('non_empty_line_count')
+    if (structuredDiff.csvRowDelta !== 0) structuredDiff.changedFields.push('csv_row_count')
+    if (structuredDiff.csvColumnDelta !== 0) structuredDiff.changedFields.push('csv_column_count')
+    if (Object.keys(claimsStatusDelta).length > 0) structuredDiff.changedFields.push('claims_status_counts')
+    if (structuredDiff.changedFields.length === 0) {
+      structuredDiff.changedFields.push('hash')
+    }
+
+    return {
+      path: after.path,
+      beforeHash: before.hash,
+      afterHash: after.hash,
+      beforeSemanticHash: before.semanticHash,
+      afterSemanticHash: after.semanticHash,
+      beforeStableSemanticHash: before.stableSemanticHash,
+      afterStableSemanticHash: after.stableSemanticHash,
+      beforeContentKind: before.contentKind,
+      afterContentKind: after.contentKind,
+      structuredDiff
+    }
+  }
+
+  private evaluateVerifiedGrowthContentProof(input: {
+    requiredDelta: number
+    proofs: NorthStarContentDeltaProof[]
+  }): { satisfied: boolean; proofPaths: string[]; matchedDelta: number } {
+    if (input.requiredDelta <= 0) {
+      return { satisfied: true, proofPaths: [], matchedDelta: 0 }
+    }
+
+    const usableProofs = input.proofs.filter((proof) => {
+      if (!proof.beforeHash || !proof.afterHash) return false
+      if (proof.beforeHash === proof.afterHash) return false
+      return (proof.structuredDiff.changedFields ?? []).length > 0
+    })
+    if (usableProofs.length === 0) {
+      return { satisfied: false, proofPaths: [], matchedDelta: 0 }
+    }
+
+    const verifiedDeltaProofs = usableProofs.filter(
+      (proof) => (proof.structuredDiff.claimsStatusDelta.verified ?? 0) > 0
+    )
+    const matchedDelta = verifiedDeltaProofs.reduce(
+      (sum, proof) => sum + Math.max(0, proof.structuredDiff.claimsStatusDelta.verified ?? 0),
+      0
+    )
+    if (matchedDelta >= input.requiredDelta) {
+      return {
+        satisfied: true,
+        proofPaths: dedupeStrings(verifiedDeltaProofs.map((proof) => proof.path)),
+        matchedDelta
+      }
+    }
+
+    const claimsPathProofs = usableProofs.filter((proof) => /(^|\/)claims[^/]*\.csv$/i.test(proof.path))
+    const hasParsedStatusColumn = claimsPathProofs.some((proof) => proof.structuredDiff.claimsStatusColumnPresent)
+    if (!hasParsedStatusColumn && claimsPathProofs.length > 0) {
+      return {
+        satisfied: true,
+        proofPaths: dedupeStrings(claimsPathProofs.map((proof) => proof.path)),
+        matchedDelta
+      }
+    }
+
+    return {
+      satisfied: false,
+      proofPaths: dedupeStrings(claimsPathProofs.map((proof) => proof.path)),
+      matchedDelta
+    }
+  }
+
+  private computeTextSemanticDigest(content: string): { digest: string; significantBytes: number } {
+    const normalized = content
+      .replace(/[ \t]+$/gm, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\s+/g, '')
+    const digest = createHash('sha256').update(normalized).digest('hex')
+    return {
+      digest,
+      significantBytes: Buffer.byteLength(normalized, 'utf-8')
+    }
+  }
+
+  private stripVolatileJsonFields(value: unknown, depth: number = 0): unknown {
+    if (depth > 12) return null
+    if (value === null || value === undefined) return value
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
+    if (Array.isArray(value)) {
+      return value.map((item) => this.stripVolatileJsonFields(item, depth + 1))
+    }
+    if (typeof value !== 'object') return String(value)
+
+    const row = value as Record<string, unknown>
+    const next: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(row)) {
+      const normalizedKey = normalizeText(key).replace(/[^a-z0-9]+/g, '_')
+      if (NORTHSTAR_VOLATILE_JSON_KEY_RE.test(normalizedKey)) continue
+      next[key] = this.stripVolatileJsonFields(entry, depth + 1)
+    }
+    return next
+  }
+
+  private computeStableSemanticDigest(input: {
+    normalizedPath: string
+    textContent: string
+    fallbackDigest: string
+  }): string {
+    const pathLower = input.normalizedPath.toLowerCase()
+    if (!pathLower.endsWith('.json')) {
+      return input.fallbackDigest
+    }
+
+    try {
+      const parsed = JSON.parse(input.textContent)
+      const scrubbed = this.stripVolatileJsonFields(parsed)
+      const canonical = canonicalizeJson(scrubbed)
+      const canonicalJson = JSON.stringify(canonical)
+      return createHash('sha256').update(canonicalJson).digest('hex')
+    } catch {
+      return input.fallbackDigest
+    }
+  }
+
+  private evaluateExternalCheckContentCredit(input: {
+    artifactPaths: string[]
+    baselineByPath: Map<string, NorthStarPathSnapshot>
+    afterByPath: Map<string, NorthStarPathSnapshot>
+    checkSucceeded: boolean
+  }): {
+    creditGranted: boolean
+    candidateArtifactPaths: string[]
+    meaningfulArtifactPaths: string[]
+    volatileOnlyArtifactPaths: string[]
+    unchangedArtifactPaths: string[]
+  } {
+    if (!input.checkSucceeded) {
+      return {
+        creditGranted: false,
+        candidateArtifactPaths: [],
+        meaningfulArtifactPaths: [],
+        volatileOnlyArtifactPaths: [],
+        unchangedArtifactPaths: []
+      }
+    }
+
+    const candidateArtifactPaths = dedupeStrings(
+      input.artifactPaths.filter((artifactPath) => NORTHSTAR_EXTERNAL_RESULT_ARTIFACT_RE.test(artifactPath))
+    )
+
+    if (candidateArtifactPaths.length === 0) {
+      return {
+        creditGranted: true,
+        candidateArtifactPaths: [],
+        meaningfulArtifactPaths: [],
+        volatileOnlyArtifactPaths: [],
+        unchangedArtifactPaths: []
+      }
+    }
+
+    const meaningfulArtifactPaths: string[] = []
+    const volatileOnlyArtifactPaths: string[] = []
+    const unchangedArtifactPaths: string[] = []
+
+    for (const artifactPath of candidateArtifactPaths) {
+      const before = input.baselineByPath.get(artifactPath) ?? this.buildEmptyNorthStarPathSnapshot(artifactPath)
+      const after = input.afterByPath.get(artifactPath) ?? this.buildEmptyNorthStarPathSnapshot(artifactPath)
+      if (!before.exists && after.exists) {
+        meaningfulArtifactPaths.push(artifactPath)
+        continue
+      }
+      if (!after.exists || before.hash === after.hash) {
+        unchangedArtifactPaths.push(artifactPath)
+        continue
+      }
+      if (before.stableSemanticHash !== after.stableSemanticHash) {
+        meaningfulArtifactPaths.push(artifactPath)
+        continue
+      }
+      volatileOnlyArtifactPaths.push(artifactPath)
+    }
+
+    return {
+      creditGranted: meaningfulArtifactPaths.length > 0,
+      candidateArtifactPaths,
+      meaningfulArtifactPaths: dedupeStrings(meaningfulArtifactPaths),
+      volatileOnlyArtifactPaths: dedupeStrings(volatileOnlyArtifactPaths),
+      unchangedArtifactPaths: dedupeStrings(unchangedArtifactPaths)
+    }
+  }
+
+  private decodeUtf8OrNull(buffer: Buffer): string | null {
+    const decoded = buffer.toString('utf-8')
+    if (decoded.includes('\uFFFD')) return null
+    return decoded
+  }
+
+  private async computeDirectoryDigest(absDir: string): Promise<string> {
+    const rows: string[] = []
+    let scanned = 0
+
+    const walk = async (dir: string, relativeDir: string): Promise<void> => {
+      if (scanned >= NORTHSTAR_DIRECTORY_DIGEST_LIMIT) return
+
+      let entries: Awaited<ReturnType<typeof fs.readdir>>
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+
+      const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name))
+      for (const entry of sorted) {
+        if (scanned >= NORTHSTAR_DIRECTORY_DIGEST_LIMIT) break
+        const nextRelative = relativeDir
+          ? `${relativeDir}/${entry.name}`
+          : entry.name
+        const fullPath = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          rows.push(`D:${nextRelative}`)
+          scanned += 1
+          await walk(fullPath, nextRelative)
+          continue
+        }
+        if (!entry.isFile()) continue
+        try {
+          const stat = await fs.stat(fullPath)
+          rows.push(`F:${nextRelative}:${stat.size}:${Math.floor(stat.mtimeMs)}`)
+          scanned += 1
+        } catch {
+          // Ignore transient stat failures.
+        }
+      }
+    }
+
+    await walk(absDir, '')
+    rows.push(`COUNT:${scanned}`)
+    return createHash('sha256').update(rows.join('\n')).digest('hex')
+  }
+
+  private async captureNorthStarPathSnapshot(relativePath: string): Promise<NorthStarPathSnapshot> {
+    const normalizedPath = this.normalizeNorthStarPath(relativePath)
+    if (!normalizedPath) {
+      return this.buildEmptyNorthStarPathSnapshot(relativePath)
+    }
+
+    let absPath = ''
+    try {
+      absPath = this.ensureSafeTargetPath(normalizedPath)
+    } catch {
+      return this.buildEmptyNorthStarPathSnapshot(normalizedPath)
+    }
+
+    try {
+      const stat = await fs.stat(absPath)
+      if (stat.isFile()) {
+        const content = await fs.readFile(absPath)
+        const rawHash = createHash('sha256').update(content).digest('hex')
+        const decoded = this.decodeUtf8OrNull(content)
+        const textSemantics = decoded !== null
+          ? this.computeTextSemanticDigest(decoded)
+          : null
+        const structure = decoded !== null
+          ? this.summarizeNorthStarTextStructure({
+            content: decoded,
+            normalizedPath
+          })
+          : {
+            lineCount: 0,
+            nonEmptyLineCount: 0,
+            csvRowCount: 0,
+            csvColumnCount: 0,
+            claimsStatusCounts: {},
+            claimsStatusColumnPresent: false
+          }
+        return {
+          path: normalizedPath,
+          exists: true,
+          hash: rawHash,
+          semanticHash: textSemantics?.digest || rawHash,
+          stableSemanticHash: textSemantics
+            ? this.computeStableSemanticDigest({
+              normalizedPath,
+              textContent: decoded!,
+              fallbackDigest: textSemantics.digest
+            })
+            : rawHash,
+          significantBytes: textSemantics?.significantBytes ?? content.byteLength,
+          contentKind: textSemantics ? 'text' : 'binary',
+          textExcerpt: textSemantics ? decoded!.slice(0, 1_600) : '',
+          mtimeMs: stat.mtimeMs,
+          lineCount: structure.lineCount,
+          nonEmptyLineCount: structure.nonEmptyLineCount,
+          csvRowCount: structure.csvRowCount,
+          csvColumnCount: structure.csvColumnCount,
+          claimsStatusCounts: structure.claimsStatusCounts,
+          claimsStatusColumnPresent: structure.claimsStatusColumnPresent
+        }
+      }
+      if (stat.isDirectory()) {
+        const digest = await this.computeDirectoryDigest(absPath)
+        return {
+          path: normalizedPath,
+          exists: true,
+          hash: digest,
+          semanticHash: digest,
+          stableSemanticHash: digest,
+          significantBytes: 0,
+          contentKind: 'directory',
+          textExcerpt: '',
+          mtimeMs: stat.mtimeMs,
+          lineCount: 0,
+          nonEmptyLineCount: 0,
+          csvRowCount: 0,
+          csvColumnCount: 0,
+          claimsStatusCounts: {},
+          claimsStatusColumnPresent: false
+        }
+      }
+
+      const synthetic = `${stat.mode}:${stat.size}:${Math.floor(stat.mtimeMs)}`
+      return {
+        path: normalizedPath,
+        exists: true,
+        hash: synthetic,
+        semanticHash: synthetic,
+        stableSemanticHash: synthetic,
+        significantBytes: 0,
+        contentKind: 'other',
+        textExcerpt: '',
+        mtimeMs: stat.mtimeMs,
+        lineCount: 0,
+        nonEmptyLineCount: 0,
+        csvRowCount: 0,
+        csvColumnCount: 0,
+        claimsStatusCounts: {},
+        claimsStatusColumnPresent: false
+      }
+    } catch {
+      return this.buildEmptyNorthStarPathSnapshot(normalizedPath)
+    }
+  }
+
+  private async captureNorthStarBaseline(northStar: NorthStarContract | undefined): Promise<NorthStarPathSnapshot[]> {
+    if (!northStar || northStar.artifactPaths.length === 0) return []
+    const snapshots: NorthStarPathSnapshot[] = []
+    for (const artifactPath of northStar.artifactPaths) {
+      snapshots.push(await this.captureNorthStarPathSnapshot(artifactPath))
+    }
+    return snapshots
+  }
+
+  private buildDefaultNorthStarEvaluation(input: {
+    orchestrationMode: ResolvedOrchestrationMode
+    northStar?: NorthStarContract
+    noDeltaStreak: number
+    realityCheckNoExecStreak?: number
+    previousGateSatisfied?: boolean | null
+    pivotAllowed: boolean
+  }): NorthStarEvaluation {
+    const contractPath = input.northStar?.filePath || NORTHSTAR_FILE_NAME
+    const artifactMode = isArtifactGravityMode(input.orchestrationMode)
+    return {
+      enabled: artifactMode,
+      objectiveId: input.northStar?.objectiveId || `obj-${hashStable(normalizeText(input.northStar?.currentObjective || input.northStar?.goal || 'northstar'))}`,
+      objectiveVersion: Number.isFinite(Number(input.northStar?.objectiveVersion))
+        ? Math.max(1, Number(input.northStar?.objectiveVersion))
+        : 1,
+      contractPath,
+      artifactGate: input.northStar?.artifactGate ?? 'any',
+      artifactPaths: [...(input.northStar?.artifactPaths ?? [])],
+      internalCheckGate: input.northStar?.internalCheckGate ?? input.northStar?.realityCheckGate ?? 'any',
+      internalCheckCommands: [...(input.northStar?.internalCheckCommands ?? input.northStar?.realityCheckCommands ?? [])],
+      internalCheckExecutedCommands: [],
+      internalCheckSucceededCommands: [],
+      internalCheckExecutedCount: 0,
+      internalCheckSucceededCount: 0,
+      internalCheckGateSatisfied: false,
+      externalCheckGate: input.northStar?.externalCheckGate ?? 'any',
+      externalCheckCommands: [...(input.northStar?.externalCheckCommands ?? [])],
+      externalCheckExecutedCommands: [],
+      externalCheckSucceededCommands: [],
+      externalCheckExecutedCount: 0,
+      externalCheckSucceededCount: 0,
+      externalCheckGateSatisfied: false,
+      externalCheckCreditGranted: false,
+      externalCheckCandidateArtifactPaths: [],
+      externalCheckMeaningfulArtifactPaths: [],
+      externalCheckVolatileOnlyArtifactPaths: [],
+      externalCheckUnchangedArtifactPaths: [],
+      externalCheckRequireEvery: Number(input.northStar?.externalCheckRequireEvery || NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_DEFAULT),
+      externalCheckDueThisTurn: false,
+      externalCheckQuotaSatisfied: true,
+      externalCheckNoSuccessStreak: 0,
+      scoreboardMetricPaths: [...(input.northStar?.scoreboardMetricPaths ?? [])],
+      scoreboardMetricPathsValid: Boolean(input.northStar?.scoreboardMetricPathsValid ?? false),
+      scoreboardValues: {},
+      scoreboardPreviousValues: {},
+      scoreboardImproved: false,
+      scoreboardRegressed: false,
+      scoreboardChangedKeys: [],
+      scoreboardImprovedKeys: [],
+      scoreboardRegressedKeys: [],
+      scoreboardReady: false,
+      realityCheckGate: input.northStar?.realityCheckGate ?? 'any',
+      realityCheckCommands: [...(input.northStar?.realityCheckCommands ?? [])],
+      realityCheckExecutedCommands: [],
+      realityCheckSucceededCommands: [],
+      realityCheckExecutedCount: 0,
+      realityCheckSucceededCount: 0,
+      realityCheckGateSatisfied: false,
+      previousGateSatisfied: typeof input.previousGateSatisfied === 'boolean'
+        ? input.previousGateSatisfied
+        : null,
+      realityCheckNoExecStreak: Number(input.realityCheckNoExecStreak || 0),
+      antiChurnTriggered: false,
+      verifyCmd: input.northStar?.verifyCmd?.trim() || '',
+      artifactChanged: false,
+      changedArtifacts: [],
+      baselineSnapshots: [],
+      afterSnapshots: [],
+      contentDeltaProofs: [],
+      verifiedGrowthKeys: [],
+      verifiedGrowthTotalDelta: 0,
+      verifiedGrowthContentProofRequired: false,
+      verifiedGrowthContentProofSatisfied: true,
+      verifiedGrowthContentProofPaths: [],
+      verifiedGrowthMatchedDelta: 0,
+      verifiedGrowthMissingProofReason: '',
+      verifyExecuted: false,
+      verifySucceeded: false,
+      gateSatisfied: !artifactMode,
+      policyViolations: [],
+      reason: artifactMode
+        ? 'northstar_missing_contract'
+        : '',
+      noDeltaStreak: input.noDeltaStreak,
+      pivotAllowed: input.pivotAllowed,
+      pivotRollbackApplied: false,
+      pivotRollbackViolation: ''
+    }
+  }
+
+  private async captureNorthStarContractSnapshot(): Promise<{ exists: boolean, content: string }> {
+    const filePath = this.getNorthStarFilePath()
+    if (!(await fileExists(filePath))) {
+      return {
+        exists: false,
+        content: ''
+      }
+    }
+    return {
+      exists: true,
+      content: await readTextOrEmpty(filePath)
+    }
+  }
+
+  private pickNorthStarHardViolation(policyViolations: string[]): string {
+    for (const violation of policyViolations) {
+      const normalized = normalizeText(violation)
+      if (YoloSession.NORTHSTAR_PIVOT_HARD_VIOLATIONS.has(normalized)) {
+        return normalized
+      }
+    }
+    return ''
+  }
+
+  private async enforceNorthStarPivotHardGate(input: {
+    orchestrationMode: ResolvedOrchestrationMode
+    policyViolations: string[]
+    beforeSnapshot: { exists: boolean, content: string } | null
+  }): Promise<{ applied: boolean, violation: string, restoreError: string }> {
+    if (!isArtifactGravityMode(input.orchestrationMode)) {
+      return { applied: false, violation: '', restoreError: '' }
+    }
+    if (!input.beforeSnapshot) {
+      return { applied: false, violation: '', restoreError: '' }
+    }
+    const hardViolation = this.pickNorthStarHardViolation(input.policyViolations)
+    if (!hardViolation) {
+      return { applied: false, violation: '', restoreError: '' }
+    }
+
+    const filePath = this.getNorthStarFilePath()
+    try {
+      if (input.beforeSnapshot.exists) {
+        await writeText(filePath, input.beforeSnapshot.content)
+      } else if (await fileExists(filePath)) {
+        await fs.rm(filePath, { force: true })
+      }
+      return {
+        applied: true,
+        violation: hardViolation,
+        restoreError: ''
+      }
+    } catch (error) {
+      return {
+        applied: false,
+        violation: hardViolation,
+        restoreError: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  private isCodeLikeNorthStarContract(northStar: NorthStarContract): boolean {
+    const hasCodeLikePath = northStar.artifactPaths.some((artifactPath) => (
+      NORTHSTAR_CODELIKE_PATH_RE.test(artifactPath)
+      || artifactPath.startsWith('repos/')
+      || artifactPath.startsWith('external/')
+      || artifactPath.startsWith('src/')
+      || artifactPath.startsWith('packages/')
+      || artifactPath.startsWith('apps/')
+    ))
+    if (hasCodeLikePath) return true
+
+    const artifactType = normalizeText(northStar.artifactType)
+    if (artifactType.includes('paper') || artifactType.includes('analysis') || artifactType.includes('writing')) {
+      return false
+    }
+    return false
+  }
+
+  private async evaluateNorthStarPivotPolicy(input: {
+    northStar: NorthStarContract
+    fallbackGoal: string
+    pivotAllowed: boolean
+  }): Promise<string[]> {
+    const currentPath = this.getNorthStarFilePath()
+    const after = await this.loadNorthStarContract({
+      filePath: currentPath,
+      fallbackGoal: input.fallbackGoal
+    })
+    if (!after.contract) {
+      return ['northstar_contract_invalid']
+    }
+
+    const beforePaths = dedupeStrings(input.northStar.artifactPaths).sort((a, b) => a.localeCompare(b))
+    const afterPaths = dedupeStrings(after.contract.artifactPaths).sort((a, b) => a.localeCompare(b))
+    const pathChanged = JSON.stringify(beforePaths) !== JSON.stringify(afterPaths)
+    const verifyChanged = this.normalizeCommandForMatch(input.northStar.verifyCmd || '')
+      !== this.normalizeCommandForMatch(after.contract.verifyCmd || '')
+    const beforeInternalChecks = dedupeStrings(input.northStar.internalCheckCommands).sort((a, b) => a.localeCompare(b))
+    const afterInternalChecks = dedupeStrings(after.contract.internalCheckCommands).sort((a, b) => a.localeCompare(b))
+    const internalCheckChanged = JSON.stringify(beforeInternalChecks) !== JSON.stringify(afterInternalChecks)
+    const beforeExternalChecks = dedupeStrings(input.northStar.externalCheckCommands).sort((a, b) => a.localeCompare(b))
+    const afterExternalChecks = dedupeStrings(after.contract.externalCheckCommands).sort((a, b) => a.localeCompare(b))
+    const externalCheckChanged = JSON.stringify(beforeExternalChecks) !== JSON.stringify(afterExternalChecks)
+    const beforeScoreboardPaths = dedupeStrings(input.northStar.scoreboardMetricPaths).sort((a, b) => a.localeCompare(b))
+    const afterScoreboardPaths = dedupeStrings(after.contract.scoreboardMetricPaths).sort((a, b) => a.localeCompare(b))
+    const scoreboardChanged = JSON.stringify(beforeScoreboardPaths) !== JSON.stringify(afterScoreboardPaths)
+    const gateChanged = (
+      input.northStar.internalCheckGate !== after.contract.internalCheckGate
+      || input.northStar.externalCheckGate !== after.contract.externalCheckGate
+    )
+    const externalPolicyChanged = input.northStar.externalCheckRequireEvery !== after.contract.externalCheckRequireEvery
+    if (!pathChanged && !verifyChanged && !internalCheckChanged && !externalCheckChanged && !scoreboardChanged && !gateChanged && !externalPolicyChanged) return []
+
+    if (!input.pivotAllowed) {
+      return ['northstar_pivot_locked']
+    }
+
+    const raw = await readTextOrEmpty(currentPath)
+    const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    const rationaleLine = lines.find((line) => /pivot\s+rationale\s*:|(?:^[-*]\s*)?rationale\s*:/i.test(line)) || ''
+    const evidenceLine = lines.find((line) => /pivot\s+evidence\s*:|(?:^[-*]\s*)?evidence\s*:/i.test(line)) || ''
+    const hasRationale = Boolean(
+      rationaleLine
+      && !/\(fill/i.test(rationaleLine)
+      && rationaleLine.replace(/^[-*]\s*/, '').split(':').slice(1).join(':').trim().length > 8
+    )
+    const hasEvidenceRef = Boolean(
+      evidenceLine && /runs\/turn-\d{4}\/[^\s)]+/i.test(evidenceLine)
+    ) || /runs\/turn-\d{4}\/[^\s)]+/i.test(raw)
+
+    const violations: string[] = []
+    if (!hasRationale) violations.push('northstar_missing_pivot_rationale')
+    if (!hasEvidenceRef) violations.push('northstar_missing_pivot_evidence')
+    return violations
+  }
+
+  private async evaluateNorthStarTurn(input: {
+    orchestrationMode: ResolvedOrchestrationMode
+    northStar?: NorthStarContract
+    baseline: NorthStarPathSnapshot[]
+    toolEvents: ToolEventRecord[]
+    noDeltaStreak: number
+    noRealityCheckExecutionStreak: number
+    noExternalCheckSuccessStreak: number
+    previousGateSatisfied: boolean | null
+    previousScoreboardValues: Record<string, number>
+    pivotAllowed: boolean
+  }): Promise<NorthStarEvaluation> {
+    const artifactGravityMode = isArtifactGravityMode(input.orchestrationMode)
+    const paperMode = isArtifactGravityPaperMode(input.orchestrationMode)
+    const evaluation = this.buildDefaultNorthStarEvaluation({
+      orchestrationMode: input.orchestrationMode,
+      northStar: input.northStar,
+      noDeltaStreak: input.noDeltaStreak,
+      realityCheckNoExecStreak: input.noRealityCheckExecutionStreak,
+      previousGateSatisfied: input.previousGateSatisfied,
+      pivotAllowed: input.pivotAllowed
+    })
+    if (!artifactGravityMode) {
+      return evaluation
+    }
+    if (!input.northStar) {
+      evaluation.reason = 'northstar_missing_contract'
+      return evaluation
+    }
+
+    const afterSnapshots: NorthStarPathSnapshot[] = []
+    for (const artifactPath of input.northStar.artifactPaths) {
+      afterSnapshots.push(await this.captureNorthStarPathSnapshot(artifactPath))
+    }
+    const afterByPath = new Map<string, NorthStarPathSnapshot>(
+      afterSnapshots.map((row) => [row.path, row])
+    )
+
+    const baselineByPath = new Map<string, NorthStarPathSnapshot>(
+      input.baseline.map((row) => [row.path, row])
+    )
+    const changedArtifacts: string[] = []
+    for (const after of afterSnapshots) {
+      const before = baselineByPath.get(after.path)
+      if (!before) {
+        if (after.exists) changedArtifacts.push(after.path)
+        continue
+      }
+      const rawChanged = before.exists !== after.exists || before.hash !== after.hash
+      if (!rawChanged) continue
+      const semanticChanged = before.semanticHash !== after.semanticHash
+      const significantDelta = Math.abs(after.significantBytes - before.significantBytes)
+      if (paperMode) {
+        // v3-paper: any normalized-text change is substantive; whitespace-only churn is ignored.
+        if (before.contentKind === 'text' && after.contentKind === 'text' && !semanticChanged) continue
+        if (before.exists !== after.exists || semanticChanged || before.contentKind !== after.contentKind) {
+          changedArtifacts.push(after.path)
+        }
+        continue
+      }
+
+      const trivialTextOnly = (
+        before.contentKind === 'text'
+        && after.contentKind === 'text'
+        && !semanticChanged
+        && significantDelta < NORTHSTAR_TRIVIAL_TEXT_DELTA_THRESHOLD
+      )
+      if (trivialTextOnly) continue
+      if (before.contentKind === 'text' && after.contentKind === 'text' && !semanticChanged && significantDelta === 0) {
+        continue
+      }
+      if (
+        before.exists !== after.exists
+        || semanticChanged
+        || before.contentKind !== after.contentKind
+        || significantDelta >= NORTHSTAR_TRIVIAL_TEXT_DELTA_THRESHOLD
+      ) {
+        changedArtifacts.push(after.path)
+      }
+    }
+
+    const artifactChanged = input.northStar.artifactGate === 'all'
+      ? (input.northStar.artifactPaths.length > 0
+          && input.northStar.artifactPaths.every((target) => changedArtifacts.includes(target)))
+      : changedArtifacts.length > 0
+    const contentDeltaProofs = changedArtifacts
+      .map((artifactPath) => this.buildNorthStarContentDeltaProof({
+        before: baselineByPath.get(artifactPath),
+        after: afterByPath.get(artifactPath) ?? this.buildEmptyNorthStarPathSnapshot(artifactPath)
+      }))
+      .filter((proof): proof is NorthStarContentDeltaProof => proof !== null)
+
+    const verifyCmd = input.northStar.verifyCmd?.trim() || ''
+    const verify = this.evaluateVerifyCommandFromToolEvents(input.toolEvents, verifyCmd)
+    const policyViolations = await this.evaluateNorthStarPivotPolicy({
+      northStar: input.northStar,
+      fallbackGoal: input.northStar.goal || '',
+      pivotAllowed: input.pivotAllowed
+    })
+
+    if (paperMode) {
+      if (!input.northStar.paperArtifactPathsEligible) {
+        policyViolations.push('northstar_paper_artifact_paths_invalid')
+      }
+      if (!input.northStar.internalCheckAllowlistValid) {
+        policyViolations.push('northstar_internalcheck_allowlist_invalid')
+      }
+      if ((input.northStar.internalCheckCommands ?? []).length === 0) {
+        policyViolations.push('northstar_missing_internal_check')
+      }
+      if (!input.northStar.externalCheckAllowlistValid) {
+        policyViolations.push('northstar_externalcheck_allowlist_invalid')
+      }
+      if ((input.northStar.externalCheckCommands ?? []).length === 0) {
+        policyViolations.push('northstar_missing_external_check')
+      }
+      if (!input.northStar.scoreboardMetricPathsValid) {
+        policyViolations.push('northstar_scoreboard_paths_invalid')
+      }
+      if ((input.northStar.scoreboardMetricPaths ?? []).length === 0) {
+        policyViolations.push('northstar_missing_scoreboard')
+      }
+    }
+
+    if (this.isCodeLikeNorthStarContract(input.northStar) && !verifyCmd) {
+      policyViolations.push('northstar_verify_required_for_code_artifact')
+    }
+
+    const internalCheckCommands = dedupeStrings(input.northStar.internalCheckCommands ?? input.northStar.realityCheckCommands ?? [])
+    const internalCheckEval = this.evaluateRealityCheckFromToolEvents(input.toolEvents, internalCheckCommands)
+    const internalCheckExecutedCount = internalCheckEval.executedCommands.length
+    const internalCheckSucceededCount = internalCheckEval.succeededCommands.length
+    const internalCheckGate = input.northStar.internalCheckGate ?? input.northStar.realityCheckGate ?? 'any'
+    const internalCheckGateSatisfied = internalCheckGate === 'all'
+      ? (internalCheckCommands.length > 0 && internalCheckSucceededCount === internalCheckCommands.length)
+      : internalCheckSucceededCount > 0
+
+    const externalCheckCommands = dedupeStrings(input.northStar.externalCheckCommands ?? [])
+    const externalCheckEval = this.evaluateRealityCheckFromToolEvents(input.toolEvents, externalCheckCommands)
+    const externalCheckExecutedCount = externalCheckEval.executedCommands.length
+    const externalCheckSucceededCount = externalCheckEval.succeededCommands.length
+    const externalCheckGate = input.northStar.externalCheckGate ?? 'any'
+    const externalCheckGateSatisfied = externalCheckGate === 'all'
+      ? (externalCheckCommands.length > 0 && externalCheckSucceededCount === externalCheckCommands.length)
+      : externalCheckSucceededCount > 0
+    const externalCheckContentCredit = paperMode
+      ? this.evaluateExternalCheckContentCredit({
+        artifactPaths: input.northStar.artifactPaths,
+        baselineByPath,
+        afterByPath,
+        checkSucceeded: externalCheckGateSatisfied
+      })
+      : {
+        creditGranted: externalCheckGateSatisfied,
+        candidateArtifactPaths: [] as string[],
+        meaningfulArtifactPaths: [] as string[],
+        volatileOnlyArtifactPaths: [] as string[],
+        unchangedArtifactPaths: [] as string[]
+      }
+    const externalCheckCreditGranted = paperMode
+      ? (externalCheckGateSatisfied && externalCheckContentCredit.creditGranted)
+      : externalCheckGateSatisfied
+
+    const realityCheckCommands = dedupeStrings([...internalCheckCommands, ...externalCheckCommands])
+    const realityCheckExecutedCommands = dedupeStrings([
+      ...internalCheckEval.executedCommands,
+      ...externalCheckEval.executedCommands
+    ])
+    const realityCheckSucceededCommands = dedupeStrings([
+      ...internalCheckEval.succeededCommands,
+      ...externalCheckEval.succeededCommands
+    ])
+    const realityCheckExecutedCount = realityCheckExecutedCommands.length
+    const realityCheckSucceededCount = realityCheckSucceededCommands.length
+    const realityCheckGateSatisfied = internalCheckGateSatisfied
+    const previousGateSatisfied = typeof input.previousGateSatisfied === 'boolean'
+      ? input.previousGateSatisfied
+      : false
+    const gateTransition = internalCheckGateSatisfied && !previousGateSatisfied
+
+    const antiChurnTriggered = (
+      paperMode
+      && input.noRealityCheckExecutionStreak >= NORTHSTAR_REALITYCHECK_NO_EXEC_PIVOT_THRESHOLD
+      && internalCheckExecutedCount === 0
+    )
+
+    const externalCheckRequireEvery = Math.min(
+      NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_MAX,
+      Math.max(
+        NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_MIN,
+        Number(input.northStar.externalCheckRequireEvery || NORTHSTAR_EXTERNAL_CHECK_REQUIRE_EVERY_DEFAULT)
+      )
+    )
+    const externalCheckDueThisTurn = (
+      paperMode
+      && externalCheckRequireEvery > 0
+      && input.noExternalCheckSuccessStreak >= (externalCheckRequireEvery - 1)
+    )
+    const externalCheckQuotaSatisfied = !externalCheckDueThisTurn || externalCheckCreditGranted
+
+    const scoreboardMetricPaths = dedupeStrings(input.northStar.scoreboardMetricPaths ?? [])
+    const scoreboardValues = paperMode
+      ? await this.loadNorthStarScoreboardValues(scoreboardMetricPaths)
+      : {}
+    const scoreboardPreviousValues = paperMode
+      ? { ...(input.previousScoreboardValues ?? {}) }
+      : {}
+    const scoreboardComparison = this.compareScoreboard(scoreboardPreviousValues, scoreboardValues)
+    const verifiedGrowth = paperMode
+      ? this.collectVerifiedGrowthFromScoreboard({
+        previous: scoreboardPreviousValues,
+        current: scoreboardValues
+      })
+      : { keys: [], totalDelta: 0 }
+    const verifiedGrowthContentProofRequired = paperMode && verifiedGrowth.totalDelta > 0
+    const verifiedGrowthProofEval = verifiedGrowthContentProofRequired
+      ? this.evaluateVerifiedGrowthContentProof({
+        requiredDelta: verifiedGrowth.totalDelta,
+        proofs: contentDeltaProofs
+      })
+      : { satisfied: true, proofPaths: [] as string[], matchedDelta: 0 }
+    const verifiedGrowthMissingProofReason = (
+      verifiedGrowthContentProofRequired && !verifiedGrowthProofEval.satisfied
+    )
+      ? NORTHSTAR_VERIFIED_GROWTH_MISSING_PROOF_REASON
+      : ''
+
+    let gateSatisfied = false
+    let reason = ''
+    if (policyViolations.length > 0) {
+      reason = policyViolations[0] || ''
+    } else if (paperMode) {
+      if (antiChurnTriggered) {
+        reason = 'northstar_realitycheck_not_executed_streak'
+      } else if (internalCheckExecutedCount === 0) {
+        reason = 'northstar_realitycheck_not_executed'
+      } else if (!internalCheckGateSatisfied) {
+        reason = 'northstar_realitycheck_failed'
+      } else if (!externalCheckQuotaSatisfied) {
+        reason = externalCheckGateSatisfied
+          ? NORTHSTAR_EXTERNAL_CHECK_TRIVIAL_DELTA_REASON
+          : 'northstar_external_check_required'
+      } else if (!scoreboardComparison.ready) {
+        reason = 'northstar_scoreboard_missing'
+      } else if (!scoreboardComparison.improved) {
+        reason = input.noDeltaStreak >= NORTHSTAR_NO_IMPROVEMENT_HARD_BLOCK_STREAK
+          ? NORTHSTAR_REPEATED_NO_DELTA_BLOCK_REASON
+          : (
+            gateTransition
+              ? 'northstar_check_only_repeated_pass'
+              : 'northstar_scoreboard_not_improved'
+          )
+      } else if (verifiedGrowthContentProofRequired && !verifiedGrowthProofEval.satisfied) {
+        reason = NORTHSTAR_VERIFIED_GROWTH_MISSING_PROOF_REASON
+      } else {
+        gateSatisfied = true
+      }
+    } else {
+      gateSatisfied = (artifactChanged || verify.succeeded) && policyViolations.length === 0
+      if (!artifactChanged && !verifyCmd) {
+        reason = 'northstar_no_artifact_change'
+      } else if (!gateSatisfied) {
+        reason = 'northstar_no_verifiable_delta'
+      }
+    }
+
+    return {
+      ...evaluation,
+      objectiveId: input.northStar.objectiveId,
+      objectiveVersion: input.northStar.objectiveVersion,
+      artifactChanged,
+      changedArtifacts,
+      baselineSnapshots: input.baseline,
+      afterSnapshots,
+      contentDeltaProofs,
+      verifiedGrowthKeys: verifiedGrowth.keys,
+      verifiedGrowthTotalDelta: verifiedGrowth.totalDelta,
+      verifiedGrowthContentProofRequired,
+      verifiedGrowthContentProofSatisfied: verifiedGrowthProofEval.satisfied,
+      verifiedGrowthContentProofPaths: verifiedGrowthProofEval.proofPaths,
+      verifiedGrowthMatchedDelta: verifiedGrowthProofEval.matchedDelta,
+      verifiedGrowthMissingProofReason,
+      internalCheckGate,
+      internalCheckCommands,
+      internalCheckExecutedCommands: internalCheckEval.executedCommands,
+      internalCheckSucceededCommands: internalCheckEval.succeededCommands,
+      internalCheckExecutedCount,
+      internalCheckSucceededCount,
+      internalCheckGateSatisfied,
+      externalCheckGate,
+      externalCheckCommands,
+      externalCheckExecutedCommands: externalCheckEval.executedCommands,
+      externalCheckSucceededCommands: externalCheckEval.succeededCommands,
+      externalCheckExecutedCount,
+      externalCheckSucceededCount,
+      externalCheckGateSatisfied,
+      externalCheckCreditGranted,
+      externalCheckCandidateArtifactPaths: externalCheckContentCredit.candidateArtifactPaths,
+      externalCheckMeaningfulArtifactPaths: externalCheckContentCredit.meaningfulArtifactPaths,
+      externalCheckVolatileOnlyArtifactPaths: externalCheckContentCredit.volatileOnlyArtifactPaths,
+      externalCheckUnchangedArtifactPaths: externalCheckContentCredit.unchangedArtifactPaths,
+      externalCheckRequireEvery,
+      externalCheckDueThisTurn,
+      externalCheckQuotaSatisfied,
+      externalCheckNoSuccessStreak: input.noExternalCheckSuccessStreak,
+      scoreboardMetricPaths,
+      scoreboardMetricPathsValid: input.northStar.scoreboardMetricPathsValid,
+      scoreboardValues,
+      scoreboardPreviousValues,
+      scoreboardImproved: scoreboardComparison.improved,
+      scoreboardRegressed: scoreboardComparison.regressed,
+      scoreboardChangedKeys: scoreboardComparison.changedKeys,
+      scoreboardImprovedKeys: scoreboardComparison.improvedKeys,
+      scoreboardRegressedKeys: scoreboardComparison.regressedKeys,
+      scoreboardReady: scoreboardComparison.ready,
+      realityCheckGate: input.northStar.realityCheckGate ?? internalCheckGate,
+      realityCheckCommands,
+      realityCheckExecutedCommands,
+      realityCheckSucceededCommands,
+      realityCheckExecutedCount,
+      realityCheckSucceededCount,
+      realityCheckGateSatisfied,
+      previousGateSatisfied: input.previousGateSatisfied,
+      realityCheckNoExecStreak: input.noRealityCheckExecutionStreak,
+      antiChurnTriggered,
+      verifyCmd,
+      verifyExecuted: verify.executed,
+      verifySucceeded: verify.succeeded,
+      gateSatisfied,
+      policyViolations: dedupeStrings([
+        ...policyViolations,
+        ...(verifiedGrowthMissingProofReason ? [verifiedGrowthMissingProofReason] : [])
+      ]),
+      reason
+    }
   }
 
   private async detectOpenAIPythonScriptIssue(input: {
@@ -3282,6 +6075,36 @@ export class YoloSession {
     preflightNotes: string[]
   }): Promise<TurnExecutionResult> {
     const runtime = input.context.project.defaultRuntime || this.config.defaultRuntime || DEFAULT_RUNTIME
+    const orchestrationMode: ResolvedOrchestrationMode = input.context.orchestrationMode ?? 'artifact_gravity_v3_paper'
+    const northStar = input.context.northStar
+    const artifactGravityMode = isArtifactGravityMode(orchestrationMode)
+    const paperMode = isArtifactGravityPaperMode(orchestrationMode)
+    const northStarNoDeltaStreak = artifactGravityMode
+      ? await this.countConsecutiveNoDeltaTurns(12, input.turnNumber - 1)
+      : 0
+    const northStarNoRealityCheckExecutionStreak = paperMode
+      ? await this.countConsecutiveTurnsWithoutRealityCheckExecution(12, input.turnNumber - 1)
+      : 0
+    const northStarNoExternalCheckSuccessStreak = paperMode
+      ? await this.countConsecutiveTurnsWithoutExternalCheckSuccess(20, input.turnNumber - 1)
+      : 0
+    const previousNorthStarScoreboardValues = paperMode
+      ? await this.loadPreviousNorthStarScoreboard(input.turnNumber - 1)
+      : {}
+    const northStarPivotAllowed = artifactGravityMode
+      ? Boolean(
+          input.context.northStarPivotAllowed === true
+          || northStarNoDeltaStreak >= NORTHSTAR_NO_DELTA_PIVOT_THRESHOLD
+          || (paperMode && northStarNoRealityCheckExecutionStreak >= NORTHSTAR_REALITYCHECK_NO_EXEC_PIVOT_THRESHOLD)
+        )
+      : false
+    const northStarContractSnapshot = artifactGravityMode
+      ? await this.captureNorthStarContractSnapshot()
+      : null
+    const previousNorthStarGateSatisfied = artifactGravityMode
+      ? await this.loadPreviousNorthStarGateSatisfied(input.turnNumber - 1)
+      : null
+    const northStarBaseline = await this.captureNorthStarBaseline(northStar)
     this.activeTurnArtifactsDirRel = `runs/${formatTurnId(input.turnNumber)}/artifacts`
     const turnPaths = this.buildNativeTurnFilePaths({
       turnDir: input.turnDir,
@@ -3296,15 +6119,18 @@ export class YoloSession {
       toolEventsPath,
       rawOutputPath
     } = turnPaths
-    const semanticGateConfig = this.resolveSemanticGateConfig()
-    const semanticGateAudit: SemanticGateAuditRecord = {
-      enabled: semanticGateConfig.enabled,
-      mode: semanticGateConfig.mode,
+    const northStarSemanticGateConfig = this.resolveNorthStarSemanticGateConfig({
+      orchestrationMode,
+      northStar
+    })
+    const northStarSemanticGateAudit: NorthStarSemanticGateAuditRecord = {
+      enabled: northStarSemanticGateConfig.enabled,
+      mode: northStarSemanticGateConfig.mode,
       eligible: false,
       invoked: false,
-      prompt_version: SEMANTIC_GATE_PROMPT_VERSION,
-      model_id: semanticGateConfig.model,
-      temperature: SEMANTIC_GATE_TEMPERATURE,
+      prompt_version: NORTHSTAR_SEMANTIC_GATE_PROMPT_VERSION,
+      model_id: northStarSemanticGateConfig.model,
+      temperature: NORTHSTAR_SEMANTIC_GATE_TEMPERATURE,
       input_hash: '',
       output: null,
       accepted: false
@@ -3356,7 +6182,7 @@ export class YoloSession {
     const cwd = bashSnapshot?.cwd || this.config.projectPath
     let exitCode = typeof bashSnapshot?.exitCode === 'number'
       ? bashSnapshot.exitCode
-      : (finalStatus === 'success' || finalStatus === 'stopped' || finalStatus === 'ask_user' ? 0 : 1)
+      : (finalStatus === 'success' || finalStatus === 'stopped' || finalStatus === 'ask_user' || finalStatus === 'no_delta' ? 0 : 1)
 
     if (exitCode !== 0 && finalStatus === 'success') {
       finalStatus = 'failure'
@@ -3550,6 +6376,35 @@ export class YoloSession {
       ...explicitPlanEvidencePaths,
       ...defaultPlanEvidencePaths
     ])
+    const northStarEvaluation = await this.evaluateNorthStarTurn({
+      orchestrationMode,
+      northStar,
+      baseline: northStarBaseline,
+      toolEvents,
+      noDeltaStreak: northStarNoDeltaStreak,
+      noRealityCheckExecutionStreak: northStarNoRealityCheckExecutionStreak,
+      noExternalCheckSuccessStreak: northStarNoExternalCheckSuccessStreak,
+      previousGateSatisfied: previousNorthStarGateSatisfied,
+      previousScoreboardValues: previousNorthStarScoreboardValues,
+      pivotAllowed: northStarPivotAllowed
+    })
+    const northStarPivotHardGate = await this.enforceNorthStarPivotHardGate({
+      orchestrationMode,
+      policyViolations: northStarEvaluation.policyViolations,
+      beforeSnapshot: northStarContractSnapshot
+    })
+    if (northStarPivotHardGate.applied) {
+      northStarEvaluation.pivotRollbackApplied = true
+      northStarEvaluation.pivotRollbackViolation = northStarPivotHardGate.violation
+    } else if (northStarPivotHardGate.restoreError) {
+      northStarEvaluation.policyViolations = dedupeStrings([
+        ...northStarEvaluation.policyViolations,
+        'northstar_pivot_rollback_failed'
+      ])
+      if (!northStarEvaluation.reason) {
+        northStarEvaluation.reason = 'northstar_pivot_rollback_failed'
+      }
+    }
 
     const deltaReasons: string[] = []
     if (bashSnapshot?.cmd?.trim() && bashSnapshot.exitCode === 0) {
@@ -3563,6 +6418,8 @@ export class YoloSession {
     if (failureEntry) deltaReasons.push('failure_recorded')
     if (clearedBlocked) deltaReasons.push('blocked_cleared')
     if (timeoutReconcile.recovered) deltaReasons.push('coding_agent_timeout_reconciled')
+    if (northStarEvaluation.artifactChanged) deltaReasons.push('northstar_artifact_changed')
+    if (northStarEvaluation.verifySucceeded) deltaReasons.push('northstar_verify_succeeded')
 
     // Stagnation enforcement: repeated dominant action type without strong delta
     // (stage advancement or blocker transitions) is treated as no progress.
@@ -3596,6 +6453,7 @@ export class YoloSession {
     }
 
     const planProgress = this.prepareNativeTurnPlanProgress({
+      orchestrationMode,
       plannerCheckpointDue,
       outcomeProjectUpdate: outcome.projectUpdate,
       currentBoard: input.context.project.planBoard,
@@ -3624,11 +6482,13 @@ export class YoloSession {
     const coTouchedDeliverablePlanIds = planProgress.coTouchedDeliverablePlanIds
     let deltaText = planProgress.deltaText
 
-    if (doneDefinitionCheck.deliverableTouched && !deltaReasons.includes('plan_deliverable_touched')) {
-      deltaReasons.push('plan_deliverable_touched')
-    }
-    if (coTouchedDeliverablePlanIds.length > 0 && !deltaReasons.includes('co_plan_deliverable_touched')) {
-      deltaReasons.push('co_plan_deliverable_touched')
+    if (!artifactGravityMode) {
+      if (doneDefinitionCheck.deliverableTouched && !deltaReasons.includes('plan_deliverable_touched')) {
+        deltaReasons.push('plan_deliverable_touched')
+      }
+      if (coTouchedDeliverablePlanIds.length > 0 && !deltaReasons.includes('co_plan_deliverable_touched')) {
+        deltaReasons.push('co_plan_deliverable_touched')
+      }
     }
 
     const openaiScriptIssue = await this.detectOpenAIPythonScriptIssue({
@@ -3637,6 +6497,9 @@ export class YoloSession {
     })
     const statusGuardResult = await this.applyNativeTurnStatusGuards({
       turnNumber: input.turnNumber,
+      orchestrationMode,
+      northStarContract: northStar,
+      northStarEvaluation,
       finalStatus,
       summary,
       activePlanId,
@@ -3659,11 +6522,12 @@ export class YoloSession {
       governanceOnlyTurn,
       resultPath,
       toolEvents,
-      semanticGateConfig,
-      semanticGateAudit,
+      northStarSemanticGateConfig,
+      northStarSemanticGateAudit,
       projectedPlanItem,
       planEvidencePaths,
       businessArtifactEvidencePaths,
+      trustedEvidencePaths: input.context.trustedEvidencePaths ?? [],
       changedFiles: workspaceChangeArtifacts.changedFiles,
       patchPath: workspaceChangeArtifacts.patchPath,
       exitCode,
@@ -3685,8 +6549,11 @@ export class YoloSession {
     deltaReasons.push(...statusGuardResult.deltaReasons)
     statusChange = statusGuardResult.statusChange
     failureEntry = statusGuardResult.failureEntry
+    const northStarSemanticOpenRequiredActions = statusGuardResult.northStarSemanticOpenRequiredActions
 
     const projectMutationResult = await this.applyNativeTurnProjectMutations({
+      orchestrationMode,
+      northStarEvaluation,
       preflightNotes: input.preflightNotes,
       outcomeUpdateSummary: outcome.updateSummary ?? [],
       planAttribution,
@@ -3697,7 +6564,7 @@ export class YoloSession {
       microCheckpointApplied,
       microCheckpointDeliverable,
       missingOutcomeEvidencePaths,
-      semanticGateAudit,
+      northStarSemanticGateAudit,
       codingAgentSessionObservation,
       outcomeProjectUpdate: outcome.projectUpdate,
       plannerCheckpointDue,
@@ -3728,7 +6595,8 @@ export class YoloSession {
       pendingUserInputs: input.pendingUserInputs,
       plannerCheckpoint: input.context.plannerCheckpoint,
       failureEntry,
-      clearedBlocked
+      clearedBlocked,
+      northStarSemanticOpenRequiredActions
     })
     finalStatus = projectMutationResult.finalStatus
     summary = projectMutationResult.summary
@@ -3791,8 +6659,11 @@ export class YoloSession {
       plannerCheckpointRejections,
       requireRepoTarget: this.requireRepoTarget,
       artifactUriPreferred: this.artifactUriPreferred,
-      semanticGateAudit,
-      codingAgentSessionObservation
+      northStarSemanticGateAudit,
+      codingAgentSessionObservation,
+      orchestrationMode,
+      northStarEvaluation,
+      northStarSemanticOpenRequiredActions
     })
 
     const actionMarkdown = this.renderNativeActionMarkdown({
@@ -3800,10 +6671,11 @@ export class YoloSession {
       intent,
       status: finalStatus,
       primaryAction,
-      activePlanId: activePlanId || undefined,
-      statusChange: statusChange || undefined,
+      orchestrationMode,
+      activePlanId: artifactGravityMode ? undefined : (activePlanId || undefined),
+      statusChange: artifactGravityMode ? undefined : (statusChange || undefined),
       delta: deltaText || undefined,
-      planEvidencePaths,
+      planEvidencePaths: artifactGravityMode ? [] : planEvidencePaths,
       keyObservation: summary,
       evidencePaths: uniqueEvidencePaths,
       updateSummary: boundedUpdates
@@ -3923,8 +6795,11 @@ export class YoloSession {
     plannerCheckpointRejections: string[]
     requireRepoTarget: boolean
     artifactUriPreferred: boolean
-    semanticGateAudit: SemanticGateAuditRecord
+    northStarSemanticGateAudit: NorthStarSemanticGateAuditRecord
     codingAgentSessionObservation: CodingAgentSessionObservation
+    orchestrationMode: ResolvedOrchestrationMode
+    northStarEvaluation: NorthStarEvaluation
+    northStarSemanticOpenRequiredActions: NorthStarSemanticGateRequiredAction[]
   }): Promise<NativeTurnResultPayloadBuildResult> {
     return buildNativeTurnResultPayloadHelper(this, input)
   }
@@ -4377,170 +7252,991 @@ export class YoloSession {
     return { ok: true, reason: '', deliverableTouched, doneReady }
   }
 
-  private resolveSemanticGateConfig(): ResolvedSemanticGateConfig {
-    const raw = this.config.semanticGate ?? {}
-    const requestedMode = (raw.mode ?? DEFAULT_SEMANTIC_GATE_MODE)
-    const mode: NonNullable<SemanticGateConfig['mode']> = (
-      requestedMode === 'off'
-      || requestedMode === 'shadow'
-      || requestedMode === 'enforce_touch_only'
-      || requestedMode === 'enforce_success'
+  private resolveNorthStarSemanticGateConfig(input: {
+    orchestrationMode: ResolvedOrchestrationMode
+    northStar?: NorthStarContract
+  }): ResolvedNorthStarSemanticGateConfig {
+    const policy = input.northStar?.semanticReviewPolicy
+    const override = this.config.northStarSemanticGate ?? {}
+
+    const modeCandidate = safeString(override.mode || policy?.mode || DEFAULT_NORTHSTAR_SEMANTIC_GATE_MODE).trim().toLowerCase()
+    const mode: NorthStarSemanticGateMode = (
+      modeCandidate === 'off'
+      || modeCandidate === 'shadow'
+      || modeCandidate === 'enforce_downgrade_only'
+      || modeCandidate === 'enforce_balanced'
     )
-      ? requestedMode
-      : DEFAULT_SEMANTIC_GATE_MODE
+      ? modeCandidate
+      : DEFAULT_NORTHSTAR_SEMANTIC_GATE_MODE
 
     const confidenceThreshold = (
-      typeof raw.confidenceThreshold === 'number'
-      && Number.isFinite(raw.confidenceThreshold)
-      && raw.confidenceThreshold >= 0
-      && raw.confidenceThreshold <= 1
+      typeof override.confidenceThreshold === 'number'
+      && Number.isFinite(override.confidenceThreshold)
+      && override.confidenceThreshold >= 0
+      && override.confidenceThreshold <= 1
     )
-      ? raw.confidenceThreshold
-      : DEFAULT_SEMANTIC_GATE_CONFIDENCE
+      ? override.confidenceThreshold
+      : (
+        typeof policy?.confidenceThreshold === 'number'
+        && Number.isFinite(policy.confidenceThreshold)
+        && policy.confidenceThreshold >= 0
+        && policy.confidenceThreshold <= 1
+          ? policy.confidenceThreshold
+          : DEFAULT_NORTHSTAR_SEMANTIC_GATE_CONFIDENCE
+      )
 
     const maxInputChars = (
-      typeof raw.maxInputChars === 'number'
-      && Number.isFinite(raw.maxInputChars)
-      && raw.maxInputChars >= 1_000
+      typeof override.maxInputChars === 'number'
+      && Number.isFinite(override.maxInputChars)
+      && override.maxInputChars >= 1_000
     )
-      ? Math.floor(raw.maxInputChars)
-      : DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS
+      ? Math.floor(override.maxInputChars)
+      : DEFAULT_NORTHSTAR_SEMANTIC_GATE_MAX_INPUT_CHARS
 
-    const model = safeString(raw.model).trim() || 'semantic-gate-local'
+    const requiredActionBudgetPerTurn = (
+      typeof override.requiredActionBudgetPerTurn === 'number'
+      && Number.isFinite(override.requiredActionBudgetPerTurn)
+    )
+      ? Math.max(0, Math.min(3, Math.floor(override.requiredActionBudgetPerTurn)))
+      : Math.max(
+        0,
+        Math.min(
+          3,
+          Math.floor(policy?.requiredActionBudgetPerTurn ?? DEFAULT_NORTHSTAR_SEMANTIC_REQUIRED_ACTION_BUDGET)
+        )
+      )
+
+    const mustActionMaxOpen = (
+      typeof override.mustActionMaxOpen === 'number'
+      && Number.isFinite(override.mustActionMaxOpen)
+    )
+      ? Math.max(0, Math.min(3, Math.floor(override.mustActionMaxOpen)))
+      : Math.max(
+        0,
+        Math.min(
+          3,
+          Math.floor(policy?.mustActionMaxOpen ?? DEFAULT_NORTHSTAR_SEMANTIC_MUST_MAX_OPEN)
+        )
+      )
+
+    const recentWindowTurns = (
+      typeof override.recentWindowTurns === 'number'
+      && Number.isFinite(override.recentWindowTurns)
+      && override.recentWindowTurns >= 1
+    )
+      ? Math.max(1, Math.min(12, Math.floor(override.recentWindowTurns)))
+      : Math.max(
+        1,
+        Math.min(
+          12,
+          Math.floor(policy?.recentWindowTurns ?? DEFAULT_NORTHSTAR_SEMANTIC_RECENT_WINDOW)
+        )
+      )
+
+    const model = safeString(override.model || '').trim() || 'northstar-semantic-gate-local'
+    const enabled = input.orchestrationMode === 'artifact_gravity_v3_paper' && mode !== 'off'
 
     return {
-      enabled: mode !== 'off',
-      mode,
+      enabled,
+      mode: enabled ? mode : 'off',
       confidenceThreshold,
       model,
-      maxInputChars
+      maxInputChars,
+      allowUpgrade: Boolean(override.allowUpgrade ?? policy?.allowUpgrade ?? false),
+      requiredActionBudgetPerTurn,
+      mustActionMaxOpen,
+      recentWindowTurns
     }
   }
 
-  private buildSemanticGateInput(input: {
+  private async parsePatchEvidenceMetadata(patchPath: string | null): Promise<{
+    patchPath: string | null
+    patchHunksCount: number
+    placeholderPatchDetected: boolean
+  }> {
+    if (!patchPath) {
+      return {
+        patchPath: null,
+        patchHunksCount: 0,
+        placeholderPatchDetected: false
+      }
+    }
+
+    const raw = await readTextOrEmpty(patchPath)
+    const patchHunksCount = (raw.match(/^@@ /gm) ?? []).length
+    const placeholderPatchDetected = /# no git patch hunks were available for touched files\./i.test(raw)
+
+    return {
+      patchPath: this.toEvidencePath(patchPath),
+      patchHunksCount,
+      placeholderPatchDetected
+    }
+  }
+
+  private resolveClaimMetricSourcePath(scoreboardAfter: Record<string, number>, preferred: string[]): string {
+    const grouped = new Map<string, string[]>()
+    for (const key of Object.keys(scoreboardAfter)) {
+      const idx = key.indexOf(':')
+      if (idx <= 0) continue
+      const metricPath = key.slice(0, idx)
+      const leaf = this.scoreMetricLeaf(key)
+      const current = grouped.get(metricPath) ?? []
+      current.push(leaf)
+      grouped.set(metricPath, current)
+    }
+    const preferredSet = new Set(dedupeStrings(preferred))
+    const candidates = [...grouped.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+
+    const relevanceScore = (leafs: string[]): number => {
+      const set = new Set(leafs)
+      let score = 0
+      if (set.has('claims_total')) score += 3
+      if (set.has('claims_verified') || set.has('claims_verified_with_valid_evidence')) score += 3
+      if (set.has('claims_verified_raw') || set.has('claims_marked_verified')) score += 2
+      if (set.has('claims_verified_invalid_evidence') || set.has('claims_marked_verified_with_invalid_evidence')) score += 2
+      if (set.has('evidence_valid_coverage')) score += 1
+      return score
+    }
+
+    const ranked = candidates
+      .map(([metricPath, leafs]) => ({
+        metricPath,
+        score: relevanceScore(leafs),
+        preferred: preferredSet.has(metricPath)
+      }))
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        if (a.preferred !== b.preferred) return a.preferred ? -1 : 1
+        return a.metricPath.localeCompare(b.metricPath)
+      })
+
+    return ranked[0]?.metricPath || preferred[0] || ''
+  }
+
+  private normalizeNorthStarClaimQuality(input: {
+    scoreboardBefore: Record<string, number>
+    scoreboardAfter: Record<string, number>
+    scoreboardMetricPaths: string[]
+  }): NormalizedNorthStarClaimQuality {
+    const sourceMetricPath = this.resolveClaimMetricSourcePath(input.scoreboardAfter, input.scoreboardMetricPaths)
+    const leafAfter = new Map<string, number>()
+
+    if (sourceMetricPath) {
+      for (const [metricKey, metricValue] of Object.entries(input.scoreboardAfter)) {
+        if (!Number.isFinite(metricValue)) continue
+        if (!metricKey.startsWith(`${sourceMetricPath}:`)) continue
+        leafAfter.set(this.scoreMetricLeaf(metricKey), metricValue)
+      }
+    }
+
+    const readLeaf = (...keys: string[]): number => {
+      for (const key of keys) {
+        if (leafAfter.has(key)) {
+          const value = leafAfter.get(key)
+          if (typeof value === 'number' && Number.isFinite(value)) return value
+        }
+      }
+      return 0
+    }
+
+    const claimsTotalRaw = readLeaf('claims_total')
+    const claimsMarkedVerifiedRaw = readLeaf('claims_marked_verified', 'claims_verified_raw')
+    const claimsVerifiedValidRaw = readLeaf('claims_verified_with_valid_evidence', 'claims_verified')
+    const claimsMarkedInvalidRaw = readLeaf('claims_marked_verified_with_invalid_evidence', 'claims_verified_invalid_evidence')
+
+    const claims_total = Math.max(0, Math.floor(claimsTotalRaw))
+    let claims_marked_verified = Math.max(0, Math.floor(claimsMarkedVerifiedRaw))
+    let claims_verified_with_valid_evidence = Math.max(0, Math.floor(claimsVerifiedValidRaw))
+    let claims_marked_verified_with_invalid_evidence = Math.max(0, Math.floor(claimsMarkedInvalidRaw))
+
+    if (claims_marked_verified < claims_verified_with_valid_evidence) {
+      claims_marked_verified = claims_verified_with_valid_evidence
+    }
+    if (claims_marked_verified_with_invalid_evidence === 0 && claims_marked_verified >= claims_verified_with_valid_evidence) {
+      claims_marked_verified_with_invalid_evidence = claims_marked_verified - claims_verified_with_valid_evidence
+    }
+    if (claims_marked_verified > claims_total) {
+      claims_marked_verified = claims_total
+    }
+    if (claims_verified_with_valid_evidence > claims_marked_verified) {
+      claims_verified_with_valid_evidence = claims_marked_verified
+    }
+    if (claims_marked_verified_with_invalid_evidence > claims_marked_verified) {
+      claims_marked_verified_with_invalid_evidence = claims_marked_verified
+    }
+
+    const computedCoverage = claims_total > 0
+      ? claims_verified_with_valid_evidence / claims_total
+      : 0
+    const coverageRaw = readLeaf('evidence_valid_coverage')
+    const evidence_valid_coverage = Number.isFinite(coverageRaw) && coverageRaw > 0
+      ? Math.max(0, Math.min(1, coverageRaw))
+      : Math.max(0, Math.min(1, computedCoverage))
+
+    const epsilon = 1e-4
+    const invariant_violation = (
+      claims_total < claims_marked_verified
+      || claims_marked_verified < claims_verified_with_valid_evidence
+      || claims_marked_verified !== (claims_verified_with_valid_evidence + claims_marked_verified_with_invalid_evidence)
+      || Math.abs(evidence_valid_coverage - computedCoverage) > Math.max(epsilon, 0.02)
+    )
+
+    return {
+      claims_total,
+      claims_marked_verified,
+      claims_verified_with_valid_evidence,
+      claims_marked_verified_with_invalid_evidence,
+      evidence_valid_coverage: Number(evidence_valid_coverage.toFixed(5)),
+      source_metric_path: sourceMetricPath || '',
+      invariant_violation
+    }
+  }
+
+  private toNorthStarSemanticFileDelta(proof: NorthStarContentDeltaProof): NorthStarSemanticGateInput['delta']['change_proof']['file_deltas'][number] {
+    const contentChanged = proof.beforeHash !== proof.afterHash
+    const addedLines = Math.max(0, proof.structuredDiff.lineCountDelta)
+    const removedLines = Math.max(0, -proof.structuredDiff.lineCountDelta)
+    const rules: string[] = []
+    if (addedLines > 0) rules.push('added_lines>0')
+    if (proof.structuredDiff.csvRowDelta !== 0) rules.push('csv_row_delta!=0')
+    if (proof.structuredDiff.csvColumnDelta !== 0) rules.push('csv_column_delta!=0')
+    if (Object.keys(proof.structuredDiff.claimsStatusDelta || {}).length > 0) rules.push('claims_status_delta!=0')
+    if (proof.structuredDiff.nonEmptyLineDelta !== 0) rules.push('non_empty_line_delta!=0')
+    const nontrivialChangeDetected = contentChanged && rules.length > 0
+    return {
+      path: proof.path,
+      before_hash: proof.beforeHash,
+      after_hash: proof.afterHash,
+      content_changed: contentChanged,
+      nontrivial_change_detected: nontrivialChangeDetected,
+      nontrivial_change_rules: rules,
+      added_lines: addedLines,
+      removed_lines: removedLines
+    }
+  }
+
+  private collectNorthStarSemanticReasonCodes(input: {
     turnNumber: number
-    activePlanId: string
+    claimQuality: NormalizedNorthStarClaimQuality
+    fileDeltas: NorthStarSemanticGateInput['delta']['change_proof']['file_deltas']
+    recentObjectives: NorthStarRecentObjective[]
+    currentObjectiveId: string
+    currentObjectiveVersion: number
+  }): NorthStarSemanticReasonCode[] {
+    const reasonCodes: NorthStarSemanticReasonCode[] = []
+    if (input.claimQuality.invariant_violation) {
+      reasonCodes.push(NORTHSTAR_SEMANTIC_REASON_INCONSISTENT_METRICS)
+    }
+
+    for (const delta of input.fileDeltas) {
+      if (!delta.content_changed && delta.nontrivial_change_detected) {
+        reasonCodes.push(NORTHSTAR_SEMANTIC_REASON_INVALID_CHANGE_PROOF_FLAGS)
+        break
+      }
+    }
+
+    const latestObjective = input.recentObjectives[0]
+    const objectiveChanged = Boolean(
+      latestObjective
+      && (latestObjective.objective_id !== input.currentObjectiveId
+        || latestObjective.objective_version !== input.currentObjectiveVersion)
+    )
+    if (input.turnNumber > 1 && !latestObjective) {
+      reasonCodes.push(NORTHSTAR_SEMANTIC_REASON_OBJECTIVE_CONTEXT_MISSING)
+    }
+
+    return dedupeStrings(reasonCodes)
+  }
+
+  private async loadRecentNorthStarSemanticTurns(input: {
+    maxTurns: number
+    beforeTurn: number
+  }): Promise<NorthStarSemanticGateInput['recent_turns']> {
+    const numbers = (await listTurnNumbers(this.runsDir))
+      .filter((turnNumber) => turnNumber < input.beforeTurn)
+      .slice(-Math.max(0, input.maxTurns))
+      .reverse()
+    const rows: NorthStarSemanticGateInput['recent_turns'] = []
+
+    for (const turnNumber of numbers) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const northstarSemantic = toPlainObject(parsed.northstar_semantic_gate)
+        const effectiveVerdictRaw = safeString(northstarSemantic?.effective_verdict).trim().toLowerCase()
+        const semantic_verdict: NorthStarSemanticGateInput['recent_turns'][number]['semantic_verdict'] = (
+          effectiveVerdictRaw === 'advance_confirmed'
+          || effectiveVerdictRaw === 'advance_weak'
+          || effectiveVerdictRaw === 'no_progress'
+          || effectiveVerdictRaw === 'regress'
+          || effectiveVerdictRaw === 'abstain'
+        )
+          ? effectiveVerdictRaw
+          : 'none'
+        rows.push({
+          turn: turnNumber,
+          status: safeString(parsed.status).trim() || 'unknown',
+          semantic_verdict,
+          summary: safeString(parsed.summary).trim().slice(0, 400)
+        })
+      } catch {
+        continue
+      }
+    }
+
+    return rows
+  }
+
+  private async loadRecentNorthStarObjectives(input: {
+    maxTurns: number
+    beforeTurn: number
+  }): Promise<NorthStarRecentObjective[]> {
+    const numbers = (await listTurnNumbers(this.runsDir))
+      .filter((turnNumber) => turnNumber < input.beforeTurn)
+      .slice(-Math.max(0, input.maxTurns))
+      .reverse()
+    const rows: NorthStarRecentObjective[] = []
+
+    for (const turnNumber of numbers) {
+      const resultPath = path.join(this.runsDir, formatTurnId(turnNumber), 'result.json')
+      if (!(await fileExists(resultPath))) continue
+      const raw = await readTextOrEmpty(resultPath)
+      if (!raw.trim()) continue
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>
+        const northstar = toPlainObject(parsed.northstar)
+        const objectiveId = safeString(northstar?.objective_id).trim()
+        const objectiveVersionRaw = typeof northstar?.objective_version === 'number'
+          ? northstar.objective_version
+          : 0
+        const objectiveVersion = Number.isFinite(objectiveVersionRaw)
+          ? Math.max(1, Math.floor(objectiveVersionRaw))
+          : 1
+        if (!objectiveId) continue
+        rows.push({
+          turn: turnNumber,
+          objective_id: objectiveId,
+          objective_version: objectiveVersion,
+          change_reason: 'objective_stable'
+        })
+      } catch {
+        continue
+      }
+    }
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const current = rows[index]
+      const previous = rows[index + 1]
+      if (!current || !previous) continue
+      if (current.objective_id !== previous.objective_id || current.objective_version !== previous.objective_version) {
+        current.change_reason = 'scope_narrowing'
+      }
+    }
+
+    return rows
+  }
+
+  private buildNorthStarSemanticContentSnapshots(input: {
+    baselineSnapshots: NorthStarPathSnapshot[]
+    afterSnapshots: NorthStarPathSnapshot[]
+    scoreboardMetricPaths: string[]
+  }): NorthStarSemanticGateInput['content_snapshots'] {
+    const beforeByPath = new Map(input.baselineSnapshots.map((row) => [row.path, row]))
+    const afterByPath = new Map(input.afterSnapshots.map((row) => [row.path, row]))
+    const keyPaths = dedupeStrings([
+      ...input.afterSnapshots.map((row) => row.path),
+      ...input.scoreboardMetricPaths
+    ])
+    const snapshots: NorthStarSemanticGateInput['content_snapshots'] = []
+    for (const keyPath of keyPaths) {
+      const before = beforeByPath.get(keyPath) ?? this.buildEmptyNorthStarPathSnapshot(keyPath)
+      const after = afterByPath.get(keyPath) ?? this.buildEmptyNorthStarPathSnapshot(keyPath)
+      snapshots.push({
+        path: keyPath,
+        kind: after.contentKind,
+        source: 'runtime_snapshot',
+        before_hash: before.hash,
+        after_hash: after.hash,
+        ...(before.textExcerpt ? { before_excerpt: before.textExcerpt.slice(0, 700) } : {}),
+        ...(after.textExcerpt ? { after_excerpt: after.textExcerpt.slice(0, 700) } : {}),
+        structured_summary: {
+          rows_before: before.csvRowCount,
+          rows_after: after.csvRowCount,
+          verified_before: before.claimsStatusCounts.verified ?? 0,
+          verified_after: after.claimsStatusCounts.verified ?? 0,
+          verified_invalid_after: after.claimsStatusCounts.verified_invalid_evidence ?? 0
+        }
+      })
+    }
+    return snapshots
+  }
+
+  private async buildNorthStarSemanticGateInput(input: {
+    turnNumber: number
+    mode: NorthStarSemanticGateMode
     finalStatus: TurnStatus
     blockedReason: string | null
-    planItem: PlanBoardItem | null
-    planEvidencePaths: string[]
-    businessArtifactEvidencePaths: string[]
-    workspaceWriteTouches: string[]
+    northStar: NorthStarContract
+    northStarEvaluation: NorthStarEvaluation
     changedFiles: string[]
     patchPath: string | null
-    exitCode: number
-    hardViolations: string[]
-    codingLargeRepoRequired: boolean
+    businessArtifactEvidencePaths: string[]
+    trustedEvidencePaths: string[]
     maxInputChars: number
-  }): { payload: SemanticGateInput; inputHash: string } {
-    const parsedRules = this.parseDoneDefinitionRules(input.planItem?.doneDefinition ?? [])
+    resultPath: string
+    hardViolations: string[]
+  }): Promise<{
+    payload: NorthStarSemanticGateInput
+    inputHash: string
+    claimQuality: NormalizedNorthStarClaimQuality
+    reasonCodes: string[]
+  }> {
+    const patchMeta = await this.parsePatchEvidenceMetadata(input.patchPath)
+    const fileDeltas = input.northStarEvaluation.contentDeltaProofs.map((proof) => this.toNorthStarSemanticFileDelta(proof))
+    const claimQuality = this.normalizeNorthStarClaimQuality({
+      scoreboardBefore: input.northStarEvaluation.scoreboardPreviousValues,
+      scoreboardAfter: input.northStarEvaluation.scoreboardValues,
+      scoreboardMetricPaths: input.northStarEvaluation.scoreboardMetricPaths
+    })
+    const recentTurns = await this.loadRecentNorthStarSemanticTurns({
+      maxTurns: input.northStar.semanticReviewPolicy.recentWindowTurns,
+      beforeTurn: input.turnNumber
+    })
+    const recentObjectives = await this.loadRecentNorthStarObjectives({
+      maxTurns: input.northStar.semanticReviewPolicy.recentWindowTurns + 2,
+      beforeTurn: input.turnNumber
+    })
+    const reasonCodes = this.collectNorthStarSemanticReasonCodes({
+      turnNumber: input.turnNumber,
+      claimQuality,
+      fileDeltas,
+      recentObjectives,
+      currentObjectiveId: input.northStar.objectiveId,
+      currentObjectiveVersion: input.northStar.objectiveVersion
+    })
+    const objectiveChanged = recentObjectives[0]
+      && (
+        recentObjectives[0].objective_id !== input.northStar.objectiveId
+        || recentObjectives[0].objective_version !== input.northStar.objectiveVersion
+      )
+    const pivotApproved = !input.northStarEvaluation.policyViolations.some((code) => (
+      normalizeText(code).includes('pivot_locked')
+      || normalizeText(code).includes('missing_pivot')
+    ))
 
-    const payload: SemanticGateInput = {
-      schema: 'yolo.semantic_gate.input.v1',
+    const contentSnapshots = this.buildNorthStarSemanticContentSnapshots({
+      baselineSnapshots: input.northStarEvaluation.baselineSnapshots,
+      afterSnapshots: input.northStarEvaluation.afterSnapshots,
+      scoreboardMetricPaths: input.northStarEvaluation.scoreboardMetricPaths
+    })
+    if (contentSnapshots.length === 0) {
+      reasonCodes.push(NORTHSTAR_SEMANTIC_REASON_MISSING_CONTENT_SNAPSHOT)
+    }
+
+    const payload: NorthStarSemanticGateInput = {
+      schema: 'yolo.northstar_semantic_gate.input.v1',
       turn: {
         id: formatTurnId(input.turnNumber),
         number: input.turnNumber
       },
-      active_plan_id: input.activePlanId || null,
+      mode: input.mode,
       deterministic: {
         status: input.finalStatus,
-        blocked_reason: input.blockedReason || null
+        blocked_reason: input.blockedReason,
+        hard_violations: dedupeStrings(input.hardViolations),
+        northstar_gate_satisfied: Boolean(input.northStarEvaluation.gateSatisfied)
       },
-      plan: {
-        done_definition: (input.planItem?.doneDefinition ?? []).slice(0, 24),
-        deliverables: parsedRules.deliverables.slice(0, 24)
+      northstar: {
+        goal: input.northStar.goal || '',
+        current_objective: input.northStar.currentObjective || '',
+        objective_id: input.northStar.objectiveId,
+        objective_version: input.northStar.objectiveVersion,
+        artifacts: dedupeStrings(input.northStar.artifactPaths),
+        scoreboard_paths: dedupeStrings(input.northStar.scoreboardMetricPaths)
       },
-      evidence_summary: {
-        explicit_evidence_paths: dedupeStrings(input.planEvidencePaths).slice(0, 80),
-        business_artifacts: dedupeStrings(input.businessArtifactEvidencePaths).slice(0, 80),
-        workspace_write_touches: dedupeStrings(input.workspaceWriteTouches).slice(0, 80),
-        changed_files_count: input.changedFiles.length,
-        has_patch: Boolean(input.patchPath),
-        cmd_exit_code: input.exitCode
+      delta: {
+        artifact_changes: dedupeStrings(input.northStarEvaluation.changedArtifacts),
+        scoreboard_before: input.northStarEvaluation.scoreboardPreviousValues,
+        scoreboard_after: input.northStarEvaluation.scoreboardValues,
+        change_proof: {
+          patch_path: patchMeta.patchPath,
+          patch_hunks_count: patchMeta.patchHunksCount,
+          placeholder_patch_detected: patchMeta.placeholderPatchDetected,
+          touched_files: dedupeStrings(input.changedFiles),
+          file_deltas: fileDeltas
+        }
       },
-      repo_constraints: {
-        hard_violations: dedupeStrings(input.hardViolations).slice(0, 20),
-        coding_large_repo_required: input.codingLargeRepoRequired
+      content_snapshots: contentSnapshots,
+      claim_quality: {
+        claims_total: claimQuality.claims_total,
+        claims_marked_verified: claimQuality.claims_marked_verified,
+        claims_verified_with_valid_evidence: claimQuality.claims_verified_with_valid_evidence,
+        claims_marked_verified_with_invalid_evidence: claimQuality.claims_marked_verified_with_invalid_evidence,
+        evidence_valid_coverage: claimQuality.evidence_valid_coverage,
+        source_metric_path: claimQuality.source_metric_path
+      },
+      checks: {
+        internal_executed: input.northStarEvaluation.internalCheckExecutedCommands,
+        internal_succeeded: input.northStarEvaluation.internalCheckSucceededCommands,
+        external_executed: input.northStarEvaluation.externalCheckExecutedCommands,
+        external_succeeded: input.northStarEvaluation.externalCheckSucceededCommands
+      },
+      recent_turns: recentTurns,
+      recent_objectives: recentObjectives,
+      pivot_context: {
+        is_explicit_pivot_turn: Boolean(objectiveChanged),
+        pivot_reason: objectiveChanged ? 'scope_narrowing' : 'objective_stable',
+        pivot_evidence_paths: [this.toEvidencePath(input.resultPath)],
+        pivot_approved_by_policy: pivotApproved
+      },
+      evidence_refs: {
+        trusted_paths: dedupeStrings(input.trustedEvidencePaths).slice(0, 100),
+        business_artifacts: dedupeStrings(input.businessArtifactEvidencePaths).slice(0, 100)
       }
     }
 
     const canonical = canonicalizeJson(payload)
     const canonicalJson = clipText(JSON.stringify(canonical), input.maxInputChars)
     const inputHash = createHash('sha256').update(canonicalJson).digest('hex')
-    return { payload, inputHash }
+    return {
+      payload,
+      inputHash,
+      claimQuality,
+      reasonCodes: dedupeStrings(reasonCodes)
+    }
   }
 
-  private normalizeSemanticGateOutput(raw: unknown): SemanticGateOutput {
+  private normalizeNorthStarSemanticGateOutput(raw: unknown): NorthStarSemanticGateOutput {
     const row = toPlainObject(raw) ?? {}
-    const verdictRaw = safeString(row.verdict).trim().toLowerCase()
-    const verdict = (verdictRaw === 'touched' || verdictRaw === 'not_touched' || verdictRaw === 'abstain')
-      ? verdictRaw
-      : 'abstain'
-
     const confidenceRaw = typeof row.confidence === 'number' && Number.isFinite(row.confidence)
       ? row.confidence
       : 0
     const confidence = Math.max(0, Math.min(1, confidenceRaw))
 
-    const touchedDeliverablesRaw = Array.isArray(row.touched_deliverables)
-      ? row.touched_deliverables
+    const readDimensionScore = (key: string): 0 | 1 | 2 | null => {
+      const dimRow = toPlainObject(row.dimension_scores)
+      if (!dimRow) return null
+      const value = dimRow[key]
+      if (value === 0 || value === 1 || value === 2) return value
+      return null
+    }
+
+    const scores = {
+      goal_alignment: readDimensionScore('goal_alignment'),
+      evidence_strength: readDimensionScore('evidence_strength'),
+      novelty_delta: readDimensionScore('novelty_delta'),
+      falsifiability: readDimensionScore('falsifiability'),
+      trajectory_health: readDimensionScore('trajectory_health')
+    }
+    const hasAllScores = Object.values(scores).every((value) => value !== null)
+    const dimension_scores = hasAllScores
+      ? {
+        goal_alignment: scores.goal_alignment as 0 | 1 | 2,
+        evidence_strength: scores.evidence_strength as 0 | 1 | 2,
+        novelty_delta: scores.novelty_delta as 0 | 1 | 2,
+        falsifiability: scores.falsifiability as 0 | 1 | 2,
+        trajectory_health: scores.trajectory_health as 0 | 1 | 2
+      }
+      : undefined
+
+    const reason_codes = Array.isArray(row.reason_codes)
+      ? dedupeStrings(row.reason_codes.map((value) => safeString(value).trim()).filter(Boolean))
       : []
-    const touched_deliverables: SemanticGateTouchedDeliverable[] = touchedDeliverablesRaw
-      .map((item) => {
-        const entry = toPlainObject(item)
-        const id = safeString(entry?.id).trim()
-        const evidenceRefs = Array.isArray(entry?.evidence_refs)
-          ? entry?.evidence_refs
-            .map((value) => safeString(value).trim())
-            .filter(Boolean)
+
+    const required_actions = Array.isArray(row.required_actions)
+      ? row.required_actions
+        .map((item) => {
+          const actionRow = toPlainObject(item)
+          const tierRaw = safeString(actionRow?.tier).trim().toLowerCase()
+          const tier = (tierRaw === 'must_candidate' || tierRaw === 'should' || tierRaw === 'suggest')
+            ? tierRaw
+            : 'suggest'
+          const code = safeString(actionRow?.code).trim()
+          const description = safeString(actionRow?.description).trim()
+          const dueTurnRaw = typeof actionRow?.due_turn === 'number' && Number.isFinite(actionRow.due_turn)
+            ? Math.max(1, Math.floor(actionRow.due_turn))
+            : undefined
+          if (!code || !description) return null
+          return {
+            tier,
+            code,
+            description,
+            ...(typeof dueTurnRaw === 'number' ? { due_turn: dueTurnRaw } : {})
+          } as NorthStarSemanticGateRequiredAction
+        })
+        .filter((entry): entry is NorthStarSemanticGateRequiredAction => entry !== null)
+      : []
+
+    const claimAuditRow = toPlainObject(row.claim_audit)
+    const claim_audit = claimAuditRow
+      ? {
+        supported_ids: Array.isArray(claimAuditRow.supported_ids)
+          ? dedupeStrings(claimAuditRow.supported_ids.map((value) => safeString(value).trim()).filter(Boolean))
+          : [],
+        unsupported_ids: Array.isArray(claimAuditRow.unsupported_ids)
+          ? dedupeStrings(claimAuditRow.unsupported_ids.map((value) => safeString(value).trim()).filter(Boolean))
+          : [],
+        contradicted_ids: Array.isArray(claimAuditRow.contradicted_ids)
+          ? dedupeStrings(claimAuditRow.contradicted_ids.map((value) => safeString(value).trim()).filter(Boolean))
           : []
-        const reasonCodes = Array.isArray(entry?.reason_codes)
-          ? entry?.reason_codes
-            .map((value) => safeString(value).trim())
-            .filter(Boolean)
-          : []
-        return {
-          id,
-          evidence_refs: dedupeStrings(evidenceRefs),
-          ...(reasonCodes.length > 0 ? { reason_codes: dedupeStrings(reasonCodes) } : {})
-        }
-      })
-      .filter((item) => item.id.length > 0)
+      }
+      : undefined
+
+    const verdictRaw = safeString(row.verdict).trim().toLowerCase()
+    const verdict = (
+      verdictRaw === 'advance_confirmed'
+      || verdictRaw === 'advance_weak'
+      || verdictRaw === 'no_progress'
+      || verdictRaw === 'regress'
+      || verdictRaw === 'abstain'
+    )
+      ? verdictRaw
+      : undefined
 
     return {
-      schema: 'yolo.semantic_gate.output.v1',
-      verdict,
+      schema: 'yolo.northstar_semantic_gate.output.v1',
       confidence,
-      ...(touched_deliverables.length > 0 ? { touched_deliverables } : {}),
-      ...(safeString(row.notes).trim() ? { notes: safeString(row.notes).trim() } : {})
+      ...(dimension_scores ? { dimension_scores } : {}),
+      ...(reason_codes.length > 0 ? { reason_codes } : {}),
+      ...(claim_audit ? { claim_audit } : {}),
+      ...(required_actions.length > 0 ? { required_actions } : {}),
+      ...(safeString(row.summary).trim() ? { summary: safeString(row.summary).trim().slice(0, 1_000) } : {}),
+      ...(verdict ? { verdict } : {})
     }
   }
 
-  private async validateSemanticGateEvidenceRefs(input: {
-    turnNumber: number
-    output: SemanticGateOutput
-  }): Promise<{ ok: boolean; reason: string }> {
-    if (input.output.verdict !== 'touched') return { ok: true, reason: '' }
-    const touched = input.output.touched_deliverables ?? []
-    if (touched.length === 0) return { ok: false, reason: 'missing_touched_deliverables' }
-
-    const turnPrefix = `runs/${formatTurnId(input.turnNumber)}/`
-
-    for (const item of touched) {
-      if (!item.id.trim()) return { ok: false, reason: 'missing_touched_deliverable_id' }
-      if (!Array.isArray(item.evidence_refs) || item.evidence_refs.length === 0) {
-        return { ok: false, reason: `missing_evidence_refs:${item.id}` }
-      }
-      for (const ref of item.evidence_refs) {
-        const normalized = this.normalizeProjectPathPointer(ref)
-        if (!EVIDENCE_PATH_RE.test(normalized)) return { ok: false, reason: `invalid_evidence_ref_format:${ref}` }
-        if (!normalized.startsWith(turnPrefix)) return { ok: false, reason: `cross_turn_evidence_ref:${normalized}` }
-        const absolute = path.join(this.yoloRoot, normalized)
-        if (!(await fileExists(absolute))) return { ok: false, reason: `missing_evidence_ref:${normalized}` }
+  private deriveNorthStarSemanticVerdict(input: {
+    dimension_scores?: NorthStarSemanticGateOutput['dimension_scores']
+  }): {
+    verdict: NorthStarSemanticVerdict
+    valid: boolean
+    normalizedScores: Record<string, number>
+  } {
+    const row = toPlainObject(input.dimension_scores) ?? {}
+    const read = (key: string): number | null => {
+      const value = row[key]
+      if (value === 0 || value === 1 || value === 2) return value
+      return null
+    }
+    const ga = read('goal_alignment')
+    const es = read('evidence_strength')
+    const nd = read('novelty_delta')
+    const fa = read('falsifiability')
+    const th = read('trajectory_health')
+    const normalizedScores: Record<string, number> = {
+      goal_alignment: ga ?? -1,
+      evidence_strength: es ?? -1,
+      novelty_delta: nd ?? -1,
+      falsifiability: fa ?? -1,
+      trajectory_health: th ?? -1
+    }
+    if ([ga, es, nd, fa, th].some((value) => value === null)) {
+      return {
+        verdict: 'abstain',
+        valid: false,
+        normalizedScores
       }
     }
 
-    return { ok: true, reason: '' }
+    const values = [ga!, es!, nd!, fa!, th!]
+    const sum = values.reduce((acc, value) => acc + value, 0)
+    const zeroCount = values.filter((value) => value === 0).length
+    const twoCount = values.filter((value) => value === 2).length
+
+    let verdict: NorthStarSemanticVerdict
+    if (zeroCount >= 3) verdict = 'regress'
+    else if (ga === 0 && (nd === 0 || th === 0)) verdict = 'regress'
+    else if (nd === 0 || ga === 0) verdict = 'no_progress'
+    else if (sum >= 8 && es! >= 1 && twoCount >= 2) verdict = 'advance_confirmed'
+    else if (sum >= 5 && ga! >= 1 && nd! >= 1) verdict = 'advance_weak'
+    else verdict = 'no_progress'
+
+    return {
+      verdict,
+      valid: true,
+      normalizedScores
+    }
+  }
+
+  private collectNorthStarDeterministicTriggerCodes(input: {
+    claimQuality: NormalizedNorthStarClaimQuality
+    reasonCodes: string[]
+    northStarEvaluation: NorthStarEvaluation
+  }): string[] {
+    const triggers: string[] = []
+    if (input.claimQuality.claims_marked_verified_with_invalid_evidence > 0) {
+      triggers.push('claims_marked_verified_with_invalid_evidence')
+    }
+    if (input.claimQuality.invariant_violation) {
+      triggers.push('inconsistent_metrics')
+    }
+    if (input.northStarEvaluation.verifiedGrowthContentProofRequired && !input.northStarEvaluation.verifiedGrowthContentProofSatisfied) {
+      triggers.push('verified_growth_missing_content_delta_proof')
+    }
+    if (!input.northStarEvaluation.scoreboardMetricPathsValid) {
+      triggers.push('invalid_scoreboard_path')
+    }
+    if (input.reasonCodes.includes(NORTHSTAR_SEMANTIC_REASON_INVALID_CHANGE_PROOF_FLAGS)) {
+      triggers.push('invalid_change_proof_flags')
+    }
+    return dedupeStrings(triggers)
+  }
+
+  private normalizeNorthStarRequiredActionCode(value: string): string {
+    return normalizeText(value)
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+  }
+
+  private isNorthStarRequiredActionResolved(input: {
+    action: NorthStarSemanticGateRequiredAction
+    claimQuality: NormalizedNorthStarClaimQuality
+  }): boolean {
+    const code = this.normalizeNorthStarRequiredActionCode(input.action.code)
+    if (!code) return false
+    const hasAnyVerifiedClaim = (
+      input.claimQuality.claims_verified_with_valid_evidence > 0
+      || input.claimQuality.claims_marked_verified > 0
+    )
+    if (!hasAnyVerifiedClaim) return false
+    return (
+      code === 'verify_at_least_one_claim'
+      || code === 'add_verified_evidence'
+    )
+  }
+
+  private postProcessNorthStarRequiredActions(input: {
+    turnNumber: number
+    actions: NorthStarSemanticGateRequiredAction[]
+    existingOpenActions: NorthStarSemanticGateRequiredAction[]
+    deterministicTriggerCodes: string[]
+    claimQuality: NormalizedNorthStarClaimQuality
+    config: ResolvedNorthStarSemanticGateConfig
+    effectiveVerdict: NorthStarSemanticVerdict
+  }): {
+    mergedOpenActions: NorthStarSemanticGateRequiredAction[]
+    promotions: NorthStarSemanticActionPromotionAudit[]
+    blockingAction: NorthStarSemanticGateRequiredAction | null
+  } {
+    const promotions: NorthStarSemanticActionPromotionAudit[] = []
+    const budgeted = input.actions.slice(0, Math.max(0, input.config.requiredActionBudgetPerTurn))
+    const processed: NorthStarSemanticGateRequiredAction[] = budgeted.map((row) => {
+      const sourceTier = row.tier === 'must' ? 'must_candidate' : row.tier
+      const base: NorthStarSemanticGateRequiredAction = {
+        ...row,
+        source_tier: sourceTier,
+        due_turn: typeof row.due_turn === 'number' ? row.due_turn : (input.turnNumber + 1)
+      }
+      if (sourceTier !== 'must_candidate') {
+        promotions.push({
+          code: base.code,
+          source_tier: sourceTier,
+          final_tier: sourceTier === 'suggest' ? 'suggest' : 'should',
+          deterministic_trigger_codes: [],
+          notes: ['non_candidate_passthrough']
+        })
+        return {
+          ...base,
+          tier: sourceTier === 'suggest' ? 'suggest' : 'should'
+        }
+      }
+      if (input.deterministicTriggerCodes.length > 0) {
+        promotions.push({
+          code: base.code,
+          source_tier: 'must_candidate',
+          final_tier: 'must',
+          deterministic_trigger_codes: [...input.deterministicTriggerCodes],
+          notes: ['promoted_by_runtime_trigger']
+        })
+        return {
+          ...base,
+          tier: 'must',
+          promotion_trigger_codes: [...input.deterministicTriggerCodes]
+        }
+      }
+      promotions.push({
+        code: base.code,
+        source_tier: 'must_candidate',
+        final_tier: 'should',
+        deterministic_trigger_codes: [],
+        notes: ['demoted_without_runtime_trigger']
+      })
+      return {
+        ...base,
+        tier: 'should'
+      }
+    })
+
+    const mergedByCode = new Map<string, NorthStarSemanticGateRequiredAction>()
+    const pushAction = (action: NorthStarSemanticGateRequiredAction): void => {
+      const code = action.code.trim()
+      if (!code) return
+      const normalizedCode = this.normalizeNorthStarRequiredActionCode(code)
+      const key = normalizedCode || code
+      mergedByCode.set(key, {
+        ...action,
+        code
+      })
+    }
+    for (const existing of input.existingOpenActions) pushAction(existing)
+    for (const next of processed) pushAction(next)
+
+    const staleNonMustDueTurn = input.turnNumber - NORTHSTAR_NON_MUST_ACTION_OVERDUE_GRACE_TURNS
+    const unresolvedOpenActions = [...mergedByCode.values()]
+      .filter((action) => !this.isNorthStarRequiredActionResolved({
+        action,
+        claimQuality: input.claimQuality
+      }))
+      .filter((action) => {
+        if (action.tier === 'must') return true
+        if (typeof action.due_turn !== 'number') return true
+        return action.due_turn >= staleNonMustDueTurn
+      })
+
+    let mergedOpenActions = unresolvedOpenActions
+      .sort((a, b) => {
+        const tierRank = (tier: NorthStarSemanticGateRequiredAction['tier']): number => {
+          if (tier === 'must') return 0
+          if (tier === 'must_candidate') return 1
+          if (tier === 'should') return 2
+          return 3
+        }
+        if (tierRank(a.tier) !== tierRank(b.tier)) return tierRank(a.tier) - tierRank(b.tier)
+        const dueA = typeof a.due_turn === 'number' ? a.due_turn : Number.MAX_SAFE_INTEGER
+        const dueB = typeof b.due_turn === 'number' ? b.due_turn : Number.MAX_SAFE_INTEGER
+        if (dueA !== dueB) return dueA - dueB
+        return a.code.localeCompare(b.code)
+      })
+      .map((action) => ({ ...action }))
+
+    const mustActions = mergedOpenActions.filter((action) => action.tier === 'must')
+    if (mustActions.length > input.config.mustActionMaxOpen) {
+      const overflow = mustActions.slice(input.config.mustActionMaxOpen)
+      for (const row of overflow) {
+        const rowKey = this.normalizeNorthStarRequiredActionCode(row.code)
+        const match = mergedOpenActions.find((item) => this.normalizeNorthStarRequiredActionCode(item.code) === rowKey)
+        if (!match) continue
+        match.tier = 'should'
+        match.promotion_notes = dedupeStrings([...(match.promotion_notes ?? []), 'demoted_by_must_open_cap'])
+      }
+    }
+
+    const nonMustActions = mergedOpenActions.filter((action) => action.tier !== 'must')
+    if (nonMustActions.length > NORTHSTAR_NON_MUST_ACTION_MAX_OPEN) {
+      const keepNonMustCodes = new Set(
+        nonMustActions
+          .slice(0, NORTHSTAR_NON_MUST_ACTION_MAX_OPEN)
+          .map((action) => this.normalizeNorthStarRequiredActionCode(action.code))
+      )
+      mergedOpenActions = mergedOpenActions.filter((action) => (
+        action.tier === 'must'
+        || keepNonMustCodes.has(this.normalizeNorthStarRequiredActionCode(action.code))
+      ))
+    }
+
+    const blockingAction = mergedOpenActions.find((action) => (
+      action.tier === 'must'
+      && typeof action.due_turn === 'number'
+      && action.due_turn < input.turnNumber
+    )) ?? null
+
+    return {
+      mergedOpenActions,
+      promotions,
+      blockingAction
+    }
+  }
+
+  private async loadPreviousNorthStarSemanticOpenActions(beforeTurn: number): Promise<NorthStarSemanticGateRequiredAction[]> {
+    if (beforeTurn <= 1) return []
+    const resultPath = path.join(this.runsDir, formatTurnId(beforeTurn - 1), 'result.json')
+    if (!(await fileExists(resultPath))) return []
+    const raw = await readTextOrEmpty(resultPath)
+    if (!raw.trim()) return []
+
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      const semanticRow = toPlainObject(parsed.northstar_semantic_gate)
+      const open = Array.isArray(semanticRow?.open_required_actions)
+        ? semanticRow.open_required_actions
+        : []
+      return open
+        .map((item) => {
+          const row = toPlainObject(item)
+          const tierRaw = safeString(row?.tier).trim().toLowerCase()
+          const tier = (tierRaw === 'must' || tierRaw === 'should' || tierRaw === 'suggest')
+            ? tierRaw
+            : 'suggest'
+          const code = safeString(row?.code).trim()
+          const description = safeString(row?.description).trim()
+          if (!code || !description) return null
+          const dueTurn = typeof row?.due_turn === 'number' && Number.isFinite(row.due_turn)
+            ? Math.max(1, Math.floor(row.due_turn))
+            : undefined
+          return {
+            tier,
+            code,
+            description,
+            ...(typeof dueTurn === 'number' ? { due_turn: dueTurn } : {})
+          } as NorthStarSemanticGateRequiredAction
+        })
+        .filter((entry): entry is NorthStarSemanticGateRequiredAction => entry !== null)
+    } catch {
+      return []
+    }
+  }
+
+  private async loadNorthStarSemanticFeedbackForContext(beforeTurn: number): Promise<TurnContext['northStarSemantic']> {
+    if (beforeTurn <= 0) return undefined
+    const resultPath = path.join(this.runsDir, formatTurnId(beforeTurn), 'result.json')
+    if (!(await fileExists(resultPath))) return undefined
+    const raw = await readTextOrEmpty(resultPath)
+    if (!raw.trim()) return undefined
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      const semanticRow = toPlainObject(parsed.northstar_semantic_gate)
+      if (!semanticRow) return undefined
+      const lastVerdictRaw = safeString(semanticRow.effective_verdict).trim().toLowerCase()
+      const lastVerdict: TurnContext['northStarSemantic']['lastVerdict'] = (
+        lastVerdictRaw === 'advance_confirmed'
+        || lastVerdictRaw === 'advance_weak'
+        || lastVerdictRaw === 'no_progress'
+        || lastVerdictRaw === 'regress'
+        || lastVerdictRaw === 'abstain'
+      )
+        ? lastVerdictRaw
+        : 'none'
+      const derivedVerdictRaw = safeString(semanticRow.derived_verdict).trim().toLowerCase()
+      const derivedVerdict: TurnContext['northStarSemantic']['derivedVerdict'] = (
+        derivedVerdictRaw === 'advance_confirmed'
+        || derivedVerdictRaw === 'advance_weak'
+        || derivedVerdictRaw === 'no_progress'
+        || derivedVerdictRaw === 'regress'
+        || derivedVerdictRaw === 'abstain'
+      )
+        ? derivedVerdictRaw
+        : 'none'
+      const reasonCodes = Array.isArray(semanticRow.reason_codes)
+        ? dedupeStrings(semanticRow.reason_codes.map((value) => safeString(value).trim()).filter(Boolean))
+        : []
+      const claimAuditDebt = Array.isArray(semanticRow.claim_audit_debt)
+        ? dedupeStrings(semanticRow.claim_audit_debt.map((value) => safeString(value).trim()).filter(Boolean))
+        : []
+      const openActions = await this.loadPreviousNorthStarSemanticOpenActions(beforeTurn + 1)
+      return {
+        lastVerdict,
+        reasonCodes,
+        claimAuditDebt,
+        openRequiredActions: openActions,
+        derivedVerdict
+      }
+    } catch {
+      return undefined
+    }
   }
 
   private computePlanBoardFingerprint(project: TurnContext['project']): string {
@@ -4599,8 +8295,16 @@ export class YoloSession {
   private async detectPlannerCheckpoint(
     project: TurnContext['project'],
     _failures: FailureEntry[],
-    nextTurnNumber: number
+    nextTurnNumber: number,
+    orchestrationMode: ResolvedOrchestrationMode
   ): Promise<PlannerCheckpointInfo> {
+    if (isArtifactGravityMode(orchestrationMode)) {
+      return {
+        due: false,
+        reasons: []
+      }
+    }
+
     const reasons: string[] = []
     const recentResults = await this.loadRecentTurnResultMetadata(24)
     const currentPlanBoardHash = this.computePlanBoardFingerprint(project)
@@ -5118,6 +8822,7 @@ export class YoloSession {
     intent: string
     status: TurnStatus
     primaryAction: string
+    orchestrationMode: ResolvedOrchestrationMode
     activePlanId?: string
     statusChange?: string
     delta?: string
@@ -5129,6 +8834,19 @@ export class YoloSession {
     const updateLines = input.updateSummary.length > 0
       ? input.updateSummary.map((line) => `- ${line}`)
       : ['- Next: continue with native tool execution.']
+    const progressSection = isArtifactGravityMode(input.orchestrationMode)
+      ? [
+        '## NorthStar Delta',
+        `- delta: ${input.delta || '(none)'}`,
+        '- plan_binding: disabled_in_v3'
+      ]
+      : [
+        '## Plan Delta',
+        `- active_plan_id: ${input.activePlanId || '(missing)'}`,
+        `- status_change: ${input.statusChange || '(none)'}`,
+        `- delta: ${input.delta || '(none)'}`,
+        `- plan_evidence: ${input.planEvidencePaths.length > 0 ? input.planEvidencePaths.join(', ') : '(none)'}`
+      ]
 
     return [
       `# Turn ${formatTurnId(input.turnNumber)}`,
@@ -5141,11 +8859,7 @@ export class YoloSession {
       '- Tool: Agent',
       `- Command or target: ${input.primaryAction || 'agent.run'}`,
       '',
-      '## Plan Delta',
-      `- active_plan_id: ${input.activePlanId || '(missing)'}`,
-      `- status_change: ${input.statusChange || '(none)'}`,
-      `- delta: ${input.delta || '(none)'}`,
-      `- plan_evidence: ${input.planEvidencePaths.length > 0 ? input.planEvidencePaths.join(', ') : '(none)'}`,
+      ...progressSection,
       '',
       '## Result',
       `- Status: ${input.status}`,

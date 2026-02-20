@@ -6,7 +6,6 @@ interface ControlPanelProps {
   overview: DesktopOverview | null
   goalDraft: string
   setGoalDraft: (v: string) => void
-  currentPlan: string[]
   modelDraft: string
   setModelDraft: (v: string) => void
   runtimeDraft: RuntimeKind
@@ -60,7 +59,6 @@ export default function ControlPanel({
   overview,
   goalDraft,
   setGoalDraft,
-  currentPlan,
   modelDraft,
   setModelDraft,
   runtimeDraft,
@@ -114,39 +112,48 @@ export default function ControlPanel({
             </div>
           )}
 
-          <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
-            <label className="t-text-muted mb-1.5 block text-[10px] font-semibold uppercase tracking-wider">Current Plan</label>
-            {currentPlan.length === 0 ? (
-              <div className="t-text-muted text-[11px]">No plan yet.</div>
-            ) : (
-              <div className="max-h-36 overflow-auto pr-1">
-                <ol className="t-text-secondary space-y-1 text-[11px]">
-                  {currentPlan.map((item, idx) => (
-                    <li key={`${idx}-${item}`} className="leading-relaxed">
-                      {idx + 1}. {item}
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            )}
-          </div>
-
           {overview?.progressHealth && (
             <div className="t-bg-elevated t-border-subtle rounded-lg border p-3">
               <label className="t-text-muted mb-1.5 block text-[10px] font-semibold uppercase tracking-wider">Progress Health (Last {overview.progressHealth.windowTurns})</label>
+              <div className="t-text-muted mb-2 text-[10px]">
+                mode: {overview.progressHealth.orchestrationMode}
+              </div>
               <div className="grid grid-cols-3 gap-2 text-[10px]">
                 <div className="t-bg-surface rounded-md px-2 py-1.5">
                   <div className="t-text-muted">Success</div>
                   <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.successRate)}</div>
                 </div>
                 <div className="t-bg-surface rounded-md px-2 py-1.5">
-                  <div className="t-text-muted">Deliverable Touch</div>
-                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.deliverableTouchRate)}</div>
+                  <div className="t-text-muted">NorthStar Gate</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.northstarGateRate)}</div>
                 </div>
                 <div className="t-bg-surface rounded-md px-2 py-1.5">
-                  <div className="t-text-muted">Fallback Attr.</div>
-                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.fallbackAttributionRate)}</div>
+                  <div className="t-text-muted">Scoreboard Improved</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.northstarScoreboardImprovedRate)}</div>
                 </div>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+                <div className="t-bg-surface rounded-md px-2 py-1.5">
+                  <div className="t-text-muted">Proof Required</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.northstarVerifiedGrowthProofRequiredRate)}</div>
+                </div>
+                <div className="t-bg-surface rounded-md px-2 py-1.5">
+                  <div className="t-text-muted">Proof Pass</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.northstarVerifiedGrowthProofPassRate)}</div>
+                </div>
+                <div className="t-bg-surface rounded-md px-2 py-1.5">
+                  <div className="t-text-muted">Verify Success</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.northstarVerifySuccessRate)}</div>
+                </div>
+              </div>
+              <div className="mt-2 grid grid-cols-1 gap-2 text-[10px]">
+                <div className="t-bg-surface rounded-md px-2 py-1.5">
+                  <div className="t-text-muted">Artifact Changed</div>
+                  <div className="t-text mt-0.5 text-[11px] font-semibold">{formatRatio(overview.progressHealth.northstarArtifactChangeRate)}</div>
+                </div>
+              </div>
+              <div className="t-text-muted mt-1 text-[10px]">
+                gate uses `northstar.scoreboard_*`; top-level `claims_total` is PROJECT display only.
               </div>
               <div className="mt-2 text-[10px]">
                 <div className="t-text-muted mb-1">No-Delta Top Reasons</div>

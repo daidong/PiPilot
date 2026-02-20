@@ -33,6 +33,45 @@ function dedupeStrings(values: string[]): string[] {
   return result
 }
 
+function isNorthStarVerifyEvidencePath(rawPath: string): boolean {
+  const normalized = rawPath.trim().replace(/\\/g, '/').toLowerCase()
+  if (!normalized) return false
+  const base = normalized.split('/').pop() || normalized
+  return (
+    /^northstar[._-]?verify([._-].+)?\.(txt|log|md|json)$/i.test(base)
+    || normalized.includes('/northstar.verify.')
+    || normalized.includes('/northstar-verify.')
+  )
+}
+
+function hasWorkspaceDeltaOutsideRuns(session: any, paths: string[]): boolean {
+  if (!Array.isArray(paths) || paths.length === 0) return false
+  return paths.some((entry) => {
+    const normalized = session.normalizeProjectPathPointer(String(entry || ''))
+    return Boolean(normalized) && !normalized.startsWith('runs/')
+  })
+}
+
+function isArtifactGravityMode(mode: string): boolean {
+  return mode === 'artifact_gravity_v3_paper'
+}
+
+function isPaperMode(mode: string): boolean {
+  return mode === 'artifact_gravity_v3_paper'
+}
+
+type NorthStarSemanticVerdict = 'advance_confirmed' | 'advance_weak' | 'no_progress' | 'regress' | 'abstain'
+
+function isNorthStarSemanticVerdict(value: string): value is NorthStarSemanticVerdict {
+  return (
+    value === 'advance_confirmed'
+    || value === 'advance_weak'
+    || value === 'no_progress'
+    || value === 'regress'
+    || value === 'abstain'
+  )
+}
+
 export function buildNativeTurnFilePaths(input: { turnDir: string, artifactsDir: string }) {
   return {
     cmdPath: path.join(input.turnDir, 'cmd.txt'),
@@ -198,6 +237,7 @@ export async function applyOutcomeProjectUpdate(session: any, input: {
 export async function applyNativeTurnPlanDeltas(
   session: any,
   input: {
+    orchestrationMode: 'artifact_gravity_v3_paper'
     activePlanId: string
     statusChange: string
     deltaText: string
@@ -228,6 +268,20 @@ export async function applyNativeTurnPlanDeltas(
   let planDeltaWarning = ''
   const coPlanStatusChanges: string[] = []
   const coPlanWarnings: string[] = []
+  const planGateEnforced = !isArtifactGravityMode(input.orchestrationMode)
+
+  // In pure v3 artifact-gravity mode, plan board is background only.
+  if (!planGateEnforced) {
+    return {
+      turnStatus,
+      summary,
+      blockedReason,
+      planDeltaApplied: false,
+      planDeltaWarning: '',
+      coPlanStatusChanges: [],
+      coPlanWarnings: []
+    }
+  }
 
   if (input.activePlanId) {
     const planDelta = await session.projectStore.applyTurnPlanDelta({
@@ -242,14 +296,14 @@ export async function applyNativeTurnPlanDeltas(
     })
     planDeltaApplied = planDelta.applied
     planDeltaWarning = planDelta.warning?.trim() || ''
-    if (!planDeltaApplied && turnStatus === 'success') {
+    if (!planDeltaApplied && turnStatus === 'success' && planGateEnforced) {
       turnStatus = 'no_delta'
       blockedReason = blockedReason || 'plan_delta_not_applied'
       summary = `NO_DELTA: ${planDeltaWarning || 'plan delta not applied'}. ${summary}`
     }
   }
 
-  if (turnStatus === 'success' && planDeltaApplied && input.coTouchedPlanIds.length > 0) {
+  if (planGateEnforced && turnStatus === 'success' && planDeltaApplied && input.coTouchedPlanIds.length > 0) {
     for (const coPlanId of input.coTouchedPlanIds) {
       const coPlanItem = session.resolveProjectedPlanItem(
         coPlanId,
@@ -325,54 +379,124 @@ export async function applyNativeTurnProjectMutations(session: any, input: any):
   let summary = input.summary
   let blockedReason = input.blockedReason
   const plannerCheckpointRejections: string[] = []
+  const artifactGravityMode = isArtifactGravityMode(input.orchestrationMode)
+  let sanitizedOutcomeProjectUpdate = input.outcomeProjectUpdate
 
   const updateSummaryLines = [
     ...input.preflightNotes.map((line: string) => line.trim()).filter(Boolean),
     ...input.outcomeUpdateSummary.map((line: string) => line.trim()).filter(Boolean)
   ]
-  if (!input.plannerCheckpointDue && input.outcomeProjectUpdate) {
-    if (Array.isArray(input.outcomeProjectUpdate.planBoard)) {
+  if (artifactGravityMode && sanitizedOutcomeProjectUpdate) {
+    const nextUpdate: Record<string, unknown> = { ...sanitizedOutcomeProjectUpdate }
+    const rejectedFields: string[] = []
+    if (Array.isArray(nextUpdate.planBoard)) {
+      delete nextUpdate.planBoard
+      rejectedFields.push('planBoard')
+    }
+    if (Array.isArray(nextUpdate.currentPlan)) {
+      delete nextUpdate.currentPlan
+      rejectedFields.push('currentPlan')
+    }
+    if (rejectedFields.length > 0) {
+      plannerCheckpointRejections.push('v3_plan_fields_ignored')
+      updateSummaryLines.push(`V3 guard: ignored model projectUpdate fields (${rejectedFields.join(', ')}).`)
+    }
+    sanitizedOutcomeProjectUpdate = Object.keys(nextUpdate).length > 0
+      ? nextUpdate as ProjectUpdate
+      : undefined
+  } else if (!input.plannerCheckpointDue && sanitizedOutcomeProjectUpdate) {
+    if (Array.isArray(sanitizedOutcomeProjectUpdate.planBoard)) {
       plannerCheckpointRejections.push('plan_board_update_outside_checkpoint')
     }
-    if (Array.isArray(input.outcomeProjectUpdate.currentPlan)) {
+    if (Array.isArray(sanitizedOutcomeProjectUpdate.currentPlan)) {
       plannerCheckpointRejections.push('current_plan_rewrite_outside_checkpoint')
     }
     if (plannerCheckpointRejections.length > 0) {
       updateSummaryLines.push(`Planner checkpoint guard rejected: ${plannerCheckpointRejections.join(', ')}`)
     }
   }
-  if (input.planAttribution.reason) {
-    updateSummaryLines.push(`Plan attribution: ${input.planAttribution.reason}${input.activePlanId ? ` -> ${input.activePlanId}` : ''}`)
-  }
-  if (input.coTouchedPlanIds.length > 0) {
-    updateSummaryLines.push(`Plan co-touch: ${input.coTouchedPlanIds.join(', ')}`)
-  }
-  if (input.coTouchedDeliverablePlanIds.length > 0) {
-    updateSummaryLines.push(`Plan co-touch deliverable hit: ${input.coTouchedDeliverablePlanIds.join(', ')}`)
-  }
-  if (!input.doneDefinitionCheck.ok && input.coTouchedDeliverablePlanIds.length > 0) {
-    updateSummaryLines.push(`Primary plan gate bypassed via co-touch deliverable accounting (${input.doneDefinitionCheck.reason}).`)
-  }
-  if (input.microCheckpointApplied && input.activePlanId && input.microCheckpointDeliverable) {
-    updateSummaryLines.push(`Micro-checkpoint: aligned ${input.activePlanId} deliverable -> ${input.microCheckpointDeliverable}`)
+  if (!artifactGravityMode) {
+    if (input.planAttribution.reason) {
+      updateSummaryLines.push(`Plan attribution: ${input.planAttribution.reason}${input.activePlanId ? ` -> ${input.activePlanId}` : ''}`)
+    }
+    if (input.coTouchedPlanIds.length > 0) {
+      updateSummaryLines.push(`Plan co-touch: ${input.coTouchedPlanIds.join(', ')}`)
+    }
+    if (input.coTouchedDeliverablePlanIds.length > 0) {
+      updateSummaryLines.push(`Plan co-touch deliverable hit: ${input.coTouchedDeliverablePlanIds.join(', ')}`)
+    }
+    if (!input.doneDefinitionCheck.ok && input.coTouchedDeliverablePlanIds.length > 0) {
+      updateSummaryLines.push(`Primary plan gate bypassed via co-touch deliverable accounting (${input.doneDefinitionCheck.reason}).`)
+    }
+    if (input.microCheckpointApplied && input.activePlanId && input.microCheckpointDeliverable) {
+      updateSummaryLines.push(`Micro-checkpoint: aligned ${input.activePlanId} deliverable -> ${input.microCheckpointDeliverable}`)
+    }
   }
   if (input.missingOutcomeEvidencePaths.length > 0) {
     const preview = input.missingOutcomeEvidencePaths[0]
     updateSummaryLines.push(`Ignored ${input.missingOutcomeEvidencePaths.length} missing outcome evidence path(s); first=${preview}`)
   }
-  if (input.semanticGateAudit.invoked) {
-    const semanticState = input.semanticGateAudit.accepted
-      ? 'accepted'
-      : (input.semanticGateAudit.reject_reason || 'rejected')
-    updateSummaryLines.push(`Semantic gate (${input.semanticGateAudit.mode}): ${semanticState}`)
+  if (input.northStarSemanticGateAudit?.enabled) {
+    const semanticState = input.northStarSemanticGateAudit.invoked
+      ? (input.northStarSemanticGateAudit.effective_verdict || input.northStarSemanticGateAudit.derived_verdict || 'invoked')
+      : (input.northStarSemanticGateAudit.reject_reason || 'not_invoked')
+    updateSummaryLines.push(`NorthStar semantic gate (${input.northStarSemanticGateAudit.mode}): ${semanticState}`)
   }
   if (input.codingAgentSessionObservation.observed && input.codingAgentSessionObservation.hasRunningOnly) {
     const stateLabel = input.codingAgentSessionObservation.warmupLikely ? 'warmup' : 'running'
     updateSummaryLines.push(`Coding-agent session: ${stateLabel} (polls=${input.codingAgentSessionObservation.pollCount}).`)
   }
+  if (artifactGravityMode) {
+    const northStarStatus = input.northStarEvaluation?.gateSatisfied
+      ? 'satisfied'
+      : (input.northStarEvaluation?.reason || 'unsatisfied')
+    updateSummaryLines.push(`NorthStar gate: ${northStarStatus}`)
+    if (typeof input.northStarEvaluation?.realityCheckExecutedCount === 'number') {
+      updateSummaryLines.push(
+        `RealityCheck: executed=${input.northStarEvaluation.realityCheckExecutedCount},`
+        + ` passed=${input.northStarEvaluation.realityCheckSucceededCount || 0},`
+        + ` gate=${input.northStarEvaluation.realityCheckGateSatisfied ? 'pass' : 'fail'}`
+      )
+    }
+    if (typeof input.northStarEvaluation?.externalCheckExecutedCount === 'number') {
+      updateSummaryLines.push(
+        `ExternalCheck: executed=${input.northStarEvaluation.externalCheckExecutedCount},`
+        + ` passed=${input.northStarEvaluation.externalCheckSucceededCount || 0},`
+        + ` due=${input.northStarEvaluation.externalCheckDueThisTurn ? 'yes' : 'no'},`
+        + ` quota=${input.northStarEvaluation.externalCheckQuotaSatisfied ? 'pass' : 'fail'}`
+      )
+    }
+    if (typeof input.northStarEvaluation?.scoreboardReady === 'boolean') {
+      updateSummaryLines.push(
+        `Scoreboard: ready=${input.northStarEvaluation.scoreboardReady ? 'yes' : 'no'},`
+        + ` improved=${input.northStarEvaluation.scoreboardImproved ? 'yes' : 'no'},`
+        + ` regressed=${input.northStarEvaluation.scoreboardRegressed ? 'yes' : 'no'}`
+      )
+    }
+    if (input.northStarEvaluation?.verifiedGrowthContentProofRequired) {
+      updateSummaryLines.push(
+        `VerifiedGrowthProof: required=yes,`
+        + ` delta=${input.northStarEvaluation.verifiedGrowthTotalDelta || 0},`
+        + ` matched=${input.northStarEvaluation.verifiedGrowthMatchedDelta || 0},`
+        + ` satisfied=${input.northStarEvaluation.verifiedGrowthContentProofSatisfied ? 'yes' : 'no'}`
+      )
+    }
+    if (Array.isArray(input.northStarEvaluation?.policyViolations) && input.northStarEvaluation.policyViolations.length > 0) {
+      updateSummaryLines.push(`NorthStar policy violations: ${input.northStarEvaluation.policyViolations.join(', ')}`)
+    }
+    if (input.northStarEvaluation?.pivotRollbackApplied) {
+      updateSummaryLines.push(`NorthStar pivot rollback applied (${input.northStarEvaluation.pivotRollbackViolation || 'policy_violation'}).`)
+    }
+    if (input.northStarEvaluation?.pivotAllowed) {
+      updateSummaryLines.push(
+        `NorthStar pivot allowed: no_delta_streak=${input.northStarEvaluation.noDeltaStreak}`
+        + `, realitycheck_no_exec_streak=${input.northStarEvaluation.realityCheckNoExecStreak || 0}`
+      )
+    }
+  }
 
   let projectUpdated = await applyOutcomeProjectUpdate(session, {
-    projectUpdate: input.outcomeProjectUpdate,
+    projectUpdate: sanitizedOutcomeProjectUpdate,
     plannerCheckpointDue: input.plannerCheckpointDue,
     evidenceRefMap: input.evidenceRefMap,
     fallbackEvidencePath: session.toEvidencePath(input.resultPath),
@@ -381,7 +505,7 @@ export async function applyNativeTurnProjectMutations(session: any, input: any):
     updateSummaryLines
   })
 
-  if (input.microCheckpointApplied && input.activePlanId && input.projectedPlanItem) {
+  if (!artifactGravityMode && input.microCheckpointApplied && input.activePlanId && input.projectedPlanItem) {
     try {
       await session.projectStore.applyUpdate({
         planBoard: [{
@@ -404,6 +528,7 @@ export async function applyNativeTurnProjectMutations(session: any, input: any):
   }
 
   const planDeltaResult = await applyNativeTurnPlanDeltas(session, {
+    orchestrationMode: input.orchestrationMode,
     activePlanId: input.activePlanId,
     statusChange: input.statusChange,
     deltaText: input.deltaText,
@@ -465,16 +590,18 @@ export async function applyNativeTurnProjectMutations(session: any, input: any):
     const panel = await session.projectStore.load()
     persistedProject = panel
     updateSummaryLines.push(`PROJECT.md: plan=${panel.currentPlan.length}, facts=${panel.facts.length}, artifacts=${panel.keyArtifacts.length}`)
-    if (planDeltaResult.planDeltaApplied) {
-      updateSummaryLines.push(`Plan Board: updated ${input.activePlanId} (${input.statusChange || finalStatus}).`)
-    } else if (input.activePlanId && planDeltaResult.planDeltaWarning) {
-      updateSummaryLines.push(`Plan Board warning: ${planDeltaResult.planDeltaWarning}`)
-    }
-    if (planDeltaResult.coPlanStatusChanges.length > 0) {
-      updateSummaryLines.push(`Plan Board: co-updated ${planDeltaResult.coPlanStatusChanges.join('; ')}`)
-    }
-    if (planDeltaResult.coPlanWarnings.length > 0) {
-      updateSummaryLines.push(`Plan Board co-update warning: ${planDeltaResult.coPlanWarnings[0]}`)
+    if (!artifactGravityMode) {
+      if (planDeltaResult.planDeltaApplied) {
+        updateSummaryLines.push(`Plan Board: updated ${input.activePlanId} (${input.statusChange || finalStatus}).`)
+      } else if (input.activePlanId && planDeltaResult.planDeltaWarning) {
+        updateSummaryLines.push(`Plan Board warning: ${planDeltaResult.planDeltaWarning}`)
+      }
+      if (planDeltaResult.coPlanStatusChanges.length > 0) {
+        updateSummaryLines.push(`Plan Board: co-updated ${planDeltaResult.coPlanStatusChanges.join('; ')}`)
+      }
+      if (planDeltaResult.coPlanWarnings.length > 0) {
+        updateSummaryLines.push(`Plan Board co-update warning: ${planDeltaResult.coPlanWarnings[0]}`)
+      }
     }
   }
 
@@ -520,6 +647,7 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
   resultPayload: Record<string, unknown>
   stageStatus: any
 }> {
+  const artifactGravityMode = isArtifactGravityMode(input.orchestrationMode)
   const producedDeliverables = await session.findProducedDeliverables()
   const stageStatus = session.inferStage(producedDeliverables)
 
@@ -531,7 +659,9 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
     }
     : {}
   const goalConstraintsFingerprint = session.computeGoalConstraintsFingerprint(input.persistedProject)
-  const planBoardHash = session.computePlanBoardFingerprint(input.persistedProject)
+  const planBoardHash = artifactGravityMode
+    ? null
+    : session.computePlanBoardFingerprint(input.persistedProject)
   const runtimeVersion = await session.resolveRuntimeVersionInfo()
 
   return {
@@ -541,12 +671,12 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
       intent: input.intent,
       summary: input.summary,
       primary_action: input.primaryAction,
-      active_plan_id: input.activePlanId || null,
-      status_change: input.statusChange || null,
+      active_plan_id: artifactGravityMode ? null : (input.activePlanId || null),
+      status_change: artifactGravityMode ? null : (input.statusChange || null),
       delta: input.deltaText || null,
       evidence_paths: input.uniqueEvidencePaths,
       evidence_refs: input.evidenceRefMap,
-      plan_evidence_paths: input.planEvidencePaths,
+      plan_evidence_paths: artifactGravityMode ? [] : input.planEvidencePaths,
       action_fingerprint: input.actionFingerprint,
       action_type: input.actionType,
       exit_code: input.exitCode,
@@ -565,8 +695,8 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
       delta_reasons: input.deltaReasons,
       governance_only_turn: input.governanceOnlyTurn,
       stage_status: stageStatus,
-      planner_checkpoint_due: input.plannerCheckpoint?.due ?? false,
-      planner_checkpoint_reasons: input.plannerCheckpoint?.reasons ?? [],
+      planner_checkpoint_due: artifactGravityMode ? false : (input.plannerCheckpoint?.due ?? false),
+      planner_checkpoint_reasons: artifactGravityMode ? [] : (input.plannerCheckpoint?.reasons ?? []),
       planner_checkpoint_rejections: input.plannerCheckpointRejections ?? [],
       plan_board_hash: planBoardHash,
       runtime_version: runtimeVersion,
@@ -574,6 +704,188 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
         require_repo_target: Boolean(input.requireRepoTarget)
       },
       artifact_uri_preferred: Boolean(input.artifactUriPreferred),
+      orchestration_mode: input.orchestrationMode || 'artifact_gravity_v3_paper',
+      northstar: {
+        enabled: Boolean(input.northStarEvaluation?.enabled),
+        objective_id: input.northStarEvaluation?.objectiveId || null,
+        objective_version: Number(input.northStarEvaluation?.objectiveVersion || 1),
+        contract_path: input.northStarEvaluation?.contractPath || null,
+        artifact_gate: input.northStarEvaluation?.artifactGate || 'any',
+        artifact_paths: Array.isArray(input.northStarEvaluation?.artifactPaths)
+          ? input.northStarEvaluation.artifactPaths
+          : [],
+        internal_check_gate: input.northStarEvaluation?.internalCheckGate || 'any',
+        internal_check_commands: Array.isArray(input.northStarEvaluation?.internalCheckCommands)
+          ? input.northStarEvaluation.internalCheckCommands
+          : [],
+        internal_check_executed_commands: Array.isArray(input.northStarEvaluation?.internalCheckExecutedCommands)
+          ? input.northStarEvaluation.internalCheckExecutedCommands
+          : [],
+        internal_check_succeeded_commands: Array.isArray(input.northStarEvaluation?.internalCheckSucceededCommands)
+          ? input.northStarEvaluation.internalCheckSucceededCommands
+          : [],
+        internal_check_executed_count: Number(input.northStarEvaluation?.internalCheckExecutedCount || 0),
+        internal_check_succeeded_count: Number(input.northStarEvaluation?.internalCheckSucceededCount || 0),
+        internal_check_gate_satisfied: Boolean(input.northStarEvaluation?.internalCheckGateSatisfied),
+        external_check_gate: input.northStarEvaluation?.externalCheckGate || 'any',
+        external_check_commands: Array.isArray(input.northStarEvaluation?.externalCheckCommands)
+          ? input.northStarEvaluation.externalCheckCommands
+          : [],
+        external_check_executed_commands: Array.isArray(input.northStarEvaluation?.externalCheckExecutedCommands)
+          ? input.northStarEvaluation.externalCheckExecutedCommands
+          : [],
+        external_check_succeeded_commands: Array.isArray(input.northStarEvaluation?.externalCheckSucceededCommands)
+          ? input.northStarEvaluation.externalCheckSucceededCommands
+          : [],
+        external_check_executed_count: Number(input.northStarEvaluation?.externalCheckExecutedCount || 0),
+        external_check_succeeded_count: Number(input.northStarEvaluation?.externalCheckSucceededCount || 0),
+        external_check_gate_satisfied: Boolean(input.northStarEvaluation?.externalCheckGateSatisfied),
+        external_check_credit_granted: Boolean(input.northStarEvaluation?.externalCheckCreditGranted),
+        external_check_candidate_artifact_paths: Array.isArray(input.northStarEvaluation?.externalCheckCandidateArtifactPaths)
+          ? input.northStarEvaluation.externalCheckCandidateArtifactPaths
+          : [],
+        external_check_meaningful_artifact_paths: Array.isArray(input.northStarEvaluation?.externalCheckMeaningfulArtifactPaths)
+          ? input.northStarEvaluation.externalCheckMeaningfulArtifactPaths
+          : [],
+        external_check_meaningful_artifact_count: Number(input.northStarEvaluation?.externalCheckMeaningfulArtifactPaths?.length || 0),
+        external_check_volatile_only_artifact_paths: Array.isArray(input.northStarEvaluation?.externalCheckVolatileOnlyArtifactPaths)
+          ? input.northStarEvaluation.externalCheckVolatileOnlyArtifactPaths
+          : [],
+        external_check_unchanged_artifact_paths: Array.isArray(input.northStarEvaluation?.externalCheckUnchangedArtifactPaths)
+          ? input.northStarEvaluation.externalCheckUnchangedArtifactPaths
+          : [],
+        external_check_require_every: Number(input.northStarEvaluation?.externalCheckRequireEvery || 0),
+        external_check_due_this_turn: Boolean(input.northStarEvaluation?.externalCheckDueThisTurn),
+        external_check_quota_satisfied: Boolean(input.northStarEvaluation?.externalCheckQuotaSatisfied),
+        external_check_no_success_streak: Number(input.northStarEvaluation?.externalCheckNoSuccessStreak || 0),
+        scoreboard_metric_paths: Array.isArray(input.northStarEvaluation?.scoreboardMetricPaths)
+          ? input.northStarEvaluation.scoreboardMetricPaths
+          : [],
+        scoreboard_metric_paths_valid: Boolean(input.northStarEvaluation?.scoreboardMetricPathsValid),
+        scoreboard_values: input.northStarEvaluation?.scoreboardValues || {},
+        scoreboard_previous_values: input.northStarEvaluation?.scoreboardPreviousValues || {},
+        scoreboard_ready: Boolean(input.northStarEvaluation?.scoreboardReady),
+        scoreboard_improved: Boolean(input.northStarEvaluation?.scoreboardImproved),
+        scoreboard_regressed: Boolean(input.northStarEvaluation?.scoreboardRegressed),
+        scoreboard_changed_keys: Array.isArray(input.northStarEvaluation?.scoreboardChangedKeys)
+          ? input.northStarEvaluation.scoreboardChangedKeys
+          : [],
+        scoreboard_improved_keys: Array.isArray(input.northStarEvaluation?.scoreboardImprovedKeys)
+          ? input.northStarEvaluation.scoreboardImprovedKeys
+          : [],
+        scoreboard_regressed_keys: Array.isArray(input.northStarEvaluation?.scoreboardRegressedKeys)
+          ? input.northStarEvaluation.scoreboardRegressedKeys
+          : [],
+        verified_growth_keys: Array.isArray(input.northStarEvaluation?.verifiedGrowthKeys)
+          ? input.northStarEvaluation.verifiedGrowthKeys
+          : [],
+        verified_growth_total_delta: Number(input.northStarEvaluation?.verifiedGrowthTotalDelta || 0),
+        verified_growth_content_proof_required: Boolean(input.northStarEvaluation?.verifiedGrowthContentProofRequired),
+        verified_growth_content_proof_satisfied: Boolean(input.northStarEvaluation?.verifiedGrowthContentProofSatisfied),
+        verified_growth_content_proof_paths: Array.isArray(input.northStarEvaluation?.verifiedGrowthContentProofPaths)
+          ? input.northStarEvaluation.verifiedGrowthContentProofPaths
+          : [],
+        verified_growth_matched_delta: Number(input.northStarEvaluation?.verifiedGrowthMatchedDelta || 0),
+        verified_growth_missing_proof_reason: input.northStarEvaluation?.verifiedGrowthMissingProofReason || null,
+        content_delta_proofs: Array.isArray(input.northStarEvaluation?.contentDeltaProofs)
+          ? input.northStarEvaluation.contentDeltaProofs.map((proof: any) => ({
+            path: proof.path,
+            before_hash: proof.beforeHash || '',
+            after_hash: proof.afterHash || '',
+            before_semantic_hash: proof.beforeSemanticHash || '',
+            after_semantic_hash: proof.afterSemanticHash || '',
+            before_stable_semantic_hash: proof.beforeStableSemanticHash || '',
+            after_stable_semantic_hash: proof.afterStableSemanticHash || '',
+            before_content_kind: proof.beforeContentKind || 'missing',
+            after_content_kind: proof.afterContentKind || 'missing',
+            structured_diff: {
+              significant_bytes_delta: Number(proof?.structuredDiff?.significantBytesDelta || 0),
+              line_count_delta: Number(proof?.structuredDiff?.lineCountDelta || 0),
+              non_empty_line_delta: Number(proof?.structuredDiff?.nonEmptyLineDelta || 0),
+              csv_row_delta: Number(proof?.structuredDiff?.csvRowDelta || 0),
+              csv_column_delta: Number(proof?.structuredDiff?.csvColumnDelta || 0),
+              claims_status_delta: (proof?.structuredDiff?.claimsStatusDelta && typeof proof.structuredDiff.claimsStatusDelta === 'object')
+                ? proof.structuredDiff.claimsStatusDelta
+                : {},
+              claims_status_column_present: Boolean(proof?.structuredDiff?.claimsStatusColumnPresent),
+              changed_fields: Array.isArray(proof?.structuredDiff?.changedFields)
+                ? proof.structuredDiff.changedFields
+                : []
+            }
+          }))
+          : [],
+        reality_check_gate: input.northStarEvaluation?.realityCheckGate || 'any',
+        reality_check_commands: Array.isArray(input.northStarEvaluation?.realityCheckCommands)
+          ? input.northStarEvaluation.realityCheckCommands
+          : [],
+        reality_check_executed_commands: Array.isArray(input.northStarEvaluation?.realityCheckExecutedCommands)
+          ? input.northStarEvaluation.realityCheckExecutedCommands
+          : [],
+        reality_check_succeeded_commands: Array.isArray(input.northStarEvaluation?.realityCheckSucceededCommands)
+          ? input.northStarEvaluation.realityCheckSucceededCommands
+          : [],
+        reality_check_executed_count: Number(input.northStarEvaluation?.realityCheckExecutedCount || 0),
+        reality_check_succeeded_count: Number(input.northStarEvaluation?.realityCheckSucceededCount || 0),
+        reality_check_gate_satisfied: Boolean(input.northStarEvaluation?.realityCheckGateSatisfied),
+        previous_gate_satisfied: typeof input.northStarEvaluation?.previousGateSatisfied === 'boolean'
+          ? input.northStarEvaluation.previousGateSatisfied
+          : null,
+        reality_check_no_exec_streak: Number(input.northStarEvaluation?.realityCheckNoExecStreak || 0),
+        anti_churn_triggered: Boolean(input.northStarEvaluation?.antiChurnTriggered),
+        artifact_changed: Boolean(input.northStarEvaluation?.artifactChanged),
+        changed_artifacts: Array.isArray(input.northStarEvaluation?.changedArtifacts)
+          ? input.northStarEvaluation.changedArtifacts
+          : [],
+        verify_cmd: input.northStarEvaluation?.verifyCmd || null,
+        verify_executed: Boolean(input.northStarEvaluation?.verifyExecuted),
+        verify_succeeded: Boolean(input.northStarEvaluation?.verifySucceeded),
+        gate_satisfied: Boolean(input.northStarEvaluation?.gateSatisfied),
+        reason: input.northStarEvaluation?.reason || null,
+        policy_violations: Array.isArray(input.northStarEvaluation?.policyViolations)
+          ? input.northStarEvaluation.policyViolations
+          : [],
+        no_delta_streak: Number(input.northStarEvaluation?.noDeltaStreak || 0),
+        pivot_allowed: Boolean(input.northStarEvaluation?.pivotAllowed),
+        pivot_rollback_applied: Boolean(input.northStarEvaluation?.pivotRollbackApplied),
+        pivot_rollback_violation: input.northStarEvaluation?.pivotRollbackViolation || null
+      },
+      northstar_semantic_gate: {
+        enabled: Boolean(input.northStarSemanticGateAudit?.enabled),
+        mode: input.northStarSemanticGateAudit?.mode || 'off',
+        eligible: Boolean(input.northStarSemanticGateAudit?.eligible),
+        invoked: Boolean(input.northStarSemanticGateAudit?.invoked),
+        prompt_version: input.northStarSemanticGateAudit?.prompt_version || '',
+        model_id: input.northStarSemanticGateAudit?.model_id || '',
+        temperature: Number(input.northStarSemanticGateAudit?.temperature ?? 0),
+        input_hash: input.northStarSemanticGateAudit?.input_hash || '',
+        output: input.northStarSemanticGateAudit?.output ?? null,
+        accepted: Boolean(input.northStarSemanticGateAudit?.accepted),
+        derived_verdict: input.northStarSemanticGateAudit?.derived_verdict || null,
+        effective_verdict: input.northStarSemanticGateAudit?.effective_verdict || null,
+        reason_codes: Array.isArray(input.northStarSemanticGateAudit?.reason_codes)
+          ? input.northStarSemanticGateAudit.reason_codes
+          : [],
+        required_actions: Array.isArray(input.northStarSemanticGateAudit?.required_actions)
+          ? input.northStarSemanticGateAudit.required_actions
+          : [],
+        required_action_promotions: Array.isArray(input.northStarSemanticGateAudit?.required_action_promotions)
+          ? input.northStarSemanticGateAudit.required_action_promotions
+          : [],
+        open_required_actions: Array.isArray(input.northStarSemanticOpenRequiredActions)
+          ? input.northStarSemanticOpenRequiredActions
+          : [],
+        claim_audit_debt: Array.isArray(input.northStarSemanticGateAudit?.claim_audit_debt)
+          ? input.northStarSemanticGateAudit.claim_audit_debt
+          : [],
+        low_confidence_coerced: Boolean(input.northStarSemanticGateAudit?.low_confidence_coerced),
+        verdict_derivation_audit: input.northStarSemanticGateAudit?.verdict_derivation_audit || null,
+        ...(input.northStarSemanticGateAudit?.status_mutation
+          ? { status_mutation: input.northStarSemanticGateAudit.status_mutation }
+          : {}),
+        ...(input.northStarSemanticGateAudit?.reject_reason
+          ? { reject_reason: input.northStarSemanticGateAudit.reject_reason }
+          : {})
+      },
       resolved_repo: input.resolvedRepoTarget?.repoId
         ? {
           repo_id: input.resolvedRepoTarget.repoId,
@@ -595,30 +907,17 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
         rewritten_count: Number(input.pathAnchorAudit?.rewrittenCount || 0),
         mode: input.pathAnchorAudit?.mode || 'recover'
       },
-      plan_attribution_reason: input.planAttribution.reason,
-      plan_attribution_ambiguous: input.planAttribution.ambiguous,
-      co_touched_plan_ids: input.coTouchedPlanIds,
-      co_touched_deliverable_plan_ids: input.coTouchedDeliverablePlanIds,
-      co_plan_status_changes: input.coPlanStatusChanges,
-      micro_checkpoint_applied: input.microCheckpointApplied,
-      ...(input.microCheckpointDeliverable ? { micro_checkpoint_deliverable: input.microCheckpointDeliverable } : {}),
+      plan_attribution_reason: artifactGravityMode ? null : input.planAttribution.reason,
+      plan_attribution_ambiguous: artifactGravityMode ? false : input.planAttribution.ambiguous,
+      co_touched_plan_ids: artifactGravityMode ? [] : input.coTouchedPlanIds,
+      co_touched_deliverable_plan_ids: artifactGravityMode ? [] : input.coTouchedDeliverablePlanIds,
+      co_plan_status_changes: artifactGravityMode ? [] : input.coPlanStatusChanges,
+      micro_checkpoint_applied: artifactGravityMode ? false : input.microCheckpointApplied,
+      ...(!artifactGravityMode && input.microCheckpointDeliverable ? { micro_checkpoint_deliverable: input.microCheckpointDeliverable } : {}),
       goal_constraints_fingerprint: goalConstraintsFingerprint,
       ...(input.deterministicFingerprint ? { failure_fingerprint: input.deterministicFingerprint } : {}),
       ...(input.clearedBlocked ? { unblock_verified: true } : {}),
       ...(input.blockedReason ? { blocked_reason: input.blockedReason } : {}),
-      semantic_gate: {
-        enabled: input.semanticGateAudit.enabled,
-        mode: input.semanticGateAudit.mode,
-        eligible: input.semanticGateAudit.eligible,
-        invoked: input.semanticGateAudit.invoked,
-        prompt_version: input.semanticGateAudit.prompt_version,
-        model_id: input.semanticGateAudit.model_id,
-        temperature: input.semanticGateAudit.temperature,
-        input_hash: input.semanticGateAudit.input_hash,
-        output: input.semanticGateAudit.output,
-        accepted: input.semanticGateAudit.accepted,
-        ...(input.semanticGateAudit.reject_reason ? { reject_reason: input.semanticGateAudit.reject_reason } : {})
-      },
       coding_agent_sessions: {
         observed: input.codingAgentSessionObservation.observed,
         session_ids: input.codingAgentSessionObservation.sessionIds,
@@ -641,6 +940,48 @@ export async function buildNativeTurnResultPayload(session: any, input: any): Pr
 
 export function prepareNativeTurnPlanProgress(session: any, input: any) {
   const projectedPlanUpdate = input.plannerCheckpointDue ? input.outcomeProjectUpdate : undefined
+
+  if (isArtifactGravityMode(input.orchestrationMode)) {
+    const planAttribution = {
+      activePlanId: '',
+      ambiguous: false,
+      reason: 'v3_plan_logic_disabled',
+      deliverablesTouched: [],
+      coTouchedPlanIds: []
+    }
+    let deltaText = session.deriveRuntimeDelta({
+      actionLabel: input.hintedDeltaText || input.primaryAction,
+      businessArtifacts: input.businessArtifactEvidencePaths,
+      workspaceWriteTouches: input.workspaceChangedFiles,
+      deliverablesTouched: [],
+      clearedBlocked: input.clearedBlocked,
+      failureRecorded: input.failureRecorded
+    })
+    if (input.hintedDeltaText) {
+      deltaText = input.hintedDeltaText
+    }
+
+    return {
+      projectedPlanUpdate: undefined,
+      planAttribution,
+      activePlanId: '',
+      coTouchedPlanIds: [],
+      planExists: false,
+      projectedPlanItem: null,
+      statusChange: '',
+      doneDefinitionCheck: {
+        ok: true,
+        reason: '',
+        deliverableTouched: false,
+        doneReady: false
+      },
+      microCheckpointApplied: false,
+      microCheckpointDeliverable: '',
+      coTouchedDeliverablePlanIds: [],
+      deltaText
+    }
+  }
+
   const projectedPlanIds = new Set<string>(input.currentBoard.map((item: any) => item.id))
   if (input.plannerCheckpointDue && Array.isArray(projectedPlanUpdate?.planBoard)) {
     for (const item of projectedPlanUpdate.planBoard) {
@@ -661,6 +1002,7 @@ export function prepareNativeTurnPlanProgress(session: any, input: any) {
   const coTouchedPlanIds = dedupeStrings(
     planAttribution.coTouchedPlanIds.filter((id: string) => id && id !== activePlanId)
   )
+
   const planExists = activePlanId
     ? projectedPlanIds.has(activePlanId)
     : false
@@ -799,6 +1141,7 @@ export async function applyNativeTurnStatusGuards(session: any, input: any): Pro
   const deltaReasons = [...input.deltaReasons]
   let statusChange = input.statusChange
   let failureEntry = input.failureEntry
+  let northStarSemanticOpenRequiredActions = await session.loadPreviousNorthStarSemanticOpenActions(input.turnNumber)
 
   if (input.forcedBlockedReason) {
     finalStatus = 'blocked'
@@ -806,215 +1149,337 @@ export async function applyNativeTurnStatusGuards(session: any, input: any): Pro
     summary = `BLOCKED: ${input.forcedBlockedReason}. ${summary}`
   }
 
-  if (finalStatus === 'success' && input.planAttributionAmbiguous) {
-    finalStatus = 'no_delta'
-    summary = `NO_DELTA: multiple plan deliverables touched in one turn. ${summary}`
-    blockedReason = 'multiple_plan_deliverables_touched'
-  }
-  if (finalStatus === 'success' && !input.activePlanId) {
-    finalStatus = 'no_delta'
-    summary = `NO_DELTA: missing active_plan_id. ${summary}`
-    blockedReason = 'missing_active_plan_id'
-  }
-  if (finalStatus === 'success' && !input.planExists) {
-    finalStatus = 'no_delta'
-    summary = `NO_DELTA: unknown active_plan_id (${input.activePlanId}). ${summary}`
-    blockedReason = 'unknown_active_plan_id'
-  }
-  if (finalStatus === 'success' && !doneDefinitionCheck.ok && input.coTouchedDeliverablePlanIds.length === 0) {
-    finalStatus = 'no_delta'
-    summary = `NO_DELTA: ${doneDefinitionCheck.reason}. ${summary}`
-    blockedReason = doneDefinitionCheck.reason
-  }
-  const hasAnyPlanDeliverableTouch = doneDefinitionCheck.deliverableTouched || input.coTouchedDeliverablePlanIds.length > 0
-  if (finalStatus === 'success' && !hasAnyPlanDeliverableTouch && !input.clearedBlocked) {
-    finalStatus = 'no_delta'
-    summary = `NO_DELTA: missing_plan_deliverable_touch. ${summary}`
-    blockedReason = 'missing_plan_deliverable_touch'
-  }
-  if (
-    finalStatus === 'success'
-    && input.repoCodeTouch.touched
-    && input.requireRepoTarget
-    && !input.resolvedRepoTarget?.repoId
-  ) {
-    finalStatus = 'no_delta'
-    blockedReason = 'missing_repo_target'
-    summary = `NO_DELTA: missing_repo_target for repo code touch (${input.repoCodeTouch.path}). ${summary}`
-  }
-  if (
-    finalStatus === 'success'
-    && input.repoCodeTouch.touched
-    && input.requireRepoTarget
-    && input.resolvedRepoTarget?.repoPath
-    && input.repoCodeTouch.repo
-    && input.resolvedRepoTarget.repoPath !== input.repoCodeTouch.repo
-  ) {
-    finalStatus = 'no_delta'
-    blockedReason = 'repo_target_mismatch'
-    summary = `NO_DELTA: repo_target_mismatch (target=${input.resolvedRepoTarget.repoPath}, touched=${input.repoCodeTouch.repo}). ${summary}`
-  }
-  if (finalStatus === 'success' && input.repoCodeTouch.touched && !input.codingLargeRepoUsage.usedCodeEditWorkflow) {
-    finalStatus = 'no_delta'
-    const scriptHint = input.codingLargeRepoUsage.used
-      ? `observed coding-large-repo/${input.codingLargeRepoUsage.script || 'unknown'} (code edits require agent-run-to-completion)`
-      : 'coding-large-repo workflow missing'
-    summary = `NO_DELTA: repo_code_edit_without_coding_large_repo (${input.repoCodeTouch.path}). ${scriptHint}. ${summary}`
-    blockedReason = 'repo_code_edit_without_coding_large_repo'
-  }
-  if (finalStatus === 'success' && input.openaiScriptIssue) {
-    finalStatus = 'no_delta'
-    summary = `NO_DELTA: openai_script_compat_issue (${input.openaiScriptIssue.reason} at ${input.openaiScriptIssue.path}). ${summary}`
-    blockedReason = 'openai_script_compat_issue'
-  }
-  const onlyRunArtifactsTouched = input.workspaceWriteTouches.length > 0
-    && input.workspaceWriteTouches.every((entry: string) => session.normalizeProjectPathPointer(entry).startsWith('runs/'))
-  if (
-    finalStatus === 'success'
-    && input.codingLargeRepoUsage.used
-    && input.codingAgentSessionObservation.observed
-    && input.codingAgentSessionObservation.hasRunningOnly
-    && !input.codingAgentSessionObservation.hasTerminal
-    && !input.repoCodeTouch.touched
-    && onlyRunArtifactsTouched
-    && !input.clearedBlocked
-  ) {
-    const sessionLabel = input.codingAgentSessionObservation.sessionIds.slice(0, 2).join(', ') || 'coding-agent-session'
-    if (input.codingAgentSessionObservation.warmupLikely) {
+  const artifactGravityMode = isArtifactGravityMode(input.orchestrationMode)
+  const applyPlanDeterministicGates = () => {
+    if (finalStatus !== 'success') return
+    if (input.planAttributionAmbiguous) {
       finalStatus = 'no_delta'
-      blockedReason = 'delegate_session_in_warmup'
-      summary = `NO_DELTA: delegate_session_in_warmup (${sessionLabel}). ${summary}`
-    } else {
+      summary = `NO_DELTA: multiple plan deliverables touched in one turn. ${summary}`
+      blockedReason = 'multiple_plan_deliverables_touched'
+      return
+    }
+    if (!input.activePlanId) {
       finalStatus = 'no_delta'
-      blockedReason = 'delegate_session_in_flight'
-      summary = `NO_DELTA: delegate_session_in_flight (${sessionLabel}). ${summary}`
+      summary = `NO_DELTA: missing active_plan_id. ${summary}`
+      blockedReason = 'missing_active_plan_id'
+      return
     }
-    if (!deltaReasons.includes('delegate_session_in_flight')) {
-      deltaReasons.push('delegate_session_in_flight')
+    if (!input.planExists) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: unknown active_plan_id (${input.activePlanId}). ${summary}`
+      blockedReason = 'unknown_active_plan_id'
+      return
     }
-  }
-  if (finalStatus === 'success' && deltaReasons.length === 0) {
-    finalStatus = 'no_delta'
-    summary = `NO_DELTA: ${summary}`
-    blockedReason = 'no_delta'
+    if (!doneDefinitionCheck.ok && input.coTouchedDeliverablePlanIds.length === 0) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: ${doneDefinitionCheck.reason}. ${summary}`
+      blockedReason = doneDefinitionCheck.reason
+      return
+    }
+    const hasAnyPlanDeliverableTouch = doneDefinitionCheck.deliverableTouched || input.coTouchedDeliverablePlanIds.length > 0
+    if (!hasAnyPlanDeliverableTouch && !input.clearedBlocked) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: missing_plan_deliverable_touch. ${summary}`
+      blockedReason = 'missing_plan_deliverable_touch'
+    }
   }
 
-  if (finalStatus === 'no_delta' && blockedReason === 'missing_plan_deliverable_touch') {
-    const semanticHardViolations = session.collectSemanticHardViolations({
-      blockedReason,
-      toolEvents: input.toolEvents
-    })
-    const hasHardViolations = semanticHardViolations.length > 0
-    const hasConcreteWorkEvidence = (
-      input.changedFiles.length > 0
-      || Boolean(input.patchPath)
-      || input.businessArtifactEvidencePaths.length > 0
-      || input.bashHasAnyOutputOnSuccess
+  if (artifactGravityMode) {
+    if (finalStatus === 'success' || finalStatus === 'no_delta') {
+      if (input.northStarEvaluation?.gateSatisfied) {
+        finalStatus = 'success'
+        blockedReason = null
+        summary = summary.replace(/^NO_DELTA:\s*/i, '').trim() || summary
+        if (input.northStarEvaluation.artifactChanged && !deltaReasons.includes('northstar_artifact_changed')) {
+          deltaReasons.push('northstar_artifact_changed')
+        }
+        if (input.northStarEvaluation.verifySucceeded && !deltaReasons.includes('northstar_verify_succeeded')) {
+          deltaReasons.push('northstar_verify_succeeded')
+        }
+
+        const verifyOnlySatisfied = Boolean(input.northStarEvaluation.verifySucceeded)
+          && !Boolean(input.northStarEvaluation.artifactChanged)
+        const hasSubstantiveArtifact = (input.businessArtifactEvidencePaths ?? [])
+          .some((entry: string) => !isNorthStarVerifyEvidencePath(entry))
+        const hasSubstantiveWorkspaceDelta = hasWorkspaceDeltaOutsideRuns(
+          session,
+          dedupeStrings([...(input.changedFiles ?? []), ...(input.workspaceWriteTouches ?? [])])
+        ) || Boolean(input.repoCodeTouch?.touched)
+
+        if (
+          verifyOnlySatisfied
+          && !hasSubstantiveArtifact
+          && !hasSubstantiveWorkspaceDelta
+          && !input.clearedBlocked
+          && !input.failureEntry
+        ) {
+          finalStatus = 'no_delta'
+          blockedReason = 'northstar_verify_only_no_substantive_delta'
+          const normalizedSummary = summary.replace(/^NO_DELTA:\s*/i, '').trim()
+          summary = `NO_DELTA: northstar_verify_only_no_substantive_delta. ${normalizedSummary || summary}`
+          const filtered = deltaReasons.filter((reason) => reason !== 'northstar_verify_succeeded')
+          deltaReasons.length = 0
+          deltaReasons.push(...filtered)
+        }
+      } else {
+        const reason = input.northStarEvaluation?.reason || 'northstar_no_verifiable_delta'
+        const hardBlock = reason === 'northstar_repeated_no_delta_requires_pivot'
+        finalStatus = hardBlock ? 'blocked' : 'no_delta'
+        blockedReason = reason
+        const normalizedSummary = summary.replace(/^(NO_DELTA|BLOCKED):\s*/i, '').trim()
+        summary = hardBlock
+          ? `BLOCKED: ${reason}. ${normalizedSummary || summary}`
+          : `NO_DELTA: ${reason}. ${normalizedSummary || summary}`
+      }
+    }
+  } else {
+    applyPlanDeterministicGates()
+  }
+
+  if (isPaperMode(input.orchestrationMode)) {
+    const hasNorthStarContract = Boolean(input.northStarContract)
+    input.northStarSemanticGateAudit.eligible = Boolean(
+      input.northStarSemanticGateConfig.enabled
+      && hasNorthStarContract
+      && input.northStarEvaluation?.enabled
     )
-    input.semanticGateAudit.eligible = hasConcreteWorkEvidence && !hasHardViolations
-    if (!input.semanticGateAudit.eligible && hasHardViolations) {
-      input.semanticGateAudit.reject_reason = `hard_violation:${semanticHardViolations[0]}`
+
+    if (!input.northStarSemanticGateAudit.eligible) {
+      input.northStarSemanticGateAudit.reject_reason = hasNorthStarContract
+        ? 'northstar_semantic_gate_ineligible'
+        : 'missing_northstar_contract'
     }
 
-    if (input.semanticGateConfig.enabled && input.semanticGateAudit.eligible) {
-      const semanticInput = session.buildSemanticGateInput({
+    if (input.northStarSemanticGateConfig.enabled && input.northStarSemanticGateAudit.eligible) {
+      const semanticHardViolations = session.collectSemanticHardViolations({
+        blockedReason,
+        toolEvents: input.toolEvents
+      })
+
+      const semanticInput = await session.buildNorthStarSemanticGateInput({
         turnNumber: input.turnNumber,
-        activePlanId: input.activePlanId,
+        mode: input.northStarSemanticGateConfig.mode,
         finalStatus,
         blockedReason,
-        planItem: input.projectedPlanItem,
-        planEvidencePaths: input.planEvidencePaths,
-        businessArtifactEvidencePaths: input.businessArtifactEvidencePaths,
-        workspaceWriteTouches: input.workspaceWriteTouches,
-        changedFiles: input.changedFiles,
+        northStar: input.northStarContract,
+        northStarEvaluation: input.northStarEvaluation,
+        changedFiles: dedupeStrings([...(input.changedFiles ?? []), ...(input.workspaceWriteTouches ?? [])]),
         patchPath: input.patchPath,
-        exitCode: input.exitCode,
-        hardViolations: semanticHardViolations,
-        codingLargeRepoRequired: input.repoCodeTouch.touched,
-        maxInputChars: input.semanticGateConfig.maxInputChars
+        businessArtifactEvidencePaths: input.businessArtifactEvidencePaths,
+        trustedEvidencePaths: input.trustedEvidencePaths ?? [],
+        maxInputChars: input.northStarSemanticGateConfig.maxInputChars,
+        resultPath: input.resultPath,
+        hardViolations: semanticHardViolations
       })
-      input.semanticGateAudit.input_hash = semanticInput.inputHash
-      input.semanticGateAudit.invoked = true
+      input.northStarSemanticGateAudit.input_hash = semanticInput.inputHash
+      input.northStarSemanticGateAudit.invoked = true
 
       let semanticRaw: unknown
       try {
-        if (session.config.semanticGateEvaluator) {
-          semanticRaw = await session.config.semanticGateEvaluator(semanticInput.payload)
+        if (session.config.northStarSemanticGateEvaluator) {
+          semanticRaw = await session.config.northStarSemanticGateEvaluator(semanticInput.payload)
         } else {
           semanticRaw = {
-            schema: 'yolo.semantic_gate.output.v1',
-            verdict: 'abstain',
+            schema: 'yolo.northstar_semantic_gate.output.v1',
             confidence: 0,
-            notes: 'semanticGateEvaluator not configured'
+            reason_codes: ['evaluator_not_configured'],
+            summary: 'northStarSemanticGateEvaluator not configured',
+            verdict: 'abstain'
           }
         }
       } catch (error) {
         semanticRaw = {
-          schema: 'yolo.semantic_gate.output.v1',
-          verdict: 'abstain',
+          schema: 'yolo.northstar_semantic_gate.output.v1',
           confidence: 0,
-          notes: `semantic evaluator error: ${error instanceof Error ? error.message : String(error)}`
+          reason_codes: ['evaluator_error'],
+          summary: `semantic evaluator error: ${error instanceof Error ? error.message : String(error)}`,
+          verdict: 'abstain'
         }
       }
 
-      const semanticOutput = session.normalizeSemanticGateOutput(semanticRaw)
-      input.semanticGateAudit.output = semanticOutput
-      const evidenceRefValidation = await session.validateSemanticGateEvidenceRefs({
-        turnNumber: input.turnNumber,
-        output: semanticOutput
+      const semanticOutput = session.normalizeNorthStarSemanticGateOutput(semanticRaw)
+      input.northStarSemanticGateAudit.output = semanticOutput
+
+      const derived = session.deriveNorthStarSemanticVerdict({
+        dimension_scores: semanticOutput.dimension_scores
+      })
+      const reasonCodes = dedupeStrings([
+        ...(semanticOutput.reason_codes ?? []),
+        ...semanticInput.reasonCodes,
+        ...(derived.valid ? [] : ['invalid_dimension_scores'])
+      ])
+
+      const legacyVerdictRaw = typeof semanticOutput.verdict === 'string'
+        ? semanticOutput.verdict.trim().toLowerCase()
+        : ''
+      const hasLegacyVerdict = isNorthStarSemanticVerdict(legacyVerdictRaw)
+      if (hasLegacyVerdict && legacyVerdictRaw !== derived.verdict) {
+        reasonCodes.push('verdict_mismatch')
+      }
+
+      let effectiveVerdict: NorthStarSemanticVerdict = derived.verdict
+      if (
+        effectiveVerdict !== 'abstain'
+        && semanticOutput.confidence < input.northStarSemanticGateConfig.confidenceThreshold
+      ) {
+        effectiveVerdict = 'abstain'
+        reasonCodes.push('low_confidence')
+        input.northStarSemanticGateAudit.low_confidence_coerced = true
+      }
+
+      const deterministicTriggerCodes = session.collectNorthStarDeterministicTriggerCodes({
+        claimQuality: semanticInput.claimQuality,
+        reasonCodes,
+        northStarEvaluation: input.northStarEvaluation
       })
 
-      const activeRules = session.parseDoneDefinitionRules(input.projectedPlanItem?.doneDefinition ?? [])
-      const activeDeliverables = new Set(activeRules.deliverables)
-      const touchedDeliverables = dedupeStrings(
-        (semanticOutput.touched_deliverables ?? [])
-          .map((item: any) => session.normalizeDeliverableTarget(item.id).value)
-          .filter(Boolean)
-      )
-      const hasDeliverableIntersection = touchedDeliverables.some((item) => activeDeliverables.has(item))
+      const actionPostProcess = session.postProcessNorthStarRequiredActions({
+        turnNumber: input.turnNumber,
+        actions: semanticOutput.required_actions ?? [],
+        existingOpenActions: northStarSemanticOpenRequiredActions,
+        deterministicTriggerCodes,
+        claimQuality: semanticInput.claimQuality,
+        config: input.northStarSemanticGateConfig,
+        effectiveVerdict
+      })
+      northStarSemanticOpenRequiredActions = actionPostProcess.mergedOpenActions
 
-      if (!evidenceRefValidation.ok) {
-        input.semanticGateAudit.reject_reason = evidenceRefValidation.reason
-      } else if (semanticOutput.verdict !== 'touched') {
-        input.semanticGateAudit.reject_reason = `verdict_${semanticOutput.verdict}`
-      } else if (semanticOutput.confidence < input.semanticGateConfig.confidenceThreshold) {
-        input.semanticGateAudit.reject_reason = `confidence_below_threshold:${input.semanticGateConfig.confidenceThreshold}`
-      } else if (!hasDeliverableIntersection) {
-        input.semanticGateAudit.reject_reason = 'deliverable_intersection_miss'
-      } else if (input.semanticGateConfig.mode === 'enforce_touch_only') {
-        input.semanticGateAudit.accepted = true
-        doneDefinitionCheck = {
-          ...doneDefinitionCheck,
-          deliverableTouched: true
-        }
-        if (!deltaReasons.includes('plan_deliverable_touched')) {
-          deltaReasons.push('plan_deliverable_touched')
-        }
-        if (!deltaReasons.includes('semantic_plan_deliverable_touched')) {
-          deltaReasons.push('semantic_plan_deliverable_touched')
+      const claimAuditDebt = dedupeStrings([
+        ...((semanticOutput.claim_audit?.unsupported_ids ?? []).map(String)),
+        ...((semanticOutput.claim_audit?.contradicted_ids ?? []).map(String))
+      ])
+
+      input.northStarSemanticGateAudit.accepted = true
+      input.northStarSemanticGateAudit.derived_verdict = derived.verdict
+      input.northStarSemanticGateAudit.effective_verdict = effectiveVerdict
+      input.northStarSemanticGateAudit.reason_codes = reasonCodes
+      input.northStarSemanticGateAudit.required_actions = northStarSemanticOpenRequiredActions
+      input.northStarSemanticGateAudit.required_action_promotions = actionPostProcess.promotions
+      input.northStarSemanticGateAudit.claim_audit_debt = claimAuditDebt
+      input.northStarSemanticGateAudit.verdict_derivation_audit = {
+        dimension_scores: derived.normalizedScores,
+        derived_verdict: derived.verdict,
+        legacy_verdict: hasLegacyVerdict ? legacyVerdictRaw : null,
+        legacy_verdict_ignored: true
+      }
+
+      if (input.northStarSemanticGateConfig.mode === 'enforce_downgrade_only') {
+        const beforeStatus = finalStatus
+        let mutationReason = 'semantic_noop_non_success'
+
+        if (finalStatus === 'success') {
+          if (effectiveVerdict === 'advance_confirmed') {
+            mutationReason = 'semantic_advance_confirmed'
+          } else if (effectiveVerdict === 'abstain') {
+            mutationReason = input.northStarSemanticGateAudit.low_confidence_coerced
+              ? 'semantic_low_confidence_abstain'
+              : 'semantic_abstain_non_veto'
+          } else if (effectiveVerdict === 'advance_weak' || effectiveVerdict === 'no_progress') {
+            finalStatus = 'no_delta'
+            blockedReason = `northstar_semantic_${effectiveVerdict}`
+            mutationReason = `semantic_downgrade_${effectiveVerdict}`
+            const normalizedSummary = summary.replace(/^NO_DELTA:\s*/i, '').trim()
+            summary = `NO_DELTA: ${blockedReason}. ${normalizedSummary || summary}`
+          } else if (effectiveVerdict === 'regress') {
+            finalStatus = 'blocked'
+            blockedReason = 'northstar_semantic_regress'
+            mutationReason = 'semantic_downgrade_regress'
+            summary = `BLOCKED: northstar_semantic_regress. ${summary}`
+          }
+
+          if (finalStatus === 'success' && actionPostProcess.blockingAction) {
+            finalStatus = 'blocked'
+            blockedReason = 'northstar_semantic_overdue_must_action'
+            mutationReason = 'runtime_promoted_must_overdue'
+            summary = `BLOCKED: northstar_semantic_overdue_must_action (${actionPostProcess.blockingAction.code}). ${summary}`
+          }
         }
 
-        finalStatus = 'success'
-        blockedReason = null
-        summary = summary.replace(/^NO_DELTA:\s*missing_plan_deliverable_touch\.?\s*/i, '').trim()
-        if (!summary) {
-          summary = 'Semantic gate confirmed deliverable touch from this turn evidence.'
+        input.northStarSemanticGateAudit.status_mutation = {
+          from: beforeStatus,
+          to: finalStatus,
+          reason: mutationReason
         }
-        statusChange = session.deriveRuntimeStatusChange({
-          activePlanId: input.activePlanId,
-          finalStatus,
-          planItem: input.projectedPlanItem,
-          doneReady: doneDefinitionCheck.doneReady
-        })
-      } else {
-        input.semanticGateAudit.reject_reason = input.semanticGateConfig.mode === 'shadow'
-          ? 'shadow_mode'
-          : `unsupported_mode:${input.semanticGateConfig.mode}`
+      } else if (input.northStarSemanticGateConfig.mode === 'shadow') {
+        input.northStarSemanticGateAudit.status_mutation = {
+          from: finalStatus,
+          to: finalStatus,
+          reason: 'shadow_no_mutation'
+        }
       }
     }
   }
 
-  if (finalStatus === 'no_delta' && !input.governanceOnlyTurn && (input.doneFingerprintHit || input.priorFingerprintCount > 0)) {
+  if (!artifactGravityMode) {
+    if (
+      finalStatus === 'success'
+      && input.repoCodeTouch.touched
+      && input.requireRepoTarget
+      && !input.resolvedRepoTarget?.repoId
+    ) {
+      finalStatus = 'no_delta'
+      blockedReason = 'missing_repo_target'
+      summary = `NO_DELTA: missing_repo_target for repo code touch (${input.repoCodeTouch.path}). ${summary}`
+    }
+    if (
+      finalStatus === 'success'
+      && input.repoCodeTouch.touched
+      && input.requireRepoTarget
+      && input.resolvedRepoTarget?.repoPath
+      && input.repoCodeTouch.repo
+      && input.resolvedRepoTarget.repoPath !== input.repoCodeTouch.repo
+    ) {
+      finalStatus = 'no_delta'
+      blockedReason = 'repo_target_mismatch'
+      summary = `NO_DELTA: repo_target_mismatch (target=${input.resolvedRepoTarget.repoPath}, touched=${input.repoCodeTouch.repo}). ${summary}`
+    }
+    if (finalStatus === 'success' && input.repoCodeTouch.touched && !input.codingLargeRepoUsage.usedCodeEditWorkflow) {
+      finalStatus = 'no_delta'
+      const scriptHint = input.codingLargeRepoUsage.used
+        ? `observed coding-large-repo/${input.codingLargeRepoUsage.script || 'unknown'} (code edits require agent-run-to-completion)`
+        : 'coding-large-repo workflow missing'
+      summary = `NO_DELTA: repo_code_edit_without_coding_large_repo (${input.repoCodeTouch.path}). ${scriptHint}. ${summary}`
+      blockedReason = 'repo_code_edit_without_coding_large_repo'
+    }
+    if (finalStatus === 'success' && input.openaiScriptIssue) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: openai_script_compat_issue (${input.openaiScriptIssue.reason} at ${input.openaiScriptIssue.path}). ${summary}`
+      blockedReason = 'openai_script_compat_issue'
+    }
+    const onlyRunArtifactsTouched = input.workspaceWriteTouches.length > 0
+      && input.workspaceWriteTouches.every((entry: string) => session.normalizeProjectPathPointer(entry).startsWith('runs/'))
+    if (
+      finalStatus === 'success'
+      && input.codingLargeRepoUsage.used
+      && input.codingAgentSessionObservation.observed
+      && input.codingAgentSessionObservation.hasRunningOnly
+      && !input.codingAgentSessionObservation.hasTerminal
+      && !input.repoCodeTouch.touched
+      && onlyRunArtifactsTouched
+      && !input.clearedBlocked
+    ) {
+      const sessionLabel = input.codingAgentSessionObservation.sessionIds.slice(0, 2).join(', ') || 'coding-agent-session'
+      if (input.codingAgentSessionObservation.warmupLikely) {
+        finalStatus = 'no_delta'
+        blockedReason = 'delegate_session_in_warmup'
+        summary = `NO_DELTA: delegate_session_in_warmup (${sessionLabel}). ${summary}`
+      } else {
+        finalStatus = 'no_delta'
+        blockedReason = 'delegate_session_in_flight'
+        summary = `NO_DELTA: delegate_session_in_flight (${sessionLabel}). ${summary}`
+      }
+      if (!deltaReasons.includes('delegate_session_in_flight')) {
+        deltaReasons.push('delegate_session_in_flight')
+      }
+    }
+    if (finalStatus === 'success' && deltaReasons.length === 0) {
+      finalStatus = 'no_delta'
+      summary = `NO_DELTA: ${summary}`
+      blockedReason = 'no_delta'
+    }
+  }
+
+  if (!artifactGravityMode && finalStatus === 'no_delta' && !input.governanceOnlyTurn && (input.doneFingerprintHit || input.priorFingerprintCount > 0)) {
     const redundant = await session.failureStore.recordRedundancyBlocked({
       fingerprint: input.actionFingerprint,
       errorLine: 'Repeated action fingerprint produced NO_DELTA.',
@@ -1036,6 +1501,7 @@ export async function applyNativeTurnStatusGuards(session: any, input: any): Pro
     doneDefinitionCheck,
     deltaReasons,
     statusChange,
-    failureEntry
+    failureEntry,
+    northStarSemanticOpenRequiredActions
   }
 }

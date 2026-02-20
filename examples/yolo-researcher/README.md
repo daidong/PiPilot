@@ -133,37 +133,95 @@ runs/
   turn-0002/
 ```
 
+## Orchestration Mode
+
+`createYoloSession` supports:
+
+- `orchestrationMode: 'artifact_gravity_v3_paper'`
+- `orchestrationMode: 'auto'`
+Runtime auto-bootstraps `NORTHSTAR.md` if missing.
+`auto` resolves to the same paper loop.
+
+`artifact_gravity_v3_paper` uses strict paper-loop semantics:
+
+- internal checks must pass (`RealityCheck (Internal)`).
+- scoreboard metrics must improve versus previous turn (`Scoreboard` json files).
+- external friction quota must be satisfied (`External Friction Policy.require_external_every`).
+- changes to `NORTHSTAR.md` alone are never progress.
+
+Environment override:
+
+```bash
+export YOLO_ORCHESTRATION_MODE=auto   # or artifact_gravity_v3_paper
+```
+
 ## UI Scope
 
 Desktop UI is not in the v2 correctness path. Runtime correctness depends on the file contracts above.
 
-Known gap: runtime selector (`host|docker|venv`) is currently metadata/prompt labeling, not executor routing. See `docs/010-runtime-selection-execution-gap.md`.
+## NorthStar Semantic Gate (RFC-017)
 
-## Semantic Gate (RFC-012)
+`artifact_gravity_v3_paper` now supports a dedicated semantic progress gate:
 
-`missing_plan_deliverable_touch` false negatives can be inspected/corrected by the hybrid semantic gate.
+- result key: `northstar_semantic_gate`
+- input schema: `yolo.northstar_semantic_gate.input.v1`
+- output schema: `yolo.northstar_semantic_gate.output.v1`
+- runtime derives verdict from `dimension_scores` (legacy model `verdict` is non-authoritative)
 
 Modes:
 - `off`
 - `shadow`
-- `enforce_touch_only`
-- `enforce_success` (reserved; do not use)
+- `enforce_downgrade_only` (veto-only)
+- `enforce_balanced` (reserved)
 
-Desktop default mode is `enforce_touch_only` with live LLM arbitration when model credentials are available.
-Set `YOLO_SEMANTIC_GATE_MODE=off` to disable.
+Main rules:
+- runtime deterministic checks remain hard authority
+- semantic gate can only downgrade in `enforce_downgrade_only`
+- low-confidence non-abstain output is coerced to `abstain`
+- `must_candidate` actions are promoted to blocking `must` only by deterministic runtime triggers
 
-Desktop runtime reads these environment variables at startup:
-
-```bash
-export YOLO_SEMANTIC_GATE_MODE=shadow
-export YOLO_SEMANTIC_GATE_CONFIDENCE=0.85
-export YOLO_SEMANTIC_GATE_MAX_INPUT_CHARS=18000
-export YOLO_SEMANTIC_GATE_MODEL=semantic-gate-local
-```
-
-Summarize outcomes from run artifacts:
+Environment overrides (desktop startup):
 
 ```bash
-node scripts/yolo-semantic-gate-report.mjs /path/to/workspace
-node scripts/yolo-semantic-gate-report.mjs /path/to/workspace --json
+export YOLO_NORTHSTAR_SEMANTIC_GATE_MODE=enforce_downgrade_only
+export YOLO_NORTHSTAR_SEMANTIC_GATE_CONFIDENCE=0.80
+export YOLO_NORTHSTAR_SEMANTIC_GATE_MAX_INPUT_CHARS=24000
+export YOLO_NORTHSTAR_SEMANTIC_GATE_MODEL=gpt-5.2
+export YOLO_NORTHSTAR_SEMANTIC_GATE_REQUIRED_ACTION_BUDGET=1
+export YOLO_NORTHSTAR_SEMANTIC_GATE_MUST_ACTION_MAX_OPEN=1
+export YOLO_NORTHSTAR_SEMANTIC_GATE_RECENT_WINDOW_TURNS=4
 ```
+
+## Literature Search Budget (Test vs Full)
+
+To reduce cost/latency during testing, v2 now defaults to a **test** literature budget profile.
+
+Default profile (`test`) when `YOLO_LITERATURE_BUDGET_PROFILE` is not set:
+- `literature-study`: `targetPaperCount=12`, `timeoutMs=12000`
+- `literature-search` quick: `limit=5`
+- `literature-search` sweep:
+  - `limitPerQuery=4`
+  - `finalLimit=16`
+  - `maxSubqueries=2`
+  - `citationSeedCount=2`
+  - `citationLimit=3`
+  - `timeoutMs=120000`
+
+### Switch back after testing
+
+Set full profile before starting the app/runtime:
+
+```bash
+export YOLO_LITERATURE_BUDGET_PROFILE=full
+```
+
+Full profile restores previous heavier defaults:
+- `literature-study`: `targetPaperCount=40`, `timeoutMs=15000`
+- `literature-search` quick: `limit=8`
+- `literature-search` sweep:
+  - `limitPerQuery=8`
+  - `finalLimit=40`
+  - `maxSubqueries=5`
+  - `citationSeedCount=5`
+  - `citationLimit=5`
+  - `timeoutMs=180000`

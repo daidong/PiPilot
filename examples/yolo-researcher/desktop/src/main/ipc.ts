@@ -4,14 +4,14 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  createSemanticGateLlmEvaluator,
+  createNorthStarSemanticGateLlmEvaluator,
   createLlmSingleAgent,
   createYoloSession,
   type TurnExecutionResult
 } from '@yolo-researcher/index'
 
 type RuntimeKind = 'host' | 'docker' | 'venv'
-type SemanticGateMode = 'off' | 'shadow' | 'enforce_touch_only' | 'enforce_success'
+type NorthStarSemanticGateMode = 'off' | 'shadow' | 'enforce_downgrade_only' | 'enforce_balanced'
 type TurnFileName = 'action.md' | 'cmd.txt' | 'stdout.txt' | 'stderr.txt' | 'exit_code.txt' | 'patch.diff' | 'result.json'
 
 interface StartPayload {
@@ -55,8 +55,15 @@ interface ProgressReasonCount {
 interface ProgressHealthSnapshot {
   windowTurns: number
   successRate: number
-  deliverableTouchRate: number
-  fallbackAttributionRate: number
+  orchestrationMode: 'artifact_gravity_v3_paper' | 'unknown'
+  northstarGateRate: number
+  northstarScoreboardImprovedRate: number
+  northstarArtifactChangeRate: number
+  northstarVerifySuccessRate: number
+  northstarVerifiedGrowthProofRequiredRate: number
+  northstarVerifiedGrowthProofPassRate: number
+  planDeliverableTouchRate: number
+  planFallbackAttributionRate: number
   noDeltaTopReasons: ProgressReasonCount[]
 }
 
@@ -67,17 +74,6 @@ interface UsageSnapshot {
   cachedTokens: number
   totalCost: number
   callCount: number
-}
-
-interface SemanticGateSnapshot {
-  enabled: boolean
-  mode: string
-  eligible: boolean
-  invoked: boolean
-  accepted: boolean
-  rejectReason: string
-  verdict: string
-  confidence: number
 }
 
 interface PersistedUsageTotals {
@@ -123,14 +119,14 @@ const windowStates = new Map<number, WindowRuntimeState>()
 let handlersRegistered = false
 const REQUIRED_BOOTSTRAP_SKILL_ID = 'literature-search'
 const REQUIRED_COMMUNITY_SKILL_ID = 'markitdown'
-const DEFAULT_SEMANTIC_GATE_MODE: SemanticGateMode = 'enforce_touch_only'
-const DEFAULT_SEMANTIC_GATE_CONFIDENCE = 0.85
-const DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS = 18_000
-const SEMANTIC_GATE_MODES = new Set<SemanticGateMode>([
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_MODE: NorthStarSemanticGateMode = 'enforce_downgrade_only'
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_CONFIDENCE = 0.80
+const DEFAULT_NORTHSTAR_SEMANTIC_GATE_MAX_INPUT_CHARS = 24_000
+const NORTHSTAR_SEMANTIC_GATE_MODES = new Set<NorthStarSemanticGateMode>([
   'off',
   'shadow',
-  'enforce_touch_only',
-  'enforce_success'
+  'enforce_downgrade_only',
+  'enforce_balanced'
 ])
 
 function parseBoundedNumberEnv(raw: string | undefined, min: number, max: number): number | undefined {
@@ -141,28 +137,59 @@ function parseBoundedNumberEnv(raw: string | undefined, min: number, max: number
   return value
 }
 
-function parseSemanticGateConfigFromEnv(): {
-  mode: SemanticGateMode
+function parseNorthStarSemanticGateConfigFromEnv(): {
+  mode: NorthStarSemanticGateMode
   confidenceThreshold?: number
   model?: string
   maxInputChars?: number
+  requiredActionBudgetPerTurn?: number
+  mustActionMaxOpen?: number
+  recentWindowTurns?: number
 } {
-  const modeRaw = (process.env.YOLO_SEMANTIC_GATE_MODE || '').trim()
-  const mode = SEMANTIC_GATE_MODES.has(modeRaw as SemanticGateMode)
-    ? (modeRaw as SemanticGateMode)
-    : DEFAULT_SEMANTIC_GATE_MODE
+  const modeRaw = (process.env.YOLO_NORTHSTAR_SEMANTIC_GATE_MODE || '').trim()
+  const mode = NORTHSTAR_SEMANTIC_GATE_MODES.has(modeRaw as NorthStarSemanticGateMode)
+    ? (modeRaw as NorthStarSemanticGateMode)
+    : DEFAULT_NORTHSTAR_SEMANTIC_GATE_MODE
 
-  const confidenceThreshold = parseBoundedNumberEnv(process.env.YOLO_SEMANTIC_GATE_CONFIDENCE, 0, 1) ?? DEFAULT_SEMANTIC_GATE_CONFIDENCE
-  const maxInputCharsRaw = parseBoundedNumberEnv(process.env.YOLO_SEMANTIC_GATE_MAX_INPUT_CHARS, 1_000, 200_000)
+  const confidenceThreshold = parseBoundedNumberEnv(
+    process.env.YOLO_NORTHSTAR_SEMANTIC_GATE_CONFIDENCE,
+    0,
+    1
+  ) ?? DEFAULT_NORTHSTAR_SEMANTIC_GATE_CONFIDENCE
+  const maxInputCharsRaw = parseBoundedNumberEnv(process.env.YOLO_NORTHSTAR_SEMANTIC_GATE_MAX_INPUT_CHARS, 1_000, 200_000)
   const maxInputChars = typeof maxInputCharsRaw === 'number'
     ? Math.floor(maxInputCharsRaw)
-    : DEFAULT_SEMANTIC_GATE_MAX_INPUT_CHARS
-  const model = (process.env.YOLO_SEMANTIC_GATE_MODEL || '').trim() || undefined
+    : DEFAULT_NORTHSTAR_SEMANTIC_GATE_MAX_INPUT_CHARS
+  const requiredActionBudgetPerTurnRaw = parseBoundedNumberEnv(
+    process.env.YOLO_NORTHSTAR_SEMANTIC_GATE_REQUIRED_ACTION_BUDGET,
+    0,
+    3
+  )
+  const mustActionMaxOpenRaw = parseBoundedNumberEnv(
+    process.env.YOLO_NORTHSTAR_SEMANTIC_GATE_MUST_ACTION_MAX_OPEN,
+    0,
+    3
+  )
+  const recentWindowTurnsRaw = parseBoundedNumberEnv(
+    process.env.YOLO_NORTHSTAR_SEMANTIC_GATE_RECENT_WINDOW_TURNS,
+    1,
+    12
+  )
+  const model = (process.env.YOLO_NORTHSTAR_SEMANTIC_GATE_MODEL || '').trim() || undefined
 
   return {
     mode,
     confidenceThreshold,
     maxInputChars,
+    ...(typeof requiredActionBudgetPerTurnRaw === 'number'
+      ? { requiredActionBudgetPerTurn: Math.floor(requiredActionBudgetPerTurnRaw) }
+      : {}),
+    ...(typeof mustActionMaxOpenRaw === 'number'
+      ? { mustActionMaxOpen: Math.floor(mustActionMaxOpenRaw) }
+      : {}),
+    ...(typeof recentWindowTurnsRaw === 'number'
+      ? { recentWindowTurns: Math.floor(recentWindowTurnsRaw) }
+      : {}),
     ...(model ? { model } : {})
   }
 }
@@ -686,8 +713,15 @@ async function buildOverview(state: WindowRuntimeState): Promise<DesktopOverview
     : {
       windowTurns: 20,
       successRate: 0,
-      deliverableTouchRate: 0,
-      fallbackAttributionRate: 0,
+      orchestrationMode: 'unknown' as const,
+      northstarGateRate: 0,
+      northstarScoreboardImprovedRate: 0,
+      northstarArtifactChangeRate: 0,
+      northstarVerifySuccessRate: 0,
+      northstarVerifiedGrowthProofRequiredRate: 0,
+      northstarVerifiedGrowthProofPassRate: 0,
+      planDeliverableTouchRate: 0,
+      planFallbackAttributionRate: 0,
       noDeltaTopReasons: []
     }
 
@@ -754,8 +788,13 @@ function computeProgressHealthFromDisk(projectPath: string, turns: TurnListItem[
   const selected = turns.slice(-Math.max(1, windowTurns))
   let considered = 0
   let successCount = 0
-  let deliverableTouchCount = 0
-  let fallbackAttributionCount = 0
+  let paperTurns = 0
+  let northstarGateCount = 0
+  let northstarScoreboardImprovedCount = 0
+  let northstarArtifactChangedCount = 0
+  let northstarVerifySucceededCount = 0
+  let northstarVerifiedGrowthProofRequiredCount = 0
+  let northstarVerifiedGrowthProofPassCount = 0
   const noDeltaReasons = new Map<string, number>()
 
   for (const turn of selected) {
@@ -768,18 +807,27 @@ function computeProgressHealthFromDisk(projectPath: string, turns: TurnListItem[
       considered += 1
       if (status === 'success') successCount += 1
 
-      const deltaReasons = Array.isArray(parsed.delta_reasons)
-        ? parsed.delta_reasons.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim().toLowerCase())
-        : []
-      if (deltaReasons.includes('plan_deliverable_touched') || deltaReasons.includes('co_plan_deliverable_touched')) {
-        deliverableTouchCount += 1
-      }
-
-      const attributionReason = typeof parsed.plan_attribution_reason === 'string'
-        ? parsed.plan_attribution_reason.trim().toLowerCase()
+      const orchestrationMode = typeof parsed.orchestration_mode === 'string'
+        ? parsed.orchestration_mode.trim().toLowerCase()
         : ''
-      if (attributionReason.startsWith('fallback_')) {
-        fallbackAttributionCount += 1
+      const northstar = parsed.northstar && typeof parsed.northstar === 'object' && !Array.isArray(parsed.northstar)
+        ? parsed.northstar as Record<string, unknown>
+        : null
+      const isPaperTurn = orchestrationMode === 'artifact_gravity_v3_paper'
+        || northstar?.enabled === true
+
+      if (isPaperTurn) {
+        paperTurns += 1
+        if (northstar?.gate_satisfied === true) northstarGateCount += 1
+        if (northstar?.scoreboard_improved === true) northstarScoreboardImprovedCount += 1
+        if (northstar?.artifact_changed === true) northstarArtifactChangedCount += 1
+        if (northstar?.verify_succeeded === true) northstarVerifySucceededCount += 1
+        if (northstar?.verified_growth_content_proof_required === true) {
+          northstarVerifiedGrowthProofRequiredCount += 1
+          if (northstar?.verified_growth_content_proof_satisfied === true) {
+            northstarVerifiedGrowthProofPassCount += 1
+          }
+        }
       }
 
       if (status === 'no_delta') {
@@ -796,50 +844,32 @@ function computeProgressHealthFromDisk(projectPath: string, turns: TurnListItem[
   const ratio = (value: number): number => (
     considered > 0 ? Number((value / considered).toFixed(2)) : 0
   )
+  const scopedRatio = (value: number, base: number): number => (
+    base > 0 ? Number((value / base).toFixed(2)) : 0
+  )
+  const orchestrationMode: ProgressHealthSnapshot['orchestrationMode'] = paperTurns > 0
+    ? 'artifact_gravity_v3_paper'
+    : 'unknown'
 
   return {
     windowTurns: selected.length,
     successRate: ratio(successCount),
-    deliverableTouchRate: ratio(deliverableTouchCount),
-    fallbackAttributionRate: ratio(fallbackAttributionCount),
+    orchestrationMode,
+    northstarGateRate: scopedRatio(northstarGateCount, paperTurns),
+    northstarScoreboardImprovedRate: scopedRatio(northstarScoreboardImprovedCount, paperTurns),
+    northstarArtifactChangeRate: scopedRatio(northstarArtifactChangedCount, paperTurns),
+    northstarVerifySuccessRate: scopedRatio(northstarVerifySucceededCount, paperTurns),
+    northstarVerifiedGrowthProofRequiredRate: scopedRatio(northstarVerifiedGrowthProofRequiredCount, paperTurns),
+    northstarVerifiedGrowthProofPassRate: scopedRatio(
+      northstarVerifiedGrowthProofPassCount,
+      northstarVerifiedGrowthProofRequiredCount
+    ),
+    planDeliverableTouchRate: 0,
+    planFallbackAttributionRate: 0,
     noDeltaTopReasons: [...noDeltaReasons.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 3)
       .map(([reason, count]) => ({ reason, count }))
-  }
-}
-
-function readSemanticGateSnapshot(projectPath: string, turnNumber: number): SemanticGateSnapshot | null {
-  const resultPath = join(sessionRoot(projectPath), `runs/turn-${String(turnNumber).padStart(4, '0')}/result.json`)
-  if (!existsSync(resultPath)) return null
-
-  try {
-    const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as Record<string, any>
-    const semantic = parsed.semantic_gate
-    if (!semantic || typeof semantic !== 'object') return null
-
-    const output = semantic.output && typeof semantic.output === 'object'
-      ? semantic.output as Record<string, unknown>
-      : {}
-    const mode = typeof semantic.mode === 'string' ? semantic.mode.trim() : 'unknown'
-    const rejectReason = typeof semantic.reject_reason === 'string' ? semantic.reject_reason.trim() : ''
-    const verdict = typeof output.verdict === 'string' ? output.verdict.trim() : 'unknown'
-    const confidence = typeof output.confidence === 'number' && Number.isFinite(output.confidence)
-      ? output.confidence
-      : 0
-
-    return {
-      enabled: semantic.enabled === true,
-      mode,
-      eligible: semantic.eligible === true,
-      invoked: semantic.invoked === true,
-      accepted: semantic.accepted === true,
-      rejectReason,
-      verdict,
-      confidence
-    }
-  } catch {
-    return null
   }
 }
 
@@ -874,22 +904,6 @@ async function runSingleTurn(state: WindowRuntimeState, win: BrowserWindow): Pro
     const durationMs = Date.now() - turnStartTime
     const actionLabel = describeExecutedAction(result)
     const statusLabel = result.status === 'ask_user' ? 'paused' : result.status
-    if (state.projectPath) {
-      const semanticGate = readSemanticGateSnapshot(state.projectPath, result.turnNumber)
-      if (semanticGate && semanticGate.enabled) {
-        const detail = [
-          `turn=turn-${String(result.turnNumber).padStart(4, '0')}`,
-          `mode=${semanticGate.mode}`,
-          `eligible=${semanticGate.eligible}`,
-          `invoked=${semanticGate.invoked}`,
-          `accepted=${semanticGate.accepted}`,
-          `verdict=${semanticGate.verdict}`,
-          `confidence=${semanticGate.confidence.toFixed(2)}`,
-          semanticGate.rejectReason ? `reason=${semanticGate.rejectReason}` : ''
-        ].filter(Boolean).join(' ')
-        console.info(`[semantic-gate] ${detail}`)
-      }
-    }
     safeSend(win, 'yolo:turn-result', result)
     safeSend(win, 'yolo:event', {
       type: 'turn_completed',
@@ -1245,20 +1259,20 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
       }
     })
 
-    const semanticGateFromEnv = parseSemanticGateConfigFromEnv()
-    const semanticGate = {
-      ...semanticGateFromEnv,
-      ...(semanticGateFromEnv.model ? {} : { model })
+    const northStarSemanticGateFromEnv = parseNorthStarSemanticGateConfigFromEnv()
+    const northStarSemanticGate = {
+      ...northStarSemanticGateFromEnv,
+      ...(northStarSemanticGateFromEnv.model ? {} : { model })
     }
-    let semanticGateEvaluator: ReturnType<typeof createSemanticGateLlmEvaluator> | undefined
-    let semanticGateEvaluatorError = ''
-    if (semanticGate.mode !== 'off') {
+    let northStarSemanticGateEvaluator: ReturnType<typeof createNorthStarSemanticGateLlmEvaluator> | undefined
+    let northStarSemanticGateEvaluatorError = ''
+    if (northStarSemanticGate.mode !== 'off') {
       try {
-        semanticGateEvaluator = createSemanticGateLlmEvaluator({
-          model: semanticGate.model || model
+        northStarSemanticGateEvaluator = createNorthStarSemanticGateLlmEvaluator({
+          model: northStarSemanticGate.model || model
         })
       } catch (error) {
-        semanticGateEvaluatorError = error instanceof Error ? error.message : String(error)
+        northStarSemanticGateEvaluatorError = error instanceof Error ? error.message : String(error)
       }
     }
     const session = createYoloSession({
@@ -1266,34 +1280,26 @@ async function initializeSession(win: BrowserWindow, state: WindowRuntimeState, 
       goal,
       defaultRuntime,
       agent,
-      semanticGate,
-      ...(semanticGateEvaluator ? { semanticGateEvaluator } : {})
+      northStarSemanticGate,
+      ...(northStarSemanticGateEvaluator ? { northStarSemanticGateEvaluator } : {})
     })
 
     await session.init()
 
-    if (semanticGate.mode !== 'off') {
+    if (northStarSemanticGate.mode !== 'off') {
       const details = [
-        `mode=${semanticGate.mode}`,
-        typeof semanticGate.confidenceThreshold === 'number' ? `confidence>=${semanticGate.confidenceThreshold}` : '',
-        semanticGate.model ? `model=${semanticGate.model}` : '',
-        typeof semanticGate.maxInputChars === 'number' ? `maxInputChars=${semanticGate.maxInputChars}` : '',
-        semanticGateEvaluator ? 'arbiter=live' : `arbiter=abstain (${semanticGateEvaluatorError || 'evaluator_init_failed'})`
+        `mode=${northStarSemanticGate.mode}`,
+        typeof northStarSemanticGate.confidenceThreshold === 'number' ? `confidence>=${northStarSemanticGate.confidenceThreshold}` : '',
+        northStarSemanticGate.model ? `model=${northStarSemanticGate.model}` : '',
+        typeof northStarSemanticGate.maxInputChars === 'number' ? `maxInputChars=${northStarSemanticGate.maxInputChars}` : '',
+        northStarSemanticGateEvaluator ? 'arbiter=live' : `arbiter=abstain (${northStarSemanticGateEvaluatorError || 'evaluator_init_failed'})`
       ].filter(Boolean).join(', ')
       safeSend(win, 'yolo:activity', {
-        id: makeUiEventId('semantic-gate-config'),
+        id: makeUiEventId('northstar-semantic-gate-config'),
         timestamp: new Date().toISOString(),
         type: 'runtime',
-        summary: 'Semantic gate enabled',
+        summary: 'NorthStar semantic gate enabled',
         detail: details || undefined
-      })
-    } else {
-      safeSend(win, 'yolo:activity', {
-        id: makeUiEventId('semantic-gate-off'),
-        timestamp: new Date().toISOString(),
-        type: 'runtime',
-        summary: 'Semantic gate disabled',
-        detail: 'mode=off (set YOLO_SEMANTIC_GATE_MODE to shadow or enforce_touch_only to enable)'
       })
     }
 

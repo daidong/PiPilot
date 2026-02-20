@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PHD RAM Console</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar card">
+      <div class="brand-wrap">
+        <h1>PHD RAM <span class="version">v0.2</span></h1>
+        <p>Review-gated research workflow</p>
+      </div>
+
+      <nav class="top-nav" aria-label="Main Views">
+        <button class="nav-btn active" data-view="guide">Guide</button>
+        <button class="nav-btn" data-view="review">Review Workspace</button>
+        <button class="nav-btn" data-view="taskboard">Taskboard</button>
+        <button class="nav-btn" data-view="evidence">Evidence</button>
+        <button class="nav-btn" data-view="decisions">Decisions</button>
+        <button class="nav-btn" data-view="memory">Memory</button>
+        <button class="nav-btn" data-view="console">Console</button>
+      </nav>
+
+      <div class="status-strip">
+        <span id="agentStateBadge" class="badge">IDLE</span>
+        <span id="runningBadge" class="badge muted">IDLE</span>
+        <span id="pendingBadge" class="badge amber">pending=0</span>
+      </div>
+    </header>
+
+    <section class="shortcut-strip card" aria-label="Keyboard Shortcuts">
+      <span><kbd>1..7</kbd> switch view</span>
+      <span><kbd>J</kbd>/<kbd>K</kbd> inbox up/down</span>
+      <span><kbd>O</kbd> open packet</span>
+      <span><kbd>A</kbd>/<kbd>C</kbd>/<kbd>X</kbd> decision</span>
+      <span><kbd>/</kbd> artifact path</span>
+      <span><kbd>N</kbd> next step</span>
+      <span><kbd>R</kbd> refresh</span>
+    </section>
+
+    <main>
+      <section id="view-guide" class="view active">
+        <div class="guide-grid">
+          <article class="card panel">
+            <h2>1) Start Topic</h2>
+            <label for="topicInput">Research Topic</label>
+            <textarea id="topicInput" rows="4" placeholder="Enter a concrete research objective..."></textarea>
+            <button id="startBtn">Start Agent</button>
+
+            <div class="spacer"></div>
+
+            <h2>5) Continue Next Turn</h2>
+            <label for="messageInput">Message To Agent</label>
+            <textarea id="messageInput" rows="4" placeholder="Ask for adjustment, constraints, or next focus..."></textarea>
+            <button id="sendBtn" class="ghost">Send Message</button>
+          </article>
+
+          <article class="card panel">
+            <div class="section-head">
+              <h2>Flow Guide</h2>
+              <button id="refreshBtn" class="ghost">Refresh</button>
+            </div>
+            <div id="currentStepTitle" class="guide-title">Initialize workspace and start topic.</div>
+            <p id="currentStepDesc" class="guide-desc">Input a topic and click Start Agent to begin.</p>
+            <button id="nextActionBtn" class="wide">Do Next Step</button>
+            <ol id="workflowSteps" class="workflow-steps"></ol>
+          </article>
+
+          <article class="card panel stats-panel">
+            <h2>Live Snapshot</h2>
+            <div id="summaryProject" class="summary-row">Project: -</div>
+            <div id="summaryState" class="summary-row">State: -</div>
+            <div id="summaryTasks" class="summary-row">Tasks: -</div>
+            <div id="summaryPending" class="summary-row">Pending packets: -</div>
+            <div class="summary-actions">
+              <button id="jumpReviewBtn" class="ghost">Go To Review Workspace</button>
+              <button id="openFirstPendingBtn" class="ghost">Open First Pending</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-review" class="view">
+        <div class="review-grid">
+          <article class="card panel">
+            <div class="section-head">
+              <h2>Inbox</h2>
+              <span id="inboxCount" class="muted">0 pending</span>
+            </div>
+            <p class="panel-hint">Choose one pending packet.</p>
+            <div id="inboxList" class="inbox-list"></div>
+          </article>
+
+          <article class="card panel">
+            <h2>Packet</h2>
+            <div id="packetMeta" class="packet-meta">Select a packet from inbox.</div>
+            <div id="packetView" class="packet-view"></div>
+          </article>
+
+          <article class="card panel">
+            <h2>Artifact</h2>
+            <div class="artifact-controls">
+              <input id="artifactPathInput" placeholder="relative/path/to/artifact">
+              <button id="openArtifactBtn">Open</button>
+            </div>
+            <div id="artifactPreview" class="artifact-preview"></div>
+          </article>
+        </div>
+
+        <div class="card decision-panel">
+          <div class="decision-head">Decision Bar</div>
+          <textarea id="decisionComment" rows="2" placeholder="Comment required for request changes / reject"></textarea>
+          <div class="decision-buttons">
+            <button id="approveBtn" class="approve">Approve</button>
+            <button id="changesBtn" class="changes">Request Changes</button>
+            <button id="rejectBtn" class="reject">Reject</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-taskboard" class="view">
+        <article class="card panel">
+          <h2>Taskboard</h2>
+          <div id="taskboardView" class="taskboard-grid"></div>
+        </article>
+      </section>
+
+      <section id="view-evidence" class="view">
+        <article class="card panel">
+          <h2>Evidence Registry</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>EID</th>
+                  <th>Type</th>
+                  <th>Title</th>
+                  <th>Path</th>
+                  <th>Packet</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="evidenceTableBody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="view-decisions" class="view">
+        <article class="card panel">
+          <h2>Decision Log</h2>
+          <div id="decisionsList" class="decisions-list"></div>
+        </article>
+      </section>
+
+      <section id="view-memory" class="view">
+        <article class="card panel">
+          <h2>Memory Digest</h2>
+          <div id="memoryDigestView" class="memory-digest"></div>
+        </article>
+        <article class="card panel">
+          <h2>Memory Entries</h2>
+          <div id="memoryList" class="memory-list"></div>
+        </article>
+      </section>
+
+      <section id="view-console" class="view">
+        <article class="card panel">
+          <h2>Activity Stream</h2>
+          <pre id="activityLog" class="activity-log"></pre>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/ui/app.js"></script>
+</body>
+</html>

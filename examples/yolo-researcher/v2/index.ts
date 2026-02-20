@@ -1,7 +1,13 @@
 export { YoloSession, createYoloSession } from './session.js'
 export { ScriptedSingleAgent } from './scripted-agent.js'
-export { createLlmSingleAgent, createSemanticGateLlmEvaluator, LlmSingleAgent } from './llm-agent.js'
-export type { SemanticGateLlmEvaluatorConfig } from './llm-agent.js'
+export {
+  createLlmSingleAgent,
+  createNorthStarSemanticGateLlmEvaluator,
+  LlmSingleAgent
+} from './llm-agent.js'
+export type {
+  NorthStarSemanticGateLlmEvaluatorConfig
+} from './llm-agent.js'
 
 export type {
   ClaimEvidence,
@@ -10,6 +16,15 @@ export type {
   EvidenceLine,
   FailureEntry,
   FailureStatus,
+  NorthStarContract,
+  NorthStarSemanticGateConfig,
+  NorthStarSemanticGateDimensionScores,
+  NorthStarSemanticGateEvaluator,
+  NorthStarSemanticGateInput,
+  NorthStarSemanticGateMode,
+  NorthStarSemanticGateOutput,
+  NorthStarSemanticGateRequiredAction,
+  OrchestrationMode,
   PendingUserInput,
   PlanBoardItem,
   PlanItemStatus,
@@ -19,12 +34,6 @@ export type {
   QueuedUserInput,
   RecentTurnContext,
   ResearchStage,
-  SemanticGateConfig,
-  SemanticGateEvaluator,
-  SemanticGateInput,
-  SemanticGateMode,
-  SemanticGateOutput,
-  SemanticGateTouchedDeliverable,
   StageStatus,
   StagnationInfo,
   ToolEventRecord,
@@ -32,5 +41,6 @@ export type {
   TurnExecutionResult,
   TurnRunOutcome,
   TurnStatus,
+  ResolvedOrchestrationMode,
   YoloSingleAgent
 } from './types.js'

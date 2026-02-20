@@ -19,12 +19,29 @@ interface TurnResultMeta {
   turnNumber?: number
   status?: string
   summary?: string
+  projectClaimsTotal?: number
+  projectClaimsCovered?: number
+  orchestrationMode?: string
   activePlanId?: string
   statusChange?: string
   delta?: string
   blockedReason?: string
   planAttributionReason?: string
   planAttributionAmbiguous?: boolean
+  northstarGateSatisfied?: boolean
+  northstarArtifactChanged?: boolean
+  northstarVerifySucceeded?: boolean
+  northstarReason?: string
+  northstarPolicyViolations?: string[]
+  northstarPivotAllowed?: boolean
+  northstarNoDeltaStreak?: number
+  northstarScoreboardClaimsTotal?: number
+  northstarScoreboardClaimsVerified?: number
+  northstarScoreboardPrevClaimsVerified?: number
+  northstarVerifiedGrowthDelta?: number
+  northstarVerifiedProofRequired?: boolean
+  northstarVerifiedProofSatisfied?: boolean
+  northstarVerifiedProofPaths?: string[]
   plannerCheckpointDue?: boolean
   plannerCheckpointReasons?: string[]
   plannerCheckpointRejections?: string[]
@@ -103,6 +120,47 @@ function readObjectField(data: Record<string, unknown> | null, key: string): Rec
   const value = data[key]
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as Record<string, unknown>
+}
+
+function readNumberMapField(data: Record<string, unknown> | null, key: string): Record<string, number> {
+  if (!data) return {}
+  const value = data[key]
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: Record<string, number> = {}
+  for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entryValue === 'number' && Number.isFinite(entryValue)) {
+      result[entryKey] = entryValue
+    }
+  }
+  return result
+}
+
+function metricLeaf(metricKey: string): string {
+  const metricPart = metricKey.includes(':')
+    ? metricKey.split(':').slice(1).join(':')
+    : metricKey
+  const withoutIndexes = metricPart.replace(/\[\d+\]/g, '')
+  return withoutIndexes
+    .split('.')
+    .map((segment) => segment.trim().toLowerCase())
+    .filter(Boolean)
+    .pop() ?? ''
+}
+
+function readNorthstarScoreboardMetric(
+  northstar: Record<string, unknown> | null,
+  sourceKey: 'scoreboard_values' | 'scoreboard_previous_values',
+  metricName: string
+): number | undefined {
+  const metrics = readNumberMapField(northstar, sourceKey)
+  let matched: number | undefined
+  const target = metricName.trim().toLowerCase()
+  for (const [key, value] of Object.entries(metrics)) {
+    if (metricLeaf(key) === target) {
+      matched = value
+    }
+  }
+  return matched
 }
 
 function formatReasonToken(value: string): string {
@@ -210,15 +268,36 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
         const pathAnchorViolation = readObjectField(parsed, 'path_anchor_violation')
         const pathAnchorMetrics = readObjectField(parsed, 'path_anchor_metrics')
         const pathRewriteEvents = parsed?.path_rewrite_events
+        const northstar = readObjectField(parsed, 'northstar')
+        const scoreboardClaimsTotal = readNorthstarScoreboardMetric(northstar, 'scoreboard_values', 'claims_total')
+        const scoreboardClaimsVerified = readNorthstarScoreboardMetric(northstar, 'scoreboard_values', 'claims_verified')
+        const scoreboardPrevClaimsVerified = readNorthstarScoreboardMetric(northstar, 'scoreboard_previous_values', 'claims_verified')
         setSelectedResultMeta({
           status: readStringField(parsed, 'status') ?? selectedTurnObject?.status ?? 'unknown',
           summary: readStringField(parsed, 'summary') ?? selectedTurnObject?.summary ?? 'No summary.',
+          projectClaimsTotal: readNumberField(parsed, 'claims_total'),
+          projectClaimsCovered: readNumberField(parsed, 'claims_covered'),
+          orchestrationMode: readStringField(parsed, 'orchestration_mode'),
           activePlanId: readStringField(parsed, 'active_plan_id'),
           statusChange: readStringField(parsed, 'status_change'),
           delta: readStringField(parsed, 'delta'),
           blockedReason: readStringField(parsed, 'blocked_reason'),
           planAttributionReason: readStringField(parsed, 'plan_attribution_reason'),
           planAttributionAmbiguous: readBooleanField(parsed, 'plan_attribution_ambiguous'),
+          northstarGateSatisfied: readBooleanField(northstar, 'gate_satisfied'),
+          northstarArtifactChanged: readBooleanField(northstar, 'artifact_changed'),
+          northstarVerifySucceeded: readBooleanField(northstar, 'verify_succeeded'),
+          northstarReason: readStringField(northstar, 'reason'),
+          northstarPolicyViolations: readStringListField(northstar, 'policy_violations'),
+          northstarPivotAllowed: readBooleanField(northstar, 'pivot_allowed'),
+          northstarNoDeltaStreak: readNumberField(northstar, 'no_delta_streak'),
+          northstarScoreboardClaimsTotal: scoreboardClaimsTotal,
+          northstarScoreboardClaimsVerified: scoreboardClaimsVerified,
+          northstarScoreboardPrevClaimsVerified: scoreboardPrevClaimsVerified,
+          northstarVerifiedGrowthDelta: readNumberField(northstar, 'verified_growth_total_delta'),
+          northstarVerifiedProofRequired: readBooleanField(northstar, 'verified_growth_content_proof_required'),
+          northstarVerifiedProofSatisfied: readBooleanField(northstar, 'verified_growth_content_proof_satisfied'),
+          northstarVerifiedProofPaths: readStringListField(northstar, 'verified_growth_content_proof_paths'),
           plannerCheckpointDue: readBooleanField(parsed, 'planner_checkpoint_due'),
           plannerCheckpointReasons: readStringListField(parsed, 'planner_checkpoint_reasons'),
           plannerCheckpointRejections: readStringListField(parsed, 'planner_checkpoint_rejections'),
@@ -282,16 +361,37 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
         const pathAnchorViolation = readObjectField(row.parsedResult, 'path_anchor_violation')
         const pathAnchorMetrics = readObjectField(row.parsedResult, 'path_anchor_metrics')
         const pathRewriteEvents = row.parsedResult?.path_rewrite_events
+        const northstar = readObjectField(row.parsedResult, 'northstar')
+        const scoreboardClaimsTotal = readNorthstarScoreboardMetric(northstar, 'scoreboard_values', 'claims_total')
+        const scoreboardClaimsVerified = readNorthstarScoreboardMetric(northstar, 'scoreboard_values', 'claims_verified')
+        const scoreboardPrevClaimsVerified = readNorthstarScoreboardMetric(northstar, 'scoreboard_previous_values', 'claims_verified')
         nextMilestones.push({
           turnNumber: row.turn.turnNumber,
           status,
           summary,
+          projectClaimsTotal: readNumberField(row.parsedResult, 'claims_total'),
+          projectClaimsCovered: readNumberField(row.parsedResult, 'claims_covered'),
+          orchestrationMode: readStringField(row.parsedResult, 'orchestration_mode'),
           activePlanId: readStringField(row.parsedResult, 'active_plan_id'),
           statusChange: readStringField(row.parsedResult, 'status_change'),
           delta: readStringField(row.parsedResult, 'delta'),
           blockedReason: readStringField(row.parsedResult, 'blocked_reason'),
           planAttributionReason: readStringField(row.parsedResult, 'plan_attribution_reason'),
           planAttributionAmbiguous: readBooleanField(row.parsedResult, 'plan_attribution_ambiguous'),
+          northstarGateSatisfied: readBooleanField(northstar, 'gate_satisfied'),
+          northstarArtifactChanged: readBooleanField(northstar, 'artifact_changed'),
+          northstarVerifySucceeded: readBooleanField(northstar, 'verify_succeeded'),
+          northstarReason: readStringField(northstar, 'reason'),
+          northstarPolicyViolations: readStringListField(northstar, 'policy_violations'),
+          northstarPivotAllowed: readBooleanField(northstar, 'pivot_allowed'),
+          northstarNoDeltaStreak: readNumberField(northstar, 'no_delta_streak'),
+          northstarScoreboardClaimsTotal: scoreboardClaimsTotal,
+          northstarScoreboardClaimsVerified: scoreboardClaimsVerified,
+          northstarScoreboardPrevClaimsVerified: scoreboardPrevClaimsVerified,
+          northstarVerifiedGrowthDelta: readNumberField(northstar, 'verified_growth_total_delta'),
+          northstarVerifiedProofRequired: readBooleanField(northstar, 'verified_growth_content_proof_required'),
+          northstarVerifiedProofSatisfied: readBooleanField(northstar, 'verified_growth_content_proof_satisfied'),
+          northstarVerifiedProofPaths: readStringListField(northstar, 'verified_growth_content_proof_paths'),
           plannerCheckpointDue: readBooleanField(row.parsedResult, 'planner_checkpoint_due'),
           plannerCheckpointReasons: readStringListField(row.parsedResult, 'planner_checkpoint_reasons'),
           plannerCheckpointRejections: readStringListField(row.parsedResult, 'planner_checkpoint_rejections'),
@@ -481,19 +581,62 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     <div className="t-text-secondary mt-1 text-[11px]">
                       {truncateText(milestone?.summary ?? turn.summary, 140)}
                     </div>
-                    {(milestone?.activePlanId || milestone?.statusChange || milestone?.planAttributionReason || milestone?.blockedReason || milestone?.lastFailureKind || milestone?.resolvedRepoId || milestone?.pathAnchorDetected || (milestone?.plannerCheckpointReasons?.length ?? 0) > 0 || (milestone?.plannerCheckpointRejections?.length ?? 0) > 0) && (
+                    {(milestone?.orchestrationMode
+                      || milestone?.projectClaimsTotal !== undefined
+                      || milestone?.blockedReason
+                      || milestone?.northstarGateSatisfied !== undefined
+                      || milestone?.northstarReason
+                      || milestone?.northstarScoreboardClaimsTotal !== undefined
+                      || milestone?.northstarScoreboardClaimsVerified !== undefined
+                      || milestone?.northstarVerifiedProofRequired !== undefined
+                      || (milestone?.northstarPolicyViolations?.length ?? 0) > 0
+                      || milestone?.lastFailureKind
+                      || milestone?.resolvedRepoId
+                      || milestone?.pathAnchorDetected) && (
                       <div className="t-text-muted mt-1 space-y-0.5 text-[10px]">
-                        {(milestone?.activePlanId || milestone?.statusChange) && (
+                        {milestone?.orchestrationMode && (
+                          <div>mode={milestone.orchestrationMode}</div>
+                        )}
+                        {milestone?.northstarGateSatisfied !== undefined && (
                           <div>
-                            {milestone?.activePlanId ? `plan=${milestone.activePlanId}` : ''}
-                            {milestone?.activePlanId && milestone?.statusChange ? ' · ' : ''}
-                            {milestone?.statusChange ? `change=${milestone.statusChange}` : ''}
+                            northstar={milestone.northstarGateSatisfied ? 'gate_satisfied' : 'unsatisfied'}
+                            {milestone.northstarArtifactChanged ? ' · artifact_changed' : ''}
+                            {milestone.northstarVerifySucceeded ? ' · verify_succeeded' : ''}
                           </div>
                         )}
-                        {milestone?.planAttributionReason && (
+                        {milestone?.northstarReason && (
+                          <div>northstar_reason={formatReasonToken(milestone.northstarReason)}</div>
+                        )}
+                        {milestone?.projectClaimsTotal !== undefined && (
                           <div>
-                            attribution={formatReasonToken(milestone.planAttributionReason)}
-                            {milestone.planAttributionAmbiguous ? ' (ambiguous)' : ''}
+                            claims_project_md={milestone.projectClaimsTotal}
+                            {milestone.projectClaimsCovered !== undefined ? ` covered=${milestone.projectClaimsCovered}` : ''}
+                          </div>
+                        )}
+                        {(milestone?.northstarScoreboardClaimsTotal !== undefined || milestone?.northstarScoreboardClaimsVerified !== undefined) && (
+                          <div>
+                            claims_scoreboard=
+                            total:{milestone?.northstarScoreboardClaimsTotal ?? '-'}
+                            {' '}verified:{milestone?.northstarScoreboardClaimsVerified ?? '-'}
+                            {milestone?.northstarScoreboardPrevClaimsVerified !== undefined
+                              ? ` prev_verified:${milestone.northstarScoreboardPrevClaimsVerified}`
+                              : ''}
+                          </div>
+                        )}
+                        {milestone?.northstarVerifiedProofRequired !== undefined && (
+                          <div>
+                            verified_growth_proof=
+                            {milestone.northstarVerifiedProofRequired
+                              ? (milestone.northstarVerifiedProofSatisfied ? 'required_pass' : 'required_fail')
+                              : 'not_required'}
+                            {milestone.northstarVerifiedGrowthDelta !== undefined
+                              ? ` delta=${milestone.northstarVerifiedGrowthDelta}`
+                              : ''}
+                          </div>
+                        )}
+                        {(milestone?.northstarPolicyViolations?.length ?? 0) > 0 && (
+                          <div>
+                            northstar_policy={milestone?.northstarPolicyViolations?.slice(0, 2).map(formatReasonToken).join(', ')}
                           </div>
                         )}
                         {milestone?.blockedReason && (
@@ -504,15 +647,6 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                             failure={formatReasonToken(milestone.lastFailureKind)}
                             {typeof milestone.lastFailedExitCode === 'number' ? ` (exit ${milestone.lastFailedExitCode})` : ''}
                           </div>
-                        )}
-                        {(milestone?.plannerCheckpointReasons?.length ?? 0) > 0 && (
-                          <div>
-                            checkpoint={milestone?.plannerCheckpointDue ? 'due' : 'guard'}:{' '}
-                            {milestone?.plannerCheckpointReasons?.slice(0, 2).map(formatReasonToken).join(', ')}
-                          </div>
-                        )}
-                        {(milestone?.plannerCheckpointRejections?.length ?? 0) > 0 && (
-                          <div>checkpoint_reject={milestone?.plannerCheckpointRejections?.slice(0, 2).map(formatReasonToken).join(', ')}</div>
                         )}
                         {milestone?.resolvedRepoId && (
                           <div>repo={milestone.resolvedRepoId} ({milestone.resolvedRepoPath || '-'})</div>
@@ -639,27 +773,66 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                 <p className="t-text-secondary mt-1.5 text-[11px] leading-relaxed">
                   {selectedSummary}
                 </p>
-                {(selectedResultMeta?.activePlanId
-                  || selectedResultMeta?.statusChange
+                {(selectedResultMeta?.orchestrationMode
+                  || selectedResultMeta?.projectClaimsTotal !== undefined
                   || selectedResultMeta?.delta
-                  || selectedResultMeta?.planAttributionReason
                   || selectedResultMeta?.blockedReason
+                  || selectedResultMeta?.northstarGateSatisfied !== undefined
+                  || selectedResultMeta?.northstarReason
+                  || selectedResultMeta?.northstarScoreboardClaimsTotal !== undefined
+                  || selectedResultMeta?.northstarScoreboardClaimsVerified !== undefined
+                  || selectedResultMeta?.northstarVerifiedProofRequired !== undefined
+                  || (selectedResultMeta?.northstarPolicyViolations?.length ?? 0) > 0
                   || selectedResultMeta?.lastFailureKind
                   || selectedResultMeta?.resolvedRepoId
                   || selectedResultMeta?.pathAnchorDetected
-                  || (selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0
-                  || (selectedResultMeta?.plannerCheckpointRejections?.length ?? 0) > 0
                 ) && (
                   <div className="t-text-muted mt-2 space-y-1 text-[10px]">
-                    {selectedResultMeta?.activePlanId && <div>plan: {selectedResultMeta.activePlanId}</div>}
-                    {selectedResultMeta?.statusChange && <div>change: {selectedResultMeta.statusChange}</div>}
-                    {selectedResultMeta?.delta && <div>delta: {truncateText(selectedResultMeta.delta, 120)}</div>}
-                    {selectedResultMeta?.planAttributionReason && (
+                    {selectedResultMeta?.orchestrationMode && <div>mode: {selectedResultMeta.orchestrationMode}</div>}
+                    {selectedResultMeta?.northstarGateSatisfied !== undefined && (
                       <div>
-                        attribution: {formatReasonToken(selectedResultMeta.planAttributionReason)}
-                        {selectedResultMeta.planAttributionAmbiguous ? ' (ambiguous)' : ''}
+                        northstar: {selectedResultMeta.northstarGateSatisfied ? 'gate_satisfied' : 'unsatisfied'}
+                        {selectedResultMeta.northstarArtifactChanged ? ' · artifact_changed' : ''}
+                        {selectedResultMeta.northstarVerifySucceeded ? ' · verify_succeeded' : ''}
                       </div>
                     )}
+                    {selectedResultMeta?.northstarReason && (
+                      <div>northstar_reason: {formatReasonToken(selectedResultMeta.northstarReason)}</div>
+                    )}
+                    {selectedResultMeta?.projectClaimsTotal !== undefined && (
+                      <div>
+                        claims_project_md: total={selectedResultMeta.projectClaimsTotal}
+                        {selectedResultMeta.projectClaimsCovered !== undefined ? ` covered=${selectedResultMeta.projectClaimsCovered}` : ''}
+                      </div>
+                    )}
+                    {(selectedResultMeta?.northstarScoreboardClaimsTotal !== undefined || selectedResultMeta?.northstarScoreboardClaimsVerified !== undefined) && (
+                      <div>
+                        claims_scoreboard: total={selectedResultMeta?.northstarScoreboardClaimsTotal ?? '-'}
+                        {' '}verified={selectedResultMeta?.northstarScoreboardClaimsVerified ?? '-'}
+                        {selectedResultMeta?.northstarScoreboardPrevClaimsVerified !== undefined
+                          ? ` prev_verified=${selectedResultMeta.northstarScoreboardPrevClaimsVerified}`
+                          : ''}
+                      </div>
+                    )}
+                    {selectedResultMeta?.northstarVerifiedProofRequired !== undefined && (
+                      <div>
+                        verified_growth_proof: {selectedResultMeta.northstarVerifiedProofRequired
+                          ? (selectedResultMeta.northstarVerifiedProofSatisfied ? 'required_pass' : 'required_fail')
+                          : 'not_required'}
+                        {selectedResultMeta?.northstarVerifiedGrowthDelta !== undefined
+                          ? ` delta=${selectedResultMeta.northstarVerifiedGrowthDelta}`
+                          : ''}
+                      </div>
+                    )}
+                    {(selectedResultMeta?.northstarVerifiedProofPaths?.length ?? 0) > 0 && (
+                      <div>
+                        verified_growth_proof_paths: {selectedResultMeta?.northstarVerifiedProofPaths?.slice(0, 2).join(', ')}
+                      </div>
+                    )}
+                    {(selectedResultMeta?.northstarPolicyViolations?.length ?? 0) > 0 && (
+                      <div>northstar_policy: {selectedResultMeta?.northstarPolicyViolations?.slice(0, 3).map(formatReasonToken).join(', ')}</div>
+                    )}
+                    {selectedResultMeta?.delta && <div>delta: {truncateText(selectedResultMeta.delta, 120)}</div>}
                     {selectedResultMeta?.blockedReason && (
                       <div>reject: {formatReasonToken(selectedResultMeta.blockedReason)}</div>
                     )}
@@ -674,16 +847,6 @@ export default function EvidenceView({ overview, turns, projectMarkdown, failure
                     )}
                     {selectedResultMeta?.lastFailedErrorExcerpt && (
                       <div>error_excerpt: {truncateText(selectedResultMeta.lastFailedErrorExcerpt, 140)}</div>
-                    )}
-                    {(selectedResultMeta?.plannerCheckpointReasons?.length ?? 0) > 0 && (
-                      <div>
-                        checkpoint: {selectedResultMeta?.plannerCheckpointDue ? 'due' : 'guard'} ({selectedResultMeta?.plannerCheckpointReasons?.map(formatReasonToken).join(', ')})
-                      </div>
-                    )}
-                    {(selectedResultMeta?.plannerCheckpointRejections?.length ?? 0) > 0 && (
-                      <div>
-                        checkpoint_reject: {selectedResultMeta?.plannerCheckpointRejections?.map(formatReasonToken).join(', ')}
-                      </div>
                     )}
                     {selectedResultMeta?.resolvedRepoId && (
                       <div>

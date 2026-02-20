@@ -2,6 +2,45 @@ export type FailureStatus = 'WARN' | 'BLOCKED' | 'UNBLOCKED'
 
 export type PlanItemStatus = 'TODO' | 'ACTIVE' | 'DONE' | 'BLOCKED' | 'DROPPED'
 
+export type OrchestrationMode = 'auto' | 'artifact_gravity_v3_paper'
+export type ResolvedOrchestrationMode = 'artifact_gravity_v3_paper'
+
+export interface NorthStarContract {
+  filePath: string
+  goal: string
+  currentObjective: string
+  objectiveId: string
+  objectiveVersion: number
+  artifactType: string
+  artifactGate: 'any' | 'all'
+  artifactPaths: string[]
+  paperArtifactPathsEligible: boolean
+  internalCheckCommands: string[]
+  internalCheckGate: 'any' | 'all'
+  internalCheckAllowlistValid: boolean
+  externalCheckCommands: string[]
+  externalCheckGate: 'any' | 'all'
+  externalCheckAllowlistValid: boolean
+  externalCheckRequireEvery: number
+  scoreboardMetricPaths: string[]
+  scoreboardMetricPathsValid: boolean
+  scoreboardMetricPathsInvalid: string[]
+  realityCheckCommands: string[]
+  realityCheckGate: 'any' | 'all'
+  realityCheckAllowlistValid: boolean
+  verifyCmd?: string
+  verifySuccessSignal?: string
+  semanticReviewPolicy: {
+    mode: NorthStarSemanticGateMode
+    confidenceThreshold: number
+    allowUpgrade: boolean
+    requiredActionBudgetPerTurn: number
+    mustActionMaxOpen: number
+    recentWindowTurns: number
+  }
+  nextAction: string
+}
+
 export interface PlanBoardItem {
   id: string
   title: string
@@ -112,6 +151,9 @@ export interface TurnContext {
   projectRoot: string
   yoloRoot: string
   runsDir: string
+  orchestrationMode?: ResolvedOrchestrationMode
+  northStar?: NorthStarContract
+  northStarPivotAllowed?: boolean
   workspaceGitRepos?: string[]
   project: ProjectControlPanel
   failures: FailureEntry[]
@@ -121,6 +163,13 @@ export interface TurnContext {
   untrustedEvidenceHints?: EvidenceTrustHint[]
   stagnation?: StagnationInfo
   plannerCheckpoint?: PlannerCheckpointInfo
+  northStarSemantic?: {
+    lastVerdict: 'advance_confirmed' | 'advance_weak' | 'no_progress' | 'regress' | 'abstain' | 'none'
+    reasonCodes: string[]
+    openRequiredActions: NorthStarSemanticGateRequiredAction[]
+    claimAuditDebt: string[]
+    derivedVerdict?: 'advance_confirmed' | 'advance_weak' | 'no_progress' | 'regress' | 'abstain' | 'none'
+  }
 }
 
 export interface ProjectUpdate {
@@ -147,59 +196,143 @@ export interface ToolEventRecord {
   error?: string
 }
 
-export type SemanticGateMode = 'off' | 'shadow' | 'enforce_touch_only' | 'enforce_success'
+export type NorthStarSemanticGateMode = 'off' | 'shadow' | 'enforce_downgrade_only' | 'enforce_balanced'
 
-export interface SemanticGateConfig {
-  mode?: SemanticGateMode
+export interface NorthStarSemanticGateConfig {
+  mode?: NorthStarSemanticGateMode
   confidenceThreshold?: number
   model?: string
   maxInputChars?: number
+  allowUpgrade?: boolean
+  requiredActionBudgetPerTurn?: number
+  mustActionMaxOpen?: number
+  recentWindowTurns?: number
 }
 
-export interface SemanticGateTouchedDeliverable {
-  id: string
-  evidence_refs: string[]
-  reason_codes?: string[]
+export interface NorthStarSemanticGateDimensionScores {
+  goal_alignment: 0 | 1 | 2
+  evidence_strength: 0 | 1 | 2
+  novelty_delta: 0 | 1 | 2
+  falsifiability: 0 | 1 | 2
+  trajectory_health: 0 | 1 | 2
 }
 
-export interface SemanticGateInput {
-  schema: 'yolo.semantic_gate.input.v1'
+export interface NorthStarSemanticGateRequiredAction {
+  tier: 'must_candidate' | 'must' | 'should' | 'suggest'
+  code: string
+  description: string
+  due_turn?: number
+  source_tier?: 'must_candidate' | 'should' | 'suggest'
+  promotion_trigger_codes?: string[]
+  promotion_notes?: string[]
+}
+
+export interface NorthStarSemanticGateInput {
+  schema: 'yolo.northstar_semantic_gate.input.v1'
   turn: {
     id: string
     number: number
   }
-  active_plan_id: string | null
+  mode: NorthStarSemanticGateMode
   deterministic: {
     status: TurnStatus
     blocked_reason: string | null
-  }
-  plan: {
-    done_definition: string[]
-    deliverables: string[]
-  }
-  evidence_summary: {
-    explicit_evidence_paths: string[]
-    business_artifacts: string[]
-    workspace_write_touches: string[]
-    changed_files_count: number
-    has_patch: boolean
-    cmd_exit_code: number
-  }
-  repo_constraints: {
     hard_violations: string[]
-    coding_large_repo_required: boolean
+    northstar_gate_satisfied: boolean
+  }
+  northstar: {
+    goal: string
+    current_objective: string
+    objective_id: string
+    objective_version: number
+    artifacts: string[]
+    scoreboard_paths: string[]
+  }
+  delta: {
+    artifact_changes: string[]
+    scoreboard_before: Record<string, number>
+    scoreboard_after: Record<string, number>
+    change_proof: {
+      patch_path: string | null
+      patch_hunks_count: number
+      placeholder_patch_detected: boolean
+      touched_files: string[]
+      file_deltas: Array<{
+        path: string
+        before_hash: string
+        after_hash: string
+        content_changed: boolean
+        nontrivial_change_detected: boolean
+        nontrivial_change_rules: string[]
+        added_lines: number
+        removed_lines: number
+      }>
+    }
+  }
+  content_snapshots: Array<{
+    path: string
+    kind: 'text' | 'binary' | 'directory' | 'other' | 'missing'
+    source: 'runtime_snapshot'
+    before_hash: string
+    after_hash: string
+    before_excerpt?: string
+    after_excerpt?: string
+    structured_summary?: Record<string, number>
+  }>
+  claim_quality: {
+    claims_total: number
+    claims_marked_verified: number
+    claims_verified_with_valid_evidence: number
+    claims_marked_verified_with_invalid_evidence: number
+    evidence_valid_coverage: number
+    source_metric_path: string
+  }
+  checks: {
+    internal_executed: string[]
+    internal_succeeded: string[]
+    external_executed: string[]
+    external_succeeded: string[]
+  }
+  recent_turns: Array<{
+    turn: number
+    status: string
+    semantic_verdict: 'advance_confirmed' | 'advance_weak' | 'no_progress' | 'regress' | 'abstain' | 'none'
+    summary: string
+  }>
+  recent_objectives: Array<{
+    turn: number
+    objective_id: string
+    objective_version: number
+    change_reason: 'pivot_due_to_regress' | 'scope_narrowing' | 'new_constraint' | 'external_feedback' | 'objective_stable'
+  }>
+  pivot_context: {
+    is_explicit_pivot_turn: boolean
+    pivot_reason: 'pivot_due_to_regress' | 'scope_narrowing' | 'new_constraint' | 'external_feedback' | 'objective_stable'
+    pivot_evidence_paths: string[]
+    pivot_approved_by_policy: boolean
+  }
+  evidence_refs: {
+    trusted_paths: string[]
+    business_artifacts: string[]
   }
 }
 
-export interface SemanticGateOutput {
-  schema?: 'yolo.semantic_gate.output.v1'
-  verdict: 'touched' | 'not_touched' | 'abstain'
+export interface NorthStarSemanticGateOutput {
+  schema?: 'yolo.northstar_semantic_gate.output.v1'
   confidence: number
-  touched_deliverables?: SemanticGateTouchedDeliverable[]
-  notes?: string
+  dimension_scores?: Partial<NorthStarSemanticGateDimensionScores>
+  reason_codes?: string[]
+  claim_audit?: {
+    supported_ids?: string[]
+    unsupported_ids?: string[]
+    contradicted_ids?: string[]
+  }
+  required_actions?: NorthStarSemanticGateRequiredAction[]
+  summary?: string
+  verdict?: 'advance_confirmed' | 'advance_weak' | 'no_progress' | 'regress' | 'abstain'
 }
 
-export type SemanticGateEvaluator = (input: SemanticGateInput) => Promise<SemanticGateOutput>
+export type NorthStarSemanticGateEvaluator = (input: NorthStarSemanticGateInput) => Promise<NorthStarSemanticGateOutput>
 
 export interface TurnRunOutcome {
   intent: string
@@ -246,10 +379,11 @@ export interface CreateYoloSessionConfig {
   goal: string
   successCriteria?: string[]
   defaultRuntime?: string
+  orchestrationMode?: OrchestrationMode
   recentTurnsToLoad?: number
   agent: YoloSingleAgent
-  semanticGate?: SemanticGateConfig
-  semanticGateEvaluator?: SemanticGateEvaluator
+  northStarSemanticGate?: NorthStarSemanticGateConfig
+  northStarSemanticGateEvaluator?: NorthStarSemanticGateEvaluator
   pathAnchor?: {
     audit?: boolean
     mode?: 'recover' | 'fail'
