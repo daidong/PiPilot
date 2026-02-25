@@ -188,6 +188,34 @@ export { createAgent } from './agent/create-agent.js'
 export type { CreateAgentOptions } from './agent/create-agent.js'
 export { defineAgent, validateAgentDefinition } from './agent/define-agent.js'
 export { AgentLoop } from './agent/agent-loop.js'
+export {
+  fileStore,
+  FileStateStore,
+  InMemoryStateStore,
+  HookBus,
+  ToolRunner,
+  PluginRegistry,
+  PluginLoader,
+  createPluginScaffold,
+  fsPlugin,
+  execPlugin,
+  memoryPlugin,
+  reviewPlugin,
+  pluginManagerPlugin
+} from './thin-core/index.js'
+export type {
+  ThinAgent,
+  ThinCreateAgentOptions,
+  PluginDefinition,
+  PluginManifest,
+  PluginPermissions,
+  PluginToolDefinition,
+  PluginToolResult,
+  PluginInstallResult,
+  StateStore,
+  SessionEvent,
+  DynamicPluginHandle
+} from './thin-core/index.js'
 
 // Schema-free Agent (RFC-002) - Primary API
 export {

@@ -37,6 +37,7 @@
     "example:phd": "tsx examples/phd/index.ts",
     "example:phd:serve": "tsx examples/phd/index.ts serve",
     "example:phd:smoke": "tsx examples/phd/index.ts smoke-test",
+    "example:thin-core": "tsx examples/thin-core/index.ts",
     "example:yolo-researcher:desktop:install": "npm --prefix examples/yolo-researcher/desktop install",
     "example:yolo-researcher:desktop:dev": "npm --prefix examples/yolo-researcher/desktop run dev",
     "example:yolo-researcher:desktop:build": "npm --prefix examples/yolo-researcher/desktop run build"
