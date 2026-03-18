@@ -96,7 +96,7 @@ async function renderSelectedContext(
 
 /** Default model per provider */
 const DEFAULT_MODEL_FOR_PROVIDER: Record<ProviderID, string> = {
-  openai: 'gpt-5.2',
+  openai: 'gpt-5.4',
   anthropic: 'claude-sonnet-4-5-20250929',
   deepseek: 'deepseek-chat',
   google: 'gemini-2.0-flash'

@@ -637,7 +637,7 @@ describe('Integration: AgentLoop end-to-end', () => {
 
       const loop = new AgentLoop({
         client,
-        modelId: 'gpt-5.2',
+        modelId: 'gpt-5.4',
         toolRegistry: env.toolRegistry,
         runtime: env.mockRuntime,
         trace: env.trace,

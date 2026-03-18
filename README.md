@@ -1160,7 +1160,7 @@ const gpt4Agent = createAgent({
 // OpenAI GPT-5 (Responses API - requires strict schemas)
 const gpt5Agent = createAgent({
   apiKey: process.env.OPENAI_API_KEY,
-  model: 'gpt-5.2'
+  model: 'gpt-5.4'
 })
 
 // Anthropic (API key starts with 'sk-ant-')

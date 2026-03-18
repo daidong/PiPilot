@@ -16,7 +16,7 @@ describe('KernelV2 replay path guard', () => {
     const kernel = createKernelV2({
       projectPath: projectDir,
       contextWindow: 1200,
-      modelId: 'gpt-5.2',
+      modelId: 'gpt-5.4',
       config: {
         enabled: true
       }

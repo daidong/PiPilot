@@ -33,7 +33,7 @@ literature-search internal (per invocation, ~15 invocations):
   Summarizer: 15 × ~8K = 120K prompt tokens
 
 Estimated total: ~700K+ prompt tokens, ~50K completion tokens
-At gpt-5.2 pricing: significant cost for one literature study
+At gpt-5.4 pricing: significant cost for one literature study
 ```
 
 ### What works well (keep these)

@@ -99,7 +99,7 @@ const fmt = createActivityFormatter({
 let coordinator: ReturnType<typeof createCoordinator> | null = null
 let scheduler: Scheduler | null = null
 let notificationStore: NotificationStore | null = null
-let currentModel = 'gpt-5.2'
+let currentModel = 'gpt-5.4'
 let currentReasoningEffort: 'high' | 'medium' | 'low' = 'medium'
 let currentAuthMode: 'api-key' | 'none' = 'none'
 // Active project path (auto-restored from last-opened project when available)
@@ -740,7 +740,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       realtimeBuffer.reset()
       projectPath = ''
       sessionId = crypto.randomUUID()
-      currentModel = 'gpt-5.2'
+      currentModel = 'gpt-5.4'
       currentAuthMode = 'none'
       clearLastProjectPath()
     } finally {

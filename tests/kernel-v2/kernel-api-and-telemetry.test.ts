@@ -12,7 +12,7 @@ describe('KernelV2 API and telemetry coverage', () => {
     const kernel = createKernelV2({
       projectPath: dir,
       contextWindow: 1200,
-      modelId: 'gpt-5.2',
+      modelId: 'gpt-5.4',
       config: {
         enabled: true,
         profile: 'legacy',
@@ -73,7 +73,7 @@ describe('KernelV2 API and telemetry coverage', () => {
     const kernel = createKernelV2({
       projectPath: dir,
       contextWindow: 1200,
-      modelId: 'gpt-5.2',
+      modelId: 'gpt-5.4',
       config: {
         enabled: true,
         profile: 'minimal',

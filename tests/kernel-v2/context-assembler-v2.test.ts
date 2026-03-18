@@ -18,7 +18,7 @@ describe('ContextAssemblerV2', () => {
       enabled: true,
       profile: 'legacy',
       context: { protectedRecentTurns: 3 }
-    }, 200000, 'gpt-5.2')
+    }, 200000, 'gpt-5.4')
 
     const assembler = new ContextAssemblerV2(storage, cfg)
 
@@ -64,7 +64,7 @@ describe('ContextAssemblerV2', () => {
       enabled: true,
       profile: 'minimal',
       context: { protectedRecentTurns: 2 }
-    }, 200000, 'gpt-5.2')
+    }, 200000, 'gpt-5.4')
 
     const assembler = new ContextAssemblerV2(storage, cfg)
 

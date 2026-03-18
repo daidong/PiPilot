@@ -12,14 +12,14 @@ describe('cost-calculator', () => {
       cacheReadInputTokens: 100
     }
 
-    const cost = calculateCost('gpt-5.2', usage)
+    const cost = calculateCost('gpt-5.4', usage)
 
-    // gpt-5.2 pricing:
-    // input: $1.75 / 1M, cached input: $0.175 / 1M, output: $14 / 1M
-    expect(cost.promptCost).toBeCloseTo(0.001575, 10)
-    expect(cost.cachedReadCost).toBeCloseTo(0.0000175, 10)
-    expect(cost.completionCost).toBeCloseTo(0.007, 10)
-    expect(cost.totalCost).toBeCloseTo(0.0085925, 10)
+    // gpt-5.4 pricing:
+    // input: $2.0 / 1M, cached input: $0.2 / 1M, output: $16 / 1M
+    expect(cost.promptCost).toBeCloseTo(0.0018, 10)
+    expect(cost.cachedReadCost).toBeCloseTo(0.00002, 10)
+    expect(cost.completionCost).toBeCloseTo(0.008, 10)
+    expect(cost.totalCost).toBeCloseTo(0.00982, 10)
   })
 
   it('falls back to provider discount when model cached input pricing is not defined', () => {

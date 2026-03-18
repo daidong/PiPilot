@@ -19,7 +19,7 @@ describe('KernelV2 recovery and telemetry', () => {
     const kernel = createKernelV2({
       projectPath: dir,
       contextWindow: 200000,
-      modelId: 'gpt-5.2',
+      modelId: 'gpt-5.4',
       config: {
         enabled: true,
         telemetry: { mode: 'stderr+file' }

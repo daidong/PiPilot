@@ -422,7 +422,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   const coordinatorProvider = getModel(model ?? '')?.providerID
   const intentRouterModelId = coordinatorProvider === 'anthropic'
     ? 'claude-haiku-4-5-20251001'
-    : 'gpt-5-nano'
+    : 'gpt-5.4-nano'
 
   let intentRouterClient: ReturnType<typeof createLLMClientFromModelId> | null = null
   try {

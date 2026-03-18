@@ -25,7 +25,7 @@ describe('ContextAssemblerV2 fail-safe and retrieval fallback', () => {
         fallbackChain: ['vector-only', 'raw-file-scan'],
         rawScanLimitTokens: 60
       }
-    }, 1200, 'gpt-5.2')
+    }, 1200, 'gpt-5.4')
 
     const project = await storage.getOrCreateProject()
     await storage.bindSessionToProject('sess_failsafe', project.projectId)

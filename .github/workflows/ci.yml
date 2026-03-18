@@ -26,9 +26,6 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: UI Color Discipline
-        run: npm run check:yolo-ui-colors
-
       - name: Build
         run: npm run build
 

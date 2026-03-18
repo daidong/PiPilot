@@ -400,7 +400,7 @@ describe('AgentLoop', () => {
 
       const agentLoop = new AgentLoop({
         client,
-        modelId: 'gpt-5.2',
+        modelId: 'gpt-5.4',
         toolRegistry,
         runtime: mockRuntime,
         trace,

@@ -665,7 +665,7 @@ export ANTHROPIC_API_KEY=sk-ant-xxx
 
 # Optional
 export EMAIL_DB_PATH=~/path/to/email.db   # default: ~/Library/Application Support/ChatMail/local-email.db
-export MODEL=gpt-5.2                       # default model
+export MODEL=gpt-5.4                       # default model
 export BRAVE_API_KEY=BSA-xxx               # for web search (optional)
 ```
 

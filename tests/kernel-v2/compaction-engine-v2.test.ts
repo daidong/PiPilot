@@ -20,7 +20,7 @@ describe('CompactionEngineV2', () => {
       await storage.appendTurn('sess_comp', { role: 'assistant', content: `Result ${i}` })
     }
 
-    const cfg = resolveKernelV2Config({ enabled: true }, 2000, 'gpt-5.2')
+    const cfg = resolveKernelV2Config({ enabled: true }, 2000, 'gpt-5.4')
     const gate = new MemoryWriteGateV2(storage, {
       maxWritesPerTurn: 20,
       maxWritesPerSession: 500,

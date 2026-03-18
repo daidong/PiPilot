@@ -43,7 +43,7 @@ describe('KernelV2 weekly lifecycle', () => {
     const kernel = createKernelV2({
       projectPath: dir,
       contextWindow: 200000,
-      modelId: 'gpt-5.2',
+      modelId: 'gpt-5.4',
       config: {
         enabled: true,
         profile: 'legacy',
