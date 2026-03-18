@@ -4,6 +4,7 @@
   font-family: 'Playfair Display';
   font-style: normal;
   font-weight: 400 900;
+  font-display: swap;
   src: url('https://fonts.gstatic.com/s/playfairdisplay/v37/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKd3vXDXbtM.woff2') format('woff2');
 }
 
@@ -11,6 +12,7 @@
   font-family: 'Inter';
   font-style: normal;
   font-weight: 100 900;
+  font-display: swap;
   src: url('https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiA.woff2') format('woff2');
 }
 
@@ -41,6 +43,17 @@ html.dark {
   --color-code-text: #38bdf8;
   --color-code-bg: rgba(56, 189, 248, 0.08);
   --color-code-border: rgba(56, 189, 248, 0.2);
+  /* Semantic status colors */
+  --color-status-success: #22c55e;
+  --color-status-error: #ef4444;
+  --color-status-error-soft: #fca5a5;
+  --color-status-warning: #f59e0b;
+  --color-status-info: #60a5fa;
+  /* Semantic surface accents */
+  --color-surface-toggle: #404040;
+  --color-surface-toggle-bg: #171717;
+  --color-surface-toggle-text: #f5f5f5;
+  --color-surface-toggle-inactive: #a3a3a3;
   color-scheme: dark;
 }
 
@@ -65,6 +78,17 @@ html.light {
   --color-code-text: #0369a1;
   --color-code-bg: rgba(3, 105, 161, 0.08);
   --color-code-border: rgba(3, 105, 161, 0.2);
+  /* Semantic status colors */
+  --color-status-success: #16a34a;
+  --color-status-error: #dc2626;
+  --color-status-error-soft: #ef4444;
+  --color-status-warning: #d97706;
+  --color-status-info: #3b82f6;
+  /* Semantic surface accents */
+  --color-surface-toggle: #d4d4d4;
+  --color-surface-toggle-bg: #e5e5e5;
+  --color-surface-toggle-text: #171717;
+  --color-surface-toggle-inactive: #525252;
   color-scheme: light;
 }
 
@@ -84,6 +108,34 @@ body {
 .t-text { color: var(--color-text); }
 .t-text-secondary { color: var(--color-text-secondary); }
 .t-text-muted { color: var(--color-text-muted); }
+.t-text-accent { color: var(--color-accent); }
+.t-text-accent-soft { color: var(--color-accent-soft); }
+.t-text-success { color: var(--color-status-success); }
+.t-text-error { color: var(--color-status-error); }
+.t-text-error-soft { color: var(--color-status-error-soft); }
+.t-text-warning { color: var(--color-status-warning); }
+.t-text-info { color: var(--color-status-info); }
+.t-bg-accent { background: var(--color-accent); }
+.t-bg-accent-soft { background: var(--color-accent-soft); }
+.t-bg-success { background: var(--color-status-success); }
+.t-bg-error { background: var(--color-status-error); }
+.t-bg-toggle { background: var(--color-surface-toggle-bg); }
+.t-text-toggle-active { color: var(--color-surface-toggle-text); }
+.t-text-toggle-inactive { color: var(--color-surface-toggle-inactive); }
+.t-bg-toggle-active { background: var(--color-surface-toggle); }
+.t-border-accent { border-color: var(--color-accent); }
+.t-border-accent-soft { border-color: var(--color-accent-soft); }
+
+/* Focus-within glow for input containers (chat input bar) */
+.t-input-container:focus-within {
+  border-color: var(--color-input-focus) !important;
+  box-shadow: 0 0 0 1px var(--color-input-focus);
+}
+
+/* Subtle focus ring for standalone inputs/textareas */
+.t-focus-ring:focus {
+  box-shadow: 0 0 0 1px var(--color-input-focus);
+}
 
 /* Draggable title bar area */
 .drag-region {
@@ -219,4 +271,15 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

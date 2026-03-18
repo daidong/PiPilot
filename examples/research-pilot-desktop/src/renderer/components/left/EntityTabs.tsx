@@ -1,6 +1,8 @@
-import React, { useEffect, useCallback, useState, useRef } from 'react'
+import React, { useEffect, useCallback, useMemo, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+const remarkPlugins = [remarkGfm]
 import {
   BookMarked,
   BookOpen,
@@ -59,8 +61,9 @@ function HoverPreview({
           <div className="flex items-center gap-0.5 shrink-0">
             <button
               onClick={(e) => { e.stopPropagation(); onDelete() }}
-              className={`p-1 rounded transition-colors ${confirmDelete ? 'text-red-500' : 't-text-muted hover:text-red-400'}`}
+              className={`p-1 rounded transition-colors ${confirmDelete ? 't-text-error' : 't-text-muted hover:t-text-error-soft'}`}
               title={confirmDelete ? 'Click again to confirm' : 'Delete'}
+              aria-label={confirmDelete ? `Confirm delete ${entity.title}` : `Delete ${entity.title}`}
             >
               <Trash2 size={13} />
             </button>
@@ -70,7 +73,7 @@ function HoverPreview({
       {content && (
         <div className="px-3 py-2">
           <div className="md-prose text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={remarkPlugins}>
               {content.length > 600 ? content.slice(0, 600) + '...' : content}
             </ReactMarkdown>
           </div>
@@ -86,7 +89,7 @@ const tabs = [
   { key: 'debug' as const, label: 'Debug', icon: Activity }
 ]
 
-function EntityRow({ entity }: { entity: EntityItem }) {
+const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem }) {
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const enrichingPapers = useEntityStore((s) => s.enrichingPapers)
   const isEnriching = enrichingPapers.has(entity.id)
@@ -168,7 +171,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
           />
         )}
         {isEnriching ? (
-          <Loader2 size={10} className="shrink-0 text-teal-400 animate-spin" />
+          <Loader2 size={10} className="shrink-0 t-text-accent-soft animate-spin" />
         ) : (
           <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
         )}
@@ -177,7 +180,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
       {messageId && (
         <button
           onClick={handleProvenanceClick}
-          className="flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-teal-400 transition-colors border-l t-border"
+          className="flex items-center gap-1 ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:t-text-accent-soft transition-colors border-l t-border"
           title="Scroll to source message"
         >
           <MessageSquare size={9} />
@@ -186,7 +189,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
       )}
     </div>
   )
-}
+})
 
 function DataTreeView({ items }: { items: EntityItem[] }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -235,7 +238,7 @@ function DataTreeView({ items }: { items: EntityItem[] }) {
               >
                 {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               </button>
-              <FlaskConical size={13} className="shrink-0 text-teal-500" />
+              <FlaskConical size={13} className="shrink-0 t-text-accent" />
               <span className="text-xs t-text truncate" onClick={() => openPreview(children[0])}>
                 Analysis: {label}
               </span>
@@ -282,16 +285,16 @@ function LibraryContent({
     refreshAll()
   }, [refreshAll])
 
-  const allItems = [...notes, ...data]
+  const allItems = useMemo(() => [...notes, ...data], [notes, data])
 
   return (
     <>
       <div
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-teal-400/40"
+        className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-[var(--color-accent-soft)]/40"
       >
-        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
+        <Upload size={16} className="mx-auto mb-1 t-text-accent-soft" />
         <p className="text-xs t-text-muted">Drop files here</p>
       </div>
 
@@ -302,13 +305,13 @@ function LibraryContent({
           <>
             {notes.length > 0 && (
               <>
-                <p className="text-[10px] t-text-muted uppercase tracking-wider px-2 pt-1 pb-0.5">Notes ({notes.length})</p>
+                <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-1 pb-0.5">Notes ({notes.length})</p>
                 {notes.map((e) => <EntityRow key={e.id} entity={e} />)}
               </>
             )}
             {data.length > 0 && (
               <>
-                <p className="text-[10px] t-text-muted uppercase tracking-wider px-2 pt-2 pb-0.5">Data ({data.length})</p>
+                <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-2 pb-0.5">Data ({data.length})</p>
                 <DataTreeView items={data} />
               </>
             )}
@@ -374,7 +377,7 @@ function PapersContent({
         <button
           onClick={handleEnrichAll}
           disabled={isEnrichingAll}
-          className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:text-teal-400 transition-colors disabled:opacity-50"
+          className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:t-text-accent-soft transition-colors disabled:opacity-50"
           title="Enrich metadata for all papers"
         >
           {isEnrichingAll ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
@@ -385,7 +388,7 @@ function PapersContent({
       <div
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className="mx-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-teal-400/40"
+        className="mx-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-[var(--color-accent-soft)]/40"
       >
         <Upload size={16} className="mx-auto mb-1 t-text-muted" />
         <p className="text-xs t-text-muted">Drop files here to add papers</p>
@@ -405,7 +408,10 @@ function PapersContent({
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, papers, data, refreshAll } = useEntityStore()
+  const notes = useEntityStore((s) => s.notes)
+  const papers = useEntityStore((s) => s.papers)
+  const data = useEntityStore((s) => s.data)
+  const refreshAll = useEntityStore((s) => s.refreshAll)
 
   useEffect(() => {
     refreshAll()
@@ -426,14 +432,16 @@ export function EntityTabs() {
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="flex border-b t-border px-1">
+      <div className="flex border-b t-border px-1" role="tablist" aria-label="Content categories">
         {tabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
+            role="tab"
+            aria-selected={leftTab === key}
             onClick={() => setLeftTab(key)}
             className={`no-drag flex items-center gap-1 px-2 py-2 text-[11px] font-medium border-b-2 transition-colors ${
               leftTab === key
-                ? 'border-teal-400 t-text'
+                ? 'border-[var(--color-accent-soft)] t-text-accent'
                 : 'border-transparent t-text-muted hover:t-text-secondary'
             }`}
             title={label}

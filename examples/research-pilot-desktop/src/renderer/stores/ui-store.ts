@@ -7,7 +7,7 @@ export type { LeftTab }
 export type ReasoningEffort = 'high' | 'medium' | 'low' | 'max'
 
 export const REASONING_MODELS = [
-  'gpt-5.2', 'gpt-5.1', 'gpt-5-mini', 'gpt-5-nano',
+  'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano',
   'claude-opus-4-6'
 ]
 /** @deprecated Use REASONING_MODELS instead */
@@ -29,10 +29,9 @@ export interface ModelOption {
 
 export const SUPPORTED_MODELS: ModelOption[] = [
   // GPT
-  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'OpenAI' },
-  { id: 'gpt-5.1', label: 'GPT-5.1', provider: 'OpenAI' },
-  { id: 'gpt-5-mini', label: 'GPT-5 Mini', provider: 'OpenAI' },
-  { id: 'gpt-5-nano', label: 'GPT-5 Nano', provider: 'OpenAI' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', provider: 'OpenAI' },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'OpenAI' },
+  { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', provider: 'OpenAI' },
   { id: 'gpt-4o', label: 'GPT-4o', provider: 'OpenAI' },
   // Anthropic Claude 4.6
   { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'Anthropic' },
@@ -73,7 +72,7 @@ interface UIState {
 export const useUIStore = create<UIState>((set) => ({
   theme: 'light',
   leftTab: 'library',
-  selectedModel: 'gpt-5.2',
+  selectedModel: 'gpt-5.4',
   isIdle: true,
   rightSidebarCollapsed: false,
   leftSidebarCollapsed: false,

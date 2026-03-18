@@ -37,12 +37,12 @@ export function ContextDebugView() {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-1.5">
-        <Eye size={11} className="text-indigo-400" />
+        <Eye size={11} className="t-text-info" />
         <span className="text-[10px] font-semibold t-text-muted uppercase tracking-wider">Context Debug</span>
         <button
           onClick={load}
           disabled={loading}
-          className="ml-auto p-0.5 t-text-muted hover:text-indigo-400 transition-colors"
+          className="ml-auto p-0.5 t-text-muted hover:t-text-info transition-colors"
           title="Refresh"
         >
           <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
@@ -57,7 +57,7 @@ export function ContextDebugView() {
             <div className="flex items-center gap-2 text-[10px]">
               <span className="t-text-muted">Intents:</span>
               {intents.map((intent, i) => (
-                <span key={i} className="px-1.5 py-0.5 rounded-full t-bg-elevated text-teal-400">{intent}</span>
+                <span key={i} className="px-1.5 py-0.5 rounded-full t-bg-elevated t-text-accent-soft">{intent}</span>
               ))}
             </div>
           )}
@@ -65,7 +65,7 @@ export function ContextDebugView() {
           {sessionSummary && (
             <div className="flex items-center gap-3 text-[10px]">
               <span className="t-text-muted">Summary:</span>
-              <span className={sessionSummary.included ? 'text-teal-400' : 't-text-secondary'}>
+              <span className={sessionSummary.included ? 't-text-accent-soft' : 't-text-secondary'}>
                 {sessionSummary.included ? 'included' : 'none'}
               </span>
               {sessionSummary.turnRange && (

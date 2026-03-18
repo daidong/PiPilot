@@ -149,8 +149,6 @@ export const useUIStore = create<UIState>((set) => ({
   closePreview: () => set({ previewEntity: null, leftSidebarCollapsed: false })
 }))
 
-type Theme = 'light' | 'dark'
-
 /** Load persisted model, reasoning, and theme preferences from disk. Call after project path is set. */
 export async function hydratePreferences(): Promise<void> {
   const api = (window as any).api

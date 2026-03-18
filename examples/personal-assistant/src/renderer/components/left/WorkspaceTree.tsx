@@ -404,9 +404,9 @@ export function WorkspaceTree() {
         key={row.key}
         className={`group flex items-center h-7 px-2 rounded cursor-pointer ${
           isDropTarget
-            ? 'ring-2 ring-blue-400/60 bg-blue-50/20 dark:bg-blue-900/20'
+            ? 'ring-2 ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/10'
             : isActive
-              ? 'bg-sky-100/70 dark:bg-sky-900/35'
+              ? 'bg-[var(--color-accent)]/15'
               : 'hover:t-bg-hover'
         }`}
         style={{ paddingLeft: `${row.depth * 14 + 8}px` }}
@@ -427,7 +427,7 @@ export function WorkspaceTree() {
         )}
 
         {node.type === 'directory'
-          ? <Folder size={13} className="mr-1.5 text-amber-500/80" />
+          ? <Folder size={13} className="mr-1.5 t-text-warning" />
           : <File size={13} className="mr-1.5 t-text-muted" />}
 
         <button
@@ -465,8 +465,8 @@ export function WorkspaceTree() {
           <button
             className={`p-0.5 rounded ${
               confirmTrashPath === node.relativePath
-                ? 'text-red-500 bg-red-500/20 animate-pulse'
-                : 'text-red-400/70 hover:text-red-500'
+                ? 't-text-error bg-[var(--color-status-error)]/20 animate-pulse'
+                : 't-text-error-soft/70 hover:t-text-error'
             }`}
             title={confirmTrashPath === node.relativePath ? 'Click again to confirm' : 'Move to trash'}
             onClick={(e) => { e.stopPropagation(); void handleTrashClick(node) }}
@@ -482,7 +482,7 @@ export function WorkspaceTree() {
     <section className="h-full flex flex-col border-t t-border">
       <div className="px-3 py-2 border-b t-border">
         <div className="flex items-center gap-2">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider t-text-muted">Workspace</h3>
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider t-text-accent-soft">Workspace</h3>
           <button
             className="ml-auto p-1 rounded hover:t-bg-hover"
             title="Refresh tree"
@@ -496,14 +496,14 @@ export function WorkspaceTree() {
           <div className="relative flex-1">
             <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 t-text-muted" />
             <input
-              className="w-full h-7 pl-7 pr-2 rounded-md border t-border t-bg-surface text-xs outline-none focus:ring-1"
+              className="w-full h-7 pl-7 pr-2 rounded-md border t-border t-bg-surface text-xs outline-none t-focus-ring"
               placeholder="Search files..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
           <button
-            className={`h-7 px-2 rounded-md border text-[10px] ${showIgnored ? 'border-sky-400 text-sky-500' : 't-border t-text-muted'}`}
+            className={`h-7 px-2 rounded-md border text-[10px] ${showIgnored ? 'border-[var(--color-accent-soft)] t-text-accent' : 't-border t-text-muted'}`}
             onClick={() => setShowIgnored(v => !v)}
           >
             ignored
@@ -513,7 +513,7 @@ export function WorkspaceTree() {
 
       <div
         ref={viewportRef}
-        className={`flex-1 overflow-auto ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-blue-400/60 bg-blue-50/10 dark:bg-blue-900/10' : ''}`}
+        className={`flex-1 overflow-auto ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/5' : ''}`}
         onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
         onDragOver={handleViewportDragOver}
         onDragLeave={handleViewportDragLeave}

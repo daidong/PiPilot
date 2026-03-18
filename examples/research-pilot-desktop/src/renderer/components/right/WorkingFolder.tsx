@@ -59,7 +59,7 @@ export function WorkingFolder() {
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-semibold t-text-muted uppercase tracking-wider">
+        <h3 className="text-xs font-semibold t-text-accent-soft uppercase tracking-wider">
           Working Folder
           {workingFiles.length > 0 && (
             <span className="ml-1.5 text-[10px] t-text-muted font-normal">

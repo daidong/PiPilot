@@ -515,9 +515,9 @@ export function WorkspaceTree() {
         key={row.key}
         className={`group flex items-center gap-1 rounded px-1.5 h-7 text-xs cursor-pointer ${
           isDropTarget
-            ? 'ring-2 ring-blue-400/60 bg-blue-50/20 dark:bg-blue-900/20'
+            ? 'ring-2 ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/10'
             : isActive
-              ? 'bg-teal-500/20 text-teal-300'
+              ? 'bg-[var(--color-accent)]/20 t-text-accent-soft'
               : 't-bg-hover t-text-secondary'
         }`}
         style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
@@ -536,7 +536,7 @@ export function WorkspaceTree() {
           <span className="w-3 shrink-0" />
         )}
         {node.type === 'directory' ? (
-          <Folder size={12} className="shrink-0 text-amber-500" />
+          <Folder size={12} className="shrink-0 t-text-warning" />
         ) : (
           <File size={12} className="shrink-0 t-text-muted" />
         )}
@@ -548,7 +548,7 @@ export function WorkspaceTree() {
             onKeyDown={handleRenameKeyDown}
             onBlur={() => void commitRename()}
             onClick={(e) => e.stopPropagation()}
-            className="flex-1 bg-transparent outline-none border-b border-teal-400 text-xs t-text"
+            className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
           />
         ) : (
           <span className="truncate flex-1">{node.name}</span>
@@ -557,14 +557,14 @@ export function WorkspaceTree() {
           {node.type === 'file' && (
             <>
               <button
-                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
+                className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
                 title="Preview file"
                 onClick={(e) => { e.stopPropagation(); openFile(node) }}
               >
                 <Eye size={11} />
               </button>
               <button
-                className="p-0.5 rounded t-bg-hover hover:text-teal-400"
+                className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
                 title="Create Artifact from file"
                 onClick={(e) => { e.stopPropagation(); void createArtifact(node) }}
               >
@@ -575,8 +575,8 @@ export function WorkspaceTree() {
           <button
             className={`p-0.5 rounded ${
               confirmTrashPath === node.relativePath
-                ? 'text-red-500 bg-red-500/20 animate-pulse'
-                : 'text-red-400/70 hover:text-red-500'
+                ? 't-text-error bg-[var(--color-status-error)]/20 animate-pulse'
+                : 't-text-error-soft/70 hover:t-text-error'
             }`}
             title={confirmTrashPath === node.relativePath ? 'Click again to confirm' : 'Move to trash'}
             onClick={(e) => { e.stopPropagation(); void handleTrashClick(node) }}
@@ -592,24 +592,24 @@ export function WorkspaceTree() {
     <section className="h-full min-h-0 flex flex-col border-t t-border">
       <div className="px-3 py-2 border-b t-border">
         <div className="flex items-center justify-between">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider t-text-muted">Workspace Files</h3>
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider t-text-accent-soft">Workspace Files</h3>
           <div className="flex items-center gap-0.5">
             <button
-              className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
+              className="p-1 rounded t-bg-hover t-text-muted hover:t-text-accent-soft"
               onClick={() => void handleNewFile('')}
               title="New File"
             >
               <FilePlus size={12} />
             </button>
             <button
-              className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
+              className="p-1 rounded t-bg-hover t-text-muted hover:t-text-accent-soft"
               onClick={() => void handleNewFolder('')}
               title="New Folder"
             >
               <FolderPlus size={12} />
             </button>
             <button
-              className="p-1 rounded t-bg-hover t-text-muted hover:text-teal-400"
+              className="p-1 rounded t-bg-hover t-text-muted hover:t-text-accent-soft"
               onClick={() => void refreshAll()}
               title="Refresh tree"
             >
@@ -623,7 +623,7 @@ export function WorkspaceTree() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter files..."
-            className="w-full bg-transparent text-xs outline-none t-text"
+            className="w-full bg-transparent text-xs outline-none t-focus-ring t-text"
           />
         </div>
         <label className="mt-1 flex items-center gap-1 text-[11px] t-text-muted">
@@ -638,7 +638,7 @@ export function WorkspaceTree() {
 
       <div
         ref={viewportRef}
-        className={`flex-1 min-h-0 overflow-y-auto px-1 py-1 ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-blue-400/60 bg-blue-50/10 dark:bg-blue-900/10' : ''}`}
+        className={`flex-1 min-h-0 overflow-y-auto px-1 py-1 ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/5' : ''}`}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         onDragOver={handleViewportDragOver}
         onDragLeave={handleViewportDragLeave}
@@ -705,7 +705,7 @@ export function WorkspaceTree() {
           )}
           <div className="border-t t-border my-1" />
           <button
-            className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:t-bg-hover flex items-center gap-2"
+            className="w-full text-left px-3 py-1.5 text-xs t-text-error-soft hover:t-bg-hover flex items-center gap-2"
             onClick={() => { void handleTrashClick(contextMenu.node); setContextMenu(null) }}
           >
             <Trash2 size={11} /> Trash

@@ -5,7 +5,7 @@ export function HeroIdle() {
     <div className="flex flex-col items-center gap-8 max-w-lg">
       {/* Blue starburst */}
       <div className="relative w-20 h-20">
-        <svg viewBox="0 0 80 80" className="w-full h-full">
+        <svg viewBox="0 0 80 80" className="w-full h-full" role="img" aria-label="Decorative starburst icon">
           <defs>
             <radialGradient id="burst" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#60a5fa" />

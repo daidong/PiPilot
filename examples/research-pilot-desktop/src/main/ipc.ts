@@ -1,6 +1,6 @@
-import { app, ipcMain, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'electron'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync, cpSync } from 'fs'
-import { basename, dirname, extname, join, relative, resolve, sep, isAbsolute } from 'path'
+import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync } from 'fs'
+import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
 import { createCoordinator } from '@research-pilot/agents/coordinator'
 import {
   listNotes, listLiterature, listData,
@@ -18,11 +18,22 @@ import { createActivityFormatter } from '../../../../src/trace/activity-formatte
 import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 
-/** Extract just the filename from a path */
-function getFileName(path: string): string {
-  if (!path) return ''
-  return path.split('/').pop() || path
-}
+// ─── Shared utilities from @shared-electron ─────────────────────────────────
+import {
+  getFileName,
+  inferMimeType,
+  safeSend,
+  loadOrCreateSessionId,
+  resolveCoordinatorAuth,
+  isWithinRoot,
+  toPosixPath,
+  registerFileHandlers,
+  registerSessionHandlers,
+  registerPrefsHandlers,
+  registerUsageHandlers,
+  registerAuthHandlers,
+  registerFolderOpenHandler,
+} from '@shared-electron'
 
 function resolveDesktopCommunitySkillsDir(): string | undefined {
   const envOverride = (process.env.AGENT_FOUNDRY_COMMUNITY_SKILLS_DIR || '').trim()
@@ -92,221 +103,6 @@ function seedDefaultProjectSkills(projectPath: string): void {
   if (seeded > 0) {
     console.log(`[ResearchPilot] seeded ${seeded} default project skill(s) from ${sourceRoot}`)
   }
-}
-
-interface FileTreeNode {
-  name: string
-  path: string
-  relativePath: string
-  type: 'file' | 'directory'
-  hasChildren?: boolean
-  modifiedAt: number
-}
-
-interface GitIgnoreRule {
-  negated: boolean
-  directoryOnly: boolean
-  regex: RegExp
-}
-
-const TREE_MAX_ENTRIES = 500
-
-function toPosixPath(input: string): string {
-  return input.split(sep).join('/')
-}
-
-function isWithinRoot(rootPath: string, targetPath: string): boolean {
-  const normalizedRoot = resolve(rootPath)
-  const normalizedTarget = resolve(targetPath)
-  if (normalizedRoot === normalizedTarget) return true
-  return normalizedTarget.startsWith(`${normalizedRoot}${sep}`)
-}
-
-function readGitIgnoreRules(rootPath: string): GitIgnoreRule[] {
-  const filePath = join(rootPath, '.gitignore')
-  if (!existsSync(filePath)) return []
-  let raw = ''
-  try {
-    raw = readFileSync(filePath, 'utf-8')
-  } catch {
-    return []
-  }
-
-  return raw
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line && !line.startsWith('#'))
-    .map(line => {
-      const negated = line.startsWith('!')
-      let pattern = negated ? line.slice(1) : line
-      const directoryOnly = pattern.endsWith('/')
-      if (directoryOnly) pattern = pattern.slice(0, -1)
-
-      const anchored = pattern.startsWith('/')
-      if (anchored) pattern = pattern.slice(1)
-
-      const escaped = pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*/g, '.*')
-        .replace(/\*/g, '[^/]*')
-        .replace(/\?/g, '[^/]')
-
-      let regexPattern = ''
-      if (anchored) {
-        regexPattern = `^${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
-      } else if (pattern.includes('/')) {
-        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
-      } else {
-        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '(?:$|/)'}`
-      }
-
-      return {
-        negated,
-        directoryOnly,
-        regex: new RegExp(regexPattern)
-      } satisfies GitIgnoreRule
-    })
-}
-
-function isHiddenPath(relativePath: string): boolean {
-  return toPosixPath(relativePath)
-    .split('/')
-    .some(segment => segment.startsWith('.'))
-}
-
-function isIgnored(relativePath: string, isDirectory: boolean, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
-  if (showIgnored) return false
-  if (isHiddenPath(relativePath)) return true
-
-  const normalized = toPosixPath(relativePath)
-  let ignored = false
-  for (const rule of rules) {
-    if (rule.directoryOnly && !isDirectory && !normalized.includes('/')) continue
-    if (rule.regex.test(normalized)) {
-      ignored = !rule.negated
-    }
-  }
-  return ignored
-}
-
-function hasVisibleChildren(dirPath: string, relativePath: string, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
-  try {
-    const entries = readdirSync(dirPath, { withFileTypes: true })
-    for (const entry of entries) {
-      const childRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name
-      if (!isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) {
-        return true
-      }
-    }
-  } catch {
-    return false
-  }
-  return false
-}
-
-function listTreeChildren(
-  rootPath: string,
-  relativePath: string = '',
-  showIgnored: boolean = false,
-  limit: number = TREE_MAX_ENTRIES
-): FileTreeNode[] {
-  const basePath = resolve(rootPath, relativePath || '.')
-  if (!isWithinRoot(rootPath, basePath)) return []
-  if (!existsSync(basePath) || !statSync(basePath).isDirectory()) return []
-
-  const rules = readGitIgnoreRules(rootPath)
-  const entries = readdirSync(basePath, { withFileTypes: true })
-  const out: FileTreeNode[] = []
-
-  entries
-    .sort((a, b) => {
-      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
-    .some(entry => {
-      const childRelative = toPosixPath(relativePath ? `${relativePath}/${entry.name}` : entry.name)
-      const childPath = join(basePath, entry.name)
-      if (isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) return false
-
-      let modifiedAt = 0
-      try {
-        modifiedAt = statSync(childPath).mtimeMs
-      } catch {
-        modifiedAt = Date.now()
-      }
-
-      out.push({
-        name: entry.name,
-        path: childPath,
-        relativePath: childRelative,
-        type: entry.isDirectory() ? 'directory' : 'file',
-        hasChildren: entry.isDirectory() ? hasVisibleChildren(childPath, childRelative, rules, showIgnored) : undefined,
-        modifiedAt
-      })
-      return out.length >= limit
-    })
-
-  return out
-}
-
-function searchTree(rootPath: string, query: string, showIgnored: boolean = false, maxResults: number = 200): FileTreeNode[] {
-  const trimmedQuery = query.trim().toLowerCase()
-  if (!trimmedQuery) return []
-
-  const rules = readGitIgnoreRules(rootPath)
-  const root = resolve(rootPath)
-  const stack: Array<{ absPath: string; relativePath: string }> = [{ absPath: root, relativePath: '' }]
-  const out: FileTreeNode[] = []
-
-  while (stack.length > 0 && out.length < maxResults) {
-    const node = stack.pop()!
-    let entries: ReturnType<typeof readdirSync> = []
-    try {
-      entries = readdirSync(node.absPath, { withFileTypes: true })
-    } catch {
-      continue
-    }
-
-    for (const entry of entries) {
-      const rel = toPosixPath(node.relativePath ? `${node.relativePath}/${entry.name}` : entry.name)
-      const abs = join(node.absPath, entry.name)
-      if (isIgnored(rel, entry.isDirectory(), rules, showIgnored)) continue
-
-      if (entry.name.toLowerCase().includes(trimmedQuery)) {
-        let modifiedAt = 0
-        try {
-          modifiedAt = statSync(abs).mtimeMs
-        } catch {
-          modifiedAt = Date.now()
-        }
-        out.push({
-          name: entry.name,
-          path: abs,
-          relativePath: rel,
-          type: entry.isDirectory() ? 'directory' : 'file',
-          hasChildren: entry.isDirectory() ? true : undefined,
-          modifiedAt
-        })
-        if (out.length >= maxResults) break
-      }
-
-      if (entry.isDirectory()) {
-        stack.push({ absPath: abs, relativePath: rel })
-      }
-    }
-  }
-
-  return out
-}
-
-function inferMimeType(path: string): string {
-  const ext = extname(path).toLowerCase()
-  if (ext === '.md' || ext === '.txt') return 'text/plain'
-  if (ext === '.csv') return 'text/csv'
-  if (ext === '.tsv') return 'text/tab-separated-values'
-  if (ext === '.json') return 'application/json'
-  if (ext === '.pdf') return 'application/pdf'
-  return 'application/octet-stream'
 }
 
 interface WindowRuntimeState {
@@ -417,7 +213,7 @@ function createWindowActivityFormatter(state: WindowRuntimeState) {
 function createWindowRuntimeState(): WindowRuntimeState {
   const state: WindowRuntimeState = {
     coordinator: null,
-    currentModel: 'gpt-5.2',
+    currentModel: 'gpt-5.4',
     currentReasoningEffort: 'medium',
     currentAuthMode: 'none',
     projectPath: '',
@@ -497,41 +293,6 @@ function createArtifactFromWorkspaceFile(state: WindowRuntimeState, filePath: st
   }, { sessionId, projectPath })
 }
 
-interface ResolvedCoordinatorAuth {
-  apiKey: string
-  authMode: 'api-key' | 'none'
-  isAnthropicModel: boolean
-  billingSource: 'api-key' | 'none'
-}
-
-function resolveCoordinatorAuth(modelId: string): ResolvedCoordinatorAuth {
-  const openaiApiKey = (process.env.OPENAI_API_KEY || '').trim()
-  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY || '').trim()
-  const isAnthropic = modelId.startsWith('claude-')
-
-  if (!isAnthropic) {
-    if (!openaiApiKey) {
-      throw new Error('OPENAI_API_KEY is required for the selected OpenAI model.')
-    }
-    return {
-      apiKey: openaiApiKey,
-      authMode: 'api-key',
-      isAnthropicModel: false,
-      billingSource: 'api-key'
-    }
-  }
-
-  if (!anthropicApiKey) {
-    throw new Error('ANTHROPIC_API_KEY is required for the selected Anthropic model.')
-  }
-
-  return {
-    apiKey: anthropicApiKey,
-    authMode: 'api-key',
-    isAnthropicModel: true,
-    billingSource: 'api-key'
-  }
-}
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
   const dirs = [
@@ -580,29 +341,6 @@ function initializeProject(path: string): void {
   }
 
   // Keep process cwd stable; each window passes explicit projectPath.
-}
-
-/** Load or create a persistent session ID for a project folder */
-function loadOrCreateSessionId(path: string): string {
-  const sessionFile = join(path, PATHS.root, 'session.json')
-  if (existsSync(sessionFile)) {
-    try {
-      const data = JSON.parse(readFileSync(sessionFile, 'utf-8'))
-      if (data.sessionId) return data.sessionId
-    } catch {
-      // Corrupted file, create new
-    }
-  }
-  const newId = crypto.randomUUID()
-  writeFileSync(sessionFile, JSON.stringify({ sessionId: newId }))
-  return newId
-}
-
-/** Safely send an IPC message — no-op if the window has been destroyed. */
-function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
-  if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
-    win.webContents.send(channel, ...args)
-  }
 }
 
 async function ensureCoordinator(
@@ -773,6 +511,56 @@ export function registerIpcHandlers(): void {
     ipcMain.handle(channel, (event, ...args) => handler(getWindowContext(event), ...(args as T)))
   }
 
+  // ─── Register shared handlers from @shared-electron ─────────────────────
+  // The shared registration functions expect a simpler `handle` signature where
+  // the handler receives only the args (no event). We wrap them so they resolve
+  // the correct per-window state.
+
+  const makeSharedHandle = (getState: (event: IpcMainInvokeEvent) => WindowRuntimeState) => {
+    return (channel: string, handler: (...args: any[]) => any) => {
+      ipcMain.handle(channel, (event, ...args) => {
+        // Bind the per-window context so shared handlers see the right projectPath
+        const state = getState(event)
+        // Temporarily override getCtx return in the closure
+        currentSharedState = state
+        try {
+          return handler(...args)
+        } finally {
+          currentSharedState = null
+        }
+      })
+    }
+  }
+
+  // Shared state bridge: the shared handler registrations call getCtx() which
+  // returns { projectPath } from this variable set by the wrapper above.
+  let currentSharedState: WindowRuntimeState | null = null
+  const getCtx = () => ({
+    projectPath: currentSharedState?.projectPath ?? ''
+  })
+
+  const sharedHandle = makeSharedHandle((event) => getWindowContext(event).state)
+
+  registerFileHandlers(sharedHandle, getCtx)
+  registerSessionHandlers(sharedHandle, getCtx, PATHS.sessions)
+  registerPrefsHandlers(sharedHandle, getCtx, PATHS.root, {
+    onModelChange: (m) => { if (currentSharedState) currentSharedState.currentModel = m },
+    onReasoningEffortChange: (e) => { if (currentSharedState) currentSharedState.currentReasoningEffort = e as any },
+    invalidateCoordinator: () => {
+      if (currentSharedState?.coordinator) {
+        currentSharedState.coordinator.destroy().catch(() => {})
+        currentSharedState.coordinator = null
+      }
+    },
+    getCurrentModel: () => currentSharedState?.currentModel ?? '',
+    getCurrentReasoningEffort: () => currentSharedState?.currentReasoningEffort ?? 'medium'
+  })
+  registerUsageHandlers(sharedHandle, getCtx, loadUsageTotals, resetUsageTotals)
+  registerAuthHandlers(sharedHandle)
+  registerFolderOpenHandler(sharedHandle, getCtx)
+
+  // ─── App-specific handlers ──────────────────────────────────────────────
+
   // Agent chat
   handleWindow('agent:send', async ({ win, state }, message: string, rawMentions?: string, model?: string) => {
     if (!state.projectPath) {
@@ -829,24 +617,6 @@ export function registerIpcHandlers(): void {
   handleWindow('agent:clear-memory', async ({ state }) => {
     if (state.coordinator) {
       await (state.coordinator as any).clearSessionMemory()
-    }
-  })
-
-  // Auth (Anthropic API key only)
-  ipcMain.handle('auth:get-anthropic-status', () => {
-    const hasApiKey = !!(process.env.ANTHROPIC_API_KEY || '').trim()
-    return {
-      authMode: hasApiKey ? 'api-key' : 'none',
-      authStatus: hasApiKey ? 'valid' : 'missing',
-      hasSetupToken: false,
-      hasApiKeyFallback: hasApiKey,
-      lastError: null
-    }
-  })
-
-  ipcMain.handle('auth:get-openai-status', () => {
-    return {
-      hasApiKey: !!(process.env.OPENAI_API_KEY || '').trim()
     }
   })
 
@@ -925,65 +695,13 @@ export function registerIpcHandlers(): void {
   })
 
 
-  // Mentions — signature: getCandidates(projectPath, typeFilter?, query?)
+  // Mentions -- signature: getCandidates(projectPath, typeFilter?, query?)
   handleWindow('mention:candidates', ({ state }, query: string, type?: string) => {
     if (!state.projectPath) return []
     try {
       return getCandidates(state.projectPath, type as any, query)
     } catch {
       return []
-    }
-  })
-
-  // List files in the project root folder (non-recursive, files only)
-  handleWindow('file:list-root', ({ state }) => {
-    if (!state.projectPath) return []
-    try {
-      const entries = readdirSync(state.projectPath)
-      const files: { path: string; name: string }[] = []
-      for (const entry of entries) {
-        // Skip hidden directories/files like .research-pilot, .git, etc.
-        if (entry.startsWith('.')) continue
-        const fullPath = join(state.projectPath, entry)
-        try {
-          if (statSync(fullPath).isFile()) {
-            files.push({ path: fullPath, name: entry })
-          }
-        } catch {
-          // Skip files we can't stat
-        }
-      }
-      return files
-    } catch {
-      return []
-    }
-  })
-
-  // Workspace file tree - lazy by directory level.
-  handleWindow('file:list-tree', ({ state }, options?: { relativePath?: string; showIgnored?: boolean; limit?: number }) => {
-    if (!state.projectPath) return []
-    const relativePath = options?.relativePath ?? ''
-    const showIgnored = options?.showIgnored ?? false
-    const limit = options?.limit ?? TREE_MAX_ENTRIES
-    return listTreeChildren(state.projectPath, relativePath, showIgnored, limit)
-  })
-
-  handleWindow('file:search-tree', ({ state }, query: string, options?: { showIgnored?: boolean; maxResults?: number }) => {
-    if (!state.projectPath) return []
-    return searchTree(state.projectPath, query, options?.showIgnored ?? false, options?.maxResults ?? 200)
-  })
-
-  // File reading for working folder preview
-  handleWindow('file:read', ({ state }, filePath: string) => {
-    try {
-      const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
-      if (!existsSync(absPath)) {
-        return { success: false, error: 'File not found' }
-      }
-      const content = readFileSync(absPath, 'utf-8')
-      return { success: true, content, path: absPath }
-    } catch (err: any) {
-      return { success: false, error: err.message }
     }
   })
 
@@ -1093,80 +811,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  // Resolve a file path to an absolute path (for file:// URLs)
-  handleWindow('file:resolve-path', ({ state }, filePath: string) => {
-    try {
-      const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
-      if (!existsSync(absPath)) {
-        return { success: false, error: 'File not found' }
-      }
-      return { success: true, absPath }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
-  })
-
-  // Open a file in the system default application
-  handleWindow('file:open-external', ({ state }, filePath: string) => {
-    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
-    if (!existsSync(absPath)) return { success: false, error: 'File not found' }
-    shell.openPath(absPath)
-    return { success: true }
-  })
-
-  // Move a workspace file or directory to system trash
-  handleWindow('file:trash', async ({ state }, filePath: string) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
-    if (!isWithinRoot(state.projectPath, absPath)) return { success: false, error: 'Path is outside workspace.' }
-    if (!existsSync(absPath)) return { success: false, error: 'File not found.' }
-    try {
-      await shell.trashItem(absPath)
-      return { success: true }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
-  })
-
-  // Drop file into a specific workspace directory
-  handleWindow('file:drop-to-dir', ({ state }, fileName: string, base64Content: string, targetDirRelPath: string) => {
-    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    const targetDir = targetDirRelPath ? resolve(state.projectPath, targetDirRelPath) : state.projectPath
-    if (!isWithinRoot(state.projectPath, targetDir)) return { success: false, error: 'Target outside workspace.' }
-    if (!existsSync(targetDir) || !statSync(targetDir).isDirectory()) return { success: false, error: 'Invalid directory.' }
-    const destPath = join(targetDir, fileName)
-    if (existsSync(destPath)) return { success: false, error: `"${fileName}" already exists.` }
-    try {
-      writeFileSync(destPath, Buffer.from(base64Content, 'base64'))
-      return { success: true, path: destPath }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
-  })
-
-  // Binary file reading (images, PDFs) — returns base64
-  handleWindow('file:read-binary', ({ state }, filePath: string) => {
-    try {
-      const absPath = isAbsolute(filePath) ? filePath : resolve(state.projectPath, filePath)
-      if (!existsSync(absPath)) {
-        return { success: false, error: 'File not found' }
-      }
-      const buffer = readFileSync(absPath)
-      const base64 = buffer.toString('base64')
-      const ext = absPath.split('.').pop()?.toLowerCase() || ''
-      const mimeMap: Record<string, string> = {
-        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
-        gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-        pdf: 'application/pdf'
-      }
-      const mime = mimeMap[ext] || 'application/octet-stream'
-      return { success: true, base64, mime, path: absPath }
-    } catch (err: any) {
-      return { success: false, error: err.message }
-    }
-  })
-
-  // Drop file handler — copies file into project and creates entity
+  // Drop file handler -- copies file into project and creates entity
   handleWindow('file:drop', async ({ state }, fileName: string, content: string, tab: string) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
 
@@ -1236,119 +881,6 @@ export function registerIpcHandlers(): void {
     return { success: false, error: `Unknown tab: ${tab}` }
   })
 
-  // Preferences persistence
-  handleWindow('prefs:load', ({ state }) => {
-    if (!state.projectPath) return null
-    const file = join(state.projectPath, PATHS.root, 'preferences.json')
-    if (!existsSync(file)) return null
-    try { return JSON.parse(readFileSync(file, 'utf-8')) } catch { return null }
-  })
-  handleWindow('prefs:save', ({ state }, prefs: { selectedModel?: string; reasoningEffort?: string }) => {
-    if (!state.projectPath) return
-    const file = join(state.projectPath, PATHS.root, 'preferences.json')
-    const data = { ...prefs, updatedAt: new Date().toISOString() }
-    writeFileSync(file, JSON.stringify(data, null, 2))
-    // Invalidate coordinator if model or reasoning effort changed so it gets recreated
-    const modelChanged = prefs.selectedModel && prefs.selectedModel !== state.currentModel
-    const effortChanged = prefs.reasoningEffort && prefs.reasoningEffort !== state.currentReasoningEffort
-    if (prefs.selectedModel) state.currentModel = prefs.selectedModel
-    if (prefs.reasoningEffort) state.currentReasoningEffort = prefs.reasoningEffort as any
-    if ((modelChanged || effortChanged) && state.coordinator) {
-      state.coordinator.destroy().catch(() => {})
-      state.coordinator = null
-    }
-  })
-
-  // Usage totals (framework persistence)
-  handleWindow('usage:get-totals', ({ state }) => {
-    if (!state.projectPath) return null
-    const baseDir = join(state.projectPath, '.agentfoundry')
-    return loadUsageTotals(baseDir)
-  })
-  handleWindow('usage:reset-totals', ({ state }) => {
-    if (!state.projectPath) return null
-    const baseDir = join(state.projectPath, '.agentfoundry')
-    return resetUsageTotals(baseDir)
-  })
-
-  // Open working folder with specified app
-  handleWindow('folder:open-with', async ({ state }, app: 'finder' | 'zed' | 'cursor' | 'vscode') => {
-    if (!state.projectPath) return { success: false, error: 'No project open' }
-
-    const { exec } = await import('child_process')
-    const { promisify } = await import('util')
-    const execAsync = promisify(exec)
-
-    try {
-      switch (app) {
-        case 'finder':
-          await execAsync(`open "${state.projectPath}"`)
-          break
-        case 'zed':
-          await execAsync(`zed "${state.projectPath}"`)
-          break
-        case 'cursor':
-          await execAsync(`cursor "${state.projectPath}"`)
-          break
-        case 'vscode':
-          await execAsync(`code "${state.projectPath}"`)
-          break
-        default:
-          return { success: false, error: `Unknown app: ${app}` }
-      }
-      return { success: true }
-    } catch (err: any) {
-      return { success: false, error: err.message || 'Failed to open folder' }
-    }
-  })
-
-  // Session - chat history persistence
-  handleWindow('session:save-message', ({ state }, sid: string, msg: any) => {
-    if (!state.projectPath) return
-    const dir = join(state.projectPath, PATHS.sessions)
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    const file = join(dir, `${sid}.jsonl`)
-    appendFileSync(file, JSON.stringify(msg) + '\n')
-  })
-
-  handleWindow('session:load-messages', ({ state }, sid: string, offset: number, limit: number) => {
-    if (!state.projectPath) return []
-    const file = join(state.projectPath, PATHS.sessions, `${sid}.jsonl`)
-    if (!existsSync(file)) return []
-    const lines = readFileSync(file, 'utf-8').split('\n').filter(Boolean)
-    // offset=0 means most recent batch; we read from the end
-    const start = Math.max(0, lines.length - offset - limit)
-    const end = lines.length - offset
-    return lines.slice(start, end).map((l) => JSON.parse(l))
-  })
-
-  handleWindow('session:get-total-count', ({ state }, sid: string) => {
-    if (!state.projectPath) return 0
-    const file = join(state.projectPath, PATHS.sessions, `${sid}.jsonl`)
-    if (!existsSync(file)) return 0
-    return readFileSync(file, 'utf-8').split('\n').filter(Boolean).length
-  })
-
-  handleWindow('session:mark-saved', ({ state }, sid: string, messageId: string) => {
-    if (!state.projectPath) return
-    const file = join(state.projectPath, PATHS.sessions, `${sid}.saved.json`)
-    let ids: string[] = []
-    if (existsSync(file)) {
-      try { ids = JSON.parse(readFileSync(file, 'utf-8')) } catch { ids = [] }
-    }
-    if (!ids.includes(messageId)) {
-      ids.push(messageId)
-      writeFileSync(file, JSON.stringify(ids))
-    }
-  })
-
-  handleWindow('session:load-saved-ids', ({ state }, sid: string) => {
-    if (!state.projectPath) return []
-    const file = join(state.projectPath, PATHS.sessions, `${sid}.saved.json`)
-    if (!existsSync(file)) return []
-    try { return JSON.parse(readFileSync(file, 'utf-8')) } catch { return [] }
-  })
-
   // Session
   handleWindow('session:current', ({ state }) => ({ sessionId: state.sessionId, projectPath: state.projectPath }))
 
@@ -1367,7 +899,7 @@ export function registerIpcHandlers(): void {
         state.coordinator = null
       }
       // Reuse persistent session ID for this project folder
-      state.sessionId = loadOrCreateSessionId(state.projectPath)
+      state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
       // Restore persisted model + reasoning preferences
       const prefsFile = join(state.projectPath, PATHS.root, 'preferences.json')
       if (existsSync(prefsFile)) {
@@ -1409,7 +941,7 @@ export function registerIpcHandlers(): void {
       state.realtimeBuffer.reset()
       state.projectPath = ''
       state.sessionId = crypto.randomUUID()
-      state.currentModel = 'gpt-5.2'
+      state.currentModel = 'gpt-5.4'
       state.currentReasoningEffort = 'medium'
       state.currentAuthMode = 'none'
     } finally {

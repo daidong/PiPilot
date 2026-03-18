@@ -221,7 +221,7 @@ export function ChatInput() {
       )}
 
       <div
-        className="flex items-end gap-2 rounded-2xl border px-4 py-3 transition-colors"
+        className="flex items-end gap-2 rounded-2xl border px-4 py-3 transition-colors t-input-container"
         style={{
           background: 'var(--color-input-bg)',
           borderColor: 'var(--color-input-border)'
@@ -231,6 +231,7 @@ export function ChatInput() {
           onClick={pickFolder}
           className="shrink-0 t-text-muted t-bg-hover transition-colors pb-0.5"
           title="Change working folder"
+          aria-label="Change working folder"
         >
           <Folder size={18} />
         </button>
@@ -248,8 +249,9 @@ export function ChatInput() {
         {isStreaming ? (
           <button
             onClick={stop}
-            className="shrink-0 p-1.5 rounded-lg bg-red-500 text-white hover:bg-red-400 transition-colors"
-            title="Stop"
+            className="shrink-0 p-2.5 rounded-lg t-bg-error text-white hover:opacity-90 transition-colors"
+            title="Stop generation"
+            aria-label="Stop generation"
           >
             <Square size={16} />
           </button>
@@ -257,8 +259,9 @@ export function ChatInput() {
           <button
             onClick={handleSend}
             disabled={!text.trim()}
-            className="shrink-0 p-1.5 rounded-lg bg-blue-500 text-white disabled:opacity-30 hover:bg-blue-400 transition-colors"
+            className="shrink-0 p-2.5 rounded-lg t-bg-accent text-white disabled:opacity-30 hover:opacity-90 transition-colors"
             title="Send (Shift+Enter)"
+            aria-label="Send message (Shift+Enter)"
           >
             <Send size={16} />
           </button>

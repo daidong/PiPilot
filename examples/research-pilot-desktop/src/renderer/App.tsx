@@ -30,7 +30,7 @@ function FolderGate() {
       <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
       <div className="text-center max-w-md px-8">
         <div className="mx-auto mb-6 w-20 h-20 rounded-2xl t-bg-surface flex items-center justify-center">
-          <FolderOpen size={36} className="text-teal-400" />
+          <FolderOpen size={36} className="t-text-accent-soft" />
         </div>
         <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily: "'Playfair Display', serif" }}>
           Research Pilot
@@ -41,7 +41,7 @@ function FolderGate() {
         </p>
         <button
           onClick={handlePick}
-          className="px-6 py-3 rounded-xl bg-teal-500 text-white font-medium hover:bg-teal-400 transition-colors text-sm"
+          className="px-6 py-3 rounded-xl t-bg-accent text-white font-medium hover:opacity-90 transition-colors text-sm"
         >
           Open Project Folder
         </button>
@@ -51,7 +51,8 @@ function FolderGate() {
 }
 
 export default function App() {
-  const { appendChunk, finalize } = useChatStore()
+  const appendChunk = useChatStore((s) => s.appendChunk)
+  const finalize = useChatStore((s) => s.finalize)
   const initSession = useSessionStore((s) => s.init)
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)

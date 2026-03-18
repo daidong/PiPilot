@@ -4,12 +4,15 @@
  * Runs an agent task once or in autonomous loop mode.
  */
 
+import * as readline from 'node:readline'
 import { createAgent } from '../agent/create-agent.js'
 import { tryLoadConfig } from '../config/index.js'
 
 export interface RunOptions {
   prompt: string
   projectPath?: string
+  model?: string
+  interactive?: boolean
   mode?: 'single' | 'autonomous'
   maxTurns?: number
   stopCondition?: string
@@ -134,10 +137,23 @@ export function parseRunArgs(args: string[]): RunOptions {
 
     switch (arg) {
       case '--project':
+      case '--project-path':
       case '-C':
         if (args[i + 1]) {
           options.projectPath = args[++i]
         }
+        break
+
+      case '--model':
+      case '-m':
+        if (args[i + 1]) {
+          options.model = args[++i]
+        }
+        break
+
+      case '--interactive':
+      case '-i':
+        options.interactive = true
         break
 
       case '--mode':
@@ -196,30 +212,26 @@ export function parseRunArgs(args: string[]): RunOptions {
   }
 
   const prompt = promptParts.join(' ').trim()
+
+  // If no prompt provided, enter interactive mode
   if (!prompt) {
-    throw new Error('Missing prompt. Usage: agent-foundry run "<task>"')
+    options.interactive = true
   }
 
   return {
-    prompt,
+    prompt: prompt || '',
     ...options
   } as RunOptions
 }
 
-export async function runAgentTask(options: RunOptions): Promise<void> {
+/**
+ * Run interactive REPL mode: reads prompts from stdin, runs agent, prints response.
+ */
+async function runInteractive(options: RunOptions): Promise<void> {
   const projectPath = options.projectPath ?? process.cwd()
-  const yamlConfig = tryLoadConfig(projectPath)
-  const runner = yamlConfig?.runner ?? {}
-
-  const mode = options.mode ?? runner.mode ?? 'single'
-  const maxTurns = options.maxTurns ?? runner.maxTurns ?? 50
-  const stopCondition = options.stopCondition ?? runner.stopCondition ?? 'TASK_COMPLETE'
-  const continuePrompt = options.continuePrompt ?? runner.continuePrompt ?? 'Continue your work.'
-  const baseInstructions = options.additionalInstructions ?? runner.additionalInstructions
-
   const verbose = !options.quiet
 
-  const agent = createAgent({
+  const agentOpts: Record<string, unknown> = {
     projectPath,
     configDir: projectPath,
     onToolCall: verbose
@@ -234,7 +246,91 @@ export async function runAgentTask(options: RunOptions): Promise<void> {
           process.stderr.write(formatToolResultLog(tool, result, args))
         }
       : undefined
+  }
+  if (options.model) {
+    agentOpts.model = options.model
+  }
+
+  const agent = createAgent(agentOpts as Parameters<typeof createAgent>[0])
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stderr,
+    prompt: '\nagent> '
   })
+
+  console.error('AgentFoundry interactive mode. Type your prompt and press Enter.')
+  console.error('Type "exit" or press Ctrl+D to quit.\n')
+  rl.prompt()
+
+  rl.on('line', async (line) => {
+    const input = line.trim()
+    if (!input) {
+      rl.prompt()
+      return
+    }
+    if (input === 'exit' || input === 'quit') {
+      rl.close()
+      return
+    }
+
+    try {
+      const result = await agent.run(input)
+      process.stdout.write(result.output)
+      if (!result.output.endsWith('\n')) process.stdout.write('\n')
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`)
+    }
+    rl.prompt()
+  })
+
+  await new Promise<void>((resolve) => {
+    rl.on('close', resolve)
+  })
+
+  await agent.destroy()
+}
+
+export async function runAgentTask(options: RunOptions): Promise<void> {
+  // Interactive mode: no prompt provided or --interactive flag
+  if (options.interactive && !options.prompt) {
+    await runInteractive(options)
+    return
+  }
+
+  const projectPath = options.projectPath ?? process.cwd()
+  const yamlConfig = tryLoadConfig(projectPath)
+  const runner = yamlConfig?.runner ?? {}
+
+  const mode = options.mode ?? runner.mode ?? 'single'
+  const maxTurns = options.maxTurns ?? runner.maxTurns ?? 50
+  const stopCondition = options.stopCondition ?? runner.stopCondition ?? 'TASK_COMPLETE'
+  const continuePrompt = options.continuePrompt ?? runner.continuePrompt ?? 'Continue your work.'
+  const baseInstructions = options.additionalInstructions ?? runner.additionalInstructions
+
+  const verbose = !options.quiet
+
+  const agentOpts: Record<string, unknown> = {
+    projectPath,
+    configDir: projectPath,
+    onToolCall: verbose
+      ? (tool: string, input: unknown) => {
+          const summary = summarizeToolInput(tool, input)
+          const detail = summary ? ` ${summary}` : ''
+          process.stderr.write(`  \u25B8 ${tool}${detail}\n`)
+        }
+      : undefined,
+    onToolResult: verbose
+      ? (tool: string, result: unknown, args?: unknown) => {
+          process.stderr.write(formatToolResultLog(tool, result, args))
+        }
+      : undefined
+  }
+  if (options.model) {
+    agentOpts.model = options.model
+  }
+
+  const agent = createAgent(agentOpts as Parameters<typeof createAgent>[0])
 
   try {
     if (mode === 'single') {
@@ -300,20 +396,26 @@ run - Execute a task with agent.yaml configuration
 
 Usage:
   agent-foundry run "<task>" [options]
+  agent-foundry run                     # interactive mode (no prompt)
+  agent-foundry run --interactive       # explicit interactive mode
 
 Options:
-  --project, -C <path>        Project/config directory (default: current directory)
-  --mode <single|autonomous>  Run mode override (default: runner.mode or single)
-  --single, -s                Shortcut for --mode single
-  --autonomous, -a            Shortcut for --mode autonomous
-  --max-turns <n>             Max autonomous turns (default: runner.maxTurns or 50)
-  --stop <text>               Stop condition token (default: runner.stopCondition or TASK_COMPLETE)
-  --continue <text>           Continue prompt between turns (default: runner.continuePrompt)
-  --instructions <text>       Additional task instructions for this run
-  --quiet, -q                 Suppress tool call logs (stderr)
+  --project, --project-path, -C <path>  Project/config directory (default: current directory)
+  --model, -m <model>                   Override LLM model (e.g. gpt-4o, claude-sonnet-4-20250514)
+  --interactive, -i                     Enter interactive REPL mode
+  --mode <single|autonomous>            Run mode override (default: runner.mode or single)
+  --single, -s                          Shortcut for --mode single
+  --autonomous, -a                      Shortcut for --mode autonomous
+  --max-turns <n>                       Max autonomous turns (default: runner.maxTurns or 50)
+  --stop <text>                         Stop condition token (default: runner.stopCondition or TASK_COMPLETE)
+  --continue <text>                     Continue prompt between turns (default: runner.continuePrompt)
+  --instructions <text>                 Additional task instructions for this run
+  --quiet, -q                           Suppress tool call logs (stderr)
 
 Examples:
   $ agent-foundry run "Summarize docs/architecture.md"
+  $ agent-foundry run --model claude-sonnet-4-20250514 "Explain this codebase"
+  $ agent-foundry run                                     # interactive mode
   $ agent-foundry run "Research MCP servers and write a report" --autonomous --max-turns 20
   $ agent-foundry run "Refactor src/core" --project ./my-repo
 `)

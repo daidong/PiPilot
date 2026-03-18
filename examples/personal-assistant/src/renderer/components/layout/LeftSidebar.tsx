@@ -54,13 +54,13 @@ export function LeftSidebar() {
               useUIStore.getState().setLeftTab('notifications')
             }}
             className={`no-drag p-1.5 rounded-lg t-bg-hover transition-colors relative ${
-              unreadCount > 0 ? 'text-blue-400' : 't-text-muted'
+              unreadCount > 0 ? 't-text-accent-soft' : 't-text-muted'
             }`}
             title="Notifications"
           >
             <Bell size={16} />
             {unreadCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-500" />
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full t-bg-accent" />
             )}
           </button>
           <button

@@ -29,17 +29,10 @@
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
-    "check:yolo-ui-colors": "node scripts/check-yolo-ui-color-discipline.mjs",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build",
     "example:no-code-researcher": "npm run build && npm --prefix examples/no-code-researcher run start",
-    "example:no-code-researcher:help": "npm --prefix examples/no-code-researcher run help",
-    "example:phd": "tsx examples/phd/index.ts",
-    "example:phd:serve": "tsx examples/phd/index.ts serve",
-    "example:phd:smoke": "tsx examples/phd/index.ts smoke-test",
-    "example:yolo-researcher:desktop:install": "npm --prefix examples/yolo-researcher/desktop install",
-    "example:yolo-researcher:desktop:dev": "npm --prefix examples/yolo-researcher/desktop run dev",
-    "example:yolo-researcher:desktop:build": "npm --prefix examples/yolo-researcher/desktop run build"
+    "example:no-code-researcher:help": "npm --prefix examples/no-code-researcher run help"
   },
   "keywords": [
     "agent",
@@ -75,6 +68,7 @@
     "@types/node": "^20.0.0",
     "@types/react": "^19.2.9",
     "@types/ws": "^8.18.1",
+    "@vitest/coverage-v8": "^1.6.1",
     "eslint": "^9.39.2",
     "globals": "^15.15.0",
     "tsx": "^4.21.0",

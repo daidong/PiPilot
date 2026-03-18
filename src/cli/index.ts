@@ -6,3 +6,7 @@ export { runIndexDocs, parseIndexDocsArgs, printIndexDocsHelp } from './index-do
 export type { IndexDocsOptions } from './index-docs.js'
 export { runAgentTask, parseRunArgs, printRunHelp } from './run.js'
 export type { RunOptions } from './run.js'
+export { runInit, parseInitArgs, printInitHelp } from './init.js'
+export type { InitOptions } from './init.js'
+export { runValidateDeep, printValidateDeepHelp } from './validate-deep.js'
+export type { ValidateDeepOptions } from './validate-deep.js'

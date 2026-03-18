@@ -18,9 +18,9 @@ interface Props {
 }
 
 const typeIcons: Record<string, React.ReactNode> = {
-  note: <StickyNote size={13} className="text-yellow-500" />,
-  paper: <BookOpen size={13} className="text-blue-500" />,
-  data: <Database size={13} className="text-green-500" />,
+  note: <StickyNote size={13} className="t-text-warning" />,
+  paper: <BookOpen size={13} className="t-text-info" />,
+  data: <Database size={13} className="t-text-success" />,
   file: <FileText size={13} className="t-text-secondary" />
 }
 

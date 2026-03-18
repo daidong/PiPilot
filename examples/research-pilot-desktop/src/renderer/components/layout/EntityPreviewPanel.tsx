@@ -1,6 +1,8 @@
-import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+const remarkPlugins = [remarkGfm]
 import { X, StickyNote, BookOpen, Database, Trash2, Save, ChevronUp, ChevronDown } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
@@ -12,9 +14,9 @@ const LazyMilkdownMarkdownEditor = lazy(async () => {
 })
 
 const typeIcons: Record<string, React.ReactNode> = {
-  note: <StickyNote size={16} className="text-yellow-500" />,
-  paper: <BookOpen size={16} className="text-blue-500" />,
-  data: <Database size={16} className="text-green-500" />
+  note: <StickyNote size={16} className="t-text-warning" />,
+  paper: <BookOpen size={16} className="t-text-info" />,
+  data: <Database size={16} className="t-text-success" />
 }
 
 const EXTERNAL_EXTS = new Set([
@@ -471,8 +473,8 @@ export function EntityPreviewPanel() {
       {(saveError || saveSuccess) && (
         <div className={`text-xs px-2 py-1 rounded border ${
           saveError
-            ? 'text-red-400 border-red-400/40 bg-red-500/10'
-            : 'text-teal-500 border-teal-500/40 bg-teal-500/10'
+            ? 't-text-error-soft border-[var(--color-status-error-soft)] bg-[var(--color-status-error)]/10'
+            : 't-text-accent border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10'
         }`}
         >
           {saveError || saveSuccess}
@@ -497,7 +499,7 @@ export function EntityPreviewPanel() {
         </Suspense>
       </div>
       {entity.id === 'agent-md' && (
-        <span className={`text-[10px] ${draftMarkdown.length > 5000 ? 'text-red-400' : 't-text-muted'}`}>
+        <span className={`text-[10px] ${draftMarkdown.length > 5000 ? 't-text-error-soft' : 't-text-muted'}`}>
           {draftMarkdown.length} / 5,000
         </span>
       )}
@@ -512,7 +514,7 @@ export function EntityPreviewPanel() {
             <p className="text-sm t-text-secondary">{getExtension(entity.filePath).toUpperCase()} file</p>
             <button
               onClick={() => (window as any).api.openFile(entity.filePath)}
-              className="px-4 py-2 rounded bg-teal-500 hover:bg-teal-600 text-white text-sm"
+              className="px-4 py-2 rounded t-bg-accent hover:opacity-90 text-white text-sm"
             >
               Open in default app
             </button>
@@ -550,7 +552,7 @@ export function EntityPreviewPanel() {
     const content = entity.content || entity.abstract || entity.valueText || 'No content available.'
     return (
       <div className="md-prose" style={{ color: 'var(--color-text)' }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        <ReactMarkdown remarkPlugins={remarkPlugins}>
           {typeof content === 'string' ? content : JSON.stringify(content, null, 2)}
         </ReactMarkdown>
       </div>
@@ -563,7 +565,7 @@ export function EntityPreviewPanel() {
         {typeIcons[entity.type] || null}
         <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
         {isEditable && isDirty && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">Unsaved</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--color-status-warning)]/15 t-text-warning">Unsaved</span>
         )}
 
         {nav.canNavigate && (
@@ -594,7 +596,7 @@ export function EntityPreviewPanel() {
               onClick={() => void handleSave()}
               disabled={!isDirty}
               className={`p-1 rounded transition-colors ${
-                isDirty ? 'text-teal-400 hover:text-teal-300' : 't-text-muted opacity-50'
+                isDirty ? 't-text-accent-soft hover:t-text-accent' : 't-text-muted opacity-50'
               }`}
               title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
             >
@@ -605,7 +607,7 @@ export function EntityPreviewPanel() {
             <button
               onClick={handleDelete}
               className={`p-1 rounded transition-colors ${
-                confirmDelete ? 'text-red-500' : 't-text-muted t-bg-hover'
+                confirmDelete ? 't-text-error' : 't-text-muted t-bg-hover'
               }`}
               title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
             >
@@ -627,10 +629,10 @@ export function EntityPreviewPanel() {
           {entity.authors?.length > 0 && <p>Authors: {entity.authors.join(', ')}</p>}
           {entity.year && <p>Year: {entity.year}</p>}
           {entity.venue && <p>Venue: {entity.venue}</p>}
-          {entity.doi && <p>DOI: <a href={`https://doi.org/${entity.doi}`} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline">{entity.doi}</a></p>}
+          {entity.doi && <p>DOI: <a href={`https://doi.org/${entity.doi}`} target="_blank" rel="noreferrer" className="t-text-accent-soft hover:underline">{entity.doi}</a></p>}
           {entity.citationCount != null && <p>Citations: {entity.citationCount}</p>}
-          {entity.url && <p>URL: <a href={entity.url} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline break-all">{entity.url}</a></p>}
-          {entity.pdfUrl && <p>PDF: <a href={entity.pdfUrl} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline break-all">{entity.pdfUrl}</a></p>}
+          {entity.url && <p>URL: <a href={entity.url} target="_blank" rel="noreferrer" className="t-text-accent-soft hover:underline break-all">{entity.url}</a></p>}
+          {entity.pdfUrl && <p>PDF: <a href={entity.pdfUrl} target="_blank" rel="noreferrer" className="t-text-accent-soft hover:underline break-all">{entity.pdfUrl}</a></p>}
           {entity.citeKey && <p>Cite key: <code className="t-bg-surface px-1 rounded">{entity.citeKey}</code></p>}
           {entity.externalSource && <p>Source: {entity.externalSource}</p>}
           {entity.relevanceScore != null && <p>Relevance: {entity.relevanceScore}/10</p>}
@@ -645,7 +647,7 @@ export function EntityPreviewPanel() {
           )}
           {entity.bibtex && (
             <details className="mt-1">
-              <summary className="cursor-pointer hover:text-teal-400">BibTeX</summary>
+              <summary className="cursor-pointer hover:t-text-accent-soft">BibTeX</summary>
               <pre className="mt-1 p-2 t-bg-surface rounded text-[11px] font-mono whitespace-pre-wrap break-all">{entity.bibtex}</pre>
             </details>
           )}

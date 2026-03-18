@@ -8,15 +8,17 @@ export function ModeToggle() {
   const setMode = useUIStore((s) => s.setMode)
 
   return (
-    <div className="flex rounded-lg bg-neutral-900 p-0.5">
+    <div className="flex rounded-lg t-bg-toggle p-0.5" role="tablist" aria-label="Interaction mode">
       {modes.map((m) => (
         <button
           key={m}
+          role="tab"
+          aria-selected={mode === m}
           onClick={() => setMode(m)}
           className={`no-drag flex-1 px-3 py-1.5 text-xs font-medium rounded-md capitalize transition-colors ${
             mode === m
-              ? 'bg-neutral-700 text-neutral-100'
-              : 'text-neutral-400 hover:text-neutral-200'
+              ? 't-bg-toggle-active t-text-toggle-active'
+              : 't-text-toggle-inactive hover:t-text'
           }`}
         >
           {m}

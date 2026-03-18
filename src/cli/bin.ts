@@ -7,6 +7,7 @@
 
 import { runIndexDocs, parseIndexDocsArgs, printIndexDocsHelp } from './index-docs.js'
 import { runAgentTask, parseRunArgs, printRunHelp } from './run.js'
+import { runInit, parseInitArgs, printInitHelp } from './init.js'
 
 const VERSION = '0.1.0'
 
@@ -17,8 +18,9 @@ Usage:
   agent-foundry <command> [options]
 
 Commands:
+  init          Scaffold a new AgentFoundry project
   validate      Validate configuration file
-  run           Run agent task (single or autonomous mode)
+  run           Run agent task (single, autonomous, or interactive mode)
   index-docs    Build document index for docs context sources
   help          Show help information
 
@@ -28,6 +30,7 @@ Options:
 
 Examples:
   $ agent-foundry validate
+  $ agent-foundry validate --deep
   $ agent-foundry run "Summarize README.md"
   $ agent-foundry index-docs --paths docs,wiki -v
 `
@@ -60,13 +63,36 @@ async function main(): Promise<void> {
 
   // Execute command
   switch (command) {
-    case 'validate':
-      if (args.slice(1).includes('--help') || args.slice(1).includes('-h')) {
-        console.log(HELP)
+    case 'init': {
+      const cmdArgs = args.slice(1)
+      if (cmdArgs.includes('--help') || cmdArgs.includes('-h')) {
+        printInitHelp()
         break
       }
-      await runValidate()
+      const initOptions = parseInitArgs(cmdArgs)
+      await runInit(initOptions)
       break
+    }
+
+    case 'validate': {
+      const validateArgs = args.slice(1)
+      if (validateArgs.includes('--help') || validateArgs.includes('-h')) {
+        if (validateArgs.includes('--deep')) {
+          const { printValidateDeepHelp } = await import('./validate-deep.js')
+          printValidateDeepHelp()
+        } else {
+          console.log(HELP)
+        }
+        break
+      }
+      if (validateArgs.includes('--deep')) {
+        const { runValidateDeep } = await import('./validate-deep.js')
+        await runValidateDeep()
+      } else {
+        await runValidate()
+      }
+      break
+    }
 
     case 'run': {
       const cmdArgs = args.slice(1)

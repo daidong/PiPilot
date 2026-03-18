@@ -1,0 +1,239 @@
+/**
+ * Shared base styles for AgentFoundry desktop apps.
+ *
+ * Each app's global.css should:
+ *   1. @import "tailwindcss";
+ *   2. @import "@shared/styles/global-base.css";
+ *   3. Define app-specific accent tokens in html.dark / html.light
+ *
+ * Accent tokens that MUST be defined per-app:
+ *   --color-accent, --color-accent-soft
+ *   --color-code-text, --color-code-bg, --color-code-border
+ *   --color-input-focus
+ *   --color-bubble-user
+ */
+
+/* === Shared theme tokens (non-accent) === */
+html.dark {
+  --color-bg-base: #0a0a0a;
+  --color-bg-surface: #171717;
+  --color-bg-elevated: #262626;
+  --color-bg-hover: rgba(255 255 255 / 0.06);
+  --color-border: #262626;
+  --color-border-subtle: #1f1f1f;
+  --color-text: #f5f5f5;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #525252;
+  --color-bubble-assistant: #262626;
+  --color-input-bg: #171717;
+  --color-input-border: #404040;
+  /* Semantic status colors */
+  --color-status-success: #22c55e;
+  --color-status-error: #ef4444;
+  --color-status-error-soft: #fca5a5;
+  --color-status-warning: #f59e0b;
+  --color-status-info: #60a5fa;
+  color-scheme: dark;
+}
+
+html.light {
+  --color-bg-base: #ffffff;
+  --color-bg-surface: #f5f5f5;
+  --color-bg-elevated: #e5e5e5;
+  --color-bg-hover: rgba(0 0 0 / 0.04);
+  --color-border: #e5e5e5;
+  --color-border-subtle: #f0f0f0;
+  --color-text: #171717;
+  --color-text-secondary: #525252;
+  --color-text-muted: #a3a3a3;
+  --color-bubble-assistant: #f5f5f5;
+  --color-input-bg: #ffffff;
+  --color-input-border: #d4d4d4;
+  /* Semantic status colors */
+  --color-status-success: #16a34a;
+  --color-status-error: #dc2626;
+  --color-status-error-soft: #ef4444;
+  --color-status-warning: #d97706;
+  --color-status-info: #3b82f6;
+  color-scheme: light;
+}
+
+/* Apply tokens globally */
+body {
+  background: var(--color-bg-base);
+  color: var(--color-text);
+}
+
+/* Themed utility classes */
+.t-bg-base { background: var(--color-bg-base); }
+.t-bg-surface { background: var(--color-bg-surface); }
+.t-bg-elevated { background: var(--color-bg-elevated); }
+.t-bg-hover:hover { background: var(--color-bg-hover); }
+.t-border { border-color: var(--color-border); }
+.t-border-subtle { border-color: var(--color-border-subtle); }
+.t-text { color: var(--color-text); }
+.t-text-secondary { color: var(--color-text-secondary); }
+.t-text-muted { color: var(--color-text-muted); }
+.t-text-accent { color: var(--color-accent); }
+.t-text-accent-soft { color: var(--color-accent-soft); }
+.t-text-success { color: var(--color-status-success); }
+.t-text-error { color: var(--color-status-error); }
+.t-text-error-soft { color: var(--color-status-error-soft); }
+.t-text-warning { color: var(--color-status-warning); }
+.t-text-info { color: var(--color-status-info); }
+.t-bg-accent { background: var(--color-accent); }
+.t-bg-accent-soft { background: var(--color-accent-soft); }
+.t-bg-success { background: var(--color-status-success); }
+.t-bg-error { background: var(--color-status-error); }
+.t-border-accent { border-color: var(--color-accent); }
+.t-border-accent-soft { border-color: var(--color-accent-soft); }
+
+/* Focus-within glow for input containers (chat input bar) */
+.t-input-container:focus-within {
+  border-color: var(--color-input-focus) !important;
+  box-shadow: 0 0 0 1px var(--color-input-focus);
+}
+
+/* Subtle focus ring for standalone inputs/textareas */
+.t-focus-ring:focus {
+  box-shadow: 0 0 0 1px var(--color-input-focus);
+}
+
+/* Draggable title bar area */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Markdown prose styling inside assistant bubbles */
+.md-prose {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.md-prose p {
+  margin: 0.3em 0;
+}
+.md-prose p:first-child {
+  margin-top: 0;
+}
+.md-prose p:last-child {
+  margin-bottom: 0;
+}
+.md-prose h1, .md-prose h2, .md-prose h3, .md-prose h4 {
+  font-weight: 600;
+  margin: 0.6em 0 0.25em;
+}
+.md-prose h1 { font-size: 1.2em; }
+.md-prose h2 { font-size: 1.1em; }
+.md-prose h3 { font-size: 1em; color: var(--color-accent-soft); }
+.md-prose h4 { font-size: 0.95em; color: var(--color-text-secondary); }
+.md-prose ul, .md-prose ol {
+  margin: 0.25em 0;
+  padding-left: 1.3em;
+}
+.md-prose li {
+  margin: 2px 0;
+}
+.md-prose ul { list-style-type: disc; }
+.md-prose ol { list-style-type: decimal; }
+.md-prose code {
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Fira Code', monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  color: var(--color-code-text);
+  background: var(--color-code-bg);
+  border: 1px solid var(--color-code-border);
+}
+.md-prose pre {
+  margin: 0.5em 0;
+  padding: 0.65em 0.9em;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: var(--color-bg-base) !important;
+  border: 1px solid var(--color-border);
+}
+.md-prose pre code {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--color-text);
+  font-size: 0.82em;
+  line-height: 1.45;
+}
+.md-prose blockquote {
+  margin: 0.4em 0;
+  padding: 0.15em 0.75em;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+.md-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.4em 0;
+  font-size: 0.9em;
+}
+.md-prose th, .md-prose td {
+  padding: 0.3em 0.5em;
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+.md-prose th {
+  font-weight: 600;
+  background: var(--color-bg-hover);
+}
+.md-prose a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: var(--color-code-border);
+  text-underline-offset: 2px;
+}
+.md-prose a:hover {
+  text-decoration-color: var(--color-accent);
+}
+.md-prose hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 0.6em 0;
+}
+.md-prose img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.md-prose strong {
+  font-weight: 700;
+  font-variation-settings: "wght" 700;
+  color: var(--color-text);
+}
+.md-prose em {
+  font-style: italic;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-elevated);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

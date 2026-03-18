@@ -9,6 +9,8 @@
     "skipLibCheck": true,
     "outDir": "./dist",
     "paths": {
+      "@shared/*": ["../shared-ui/*"],
+      "@shared": ["../shared-ui/index.ts"],
       "@/*": ["./src/renderer/*"]
     }
   },

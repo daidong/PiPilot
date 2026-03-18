@@ -738,6 +738,10 @@ export type {
 
 export { runIndexDocs, parseIndexDocsArgs, printIndexDocsHelp } from './cli/index.js'
 export type { IndexDocsOptions } from './cli/index.js'
+export { runInit, parseInitArgs, printInitHelp } from './cli/index.js'
+export type { InitOptions } from './cli/index.js'
+export { runValidateDeep, printValidateDeepHelp } from './cli/index.js'
+export type { ValidateDeepOptions } from './cli/index.js'
 
 // ============================================================================
 // Multi-Agent Team exports

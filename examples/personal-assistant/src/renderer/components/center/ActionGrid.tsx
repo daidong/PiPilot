@@ -23,9 +23,9 @@ export function ActionGrid() {
             setIdle(false)
             send(prompt)
           }}
-          className="flex items-center gap-3 px-4 py-3 rounded-xl border border-neutral-800 bg-neutral-900/50 hover:bg-neutral-800 text-sm text-neutral-300 hover:text-neutral-100 transition-colors text-left"
+          className="flex items-center gap-3 px-4 py-3 rounded-xl border t-border t-bg-surface/50 hover:t-bg-elevated text-sm t-text-secondary hover:t-text transition-colors text-left"
         >
-          <Icon size={18} className="text-blue-400 shrink-0" />
+          <Icon size={18} className="t-text-accent-soft shrink-0" />
           {label}
         </button>
       ))}

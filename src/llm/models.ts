@@ -10,40 +10,25 @@ import type { ModelConfig } from './provider.types.js'
  * Built-in model configurations
  */
 export const builtinModels: ModelConfig[] = [
-  // OpenAI Models - GPT-5.x (Responses API)
+  // OpenAI Models - GPT-5.4 (Responses API)
   {
-    id: 'gpt-5.2',
-    name: 'GPT-5.2',
+    id: 'gpt-5.4',
+    name: 'GPT-5.4',
     providerID: 'openai',
     api: 'chat',
     capabilities: {
-      temperature: false,  // GPT-5.2 does not support temperature
+      temperature: false,  // GPT-5.4 does not support temperature
       reasoning: true,     // Uses Responses API
       toolcall: true,
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 1.75, cachedInput: 0.175, output: 14 },
+    cost: { input: 2.0, cachedInput: 0.2, output: 16 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
   {
-    id: 'gpt-5.1',
-    name: 'GPT-5.1',
-    providerID: 'openai',
-    api: 'chat',
-    capabilities: {
-      temperature: false,  // GPT-5.1 does not support temperature
-      reasoning: true,     // Uses Responses API
-      toolcall: true,
-      input: ['text', 'image'],
-      output: ['text']
-    },
-    cost: { input: 1.25, cachedInput: 0.125, output: 10 },
-    limit: { maxContext: 128000, maxOutput: 16384 }
-  },
-  {
-    id: 'gpt-5-mini',
-    name: 'GPT-5 Mini',
+    id: 'gpt-5.4-mini',
+    name: 'GPT-5.4 Mini',
     providerID: 'openai',
     api: 'chat',
     capabilities: {
@@ -53,12 +38,12 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 0.25, cachedInput: 0.025, output: 2 },
+    cost: { input: 0.3, cachedInput: 0.03, output: 2.4 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
   {
-    id: 'gpt-5-nano',
-    name: 'GPT-5 Nano',
+    id: 'gpt-5.4-nano',
+    name: 'GPT-5.4 Nano',
     providerID: 'openai',
     api: 'chat',
     capabilities: {
@@ -68,7 +53,7 @@ export const builtinModels: ModelConfig[] = [
       input: ['text', 'image'],
       output: ['text']
     },
-    cost: { input: 0.05, cachedInput: 0.005, output: 0.4 },
+    cost: { input: 0.06, cachedInput: 0.006, output: 0.48 },
     limit: { maxContext: 128000, maxOutput: 16384 }
   },
 

@@ -20,7 +20,7 @@ const tabs = [
   { key: 'notifications' as const, label: 'Alerts', icon: Bell }
 ]
 
-function EntityRow({ entity }: { entity: EntityItem }) {
+const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem }) {
   const openPreview = useUIStore((s) => s.openPreview)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const requestScrollTo = useChatStore((s) => s.requestScrollTo)
@@ -39,13 +39,15 @@ function EntityRow({ entity }: { entity: EntityItem }) {
         <button
           className="min-w-0 flex-1 text-left"
           onClick={() => openPreview(entity)}
+          aria-label={`Open preview: ${entity.title}`}
         >
           <span className="text-xs t-text truncate block">{entity.title}</span>
           {subtitle && <span className="text-[10px] t-text-muted truncate block">{subtitle}</span>}
         </button>
         <button
-          className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400"
+          className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:t-text-error-soft"
           title="Delete"
+          aria-label={`Delete ${entity.title}`}
           onClick={() => deleteEntity(entity.id)}
         >
           <Trash2 size={12} />
@@ -54,7 +56,7 @@ function EntityRow({ entity }: { entity: EntityItem }) {
       {entity.provenance?.messageId && (
         <button
           onClick={() => requestScrollTo(entity.provenance?.messageId)}
-          className="ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:text-blue-400 transition-colors border-l t-border"
+          className="ml-4 pl-2 py-0.5 text-[10px] t-text-muted hover:t-text-accent-soft transition-colors border-l t-border"
           title="Scroll to source message"
         >
           from chat
@@ -62,9 +64,9 @@ function EntityRow({ entity }: { entity: EntityItem }) {
       )}
     </div>
   )
-}
+})
 
-function TodoRow({ todo }: { todo: EntityItem }) {
+const TodoRow = React.memo(function TodoRow({ todo }: { todo: EntityItem }) {
   const toggleTodoComplete = useEntityStore((s) => s.toggleTodoComplete)
   const openPreview = useUIStore((s) => s.openPreview)
 
@@ -75,9 +77,12 @@ function TodoRow({ todo }: { todo: EntityItem }) {
       <button
         onClick={() => toggleTodoComplete(todo.id)}
         className="shrink-0"
+        role="checkbox"
+        aria-checked={completed}
+        aria-label={`${todo.title}: ${completed ? 'completed' : 'pending'}`}
         title={completed ? 'Mark as pending' : 'Mark as completed'}
       >
-        {completed ? <CheckCircle2 size={13} className="text-green-500" /> : <Circle size={13} className="t-text-muted" />}
+        {completed ? <CheckCircle2 size={13} className="t-text-success" /> : <Circle size={13} className="t-text-muted" />}
       </button>
       <button
         className={`min-w-0 flex-1 text-left ${completed ? 'line-through opacity-60' : ''}`}
@@ -87,7 +92,7 @@ function TodoRow({ todo }: { todo: EntityItem }) {
       </button>
     </div>
   )
-}
+})
 
 function NotificationRow({ notification, onRead }: { notification: Notification; onRead: (id: string) => void }) {
   const isUnread = !notification.readAt
@@ -106,7 +111,7 @@ function NotificationRow({ notification, onRead }: { notification: Notification;
       className={`w-full text-left rounded-md px-2 py-1.5 transition-colors ${isUnread ? 't-bg-hover' : 'opacity-60'}`}
     >
       <div className="flex items-start gap-1.5">
-        {isUnread && <span className="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />}
+        {isUnread && <span className="mt-1 w-1.5 h-1.5 rounded-full t-bg-accent shrink-0" />}
         <div className="min-w-0 flex-1">
           <p className="text-xs t-text truncate font-medium">{notification.title}</p>
           <p className="text-[10px] t-text-secondary line-clamp-2 mt-0.5">{notification.body}</p>
@@ -120,7 +125,12 @@ function NotificationRow({ notification, onRead }: { notification: Notification;
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
-  const { notes, docs, todos, mail, calendar, refreshAll } = useEntityStore()
+  const notes = useEntityStore((s) => s.notes)
+  const docs = useEntityStore((s) => s.docs)
+  const todos = useEntityStore((s) => s.todos)
+  const mail = useEntityStore((s) => s.mail)
+  const calendar = useEntityStore((s) => s.calendar)
+  const refreshAll = useEntityStore((s) => s.refreshAll)
   const notifications = useNotificationStore((s) => s.notifications)
   const unreadCount = useNotificationStore((s) => s.unreadCount)
   const loadNotifications = useNotificationStore((s) => s.load)
@@ -142,7 +152,7 @@ export function EntityTabs() {
     return todos.filter((t) => t.status !== 'completed')
   }, [todos, showCompleted])
 
-  const items: EntityItem[] = (() => {
+  const items = useMemo<EntityItem[]>(() => {
     switch (leftTab) {
       case 'todos': return filteredTodos
       case 'notes': return notes
@@ -151,7 +161,7 @@ export function EntityTabs() {
       case 'calendar': return calendar
       default: return []
     }
-  })()
+  }, [leftTab, filteredTodos, notes, docs, mail, calendar])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -183,14 +193,16 @@ export function EntityTabs() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex gap-1 px-2 pb-2 border-b t-border overflow-x-auto">
+      <div className="flex gap-1 px-2 pb-2 border-b t-border overflow-x-auto" role="tablist" aria-label="Entity categories">
         {tabs.map((tab) => {
           const Icon = tab.icon
           const active = leftTab === tab.key
           return (
             <button
               key={tab.key}
-              className={`flex items-center gap-1 px-2 py-1.5 rounded-md text-xs whitespace-nowrap ${active ? 't-bg-surface t-text' : 't-text-muted hover:t-bg-hover'}`}
+              role="tab"
+              aria-selected={active}
+              className={`flex items-center gap-1 px-2 py-1.5 rounded-md text-xs whitespace-nowrap ${active ? 't-bg-surface t-text-accent' : 't-text-muted hover:t-bg-hover'}`}
               onClick={() => setLeftTab(tab.key)}
             >
               <Icon size={12} />
@@ -226,9 +238,9 @@ export function EntityTabs() {
         <div
           onDragOver={handleDragOver}
           onDrop={handleDrop}
-          className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-blue-400/40"
+          className="mx-2 mt-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-[var(--color-accent-soft)]"
         >
-          <Upload size={16} className="mx-auto mb-1 t-text-muted" />
+          <Upload size={16} className="mx-auto mb-1 t-text-accent-soft" />
           <p className="text-xs t-text-muted">Drop files here</p>
         </div>
       )}

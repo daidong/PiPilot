@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react'
+import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useChatStore, type ChatMessage } from '../../stores/chat-store'
@@ -7,6 +7,9 @@ import { useActivityStore } from '../../stores/activity-store'
 import { Bookmark, BookmarkCheck, Loader2 } from 'lucide-react'
 
 const api = (window as any).api
+
+// Stable reference to avoid re-creating array on every render
+const remarkPlugins = [remarkGfm]
 
 // Floating tooltip that appears when user selects text inside an assistant bubble
 function SelectionBookmark() {
@@ -118,6 +121,7 @@ function SelectionBookmark() {
         color: saveState === 'saved' ? '#22c55e' : 'var(--color-text-secondary)',
       }}
       title="Save selection as note"
+      aria-label={saveState === 'saved' ? 'Selection saved as note' : 'Save selection as note'}
     >
       {saveState === 'saving' ? (
         <Loader2 size={12} className="animate-spin" />
@@ -131,7 +135,7 @@ function SelectionBookmark() {
   )
 }
 
-function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean }) {
+const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean }) {
   const isUser = msg.role === 'user'
   const refreshAll = useEntityStore((s) => s.refreshAll)
   const markSaved = useChatStore((s) => s.markSaved)
@@ -176,7 +180,7 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
       <div
         className={`relative max-w-[80%] rounded-2xl px-4 py-3 text-sm t-text ${
           !isUser ? 'assistant-bubble' : ''
-        }${!isUser && isSaved ? ' border-l-2 border-green-500' : ''}`}
+        }${!isUser && isSaved ? ' border-l-2 border-[var(--color-status-success)]' : ''}`}
         style={{
           background: isUser
             ? 'var(--color-bubble-user)'
@@ -185,7 +189,7 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
         data-msg-id={msg.id}
       >
         <div className="md-prose" style={{ color: 'var(--color-text)' }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={remarkPlugins}>{msg.content}</ReactMarkdown>
         </div>
 
         {!isUser && (
@@ -194,12 +198,13 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
             disabled={saveState !== 'idle'}
             className={`absolute -right-8 top-2 transition-opacity ${
               saveState === 'saved'
-                ? 'opacity-100 text-green-500'
+                ? 'opacity-100 t-text-success'
                 : saveState === 'saving'
                   ? 'opacity-100 t-text-muted'
-                  : 'opacity-0 group-hover:opacity-100 t-text-muted hover:text-teal-400'
+                  : 'opacity-0 group-hover:opacity-100 t-text-muted hover:t-text-accent-soft'
             }`}
             title={saveState === 'saved' ? 'Saved as note' : 'Save entire message as note'}
+            aria-label={saveState === 'saved' ? 'Message saved as note' : 'Save entire message as note'}
           >
             {saveState === 'saving' ? (
               <Loader2 size={14} className="animate-spin" />
@@ -213,23 +218,25 @@ function MessageBubble({ msg, isSaved }: { msg: ChatMessage; isSaved: boolean })
       </div>
     </div>
   )
-}
+})
 
 // Animated dots for thinking state
 function ThinkingDots() {
   return (
     <span className="inline-flex gap-1 items-center">
-      <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-      <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-      <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '0ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '150ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '300ms' }} />
     </span>
   )
 }
 
 function ThinkingBubble() {
   const events = useActivityStore((s) => s.events)
-  const latest = [...events].reverse().find(e => e.type === 'tool-call') || events[events.length - 1]
-  const activity = latest?.summary || ''
+  const activity = useMemo(() => {
+    const latest = [...events].reverse().find(e => e.type === 'tool-call') || events[events.length - 1]
+    return latest?.summary || ''
+  }, [events])
 
   return (
     <div className="flex items-center gap-3">
@@ -264,9 +271,9 @@ function StreamingBubble() {
         style={{ background: 'var(--color-bubble-assistant)' }}
       >
         <div className="md-prose" style={{ color: 'var(--color-text)' }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={remarkPlugins}>{text}</ReactMarkdown>
         </div>
-        <span className="inline-block w-1.5 h-4 bg-teal-400 animate-pulse ml-0.5 align-text-bottom" />
+        <span className="inline-block w-1.5 h-4 t-bg-accent-soft animate-pulse ml-0.5 align-text-bottom" />
       </div>
     </div>
   )
@@ -332,8 +339,8 @@ export function ChatMessages() {
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       // Brief highlight flash
-      el.classList.add('ring-2', 'ring-teal-400')
-      setTimeout(() => el.classList.remove('ring-2', 'ring-teal-400'), 1500)
+      el.classList.add('ring-2', 'ring-[var(--color-accent-soft)]')
+      setTimeout(() => el.classList.remove('ring-2', 'ring-[var(--color-accent-soft)]'), 1500)
     }
   }, [scrollToMessageId])
 
@@ -344,6 +351,9 @@ export function ChatMessages() {
         ref={scrollContainerRef}
         onScroll={handleScroll}
         className="space-y-4 overflow-y-auto h-full"
+        role="log"
+        aria-label="Chat messages"
+        aria-live="polite"
       >
         {isLoadingHistory && (
           <div className="flex justify-center py-2">

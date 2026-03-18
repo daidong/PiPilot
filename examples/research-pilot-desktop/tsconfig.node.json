@@ -8,6 +8,8 @@
     "skipLibCheck": true,
     "outDir": "./dist",
     "paths": {
+      "@shared-electron/*": ["../shared-electron/*"],
+      "@shared-electron": ["../shared-electron/index.ts"],
       "@research-pilot/*": ["../research-pilot/*"]
     }
   },

@@ -1,14 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+const remarkPlugins = [remarkGfm]
 import { X, StickyNote, FileText, Trash2, Pencil, Check, CheckSquare, Undo2 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore } from '../../stores/entity-store'
 
 const typeIcons: Record<string, React.ReactNode> = {
-  note: <StickyNote size={16} className="text-yellow-500" />,
-  todo: <CheckSquare size={16} className="text-green-500" />,
-  doc: <FileText size={16} className="text-blue-500" />
+  note: <StickyNote size={16} className="t-text-warning" />,
+  todo: <CheckSquare size={16} className="t-text-success" />,
+  doc: <FileText size={16} className="t-text-accent" />
 }
 
 // File extension categories
@@ -256,7 +258,7 @@ export function EntityPreviewPanel() {
             <p className="text-sm t-text-secondary">{getExtension(entity.filePath!).toUpperCase()} file</p>
             <button
               onClick={() => (window as any).api.openFile(entity.filePath)}
-              className="px-4 py-2 rounded bg-blue-500 hover:bg-blue-600 text-white text-sm"
+              className="px-4 py-2 rounded t-bg-accent hover:opacity-90 text-white text-sm"
             >
               Open in default app
             </button>
@@ -279,7 +281,7 @@ export function EntityPreviewPanel() {
         if (isMarkdown) {
           return (
             <div className="md-prose" style={{ color: 'var(--color-text)' }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{fileContent}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={remarkPlugins}>{fileContent}</ReactMarkdown>
             </div>
           )
         }
@@ -297,7 +299,7 @@ export function EntityPreviewPanel() {
           ref={textareaRef}
           value={editContent}
           onChange={(e) => setEditContent(e.target.value)}
-          className="w-full min-h-[200px] text-sm t-text bg-transparent outline-none resize-none font-mono leading-relaxed"
+          className="w-full min-h-[200px] text-sm t-text bg-transparent outline-none t-focus-ring resize-none font-mono leading-relaxed"
           placeholder="Enter content..."
         />
       )
@@ -306,7 +308,7 @@ export function EntityPreviewPanel() {
     const content = entity.content || 'No content available.'
     return (
       <div className="md-prose" style={{ color: 'var(--color-text)' }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        <ReactMarkdown remarkPlugins={remarkPlugins}>
           {typeof content === 'string' ? content : JSON.stringify(content, null, 2)}
         </ReactMarkdown>
       </div>
@@ -323,7 +325,7 @@ export function EntityPreviewPanel() {
             autoFocus
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
-            className="flex-1 text-sm font-semibold t-text bg-transparent border-b border-blue-400 outline-none min-w-0"
+            className="flex-1 text-sm font-semibold t-text bg-transparent border-b t-border-accent-soft outline-none t-focus-ring min-w-0"
           />
         ) : (
           <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
@@ -334,7 +336,7 @@ export function EntityPreviewPanel() {
             <>
               <button
                 onClick={saveEditing}
-                className="px-2 py-1 rounded text-xs bg-blue-500 text-white hover:bg-blue-400 transition-colors inline-flex items-center gap-1"
+                className="px-2 py-1 rounded text-xs t-bg-accent text-white hover:opacity-90 transition-colors inline-flex items-center gap-1"
                 title="Save changes"
               >
                 <Check size={12} />
@@ -352,7 +354,7 @@ export function EntityPreviewPanel() {
           ) : (
             <button
               onClick={startEditing}
-              className="p-1 rounded transition-colors t-text-muted hover:text-blue-400"
+              className="p-1 rounded transition-colors t-text-muted hover:t-text-accent-soft"
               title="Edit"
             >
               <Pencil size={14} />
@@ -361,7 +363,7 @@ export function EntityPreviewPanel() {
           <button
             onClick={handleDelete}
             className={`p-1 rounded transition-colors ${
-              confirmDelete ? 'text-red-500' : 't-text-muted t-bg-hover'
+              confirmDelete ? 't-text-error' : 't-text-muted t-bg-hover'
             }`}
             title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
           >
@@ -378,13 +380,13 @@ export function EntityPreviewPanel() {
       </div>
       {editing && entity.id === 'agent-md' && (
         <div className="px-4 py-1 border-b t-border text-[11px]">
-          <span className={editContent.length > AGENT_MD_MAX_CHARS ? 'text-red-500' : 't-text-muted'}>
+          <span className={editContent.length > AGENT_MD_MAX_CHARS ? 't-text-error' : 't-text-muted'}>
             agent.md: {editContent.length}/{AGENT_MD_MAX_CHARS}
           </span>
         </div>
       )}
       {saveError && (
-        <div className="px-4 py-2 border-b t-border text-xs text-red-500">
+        <div className="px-4 py-2 border-b t-border text-xs t-text-error">
           {saveError}
         </div>
       )}
@@ -396,9 +398,10 @@ export function EntityPreviewPanel() {
             onClick={() => toggleTodoComplete(entity.id)}
             className={`flex items-center justify-center w-6 h-6 rounded border-2 transition-colors ${
               entity.status === 'completed'
-                ? 'bg-green-500 border-green-500 text-white'
-                : 't-border hover:border-green-400'
+                ? 't-bg-success text-white'
+                : 't-border hover:border-[var(--color-status-success)]'
             }`}
+            style={entity.status === 'completed' ? { borderColor: 'var(--color-status-success)' } : undefined}
             title={entity.status === 'completed' ? 'Mark as pending' : 'Mark as completed'}
           >
             {entity.status === 'completed' && <Check size={14} strokeWidth={3} />}
