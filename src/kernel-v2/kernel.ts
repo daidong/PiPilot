@@ -190,7 +190,8 @@ export class KernelV2Impl implements KernelV2 {
     config: KernelV2Config | undefined,
     contextWindow: number,
     modelId: string,
-    private readonly debug = false
+    private readonly debug = false,
+    summarizeFn?: import('./compaction-engine-v2.js').SummarizeFn
   ) {
     this.config = resolveKernelV2Config(config, contextWindow, modelId)
     this.telemetry = new KernelV2Telemetry(projectPath, this.config, this.debug)
@@ -203,7 +204,7 @@ export class KernelV2Impl implements KernelV2 {
       preFlushReserve: this.config.compaction.preFlush.writeReserve
     }, (event) => this.emit(event))
     this.assembler = new ContextAssemblerV2(this.storage, this.config, (event) => this.emit(event))
-    this.compaction = new CompactionEngineV2(this.storage, this.gate, this.config, (event) => this.emit(event))
+    this.compaction = new CompactionEngineV2(this.storage, this.gate, this.config, (event) => this.emit(event), summarizeFn)
     this.lifecycle = new MemoryLifecycleManager(projectPath, this.storage, this.config, (event) => this.emit(event))
   }
 
@@ -769,12 +770,14 @@ export function createKernelV2(params: {
   contextWindow: number
   modelId: string
   debug?: boolean
+  summarizeFn?: import('./compaction-engine-v2.js').SummarizeFn
 }): KernelV2 {
   return new KernelV2Impl(
     params.projectPath,
     params.config,
     params.contextWindow,
     params.modelId,
-    params.debug ?? false
+    params.debug ?? false,
+    params.summarizeFn
   )
 }

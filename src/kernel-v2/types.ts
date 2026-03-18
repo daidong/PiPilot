@@ -46,6 +46,12 @@ export interface KernelV2Config {
       writeReserve?: number
     }
     requireReplayRefs?: boolean
+    /**
+     * Use an LLM to generate semantic summaries instead of heuristic truncation.
+     * Requires `summarizeFn` to be injected into KernelV2Impl at construction time.
+     * Default: false
+     */
+    llmSummarization?: boolean
   }
   retrieval?: {
     fallbackChain?: Array<'hybrid' | 'lexical' | 'vector-only' | 'raw-file-scan'>
@@ -108,6 +114,7 @@ export interface KernelV2ResolvedConfig {
       writeReserve: number
     }
     requireReplayRefs: boolean
+    llmSummarization: boolean
   }
   retrieval: {
     fallbackChain: Array<'hybrid' | 'lexical' | 'vector-only' | 'raw-file-scan'>

@@ -587,6 +587,20 @@ export type {
 export type { LLMClient, AgentLoopConfig } from './agent/agent-loop.js'
 export { runAgent } from './agent/agent-loop.js'
 
+// AgentHooks — strongly-typed lifecycle hooks
+export type {
+  AgentHooks,
+  BeforeToolCallEvent,
+  AfterToolCallEvent,
+  TurnStartEvent,
+  TurnEndEvent,
+  RunStartEvent,
+  RunEndEvent,
+  BeforeToolCallResult,
+  BlockToolResult,
+  AllowToolResult
+} from './core/agent-hooks.js'
+
 // ============================================================================
 // Python bridge exports
 // ============================================================================

@@ -61,12 +61,34 @@ function extractReplayRefs(compacted: V2TurnRecord[]): Array<{ type: 'path' | 'u
   return [...refs.values()].slice(0, 20)
 }
 
+/**
+ * Optional LLM-powered summarization function.
+ * Receives a plain-text representation of the conversation turns to be compacted
+ * and returns a structured summary string.
+ */
+export type SummarizeFn = (conversationText: string) => Promise<string>
+
+const COMPACTION_PROMPT = `You are a context compaction assistant. The conversation below is about to be compressed.
+
+Create a concise structured summary that preserves all critical information needed to continue the work:
+
+## Summary Format
+**Goal:** (one sentence describing the overall objective)
+**Progress:** (what has been accomplished)
+**Key Decisions:** (important choices made and why)
+**Files Modified/Read:** (list any relevant file paths)
+**Remaining Work:** (what still needs to be done)
+**Important Context:** (any other facts the agent must remember)
+
+Keep the summary under 600 tokens. Be specific, not generic.`
+
 export class CompactionEngineV2 {
   constructor(
     private readonly storage: KernelV2Storage,
     private readonly gate: MemoryWriteGateV2,
     private readonly config: KernelV2ResolvedConfig,
-    private readonly telemetry?: (event: KernelV2TelemetryEvent) => void
+    private readonly telemetry?: (event: KernelV2TelemetryEvent) => void,
+    private readonly summarizeFn?: SummarizeFn
   ) {}
 
   private emit(event: string, payload: Record<string, unknown>, message: string): void {
@@ -110,13 +132,37 @@ export class CompactionEngineV2 {
     }
 
     const turnRange: [number, number] = [flat[0]!.index, flat[flat.length - 1]!.index]
-    const summaryLines = compactable.slice(-20).map(turn => {
-      const user = turn.find(t => t.role === 'user')
-      const assistant = turn.find(t => t.role === 'assistant')
-      const userText = user?.content.slice(0, 120) ?? ''
-      const assistantText = assistant?.content.slice(0, 120) ?? ''
-      return `- U: ${userText}\n  A: ${assistantText}`
-    })
+
+    // Build summary — LLM-powered when configured, otherwise heuristic
+    let summaryText: string
+    const useLLM = this.config.compaction.llmSummarization && this.summarizeFn
+    if (useLLM) {
+      try {
+        const conversationText = compactable.map(turn => {
+          return turn.map(t => {
+            const roleLabel = t.role === 'user' ? 'User' : t.role === 'assistant' ? 'Assistant' : 'Tool'
+            return `${roleLabel}: ${t.content.slice(0, 800)}`
+          }).join('\n')
+        }).join('\n\n---\n\n')
+        summaryText = await this.summarizeFn!(`${COMPACTION_PROMPT}\n\n## Conversation\n${conversationText}`)
+        this.emit('compaction.llm_summary.success', { sessionId: params.sessionId, turns: flat.length }, `llm-summary session=${params.sessionId}`)
+      } catch (err: unknown) {
+        // Fall back to heuristic on LLM failure
+        const msg = err instanceof Error ? err.message : String(err)
+        this.emit('compaction.llm_summary.failed', { sessionId: params.sessionId, error: msg }, `llm-summary-failed session=${params.sessionId}`)
+        summaryText = compactable.slice(-20).map(turn => {
+          const user = turn.find(t => t.role === 'user')
+          const assistant = turn.find(t => t.role === 'assistant')
+          return `- U: ${user?.content.slice(0, 120) ?? ''}\n  A: ${assistant?.content.slice(0, 120) ?? ''}`
+        }).join('\n')
+      }
+    } else {
+      summaryText = compactable.slice(-20).map(turn => {
+        const user = turn.find(t => t.role === 'user')
+        const assistant = turn.find(t => t.role === 'assistant')
+        return `- U: ${user?.content.slice(0, 120) ?? ''}\n  A: ${assistant?.content.slice(0, 120) ?? ''}`
+      }).join('\n')
+    }
 
     const replayRefs = extractReplayRefs(flat)
     if (this.config.compaction.requireReplayRefs && replayRefs.length === 0) {
@@ -128,7 +174,7 @@ export class CompactionEngineV2 {
       id: generateId('seg'),
       sessionId: params.sessionId,
       turnRange,
-      summary: summaryLines.join('\n'),
+      summary: summaryText,
       replayRefs,
       createdAt: new Date().toISOString()
     }
@@ -140,7 +186,7 @@ export class CompactionEngineV2 {
       segmentId: segment.id,
       turnRange,
       replayRefs: replayRefs.length,
-      savedApproxTokens: countTokens(summaryLines.join('\n'))
+      savedApproxTokens: countTokens(summaryText)
     }, `segment-created id=${segment.id} turns=${turnRange[0]}-${turnRange[1]}`)
 
     return { compacted: true, segment }

@@ -38,7 +38,8 @@ export function resolveKernelV2Config(config: KernelV2Config | undefined, contex
         enabled: config?.compaction?.preFlush?.enabled ?? true,
         writeReserve: config?.compaction?.preFlush?.writeReserve ?? 5
       },
-      requireReplayRefs: config?.compaction?.requireReplayRefs ?? true
+      requireReplayRefs: config?.compaction?.requireReplayRefs ?? true,
+      llmSummarization: config?.compaction?.llmSummarization ?? false
     },
     retrieval: {
       fallbackChain: config?.retrieval?.fallbackChain ?? ['hybrid', 'lexical', 'vector-only', 'raw-file-scan'],

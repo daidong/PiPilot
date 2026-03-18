@@ -28,6 +28,7 @@ import { TokenTracker } from '../core/token-tracker.js'
 import type { ErrorCategory } from '../core/errors.js'
 import { buildFeedback, formatFeedbackAsToolResult, contextDropFeedback, policyDenialFeedback } from '../core/feedback.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
+import type { AgentHooks } from '../core/agent-hooks.js'
 
 /**
  * LLM client type
@@ -100,6 +101,21 @@ export interface AgentLoopConfig {
     /** Number of failures before disabling tool (default: 3) */
     disableAfter?: number
   }
+
+  /**
+   * Execute tool calls within a round in parallel (default: false).
+   *
+   * When true: pre-validation (3-strike, subset checks) runs sequentially,
+   * then all valid tool calls execute concurrently via Promise.allSettled.
+   * Results are collected in source order.
+   */
+  parallelToolExecution?: boolean
+
+  /**
+   * Strongly-typed lifecycle hooks for observing and gating agent behavior.
+   * Complements the EventBus with compile-time safety.
+   */
+  hooks?: AgentHooks
 }
 
 /**
@@ -297,6 +313,15 @@ export class AgentLoop {
       data: { prompt: userPrompt }
     })
 
+    // Hook: onRunStart
+    if (this.config.hooks?.onRunStart) {
+      await this.config.hooks.onRunStart({
+        input: userPrompt,
+        sessionId: this.config.runtime.sessionId,
+        agentId: this.config.runtime.agentId
+      })
+    }
+
     // Add user message
     this.messages.push({
       role: 'user',
@@ -329,6 +354,15 @@ export class AgentLoop {
           type: 'agent.step',
           data: { step }
         })
+
+        // Hook: onTurnStart
+        if (this.config.hooks?.onTurnStart) {
+          await this.config.hooks.onTurnStart({
+            step,
+            messageCount: this.messages.length,
+            sessionId: this.config.runtime.sessionId
+          })
+        }
 
         // Prepare context (with optional budget management)
         let systemPrompt = this.config.systemPromptBuilder
@@ -669,25 +703,47 @@ export class AgentLoop {
         this.trackToolUsage(toolCalls.map(tc => tc.name))
 
         // Execute tool calls
-        const toolResults: ContentBlock[] = []
+        // Per-tool execution encapsulated as an async closure so the same logic
+        // can run either sequentially or in parallel (Promise.all).
         let toolNotAvailableThisRound = false
 
-        for (const toolUse of toolCalls) {
+        const executeOneToolCall = async (toolUse: ToolUseContent): Promise<ContentBlock> => {
           // Check tool subset validation
           if (this.activeToolSubset) {
             const subsetError = this.config.toolRegistry.validateSubset(toolUse.name, this.activeToolSubset)
             if (subsetError) {
               toolNotAvailableThisRound = true
               this.config.onToolResult?.(toolUse.name, subsetError, toolUse.input)
-              toolResults.push({
+              return {
                 type: 'tool_result',
                 tool_use_id: toolUse.id,
                 content: JSON.stringify(subsetError),
                 is_error: true
-              })
-              continue
+              }
             }
           }
+
+          // Hook: beforeToolCall — can block the tool
+          if (this.config.hooks?.beforeToolCall) {
+            const hookResult = await this.config.hooks.beforeToolCall({
+              tool: toolUse.name,
+              input: toolUse.input,
+              step,
+              sessionId: this.config.runtime.sessionId
+            })
+            if (hookResult && 'block' in hookResult && hookResult.block) {
+              const blockedFeedback = policyDenialFeedback(toolUse.name, hookResult.reason, 'hook')
+              const blockedContent = formatFeedbackAsToolResult(blockedFeedback)
+              this.config.onToolResult?.(toolUse.name, { success: false, blocked: true, reason: hookResult.reason }, toolUse.input)
+              return {
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: blockedContent,
+                is_error: true
+              }
+            }
+          }
+
           // Check repeated failure signature block (3-strike protocol)
           const argKey = buildArgKey(toolUse.input)
           const lastError = this.lastErrorByArgs[`${toolUse.name}::${argKey}`]
@@ -702,21 +758,21 @@ export class AgentLoop {
               )
               const resultContent = formatFeedbackAsToolResult(feedback)
               this.config.onToolResult?.(toolUse.name, { success: false, error: feedback }, toolUse.input)
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: toolUse.id,
-                content: resultContent,
-                is_error: true
-              })
               this.config.trace.record({
                 type: 'error.classified',
                 data: { tool: toolUse.name, category: 'policy_denied', source: 'error-strike', attempt: this.toolAttempts[`${toolUse.name}:${toolUse.id}`] ?? 0 }
               })
-              continue
+              return {
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: resultContent,
+                is_error: true
+              }
             }
           }
 
           // RFC-005: Execute tool with transparent executor_retry for transient errors
+          const toolCallStart = Date.now()
           let result = await this.config.toolRegistry.call(
             toolUse.name,
             toolUse.input,
@@ -794,6 +850,20 @@ export class AgentLoop {
 
           this.config.onToolResult?.(toolUse.name, result, toolUse.input)
 
+          // Hook: afterToolCall
+          if (this.config.hooks?.afterToolCall) {
+            await this.config.hooks.afterToolCall({
+              tool: toolUse.name,
+              input: toolUse.input,
+              success: result.success,
+              result: result.success ? result.data : undefined,
+              error: result.success ? undefined : result.error,
+              durationMs: Date.now() - toolCallStart,
+              step,
+              sessionId: this.config.runtime.sessionId
+            })
+          }
+
           // Notify skill manager of tool usage (triggers lazy loading of associated skills)
           if (this.config.runtime.skillManager) {
             this.config.runtime.skillManager.onToolUsed(toolUse.name)
@@ -812,14 +882,14 @@ export class AgentLoop {
             this.config.runtime.sessionState.set('recentSuccessfulTools', recentTools)
 
             // Reset error streaks for this tool+args on success (3-strike protocol)
-            const argKey = buildArgKey(toolUse.input)
+            const successArgKey = buildArgKey(toolUse.input)
             const prefix = `${toolUse.name}::`
-            const lastKey = `${toolUse.name}::${argKey}`
+            const lastKey = `${toolUse.name}::${successArgKey}`
             if (this.lastErrorByArgs[lastKey]) {
               delete this.lastErrorByArgs[lastKey]
             }
             for (const key of Object.keys(this.toolErrorStreaks)) {
-              if (key.startsWith(prefix) && key.endsWith(`::${argKey}`)) {
+              if (key.startsWith(prefix) && key.endsWith(`::${successArgKey}`)) {
                 delete this.toolErrorStreaks[key]
               }
             }
@@ -882,12 +952,12 @@ export class AgentLoop {
             // 3-strike protocol: warn after N failures, disable after M failures (per tool)
             const strikeEligible = !['rate_limit', 'server_overload', 'transient_network', 'timeout'].includes(errorCategory)
             if (strikeEligible) {
-              const argKey = buildArgKey(toolUse.input)
-              const signature = strikeKey(toolUse.name, argKey, errorCategory)
+              const failArgKey = buildArgKey(toolUse.input)
+              const signature = strikeKey(toolUse.name, failArgKey, errorCategory)
               const prev = this.toolErrorStreaks[signature] ?? 0
               const next = prev + 1
               this.toolErrorStreaks[signature] = next
-              this.lastErrorByArgs[`${toolUse.name}::${argKey}`] = { category: errorCategory }
+              this.lastErrorByArgs[`${toolUse.name}::${failArgKey}`] = { category: errorCategory }
 
               if (next === strikePolicy.warnAfter) {
                 resultContent = appendGuidance(
@@ -918,13 +988,24 @@ export class AgentLoop {
             resultContent = compressed.content
           }
 
-          toolResults.push({
+          return {
             type: 'tool_result',
             tool_use_id: toolUse.id,
             content: resultContent,
             is_error: !result.success
-          })
+          }
         }
+
+        // Run tools: parallel when opted in, sequential otherwise
+        const toolResults: ContentBlock[] = this.config.parallelToolExecution && toolCalls.length > 1
+          ? await Promise.all(toolCalls.map(executeOneToolCall))
+          : await (async () => {
+              const results: ContentBlock[] = []
+              for (const toolUse of toolCalls) {
+                results.push(await executeOneToolCall(toolUse))
+              }
+              return results
+            })()
 
         // Add tool result message
         this.messages.push({
@@ -936,6 +1017,16 @@ export class AgentLoop {
         this.hadToolErrors = toolResults.some(
           (tr: any) => tr.is_error === true
         )
+
+        // Hook: onTurnEnd
+        if (this.config.hooks?.onTurnEnd) {
+          await this.config.hooks.onTurnEnd({
+            step,
+            toolCallCount: toolCalls.length,
+            hadErrors: this.hadToolErrors,
+            sessionId: this.config.runtime.sessionId
+          })
+        }
 
         // Circuit breaker: if TOOL_NOT_AVAILABLE happens in 2 consecutive rounds,
         // expand tool subset back to full (or L1 level) to let the model recover.
@@ -1038,6 +1129,15 @@ export class AgentLoop {
         durationMs: Date.now() - startTime,
         usage: usageSummary
       }
+      if (this.config.hooks?.onRunEnd) {
+        await this.config.hooks.onRunEnd({
+          output: finalOutput,
+          steps: step,
+          success: true,
+          sessionId: this.config.runtime.sessionId,
+          agentId: this.config.runtime.agentId
+        })
+      }
       await finalizeTrace({ success: true, steps: step, usage: usageSummary })
       return result
     } catch (error) {
@@ -1076,6 +1176,16 @@ export class AgentLoop {
         trace: this.config.trace.getEvents(),
         durationMs: Date.now() - startTime,
         usage: usageSummary
+      }
+      if (this.config.hooks?.onRunEnd) {
+        await this.config.hooks.onRunEnd({
+          output: '',
+          steps: step,
+          success: false,
+          error: errorMessage,
+          sessionId: this.config.runtime.sessionId,
+          agentId: this.config.runtime.agentId
+        })
       }
       await finalizeTrace({ success: false, steps: step, error: errorMessage, usage: usageSummary })
       return result

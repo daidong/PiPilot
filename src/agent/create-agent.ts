@@ -664,12 +664,26 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   const toolResultCap = config.toolResultCap ?? 4096
 
   // RFC-011: Kernel V2 (mandatory)
+  // Build an LLM-powered summarize function when llmSummarization is enabled.
+  // Uses a lightweight generate() call so it doesn't interfere with the main loop.
+  let summarizeFn: ((text: string) => Promise<string>) | undefined
+  if (config.kernelV2?.compaction?.llmSummarization) {
+    summarizeFn = async (conversationText: string): Promise<string> => {
+      const response = await llmClient.generate({
+        messages: [{ role: 'user', content: conversationText }],
+        maxTokens: 1024
+      })
+      return response.text ?? ''
+    }
+  }
+
   const kernelV2 = createKernelV2({
     projectPath,
     config: config.kernelV2,
     contextWindow,
     modelId: model,
-    debug: config.debug
+    debug: config.debug,
+    summarizeFn
   })
   runtime.kernelV2 = kernelV2
 
