@@ -9,6 +9,7 @@ export type {
   ToolContext,
   Attachment,
   ToolResult,
+  ToolRetrySignal,
   Tool,
   ToolConfig,
   BuiltinToolName,
@@ -94,6 +95,18 @@ export type {
   Agent,
   SessionState
 } from './agent.js'
+
+// Agent event types (streaming-first)
+export type {
+  AgentEvent,
+  AgentTextDeltaEvent,
+  AgentToolCallEvent,
+  AgentToolResultEvent,
+  AgentStepStartEvent,
+  AgentStepFinishEvent,
+  AgentErrorEvent,
+  AgentDoneEvent
+} from './agent-event.js'
 
 // Runtime types
 export type {

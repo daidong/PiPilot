@@ -378,6 +378,17 @@ export interface CreateAgentOptions extends AgentConfig {
    * Fraction of contextWindow at which pre-call trimming kicks in (default: 0.85).
    */
   preCallTrimThreshold?: number
+
+  /**
+   * Agent-level IO provider override. When set, the agent uses this factory
+   * to create its RuntimeIO instead of the default LocalRuntimeIO.
+   *
+   * Individual tools can further override via `tool.createIO`.
+   *
+   * Use cases: all tools execute on a remote host (SSH/Docker), or the agent
+   * operates in a sandboxed environment.
+   */
+  ioProvider?: (config: { projectPath: string; agentId: string; sessionId: string }) => import('../types/runtime.js').RuntimeIO
 }
 
 /**
@@ -503,17 +514,19 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     sessionState: createSessionState()
   } as Runtime
 
-  // Create RuntimeIO
-  const runtimeIO = new RuntimeIO({
-    projectPath,
-    policyEngine,
-    trace,
-    eventBus,
-    agentId,
-    sessionId,
-    getCurrentStep: () => currentStep,
-    limits: config.ioLimits
-  })
+  // Create RuntimeIO — use ioProvider if supplied, otherwise default LocalRuntimeIO
+  const runtimeIO: import('../types/runtime.js').RuntimeIO = config.ioProvider
+    ? config.ioProvider({ projectPath, agentId, sessionId })
+    : new RuntimeIO({
+        projectPath,
+        policyEngine,
+        trace,
+        eventBus,
+        agentId,
+        sessionId,
+        getCurrentStep: () => currentStep,
+        limits: config.ioLimits
+      })
 
   // Update runtime
   ;(runtime as any).io = runtimeIO
@@ -854,7 +867,7 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     },
 
     run(prompt: string, options?: AgentRunOptions): AgentRunHandle {
-      return new AgentRunHandle(async (attachLoop) => {
+      return new AgentRunHandle(async (attachLoop, emitEvent) => {
         await initPacks()
 
         // Phase 1.1: Recompile system prompt to pick up lazy-loaded skills from previous runs
@@ -941,7 +954,18 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
         activeAgentLoop = agentLoop
         attachLoop(agentLoop)
 
-        const result = await agentLoop.run(prompt)
+        // Use runStream() to get both the result and the event stream.
+        // Events are forwarded to the AgentRunHandle's replay channel via emitEvent.
+        let result: import('../types/agent.js').AgentRunResult | undefined
+        for await (const event of agentLoop.runStream(prompt)) {
+          emitEvent(event)
+          if (event.type === 'done') {
+            result = event.result
+          }
+        }
+        if (!result) {
+          result = { success: false, output: '', error: 'Stream ended without done event', steps: 0, trace: [], durationMs: 0 }
+        }
         const allMessages = agentLoop.getMessages()
 
         await kernelV2.completeTurn({

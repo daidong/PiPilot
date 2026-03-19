@@ -34,7 +34,8 @@ export function defineTool<TInput = unknown, TOutput = unknown>(
     parameters: config.parameters,
     execute: config.execute,
     ...(config.activity ? { activity: config.activity } : {}),
-    ...(config.timeout !== undefined ? { timeout: config.timeout } : {})
+    ...(config.timeout !== undefined ? { timeout: config.timeout } : {}),
+    ...(config.createIO ? { createIO: config.createIO } : {})
   }
 }
 

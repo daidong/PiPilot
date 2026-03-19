@@ -353,9 +353,15 @@ export class ToolRegistry {
     // Record tool call
     const spanId = this.config.trace.startSpan('tool.call', { tool: name, input: mutatedInput })
 
-    // Build tool context
+    // Build tool context — apply per-tool IO override if the tool defines createIO
+    let effectiveRuntime = this.config.runtime
+    if (tool.createIO) {
+      const customIO = await tool.createIO(this.config.runtime.io, this.config.runtime)
+      effectiveRuntime = { ...this.config.runtime, io: customIO }
+    }
+
     const toolContext: ToolContext = {
-      runtime: this.config.runtime,
+      runtime: effectiveRuntime,
       sessionId: context?.sessionId ?? this.config.runtime.sessionId,
       step: context?.step ?? this.config.runtime.step,
       agentId: context?.agentId ?? this.config.runtime.agentId,

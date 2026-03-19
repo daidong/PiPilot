@@ -390,7 +390,7 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
       },
 
       run(prompt: string): AgentRunHandle {
-        return new AgentRunHandle(async (attachLoop) => {
+        return new AgentRunHandle(async (attachLoop, emitEvent) => {
           await initPacks()
 
           // Phase 1.4: Recompile system prompt to pick up lazy-loaded skills
@@ -428,7 +428,17 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
 
           attachLoop(agentLoop)
 
-          const result = await agentLoop.run(prompt)
+          // Use runStream() to emit events for streaming consumers
+          let result: import('../types/agent.js').AgentRunResult | undefined
+          for await (const event of agentLoop.runStream(prompt)) {
+            emitEvent(event)
+            if (event.type === 'done') {
+              result = event.result
+            }
+          }
+          if (!result) {
+            result = { success: false, output: '', error: 'Stream ended without done event', steps: 0, trace: [], durationMs: 0 }
+          }
           if (kernelV2 && agentLoop) {
             await kernelV2.completeTurn({
               sessionId,

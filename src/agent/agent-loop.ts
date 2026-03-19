@@ -23,6 +23,8 @@ import type { TraceCollector } from '../core/trace-collector.js'
 import type { Runtime } from '../types/runtime.js'
 import type { AgentRunResult } from '../types/agent.js'
 import { compressToolResult } from '../core/tool-result-compressor.js'
+import { createChannel, type AsyncChannel } from '../utils/async-channel.js'
+import type { AgentEvent } from '../types/agent-event.js'
 import { classifyError, sanitizeErrorContent } from '../core/errors.js'
 import { TokenTracker } from '../core/token-tracker.js'
 import type { ErrorCategory } from '../core/errors.js'
@@ -30,7 +32,7 @@ import { buildFeedback, formatFeedbackAsToolResult, contextDropFeedback, policyD
 import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
 import type { AgentHooks } from '../core/agent-hooks.js'
 import { tryCatch } from '../utils/result.js'
-import { countTokens } from '../utils/tokenizer.js'
+import { MessageStore } from '../core/message-store.js'
 
 /**
  * LLM client type
@@ -124,7 +126,7 @@ export interface AgentLoopConfig {
    * Return a (possibly modified) copy of the messages to send instead.
    * Useful for RAG injection, message filtering, per-call system augmentation.
    *
-   * The original `this.messages` is not modified — only the messages sent
+   * The original message history is not modified — only the messages sent
    * to the LLM are affected. Changes do NOT persist to subsequent rounds.
    */
   transformContext?: (messages: Message[]) => Message[] | Promise<Message[]>
@@ -236,7 +238,7 @@ function strikeKey(toolName: string, argKey: string, category: ErrorCategory): s
 export class AgentLoop {
   private config: AgentLoopConfig
   private client: LLMClient
-  private messages: Message[] = []
+  private store: MessageStore
   private stopped = false
   /** Error category counts across the run (RFC-005) */
   private errorCategoryCounts: Partial<Record<ErrorCategory, number>> = {}
@@ -266,10 +268,12 @@ export class AgentLoop {
   private steeringQueue: string[] = []
   /** Follow-up prompts to continue with after the agent would otherwise stop */
   private followUpQueue: string[] = []
+  /** Event channel for runStream() — null when not streaming */
+  private _eventChannel: AsyncChannel<AgentEvent> | null = null
+  /** Current step number exposed for event emission */
+  private _currentStep = 0
   /** AbortController for the current run — aborted when stop() is called */
   private abortController: AbortController | null = null
-  /** Messages that are always prepended to every LLM call and never compacted */
-  private pinnedMessages: Message[] = []
 
   constructor(config: AgentLoopConfig) {
     this.config = config
@@ -283,9 +287,12 @@ export class AgentLoop {
       throw new Error('Either client or llmConfig must be provided')
     }
 
-    if (config.pinnedMessages) {
-      this.pinnedMessages = [...config.pinnedMessages]
-    }
+    this.store = new MessageStore({
+      contextWindow: config.contextWindow,
+      preCallTrimThreshold: config.preCallTrimThreshold,
+      transformContext: config.transformContext,
+      pinnedMessages: config.pinnedMessages,
+    })
   }
 
   /**
@@ -367,7 +374,7 @@ export class AgentLoop {
     }
 
     // Add user message
-    this.messages.push({
+    this.store.append({
       role: 'user',
       content: userPrompt
     })
@@ -393,17 +400,22 @@ export class AgentLoop {
         this.config.runtime.step = step
         this.config.trace.setStep(step)
 
+        this._currentStep = step
+
         // Record step start
         this.config.trace.record({
           type: 'agent.step',
           data: { step }
         })
 
+        // Emit step-start event for streaming consumers
+        this._eventChannel?.push({ type: 'step-start', step })
+
         // Hook: onTurnStart
         if (this.config.hooks?.onTurnStart) {
           await this.config.hooks.onTurnStart({
             step,
-            messageCount: this.messages.length,
+            messageCount: this.store.length,
             sessionId: this.config.runtime.sessionId
           })
         }
@@ -412,7 +424,7 @@ export class AgentLoop {
         while (this.steeringQueue.length > 0) {
           const steeringMsg = this.steeringQueue.shift()!
           this.config.trace.record({ type: 'agent.steering', data: { message: steeringMsg, step } })
-          this.messages.push({ role: 'user', content: steeringMsg })
+          this.store.append({ role: 'user', content: steeringMsg })
         }
 
         // Prepare context (with optional budget management)
@@ -422,32 +434,8 @@ export class AgentLoop {
         let tools = this.config.toolRegistry.generateToolSchemas(
           this.activeToolSubset ? { subset: this.activeToolSubset } : undefined
         ) as LLMToolDefinition[]
-        let messagesToSend: Message[] = this.config.transformContext
-          ? await this.config.transformContext([...this.messages])
-          : [...this.messages]
-
-        // GAP-10: Prepend pinned messages (always present, never trimmed)
-        if (this.pinnedMessages.length > 0) {
-          messagesToSend = [...this.pinnedMessages, ...messagesToSend]
-        }
-
-        // GAP-6: Pre-call token estimation — proactively trim before context overflow
-        if (this.config.contextWindow && messagesToSend.length > 0) {
-          const threshold = this.config.preCallTrimThreshold ?? 0.85
-          const limit = Math.floor(this.config.contextWindow * threshold)
-          const estimated = countTokens(JSON.stringify(messagesToSend))
-          if (estimated > limit) {
-            const pinnedCount = this.pinnedMessages.length
-            const mutable = messagesToSend.slice(pinnedCount)
-            // Drop oldest messages (keep at least 1) until under threshold
-            while (mutable.length > 1) {
-              const reEstimated = countTokens(JSON.stringify([...this.pinnedMessages, ...mutable]))
-              if (reEstimated <= limit) break
-              mutable.shift()
-            }
-            messagesToSend = [...this.pinnedMessages, ...mutable]
-          }
-        }
+        // Build LLM view: transform → pin → trim (delegated to MessageStore)
+        const messagesToSend = await this.store.buildView()
 
         // Determine round hint for trace metadata
         const roundHint = this.determineRoundHint(tools, previousResponseText, previousToolCallCount)
@@ -528,6 +516,7 @@ export class AgentLoop {
             onText: (text) => {
               responseText += text
               this.config.onText?.(text)
+              this._eventChannel?.push({ type: 'text-delta', text, step })
             },
             onToolCall: (tc) => {
               // Ensure input is always a plain object — the Anthropic API
@@ -544,6 +533,7 @@ export class AgentLoop {
                 input: safeInput
               })
               this.config.onToolCall?.(tc.toolName, safeInput)
+              this._eventChannel?.push({ type: 'tool-call', tool: tc.toolName, toolCallId: tc.toolCallId, args: safeInput, step })
             },
             onFinish: (result) => {
               usage = result.usage
@@ -616,6 +606,7 @@ export class AgentLoop {
               type: 'error.retrying',
               data: { category: classifiedError.category, attempt: transientRetryCount, maxAttempts: 3, mode: 'executor_retry', backoffMs }
             })
+            this._eventChannel?.push({ type: 'error', error: errorMessage, recoverable: true, step })
             await new Promise(resolve => setTimeout(resolve, backoffMs))
             step--
             continue
@@ -624,23 +615,22 @@ export class AgentLoop {
           if (classifiedError.category === 'context_overflow' && retryCount < 2) {
             retryCount++
             // Halve the messages to reduce context size
-            const totalMsgs = this.messages.length
+            const history = this.store.getHistory()
+            const totalMsgs = history.length
             const halfCount = Math.max(2, Math.floor(totalMsgs / 2))
             const droppedCount = totalMsgs - halfCount
-            this.messages = this.messages.slice(-halfCount)
+            this.store.setHistory(history.slice(-halfCount))
 
             // Inject context-drop feedback so the LLM knows data was lost (RFC-005).
-            // This is an LLM-level event (no tool_use_id), so we use the assistant/user
-            // message channel with structured JSON content.
             const dropFeedback = contextDropFeedback(
               [`${droppedCount} earlier messages`],
               'Context overflow — messages trimmed to fit token limit'
             )
-            this.messages.push({
+            this.store.append({
               role: 'assistant',
               content: 'Some earlier context was trimmed due to token limits.'
             })
-            this.messages.push({
+            this.store.append({
               role: 'user',
               content: formatFeedbackAsToolResult(dropFeedback)
             })
@@ -736,7 +726,7 @@ export class AgentLoop {
           if (retryCount < 2) {
             retryCount++
             // Remove the last user message so it gets re-sent with higher token budget
-            // (the user message is still at the end of this.messages)
+            // (the user message is still at the end of the message history)
             this.config.trace.record({
               type: 'budget.retry',
               data: {
@@ -748,14 +738,15 @@ export class AgentLoop {
             console.error(`[AgentLoop] Empty response with finishReason=length (outputTokens=${usage.completionTokens}). Retrying ${retryCount}/2 with halved messages.`)
             // Reduce messages to free input budget, giving the model more room for output.
             // Ensure we don't orphan tool results from their assistant tool_call messages.
-            let halfCount = Math.max(2, Math.floor(this.messages.length / 2))
-            let sliced = this.messages.slice(-halfCount)
+            const history = this.store.getHistory()
+            let halfCount = Math.max(2, Math.floor(history.length / 2))
+            let sliced = history.slice(-halfCount)
             // Walk forward past any leading tool messages (they need their preceding assistant)
             while (sliced.length > 1 && sliced[0]?.role === 'tool') {
               halfCount--
-              sliced = this.messages.slice(-halfCount)
+              sliced = history.slice(-halfCount)
             }
-            this.messages = sliced
+            this.store.setHistory(sliced)
             step--
             continue
           }
@@ -773,7 +764,7 @@ export class AgentLoop {
         assistantContent.push(...toolCalls)
 
         // Add assistant message
-        this.messages.push({
+        this.store.append({
           role: 'assistant',
           content: assistantContent
         })
@@ -782,12 +773,15 @@ export class AgentLoop {
         // When there ARE tool calls, always execute them even if finishReason is 'stop'
         // (some providers set 'stop' when the model emits both text and tool calls).
         if (toolCalls.length === 0) {
+          // Emit step-finish for the final step (no tools called)
+          this._eventChannel?.push({ type: 'step-finish', step, text: responseText, toolCallCount: 0 })
+
           finalOutput = responseText
           // Check follow-up queue before stopping — allows chained agentic pipelines
           if (this.followUpQueue.length > 0) {
             const followUpMsg = this.followUpQueue.shift()!
             this.config.trace.record({ type: 'agent.followUp', data: { message: followUpMsg, step } })
-            this.messages.push({ role: 'user', content: followUpMsg })
+            this.store.append({ role: 'user', content: followUpMsg })
             continue
           }
           break
@@ -874,44 +868,68 @@ export class AgentLoop {
               sessionId: this.config.runtime.sessionId,
               step,
               agentId: this.config.runtime.agentId,
-              messages: this.messages,
+              messages: this.store.getHistory(),
               signal: this.abortController?.signal
             }
           )
 
-          // Transparent executor retry loop (rate_limit, transient_network, timeout)
+          // Transparent executor retry loop
+          // GAP-12: Tool-initiated retry signal takes priority over error classification.
+          // If the tool returns `retry.shouldRetry`, we retry at the executor level
+          // without consulting the LLM, using the tool's suggested delay/attempts.
           if (!result.success) {
+            const toolRetry = result.retry
+            const useToolRetry = toolRetry?.shouldRetry === true
+
             const initialClassified = classifyError(result.error || 'Unknown error', { toolName: toolUse.name, stepId: step })
             const strategy = getStrategy(initialClassified.category)
+            const shouldExecutorRetry = useToolRetry || strategy.mode === 'executor_retry'
 
-            if (strategy.mode === 'executor_retry') {
+            if (shouldExecutorRetry) {
+              const maxAttempts = useToolRetry
+                ? Math.min(toolRetry!.maxAttempts ?? 2, 5) // tool-requested, capped at 5
+                : strategy.maxAttempts
+              const retryCategory = useToolRetry ? 'execution' : initialClassified.category
               let retryAttempt = 0
-              let lastCategory = initialClassified.category
+              let lastCategory = retryCategory
 
               while (
                 !result.success &&
-                retryAttempt < strategy.maxAttempts - 1
+                retryAttempt < maxAttempts - 1
               ) {
-                // Re-classify current error to catch category changes between retries
-                const currentError = classifyError(result.error || 'Unknown error', { toolName: toolUse.name, stepId: step })
-                const currentStrategy = getStrategy(currentError.category)
+                // For tool-initiated retries, respect the tool's signal on each attempt.
+                // For strategy-based retries, re-classify to catch category changes.
+                if (useToolRetry) {
+                  // Check if the latest result still wants retry
+                  if (retryAttempt > 0 && result.retry?.shouldRetry !== true) break
+                  if (!this.retryBudget.canRetry(retryCategory, 'yes')) break
+                } else {
+                  const currentError = classifyError(result.error || 'Unknown error', { toolName: toolUse.name, stepId: step })
+                  const currentStrategy = getStrategy(currentError.category)
+                  if (currentStrategy.mode !== 'executor_retry') break
+                  if (!this.retryBudget.canRetry(currentError.category, currentError.recoverability)) break
+                  lastCategory = currentError.category
+                }
 
-                // Stop if the error is no longer executor-retryable
-                if (currentStrategy.mode !== 'executor_retry') break
-                if (!this.retryBudget.canRetry(currentError.category, currentError.recoverability)) break
-
-                this.retryBudget.record(currentError.category)
+                this.retryBudget.record(lastCategory)
                 retryAttempt++
-                lastCategory = currentError.category
                 this.retryByMode.executor_retry++
 
                 this.config.trace.record({
                   type: 'error.retrying',
-                  data: { tool: toolUse.name, category: currentError.category, attempt: retryAttempt, mode: 'executor_retry' }
+                  data: {
+                    tool: toolUse.name,
+                    category: lastCategory,
+                    attempt: retryAttempt,
+                    mode: 'executor_retry',
+                    ...(useToolRetry ? { toolInitiated: true } : {})
+                  }
                 })
 
-                // Backoff using the current error's strategy
-                const delay = computeBackoff(currentStrategy.backoff, retryAttempt - 1)
+                // Backoff: tool-requested delay or strategy-based
+                const delay = useToolRetry
+                  ? (toolRetry!.delayMs ?? 1000)
+                  : computeBackoff(strategy.backoff, retryAttempt - 1)
                 if (delay > 0) {
                   await new Promise(resolve => setTimeout(resolve, delay))
                 }
@@ -923,7 +941,7 @@ export class AgentLoop {
                     sessionId: this.config.runtime.sessionId,
                     step,
                     agentId: this.config.runtime.agentId,
-                    messages: this.messages,
+                    messages: this.store.getHistory(),
                     signal: this.abortController?.signal
                   }
                 )
@@ -933,18 +951,28 @@ export class AgentLoop {
               if (result.success && retryAttempt > 0) {
                 this.config.trace.record({
                   type: 'error.recovered',
-                  data: { tool: toolUse.name, category: lastCategory, attempts: retryAttempt + 1, mode: 'executor_retry' }
+                  data: { tool: toolUse.name, category: lastCategory, attempts: retryAttempt + 1, mode: 'executor_retry', ...(useToolRetry ? { toolInitiated: true } : {}) }
                 })
               } else if (!result.success && retryAttempt > 0) {
                 this.config.trace.record({
                   type: 'error.exhausted',
-                  data: { tool: toolUse.name, category: lastCategory, attempts: retryAttempt + 1, mode: 'executor_retry' }
+                  data: { tool: toolUse.name, category: lastCategory, attempts: retryAttempt + 1, mode: 'executor_retry', ...(useToolRetry ? { toolInitiated: true } : {}) }
                 })
               }
             }
           }
 
           this.config.onToolResult?.(toolUse.name, result, toolUse.input)
+          this._eventChannel?.push({
+            type: 'tool-result',
+            tool: toolUse.name,
+            toolCallId: toolUse.id,
+            success: result.success,
+            data: result.success ? result.data : undefined,
+            error: result.success ? undefined : result.error,
+            durationMs: Date.now() - toolCallStart,
+            step
+          })
 
           // Hook: afterToolCall
           if (this.config.hooks?.afterToolCall) {
@@ -1033,6 +1061,12 @@ export class AgentLoop {
               resultContent = formatFeedbackAsToolResult(feedback)
             }
 
+            // GAP-12: If the tool provided custom guidance in its retry signal,
+            // append it to the feedback so the LLM gets tool-specific recovery advice.
+            if (result.retry?.guidance) {
+              resultContent = appendGuidance(resultContent, result.retry.guidance)
+            }
+
             // RFC-005: Track agent-retry budget — the LLM seeing this error is an
             // agent_retry attempt. Record it and append exhaustion guidance if needed.
             this.retryByMode.agent_retry++
@@ -1108,7 +1142,7 @@ export class AgentLoop {
             })()
 
         // Add tool result message
-        this.messages.push({
+        this.store.append({
           role: 'tool',
           content: toolResults
         })
@@ -1117,6 +1151,9 @@ export class AgentLoop {
         this.hadToolErrors = toolResults.some(
           (tr: any) => tr.is_error === true
         )
+
+        // Emit step-finish for streaming consumers
+        this._eventChannel?.push({ type: 'step-finish', step, text: responseText, toolCallCount: toolCalls.length })
 
         // Hook: onTurnEnd
         if (this.config.hooks?.onTurnEnd) {
@@ -1163,7 +1200,7 @@ export class AgentLoop {
             ?? `[System Notice] You have made ${consecutiveToolRounds} consecutive tool calls without producing any text response. Please stop calling tools and synthesize your findings into a comprehensive response now.`
 
           if (nudge) {
-            this.messages.push({ role: 'user', content: nudge })
+            this.store.append({ role: 'user', content: nudge })
             this.toolNudgeInjected = true
             this.config.trace.record({
               type: 'agent.toolLoopNudge',
@@ -1293,6 +1330,65 @@ export class AgentLoop {
   }
 
   /**
+   * Run the agent and yield events as an async iterable.
+   *
+   * This is the streaming-first API. Each observable action (text deltas,
+   * tool calls, tool results, step boundaries, errors) is yielded as a
+   * typed AgentEvent. The final `done` event contains the full AgentRunResult.
+   *
+   * Existing callbacks (onText, onToolCall, onToolResult) still fire alongside
+   * the event stream — they are not disabled.
+   *
+   * @example
+   * ```typescript
+   * for await (const event of loop.runStream('hello')) {
+   *   if (event.type === 'text-delta') process.stdout.write(event.text)
+   *   if (event.type === 'done') console.log('Done:', event.result.output)
+   * }
+   * ```
+   */
+  runStream(userPrompt: string): AsyncIterable<AgentEvent> {
+    const channel = createChannel<AgentEvent>()
+    this._eventChannel = channel
+
+    // Launch run() in the background — it pushes events to the channel
+    // via the instrumented callback sites. When done, push the final event.
+    const runPromise = this.run(userPrompt)
+      .then((result) => {
+        channel.push({ type: 'done', result })
+        channel.done()
+      })
+      .catch((err) => {
+        channel.push({
+          type: 'error',
+          error: err instanceof Error ? err.message : String(err),
+          recoverable: false,
+          step: this._currentStep
+        })
+        channel.push({
+          type: 'done',
+          result: {
+            success: false,
+            output: '',
+            error: err instanceof Error ? err.message : String(err),
+            steps: this._currentStep,
+            trace: this.config.trace.getEvents(),
+            durationMs: 0
+          }
+        })
+        channel.done()
+      })
+      .finally(() => {
+        this._eventChannel = null
+      })
+
+    // Prevent unhandled rejection if consumer breaks early
+    runPromise.catch(() => {})
+
+    return channel
+  }
+
+  /**
    * Stop execution
    */
   stop(): void {
@@ -1320,14 +1416,14 @@ export class AgentLoop {
    * Get message history
    */
   getMessages(): Message[] {
-    return [...this.messages]
+    return this.store.getHistory()
   }
 
   /**
    * Clear message history
    */
   clearMessages(): void {
-    this.messages = []
+    this.store.clear()
   }
 
   /**
@@ -1355,7 +1451,7 @@ export class AgentLoop {
    * Pinned messages are never trimmed by pre-call token estimation.
    */
   pin(message: Message): void {
-    this.pinnedMessages.push(message)
+    this.store.pin(message)
   }
 }
 

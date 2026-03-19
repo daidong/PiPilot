@@ -840,7 +840,6 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     toolLoopThreshold: 15,
     maxSteps: 100,
     onUsage,
-    contextWindow,
     kernelV2: RESEARCH_PILOT_KERNEL_V2_CONFIG
   })
 

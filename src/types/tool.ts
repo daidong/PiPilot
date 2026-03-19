@@ -3,7 +3,7 @@
  * Tools define the operations an Agent can execute
  */
 
-import type { Runtime } from './runtime.js'
+import type { Runtime, RuntimeIO } from './runtime.js'
 
 /**
  * Parameter type definition
@@ -71,6 +71,47 @@ export interface ToolResult<T = unknown> {
    * When absent, the LLM receives the JSON-serialized `data` as usual.
    */
   llmSummary?: string
+  /**
+   * GAP-12: Tool-initiated retry signal.
+   *
+   * When a tool returns `success: false` with a `retry` field, the executor
+   * retries the tool call transparently (no LLM round-trip) before falling
+   * back to error classification. This lets tools handle transient failures
+   * that the framework's heuristic error classifier cannot detect.
+   *
+   * If retries are exhausted or the budget is spent, the error falls through
+   * to the normal agent_retry path (feedback to LLM).
+   *
+   * Example:
+   * ```typescript
+   * execute: async (input) => {
+   *   const res = await externalAPI.call(input)
+   *   if (res.status === 503) {
+   *     return {
+   *       success: false,
+   *       error: 'Service temporarily unavailable',
+   *       retry: { shouldRetry: true, delayMs: 2000, maxAttempts: 3 }
+   *     }
+   *   }
+   *   return { success: true, data: res.data }
+   * }
+   * ```
+   */
+  retry?: ToolRetrySignal
+}
+
+/**
+ * GAP-12: Retry signal returned by a tool to request executor-level retry.
+ */
+export interface ToolRetrySignal {
+  /** When true, the executor retries this tool call without consulting the LLM. */
+  shouldRetry: boolean
+  /** Suggested delay (ms) between retries. Default: 1000. */
+  delayMs?: number
+  /** Maximum retry attempts the tool recommends. Capped by the run's retry budget. Default: 2. */
+  maxAttempts?: number
+  /** Custom guidance to include in error feedback if all retries are exhausted. */
+  guidance?: string
 }
 
 /**
@@ -101,6 +142,19 @@ export interface Tool<TInput = unknown, TOutput = unknown> {
    * `context.signal`. Combine with GAP-18 AbortSignal for full cancellation.
    */
   timeout?: number
+
+  /**
+   * Per-tool IO override. When provided, the tool receives a custom RuntimeIO
+   * instead of the agent's default. The factory receives the agent's default IO
+   * (so it can delegate or compose) and the current Runtime.
+   *
+   * Use cases: SSH/Docker execution for specific tools, sandboxed write access,
+   * or mixed local+remote workflows where most tools use local IO but one tool
+   * targets a remote host.
+   *
+   * Priority: tool.createIO > agent-level ioProvider > default LocalRuntimeIO
+   */
+  createIO?: (defaultIO: RuntimeIO, runtime: Runtime) => RuntimeIO | Promise<RuntimeIO>
 }
 
 /**
@@ -115,6 +169,8 @@ export interface ToolConfig<TInput = unknown, TOutput = unknown> {
   activity?: ToolActivityFormat
   /** Maximum execution time in milliseconds (see Tool.timeout) */
   timeout?: number
+  /** Per-tool IO override factory (see Tool.createIO) */
+  createIO?: (defaultIO: RuntimeIO, runtime: Runtime) => RuntimeIO | Promise<RuntimeIO>
 }
 
 /**

@@ -10,7 +10,7 @@
 | 1 | LLM-driven context compaction | High | ✅ Done |
 | 2 | Parallel tool execution | High | ✅ Done |
 | 3 | Typed agent hooks (`AgentHooks`) | High | ✅ Done |
-| 4 | Operations interface DI per tool | Medium | Backlog |
+| 4 | Operations interface DI per tool | Medium | ✅ Done |
 | 5 | Tool result content/details separation | Medium | ✅ Done |
 | 6 | No-throw contract on critical paths | Medium | ✅ Done |
 | 7 | Steering/follow-up message queues | Medium | ✅ Done |
@@ -18,6 +18,7 @@
 | 9 | Extension hot-reload | Low | Backlog |
 | 10 | More providers + compat flags | Low | Backlog |
 | 11 | Markdown-file skill support | Low | Backlog |
+| 12 | Streaming-first event architecture | High | ✅ Done |
 
 ### Gap Analysis Batch 2
 
@@ -31,7 +32,7 @@
 | GAP-2 | Per-call temperature/topP override | Medium | Backlog |
 | GAP-1 | `stopSequences` per-call | Medium | Backlog |
 | GAP-7 | Tool parameter `$defs`/`$ref` support | Medium | Backlog |
-| GAP-12 | Tool retry signal from execute() | Medium | Backlog |
+| GAP-12 | Tool retry signal from execute() | Medium | ✅ Done |
 | GAP-14 | Structured output / JSON mode | Medium | Backlog |
 | GAP-4 | Output token budget enforcement | Medium | Backlog |
 | GAP-6 | Token pre-estimation before LLM call | Medium | ✅ Done |
@@ -398,7 +399,8 @@ const myTool = defineTool({
 - `CreateAgentOptions.pinnedMessages` wired through to `AgentLoopConfig`
 
 **Files changed:**
-- `src/agent/agent-loop.ts` — `pinnedMessages` field, `pin()` method, config option
+- `src/core/message-store.ts` — `pin()` method, pinned array, `buildView()` prepends pinned
+- `src/agent/agent-loop.ts` — delegates to `this.store.pin()`
 - `src/agent/agent-run-handle.ts` — `pin()` with pre-attach buffer, `_pinBuffer`
 - `src/agent/create-agent.ts` — `pinnedMessages` and `preCallTrimThreshold` in `CreateAgentOptions`, wired to `AgentLoop`
 
@@ -426,7 +428,8 @@ const result = await handle
 **Solution:** After building `messagesToSend`, estimate tokens via `countTokens(JSON.stringify(messagesToSend))`. If the estimate exceeds `contextWindow * preCallTrimThreshold` (default 0.85), drop the oldest non-pinned messages until back under the threshold.
 
 **Files changed:**
-- `src/agent/agent-loop.ts` — import `countTokens`; trim loop after `messagesToSend` is finalized
+- `src/agent/agent-loop.ts` — delegates to `MessageStore.buildView()` for transform→pin→trim pipeline
+- `src/core/message-store.ts` — `trimToFit()` implements the token estimation and oldest-first drop
 - `src/agent/create-agent.ts` — `contextWindow` (already existed) and `preCallTrimThreshold` wired through
 
 **Usage:**
@@ -436,3 +439,174 @@ const agent = createAgent({
   preCallTrimThreshold: 0.85,  // trim when >85% full (default)
 })
 ```
+
+---
+
+## Architecture: MessageStore Extraction
+
+**Problem:** `agent-loop.ts` (~1370 lines) mixed execution logic with message state management — `this.messages`, `this.pinnedMessages`, transform/pin/trim pipeline were scattered across ~25 call sites.
+
+**Solution:** Extracted `MessageStore` class (`src/core/message-store.ts`, ~105 lines) that owns all message state:
+- `append()` / `appendAll()` — add messages to history
+- `pin()` — pin messages (never trimmed)
+- `getHistory()` / `getPinned()` — immutable snapshots
+- `setHistory()` / `clear()` — compaction support
+- `buildView()` — constructs the LLM call view: transform → pin → trim (GAP-9 + GAP-10 + GAP-6)
+
+`AgentLoop` now holds `private store: MessageStore` and delegates all message operations. The 25-line messagesToSend construction block collapsed to `await this.store.buildView()`.
+
+**Files changed:**
+- `src/core/message-store.ts` — new file (~105 lines)
+- `src/agent/agent-loop.ts` — replaced all `this.messages` / `this.pinnedMessages` with `this.store.*`
+- `tests/core/message-store.test.ts` — 12 behavior tests
+
+This is the embryo of the **View** primitive — the fifth orthogonal axis alongside Tool, Policy, Context Source, and Message.
+
+---
+
+### GAP-12. Tool Retry Signal from execute() (Medium) ✅
+
+**Problem:** When a tool fails due to a transient issue (e.g., external API 503), the framework classifies the error via heuristic pattern matching on the error string. This is unreliable — the tool knows *why* it failed but has no way to communicate that. All non-classified errors fall through to `agent_retry` (LLM round-trip), wasting tokens on something the executor could retry silently.
+
+**Solution:** Added `retry?: ToolRetrySignal` field to `ToolResult`. When a tool returns `success: false` with `retry.shouldRetry: true`, the executor retries the tool call transparently (no LLM round-trip), using the tool's suggested delay and attempt count. This takes priority over the framework's error classification.
+
+Safety constraints:
+- `maxAttempts` capped at 5 regardless of what the tool requests
+- `RetryBudget` still enforced — budget exhaustion stops retries
+- On each retry, the executor checks if the latest result still has `shouldRetry: true` — tools can withdraw the retry request mid-sequence
+- If retries are exhausted, the error falls through to `agent_retry` with the tool's optional `guidance` appended to the feedback
+
+**Interface:**
+```typescript
+interface ToolRetrySignal {
+  shouldRetry: boolean    // Request executor-level retry
+  delayMs?: number        // Delay between retries (default: 1000ms)
+  maxAttempts?: number    // Max retries (default: 2, capped at 5)
+  guidance?: string       // Custom advice for LLM if retries exhausted
+}
+
+// Usage in tool execute():
+return {
+  success: false,
+  error: 'Service temporarily unavailable',
+  retry: { shouldRetry: true, delayMs: 2000, maxAttempts: 3 }
+}
+```
+
+**Files changed:**
+- `src/types/tool.ts` — `ToolRetrySignal` interface, `retry?` field on `ToolResult`
+- `src/types/index.ts` — export `ToolRetrySignal`
+- `src/index.ts` — export `ToolRetrySignal`
+- `src/agent/agent-loop.ts` — executor retry loop checks `result.retry` before error classification; appends `retry.guidance` to feedback
+- `tests/agent/tool-retry-signal.test.ts` — 7 behavior tests
+
+### 4. Operations Interface DI per Tool (Medium) ✅
+
+**Problem:** All tools share the same `RuntimeIO` instance — the agent's local filesystem. This makes it impossible to run specific tools against remote hosts (SSH, Docker) or sandboxed environments without replacing the entire agent's IO.
+
+**Solution:** Two-layer IO provider design:
+
+1. **Agent-level**: `ioProvider` on `CreateAgentOptions` — replaces the default `LocalRuntimeIO` for all tools
+2. **Tool-level**: `createIO` on `Tool`/`ToolConfig` — per-tool IO override, receives the agent's default IO for composition
+
+Priority: `tool.createIO` > `agent.ioProvider` > default `LocalRuntimeIO`
+
+This enables mixed local+remote workflows: most tools use local IO, but a `deploy` tool targets a Docker container, and a `remote-exec` tool uses SSH — all in the same agent.
+
+**Interface:**
+```typescript
+// Agent-level: all tools default to this IO
+const agent = createAgent({
+  ioProvider: ({ projectPath }) => createSSHIO({ host: 'build-server', projectPath })
+})
+
+// Tool-level: override for specific tools
+const deployTool = defineTool({
+  name: 'deploy',
+  // ...
+  createIO: (defaultIO, runtime) => createDockerIO({ container: 'app' })
+})
+
+// Hybrid: reads from remote, writes to local
+const hybridTool = defineTool({
+  name: 'sync',
+  // ...
+  createIO: (defaultIO, runtime) => ({
+    ...defaultIO,                           // local writes
+    readFile: remoteIO.readFile,            // remote reads
+    exec: remoteIO.exec                     // remote exec
+  })
+})
+```
+
+**Key design decisions:**
+- `createIO` is called on every `ToolRegistry.call()` invocation (not cached) — tools can return different IOs based on runtime state
+- The custom IO is set on a shallow copy of the runtime object — the shared runtime is never mutated
+- `ioProvider` is synchronous (matches `createAgent`'s synchronous return); `tool.createIO` supports async (awaited in `ToolRegistry.call()`)
+
+**Files changed:**
+- `src/types/tool.ts` — `createIO?` field on `Tool` and `ToolConfig`
+- `src/factories/define-tool.ts` — passes `createIO` through
+- `src/core/tool-registry.ts` — assembles per-tool IO in `call()`, creates runtime copy with custom IO
+- `src/agent/create-agent.ts` — `ioProvider?` on `CreateAgentOptions`, wired into RuntimeIO construction
+- `tests/core/operations-di.test.ts` — 9 behavior tests
+
+### 12. Streaming-First Event Architecture (High) ✅
+
+**Problem:** AgentFoundry's streaming was callback-based (`onStream`, `onToolCall`, `onToolResult`). Consumers couldn't iterate over a unified event stream — they had to register separate callbacks, which made composition, filtering, and SSE forwarding clumsy. Pi-mono's core abstraction is streaming-first: `for await (const event of agent.run(...))`.
+
+**Solution:** Unified `AgentEvent` type + `AsyncIterable` API at both `AgentLoop` and `AgentRunHandle` levels.
+
+New consumer API:
+```typescript
+// Streaming consumption (new)
+for await (const event of agent.run(prompt).events()) {
+  switch (event.type) {
+    case 'text-delta':    process.stdout.write(event.text); break
+    case 'tool-call':     console.log(`→ ${event.tool}`); break
+    case 'tool-result':   console.log(`${event.tool}: ${event.success}`); break
+    case 'step-start':    console.log(`Step ${event.step}`); break
+    case 'done':          console.log(event.result.output); break
+  }
+}
+
+// Traditional await (fully backward-compatible, unchanged)
+const result = await agent.run(prompt)
+
+// Callback API (still works, fires alongside stream events)
+createAgent({ onStream: (chunk) => ..., onToolCall: (t, i) => ... })
+```
+
+**AgentEvent types:**
+- `text-delta` — incremental LLM text chunk
+- `tool-call` — LLM requested a tool call
+- `tool-result` — tool execution completed (success/failure, duration)
+- `step-start` / `step-finish` — step (LLM round) boundaries
+- `error` — recoverable/non-recoverable error
+- `done` — run completed, contains full `AgentRunResult`
+
+**Architecture:**
+1. `AgentLoop.run()` instrumented to push events to an optional `AsyncChannel` when active
+2. `AgentLoop.runStream()` sets up the channel, delegates to `run()`, yields events + final `done`
+3. `AgentRunHandle` constructor accepts `emitEvent` callback from executor
+4. `createAgent` uses `runStream()` internally, forwards events to handle's replay channel
+5. `AgentRunHandle.events()` returns the replay channel as `AsyncIterable<AgentEvent>`
+6. `AsyncChannel` utility bridges push-based callbacks to pull-based `AsyncIterator`
+
+**Key design decisions:**
+- Zero changes to `AgentLoop.run()` internals — events are emitted via `_eventChannel?.push()` at instrumented points
+- Callbacks (`onText`, `onToolCall`, `onToolResult`) still fire alongside stream events
+- `steer()` / `followUp()` / `stop()` work in stream mode
+- All 1535 existing tests pass unchanged (full backward compatibility)
+
+**Files changed:**
+- `src/types/agent-event.ts` — new file: `AgentEvent` union type + per-event interfaces
+- `src/types/index.ts` — exports AgentEvent types
+- `src/index.ts` — exports AgentEvent types
+- `src/utils/async-channel.ts` — new file: callback→AsyncIterator bridge
+- `src/agent/agent-loop.ts` — `_eventChannel` field, `runStream()` method, event push at 6 instrumented points
+- `src/agent/agent-run-handle.ts` — `events()` method, replay channel via `emitEvent` callback
+- `src/agent/create-agent.ts` — switched to `runStream()`, wires `emitEvent` to handle
+- `tests/utils/async-channel.test.ts` — 6 channel unit tests
+- `tests/agent/agent-stream.test.ts` — 7 streaming behavior tests
+- `examples/hello-world/with-streaming.ts` — streaming consumption example

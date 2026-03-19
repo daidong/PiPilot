@@ -22,6 +22,7 @@ export type {
   Tool,
   ToolContext,
   ToolResult,
+  ToolRetrySignal,
   ParameterSchema,
   ParameterDefinition,
   ActivitySummary,
@@ -64,6 +65,16 @@ export type {
   Agent,
   AgentRunResult,
   SessionState,
+
+  // Agent event types (streaming-first)
+  AgentEvent,
+  AgentTextDeltaEvent,
+  AgentToolCallEvent,
+  AgentToolResultEvent,
+  AgentStepStartEvent,
+  AgentStepFinishEvent,
+  AgentErrorEvent,
+  AgentDoneEvent,
 
   // Runtime related types
   Runtime,
