@@ -22,7 +22,7 @@ import { AgentRunHandle } from './agent-run-handle.js'
 import { TokenTracker, createTokenTracker, type TokenTrackerConfig } from '../core/token-tracker.js'
 import type { DetailedTokenUsage, TokenCost } from '../llm/provider.types.js'
 import { countTokens } from '../utils/tokenizer.js'
-import { createLLMClient, detectProviderFromApiKey, getModel } from '../llm/index.js'
+import { createLLMClient, detectProviderFromApiKey, getModel, findProviderForModel, getProviderDefinition, registerProvider } from '../llm/index.js'
 import type { AgentHooks } from '../core/agent-hooks.js'
 import type { Message } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
@@ -32,13 +32,16 @@ import {
   tryLoadConfig,
   normalizePackConfigs,
   normalizeMCPConfigs,
+  resolveProviderIdFromConfig,
   type MCPConfigEntry,
-  type AgentYAMLConfig
+  type AgentYAMLConfig,
+  type ProviderConfigEntry,
 } from '../config/index.js'
 import { isAbsolute, join, relative } from 'path'
 import { FRAMEWORK_DIR } from '../constants.js'
 import { resolveCommunitySkillDir, resolveProjectSkillDir } from '../skills/skill-source-paths.js'
 import { createMCPProvider } from '../mcp/index.js'
+import { SkillInstaller } from '../skills/skill-installer.js'
 
 /**
  * Generate a unique ID
@@ -96,12 +99,57 @@ async function renderSelectedContext(
   return rendered.length > 0 ? rendered : undefined
 }
 
-/** Default model per provider */
-const DEFAULT_MODEL_FOR_PROVIDER: Record<ProviderID, string> = {
+/** Default model per provider (Tier 1 only — Tier 2 uses first model in definition) */
+const DEFAULT_MODEL_FOR_PROVIDER: Record<string, string> = {
   openai: 'gpt-5.4',
   anthropic: 'claude-sonnet-4-5-20250929',
   deepseek: 'deepseek-chat',
-  google: 'gemini-2.0-flash'
+  google: 'gemini-2.0-flash',
+}
+
+/** Get default model for any provider (Tier 1 or Tier 2). */
+function getDefaultModelForProvider(providerId: string): string {
+  if (DEFAULT_MODEL_FOR_PROVIDER[providerId]) return DEFAULT_MODEL_FOR_PROVIDER[providerId]
+  // For Tier 2 providers, use the first model in their definition
+  const def = getProviderDefinition(providerId)
+  if (def && def.models.length > 0) return def.models[0]!.id
+  return 'gpt-5.4' // ultimate fallback
+}
+
+/**
+ * Register an inline provider from YAML config into the provider registry.
+ * Called once during createAgent when model.provider is an object.
+ */
+function registerInlineProvider(entry: ProviderConfigEntry): void {
+  // Don't re-register if already present (e.g. from a previous createAgent call)
+  if (getProviderDefinition(entry.id)) return
+
+  const models = (entry.models ?? []).map(m => ({
+    id: m.id,
+    name: m.name ?? m.id,
+    capabilities: {
+      temperature: true,
+      reasoning: m.reasoning ?? false,
+      toolcall: m.toolcall ?? true,
+      input: (m.vision ? ['text', 'image'] : ['text']) as Array<'text' | 'image'>,
+      output: ['text'] as Array<'text'>,
+    },
+    limit: {
+      maxContext: m.maxContext ?? 128_000,
+      maxOutput: m.maxOutput ?? 4_096,
+    },
+  }))
+
+  registerProvider({
+    id: entry.id,
+    name: entry.name ?? entry.id,
+    apiProtocol: entry.apiProtocol ?? 'openai-chat',
+    baseUrl: entry.baseUrl,
+    apiKeyEnv: entry.apiKeyEnv,
+    compat: entry.compat,
+    headers: entry.headers,
+    models,
+  })
 }
 
 /**
@@ -110,7 +158,7 @@ const DEFAULT_MODEL_FOR_PROVIDER: Record<ProviderID, string> = {
  * registry so that e.g. "claude-sonnet-4-20250514" correctly resolves to
  * the "anthropic" provider regardless of which API key was passed in.
  * Falls back to API-key-based detection when no model is specified,
- * then to environment variable detection.
+ * then to environment variable detection (including Tier 2 providers).
  */
 function detectProviderAndModel(apiKey: string, preferredModel?: string): { provider: ProviderID; model: string } {
   // If a model is explicitly requested, trust the model registry for the provider
@@ -119,32 +167,48 @@ function detectProviderAndModel(apiKey: string, preferredModel?: string): { prov
     if (modelConfig) {
       return { provider: modelConfig.providerID, model: preferredModel }
     }
+    // Also check provider definitions (for models not yet in legacy registry)
+    const found = findProviderForModel(preferredModel)
+    if (found) {
+      return { provider: found.id as ProviderID, model: preferredModel }
+    }
   }
 
   // Fallback: detect from API key
   const provider = detectProviderFromApiKey(apiKey)
   if (provider) {
-    return { provider, model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER[provider] }
+    return { provider, model: preferredModel || getDefaultModelForProvider(provider) }
   }
 
-  // Fallback: detect from environment variables
-  if (process.env.ANTHROPIC_API_KEY) {
-    return { provider: 'anthropic', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.anthropic }
-  }
-  if (process.env.OPENAI_API_KEY) {
-    return { provider: 'openai', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.openai }
-  }
-  if (process.env.DEEPSEEK_API_KEY) {
-    return { provider: 'deepseek', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.deepseek }
-  }
-  if (process.env.GOOGLE_API_KEY) {
-    return { provider: 'google', model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.google }
+  // Fallback: detect from environment variables (Tier 1 first, then Tier 2)
+  const envPriority: Array<{ env: string; providerId: string }> = [
+    { env: 'ANTHROPIC_API_KEY', providerId: 'anthropic' },
+    { env: 'OPENAI_API_KEY', providerId: 'openai' },
+    { env: 'DEEPSEEK_API_KEY', providerId: 'deepseek' },
+    { env: 'GOOGLE_API_KEY', providerId: 'google' },
+    // Tier 2 providers
+    { env: 'GROQ_API_KEY', providerId: 'groq' },
+    { env: 'XAI_API_KEY', providerId: 'xai' },
+    { env: 'CEREBRAS_API_KEY', providerId: 'cerebras' },
+    { env: 'OPENROUTER_API_KEY', providerId: 'openrouter' },
+    { env: 'TOGETHER_API_KEY', providerId: 'together' },
+    { env: 'FIREWORKS_API_KEY', providerId: 'fireworks' },
+    { env: 'MISTRAL_API_KEY', providerId: 'mistral' },
+  ]
+
+  for (const { env, providerId } of envPriority) {
+    if (process.env[env]) {
+      return {
+        provider: providerId as ProviderID,
+        model: preferredModel || getDefaultModelForProvider(providerId)
+      }
+    }
   }
 
   // Ultimate fallback
   return {
     provider: 'openai',
-    model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER.openai
+    model: preferredModel || DEFAULT_MODEL_FOR_PROVIDER['openai']!
   }
 }
 
@@ -677,19 +741,35 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
     policyEngine.registerAll(config.policies)
   }
 
+  // Register inline provider from YAML config (if model.provider is an object)
+  const yamlProviderConfig = yamlConfig?.model?.provider
+  if (yamlProviderConfig && typeof yamlProviderConfig === 'object') {
+    registerInlineProvider(yamlProviderConfig)
+  }
+
   // Detect provider from explicit config, model name, or API key
-  const explicitProvider = (config.provider ?? yamlConfig?.model?.provider) as ProviderID | undefined
+  const explicitProvider = (
+    config.provider ?? resolveProviderIdFromConfig(yamlConfig?.model?.provider)
+  ) as ProviderID | undefined
   const fallbackKey = config.apiKey ?? process.env['OPENAI_API_KEY'] ?? process.env['ANTHROPIC_API_KEY'] ?? ''
   const { provider, model } = explicitProvider
-    ? { provider: explicitProvider, model: effectiveModel || DEFAULT_MODEL_FOR_PROVIDER[explicitProvider] }
+    ? { provider: explicitProvider, model: effectiveModel || getDefaultModelForProvider(explicitProvider) }
     : detectProviderAndModel(fallbackKey, effectiveModel)
 
   // Resolve the correct API key for the detected provider
+  // Tier 1 providers have hardcoded env vars; Tier 2 use their definition's apiKeyEnv
   const providerKeyMap: Record<string, string | undefined> = {
     openai: config.apiKey || process.env['OPENAI_API_KEY'],
     anthropic: config.apiKey || process.env['ANTHROPIC_API_KEY'],
     deepseek: config.apiKey || process.env['DEEPSEEK_API_KEY'],
-    google: config.apiKey || process.env['GOOGLE_API_KEY']
+    google: config.apiKey || process.env['GOOGLE_API_KEY'],
+  }
+  // For Tier 2 providers, resolve from their definition's apiKeyEnv
+  if (!providerKeyMap[provider]) {
+    const def = getProviderDefinition(provider)
+    if (def) {
+      providerKeyMap[provider] = config.apiKey || process.env[def.apiKeyEnv]
+    }
   }
   const apiKey = providerKeyMap[provider] || fallbackKey
 
@@ -792,6 +872,35 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       for (const pack of packsToLoad) {
         if (pack.onInit) {
           await pack.onInit(runtime)
+        }
+      }
+
+      // Auto-install skills declared in agent.yaml (if not already present)
+      if (yamlConfig?.skills && yamlConfig.skills.length > 0) {
+        const installer = new SkillInstaller({
+          skillsDir: resolvedExternalSkillsDir,
+          onProgress: config.debug ? (msg) => console.log(`[Skills] ${msg}`) : undefined,
+        })
+        for (const entry of yamlConfig.skills) {
+          try {
+            if (entry.github) {
+              // Only install if the skill directory doesn't exist yet
+              const parts = entry.github.split('/')
+              const inferredId = parts[parts.length - 1] ?? parts[1] ?? 'skill'
+              const existingDir = join(resolvedExternalSkillsDir, inferredId)
+              const { existsSync } = await import('node:fs')
+              if (!existsSync(existingDir)) {
+                await installer.installFromGitHub(entry.github)
+              }
+            } else if (entry.url) {
+              // For URL skills, derive an ID and check existence
+              await installer.installFromURL(entry.url)
+            }
+            // entry.id: no action needed — ExternalSkillLoader will pick it up
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error)
+            console.warn(`[Skills] Failed to install declared skill: ${msg}`)
+          }
         }
       }
 

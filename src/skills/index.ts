@@ -48,6 +48,8 @@ export {
 } from './skill-file.js'
 export type { ExternalSkillFrontmatter, ParsedExternalSkill } from './skill-file.js'
 
+export { SkillInstaller } from './skill-installer.js'
+export type { SkillInstallResult, InstalledSkillInfo, SkillInstallerOptions } from './skill-installer.js'
 export { SkillRegistry, globalSkillRegistry } from './skill-registry.js'
 export type { SkillQuery, SkillMatch } from './skill-registry.js'
 

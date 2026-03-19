@@ -4,7 +4,8 @@
  * Define supported LLM models and their capabilities
  */
 
-import type { ModelConfig } from './provider.types.js'
+import type { ModelConfig, ProviderID } from './provider.types.js'
+import { BUILTIN_PROVIDERS } from './provider-definitions.js'
 
 /**
  * Built-in model configurations
@@ -274,9 +275,26 @@ class ModelRegistry {
   private models: Map<string, ModelConfig> = new Map()
 
   constructor() {
-    // Register built-in models
+    // Register built-in models (legacy hardcoded list)
     for (const model of builtinModels) {
       this.register(model)
+    }
+    // Register models from provider definitions (Tier 2 providers + any
+    // Tier 1 models not already in builtinModels). Existing entries win.
+    for (const provider of BUILTIN_PROVIDERS) {
+      for (const modelDef of provider.models) {
+        if (!this.models.has(modelDef.id)) {
+          this.register({
+            id: modelDef.id,
+            name: modelDef.name,
+            providerID: provider.id as ProviderID,
+            api: 'chat',
+            capabilities: modelDef.capabilities,
+            cost: modelDef.cost,
+            limit: modelDef.limit,
+          })
+        }
+      }
     }
   }
 

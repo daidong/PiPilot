@@ -13,6 +13,7 @@ import type {
   ProviderOptions
 } from './provider.types.js'
 import { getModel } from './models.js'
+import { getProviderDefinition, getAllProviderDefinitions, type ProviderDefinition } from './provider-definitions.js'
 
 /**
  * SDK instance type
@@ -25,13 +26,25 @@ type SDKInstance = OpenAIProvider | AnthropicProvider
 const sdkCache = new Map<string, SDKInstance>()
 
 /**
- * Per-provider environment variable mapping
+ * Per-provider environment variable mapping (legacy static map).
+ * For dynamic providers, the env var comes from ProviderDefinition.apiKeyEnv.
  */
-const PROVIDER_ENV_KEYS: Record<ProviderID, string> = {
+const LEGACY_PROVIDER_ENV_KEYS: Record<string, string> = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
-  google: 'GOOGLE_API_KEY'
+  google: 'GOOGLE_API_KEY',
+}
+
+/**
+ * Resolve the environment variable name for a provider's API key.
+ */
+function getApiKeyEnvVar(providerId: string): string | undefined {
+  // Check provider definitions first (covers Tier 2 providers)
+  const def = getProviderDefinition(providerId)
+  if (def) return def.apiKeyEnv
+  // Fallback to legacy static map
+  return LEGACY_PROVIDER_ENV_KEYS[providerId]
 }
 
 /**
@@ -39,9 +52,14 @@ const PROVIDER_ENV_KEYS: Record<ProviderID, string> = {
  */
 function resolveApiKey(provider: ProviderID, config: ProviderSDKConfig): string {
   if (config.apiKey) return config.apiKey
-  const envKey = process.env[PROVIDER_ENV_KEYS[provider]]?.trim()
-  if (envKey) return envKey
-  throw new Error(`No API key for ${provider}. Set ${PROVIDER_ENV_KEYS[provider]} or pass apiKey.`)
+  const envVarName = getApiKeyEnvVar(provider)
+  if (envVarName) {
+    const envKey = process.env[envVarName]?.trim()
+    if (envKey) return envKey
+  }
+  throw new Error(
+    `No API key for ${provider}. Set ${getApiKeyEnvVar(provider) || provider.toUpperCase() + '_API_KEY'} or pass apiKey.`
+  )
 }
 
 /**
@@ -133,10 +151,9 @@ function getGoogleSDK(config: ProviderSDKConfig): OpenAIProvider {
 /**
  * Get Language Model instance
  *
- * Note: AI SDK v5+ defaults to Responses API for OpenAI.
- * We need to explicitly use .chat() for Chat Completions API
- * or .responses() for Responses API based on model capabilities.
+ * Handles both Tier 1 (dedicated SDK) and Tier 2 (OpenAI-compatible) providers.
  *
+ * For OpenAI: AI SDK v5+ defaults to Responses API.
  * - reasoning: true  -> use sdk.responses(model) (GPT-5.x, o-series)
  * - reasoning: false -> use sdk.chat(model) (GPT-4o, etc.)
  */
@@ -146,21 +163,17 @@ export function getLanguageModel(options: ProviderOptions): LanguageModel {
   // Get model config to determine API type
   const modelConfig = getModel(model)
 
+  // Tier 1: Dedicated SDK providers
   switch (provider) {
     case 'openai': {
       const sdk = getOpenAISDK(config)
-      // GPT-5.x and reasoning models (o-series) use Responses API
-      // GPT-4o and older models use Chat Completions API
       if (modelConfig?.capabilities.reasoning) {
         return sdk.responses(model)
       }
-      // Must explicitly use .chat() for Chat Completions API in AI SDK v5+
       return sdk.chat(model)
     }
     case 'anthropic': {
       const sdk = getAnthropicSDK(config)
-      // Prompt caching is enabled via message-level providerOptions
-      // in stream.ts convertMessages function
       return sdk(model)
     }
     case 'deepseek': {
@@ -171,8 +184,82 @@ export function getLanguageModel(options: ProviderOptions): LanguageModel {
       const sdk = getGoogleSDK(config)
       return sdk(model)
     }
+  }
+
+  // Tier 2: Dynamic providers via provider definitions
+  const providerDef = getProviderDefinition(provider)
+  if (providerDef) {
+    return getLanguageModelFromDefinition(providerDef, model, config)
+  }
+
+  throw new Error(`Unsupported provider: ${provider}. Register it with registerProvider() first.`)
+}
+
+/**
+ * Create a LanguageModel from a ProviderDefinition.
+ * Used for Tier 2 (OpenAI-compatible) and user-registered providers.
+ */
+function getLanguageModelFromDefinition(
+  providerDef: ProviderDefinition,
+  model: string,
+  config: ProviderSDKConfig
+): LanguageModel {
+  const apiKey = resolveApiKey(providerDef.id as ProviderID, config)
+  const cacheKey = getCacheKey(providerDef.id, apiKey)
+
+  switch (providerDef.apiProtocol) {
+    case 'openai-chat': {
+      let sdk = sdkCache.get(cacheKey) as OpenAIProvider | undefined
+      if (!sdk) {
+        sdk = createOpenAI({
+          apiKey,
+          baseURL: config.baseURL || providerDef.baseUrl,
+          headers: providerDef.headers,
+        })
+        sdkCache.set(cacheKey, sdk)
+      }
+      return sdk.chat(model)
+    }
+    case 'openai-responses': {
+      let sdk = sdkCache.get(cacheKey) as OpenAIProvider | undefined
+      if (!sdk) {
+        sdk = createOpenAI({
+          apiKey,
+          baseURL: config.baseURL || providerDef.baseUrl,
+          headers: providerDef.headers,
+        })
+        sdkCache.set(cacheKey, sdk)
+      }
+      const modelConfig = getModel(model)
+      if (modelConfig?.capabilities.reasoning) {
+        return sdk.responses(model)
+      }
+      return sdk.chat(model)
+    }
+    case 'anthropic-messages': {
+      let sdk = sdkCache.get(cacheKey) as AnthropicProvider | undefined
+      if (!sdk) {
+        sdk = createAnthropic({
+          apiKey,
+          baseURL: config.baseURL || providerDef.baseUrl,
+        })
+        sdkCache.set(cacheKey, sdk)
+      }
+      return sdk(model)
+    }
+    case 'google-generative': {
+      let sdk = sdkCache.get(cacheKey) as OpenAIProvider | undefined
+      if (!sdk) {
+        sdk = createOpenAI({
+          apiKey,
+          baseURL: config.baseURL || providerDef.baseUrl,
+        })
+        sdkCache.set(cacheKey, sdk)
+      }
+      return sdk(model)
+    }
     default:
-      throw new Error(`Unsupported provider: ${provider}`)
+      throw new Error(`Unsupported API protocol: ${providerDef.apiProtocol}`)
   }
 }
 
@@ -221,10 +308,11 @@ export interface ProviderInfo {
 }
 
 /**
- * Get Provider information
+ * Get Provider information.
+ * Falls back to provider definitions for Tier 2 providers.
  */
 export function getProviderInfo(id: ProviderID): ProviderInfo {
-  const providers: Record<ProviderID, ProviderInfo> = {
+  const staticProviders: Record<string, ProviderInfo> = {
     openai: {
       id: 'openai',
       name: 'OpenAI',
@@ -255,19 +343,42 @@ export function getProviderInfo(id: ProviderID): ProviderInfo {
     }
   }
 
-  return providers[id]
+  if (staticProviders[id]) return staticProviders[id]
+
+  // Dynamic lookup from provider definitions
+  const def = getProviderDefinition(id)
+  if (def) {
+    const features: string[] = ['chat']
+    const hasTools = def.models.some(m => m.capabilities.toolcall)
+    const hasVision = def.models.some(m => m.capabilities.input.includes('image'))
+    const hasReasoning = def.models.some(m => m.capabilities.reasoning)
+    if (hasTools) features.push('tools')
+    if (hasVision) features.push('vision')
+    if (hasReasoning) features.push('reasoning')
+    return {
+      id,
+      name: def.name,
+      description: `${def.name} models (${def.apiProtocol})`,
+      requiresApiKey: true,
+      supportedFeatures: features,
+    }
+  }
+
+  // Unknown provider — return minimal info
+  return {
+    id,
+    name: id,
+    description: `Unknown provider: ${id}`,
+    requiresApiKey: true,
+    supportedFeatures: ['chat'],
+  }
 }
 
 /**
- * Get all supported Providers
+ * Get all supported Providers (Tier 1 + Tier 2)
  */
 export function getAllProviders(): ProviderInfo[] {
-  return [
-    getProviderInfo('openai'),
-    getProviderInfo('anthropic'),
-    getProviderInfo('deepseek'),
-    getProviderInfo('google')
-  ]
+  return getAllProviderDefinitions().map(def => getProviderInfo(def.id as ProviderID))
 }
 
 /**

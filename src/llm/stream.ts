@@ -34,6 +34,9 @@ import {
 } from './provider.js'
 import { getModel } from './models.js'
 import type { ProviderSDKConfig, ProviderID } from './provider.types.js'
+import type { ApiProtocol, ResolvedCompat } from './compat.js'
+import { resolveCompat } from './compat.js'
+import { getProviderDefinition } from './provider-definitions.js'
 
 /**
  * Anthropic cache control metadata for prompt caching
@@ -54,7 +57,7 @@ const ANTHROPIC_CACHE_CONTROL = {
  */
 function formatSystemWithCacheControl(
   system: string | undefined,
-  _provider: ProviderID
+  _ctx: ProviderContext
 ): Parameters<typeof streamText>[0]['system'] {
   if (!system) return undefined
   // Keep system as plain string for maximum provider compatibility.
@@ -62,18 +65,21 @@ function formatSystemWithCacheControl(
 }
 
 /**
- * Convert framework messages to Vercel AI SDK message format
- * For Anthropic: marks early stable messages with cache_control
+ * Convert framework messages to Vercel AI SDK message format.
+ *
+ * Cache control is applied when the provider's API protocol is 'anthropic-messages'
+ * and the compat flags indicate caching is supported.
  */
-function convertMessages(messages: Message[], provider?: ProviderID): ModelMessage[] {
-  // For Anthropic, we cache the first N user/assistant messages (stable history)
-  // These are typically older turns that won't change
+function convertMessages(messages: Message[], ctx?: ProviderContext): ModelMessage[] {
+  // Cache the first N user/assistant messages (stable history)
   // Extended to 8 messages for better cache hit rate in multi-turn conversations
   const CACHE_FIRST_N_MESSAGES = 8
 
+  // Enable message caching for Anthropic protocol with caching support
+  const enableCaching = ctx?.apiProtocol === 'anthropic-messages' && ctx.compat.supportsCaching
+
   return messages.map((msg, index): ModelMessage => {
-    // Determine if this message should be cached (Anthropic only, early messages)
-    const shouldCache = provider === 'anthropic' && index < CACHE_FIRST_N_MESSAGES
+    const shouldCache = enableCaching && index < CACHE_FIRST_N_MESSAGES
 
     if (typeof msg.content === 'string') {
       // For cached messages, use array format with providerOptions
@@ -332,6 +338,99 @@ function jsonSchemaToZod(schema: {
   return z.object(props)
 }
 
+// ---------------------------------------------------------------------------
+// Reasoning provider options builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build `providerOptions` for reasoning/thinking models based on API protocol.
+ *
+ * - Anthropic: adaptive thinking (Opus 4.6) or budget-based thinking
+ * - OpenAI / OpenAI-compatible: `reasoningEffort` parameter
+ * - Others: no reasoning options (unsupported)
+ */
+function buildReasoningProviderOptions(
+  ctx: ProviderContext,
+  modelId: string,
+  reasoningEffort: 'low' | 'medium' | 'high' | 'max'
+): Parameters<typeof streamText>[0]['providerOptions'] {
+  switch (ctx.apiProtocol) {
+    case 'anthropic-messages': {
+      // Claude Opus 4.6: adaptive thinking + effort parameter
+      if (modelId === 'claude-opus-4-6') {
+        return {
+          anthropic: {
+            thinking: { type: 'adaptive' },
+            effort: reasoningEffort
+          }
+        }
+      }
+      // Older Claude models: manual thinking with budget_tokens
+      const budgetMap: Record<string, number> = {
+        low: 4096, medium: 10000, high: 16384, max: 32768
+      }
+      return {
+        anthropic: {
+          thinking: { type: 'enabled', budgetTokens: budgetMap[reasoningEffort] ?? 10000 }
+        }
+      }
+    }
+
+    case 'openai-responses':
+    case 'openai-chat': {
+      if (!ctx.compat.supportsReasoningEffort) return undefined
+      // OpenAI Responses API: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+      const openaiEffort = reasoningEffort === 'max' ? 'xhigh' : reasoningEffort
+      return { openai: { reasoningEffort: openaiEffort } }
+    }
+
+    default:
+      return undefined
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Provider context resolution
+// ---------------------------------------------------------------------------
+
+/** Resolved provider context used throughout the client. */
+interface ProviderContext {
+  providerId: string
+  apiProtocol: ApiProtocol
+  compat: ResolvedCompat
+}
+
+/** Well-known Tier 1 provider protocols. */
+const TIER1_PROTOCOLS: Record<string, ApiProtocol> = {
+  openai: 'openai-responses',
+  anthropic: 'anthropic-messages',
+  google: 'google-generative',
+  deepseek: 'openai-chat',
+}
+
+/**
+ * Resolve API protocol and compat flags for a provider.
+ * Checks provider definitions first, falls back to Tier 1 defaults.
+ */
+function resolveProviderContext(providerId: string, modelId?: string): ProviderContext {
+  const def = getProviderDefinition(providerId)
+  if (def) {
+    // Find model-level compat overrides
+    const modelDef = modelId ? def.models.find(m => m.id === modelId) : undefined
+    return {
+      providerId,
+      apiProtocol: def.apiProtocol,
+      compat: resolveCompat(def.compat, modelDef?.compat),
+    }
+  }
+  // Tier 1 fallback (in case provider definitions aren't loaded)
+  return {
+    providerId,
+    apiProtocol: TIER1_PROTOCOLS[providerId] ?? 'openai-chat',
+    compat: resolveCompat(),
+  }
+}
+
 /**
  * LLM client configuration
  */
@@ -356,6 +455,7 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 
   const modelConfig = getModel(clientConfig.model)
   const defaults = getModelDefaults(clientConfig.model)
+  const ctx = resolveProviderContext(clientConfig.provider, clientConfig.model)
 
   return {
     /**
@@ -367,10 +467,8 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 
       const streamOptions: Parameters<typeof streamText>[0] = {
         model: languageModel,
-        // Use cache control for system prompt on Anthropic
-        system: formatSystemWithCacheControl(system, clientConfig.provider),
-        // Pass provider for message caching
-        messages: convertMessages(messages, clientConfig.provider),
+        system: formatSystemWithCacheControl(system, ctx),
+        messages: convertMessages(messages, ctx),
         maxOutputTokens: maxTokens ?? defaults.maxTokens,
         stopSequences
       }
@@ -382,37 +480,9 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
 
       // Pass reasoning effort for reasoning models via providerOptions
       if (modelConfig?.capabilities.reasoning && reasoningEffort) {
-        if (clientConfig.provider === 'anthropic') {
-          if (clientConfig.model === 'claude-opus-4-6') {
-            // Opus 4.6: adaptive thinking + effort parameter
-            streamOptions.providerOptions = {
-              anthropic: {
-                thinking: { type: 'adaptive' },
-                effort: reasoningEffort
-              }
-            }
-          } else {
-            // Older Claude models: manual thinking with budget_tokens
-            const budgetMap: Record<string, number> = {
-              low: 4096,
-              medium: 10000,
-              high: 16384,
-              max: 32768
-            }
-            streamOptions.providerOptions = {
-              anthropic: {
-                thinking: { type: 'enabled', budgetTokens: budgetMap[reasoningEffort] ?? 10000 }
-              }
-            }
-          }
-        } else {
-          // OpenAI Responses API supports: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
-          // Map 'max' (Anthropic-only value) to 'xhigh'
-          const openaiEffort = reasoningEffort === 'max' ? 'xhigh' : reasoningEffort
-          streamOptions.providerOptions = {
-            openai: { reasoningEffort: openaiEffort }
-          }
-        }
+        streamOptions.providerOptions = buildReasoningProviderOptions(
+          ctx, clientConfig.model, reasoningEffort
+        )
       }
 
       // Only add tools when model supports them
@@ -568,15 +638,13 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
      * Non-streaming generation
      */
     async generate(options: GenerateOptions): Promise<CompletionResponse> {
-      const { system, messages, tools, maxTokens, temperature, stopSequences } =
+      const { system, messages, tools, maxTokens, temperature, stopSequences, reasoningEffort } =
         options
 
       const generateOptions: Parameters<typeof generateText>[0] = {
         model: languageModel,
-        // Use cache control for system prompt on Anthropic
-        system: formatSystemWithCacheControl(system, clientConfig.provider),
-        // Pass provider for message caching
-        messages: convertMessages(messages, clientConfig.provider),
+        system: formatSystemWithCacheControl(system, ctx),
+        messages: convertMessages(messages, ctx),
         maxOutputTokens: maxTokens ?? defaults.maxTokens,
         stopSequences
       }
@@ -584,6 +652,13 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
       // Only add temperature when model supports it
       if (modelConfig?.capabilities.temperature && temperature !== undefined) {
         generateOptions.temperature = temperature
+      }
+
+      // Pass reasoning effort for reasoning models
+      if (modelConfig?.capabilities.reasoning && reasoningEffort) {
+        generateOptions.providerOptions = buildReasoningProviderOptions(
+          ctx, clientConfig.model, reasoningEffort
+        )
       }
 
       // Only add tools when model supports them

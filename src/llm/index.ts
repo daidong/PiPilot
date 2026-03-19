@@ -140,6 +140,34 @@ export {
 } from './schema-utils.js'
 
 // ============================================================================
+// Compat & Provider Definitions
+// ============================================================================
+
+export type {
+  ApiProtocol,
+  OpenAICompat,
+  ResolvedCompat
+} from './compat.js'
+
+export {
+  resolveCompat
+} from './compat.js'
+
+export type {
+  ModelDefinition,
+  ProviderDefinition
+} from './provider-definitions.js'
+
+export {
+  BUILTIN_PROVIDERS,
+  registerProvider,
+  getProviderDefinition,
+  getAllProviderDefinitions,
+  findProviderForModel,
+  findModelDefinition
+} from './provider-definitions.js'
+
+// ============================================================================
 // Cost Calculator
 // ============================================================================
 

@@ -11,6 +11,66 @@ import * as yaml from 'yaml'
 import type { MCPServerConfig } from '../mcp/index.js'
 
 /**
+ * Inline provider definition in agent.yaml.
+ *
+ * Allows users to register a custom OpenAI-compatible provider directly
+ * in their YAML config without writing code.
+ *
+ * ```yaml
+ * model:
+ *   default: "my-model"
+ *   provider:
+ *     id: "my-provider"
+ *     name: "My Provider"              # optional, defaults to id
+ *     baseUrl: "https://my-llm.internal/v1"
+ *     apiProtocol: "openai-chat"       # optional, defaults to openai-chat
+ *     apiKeyEnv: "MY_LLM_KEY"
+ *     compat:                          # optional
+ *       maxTokensField: "max_tokens"
+ *       supportsDeveloperRole: false
+ *     models:                          # optional (if you only use model.default)
+ *       - id: "my-model"
+ *         name: "My Model"
+ *         maxContext: 32000
+ *         maxOutput: 4096
+ * ```
+ */
+export interface ProviderConfigEntry {
+  /** Unique provider slug */
+  id: string
+  /** Display name (defaults to id) */
+  name?: string
+  /** API protocol — defaults to 'openai-chat' */
+  apiProtocol?: 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'google-generative'
+  /** Base URL for API requests */
+  baseUrl: string
+  /** Environment variable name holding the API key */
+  apiKeyEnv: string
+  /** Optional compat flags for OpenAI-compatible quirks */
+  compat?: {
+    supportsDeveloperRole?: boolean
+    maxTokensField?: 'max_tokens' | 'max_completion_tokens'
+    supportsReasoningEffort?: boolean
+    supportsStrictMode?: boolean
+    requiresToolResultName?: boolean
+    supportsCaching?: boolean
+    supportsStreamOptions?: boolean
+  }
+  /** Static headers to add to every request */
+  headers?: Record<string, string>
+  /** Models hosted by this provider (optional) */
+  models?: Array<{
+    id: string
+    name?: string
+    maxContext?: number
+    maxOutput?: number
+    toolcall?: boolean
+    reasoning?: boolean
+    vision?: boolean
+  }>
+}
+
+/**
  * Agent YAML configuration structure
  */
 export interface AgentYAMLConfig {
@@ -35,7 +95,8 @@ export interface AgentYAMLConfig {
   /** Model configuration */
   model?: {
     default?: string
-    provider?: string
+    /** Provider: string ID for built-in providers, or inline object for custom providers */
+    provider?: string | ProviderConfigEntry
     maxTokens?: number
     temperature?: number
     reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
@@ -64,8 +125,33 @@ export interface AgentYAMLConfig {
     llmSummarization?: boolean
   }
 
+  /**
+   * Skill dependencies — declare skills to auto-install on first run.
+   *
+   * ```yaml
+   * skills:
+   *   - id: "my-local-skill"                          # already in .agentfoundry/skills/
+   *   - github: "user/repo/skills/my-skill"            # fetch from GitHub
+   *   - url: "https://example.com/skill.tar.gz"        # fetch from URL
+   * ```
+   */
+  skills?: SkillDependencyEntry[]
+
   /** Custom configuration */
   custom?: Record<string, unknown>
+}
+
+/**
+ * Skill dependency entry in agent.yaml.
+ * Exactly one of `id`, `github`, or `url` must be set.
+ */
+export interface SkillDependencyEntry {
+  /** Reference a local skill already in .agentfoundry/skills/ */
+  id?: string
+  /** GitHub path: "owner/repo" or "owner/repo/path/to/skill-dir" */
+  github?: string
+  /** Direct URL to a SKILL.md file or a tar.gz/zip archive */
+  url?: string
 }
 
 /**
@@ -355,9 +441,43 @@ export function validateConfig(config: AgentYAMLConfig): string[] {
 
   if (config.model) {
     if (config.model.provider !== undefined) {
-      const validProviders = ['openai', 'anthropic', 'deepseek', 'google']
-      if (!validProviders.includes(config.model.provider)) {
-        errors.push(`model.provider must be one of: ${validProviders.join(', ')}`)
+      if (typeof config.model.provider === 'string') {
+        // String provider ID — accept any registered provider (Tier 1 + Tier 2 + custom)
+        if (config.model.provider.trim().length === 0) {
+          errors.push('model.provider must be a non-empty string')
+        }
+      } else if (typeof config.model.provider === 'object' && config.model.provider !== null) {
+        // Inline provider definition object
+        const providerObj = config.model.provider as ProviderConfigEntry
+        if (!providerObj.id || typeof providerObj.id !== 'string' || providerObj.id.trim().length === 0) {
+          errors.push('model.provider.id is required and must be a non-empty string')
+        }
+        if (!providerObj.baseUrl || typeof providerObj.baseUrl !== 'string' || providerObj.baseUrl.trim().length === 0) {
+          errors.push('model.provider.baseUrl is required and must be a non-empty string')
+        }
+        if (!providerObj.apiKeyEnv || typeof providerObj.apiKeyEnv !== 'string' || providerObj.apiKeyEnv.trim().length === 0) {
+          errors.push('model.provider.apiKeyEnv is required and must be a non-empty string')
+        }
+        if (providerObj.apiProtocol !== undefined) {
+          const validProtocols = ['openai-chat', 'openai-responses', 'anthropic-messages', 'google-generative']
+          if (!validProtocols.includes(providerObj.apiProtocol)) {
+            errors.push(`model.provider.apiProtocol must be one of: ${validProtocols.join(', ')}`)
+          }
+        }
+        if (providerObj.models) {
+          if (!Array.isArray(providerObj.models)) {
+            errors.push('model.provider.models must be an array')
+          } else {
+            for (let i = 0; i < providerObj.models.length; i++) {
+              const m = providerObj.models[i]
+              if (!m?.id || typeof m.id !== 'string') {
+                errors.push(`model.provider.models[${i}].id is required and must be a string`)
+              }
+            }
+          }
+        }
+      } else {
+        errors.push('model.provider must be a string or an object with id, baseUrl, and apiKeyEnv')
       }
     }
     if (config.model.temperature !== undefined && (config.model.temperature < 0 || config.model.temperature > 2)) {
@@ -393,5 +513,48 @@ export function validateConfig(config: AgentYAMLConfig): string[] {
     }
   }
 
+  if (config.skills) {
+    if (!Array.isArray(config.skills)) {
+      errors.push('skills must be an array')
+    } else {
+      for (let i = 0; i < config.skills.length; i++) {
+        const entry = config.skills[i]
+        if (!entry || typeof entry !== 'object') {
+          errors.push(`skills[${i}] must be an object with id, github, or url`)
+          continue
+        }
+        const keys = ['id', 'github', 'url'].filter(k => !!(entry as Record<string, unknown>)[k])
+        if (keys.length === 0) {
+          errors.push(`skills[${i}] must have one of: id, github, or url`)
+        } else if (keys.length > 1) {
+          errors.push(`skills[${i}] must have exactly one of: id, github, or url (found: ${keys.join(', ')})`)
+        }
+        if (entry.github && typeof entry.github === 'string') {
+          // Must be owner/repo or owner/repo/path
+          if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(\/.*)?$/.test(entry.github)) {
+            errors.push(`skills[${i}].github must be in format "owner/repo" or "owner/repo/path"`)
+          }
+        }
+        if (entry.url && typeof entry.url === 'string') {
+          if (!entry.url.startsWith('http://') && !entry.url.startsWith('https://')) {
+            errors.push(`skills[${i}].url must start with http:// or https://`)
+          }
+        }
+      }
+    }
+  }
+
   return errors
+}
+
+/**
+ * Resolve the provider ID from a model.provider config value.
+ * Returns the string ID whether it's a string or inline object.
+ */
+export function resolveProviderIdFromConfig(
+  provider: string | ProviderConfigEntry | undefined
+): string | undefined {
+  if (!provider) return undefined
+  if (typeof provider === 'string') return provider
+  return provider.id
 }

@@ -21,16 +21,20 @@ const STYLE_TEXT = `## Communication Style
 - Vary sentence structure. Mix short and long sentences naturally.
 - Respond proportionally: short questions get short answers.`
 
-const STYLE_NORMALIZATION: Partial<Record<ProviderID, string>> = {
-  openai: STYLE_TEXT,
-  deepseek: STYLE_TEXT,
-  google: STYLE_TEXT
-}
+/**
+ * Providers that do NOT need style normalization.
+ * Anthropic models already produce the desired style natively.
+ */
+const SKIP_STYLE_PROVIDERS = new Set<string>(['anthropic'])
 
 /**
  * Return provider-specific style normalization text, or `undefined` for
  * providers that don't need it (e.g. Anthropic).
+ *
+ * All non-Anthropic providers (including Tier 2) receive style guidance
+ * since they typically host open-weight or non-Anthropic models.
  */
 export function getProviderStyleNormalization(provider: ProviderID): string | undefined {
-  return STYLE_NORMALIZATION[provider]
+  if (SKIP_STYLE_PROVIDERS.has(provider)) return undefined
+  return STYLE_TEXT
 }

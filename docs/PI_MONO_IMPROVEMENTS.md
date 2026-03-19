@@ -16,8 +16,8 @@
 | 7 | Steering/follow-up message queues | Medium | ✅ Done |
 | 8 | Tree-structured session branching | Low | Backlog |
 | 9 | Extension hot-reload | Low | Backlog |
-| 10 | More providers + compat flags | Low | Backlog |
-| 11 | Markdown-file skill support | Low | Backlog |
+| 10 | More providers + compat flags | Low | ✅ Done |
+| 11 | Markdown-file skill support + install | Low | ✅ Done |
 | 12 | Streaming-first event architecture | High | ✅ Done |
 
 ### Gap Analysis Batch 2
@@ -610,3 +610,152 @@ createAgent({ onStream: (chunk) => ..., onToolCall: (t, i) => ... })
 - `tests/utils/async-channel.test.ts` — 6 channel unit tests
 - `tests/agent/agent-stream.test.ts` — 7 streaming behavior tests
 - `examples/hello-world/with-streaming.ts` — streaming consumption example
+
+### 10. More Providers + Compat Flags (Low) ✅
+
+**Problem:** AgentFoundry supported only 4 providers (OpenAI, Anthropic, Google, DeepSeek) with 19 models. Adding new OpenAI-compatible providers (Groq, xAI, Cerebras, etc.) required writing new SDK initialization code and hardcoded if/else branches.
+
+**Solution:** Two-axis provider architecture inspired by pi-mono:
+
+1. **API Protocol** (`ApiProtocol`) — the wire-level contract: `openai-chat`, `openai-responses`, `anthropic-messages`, `google-generative`
+2. **Provider Definition** (`ProviderDefinition`) — declarative brand config: `id`, `baseUrl`, `apiKeyEnv`, `compat` flags, `models[]`
+3. **Compat Flags** (`OpenAICompat`) — structured quirk descriptions: `maxTokensField`, `supportsDeveloperRole`, `supportsStrictMode`, `supportsReasoningEffort`, `thinkingFormat`, etc.
+
+New providers are added as pure configuration — no new code branches needed. The streaming layer uses `apiProtocol` + `compat` flags instead of `if (provider === 'xxx')` checks.
+
+**7 new Tier 2 providers added** (Groq, xAI, Cerebras, OpenRouter, Together, Fireworks, Mistral) with ~20 new models. Users can also register custom providers at runtime.
+
+**Usage:**
+```yaml
+# agent.yaml — use Groq
+model:
+  default: "llama-3.3-70b-versatile"
+  provider: "groq"
+```
+
+```typescript
+// Code — use any registered provider
+const agent = createAgent({ model: 'grok-3', provider: 'xai' })
+
+// Register a custom OpenAI-compatible provider
+import { registerProvider } from 'agent-foundry'
+registerProvider({
+  id: 'my-corp',
+  name: 'Corp LLM',
+  apiProtocol: 'openai-chat',
+  baseUrl: 'https://llm.corp.internal/v1',
+  apiKeyEnv: 'CORP_LLM_KEY',
+  compat: { maxTokensField: 'max_tokens', supportsDeveloperRole: false },
+  models: [
+    { id: 'corp-72b', name: 'Corp 72B',
+      capabilities: { temperature: true, reasoning: false, toolcall: true, input: ['text'], output: ['text'] },
+      limit: { maxContext: 128_000, maxOutput: 8_192 } }
+  ]
+})
+```
+
+**Files changed:**
+- `src/llm/compat.ts` — new file: `ApiProtocol`, `OpenAICompat`, `ResolvedCompat`, `resolveCompat()`
+- `src/llm/provider-definitions.ts` — new file: `ProviderDefinition`, `ModelDefinition`, 11 builtin providers, runtime registry API
+- `src/llm/provider.types.ts` — `ProviderID` expanded with Tier 2 IDs + open string extension
+- `src/llm/models.ts` — auto-registers Tier 2 models from provider definitions
+- `src/llm/provider.ts` — `getLanguageModel()` handles dynamic providers; `resolveApiKey()` uses definition's `apiKeyEnv`; `getAllProviders()` includes all providers
+- `src/llm/stream.ts` — `ProviderContext` replaces raw `ProviderID`; `buildReasoningProviderOptions()` uses protocol; `convertMessages()` uses `apiProtocol` + `compat.supportsCaching`
+- `src/llm/provider-style.ts` — style normalization applies to all non-Anthropic providers
+- `src/llm/index.ts` — exports compat + provider-definitions modules
+- `src/llm/cost-calculator.ts` — `Record<string, number>` for extensibility
+- `src/index.ts` — exports new public API
+- `src/config/loader.ts` — accepts any provider string in validation
+- `src/agent/create-agent.ts` — Tier 2 env var detection; dynamic API key resolution
+- `src/cli/validate-deep.ts` — flexible provider type maps
+- `src/config/loader.ts` — `ProviderConfigEntry` interface; `model.provider` accepts `string | ProviderConfigEntry`; inline provider validation; `resolveProviderIdFromConfig()` helper
+- `src/config/index.ts` — exports new types and helper
+- `src/agent/create-agent.ts` — `registerInlineProvider()` converts YAML model config to `ProviderDefinition` and registers it; resolves provider ID from union type
+- `src/cli/validate-deep.ts` — handles `model.provider` as string or object
+- `tests/llm/provider-definitions.test.ts` — 20 tests for provider registry + compat
+- `tests/llm/compat-streaming.test.ts` — 15 tests for compat-driven streaming behavior
+- `tests/config/yaml-provider.test.ts` — 17 tests for YAML inline provider config, validation, and registration
+
+**YAML inline provider support (PR3):**
+
+Users can now define custom providers directly in `agent.yaml` without writing any code:
+
+```yaml
+# agent.yaml — custom OpenAI-compatible provider
+model:
+  default: "my-model"
+  provider:
+    id: "my-provider"
+    name: "My Provider"
+    baseUrl: "https://my-llm.internal/v1"
+    apiProtocol: "openai-chat"
+    apiKeyEnv: "MY_LLM_KEY"
+    compat:
+      maxTokensField: "max_tokens"
+      supportsDeveloperRole: false
+    models:
+      - id: "my-model"
+        name: "My Model"
+        maxContext: 32000
+        maxOutput: 4096
+        toolcall: true
+```
+
+The inline provider is automatically registered via `registerProvider()` during `createAgent()`, making it immediately available for model resolution and SDK creation.
+
+### 11. Markdown-file Skill Support + Install (Low) ✅
+
+**Problem:** Skills could already be loaded from `SKILL.md` files in `.agentfoundry/skills/`, but there was no way to install them from external sources (GitHub, URLs) and no CLI to manage them. Users had to manually create directories and copy files.
+
+**Solution:** Added a complete skill distribution/installation system:
+
+1. **`SkillInstaller`** — core install/remove/list logic supporting GitHub paths and URLs
+2. **CLI `skill` subcommand** — `list`, `install`, `remove`, `info`
+3. **YAML `skills` field** — declare skill dependencies in `agent.yaml` for auto-install
+4. **Provenance tracking** — `.source.json` metadata file records install source
+
+**CLI Usage:**
+```bash
+# List all available skills (local + community-builtin)
+agent-foundry skill list
+
+# Install from GitHub (owner/repo/path)
+agent-foundry skill install anthropics/af-skills/web-research
+
+# Install from URL
+agent-foundry skill install https://example.com/my-skill/SKILL.md
+
+# Remove a skill
+agent-foundry skill remove web-research
+
+# Show skill details
+agent-foundry skill info markitdown
+```
+
+**YAML Declaration (auto-install on first run):**
+```yaml
+# agent.yaml
+skills:
+  - id: "markitdown"                        # local skill (already installed)
+  - github: "user/repo/skills/web-research"  # auto-install from GitHub
+  - url: "https://example.com/SKILL.md"      # auto-install from URL
+```
+
+**Install from GitHub:**
+- Parses `owner/repo[/path]` format
+- Uses GitHub Contents API to download `SKILL.md` + `scripts/`
+- Supports `GITHUB_TOKEN` env var for private repos and rate limits
+- Skills persist in `.agentfoundry/skills/<skill-id>/`
+
+**Files changed:**
+- `src/skills/skill-installer.ts` — new file: `SkillInstaller` class with GitHub/URL download, remove, list
+- `src/cli/skill.ts` — new file: CLI `skill list/install/remove/info` subcommands
+- `src/cli/bin.ts` — wired `skill` command into CLI router
+- `src/cli/index.ts` — exports skill command
+- `src/config/loader.ts` — `SkillDependencyEntry` interface, `skills` field in `AgentYAMLConfig`, validation
+- `src/config/index.ts` — exports new types
+- `src/agent/create-agent.ts` — auto-install declared skills in `initPacks()` before ExternalSkillLoader runs
+- `src/skills/index.ts` — exports `SkillInstaller`
+- `src/index.ts` — exports new types and classes
+- `tests/skills/skill-installer.test.ts` — 11 tests for install, list, remove, provenance
+- `tests/config/yaml-skills.test.ts` — 11 tests for YAML skills validation

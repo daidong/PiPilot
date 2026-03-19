@@ -140,6 +140,7 @@ export {
   // Core classes
   SkillManager,
   ExternalSkillLoader,
+  SkillInstaller,
   SkillRegistry,
   globalSkillRegistry,
 
@@ -179,6 +180,9 @@ export type {
 
   // Manager types
   SkillManagerOptions,
+  SkillInstallerOptions,
+  SkillInstallResult,
+  InstalledSkillInfo,
   ExternalSkillLoaderOptions,
   ExternalSkillSourceConfig,
   ExternalSkillSourceType,
@@ -548,6 +552,17 @@ export {
   supportsVision
 } from './llm/index.js'
 
+// Compat & Provider Definitions
+export {
+  resolveCompat,
+  BUILTIN_PROVIDERS,
+  registerProvider,
+  getProviderDefinition,
+  getAllProviderDefinitions,
+  findProviderForModel,
+  findModelDefinition
+} from './llm/index.js'
+
 // Streaming API
 export {
   createLLMClient,
@@ -761,11 +776,13 @@ export {
   normalizeMCPConfigs,
   generateEnvExample,
   validateConfig,
+  resolveProviderIdFromConfig,
   DEFAULT_CONFIG_FILENAMES
 } from './config/index.js'
 export type {
   AgentYAMLConfig,
   PackConfigEntry,
+  ProviderConfigEntry,
   MCPConfigEntry
 } from './config/index.js'
 

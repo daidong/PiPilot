@@ -54,14 +54,14 @@ function info(message: string): void {
 
 // ── Provider env key mapping ────────────────────────────────────────────────
 
-const PROVIDER_ENV_KEYS: Record<ProviderID, string> = {
+const PROVIDER_ENV_KEYS: Record<string, string> = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   google: 'GOOGLE_API_KEY'
 }
 
-const PROVIDER_NAMES: Record<ProviderID, string> = {
+const PROVIDER_NAMES: Record<string, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   deepseek: 'DeepSeek',
@@ -121,7 +121,11 @@ async function validateApiKeys(
   let targetProvider: ProviderID | null = null
 
   if (config.model?.provider) {
-    targetProvider = config.model.provider as ProviderID
+    targetProvider = (
+      typeof config.model.provider === 'string'
+        ? config.model.provider
+        : config.model.provider.id
+    ) as ProviderID
   } else if (config.model?.default) {
     const modelConfig = getModel(config.model.default)
     if (modelConfig) {
@@ -146,7 +150,7 @@ async function validateApiKeys(
     return null
   }
 
-  const envKey = PROVIDER_ENV_KEYS[targetProvider]
+  const envKey = PROVIDER_ENV_KEYS[targetProvider] ?? `${targetProvider.toUpperCase()}_API_KEY`
   const apiKey = process.env[envKey]?.trim()
 
   if (!apiKey) {
@@ -175,7 +179,7 @@ async function validateApiKeys(
   const otherProviders: string[] = []
   for (const [provider, ek] of Object.entries(PROVIDER_ENV_KEYS)) {
     if (provider !== targetProvider && process.env[ek]?.trim()) {
-      otherProviders.push(PROVIDER_NAMES[provider as ProviderID])
+      otherProviders.push(PROVIDER_NAMES[provider] ?? provider)
     }
   }
   if (otherProviders.length > 0) {

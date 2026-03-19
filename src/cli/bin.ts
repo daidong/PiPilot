@@ -8,6 +8,7 @@
 import { runIndexDocs, parseIndexDocsArgs, printIndexDocsHelp } from './index-docs.js'
 import { runAgentTask, parseRunArgs, printRunHelp } from './run.js'
 import { runInit, parseInitArgs, printInitHelp } from './init.js'
+import { runSkillCommand, parseSkillArgs, printSkillHelp } from './skill.js'
 
 const VERSION = '0.1.0'
 
@@ -21,6 +22,7 @@ Commands:
   init          Scaffold a new AgentFoundry project
   validate      Validate configuration file
   run           Run agent task (single, autonomous, or interactive mode)
+  skill         Manage skills (list, install, remove)
   index-docs    Build document index for docs context sources
   help          Show help information
 
@@ -32,6 +34,9 @@ Examples:
   $ agent-foundry validate
   $ agent-foundry validate --deep
   $ agent-foundry run "Summarize README.md"
+  $ agent-foundry skill list
+  $ agent-foundry skill install user/repo/skills/my-skill
+  $ agent-foundry skill remove my-skill
   $ agent-foundry index-docs --paths docs,wiki -v
 `
 
@@ -102,6 +107,17 @@ async function main(): Promise<void> {
       }
       const runOptions = parseRunArgs(cmdArgs)
       await runAgentTask(runOptions)
+      break
+    }
+
+    case 'skill': {
+      const cmdArgs = args.slice(1)
+      if (cmdArgs.includes('--help') || cmdArgs.includes('-h')) {
+        printSkillHelp()
+        break
+      }
+      const skillOptions = parseSkillArgs(cmdArgs)
+      await runSkillCommand(skillOptions)
       break
     }
 

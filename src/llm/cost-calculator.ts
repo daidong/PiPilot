@@ -4,14 +4,14 @@
  * Calculates costs based on model pricing and cache utilization
  */
 
-import type { DetailedTokenUsage, TokenCost, ProviderID } from './provider.types.js'
+import type { DetailedTokenUsage, TokenCost } from './provider.types.js'
 import { getModel } from './models.js'
 
 /**
  * Fallback cache discount rates by provider.
  * Used only when a model does not define `cost.cachedInput`.
  */
-const FALLBACK_CACHE_DISCOUNTS: Record<ProviderID, number> = {
+const FALLBACK_CACHE_DISCOUNTS: Record<string, number> = {
   anthropic: 0.1,   // 90% discount for cached reads
   openai: 0.5,      // 50% discount for cached reads
   google: 0.25,     // 75% discount for Gemini context caching
@@ -22,7 +22,7 @@ const FALLBACK_CACHE_DISCOUNTS: Record<ProviderID, number> = {
  * Cache creation cost multiplier by provider
  * Some providers charge extra for writing to cache
  */
-const CACHE_CREATION_MULTIPLIERS: Record<ProviderID, number> = {
+const CACHE_CREATION_MULTIPLIERS: Record<string, number> = {
   anthropic: 1.25,  // 25% premium for cache creation
   openai: 1.0,      // No premium
   google: 1.0,      // No premium

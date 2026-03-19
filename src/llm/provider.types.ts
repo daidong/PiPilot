@@ -8,6 +8,8 @@
  * Supported Provider IDs
  */
 export type ProviderID = 'openai' | 'anthropic' | 'google' | 'deepseek'
+  | 'groq' | 'xai' | 'cerebras' | 'openrouter' | 'together' | 'fireworks' | 'mistral'
+  | (string & {})  // allows any string while preserving autocomplete for known IDs
 
 /**
  * Model API type
