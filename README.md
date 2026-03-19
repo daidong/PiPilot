@@ -1,902 +1,318 @@
-# Agent Foundry
+<p align="center">
+  <strong>Agent Foundry</strong>
+</p>
 
-A powerful AI agent framework with a **three-axis orthogonal architecture** for building intelligent, controllable, and context-aware agents — plus a fully featured **Research Pilot** example application.
+<p align="center">
+  A TypeScript framework for building AI agents that are powerful, controllable, and context-aware.
+</p>
 
-## Architecture Overview
+<p align="center">
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="docs/API.md">API Reference</a> &middot;
+  <a href="docs/AGENT_DEV_GUIDE.md">App Dev Guide</a> &middot;
+  <a href="#examples">Examples</a>
+</p>
 
-Agent Foundry is built on three orthogonal axes:
+---
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Agent Foundry                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ┌─────────┐    ┌──────────┐    ┌─────────────────┐       │
-│   │  Tools  │    │ Policies │    │ Context Sources │       │
-│   └────┬────┘    └────┬─────┘    └────────┬────────┘       │
-│        │              │                    │                │
-│   Operations     Access Control      Information            │
-│   agents can     (Guard→Mutate→     providers for           │
-│   execute        Observe)           agents                  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+## Why Agent Foundry?
 
-- **Tools**: Operations that agents can execute (file I/O, shell, HTTP, etc.)
-- **Policies**: Rules controlling what operations are allowed (three-phase pipeline)
-- **Context Sources**: Read-only information providers (`ctx.get()` API)
+Most agent frameworks give you tools and a loop. Agent Foundry gives you **architecture**.
 
-### Kernel V2 Profiles
+- **Three orthogonal axes** — Tools (what agents *do*), Policies (what agents *may* do), and Context Sources (what agents *know*) compose independently, so you never have to choose between power and safety.
+- **Token-efficient by design** — Skills load lazily, context assembles in priority phases, and history compresses automatically. Your agents stay sharp in long sessions.
+- **Multi-provider, zero lock-in** — OpenAI, Anthropic, Google, DeepSeek, Groq, Mistral, xAI, Cerebras, Together, Fireworks, OpenRouter — switch with one line. Bring your own provider via YAML config.
+- **Teams built in** — Sequential pipelines, fan-out/fan-in, supervisor patterns, debate, voting — all as composable flow combinators, not custom glue code.
+- **Skill marketplace** — Install, share, and auto-load portable Markdown skills from GitHub or URL. No code changes needed.
+- **MCP native** — Connect external tool servers (GitHub, Postgres, Slack, browsers) via the Model Context Protocol.
 
-`kernelV2.profile` controls memory semantics:
-
-- `minimal` (default): lean core context (history + selected context + continuity), no built-in task/facts/evidence scaffolding
-- `legacy`: enables task anchor + memory facts + evidence retrieval flow for compatibility
-
-## Table of Contents
-
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Research Pilot](#research-pilot)
-- [CLI Tools](#cli-tools)
-- [Configuration](#configuration)
-- [Tools](#tools)
-- [Policies](#policies)
-- [Context Sources](#context-sources)
-- [Skills](#skills)
-- [Packs](#packs)
-- [MCP Integration](#mcp-integration)
-- [Multi-Agent Teams](#multi-agent-teams)
-- [API Reference](#api-reference)
-- [Advanced Usage](#advanced-usage)
-- [Examples](#examples)
-- [Development](#development)
-
-## Installation
+## Quick Start
 
 ```bash
 npm install agent-foundry
 ```
 
-Or use directly with npx:
-
-```bash
-npx agent-foundry <command>
-```
-
-## Quick Start
-
-### Option 1: Programmatic Setup (Recommended)
+### Minimal Example
 
 ```typescript
-import { createAgent } from 'agent-foundry'
+import { createAgent, packs } from 'agent-foundry'
 
-// Automatically loads agent.yaml
 const agent = createAgent({
   apiKey: process.env.OPENAI_API_KEY,
+  packs: [packs.standard()],
   onStream: (text) => process.stdout.write(text)
 })
 
 const result = await agent.run('What files are in this project?')
-console.log(result.output)
-
 await agent.destroy()
 ```
 
-### Option 2: Pack-based Setup
+### With YAML Configuration
 
-```typescript
-import { createAgent, packs } from 'agent-foundry'
-
-const agent = createAgent({
-  apiKey: process.env.OPENAI_API_KEY,
-  packs: [
-    packs.standard(),      // Core tools + repo + git
-    packs.kvMemory(),      // Key-value memory
-    packs.docs(),          // Document library
-    packs.discovery()      // Context discovery
-  ],
-  identity: 'You are a helpful coding assistant.',
-  constraints: ['Always explain your reasoning'],
-  onStream: (text) => process.stdout.write(text)
-})
-
-const result = await agent.run('Analyze the codebase structure')
-await agent.destroy()
-```
-
-## Research Pilot
-
-Research Pilot is a full-featured example application demonstrating AgentFoundry's capabilities. It is a CLI-based research assistant with an Ink (React terminal UI) interface.
-
-### Running Research Pilot
-
-```bash
-export OPENAI_API_KEY=sk-xxx
-npx tsx examples/research-pilot/index.tsx
-npx tsx examples/research-pilot/index.tsx --debug
-```
-
-### Features
-
-#### Context Assembly Pipeline
-
-Research Pilot exercises the 5-phase context pipeline (RFC-003):
-
-| Phase | Priority | Content |
-|-------|----------|---------|
-| System | 100 | System prompt + tool descriptions |
-| Pinned | 90 | Pinned entities always in context |
-| Selected | 80 | User-selected notes/papers/data |
-| Session | 50 | Recent conversation history |
-| Index | 30 | Compressed history + catalog |
-
-#### Research Entity Management
-
-All research data is stored as JSON files under `.research-pilot/`:
-
-```
-.research-pilot/
-├── project.json          # Project config
-├── notes/                # Research notes
-├── literature/           # Academic papers
-├── data/                 # Data attachments
-└── sessions/             # Session history
-```
-
-**Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `/notes` | List all notes |
-| `/papers` | List all literature |
-| `/data` | List all data files |
-| `/search <query>` | Search across all entities |
-| `/save-note --from-last` | Save agent response as a note |
-| `/save-note --from-last --lines 5-12` | Save specific lines |
-| `/save-paper <title> [--authors "A, B"] [--year N]` | Save a paper reference |
-| `/save-data <name> --path <file>` | Register a data file |
-| `/delete <id>` | Delete any entity |
-| `/select <id>` | Toggle AI context selection |
-| `/pin <id>` | Toggle pinned status (always in context) |
-| `/lit-search <query>` | Search academic literature via agent |
-| `/debug` | Toggle debug mode |
-
-#### @-Mention System
-
-Inline-reference entities, files, and URLs directly in chat messages:
-
-```
-@note:<id-or-title>       → research note
-@paper:<citekey-or-id>    → literature entity
-@data:<id-or-name>        → data attachment
-@file:<path>              → arbitrary file on disk
-@url:<url>                → web content (async fetch)
-```
-
-Quoting is supported for values with spaces: `@file:"my data/file.csv"`
-
-**Autocomplete popup**: Typing `@` triggers an autocomplete dropdown showing matching entities and files. Navigate with arrow keys, select with Enter/Tab, dismiss with Escape.
-
-**Example usage:**
-
-```
-Summarize @paper:smith2024 and compare with @note:hypothesis
-Analyze @file:package.json
-Summarize @url:https://example.com
-```
-
-Mentioned items are resolved and injected into the agent context as a `<mentioned-context>` block for that message only.
-
-#### Activity Panel
-
-A tabbed right-side panel showing recent activity across all entity types:
-
-- **Tabs**: Notes, Papers, Data — switch with Tab/Shift+Tab
-- **Navigation**: Arrow up/down to browse items
-- **Preview**: Press Enter to open a full-screen entity preview overlay
-- **Focus**: Ctrl+R toggles panel focus, Esc closes preview or unfocuses
-
-The preview overlay displays full entity content (metadata, tags, pinned/selected status, body) and overlaps the main chat view.
-
-#### Multi-Agent Team
-
-| Agent | Purpose |
-|-------|---------|
-| Coordinator | Main chat agent with context pipeline |
-| Literature Agent | Academic literature search and review |
-| Writing Agent | Writing assistance and drafting |
-| Data Agent | Data analysis and insights |
-
-### Research Pilot Structure
-
-```
-examples/research-pilot/
-├── index.ts                  # Library exports
-├── types.ts                  # Artifact + session summary types
-├── agents/
-│   ├── coordinator.ts        # Main orchestrator
-│   ├── literature-team.ts    # Literature multi-agent team
-│   ├── data-team.ts          # Data analysis pipeline
-│   ├── subagent-tools.ts     # literature-search / data-analyze tools
-│   └── prompts/              # Coordinator + subagent prompts
-├── commands/
-│   ├── artifact.ts           # Canonical artifact CRUD/search surface
-│   ├── paper-artifact.ts     # Paper upsert / metadata update helpers
-│   ├── list.ts               # Notes/papers/data views
-│   ├── search.ts             # Search helpers
-│   ├── delete.ts             # Delete by id
-│   ├── paper-enrichment.ts   # Enrichment pipeline command
-│   ├── session-summary.ts    # Session summary read
-│   └── index.ts              # Command exports
-├── memory-v2/
-│   └── store.ts              # Artifact store + summary storage + legacy migration
-├── mentions/
-│   ├── parser.ts             # @-mention regex parser
-│   ├── resolver.ts           # Entity/file/URL resolution
-│   ├── candidates.ts         # Autocomplete candidate builder
-│   └── index.ts              # Mention exports
-├── tools/
-│   └── entity-tools.ts       # artifact-create/update/search runtime tools
-└── README.md                 # Current architecture notes
-```
-
-## CLI Tools
-
-### validate - Check Configuration
-
-```bash
-npx agent-foundry validate
-```
-
-Validates `agent.yaml` for:
-- Required fields
-- Valid pack names
-- Configuration syntax
-
-### index-docs - Build Document Index
-
-```bash
-npx agent-foundry index-docs [options]
-```
-
-Build a searchable document index for the `docs.*` context sources:
-
-```bash
-# Index docs directory
-npx agent-foundry index-docs --paths docs -v
-
-# Multiple directories
-npx agent-foundry index-docs --paths docs,wiki,notes
-
-# Markdown only
-npx agent-foundry index-docs --ext .md
-
-# Incremental update
-npx agent-foundry index-docs --incremental
-```
-
-**Options:**
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--paths, -p` | `./docs` | Directories to scan |
-| `--ext, -e` | `.md,.txt` | File extensions |
-| `--exclude, -x` | - | Exclude patterns |
-| `--chunk-size` | `500` | Tokens per chunk |
-| `--overlap` | `50` | Chunk overlap tokens |
-| `--output, -o` | `.agentfoundry` | Output directory |
-| `--incremental, -i` | - | Incremental mode |
-| `--verbose, -v` | - | Verbose output |
-
-## Configuration
-
-### agent.yaml
+Create `agent.yaml` in your project root:
 
 ```yaml
-# Required: Unique identifier
 id: my-agent
-
-# Optional: Display name
 name: My Coding Assistant
-
-# Optional: Agent identity/persona
-identity: |
-  You are a helpful coding assistant specializing in TypeScript.
-  You write clean, well-documented code.
-
-# Optional: Behavioral constraints
-constraints:
-  - Always explain your reasoning
-  - Ask for clarification when uncertain
-  - Never modify files without explicit permission
-
-# Packs to load (string or object with options)
+model:
+  default: claude-sonnet-4-20250514
 packs:
   - safe
+  - exec
   - repo
-  - kv-memory
-  - docs
-  - discovery
-  - name: exec
-    options:
-      allowedCommands: [npm, git, ls]
-  - name: network
-    options:
-      allowedDomains: [api.github.com]
-
-# MCP server configurations
-mcp:
-  - name: github
-    package: "@modelcontextprotocol/server-github"
-    transport:
-      type: stdio
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-github"]
-    env:
-      - GITHUB_TOKEN
-
-# Model configuration
-model:
-  default: gpt-4o
-  maxTokens: 16384
-  temperature: 0.7
-
-# Maximum execution steps
-maxSteps: 30
-
-# Custom configuration
-custom:
-  myOption: value
+  - git
+constraints:
+  - Always explain your reasoning
+  - Ask before modifying files
 ```
-
-### Configuration Priority
-
-Settings are merged in this order (later overrides earlier):
-
-1. Default values
-2. `agent.yaml` file
-3. Function parameters
 
 ```typescript
-// Uses agent.yaml
-const agent1 = createAgent({ apiKey: 'sk-xxx' })
+import { createAgent } from 'agent-foundry'
 
-// Override model from agent.yaml
-const agent2 = createAgent({
-  apiKey: 'sk-xxx',
-  model: 'gpt-4-turbo'
-})
-
-// Skip agent.yaml entirely
-const agent3 = createAgent({
-  apiKey: 'sk-xxx',
-  skipConfigFile: true,
-  packs: [packs.safe()]
-})
+// Loads agent.yaml automatically
+const agent = createAgent({ apiKey: process.env.ANTHROPIC_API_KEY })
 ```
 
-## Tools
+## Core Concepts
 
-Tools are operations that agents can execute.
-
-### Built-in Tools
-
-| Tool | Pack | Description |
-|------|------|-------------|
-| `read` | safe | Read file content |
-| `write` | safe | Write file content |
-| `edit` | safe | Edit file (old_string → new_string) |
-| `glob` | safe | Match files with patterns |
-| `grep` | safe | Search content in files |
-| `ctx-get` | safe | Get context from sources |
-| `bash` | exec | Execute shell commands |
-| `fetch` | network | HTTP requests |
-| `llm-call` | compute | LLM sub-calls |
-| `memory-set` | kv-memory | Store key-value data |
-| `memory-delete` | kv-memory | Delete stored data |
-
-### Define Custom Tools
-
-```typescript
-import { defineTool } from 'agent-foundry'
-
-const weatherTool = defineTool({
-  name: 'get-weather',
-  description: 'Get current weather for a city',
-  parameters: {
-    city: {
-      type: 'string',
-      required: true,
-      description: 'City name'
-    },
-    units: {
-      type: 'string',
-      required: false,
-      default: 'celsius',
-      enum: ['celsius', 'fahrenheit']
-    }
-  },
-  execute: async (input, context) => {
-    const { city, units } = input
-    // Fetch weather data...
-    return {
-      success: true,
-      data: { temperature: 22, condition: 'sunny' }
-    }
-  }
-})
-```
-
-### Using Tools in Agents
-
-```typescript
-import { createAgent, definePack } from 'agent-foundry'
-
-const myPack = definePack({
-  id: 'my-tools',
-  description: 'My custom tools',
-  tools: [weatherTool]
-})
-
-const agent = createAgent({
-  apiKey: 'sk-xxx',
-  packs: [packs.safe(), myPack]
-})
-```
-
-## Policies
-
-Policies control what operations are allowed through a three-phase pipeline:
+### Architecture
 
 ```
-Guard Phase → Mutate Phase → Execute Tool → Observe Phase
+                        ┌─────────────────────────┐
+                        │       Agent Loop         │
+                        └────┬────────┬────────┬───┘
+                             │        │        │
+                     ┌───────▼──┐ ┌───▼────┐ ┌─▼──────────────┐
+                     │  Tools   │ │Policies│ │ Context Sources │
+                     │ (actions)│ │(rules) │ │  (knowledge)    │
+                     └──────────┘ └────────┘ └────────────────┘
 ```
 
-### Guard Policies (Allow/Deny/Approval)
-
-```typescript
-import { defineGuardPolicy } from 'agent-foundry'
-
-// Block dangerous commands
-const noDestructive = defineGuardPolicy({
-  id: 'no-destructive',
-  description: 'Block destructive commands',
-  priority: 10,  // Lower = higher priority
-  match: (ctx) => ctx.tool === 'bash',
-  decide: (ctx) => {
-    const cmd = ctx.input.command
-    if (cmd.includes('rm -rf') || cmd.includes('DROP TABLE')) {
-      return { action: 'deny', reason: 'Destructive command blocked' }
-    }
-    if (cmd.includes('sudo')) {
-      return { action: 'require_approval', reason: 'Sudo requires approval' }
-    }
-    return { action: 'allow' }
-  }
-})
-```
-
-### Mutate Policies (Transform Input)
-
-```typescript
-import { defineMutatePolicy } from 'agent-foundry'
-
-// Auto-add limits to grep
-const autoLimit = defineMutatePolicy({
-  id: 'auto-limit-grep',
-  description: 'Add default limit to grep',
-  match: (ctx) => ctx.tool === 'grep',
-  transforms: (ctx) => {
-    if (!ctx.input.limit) {
-      return [{ op: 'set', path: 'limit', value: 100 }]
-    }
-    return []
-  }
-})
-```
-
-### Observe Policies (Logging/Alerts)
-
-```typescript
-import { defineObservePolicy } from 'agent-foundry'
-
-// Audit all tool calls
-const audit = defineObservePolicy({
-  id: 'audit-all',
-  description: 'Log all tool calls',
-  match: () => true,
-  observe: (ctx) => ({
-    record: {
-      timestamp: Date.now(),
-      tool: ctx.tool,
-      input: ctx.input,
-      agentId: ctx.agentId
-    }
-  })
-})
-```
-
-### Built-in Policies
-
-| Policy | Type | Description |
-|--------|------|-------------|
-| `noDestructive` | Guard | Block rm -rf, DROP TABLE, etc. |
-| `noSecretFilesRead` | Guard | Block reading .env, credentials |
-| `noSecretFilesWrite` | Guard | Block writing to secret files |
-| `autoLimitGrep` | Mutate | Add default limit to grep |
-| `autoLimitGlob` | Mutate | Add ignore patterns to glob |
-| `normalizeReadPaths` | Mutate | Normalize file paths |
-| `auditAllCalls` | Observe | Log all tool calls |
-
-## Context Sources
-
-Context sources provide read-only information to agents via `ctx.get()`.
-
-### Namespace Overview
-
-| Namespace | Purpose | Sources |
-|-----------|---------|---------|
-| `repo.*` | Repository context | repo.index, repo.search, repo.symbols, repo.file, repo.git |
-| `session.*` | Conversation history | session.recent, session.search, session.thread |
-| `memory.*` | Key-value storage | memory.get, memory.search, memory.list |
-| `facts.*` | Long-term facts | facts.list |
-| `decisions.*` | Decision tracking | decisions.list |
-| `docs.*` | Document library | docs.index, docs.search, docs.open |
-| `ctx.*` | Discovery/routing | ctx.catalog, ctx.describe, ctx.route |
-
-### Context Source Kinds
-
-| Kind | Purpose | Example |
+| Axis | Purpose | Example |
 |------|---------|---------|
-| `index` | Overview/listing | docs.index, repo.index |
-| `search` | Find by query | docs.search, repo.search |
-| `open` | Read content | docs.open, repo.file |
-| `get` | Exact lookup | memory.get, ctx.describe |
+| **Tools** | Operations agents execute | `read`, `write`, `bash`, `fetch`, `llm-call` |
+| **Policies** | Guard / Mutate / Observe pipeline | Block `rm -rf`, auto-limit grep, audit logs |
+| **Context Sources** | Read-only information providers | Repo index, session history, document search |
 
-### Using Context Sources
+The three axes compose independently — add a tool without touching policies, tighten a policy without changing tools.
 
-Agents use the `ctx-get` tool to access context:
+### Packs
 
-```typescript
-// In agent prompts or tool calls:
-ctx.get("docs.index")
-ctx.get("docs.search", { query: "authentication" })
-ctx.get("docs.open", { path: "docs/guide.md" })
-ctx.get("repo.search", { query: "handleLogin", fileTypes: ["ts"] })
-ctx.get("session.recent", { turns: 10 })
-ctx.get("memory.get", { namespace: "user", key: "preferences" })
-ctx.get("ctx.route", { intent: "search", query: "API endpoints" })
-```
+Packs bundle Tools + Policies + Context Sources + Skills into reusable capability sets.
 
-### Repository Context (repo.*)
-
-```typescript
-// List repository structure
-ctx.get("repo.index")
-ctx.get("repo.index", { path: "src/", depth: 2 })
-
-// Search code
-ctx.get("repo.search", { query: "authentication", fileTypes: ["ts"] })
-
-// Get symbols (functions, classes)
-ctx.get("repo.symbols", { path: "src/core/" })
-
-// Read file content
-ctx.get("repo.file", { path: "src/index.ts" })
-
-// Git information
-ctx.get("repo.git")
-```
-
-### Document Library (docs.*)
-
-First, build the index:
-
-```bash
-npx agent-foundry index-docs --paths docs -v
-```
-
-Then use in your agent:
+| Pack | Contents | Risk |
+|------|----------|------|
+| `safe()` | read, write, edit, glob, grep, ctx-get | Safe |
+| `exec()` | bash | High |
+| `network()` | fetch | Elevated |
+| `compute()` | llm-call, llm-expand, llm-filter | Elevated |
+| `repo()` | Repository context sources | Safe |
+| `git()` | Git operations | Elevated |
+| `standard()` | safe + exec + repo + git + exploration | Composite |
+| `full()` | Everything | Composite |
 
 ```typescript
-// List documents
-ctx.get("docs.index")
-ctx.get("docs.index", { type: "markdown", sortBy: "modified" })
-
-// Search documents
-ctx.get("docs.search", { query: "API authentication" })
-
-// Read document content
-ctx.get("docs.open", { path: "docs/guide.md" })
-ctx.get("docs.open", { path: "docs/guide.md", startLine: 100 })
-ctx.get("docs.open", { path: "docs/api.md", includeOutline: true })
-```
-
-### Session & Memory (session.*, memory.*, facts.*, decisions.*)
-
-```typescript
-// Recent conversation
-ctx.get("session.recent", { turns: 10 })
-
-// Search conversation history
-ctx.get("session.search", { query: "database design", k: 5 })
-
-// Key-value memory
-ctx.get("memory.get", { namespace: "user", key: "preferences" })
-ctx.get("memory.list", { namespace: "user" })
-
-// Long-term facts
-ctx.get("facts.list", { topics: ["preference"], confidence: "confirmed" })
-
-// Decisions
-ctx.get("decisions.list", { status: "active" })
-```
-
-### Discovery & Routing (ctx.*)
-
-```typescript
-// List all available context sources
-ctx.get("ctx.catalog")
-ctx.get("ctx.catalog", { namespace: "docs" })
-
-// Get detailed documentation for a source
-ctx.get("ctx.describe", { id: "docs.search" })
-
-// Get routing recommendations based on intent
-ctx.get("ctx.route", { intent: "search", query: "authentication" })
-ctx.get("ctx.route", { intent: "browse", namespace: "docs" })
-ctx.get("ctx.route", { intent: "auto", query: "find all API endpoints" })
-```
-
-**Route Intents:**
-
-| Intent | Purpose |
-|--------|---------|
-| `search` | Find by query |
-| `browse` | Get overview/index |
-| `read` | Read specific content |
-| `lookup` | Exact key lookup |
-| `explore` | Understand structure |
-| `remember` | Store information |
-| `recall` | Retrieve stored info |
-| `auto` | Auto-detect from query |
-
-### Define Custom Context Sources
-
-```typescript
-import { defineContextSource } from 'agent-foundry'
-
-const projectInfo = defineContextSource({
-  id: 'project.info',
-  kind: 'get',
-  description: 'Get project information',
-  shortDescription: 'Project info',
-  resourceTypes: ['project'],
-  params: [],
-  examples: [
-    { description: 'Get info', params: {}, resultSummary: 'Project metadata' }
-  ],
-  costTier: 'cheap',
-  cache: { ttlMs: 60000 },
-  render: { maxTokens: 500, truncateStrategy: 'tail' },
-
-  fetch: async (params, runtime) => {
-    const pkg = await readPackageJson(runtime.projectPath)
-    return {
-      data: { name: pkg.name, version: pkg.version },
-      rendered: `# Project: ${pkg.name}\nVersion: ${pkg.version}`,
-      provenance: { operations: [], durationMs: 10 },
-      coverage: { complete: true }
-    }
-  }
-})
-```
-
-## Skills
-
-Skills are **lazily-loaded procedural knowledge** that optimize token usage. Unlike tools (which execute operations), skills provide guidance, examples, and best practices that load on-demand.
-
-### Why Skills?
-
-| Without Skills | With Skills | Savings |
-|----------------|-------------|---------|
-| ~2000 tokens (always loaded) | ~500 tokens (initial) | 75% |
-| All guidance in tool descriptions | Progressive disclosure | On-demand |
-
-### Quick Start
-
-```typescript
-import { defineSkill, SkillManager } from 'agent-foundry'
-
-const mySkill = defineSkill({
-  id: 'my-skill',
-  name: 'My Skill',
-  shortDescription: 'Brief description (<100 chars)',
-
-  instructions: {
-    summary: 'Concise overview (~100 tokens)',      // Always loaded
-    procedures: 'Detailed step-by-step guide',      // Loaded on use
-    examples: 'Usage examples with code',           // Loaded on use
-    troubleshooting: 'Common issues and solutions'  // Loaded on use
-  },
-
-  tools: ['tool-a', 'tool-b'],  // Triggers loading when these tools are used
-  loadingStrategy: 'lazy',       // 'eager' | 'lazy' | 'on-demand'
-  tags: ['category1', 'category2']
-})
-
-// Register and use
-const manager = new SkillManager()
-manager.register(mySkill)
-manager.onToolUsed('tool-a')  // Triggers full loading
-```
-
-### Loading Strategies
-
-| Strategy | When Loaded | Use Case |
-|----------|-------------|----------|
-| `eager` | At registration | Critical, always-needed skills |
-| `lazy` | On first tool use | Most skills (default) |
-| `on-demand` | Explicit `loadOnDemand()` call | Specialized, rarely-needed skills |
-
-### Built-in Skills
-
-| Skill | Description | Tools |
-|-------|-------------|-------|
-| `llm-compute-skill` | LLM sub-computations | llm-call, llm-expand, llm-filter |
-| `git-workflow-skill` | Git operations guide | bash |
-| `context-retrieval-skill` | Context source usage | ctx-get |
-
-### App-Specific Skills
-
-Skills can be defined per-application for domain-specific guidance:
-
-| App | Skills | Token Savings |
-|-----|--------|---------------|
-| research-pilot | academic-writing, literature, data-analysis | 89-97% |
-| personal-assistant | gmail, calendar | 72-88% |
-
-For comprehensive documentation, see [Skills Guide](docs/SKILLS.md).
-
-## Packs
-
-Packs bundle tools, policies, context sources, and skills.
-
-### Available Packs
-
-#### Core Packs
-
-| Pack | Risk | Contents |
-|------|------|----------|
-| `safe()` | Safe | read, write, edit, glob, grep, ctx-get |
-| `exec()` | High | bash |
-| `network()` | Elevated | fetch |
-| `compute()` | Elevated | llm-call, llm-expand, llm-filter |
-
-#### Domain Packs
-
-| Pack | Risk | Contents |
-|------|------|----------|
-| `repo()` | Safe | Repository context sources |
-| `git()` | Elevated | Git operations |
-| `exploration()` | Safe | Code exploration guidelines |
-| `python()` | Elevated | Python execution |
-| `browserPack()` | Elevated | Browser automation |
-| `contextPipeline()` | Safe | 5-phase context assembly + ctx-expand |
-
-#### Memory & Context Packs
-
-| Pack | Risk | Contents |
-|------|------|----------|
-| `kvMemory()` | Safe | memory.get/search/list + memory-set/delete tools |
-| `sessionHistory()` | Safe | session.messages/trace/search/thread |
-| `docs()` | Safe | docs.index/search/open (requires index-docs) |
-| `discovery()` | Safe | ctx.catalog/describe |
-
-#### Composite Packs
-
-| Pack | Contents |
-|------|----------|
-| `minimal()` | safe |
-| `standard()` | safe + execDev + repo + git + exploration |
-| `full()` | safe + exec + network + compute + repo + git + exploration |
-| `strict()` | safe only |
-
-### Using Packs
-
-```typescript
-import { createAgent, packs } from 'agent-foundry'
-
 const agent = createAgent({
   apiKey: 'sk-xxx',
   packs: [
     packs.standard(),
     packs.kvMemory(),
     packs.docs(),
-    packs.discovery()
+    packs.compute({ maxTokensPerCall: 4000 })
   ]
 })
 ```
 
-### Pack Options
+### Skills
 
-```typescript
-// Exec with command restrictions
-packs.exec({ allowedCommands: ['git', 'npm', 'ls'] })
+Skills are **lazily-loaded procedural knowledge** in portable Markdown format. They optimize token usage by loading guidance only when relevant tools are invoked.
 
-// Network with domain whitelist
-packs.network({ allowedDomains: ['api.github.com', 'api.openai.com'] })
-
-// Compute with token limits
-packs.compute({ maxTokensPerCall: 4000, maxCallsPerSession: 10 })
+```
+skills/my-skill/SKILL.md
 ```
 
-### Define Custom Packs
+```markdown
+---
+id: my-skill
+name: My Skill
+shortDescription: What this skill provides
+tools: [tool-a, tool-b]
+loadingStrategy: lazy
+tags: [category]
+---
+
+Concise summary loaded at startup (~100 tokens).
+
+## Procedures
+Detailed step-by-step guide (loaded on first tool use).
+
+## Examples
+Code examples and patterns.
+
+## Troubleshooting
+Common issues and fixes.
+```
+
+| Strategy | When Loaded | Use Case |
+|----------|-------------|----------|
+| `eager` | At registration | Critical, always-needed |
+| `lazy` | On first tool use | Most skills (default) |
+| `on-demand` | Explicit call | Specialized, rare |
+
+#### Install Skills from GitHub or URL
+
+```bash
+# Install from GitHub
+npx agent-foundry skill install user/repo/skills/my-skill
+
+# Install from URL
+npx agent-foundry skill install https://example.com/SKILL.md
+
+# List installed skills
+npx agent-foundry skill list
+
+# Declare in agent.yaml (auto-installed on first run)
+```
+
+```yaml
+skills:
+  - github: user/repo/skills/my-skill
+  - url: https://example.com/skills/SKILL.md
+```
+
+### Policies
+
+Three-phase pipeline controlling every tool call:
+
+```
+Guard → Mutate → Execute → Observe
+```
 
 ```typescript
-import { definePack } from 'agent-foundry'
+import { defineGuardPolicy } from 'agent-foundry'
 
-const myPack = definePack({
-  id: 'my-pack',
-  description: 'My custom pack',
-  tools: [myTool1, myTool2],
-  policies: [myPolicy],
-  contextSources: [myContextSource],
-  promptFragment: `
-## My Pack Usage
-Use myTool1 for X, myTool2 for Y.
-  `,
-  onInit: async (runtime) => {
-    // Initialize resources
-  },
-  onDestroy: async (runtime) => {
-    // Cleanup resources
+const noDestructive = defineGuardPolicy({
+  id: 'no-destructive',
+  match: (ctx) => ctx.tool === 'bash',
+  decide: (ctx) => {
+    if (ctx.input.command.includes('rm -rf'))
+      return { action: 'deny', reason: 'Destructive command blocked' }
+    return { action: 'allow' }
   }
 })
 ```
 
-## MCP Integration
+### Context Sources
 
-MCP (Model Context Protocol) lets you connect to external tool servers.
+Read-only information providers accessible via `ctx.get()`:
 
-### STDIO Transport (Local)
-
-```typescript
-import { createStdioMCPProvider, createAgent } from 'agent-foundry'
-
-const githubMCP = createStdioMCPProvider({
-  id: 'github',
-  name: 'GitHub',
-  command: 'npx',
-  args: ['-y', '@modelcontextprotocol/server-github'],
-  env: { GITHUB_TOKEN: process.env.GITHUB_TOKEN },
-  toolPrefix: 'gh'
-})
-
-const agent = createAgent({
-  apiKey: 'sk-xxx',
-  providers: [githubMCP]
-})
-```
-
-### HTTP Transport (Remote)
+| Namespace | Purpose |
+|-----------|---------|
+| `repo.*` | Repository structure, code search, git info |
+| `session.*` | Conversation history and search |
+| `memory.*` | Key-value persistent storage |
+| `docs.*` | Indexed document library |
+| `ctx.*` | Discovery and routing |
 
 ```typescript
-import { createHttpMCPProvider } from 'agent-foundry'
-
-const remoteMCP = createHttpMCPProvider({
-  id: 'my-service',
-  name: 'My Service',
-  url: 'https://mcp.example.com',
-  headers: { 'Authorization': `Bearer ${process.env.API_TOKEN}` },
-  toolPrefix: 'svc'
-})
+ctx.get("repo.search", { query: "handleLogin", fileTypes: ["ts"] })
+ctx.get("docs.search", { query: "authentication" })
+ctx.get("memory.get", { namespace: "user", key: "preferences" })
 ```
 
-### Configuration in agent.yaml
+## Multi-Provider Support
+
+Agent Foundry supports 11+ LLM providers out of the box:
+
+| Provider | Models | API Key Env |
+|----------|--------|-------------|
+| **OpenAI** | GPT-4o, GPT-5.4, o3-mini | `OPENAI_API_KEY` |
+| **Anthropic** | Claude Sonnet 4, Haiku 4.5 | `ANTHROPIC_API_KEY` |
+| **Google** | Gemini 2.0 Flash, Pro | `GOOGLE_API_KEY` |
+| **DeepSeek** | DeepSeek Chat, R1 | `DEEPSEEK_API_KEY` |
+| **Groq** | Llama 3.3 70B, 8B (ultra-fast) | `GROQ_API_KEY` |
+| **Mistral** | Large, Small, Codestral | `MISTRAL_API_KEY` |
+| **xAI** | Grok 3, Grok 3 Mini | `XAI_API_KEY` |
+| **Cerebras** | Llama 3.3 70B | `CEREBRAS_API_KEY` |
+| **Together** | Llama, Qwen, DeepSeek R1 | `TOGETHER_API_KEY` |
+| **Fireworks** | Llama, Qwen | `FIREWORKS_API_KEY` |
+| **OpenRouter** | Any model via gateway | `OPENROUTER_API_KEY` |
+
+Switch providers with one line:
+
+```typescript
+createAgent({ apiKey: process.env.GROQ_API_KEY, model: 'llama-3.3-70b-versatile' })
+```
+
+Or bring your own OpenAI-compatible provider in `agent.yaml`:
 
 ```yaml
+model:
+  default: my-model
+  provider:
+    id: my-provider
+    baseUrl: https://my-llm.internal/v1
+    apiKeyEnv: MY_LLM_KEY
+    models:
+      - id: my-model
+        maxContext: 128000
+```
+
+## Multi-Agent Teams
+
+Define teams of agents that collaborate through composable flow patterns:
+
+```typescript
+import { defineTeam, agentHandle, seq, step, state, createTeamRuntime } from 'agent-foundry/team'
+
+const team = defineTeam({
+  id: 'research-team',
+  agents: {
+    researcher: agentHandle('researcher', researcherAgent),
+    writer: agentHandle('writer', writerAgent)
+  },
+  flow: seq(
+    step(researcherAgent)
+      .in(state.initial<{ topic: string }>())
+      .out(state.path('research')),
+    step(writerAgent)
+      .in(state.path('research'))
+      .out(state.path('article'))
+  )
+})
+
+const runtime = createTeamRuntime({ team, agentInvoker })
+const result = await runtime.run({ topic: 'AI Safety' })
+```
+
+### Flow Combinators
+
+| Combinator | Description |
+|------------|-------------|
+| `seq(...)` | Sequential execution |
+| `par(...)` | Parallel branches |
+| `loop(body, until)` | Iterate until condition |
+| `race(...)` | First result wins |
+| `supervise(supervisor, workers)` | Coordinated delegation |
+| `gate(validator, flow)` | Conditional execution |
+
+### Built-in Protocol Templates
+
+| Protocol | Pattern |
+|----------|---------|
+| `pipeline` | A &rarr; B &rarr; C |
+| `fanOutFanIn` | Parallel workers, merged result |
+| `criticRefineLoop` | Draft &rarr; critique &rarr; refine &rarr; repeat |
+| `debate` | Debaters + judge |
+| `voting` | Parallel voters + aggregation |
+| `supervisorProtocol` | Manager delegates to specialists |
+
+## MCP Integration
+
+Connect external tool servers via the Model Context Protocol:
+
+```yaml
+# agent.yaml
 mcp:
   - name: github
     package: "@modelcontextprotocol/server-github"
@@ -906,413 +322,99 @@ mcp:
       args: ["-y", "@modelcontextprotocol/server-github"]
     env:
       - GITHUB_TOKEN
-
-  - name: postgres
-    package: "@modelcontextprotocol/server-postgres"
-    transport:
-      type: stdio
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-postgres"]
-    env:
-      - POSTGRES_CONNECTION_STRING
 ```
 
-### Popular MCP Servers
-
-| Package | Description |
-|---------|-------------|
-| `@modelcontextprotocol/server-filesystem` | File operations |
-| `@modelcontextprotocol/server-github` | GitHub API |
-| `@modelcontextprotocol/server-postgres` | PostgreSQL |
-| `@modelcontextprotocol/server-sqlite` | SQLite |
-| `@modelcontextprotocol/server-slack` | Slack |
-| `@modelcontextprotocol/server-puppeteer` | Browser automation |
-| `@modelcontextprotocol/server-brave-search` | Web search |
-
-## Multi-Agent Teams
-
-Agent Foundry supports multi-agent collaboration through the Team module. Define teams of agents that work together using flow-based orchestration patterns.
-
-### Quick Example
-
 ```typescript
-import {
-  defineTeam, agentHandle,
-  seq, par, invoke, input,
-  createTeamRuntime, createPassthroughInvoker
-} from 'agent-foundry/team'
+import { createStdioMCPProvider, createAgent } from 'agent-foundry'
 
-// Define a research and writing team
-const team = defineTeam({
-  id: 'research-writing-team',
-  agents: {
-    researcher: agentHandle('researcher', researcherAgent),
-    writer: agentHandle('writer', writerAgent),
-    editor: agentHandle('editor', editorAgent)
-  },
-  flow: seq(
-    invoke('researcher', input.initial()),  // Research the topic
-    invoke('writer', input.prev()),          // Write based on research
-    invoke('editor', input.prev())           // Edit the draft
-  )
+const githubMCP = createStdioMCPProvider({
+  id: 'github',
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-github'],
+  env: { GITHUB_TOKEN: process.env.GITHUB_TOKEN }
 })
 
-// Create runtime and execute
-const runtime = createTeamRuntime({
-  team,
-  agentInvoker: createPassthroughInvoker()
-})
-
-const result = await runtime.run({ topic: 'AI Safety' })
-console.log(result.output)
+const agent = createAgent({ apiKey: 'sk-xxx', providers: [githubMCP] })
 ```
 
-### Flow Combinators
+## CLI
 
-| Combinator | Description |
-|------------|-------------|
-| `seq(...steps)` | Execute steps sequentially |
-| `par(...branches)` | Execute branches in parallel |
-| `loop(body, until, opts)` | Repeat until condition met |
-| `invoke(agent, input)` | Invoke an agent |
-| `race(...contenders)` | First successful result wins |
-| `supervise(supervisor, workers)` | Supervisor coordinates workers |
-| `gate(validator, flow)` | Conditional execution |
-
-### Input Selectors
-
-```typescript
-input.initial()           // Initial input to the team
-input.prev()              // Output from previous step
-input.state('path.to.key') // Value from shared state
-input.literal({ value })   // Literal value
-input.merge(['a', 'b'])    // Merge multiple paths
-```
-
-### Built-in Protocol Templates
-
-Pre-built patterns for common multi-agent workflows:
-
-| Protocol | Description |
-|----------|-------------|
-| `pipeline` | Sequential processing stages |
-| `fanOutFanIn` | Parallel workers with merge |
-| `supervisorProtocol` | Manager coordinating workers |
-| `criticRefineLoop` | Iterative refinement with critic |
-| `debate` | Multiple debaters + judge |
-| `voting` | Parallel voters with vote aggregation |
-| `raceProtocol` | First successful result wins |
-| `gatedPipeline` | Pipeline with validation gates |
-
-```typescript
-import { pipeline, createProtocolRegistry } from 'agent-foundry/team'
-
-// Use protocol template
-const flow = pipeline.build({
-  agents: { stages: ['analyzer', 'transformer', 'validator'] }
-})
-
-// Or use registry
-const registry = createProtocolRegistry()
-const debateFlow = registry.build('debate', {
-  agents: {
-    debaters: ['proponent', 'opponent'],
-    judge: 'arbiter'
-  }
-})
-```
-
-### Channels for Agent Communication
-
-Agents can communicate through pub/sub and request/response channels:
-
-```typescript
-import { createChannelHub } from 'agent-foundry/team'
-
-const hub = createChannelHub({ retentionMs: 60000 })
-
-// Pub/Sub
-hub.subscribe('updates.*', (msg) => console.log(msg))
-hub.publish('updates.status', { progress: 50 })
-
-// Request/Response
-hub.subscribe('questions', async (msg, reply) => {
-  reply({ answer: 'Yes' })
-})
-const response = await hub.request('questions', { q: 'Ready?' })
-```
-
-### Agent Handoff
-
-Agents can hand off control to other agents:
-
-```typescript
-import { createHandoff, executeHandoffChain } from 'agent-foundry/team'
-
-// Agent creates a handoff
-const handoff = createHandoff('specialist-agent', {
-  data: { context: 'Need expert help' },
-  reason: 'Complex technical question'
-})
-
-// Execute handoff chain
-const result = await executeHandoffChain(
-  'initial-agent',
-  { question: 'How to...' },
-  invoker,
-  { maxHandoffs: 5, trackHistory: true }
-)
-```
-
-For comprehensive documentation, see [Team API Reference](docs/TEAM.md).
-
-## API Reference
-
-### createAgent(config)
-
-Create an agent instance.
-
-```typescript
-const agent = createAgent({
-  // Required
-  apiKey: string,
-
-  // Model
-  model?: string,              // e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022'
-
-  // Capabilities
-  packs?: Pack[],              // Packs to load
-  providers?: MCPProvider[],   // MCP providers
-
-  // Limits
-  maxSteps?: number,           // Max execution steps (default: 30)
-  maxTokens?: number,          // Max tokens (default: 100000)
-
-  // Identity
-  identity?: string,           // Agent persona
-  constraints?: string[],      // Behavioral constraints
-
-  // Paths
-  projectPath?: string,        // Working directory
-  configDir?: string,          // Config file directory
-  skipConfigFile?: boolean,    // Skip agent.yaml
-
-  // Callbacks
-  onStream?: (text: string) => void,
-  onToolCall?: (tool: string, input: unknown) => void,
-  onToolResult?: (tool: string, result: unknown) => void,
-  onApprovalRequired?: (message: string) => Promise<boolean>,
-
-  // Additional
-  policies?: Policy[],         // Extra policies
-})
-```
-
-### Agent Interface
-
-```typescript
-interface Agent {
-  id: string
-  run(prompt: string): Promise<AgentRunResult>
-  stop(): void
-  destroy(): Promise<void>
-}
-
-interface AgentRunResult {
-  success: boolean
-  output: string
-  error?: string
-  steps: number
-  trace: TraceEvent[]
-  durationMs: number
-}
-```
-
-### defineAgent(definition)
-
-Create an agent factory with predefined configuration.
-
-```typescript
-const myAgentFactory = defineAgent({
-  id: 'my-agent',
-  name: 'My Agent',
-  identity: 'You are a helpful assistant.',
-  constraints: ['Be concise'],
-  packs: [packs.standard()],
-  model: { default: 'gpt-4o', maxTokens: 100000 },
-  maxSteps: 50
-})
-
-const agent = myAgentFactory({ apiKey: 'sk-xxx' })
-```
-
-## Advanced Usage
-
-### Different LLM Providers
-
-```typescript
-// OpenAI GPT-4 (Chat Completions API)
-const gpt4Agent = createAgent({
-  apiKey: process.env.OPENAI_API_KEY,
-  model: 'gpt-4o'
-})
-
-// OpenAI GPT-5 (Responses API - requires strict schemas)
-const gpt5Agent = createAgent({
-  apiKey: process.env.OPENAI_API_KEY,
-  model: 'gpt-5.4'
-})
-
-// Anthropic (API key starts with 'sk-ant-')
-const anthropicAgent = createAgent({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  model: 'claude-3-5-sonnet-20241022'
-})
-```
-
-> Desktop examples note: Anthropic `setup-token` (app-layer auth) is stored in `~/.agentfoundry/credentials/anthropic.json` (or `$AGENTFOUNDRY_HOME/credentials/anthropic.json`) and shared across desktop apps.
-
-> **Note**: GPT-5.x and o-series models use OpenAI's Responses API which requires strict JSON schemas.
-> Agent Foundry handles this automatically through schema coercion. See [Schema Coercion](docs/SCHEMA-COERCION.md) for details.
-
-### Custom Approval Handler
-
-```typescript
-const agent = createAgent({
-  apiKey: 'sk-xxx',
-  onApprovalRequired: async (message, timeout) => {
-    console.log(`Approval needed: ${message}`)
-    const answer = await promptUser('Approve? (y/n)')
-    return answer === 'y'
-  }
-})
-```
-
-### Event Handling
-
-```typescript
-import { EventBus } from 'agent-foundry'
-
-const eventBus = new EventBus()
-
-eventBus.on('file:write', (data) => {
-  console.log(`File written: ${data.path}`)
-})
-
-eventBus.on('policy:deny', (data) => {
-  console.log(`Denied: ${data.reason}`)
-})
-
-eventBus.on('tool:call', (data) => {
-  console.log(`Tool called: ${data.tool}`)
-})
-```
-
-### Context Manager Direct Access
-
-```typescript
-import { ContextManager } from 'agent-foundry'
-
-const manager = new ContextManager()
-manager.register(myContextSource)
-
-const result = await manager.get('my-source', { key: 'value' })
-console.log(result.rendered)
-```
-
-### Tool Registry Direct Access
-
-```typescript
-import { ToolRegistry } from 'agent-foundry'
-
-const registry = new ToolRegistry()
-registry.register(myTool)
-
-const result = await registry.call('my-tool', { input: 'value' }, context)
+```bash
+npx agent-foundry validate              # Validate agent.yaml
+npx agent-foundry index-docs --paths docs  # Build document search index
+npx agent-foundry skill list             # List installed skills
+npx agent-foundry skill install <source> # Install skill from GitHub/URL
+npx agent-foundry skill remove <id>      # Remove installed skill
+npx agent-foundry skill info <id>        # Show skill details
 ```
 
 ## Examples
 
 | Example | Description |
 |---------|-------------|
-| `examples/no-code-researcher/` | Config-only autonomous researcher (`agent.yaml` + project-local skills + `agent-foundry run`) |
-| `examples/research-pilot/` | Full-featured research assistant with Ink UI, @-mentions, activity panel, entity preview, context pipeline |
-| `examples/literature-agent/` | Multi-agent literature search and review |
-| `examples/dataanalysis-agent/` | Data analysis agent |
-| `examples/personal-email-assistant/` | Email management assistant |
-| `examples/team-demo/` | Multi-agent team orchestration demo |
+| [`hello-world`](examples/hello-world) | Minimal agent setup |
+| [`coding-agent`](examples/coding-agent) | Code generation and editing |
+| [`research-pilot`](examples/research-pilot) | Full research assistant — literature search, data analysis, academic writing, @-mentions, context pipeline |
+| [`research-pilot-desktop`](examples/research-pilot-desktop) | Electron desktop app with React UI for Research Pilot |
+| [`personal-assistant`](examples/personal-assistant) | Desktop assistant with memory, scheduler, and notifications |
+| [`api-server`](examples/api-server) | REST API wrapping an agent |
+| [`team-demo`](examples/team-demo) | Multi-agent team orchestration |
 
-### Building Apps on AgentFoundry
+### Research Pilot
 
-Read [`docs/AGENT_DEV_GUIDE.md`](docs/AGENT_DEV_GUIDE.md) before building an application. Key principles:
+The flagship example — a multi-agent research assistant demonstrating context pipelines, lazy skills, intent routing, and structured output:
 
-- **Check before creating**: The framework provides file tools, context pipeline, and history compression out of the box
-- **No storage abstractions**: Use `fs` directly with path constants — agents use framework tools
-- **Minimal custom tools**: Only create tools for domain-specific external APIs
-- **Reuse context pipeline**: Use `packs.contextPipeline()` instead of custom implementations
+- **Coordinator** orchestrates intent detection, skill preloading, and context assembly
+- **Literature team** searches Semantic Scholar, arXiv, DBLP with relevance scoring
+- **Data team** runs Python analysis with sandboxed execution
+- **3 portable SKILL.md files** (academic-writing, literature, data-analysis) with 96% token savings via lazy loading
+- **agent.yaml** for declarative model/skill configuration
+- **@-mention system** for inline entity references
+- **Session summaries** via `generateStructured` with Zod validation
+
+## Project Structure
+
+```
+src/
+├── agent/           # createAgent, defineAgent, AgentLoop
+├── core/            # ToolRegistry, PolicyEngine, ContextManager, EventBus
+├── factories/       # defineTool, definePolicy, definePack
+├── types/           # TypeScript type definitions
+├── packs/           # Pre-built capability packs
+├── tools/           # Built-in tools
+├── policies/        # Built-in policies
+├── context-sources/ # Built-in context sources
+├── skills/          # Skills system (define, manage, load, install)
+├── llm/             # LLM integration (Vercel AI SDK, 11+ providers)
+├── mcp/             # Model Context Protocol support
+├── team/            # Multi-agent teams (flows, state, channels, protocols)
+├── cli/             # CLI commands
+└── config/          # YAML configuration
+```
 
 ## Development
 
 ```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Run tests
-npm test
-
-# Watch mode
-npm run dev
-
-# Lint
-npm run lint
-```
-
-### Project Structure
-
-```
-src/
-├── agent/           # Agent creation (createAgent, defineAgent, AgentLoop)
-├── core/            # Runtime components (ToolRegistry, PolicyEngine, ContextManager, EventBus)
-├── factories/       # Definition factories (defineTool, definePolicy, definePack)
-├── types/           # TypeScript type definitions
-├── packs/           # Pre-built capability packs
-├── tools/           # Built-in tools (read, write, edit, bash, glob, grep, fetch)
-├── policies/        # Built-in policies
-├── context-sources/ # Built-in context sources (repo-index, repo-search, session-history)
-├── skills/          # Skills system (lazy-loaded procedural knowledge)
-│   ├── define-skill.ts   # Skill factory functions
-│   ├── skill-manager.ts  # Lifecycle and loading management
-│   ├── skill-registry.ts # Discovery and querying
-│   └── builtin/          # Built-in skills
-├── llm/             # LLM integration (Vercel AI SDK)
-├── mcp/             # Model Context Protocol support
-├── cli/             # CLI commands (validate, index-docs)
-├── config/          # agent.yaml loading and validation
-├── team/            # Multi-agent team system
-│   ├── flow/        # Flow combinators, executor, AST, reducers, handoff
-│   ├── state/       # Blackboard shared state
-│   ├── channels/    # Pub/sub and request/response channels
-│   ├── protocols/   # Built-in protocol templates
-│   ├── define-team.ts
-│   ├── team-runtime.ts
-│   ├── agent-bridge.ts
-│   └── index.ts
-└── index.ts         # Main exports
+npm install        # Install dependencies
+npm run build      # Compile TypeScript
+npm run dev        # Watch mode
+npm test           # Run tests (watch)
+npm run test:run   # Run tests once (1616 tests)
+npm run lint       # Lint code
 ```
 
 ## Documentation
 
-- [API Reference](docs/API.md) - Complete API documentation
-- [CLI Reference](docs/CLI.md) - CLI commands and options
-- [MCP Guide](docs/MCP-GUIDE.md) - MCP integration guide
-- [Providers](docs/PROVIDERS.md) - Provider plugin system
-- [Skills Guide](docs/SKILLS.md) - Lazy-loaded procedural knowledge system
-- [Multi-Agent Teams](docs/TEAM.md) - Multi-agent collaboration system
-- [Schema Coercion](docs/SCHEMA-COERCION.md) - OpenAI Responses API compatibility
-- [Agent Dev Guide](docs/AGENT_DEV_GUIDE.md) - Guide for building apps on AgentFoundry
+| Document | Description |
+|----------|-------------|
+| [API Reference](docs/API.md) | Complete API documentation |
+| [App Dev Guide](docs/AGENT_DEV_GUIDE.md) | Guide for building apps on Agent Foundry |
+| [Skills Guide](docs/SKILLS.md) | Lazy-loaded procedural knowledge system |
+| [Multi-Agent Teams](docs/TEAM.md) | Team flows, protocols, and channels |
+| [Providers](docs/PROVIDERS.md) | Provider plugin system and custom providers |
+| [MCP Guide](docs/MCP-GUIDE.md) | MCP integration guide |
+| [CLI Reference](docs/CLI.md) | CLI commands and options |
+| [Schema Coercion](docs/SCHEMA-COERCION.md) | OpenAI Responses API compatibility |
 
 ## License
 
