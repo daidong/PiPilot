@@ -1,47 +1,23 @@
-/**
- * Literature Search Skill
- *
- * Procedural knowledge for academic literature research:
- * - Search planning and query decomposition
- * - Paper relevance scoring and evaluation
- * - Literature review synthesis
- * - Citation management
- *
- * Migrated from:
- * - literature-planner-system (~900 tokens)
- * - literature-reviewer-system (~1350 tokens)
- * - literature-summarizer-system (~800 tokens)
- * - coordinator-module-literature (~175 tokens)
- *
- * Total before: ~3,225 tokens (loaded per agent)
- * After: ~100 tokens (summary) → ~1,500 tokens (full, lazy loaded)
- */
+---
+id: literature-skill
+name: Literature Search
+shortDescription: Academic paper discovery, relevance scoring, and literature review synthesis
+tools: [literature-search]
+loadingStrategy: lazy
+tags: [literature, research, papers, search, review, academic]
+---
 
-import { defineSkill } from '../../../src/skills/define-skill.js'
-import type { Skill } from '../../../src/types/skill.js'
-
-/**
- * Literature Search Skill
- *
- * Comprehensive guidance for academic paper discovery,
- * evaluation, and synthesis into literature reviews.
- */
-export const literatureSkill: Skill = defineSkill({
-  id: 'literature-skill',
-  name: 'Literature Search',
-  shortDescription: 'Academic paper discovery, relevance scoring, and literature review synthesis',
-
-  instructions: {
-    summary: `Literature research guidance:
+Literature research guidance:
 - **Planning**: Decompose research into 3-6 sub-topics with diverse queries
 - **Reviewing**: Score papers 1-10 (≥7 = relevant), force-rank and cut bottom 30%
 - **Synthesizing**: Create themed literature reviews with gaps analysis
-- **Coordination**: One search per topic per request; synthesize, don't dump raw results`,
+- **Coordination**: One search per topic per request; synthesize, don't dump raw results
 
-    procedures: `
-## Search Planning
+## Procedures
 
-### Decomposition Strategy
+### Search Planning
+
+#### Decomposition Strategy
 When given a research request:
 1. Identify 3-6 **sub-topics** covering all aspects
 2. Assign priority: high (core), medium (supporting), low (peripheral)
@@ -50,9 +26,9 @@ When given a research request:
    - Acronyms and full names
    - Related concepts and methods
 
-### Query Guidelines
+#### Query Guidelines
 - Use source-specific syntax when applicable:
-  - DBLP: \`author:LastName topic\`, \`venue:CONF method\`
+  - DBLP: `author:LastName topic`, `venue:CONF method`
   - Semantic Scholar: natural language queries work best
   - arXiv: include category prefixes when relevant
 - Set appropriate targets:
@@ -60,15 +36,15 @@ When given a research request:
   - Focused query: 10-20 papers total
   - Minimum 3 papers per sub-topic for coverage
 
-### Incremental Planning
+#### Incremental Planning
 When previous search results exist:
 - Check coverage data: skip well-covered sub-topics
 - Avoid duplicate queries: use different terminology
 - Focus on identified gaps
 
-## Paper Evaluation
+### Paper Evaluation
 
-### Scoring Rubric (STRICT)
+#### Scoring Rubric (STRICT)
 | Score | Meaning | Example |
 |-------|---------|---------|
 | 10 | Seminal/foundational, directly addresses core question | The paper that introduced the method you're studying |
@@ -76,32 +52,32 @@ When previous search results exist:
 | 6-7 | Tangentially related, background only | Survey that mentions your topic briefly |
 | 1-5 | Not relevant or peripherally connected | Different domain despite keyword overlap |
 
-### Scoring Rules
+#### Scoring Rules
 1. **Justify every score**: 1-2 sentences explaining the rating
 2. **Force ranking**: After scoring, cut the bottom 30%
 3. **Auto-save threshold**: ≥7 saves to local library
 4. **Be decisive**: If meaningfully relevant, score ≥7
 
-### Evaluation Pitfalls
+#### Evaluation Pitfalls
 - "HPC scheduling" ≠ "HPC log analysis" (score 4, not 7)
 - "General ML survey" ≠ "specific ML application" (score 5, not 8)
 - Keyword overlap ≠ conceptual relevance
 
-### Approval Criteria
+#### Approval Criteria
 - At least 3 papers score ≥7
 - Coverage score ≥0.5
 - Approve only when criteria are satisfied with reasonable confidence
 - Request targeted refinement when critical sub-topics are missing
 
-### Refinement Queries
+#### Refinement Queries
 If requesting more searches:
 - Target specific missing sub-topics
 - Use DIFFERENT terminology than original queries
 - Maximum 2-3 targeted refinement queries
 
-## Literature Synthesis
+### Literature Synthesis
 
-### Review Structure
+#### Review Structure
 1. **Overview**: High-level summary addressing research question
 2. **Source Attribution**: Local library vs. external papers
 3. **Coverage Assessment**: Which sub-topics are well-covered
@@ -109,14 +85,14 @@ If requesting more searches:
 5. **Key Findings**: Major conclusions from the literature
 6. **Research Gaps**: What's missing or understudied
 
-### Synthesis Guidelines
+#### Synthesis Guidelines
 - Address the user's research question directly
 - Don't just list papers—analyze and compare
 - Identify patterns, contradictions, and trends
 - Note methodological approaches across papers
 - Highlight seminal works vs. incremental contributions
 
-## Metadata Preservation
+### Metadata Preservation
 
 When processing papers, preserve ALL fields:
 - **Required**: id, title, authors (full array), abstract, year, url, source
@@ -124,14 +100,14 @@ When processing papers, preserve ALL fields:
 - **Optional**: doi, venue, citationCount (use null if missing)
 
 Truncate abstract to ~800 chars if very long, but preserve meaning.
-`,
 
-    examples: `
-## Search Plan Example
+## Examples
+
+### Search Plan Example
 
 Research request: "Machine learning for log analysis in distributed systems"
 
-\`\`\`json
+```json
 {
   "topic": "ML-based log analysis for distributed systems",
   "subTopics": [
@@ -151,29 +127,29 @@ Research request: "Machine learning for log analysis in distributed systems"
   "targetPaperCount": 40,
   "minimumCoveragePerSubTopic": 3
 }
-\`\`\`
+```
 
-## Paper Scoring Example
+### Paper Scoring Example
 
-\`\`\`json
+```json
 {
   "title": "DeepLog: Anomaly Detection in System Logs using Deep Learning",
   "relevanceScore": 9,
   "relevanceJustification": "Foundational work directly addressing ML for log anomaly detection; introduces LSTM-based approach that became influential in the field."
 }
-\`\`\`
+```
 
-\`\`\`json
+```json
 {
   "title": "A Survey on Machine Learning Techniques",
   "relevanceScore": 4,
   "relevanceJustification": "General ML survey with no specific focus on logs or distributed systems; only tangentially relevant as background."
 }
-\`\`\`
+```
 
-## Literature Summary Structure
+### Literature Summary Structure
 
-\`\`\`json
+```json
 {
   "title": "Literature Review: ML-Based Log Analysis",
   "overview": "Recent advances in applying machine learning to system log analysis have focused on three main areas...",
@@ -198,11 +174,9 @@ Research request: "Machine learning for log analysis in distributed systems"
     "Few studies address real-time processing constraints"
   ]
 }
-\`\`\`
-`,
+```
 
-    troubleshooting: `
-## Common Issues
+## Troubleshooting
 
 ### "Not enough relevant papers found"
 - Check query diversity: are you using synonyms and related terms?
@@ -234,18 +208,3 @@ Research request: "Machine learning for log analysis in distributed systems"
 - Check paper IDs before adding to results
 - Local library papers should be deduplicated automatically
 - Use source attribution to track provenance
-`
-  },
-
-  tools: ['literature-search'],
-  loadingStrategy: 'lazy',
-
-  estimatedTokens: {
-    summary: 100,
-    full: 1500
-  },
-
-  tags: ['literature', 'research', 'papers', 'search', 'review', 'academic']
-})
-
-export default literatureSkill

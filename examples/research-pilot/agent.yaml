@@ -1,0 +1,27 @@
+# Research Pilot — Agent Configuration
+# This file declares the model, skills, and tool policies for the research-pilot.
+# The coordinator still creates the agent programmatically, but reads these
+# defaults so you can switch providers without touching code.
+
+id: research-pilot
+name: Research Pilot
+description: AI research assistant with literature search, data analysis, and academic writing
+
+model:
+  default: claude-sonnet-4-20250514
+
+# Declarative skill dependencies — auto-installed on first run
+skills:
+  - id: academic-writing-skill
+  - id: literature-skill
+  - id: data-analysis-skill
+
+# Tool policy overrides
+tools:
+  bash:
+    approval: none
+    denyPatterns: []
+
+# Reasoning effort for the main coordinator
+reasoning:
+  effort: high

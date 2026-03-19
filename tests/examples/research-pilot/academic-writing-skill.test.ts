@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { SkillManager } from '../../../src/skills/skill-manager.js'
-import { academicWritingSkill } from '../../../examples/research-pilot/skills/academic-writing-skill.js'
+import { academicWritingSkill } from '../../../examples/research-pilot/skills/index.js'
 
 describe('academicWritingSkill', () => {
   let manager: SkillManager
@@ -57,8 +57,8 @@ describe('academicWritingSkill', () => {
 
     it('should have troubleshooting', () => {
       const troubleshooting = academicWritingSkill.instructions.troubleshooting!
-      expect(troubleshooting).toContain('Common Issues')
       expect(troubleshooting).toContain('feels like a list')
+      expect(troubleshooting).toContain('Citations feel bolted on')
     })
   })
 

@@ -8,9 +8,10 @@
  */
 
 import { join, parse } from 'path'
+import { z } from 'zod'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { createAgent, packs, definePack, defineTool } from '../../../src/index.js'
-import { createLLMClientFromModelId } from '../../../src/llm/index.js'
+import { createAgent, packs, definePack, defineTool, tryLoadConfig } from '../../../src/index.js'
+import { createLLMClientFromModelId, getLanguageModelByModelId, generateStructured } from '../../../src/llm/index.js'
 import { getModel } from '../../../src/llm/models.js'
 import { createSubagentTools } from './subagent-tools.js'
 import { createResearchMemoryTools } from '../tools/entity-tools.js'
@@ -537,9 +538,12 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   clearSessionMemory: () => Promise<void>
   destroy: () => Promise<void>
 }> {
+  // Load agent.yaml for declarative defaults (model, skills, etc.)
+  const yamlConfig = tryLoadConfig(config.projectPath ?? process.cwd())
+
   const {
     apiKey,
-    model,
+    model = yamlConfig?.model?.default,
     projectPath = process.cwd(),
     debug = false,
     sessionId = 'default',
@@ -565,11 +569,22 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     console.log(`[Coordinator] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
   }
 
-  // Select intent router model based on coordinator's provider
+  // Select cheapest/fastest model from the coordinator's provider for intent routing
   const coordinatorProvider = getModel(model ?? '')?.providerID
-  const intentRouterModelId = coordinatorProvider === 'anthropic'
-    ? 'claude-haiku-4-5-20251001'
-    : 'gpt-5.4-nano'
+  const INTENT_ROUTER_MODELS: Record<string, string> = {
+    anthropic: 'claude-haiku-4-5-20251001',
+    openai: 'gpt-5.4-nano',
+    google: 'gemini-2.0-flash-lite',
+    groq: 'llama-3.1-8b-instant',
+    cerebras: 'llama-3.3-70b',
+    mistral: 'mistral-small-latest',
+    deepseek: 'deepseek-chat',
+    xai: 'grok-3-mini',
+    together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+    fireworks: 'accounts/fireworks/models/llama-v3p3-70b-instruct',
+    openrouter: 'google/gemini-2.0-flash-001',
+  }
+  const intentRouterModelId = INTENT_ROUTER_MODELS[coordinatorProvider ?? ''] ?? 'gpt-5.4-nano'
 
   let intentRouterClient: ReturnType<typeof createLLMClientFromModelId> | null = null
   try {
@@ -875,43 +890,37 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       .map((t, i) => `Turn ${turnCount - turnHistory.length + i + 1}: User: ${t.userMessage}\nAssistant: ${t.response}`)
       .join('\n\n')
 
-    const prompt = [
-      'Summarize this research assistant conversation excerpt.',
-      'Output JSON: {"summary":"<2-3 sentences>","topicsDiscussed":["topic1","topic2"],"openQuestions":["q1"]}',
-      '',
-      historyText
-    ].join('\n')
+    const SessionSummarySchema = z.object({
+      summary: z.string().describe('2-3 sentence summary of the conversation'),
+      topicsDiscussed: z.array(z.string()).describe('Key topics discussed'),
+      openQuestions: z.array(z.string()).describe('Unresolved questions')
+    })
 
     try {
-      const result = await intentRouterClient.generate({
-        system: 'You summarize research conversations. Output valid JSON only.',
-        messages: [{ role: 'user', content: prompt }],
-        maxTokens: 200
+      const routerModel = getLanguageModelByModelId(intentRouterModelId, { apiKey })
+      const result = await generateStructured({
+        model: routerModel,
+        system: 'You summarize research conversations concisely.',
+        prompt: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
+        schema: SessionSummarySchema,
+        schemaName: 'SessionSummary',
+        maxTokens: 200,
+        retries: 1
       })
-
-      const text = result.text.trim()
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (!jsonMatch) return
-
-      const parsed = JSON.parse(jsonMatch[0]) as {
-        summary: string
-        topicsDiscussed: string[]
-        openQuestions: string[]
-      }
 
       const summary: SessionSummary = {
         sessionId,
         turnRange: [Math.max(1, turnCount - turnHistory.length + 1), turnCount],
-        summary: parsed.summary,
-        topicsDiscussed: parsed.topicsDiscussed ?? [],
-        openQuestions: parsed.openQuestions ?? [],
+        summary: result.output.summary,
+        topicsDiscussed: result.output.topicsDiscussed ?? [],
+        openQuestions: result.output.openQuestions ?? [],
         createdAt: new Date().toISOString()
       }
 
       writeSessionSummary(projectPath, summary)
 
       if (debug) {
-        console.log(`[Summary] Generated session summary at turn ${turnCount}: ${parsed.summary.slice(0, 80)}...`)
+        console.log(`[Summary] Generated session summary at turn ${turnCount}: ${result.output.summary.slice(0, 80)}...`)
       }
     } catch (err) {
       if (debug) {

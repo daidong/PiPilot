@@ -181,7 +181,9 @@ function splitFrontmatter(content: string): FrontmatterSplit {
 
 function splitHeadingBlocks(body: string): { preamble: string; blocks: HeadingBlock[] } {
   const lines = body.split('\n')
-  const headingRegex = /^#{1,6}\s+(.+?)\s*$/
+  // Only split at ## (level 2) headings — sub-headings (###, ####, etc.)
+  // remain as content within their parent block
+  const headingRegex = /^##\s+(.+?)\s*$/
 
   const preambleLines: string[] = []
   const blocks: HeadingBlock[] = []

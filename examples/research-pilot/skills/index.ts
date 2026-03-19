@@ -2,8 +2,8 @@
  * Research Pilot Skills
  *
  * App-specific skills for the research-pilot example.
- * These skills provide procedural knowledge that can be lazily loaded
- * to optimize token usage.
+ * Skills are loaded from SKILL.md files (portable Markdown format)
+ * using the framework's parseExternalSkill() function.
  *
  * Token Savings Summary:
  * | Skill | Before | After (summary) | After (full) | Initial Savings |
@@ -14,14 +14,24 @@
  * | **Total** | ~6,800 | ~280 | ~3,500 | **96%** |
  */
 
-export { academicWritingSkill } from './academic-writing-skill.js'
-export { literatureSkill } from './literature-skill.js'
-export { dataAnalysisSkill } from './data-analysis-skill.js'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parseExternalSkill } from '../../../src/skills/skill-file.js'
+import type { Skill } from '../../../src/types/skill.js'
 
-// Re-export all skills as a collection
-import { academicWritingSkill } from './academic-writing-skill.js'
-import { literatureSkill } from './literature-skill.js'
-import { dataAnalysisSkill } from './data-analysis-skill.js'
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+function loadSkillMd(subdir: string): Skill {
+  const mdPath = join(__dirname, subdir, 'SKILL.md')
+  const content = readFileSync(mdPath, 'utf-8')
+  const { skill } = parseExternalSkill(content, { defaultId: subdir })
+  return skill
+}
+
+export const academicWritingSkill: Skill = loadSkillMd('academic-writing')
+export const literatureSkill: Skill = loadSkillMd('literature')
+export const dataAnalysisSkill: Skill = loadSkillMd('data-analysis')
 
 /**
  * All research-pilot skills
