@@ -2,7 +2,7 @@
  * createAgent - Agent creation factory
  */
 
-import type { Agent, AgentConfig, AgentRunResult, AgentRunOptions, SessionState } from '../types/agent.js'
+import type { Agent, AgentConfig, AgentRunOptions, SessionState } from '../types/agent.js'
 import type { Runtime } from '../types/runtime.js'
 import type { Pack } from '../types/pack.js'
 
@@ -18,10 +18,12 @@ import { SkillManager } from '../skills/skill-manager.js'
 import { ExternalSkillLoader, type LoadedExternalSkill } from '../skills/external-skill-loader.js'
 import { globalSkillRegistry } from '../skills/skill-registry.js'
 import { AgentLoop } from './agent-loop.js'
+import { AgentRunHandle } from './agent-run-handle.js'
 import { TokenTracker, createTokenTracker, type TokenTrackerConfig } from '../core/token-tracker.js'
 import type { DetailedTokenUsage, TokenCost } from '../llm/provider.types.js'
 import { countTokens } from '../utils/tokenizer.js'
 import { createLLMClient, detectProviderFromApiKey, getModel } from '../llm/index.js'
+import type { AgentHooks } from '../core/agent-hooks.js'
 import type { Message } from '../llm/index.js'
 import type { ProviderID } from '../llm/index.js'
 import { createKernelV2 } from '../kernel-v2/index.js'
@@ -346,6 +348,36 @@ export interface CreateAgentOptions extends AgentConfig {
 
   /** Callback fired after each LLM call with usage and cost info */
   onUsage?: (usage: DetailedTokenUsage, cost: TokenCost) => void
+
+  /**
+   * Execute independent tool calls in a single LLM round concurrently.
+   * Default: true. Set to false to force sequential execution.
+   */
+  parallelToolExecution?: boolean
+
+  /**
+   * Strongly-typed lifecycle hooks for observing and gating agent behavior.
+   */
+  hooks?: AgentHooks
+
+  /**
+   * Called just before each LLM request with the current message array.
+   * Return a (possibly modified) copy of the messages to send instead.
+   * Useful for RAG injection, message filtering, or per-call system augmentation.
+   * Changes do NOT persist to subsequent rounds — only the outbound messages are affected.
+   */
+  transformContext?: (messages: Message[]) => Message[] | Promise<Message[]>
+
+  /**
+   * Messages pinned to every LLM call — prepended to the message list and
+   * never dropped by pre-call token trimming.
+   */
+  pinnedMessages?: Message[]
+
+  /**
+   * Fraction of contextWindow at which pre-call trimming kicks in (default: 0.85).
+   */
+  preCallTrimThreshold?: number
 }
 
 /**
@@ -664,22 +696,35 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
   const toolResultCap = config.toolResultCap ?? 4096
 
   // RFC-011: Kernel V2 (mandatory)
-  // Build an LLM-powered summarize function when llmSummarization is enabled.
-  // Uses a lightweight generate() call so it doesn't interfere with the main loop.
-  let summarizeFn: ((text: string) => Promise<string>) | undefined
-  if (config.kernelV2?.compaction?.llmSummarization) {
-    summarizeFn = async (conversationText: string): Promise<string> => {
-      const response = await llmClient.generate({
-        messages: [{ role: 'user', content: conversationText }],
-        maxTokens: 1024
-      })
-      return response.text ?? ''
+  // Merge YAML compaction settings into the code-level kernelV2 config so users
+  // can opt out via agent.yaml (compaction.llmSummarization: false).
+  const effectiveKernelV2Config = {
+    ...config.kernelV2,
+    compaction: {
+      ...config.kernelV2?.compaction,
+      // YAML takes precedence when explicitly set (allows opt-out from config file)
+      llmSummarization: config.kernelV2?.compaction?.llmSummarization
+        ?? yamlConfig?.compaction?.llmSummarization
     }
   }
 
+  // Build an LLM-powered summarize function unless explicitly disabled.
+  // Default is ON (opt-out, not opt-in) so long-running agents get semantic
+  // compaction without any configuration.
+  const llmSummarizationDisabled = effectiveKernelV2Config.compaction?.llmSummarization === false
+  const summarizeFn = !llmSummarizationDisabled
+    ? async (conversationText: string): Promise<string> => {
+        const response = await llmClient.generate({
+          messages: [{ role: 'user', content: conversationText }],
+          maxTokens: 1024
+        })
+        return response.text ?? ''
+      }
+    : undefined
+
   const kernelV2 = createKernelV2({
     projectPath,
-    config: config.kernelV2,
+    config: effectiveKernelV2Config,
     contextWindow,
     modelId: model,
     debug: config.debug,
@@ -808,101 +853,110 @@ export function createAgent(config: CreateAgentOptions = {}): Agent {
       await initPacks()
     },
 
-    async run(prompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
-      await initPacks()
+    run(prompt: string, options?: AgentRunOptions): AgentRunHandle {
+      return new AgentRunHandle(async (attachLoop) => {
+        await initPacks()
 
-      // Phase 1.1: Recompile system prompt to pick up lazy-loaded skills from previous runs
-      systemPrompt = compileSystemPrompt()
+        // Phase 1.1: Recompile system prompt to pick up lazy-loaded skills from previous runs
+        systemPrompt = compileSystemPrompt()
 
-      // Per-run IO guard state (used to prevent redundant read calls)
-      runtime.sessionState.set('ioGuard', {
-        readHistory: new Map<string, { revision: number; count: number; lastAt: number }>(),
-        fileRevisions: new Map<string, number>()
-      })
-
-      // Assemble runtime context
-      const extraInstructions = options?.additionalInstructions?.trim()
-      const taskModulesBlock = extraInstructions
-        ? '\n\n## Task Modules\n' + extraInstructions
-        : ''
-      let workingContextBlock = ''
-      let dynamicSystemPrompt = systemPrompt + taskModulesBlock
-
-      {
-        const identityTokens = countTokens(systemPrompt)
-        const toolSchemas = toolRegistry.generateToolSchemas()
-        const toolTokens = countTokens(JSON.stringify(toolSchemas))
-        const selectedContextText = await renderSelectedContext(
-          options?.selectedContext,
-          runtime,
-          !!config.debug
-        )
-
-        const kernelTurn = await kernelV2.beginTurn({
-          sessionId,
-          userPrompt: prompt,
-          systemPromptTokens: identityTokens,
-          toolSchemasTokens: toolTokens,
-          selectedContext: selectedContextText,
-          additionalInstructions: extraInstructions
+        // Per-run IO guard state (used to prevent redundant read calls)
+        runtime.sessionState.set('ioGuard', {
+          readHistory: new Map<string, { revision: number; count: number; lastAt: number }>(),
+          fileRevisions: new Map<string, number>()
         })
 
-        workingContextBlock = kernelTurn.context.workingContextBlock
-        if (config.debug) {
-          console.error('[KernelV2] context tokens:', kernelTurn.context.promptTokensEstimate, '| protected turns:', kernelTurn.context.protectedTurnsKept, '| degraded:', kernelTurn.context.degradedZones.join(', ') || 'none')
+        // Assemble runtime context
+        const extraInstructions = options?.additionalInstructions?.trim()
+        const taskModulesBlock = extraInstructions
+          ? '\n\n## Task Modules\n' + extraInstructions
+          : ''
+        let workingContextBlock = ''
+        let dynamicSystemPrompt = systemPrompt + taskModulesBlock
+
+        {
+          const identityTokens = countTokens(systemPrompt)
+          const toolSchemas = toolRegistry.generateToolSchemas()
+          const toolTokens = countTokens(JSON.stringify(toolSchemas))
+          const selectedContextText = await renderSelectedContext(
+            options?.selectedContext,
+            runtime,
+            !!config.debug
+          )
+
+          const kernelTurn = await kernelV2.beginTurn({
+            sessionId,
+            userPrompt: prompt,
+            systemPromptTokens: identityTokens,
+            toolSchemasTokens: toolTokens,
+            selectedContext: selectedContextText,
+            additionalInstructions: extraInstructions
+          })
+
+          workingContextBlock = kernelTurn.context.workingContextBlock
+          if (config.debug) {
+            console.error('[KernelV2] context tokens:', kernelTurn.context.promptTokensEstimate, '| protected turns:', kernelTurn.context.protectedTurnsKept, '| degraded:', kernelTurn.context.degradedZones.join(', ') || 'none')
+          }
         }
-      }
 
-      // Helper to rebuild system prompt with current skill state (for mid-run updates)
-      const buildSystemPromptForRun = () => compileSystemPrompt() + taskModulesBlock + workingContextBlock
-      dynamicSystemPrompt = buildSystemPromptForRun()
+        // Helper to rebuild system prompt with current skill state (for mid-run updates)
+        const buildSystemPromptForRun = () => compileSystemPrompt() + taskModulesBlock + workingContextBlock
+        dynamicSystemPrompt = buildSystemPromptForRun()
 
-      // Create token tracker for usage tracking
-      const tokenTracker = config.tokenTracker
-        ?? (config.onUsage ? createTokenTracker(config.tokenTrackerConfig) : undefined)
+        // Create token tracker for usage tracking
+        const tokenTracker = config.tokenTracker
+          ?? (config.onUsage ? createTokenTracker(config.tokenTrackerConfig) : undefined)
 
-      // Create a FRESH AgentLoop each turn with budget-controlled history in the system prompt
-      const agentLoop = new AgentLoop({
-        client: llmClient,
-        modelId: model,
-        toolRegistry,
-        runtime,
-        trace,
-        systemPrompt: dynamicSystemPrompt,
-        systemPromptBuilder: buildSystemPromptForRun,
-        maxSteps: effectiveMaxSteps,
-        maxTokens: options?.tokenBudget ?? effectiveMaxTokens,
-        temperature: effectiveTemperature,
-        reasoningEffort: effectiveReasoningEffort,
-        onText: config.onStream,
-        onToolCall: config.onToolCall,
-        onToolResult: config.onToolResult,
-        toolResultCap,
-        debug: config.debug,
-        toolLoopThreshold: config.toolLoopThreshold,
-        maxConsecutiveToolRounds: config.maxConsecutiveToolRounds,
-        tokenTracker,
-        onUsage: config.onUsage,
-        errorStrikePolicy: config.errorStrikePolicy
+        // Create a FRESH AgentLoop each turn with budget-controlled history in the system prompt
+        const agentLoop = new AgentLoop({
+          client: llmClient,
+          modelId: model,
+          toolRegistry,
+          runtime,
+          trace,
+          systemPrompt: dynamicSystemPrompt,
+          systemPromptBuilder: buildSystemPromptForRun,
+          maxSteps: effectiveMaxSteps,
+          maxTokens: options?.tokenBudget ?? effectiveMaxTokens,
+          temperature: effectiveTemperature,
+          reasoningEffort: effectiveReasoningEffort,
+          onText: config.onStream,
+          onToolCall: config.onToolCall,
+          onToolResult: config.onToolResult,
+          toolResultCap,
+          debug: config.debug,
+          toolLoopThreshold: config.toolLoopThreshold,
+          maxConsecutiveToolRounds: config.maxConsecutiveToolRounds,
+          tokenTracker,
+          onUsage: config.onUsage,
+          errorStrikePolicy: config.errorStrikePolicy,
+          parallelToolExecution: config.parallelToolExecution ?? yamlConfig?.parallelToolExecution ?? true,
+          hooks: config.hooks,
+          transformContext: config.transformContext,
+          pinnedMessages: config.pinnedMessages,
+          contextWindow: config.contextWindow,
+          preCallTrimThreshold: config.preCallTrimThreshold
+        })
+
+        activeAgentLoop = agentLoop
+        attachLoop(agentLoop)
+
+        const result = await agentLoop.run(prompt)
+        const allMessages = agentLoop.getMessages()
+
+        await kernelV2.completeTurn({
+          sessionId,
+          messages: allMessages as Message[],
+          promptTokens: result.usage?.tokens.promptTokens ?? 0
+        })
+
+        // Phase 3.3: Clean up expired skills (TTL-based downgrading)
+        skillManager.cleanup()
+        skillManager.reportTokenSavings(`${sessionId}:${Date.now().toString(36)}`, sessionId)
+
+        activeAgentLoop = null
+        return result
       })
-
-      activeAgentLoop = agentLoop
-
-      const result = await agentLoop.run(prompt)
-      const allMessages = agentLoop.getMessages()
-
-      await kernelV2.completeTurn({
-        sessionId,
-        messages: allMessages as Message[],
-        promptTokens: result.usage?.tokens.promptTokens ?? 0
-      })
-
-      // Phase 3.3: Clean up expired skills (TTL-based downgrading)
-      skillManager.cleanup()
-      skillManager.reportTokenSavings(`${sessionId}:${Date.now().toString(36)}`, sessionId)
-
-      activeAgentLoop = null
-      return result
     },
 
     stop(): void {

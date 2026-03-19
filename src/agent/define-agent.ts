@@ -2,7 +2,8 @@
  * defineAgent - Agent definition factory
  */
 
-import type { AgentDefinition, Agent, AgentConfig, AgentRunResult, SessionState } from '../types/agent.js'
+import type { AgentDefinition, Agent, AgentConfig, SessionState } from '../types/agent.js'
+import { AgentRunHandle } from './agent-run-handle.js'
 import type { Runtime } from '../types/runtime.js'
 
 import { EventBus } from '../core/event-bus.js'
@@ -388,56 +389,60 @@ export function defineAgent(definition: AgentDefinition): (config: AgentConfig) 
         await initPacks()
       },
 
-      async run(prompt: string): Promise<AgentRunResult> {
-        await initPacks()
+      run(prompt: string): AgentRunHandle {
+        return new AgentRunHandle(async (attachLoop) => {
+          await initPacks()
 
-        // Phase 1.4: Recompile system prompt to pick up lazy-loaded skills
-        systemPrompt = compileSystemPrompt()
-        let workingContextBlock = ''
-        if (kernelV2) {
-          const identityTokens = countTokens(systemPrompt)
-          const toolSchemas = toolRegistry.generateToolSchemas()
-          const toolTokens = countTokens(JSON.stringify(toolSchemas))
-          const kernelTurn = await kernelV2.beginTurn({
-            sessionId,
-            userPrompt: prompt,
-            systemPromptTokens: identityTokens,
-            toolSchemasTokens: toolTokens
+          // Phase 1.4: Recompile system prompt to pick up lazy-loaded skills
+          systemPrompt = compileSystemPrompt()
+          let workingContextBlock = ''
+          if (kernelV2) {
+            const identityTokens = countTokens(systemPrompt)
+            const toolSchemas = toolRegistry.generateToolSchemas()
+            const toolTokens = countTokens(JSON.stringify(toolSchemas))
+            const kernelTurn = await kernelV2.beginTurn({
+              sessionId,
+              userPrompt: prompt,
+              systemPromptTokens: identityTokens,
+              toolSchemasTokens: toolTokens
+            })
+            workingContextBlock = kernelTurn.context.workingContextBlock
+          }
+
+          const buildSystemPromptForRun = () => compileSystemPrompt() + workingContextBlock
+
+          agentLoop = new AgentLoop({
+            client: llmClient,
+            modelId,
+            toolRegistry,
+            runtime,
+            trace,
+            systemPrompt: buildSystemPromptForRun(),
+            systemPromptBuilder: buildSystemPromptForRun,
+            maxSteps: definition.maxSteps ?? config.maxSteps ?? 30,
+            maxTokens: definition.model?.maxTokens ?? config.maxTokens,
+            onText: config.onStream,
+            onToolCall: config.onToolCall,
+            onToolResult: config.onToolResult
           })
-          workingContextBlock = kernelTurn.context.workingContextBlock
-        }
 
-        const buildSystemPromptForRun = () => compileSystemPrompt() + workingContextBlock
+          attachLoop(agentLoop)
 
-        agentLoop = new AgentLoop({
-          client: llmClient,
-          modelId,
-          toolRegistry,
-          runtime,
-          trace,
-          systemPrompt: buildSystemPromptForRun(),
-          systemPromptBuilder: buildSystemPromptForRun,
-          maxSteps: definition.maxSteps ?? config.maxSteps ?? 30,
-          maxTokens: definition.model?.maxTokens ?? config.maxTokens,
-          onText: config.onStream,
-          onToolCall: config.onToolCall,
-          onToolResult: config.onToolResult
+          const result = await agentLoop.run(prompt)
+          if (kernelV2 && agentLoop) {
+            await kernelV2.completeTurn({
+              sessionId,
+              messages: agentLoop.getMessages() as Message[],
+              promptTokens: result.usage?.tokens.promptTokens ?? 0
+            })
+          }
+
+          // Phase 3.3: Clean up expired skills (TTL-based downgrading)
+          skillManager.cleanup()
+          skillManager.reportTokenSavings(`${sessionId}:${Date.now().toString(36)}`, sessionId)
+
+          return result
         })
-
-        const result = await agentLoop.run(prompt)
-        if (kernelV2 && agentLoop) {
-          await kernelV2.completeTurn({
-            sessionId,
-            messages: agentLoop.getMessages() as Message[],
-            promptTokens: result.usage?.tokens.promptTokens ?? 0
-          })
-        }
-
-        // Phase 3.3: Clean up expired skills (TTL-based downgrading)
-        skillManager.cleanup()
-        skillManager.reportTokenSavings(`${sessionId}:${Date.now().toString(36)}`, sessionId)
-
-        return result
       },
 
       stop(): void {

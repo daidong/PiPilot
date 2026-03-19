@@ -90,8 +90,20 @@ export const edit: Tool<EditInput, EditOutput> = defineTool({
       }
     }
 
+    // Normalize BOM and line endings so matches don't silently fail on Windows
+    // files or files created by editors that insert BOM / CRLF.
+    if (content.startsWith('\uFEFF')) content = content.slice(1)
+    content = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+
+    // Apply the same normalization to old_string so the agent doesn't need to
+    // know about the underlying encoding of the file it's editing.
+    const normalizedOldString = input.old_string
+      .replace(/^\uFEFF/, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+
     // Check if old_string exists
-    if (!content.includes(input.old_string)) {
+    if (!content.includes(normalizedOldString)) {
       return {
         success: false,
         error: `old_string not found in file: ${input.path}`
@@ -99,7 +111,7 @@ export const edit: Tool<EditInput, EditOutput> = defineTool({
     }
 
     // Check uniqueness (unless replace_all)
-    const occurrences = content.split(input.old_string).length - 1
+    const occurrences = content.split(normalizedOldString).length - 1
     if (!input.replace_all && occurrences > 1) {
       return {
         success: false,
@@ -107,16 +119,21 @@ export const edit: Tool<EditInput, EditOutput> = defineTool({
       }
     }
 
+    // Normalize new_string line endings for consistency
+    const normalizedNewString = input.new_string
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+
     // Perform replacement
     let newContent: string
     let replacements: number
 
     if (input.replace_all) {
       replacements = occurrences
-      newContent = content.split(input.old_string).join(input.new_string)
+      newContent = content.split(normalizedOldString).join(normalizedNewString)
     } else {
       replacements = 1
-      newContent = content.replace(input.old_string, input.new_string)
+      newContent = content.replace(normalizedOldString, normalizedNewString)
     }
 
     // Write file
@@ -135,11 +152,8 @@ export const edit: Tool<EditInput, EditOutput> = defineTool({
 
     return {
       success: true,
-      data: {
-        path: input.path,
-        replacements,
-        bytes: newContent.length
-      }
+      data: { path: input.path, replacements, bytes: newContent.length },
+      llmSummary: `Edited ${input.path}: ${replacements} replacement${replacements !== 1 ? 's' : ''}`
     }
   }
 })

@@ -68,14 +68,15 @@ export const bash: Tool<BashInput, BashOutput> = defineTool({
       return { label: lines > 0 ? `${cmd}: ${lines} lines` : `${cmd}: done`, icon: 'run' }
     }
   },
-  execute: async (input, { runtime }) => {
+  execute: async (input, { runtime, signal }) => {
     const normalizedTimeout = typeof input.timeout === 'number' && Number.isFinite(input.timeout) && input.timeout > 0
       ? input.timeout
       : undefined
     const result = await runtime.io.exec(input.command, {
       cwd: input.cwd,
       timeout: normalizedTimeout,
-      caller: 'bash'
+      caller: 'bash',
+      signal
     })
 
     if (!result.success && !result.data) {
@@ -84,10 +85,25 @@ export const bash: Tool<BashInput, BashOutput> = defineTool({
 
     const output = result.data!
 
+    // Build a plain-text summary for the LLM — avoids JSON wrapper overhead
+    // while preserving the actual stdout content the LLM needs to make progress.
+    // compressToolResult will still trim if this exceeds the token cap.
+    let llmSummary: string
+    if (output.exitCode === 0) {
+      const combined = [output.stdout, output.stderr].filter(Boolean).join('\n').trimEnd()
+      llmSummary = combined ? `Exit 0.\n${combined}` : 'Exit 0. (no output)'
+    } else {
+      // Error path: success=false so llmSummary won't be used by agent-loop,
+      // but set it anyway for completeness.
+      const combined = [output.stdout, output.stderr].filter(Boolean).join('\n').trimEnd()
+      llmSummary = `Exit ${output.exitCode}.\n${combined}`
+    }
+
     return {
       success: output.exitCode === 0,
       data: output,
-      error: output.exitCode !== 0 ? buildCommandFailureError(output) : undefined
+      error: output.exitCode !== 0 ? buildCommandFailureError(output) : undefined,
+      llmSummary
     }
   }
 })

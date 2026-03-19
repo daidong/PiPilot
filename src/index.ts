@@ -312,6 +312,8 @@ export type {
 // ============================================================================
 
 export { Cache } from './utils/cache.js'
+export { ok, err, tryCatch } from './utils/result.js'
+export type { Result } from './utils/result.js'
 export {
   SimpleTokenizer,
   countTokens,
@@ -586,6 +588,16 @@ export type {
 // AgentLoop related
 export type { LLMClient, AgentLoopConfig } from './agent/agent-loop.js'
 export { runAgent } from './agent/agent-loop.js'
+
+// AgentRunHandle — steering/follow-up queues + PromiseLike wrapper
+export { AgentRunHandle } from './agent/agent-run-handle.js'
+
+// transformContext — per-call message array hook (re-exported via AgentLoopConfig)
+// Usage: createAgent({ transformContext: (msgs) => [...msgs, { role: 'user', content: ragContext }] })
+
+// skill.load context source — on-demand skill instruction loader
+export { skillLoad } from './context-sources/skill-load.js'
+export type { SkillLoadParams, SkillLoadData } from './context-sources/skill-load.js'
 
 // AgentHooks — strongly-typed lifecycle hooks
 export type {

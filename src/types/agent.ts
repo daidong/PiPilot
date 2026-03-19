@@ -11,6 +11,7 @@ import type { UsageSummary } from '../llm/provider.types.js'
 import type { SkillTelemetryConfig } from './skill.js'
 import type { KernelV2Config } from '../kernel-v2/types.js'
 import type { ResourceLimits } from './runtime.js'
+import type { AgentRunHandle } from '../agent/agent-run-handle.js'
 
 /**
  * Model configuration
@@ -176,7 +177,7 @@ export interface Agent {
   /** Ensure packs are initialized (idempotent, called automatically by run()) */
   ensureInit: () => Promise<void>
   /** Run the Agent */
-  run: (prompt: string, options?: AgentRunOptions) => Promise<AgentRunResult>
+  run: (prompt: string, options?: AgentRunOptions) => AgentRunHandle
   /** Stop the run */
   stop: () => void
   /** Destroy the Agent */

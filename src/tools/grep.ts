@@ -89,13 +89,17 @@ export const grep: Tool<GrepInput, GrepOutput> = defineTool({
     const matches = result.data!
     const meta = result.meta ?? {}
 
+    const truncated = meta.truncated ?? false
+    const header = truncated
+      ? `Found ${matches.length}+ matches for "${input.pattern}" (truncated):`
+      : `Found ${matches.length} match${matches.length !== 1 ? 'es' : ''} for "${input.pattern}"${matches.length > 0 ? ':' : ''}`
+    const matchLines = matches.map(m => `${m.file}:${m.line}: ${m.text}`)
+    const llmSummary = matches.length > 0 ? `${header}\n${matchLines.join('\n')}` : header
+
     return {
       success: true,
-      data: {
-        matches,
-        count: matches.length,
-        truncated: meta.truncated ?? false
-      }
+      data: { matches, count: matches.length, truncated },
+      llmSummary
     }
   }
 })

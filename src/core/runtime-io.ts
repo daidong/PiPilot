@@ -579,6 +579,13 @@ export class RuntimeIO implements IRuntimeIO {
         timeout
       })
 
+      // Respect AbortSignal — kill child process when aborted
+      if (options?.signal) {
+        const abortHandler = (): void => { child.kill('SIGTERM') }
+        options.signal.addEventListener('abort', abortHandler, { once: true })
+        child.once('close', () => options.signal!.removeEventListener('abort', abortHandler))
+      }
+
       let stdout = ''
       let stderr = ''
       let stdoutTruncated = false

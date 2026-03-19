@@ -101,12 +101,14 @@ describe('SkillManager', () => {
       expect(content).toContain('Always available procedures')
     })
 
-    it('should only load summary for lazy skills on registration', () => {
+    it('should only load pointer for lazy skills on registration', () => {
       manager.register(testSkill)
 
       expect(manager.getState('test-skill')).toBe('summary-loaded')
       const content = manager.getContent('test-skill')
-      expect(content).toContain('test skill summary')
+      // Lazy skills show a compact pointer hint, not the full summary
+      expect(content).toContain('skill:test-skill')
+      expect(content).toContain('skill.load')
       expect(content).not.toContain('Step 1: Do something')
     })
 
@@ -181,13 +183,14 @@ describe('SkillManager', () => {
   })
 
   describe('content management', () => {
-    it('should build summary content correctly', () => {
+    it('should build pointer content for lazy skills initially', () => {
       manager.register(testSkill)
 
       const content = manager.getContent('test-skill')
 
-      expect(content).toContain('## Test Skill')
-      expect(content).toContain('test skill summary')
+      // Lazy skills start with a pointer hint, not the full summary header
+      expect(content).toContain('skill:test-skill')
+      expect(content).toContain('skill.load')
     })
 
     it('should build full content with all sections', () => {

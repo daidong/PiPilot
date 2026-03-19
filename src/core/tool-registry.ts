@@ -9,6 +9,7 @@ import type { Runtime } from '../types/runtime.js'
 import { createValidationError } from './errors.js'
 import { toolValidationFeedback, policyDenialFeedback, formatFeedbackAsToolResult } from './feedback.js'
 import type { FeedbackContext, ToolSchemaSummary } from './feedback.js'
+import { tryCatch } from '../utils/result.js'
 
 /**
  * Tool call information
@@ -176,6 +177,25 @@ function validateInput(
 }
 
 /**
+ * Run a promise with a deadline. Cleans up the timer whether the promise
+ * resolves or rejects, so there are no dangling timers.
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number, toolName: string): Promise<T> {
+  let timerId: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timerId = setTimeout(
+      () => reject(new Error(`Tool "${toolName}" timed out after ${ms}ms`)),
+      ms
+    )
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    clearTimeout(timerId)
+  }
+}
+
+/**
  * Tool Registry
  */
 export class ToolRegistry {
@@ -256,7 +276,7 @@ export class ToolRegistry {
   async call(
     name: string,
     input: unknown,
-    context?: Partial<ToolContext>
+    context?: Partial<ToolContext> & { signal?: AbortSignal }
   ): Promise<ToolResult> {
     if (!this.config) {
       throw new Error('ToolRegistry not configured')
@@ -307,14 +327,19 @@ export class ToolRegistry {
       step: this.config.runtime.step
     }
 
-    // Pre-execution check (Guard + Mutate)
-    const beforeResult = await this.config.policyEngine.evaluateBefore(policyContext)
+    // Pre-execution check (Guard + Mutate) — wrapped so a buggy policy can't crash the loop
+    const { policyEngine, trace: registryTrace } = this.config
+    const beforeRes = await tryCatch(() => policyEngine.evaluateBefore(policyContext))
+    if (!beforeRes.ok) {
+      return { success: false, error: `Policy evaluation error: ${beforeRes.error.message}` }
+    }
+    const beforeResult = beforeRes.value
 
     if (!beforeResult.allowed) {
       const feedback = policyDenialFeedback(name, beforeResult.reason || 'Policy denied', beforeResult.policyId)
       const result: ToolResult = { success: false, error: formatFeedbackAsToolResult(feedback) }
 
-      this.config.trace.record({
+      registryTrace.record({
         type: 'tool.result',
         data: { tool: name, success: false, error: beforeResult.reason, category: 'policy_denied' }
       })
@@ -334,13 +359,17 @@ export class ToolRegistry {
       sessionId: context?.sessionId ?? this.config.runtime.sessionId,
       step: context?.step ?? this.config.runtime.step,
       agentId: context?.agentId ?? this.config.runtime.agentId,
-      messages: context?.messages
+      messages: context?.messages,
+      signal: context?.signal
     }
 
     let result: ToolResult
 
     try {
-      result = await tool.execute(mutatedInput, toolContext)
+      const executePromise = tool.execute(mutatedInput, toolContext)
+      result = tool.timeout
+        ? await withTimeout(executePromise, tool.timeout, tool.name)
+        : await executePromise
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       result = { success: false, error: errorMessage }
@@ -352,12 +381,13 @@ export class ToolRegistry {
       error: result.error
     })
 
-    // Post-execution observation (Observe)
-    await this.config.policyEngine.evaluateAfter({
+    // Post-execution observation (Observe) — fire-and-forget; a buggy observe policy
+    // must not crash the tool call that already succeeded.
+    await tryCatch(() => policyEngine.evaluateAfter({
       ...policyContext,
       input: mutatedInput,
       result
-    })
+    }))
 
     return result
   }

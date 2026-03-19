@@ -184,6 +184,8 @@ export class KernelV2Impl implements KernelV2 {
   private readonly activeProjectBySession = new Map<string, string>()
   private readonly activeTaskBySession = new Map<string, string>()
   private readonly failSafeBySession = new Map<string, boolean>()
+  /** Tracks the last compaction summary per session for incremental updates */
+  private readonly lastCompactionSummaryBySession = new Map<string, string>()
 
   constructor(
     private readonly projectPath: string,
@@ -569,10 +571,15 @@ export class KernelV2Impl implements KernelV2 {
       sessionId: params.sessionId,
       promptTokens: params.promptTokens,
       protectedRecentTurns: this.config.context.protectedRecentTurns,
-      preFlushCandidates
+      preFlushCandidates,
+      previousSummary: this.lastCompactionSummaryBySession.get(params.sessionId)
     })
 
     if (compacted.compacted) {
+      // Store the new summary for the next compaction cycle
+      if (compacted.segment?.summary) {
+        this.lastCompactionSummaryBySession.set(params.sessionId, compacted.segment.summary)
+      }
       this.emit({
         event: 'context.degradation.applied',
         payload: { sessionId: params.sessionId, segmentId: compacted.segment?.id },

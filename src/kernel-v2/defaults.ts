@@ -39,7 +39,7 @@ export function resolveKernelV2Config(config: KernelV2Config | undefined, contex
         writeReserve: config?.compaction?.preFlush?.writeReserve ?? 5
       },
       requireReplayRefs: config?.compaction?.requireReplayRefs ?? true,
-      llmSummarization: config?.compaction?.llmSummarization ?? false
+      llmSummarization: config?.compaction?.llmSummarization ?? true
     },
     retrieval: {
       fallbackChain: config?.retrieval?.fallbackChain ?? ['hybrid', 'lexical', 'vector-only', 'raw-file-scan'],

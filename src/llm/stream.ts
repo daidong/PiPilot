@@ -406,8 +406,11 @@ export function createLLMClient(clientConfig: LLMClientConfig) {
             }
           }
         } else {
+          // OpenAI Responses API supports: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+          // Map 'max' (Anthropic-only value) to 'xhigh'
+          const openaiEffort = reasoningEffort === 'max' ? 'xhigh' : reasoningEffort
           streamOptions.providerOptions = {
-            openai: { reasoningEffort }
+            openai: { reasoningEffort: openaiEffort }
           }
         }
       }

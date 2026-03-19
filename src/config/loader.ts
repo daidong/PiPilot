@@ -47,6 +47,23 @@ export interface AgentYAMLConfig {
   /** Maximum number of steps */
   maxSteps?: number
 
+  /**
+   * Execute independent tool calls in a single LLM round concurrently.
+   * Default: true. Set to false to force sequential execution.
+   */
+  parallelToolExecution?: boolean
+
+  /**
+   * Compaction settings for long-running sessions.
+   */
+  compaction?: {
+    /**
+     * Use LLM to generate semantic summaries when compacting context.
+     * Default: true. Set to false to use the fast heuristic instead.
+     */
+    llmSummarization?: boolean
+  }
+
   /** Custom configuration */
   custom?: Record<string, unknown>
 }

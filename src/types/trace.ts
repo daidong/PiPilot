@@ -49,6 +49,8 @@ export type TraceEventType =
   | 'budget.profile'
   | 'agent.toolLoopNudge'
   | 'agent.toolLoopHardStop'
+  | 'agent.steering'
+  | 'agent.followUp'
   | 'error.budget_summary'
   | 'error.classified'
   | 'error.retrying'

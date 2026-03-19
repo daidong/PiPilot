@@ -34,6 +34,11 @@ export interface ToolContext {
   agentId: string
   /** Current conversation messages (optional, for tools that need conversation context) */
   messages?: unknown[]
+  /**
+   * Abort signal from the agent run. Set when the agent is stopped or the run
+   * is cancelled. Tools should respect this signal for long-running operations.
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -54,6 +59,18 @@ export interface ToolResult<T = unknown> {
   data?: T
   error?: string
   attachments?: Attachment[]
+  /**
+   * Optional compact string to send to the LLM instead of serializing `data`.
+   *
+   * Use this to keep the LLM context lean while preserving full-fidelity data
+   * in `data` for UI consumers (via the `onToolResult` callback).
+   *
+   * Example: a diff tool returns the raw unified diff in `data` but a
+   * one-line summary like "Changed 12 lines across 3 files" in `llmSummary`.
+   *
+   * When absent, the LLM receives the JSON-serialized `data` as usual.
+   */
+  llmSummary?: string
 }
 
 /**
@@ -74,6 +91,16 @@ export interface Tool<TInput = unknown, TOutput = unknown> {
 
   /** Optional activity label formatters for UI display */
   activity?: ToolActivityFormat
+
+  /**
+   * Maximum execution time in milliseconds. When set, the registry wraps
+   * `execute()` in a timeout race — returning `{ success: false, error: '...' }`
+   * if the tool does not complete within the allotted time.
+   *
+   * Note: this does not cancel in-flight I/O unless the tool also respects
+   * `context.signal`. Combine with GAP-18 AbortSignal for full cancellation.
+   */
+  timeout?: number
 }
 
 /**
@@ -86,6 +113,8 @@ export interface ToolConfig<TInput = unknown, TOutput = unknown> {
   execute: (input: TInput, context: ToolContext) => Promise<ToolResult<TOutput>>
   /** Optional activity label formatters for UI display */
   activity?: ToolActivityFormat
+  /** Maximum execution time in milliseconds (see Tool.timeout) */
+  timeout?: number
 }
 
 /**

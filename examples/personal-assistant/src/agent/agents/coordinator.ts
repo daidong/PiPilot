@@ -618,6 +618,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     maxConsecutiveToolRounds: 20,
     maxSteps: 100,
     onUsage,
+    contextWindow,
     kernelV2: PERSONAL_ASSISTANT_KERNEL_V2_CONFIG
   })
 

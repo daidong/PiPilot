@@ -29,6 +29,8 @@ import type { ErrorCategory } from '../core/errors.js'
 import { buildFeedback, formatFeedbackAsToolResult, contextDropFeedback, policyDenialFeedback } from '../core/feedback.js'
 import { RetryBudget, DEFAULT_BUDGET_CONFIG, getStrategy, computeBackoff } from '../core/retry.js'
 import type { AgentHooks } from '../core/agent-hooks.js'
+import { tryCatch } from '../utils/result.js'
+import { countTokens } from '../utils/tokenizer.js'
 
 /**
  * LLM client type
@@ -116,6 +118,34 @@ export interface AgentLoopConfig {
    * Complements the EventBus with compile-time safety.
    */
   hooks?: AgentHooks
+
+  /**
+   * Called just before each LLM request with the current message array.
+   * Return a (possibly modified) copy of the messages to send instead.
+   * Useful for RAG injection, message filtering, per-call system augmentation.
+   *
+   * The original `this.messages` is not modified — only the messages sent
+   * to the LLM are affected. Changes do NOT persist to subsequent rounds.
+   */
+  transformContext?: (messages: Message[]) => Message[] | Promise<Message[]>
+
+  /**
+   * Messages pinned to every LLM call — prepended to messagesToSend and
+   * never compacted or dropped by pre-call trimming.
+   */
+  pinnedMessages?: Message[]
+
+  /**
+   * Model context window size in tokens (used for GAP-6 pre-call trimming).
+   * When set, messagesToSend is proactively trimmed before hitting the limit.
+   */
+  contextWindow?: number
+
+  /**
+   * Fraction of contextWindow at which pre-call trimming kicks in (default: 0.85).
+   * E.g. 0.85 means trim when estimated tokens > contextWindow * 0.85.
+   */
+  preCallTrimThreshold?: number
 }
 
 /**
@@ -232,6 +262,15 @@ export class AgentLoop {
   private toolErrorStreaks: Record<string, number> = {}
   /** Last error category per tool+args signature (for pre-block checks) */
   private lastErrorByArgs: Record<string, { category: ErrorCategory }> = {}
+  /** Steering messages to inject before the next LLM call */
+  private steeringQueue: string[] = []
+  /** Follow-up prompts to continue with after the agent would otherwise stop */
+  private followUpQueue: string[] = []
+  /** AbortController for the current run — aborted when stop() is called */
+  private abortController: AbortController | null = null
+  /** Messages that are always prepended to every LLM call and never compacted */
+  private pinnedMessages: Message[] = []
+
   constructor(config: AgentLoopConfig) {
     this.config = config
 
@@ -242,6 +281,10 @@ export class AgentLoop {
       this.client = createLLMClient(config.llmConfig)
     } else {
       throw new Error('Either client or llmConfig must be provided')
+    }
+
+    if (config.pinnedMessages) {
+      this.pinnedMessages = [...config.pinnedMessages]
     }
   }
 
@@ -284,6 +327,7 @@ export class AgentLoop {
     const startTime = Date.now()
     const runId = crypto.randomUUID()
     this.stopped = false
+    this.abortController = new AbortController()
 
     // Start token tracking
     this.config.tokenTracker?.startRun(runId)
@@ -364,6 +408,13 @@ export class AgentLoop {
           })
         }
 
+        // Drain steering queue — inject messages as user turns before the LLM call
+        while (this.steeringQueue.length > 0) {
+          const steeringMsg = this.steeringQueue.shift()!
+          this.config.trace.record({ type: 'agent.steering', data: { message: steeringMsg, step } })
+          this.messages.push({ role: 'user', content: steeringMsg })
+        }
+
         // Prepare context (with optional budget management)
         let systemPrompt = this.config.systemPromptBuilder
           ? this.config.systemPromptBuilder()
@@ -371,7 +422,32 @@ export class AgentLoop {
         let tools = this.config.toolRegistry.generateToolSchemas(
           this.activeToolSubset ? { subset: this.activeToolSubset } : undefined
         ) as LLMToolDefinition[]
-        const messagesToSend = this.messages
+        let messagesToSend: Message[] = this.config.transformContext
+          ? await this.config.transformContext([...this.messages])
+          : [...this.messages]
+
+        // GAP-10: Prepend pinned messages (always present, never trimmed)
+        if (this.pinnedMessages.length > 0) {
+          messagesToSend = [...this.pinnedMessages, ...messagesToSend]
+        }
+
+        // GAP-6: Pre-call token estimation — proactively trim before context overflow
+        if (this.config.contextWindow && messagesToSend.length > 0) {
+          const threshold = this.config.preCallTrimThreshold ?? 0.85
+          const limit = Math.floor(this.config.contextWindow * threshold)
+          const estimated = countTokens(JSON.stringify(messagesToSend))
+          if (estimated > limit) {
+            const pinnedCount = this.pinnedMessages.length
+            const mutable = messagesToSend.slice(pinnedCount)
+            // Drop oldest messages (keep at least 1) until under threshold
+            while (mutable.length > 1) {
+              const reEstimated = countTokens(JSON.stringify([...this.pinnedMessages, ...mutable]))
+              if (reEstimated <= limit) break
+              mutable.shift()
+            }
+            messagesToSend = [...this.pinnedMessages, ...mutable]
+          }
+        }
 
         // Determine round hint for trace metadata
         const roundHint = this.determineRoundHint(tools, previousResponseText, previousToolCallCount)
@@ -435,7 +511,10 @@ export class AgentLoop {
           console.error('[AgentLoop:debug] === End Request ===')
         }
 
-        const response = await streamWithCallbacks(
+        // Wrap in tryCatch so that pre-stream throws (e.g. connection refused before
+        // streaming starts) are funnelled into the existing error-recovery logic
+        // rather than bubbling past the retry/context-trim paths to the outer catch.
+        const streamResult = await tryCatch(() => streamWithCallbacks(
           this.client,
           {
             system: systemPrompt,
@@ -504,7 +583,15 @@ export class AgentLoop {
               }
             }
           }
-        )
+        ))
+
+        // Convert a thrown error to the same structured path as onError
+        const response = streamResult.ok
+          ? streamResult.value
+          : { finishReason: 'error' as const, text: '', toolCalls: [], id: '', usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } }
+        if (!streamResult.ok && !llmError) {
+          llmError = streamResult.error
+        }
 
         // Check for LLM error
         if (response.finishReason === 'error' || llmError) {
@@ -696,6 +783,13 @@ export class AgentLoop {
         // (some providers set 'stop' when the model emits both text and tool calls).
         if (toolCalls.length === 0) {
           finalOutput = responseText
+          // Check follow-up queue before stopping — allows chained agentic pipelines
+          if (this.followUpQueue.length > 0) {
+            const followUpMsg = this.followUpQueue.shift()!
+            this.config.trace.record({ type: 'agent.followUp', data: { message: followUpMsg, step } })
+            this.messages.push({ role: 'user', content: followUpMsg })
+            continue
+          }
           break
         }
 
@@ -780,7 +874,8 @@ export class AgentLoop {
               sessionId: this.config.runtime.sessionId,
               step,
               agentId: this.config.runtime.agentId,
-              messages: this.messages
+              messages: this.messages,
+              signal: this.abortController?.signal
             }
           )
 
@@ -828,7 +923,8 @@ export class AgentLoop {
                     sessionId: this.config.runtime.sessionId,
                     step,
                     agentId: this.config.runtime.agentId,
-                    messages: this.messages
+                    messages: this.messages,
+                    signal: this.abortController?.signal
                   }
                 )
               }
@@ -893,7 +989,11 @@ export class AgentLoop {
                 delete this.toolErrorStreaks[key]
               }
             }
-            resultContent = result.data !== undefined ? JSON.stringify(result.data, null, 2) : '{"success": true}'
+            // Prefer a pre-computed compact LLM summary when the tool provides one.
+            // This allows tools to return rich data in `result.data` for UI consumers
+            // while keeping the LLM context lean.
+            resultContent = result.llmSummary
+              ?? (result.data !== undefined ? JSON.stringify(result.data, null, 2) : '{"success": true}')
           } else {
             const errorStr = result.error || 'Unknown error'
             const attemptKey = `${toolUse.name}:${toolUse.id}`
@@ -1197,6 +1297,23 @@ export class AgentLoop {
    */
   stop(): void {
     this.stopped = true
+    this.abortController?.abort()
+  }
+
+  /**
+   * Inject a steering message that will be delivered to the LLM before its
+   * next call. Safe to call while the agent is running.
+   */
+  steer(message: string): void {
+    this.steeringQueue.push(message)
+  }
+
+  /**
+   * Queue a follow-up prompt that continues execution after the agent would
+   * otherwise stop. Consumed one at a time, in order.
+   */
+  followUp(message: string): void {
+    this.followUpQueue.push(message)
   }
 
   /**
@@ -1231,6 +1348,14 @@ export class AgentLoop {
    * Get recently used tool names   */
   getRecentTools(): string[] {
     return this.getRecentToolNames()
+  }
+
+  /**
+   * Pin a message so it is prepended to every future LLM call.
+   * Pinned messages are never trimmed by pre-call token estimation.
+   */
+  pin(message: Message): void {
+    this.pinnedMessages.push(message)
   }
 }
 

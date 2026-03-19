@@ -234,9 +234,11 @@ export class SkillManager {
         `eager-load id=${skill.id} tokens=+${skill.estimatedTokens.full}`
       )
     } else {
-      // Lazy/on-demand: start with summary only
+      // Lazy/on-demand: use a compact pointer hint instead of the full summary.
+      // This reduces per-skill prompt cost from ~80-100 tokens to ~20 tokens.
+      // The agent requests full instructions via ctx-get("skill.load", { id }).
       content.state = 'summary-loaded'
-      content.content = this.buildSummaryContent(skill)
+      content.content = this.buildPointerContent(skill)
       this.emit('skill:loaded', {
         skillId: skill.id,
         state: 'summary-loaded',
@@ -245,7 +247,7 @@ export class SkillManager {
       this.recordTelemetry(
         'skill.loaded.summary',
         { skillId: skill.id, reason: 'register', tokens: skill.estimatedTokens.summary },
-        `summary-load id=${skill.id} tokens=+${skill.estimatedTokens.summary}`
+        `pointer-load id=${skill.id} tokens=~20`
       )
     }
 
@@ -253,10 +255,13 @@ export class SkillManager {
   }
 
   /**
-   * Build summary-only content
+   * Build pointer content — a single compact hint used for lazy/on-demand skills
+   * before they are requested. This keeps the system prompt lean (~20 tokens per
+   * skill) compared to the full summary (~80-100 tokens).
+   * The agent calls ctx-get("skill.load", { id }) to get full instructions.
    */
-  private buildSummaryContent(skill: Skill): string {
-    return `## ${skill.name}\n${skill.instructions.summary}`
+  private buildPointerContent(skill: Skill): string {
+    return `> **[skill:${skill.id}]** ${skill.shortDescription} — call ctx-get("skill.load", {"id": "${skill.id}"}) to load full instructions.`
   }
 
   /**
@@ -508,7 +513,7 @@ export class SkillManager {
 
     if (content.state === 'fully-loaded' && content.skill.loadingStrategy !== 'eager') {
       content.state = 'summary-loaded'
-      content.content = this.buildSummaryContent(content.skill)
+      content.content = this.buildPointerContent(content.skill)
       this.log(`Downgraded skill: ${skillId}`)
     }
   }

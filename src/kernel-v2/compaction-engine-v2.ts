@@ -82,6 +82,20 @@ Create a concise structured summary that preserves all critical information need
 
 Keep the summary under 600 tokens. Be specific, not generic.`
 
+const UPDATE_COMPACTION_PROMPT = `You are a context compaction assistant. Below is a PREVIOUS summary followed by NEW conversation turns added since that summary.
+
+Update the summary to incorporate the new information. Keep all critical information from the previous summary and add what's new.
+
+## Summary Format
+**Goal:** (one sentence describing the overall objective)
+**Progress:** (what has been accomplished, cumulative)
+**Key Decisions:** (important choices made and why, cumulative)
+**Files Modified/Read:** (list any relevant file paths, cumulative)
+**Remaining Work:** (what still needs to be done)
+**Important Context:** (any other facts the agent must remember)
+
+Keep the updated summary under 600 tokens. Be specific, not generic.`
+
 export class CompactionEngineV2 {
   constructor(
     private readonly storage: KernelV2Storage,
@@ -106,6 +120,8 @@ export class CompactionEngineV2 {
     promptTokens: number
     protectedRecentTurns: number
     preFlushCandidates?: V2MemoryWriteCandidate[]
+    /** Previous segment summary — when provided, generates an incremental update instead of a full re-summary */
+    previousSummary?: string
   }): Promise<{ compacted: boolean; segment?: V2CompactSegment }> {
     if (!this.shouldCompact(params.promptTokens)) {
       return { compacted: false }
@@ -144,8 +160,15 @@ export class CompactionEngineV2 {
             return `${roleLabel}: ${t.content.slice(0, 800)}`
           }).join('\n')
         }).join('\n\n---\n\n')
-        summaryText = await this.summarizeFn!(`${COMPACTION_PROMPT}\n\n## Conversation\n${conversationText}`)
-        this.emit('compaction.llm_summary.success', { sessionId: params.sessionId, turns: flat.length }, `llm-summary session=${params.sessionId}`)
+
+        // Use incremental update prompt when a previous summary is available —
+        // this avoids re-summarizing already-compacted turns from scratch.
+        const prompt = params.previousSummary
+          ? `${UPDATE_COMPACTION_PROMPT}\n\n## Previous Summary\n${params.previousSummary}\n\n## New Conversation Turns\n${conversationText}`
+          : `${COMPACTION_PROMPT}\n\n## Conversation\n${conversationText}`
+
+        summaryText = await this.summarizeFn!(prompt)
+        this.emit('compaction.llm_summary.success', { sessionId: params.sessionId, turns: flat.length, incremental: !!params.previousSummary }, `llm-summary session=${params.sessionId} incremental=${!!params.previousSummary}`)
       } catch (err: unknown) {
         // Fall back to heuristic on LLM failure
         const msg = err instanceof Error ? err.message : String(err)

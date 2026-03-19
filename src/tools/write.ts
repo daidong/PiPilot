@@ -73,11 +73,8 @@ export const write: Tool<WriteInput, WriteOutput> = defineTool({
 
     return {
       success: true,
-      data: {
-        path: input.path,
-        bytes: input.content.length,
-        created: !existed
-      }
+      data: { path: input.path, bytes: input.content.length, created: !existed },
+      llmSummary: `${!existed ? 'Created' : 'Overwrote'} ${input.path} (${input.content.length} bytes)`
     }
   }
 })

@@ -95,6 +95,8 @@ export interface ExecOptions {
   timeout?: number
   env?: Record<string, string>
   caller?: string
+  /** Abort signal — when aborted, the child process is sent SIGTERM */
+  signal?: AbortSignal
 }
 
 /**

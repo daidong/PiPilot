@@ -29,6 +29,9 @@ export { docsOpen } from './docs-open.js'
 export { todoList } from './todo-list.js'
 export { todoGet } from './todo-get.js'
 
+// Skill namespace
+export { skillLoad } from './skill-load.js'
+
 // Type exports
 export type { SessionTraceParams, SessionTraceData, TraceEntry } from './session-trace.js'
 export type { CtxCatalogParams, CtxCatalogData, CatalogEntry } from './ctx-catalog.js'
@@ -41,6 +44,7 @@ export type { DocsSearchParams, DocsSearchData } from './docs-search.js'
 export type { DocsOpenParams, DocsOpenData } from './docs-open.js'
 export type { TodoListParams, TodoListData } from './todo-list.js'
 export type { TodoGetParams, TodoGetData } from './todo-get.js'
+export type { SkillLoadParams, SkillLoadData } from './skill-load.js'
 
 import type { ContextSource } from '../types/context.js'
 import { sessionTrace } from './session-trace.js'
@@ -54,6 +58,7 @@ import { docsSearch } from './docs-search.js'
 import { docsOpen } from './docs-open.js'
 import { todoList } from './todo-list.js'
 import { todoGet } from './todo-get.js'
+import { skillLoad } from './skill-load.js'
 
 /**
  * Session namespace context sources
@@ -101,6 +106,13 @@ export const todoContextSources: ContextSource<any, any>[] = [
 ]
 
 /**
+ * Skill namespace context sources
+ */
+export const skillContextSources: ContextSource<any, any>[] = [
+  skillLoad
+]
+
+/**
  * All builtin context sources
  */
 export const builtinContextSources: ContextSource<any, any>[] = [
@@ -108,7 +120,8 @@ export const builtinContextSources: ContextSource<any, any>[] = [
   ...metaContextSources,
   ...memoryContextSources,
   ...docsContextSources,
-  ...todoContextSources
+  ...todoContextSources,
+  ...skillContextSources
 ]
 
 /**

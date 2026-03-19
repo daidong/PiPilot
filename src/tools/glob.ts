@@ -69,14 +69,17 @@ export const glob: Tool<GlobInput, GlobOutput> = defineTool({
     const files = result.data!
     const meta = result.meta ?? {}
 
+    const truncated = meta.truncated ?? false
+    const total = meta.total
+    const header = truncated
+      ? `Found ${total ?? files.length}+ files matching "${input.pattern}" (showing ${files.length}):`
+      : `Found ${files.length} file${files.length !== 1 ? 's' : ''} matching "${input.pattern}"${files.length > 0 ? ':' : ''}`
+    const llmSummary = files.length > 0 ? `${header}\n${files.join('\n')}` : header
+
     return {
       success: true,
-      data: {
-        files,
-        count: files.length,
-        truncated: meta.truncated ?? false,
-        total: meta.total
-      }
+      data: { files, count: files.length, truncated, total },
+      llmSummary
     }
   }
 })

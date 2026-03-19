@@ -19,6 +19,7 @@ import { noSecretFiles } from '../policies/no-secret-files.js'
 import { normalizePathsPolicies } from '../policies/normalize-paths.js'
 import { autoLimitRead, autoLimitGrep, autoLimitGlob } from '../policies/auto-limit.js'
 import { contextRetrievalSkill, resourcefulPhilosophySkill } from '../skills/builtin/index.js'
+import { skillLoad } from '../context-sources/skill-load.js'
 
 /**
  * Safe Pack options
@@ -95,6 +96,7 @@ export function safe(options: SafePackOptions = {}): Pack {
       description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve, skill-script-run',
       tools,
       policies,
+      contextSources: [skillLoad as any],
       skills: packSkills,
       skillLoadingConfig: {
         eager: eagerSkills,
@@ -109,6 +111,7 @@ export function safe(options: SafePackOptions = {}): Pack {
     description: 'Safe core toolkit: ctx-get, read, write, edit, glob, grep, skill-create, skill-approve, skill-script-run',
     tools,
     policies,
+    contextSources: [skillLoad as any],
     promptFragment: `
 ## Core Tools Guide
 

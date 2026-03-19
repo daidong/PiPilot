@@ -95,12 +95,14 @@ describe('academicWritingSkill', () => {
       expect(manager.getState('academic-writing-skill')).toBe('fully-loaded')
     })
 
-    it('should provide summary content initially', () => {
+    it('should provide pointer content initially', () => {
       manager.register(academicWritingSkill)
 
       const content = manager.getContent('academic-writing-skill')
 
-      expect(content).toContain('Academic Writing')
+      // Lazy skills show a compact pointer, not the full summary
+      expect(content).toContain('skill:academic-writing-skill')
+      expect(content).toContain('skill.load')
       expect(content).not.toContain('Writing Philosophy')  // Full section not loaded yet
     })
 
