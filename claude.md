@@ -31,11 +31,21 @@ lib/                      # Research agent logic (framework-independent)
 ├── commands/             # Artifact CRUD, search, enrichment, session summaries
 ├── mentions/             # @-mention parsing, resolution, candidate generation
 ├── memory-v2/            # Artifact storage (JSONL), session summaries
-├── skills/               # Research skills (SKILL.md format)
+├── skills/               # Skills system (SKILL.md format)
+│   ├── builtin/          # 7 builtin skills (scientific-writing, matplotlib, etc.)
 │   ├── academic-writing/ # Writing assistance
 │   ├── literature/       # Literature search guidance
-│   └── data-analysis/    # Python analysis guidance
-├── tools/                # Custom AgentTool definitions
+│   ├── data-analysis/    # Python analysis guidance
+│   └── loader.ts         # Runtime skill discovery
+├── tools/                # Research tools (pi-mono AgentTool format)
+│   ├── index.ts          # createResearchTools() factory
+│   ├── web-tools.ts      # Brave Search + arXiv
+│   ├── literature-search.ts  # Multi-source pipeline
+│   ├── data-analyze.ts   # LLM-generated Python analysis
+│   ├── convert-document.ts   # PDF/DOCX → Markdown
+│   ├── entity-tools.ts   # Artifact CRUD
+│   ├── tool-utils.ts     # toAgentResult adapter
+│   └── types.ts          # ResearchToolContext
 └── types.ts              # Shared types (Artifact, ProjectConfig, etc.)
 
 shared-electron/          # Reusable Electron IPC utilities
@@ -55,10 +65,12 @@ Renderer (React + Zustand) → IPC invoke → Preload bridge → Main process �
 
 ### Agent Layer (pi-mono)
 The coordinator in `lib/agents/coordinator.ts` creates a pi-mono Agent with:
-- Built-in tools from pi-mono (read, write, edit, bash, grep, find)
-- Custom research tools (artifact CRUD, literature search, data analysis)
-- Skills loaded from `.pi/skills/` directory
-- beforeToolCall/afterToolCall hooks for policy enforcement
+- Built-in coding tools from `@mariozechner/pi-coding-agent` (read, write, edit, bash, grep, find)
+- Custom research tools via `createResearchTools()` from `lib/tools/index.ts`
+- Prompt registry in `lib/agents/prompts/index.ts` (bundler-safe inline strings)
+- Intent detection (rule-based + optional LLM) for dynamic system prompt modules
+- beforeToolCall/afterToolCall hooks for activity tracking
+- Skills discovered at runtime from builtin + workspace + user directories
 
 ### Artifact Storage
 - Stored in `.research-pilot/artifacts/{notes,papers,data,web-content,tool-output}/`
@@ -76,28 +88,36 @@ npx electron-vite build  # Production build
 
 ## Adding New Research Tools
 
-Define tools using pi-mono's AgentTool interface in `lib/tools/`:
+Define tools using pi-mono's AgentTool interface in `lib/tools/`, then register in `lib/tools/index.ts`:
 
 ```typescript
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
+import { toAgentResult } from './tool-utils.js'
+import type { ResearchToolContext } from './types.js'
 
-export const myTool: AgentTool = {
-  name: 'my-tool',
-  label: 'My Tool',
-  description: 'What it does',
-  parameters: Type.Object({
-    input: Type.String({ description: 'Input parameter' })
-  }),
-  execute: async (toolCallId, params, signal) => {
-    return { content: 'result' }
+export function createMyTool(ctx: ResearchToolContext): AgentTool {
+  return {
+    name: 'my-tool',
+    label: 'My Tool',
+    description: 'What it does',
+    parameters: Type.Object({
+      input: Type.String({ description: 'Input parameter' })
+    }),
+    execute: async (_toolCallId, rawParams) => {
+      const params = rawParams as Record<string, unknown>
+      // ... tool logic ...
+      return toAgentResult('my-tool', { success: true, data: result })
+    }
   }
 }
 ```
 
+Then add to `createResearchTools()` in `lib/tools/index.ts`.
+
 ## Adding New Skills
 
-Create a markdown file in `lib/skills/<name>/SKILL.md`:
+Create a markdown file in `lib/skills/builtin/<name>/SKILL.md` (or workspace `.pi/skills/<name>/SKILL.md`):
 
 ```markdown
 ---
@@ -112,4 +132,11 @@ Summary loaded at startup.
 Detailed guidance loaded on demand.
 ```
 
-Skills are auto-discovered by pi-mono from the `.pi/skills/` directory at runtime.
+Skills are auto-discovered from three locations (later overrides earlier):
+1. `lib/skills/builtin/` — shipped with the app
+2. `~/.research-pilot/skills/` — user-global
+3. `<workspace>/.pi/skills/` — project-specific
+
+## Adding New Prompts
+
+Add prompt strings to `lib/agents/prompts/index.ts` as key-value entries in the `prompts` record. Access via `loadPrompt('key-name')`.

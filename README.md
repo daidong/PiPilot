@@ -4,19 +4,22 @@ An AI-powered research assistant desktop application. Literature search, data an
 
 ## Status
 
-**Active development** on the `next-step` branch.
+**Active development.**
 
 > **Looking for AgentFoundry?** The original agent framework has been archived to [`archive/agentfoundry/`](archive/agentfoundry/). It is no longer maintained. See the [migration rationale](#why-the-migration) below.
 
 ## Features
 
-- Literature search across Semantic Scholar, arXiv, DBLP
-- Python-based data analysis with visualization
-- Academic writing assistance with citation management
-- Artifact management (notes, papers, data, web content)
-- @-mention system for inline entity references
-- Session continuity with automatic compaction (via pi-mono)
-- Electron desktop app with three-panel React UI
+- **Literature search** — multi-source pipeline (Semantic Scholar, arXiv, OpenAlex, DBLP) with LLM-driven planning, review, and synthesis
+- **Web search & fetch** — Brave Search API + arXiv, with rate limiting and caching
+- **Document conversion** — PDF/DOCX/PPTX/XLSX → Markdown via markitdown, with PDF page-range extraction
+- **Python data analysis** — LLM-generated analysis scripts with matplotlib/seaborn visualization
+- **Academic writing** — drafting, rewriting, citation management
+- **Artifact management** — notes, papers, data, web content with CRUD tools
+- **@-mention system** — inline entity references with resolution
+- **Skills system** — lazy-loaded procedural knowledge (7 builtin + workspace-discoverable)
+- **Session continuity** — automatic compaction and session summaries
+- **Electron desktop app** — three-panel React UI with Zustand stores
 
 ## Project Structure
 
@@ -27,12 +30,12 @@ app/                  # Electron desktop application
 └── src/renderer/     # React UI (Zustand stores, components)
 
 lib/                  # Research agent logic
-├── agents/           # Coordinator agent
+├── agents/           # Coordinator agent + prompt registry
 ├── commands/         # Artifact CRUD, search, enrichment
 ├── mentions/         # @-mention parsing and resolution
 ├── memory-v2/        # Artifact storage and session summaries
-├── skills/           # Research skills (academic-writing, literature, data-analysis)
-├── tools/            # Custom research tools
+├── skills/           # Skills system (loader + 7 builtin skills)
+├── tools/            # Research tools (web, literature, data, convert, artifacts)
 └── types.ts          # Shared type definitions
 
 shared-electron/      # Shared Electron IPC utilities
