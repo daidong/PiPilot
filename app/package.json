@@ -16,6 +16,7 @@
     "@mariozechner/pi-coding-agent": "^0.61.1",
     "@milkdown/plugin-diagram": "^7.7.0",
     "@milkdown/react": "^7.18.0",
+    "@sinclair/typebox": "^0.34.48",
     "katex": "^0.16.28",
     "lucide-react": "^0.469.0",
     "mermaid": "^11.12.2",

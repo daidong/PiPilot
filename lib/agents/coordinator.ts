@@ -16,14 +16,11 @@ import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Agent } from '@mariozechner/pi-agent-core'
 import { getModel as getPiModel, completeSimple } from '@mariozechner/pi-ai'
-import { Type } from '@mariozechner/pi-ai'
 import { createCodingTools } from '@mariozechner/pi-coding-agent'
-import type { AgentTool, AgentToolResult, AgentEvent } from '@mariozechner/pi-agent-core'
+import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent } from '@mariozechner/pi-ai'
-import type { TSchema } from '@sinclair/typebox'
 
-import { createSubagentTools } from './subagent-tools.js'
-import { createResearchMemoryTools, type ResearchTool } from '../tools/entity-tools.js'
+import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
@@ -203,63 +200,6 @@ function writeExplainSnapshot(projectPath: string, snapshot: TurnExplainSnapshot
   writeFileSync(path, JSON.stringify(snapshot, null, 2), 'utf-8')
 }
 
-/**
- * Adapt a ResearchTool to pi-mono's AgentTool format.
- */
-function adaptResearchTool(tool: ResearchTool): AgentTool {
-  // Build TypeBox schema from JSON Schema properties
-  const properties: Record<string, TSchema> = {}
-  const jsonProps = (tool.parameters as { properties?: Record<string, { type?: string; description?: string; enum?: string[] }> }).properties ?? {}
-  const requiredFields = (tool.parameters as { required?: string[] }).required ?? []
-
-  for (const [key, prop] of Object.entries(jsonProps)) {
-    const isRequired = requiredFields.includes(key)
-    let schema: TSchema
-
-    if (prop.enum) {
-      // Use union of literals for enum
-      schema = Type.Union(prop.enum.map(v => Type.Literal(v)))
-    } else if (prop.type === 'number') {
-      schema = Type.Number({ description: prop.description })
-    } else if (prop.type === 'array') {
-      schema = Type.Array(Type.String(), { description: prop.description })
-    } else {
-      schema = Type.String({ description: prop.description })
-    }
-
-    properties[key] = isRequired ? schema : Type.Optional(schema)
-  }
-
-  const parametersSchema = Type.Object(properties)
-
-  return {
-    name: tool.name,
-    description: tool.description,
-    label: tool.name,
-    parameters: parametersSchema,
-    execute: async (
-      toolCallId: string,
-      params: any,
-      signal?: AbortSignal,
-    ): Promise<AgentToolResult> => {
-      try {
-        const result = await tool.execute(params as Record<string, unknown>)
-        const text = JSON.stringify(result.data ?? { error: result.error }, null, 2)
-        return {
-          content: [{ type: 'text', text }],
-          details: result
-        }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err)
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: errorMsg }) }],
-          details: { success: false, error: errorMsg }
-        }
-      }
-    }
-  }
-}
-
 export interface CoordinatorConfig {
   apiKey: string
   model?: string
@@ -356,27 +296,24 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onToolResult?.(tool, result, args)
   }
 
-  // Create research-specific tools
-  const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(
-    apiKey,
-    modelId,
-    wrappedOnToolResult,
+  // Create research-specific tools via unified factory
+  const toolCtx: ResearchToolContext = {
+    workspacePath: projectPath,
+    sessionId,
     projectPath,
-    sessionId,
-    onToolCall
-  )
-
-  const memoryTools = createResearchMemoryTools({
-    sessionId,
-    projectPath
-  })
-
-  // Adapt research tools to pi-mono AgentTool format
-  const researchAgentTools: AgentTool[] = [
-    literatureSearchTool,
-    dataAnalyzeTool,
-    ...memoryTools
-  ].map(adaptResearchTool)
+    callLlm: async (systemPrompt: string, userContent: string) => {
+      if (!piModel) throw new Error('No model available for sub-call')
+      const result = await completeSimple(piModel, {
+        systemPrompt,
+        messages: [{ role: 'user', content: userContent, timestamp: Date.now() }]
+      }, { maxTokens: 4096, apiKey })
+      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
+      return textContent?.text ?? ''
+    },
+    onToolCall,
+    onToolResult: wrappedOnToolResult
+  }
+  const researchAgentTools: AgentTool[] = createResearchTools(toolCtx)
 
   // Create built-in coding tools from pi-coding-agent
   const codingTools = createCodingTools(projectPath)

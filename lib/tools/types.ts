@@ -1,0 +1,20 @@
+/**
+ * Research Copilot tool context and types.
+ *
+ * Simplified from myRAM's ToolContext — only what Research Copilot actually needs.
+ */
+
+export interface ResearchToolContext {
+  /** Root of the workspace (e.g., project directory) */
+  workspacePath: string
+  /** Current session identifier */
+  sessionId: string
+  /** Project-level path for artifact storage */
+  projectPath: string
+  /** Optional LLM call function for tools that need sub-calls */
+  callLlm?: (systemPrompt: string, userContent: string) => Promise<string>
+  /** Callback when a tool is invoked */
+  onToolCall?: (tool: string, args: unknown) => void
+  /** Callback when a tool returns */
+  onToolResult?: (tool: string, result: unknown) => void
+}

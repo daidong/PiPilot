@@ -20,7 +20,11 @@ export default defineConfig({
     resolve: {
       alias: {
         '@shared': resolve(__dirname, '../shared-ui'),
-        '@': resolve(__dirname, 'src/renderer')
+        '@': resolve(__dirname, 'src/renderer'),
+        // Ensure bare imports from shared-ui resolve from app/node_modules
+        'zustand': resolve(__dirname, 'node_modules/zustand'),
+        'lucide-react': resolve(__dirname, 'node_modules/lucide-react'),
+        'react': resolve(__dirname, 'node_modules/react')
       }
     }
   }
