@@ -8,12 +8,12 @@
 // Agents
 export { createCoordinator, createCoordinatorRunner } from './agents/coordinator.js'
 export type { CoordinatorConfig } from './agents/coordinator.js'
-export { createLiteratureTeam } from './agents/literature-team.js'
-export { createDataAnalyzer } from './agents/data-team.js'
-export type { AnalyzeResult } from './agents/data-team.js'
+// NOTE: createLiteratureTeam and createDataAnalyzer removed during pi-mono migration.
+// These were multi-agent team implementations that depended on AgentFoundry's team system.
+// They will be re-implemented with pi-mono agents.
 
-// Skills
-export { academicWritingSkill, literatureSkill, dataAnalysisSkill, researchPilotSkills } from './skills/index.js'
+// Skills (metadata only - pi-mono loads skills from .pi/skills/ at runtime)
+export { researchPilotSkills } from './skills/index.js'
 
 // Commands
 export {

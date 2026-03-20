@@ -1,6 +1,7 @@
-import type { KernelV2Config } from '../../../src/kernel-v2/types.js'
-
-export const RESEARCH_PILOT_KERNEL_V2_CONFIG: KernelV2Config = {
-  enabled: true,
+// KernelV2 config removed - pi-mono handles session management natively
+export const RESEARCH_PILOT_CONFIG = {
   profile: 'minimal'
 }
+
+// Keep the old export name for backward compatibility during migration
+export const RESEARCH_PILOT_KERNEL_V2_CONFIG = RESEARCH_PILOT_CONFIG

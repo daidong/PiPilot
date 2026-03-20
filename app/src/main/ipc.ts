@@ -1,7 +1,7 @@
-import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync } from 'fs'
+import { ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
-import { createCoordinator } from '@research-pilot/agents/coordinator'
+import { createCoordinator } from '../../../lib/agents/coordinator'
 import {
   listNotes, listLiterature, listData,
   searchEntities, deleteEntity,
@@ -9,16 +9,14 @@ import {
   memoryExplainTurn,
   sessionSummaryGet,
   enrichPaperArtifacts
-} from '@research-pilot/commands/index'
-import { parseMentions, resolveMentions, getCandidates } from '@research-pilot/mentions/index'
-import { setCachedMarkdown } from '@research-pilot/mentions/document-cache'
-import { PATHS, type ProjectConfig } from '@research-pilot/types'
-import { ensureAgentMd, migrateLegacyArtifacts } from '@research-pilot/memory-v2/store'
-import { createActivityFormatter } from '../../../../src/trace/activity-formatter.js'
-import { loadUsageTotals, resetUsageTotals } from '../../../../src/core/usage-totals.js'
+} from '../../../lib/commands/index'
+import { parseMentions, resolveMentions, getCandidates } from '../../../lib/mentions/index'
+import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
+import { PATHS, type ProjectConfig } from '../../../lib/types'
+import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 
-// ─── Shared utilities from @shared-electron ─────────────────────────────────
+// ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
   getFileName,
   inferMimeType,
@@ -33,76 +31,106 @@ import {
   registerUsageHandlers,
   registerAuthHandlers,
   registerFolderOpenHandler,
-} from '@shared-electron'
+} from '../../../shared-electron/index'
 
-function resolveDesktopCommunitySkillsDir(): string | undefined {
-  const envOverride = (process.env.AGENT_FOUNDRY_COMMUNITY_SKILLS_DIR || '').trim()
-  const appPath = app.getAppPath()
-  const resourcesPath = process.resourcesPath
-  const candidates = [
-    envOverride,
-    join(appPath, 'skills', 'community-builtin'),
-    join(appPath, 'out', 'skills', 'community-builtin'),
-    join(appPath, 'out', 'main', 'skills', 'community-builtin'),
-    resourcesPath ? join(resourcesPath, 'skills', 'community-builtin') : '',
-    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'skills', 'community-builtin') : '',
-    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'skills', 'community-builtin') : '',
-    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'main', 'skills', 'community-builtin') : '',
-    resolve(process.cwd(), 'out', 'skills', 'community-builtin'),
-    resolve(process.cwd(), 'out', 'main', 'skills', 'community-builtin'),
-    resolve(process.cwd(), 'examples', 'research-pilot-desktop', 'out', 'skills', 'community-builtin'),
-    resolve(process.cwd(), 'src', 'skills', 'community-builtin'),
-    resolve(process.cwd(), 'dist', 'skills', 'community-builtin')
-  ].filter(Boolean)
+// ─── Simple activity formatter (replaces AgentFoundry's createActivityFormatter) ─
+interface ActivityLabel { label: string; icon: string }
 
-  return [...new Set(candidates)].find(candidate => existsSync(candidate))
+/** Map tool names to human-readable activity labels */
+function formatToolCall(tool: string, args: unknown): ActivityLabel {
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
+
+  // Custom research-pilot tool labels
+  switch (tool) {
+    case 'literature-search':
+      return { label: `Search: ${((a.query as string) || '').slice(0, 40)}${((a.query as string) || '').length > 40 ? '...' : ''}`, icon: 'search' }
+    case 'lit-subtopic':
+      return { label: (a._summary as string) || 'Searching sub-topic', icon: 'search' }
+    case 'lit-enrich':
+      return { label: (a._summary as string) || 'Enriching paper metadata', icon: 'search' }
+    case 'lit-autosave':
+      return { label: (a._summary as string) || 'Saving papers', icon: 'file' }
+    case 'data-analyze':
+      return { label: `Analyze: ${getFileName((a.filePath as string) || '') || 'data'}`, icon: 'file' }
+    case 'convert_to_markdown': {
+      const sourcePath = ((a.path as string) || (a.uri as string) || '')
+      return { label: `Convert: ${getFileName(sourcePath)}`, icon: 'file' }
+    }
+    case 'artifact-create': {
+      const type = ((a.type as string) || 'artifact').toLowerCase()
+      const title = ((a.title as string) || type).slice(0, 35)
+      return { label: `Create ${type}: ${title}`, icon: 'file' }
+    }
+    // Generic tool labels
+    case 'read': return { label: `Read: ${getFileName((a.path as string) || '')}`, icon: 'file' }
+    case 'write': return { label: `Write: ${getFileName((a.path as string) || '')}`, icon: 'file' }
+    case 'edit': return { label: `Edit: ${getFileName((a.path as string) || '')}`, icon: 'file' }
+    case 'bash': return { label: `Run command`, icon: 'terminal' }
+    case 'glob': return { label: `Search files: ${(a.pattern as string) || ''}`, icon: 'search' }
+    case 'grep': return { label: `Search content: ${((a.pattern as string) || '').slice(0, 30)}`, icon: 'search' }
+    case 'fetch': return { label: `Fetch: ${((a.url as string) || '').slice(0, 40)}`, icon: 'network' }
+    default: return { label: `${tool}`, icon: 'tool' }
+  }
 }
 
-function resolveDesktopDefaultProjectSkillsDir(): string | undefined {
-  const envOverride = (process.env.AGENT_FOUNDRY_DEFAULT_PROJECT_SKILLS_DIR || '').trim()
-  const appPath = app.getAppPath()
-  const resourcesPath = process.resourcesPath
-  const candidates = [
-    envOverride,
-    join(appPath, 'skills', 'research-pilot-default-project-skills'),
-    join(appPath, 'out', 'skills', 'research-pilot-default-project-skills'),
-    join(appPath, 'out', 'main', 'skills', 'research-pilot-default-project-skills'),
-    resourcesPath ? join(resourcesPath, 'skills', 'research-pilot-default-project-skills') : '',
-    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'skills', 'research-pilot-default-project-skills') : '',
-    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'skills', 'research-pilot-default-project-skills') : '',
-    resourcesPath ? join(resourcesPath, 'app.asar.unpacked', 'out', 'main', 'skills', 'research-pilot-default-project-skills') : '',
-    resolve(process.cwd(), 'out', 'skills', 'research-pilot-default-project-skills'),
-    resolve(process.cwd(), 'out', 'main', 'skills', 'research-pilot-default-project-skills'),
-    resolve(process.cwd(), 'examples', 'research-pilot-desktop', 'out', 'skills', 'research-pilot-default-project-skills'),
-    resolve(process.cwd(), 'examples', 'research-pilot', 'skills', 'default-project-skills')
-  ].filter(Boolean)
+function formatToolResult(tool: string, result: unknown, args?: unknown): ActivityLabel {
+  const r = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
+  const data = (r.data && typeof r.data === 'object' ? r.data : {}) as Record<string, unknown>
 
-  return [...new Set(candidates)].find(candidate => existsSync(candidate))
+  switch (tool) {
+    case 'literature-search': {
+      const totalFound = (data.totalPapersFound as number) ?? 0
+      const saved = (data.papersAutoSaved as number) ?? 0
+      const coverage = data.coverage as { score?: number } | undefined
+      if (totalFound > 0) {
+        let summary = `Found ${totalFound} papers`
+        if (coverage?.score != null) summary += ` (coverage: ${Math.round(coverage.score * 100)}%)`
+        if (saved > 0) summary += `, saved ${saved}`
+        return { label: summary, icon: 'search' }
+      }
+      const local = (data.localPapersUsed as number) ?? 0
+      const external = (data.externalPapersUsed as number) ?? 0
+      const savedV1 = (data.savedPapers as number) ?? 0
+      let summary = `Found ${local + external} papers`
+      if (local > 0) summary += ` (${local} local)`
+      if (savedV1 > 0) summary += `, saved ${savedV1}`
+      return { label: summary, icon: 'search' }
+    }
+    case 'lit-subtopic':
+      return { label: (r.data as string) || 'Search completed', icon: 'search' }
+    case 'lit-enrich':
+      return { label: (r.data as string) || 'Enriched metadata', icon: 'search' }
+    case 'lit-autosave':
+      return { label: (r.data as string) || 'Saved papers', icon: 'file' }
+    case 'convert_to_markdown': {
+      const sourcePath = ((a.path as string) || (a.uri as string) || '')
+      const skill = typeof data.converterSkill === 'string' ? data.converterSkill : ''
+      const script = typeof data.converterScript === 'string' ? data.converterScript : ''
+      if (skill && script) return { label: `Converted ${getFileName(sourcePath)} via ${skill}/${script}`, icon: 'file' }
+      if (skill) return { label: `Converted ${getFileName(sourcePath)} via ${skill}`, icon: 'file' }
+      return { label: `Converted ${getFileName(sourcePath)}`, icon: 'file' }
+    }
+    case 'artifact-create': {
+      const type = (data.type as string) || 'artifact'
+      const title = (data.title as string) || ''
+      return { label: title ? `Created ${type}: ${title.slice(0, 30)}` : `Created ${type}`, icon: 'file' }
+    }
+    default: {
+      const success = r.success !== false
+      return { label: success ? `${tool} completed` : `${tool} failed`, icon: 'tool' }
+    }
+  }
 }
 
-function seedDefaultProjectSkills(projectPath: string): void {
-  const sourceRoot = resolveDesktopDefaultProjectSkillsDir()
-  if (!sourceRoot || !existsSync(sourceRoot)) return
+// ─── Simple in-memory usage totals (replaces AgentFoundry's usage-totals) ────
+function loadUsageTotals(_baseDir: string): Record<string, unknown> {
+  // TODO: Implement persistent usage tracking if needed
+  return { promptTokens: 0, completionTokens: 0, totalCost: 0 }
+}
 
-  const targetRoot = join(projectPath, '.agentfoundry', 'skills')
-  mkdirSync(targetRoot, { recursive: true })
-
-  let seeded = 0
-  for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    const sourceSkillDir = join(sourceRoot, entry.name)
-    const sourceSkillFile = join(sourceSkillDir, 'SKILL.md')
-    if (!existsSync(sourceSkillFile)) continue
-
-    const targetSkillDir = join(targetRoot, entry.name)
-    if (existsSync(targetSkillDir)) continue
-    cpSync(sourceSkillDir, targetSkillDir, { recursive: true })
-    seeded++
-  }
-
-  if (seeded > 0) {
-    console.log(`[ResearchPilot] seeded ${seeded} default project skill(s) from ${sourceRoot}`)
-  }
+function resetUsageTotals(_baseDir: string): Record<string, unknown> {
+  return { promptTokens: 0, completionTokens: 0, totalCost: 0 }
 }
 
 interface WindowRuntimeState {
@@ -114,104 +142,13 @@ interface WindowRuntimeState {
   sessionId: string
   isClosing: boolean
   realtimeBuffer: RealtimeBuffer
-  fmt: ReturnType<typeof createActivityFormatter>
 }
 
 const windowStates = new Map<number, WindowRuntimeState>()
 let ipcHandlersRegistered = false
 
-function createWindowActivityFormatter(state: WindowRuntimeState) {
-  return createActivityFormatter({
-    // Lazy getter: registry becomes available after coordinator is created
-    toolRegistry: () => state.coordinator?.agent?.runtime?.toolRegistry,
-    customRules: [
-      {
-        match: 'literature-search',
-        formatCall: (_, a) => ({ label: `Search: ${((a.query as string) || '').slice(0, 40)}${((a.query as string) || '').length > 40 ? '...' : ''}`, icon: 'search' }),
-        formatResult: (_, r) => {
-          const data = r.data as Record<string, unknown> | undefined
-          // v2 compressed result format
-          const totalFound = (data?.totalPapersFound as number) ?? 0
-          const saved = (data?.papersAutoSaved as number) ?? 0
-          const coverage = data?.coverage as { score?: number } | undefined
-          if (totalFound > 0) {
-            let summary = `Found ${totalFound} papers`
-            if (coverage?.score != null) summary += ` (coverage: ${Math.round(coverage.score * 100)}%)`
-            if (saved > 0) summary += `, saved ${saved}`
-            return { label: summary, icon: 'search' }
-          }
-          // v1 fallback
-          const local = (data?.localPapersUsed as number) ?? 0
-          const external = (data?.externalPapersUsed as number) ?? 0
-          const savedV1 = (data?.savedPapers as number) ?? 0
-          let summary = `Found ${local + external} papers`
-          if (local > 0) summary += ` (${local} local)`
-          if (savedV1 > 0) summary += `, saved ${savedV1}`
-          return { label: summary, icon: 'search' }
-        }
-      },
-      // Sub-topic search progress (ACTIVITY, not PROGRESS)
-      {
-        match: 'lit-subtopic',
-        formatCall: (_, a) => ({ label: (a._summary as string) || 'Searching sub-topic', icon: 'search' }),
-        formatResult: (_, r) => ({ label: (r.data as string) || 'Search completed', icon: 'search' }),
-      },
-      // Metadata enrichment progress
-      {
-        match: 'lit-enrich',
-        formatCall: (_, a) => ({ label: (a._summary as string) || 'Enriching paper metadata', icon: 'search' }),
-        formatResult: (_, r) => ({ label: (r.data as string) || 'Enriched metadata', icon: 'search' }),
-      },
-      // Auto-save papers
-      {
-        match: 'lit-autosave',
-        formatCall: (_, a) => ({ label: (a._summary as string) || 'Saving papers', icon: 'file' }),
-        formatResult: (_, r) => ({ label: (r.data as string) || 'Saved papers', icon: 'file' }),
-      },
-      {
-        match: 'data-analyze',
-        formatCall: (_, a) => ({ label: `Analyze: ${getFileName((a.filePath as string) || '') || 'data'}`, icon: 'file' }),
-      },
-      {
-        match: 'convert_to_markdown',
-        formatCall: (_, a) => {
-          const sourcePath = ((a.path as string) || (a.uri as string) || '')
-          return { label: `Convert: ${getFileName(sourcePath)}`, icon: 'file' }
-        },
-        formatResult: (_, r, a) => {
-          const sourcePath = ((a?.path as string) || (a?.uri as string) || '')
-          const data = (r.data as Record<string, unknown> | undefined) ?? {}
-          const skill = typeof data.converterSkill === 'string' ? data.converterSkill : ''
-          const script = typeof data.converterScript === 'string' ? data.converterScript : ''
-          if (skill && script) {
-            return { label: `Converted ${getFileName(sourcePath)} via ${skill}/${script}`, icon: 'file' }
-          }
-          if (skill) {
-            return { label: `Converted ${getFileName(sourcePath)} via ${skill}`, icon: 'file' }
-          }
-          return { label: `Converted ${getFileName(sourcePath)}`, icon: 'file' }
-        },
-      },
-      {
-        match: 'artifact-create',
-        formatCall: (_, a) => {
-          const type = ((a.type as string) || 'artifact').toLowerCase()
-          const title = ((a.title as string) || type).slice(0, 35)
-          return { label: `Create ${type}: ${title}`, icon: 'file' }
-        },
-        formatResult: (_, r) => {
-          const data = (r.data as any) || {}
-          const type = (data.type as string) || 'artifact'
-          const title = (data.title as string) || ''
-          return { label: title ? `Created ${type}: ${title.slice(0, 30)}` : `Created ${type}`, icon: 'file' }
-        }
-      },
-    ]
-  })
-}
-
 function createWindowRuntimeState(): WindowRuntimeState {
-  const state: WindowRuntimeState = {
+  return {
     coordinator: null,
     currentModel: 'gpt-5.4',
     currentReasoningEffort: 'medium',
@@ -220,10 +157,7 @@ function createWindowRuntimeState(): WindowRuntimeState {
     sessionId: crypto.randomUUID(),
     isClosing: false,
     realtimeBuffer: createRealtimeBuffer(),
-    fmt: undefined as unknown as ReturnType<typeof createActivityFormatter>
   }
-  state.fmt = createWindowActivityFormatter(state)
-  return state
 }
 
 function getOrCreateWindowState(win: BrowserWindow): WindowRuntimeState {
@@ -331,8 +265,6 @@ function initializeProject(path: string): void {
     writeFileSync(projectFile, JSON.stringify(defaultConfig, null, 2))
   }
 
-  seedDefaultProjectSkills(path)
-
   // Ensure agent.md note exists (pinned, always-present)
   ensureAgentMd(path)
   const migration = migrateLegacyArtifacts(path)
@@ -370,7 +302,6 @@ async function ensureCoordinator(
   if (!state.coordinator) {
     const apiKey = resolvedAuth.apiKey
     const runProjectPath = state.projectPath
-    const communitySkillsDir = resolveDesktopCommunitySkillsDir()
 
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
     const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
@@ -383,7 +314,6 @@ async function ensureCoordinator(
       reasoningEffort: state.currentReasoningEffort,
       projectPath: state.projectPath,
       sessionId: state.sessionId,
-      communitySkillsDir,
       debug: true,
       onStream: (chunk: string) => {
         state.realtimeBuffer.appendChunk(chunk)
@@ -391,7 +321,7 @@ async function ensureCoordinator(
       },
       onToolCall: (tool: string, args: unknown) => {
         // Send activity event for tool invocation
-        const summary = state.fmt.formatToolCall(tool, args).label
+        const summary = formatToolCall(tool, args).label
         const event = { type: 'tool-call', tool, summary }
         state.realtimeBuffer.pushActivity(event)
         safeSend(win, 'agent:activity', event)
@@ -465,7 +395,7 @@ async function ensureCoordinator(
         const r = result as any
         const success = r?.success !== false
         const error = !success ? (r?.error || 'Unknown error') : undefined
-        const summary = state.fmt.formatToolResult(tool, result, args).label
+        const summary = formatToolResult(tool, result, args).label
         const actEvent = { type: 'tool-result', tool, summary, success, error }
         state.realtimeBuffer.pushActivity(actEvent)
         safeSend(win, 'agent:activity', actEvent)

@@ -1,11 +1,12 @@
 /**
  * Research Pilot Memory V2 Tools (RFC-012)
+ *
+ * Rewritten to use simple ResearchTool interface instead of AgentFoundry's defineTool.
+ * Tool execution logic (createArtifact, updateArtifact, searchArtifacts) is unchanged.
  */
 
 import { existsSync } from 'fs'
 import { isAbsolute, resolve } from 'path'
-import { defineTool } from '../../../src/factories/define-tool.js'
-import type { Tool } from '../../../src/types/tool.js'
 import { type ArtifactType, type CLIContext } from '../types.js'
 import {
   createArtifact,
@@ -13,6 +14,17 @@ import {
   updateArtifact,
   type CreateArtifactInput
 } from '../memory-v2/store.js'
+
+/**
+ * Simple tool interface for research tools.
+ * These will be adapted to pi-mono's AgentTool format by the coordinator.
+ */
+export interface ResearchTool {
+  name: string
+  description: string
+  parameters: Record<string, unknown>  // JSON Schema
+  execute: (input: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown; error?: string }>
+}
 
 function generateCiteKey(authors: string[], year?: number, title?: string): string {
   const firstAuthor = authors[0] || 'unknown'
@@ -32,154 +44,41 @@ function parseJsonSafely(text: string): unknown {
   }
 }
 
-async function maybeRegisterArtifactInKernel(
-  runtime: { kernelV2?: unknown },
-  params: {
-    sessionId: string
-    type: ArtifactType
-    title: string
-    path: string
-    summary?: string
-  }
-): Promise<void> {
-  const kernel = runtime.kernelV2 as {
-    addArtifact?: (input: {
-      sessionId: string
-      type: 'document' | 'tool-output' | 'file-snapshot' | 'web-content'
-      path: string
-      mimeType: string
-      summary: string
-      sourceRef: string
-    }) => Promise<void>
-  } | undefined
-
-  if (!kernel?.addArtifact) return
-
-  let type: 'document' | 'tool-output' | 'file-snapshot' | 'web-content' = 'document'
-  if (params.type === 'tool-output') type = 'tool-output'
-  if (params.type === 'data') type = 'file-snapshot'
-  if (params.type === 'web-content') type = 'web-content'
-
-  await kernel.addArtifact({
-    sessionId: params.sessionId,
-    type,
-    path: params.path,
-    mimeType: 'application/json',
-    summary: params.summary ?? params.title,
-    sourceRef: `artifact:${params.type}:${params.title}`
-  })
-}
-
-export function createArtifactCreateTool(sessionId: string, projectPath: string): Tool {
-  return defineTool({
+export function createArtifactCreateTool(sessionId: string, projectPath: string): ResearchTool {
+  return {
     name: 'artifact-create',
     description: 'Create an artifact (note, paper, data, web-content, tool-output). This is the canonical persistence API for Research Pilot Memory V2.',
     parameters: {
-      type: {
-        type: 'string',
-        enum: ['note', 'paper', 'data', 'web-content', 'tool-output'],
-        required: true,
-        description: 'Artifact type'
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['note', 'paper', 'data', 'web-content', 'tool-output'],
+          description: 'Artifact type'
+        },
+        title: { type: 'string', description: 'Artifact title' },
+        content: { type: 'string', description: 'Content for note or web-content' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Artifact tags' },
+        summary: { type: 'string', description: 'Optional concise summary' },
+        authors: { type: 'array', items: { type: 'string' }, description: 'Paper authors' },
+        abstract: { type: 'string', description: 'Paper abstract' },
+        year: { type: 'number', description: 'Paper year' },
+        venue: { type: 'string', description: 'Paper venue' },
+        citeKey: { type: 'string', description: 'Paper citation key' },
+        doi: { type: 'string', description: 'Paper DOI' },
+        bibtex: { type: 'string', description: 'Paper BibTeX' },
+        url: { type: 'string', description: 'Paper or web URL' },
+        pdfUrl: { type: 'string', description: 'Paper PDF URL' },
+        filePath: { type: 'string', description: 'Data artifact file path' },
+        mimeType: { type: 'string', description: 'Data artifact MIME type' },
+        schemaJson: { type: 'string', description: 'JSON string for data schema' },
+        toolName: { type: 'string', description: 'Tool name for tool-output artifacts' },
+        outputPath: { type: 'string', description: 'Output file path for tool-output artifacts' },
+        outputText: { type: 'string', description: 'Output text for tool-output artifacts' }
       },
-      title: {
-        type: 'string',
-        required: true,
-        description: 'Artifact title'
-      },
-      content: {
-        type: 'string',
-        required: false,
-        description: 'Content for note or web-content'
-      },
-      tags: {
-        type: 'array',
-        items: { type: 'string' },
-        required: false,
-        description: 'Artifact tags'
-      },
-      summary: {
-        type: 'string',
-        required: false,
-        description: 'Optional concise summary'
-      },
-      authors: {
-        type: 'array',
-        items: { type: 'string' },
-        required: false,
-        description: 'Paper authors'
-      },
-      abstract: {
-        type: 'string',
-        required: false,
-        description: 'Paper abstract'
-      },
-      year: {
-        type: 'number',
-        required: false,
-        description: 'Paper year'
-      },
-      venue: {
-        type: 'string',
-        required: false,
-        description: 'Paper venue'
-      },
-      citeKey: {
-        type: 'string',
-        required: false,
-        description: 'Paper citation key'
-      },
-      doi: {
-        type: 'string',
-        required: false,
-        description: 'Paper DOI'
-      },
-      bibtex: {
-        type: 'string',
-        required: false,
-        description: 'Paper BibTeX'
-      },
-      url: {
-        type: 'string',
-        required: false,
-        description: 'Paper or web URL'
-      },
-      pdfUrl: {
-        type: 'string',
-        required: false,
-        description: 'Paper PDF URL'
-      },
-      filePath: {
-        type: 'string',
-        required: false,
-        description: 'Data artifact file path'
-      },
-      mimeType: {
-        type: 'string',
-        required: false,
-        description: 'Data artifact MIME type'
-      },
-      schemaJson: {
-        type: 'string',
-        required: false,
-        description: 'JSON string for data schema'
-      },
-      toolName: {
-        type: 'string',
-        required: false,
-        description: 'Tool name for tool-output artifacts'
-      },
-      outputPath: {
-        type: 'string',
-        required: false,
-        description: 'Output file path for tool-output artifacts'
-      },
-      outputText: {
-        type: 'string',
-        required: false,
-        description: 'Output text for tool-output artifacts'
-      }
+      required: ['type', 'title']
     },
-    execute: async (input, context) => {
+    execute: async (input) => {
       const args = input as Record<string, unknown>
       const type = String(args.type) as ArtifactType
       const title = String(args.title || '').trim()
@@ -269,13 +168,6 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
       }
 
       const { artifact, filePath } = createArtifact(payload, cliContext)
-      await maybeRegisterArtifactInKernel(context.runtime, {
-        sessionId,
-        type: artifact.type,
-        title: artifact.title,
-        path: filePath,
-        summary: artifact.summary
-      })
 
       return {
         success: true,
@@ -287,28 +179,32 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
         }
       }
     }
-  })
+  }
 }
 
-export function createArtifactUpdateTool(projectPath: string): Tool {
-  return defineTool({
+export function createArtifactUpdateTool(projectPath: string): ResearchTool {
+  return {
     name: 'artifact-update',
     description: 'Update fields for an existing artifact by id or id prefix.',
     parameters: {
-      id: { type: 'string', required: true, description: 'Artifact id (full or prefix)' },
-      title: { type: 'string', required: false, description: 'Updated title' },
-      summary: { type: 'string', required: false, description: 'Updated summary' },
-      content: { type: 'string', required: false, description: 'Updated note/web content' },
-      tags: { type: 'array', items: { type: 'string' }, required: false, description: 'Updated tags' },
-      abstract: { type: 'string', required: false, description: 'Paper abstract' },
-      year: { type: 'number', required: false, description: 'Paper year' },
-      venue: { type: 'string', required: false, description: 'Paper venue' },
-      url: { type: 'string', required: false, description: 'Paper/web URL' },
-      doi: { type: 'string', required: false, description: 'Paper DOI' },
-      bibtex: { type: 'string', required: false, description: 'Paper BibTeX' },
-      pdfUrl: { type: 'string', required: false, description: 'Paper PDF URL' }
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Artifact id (full or prefix)' },
+        title: { type: 'string', description: 'Updated title' },
+        summary: { type: 'string', description: 'Updated summary' },
+        content: { type: 'string', description: 'Updated note/web content' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Updated tags' },
+        abstract: { type: 'string', description: 'Paper abstract' },
+        year: { type: 'number', description: 'Paper year' },
+        venue: { type: 'string', description: 'Paper venue' },
+        url: { type: 'string', description: 'Paper/web URL' },
+        doi: { type: 'string', description: 'Paper DOI' },
+        bibtex: { type: 'string', description: 'Paper BibTeX' },
+        pdfUrl: { type: 'string', description: 'Paper PDF URL' }
+      },
+      required: ['id']
     },
-    execute: async (input, context) => {
+    execute: async (input) => {
       const args = input as Record<string, unknown>
       const id = String(args.id || '')
       if (!id) return { success: false, error: 'id is required' }
@@ -331,14 +227,6 @@ export function createArtifactUpdateTool(projectPath: string): Tool {
         return { success: false, error: `Artifact not found: ${id}` }
       }
 
-      await maybeRegisterArtifactInKernel(context.runtime, {
-        sessionId: context.sessionId,
-        type: updated.artifact.type,
-        title: updated.artifact.title,
-        path: updated.filePath,
-        summary: updated.artifact.summary
-      })
-
       return {
         success: true,
         data: {
@@ -349,21 +237,24 @@ export function createArtifactUpdateTool(projectPath: string): Tool {
         }
       }
     }
-  })
+  }
 }
 
-export function createArtifactSearchTool(projectPath: string): Tool {
-  return defineTool({
+export function createArtifactSearchTool(projectPath: string): ResearchTool {
+  return {
     name: 'artifact-search',
     description: 'Search artifacts by query terms and return ranked hits.',
     parameters: {
-      query: { type: 'string', required: true, description: 'Search query' },
-      type: {
-        type: 'string',
-        enum: ['note', 'paper', 'data', 'web-content', 'tool-output'],
-        required: false,
-        description: 'Optional artifact type filter'
-      }
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query' },
+        type: {
+          type: 'string',
+          enum: ['note', 'paper', 'data', 'web-content', 'tool-output'],
+          description: 'Optional artifact type filter'
+        }
+      },
+      required: ['query']
     },
     execute: async (input) => {
       const args = input as Record<string, unknown>
@@ -383,13 +274,13 @@ export function createArtifactSearchTool(projectPath: string): Tool {
         }))
       }
     }
-  })
+  }
 }
 
 export function createResearchMemoryTools(params: {
   sessionId: string
   projectPath: string
-}): Tool[] {
+}): ResearchTool[] {
   return [
     createArtifactCreateTool(params.sessionId, params.projectPath),
     createArtifactUpdateTool(params.projectPath),

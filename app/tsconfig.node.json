@@ -10,7 +10,7 @@
     "paths": {
       "@shared-electron/*": ["../shared-electron/*"],
       "@shared-electron": ["../shared-electron/index.ts"],
-      "@research-pilot/*": ["../research-pilot/*"]
+      "@research-pilot/*": ["../lib/*"]
     }
   },
   "include": ["src/main/**/*", "src/preload/**/*", "electron.vite.config.ts"]

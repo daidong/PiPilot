@@ -8,7 +8,7 @@ export default defineConfig({
     resolve: {
       alias: {
         '@shared-electron': resolve(__dirname, '../shared-electron'),
-        '@research-pilot': resolve(__dirname, '../research-pilot')
+        '@research-pilot': resolve(__dirname, '../lib')
       }
     }
   },

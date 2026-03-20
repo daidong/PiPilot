@@ -1,15 +1,19 @@
 {
-  "name": "research-pilot-desktop",
+  "name": "research-copilot",
   "version": "0.1.0",
   "private": true,
+  "description": "AI-powered research assistant desktop application",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build && node ../../scripts/copy-desktop-community-skills.mjs",
+    "build": "electron-vite build",
     "preview": "electron-vite preview",
     "icon:generate": "python3 scripts/generate-app-icon.py"
   },
   "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.61.1",
+    "@mariozechner/pi-ai": "^0.61.1",
+    "@mariozechner/pi-coding-agent": "^0.61.1",
     "@milkdown/plugin-diagram": "^7.7.0",
     "@milkdown/react": "^7.18.0",
     "katex": "^0.16.28",

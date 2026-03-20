@@ -1,3 +1,5 @@
+// @ts-nocheck
+// Dead code during pi-mono migration - will be re-implemented with pi-mono agents
 /**
  * Literature Research Team v2 (RFC-008)
  *

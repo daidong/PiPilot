@@ -1,27 +1,30 @@
 /**
- * Coordinator Agent (Research Pilot Memory Minimal Core - RFC-015)
+ * Coordinator Agent (Research Pilot - pi-mono migration)
  *
  * Key behavior:
  * - Canonical durable memory surface: Artifact
  * - Cross-turn continuity is provided by Session Summary snapshots
- * - Context is assembled by Kernel V2 with mention selections + latest session summary
+ * - Context is assembled with mention selections + latest session summary
+ *
+ * Rewritten from AgentFoundry to use pi-mono:
+ * - @mariozechner/pi-agent-core for Agent
+ * - @mariozechner/pi-ai for model resolution and LLM calls
+ * - @mariozechner/pi-coding-agent for built-in coding tools
  */
 
-import { join, parse } from 'path'
-import { z } from 'zod'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { createAgent, packs, definePack, defineTool, tryLoadConfig } from '../../../src/index.js'
-import { createLLMClientFromModelId, getLanguageModelByModelId, generateStructured } from '../../../src/llm/index.js'
-import { getModel } from '../../../src/llm/models.js'
+import { join } from 'path'
+import { mkdirSync, writeFileSync } from 'fs'
+import { Agent } from '@mariozechner/pi-agent-core'
+import { getModel as getPiModel, completeSimple } from '@mariozechner/pi-ai'
+import { Type } from '@mariozechner/pi-ai'
+import { createCodingTools } from '@mariozechner/pi-coding-agent'
+import type { AgentTool, AgentToolResult, AgentEvent } from '@mariozechner/pi-agent-core'
+import type { Model, TextContent } from '@mariozechner/pi-ai'
+import type { TSchema } from '@sinclair/typebox'
+
 import { createSubagentTools } from './subagent-tools.js'
-import { createResearchMemoryTools } from '../tools/entity-tools.js'
-import { RESEARCH_PILOT_KERNEL_V2_CONFIG } from '../config/kernel-v2.js'
-import type { Agent } from '../../../src/types/agent.js'
-import type { ContextSelection } from '../../../src/types/context-pipeline.js'
-import type { SkillScriptMetadata } from '../../../src/types/skill.js'
-import { countTokens } from '../../../src/utils/tokenizer.js'
+import { createResearchMemoryTools, type ResearchTool } from '../tools/entity-tools.js'
 import { loadPrompt } from './prompts/index.js'
-import { researchPilotSkills } from '../skills/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import {
@@ -64,32 +67,10 @@ const INTENT_MODULES: Partial<Record<IntentLabel, string>> = {
   critique: 'coordinator-module-critique'
 }
 
-const INTENT_SKILL_IDS: Partial<Record<IntentLabel, string>> = {
-  literature: 'literature-skill',
-  data: 'data-analysis-skill',
-  writing: 'academic-writing-skill',
-  citation: 'citation-management',
-  grants: 'research-grants',
-  docx: 'document-docx'
-}
-
-const INTENT_TAG_HINTS: Partial<Record<IntentLabel, string[]>> = {
-  literature: ['literature', 'papers', 'research'],
-  data: ['data', 'analysis'],
-  writing: ['writing', 'academic'],
-  citation: ['citations', 'bibtex', 'doi'],
-  grants: ['grants', 'proposal'],
-  docx: ['docx', 'document-processing']
-}
-
 interface TurnExplainSnapshot {
   timestamp: string
   sessionId: string
   intents: string[]
-  skillRouting?: {
-    explicitPreloads: string[]
-    recommendedPreloads: string[]
-  }
   selectedContext: {
     mentionSelections: number
     approxTokens: number
@@ -105,7 +86,6 @@ interface TurnExplainSnapshot {
   }
   budget: {
     model: string
-    contextWindow?: number
     promptTokens?: number
     completionTokens?: number
     totalTokens?: number
@@ -129,304 +109,35 @@ function detectIntentsByRules(message: string): Set<IntentLabel> {
 }
 
 async function classifyIntentWithLLM(
-  routerClient: ReturnType<typeof createLLMClientFromModelId> | null,
+  model: Model<any> | null,
+  apiKey: string,
   message: string
 ): Promise<IntentLabel> {
-  if (!routerClient) return 'general'
+  if (!model) return 'general'
 
-  const system = [
+  const systemPrompt = [
     'You are an intent router for a research assistant.',
     'Choose ONE label from: literature, data, writing, critique, web, citation, grants, docx, general.',
     'Output only the label.'
   ].join(' ')
 
   try {
-    const result = await routerClient.generate({
-      system,
-      messages: [{ role: 'user', content: message }],
-      maxTokens: 6
+    const result = await completeSimple(model, {
+      systemPrompt,
+      messages: [{ role: 'user', content: message, timestamp: Date.now() }]
+    }, {
+      maxTokens: 6,
+      apiKey
     })
-    const label = result.text.trim().toLowerCase().split(/\s+/)[0] as IntentLabel
+
+    const textContent = result.content.find((c): c is TextContent => c.type === 'text')
+    const label = (textContent?.text ?? '').trim().toLowerCase().split(/\s+/)[0] as IntentLabel
     if (INTENT_PRIORITY.includes(label)) return label
   } catch {
     // fallback
   }
 
   return 'general'
-}
-
-interface ScriptCandidate {
-  skillId: string
-  script: string
-  score: number
-  reason: string
-}
-
-interface ConversionCapability {
-  extensions?: string[]
-  script?: string
-}
-
-interface PreferredConversionScript {
-  skillId: string
-  script: string
-  successes: number
-  failures: number
-  lastUsedAt: number
-}
-
-interface SkillPreloadDecision {
-  explicitPreloads: string[]
-  recommendedPreloads: string[]
-}
-
-function isScriptOnlySkill(skill: { tools?: unknown[] } | null | undefined): boolean {
-  if (!skill || !Array.isArray(skill.tools)) return false
-  return skill.tools.length === 1 && skill.tools[0] === 'skill-script-run'
-}
-
-function normalizeExtension(ext: string): string {
-  return ext.toLowerCase().replace(/^\./, '').trim()
-}
-
-function normalizeScriptName(script: SkillScriptMetadata): string {
-  const raw = (script.name ?? script.fileName ?? '').trim()
-  if (!raw) return ''
-  const ext = raw.lastIndexOf('.')
-  return ext > 0 ? raw.slice(0, ext) : raw
-}
-
-function readConversionCapability(skill: { meta?: Record<string, unknown> }): ConversionCapability | null {
-  const meta = skill.meta
-  if (!meta || typeof meta !== 'object') return null
-  const capabilities = (meta as Record<string, unknown>).capabilities
-  if (!capabilities || typeof capabilities !== 'object') return null
-  const convert = (capabilities as Record<string, unknown>).convert_to_markdown
-  if (!convert || typeof convert !== 'object') return null
-
-  const convertObj = convert as Record<string, unknown>
-  const extensions = Array.isArray(convertObj.extensions)
-    ? convertObj.extensions
-      .map(item => typeof item === 'string' ? normalizeExtension(item) : '')
-      .filter(Boolean)
-    : undefined
-  const script = typeof convertObj.script === 'string' && convertObj.script.trim()
-    ? convertObj.script.trim().toLowerCase()
-    : undefined
-
-  if ((!extensions || extensions.length === 0) && !script) return null
-  return { extensions, script }
-}
-
-function scoreScriptCandidate(
-  skillId: string,
-  scriptName: string,
-  extNoDot: string,
-  options?: {
-    capability?: ConversionCapability | null
-    preferred?: PreferredConversionScript | null
-  }
-): { score: number; reason: string } | null {
-  const normalizedSkill = skillId.toLowerCase()
-  const normalizedScript = scriptName.toLowerCase()
-  let score = 0
-  const reasons: string[] = []
-
-  if (normalizedScript === `${extNoDot}-to-markdown`) {
-    score += 240
-    reasons.push('exact extension converter')
-  } else if (normalizedScript === 'convert-file') {
-    score += 200
-    reasons.push('generic file converter')
-  } else if (normalizedScript === 'convert-to-markdown') {
-    score += 180
-    reasons.push('explicit markdown converter')
-  } else if (normalizedScript.includes('to-markdown')) {
-    score += 160
-    reasons.push('markdown conversion script')
-  } else if (normalizedScript.includes('convert') && normalizedScript.includes('markdown')) {
-    score += 140
-    reasons.push('convert+markdown script')
-  } else if (normalizedScript.includes('convert')) {
-    score += 80
-    reasons.push('generic conversion script')
-  }
-
-  if (normalizedScript.includes(extNoDot)) {
-    score += 40
-    reasons.push('extension mentioned in script')
-  }
-
-  if (normalizedSkill.includes('markitdown')) {
-    score += 35
-    reasons.push('markitdown skill')
-  }
-
-  if (normalizedSkill.includes(extNoDot)) {
-    score += 30
-    reasons.push('extension-aligned skill')
-  }
-
-  if (options?.capability?.extensions?.includes(extNoDot)) {
-    score += 90
-    reasons.push('declared extension capability')
-  }
-
-  if (options?.capability?.script && options.capability.script === normalizedScript) {
-    score += 110
-    reasons.push('declared preferred conversion script')
-  }
-
-  if (
-    options?.preferred &&
-    options.preferred.skillId === skillId &&
-    options.preferred.script.toLowerCase() === normalizedScript
-  ) {
-    score += 160
-    reasons.push('previous successful converter')
-    score += Math.min(40, options.preferred.successes * 8)
-    score -= Math.min(30, options.preferred.failures * 10)
-  }
-
-  if (score <= 0) return null
-
-  return {
-    score,
-    reason: reasons.join(', ')
-  }
-}
-
-function discoverDynamicConversionScripts(
-  skillManager: any,
-  inputPath: string,
-  preferredByExt?: Map<string, PreferredConversionScript>
-): ScriptCandidate[] {
-  if (!skillManager || typeof skillManager.getAll !== 'function') {
-    return []
-  }
-
-  const extNoDot = normalizeExtension(parse(inputPath).ext)
-  if (!extNoDot) return []
-
-  const preferred = preferredByExt?.get(extNoDot) ?? null
-  const skills = skillManager.getAll() as Array<{
-    id: string
-    meta?: Record<string, unknown> & { scripts?: SkillScriptMetadata[] }
-  }>
-  const candidates: ScriptCandidate[] = []
-  const seen = new Set<string>()
-
-  for (const skill of skills) {
-    const scripts = skill.meta?.scripts
-    if (!Array.isArray(scripts) || scripts.length === 0) continue
-    const capability = readConversionCapability(skill)
-
-    for (const script of scripts) {
-      const scriptName = normalizeScriptName(script)
-      if (!scriptName) continue
-
-      const scored = scoreScriptCandidate(skill.id, scriptName, extNoDot, {
-        capability,
-        preferred
-      })
-      if (!scored) continue
-
-      const key = `${skill.id}:${scriptName}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      candidates.push({
-        skillId: skill.id,
-        script: scriptName,
-        score: scored.score,
-        reason: scored.reason
-      })
-    }
-  }
-
-  candidates.sort((a, b) => {
-    if (a.score !== b.score) return b.score - a.score
-    if (a.skillId !== b.skillId) return a.skillId.localeCompare(b.skillId)
-    return a.script.localeCompare(b.script)
-  })
-
-  return candidates
-}
-
-function recommendSkillsForMessage(
-  message: string,
-  intents: Set<IntentLabel>,
-  skillRegistry: any
-): string[] {
-  if (!skillRegistry || typeof skillRegistry.findMatches !== 'function') {
-    return []
-  }
-
-  const tagHints = new Set<string>()
-  for (const intent of intents) {
-    const tags = INTENT_TAG_HINTS[intent] ?? []
-    for (const tag of tags) tagHints.add(tag)
-  }
-
-  const matches = skillRegistry.findMatches({
-    ...(tagHints.size > 0 ? { tags: Array.from(tagHints) } : {}),
-    search: message
-  }) as Array<{
-    score: number
-    skill?: { id?: string; loadingStrategy?: string; meta?: Record<string, unknown>; tools?: unknown[] }
-  }>
-
-  if (!Array.isArray(matches) || matches.length === 0) {
-    return []
-  }
-
-  const recommended: string[] = []
-  for (const match of matches) {
-    const skill = match.skill
-    if (!skill?.id) continue
-    if ((match.score ?? 0) < 25) continue
-    if (skill.loadingStrategy === 'on-demand') continue
-    if (isScriptOnlySkill(skill)) continue
-    const sourceType = typeof skill.meta?.sourceType === 'string' ? skill.meta.sourceType : ''
-    if (sourceType !== 'community-builtin' && sourceType !== 'project-local') continue
-    recommended.push(skill.id)
-    if (recommended.length >= 3) break
-  }
-
-  return recommended
-}
-
-function preloadSkillsForIntents(
-  message: string,
-  intents: Set<IntentLabel>,
-  skillManager: any,
-  skillRegistry: any
-): SkillPreloadDecision {
-  const decision: SkillPreloadDecision = {
-    explicitPreloads: [],
-    recommendedPreloads: []
-  }
-  if (!skillManager || typeof skillManager.loadFully !== 'function') return decision
-
-  const loaded = new Set<string>()
-  for (const intent of intents) {
-    const skillId = INTENT_SKILL_IDS[intent]
-    if (!skillId || loaded.has(skillId)) continue
-    const skill = typeof skillManager.get === 'function' ? skillManager.get(skillId) : null
-    if (isScriptOnlySkill(skill)) continue
-    loaded.add(skillId)
-    decision.explicitPreloads.push(skillId)
-    skillManager.loadFully(skillId)
-  }
-
-  const recommended = recommendSkillsForMessage(message, intents, skillRegistry)
-  for (const skillId of recommended) {
-    if (loaded.has(skillId)) continue
-    loaded.add(skillId)
-    decision.recommendedPreloads.push(skillId)
-    skillManager.loadFully(skillId)
-  }
-
-  return decision
 }
 
 function classifyPersistenceDecision(message: string): { decision: PersistenceDecision; reason: string } {
@@ -452,8 +163,6 @@ function buildAdditionalInstructions(intents: Set<IntentLabel>): string | undefi
   const modules: string[] = []
 
   for (const intent of ordered) {
-    if (INTENT_SKILL_IDS[intent]) continue
-
     const name = INTENT_MODULES[intent]
     if (name) {
       modules.push(loadPrompt(name))
@@ -463,26 +172,16 @@ function buildAdditionalInstructions(intents: Set<IntentLabel>): string | undefi
   return modules.length > 0 ? modules.join('\n\n') : undefined
 }
 
-function buildMentionSelections(mentions?: ResolvedMention[]): ContextSelection[] {
-  if (!mentions) return []
+function buildMentionContext(mentions?: ResolvedMention[]): string {
+  if (!mentions || mentions.length === 0) return ''
 
   return mentions
     .filter(m => !m.error)
-    .map(m => ({
-      type: 'custom' as const,
-      ref: m.ref.raw,
-      resolve: async () => {
-        const content = `### ${m.label}\n\n${m.content}`
-        return {
-          source: `mention:${m.ref.raw}`,
-          content,
-          tokens: countTokens(content)
-        }
-      }
-    }))
+    .map(m => `### ${m.label}\n\n${m.content}`)
+    .join('\n\n')
 }
 
-function buildSessionSummarySelection(summary: SessionSummary): ContextSelection {
+function buildSessionSummaryContext(summary: SessionSummary): string {
   const lines = [
     '## Session Summary',
     `Turns ${summary.turnRange[0]}-${summary.turnRange[1]}:`,
@@ -493,18 +192,7 @@ function buildSessionSummarySelection(summary: SessionSummary): ContextSelection
       ? ['Open questions:', ...summary.openQuestions.map(q => `- ${q}`)]
       : [])
   ]
-  const content = lines.join('\n')
-  const tokens = countTokens(content)
-
-  return {
-    type: 'custom',
-    ref: 'session:summary',
-    resolve: async () => ({
-      source: 'session:summary',
-      content,
-      tokens
-    })
-  }
+  return lines.join('\n')
 }
 
 function writeExplainSnapshot(projectPath: string, snapshot: TurnExplainSnapshot): void {
@@ -515,16 +203,69 @@ function writeExplainSnapshot(projectPath: string, snapshot: TurnExplainSnapshot
   writeFileSync(path, JSON.stringify(snapshot, null, 2), 'utf-8')
 }
 
+/**
+ * Adapt a ResearchTool to pi-mono's AgentTool format.
+ */
+function adaptResearchTool(tool: ResearchTool): AgentTool {
+  // Build TypeBox schema from JSON Schema properties
+  const properties: Record<string, TSchema> = {}
+  const jsonProps = (tool.parameters as { properties?: Record<string, { type?: string; description?: string; enum?: string[] }> }).properties ?? {}
+  const requiredFields = (tool.parameters as { required?: string[] }).required ?? []
+
+  for (const [key, prop] of Object.entries(jsonProps)) {
+    const isRequired = requiredFields.includes(key)
+    let schema: TSchema
+
+    if (prop.enum) {
+      // Use union of literals for enum
+      schema = Type.Union(prop.enum.map(v => Type.Literal(v)))
+    } else if (prop.type === 'number') {
+      schema = Type.Number({ description: prop.description })
+    } else if (prop.type === 'array') {
+      schema = Type.Array(Type.String(), { description: prop.description })
+    } else {
+      schema = Type.String({ description: prop.description })
+    }
+
+    properties[key] = isRequired ? schema : Type.Optional(schema)
+  }
+
+  const parametersSchema = Type.Object(properties)
+
+  return {
+    name: tool.name,
+    description: tool.description,
+    label: tool.name,
+    parameters: parametersSchema,
+    execute: async (
+      toolCallId: string,
+      params: any,
+      signal?: AbortSignal,
+    ): Promise<AgentToolResult> => {
+      try {
+        const result = await tool.execute(params as Record<string, unknown>)
+        const text = JSON.stringify(result.data ?? { error: result.error }, null, 2)
+        return {
+          content: [{ type: 'text', text }],
+          details: result
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err)
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: errorMsg }) }],
+          details: { success: false, error: errorMsg }
+        }
+      }
+    }
+  }
+}
+
 export interface CoordinatorConfig {
   apiKey: string
   model?: string
   projectPath?: string
   debug?: boolean
   sessionId?: string
-  externalSkillsDir?: string
-  communitySkillsDir?: string
-  watchExternalSkills?: boolean
-  watchCommunitySkills?: boolean
   reasoningEffort?: 'high' | 'medium' | 'low'
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown) => void
@@ -538,19 +279,12 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   clearSessionMemory: () => Promise<void>
   destroy: () => Promise<void>
 }> {
-  // Load agent.yaml for declarative defaults (model, skills, etc.)
-  const yamlConfig = tryLoadConfig(config.projectPath ?? process.cwd())
-
   const {
     apiKey,
-    model = yamlConfig?.model?.default,
+    model: modelId,
     projectPath = process.cwd(),
     debug = false,
     sessionId = 'default',
-    externalSkillsDir,
-    communitySkillsDir,
-    watchExternalSkills,
-    watchCommunitySkills,
     reasoningEffort = 'high',
     onStream,
     onToolCall,
@@ -558,8 +292,6 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onUsage
   } = config
 
-  let lastTurnExplain: TurnExplainSnapshot | null = null
-  let lastBudgetExplain: TurnExplainSnapshot['budget'] | null = null
   let turnCount = 0
   let activeTurnToolCallCount: number | null = null
   const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
@@ -569,30 +301,52 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     console.log(`[Coordinator] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
   }
 
-  // Select cheapest/fastest model from the coordinator's provider for intent routing
-  const coordinatorProvider = getModel(model ?? '')?.providerID
-  const INTENT_ROUTER_MODELS: Record<string, string> = {
-    anthropic: 'claude-haiku-4-5-20251001',
-    openai: 'gpt-5.4-nano',
-    google: 'gemini-2.0-flash-lite',
-    groq: 'llama-3.1-8b-instant',
-    cerebras: 'llama-3.3-70b',
-    mistral: 'mistral-small-latest',
-    deepseek: 'deepseek-chat',
-    xai: 'grok-3-mini',
-    together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-    fireworks: 'accounts/fireworks/models/llama-v3p3-70b-instruct',
-    openrouter: 'google/gemini-2.0-flash-001',
-  }
-  const intentRouterModelId = INTENT_ROUTER_MODELS[coordinatorProvider ?? ''] ?? 'gpt-5.4-nano'
-
-  let intentRouterClient: ReturnType<typeof createLLMClientFromModelId> | null = null
+  // Resolve pi-mono model
+  let piModel: Model<any> | null = null
   try {
-    intentRouterClient = createLLMClientFromModelId(intentRouterModelId, { apiKey })
+    if (modelId) {
+      // Try to find the model by provider + modelId convention
+      // modelId format is typically "provider:model-name" or just "model-name"
+      const parts = modelId.split(':')
+      if (parts.length === 2) {
+        piModel = getPiModel(parts[0] as any, parts[1] as any)
+      } else {
+        // Try common providers
+        for (const provider of ['anthropic', 'openai', 'google'] as const) {
+          try {
+            piModel = getPiModel(provider, modelId as any)
+            break
+          } catch {
+            continue
+          }
+        }
+      }
+    }
   } catch (err) {
     if (debug) {
-      console.warn(`[IntentRouter] Failed to init ${intentRouterModelId}:`, err)
+      console.warn(`[Coordinator] Failed to resolve model "${modelId}":`, err)
     }
+  }
+
+  // Select a cheap model for intent routing
+  let intentRouterModel: Model<any> | null = null
+  try {
+    // Try to get a fast/cheap model for intent routing
+    const routerModels = [
+      ['anthropic', 'claude-haiku-4-5-20251001'],
+      ['openai', 'gpt-4.1-nano'],
+      ['google', 'gemini-2.0-flash-lite']
+    ] as const
+    for (const [provider, model] of routerModels) {
+      try {
+        intentRouterModel = getPiModel(provider as any, model as any)
+        break
+      } catch {
+        continue
+      }
+    }
+  } catch {
+    // No intent router available, will fall back to rule-based
   }
 
   const wrappedOnToolResult = (tool: string, result: unknown, args?: unknown) => {
@@ -602,9 +356,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onToolResult?.(tool, result, args)
   }
 
+  // Create research-specific tools
   const { literatureSearchTool, dataAnalyzeTool } = createSubagentTools(
     apiKey,
-    model,
+    modelId,
     wrappedOnToolResult,
     projectPath,
     sessionId,
@@ -616,260 +371,69 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     projectPath
   })
 
-  const convertToMarkdownTool = defineTool({
-    name: 'convert_to_markdown',
-    description: 'Convert document to markdown, save local .md file, and return preview + headings for targeted reads.',
-    parameters: {
-      path: {
-        type: 'string',
-        description: 'Relative path to document file (e.g., "report.pdf")',
-        required: true
-      }
+  // Adapt research tools to pi-mono AgentTool format
+  const researchAgentTools: AgentTool[] = [
+    literatureSearchTool,
+    dataAnalyzeTool,
+    ...memoryTools
+  ].map(adaptResearchTool)
+
+  // Create built-in coding tools from pi-coding-agent
+  const codingTools = createCodingTools(projectPath)
+
+  // Combine all tools
+  const allTools: AgentTool[] = [
+    ...codingTools,
+    ...researchAgentTools
+  ]
+
+  // Build the full system prompt
+  const fullSystemPrompt = SYSTEM_PROMPT
+
+  // Create the pi-mono Agent
+  const agent = new Agent({
+    initialState: {
+      systemPrompt: fullSystemPrompt,
+      model: piModel ?? undefined as any,
+      tools: allTools,
+      thinkingLevel: reasoningEffort === 'high' ? 'high' : reasoningEffort === 'medium' ? 'medium' : 'low'
     },
-    execute: async (input, context) => {
-      const fileName = (input as { path: string }).path
-      const absPath = join(projectPath, fileName)
-      if (!existsSync(absPath)) {
-        return { success: false, error: `File not found: ${fileName}` }
-      }
-
-      const outputName = `${parse(fileName).name}.extracted.md`
-      const outputPath = join(projectPath, outputName)
-      const extension = normalizeExtension(parse(fileName).ext)
-      const preferredByExt = context.runtime.sessionState.get<Map<string, PreferredConversionScript>>('preferredConverterByExt')
-        ?? new Map<string, PreferredConversionScript>()
-      const dynamicCandidates = discoverDynamicConversionScripts(context.runtime.skillManager, absPath, preferredByExt)
-      if (debug) {
-        const preview = dynamicCandidates
-          .slice(0, 5)
-          .map(c => `${c.skillId}/${c.script} score=${c.score}`)
-          .join(', ')
-        console.log(`[convert_to_markdown] extension=${extension || '(none)'} candidates=${dynamicCandidates.length}${preview ? ` -> ${preview}` : ''}`)
-      }
-      const errors: string[] = []
-      let usedConverter: string | null = null
-      let usedScript: string | null = null
-
-      if (dynamicCandidates.length === 0) {
-        if (debug) {
-          console.log('[convert_to_markdown] no converter scripts discovered from loaded skills')
-        }
-        return {
-          success: false,
-          error: [
-            `Failed to convert "${fileName}" because no conversion script was discovered from loaded skills.`,
-            'Expected scripts like: convert-file, <ext>-to-markdown, convert-to-markdown.',
-            'Tip: ensure community skill "markitdown" or project-local converter skills are loaded.'
-          ].join('\n')
-        }
-      }
-
-      const skillScriptRunTool = context.runtime.toolRegistry.get('skill-script-run')
-      if (!skillScriptRunTool) {
-        if (debug) {
-          console.log('[convert_to_markdown] skill-script-run not available in runtime')
-        }
-        return {
-          success: false,
-          error: 'skill-script-run tool is not available in runtime.'
-        }
-      }
-
-      for (const candidate of dynamicCandidates) {
-        const runResult = await skillScriptRunTool.execute({
-          skillId: candidate.skillId,
-          script: candidate.script,
-          args: [absPath, outputPath],
-          cwd: '.',
-          timeout: 240000
-        }, context)
-
-        if (!runResult.success) {
-          if (debug) {
-            console.log(`[convert_to_markdown] failed ${candidate.skillId}/${candidate.script}: ${runResult.error ?? 'execution failed'}`)
-          }
-          errors.push(`${candidate.skillId}/${candidate.script} (${candidate.reason}): ${runResult.error ?? 'execution failed'}`)
-
-          if (extension) {
-            const preferred = preferredByExt.get(extension)
-            if (
-              preferred &&
-              preferred.skillId === candidate.skillId &&
-              preferred.script.toLowerCase() === candidate.script.toLowerCase()
-            ) {
-              preferredByExt.set(extension, {
-                ...preferred,
-                failures: preferred.failures + 1,
-                lastUsedAt: Date.now()
-              })
-              context.runtime.sessionState.set('preferredConverterByExt', preferredByExt)
-            }
-          }
-          continue
-        }
-
-        if (!existsSync(outputPath)) {
-          errors.push(`${candidate.skillId}/${candidate.script} (${candidate.reason}): completed but output file missing`)
-          continue
-        }
-
-        const generated = readFileSync(outputPath, 'utf-8').trim()
-        if (!generated) {
-          errors.push(`${candidate.skillId}/${candidate.script} (${candidate.reason}): output markdown is empty`)
-          continue
-        }
-
-        usedConverter = candidate.skillId
-        usedScript = candidate.script
-        if (debug) {
-          console.log(`[convert_to_markdown] selected ${usedConverter}/${usedScript}`)
-        }
-        if (extension) {
-          const preferred = preferredByExt.get(extension)
-          const sameAsPreferred = preferred &&
-            preferred.skillId === candidate.skillId &&
-            preferred.script.toLowerCase() === candidate.script.toLowerCase()
-
-          preferredByExt.set(extension, {
-            skillId: candidate.skillId,
-            script: candidate.script,
-            successes: sameAsPreferred ? preferred.successes + 1 : 1,
-            failures: sameAsPreferred ? preferred.failures : 0,
-            lastUsedAt: Date.now()
-          })
-          context.runtime.sessionState.set('preferredConverterByExt', preferredByExt)
-        }
-        break
-      }
-
-      if (!usedConverter) {
-        return {
-          success: false,
-          error: [
-            `Failed to convert document "${fileName}" to markdown.`,
-            'Tried skill scripts:',
-            ...errors.map((line) => `- ${line}`)
-          ].join('\n')
-        }
-      }
-
-      const text = readFileSync(outputPath, 'utf-8')
-
-      const allLines = text.split('\n')
-      const lines = allLines.length
-      const headings = allLines
-        .map((line, index) => ({ line: index + 1, text: line }))
-        .filter(item => /^#{1,4}\s/.test(item.text))
-
-      const head = allLines.slice(0, 30).join('\n')
-      const tail = lines > 60 ? allLines.slice(-30).join('\n') : ''
-
-      return {
-        success: true,
-        data: {
-          outputFile: outputName,
-          lines,
-          bytes: text.length,
-          converterSkill: usedConverter,
-          converterScript: usedScript,
-          head,
-          tail: tail || undefined,
-          headings: headings.length > 0
-            ? headings.map(h => `L${h.line}: ${h.text}`).join('\n')
-            : undefined,
-          message: `Extracted ${lines} lines. Use read({ path: "${outputName}", offset, limit }) for targeted sections.`
-        }
-      }
-    }
-  })
-
-  const webPack = await packs.web({
-    timeout: 30000,
-    enabledTools: ['brave_web_search']
-  })
-
-  const subagentPack = definePack({
-    id: 'subagents',
-    name: 'Subagent Tools',
-    description: 'Literature search and data analysis tools',
-    tools: [literatureSearchTool, dataAnalyzeTool, ...memoryTools]
-  })
-
-  const agent = createAgent({
-    apiKey,
-    model,
-    projectPath,
-    reasoningEffort,
-    identity: SYSTEM_PROMPT,
-    constraints: [
-      'For multi-step work, briefly state intent before acting',
-      'Ask for clarification when instructions are ambiguous',
-      'For repo/file investigation: locate with glob/grep first, then use targeted read with offset/limit; avoid bash unless execution or built-in tools cannot perform the task.'
-    ],
-    packs: [
-      packs.safe(),
-      packs.exec({ approvalMode: 'none', denyPatterns: [] }),
-      packs.todo(),
-      definePack({
-        id: 'documents-wrapper',
-        description: 'Document conversion wrapper',
-        tools: [convertToMarkdownTool as unknown as Tool]
-      }),
-      webPack,
-      subagentPack,
-      definePack({
-        id: 'research-skills',
-        description: 'Research pilot skills for literature, writing, and data analysis',
-        skills: researchPilotSkills,
-        skillLoadingConfig: {
-          lazy: ['academic-writing-skill', 'literature-skill', 'data-analysis-skill']
-        }
-      })
-    ],
-    onStream,
-    onToolCall: (name: string, args: unknown) => {
-      onToolCall?.(name, args)
-      if (debug) {
-        console.log(`  [Tool] ${name}(${JSON.stringify(args).slice(0, 120)}...)`)
-      }
-    },
-    onToolResult: wrappedOnToolResult,
-    externalSkillsDir,
-    communitySkillsDir,
-    watchExternalSkills,
-    watchCommunitySkills,
     sessionId,
-    debug,
-    taskProfile: 'research',
-    outputReserveStrategy: {
-      intermediate: 16384,
-      final: 8192,
-      extended: 16384
+    getApiKey: async () => apiKey,
+    beforeToolCall: async (ctx) => {
+      onToolCall?.(ctx.toolCall.name, ctx.args)
+      if (debug) {
+        console.log(`  [Tool] ${ctx.toolCall.name}(${JSON.stringify(ctx.args).slice(0, 120)}...)`)
+      }
+      return undefined
     },
-    budgetConfig: {
-      enabled: true,
-      modelId: model,
-      toolResultCap: 4096,
-      priorityTools: ['read', 'write', 'edit', 'grep', 'glob', 'literature-search', 'artifact-search']
-    },
-    toolLoopThreshold: 15,
-    maxSteps: 100,
-    onUsage,
-    kernelV2: RESEARCH_PILOT_KERNEL_V2_CONFIG
+    afterToolCall: async (ctx) => {
+      wrappedOnToolResult(ctx.toolCall.name, ctx.result, ctx.args)
+      return undefined
+    }
   })
 
-  await agent.ensureInit()
-
-  async function clearSessionMemory() {
-    const storage = agent.runtime.memoryStorage
-    if (!storage) return
-    const { items } = await storage.list({ namespace: 'session', status: 'active' })
-    for (const item of items) {
-      await storage.delete('session', item.key, 'session-clear')
-    }
+  // Subscribe to agent events for streaming
+  if (onStream || onUsage) {
+    agent.subscribe((event: AgentEvent) => {
+      if (event.type === 'message_update' && onStream) {
+        if (event.assistantMessageEvent.type === 'text_delta') {
+          onStream(event.assistantMessageEvent.delta)
+        }
+      }
+      if (event.type === 'turn_end' && onUsage) {
+        const msg = event.message
+        if (msg && 'usage' in msg && (msg as any).usage) {
+          const usage = (msg as any).usage
+          onUsage(usage, usage.cost)
+        }
+      }
+    })
   }
 
-  await clearSessionMemory()
+  async function clearSessionMemory() {
+    agent.clearMessages()
+  }
 
   async function maybeGenerateSummary(): Promise<void> {
     if (turnHistory.length === 0) return
@@ -884,43 +448,42 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     if (!isBaselineTrigger && !isHeavyToolUsage && !isLotsOfContent) return
 
-    if (!intentRouterClient) return
+    if (!intentRouterModel) return
 
     const historyText = turnHistory
       .map((t, i) => `Turn ${turnCount - turnHistory.length + i + 1}: User: ${t.userMessage}\nAssistant: ${t.response}`)
       .join('\n\n')
 
-    const SessionSummarySchema = z.object({
-      summary: z.string().describe('2-3 sentence summary of the conversation'),
-      topicsDiscussed: z.array(z.string()).describe('Key topics discussed'),
-      openQuestions: z.array(z.string()).describe('Unresolved questions')
-    })
-
     try {
-      const routerModel = getLanguageModelByModelId(intentRouterModelId, { apiKey })
-      const result = await generateStructured({
-        model: routerModel,
-        system: 'You summarize research conversations concisely.',
-        prompt: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
-        schema: SessionSummarySchema,
-        schemaName: 'SessionSummary',
+      const result = await completeSimple(intentRouterModel, {
+        systemPrompt: 'You summarize research conversations concisely. Output JSON with keys: summary (string), topicsDiscussed (string[]), openQuestions (string[]). Output ONLY valid JSON.',
+        messages: [{
+          role: 'user',
+          content: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
+          timestamp: Date.now()
+        }]
+      }, {
         maxTokens: 200,
-        retries: 1
+        apiKey
       })
+
+      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
+      const text = textContent?.text ?? ''
+      const parsed = JSON.parse(text)
 
       const summary: SessionSummary = {
         sessionId,
         turnRange: [Math.max(1, turnCount - turnHistory.length + 1), turnCount],
-        summary: result.output.summary,
-        topicsDiscussed: result.output.topicsDiscussed ?? [],
-        openQuestions: result.output.openQuestions ?? [],
+        summary: parsed.summary || '',
+        topicsDiscussed: parsed.topicsDiscussed ?? [],
+        openQuestions: parsed.openQuestions ?? [],
         createdAt: new Date().toISOString()
       }
 
       writeSessionSummary(projectPath, summary)
 
       if (debug) {
-        console.log(`[Summary] Generated session summary at turn ${turnCount}: ${result.output.summary.slice(0, 80)}...`)
+        console.log(`[Summary] Generated session summary at turn ${turnCount}: ${(parsed.summary || '').slice(0, 80)}...`)
       }
     } catch (err) {
       if (debug) {
@@ -938,104 +501,112 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const hasModuleIntent = ['literature', 'data', 'writing', 'citation', 'grants', 'docx', 'critique']
           .some(i => intents.has(i as IntentLabel))
         if (!hasModuleIntent) {
-          const label = await classifyIntentWithLLM(intentRouterClient, message)
+          const label = await classifyIntentWithLLM(intentRouterModel, apiKey, message)
           if (label !== 'general') intents.add(label)
         }
-        const skillRouting = preloadSkillsForIntents(
-          message,
-          intents,
-          agent.runtime.skillManager,
-          agent.runtime.skillRegistry
-        )
-        const baseAdditionalInstructions = buildAdditionalInstructions(intents)
 
-        // Read agent.md and prepend to additionalInstructions (system prompt level, never truncated)
+        const additionalInstructions = buildAdditionalInstructions(intents)
+
+        // Read agent.md and prepend to additionalInstructions
         const agentMdRecord = findArtifactById(projectPath, AGENT_MD_ID)
         const agentMdContent = agentMdRecord?.artifact?.type === 'note'
           ? (agentMdRecord.artifact as NoteArtifact).content
           : ''
-        const additionalInstructions = agentMdContent
-          ? `## User Instructions (agent.md)\n\n${agentMdContent}\n\n${baseAdditionalInstructions ?? ''}`
-          : baseAdditionalInstructions
+
+        // Build context pieces
+        const mentionContext = buildMentionContext(mentions)
+        const latestSummary = readLatestSessionSummary(projectPath, sessionId)
+        const summaryContext = latestSummary ? buildSessionSummaryContext(latestSummary) : ''
 
         const persistence = classifyPersistenceDecision(message)
-
-        const mentionSelections = buildMentionSelections(mentions)
-        const latestSummary = readLatestSessionSummary(projectPath, sessionId)
-        const summarySelection = latestSummary ? buildSessionSummarySelection(latestSummary) : null
-        const summaryTokens = summarySelection
-          ? countTokens(`Session summary (~${latestSummary!.turnRange[0]}-${latestSummary!.turnRange[1]})`)
-          : 0
-
-        const selectedContext: ContextSelection[] = [
-          ...mentionSelections,
-          ...(summarySelection ? [summarySelection] : [])
-        ]
 
         const explain: TurnExplainSnapshot = {
           timestamp: new Date().toISOString(),
           sessionId,
           intents: Array.from(intents),
-          skillRouting,
           selectedContext: {
-            mentionSelections: mentionSelections.length,
-            approxTokens: summaryTokens
+            mentionSelections: mentions?.filter(m => !m.error).length ?? 0,
+            approxTokens: 0
           },
           persistence: {
             decision: persistence.decision,
             reason: persistence.reason
           },
           sessionSummary: {
-            included: !!summarySelection,
+            included: !!latestSummary,
             turnRange: latestSummary?.turnRange,
-            approxTokens: summaryTokens
+            approxTokens: 0
           },
           budget: {
-            model: model ?? 'default'
+            model: modelId ?? 'default'
           }
         }
-
-        lastTurnExplain = explain
-        lastBudgetExplain = explain.budget
 
         if (debug) {
           const intentList = Array.from(intents).join(', ') || 'none'
           console.log(`[Chat] Intents: ${intentList}`)
-          if (skillRouting.explicitPreloads.length > 0 || skillRouting.recommendedPreloads.length > 0) {
-            console.log(`[Chat] Skill preloads: explicit=[${skillRouting.explicitPreloads.join(', ')}] recommended=[${skillRouting.recommendedPreloads.join(', ')}]`)
-          }
-          console.log(`[Chat] Sending message to agent (${mentionSelections.length} mention selections, summary=${!!summarySelection})...`)
+          console.log(`[Chat] Sending message to agent (${mentions?.filter(m => !m.error).length ?? 0} mentions, summary=${!!latestSummary})...`)
         }
 
-        // Count tool calls for this turn via coordinator-level onToolResult wrapper.
+        // Build the enriched system prompt with context
+        let enrichedSystem = fullSystemPrompt
+        if (agentMdContent) {
+          enrichedSystem = `${enrichedSystem}\n\n## User Instructions (agent.md)\n\n${agentMdContent}`
+        }
+        if (additionalInstructions) {
+          enrichedSystem = `${enrichedSystem}\n\n${additionalInstructions}`
+        }
+        agent.setSystemPrompt(enrichedSystem)
+
+        // Build the user message with injected context
+        let userMessage = message
+        if (mentionContext || summaryContext) {
+          const contextParts: string[] = []
+          if (summaryContext) contextParts.push(summaryContext)
+          if (mentionContext) contextParts.push(mentionContext)
+          userMessage = `${contextParts.join('\n\n')}\n\n---\n\n${message}`
+        }
+
+        // Count tool calls for this turn
         let perTurnToolCallCount = 0
         activeTurnToolCallCount = 0
-        let result: Awaited<ReturnType<Agent['run']>>
+
         try {
-          result = await agent.run(message, {
-            ...(selectedContext.length > 0 ? { selectedContext } : {}),
-            ...(additionalInstructions ? { additionalInstructions } : {})
-          })
+          await agent.prompt(userMessage)
           perTurnToolCallCount = activeTurnToolCallCount ?? 0
         } finally {
           activeTurnToolCallCount = null
         }
 
-        if (result.usage?.tokens) {
-          explain.budget.promptTokens = result.usage.tokens.promptTokens
-          explain.budget.completionTokens = result.usage.tokens.completionTokens
-          explain.budget.totalTokens = result.usage.tokens.totalTokens
-          lastBudgetExplain = explain.budget
-          lastTurnExplain = explain
+        // Extract the response text from agent messages
+        const messages = agent.state.messages
+        const lastMsg = messages[messages.length - 1]
+        let responseText = ''
+        if (lastMsg && 'content' in lastMsg && Array.isArray(lastMsg.content)) {
+          for (const block of lastMsg.content) {
+            if ('type' in block && block.type === 'text' && 'text' in block) {
+              responseText += (block as TextContent).text
+            }
+          }
+        }
+
+        // Extract usage if available
+        if (lastMsg && 'usage' in lastMsg) {
+          const usage = (lastMsg as any).usage
+          if (usage) {
+            explain.budget.promptTokens = usage.input
+            explain.budget.completionTokens = usage.output
+            explain.budget.totalTokens = usage.totalTokens
+          }
         }
 
         writeExplainSnapshot(projectPath, explain)
 
-        // Update turn history and count (single-point increment)
+        // Update turn history and count
         turnCount++
         turnHistory.push({
           userMessage: message.slice(0, 300),
-          response: (result.output ?? '').slice(0, 300),
+          response: responseText.slice(0, 300),
           toolCallCount: perTurnToolCallCount,
           timestamp: new Date().toISOString()
         })
@@ -1045,17 +616,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         void maybeGenerateSummary()
 
         if (debug) {
-          console.log(`[Chat] Result: success=${result.success}, hasOutput=${!!result.output}, turn=${turnCount}`)
+          console.log(`[Chat] Result: success=true, hasOutput=${!!responseText}, turn=${turnCount}`)
         }
 
-        if (result.success) {
-          return { success: true, response: result.output }
-        }
-
-        return {
-          success: false,
-          error: result.error || 'Agent failed (no error message)'
-        }
+        return { success: true, response: responseText }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
         if (debug) {
@@ -1068,7 +632,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     clearSessionMemory,
 
     async destroy() {
-      await agent.destroy()
+      agent.abort()
     }
   }
 }

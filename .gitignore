@@ -31,5 +31,10 @@ coverage/
 *.tmp
 *.temp
 
+# App build output
+app/out/
+app/dist/
+app/node_modules/
+
 # AgentFoundry framework data
 .agentfoundry/

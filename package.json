@@ -1,0 +1,12 @@
+{
+  "name": "research-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-powered research assistant desktop application",
+  "type": "module",
+  "scripts": {
+    "dev": "cd app && npx electron-vite dev",
+    "build": "cd app && npx electron-vite build",
+    "clean": "rm -rf app/out app/dist"
+  }
+}
