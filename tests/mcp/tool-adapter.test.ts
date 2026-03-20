@@ -440,6 +440,127 @@ describe('validateToolInput', () => {
     const result = validateToolInput({}, noReqSchema)
     expect(result.valid).toBe(true)
   })
+
+  describe('anyOf/oneOf enum extraction', () => {
+    const anyOfSchema: MCPInputSchema = {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        units: {
+          type: 'string',
+          anyOf: [
+            { type: 'string', const: 'metric' },
+            { type: 'string', const: 'imperial' }
+          ]
+        } as any
+      },
+      required: ['query']
+    }
+
+    it('should accept valid anyOf const value', () => {
+      const result = validateToolInput({ query: 'ok', units: 'metric' }, anyOfSchema)
+      expect(result.valid).toBe(true)
+    })
+
+    it('should reject invalid anyOf const value', () => {
+      const result = validateToolInput({ query: 'ok', units: 'celsius' }, anyOfSchema)
+      expect(result.valid).toBe(false)
+      expect(result.errors.some((e) => e.includes('must be one of'))).toBe(true)
+    })
+
+    it('should handle oneOf with const values', () => {
+      const oneOfSchema: MCPInputSchema = {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            oneOf: [
+              { type: 'string', const: 'fast' },
+              { type: 'string', const: 'slow' }
+            ]
+          } as any
+        }
+      }
+      const valid = validateToolInput({ mode: 'fast' }, oneOfSchema)
+      expect(valid.valid).toBe(true)
+      const invalid = validateToolInput({ mode: 'medium' }, oneOfSchema)
+      expect(invalid.valid).toBe(false)
+    })
+  })
+})
+
+// ===========================================================================
+// Sanitization of anyOf/oneOf enum values (Brave Search bug fix)
+// ===========================================================================
+
+describe('adaptMCPTool sanitization with anyOf/oneOf', () => {
+  it('should strip optional field with invalid anyOf const value', async () => {
+    const mockClient = makeMockClient()
+    const tool = adaptMCPTool(
+      makeMCPTool({
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            units: {
+              type: 'string',
+              anyOf: [
+                { type: 'string', const: 'metric' },
+                { type: 'string', const: 'imperial' }
+              ]
+            } as any
+          },
+          required: ['query']
+        }
+      }),
+      mockClient
+    )
+
+    await tool.execute({ query: 'weather', units: 'celsius' })
+    expect(mockClient.callTool).toHaveBeenCalledWith('test-tool', { query: 'weather' })
+  })
+
+  it('should keep optional field with valid anyOf const value', async () => {
+    const mockClient = makeMockClient()
+    const tool = adaptMCPTool(
+      makeMCPTool({
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            units: {
+              type: 'string',
+              anyOf: [
+                { type: 'string', const: 'metric' },
+                { type: 'string', const: 'imperial' }
+              ]
+            } as any
+          },
+          required: ['query']
+        }
+      }),
+      mockClient
+    )
+
+    await tool.execute({ query: 'weather', units: 'metric' })
+    expect(mockClient.callTool).toHaveBeenCalledWith('test-tool', { query: 'weather', units: 'metric' })
+  })
+
+  it('should extract enum from anyOf in schema conversion', () => {
+    const params = convertJsonSchemaToParameters({
+      type: 'object',
+      properties: {
+        units: {
+          type: 'string',
+          anyOf: [
+            { type: 'string', const: 'metric' },
+            { type: 'string', const: 'imperial' }
+          ]
+        } as any
+      }
+    })
+    expect(params.units.enum).toEqual(['metric', 'imperial'])
+  })
 })
 
 // ===========================================================================

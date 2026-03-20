@@ -161,8 +161,9 @@ function convertPropertySchema(
     definition.default = prop.default
   }
 
-  if (prop.enum) {
-    definition.enum = prop.enum
+  const enumValues = extractEnumValues(prop)
+  if (enumValues) {
+    definition.enum = enumValues
   }
 
   // Handle array type
@@ -184,6 +185,34 @@ function convertPropertySchema(
   }
 
   return definition
+}
+
+/**
+ * Extract enum-like values from JSON Schema patterns (anyOf/oneOf with const, or enum).
+ * Many MCP servers (e.g. Brave Search) use Zod which generates
+ * `anyOf: [{ const: "metric" }, { const: "imperial" }]` instead of `enum: ["metric", "imperial"]`.
+ */
+function extractEnumValues(schema: MCPPropertySchema): unknown[] | undefined {
+  if (schema.enum) return schema.enum
+
+  const unionSchemas = schema.anyOf ?? schema.oneOf
+  if (unionSchemas && unionSchemas.length > 0) {
+    const constValues: unknown[] = []
+    for (const sub of unionSchemas) {
+      if (sub.const !== undefined) {
+        constValues.push(sub.const)
+      } else if (sub.enum && sub.enum.length === 1) {
+        constValues.push(sub.enum[0])
+      }
+    }
+    if (constValues.length === unionSchemas.length) {
+      return constValues
+    }
+  }
+
+  if (schema.const !== undefined) return [schema.const]
+
+  return undefined
 }
 
 /**
@@ -265,8 +294,9 @@ function sanitizeInput(
       continue
     }
 
-    // Drop optional fields with invalid enum values
-    if (propSchema.enum && !propSchema.enum.includes(value)) {
+    // Drop optional fields with invalid enum values (handles enum, anyOf/oneOf with const)
+    const allowedValues = extractEnumValues(propSchema)
+    if (allowedValues && !allowedValues.includes(value)) {
       continue
     }
 
@@ -439,9 +469,10 @@ function validateType(value: unknown, schema: MCPPropertySchema): string | null 
       break
   }
 
-  // Check enum values
-  if (schema.enum && !schema.enum.includes(value)) {
-    return `value must be one of: ${schema.enum.join(', ')}`
+  // Check enum values (handles enum, anyOf/oneOf with const)
+  const allowed = extractEnumValues(schema)
+  if (allowed && !allowed.includes(value)) {
+    return `value must be one of: ${allowed.join(', ')}`
   }
 
   return null

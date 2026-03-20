@@ -890,14 +890,18 @@ export function registerIpcHandlers(): void {
       properties: ['openDirectory']
     })
     if (!result.canceled && result.filePaths[0]) {
+      // Clean up previous project (same as project:close)
+      if (state.coordinator) {
+        try { (state.coordinator as any).agent.stop() } catch { /* may not be running */ }
+        try { await state.coordinator.destroy() } catch { /* best effort */ }
+        state.coordinator = null
+      }
+      state.realtimeBuffer.reset()
+
+      // Set up new project
       state.projectPath = result.filePaths[0]
       // Initialize .research-pilot directory structure
       initializeProject(state.projectPath)
-      // Reset coordinator and memory storage for new project
-      if (state.coordinator) {
-        await state.coordinator.destroy()
-        state.coordinator = null
-      }
       // Reuse persistent session ID for this project folder
       state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
       // Restore persisted model + reasoning preferences

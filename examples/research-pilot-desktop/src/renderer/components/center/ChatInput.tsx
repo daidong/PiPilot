@@ -48,7 +48,15 @@ export function ChatInput() {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const setIdle = useUIStore((s) => s.setIdle)
   const pickFolder = useSessionStore((s) => s.pickFolder)
+  const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
+
+  // Clear draft text when switching projects
+  useEffect(() => {
+    setText('')
+    setShowMention(false)
+    setShowCommand(false)
+  }, [hasProject])
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim()

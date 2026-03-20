@@ -149,6 +149,12 @@ export interface MCPPropertySchema {
   items?: MCPPropertySchema
   properties?: Record<string, MCPPropertySchema>
   required?: string[]
+  /** JSON Schema const (single allowed value) */
+  const?: unknown
+  /** JSON Schema anyOf (union types — often used for enum-like constraints) */
+  anyOf?: MCPPropertySchema[]
+  /** JSON Schema oneOf (exclusive union types) */
+  oneOf?: MCPPropertySchema[]
 }
 
 /**

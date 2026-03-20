@@ -211,6 +211,23 @@ Key components:
 
 3. **Update exports** in `src/index.ts` if new public APIs added
 
+### After Editing Research-Pilot SKILL.md Files
+
+Research-pilot skills use **build-time inlined content** (not runtime file reads) to work in both ESM and electron-vite bundles.
+
+After editing any `examples/research-pilot/skills/*/SKILL.md`:
+
+```bash
+node examples/research-pilot/skills/generate-skill-content.mjs
+```
+
+This regenerates `skills/_generated.ts` with the updated Markdown content. **Forgetting this step means the app uses stale skill content.** The generator auto-discovers all subdirectories containing SKILL.md.
+
+To add a new skill:
+1. Create `examples/research-pilot/skills/<name>/SKILL.md`
+2. Run the generator above
+3. Add `export const newSkill = parseSkill('<name>')` in `skills/index.ts`
+
 ### After Major Updates
 
 1. **Write tests** in `tests/` directory:

@@ -4,6 +4,7 @@ import { useProgressStore } from './progress-store'
 import { useActivityStore } from './activity-store'
 import { useUIStore, hydratePreferences } from './ui-store'
 import { useEntityStore } from './entity-store'
+import { useUsageStore } from './usage-store'
 
 interface SessionState {
   sessionId: string
@@ -36,6 +37,14 @@ export const useSessionStore = create<SessionState>((set) => ({
   pickFolder: async () => {
     const result = await api.pickFolder()
     if (result) {
+      // Clear all stores before loading new project (same cleanup as closeProject)
+      useChatStore.getState().clear()
+      useProgressStore.getState().clear()
+      useActivityStore.getState().clear()
+      useUIStore.getState().reset()
+      useEntityStore.getState().reset()
+      useUsageStore.getState().resetSession()
+
       set({
         sessionId: result.sessionId,
         projectPath: result.projectPath,
@@ -57,6 +66,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     useActivityStore.getState().clear()
     useUIStore.getState().reset()
     useEntityStore.getState().reset()
+    useUsageStore.getState().resetSession()
 
     set({ sessionId: '', projectPath: '', hasProject: false })
   }
