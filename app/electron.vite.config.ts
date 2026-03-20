@@ -4,7 +4,33 @@ import { resolve } from 'path'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({
+      exclude: [
+        '@mariozechner/pi-agent-core',
+        '@mariozechner/pi-ai',
+        '@mariozechner/pi-coding-agent',
+        '@sinclair/typebox'
+      ]
+    })],
+    build: {
+      rollupOptions: {
+        plugins: [
+          // Redirect bare package imports from lib/ to app/node_modules
+          {
+            name: 'resolve-from-app-node-modules',
+            resolveId(source, importer) {
+              // Only intercept imports from files outside app/
+              if (!importer || importer.includes('/app/node_modules/')) return null
+              if (source.startsWith('@mariozechner/') || source.startsWith('@sinclair/')) {
+                // Let Node's module resolution handle it from app/node_modules
+                return this.resolve(source, resolve(__dirname, '_virtual_importer.js'), { skipSelf: true })
+              }
+              return null
+            }
+          }
+        ]
+      }
+    },
     resolve: {
       alias: {
         '@shared-electron': resolve(__dirname, '../shared-electron'),
