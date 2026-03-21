@@ -2,6 +2,7 @@
 id: literature-skill
 name: Literature Search
 shortDescription: Academic paper discovery, relevance scoring, and literature review synthesis
+category: Literature & Search
 tools: [literature-search]
 loadingStrategy: lazy
 tags: [literature, research, papers, search, review, academic]

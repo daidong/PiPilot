@@ -2,6 +2,7 @@
 id: data-analysis-skill
 name: Data Analysis
 shortDescription: Python data analysis, visualization, statistics, and ML modeling
+category: Data & Analysis
 tools: [data-analyze]
 loadingStrategy: lazy
 tags: [data, analysis, python, visualization, statistics, ml]

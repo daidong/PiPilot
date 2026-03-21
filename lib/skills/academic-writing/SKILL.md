@@ -2,6 +2,7 @@
 id: academic-writing-skill
 name: Academic Writing
 shortDescription: Research paper outlining and drafting with narrative flow, not bullet enumeration
+category: Writing & Review
 tools: [writing-outline, writing-draft]
 loadingStrategy: lazy
 tags: [writing, academic, research, narrative, outline, draft]

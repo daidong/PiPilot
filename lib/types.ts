@@ -38,7 +38,11 @@ export const PATHS = {
   // Memory V2 state (app-level)
   memoryRoot: '.research-pilot/memory-v2',
   explainDir: '.research-pilot/memory-v2/explain',
-  sessionSummaries: '.research-pilot/memory-v2/session-summaries'
+  sessionSummaries: '.research-pilot/memory-v2/session-summaries',
+
+  // Skills
+  skills: '.research-pilot/skills',
+  skillsConfig: '.research-pilot/skills-config.json'
 } as const
 
 // ============================================================================

@@ -7,6 +7,7 @@ import {
   BookMarked,
   BookOpen,
   FolderOpen,
+  Sparkles,
   Upload,
   MessageSquare,
   Trash2,
@@ -15,12 +16,16 @@ import {
   FileSpreadsheet,
   FlaskConical,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  Search,
+  Check,
+  UploadCloud
 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
 import { WorkspaceTree } from './WorkspaceTree'
+import { useSkillStore, type SkillManifest } from '../../stores/skill-store'
 
 function HoverPreview({
   entity,
@@ -86,7 +91,8 @@ function HoverPreview({
 const tabs = [
   { key: 'library' as const, label: 'Library', icon: BookMarked },
   { key: 'papers' as const, label: 'Papers', icon: BookOpen },
-  { key: 'files' as const, label: 'Files', icon: FolderOpen }
+  { key: 'files' as const, label: 'Files', icon: FolderOpen },
+  { key: 'skills' as const, label: 'Skills', icon: Sparkles }
 ]
 
 const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem }) {
@@ -405,6 +411,232 @@ function PapersContent({
   )
 }
 
+const CATEGORY_ORDER = [
+  'Writing & Review',
+  'Visualization',
+  'Data & Analysis',
+  'Literature & Search',
+  'Grants & Proposals',
+  'Evaluation',
+  'General'
+]
+
+/** Skills tab content */
+function SkillsContent() {
+  const skills = useSkillStore((s) => s.skills)
+  const loading = useSkillStore((s) => s.loading)
+  const refreshSkills = useSkillStore((s) => s.refreshSkills)
+  const toggleSkill = useSkillStore((s) => s.toggleSkill)
+  const uploadSkill = useSkillStore((s) => s.uploadSkill)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    refreshSkills()
+  }, [])
+
+  const filtered = useMemo(() => {
+    if (!searchQuery.trim()) return skills
+    const q = searchQuery.toLowerCase()
+    return skills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.tags.some((t) => t.toLowerCase().includes(q))
+    )
+  }, [skills, searchQuery])
+
+  // Group by category, ordered
+  const categorized = useMemo(() => {
+    const groups = new Map<string, SkillManifest[]>()
+    for (const s of filtered) {
+      const cat = s.category || 'General'
+      if (!groups.has(cat)) groups.set(cat, [])
+      groups.get(cat)!.push(s)
+    }
+    // Sort by CATEGORY_ORDER, unknown categories at end
+    const sorted: Array<[string, SkillManifest[]]> = []
+    for (const cat of CATEGORY_ORDER) {
+      if (groups.has(cat)) {
+        sorted.push([cat, groups.get(cat)!])
+        groups.delete(cat)
+      }
+    }
+    // Remaining categories
+    for (const [cat, items] of groups) {
+      sorted.push([cat, items])
+    }
+    return sorted
+  }, [filtered])
+
+  const directCount = skills.filter((s) => s.enabled && s.enabledReason === 'direct').length
+  const depCount = skills.filter((s) => s.enabled && s.enabledReason === 'dependency').length
+  const totalEnabled = directCount + depCount
+
+  const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadStatus('Installing...')
+    const result = await uploadSkill(file)
+    if (result.success) {
+      setUploadStatus(`Installed "${result.skillName}"`)
+    } else {
+      setUploadStatus(`Error: ${result.error}`)
+    }
+    setTimeout(() => setUploadStatus(null), 3000)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [uploadSkill])
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {/* Header */}
+      <div className="px-2 pt-2 pb-1 space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] t-text-muted">
+            {totalEnabled}/{skills.length} enabled
+            {depCount > 0 && (
+              <span className="t-text-muted"> ({directCount} direct + {depCount} deps)</span>
+            )}
+          </span>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="no-drag flex items-center gap-1 px-1.5 py-0.5 text-[10px] t-text-muted hover:t-text-accent-soft transition-colors rounded t-bg-hover"
+            title="Upload skill (.zip)"
+          >
+            <UploadCloud size={11} />
+            <span>Install</span>
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip"
+            onChange={handleUpload}
+            className="hidden"
+          />
+        </div>
+        {uploadStatus && (
+          <p className={`text-[10px] px-1 ${uploadStatus.startsWith('Error') ? 't-text-error' : 't-text-accent-soft'}`}>
+            {uploadStatus}
+          </p>
+        )}
+        <div className="relative">
+          <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 t-text-muted" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search skills or tags..."
+            className="w-full pl-6 pr-2 py-1 text-[11px] rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
+          />
+        </div>
+      </div>
+
+      {/* Skills list grouped by category */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-1 py-1 space-y-2">
+        {loading && skills.length === 0 ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 size={16} className="animate-spin t-text-muted" />
+          </div>
+        ) : categorized.length === 0 ? (
+          <p className="px-3 py-4 text-xs t-text-muted text-center">
+            {searchQuery ? 'No skills match your search' : 'No skills available'}
+          </p>
+        ) : (
+          categorized.map(([category, items]) => (
+            <div key={category}>
+              <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-1 pb-0.5 font-medium">
+                {category} ({items.length})
+              </p>
+              <div className="space-y-0.5">
+                {items.map((skill) => {
+                  const isDep = skill.enabledReason === 'dependency'
+                  const isLocked = isDep && skill.enabled
+                  return (
+                    <div
+                      key={skill.name}
+                      onClick={() => !isLocked && toggleSkill(skill.name)}
+                      className={`flex items-start gap-2 px-2 py-1.5 rounded transition-colors ${
+                        isLocked
+                          ? 'opacity-75 cursor-default'
+                          : 'cursor-pointer'
+                      } ${
+                        skill.enabled
+                          ? 'bg-[var(--color-accent-soft)]/8 hover:bg-[var(--color-accent-soft)]/12'
+                          : 't-bg-hover'
+                      }`}
+                      title={isLocked ? `Required by ${skill.dependencyOf.join(', ')}` : skill.name}
+                    >
+                      {/* Toggle checkbox */}
+                      <div
+                        className={`mt-0.5 w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                          skill.enabled
+                            ? isDep
+                              ? 'bg-[var(--color-accent-soft)]/50 border-[var(--color-accent-soft)]/50'
+                              : 'bg-[var(--color-accent-soft)] border-[var(--color-accent-soft)]'
+                            : 't-border'
+                        }`}
+                      >
+                        {skill.enabled && <Check size={9} className="text-white" />}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        {/* Name + source badge */}
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs t-text font-medium truncate">{skill.name}</p>
+                          {skill.source !== 'builtin' && (
+                            <span className="shrink-0 px-1 py-px text-[9px] rounded t-bg-elevated t-text-muted">
+                              {skill.source}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Description */}
+                        <p className="text-[10px] t-text-muted leading-tight line-clamp-2 mt-0.5">
+                          {skill.description}
+                        </p>
+
+                        {/* Tags */}
+                        {skill.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {skill.tags.slice(0, 4).map((tag) => (
+                              <span
+                                key={tag}
+                                className="px-1 py-px text-[9px] rounded t-bg-elevated t-text-muted"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                            {skill.tags.length > 4 && (
+                              <span className="text-[9px] t-text-muted">+{skill.tags.length - 4}</span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Dependency hints */}
+                        {isDep && skill.dependencyOf.length > 0 && (
+                          <p className="text-[9px] t-text-accent-soft mt-0.5 italic">
+                            auto-enabled by {skill.dependencyOf.join(', ')}
+                          </p>
+                        )}
+                        {skill.depends.length > 0 && (
+                          <p className="text-[9px] t-text-muted mt-0.5">
+                            needs: {skill.depends.join(', ')}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
@@ -425,6 +657,8 @@ export function EntityTabs() {
         return <PapersContent papers={papers} refreshAll={refreshAll} />
       case 'files':
         return <WorkspaceTree />
+      case 'skills':
+        return <SkillsContent />
       default:
         return null
     }
