@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers, registerWindow } from './ipc'
+import { registerTerminalHandlers, destroyAllTerminals } from './terminal'
 
 function resolveAppIconPath(): string | undefined {
   const candidates = [
@@ -61,6 +62,7 @@ app.whenReady().then(() => {
     app.dock?.setIcon(iconPath)
   }
   registerIpcHandlers()
+  registerTerminalHandlers()
   registerWindow(createWindow())
   buildMenu()
 
@@ -153,5 +155,10 @@ function buildMenu(): void {
 }
 
 app.on('window-all-closed', () => {
+  destroyAllTerminals()
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  destroyAllTerminals()
 })

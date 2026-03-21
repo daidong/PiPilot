@@ -60,6 +60,8 @@ interface UIState {
   setModel: (model: ModelId) => void
   setIdle: (idle: boolean) => void
   toggleRightSidebar: () => void
+  terminalOpen: boolean
+  toggleTerminal: () => void
   addWorkingFile: (path: string) => void
   setWorkingFiles: (paths: string[]) => void
   clearWorkingFiles: () => void
@@ -76,6 +78,7 @@ export const useUIStore = create<UIState>((set) => ({
   isIdle: true,
   rightSidebarCollapsed: false,
   leftSidebarCollapsed: false,
+  terminalOpen: false,
   workingFiles: [],
   reasoningEffort: 'medium',
   previewEntity: null,
@@ -106,6 +109,7 @@ export const useUIStore = create<UIState>((set) => ({
   },
   setIdle: (isIdle) => set({ isIdle }),
   toggleRightSidebar: () => set((s) => ({ rightSidebarCollapsed: !s.rightSidebarCollapsed })),
+  toggleTerminal: () => set((s) => ({ terminalOpen: !s.terminalOpen })),
   addWorkingFile: (path) =>
     set((s) => {
       const now = Date.now()

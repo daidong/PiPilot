@@ -115,6 +115,14 @@ export interface ElectronAPI {
   // Folder operations
   openFolderWith: (app: 'finder' | 'zed' | 'cursor' | 'vscode') => Promise<{ success: boolean; error?: string }>
 
+  // Terminal
+  terminalSpawn: (cwd: string) => Promise<{ success: boolean; pid?: number; error?: string }>
+  terminalInput: (data: string) => void
+  terminalResize: (cols: number, rows: number) => void
+  terminalKill: () => Promise<void>
+  onTerminalData: (cb: (data: string) => void) => () => void
+  onTerminalExit: (cb: (exitCode: number) => void) => () => void
+
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
   loadMessages: (sessionId: string, offset: number, limit: number) => Promise<any[]>
@@ -249,7 +257,23 @@ const api: ElectronAPI = {
   loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),
   getMessageCount: (sessionId) => ipcRenderer.invoke('session:get-total-count', sessionId),
   markMessageSaved: (sessionId, messageId) => ipcRenderer.invoke('session:mark-saved', sessionId, messageId),
-  loadSavedMessageIds: (sessionId) => ipcRenderer.invoke('session:load-saved-ids', sessionId)
+  loadSavedMessageIds: (sessionId) => ipcRenderer.invoke('session:load-saved-ids', sessionId),
+
+  // Terminal
+  terminalSpawn: (cwd) => ipcRenderer.invoke('terminal:spawn', cwd),
+  terminalInput: (data) => ipcRenderer.send('terminal:input', data),
+  terminalResize: (cols, rows) => ipcRenderer.send('terminal:resize', cols, rows),
+  terminalKill: () => ipcRenderer.invoke('terminal:kill'),
+  onTerminalData: (cb) => {
+    const handler = (_: any, data: string) => cb(data)
+    ipcRenderer.on('terminal:data', handler)
+    return () => ipcRenderer.removeListener('terminal:data', handler)
+  },
+  onTerminalExit: (cb) => {
+    const handler = (_: any, exitCode: number) => cb(exitCode)
+    ipcRenderer.on('terminal:exit', handler)
+    return () => ipcRenderer.removeListener('terminal:exit', handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

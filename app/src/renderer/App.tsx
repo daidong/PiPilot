@@ -2,8 +2,10 @@ import React, { useEffect } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
-import { RightSidebar } from './components/layout/RightSidebar'
 import { EntityPreviewPanel } from './components/layout/EntityPreviewPanel'
+import { StatusBar } from './components/layout/StatusBar'
+import { TerminalPanel } from './components/layout/TerminalPanel'
+import { ErrorBoundary } from './components/layout/ErrorBoundary'
 import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
 import { useEntityStore } from './stores/entity-store'
@@ -56,10 +58,10 @@ export default function App() {
   const initSession = useSessionStore((s) => s.init)
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
-  const rightCollapsed = useUIStore((s) => s.rightSidebarCollapsed)
   const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
   const previewEntity = useUIStore((s) => s.previewEntity)
   const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
+  const terminalOpen = useUIStore((s) => s.terminalOpen)
   const theme = useUIStore((s) => s.theme)
 
   // Apply theme class to html element
@@ -214,6 +216,11 @@ export default function App() {
       if (e.key === 'Escape' && previewEntity) {
         useUIStore.getState().closePreview()
       }
+      // Ctrl+` or Cmd+` → Toggle terminal
+      if ((e.metaKey || e.ctrlKey) && e.key === '`') {
+        e.preventDefault()
+        useUIStore.getState().toggleTerminal()
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -225,22 +232,37 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen t-bg-base t-text">
-      {/* Draggable title bar */}
-      <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
+    <ErrorBoundary>
+      <div className="flex flex-col h-screen w-screen t-bg-base t-text">
+        {/* Draggable title bar */}
+        <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
 
-      {/* Keep LeftSidebar mounted (hidden) when preview is open to preserve
-          WorkspaceTree expanded state, scroll position, and loaded children */}
-      {!leftCollapsed && (
-        <div className={previewEntity ? 'hidden' : 'contents'}>
-          <LeftSidebar />
+        {/* Main content area */}
+        <div className="flex flex-1 min-h-0">
+          {/* Keep LeftSidebar mounted (hidden) when preview is open to preserve
+              WorkspaceTree expanded state, scroll position, and loaded children */}
+          {!leftCollapsed && (
+            <div className={previewEntity ? 'hidden' : 'contents'}>
+              <LeftSidebar />
+            </div>
+          )}
+          <div className="flex-1 flex flex-col min-w-0 min-h-0">
+            <div className="flex-1 flex min-h-0">
+              <CenterPanel />
+              {previewEntity && <EntityPreviewPanel />}
+            </div>
+            {/* Integrated terminal */}
+            {terminalOpen && (
+              <div style={{ height: '35%', minHeight: 120 }}>
+                <TerminalPanel />
+              </div>
+            )}
+          </div>
         </div>
-      )}
-      <CenterPanel />
-      {previewEntity
-        ? <EntityPreviewPanel />
-        : !rightCollapsed && <RightSidebar />
-      }
-    </div>
+
+        {/* Bottom status bar */}
+        <StatusBar />
+      </div>
+    </ErrorBoundary>
   )
 }
