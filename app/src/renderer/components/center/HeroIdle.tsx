@@ -22,7 +22,7 @@ export function HeroIdle() {
   }
 
   return (
-    <div className="flex flex-col items-center gap-8 max-w-xl px-8">
+    <div className="flex flex-col items-center gap-10 w-full max-w-lg px-8">
       {/* Heading — clean and minimal, no logo duplication */}
       <div className="text-center space-y-2">
         <h1
@@ -34,7 +34,7 @@ export function HeroIdle() {
       </div>
 
       {/* Suggestion chips */}
-      <div className="grid grid-cols-2 gap-2.5 w-full max-w-sm">
+      <div className="grid grid-cols-2 gap-3 w-full">
         {suggestions.map(({ icon: Icon, label, prompt }) => (
           <button
             key={label}

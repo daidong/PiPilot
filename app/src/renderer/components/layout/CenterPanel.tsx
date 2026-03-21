@@ -17,13 +17,17 @@ export function CenterPanel() {
           <HeroIdle />
         </div>
       ) : (
-        <div className="flex-1 min-h-0 px-6 py-4">
-          <ChatMessages />
+        <div className="flex-1 min-h-0 px-6 pt-4 pb-2">
+          <div className="mx-auto h-full" style={{ maxWidth: '48rem' }}>
+            <ChatMessages />
+          </div>
         </div>
       )}
 
-      <div className="px-6 pb-6">
-        <ChatInput />
+      <div className="px-6 pb-5">
+        <div className="mx-auto" style={{ maxWidth: '48rem' }}>
+          <ChatInput />
+        </div>
       </div>
     </main>
   )

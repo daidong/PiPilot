@@ -51,12 +51,12 @@ export function StatusBar() {
   const hasProjectUsage = allTimeTokens > 0
 
   return (
-    <div className="h-6 flex items-center px-3 gap-4 border-t t-border t-bg-surface text-[11px] t-text-muted select-none shrink-0">
+    <div className="h-7 flex items-center px-4 gap-5 border-t t-border t-bg-surface text-[11px] t-text-muted select-none shrink-0">
       {/* Activity summary */}
       {hasActivity && (
-        <div className="flex items-center gap-2 overflow-hidden">
+        <div className="flex items-center gap-3 overflow-hidden">
           {toolSummary.map((t) => (
-            <span key={t.name} className="flex items-center gap-0.5 whitespace-nowrap">
+            <span key={t.name} className="flex items-center gap-1 whitespace-nowrap">
               {t.pending > 0 ? (
                 <span className="t-text-warning">⟳</span>
               ) : t.failed > 0 ? (

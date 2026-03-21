@@ -236,6 +236,12 @@ export default function App() {
       // Cmd+Shift+K → Close Project
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'K') {
         e.preventDefault()
+        if (useChatStore.getState().isStreaming) {
+          const ok = window.confirm(
+            'An agent task is still running. Close project anyway?'
+          )
+          if (!ok) return
+        }
         useSessionStore.getState().closeProject()
       }
       if (e.key === 'Escape' && previewEntity) {

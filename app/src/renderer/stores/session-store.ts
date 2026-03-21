@@ -45,6 +45,13 @@ export const useSessionStore = create<SessionState>((set) => ({
       useEntityStore.getState().reset()
       useUsageStore.getState().resetSession()
 
+      // Briefly toggle hasProject so the App.tsx useEffect([hasProject]) re-fires
+      // and re-initializes IPC listeners, entities, chat history, etc.
+      set({ hasProject: false, sessionId: '', projectPath: '' })
+
+      // Allow React to process the false state before setting true
+      await new Promise((r) => setTimeout(r, 0))
+
       set({
         sessionId: result.sessionId,
         projectPath: result.projectPath,

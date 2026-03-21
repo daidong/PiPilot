@@ -13,11 +13,17 @@ export function RightSidebar() {
         </h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        <TokenUsage />
-        <WorkingFolder />
-        <ProgressSteps />
-        <ActivityLog />
+      <div className="flex-1 overflow-y-auto px-4 py-3">
+        {/* Tight group: usage + files (glanceable status) */}
+        <div className="space-y-3">
+          <TokenUsage />
+          <WorkingFolder />
+        </div>
+        {/* Generous separator before activity sections */}
+        <div className="mt-5 pt-4 border-t t-border space-y-3">
+          <ProgressSteps />
+          <ActivityLog />
+        </div>
       </div>
     </aside>
   )

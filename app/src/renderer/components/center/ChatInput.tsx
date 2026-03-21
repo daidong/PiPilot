@@ -315,7 +315,16 @@ export function ChatInput() {
         }}
       >
         <button
-          onClick={pickFolder}
+          onClick={() => {
+            if (isStreaming) {
+              const ok = window.confirm(
+                'Switching projects will stop the current task. Continue?'
+              )
+              if (!ok) return
+              stop()
+            }
+            pickFolder()
+          }}
           className="shrink-0 t-text-muted t-bg-hover transition-colors pb-0.5"
           title="Change working folder"
           aria-label="Change working folder"

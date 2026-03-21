@@ -350,7 +350,7 @@ export function ChatMessages() {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="space-y-4 overflow-y-auto h-full"
+        className="overflow-y-auto h-full"
         role="log"
         aria-label="Chat messages"
         aria-live="polite"
@@ -360,14 +360,25 @@ export function ChatMessages() {
             <Loader2 size={16} className="animate-spin t-text-muted" />
           </div>
         )}
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            msg={msg}
-            isSaved={savedMessageIds.has(msg.id)}
-          />
-        ))}
-        {isStreaming && (streamingText ? <StreamingBubble /> : <ThinkingBubble />)}
+        {messages.map((msg, i) => {
+          const prev = messages[i - 1]
+          // Tighter spacing within same-role runs (e.g. multi-part assistant),
+          // generous space when the speaker changes (new exchange)
+          const gap = prev && prev.role !== msg.role ? 'mt-5' : 'mt-3'
+          return (
+            <div key={msg.id} className={i === 0 ? '' : gap}>
+              <MessageBubble
+                msg={msg}
+                isSaved={savedMessageIds.has(msg.id)}
+              />
+            </div>
+          )
+        })}
+        {isStreaming && (
+          <div className="mt-5">
+            {streamingText ? <StreamingBubble /> : <ThinkingBubble />}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
     </>
