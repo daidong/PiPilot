@@ -430,13 +430,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           timestamp: Date.now()
         }]
       }, {
-        maxTokens: 200,
+        maxTokens: 512,
         apiKey
       })
 
       const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-      const text = textContent?.text ?? ''
-      const parsed = JSON.parse(text)
+      const text = textContent?.text?.trim() ?? ''
+      if (!text) return
+      // Extract JSON from possible markdown code fences
+      const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? text.match(/(\{[\s\S]*\})/)
+      const jsonStr = jsonMatch?.[1]?.trim() ?? text
+      const parsed = JSON.parse(jsonStr)
 
       const summary: SessionSummary = {
         sessionId,
