@@ -1,7 +1,5 @@
 import React from 'react'
 import { Sparkles, FileText, BookOpen, BarChart3 } from 'lucide-react'
-import { useChatStore } from '../../stores/chat-store'
-import { useUIStore } from '../../stores/ui-store'
 
 const suggestions = [
   { icon: FileText, label: 'Draft a research note', prompt: 'Help me draft a research note about ' },
@@ -11,13 +9,9 @@ const suggestions = [
 ]
 
 export function HeroIdle() {
-  const sendMessage = useChatStore((s) => s.sendMessage)
-
   const handleSuggestion = (prompt: string) => {
-    // Put the prompt text in the input rather than sending directly
     const input = document.querySelector<HTMLTextAreaElement>('[data-chat-input]')
     if (input) {
-      // Use native setter to trigger React's onChange
       const nativeSetter = Object.getOwnPropertyDescriptor(
         window.HTMLTextAreaElement.prototype, 'value'
       )?.set
@@ -28,54 +22,28 @@ export function HeroIdle() {
   }
 
   return (
-    <div className="flex flex-col items-center gap-10 max-w-2xl px-8">
-      {/* Branded mark */}
-      <div className="relative">
-        <div
-          className="w-16 h-16 rounded-2xl flex items-center justify-center"
-          style={{
-            background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)',
-            boxShadow: '0 8px 32px rgba(99, 102, 241, 0.25)',
-          }}
-        >
-          <span className="text-white text-2xl font-bold tracking-tight" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-            P
-          </span>
-        </div>
-        {/* Subtle glow ring */}
-        <div
-          className="absolute -inset-2 rounded-3xl opacity-20 blur-xl -z-10"
-          style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)' }}
-        />
-      </div>
-
-      {/* Heading */}
-      <div className="text-center space-y-3">
+    <div className="flex flex-col items-center gap-8 max-w-xl px-8">
+      {/* Heading — clean and minimal, no logo duplication */}
+      <div className="text-center space-y-2">
         <h1
-          className="text-3xl font-semibold t-text tracking-tight"
-          style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
+          className="t-text-secondary tracking-tight font-medium"
+          style={{ fontSize: 'var(--text-xl)' }}
         >
           What would you like to do?
         </h1>
-        <p className="text-sm t-text-secondary leading-relaxed max-w-md mx-auto">
-          Research, write, analyze, or explore — your AI copilot is ready.
-        </p>
       </div>
 
       {/* Suggestion chips */}
-      <div className="grid grid-cols-2 gap-3 w-full max-w-md">
+      <div className="grid grid-cols-2 gap-2.5 w-full max-w-sm">
         {suggestions.map(({ icon: Icon, label, prompt }) => (
           <button
             key={label}
             onClick={() => handleSuggestion(prompt)}
-            className="group flex items-center gap-3 px-4 py-3 rounded-xl t-bg-surface border t-border
-                       hover:border-indigo-400/50 hover:shadow-sm transition-all duration-200 text-left"
+            className="group flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg t-bg-surface border t-border
+                       chip-hover hover:shadow-sm transition-all duration-200 text-left"
           >
-            <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center
-                            t-bg-base group-hover:bg-indigo-50 dark:group-hover:bg-indigo-950/30 transition-colors">
-              <Icon size={16} className="t-text-muted group-hover:text-indigo-500 transition-colors" />
-            </div>
-            <span className="text-[13px] t-text-secondary group-hover:t-text font-medium transition-colors">
+            <Icon size={14} className="shrink-0 t-text-muted group-hover:t-text-accent-2 transition-colors" />
+            <span className="t-text-secondary group-hover:t-text font-medium transition-colors" style={{ fontSize: 'var(--text-sm)' }}>
               {label}
             </span>
           </button>

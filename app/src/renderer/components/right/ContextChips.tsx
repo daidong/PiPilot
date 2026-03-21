@@ -37,7 +37,7 @@ export function ContextChips() {
                 <p className="text-[10px] t-text-muted mb-1">Topics:</p>
                 <div className="flex flex-wrap gap-1">
                   {summary.topicsDiscussed.map((topic, i) => (
-                    <span key={i} className="px-1.5 py-0.5 rounded-full t-bg-elevated text-[10px] t-text-secondary">{topic}</span>
+                    <span key={i} className="px-1.5 py-0.5 rounded-full t-bg-accent-2-muted text-[10px] t-text-accent-2-soft">{topic}</span>
                   ))}
                 </div>
               </div>

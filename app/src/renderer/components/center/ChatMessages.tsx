@@ -118,7 +118,7 @@ function SelectionBookmark() {
         top: pos.y,
         transform: 'translate(-50%, -100%)',
         background: 'var(--color-bg-elevated)',
-        color: saveState === 'saved' ? '#22c55e' : 'var(--color-text-secondary)',
+        color: saveState === 'saved' ? 'var(--color-status-success)' : 'var(--color-text-secondary)',
       }}
       title="Save selection as note"
       aria-label={saveState === 'saved' ? 'Selection saved as note' : 'Save selection as note'}

@@ -30,21 +30,45 @@ function FolderGate() {
   return (
     <div className="flex h-screen w-screen t-bg-base t-text items-center justify-center">
       <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
-      <div className="text-center max-w-md px-8">
-        <div className="mx-auto mb-6 w-20 h-20 rounded-2xl t-bg-surface flex items-center justify-center">
-          <FolderOpen size={36} className="t-text-accent-soft" />
+      <div className="text-center max-w-sm px-8">
+        {/* Branded mark */}
+        <div className="relative mx-auto mb-8 w-fit">
+          <div
+            className="w-14 h-14 rounded-2xl flex items-center justify-center"
+            style={{
+              background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
+              boxShadow: '0 8px 32px var(--color-accent-2-muted)',
+            }}
+          >
+            <span className="text-white text-xl font-bold tracking-tight">
+              P
+            </span>
+          </div>
+          <div
+            className="absolute -inset-2 rounded-3xl opacity-15 blur-xl -z-10"
+            style={{ background: 'linear-gradient(135deg, var(--color-accent), var(--color-accent-2))' }}
+          />
         </div>
-        <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily: "'Playfair Display', serif" }}>
+
+        <h1
+          className="text-2xl font-semibold mb-2 tracking-tight"
+        >
           Research Pilot
         </h1>
-        <p className="t-text-secondary text-sm mb-8 leading-relaxed">
-          Select a project folder to get started. A <code className="px-1.5 py-0.5 rounded t-bg-surface text-xs">.research-pilot</code> directory
-          will be created to store your notes, papers, and data.
+        <p className="t-text-secondary text-[13px] mb-8 leading-relaxed">
+          Open a project folder to begin. Your notes, papers, and data will live
+          in a <code className="px-1 py-0.5 rounded t-bg-surface text-xs font-mono">.research-pilot</code> directory.
         </p>
         <button
           onClick={handlePick}
-          className="px-6 py-3 rounded-xl t-bg-accent text-white font-medium hover:opacity-90 transition-colors text-sm"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium
+                     hover:opacity-90 transition-all duration-200"
+          style={{
+            background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
+            boxShadow: '0 4px 16px var(--color-accent-2-muted)',
+          }}
         >
+          <FolderOpen size={16} />
           Open Project Folder
         </button>
       </div>
