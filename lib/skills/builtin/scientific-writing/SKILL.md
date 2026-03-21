@@ -1,6 +1,10 @@
 ---
 name: scientific-writing
 description: Core skill for the deep research and writing tool. Write scientific manuscripts in full paragraphs (never bullet points). Use a two-stage process with (1) section outlines supported by literature-search tools and (2) conversion to flowing prose. Covers IMRAD structure, citations (APA/AMA/Vancouver), figures/tables, reporting guidelines (CONSORT/STROBE/PRISMA), and journal-ready manuscript drafting.
+category: Writing & Review
+depends: [scientific-schematics, rewrite-humanize]
+tags: [science, writing, paper]
+triggers: [write paper, draft manuscript, scientific writing, IMRAD, write introduction, write methods, write results, write discussion, 写论文, 写稿, 论文写作, write a paper, draft a section]
 allowed-tools: [Read, Write, Edit, Bash]
 license: MIT license
 metadata:

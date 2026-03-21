@@ -22,7 +22,7 @@ import type { Model, TextContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
 import { createLoadSkillTool } from '../tools/skill-tools.js'
-import { loadAllSkills, buildSkillsCatalogPrompt } from '../skills/loader.js'
+import { loadAllSkills, readEnabledSkills, resolveSkillDependencies, buildSkillsCatalogPrompt, buildSkillSummary, type SkillEntry } from '../skills/loader.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
@@ -47,29 +47,11 @@ type IntentLabel =
   | 'general'
 type PersistenceDecision = 'ephemeral' | 'conditional' | 'persist-requested'
 
-const INTENT_PRIORITY: IntentLabel[] = [
-  'data',
-  'literature',
-  'critique',
-  'writing',
-  'citation',
-  'grants',
-  'docx',
-  'web',
-  'general'
-]
-
-const INTENT_MODULES: Partial<Record<IntentLabel, string>> = {
-  literature: 'coordinator-module-literature',
-  data: 'coordinator-module-data',
-  writing: 'coordinator-module-writing',
-  critique: 'coordinator-module-critique'
-}
-
 interface TurnExplainSnapshot {
   timestamp: string
   sessionId: string
   intents: string[]
+  matchedSkills: string[]
   selectedContext: {
     mentionSelections: number
     approxTokens: number
@@ -107,36 +89,72 @@ function detectIntentsByRules(message: string): Set<IntentLabel> {
   return intents
 }
 
-async function classifyIntentWithLLM(
+
+const MAX_SKILL_PRELOAD = 5
+
+async function matchSkillsWithLLM(
   model: Model<any> | null,
   apiKey: string,
-  message: string
-): Promise<IntentLabel> {
-  if (!model) return 'general'
+  message: string,
+  skills: SkillEntry[]
+): Promise<string[]> {
+  if (!model || skills.length === 0) return []
 
+  const skillList = skills.map(s => `- ${s.name}: ${s.description}`).join('\n')
   const systemPrompt = [
-    'You are an intent router for a research assistant.',
-    'Choose ONE label from: literature, data, writing, critique, web, citation, grants, docx, general.',
-    'Output only the label.'
-  ].join(' ')
+    'You are a skill router for a research assistant. Given a user message, select which skills should be activated.',
+    'Return ONLY a JSON array of skill names. Return [] if none are relevant.',
+    '',
+    'Rules:',
+    '- Only select skills directly relevant to the user\'s request',
+    '- Do not select skills speculatively',
+    `- Maximum ${MAX_SKILL_PRELOAD} skills`,
+    '- Consider both English and Chinese messages',
+    '',
+    'Available skills:',
+    skillList
+  ].join('\n')
 
   try {
     const result = await completeSimple(model, {
       systemPrompt,
       messages: [{ role: 'user', content: message, timestamp: Date.now() }]
     }, {
-      maxTokens: 6,
+      maxTokens: 100,
       apiKey
     })
 
     const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-    const label = (textContent?.text ?? '').trim().toLowerCase().split(/\s+/)[0] as IntentLabel
-    if (INTENT_PRIORITY.includes(label)) return label
-  } catch {
-    // fallback
-  }
+    const text = textContent?.text?.trim() ?? ''
+    if (!text) return []
 
-  return 'general'
+    // Extract JSON array from response (may be wrapped in code fences)
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? text.match(/(\[[\s\S]*?\])/)
+    const jsonStr = jsonMatch?.[1]?.trim() ?? text
+    const parsed = JSON.parse(jsonStr)
+
+    if (!Array.isArray(parsed)) return []
+    const validNames = new Set(skills.map(s => s.name))
+    return parsed
+      .filter((n): n is string => typeof n === 'string' && validNames.has(n))
+      .slice(0, MAX_SKILL_PRELOAD)
+  } catch {
+    return []
+  }
+}
+
+function buildSkillSummariesPrompt(matchedSkills: SkillEntry[]): string {
+  if (matchedSkills.length === 0) return ''
+  const sections = matchedSkills.map(s => {
+    const summary = buildSkillSummary(s)
+    return `### Pre-loaded: ${s.name}\n\n${summary}`
+  })
+  return [
+    '## Matched Skill Summaries',
+    'The following skills have been identified as relevant to this request. Review their summaries below. Call `load_skill(name)` if you need the full procedures.',
+    '',
+    ...sections
+  ].join('\n\n')
 }
 
 function classifyPersistenceDecision(message: string): { decision: PersistenceDecision; reason: string } {
@@ -157,19 +175,6 @@ function classifyPersistenceDecision(message: string): { decision: PersistenceDe
   return { decision: 'conditional', reason: 'Persist only if reuse/traceability triggers are met during execution.' }
 }
 
-function buildAdditionalInstructions(intents: Set<IntentLabel>): string | undefined {
-  const ordered = INTENT_PRIORITY.filter(i => intents.has(i)).slice(0, 2)
-  const modules: string[] = []
-
-  for (const intent of ordered) {
-    const name = INTENT_MODULES[intent]
-    if (name) {
-      modules.push(loadPrompt(name))
-    }
-  }
-
-  return modules.length > 0 ? modules.join('\n\n') : undefined
-}
 
 function buildMentionContext(mentions?: ResolvedMention[]): string {
   if (!mentions || mentions.length === 0) return ''
@@ -213,6 +218,7 @@ export interface CoordinatorConfig {
   onToolCall?: (tool: string, args: unknown) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown) => void
   onUsage?: (usage: unknown, cost: unknown) => void
+  onSkillLoaded?: (skillName: string) => void
 }
 
 export async function createCoordinator(config: CoordinatorConfig): Promise<{
@@ -231,7 +237,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onStream,
     onToolCall,
     onToolResult,
-    onUsage
+    onUsage,
+    onSkillLoaded
   } = config
 
   let turnCount = 0
@@ -337,10 +344,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // Create built-in coding tools from pi-coding-agent
   const codingTools = createCodingTools(projectPath)
 
-  // Load skills and create load_skill tool
-  const skills = loadAllSkills(projectPath)
+  // Load skills and filter by enabled config (with dependency resolution)
+  const allSkills = loadAllSkills(projectPath)
+  const enabledList = readEnabledSkills(projectPath)
+  const directSelection = enabledList ?? allSkills.map(s => s.name)
+  const resolved = resolveSkillDependencies(allSkills, directSelection)
+  const skills = allSkills.filter(s => resolved.has(s.name))
   if (debug && skills.length > 0) {
-    console.log(`[Coordinator] Loaded ${skills.length} skills: ${skills.map(s => s.name).join(', ')}`)
+    console.log(`[Coordinator] Loaded ${skills.length}/${allSkills.length} skills: ${skills.map(s => s.name).join(', ')}`)
   }
   const loadSkillTool = createLoadSkillTool(skills)
 
@@ -376,6 +387,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
     afterToolCall: async (ctx) => {
       wrappedOnToolResult(ctx.toolCall.name, ctx.result, ctx.args)
+      // Notify when a skill is loaded successfully
+      if (ctx.toolCall.name === 'load_skill' && onSkillLoaded) {
+        const args = ctx.args as { name?: string }
+        const result = ctx.result as any
+        if (args?.name && result?.success !== false) {
+          onSkillLoaded(args.name)
+        }
+      }
       return undefined
     }
   })
@@ -468,15 +487,21 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     async chat(message: string, mentions?: ResolvedMention[], images?: Array<{ base64: string; mimeType: string }>) {
       try {
+        // --- Intent detection (rule-based only, for explain snapshots) ---
         const intents = detectIntentsByRules(message)
-        const hasModuleIntent = ['literature', 'data', 'writing', 'citation', 'grants', 'docx', 'critique']
-          .some(i => intents.has(i as IntentLabel))
-        if (!hasModuleIntent) {
-          const label = await classifyIntentWithLLM(intentRouterModel, apiKey, message)
-          if (label !== 'general') intents.add(label)
+
+        // --- LLM-based skill matching (replaces intent-driven prompt modules) ---
+        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, apiKey, message, skills)
+        const matchedSkills = matchedSkillNames
+          .map(name => skills.find(s => s.name === name))
+          .filter((s): s is SkillEntry => s !== undefined)
+
+        // Notify UI about pre-matched skills
+        for (const s of matchedSkills) {
+          onSkillLoaded?.(s.name)
         }
 
-        const additionalInstructions = buildAdditionalInstructions(intents)
+        const skillSummariesPrompt = buildSkillSummariesPrompt(matchedSkills)
 
         // Read agent.md and prepend to additionalInstructions
         const agentMdRecord = findArtifactById(projectPath, AGENT_MD_ID)
@@ -495,6 +520,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           timestamp: new Date().toISOString(),
           sessionId,
           intents: Array.from(intents),
+          matchedSkills: matchedSkillNames,
           selectedContext: {
             mentionSelections: mentions?.filter(m => !m.error).length ?? 0,
             approxTokens: 0
@@ -515,7 +541,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
         if (debug) {
           const intentList = Array.from(intents).join(', ') || 'none'
+          const skillList = matchedSkillNames.join(', ') || 'none'
           console.log(`[Chat] Intents: ${intentList}`)
+          console.log(`[Chat] Matched skills: ${skillList}`)
           console.log(`[Chat] Sending message to agent (${mentions?.filter(m => !m.error).length ?? 0} mentions, summary=${!!latestSummary})...`)
         }
 
@@ -524,8 +552,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         if (agentMdContent) {
           enrichedSystem = `${enrichedSystem}\n\n## User Instructions (agent.md)\n\n${agentMdContent}`
         }
-        if (additionalInstructions) {
-          enrichedSystem = `${enrichedSystem}\n\n${additionalInstructions}`
+        if (skillSummariesPrompt) {
+          enrichedSystem = `${enrichedSystem}\n\n${skillSummariesPrompt}`
         }
         agent.setSystemPrompt(enrichedSystem)
 

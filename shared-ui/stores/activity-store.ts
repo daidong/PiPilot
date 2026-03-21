@@ -15,7 +15,10 @@ export interface ActivityEvent {
 
 interface ActivityState {
   events: ActivityEvent[]
+  /** Skills loaded during the current run */
+  activeSkills: string[]
   push: (event: ActivityEvent) => void
+  addSkill: (name: string) => void
   clear: () => void
 }
 
@@ -23,6 +26,12 @@ const MAX_EVENTS = 50
 
 export const useActivityStore = create<ActivityState>((set) => ({
   events: [],
+  activeSkills: [],
+  addSkill: (name) =>
+    set((state) => {
+      if (state.activeSkills.includes(name)) return state
+      return { activeSkills: [...state.activeSkills, name] }
+    }),
   push: (event) =>
     set((state) => {
       // Filter out internal todo-* tool events (subagent pipeline noise)
@@ -52,7 +61,7 @@ export const useActivityStore = create<ActivityState>((set) => ({
       // Keep only the most recent events
       return { events: next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next }
     }),
-  clear: () => set({ events: [] }),
+  clear: () => set({ events: [], activeSkills: [] }),
 }))
 
 /** Find index of the last element matching a predicate */

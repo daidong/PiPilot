@@ -11,6 +11,7 @@ import {
   enrichPaperArtifacts
 } from '../../../lib/commands/index'
 import { parseMentions, resolveMentions, getCandidates } from '../../../lib/mentions/index'
+import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readEnabledSkills, setBuiltinSkillsRoot } from '../../../lib/skills/loader'
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
@@ -239,7 +240,8 @@ function initializeProject(path: string): void {
     PATHS.documentCache,
     PATHS.memoryRoot,
     PATHS.explainDir,
-    PATHS.sessionSummaries
+    PATHS.sessionSummaries,
+    PATHS.skills
   ]
 
   for (const dir of dirs) {
@@ -398,6 +400,11 @@ async function ensureCoordinator(
         safeSend(win, 'agent:activity', actEvent)
       },
 
+      // Skill activation tracking
+      onSkillLoaded: (skillName: string) => {
+        safeSend(win, 'agent:skill-loaded', skillName)
+      },
+
       // Token usage tracking
       // pi-mono Usage type: { input, output, cacheRead, cacheWrite, totalTokens, cost: { input, output, cacheRead, cacheWrite, total } }
       onUsage: (usage: any, cost: any) => {
@@ -437,6 +444,11 @@ async function ensureCoordinator(
 export function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
   ipcHandlersRegistered = true
+
+  // Set the builtin skills root so the loader can find SKILL.md files
+  // __dirname in the bundled main process is app/out/main/ (or app/src/main/ in dev)
+  // lib/skills/ is 3 levels up at the repo root
+  setBuiltinSkillsRoot(join(__dirname, '..', '..', '..', 'lib', 'skills'))
 
   const handleWindow = <T extends unknown[], R>(
     channel: string,
@@ -813,6 +825,93 @@ export function registerIpcHandlers(): void {
     }
 
     return { success: false, error: `Unknown tab: ${tab}` }
+  })
+
+  // ─── Skills ───────────────────────────────────────────────────────────
+  handleWindow('skills:list', ({ state }) => {
+    if (!state.projectPath) return []
+    return buildSkillManifests(state.projectPath)
+  })
+
+  handleWindow('skills:set-enabled', async ({ win, state }, enabledSkills: string[]) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    writeEnabledSkills(state.projectPath, enabledSkills)
+    // Recreate coordinator so it picks up the new skill set
+    if (state.coordinator) {
+      state.coordinator.destroy().catch(() => {})
+      state.coordinator = null
+    }
+    return { success: true }
+  })
+
+  handleWindow('skills:upload', async ({ state }, fileName: string, base64Data: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const os = await import('os')
+    const tmpDir = join(os.tmpdir(), `rp-skill-${Date.now()}`)
+    mkdirSync(tmpDir, { recursive: true })
+
+    try {
+      // Decode base64 zip
+      const buffer = Buffer.from(base64Data, 'base64')
+      const AdmZip = (await import('adm-zip')).default
+      const zip = new AdmZip(buffer)
+      zip.extractAllTo(tmpDir, true)
+
+      // Find SKILL.md in the extracted content
+      const { readdirSync, statSync } = await import('fs')
+      let skillMdDir: string | null = null
+
+      // Check root level
+      if (existsSync(join(tmpDir, 'SKILL.md'))) {
+        skillMdDir = tmpDir
+      } else {
+        // Check one level deep (single folder inside zip)
+        const entries = readdirSync(tmpDir, { withFileTypes: true })
+        for (const entry of entries) {
+          if (entry.isDirectory() && existsSync(join(tmpDir, entry.name, 'SKILL.md'))) {
+            skillMdDir = join(tmpDir, entry.name)
+            break
+          }
+        }
+      }
+
+      if (!skillMdDir) {
+        return { success: false, error: 'No SKILL.md found in the uploaded ZIP.' }
+      }
+
+      // Read SKILL.md to get the skill name
+      const skillContent = readFileSync(join(skillMdDir, 'SKILL.md'), 'utf-8')
+      const nameMatch = skillContent.match(/^---\n[\s\S]*?^name:\s*(.+)$/m)
+      if (!nameMatch) {
+        return { success: false, error: 'SKILL.md missing required "name" field in frontmatter.' }
+      }
+      const skillName = nameMatch[1].trim().replace(/^["']|["']$/g, '')
+
+      // Install to workspace
+      installSkillToWorkspace(state.projectPath, skillName, skillMdDir)
+
+      // Auto-enable the newly installed skill
+      const current = readEnabledSkills(state.projectPath)
+      if (current !== null && !current.includes(skillName)) {
+        writeEnabledSkills(state.projectPath, [...current, skillName])
+      }
+
+      // Invalidate coordinator
+      if (state.coordinator) {
+        state.coordinator.destroy().catch(() => {})
+        state.coordinator = null
+      }
+
+      return { success: true, skillName }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    } finally {
+      // Cleanup temp dir
+      try {
+        const { rmSync } = await import('fs')
+        rmSync(tmpDir, { recursive: true, force: true })
+      } catch { /* best effort */ }
+    }
   })
 
   // Session

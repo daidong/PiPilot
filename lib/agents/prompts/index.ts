@@ -18,7 +18,7 @@ Hard rules:
 - Academic papers / related work → literature-search. General web facts → brave_web_search or fetch.
 - If a required paper PDF/full text cannot be retrieved (paywall/auth/access blocked), do NOT infer missing content. Ask user to provide/upload the file and continue only after file is available.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
-- For reusable methodology, writing scaffolding, or plot/style templates, use load_skill to load the relevant skill instructions first, then follow them.
+- For reusable methodology, writing scaffolding, or plot/style templates, check if a relevant skill summary is already pre-loaded below. If so, follow it; call load_skill(name) for full procedures when needed. You can also browse the Skills Catalog and load any skill on demand.
 - For repository/text inspection, use this order by default:
   1) glob/grep to locate relevant files/sections;
   2) read with offset+limit in focused chunks;
@@ -41,32 +41,6 @@ Memory model:
 - Session context is maintained automatically via periodic summaries.
 - For quick-reference info, create a note via artifact-create({ type: "note", ... }).`,
 
-
-// ---------------------------------------------------------------------------
-// coordinator-modules (loaded on demand per user intent)
-// ---------------------------------------------------------------------------
-'coordinator-module-literature': `## Literature Search Module
-- Use literature-search at most once per user request for the same topic.
-- Always pass context when available (research goals, names, titles).
-- After literature-search, read fullReviewPath and synthesize (do not dump raw).
-- If full-text PDF is required but unavailable (paywall/auth), explicitly request user upload instead of fabricating details.
-- Re-run only if the user explicitly asks or the topic changes.`,
-
-'coordinator-module-data': `## Data Analysis Module
-- Use data-analyze for any analysis, visualization, statistics, or modeling.
-- Do not compute from raw data with read/grep.
-- Generate only the outputs the user requested; no extras.`,
-
-'coordinator-module-writing': `## Writing Module
-- Prefer narrative flow over bullet enumeration.
-- Formal, precise, concise; avoid filler.
-- Integrate citations as [Author, Year] when referencing literature.
-- Prefer full sentences in prose; use bullets/dashes when the user asks for list format or when it materially improves clarity.`,
-
-'coordinator-module-critique': `## Critique Module
-Include: verdict, gaps, failure modes, terminology ambiguities, actionable fixes.
-Each point must include at least one checkable noun (metric, baseline, API, data structure, deployment constraint).
-Be specific and technical; avoid generic pros/cons.`,
 
 // ---------------------------------------------------------------------------
 // data-analysis-system

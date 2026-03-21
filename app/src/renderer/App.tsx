@@ -159,6 +159,9 @@ export default function App() {
         ...event
       })
     })
+    const unsubSkillLoaded = api.onSkillLoaded((skillName: string) => {
+      useActivityStore.getState().addSkill(skillName)
+    })
 
     const unsub1 = api.onStreamChunk((chunk: string) => appendChunk(chunk))
     const unsub2 = api.onAgentDone((result: any) => {
@@ -210,6 +213,7 @@ export default function App() {
       unsub6()
       unsubActivity()
       unsubActivityClear()
+      unsubSkillLoaded()
       unsubUsage()
     }
   }, [hasProject])

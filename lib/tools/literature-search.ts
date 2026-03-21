@@ -276,8 +276,11 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       'Search academic papers on a topic using a multi-agent literature research pipeline. ' +
       'Internally plans sub-topics, searches multiple sources (Semantic Scholar, arXiv, OpenAlex, DBLP), ' +
       'reviews/scores papers, and synthesizes a summary -- all in a SINGLE call. ' +
-      'Returns a compressed result with coverage state, paper counts, and disk paths to full review. ' +
-      'Do NOT call this tool multiple times for the same study.',
+      'Returns a compressed result with coverage state, paper counts, and disk paths to full review.\n' +
+      'Usage guidelines: (1) Call at most ONCE per user request for the same topic — re-run only if the user explicitly asks or the topic changes. ' +
+      '(2) Always pass context when available (research goals, researcher names, paper titles). ' +
+      '(3) After receiving results, read fullReviewPath and synthesize — do not dump raw results. ' +
+      '(4) If full-text PDF is required but unavailable (paywall/auth), ask the user to upload instead of fabricating details.',
     parameters: Type.Object({
       query: Type.String({ description: 'The research topic or question to search for' }),
       context: Type.Optional(

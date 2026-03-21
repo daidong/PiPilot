@@ -17,6 +17,7 @@ function formatTokens(tokens: number): string {
 
 export function StatusBar() {
   const events = useActivityStore((s) => s.events)
+  const activeSkills = useActivityStore((s) => s.activeSkills)
   const runTokens = useUsageStore((s) => s.runTokens)
   const runCost = useUsageStore((s) => s.runCost)
   const runCacheHitRate = useUsageStore((s) => s.runCacheHitRate)
@@ -47,11 +48,24 @@ export function StatusBar() {
   }, [events])
 
   const hasActivity = toolSummary.length > 0
+  const hasSkills = activeSkills.length > 0
   const hasRunUsage = runTokens > 0
   const hasProjectUsage = allTimeTokens > 0
 
   return (
     <div className="h-7 flex items-center px-4 gap-5 border-t t-border t-bg-surface text-[11px] t-text-muted select-none shrink-0">
+      {/* Active skills */}
+      {hasSkills && (
+        <div className="flex items-center gap-2 overflow-hidden">
+          {activeSkills.map((name) => (
+            <span key={name} className="flex items-center gap-1 px-1.5 py-0.5 rounded t-bg-accent/10 t-text-accent whitespace-nowrap">
+              <span className="text-[10px]">&#x26A1;</span>
+              <span>{name}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Activity summary */}
       {hasActivity && (
         <div className="flex items-center gap-3 overflow-hidden">

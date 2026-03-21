@@ -1,6 +1,9 @@
 ---
 name: scholar-evaluation
 description: Systematically evaluate scholarly work using the ScholarEval framework, providing structured assessment across research quality dimensions including problem formulation, methodology, analysis, and writing with quantitative scoring and actionable feedback.
+category: Writing & Review
+tags: [science, evaluation]
+triggers: [evaluate paper, review paper, assess quality, critique research, scholarly evaluation, peer review, 评审论文, 评价研究, score paper]
 license: MIT license
 metadata:
     skill-author: K-Dense Inc.

@@ -69,6 +69,9 @@ export interface ElectronAPI {
   // Activity feed
   onActivity: (cb: (event: any) => void) => () => void
 
+  // Skill activation tracking
+  onSkillLoaded: (cb: (skillName: string) => void) => () => void
+
   // Entity creation notifications
   onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
 
@@ -122,6 +125,11 @@ export interface ElectronAPI {
   terminalKill: () => Promise<void>
   onTerminalData: (cb: (data: string) => void) => () => void
   onTerminalExit: (cb: (exitCode: number) => void) => () => void
+
+  // Skills
+  listSkills: () => Promise<Array<{ name: string; description: string; source: string; enabled: boolean }>>
+  setEnabledSkills: (enabledSkills: string[]) => Promise<{ success: boolean; error?: string }>
+  uploadSkill: (fileName: string, base64Data: string) => Promise<{ success: boolean; skillName?: string; error?: string }>
 
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
@@ -200,6 +208,12 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:activity', handler)
   },
 
+  onSkillLoaded: (cb) => {
+    const handler = (_: any, skillName: string) => cb(skillName)
+    ipcRenderer.on('agent:skill-loaded', handler)
+    return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
+  },
+
   onEntityCreated: (cb) => {
     const handler = (_: any, info: { type: string; id: string; title: string }) => cb(info)
     ipcRenderer.on('agent:entity-created', handler)
@@ -252,6 +266,11 @@ const api: ElectronAPI = {
   savePreferences: (prefs) => ipcRenderer.invoke('prefs:save', prefs),
 
   openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app),
+
+  // Skills
+  listSkills: () => ipcRenderer.invoke('skills:list'),
+  setEnabledSkills: (enabledSkills) => ipcRenderer.invoke('skills:set-enabled', enabledSkills),
+  uploadSkill: (fileName, base64Data) => ipcRenderer.invoke('skills:upload', fileName, base64Data),
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),
   loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),

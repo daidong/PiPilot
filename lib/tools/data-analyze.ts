@@ -62,7 +62,9 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
     label: 'Data Analysis',
     description:
       'Analyze a dataset using Python. Supports statistics, visualization (matplotlib/seaborn), ' +
-      'data transformation, and modeling. Generated outputs (figures, tables) are saved to disk.',
+      'data transformation, and modeling. Generated outputs (figures, tables) are saved to disk.\n' +
+      'Usage guidelines: (1) Use this tool for ANY analysis, visualization, statistics, or modeling — do not compute from raw data with read/grep. ' +
+      '(2) Generate only the outputs the user requested; no extras.',
     parameters: DataAnalyzeSchema,
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as Record<string, unknown>

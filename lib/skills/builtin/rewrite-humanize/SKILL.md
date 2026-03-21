@@ -1,6 +1,9 @@
 ---
 name: rewrite-humanize
 description: Rewrite existing draft to sound more natural and less AI-templated while preserving scientific meaning, facts, numbers, citations, and claims. Use when user asks to reduce AI tone, improve flow, or humanize wording without changing conclusions.
+category: Writing & Review
+tags: [writing]
+triggers: [humanize, reduce AI tone, rewrite naturally, polish writing, improve flow, less robotic, 润色, 改写得自然, sound more natural]
 ---
 
 # Rewrite Humanize
