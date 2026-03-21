@@ -821,7 +821,7 @@ export function registerIpcHandlers(): void {
   // Project - pick folder and initialize
   handleWindow('project:pick-folder', async ({ win, state }) => {
     const result = await dialog.showOpenDialog(win, {
-      properties: ['openDirectory']
+      properties: ['openDirectory', 'createDirectory']
     })
     if (!result.canceled && result.filePaths[0]) {
       // Clean up previous project (same as project:close)
