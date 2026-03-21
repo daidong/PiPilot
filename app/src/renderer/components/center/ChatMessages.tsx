@@ -191,7 +191,15 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
         {msg.images && msg.images.length > 0 && (
           <div className="flex gap-2 mb-2 flex-wrap">
             {msg.images.map((src, i) => (
-              <img key={i} src={src} alt="" className="max-h-48 rounded-lg border t-border" />
+              <img
+                key={i}
+                src={src}
+                alt=""
+                className={`rounded-lg border t-border cursor-pointer hover:opacity-90 transition-opacity ${
+                  isUser ? 'max-h-48' : 'max-h-80'
+                }`}
+                onClick={() => window.open(src, '_blank')}
+              />
             ))}
           </div>
         )}

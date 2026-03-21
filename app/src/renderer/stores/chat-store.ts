@@ -22,7 +22,7 @@ interface ChatState {
   send: (text: string, images?: Array<{ base64: string; mimeType: string }>) => Promise<void>
   stop: () => Promise<void>
   appendChunk: (chunk: string) => void
-  finalize: (result: { success: boolean; response?: string; error?: string }) => void
+  finalize: (result: { success: boolean; response?: string; error?: string; images?: Array<{ base64: string; mimeType: string }> }) => void
   clear: () => void
   markSaved: (messageId: string) => void
   loadInitial: (sessionId: string) => Promise<void>
@@ -92,6 +92,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       id: crypto.randomUUID(),
       role: 'assistant',
       content,
+      images: result.images?.map(i => `data:${i.mimeType};base64,${i.base64}`),
       timestamp: Date.now()
     }
     set((s) => ({

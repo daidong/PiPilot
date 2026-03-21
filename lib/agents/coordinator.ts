@@ -554,14 +554,18 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           activeTurnToolCallCount = null
         }
 
-        // Extract the response text from agent messages
+        // Extract the response text and images from agent messages
         const messages = agent.state.messages
         const lastMsg = messages[messages.length - 1]
         let responseText = ''
+        const responseImages: Array<{ base64: string; mimeType: string }> = []
         if (lastMsg && 'content' in lastMsg && Array.isArray(lastMsg.content)) {
           for (const block of lastMsg.content) {
             if ('type' in block && block.type === 'text' && 'text' in block) {
               responseText += (block as TextContent).text
+            } else if ('type' in block && block.type === 'image' && 'data' in block) {
+              const imgBlock = block as { type: 'image'; data: string; mimeType: string }
+              responseImages.push({ base64: imgBlock.data, mimeType: imgBlock.mimeType })
             }
           }
         }
@@ -595,7 +599,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           console.log(`[Chat] Result: success=true, hasOutput=${!!responseText}, turn=${turnCount}`)
         }
 
-        return { success: true, response: responseText }
+        return {
+          success: true,
+          response: responseText,
+          ...(responseImages.length > 0 && { images: responseImages })
+        }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
         if (debug) {
