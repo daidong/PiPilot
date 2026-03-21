@@ -6,7 +6,7 @@ const remarkPlugins = [remarkGfm]
 import {
   BookMarked,
   BookOpen,
-  Activity,
+  FolderOpen,
   Upload,
   MessageSquare,
   Trash2,
@@ -20,7 +20,7 @@ import {
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
-import { RunsPanel } from './RunsPanel'
+import { WorkspaceTree } from './WorkspaceTree'
 
 function HoverPreview({
   entity,
@@ -86,7 +86,7 @@ function HoverPreview({
 const tabs = [
   { key: 'library' as const, label: 'Library', icon: BookMarked },
   { key: 'papers' as const, label: 'Papers', icon: BookOpen },
-  { key: 'debug' as const, label: 'Debug', icon: Activity }
+  { key: 'files' as const, label: 'Files', icon: FolderOpen }
 ]
 
 const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem }) {
@@ -423,8 +423,8 @@ export function EntityTabs() {
         return <LibraryContent notes={notes} data={data} refreshAll={refreshAll} />
       case 'papers':
         return <PapersContent papers={papers} refreshAll={refreshAll} />
-      case 'debug':
-        return <RunsPanel />
+      case 'files':
+        return <WorkspaceTree />
       default:
         return null
     }

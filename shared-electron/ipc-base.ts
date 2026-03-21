@@ -355,14 +355,14 @@ export function registerUsageHandlers(
   handle('usage:get-totals', () => {
     const { projectPath } = getCtx()
     if (!projectPath) return null
-    const baseDir = join(projectPath, '.agentfoundry')
+    const baseDir = join(projectPath, '.research-pilot')
     return loadUsageTotals(baseDir)
   })
 
   handle('usage:reset-totals', () => {
     const { projectPath } = getCtx()
     if (!projectPath) return null
-    const baseDir = join(projectPath, '.agentfoundry')
+    const baseDir = join(projectPath, '.research-pilot')
     return resetUsageTotals(baseDir)
   })
 }

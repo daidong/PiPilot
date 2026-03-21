@@ -165,7 +165,7 @@ function usePreviewNavigation() {
         return [...notes, ...data]
       case 'papers':
         return papers
-      case 'debug':
+      case 'files':
       default:
         return []
     }

@@ -123,15 +123,12 @@ function formatToolResult(tool: string, result: unknown, args?: unknown): Activi
   }
 }
 
-// ─── Simple in-memory usage totals (replaces AgentFoundry's usage-totals) ────
-function loadUsageTotals(_baseDir: string): Record<string, unknown> {
-  // TODO: Implement persistent usage tracking if needed
-  return { promptTokens: 0, completionTokens: 0, totalCost: 0 }
-}
-
-function resetUsageTotals(_baseDir: string): Record<string, unknown> {
-  return { promptTokens: 0, completionTokens: 0, totalCost: 0 }
-}
+// ─── Persistent per-project usage totals ────────────────────────────────────
+import {
+  loadUsageTotals,
+  accumulateUsage,
+  resetUsageTotals
+} from './usage-totals'
 
 interface WindowRuntimeState {
   coordinator: ReturnType<typeof createCoordinator> | null
@@ -402,20 +399,27 @@ async function ensureCoordinator(
       },
 
       // Token usage tracking
+      // pi-mono Usage type: { input, output, cacheRead, cacheWrite, totalTokens, cost: { input, output, cacheRead, cacheWrite, total } }
       onUsage: (usage: any, cost: any) => {
-        const rawCost = cost.totalCost ?? 0
+        const rawCost = cost?.total ?? 0
+        const promptTokens = usage.input ?? 0
+        const completionTokens = usage.output ?? 0
+        const cachedTokens = usage.cacheRead ?? 0
+
+        // Persist to disk (per-project accumulated totals)
+        const baseDir = join(runProjectPath, PATHS.root)
+        accumulateUsage(baseDir, promptTokens, completionTokens, cachedTokens, rawCost)
+
         const usageEvent = {
-          promptTokens: usage.promptTokens ?? 0,
-          completionTokens: usage.completionTokens ?? 0,
-          cachedTokens: usage.cacheReadInputTokens ?? 0,
+          promptTokens,
+          completionTokens,
+          cachedTokens,
           cost: rawCost,
           rawCost,
           billableCost: rawCost,
           authMode: state.currentAuthMode,
           billingSource: resolvedAuth.billingSource,
-          cacheHitRate: usage.promptTokens > 0
-            ? (usage.cacheReadInputTokens ?? 0) / usage.promptTokens
-            : 0
+          cacheHitRate: promptTokens > 0 ? cachedTokens / promptTokens : 0
         }
         safeSend(win, 'agent:usage', usageEvent)
       }

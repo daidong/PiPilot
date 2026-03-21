@@ -21,6 +21,8 @@ import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
+import { createLoadSkillTool } from '../tools/skill-tools.js'
+import { loadAllSkills, buildSkillsCatalogPrompt } from '../skills/loader.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
@@ -243,29 +245,46 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   // Resolve pi-mono model
   let piModel: Model<any> | null = null
-  try {
-    if (modelId) {
-      // Try to find the model by provider + modelId convention
-      // modelId format is typically "provider:model-name" or just "model-name"
-      const parts = modelId.split(':')
-      if (parts.length === 2) {
-        piModel = getPiModel(parts[0] as any, parts[1] as any)
-      } else {
-        // Try common providers
-        for (const provider of ['anthropic', 'openai', 'google'] as const) {
-          try {
-            piModel = getPiModel(provider, modelId as any)
+  if (modelId) {
+    const parts = modelId.split(':')
+    if (parts.length === 2) {
+      // Explicit provider:model format
+      try {
+        const result = getPiModel(parts[0] as any, parts[1] as any)
+        if (result) piModel = result
+      } catch (err) {
+        if (debug) console.warn(`[Coordinator] getPiModel("${parts[0]}", "${parts[1]}") failed:`, err)
+      }
+    } else {
+      // Infer provider from model name
+      const providerHint = modelId.startsWith('claude-') ? 'anthropic'
+        : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
+        : modelId.startsWith('gemini-') ? 'google'
+        : null
+
+      const providers = providerHint
+        ? [providerHint, 'anthropic', 'openai', 'google']
+        : ['anthropic', 'openai', 'google']
+
+      for (const provider of providers) {
+        try {
+          const result = getPiModel(provider as any, modelId as any)
+          if (result) {
+            piModel = result
+            if (debug) console.log(`[Coordinator] Resolved model "${modelId}" via provider "${provider}"`)
             break
-          } catch {
-            continue
           }
+        } catch {
+          continue
         }
       }
     }
-  } catch (err) {
-    if (debug) {
-      console.warn(`[Coordinator] Failed to resolve model "${modelId}":`, err)
+
+    if (!piModel) {
+      console.warn(`[Coordinator] Could not resolve model "${modelId}" from any provider. Chat will fail.`)
     }
+  } else {
+    console.warn('[Coordinator] No modelId provided. Chat will fail.')
   }
 
   // Select a cheap model for intent routing
@@ -318,14 +337,25 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // Create built-in coding tools from pi-coding-agent
   const codingTools = createCodingTools(projectPath)
 
+  // Load skills and create load_skill tool
+  const skills = loadAllSkills(projectPath)
+  if (debug && skills.length > 0) {
+    console.log(`[Coordinator] Loaded ${skills.length} skills: ${skills.map(s => s.name).join(', ')}`)
+  }
+  const loadSkillTool = createLoadSkillTool(skills)
+
   // Combine all tools
   const allTools: AgentTool[] = [
     ...codingTools,
-    ...researchAgentTools
+    ...researchAgentTools,
+    loadSkillTool
   ]
 
-  // Build the full system prompt
-  const fullSystemPrompt = SYSTEM_PROMPT
+  // Build the full system prompt with skills catalog
+  const skillsCatalog = buildSkillsCatalogPrompt(skills)
+  const fullSystemPrompt = skillsCatalog
+    ? SYSTEM_PROMPT + '\n\n' + skillsCatalog
+    : SYSTEM_PROMPT
 
   // Create the pi-mono Agent
   const agent = new Agent({

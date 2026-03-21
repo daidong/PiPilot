@@ -97,7 +97,9 @@ function parseSkillFile(skillFile: string, displayPath: string): SkillEntry | nu
   const content = safeReadText(skillFile)
   if (!content) return null
   const name = parseFrontmatterField(content, 'name')
+  // Accept both 'description' and 'shortDescription' (myRAM compat)
   const description = parseFrontmatterField(content, 'description')
+    ?? parseFrontmatterField(content, 'shortDescription')
   if (!name || !description) return null
   return {
     name,
@@ -114,17 +116,19 @@ function parseSkillFile(skillFile: string, displayPath: string): SkillEntry | nu
 
 /** Load built-in skills that ship with the software. */
 export function loadBuiltinSkills(): SkillEntry[] {
-  // Resolve relative to this file: lib/skills/loader.ts -> lib/skills/builtin/
-  const thisDir = path.dirname(fileURLToPath(import.meta.url))
-  const builtinRoot = path.resolve(thisDir, 'builtin')
-  if (!fs.existsSync(builtinRoot) || !fs.statSync(builtinRoot).isDirectory()) {
+  // Scan the entire lib/skills/ directory (includes builtin/, academic-writing/, literature/, etc.)
+  const skillsRoot = path.dirname(fileURLToPath(import.meta.url))
+  if (!fs.existsSync(skillsRoot) || !fs.statSync(skillsRoot).isDirectory()) {
     return []
   }
-  const files = discoverSkillFiles(builtinRoot)
-  const entries = files
-    .map((file) => parseSkillFile(file, `[builtin] ${path.relative(builtinRoot, file)}`))
-    .filter((entry): entry is SkillEntry => entry !== null)
-  return entries.sort((a, b) => a.name.localeCompare(b.name))
+  const files = discoverSkillFiles(skillsRoot)
+  // Deduplicate by name (later files override earlier)
+  const byName = new Map<string, SkillEntry>()
+  for (const file of files) {
+    const entry = parseSkillFile(file, `[builtin] ${path.relative(skillsRoot, file)}`)
+    if (entry) byName.set(entry.name, entry)
+  }
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name))
 }
 
 /** Load workspace-level skills from .research-pilot/skills/. */
@@ -181,9 +185,47 @@ export function buildSkillsCatalog(entries: SkillEntry[]): SkillCatalogItem[] {
   }))
 }
 
-/** Find a skill by name. */
+/** Find a skill by name (fuzzy: also tries substring match). */
 export function getSkillByName(entries: SkillEntry[], name: string): SkillEntry | undefined {
   const trimmed = name.trim()
   if (!trimmed) return undefined
   return entries.find((entry) => entry.name === trimmed)
+}
+
+/**
+ * Build a prompt section that lists available skills for the LLM.
+ * Injected into the system prompt so the agent knows what skills exist
+ * and can call `load_skill` to load full instructions on demand.
+ */
+export function buildSkillsCatalogPrompt(entries: SkillEntry[]): string {
+  if (entries.length === 0) return ''
+  const lines = entries.map((e) => `- ${e.name}: ${e.description} (${e.path})`)
+  return [
+    '## Skills',
+    'You have the following skills available. At the start of each task, scan this list and call `load_skill` for any skill that is a strong match for the work you are about to do. Load a skill when it will change how you structure the output, execute the task, or avoid a known failure mode. Do not load skills speculatively.',
+    '',
+    ...lines,
+    '',
+    'After loading a skill, follow its instructions exactly where applicable.'
+  ].join('\n')
+}
+
+/**
+ * Build the full skill context string for a loaded skill.
+ * Returned as the tool result when `load_skill` is called.
+ */
+export function buildSkillContext(entry: SkillEntry, maxChars = 50_000): string {
+  const header = [
+    'Skill context loaded for this request. Follow these instructions where applicable.',
+    '',
+    `### Skill: ${entry.name}`,
+    `Path: ${entry.path}`,
+    `Directory: ${entry.dir}`,
+    ''
+  ].join('\n')
+
+  const body = entry.content.length > maxChars
+    ? entry.content.slice(0, maxChars) + '\n\n[... truncated]'
+    : entry.content
+  return header + body
 }

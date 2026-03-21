@@ -18,7 +18,7 @@ Hard rules:
 - Academic papers / related work → literature-search. General web facts → brave_web_search or fetch.
 - If a required paper PDF/full text cannot be retrieved (paywall/auth/access blocked), do NOT infer missing content. Ask user to provide/upload the file and continue only after file is available.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
-- For reusable matplotlib plot/style scaffolding, use skill-script-run with skillId "matplotlib" (e.g. script "plot_template" or "style_configurator"), then apply to dataset tasks via data-analyze.
+- For reusable methodology, writing scaffolding, or plot/style templates, use load_skill to load the relevant skill instructions first, then follow them.
 - For repository/text inspection, use this order by default:
   1) glob/grep to locate relevant files/sections;
   2) read with offset+limit in focused chunks;

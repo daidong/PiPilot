@@ -23,7 +23,7 @@ export function HeroIdle() {
         className="text-3xl font-bold text-center t-text"
         style={{ fontFamily: "'Playfair Display', serif" }}
       >
-        What would you like to research?
+        What would you like to do?
       </h1>
     </div>
   )
