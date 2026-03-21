@@ -221,9 +221,9 @@ export function ensureAgentMd(projectPath: string): void {
     id: AGENT_MD_ID,
     type: 'note',
     title: 'agent.md',
-    content: '',
+    content: '## User Instructions\n\n\n\n## Agent Memory\n',
     tags: ['pinned'],
-    summary: 'User instructions always injected into agent context.',
+    summary: 'User instructions and agent long-term memory. Injected into agent context every turn.',
     provenance: {
       source: 'user',
       sessionId: 'init',

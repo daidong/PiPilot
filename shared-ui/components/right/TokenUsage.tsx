@@ -23,8 +23,11 @@ export function TokenUsage() {
   const [confirmReset, setConfirmReset] = useState(false)
 
   // Calculate all-time cache hit rate
-  const allTimeCacheHitRate = allTimePromptTokens > 0
-    ? allTimeCachedTokens / allTimePromptTokens
+  // promptTokens = non-cached input only (pi-mono subtracts cached from total input)
+  // so total input = promptTokens + cachedTokens
+  const totalInputTokens = allTimePromptTokens + allTimeCachedTokens
+  const allTimeCacheHitRate = totalInputTokens > 0
+    ? allTimeCachedTokens / totalInputTokens
     : 0
 
   const handleResetClick = () => {

@@ -39,7 +39,14 @@ Memory model:
 - Artifact = source of truth (notes, papers, data, web-content, tool-output).
 - Use artifact-create to persist important results; artifact-search to find existing.
 - Session context is maintained automatically via periodic summaries.
-- For quick-reference info, create a note via artifact-create({ type: "note", ... }).`,
+- For quick-reference info, create a note via artifact-create({ type: "note", ... }).
+
+Long-term memory (agent.md):
+- agent.md is your persistent memory across sessions. Its content is injected into your context every turn, so anything written there will be remembered.
+- agent.md has two sections: "## User Instructions" (written by the user — NEVER modify this section) and "## Agent Memory" (written by you — update freely).
+- Use artifact-update on agent.md to save important cross-session information to the "## Agent Memory" section: user preferences, ongoing project context, key decisions, important findings.
+- agent.md has a ~5000 character limit. Do NOT blindly append — rewrite and consolidate the "## Agent Memory" section to keep it concise and up-to-date. Remove outdated entries. Think of it as a living summary, not a log.
+- Only persist genuinely valuable information that you would need in a future session. Do not save trivial or ephemeral details.`,
 
 
 // ---------------------------------------------------------------------------

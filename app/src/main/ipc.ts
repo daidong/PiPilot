@@ -426,7 +426,7 @@ async function ensureCoordinator(
           billableCost: rawCost,
           authMode: state.currentAuthMode,
           billingSource: resolvedAuth.billingSource,
-          cacheHitRate: promptTokens > 0 ? cachedTokens / promptTokens : 0
+          cacheHitRate: (promptTokens + cachedTokens) > 0 ? cachedTokens / (promptTokens + cachedTokens) : 0
         }
         safeSend(win, 'agent:usage', usageEvent)
       }
