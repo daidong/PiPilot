@@ -1,12 +1,32 @@
 {
-  "name": "research-copilot",
+  "name": "research-copilot-root",
   "version": "0.1.0",
   "private": true,
   "description": "AI-powered research assistant desktop application",
   "type": "module",
+  "workspaces": [
+    "app",
+    "lib",
+    "shared-ui",
+    "shared-electron"
+  ],
   "scripts": {
     "dev": "cd app && npx electron-vite dev",
     "build": "cd app && npx electron-vite build",
     "clean": "rm -rf app/out app/dist"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.61.1",
+    "@mariozechner/pi-ai": "^0.61.1",
+    "@mariozechner/pi-coding-agent": "^0.61.1",
+    "@sinclair/typebox": "^0.34.48",
+    "ajv": "^8.18.0",
+    "ajv-formats": "^3.0.1",
+    "ignore": "^7.0.5",
+    "lucide-react": "^0.469.0",
+    "minimatch": "^10.2.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zustand": "^5.0.3"
   }
 }

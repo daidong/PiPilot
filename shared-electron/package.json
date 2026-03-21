@@ -1,0 +1,9 @@
+{
+  "name": "@research-copilot/shared-electron",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "peerDependencies": {
+    "electron": "^33.3.1"
+  }
+}

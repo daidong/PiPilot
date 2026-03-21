@@ -1,0 +1,12 @@
+{
+  "name": "@research-copilot/lib",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "peerDependencies": {
+    "@mariozechner/pi-agent-core": "^0.61.1",
+    "@mariozechner/pi-ai": "^0.61.1",
+    "@mariozechner/pi-coding-agent": "^0.61.1",
+    "@sinclair/typebox": "^0.34.48"
+  }
+}
