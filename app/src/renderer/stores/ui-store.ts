@@ -60,8 +60,10 @@ interface UIState {
   setModel: (model: ModelId) => void
   setIdle: (idle: boolean) => void
   toggleRightSidebar: () => void
-  terminalOpen: boolean
+  terminalVisible: boolean
+  terminalAlive: boolean
   toggleTerminal: () => void
+  closeTerminal: () => void
   addWorkingFile: (path: string) => void
   setWorkingFiles: (paths: string[]) => void
   clearWorkingFiles: () => void
@@ -78,7 +80,8 @@ export const useUIStore = create<UIState>((set) => ({
   isIdle: true,
   rightSidebarCollapsed: false,
   leftSidebarCollapsed: false,
-  terminalOpen: false,
+  terminalVisible: false,
+  terminalAlive: false,
   workingFiles: [],
   reasoningEffort: 'medium',
   previewEntity: null,
@@ -109,7 +112,13 @@ export const useUIStore = create<UIState>((set) => ({
   },
   setIdle: (isIdle) => set({ isIdle }),
   toggleRightSidebar: () => set((s) => ({ rightSidebarCollapsed: !s.rightSidebarCollapsed })),
-  toggleTerminal: () => set((s) => ({ terminalOpen: !s.terminalOpen })),
+  // Ctrl+`: toggle visibility. If not alive yet, also spawn.
+  toggleTerminal: () => set((s) => {
+    if (!s.terminalAlive) return { terminalVisible: true, terminalAlive: true }
+    return { terminalVisible: !s.terminalVisible }
+  }),
+  // X button: kill terminal entirely
+  closeTerminal: () => set({ terminalVisible: false, terminalAlive: false }),
   addWorkingFile: (path) =>
     set((s) => {
       const now = Date.now()

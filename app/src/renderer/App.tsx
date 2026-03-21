@@ -61,7 +61,8 @@ export default function App() {
   const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
   const previewEntity = useUIStore((s) => s.previewEntity)
   const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
-  const terminalOpen = useUIStore((s) => s.terminalOpen)
+  const terminalVisible = useUIStore((s) => s.terminalVisible)
+  const terminalAlive = useUIStore((s) => s.terminalAlive)
   const theme = useUIStore((s) => s.theme)
 
   // Apply theme class to html element
@@ -247,13 +248,20 @@ export default function App() {
             </div>
           )}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
-            <div className="flex-1 flex min-h-0">
+            <div className={`flex min-h-0 ${terminalVisible ? 'flex-[2]' : 'flex-1'}`}>
               <CenterPanel />
               {previewEntity && <EntityPreviewPanel />}
             </div>
-            {/* Integrated terminal */}
-            {terminalOpen && (
-              <div style={{ height: '35%', minHeight: 120 }}>
+            {/* Integrated terminal — stays mounted while alive, hidden when not visible */}
+            {terminalAlive && (
+              <div
+                className="flex-1"
+                style={{
+                  minHeight: terminalVisible ? 150 : 0,
+                  maxHeight: terminalVisible ? '40%' : 0,
+                  overflow: 'hidden'
+                }}
+              >
                 <TerminalPanel />
               </div>
             )}

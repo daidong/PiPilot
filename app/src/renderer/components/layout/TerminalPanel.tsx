@@ -16,6 +16,7 @@ export function TerminalPanel() {
   const [alive, setAlive] = useState(false)
   const projectPath = useSessionStore((s) => s.projectPath)
   const theme = useUIStore((s) => s.theme)
+  const visible = useUIStore((s) => s.terminalVisible)
 
   const spawn = async () => {
     if (!projectPath) return
@@ -23,7 +24,7 @@ export function TerminalPanel() {
     if (result.success) setAlive(true)
   }
 
-  // Initialize xterm instance once
+  // Initialize xterm instance once (component stays mounted while alive)
   useEffect(() => {
     if (!termRef.current) return
 
@@ -51,9 +52,12 @@ export function TerminalPanel() {
     term.loadAddon(new WebLinksAddon())
     term.open(termRef.current)
 
-    // Fit after a frame so the container has dimensions
+    // Fit after layout settles
     requestAnimationFrame(() => {
-      fit.fit()
+      requestAnimationFrame(() => {
+        fit.fit()
+        api.terminalResize(term.cols, term.rows)
+      })
     })
 
     xtermRef.current = term
@@ -83,7 +87,7 @@ export function TerminalPanel() {
     })
     observer.observe(termRef.current)
 
-    // Auto-spawn
+    // Auto-spawn on first mount
     spawn()
 
     return () => {
@@ -93,8 +97,22 @@ export function TerminalPanel() {
       term.dispose()
       xtermRef.current = null
       fitRef.current = null
+      // Kill PTY when component unmounts (X button closes terminal)
+      api.terminalKill()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-fit when visibility changes (container goes from 0 to real height)
+  useEffect(() => {
+    if (!visible) return
+    const fit = fitRef.current
+    if (!fit) return
+    requestAnimationFrame(() => {
+      fit.fit()
+      const term = xtermRef.current
+      if (term) api.terminalResize(term.cols, term.rows)
+    })
+  }, [visible])
 
   // Update theme without re-creating terminal
   useEffect(() => {
@@ -114,7 +132,7 @@ export function TerminalPanel() {
     }
   }, [theme])
 
-  // Handle key press to restart when dead
+  // Handle key press to restart when shell has exited
   useEffect(() => {
     const term = xtermRef.current
     if (!term || alive) return
@@ -130,8 +148,9 @@ export function TerminalPanel() {
     await spawn()
   }
 
+  // X button: fully destroy terminal (unmounts component)
   const handleClose = () => {
-    useUIStore.getState().toggleTerminal()
+    useUIStore.getState().closeTerminal()
   }
 
   return (
@@ -150,14 +169,14 @@ export function TerminalPanel() {
           <button
             onClick={handleClose}
             className="p-0.5 rounded t-text-muted hover:t-text-secondary t-bg-hover"
-            title="Close terminal (Ctrl+`)"
+            title="Close terminal"
           >
             <X size={12} />
           </button>
         </div>
       </div>
       {/* Terminal viewport */}
-      <div ref={termRef} className="flex-1 min-h-0" />
+      <div ref={termRef} className="flex-1 min-h-0 overflow-hidden" />
     </div>
   )
 }
