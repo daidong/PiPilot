@@ -466,7 +466,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   return {
     agent,
 
-    async chat(message: string, mentions?: ResolvedMention[]) {
+    async chat(message: string, mentions?: ResolvedMention[], images?: Array<{ base64: string; mimeType: string }>) {
       try {
         const intents = detectIntentsByRules(message)
         const hasModuleIntent = ['literature', 'data', 'writing', 'citation', 'grants', 'docx', 'critique']
@@ -543,7 +543,12 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         activeTurnToolCallCount = 0
 
         try {
-          await agent.prompt(userMessage)
+          const imageContents = images?.map(img => ({
+            type: 'image' as const,
+            data: img.base64,
+            mimeType: img.mimeType
+          }))
+          await agent.prompt(userMessage, imageContents?.length ? imageContents : undefined)
           perTurnToolCallCount = activeTurnToolCallCount ?? 0
         } finally {
           activeTurnToolCallCount = null

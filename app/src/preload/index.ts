@@ -23,7 +23,7 @@ export interface FileTreeNode {
 
 export interface ElectronAPI {
   // Agent
-  sendMessage: (message: string, rawMentions?: string, model?: string) => Promise<any>
+  sendMessage: (message: string, rawMentions?: string, model?: string, images?: Array<{ base64: string; mimeType: string }>) => Promise<any>
   onStreamChunk: (cb: (chunk: string) => void) => () => void
   onAgentDone: (cb: (result: any) => void) => () => void
   onUsage: (cb: (event: UsageEvent) => void) => () => void
@@ -132,8 +132,8 @@ export interface ElectronAPI {
 }
 
 const api: ElectronAPI = {
-  sendMessage: (message, rawMentions, model) =>
-    ipcRenderer.invoke('agent:send', message, rawMentions, model),
+  sendMessage: (message, rawMentions, model, images) =>
+    ipcRenderer.invoke('agent:send', message, rawMentions, model, images),
   onStreamChunk: (cb) => {
     const handler = (_: any, chunk: string) => cb(chunk)
     ipcRenderer.on('agent:stream-chunk', handler)

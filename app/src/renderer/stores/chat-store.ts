@@ -4,6 +4,7 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  images?: string[] // data URLs for user-pasted images
   timestamp: number
 }
 
@@ -18,7 +19,7 @@ interface ChatState {
   isLoadingHistory: boolean
   _offset: number
 
-  send: (text: string) => Promise<void>
+  send: (text: string, images?: Array<{ base64: string; mimeType: string }>) => Promise<void>
   stop: () => Promise<void>
   appendChunk: (chunk: string) => void
   finalize: (result: { success: boolean; response?: string; error?: string }) => void
@@ -45,11 +46,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   _offset: 0,
   scrollToMessageId: null,
 
-  send: async (text: string) => {
+  send: async (text: string, images?: Array<{ base64: string; mimeType: string }>) => {
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content: text,
+      images: images?.map(i => `data:${i.mimeType};base64,${i.base64}`),
       timestamp: Date.now()
     }
     set((s) => ({
@@ -70,7 +72,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const { useUIStore } = await import('./ui-store')
       const model = useUIStore.getState().selectedModel
-      await api.sendMessage(text, undefined, model)
+      await api.sendMessage(text, undefined, model, images)
     } catch {
       // Error handled via agent:done event
     }

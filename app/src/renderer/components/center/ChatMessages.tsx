@@ -188,6 +188,13 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
         }}
         data-msg-id={msg.id}
       >
+        {msg.images && msg.images.length > 0 && (
+          <div className="flex gap-2 mb-2 flex-wrap">
+            {msg.images.map((src, i) => (
+              <img key={i} src={src} alt="" className="max-h-48 rounded-lg border t-border" />
+            ))}
+          </div>
+        )}
         <div className="md-prose" style={{ color: 'var(--color-text)' }}>
           <ReactMarkdown remarkPlugins={remarkPlugins}>{msg.content}</ReactMarkdown>
         </div>

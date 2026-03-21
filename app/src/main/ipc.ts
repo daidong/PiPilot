@@ -496,7 +496,7 @@ export function registerIpcHandlers(): void {
   // ─── App-specific handlers ──────────────────────────────────────────────
 
   // Agent chat
-  handleWindow('agent:send', async ({ win, state }, message: string, rawMentions?: string, model?: string) => {
+  handleWindow('agent:send', async ({ win, state }, message: string, rawMentions?: string, model?: string, images?: Array<{ base64: string; mimeType: string }>) => {
     if (!state.projectPath) {
       const errResult = { success: false, error: 'No project folder selected. Please select a folder first.' }
       safeSend(win, 'agent:done', errResult)
@@ -523,7 +523,7 @@ export function registerIpcHandlers(): void {
       }
     }
     try {
-      const result = await coord.chat(message, mentions)
+      const result = await coord.chat(message, mentions, images)
       state.realtimeBuffer.finishStreaming()
       safeSend(win, 'agent:done', result)
       return result
