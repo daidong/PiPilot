@@ -80,7 +80,7 @@ export function WorkspaceTree() {
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
   const [query, setQuery] = useState('')
-  const [showIgnored, setShowIgnored] = useState(false)
+  const [showIgnored, setShowIgnored] = useState(true)
   const [searchResults, setSearchResults] = useState<FileTreeNode[]>([])
   const [searching, setSearching] = useState(false)
   const expandedStorageKey = useMemo(() => `rp:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
