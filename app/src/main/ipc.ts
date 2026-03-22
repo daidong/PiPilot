@@ -527,12 +527,12 @@ export function registerIpcHandlers(): void {
     // Only clear activity (per-run), NOT progress/todos (persist across turns)
     state.realtimeBuffer.clearActivity()
     safeSend(win, 'agent:activity-clear')
+    // Always parse mentions from the message text itself — mention tokens
+    // like @file:"path" are inline in the user's message.
     let mentions: any[] = []
-    if (rawMentions) {
-      const parsed = parseMentions(rawMentions)
-      if (parsed.mentions.length > 0) {
-        mentions = await resolveMentions(parsed.mentions, state.projectPath)
-      }
+    const parsed = parseMentions(message)
+    if (parsed.mentions.length > 0) {
+      mentions = await resolveMentions(parsed.mentions, state.projectPath)
     }
     try {
       const result = await coord.chat(message, mentions, images)
@@ -643,10 +643,16 @@ export function registerIpcHandlers(): void {
 
   // Mentions -- signature: getCandidates(projectPath, typeFilter?, query?)
   handleWindow('mention:candidates', ({ state }, query: string, type?: string) => {
-    if (!state.projectPath) return []
+    if (!state.projectPath) {
+      console.warn('[mention:candidates] No projectPath set')
+      return []
+    }
     try {
-      return getCandidates(state.projectPath, type as any, query)
-    } catch {
+      const result = getCandidates(state.projectPath, type as any, query)
+      console.log(`[mention:candidates] query="${query}" type=${type} → ${result.length} candidates (project: ${state.projectPath})`)
+      return result
+    } catch (err) {
+      console.error('[mention:candidates] Error:', err)
       return []
     }
   })

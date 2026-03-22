@@ -54,12 +54,11 @@ function walkFiles(
       if (SKIP_DIRS.has(name)) continue
       walkFiles(root, childRel, depth + 1, out)
     } else {
-      const parentDir = rel ? `${rel}/` : ''
       out.push({
         type: 'file',
         value: childRel,
-        label: name,
-        detail: parentDir || `${(stat.size / 1024).toFixed(1)}KB`
+        label: childRel,
+        detail: `${(stat.size / 1024).toFixed(1)}KB`
       })
     }
   }
@@ -82,8 +81,8 @@ export function getCandidates(
       candidates.push({
         type: 'note',
         value: n.id.slice(0, 8),
-        label: n.title,
-        detail: n.tags.length > 0 ? n.tags.join(', ') : undefined
+        label: n.title || n.id.slice(0, 8),
+        detail: n.tags?.length > 0 ? n.tags.join(', ') : undefined
       })
     }
   }
@@ -93,8 +92,8 @@ export function getCandidates(
       candidates.push({
         type: 'paper',
         value: l.citeKey,
-        label: l.title,
-        detail: l.authors.slice(0, 2).join(', ') + (l.year ? ` (${l.year})` : '')
+        label: l.title || l.citeKey,
+        detail: (l.authors?.slice(0, 2).join(', ') || '') + (l.year ? ` (${l.year})` : '')
       })
     }
   }
@@ -104,7 +103,7 @@ export function getCandidates(
       candidates.push({
         type: 'data',
         value: d.id.slice(0, 8),
-        label: d.name,
+        label: d.name || d.id.slice(0, 8),
         detail: d.rowCount != null ? `${d.rowCount} rows` : undefined
       })
     }
@@ -124,6 +123,23 @@ export function getCandidates(
       c.value.toLowerCase().includes(q) ||
       c.detail?.toLowerCase().includes(q)
     )
+  }
+
+  // For empty query, cap file results to avoid overwhelming the list.
+  // Sort files by path depth (shallow first) so top-level files appear first.
+  const MAX_EMPTY_QUERY_FILES = 30
+  const fileCount = candidates.filter(c => c.type === 'file').length
+  if (fileCount > MAX_EMPTY_QUERY_FILES) {
+    const nonFiles = candidates.filter(c => c.type !== 'file')
+    const files = candidates
+      .filter(c => c.type === 'file')
+      .sort((a, b) => {
+        const depthA = (a.value.match(/\//g) || []).length
+        const depthB = (b.value.match(/\//g) || []).length
+        return depthA - depthB || a.value.localeCompare(b.value)
+      })
+      .slice(0, MAX_EMPTY_QUERY_FILES)
+    return [...nonFiles, ...files]
   }
 
   return candidates

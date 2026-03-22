@@ -63,15 +63,22 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
   }, [grouped])
 
   useEffect(() => {
+    let stale = false
     setLoading(true)
+    console.log(`[MentionPopover] fetching candidates for query="${query}"`)
     api.getCandidates(query).then((result: MentionCandidate[]) => {
+      if (stale) return
+      console.log(`[MentionPopover] got ${result?.length ?? 0} candidates for query="${query}"`)
       setCandidates(result || [])
       setSelectedIdx(0)
       setLoading(false)
-    }).catch(() => {
+    }).catch((err: any) => {
+      if (stale) return
+      console.error('[MentionPopover] getCandidates error:', err)
       setCandidates([])
       setLoading(false)
     })
+    return () => { stale = true }
   }, [query])
 
   useEffect(() => {
@@ -106,7 +113,7 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
 
   return (
     <div
-      className="absolute z-50 w-72 max-h-64 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
+      className="absolute z-50 w-96 max-h-64 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
       style={{ bottom: '100%', left: 48, marginBottom: 8 }}
     >
       <div className="px-3 py-1.5 border-b t-border flex items-center gap-2 text-xs t-text-secondary">
@@ -149,7 +156,7 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
                 >
                   <span className="truncate flex-1">{c.label}</span>
                   {c.detail && (
-                    <span className="text-[10px] t-text-muted truncate max-w-[60px]">{c.detail}</span>
+                    <span className="text-[10px] t-text-muted truncate max-w-[100px]">{c.detail}</span>
                   )}
                 </button>
               )
