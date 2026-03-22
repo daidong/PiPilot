@@ -43,6 +43,17 @@ export interface LiteratureListItem {
   enrichedAt?: string
   tags?: string[]
   provenance?: Provenance
+  // Literature study fields
+  subTopic?: string
+  keyFindings?: string[]
+  relevanceJustification?: string
+  addedInRound?: string
+  addedByTask?: string
+  fulltextPath?: string
+  identityConfidence?: 'high' | 'medium' | 'low'
+  arxivId?: string
+  pubmedId?: string
+  semanticScholarId?: string
 }
 
 export interface DataListItem {
@@ -105,7 +116,17 @@ export function listLiterature(projectPath: string): LiteratureListItem[] {
       enrichmentSource: paper.enrichmentSource,
       enrichedAt: paper.enrichedAt,
       tags: paper.tags,
-      provenance: paper.provenance
+      provenance: paper.provenance,
+      subTopic: paper.subTopic,
+      keyFindings: paper.keyFindings,
+      relevanceJustification: paper.relevanceJustification,
+      addedInRound: paper.addedInRound,
+      addedByTask: paper.addedByTask,
+      fulltextPath: paper.fulltextPath,
+      identityConfidence: paper.identityConfidence,
+      arxivId: paper.arxivId,
+      pubmedId: paper.pubmedId,
+      semanticScholarId: paper.semanticScholarId
     }))
 }
 

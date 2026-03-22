@@ -16,6 +16,7 @@ import { loadPrompt } from '../agents/prompts/index.js'
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { upsertPaperArtifact } from '../commands/paper-artifact.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -421,8 +422,50 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
         // summary is optional
       }
 
-      // ── Step 5: Persist to disk ──────────────────────────────────
+      // ── Step 5: Auto-save relevant papers as artifacts ──────────
+      const AUTO_SAVE_THRESHOLD = 7
+      let papersAutoSaved = 0
       const runId = Date.now().toString(36)
+      const roundLabel = `R-${runId}`
+
+      for (const paper of review.relevantPapers) {
+        if (paper.relevanceScore >= AUTO_SAVE_THRESHOLD) {
+          try {
+            // Find matching sub-topic from the plan
+            const matchedSubTopic = plan.subTopics.find(st =>
+              paper.relevanceJustification?.toLowerCase().includes(st.name.toLowerCase())
+            )?.name
+
+            const result = upsertPaperArtifact(paper.title, {
+              authors: paper.authors,
+              year: paper.year ?? undefined,
+              abstract: paper.abstract,
+              venue: paper.venue ?? undefined,
+              url: paper.url,
+              doi: paper.doi ?? undefined,
+              externalSource: paper.source,
+              relevanceScore: paper.relevanceScore,
+              citationCount: paper.citationCount ?? undefined,
+              relevanceJustification: paper.relevanceJustification,
+              subTopic: matchedSubTopic,
+              addedInRound: roundLabel,
+              addedByTask: 'deep_literature_study',
+              identityConfidence: paper.doi ? 'high' : 'medium',
+              semanticScholarId: paper.source === 'semantic_scholar' ? paper.id : undefined,
+              arxivId: paper.source === 'arxiv' ? paper.id : undefined,
+            }, {
+              sessionId: ctx.sessionId ?? 'unknown',
+              projectPath: ctx.projectPath
+            })
+
+            if (result.success) papersAutoSaved++
+          } catch {
+            // Don't fail the whole search if one paper fails to save
+          }
+        }
+      }
+
+      // ── Step 6: Persist full review to disk ─────────────────────
       const reviewDir = path.join(ctx.projectPath, '.research-pilot', 'literature-runs', runId)
       fs.mkdirSync(reviewDir, { recursive: true })
 
@@ -442,6 +485,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       const payload = {
         totalFound: deduplicated.length,
         reviewedCount: review.relevantPapers.length,
+        papersAutoSaved,
         approved: review.approved,
         confidence: review.confidence,
         coverage: review.coverage,

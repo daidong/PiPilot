@@ -2,6 +2,7 @@ import React from 'react'
 import { Sun, Moon, Eraser } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { EntityTabs } from '../left/EntityTabs'
+import { LiteratureSidebar } from '../left/LiteratureSidebar'
 import { UserProfile } from '../left/UserProfile'
 import { ModelSelector } from '../left/ModelSelector'
 import { ReasoningToggle } from '../left/ReasoningToggle'
@@ -9,6 +10,7 @@ import { ReasoningToggle } from '../left/ReasoningToggle'
 export function LeftSidebar() {
   const theme = useUIStore((s) => s.theme)
   const toggleTheme = useUIStore((s) => s.toggleTheme)
+  const centerView = useUIStore((s) => s.centerView)
 
   return (
     <aside className="w-80 flex flex-col border-r t-border t-bg-base pt-10">
@@ -34,7 +36,7 @@ export function LeftSidebar() {
       </div>
 
       <div className="flex-1 min-h-0">
-        <EntityTabs />
+        {centerView === 'literature' ? <LiteratureSidebar /> : <EntityTabs />}
       </div>
 
       <div className="border-t t-border p-4">

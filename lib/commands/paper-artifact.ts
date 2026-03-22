@@ -53,6 +53,17 @@ export function upsertPaperArtifact(
     doi?: string
     bibtex?: string
     pdfUrl?: string
+    // Literature study fields
+    subTopic?: string
+    keyFindings?: string[]
+    relevanceJustification?: string
+    addedInRound?: string
+    addedByTask?: string
+    fulltextPath?: string
+    identityConfidence?: 'high' | 'medium' | 'low'
+    arxivId?: string
+    pubmedId?: string
+    semanticScholarId?: string
   },
   context: CLIContext
 ): UpsertPaperResult {
@@ -93,7 +104,17 @@ export function upsertPaperArtifact(
       searchKeywords: opts.searchKeywords ?? dedup.searchKeywords,
       externalSource: opts.externalSource ?? dedup.externalSource,
       relevanceScore: opts.relevanceScore ?? dedup.relevanceScore,
-      citationCount: opts.citationCount ?? dedup.citationCount
+      citationCount: opts.citationCount ?? dedup.citationCount,
+      subTopic: opts.subTopic ?? dedup.subTopic,
+      keyFindings: opts.keyFindings ?? dedup.keyFindings,
+      relevanceJustification: opts.relevanceJustification ?? dedup.relevanceJustification,
+      addedInRound: opts.addedInRound ?? dedup.addedInRound,
+      addedByTask: opts.addedByTask ?? dedup.addedByTask,
+      fulltextPath: opts.fulltextPath ?? dedup.fulltextPath,
+      identityConfidence: opts.identityConfidence ?? dedup.identityConfidence,
+      arxivId: opts.arxivId ?? dedup.arxivId,
+      pubmedId: opts.pubmedId ?? dedup.pubmedId,
+      semanticScholarId: opts.semanticScholarId ?? dedup.semanticScholarId
     })
 
     if (!updated.success || !updated.artifact || updated.artifact.type !== 'paper') {
@@ -124,6 +145,16 @@ export function upsertPaperArtifact(
     externalSource: opts.externalSource,
     relevanceScore: opts.relevanceScore,
     citationCount: opts.citationCount,
+    subTopic: opts.subTopic,
+    keyFindings: opts.keyFindings,
+    relevanceJustification: opts.relevanceJustification,
+    addedInRound: opts.addedInRound,
+    addedByTask: opts.addedByTask,
+    fulltextPath: opts.fulltextPath,
+    identityConfidence: opts.identityConfidence,
+    arxivId: opts.arxivId,
+    pubmedId: opts.pubmedId,
+    semanticScholarId: opts.semanticScholarId,
     provenance: {
       source: opts.externalSource ? 'agent' : 'user',
       sessionId: context.sessionId,

@@ -56,6 +56,17 @@ export type CreateArtifactInput =
       citationCount?: number
       enrichmentSource?: string
       enrichedAt?: string
+      // Literature study fields
+      subTopic?: string
+      keyFindings?: string[]
+      relevanceJustification?: string
+      addedInRound?: string
+      addedByTask?: string
+      fulltextPath?: string
+      identityConfidence?: 'high' | 'medium' | 'low'
+      arxivId?: string
+      pubmedId?: string
+      semanticScholarId?: string
     }
   | {
       type: 'data'
@@ -325,7 +336,17 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
       relevanceScore: input.relevanceScore,
       citationCount: input.citationCount,
       enrichmentSource: input.enrichmentSource,
-      enrichedAt: input.enrichedAt
+      enrichedAt: input.enrichedAt,
+      subTopic: input.subTopic,
+      keyFindings: input.keyFindings,
+      relevanceJustification: input.relevanceJustification,
+      addedInRound: input.addedInRound,
+      addedByTask: input.addedByTask,
+      fulltextPath: input.fulltextPath,
+      identityConfidence: input.identityConfidence,
+      arxivId: input.arxivId,
+      pubmedId: input.pubmedId,
+      semanticScholarId: input.semanticScholarId
     }
   } else if (input.type === 'data') {
     artifact = {

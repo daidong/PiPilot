@@ -100,6 +100,18 @@ export interface PaperArtifact extends ArtifactBase {
   citationCount?: number
   enrichmentSource?: string
   enrichedAt?: string
+
+  // Literature study fields (myRAM-GCP compat)
+  subTopic?: string
+  keyFindings?: string[]
+  relevanceJustification?: string
+  addedInRound?: string              // e.g. "R-01", "R-02"
+  addedByTask?: string               // e.g. "deep_literature_study"
+  fulltextPath?: string              // relative path to converted markdown
+  identityConfidence?: 'high' | 'medium' | 'low'
+  arxivId?: string
+  pubmedId?: string
+  semanticScholarId?: string
 }
 
 export interface DataSchema {

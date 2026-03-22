@@ -5,7 +5,6 @@ import remarkGfm from 'remark-gfm'
 const remarkPlugins = [remarkGfm]
 import {
   BookMarked,
-  BookOpen,
   FolderOpen,
   Sparkles,
   Upload,
@@ -16,7 +15,6 @@ import {
   FileSpreadsheet,
   FlaskConical,
   Loader2,
-  RefreshCw,
   Search,
   Check,
   UploadCloud
@@ -90,7 +88,6 @@ function HoverPreview({
 
 const tabs = [
   { key: 'library' as const, label: 'Library', icon: BookMarked },
-  { key: 'papers' as const, label: 'Papers', icon: BookOpen },
   { key: 'files' as const, label: 'Files', icon: FolderOpen },
   { key: 'skills' as const, label: 'Skills', icon: Sparkles }
 ]
@@ -328,88 +325,6 @@ function LibraryContent({
   )
 }
 
-/** Papers tab content: shows papers with enrich button */
-function PapersContent({
-  papers,
-  refreshAll
-}: {
-  papers: EntityItem[]
-  refreshAll: () => Promise<void>
-}) {
-  const { setEnriching, clearEnriching, clearAllEnriching } = useEntityStore()
-  const [isEnrichingAll, setIsEnrichingAll] = useState(false)
-
-  const handleEnrichAll = useCallback(async () => {
-    const api = (window as any).api
-    setIsEnrichingAll(true)
-    const unsub = api.onEnrichProgress((info: { paperId: string; status: string }) => {
-      if (info.status === 'enriching') setEnriching(info.paperId)
-      else clearEnriching(info.paperId)
-    })
-    try {
-      await api.enrichAllPapers(papers.map((p: any) => p.id))
-      await refreshAll()
-    } finally {
-      unsub()
-      clearAllEnriching()
-      setIsEnrichingAll(false)
-    }
-  }, [refreshAll, setEnriching, clearEnriching, clearAllEnriching, papers])
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-  }, [])
-
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault()
-    const api = (window as any).api
-    const files = Array.from(e.dataTransfer.files)
-    for (const file of files) {
-      try {
-        const content = await file.text()
-        await api.dropFile(file.name, content, 'papers')
-      } catch (err) {
-        console.error(`Failed to drop file ${file.name}:`, err)
-      }
-    }
-    refreshAll()
-  }, [refreshAll])
-
-  return (
-    <>
-      <div className="flex items-center px-3 pt-2 pb-1">
-        <span className="text-[10px] t-text-muted">{papers.length} papers</span>
-        <button
-          onClick={handleEnrichAll}
-          disabled={isEnrichingAll}
-          className="no-drag ml-auto flex items-center gap-1 px-2 py-1 text-[10px] t-text-muted hover:t-text-accent-soft transition-colors disabled:opacity-50"
-          title="Enrich metadata for all papers"
-        >
-          {isEnrichingAll ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-          <span>Enrich</span>
-        </button>
-      </div>
-
-      <div
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        className="mx-2 rounded-lg border-2 border-dashed t-border px-3 py-3 text-center transition-colors hover:border-[var(--color-accent-soft)]/40"
-      >
-        <Upload size={16} className="mx-auto mb-1 t-text-muted" />
-        <p className="text-xs t-text-muted">Drop files here to add papers</p>
-      </div>
-
-      <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0 flex-1">
-        {papers.length === 0 ? (
-          <p className="px-3 py-4 text-xs t-text-muted text-center">No papers yet</p>
-        ) : (
-          papers.map((e) => <EntityRow key={e.id} entity={e} />)
-        )}
-      </div>
-    </>
-  )
-}
 
 const CATEGORY_ORDER = [
   'Writing & Review',
@@ -641,7 +556,6 @@ export function EntityTabs() {
   const leftTab = useUIStore((s) => s.leftTab)
   const setLeftTab = useUIStore((s) => s.setLeftTab)
   const notes = useEntityStore((s) => s.notes)
-  const papers = useEntityStore((s) => s.papers)
   const data = useEntityStore((s) => s.data)
   const refreshAll = useEntityStore((s) => s.refreshAll)
 
@@ -653,8 +567,6 @@ export function EntityTabs() {
     switch (leftTab) {
       case 'library':
         return <LibraryContent notes={notes} data={data} refreshAll={refreshAll} />
-      case 'papers':
-        return <PapersContent papers={papers} refreshAll={refreshAll} />
       case 'files':
         return <WorkspaceTree />
       case 'skills':

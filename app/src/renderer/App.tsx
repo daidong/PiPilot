@@ -237,6 +237,15 @@ export default function App() {
         useUIStore.getState().setIdle(true)
         useUIStore.getState().closePreview()
       }
+      // Cmd+1 → Chat view, Cmd+2 → Literature view
+      if ((e.metaKey || e.ctrlKey) && e.key === '1') {
+        e.preventDefault()
+        useUIStore.getState().setCenterView('chat')
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '2') {
+        e.preventDefault()
+        useUIStore.getState().setCenterView('literature')
+      }
       // Cmd+Shift+K → Close Project
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'K') {
         e.preventDefault()

@@ -2,8 +2,9 @@ import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
-type LeftTab = 'library' | 'papers' | 'files' | 'skills'
-export type { LeftTab }
+type LeftTab = 'library' | 'files' | 'skills'
+type CenterView = 'chat' | 'literature'
+export type { LeftTab, CenterView }
 export type ReasoningEffort = 'high' | 'medium' | 'low' | 'max'
 
 export const REASONING_MODELS = [
@@ -44,6 +45,7 @@ export const SUPPORTED_MODELS: ModelOption[] = [
 interface UIState {
   theme: Theme
   leftTab: LeftTab
+  centerView: CenterView
   selectedModel: ModelId
   isIdle: boolean
   rightSidebarCollapsed: boolean
@@ -53,10 +55,15 @@ interface UIState {
   previewEntity: EntityItem | null
   previewSourceTab: LeftTab | null
   previewEditorFocused: boolean
+
+  // Literature view state
+  literatureFilter: LiteratureFilter
+
   setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
   setLeftTab: (tab: LeftTab) => void
+  setCenterView: (view: CenterView) => void
   setModel: (model: ModelId) => void
   setIdle: (idle: boolean) => void
   toggleRightSidebar: () => void
@@ -71,11 +78,23 @@ interface UIState {
   openPreview: (entity: EntityItem) => void
   closePreview: () => void
   setPreviewEditorFocused: (focused: boolean) => void
+  setLiteratureFilter: (filter: Partial<LiteratureFilter>) => void
+}
+
+export interface LiteratureFilter {
+  search: string
+  subTopic: string | null
+  sortBy: 'year' | 'relevance' | 'citations' | 'title'
+  sortDir: 'asc' | 'desc'
+  minScore: number
+  source: string | null
+  round: string | null
 }
 
 export const useUIStore = create<UIState>((set) => ({
   theme: 'light',
   leftTab: 'library',
+  centerView: 'chat',
   selectedModel: 'gpt-5.4',
   isIdle: true,
   rightSidebarCollapsed: false,
@@ -87,6 +106,15 @@ export const useUIStore = create<UIState>((set) => ({
   previewEntity: null,
   previewSourceTab: null,
   previewEditorFocused: false,
+  literatureFilter: {
+    search: '',
+    subTopic: null,
+    sortBy: 'year',
+    sortDir: 'desc',
+    minScore: 0,
+    source: null,
+    round: null
+  },
 
   setReasoningEffort: (reasoningEffort) => {
     set({ reasoningEffort })
@@ -104,6 +132,10 @@ export const useUIStore = create<UIState>((set) => ({
     useUIStore.getState().setTheme(newTheme)
   },
   setLeftTab: (leftTab) => set({ leftTab }),
+  setCenterView: (centerView) => set({ centerView }),
+  setLiteratureFilter: (filter) => set((s) => ({
+    literatureFilter: { ...s.literatureFilter, ...filter }
+  })),
   setModel: (selectedModel) => {
     set({ selectedModel })
     const api = (window as any).api
@@ -158,13 +190,15 @@ export const useUIStore = create<UIState>((set) => ({
   reset: () =>
     set({
       leftTab: 'library',
+      centerView: 'chat',
       isIdle: true,
       rightSidebarCollapsed: false,
       leftSidebarCollapsed: false,
       workingFiles: [],
       previewEntity: null,
       previewSourceTab: null,
-      previewEditorFocused: false
+      previewEditorFocused: false,
+      literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null }
     }),
   openPreview: (entity) => set((s) => ({ previewEntity: entity, previewSourceTab: s.leftTab, leftSidebarCollapsed: true, previewEditorFocused: false })),
   closePreview: () => set({ previewEntity: null, previewSourceTab: null, leftSidebarCollapsed: false, previewEditorFocused: false }),

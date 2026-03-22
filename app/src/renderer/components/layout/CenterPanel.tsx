@@ -1,17 +1,69 @@
 import React from 'react'
-import { useUIStore } from '../../stores/ui-store'
+import { MessageSquare, BookOpen } from 'lucide-react'
+import { useUIStore, type CenterView } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
+import { useEntityStore } from '../../stores/entity-store'
 import { HeroIdle } from '../center/HeroIdle'
 import { ChatMessages } from '../center/ChatMessages'
 import { ChatInput } from '../center/ChatInput'
+import { LiteratureView } from '../center/LiteratureView'
+
+const viewTabs: { key: CenterView; label: string; icon: React.ElementType; shortcut: string }[] = [
+  { key: 'chat', label: 'Chat', icon: MessageSquare, shortcut: '⌘1' },
+  { key: 'literature', label: 'Literature', icon: BookOpen, shortcut: '⌘2' }
+]
+
+function ViewSwitcher() {
+  const centerView = useUIStore((s) => s.centerView)
+  const setCenterView = useUIStore((s) => s.setCenterView)
+  const paperCount = useEntityStore((s) => s.papers.length)
+
+  return (
+    <div className="flex items-center gap-0.5 px-4 pt-10 pb-1">
+      {viewTabs.map(({ key, label, icon: Icon, shortcut }) => (
+        <button
+          key={key}
+          onClick={() => setCenterView(key)}
+          className={`no-drag flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+            centerView === key
+              ? 't-text-accent bg-[var(--color-accent-soft)]/10'
+              : 't-text-muted hover:t-text-secondary hover:t-bg-hover'
+          }`}
+          title={`${label} (${shortcut})`}
+        >
+          <Icon size={13} />
+          {label}
+          {key === 'literature' && paperCount > 0 && (
+            <span className="ml-0.5 px-1 py-px text-[9px] rounded-full t-bg-elevated t-text-muted tabular-nums">
+              {paperCount}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 export function CenterPanel() {
+  const centerView = useUIStore((s) => s.centerView)
   const isIdle = useUIStore((s) => s.isIdle)
   const messages = useChatStore((s) => s.messages)
   const showHero = isIdle && messages.length === 0
 
+  if (centerView === 'literature') {
+    return (
+      <main className="flex-1 flex flex-col min-w-0">
+        <ViewSwitcher />
+        <LiteratureView />
+      </main>
+    )
+  }
+
+  // Chat view
   return (
-    <main className="flex-1 flex flex-col min-w-0 pt-10">
+    <main className="flex-1 flex flex-col min-w-0">
+      <ViewSwitcher />
+
       {showHero ? (
         <div className="flex-1 flex items-center justify-center">
           <HeroIdle />
