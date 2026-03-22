@@ -32,9 +32,7 @@ lib/                      # Research agent logic (framework-independent)
 ├── mentions/             # @-mention parsing, resolution, candidate generation
 ├── memory-v2/            # Artifact storage (JSONL), session summaries
 ├── skills/               # Skills system (SKILL.md format)
-│   ├── builtin/          # 7 builtin skills (scientific-writing, matplotlib, etc.)
-│   ├── academic-writing/ # Writing assistance
-│   ├── literature/       # Literature search guidance
+│   ├── builtin/          # Builtin skills (scientific-writing, matplotlib, etc.)
 │   ├── data-analysis/    # Python analysis guidance
 │   └── loader.ts         # Runtime skill discovery
 ├── tools/                # Research tools (pi-mono AgentTool format)

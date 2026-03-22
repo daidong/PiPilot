@@ -12,10 +12,8 @@ export type { SkillEntry, SkillCatalogItem }
 
 /** Metadata for UI display */
 export const researchPilotSkills = [
-  { id: 'academic-writing-skill', name: 'Academic Writing' },
-  { id: 'literature-skill', name: 'Literature Search' },
   { id: 'data-analysis-skill', name: 'Data Analysis' },
-  // myRAM builtin skills
+  // builtin skills
   { id: 'scientific-writing', name: 'Scientific Writing' },
   { id: 'scientific-visualization', name: 'Scientific Visualization' },
   { id: 'research-grants', name: 'Research Grants' },

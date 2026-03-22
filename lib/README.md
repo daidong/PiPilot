@@ -126,16 +126,7 @@ Relevant files:
 
 It records which skill/script was used in the tool result (`converterSkill`, `converterScript`) for UI transparency.
 
-Research Pilot also ships app-specific default project-local skills under:
-
-- `examples/research-pilot/skills/default-project-skills`
-
-Current defaults:
-
-- `citation-management`
-- `research-grants`
-
-Desktop project initialization seeds missing defaults into `.agentfoundry/skills` (without overwriting user-modified skills).
+Builtin skills are shipped under `lib/skills/builtin/` and discovered at runtime by the skill loader.
 
 ## 7. Public API Surface
 

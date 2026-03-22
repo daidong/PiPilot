@@ -1,9 +1,8 @@
 /**
  * Research Pilot Agents
  *
- * Note: Writing functionality is now handled via academicWritingSkill.
+ * Writing functionality is handled via the scientific-writing builtin skill.
  * The Coordinator loads the skill when writing intent is detected.
- * See: ../skills/academic-writing/SKILL.md
  */
 
 export { createCoordinator, createCoordinatorRunner, type CoordinatorConfig } from './coordinator.js'

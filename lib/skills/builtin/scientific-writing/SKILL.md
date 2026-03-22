@@ -261,6 +261,46 @@ Apply fundamental scientific writing principles. For detailed guidance, refer to
 
 **CRITICAL: Always write in full paragraphs, never submit bullet points in scientific papers.**
 
+#### Writing Philosophy: Narrative Over Enumeration
+
+Good academic writing is NOT a list of logical points. It is a narrative that draws the reader in step by step, guiding them to understand and agree with your argument. Think of it as storytelling: each section should motivate the next, every sentence should earn its place, and the reader should never wonder "why am I reading this?"
+
+**Key shift**: From "enumerating logic" to "telling a story."
+- Build suspense with open questions
+- Deliver insights as resolutions
+- Let each paragraph naturally set up the next
+
+**Style principles:**
+1. **Formal but accessible**: Technical precision without unnecessary jargon
+2. **Direct, confident claims**: Avoid hedging unless genuinely uncertain
+3. **Citations as narrative**: Integrate [Author, Year] naturally, not as afterthoughts — e.g., "Building on [Author]'s framework, we extend..." rather than "This was studied before [Author]."
+
+**Narrative arc for each section:**
+- Motivation: Why should the reader care?
+- Tension: What problem or gap exists?
+- Contribution: What does this work offer?
+- Evidence: How is the contribution supported?
+- Resolution: What's the takeaway?
+
+#### Good vs Bad Examples
+
+**Opening paragraphs:**
+- Bad: "This section covers three topics. First, we discuss X. Second, we examine Y. Third, we analyze Z."
+- Good: "Understanding X requires grappling with a fundamental tension: while Y promises efficiency, it often sacrifices the nuance that Z demands. This section traces how researchers have navigated this trade-off, revealing patterns that inform our approach."
+
+**Section transitions:**
+- Bad: "Section 3: Methodology" / "This section describes our methodology."
+- Good: "Section 3: Methodology" / "The tensions identified above—between scalability and accuracy, between generality and domain specificity—shaped our methodological choices. We sought an approach that could..."
+
+**Troubleshooting common issues:**
+- *Writing feels like a list*: Check if paragraphs start with "First," "Second," "Additionally." Rewrite openings as questions, tensions, or claims.
+- *Citations feel bolted on*: Integrate citations into sentence structure rather than clustering at sentence ends.
+- *Sections don't flow*: Add a forward-looking final sentence to each section. Read only first and last paragraphs—is the thread clear?
+- *Hedging weakens claims*: "It might be possible that X could potentially..." → "X occurs when..." (add caveats only where genuinely needed). Aim for <5% hedging words.
+- *Draft is too verbose*: Ask "what would the reader lose if I deleted this?" Target cutting 20% in revision.
+
+#### Two-Stage Writing Approach
+
 Scientific papers must be written in complete, flowing prose. Use this two-stage approach for effective writing:
 
 **Stage 1: Create Section Outlines with Key Points**
