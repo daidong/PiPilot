@@ -83,7 +83,14 @@ export function WorkspaceTree() {
   const [showIgnored, setShowIgnored] = useState(false)
   const [searchResults, setSearchResults] = useState<FileTreeNode[]>([])
   const [searching, setSearching] = useState(false)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const expandedStorageKey = useMemo(() => `rp:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(expandedStorageKey)
+      if (raw) return new Set(JSON.parse(raw) as string[])
+    } catch { /* ignore */ }
+    return new Set()
+  })
   const [tree, setTree] = useState<TreeNodeState>({ byParent: {}, loadingParents: new Set() })
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(280)
@@ -92,11 +99,12 @@ export function WorkspaceTree() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null) // relativePath being renamed
   const [renameValue, setRenameValue] = useState('')
+  const [creating, setCreating] = useState<{ parentDir: string; type: 'file' | 'directory' } | null>(null)
+  const [createValue, setCreateValue] = useState('')
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
-
-  const storageKey = useMemo(() => `rp:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
+  const createInputRef = useRef<HTMLInputElement>(null)
 
   // Close context menu on outside click
   useEffect(() => {
@@ -113,6 +121,13 @@ export function WorkspaceTree() {
       renameInputRef.current.select()
     }
   }, [renaming])
+
+  // Auto-focus create input
+  useEffect(() => {
+    if (creating && createInputRef.current) {
+      createInputRef.current.focus()
+    }
+  }, [creating])
 
   const setParentLoading = useCallback((parentKey: string, loading: boolean) => {
     setTree((state) => {
@@ -144,6 +159,26 @@ export function WorkspaceTree() {
     }
   }, [setParentLoading, showIgnored])
 
+  // Auto-refresh when agent creates/modifies files
+  useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        const dirs = ['', ...Array.from(expanded)]
+        void Promise.all(dirs.map((dir) => loadChildren(dir)))
+      }, 500)
+    }
+
+    const unsubFileCreated = api.onFileCreated(scheduleRefresh)
+    const unsubAgentDone = api.onAgentDone(scheduleRefresh)
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      unsubFileCreated()
+      unsubAgentDone()
+    }
+  }, [expanded, loadChildren])
+
   const refreshRoot = useCallback(async () => {
     await loadChildren('')
   }, [loadChildren])
@@ -154,26 +189,22 @@ export function WorkspaceTree() {
     await Promise.all(dirs.map((dir) => loadChildren(dir)))
   }, [expanded, loadChildren])
 
+  // When projectPath changes, reload expanded state and tree data
   useEffect(() => {
-    let initialExpanded = new Set<string>()
+    let restored = new Set<string>()
     try {
-      const raw = sessionStorage.getItem(storageKey)
-      if (raw) {
-        const parsed = JSON.parse(raw) as string[]
-        initialExpanded = new Set(parsed)
-      }
-    } catch {
-      initialExpanded = new Set()
-    }
-    setExpanded(initialExpanded)
-    // Load root + all previously expanded directories so the tree fully restores
-    const dirs = ['', ...Array.from(initialExpanded)]
+      const raw = localStorage.getItem(expandedStorageKey)
+      if (raw) restored = new Set(JSON.parse(raw) as string[])
+    } catch { /* ignore */ }
+    setExpanded(restored)
+    const dirs = ['', ...Array.from(restored)]
     void Promise.all(dirs.map((dir) => loadChildren(dir)))
-  }, [storageKey, loadChildren])
+  }, [expandedStorageKey, loadChildren])
 
+  // Persist expanded state to localStorage whenever it changes
   useEffect(() => {
-    sessionStorage.setItem(storageKey, JSON.stringify(Array.from(expanded)))
-  }, [expanded, storageKey])
+    localStorage.setItem(expandedStorageKey, JSON.stringify(Array.from(expanded)))
+  }, [expanded, expandedStorageKey])
 
   useEffect(() => {
     refreshAll()
@@ -299,35 +330,62 @@ export function WorkspaceTree() {
       : ''
   }, [])
 
-  const handleNewFile = useCallback(async (parentRelPath: string) => {
-    const name = prompt('File name:')
-    if (!name?.trim()) return
-    const relPath = parentRelPath ? `${parentRelPath}/${name.trim()}` : name.trim()
-    const result = await api.createFile(relPath)
-    if (result.success) {
-      if (parentRelPath) {
-        const next = new Set(expanded)
+  const handleNewFile = useCallback((parentRelPath: string) => {
+    setCreating({ parentDir: parentRelPath, type: 'file' })
+    setCreateValue('')
+    // Expand the parent so the inline input is visible
+    if (parentRelPath) {
+      setExpanded((prev) => {
+        const next = new Set(prev)
         next.add(parentRelPath)
-        setExpanded(next)
+        return next
+      })
+      if (!tree.byParent[toKey(parentRelPath)]) {
+        void loadChildren(parentRelPath)
       }
-      await loadChildren(parentRelPath)
     }
-  }, [expanded, loadChildren])
+  }, [tree.byParent, loadChildren])
 
-  const handleNewFolder = useCallback(async (parentRelPath: string) => {
-    const name = prompt('Folder name:')
-    if (!name?.trim()) return
-    const relPath = parentRelPath ? `${parentRelPath}/${name.trim()}` : name.trim()
-    const result = await api.createDir(relPath)
-    if (result.success) {
-      if (parentRelPath) {
-        const next = new Set(expanded)
+  const handleNewFolder = useCallback((parentRelPath: string) => {
+    setCreating({ parentDir: parentRelPath, type: 'directory' })
+    setCreateValue('')
+    if (parentRelPath) {
+      setExpanded((prev) => {
+        const next = new Set(prev)
         next.add(parentRelPath)
-        setExpanded(next)
+        return next
+      })
+      if (!tree.byParent[toKey(parentRelPath)]) {
+        void loadChildren(parentRelPath)
       }
-      await loadChildren(parentRelPath)
     }
-  }, [expanded, loadChildren])
+  }, [tree.byParent, loadChildren])
+
+  const commitCreate = useCallback(async () => {
+    if (!creating || !createValue.trim()) {
+      setCreating(null)
+      return
+    }
+    const relPath = creating.parentDir
+      ? `${creating.parentDir}/${createValue.trim()}`
+      : createValue.trim()
+    const result = creating.type === 'file'
+      ? await api.createFile(relPath)
+      : await api.createDir(relPath)
+    if (result.success) {
+      await loadChildren(creating.parentDir)
+    }
+    setCreating(null)
+  }, [creating, createValue, loadChildren])
+
+  const handleCreateKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void commitCreate()
+    } else if (e.key === 'Escape') {
+      setCreating(null)
+    }
+  }, [commitCreate])
 
   const startRename = useCallback((node: FileTreeNode) => {
     setRenaming(node.relativePath)
@@ -490,6 +548,33 @@ export function WorkspaceTree() {
   const topSpacerHeight = startIndex * ROW_HEIGHT
   const bottomSpacerHeight = Math.max(0, (totalRows - endIndex) * ROW_HEIGHT)
 
+  const renderCreateInput = useCallback((depth: number) => {
+    if (!creating) return null
+    return (
+      <div
+        key="__creating__"
+        className="flex items-center gap-1 rounded px-1.5 h-7 text-xs bg-[var(--color-accent)]/10"
+        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+      >
+        <span className="w-3 shrink-0" />
+        {creating.type === 'directory' ? (
+          <Folder size={12} className="shrink-0 t-text-warning" />
+        ) : (
+          <File size={12} className="shrink-0 t-text-muted" />
+        )}
+        <input
+          ref={createInputRef}
+          value={createValue}
+          onChange={(e) => setCreateValue(e.target.value)}
+          onKeyDown={handleCreateKeyDown}
+          onBlur={() => void commitCreate()}
+          placeholder={creating.type === 'file' ? 'filename.ext' : 'folder name'}
+          className="flex-1 bg-transparent outline-none border-b border-[var(--color-accent-soft)] text-xs t-text"
+        />
+      </div>
+    )
+  }, [creating, createValue, handleCreateKeyDown, commitCreate])
+
   const renderVisibleRow = useCallback((row: VisibleRow) => {
     if (row.kind === 'loading') {
       return (
@@ -509,84 +594,87 @@ export function WorkspaceTree() {
     const isActive = !!activePath && normalizePath(node.path) === activePath
     const isDropTarget = node.type === 'directory' && dropTargetPath === node.relativePath
     const isRenaming = renaming === node.relativePath
+    const showCreateHere = creating && creating.parentDir === node.relativePath && isExpanded
 
     return (
-      <div
-        key={row.key}
-        className={`group flex items-center gap-1 rounded px-1.5 h-7 text-xs cursor-pointer ${
-          isDropTarget
-            ? 'ring-2 ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/10'
-            : isActive
-              ? 'bg-[var(--color-accent)]/20 t-text-accent-soft'
-              : 't-bg-hover t-text-secondary'
-        }`}
-        style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
-        onClick={() => (node.type === 'directory' ? void toggleExpand(node) : openFile(node))}
-        onContextMenu={(e) => handleContextMenu(e, node)}
-        title={node.relativePath}
-        onDragOver={(e) => handleRowDragOver(e, node)}
-        onDragLeave={handleRowDragLeave}
-        onDrop={(e) => handleRowDrop(e, node)}
-      >
-        {node.type === 'directory' ? (
-          <button className="shrink-0 t-text-muted" onClick={(e) => { e.stopPropagation(); void toggleExpand(node) }}>
-            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          </button>
-        ) : (
-          <span className="w-3 shrink-0" />
-        )}
-        {node.type === 'directory' ? (
-          <Folder size={12} className="shrink-0 t-text-warning" />
-        ) : (
-          <File size={12} className="shrink-0 t-text-muted" />
-        )}
-        {isRenaming ? (
-          <input
-            ref={renameInputRef}
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={handleRenameKeyDown}
-            onBlur={() => void commitRename()}
-            onClick={(e) => e.stopPropagation()}
-            className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
-          />
-        ) : (
-          <span className="truncate flex-1">{node.name}</span>
-        )}
-        <div className="hidden group-hover:flex items-center gap-0.5">
-          {node.type === 'file' && (
-            <>
-              <button
-                className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
-                title="Preview file"
-                onClick={(e) => { e.stopPropagation(); openFile(node) }}
-              >
-                <Eye size={11} />
-              </button>
-              <button
-                className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
-                title="Create Artifact from file"
-                onClick={(e) => { e.stopPropagation(); void createArtifact(node) }}
-              >
-                <File size={11} />
-              </button>
-            </>
+      <React.Fragment key={row.key}>
+        <div
+          className={`group flex items-center gap-1 rounded px-1.5 h-7 text-xs cursor-pointer ${
+            isDropTarget
+              ? 'ring-2 ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/10'
+              : isActive
+                ? 'bg-[var(--color-accent)]/20 t-text-accent-soft'
+                : 't-bg-hover t-text-secondary'
+          }`}
+          style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
+          onClick={() => (node.type === 'directory' ? void toggleExpand(node) : openFile(node))}
+          onContextMenu={(e) => handleContextMenu(e, node)}
+          title={node.relativePath}
+          onDragOver={(e) => handleRowDragOver(e, node)}
+          onDragLeave={handleRowDragLeave}
+          onDrop={(e) => handleRowDrop(e, node)}
+        >
+          {node.type === 'directory' ? (
+            <button className="shrink-0 t-text-muted" onClick={(e) => { e.stopPropagation(); void toggleExpand(node) }}>
+              {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+          ) : (
+            <span className="w-3 shrink-0" />
           )}
-          <button
-            className={`p-0.5 rounded ${
-              confirmTrashPath === node.relativePath
-                ? 't-text-error bg-[var(--color-status-error)]/20 animate-pulse'
-                : 't-text-error-soft/70 hover:t-text-error'
-            }`}
-            title={confirmTrashPath === node.relativePath ? 'Click again to confirm' : 'Move to trash'}
-            onClick={(e) => { e.stopPropagation(); void handleTrashClick(node) }}
-          >
-            <Trash2 size={11} />
-          </button>
+          {node.type === 'directory' ? (
+            <Folder size={12} className="shrink-0 t-text-warning" />
+          ) : (
+            <File size={12} className="shrink-0 t-text-muted" />
+          )}
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={handleRenameKeyDown}
+              onBlur={() => void commitRename()}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
+            />
+          ) : (
+            <span className="truncate flex-1">{node.name}</span>
+          )}
+          <div className="hidden group-hover:flex items-center gap-0.5">
+            {node.type === 'file' && (
+              <>
+                <button
+                  className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
+                  title="Preview file"
+                  onClick={(e) => { e.stopPropagation(); openFile(node) }}
+                >
+                  <Eye size={11} />
+                </button>
+                <button
+                  className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
+                  title="Create Artifact from file"
+                  onClick={(e) => { e.stopPropagation(); void createArtifact(node) }}
+                >
+                  <File size={11} />
+                </button>
+              </>
+            )}
+            <button
+              className={`p-0.5 rounded ${
+                confirmTrashPath === node.relativePath
+                  ? 't-text-error bg-[var(--color-status-error)]/20 animate-pulse'
+                  : 't-text-error-soft/70 hover:t-text-error'
+              }`}
+              title={confirmTrashPath === node.relativePath ? 'Click again to confirm' : 'Move to trash'}
+              onClick={(e) => { e.stopPropagation(); void handleTrashClick(node) }}
+            >
+              <Trash2 size={11} />
+            </button>
+          </div>
         </div>
-      </div>
+        {showCreateHere && renderCreateInput(row.depth + 1)}
+      </React.Fragment>
     )
-  }, [expanded, activePath, dropTargetPath, confirmTrashPath, renaming, renameValue, toggleExpand, openFile, createArtifact, handleTrashClick, handleContextMenu, handleRowDragOver, handleRowDragLeave, handleRowDrop, handleRenameKeyDown, commitRename])
+  }, [expanded, activePath, dropTargetPath, confirmTrashPath, renaming, renameValue, creating, toggleExpand, openFile, createArtifact, handleTrashClick, handleContextMenu, handleRowDragOver, handleRowDragLeave, handleRowDrop, handleRenameKeyDown, commitRename, renderCreateInput])
 
   return (
     <section className="h-full min-h-0 flex flex-col border-t t-border">
@@ -655,6 +743,8 @@ export function WorkspaceTree() {
           <p className="px-2 py-2 text-xs t-text-muted">No visible files in workspace root.</p>
         ) : (
           <div>
+            {/* Inline create input at root level */}
+            {creating && creating.parentDir === '' && renderCreateInput(0)}
             {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
             {visibleRows.map((row) => renderVisibleRow(row))}
             {bottomSpacerHeight > 0 && <div style={{ height: `${bottomSpacerHeight}px` }} />}
