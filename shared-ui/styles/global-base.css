@@ -15,23 +15,24 @@
 
 /* === Shared theme tokens (non-accent) === */
 html.dark {
-  --color-bg-base: #0a0a0a;
-  --color-bg-surface: #171717;
-  --color-bg-elevated: #262626;
+  /* Neutrals — warm navy-tinted (myRAM-GCP palette) */
+  --color-bg-base: #141a1e;
+  --color-bg-surface: #1a2127;
+  --color-bg-elevated: #232b32;
   --color-bg-hover: rgba(255 255 255 / 0.06);
-  --color-border: #262626;
-  --color-border-subtle: #1f1f1f;
-  --color-text: #f5f5f5;
-  --color-text-secondary: #a3a3a3;
-  --color-text-muted: #525252;
-  --color-bubble-assistant: #262626;
-  --color-input-bg: #171717;
-  --color-input-border: #404040;
-  /* Semantic status colors */
-  --color-status-success: #22c55e;
-  --color-status-error: #ef4444;
-  --color-status-error-soft: #fca5a5;
-  --color-status-warning: #f59e0b;
+  --color-border: #2e373f;
+  --color-border-subtle: #242c33;
+  --color-text: #cdd5db;
+  --color-text-secondary: #7e8d98;
+  --color-text-muted: #4a5660;
+  --color-bubble-assistant: #232b32;
+  --color-input-bg: #1a2127;
+  --color-input-border: #3a4550;
+  /* Semantic status colors (myRAM-GCP palette) */
+  --color-status-success: #36c459;
+  --color-status-error: #ef5350;
+  --color-status-error-soft: #ff8a80;
+  --color-status-warning: #e0a820;
   --color-status-info: #60a5fa;
   color-scheme: dark;
 }
