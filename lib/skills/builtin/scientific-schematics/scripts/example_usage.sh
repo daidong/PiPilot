@@ -1,11 +1,10 @@
 #!/bin/bash
 # Example usage of AI-powered scientific schematic generation
-# 
+#
 # Prerequisites:
-# 1. Set GOOGLE_CLOUD_PROJECT or configure gcloud default project
+# 1. Set OPENROUTER_API_KEY environment variable
 # 2. Ensure Python 3.10+ is installed
 # 3. Install requests: pip install requests
-# 4. Authenticate to Google Cloud (GKE Workload Identity, ADC, or gcloud auth)
 
 set -e
 
@@ -15,19 +14,15 @@ echo "Example Usage Demonstrations"
 echo "=========================================="
 echo ""
 
-# Check for project
-if [ -z "$GOOGLE_CLOUD_PROJECT" ] && ! command -v gcloud >/dev/null 2>&1; then
-    echo "❌ Error: GOOGLE_CLOUD_PROJECT is not set and gcloud is not installed"
+# Check for API key
+if [ -z "$OPENROUTER_API_KEY" ]; then
+    echo "Error: OPENROUTER_API_KEY is not set"
     echo ""
-    echo "Set GOOGLE_CLOUD_PROJECT='your-project-id' or install/configure gcloud"
+    echo "Set OPENROUTER_API_KEY='your-api-key'"
     exit 1
 fi
 
-if [ -n "$GOOGLE_CLOUD_PROJECT" ]; then
-    echo "✓ GOOGLE_CLOUD_PROJECT is set to: $GOOGLE_CLOUD_PROJECT"
-else
-    echo "✓ Using gcloud default project"
-fi
+echo "✓ OPENROUTER_API_KEY is set"
 echo ""
 
 # Create output directory
@@ -45,8 +40,6 @@ python scripts/generate_schematic.py \
 
 echo ""
 echo "✓ Generated: figures/consort_example.png"
-echo "  - Also created: consort_example_v1.png, v2.png, v3.png"
-echo "  - Review log: consort_example_review_log.json"
 echo ""
 
 # Example 2: Neural network (shorter for demo)
@@ -78,7 +71,7 @@ echo "All examples completed successfully!"
 echo "=========================================="
 echo ""
 echo "Generated files in figures/:"
-ls -lh figures/*example*.png 2>/dev/null || echo "  (Files will appear after running with valid Vertex credentials)"
+ls -lh figures/*example*.png 2>/dev/null || echo "  (Files will appear after running with valid API key)"
 echo ""
 echo "Review the review_log.json files to see:"
 echo "  - Quality scores for each iteration"

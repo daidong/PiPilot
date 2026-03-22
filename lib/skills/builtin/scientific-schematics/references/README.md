@@ -1,19 +1,18 @@
-# Scientific Schematics - Vertex AI
+# Scientific Schematics - OpenRouter API
 
 **Generate any scientific diagram by describing it in natural language.**
 
-Vertex AI image models create publication-quality diagrams automatically - no coding, no templates, no manual drawing required.
+AI image models create publication-quality diagrams automatically via OpenRouter - no coding, no templates, no manual drawing required.
 
 ## Quick Start
 
-Default image model: `gemini-3-pro-image-preview`. Normal skill usage does not require model selection.
+Default image model: `google/gemini-3-pro-image-preview`. Normal skill usage does not require model selection.
 
 ### Generate Any Diagram
 
 ```bash
-# Set your Google Cloud project
-export GOOGLE_CLOUD_PROJECT='your-project-id'
-export GOOGLE_CLOUD_LOCATION='global'
+# Set your OpenRouter API key
+export OPENROUTER_API_KEY='your-openrouter-api-key'
 
 # Generate any scientific diagram
 python @skill/scripts/generate_schematic.py "CONSORT participant flow diagram" -o @ws/figures/consort.png
@@ -45,9 +44,9 @@ python @skill/scripts/generate_schematic.py "MAPK signaling pathway" -o @ws/figu
 
 1. **Generation 1**: Create initial diagram from your description
 2. **Review 1**: AI evaluates clarity, labels, accuracy, accessibility
-3. **Generation 2**: Improve based on critique
-4. **Review 2**: Second evaluation with specific feedback
-5. **Generation 3**: Final polished version
+3. **Decision**: If quality meets threshold → DONE; otherwise continue
+4. **Generation 2**: Improve based on critique
+5. **Review 2**: Second evaluation with specific feedback
 
 ### Automatic Quality Standards
 
@@ -62,13 +61,9 @@ All diagrams automatically follow:
 
 ## Installation
 
-### For AI Generation
-
 ```bash
-# Set Google Cloud project and location
-export GOOGLE_CLOUD_PROJECT='your-project-id'
-export GOOGLE_CLOUD_LOCATION='global'
-export GOOGLE_CLOUD_IMAGE_LOCATION='us-central1'   # optional; needed for Imagen
+# Set OpenRouter API key
+export OPENROUTER_API_KEY='your-openrouter-api-key'
 
 # Install Python dependencies (if not already installed)
 pip install requests
@@ -91,8 +86,7 @@ python @skill/scripts/generate_schematic.py \
 
 **Output:**
 - `@ws/figures/consort_v1.png` - Initial generation
-- `@ws/figures/consort_v2.png` - After first review
-- `@ws/figures/consort_v3.png` - Final version
+- `@ws/figures/consort_v2.png` - After review (if needed)
 - `@ws/figures/consort.png` - Copy of final version
 - `@ws/figures/consort_review_log.json` - Detailed review log
 
@@ -134,13 +128,16 @@ python @skill/scripts/generate_schematic.py [OPTIONS] "description" -o @ws/outpu
 
 Options:
   --iterations N          Number of AI refinement iterations (default: 2, max: 2)
+  --doc-type TYPE         Document type for quality threshold (journal, poster, etc.)
+  --image-model MODEL     Override image generation model
+  --review-model MODEL    Override review model
   -v, --verbose          Verbose output
   -h, --help             Show help message
 ```
 
 ## Supported Automation Interface
 
-Use the CLI wrapper as the supported interface inside RAM:
+Use the CLI wrapper as the supported interface:
 
 ```bash
 python @skill/scripts/generate_schematic.py \
@@ -155,29 +152,28 @@ This skill does not ship as an installable Python package, so avoid direct
 ## Prompt Engineering Tips
 
 ### Be Specific About Layout
-✓ "Flowchart with vertical flow, top to bottom"  
-✓ "Architecture diagram with encoder on left, decoder on right"  
-✗ "Make a diagram" (too vague)
+- "Flowchart with vertical flow, top to bottom"
+- "Architecture diagram with encoder on left, decoder on right"
+- Avoid: "Make a diagram" (too vague)
 
 ### Include Quantitative Details
-✓ "Neural network: input (784), hidden (128), output (10)"  
-✓ "Flowchart: n=500 screened, n=150 excluded, n=350 randomized"  
-✗ "Some numbers" (not specific)
+- "Neural network: input (784), hidden (128), output (10)"
+- "Flowchart: n=500 screened, n=150 excluded, n=350 randomized"
 
 ### Specify Visual Style
-✓ "Minimalist block diagram with clean lines"  
-✓ "Detailed biological pathway with protein structures"  
-✓ "Technical schematic with engineering notation"
+- "Minimalist block diagram with clean lines"
+- "Detailed biological pathway with protein structures"
+- "Technical schematic with engineering notation"
 
 ### Request Specific Labels
-✓ "Label all arrows with activation/inhibition"  
-✓ "Include layer dimensions in each box"  
-✓ "Show time progression with timestamps"
+- "Label all arrows with activation/inhibition"
+- "Include layer dimensions in each box"
+- "Show time progression with timestamps"
 
 ### Mention Color Requirements
-✓ "Use colorblind-friendly colors"  
-✓ "Grayscale-compatible design"  
-✓ "Color-code by function: blue=input, green=processing, red=output"
+- "Use colorblind-friendly colors"
+- "Grayscale-compatible design"
+- "Color-code by function: blue=input, green=processing, red=output"
 
 ## Review Log Format
 
@@ -186,59 +182,55 @@ Each generation produces a JSON review log:
 ```json
 {
   "user_prompt": "CONSORT participant flow diagram...",
+  "doc_type": "default",
+  "quality_threshold": 7.5,
   "iterations": [
     {
       "iteration": 1,
       "image_path": "figures/consort_v1.png",
-      "prompt": "Full generation prompt...",
-      "critique": "Score: 7/10. Issues: font too small...",
       "score": 7.0,
+      "critique": "Score: 7/10. Issues: font too small...",
       "success": true
     },
     {
       "iteration": 2,
       "image_path": "figures/consort_v2.png",
       "score": 8.5,
-      "critique": "Much improved. Remaining issues..."
-    },
-    {
-      "iteration": 3,
-      "image_path": "figures/consort_v3.png",
-      "score": 9.5,
-      "critique": "Excellent. Publication ready."
+      "critique": "Much improved. Publication ready."
     }
   ],
-  "final_image": "figures/consort_v3.png",
-  "final_score": 9.5,
-  "success": true
+  "final_image": "figures/consort_v2.png",
+  "final_score": 8.5,
+  "success": true,
+  "early_stop": true,
+  "early_stop_reason": "Quality score 8.5 meets threshold 7.5 for default"
 }
 ```
 
 Note: in review log JSON, file paths are stored as raw workspace-relative paths (`figures/...`), not scoped command prefixes.
 
-## Why Use Vertex AI Image Generation
+## Why Use AI Image Generation
 
-**Simply describe what you want - Vertex AI creates it:**
+**Simply describe what you want - AI creates it:**
 
-- ✓ **Fast**: Results in minutes
-- ✓ **Easy**: Natural language descriptions (no coding)
-- ✓ **Quality**: Automatic review and refinement
-- ✓ **Universal**: Works for all diagram types
-- ✓ **Publication-ready**: High-quality output immediately
+- **Fast**: Results in minutes
+- **Easy**: Natural language descriptions (no coding)
+- **Quality**: Automatic review and refinement
+- **Universal**: Works for all diagram types
+- **Publication-ready**: High-quality output immediately
 
 **Just describe your diagram, and it's generated automatically.**
 
 ## Troubleshooting
 
-### Vertex Credential Issues
+### API Key Issues
 
 ```bash
-# Check project / ADC state
-echo $GOOGLE_CLOUD_PROJECT
-gcloud auth application-default print-access-token
+# Check API key is set
+echo $OPENROUTER_API_KEY
 
-# Set the project explicitly
-export GOOGLE_CLOUD_PROJECT='your-project-id'
+# Set it if missing
+export OPENROUTER_API_KEY='your-api-key'
 ```
 
 ### Import Errors
@@ -253,10 +245,6 @@ pip install requests
 ```bash
 # Use verbose mode to see detailed errors
 python @skill/scripts/generate_schematic.py "diagram" -o @ws/out.png -v
-
-# Check Vertex auth + project
-gcloud config get-value project
-gcloud auth print-access-token | head -c 20
 ```
 
 ### Low Quality Scores
@@ -277,10 +265,7 @@ python @skill/scripts/generate_schematic.py "test diagram" -o @ws/test.png -v
 
 ## Cost Considerations
 
-Vertex AI image generation pricing varies by Gemini image model or Imagen backend:
-- **Vertex AI image generation**: varies by Gemini image model or Imagen backend
-
-Typical costs per diagram:
+Costs depend on the models used via OpenRouter. Typical costs per diagram:
 - Simple diagram (1 iteration): ~$0.05-0.15
 - Complex diagram (2 iterations): ~$0.10-0.30
 
@@ -304,4 +289,4 @@ For issues or questions:
 
 ## License
 
-Part of the scientific-writer package. See main repository for license information.
+Part of the scientific-schematics skill. See main repository for license information.

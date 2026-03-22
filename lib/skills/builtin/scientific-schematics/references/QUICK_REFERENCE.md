@@ -1,26 +1,22 @@
 # Scientific Schematics - Quick Reference
 
-**How it works:** Describe your diagram → Vertex AI generates it automatically
+**How it works:** Describe your diagram → AI generates it via OpenRouter automatically
 
 Path convention: use `@skill/...` for skill files and `@ws/...` for workspace inputs/outputs in shell commands.
 
 ## Setup (One-Time)
 
-Default image model: `gemini-3-pro-image-preview`. Normal skill usage does not require choosing a model.
+Default image model: `google/gemini-3-pro-image-preview`. Normal skill usage does not require choosing a model.
 
 ```bash
-# Required unless gcloud default project is already set
-export GOOGLE_CLOUD_PROJECT='your-project-id'
-export GOOGLE_CLOUD_LOCATION='global'
-
-# Optional: only needed when using Imagen models
-export GOOGLE_CLOUD_IMAGE_LOCATION='us-central1'
+# Required
+export OPENROUTER_API_KEY='your-openrouter-api-key'
 ```
 
 ## Basic Usage
 
 ```bash
-# Describe your diagram, Vertex AI creates it
+# Describe your diagram, AI creates it
 python @skill/scripts/generate_schematic.py "your diagram description" -o @ws/output.png
 
 # That's it! Automatic:
@@ -69,12 +65,12 @@ python @skill/scripts/generate_schematic.py \
 
 ## Prompt Tips
 
-### ✓ Good Prompts (Specific)
+### Good Prompts (Specific)
 - "CONSORT flowchart with screening (n=500), exclusion (n=150), randomization (n=350)"
 - "Transformer architecture: encoder on left with 6 layers, decoder on right, cross-attention connections"
 - "MAPK signaling: receptor → RAS → RAF → MEK → ERK → nucleus, label each phosphorylation"
 
-### ✗ Avoid (Too Vague)
+### Avoid (Too Vague)
 - "Make a flowchart"
 - "Neural network"
 - "Pathway diagram"
@@ -113,19 +109,15 @@ For input `@ws/diagram.png`, you get:
 python @skill/scripts/generate_schematic.py "diagram description" -o @ws/output.png --iterations 2
 ```
 
-Use the CLI wrapper inside RAM workflows. Do not rely on importing private
+Use the CLI wrapper inside workflows. Do not rely on importing private
 skill modules directly from Python.
 
 ## Troubleshooting
 
-### Vertex Credentials Not Found
+### API Key Not Found
 ```bash
-# Check project / ADC state
-echo $GOOGLE_CLOUD_PROJECT
-gcloud auth application-default print-access-token
-
-# Or set the project explicitly
-export GOOGLE_CLOUD_PROJECT='your-project-id'
+# Set your OpenRouter API key
+export OPENROUTER_API_KEY='your-api-key'
 ```
 
 ### Import Error
@@ -153,15 +145,15 @@ Typical cost per diagram (max 2 iterations):
 - Simple (1 iteration): $0.05-0.15
 - Complex (2 iterations): $0.10-0.30
 
-## How Vertex AI Image Generation Works
+## How It Works
 
 **Simply describe your diagram in natural language:**
-- ✓ No coding required
-- ✓ No templates needed
-- ✓ No manual drawing
-- ✓ Automatic quality review
-- ✓ Publication-ready output
-- ✓ Works for any diagram type
+- No coding required
+- No templates needed
+- No manual drawing
+- Automatic quality review
+- Publication-ready output
+- Works for any diagram type
 
 **Just describe what you want, and it's generated automatically.**
 
@@ -177,10 +169,9 @@ python @skill/scripts/generate_schematic.py "diagram" -o @ws/out.png -v
 
 ## Quick Start Checklist
 
-- [ ] Set `GOOGLE_CLOUD_PROJECT` or configure `gcloud`
+- [ ] Set `OPENROUTER_API_KEY`
 - [ ] Run `python @skill/scripts/generate_schematic.py "test diagram" -o @ws/test.png -v`
-- [ ] Try: `python @skill/scripts/generate_schematic.py "test diagram" -o @ws/test.png`
-- [ ] Review output files (test_v1.png, v2, review_log.json)
+- [ ] Review output files (test_v1.png, test_v2.png, review_log.json)
 - [ ] Read SKILL.md for detailed documentation
 - [ ] Check README.md for examples
 
