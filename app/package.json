@@ -8,7 +8,38 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "icon:generate": "python3 scripts/generate-app-icon.py"
+    "icon:generate": "python3 scripts/generate-app-icon.py",
+    "pack": "electron-vite build && electron-builder --mac"
+  },
+  "author": "Research Copilot",
+  "build": {
+    "appId": "com.research-copilot.app",
+    "productName": "Research Copilot",
+    "electronVersion": "33.4.11",
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity",
+      "identity": null
+    },
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../lib/skills/builtin",
+        "to": "skills/builtin",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../lib/skills/data-analysis",
+        "to": "skills/data-analysis",
+        "filter": ["**/*"]
+      }
+    ]
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.61.1",
@@ -38,6 +69,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "electron": "^33.3.1",
+    "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0"

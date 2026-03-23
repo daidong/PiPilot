@@ -1,9 +1,32 @@
 import { app, BrowserWindow, shell, Menu } from 'electron'
 import { existsSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 import { join, resolve } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers, registerWindow } from './ipc'
 import { registerTerminalHandlers, destroyAllTerminals } from './terminal'
+
+// macOS apps launched from Finder don't inherit shell env vars.
+// Load them from the user's login shell so API keys etc. are available.
+if (process.platform === 'darwin' && !is.dev) {
+  try {
+    const shellPath = process.env.SHELL || '/bin/zsh'
+    const raw = execSync(`${shellPath} -ilc 'env'`, { encoding: 'utf-8', timeout: 5000 })
+    for (const line of raw.split('\n')) {
+      const idx = line.indexOf('=')
+      if (idx > 0) {
+        const key = line.slice(0, idx)
+        const val = line.slice(idx + 1)
+        // Don't overwrite Electron-internal vars
+        if (!key.startsWith('ELECTRON_') && !process.env[key]) {
+          process.env[key] = val
+        }
+      }
+    }
+  } catch {
+    // Silently ignore — user will see the "key missing" dialog as fallback
+  }
+}
 
 function resolveAppIconPath(): string | undefined {
   const candidates = [
@@ -26,7 +49,7 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 16, y: 18 },
-    backgroundColor: '#0a0a0a',
+    backgroundColor: '#141a1e',
     ...(process.platform === 'darwin' ? {} : iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

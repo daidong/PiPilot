@@ -151,7 +151,8 @@ function buildSkillSummariesPrompt(matchedSkills: SkillEntry[]): string {
   })
   return [
     '## Matched Skill Summaries',
-    'The following skills have been identified as relevant to this request. Review their summaries below. Call `load_skill(name)` if you need the full procedures.',
+    'The following skills have been pre-matched to this request. The summaries below are overviews only — they do NOT contain the full procedures, scripts, or parameters.',
+    '**Rule: Always call `load_skill(name)` before executing any skill procedure.** The summary is for deciding whether a skill is relevant; the full content is required before acting on it.',
     '',
     ...sections
   ].join('\n\n')

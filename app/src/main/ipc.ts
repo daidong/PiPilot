@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
 import { createCoordinator } from '../../../lib/agents/coordinator'
@@ -445,10 +445,13 @@ export function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
   ipcHandlersRegistered = true
 
-  // Set the builtin skills root so the loader can find SKILL.md files
-  // __dirname in the bundled main process is app/out/main/ (or app/src/main/ in dev)
-  // lib/skills/ is 3 levels up at the repo root
-  setBuiltinSkillsRoot(join(__dirname, '..', '..', '..', 'lib', 'skills'))
+  // Set the builtin skills root so the loader can find SKILL.md files.
+  // Dev: source tree at repo-root/lib/skills/builtin/
+  // Production: electron-builder extraResources copies to Resources/skills/builtin/
+  const builtinSkillsRoot = app.isPackaged
+    ? join(process.resourcesPath, 'skills')
+    : join(__dirname, '..', '..', '..', 'lib', 'skills')
+  setBuiltinSkillsRoot(builtinSkillsRoot)
 
   const handleWindow = <T extends unknown[], R>(
     channel: string,
