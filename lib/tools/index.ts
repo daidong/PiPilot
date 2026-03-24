@@ -13,6 +13,7 @@ import { Type } from '@sinclair/typebox'
 import type { TSchema } from '@sinclair/typebox'
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { ResearchToolContext } from './types.js'
+import { toAgentResult, toolError } from './tool-utils.js'
 import { type ResearchTool, createResearchMemoryTools } from './entity-tools.js'
 import { createWebSearchTool, createWebFetchTool } from './web-tools.js'
 import { createLiteratureSearchTool } from './literature-search.js'
@@ -66,17 +67,14 @@ function wrapResearchTool(tool: ResearchTool): AgentTool {
     ): Promise<AgentToolResult> => {
       try {
         const result = await tool.execute(params as Record<string, unknown>)
-        const text = JSON.stringify(result.data ?? { error: result.error }, null, 2)
-        return {
-          content: [{ type: 'text', text }],
-          details: result
-        }
+        // Pass through structured error fields (error_code, suggestions, etc.) from ResearchTool results
+        return toAgentResult(tool.name, result)
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err)
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: errorMsg }) }],
-          details: { success: false, error: errorMsg }
-        }
+        return toAgentResult(tool.name, toolError('EXECUTION_FAILED', errorMsg, {
+          retryable: false,
+          suggestions: ['Check tool parameters and try again.'],
+        }))
       }
     }
   }

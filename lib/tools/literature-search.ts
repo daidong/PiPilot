@@ -10,7 +10,7 @@
 
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { toAgentResult, type ToolResult } from './tool-utils.js'
+import { toAgentResult, toolError, toolSuccess, type ToolResult } from './tool-utils.js'
 import type { ResearchToolContext } from './types.js'
 import { loadPrompt } from '../agents/prompts/index.js'
 
@@ -87,7 +87,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-async function searchSemanticScholar(query: string, limit = 10): Promise<PaperResult[]> {
+/** Result from a single source search — always returns papers + optional error context */
+interface SourceSearchResult {
+  papers: PaperResult[]
+  error?: string
+  statusCode?: number
+}
+
+async function searchSemanticScholar(query: string, limit = 10): Promise<SourceSearchResult> {
   const url = new URL('https://api.semanticscholar.org/graph/v1/paper/search')
   url.searchParams.set('query', query)
   url.searchParams.set('limit', String(limit))
@@ -97,9 +104,11 @@ async function searchSemanticScholar(query: string, limit = 10): Promise<PaperRe
     const res = await fetch(url.toString(), {
       headers: { 'User-Agent': 'research-pilot/0.1' }
     })
-    if (!res.ok) return []
+    if (!res.ok) {
+      return { papers: [], error: `Semantic Scholar API returned HTTP ${res.status}`, statusCode: res.status }
+    }
     const json = await res.json() as any
-    return (json.data ?? []).map((p: any) => ({
+    const papers = (json.data ?? []).map((p: any) => ({
       id: p.paperId ?? '',
       title: p.title ?? '',
       authors: (p.authors ?? []).map((a: any) => a.name ?? ''),
@@ -111,12 +120,13 @@ async function searchSemanticScholar(query: string, limit = 10): Promise<PaperRe
       venue: p.venue ?? null,
       citationCount: p.citationCount ?? null
     }))
-  } catch {
-    return []
+    return { papers }
+  } catch (err) {
+    return { papers: [], error: `Semantic Scholar request failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 
-async function searchArxiv(query: string, limit = 10): Promise<PaperResult[]> {
+async function searchArxiv(query: string, limit = 10): Promise<SourceSearchResult> {
   const url = new URL('http://export.arxiv.org/api/query')
   url.searchParams.set('search_query', `all:${query}`)
   url.searchParams.set('start', '0')
@@ -127,10 +137,12 @@ async function searchArxiv(query: string, limit = 10): Promise<PaperResult[]> {
     const res = await fetch(url.toString(), {
       headers: { Accept: 'application/atom+xml' }
     })
-    if (!res.ok) return []
+    if (!res.ok) {
+      return { papers: [], error: `arXiv API returned HTTP ${res.status}`, statusCode: res.status }
+    }
     const xml = await res.text()
     const entries = xml.match(/<entry>([\s\S]*?)<\/entry>/gi) ?? []
-    return entries.slice(0, limit).map(entry => {
+    const papers = entries.slice(0, limit).map(entry => {
       const tag = (name: string) => {
         const m = entry.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, 'i'))
         return m ? m[1].trim() : ''
@@ -151,12 +163,13 @@ async function searchArxiv(query: string, limit = 10): Promise<PaperResult[]> {
         citationCount: null
       }
     })
-  } catch {
-    return []
+    return { papers }
+  } catch (err) {
+    return { papers: [], error: `arXiv request failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 
-async function searchOpenAlex(query: string, limit = 10): Promise<PaperResult[]> {
+async function searchOpenAlex(query: string, limit = 10): Promise<SourceSearchResult> {
   const url = new URL('https://api.openalex.org/works')
   url.searchParams.set('search', query)
   url.searchParams.set('per_page', String(limit))
@@ -164,9 +177,11 @@ async function searchOpenAlex(query: string, limit = 10): Promise<PaperResult[]>
 
   try {
     const res = await fetch(url.toString())
-    if (!res.ok) return []
+    if (!res.ok) {
+      return { papers: [], error: `OpenAlex API returned HTTP ${res.status}`, statusCode: res.status }
+    }
     const json = await res.json() as any
-    return (json.results ?? []).map((w: any) => ({
+    const papers = (json.results ?? []).map((w: any) => ({
       id: w.id ?? '',
       title: w.title ?? '',
       authors: (w.authorships ?? []).map((a: any) => a.author?.display_name ?? '').filter(Boolean),
@@ -184,12 +199,13 @@ async function searchOpenAlex(query: string, limit = 10): Promise<PaperResult[]>
       venue: w.primary_location?.source?.display_name ?? null,
       citationCount: w.cited_by_count ?? null
     }))
-  } catch {
-    return []
+    return { papers }
+  } catch (err) {
+    return { papers: [], error: `OpenAlex request failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 
-async function searchDblp(query: string, limit = 10): Promise<PaperResult[]> {
+async function searchDblp(query: string, limit = 10): Promise<SourceSearchResult> {
   const url = new URL('https://dblp.org/search/publ/api')
   url.searchParams.set('q', query)
   url.searchParams.set('h', String(limit))
@@ -197,10 +213,12 @@ async function searchDblp(query: string, limit = 10): Promise<PaperResult[]> {
 
   try {
     const res = await fetch(url.toString())
-    if (!res.ok) return []
+    if (!res.ok) {
+      return { papers: [], error: `DBLP API returned HTTP ${res.status}`, statusCode: res.status }
+    }
     const json = await res.json() as any
     const hits = json.result?.hits?.hit ?? []
-    return hits.map((h: any) => {
+    const papers = hits.map((h: any) => {
       const info = h.info ?? {}
       const authorsRaw = info.authors?.author
       const authors = Array.isArray(authorsRaw)
@@ -219,12 +237,13 @@ async function searchDblp(query: string, limit = 10): Promise<PaperResult[]> {
         citationCount: null
       }
     })
-  } catch {
-    return []
+    return { papers }
+  } catch (err) {
+    return { papers: [], error: `DBLP request failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 
-const SOURCE_DISPATCH: Record<string, (query: string, limit: number) => Promise<PaperResult[]>> = {
+const SOURCE_DISPATCH: Record<string, (query: string, limit: number) => Promise<SourceSearchResult>> = {
   semantic_scholar: searchSemanticScholar,
   arxiv: searchArxiv,
   openalex: searchOpenAlex,
@@ -292,12 +311,16 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       const params = rawParams as Record<string, unknown>
       const query = typeof params.query === 'string' ? params.query.trim() : ''
       if (!query) {
-        return toAgentResult('literature-search', { success: false, error: 'Missing query.' })
+        return toAgentResult('literature-search', toolError('MISSING_PARAMETER', 'Missing query.', {
+          suggestions: ['Provide a non-empty research topic or question as the query parameter.']
+        }))
       }
       const extraContext = typeof params.context === 'string' ? params.context.trim() : ''
 
       if (!ctx.callLlm) {
-        return toAgentResult('literature-search', { success: false, error: 'LLM not available for literature search pipeline.' })
+        return toAgentResult('literature-search', toolError('LLM_UNAVAILABLE', 'LLM not available for literature search pipeline.', {
+          suggestions: ['Ensure the agent runtime has an LLM provider configured (callLlm in ResearchToolContext).']
+        }))
       }
 
       ctx.onToolCall?.('literature-search', { query, context: extraContext })
@@ -312,16 +335,23 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
         const planText = await ctx.callLlm(PLANNER_SYSTEM, planUserPrompt)
         const parsed = safeJsonParse<SearchPlan>(planText)
         if (!parsed || !Array.isArray(parsed.queryBatches)) {
-          return toAgentResult('literature-search', { success: false, error: 'Failed to parse search plan from LLM.' })
+          return toAgentResult('literature-search', toolError('PARSE_FAILED', 'Failed to parse search plan from LLM.', {
+            retryable: true,
+            suggestions: ['Retry the search — LLM may produce valid JSON on a subsequent attempt.', 'Try simplifying the query.'],
+          }))
         }
         plan = parsed
       } catch (err: any) {
-        return toAgentResult('literature-search', { success: false, error: `Planning failed: ${err.message}` })
+        return toAgentResult('literature-search', toolError('EXECUTION_FAILED', `Planning step failed: ${err.message}`, {
+          retryable: true,
+          suggestions: ['Retry the search.', 'Check if the LLM provider is available.'],
+        }))
       }
 
       // ── Step 2: Search ────────────────────────────────────────────
       const allPapers: PaperResult[] = []
       const queriesUsed: string[] = []
+      const sourceErrors: Record<string, string[]> = {}
 
       for (const batch of plan.queryBatches.sort((a, b) => a.priority - b.priority)) {
         for (const q of batch.queries) {
@@ -329,11 +359,11 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
           for (const src of batch.sources) {
             const searchFn = SOURCE_DISPATCH[src]
             if (!searchFn) continue
-            try {
-              const results = await searchFn(q, 10)
-              allPapers.push(...results)
-            } catch {
-              // skip failed source
+            const result = await searchFn(q, 10)
+            allPapers.push(...result.papers)
+            if (result.error) {
+              if (!sourceErrors[src]) sourceErrors[src] = []
+              sourceErrors[src].push(result.error)
             }
             await sleep(500) // polite rate limit
           }
@@ -342,11 +372,11 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
         if (batch.dblpQueries) {
           for (const dq of batch.dblpQueries) {
             queriesUsed.push(`[dblp] ${dq}`)
-            try {
-              const results = await searchDblp(dq, 10)
-              allPapers.push(...results)
-            } catch {
-              // skip
+            const result = await searchDblp(dq, 10)
+            allPapers.push(...result.papers)
+            if (result.error) {
+              if (!sourceErrors['dblp']) sourceErrors['dblp'] = []
+              sourceErrors['dblp'].push(result.error)
             }
             await sleep(500)
           }
@@ -354,17 +384,38 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       }
 
       const deduplicated = deduplicatePapers(allPapers)
+      const failedSourceNames = Object.keys(sourceErrors)
+      const hasSourceFailures = failedSourceNames.length > 0
 
       if (deduplicated.length === 0) {
-        return toAgentResult('literature-search', {
-          success: true,
-          data: {
-            totalFound: 0,
-            papers: [],
-            coverage: { score: 0, coveredTopics: [], missingTopics: plan.subTopics.map(s => s.name), gaps: ['No papers found'] },
-            queriesUsed
+        // Distinguish "no papers exist" from "all APIs failed"
+        const failedDetails = failedSourceNames
+          .map(src => `${src}: ${sourceErrors[src][0]}`)
+
+        return toAgentResult('literature-search', toolError(
+          hasSourceFailures ? 'API_ERROR' : 'NOT_FOUND',
+          hasSourceFailures
+            ? `No papers found. ${failedSourceNames.length} source(s) failed: ${failedSourceNames.join(', ')}.`
+            : 'No papers found matching the query across all sources.',
+          {
+            retryable: hasSourceFailures,
+            context: {
+              queriesUsed,
+              failedSources: failedDetails,
+              subTopics: plan.subTopics.map(s => s.name),
+            },
+            suggestions: hasSourceFailures
+              ? [
+                  'Some academic APIs may be temporarily unavailable. Retry in a few minutes.',
+                  'Try different or broader search terms.',
+                ]
+              : [
+                  'Try broader or alternative search terms.',
+                  'Check if the topic uses different terminology in academic literature.',
+                  'Consider searching for related sub-topics individually.',
+                ],
           }
-        })
+        ))
       }
 
       // ── Step 3: Review ────────────────────────────────────────────
@@ -382,11 +433,20 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       ].join('\n')
 
       let review: ReviewResult
+      const pipelineWarnings: string[] = []
+
+      // Propagate source failure warnings
+      if (hasSourceFailures) {
+        pipelineWarnings.push(
+          `${failedSourceNames.length} source(s) had errors: ${failedSourceNames.join(', ')}. Results may be incomplete.`
+        )
+      }
+
       try {
         const reviewText = await ctx.callLlm(REVIEWER_SYSTEM, reviewInput)
         const parsed = safeJsonParse<ReviewResult>(reviewText)
         if (!parsed) {
-          // If review parsing fails, include all papers with a default score
+          // If review parsing fails, include all papers with a default score — but warn the agent
           review = {
             approved: true,
             relevantPapers: deduplicated.slice(0, 12).map(p => ({ ...p, relevanceScore: 5, relevanceJustification: 'Review parsing failed; included by default.' })),
@@ -395,11 +455,19 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
             issues: ['Review parsing failed'],
             additionalQueries: null
           }
+          pipelineWarnings.push(
+            'LLM review parsing failed — papers included with default relevance score of 5. '
+            + 'Relevance scores may not be accurate. Consider re-reviewing the top papers manually.'
+          )
         } else {
           review = parsed
         }
       } catch (err: any) {
-        return toAgentResult('literature-search', { success: false, error: `Review failed: ${err.message}` })
+        return toAgentResult('literature-search', toolError('EXECUTION_FAILED', `Review step failed: ${err.message}`, {
+          retryable: true,
+          suggestions: ['The LLM review step failed. Retry the search, or process the raw papers without review.'],
+          context: { papersFound: deduplicated.length, queriesUsed },
+        }))
       }
 
       // ── Step 4: Summarize ─────────────────────────────────────────
@@ -510,7 +578,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
 
       ctx.onToolResult?.('literature-search', payload)
 
-      return toAgentResult('literature-search', { success: true, data: payload })
+      return toAgentResult('literature-search', toolSuccess(payload, pipelineWarnings.length > 0 ? pipelineWarnings : undefined))
     }
   }
 }

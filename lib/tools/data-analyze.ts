@@ -15,7 +15,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { toAgentResult, type ToolResult } from './tool-utils.js'
+import { toAgentResult, toolError, type ToolResult } from './tool-utils.js'
 import type { ResearchToolContext } from './types.js'
 import { loadPrompt } from '../agents/prompts/index.js'
 
@@ -73,19 +73,31 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
       const taskType = typeof params.task_type === 'string' ? params.task_type.trim().toLowerCase() : 'analyze'
 
       if (!filePath) {
-        return toAgentResult('data_analyze', { success: false, error: 'Missing file_path.' })
+        return toAgentResult('data_analyze', toolError('MISSING_PARAMETER', 'Missing file_path.', {
+          suggestions: ['Provide a relative path to the data file (CSV, JSON, TSV, or XLSX).']
+        }))
       }
       if (!instructions) {
-        return toAgentResult('data_analyze', { success: false, error: 'Missing instructions.' })
+        return toAgentResult('data_analyze', toolError('MISSING_PARAMETER', 'Missing instructions.', {
+          suggestions: ['Describe what analysis to perform on the data.']
+        }))
       }
       if (!['analyze', 'visualize', 'transform', 'model'].includes(taskType)) {
-        return toAgentResult('data_analyze', { success: false, error: `Invalid task_type: ${taskType}. Use: analyze | visualize | transform | model.` })
+        return toAgentResult('data_analyze', toolError('INVALID_PARAMETER', `Invalid task_type: ${taskType}. Use: analyze | visualize | transform | model.`, {
+          suggestions: ['Valid task types: analyze, visualize, transform, model.']
+        }))
       }
 
       // 1. Resolve data file path
       const absDataFile = path.resolve(ctx.workspacePath, filePath)
       if (!fs.existsSync(absDataFile)) {
-        return toAgentResult('data_analyze', { success: false, error: `File not found: ${filePath}` })
+        return toAgentResult('data_analyze', toolError('FILE_NOT_FOUND', `File not found: ${filePath}`, {
+          suggestions: [
+            'Verify the file path is relative to the workspace root.',
+            'Use the find or glob tool to locate the data file.',
+          ],
+          context: { workspacePath: ctx.workspacePath, resolvedPath: absDataFile }
+        }))
       }
 
       ctx.onToolCall?.('data_analyze', { file_path: filePath, instructions, task_type: taskType })
@@ -109,7 +121,9 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
 
       // 4. Generate Python code via LLM
       if (!ctx.callLlm) {
-        return toAgentResult('data_analyze', { success: false, error: 'LLM not available for code generation.' })
+        return toAgentResult('data_analyze', toolError('LLM_UNAVAILABLE', 'LLM not available for code generation.', {
+          suggestions: ['Ensure the agent runtime has an LLM provider configured (callLlm in ResearchToolContext).']
+        }))
       }
 
       // Extract the relevant task description section
@@ -144,7 +158,10 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
         const codeMatch = llmResponse.match(/```python\n([\s\S]*?)```/) || llmResponse.match(/```\n([\s\S]*?)```/)
         generatedCode = codeMatch ? codeMatch[1] : llmResponse
       } catch (err: any) {
-        return toAgentResult('data_analyze', { success: false, error: `Code generation failed: ${err.message}` })
+        return toAgentResult('data_analyze', toolError('EXECUTION_FAILED', `Code generation failed: ${err.message}`, {
+          retryable: true,
+          suggestions: ['Retry — the LLM may produce valid code on a subsequent attempt.', 'Try simplifying the instructions.'],
+        }))
       }
 
       // 6. Build full script with template header + pre-defined paths
@@ -216,14 +233,22 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
         return toAgentResult('data_analyze', { success: true, data: payload })
       } catch (err: any) {
         const errorDetail = err.stderr?.slice(0, 2000) || err.message
-        return toAgentResult('data_analyze', {
-          success: false,
-          error: `Python execution failed: ${errorDetail}`,
+        return toAgentResult('data_analyze', toolError('EXECUTION_FAILED', `Python execution failed: ${errorDetail}`, {
+          retryable: true,
+          suggestions: [
+            `Review the generated script at ${path.relative(ctx.workspacePath, scriptPath)} for errors.`,
+            'Check that required Python packages (pandas, matplotlib, seaborn, etc.) are installed.',
+            'Try simplifying the analysis instructions.',
+          ],
+          context: {
+            scriptPath: path.relative(ctx.workspacePath, scriptPath),
+            runId,
+          },
           data: {
             scriptPath: path.relative(ctx.workspacePath, scriptPath),
             runId
           }
-        })
+        }))
       }
     }
   }

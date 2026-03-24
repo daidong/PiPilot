@@ -14,6 +14,7 @@ import {
   updateArtifact,
   type CreateArtifactInput
 } from '../memory-v2/store.js'
+import { toolError } from './tool-utils.js'
 
 /**
  * Simple tool interface for research tools.
@@ -82,7 +83,9 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
       const args = input as Record<string, unknown>
       const type = String(args.type) as ArtifactType
       const title = String(args.title || '').trim()
-      if (!title) return { success: false, error: 'title is required' }
+      if (!title) return toolError('MISSING_PARAMETER', 'title is required.', {
+        suggestions: ['Provide a non-empty title string for the artifact.']
+      })
 
       const cliContext: CLIContext = {
         sessionId,
@@ -128,10 +131,18 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
         }
       } else if (type === 'data') {
         const filePath = typeof args.filePath === 'string' ? args.filePath : ''
-        if (!filePath) return { success: false, error: 'filePath is required for data artifacts' }
+        if (!filePath) return toolError('MISSING_PARAMETER', 'filePath is required for data artifacts.', {
+          suggestions: ['Provide a file path (relative to project root or absolute) for the data artifact.']
+        })
         const resolvedFilePath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
         if (!existsSync(resolvedFilePath)) {
-          return { success: false, error: `File not found: ${filePath}` }
+          return toolError('FILE_NOT_FOUND', `File not found: ${filePath}`, {
+            suggestions: [
+              `Check the file path relative to project root: ${projectPath}`,
+              'Use the find or glob tool to locate the correct file path.',
+            ],
+            context: { resolvedPath: resolvedFilePath, projectPath }
+          })
         }
 
         payload = {
@@ -207,7 +218,9 @@ export function createArtifactUpdateTool(projectPath: string): ResearchTool {
     execute: async (input) => {
       const args = input as Record<string, unknown>
       const id = String(args.id || '')
-      if (!id) return { success: false, error: 'id is required' }
+      if (!id) return toolError('MISSING_PARAMETER', 'id is required.', {
+        suggestions: ['Provide an artifact id (full or prefix). Use artifact-search to find artifact ids.']
+      })
 
       const updated = updateArtifact(projectPath, id, {
         title: typeof args.title === 'string' ? args.title : undefined,
@@ -224,7 +237,13 @@ export function createArtifactUpdateTool(projectPath: string): ResearchTool {
       })
 
       if (!updated) {
-        return { success: false, error: `Artifact not found: ${id}` }
+        return toolError('NOT_FOUND', `Artifact not found: ${id}`, {
+          suggestions: [
+            'Check the artifact id — it may have been deleted or the prefix is ambiguous.',
+            'Use artifact-search to find the correct artifact id.',
+          ],
+          context: { searchedId: id }
+        })
       }
 
       return {
@@ -259,7 +278,9 @@ export function createArtifactSearchTool(projectPath: string): ResearchTool {
     execute: async (input) => {
       const args = input as Record<string, unknown>
       const query = String(args.query || '').trim()
-      if (!query) return { success: false, error: 'query is required' }
+      if (!query) return toolError('MISSING_PARAMETER', 'query is required.', {
+        suggestions: ['Provide a non-empty search query string.']
+      })
 
       const type = typeof args.type === 'string' ? args.type as ArtifactType : undefined
       const hits = searchArtifacts(projectPath, query, type ? [type] : undefined)

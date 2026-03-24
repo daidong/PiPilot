@@ -10,7 +10,7 @@
 
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { toAgentResult, truncateHeadTail, type ToolResult } from './tool-utils.js'
+import { toAgentResult, toolError, truncateHeadTail, type ToolResult } from './tool-utils.js'
 import type { ResearchToolContext } from './types.js'
 
 // ---------------------------------------------------------------------------
@@ -393,7 +393,9 @@ export function createWebSearchTool(ctx: ResearchToolContext): AgentTool {
       const params = rawParams as Record<string, unknown>
       const query = typeof params.query === 'string' ? params.query.trim() : ''
       if (!query) {
-        return toAgentResult('web_search', { success: false, error: 'Missing query.' })
+        return toAgentResult('web_search', toolError('MISSING_PARAMETER', 'Missing query.', {
+          suggestions: ['Provide a non-empty search query string.']
+        }))
       }
 
       const countRaw = typeof params.count === 'number' && Number.isFinite(params.count)
@@ -415,10 +417,13 @@ export function createWebSearchTool(ctx: ResearchToolContext): AgentTool {
         if (effectiveProvider === 'brave') {
           if (!braveApiKey) {
             if (providerRequested === 'brave') {
-              return toAgentResult('web_search', {
-                success: false,
-                error: 'BRAVE_API_KEY is required when provider=brave. Set BRAVE_API_KEY or use provider=arxiv.',
-              })
+              return toAgentResult('web_search', toolError('MISSING_PARAMETER',
+                'BRAVE_API_KEY is required when provider=brave.', {
+                suggestions: [
+                  'Set BRAVE_API_KEY environment variable.',
+                  'Use provider=arxiv as a fallback for academic search.',
+                ]
+              }))
             }
             effectiveProvider = 'arxiv'
           } else {
@@ -430,7 +435,18 @@ export function createWebSearchTool(ctx: ResearchToolContext): AgentTool {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        return toAgentResult('web_search', { success: false, error: msg })
+        const isRateLimit = msg.includes('429')
+        return toAgentResult('web_search', toolError(
+          isRateLimit ? 'API_RATE_LIMITED' : 'API_ERROR',
+          msg,
+          {
+            retryable: true,
+            suggestions: isRateLimit
+              ? ['Wait before retrying — the search API rate limit was hit.']
+              : ['Retry the search.', 'Try provider=arxiv if Brave is unavailable.'],
+            context: { provider: effectiveProvider, query }
+          }
+        ))
       }
 
       const payload = {
@@ -460,17 +476,23 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
       const params = rawParams as Record<string, unknown>
       const urlRaw = typeof params.url === 'string' ? params.url.trim() : ''
       if (!urlRaw) {
-        return toAgentResult('web_fetch', { success: false, error: 'Missing url.' })
+        return toAgentResult('web_fetch', toolError('MISSING_PARAMETER', 'Missing url.', {
+          suggestions: ['Provide a valid HTTP or HTTPS URL to fetch.']
+        }))
       }
 
       let url: URL
       try {
         url = new URL(urlRaw)
       } catch {
-        return toAgentResult('web_fetch', { success: false, error: `Invalid URL: ${urlRaw}` })
+        return toAgentResult('web_fetch', toolError('INVALID_PARAMETER', `Invalid URL: ${urlRaw}`, {
+          suggestions: ['Ensure the URL is well-formed (e.g., https://example.com/page).']
+        }))
       }
       if (!['http:', 'https:'].includes(url.protocol)) {
-        return toAgentResult('web_fetch', { success: false, error: 'Only http/https URLs are supported.' })
+        return toAgentResult('web_fetch', toolError('INVALID_PARAMETER', 'Only http/https URLs are supported.', {
+          suggestions: [`The URL uses protocol "${url.protocol}". Provide an http:// or https:// URL instead.`]
+        }))
       }
 
       // Parse parameters with snake_case / camelCase aliases
@@ -509,7 +531,18 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
       } catch (err) {
         clearTimeout(timer)
         const msg = err instanceof Error ? err.message : String(err)
-        return toAgentResult('web_fetch', { success: false, error: `Fetch failed: ${msg}` })
+        const isTimeout = msg.includes('abort')
+        return toAgentResult('web_fetch', toolError(
+          isTimeout ? 'NETWORK_TIMEOUT' : 'DOWNLOAD_FAILED',
+          `Fetch failed: ${msg}`,
+          {
+            retryable: true,
+            suggestions: isTimeout
+              ? ['The request timed out. Try increasing timeout_sec or retry later.']
+              : ['Check that the URL is accessible.', 'The server may be temporarily unavailable.'],
+            context: { url: url.toString() }
+          }
+        ))
       } finally {
         clearTimeout(timer)
       }

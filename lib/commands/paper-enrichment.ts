@@ -4,11 +4,18 @@ import { updatePaperMetadata } from './paper-artifact.js'
 import { RateLimiter, CircuitBreaker, DEFAULT_SEARCHER_CONFIG } from '../agents/rate-limiter.js'
 import { enrichPapers, createEnrichmentConfig, countCoreFields, type PaperInput } from '../agents/metadata-enrichment.js'
 
+export interface EnrichPapersFailureDetail {
+  paperId: string
+  title: string
+  error: string
+}
+
 export interface EnrichPapersResult {
   success: boolean
   enriched: number
   skipped: number
   failed: number
+  failureDetails?: EnrichPapersFailureDetail[]
 }
 
 export interface EnrichPapersProgress {
@@ -80,6 +87,7 @@ export async function enrichPaperArtifacts(options: EnrichPapersOptions): Promis
   let enriched = 0
   let skipped = 0
   let failed = 0
+  const failureDetails: EnrichPapersFailureDetail[] = []
 
   for (const paper of papers) {
     const paperInput = toPaperInput(paper)
@@ -127,6 +135,11 @@ export async function enrichPaperArtifacts(options: EnrichPapersOptions): Promis
 
       if (!updateResult.success) {
         failed++
+        failureDetails.push({
+          paperId: paper.id,
+          title: paper.title?.slice(0, 80) ?? '',
+          error: 'Metadata update failed after enrichment'
+        })
         onProgress?.({ paperId: paper.id, status: 'failed' })
         continue
       }
@@ -134,10 +147,16 @@ export async function enrichPaperArtifacts(options: EnrichPapersOptions): Promis
       enriched++
       onProgress?.({ paperId: paper.id, status: 'done' })
     } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
       if (debug) {
         console.error(`[enrich] Error enriching "${paper.title?.slice(0, 60)}":`, err)
       }
       failed++
+      failureDetails.push({
+        paperId: paper.id,
+        title: paper.title?.slice(0, 80) ?? '',
+        error: errorMsg
+      })
       onProgress?.({ paperId: paper.id, status: 'failed' })
     }
   }
@@ -145,5 +164,11 @@ export async function enrichPaperArtifacts(options: EnrichPapersOptions): Promis
   if (debug) {
     console.log(`[enrich] Done: ${enriched} enriched, ${skipped} skipped, ${failed} failed`)
   }
-  return { success: true, enriched, skipped, failed }
+  return {
+    success: true,
+    enriched,
+    skipped,
+    failed,
+    failureDetails: failureDetails.length > 0 ? failureDetails : undefined,
+  }
 }
