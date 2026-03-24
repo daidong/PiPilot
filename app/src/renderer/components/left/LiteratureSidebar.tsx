@@ -129,10 +129,29 @@ function GapAlerts({ papers }: { papers: EntityItem[] }) {
   )
 }
 
+const CORE_FIELDS = ['title', 'authors', 'year', 'venue', 'abstract', 'doi', 'citationCount'] as const
+
+function countCoreFields(paper: EntityItem): number {
+  let count = 0
+  for (const field of CORE_FIELDS) {
+    const val = (paper as any)[field]
+    if (val !== undefined && val !== null && val !== '') {
+      if (Array.isArray(val) && val.length === 0) continue
+      count++
+    }
+  }
+  return count
+}
+
 export function LiteratureSidebar() {
   const papers = useEntityStore((s) => s.papers)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const setCenterView = useUIStore((s) => s.setCenterView)
+
+  const allPapersEnriched = useMemo(
+    () => papers.length > 0 && papers.every((p) => countCoreFields(p) >= 5),
+    [papers]
+  )
 
   const sendToChat = (text: string) => {
     setCenterView('chat')
@@ -178,12 +197,12 @@ export function LiteratureSidebar() {
         <QuickAction
           icon={RefreshCw}
           label="Enrich All"
-          description="Batch-update metadata for all papers"
+          description={allPapersEnriched ? "All papers already have complete metadata" : "Batch-update metadata for all papers"}
           onClick={async () => {
             const api = (window as any).api
             await api.enrichAllPapers(papers.map((p: any) => p.id))
           }}
-          disabled={isStreaming || papers.length === 0}
+          disabled={isStreaming || papers.length === 0 || allPapersEnriched}
         />
       </div>
 
