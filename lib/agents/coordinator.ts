@@ -295,25 +295,46 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     console.warn('[Coordinator] No modelId provided. Chat will fail.')
   }
 
-  // Select a cheap model for intent routing
+  // Select a cheap model for intent routing — same provider as the main model
+  // so the existing apiKey is guaranteed to work.
   let intentRouterModel: Model<any> | null = null
-  try {
-    // Try to get a fast/cheap model for intent routing
-    const routerModels = [
-      ['anthropic', 'claude-haiku-4-5-20251001'],
-      ['openai', 'gpt-4.1-nano'],
-      ['google', 'gemini-2.0-flash-lite']
-    ] as const
-    for (const [provider, model] of routerModels) {
+  {
+    const routerByProvider: Record<string, string> = {
+      anthropic: 'claude-haiku-4-5-20251001',
+      openai: 'gpt-5.4-nano',
+      google: 'gemini-2.0-flash-lite'
+    }
+
+    // Determine which provider the main model resolved to
+    let mainProvider: string | null = null
+    if (modelId) {
+      const parts = modelId.split(':')
+      if (parts.length === 2) {
+        mainProvider = parts[0]
+      } else {
+        mainProvider = modelId.startsWith('claude-') ? 'anthropic'
+          : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
+          : modelId.startsWith('gemini-') ? 'google'
+          : null
+      }
+    }
+
+    // Try same-provider router first, then fall back to others
+    const providerOrder = mainProvider
+      ? [mainProvider, ...Object.keys(routerByProvider).filter(p => p !== mainProvider)]
+      : Object.keys(routerByProvider)
+
+    for (const provider of providerOrder) {
+      const routerModelId = routerByProvider[provider]
+      if (!routerModelId) continue
       try {
-        intentRouterModel = getPiModel(provider as any, model as any)
+        intentRouterModel = getPiModel(provider as any, routerModelId as any)
+        if (debug) console.log(`[Coordinator] Intent router: ${provider}/${routerModelId}`)
         break
       } catch {
         continue
       }
     }
-  } catch {
-    // No intent router available, will fall back to rule-based
   }
 
   const wrappedOnToolResult = (tool: string, result: unknown, args?: unknown) => {
