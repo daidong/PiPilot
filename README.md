@@ -61,7 +61,7 @@ Skills are lazy-loaded knowledge modules that give the AI domain expertise. The 
 - **@-mention system** — reference entities inline in chat
 - **Session continuity** — automatic context compaction and session summaries
 - **Integrated terminal** — run commands without leaving the app
-- **20+ LLM providers** — OpenAI, Anthropic, OpenRouter, and more via pi-mono
+- **LLM providers** — OpenAI and Anthropic models supported
 
 ## Prerequisites
 
