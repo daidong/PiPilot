@@ -38,3 +38,16 @@ app/node_modules/
 
 # AgentFoundry framework data
 .agentfoundry/
+
+# Research pilot data
+.research-pilot/
+
+# Electron build artifacts
+app/release/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Claude Code local settings
+.claude/

@@ -1,69 +1,126 @@
 # Research Copilot
 
-An AI-powered research assistant desktop application. Literature search, data analysis, academic writing — powered by [pi-mono](https://github.com/badlogic/pi-mono).
+An AI-powered desktop research assistant for scientists and academics. Literature search, data analysis, academic writing, and project management — all in one place.
 
-## Status
+Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electron + React.
 
-**Active development.**
-
-> **Looking for AgentFoundry?** The original agent framework has been archived to [`archive/agentfoundry/`](archive/agentfoundry/). It is no longer maintained. See the [migration rationale](#why-the-migration) below.
+![Main Interface](docs/default-screen.png)
 
 ## Features
 
-- **Literature search** — multi-source pipeline (Semantic Scholar, arXiv, OpenAlex, DBLP) with LLM-driven planning, review, and synthesis
-- **Web search & fetch** — Brave Search API + arXiv, with rate limiting and caching
-- **Document conversion** — PDF/DOCX/PPTX/XLSX → Markdown via markitdown, with PDF page-range extraction
-- **Python data analysis** — LLM-generated analysis scripts with matplotlib/seaborn visualization
-- **Academic writing** — drafting, rewriting, citation management
+### AI Chat with Coding & Writing Tools
+Converse with an AI research assistant that can read, write, and edit files in your workspace. It generates LaTeX manuscripts, creates publication-quality figures, runs Python analysis scripts, and manages your project files — all through natural language.
+
+### Multi-Source Literature Search
+Search across **Semantic Scholar**, **arXiv**, **OpenAlex**, and **DBLP** simultaneously. Papers are scored for relevance, deduplicated, and organized in a searchable table. Quick actions let you do deep searches, fill coverage gaps, or trace citation chains.
+
+![Literature Management](docs/literature.png)
+
+### Extensible Skills System
+Skills are lazy-loaded knowledge modules that give the AI domain expertise. The app ships with 13 builtin skills covering academic writing (paper-writing, grant proposals, rewrite-humanize), visualization (matplotlib, scientific schematics), data analysis, and more. You can also add your own project-specific skills.
+
+![Skills Browser](docs/skills.png)
+
+### More
+- **Document conversion** — PDF / DOCX / PPTX / XLSX → Markdown
+- **Python data analysis** — LLM-generated analysis with matplotlib/seaborn visualization
 - **Artifact management** — notes, papers, data, web content with CRUD tools
-- **@-mention system** — inline entity references with resolution
-- **Skills system** — lazy-loaded procedural knowledge (7 builtin + workspace-discoverable)
-- **Session continuity** — automatic compaction and session summaries
-- **Electron desktop app** — three-panel React UI with Zustand stores
+- **@-mention system** — reference entities inline in chat
+- **Session continuity** — automatic context compaction and session summaries
+- **Integrated terminal** — run commands without leaving the app
+- **20+ LLM providers** — OpenAI, Anthropic, OpenRouter, and more via pi-mono
+
+## Prerequisites
+
+- **Node.js** >= 18
+- **npm** >= 9
+- **Python 3** (optional, for data analysis and figure generation)
+- **macOS** (Electron desktop app; Linux/Windows support is untested)
+
+## Getting Started
+
+```bash
+# Clone the repository
+git clone https://github.com/daidong/AgentFoundry.git
+cd AgentFoundry
+
+# Install dependencies
+npm install
+
+# Start in development mode
+npm run dev
+```
+
+On first launch, you'll be prompted to configure your LLM provider (API key for OpenAI, Anthropic, OpenRouter, etc.).
+
+### Build for Production
+
+```bash
+# Build the Electron app
+npm run build
+
+# Package as macOS DMG
+cd app
+npm run pack
+```
 
 ## Project Structure
 
 ```
 app/                  # Electron desktop application
-├── src/main/         # Main process (IPC, lifecycle)
-├── src/preload/      # Context bridge (renderer <-> main)
-└── src/renderer/     # React UI (Zustand stores, components)
+├── src/main/         # Main process (IPC handlers, app lifecycle)
+├── src/preload/      # Context bridge (renderer ↔ main)
+└── src/renderer/     # React UI (components, Zustand stores)
 
-lib/                  # Research agent logic
+lib/                  # Research agent logic (framework-independent)
 ├── agents/           # Coordinator agent + prompt registry
 ├── commands/         # Artifact CRUD, search, enrichment
 ├── mentions/         # @-mention parsing and resolution
 ├── memory-v2/        # Artifact storage and session summaries
-├── skills/           # Skills system (loader + 7 builtin skills)
-├── tools/            # Research tools (web, literature, data, convert, artifacts)
-└── types.ts          # Shared type definitions
+├── skills/           # Skills system (loader + builtin skills)
+└── tools/            # Research tools (web, literature, data, convert)
 
-shared-electron/      # Shared Electron IPC utilities
+shared-electron/      # Reusable Electron IPC utilities
 shared-ui/            # Shared React components and stores
 ```
 
-## Development
+## Adding Custom Skills
 
-```bash
-cd app
-npm install
-npx electron-vite dev    # Development mode
-npx electron-vite build  # Production build
+Create a Markdown file at `<your-workspace>/.pi/skills/<name>/SKILL.md`:
+
+```markdown
+---
+id: my-skill
+name: My Skill
+shortDescription: Brief description of what this skill does
+---
+
+Summary loaded at startup.
+
+## Procedures
+Detailed guidance loaded on demand when the skill is activated.
 ```
 
-## Why the Migration
+Skills are auto-discovered from three locations (later overrides earlier):
+1. `lib/skills/builtin/` — shipped with the app
+2. `~/.research-pilot/skills/` — user-global
+3. `<workspace>/.pi/skills/` — project-specific
 
-AgentFoundry was an elegant agent framework with strong architectural patterns (three-axis orthogonal design, policy pipelines, team flow combinators). However, building a production research assistant requires battle-tested runtime capabilities:
+## Configuration
 
-- **Automatic context compaction** — pi-mono handles context window overflow with split-turn-aware summarization
-- **Session persistence** — append-only JSONL with tree-based branching
-- **20+ LLM providers** — unified API with lazy loading and OAuth support
-- **Fuzzy edit matching** — resilient to LLM formatting differences
-- **File mutation queue** — prevents write conflicts during parallel tool execution
-- **Extension system** — runtime-extensible via event hooks
+Research Copilot stores its data in the workspace under `.research-pilot/`:
 
-The framework layer was rebuilt on pi-mono. The application layer (UI, artifacts, mentions, skills) carries forward.
+```
+.research-pilot/
+├── artifacts/          # Notes, papers, data, web content
+│   ├── notes/
+│   ├── papers/
+│   ├── data/
+│   └── web-content/
+└── memory-v2/
+    └── session-summaries/
+```
 
 ## License
 
-MIT
+[MIT](LICENSE)
