@@ -93,7 +93,7 @@ export interface LiteratureFilter {
 
 export const useUIStore = create<UIState>((set) => ({
   theme: 'light',
-  leftTab: 'library',
+  leftTab: 'files',
   centerView: 'chat',
   selectedModel: 'gpt-5.4',
   isIdle: true,
@@ -189,7 +189,7 @@ export const useUIStore = create<UIState>((set) => ({
   clearWorkingFiles: () => set({ workingFiles: [] }),
   reset: () =>
     set({
-      leftTab: 'library',
+      leftTab: 'files',
       centerView: 'chat',
       isIdle: true,
       rightSidebarCollapsed: false,
