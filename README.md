@@ -6,6 +6,39 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electr
 
 ![Main Interface](docs/default-screen.png)
 
+---
+
+## API Keys Setup (READ THIS FIRST)
+
+Research Copilot requires API keys to function. Add them to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
+
+```bash
+# ===== REQUIRED (at least one) =====
+export OPENAI_API_KEY="sk-..."           # For OpenAI models (GPT-4o, GPT-5, o3, etc.)
+export ANTHROPIC_API_KEY="sk-ant-..."    # For Anthropic models (Claude Sonnet, Opus, etc.)
+
+# ===== RECOMMENDED =====
+export BRAVE_API_KEY="BSA..."            # For web search (https://brave.com/search/api/)
+export OPENROUTER_API_KEY="sk-or-..."    # For AI-generated scientific diagrams (https://openrouter.ai/)
+```
+
+Then reload your shell: `source ~/.zshrc`
+
+### What happens without each key?
+
+| Key | Required? | What it powers | Without it |
+|-----|-----------|---------------|------------|
+| `OPENAI_API_KEY` | **Yes** (if using OpenAI models) | Core AI agent — all chat, coding, writing, analysis | App cannot start the agent. You'll see an error dialog on first message. |
+| `ANTHROPIC_API_KEY` | **Yes** (if using Anthropic models) | Core AI agent (same as above, for Claude models) | Same — agent won't initialize for Claude models. |
+| `BRAVE_API_KEY` | Recommended | `web_search` tool — general web search via Brave Search | **Graceful fallback**: web search automatically degrades to arXiv-only (academic papers). No general web results. |
+| `OPENROUTER_API_KEY` | Optional | `scientific-schematics` skill — AI-generated diagrams, flowcharts, graphical abstracts | The schematics skill fails when invoked. All other skills (writing, visualization, data analysis) work fine. |
+
+> **Minimum viable setup**: You need **at least one** of `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` to use the app. Everything else enhances the experience but is not strictly required.
+
+> **Semantic Scholar, arXiv, OpenAlex, DBLP**: These academic APIs are used for literature search and **do not require API keys**. They work out of the box.
+
+---
+
 ## Features
 
 ### AI Chat with Coding & Writing Tools
@@ -51,7 +84,7 @@ npm install
 npm run dev
 ```
 
-On first launch, you'll be prompted to configure your LLM provider (API key for OpenAI, Anthropic, OpenRouter, etc.).
+Make sure your API keys are configured (see [API Keys Setup](#api-keys-setup-read-this-first) above).
 
 ### Build for Production
 
