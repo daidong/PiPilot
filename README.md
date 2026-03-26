@@ -52,8 +52,6 @@ Search across **Semantic Scholar**, **arXiv**, **OpenAlex**, and **DBLP** simult
 ### Extensible Skills System
 Skills are lazy-loaded knowledge modules that give the AI domain expertise. The app ships with 13 builtin skills covering academic writing (paper-writing, grant proposals, rewrite-humanize), visualization (matplotlib, scientific schematics), data analysis, and more. You can also add your own project-specific skills.
 
-![Skills Browser](docs/skills.png)
-
 ### More
 - **Document conversion** — PDF / DOCX / PPTX / XLSX → Markdown
 - **Python data analysis** — LLM-generated analysis with matplotlib/seaborn visualization
