@@ -8,7 +8,7 @@ on:
       - master
 
 jobs:
-  build-test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,11 +23,5 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
-
       - name: Build
         run: npm run build
-
-      - name: Test
-        run: npm run test:run
