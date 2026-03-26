@@ -1,5 +1,5 @@
 import React from 'react'
-import { Sun, Moon, Eraser } from 'lucide-react'
+import { Sun, Moon, Eraser, Terminal } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { EntityTabs } from '../left/EntityTabs'
 import { LiteratureSidebar } from '../left/LiteratureSidebar'
@@ -31,6 +31,13 @@ export function LeftSidebar() {
             title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            onClick={() => useUIStore.getState().toggleTerminal()}
+            className="no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
+            title="Toggle terminal (⌘`)"
+          >
+            <Terminal size={16} />
           </button>
         </div>
       </div>

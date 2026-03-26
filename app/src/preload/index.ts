@@ -131,6 +131,9 @@ export interface ElectronAPI {
   setEnabledSkills: (enabledSkills: string[]) => Promise<{ success: boolean; error?: string }>
   uploadSkill: (fileName: string, base64Data: string) => Promise<{ success: boolean; skillName?: string; error?: string }>
 
+  // File conversion
+  convertFileToText: (fileName: string, base64Data: string) => Promise<{ success: boolean; content?: string; error?: string }>
+
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
   loadMessages: (sessionId: string, offset: number, limit: number) => Promise<any[]>
@@ -271,6 +274,8 @@ const api: ElectronAPI = {
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setEnabledSkills: (enabledSkills) => ipcRenderer.invoke('skills:set-enabled', enabledSkills),
   uploadSkill: (fileName, base64Data) => ipcRenderer.invoke('skills:upload', fileName, base64Data),
+
+  convertFileToText: (fileName, base64Data) => ipcRenderer.invoke('file:convert-to-text', fileName, base64Data),
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),
   loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),

@@ -767,6 +767,72 @@ export function registerIpcHandlers(): void {
   })
 
   // Drop file handler -- copies file into project and creates entity
+  // ─── File conversion (PDF, DOCX → text for chat attachment) ───────────
+  handleWindow('file:convert-to-text', async ({ state }, fileName: string, base64Data: string) => {
+    try {
+      const { tmpdir } = await import('os')
+      const tmpDir = join(tmpdir(), 'research-pilot-convert')
+      if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true })
+
+      const tmpPath = join(tmpDir, `${Date.now()}-${fileName}`)
+      const buffer = Buffer.from(base64Data, 'base64')
+      writeFileSync(tmpPath, buffer)
+
+      const ext = extname(fileName).replace('.', '').toLowerCase()
+
+      // Try markitdown first
+      const { execFile: execFileCb } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFileCb)
+
+      let content: string
+      try {
+        const { stdout } = await execFileAsync('markitdown', [tmpPath], {
+          timeout: 60_000,
+          maxBuffer: 10 * 1024 * 1024
+        })
+        content = stdout
+      } catch {
+        // Fallback: for text-like formats, read directly
+        const textFormats = ['txt', 'md', 'csv', 'json', 'xml', 'html']
+        if (textFormats.includes(ext)) {
+          content = readFileSync(tmpPath, 'utf-8')
+        } else {
+          // Try pypdf for PDF
+          if (ext === 'pdf') {
+            try {
+              const { stdout } = await execFileAsync('python3', [
+                '-c',
+                `import pypdf; r=pypdf.PdfReader("${tmpPath}"); print("\\n".join(p.extract_text() or "" for p in r.pages))`
+              ], { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 })
+              content = stdout
+            } catch {
+              // Clean up tmp file
+              try { (await import('fs/promises')).unlink(tmpPath).catch(() => {}) } catch {}
+              return { success: false, error: 'No converter available. Install markitdown (pip install markitdown[all]) or pypdf.' }
+            }
+          } else {
+            // Clean up tmp file
+            try { (await import('fs/promises')).unlink(tmpPath).catch(() => {}) } catch {}
+            return { success: false, error: `Cannot convert .${ext} files. Install markitdown (pip install markitdown[all]).` }
+          }
+        }
+      }
+
+      // Clean up tmp file
+      try { (await import('fs/promises')).unlink(tmpPath).catch(() => {}) } catch {}
+
+      // Truncate if too large (500K chars max)
+      if (content.length > 500_000) {
+        content = content.slice(0, 500_000) + '\n\n[... content truncated ...]'
+      }
+
+      return { success: true, content }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Conversion failed' }
+    }
+  })
+
   handleWindow('file:drop', async ({ state }, fileName: string, content: string, tab: string) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
 

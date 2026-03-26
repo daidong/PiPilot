@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
-import { Send, Square, Folder, Paperclip } from 'lucide-react'
+import { Send, Square, Paperclip, FileText, X } from 'lucide-react'
 import { useChatStore } from '../../stores/chat-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useSessionStore } from '../../stores/session-store'
@@ -25,6 +25,20 @@ const api = (window as any).api
 const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 const MAX_IMAGES = 5
 
+// Document file types supported for text extraction
+const ACCEPTED_DOC_EXTENSIONS = ['.pdf', '.csv', '.md', '.txt', '.json', '.xml', '.html', '.docx']
+const ACCEPTED_DOC_MIMES = [
+  'application/pdf',
+  'text/csv', 'text/plain', 'text/markdown', 'text/html', 'text/xml',
+  'application/json', 'application/xml',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+]
+const TEXT_READABLE_MIMES = [
+  'text/csv', 'text/plain', 'text/markdown', 'text/html', 'text/xml',
+  'application/json', 'application/xml'
+]
+const MAX_FILES = 5
+
 function parseFlagArgs(raw: string): { cleaned: string; flags: Record<string, string> } {
   const flagPattern = /--(\w+)\s+"([^"]+)"|--(\w+)\s+(\S+)/g
   const flags: Record<string, string> = {}
@@ -45,6 +59,12 @@ interface PendingImage {
   dataUrl: string
 }
 
+interface PendingFile {
+  name: string
+  content: string  // extracted text content
+  loading: boolean
+}
+
 export function ChatInput() {
   const [text, setText] = useState('')
   const [showMention, setShowMention] = useState(false)
@@ -52,6 +72,7 @@ export function ChatInput() {
   const [showCommand, setShowCommand] = useState(false)
   const [commandQuery, setCommandQuery] = useState('')
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -59,7 +80,6 @@ export function ChatInput() {
   const stop = useChatStore((s) => s.stop)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const setIdle = useUIStore((s) => s.setIdle)
-  const pickFolder = useSessionStore((s) => s.pickFolder)
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
@@ -69,6 +89,7 @@ export function ChatInput() {
     setShowMention(false)
     setShowCommand(false)
     setPendingImages([])
+    setPendingFiles([])
   }, [hasProject])
 
   // ── Unified image ingestion (paste / drop / file picker all converge here) ──
@@ -96,6 +117,80 @@ export function ChatInput() {
       return prev // actual updates happen in reader.onload
     })
   }, [])
+
+  // ── Document ingestion (PDF, CSV, MD, TXT, etc.) ──
+
+  const isDocFile = useCallback((file: File) => {
+    if (ACCEPTED_DOC_MIMES.includes(file.type)) return true
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase()
+    return ACCEPTED_DOC_EXTENSIONS.includes(ext)
+  }, [])
+
+  const isTextReadable = useCallback((file: File) => {
+    if (TEXT_READABLE_MIMES.includes(file.type)) return true
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase()
+    return ['.csv', '.md', '.txt', '.json', '.xml', '.html'].includes(ext)
+  }, [])
+
+  const addDocFiles = useCallback((files: File[]) => {
+    const docFiles = files.filter(f => isDocFile(f) && !ACCEPTED_IMAGE_TYPES.includes(f.type))
+    if (docFiles.length === 0) return
+
+    for (const file of docFiles) {
+      setPendingFiles(prev => {
+        if (prev.length >= MAX_FILES) return prev
+        if (prev.some(p => p.name === file.name)) return prev
+        const placeholder: PendingFile = { name: file.name, content: '', loading: true }
+        const updated = [...prev, placeholder]
+
+        if (isTextReadable(file)) {
+          // Text-based files: read directly
+          const reader = new FileReader()
+          reader.onload = () => {
+            const text = reader.result as string
+            setPendingFiles(p => p.map(f =>
+              f.name === file.name ? { ...f, content: text, loading: false } : f
+            ))
+          }
+          reader.onerror = () => {
+            setPendingFiles(p => p.filter(f => f.name !== file.name))
+          }
+          reader.readAsText(file)
+        } else {
+          // Binary files (PDF, DOCX): send to main process for conversion
+          const reader = new FileReader()
+          reader.onload = async () => {
+            const dataUrl = reader.result as string
+            const base64 = dataUrl.split(',')[1]
+            try {
+              const result = await api.convertFileToText(file.name, base64)
+              if (result?.success && result.content) {
+                setPendingFiles(p => p.map(f =>
+                  f.name === file.name ? { ...f, content: result.content, loading: false } : f
+                ))
+              } else {
+                setPendingFiles(p => p.filter(f => f.name !== file.name))
+              }
+            } catch {
+              setPendingFiles(p => p.filter(f => f.name !== file.name))
+            }
+          }
+          reader.readAsDataURL(file)
+        }
+
+        return updated
+      })
+    }
+  }, [isDocFile, isTextReadable])
+
+  // ── Unified file handler (routes images vs documents) ──
+
+  const addFiles = useCallback((files: File[]) => {
+    const imageFiles = files.filter(f => ACCEPTED_IMAGE_TYPES.includes(f.type))
+    const docFiles = files.filter(f => !ACCEPTED_IMAGE_TYPES.includes(f.type))
+    if (imageFiles.length > 0) addImageFiles(imageFiles)
+    if (docFiles.length > 0) addDocFiles(docFiles)
+  }, [addImageFiles, addDocFiles])
 
   // Ctrl+V paste
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
@@ -134,9 +229,9 @@ export function ChatInput() {
     e.stopPropagation()
     setIsDragOver(false)
     const files = Array.from(e.dataTransfer.files)
-    addImageFiles(files)
+    addFiles(files)
     textareaRef.current?.focus()
-  }, [addImageFiles])
+  }, [addFiles])
 
   // File picker button
   const handleFileSelect = useCallback(() => {
@@ -145,17 +240,21 @@ export function ChatInput() {
 
   const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
-    addImageFiles(files)
+    addFiles(files)
     // Reset so the same file can be re-selected
     e.target.value = ''
     textareaRef.current?.focus()
-  }, [addImageFiles])
+  }, [addFiles])
 
   // ── Send ──
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim()
-    if ((!trimmed && pendingImages.length === 0) || isStreaming) return
+    const hasFiles = pendingFiles.some(f => !f.loading && f.content)
+    const hasAnyContent = trimmed || pendingImages.length > 0 || hasFiles
+    if (!hasAnyContent || isStreaming) return
+    // Don't send while files are still loading
+    if (pendingFiles.some(f => f.loading)) return
 
     if (trimmed.startsWith('/')) {
       handleSlashCommand(trimmed)
@@ -164,16 +263,29 @@ export function ChatInput() {
       return
     }
 
+    // Build message with attached document content
+    let message = trimmed
+    const readyFiles = pendingFiles.filter(f => !f.loading && f.content)
+    if (readyFiles.length > 0) {
+      const fileBlocks = readyFiles.map(f =>
+        `<attached_file name="${f.name}">\n${f.content}\n</attached_file>`
+      ).join('\n\n')
+      message = message
+        ? `${message}\n\n${fileBlocks}`
+        : `Please analyze the following file(s):\n\n${fileBlocks}`
+    }
+
     const images = pendingImages.length > 0
       ? pendingImages.map(({ base64, mimeType }) => ({ base64, mimeType }))
       : undefined
     setIdle(false)
-    send(trimmed || 'What is in this image?', images)
+    send(message || 'What is in this image?', images)
     setText('')
     setPendingImages([])
+    setPendingFiles([])
     setShowMention(false)
     setShowCommand(false)
-  }, [text, pendingImages, isStreaming, send, setIdle])
+  }, [text, pendingImages, pendingFiles, isStreaming, send, setIdle])
 
   const handleSlashCommand = async (input: string) => {
     const parts = input.split(/\s+/)
@@ -410,7 +522,7 @@ export function ChatInput() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
+        accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.csv,.md,.txt,.json,.xml,.html,.docx"
         multiple
         className="hidden"
         onChange={handleFileInputChange}
@@ -451,38 +563,46 @@ export function ChatInput() {
           </div>
         )}
 
+        {/* Document file chips */}
+        {pendingFiles.length > 0 && (
+          <div className="flex gap-2 pb-2 flex-wrap">
+            {pendingFiles.map((file, i) => (
+              <div
+                key={i}
+                className="relative group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border t-border text-xs"
+                style={{ background: 'var(--color-surface)' }}
+              >
+                <FileText size={14} className="shrink-0 t-text-muted" />
+                <span className="t-text truncate max-w-[120px]">{file.name}</span>
+                {file.loading && (
+                  <span className="t-text-muted animate-pulse">...</span>
+                )}
+                <button
+                  onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                  className="shrink-0 t-text-muted hover:t-text-secondary transition-opacity opacity-0 group-hover:opacity-100"
+                  aria-label="Remove file"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Drag overlay hint */}
         {isDragOver && (
           <div className="pb-2 text-xs t-text-accent text-center">
-            Drop image here
+            Drop files here
           </div>
         )}
 
         {/* Input row */}
         <div className="flex items-end gap-2">
           <button
-            onClick={() => {
-              if (isStreaming) {
-                const ok = window.confirm(
-                  'Switching projects will stop the current task. Continue?'
-                )
-                if (!ok) return
-                stop()
-              }
-              pickFolder()
-            }}
-            className="shrink-0 t-text-muted t-bg-hover transition-colors pb-0.5"
-            title="Change working folder"
-            aria-label="Change working folder"
-          >
-            <Folder size={18} />
-          </button>
-
-          <button
             onClick={handleFileSelect}
             className="shrink-0 t-text-muted hover:t-text-secondary transition-colors pb-0.5"
-            title="Attach image"
-            aria-label="Attach image"
+            title="Attach file"
+            aria-label="Attach file"
           >
             <Paperclip size={18} />
           </button>
@@ -494,7 +614,7 @@ export function ChatInput() {
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder="Ask anything, paste images, or type /commands..."
+            placeholder="Ask anything, attach files, or type /commands..."
             rows={1}
             className="flex-1 bg-transparent text-sm t-text placeholder:t-text-muted resize-none outline-none"
           />
@@ -511,7 +631,7 @@ export function ChatInput() {
           ) : (
             <button
               onClick={handleSend}
-              disabled={!text.trim() && pendingImages.length === 0}
+              disabled={!text.trim() && pendingImages.length === 0 && !pendingFiles.some(f => !f.loading && f.content)}
               className="shrink-0 p-2.5 rounded-lg t-bg-accent text-white disabled:opacity-30 hover:opacity-90 transition-colors"
               title="Send (Shift+Enter)"
               aria-label="Send message (Shift+Enter)"

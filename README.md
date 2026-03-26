@@ -52,8 +52,21 @@ Search across **Semantic Scholar**, **arXiv**, **OpenAlex**, and **DBLP** simult
 ### Extensible Skills System
 Skills are lazy-loaded knowledge modules that give the AI domain expertise. The app ships with 13 builtin skills covering academic writing (paper-writing, grant proposals, rewrite-humanize), visualization (matplotlib, scientific schematics), data analysis, and more. You can also add your own project-specific skills.
 
+### File Attachments in Chat
+Attach files directly in the chat input via the paperclip button, drag & drop, or paste. Supported formats:
+
+| Format | How it's processed |
+|--------|--------------------|
+| **Images** (PNG, JPEG, GIF, WebP) | Sent as vision content — the LLM sees the image visually |
+| **Text files** (CSV, MD, TXT, JSON, XML, HTML) | Read directly and injected as text into the message |
+| **Documents** (PDF, DOCX) | Converted to text via `markitdown` CLI (with `pypdf` fallback for PDF), then injected into the message |
+
+> **Note**: Document conversion requires `markitdown` (`pip install markitdown[all]`) or `pypdf` (`pip install pypdf`) for PDF/DOCX files. Text-based formats work out of the box with no extra dependencies.
+
+> **Future plan**: The underlying Anthropic API supports native PDF document blocks (preserving layout, tables, and embedded images). Once the pi-mono agent runtime adds `DocumentContent` support, PDF attachments will be upgraded to use native API handling instead of text extraction.
+
 ### More
-- **Document conversion** — PDF / DOCX / PPTX / XLSX → Markdown
+- **Document conversion** — PDF / DOCX / PPTX / XLSX → Markdown (via agent tools)
 - **Python data analysis** — LLM-generated analysis with matplotlib/seaborn visualization
 - **Artifact management** — notes, papers, data, web content with CRUD tools
 - **@-mention system** — reference entities inline in chat
