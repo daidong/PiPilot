@@ -273,9 +273,10 @@ Negative Constraints:
         Extract image bytes from an OpenRouter response.
 
         Handles multiple response formats:
-        1. Multipart content array with inline_data (Gemini-style via OpenRouter)
-        2. Content array with image_url data URIs
-        3. Base64 image data in content parts
+        1. message.images array with image_url data URIs (Gemini via OpenRouter)
+        2. Multipart content array with inline_data (Gemini native)
+        3. Content array with image_url data URIs
+        4. Base64 image data in content string
 
         Returns:
             Image bytes or None if not found
@@ -287,6 +288,29 @@ Negative Constraints:
                 return None
 
             message = choices[0].get("message", {})
+
+            # Case 0: message.images array (OpenRouter Gemini image generation format)
+            # The API returns content=null but images=[{type: "image_url", image_url: {url: "data:..."}}]
+            images = message.get("images")
+            if isinstance(images, list):
+                for index, img in enumerate(images):
+                    if not isinstance(img, dict):
+                        continue
+                    # Handle {type: "image_url", image_url: {url: "data:image/png;base64,..."}}
+                    if img.get("type") == "image_url":
+                        image_url = img.get("image_url", {})
+                        url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url)
+                        if url.startswith("data:") and "," in url:
+                            _, b64data = url.split(",", 1)
+                            self._log(f"Found image in message.images[{index}]")
+                            return base64.b64decode(b64data)
+                    # Handle direct {url: "data:..."} format
+                    url = img.get("url", "")
+                    if url.startswith("data:") and "," in url:
+                        _, b64data = url.split(",", 1)
+                        self._log(f"Found image in message.images[{index}] (direct url)")
+                        return base64.b64decode(b64data)
+
             content = message.get("content", "")
 
             # Case 1: content is a list of parts (multimodal response)
@@ -315,7 +339,7 @@ Negative Constraints:
                 return None
 
             # Case 2: content is a string — might contain base64 image in markdown
-            if isinstance(content, str):
+            if isinstance(content, str) and content:
                 # Look for markdown image with base64
                 match = re.search(r'!\[.*?\]\(data:image/[^;]+;base64,([A-Za-z0-9+/=\s]+)\)', content)
                 if match:
@@ -324,7 +348,6 @@ Negative Constraints:
                     return base64.b64decode(b64data)
 
                 # Look for raw base64 block (some models return just the data)
-                # Only try if content looks like it could be base64 (long, no spaces, valid chars)
                 stripped = content.strip()
                 if len(stripped) > 1000 and re.match(r'^[A-Za-z0-9+/=\n\r]+$', stripped):
                     try:

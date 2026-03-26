@@ -16,7 +16,7 @@ import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Agent } from '@mariozechner/pi-agent-core'
 import { getModel as getPiModel, completeSimple } from '@mariozechner/pi-ai'
-import { createCodingTools } from '@mariozechner/pi-coding-agent'
+import { createCodingTools, createGrepTool, createFindTool, createLsTool } from '@mariozechner/pi-coding-agent'
 import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent } from '@mariozechner/pi-ai'
 
@@ -365,6 +365,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   // Create built-in coding tools from pi-coding-agent
   const codingTools = createCodingTools(projectPath)
+  // Add code-navigation tools (grep, find, ls) not included in codingTools
+  const grepTool = createGrepTool(projectPath)
+  const findTool = createFindTool(projectPath)
+  const lsTool = createLsTool(projectPath)
 
   // Load skills and filter by enabled config (with dependency resolution)
   const allSkills = loadAllSkills(projectPath)
@@ -380,6 +384,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // Combine all tools
   const allTools: AgentTool[] = [
     ...codingTools,
+    grepTool,
+    findTool,
+    lsTool,
     ...researchAgentTools,
     loadSkillTool
   ]

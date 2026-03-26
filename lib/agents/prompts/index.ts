@@ -52,7 +52,15 @@ Long-term memory (agent.md):
 - agent.md has two sections: "## User Instructions" (written by the user — NEVER modify this section) and "## Agent Memory" (written by you — update freely).
 - Use artifact-update on agent.md to save important cross-session information to the "## Agent Memory" section: user preferences, ongoing project context, key decisions, important findings.
 - agent.md has a ~5000 character limit. Do NOT blindly append — rewrite and consolidate the "## Agent Memory" section to keep it concise and up-to-date. Remove outdated entries. Think of it as a living summary, not a log.
-- Only persist genuinely valuable information that you would need in a future session. Do not save trivial or ephemeral details.`,
+- Only persist genuinely valuable information that you would need in a future session. Do not save trivial or ephemeral details.
+
+Coding tasks:
+- For code implementation, follow test-first workflow: write/update test → confirm it fails → implement → confirm it passes.
+- Generate at most 300 lines per write/edit operation. Break larger tasks into verified increments.
+- Prefer edit (oldText/newText) over rewriting entire files. Read before editing to get exact text.
+- After every code change, run the relevant command (build/test/lint) and read the error output. Do not proceed while errors remain.
+- Use grep/find/ls to understand codebase structure before making changes. Do not guess at file layout.
+- If a coding skill is available, load it for detailed procedures.`,
 
 
 // ---------------------------------------------------------------------------
