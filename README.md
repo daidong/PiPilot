@@ -85,8 +85,8 @@ Attach files directly in the chat input via the paperclip button, drag & drop, o
 
 ```bash
 # Clone the repository
-git clone https://github.com/daidong/AgentFoundry.git
-cd AgentFoundry
+git clone https://github.com/daidong/PiPilot.git
+cd PiPilot
 
 # Install dependencies
 npm install
