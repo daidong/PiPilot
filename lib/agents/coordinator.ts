@@ -16,7 +16,7 @@ import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Agent } from '@mariozechner/pi-agent-core'
 import { getModel as getPiModel, completeSimple } from '@mariozechner/pi-ai'
-import { createCodingTools, createGrepTool, createFindTool, createLsTool } from '@mariozechner/pi-coding-agent'
+import { createCodingTools, createGrepTool, createFindTool, createLsTool, estimateTokens, shouldCompact, generateSummary, DEFAULT_COMPACTION_SETTINGS } from '@mariozechner/pi-coding-agent'
 import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent } from '@mariozechner/pi-ai'
 
@@ -397,6 +397,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     ? SYSTEM_PROMPT + '\n\n' + skillsCatalog
     : SYSTEM_PROMPT
 
+  // ── Context compaction state ──
+  // Tracks the summary of compacted (discarded) messages so iterative
+  // compactions can update rather than regenerate from scratch.
+  let compactionSummary: string | undefined
+
   // Create the pi-mono Agent
   const agent = new Agent({
     initialState: {
@@ -407,6 +412,90 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
     sessionId,
     getApiKey: async () => apiKey,
+
+    // ── Context compaction via transformContext ──
+    // Before each LLM call, check if accumulated messages exceed the model's
+    // context window.  If so, summarize old messages and keep only recent ones.
+    transformContext: async (messages, signal) => {
+      const contextWindow = piModel?.contextWindow ?? 128_000
+      const settings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 30_000 }
+
+      // Estimate total tokens from all messages
+      let totalTokens = 0
+      for (const msg of messages) {
+        totalTokens += estimateTokens(msg)
+      }
+
+      if (!shouldCompact(totalTokens, contextWindow, settings)) {
+        return messages
+      }
+
+      if (!piModel) return messages
+
+      if (debug) {
+        console.log(`[Compaction] Context ${totalTokens} tokens exceeds threshold (window=${contextWindow}, reserve=${settings.reserveTokens}). Compacting...`)
+      }
+
+      // Walk backwards to find the cut point: keep ~keepRecentTokens of recent messages
+      let keptTokens = 0
+      let cutIndex = messages.length
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msgTokens = estimateTokens(messages[i])
+        if (keptTokens + msgTokens > settings.keepRecentTokens) {
+          cutIndex = i + 1
+          break
+        }
+        keptTokens += msgTokens
+        if (i === 0) cutIndex = 0
+      }
+
+      // Don't cut if there's nothing meaningful to summarize
+      if (cutIndex <= 1) return messages
+
+      // Ensure we don't cut in the middle of a tool-call / tool-result pair
+      // Move cutIndex forward until we hit a user message (safe boundary)
+      while (cutIndex < messages.length) {
+        const msg = messages[cutIndex]
+        if (msg.role === 'user') break
+        cutIndex++
+      }
+      if (cutIndex >= messages.length) return messages
+
+      const messagesToSummarize = messages.slice(0, cutIndex)
+      const messagesToKeep = messages.slice(cutIndex)
+
+      try {
+        const summary = await generateSummary(
+          messagesToSummarize,
+          piModel,
+          settings.reserveTokens,
+          apiKey,
+          signal,
+          undefined,
+          compactionSummary
+        )
+        compactionSummary = summary
+
+        if (debug) {
+          console.log(`[Compaction] Summarized ${messagesToSummarize.length} messages (${totalTokens - keptTokens} tokens) → kept ${messagesToKeep.length} messages`)
+        }
+
+        // Inject the compaction summary as a synthetic user message at the top
+        const summaryMessage: import('@mariozechner/pi-agent-core').AgentMessage = {
+          role: 'user' as const,
+          content: `[Previous conversation summary]\n\n${summary}\n\n---\n\nThe conversation continues below.`,
+          timestamp: Date.now()
+        }
+
+        return [summaryMessage, ...messagesToKeep]
+      } catch (err) {
+        if (debug) {
+          console.warn('[Compaction] Failed, using full context:', err)
+        }
+        return messages
+      }
+    },
+
     beforeToolCall: async (ctx) => {
       onToolCall?.(ctx.toolCall.name, ctx.args)
       if (debug) {
@@ -448,6 +537,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   async function clearSessionMemory() {
     agent.clearMessages()
+    compactionSummary = undefined
   }
 
   async function maybeGenerateSummary(): Promise<void> {
