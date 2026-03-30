@@ -88,17 +88,8 @@ Attach files directly in the chat input via the paperclip button, drag & drop, o
 ### Option A: Install via npm (recommended)
 
 ```bash
-# Install globally
 npm install -g research-copilot
-
-# Launch
 research-copilot
-```
-
-Or run directly without installing:
-
-```bash
-npx research-copilot
 ```
 
 ### Option B: Clone from source
