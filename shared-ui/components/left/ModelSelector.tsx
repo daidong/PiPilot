@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Check, Cpu } from 'lucide-react'
+import { ChevronDown, Check, Cpu, Eye, EyeOff } from 'lucide-react'
 import { SUPPORTED_MODELS } from '../../constants'
 import type { ModelOption } from '../../types'
 
@@ -19,9 +19,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const [open, setOpen] = useState(false)
   const [anthropicStatus, setAnthropicStatus] = useState<any>(null)
   const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
-  const [anthropicCopyHint, setAnthropicCopyHint] = useState<string | null>(null)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
-  const [openAICopyHint, setOpenAICopyHint] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const api = (window as any).api
 
@@ -71,7 +69,6 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       const status = await api?.getOpenAIAuthStatus?.()
       if (!status?.hasApiKey) {
         setShowOpenAIDialog(true)
-        setOpenAICopyHint(null)
         setOpen(false)
         return
       }
@@ -81,7 +78,6 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       const status = await api?.getAnthropicAuthStatus?.()
       if (!status?.hasApiKeyFallback) {
         setShowAnthropicDialog(true)
-        setAnthropicCopyHint(null)
         setOpen(false)
         return
       }
@@ -154,99 +150,112 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
         </div>
       )}
 
-      {showOpenAIDialog && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="openai-dialog-title">
-          <div className="w-full max-w-md rounded-xl border t-border t-bg-surface shadow-2xl p-4 space-y-3">
-            <div>
-              <div id="openai-dialog-title" className="text-sm font-semibold t-text">OpenAI API Key Required</div>
-              <div className="text-xs t-text-secondary mt-1">
-                OpenAI models require <code className="px-1 rounded t-bg-surface">OPENAI_API_KEY</code>.
-              </div>
-            </div>
-            <div className="rounded-lg border t-border t-bg-base/60 p-3 space-y-2">
-              <div className="text-xs font-medium t-text">How to set it</div>
-              <ol className="text-xs t-text-secondary space-y-1 list-decimal pl-4">
-                <li>Open your environment config (for example project <code className="px-1 rounded t-bg-surface">.env</code>).</li>
-                <li>Add <code className="px-1 rounded t-bg-surface">OPENAI_API_KEY=sk-...</code>.</li>
-                <li>Restart the app, then select the OpenAI model again.</li>
-              </ol>
-              <div className="flex items-center gap-2">
-                <code className="text-[11px] px-2 py-1 rounded t-bg-surface border t-border">OPENAI_API_KEY=sk-...</code>
-                <button
-                  className="px-2 py-1 rounded text-[11px] t-bg-hover t-text-secondary"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText('OPENAI_API_KEY=sk-...')
-                      setOpenAICopyHint('Template copied')
-                    } catch {
-                      setOpenAICopyHint('Copy failed')
-                    }
-                    setTimeout(() => setOpenAICopyHint(null), 1500)
-                  }}
-                >
-                  Copy
-                </button>
-                {openAICopyHint && <span className="text-[11px] t-text-muted">{openAICopyHint}</span>}
-              </div>
-            </div>
-            <div className="flex items-center justify-end">
-              <button
-                className="px-3 py-1.5 rounded-lg text-xs t-bg-accent text-white hover:opacity-90"
-                onClick={() => setShowOpenAIDialog(false)}
-              >
-                Got It
-              </button>
-            </div>
-          </div>
-        </div>
+      {(showOpenAIDialog || showAnthropicDialog) && (
+        <ApiKeyDialog
+          provider={showOpenAIDialog ? 'OpenAI' : 'Anthropic'}
+          keyName={showOpenAIDialog ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'}
+          placeholder={showOpenAIDialog ? 'sk-...' : 'sk-ant-...'}
+          onClose={() => { setShowOpenAIDialog(false); setShowAnthropicDialog(false) }}
+          onSaved={(model) => {
+            setShowOpenAIDialog(false)
+            setShowAnthropicDialog(false)
+            // Select the model that triggered the dialog
+            onSelectModel(model)
+            refreshAnthropicStatus()
+          }}
+          pendingModel={selectedModel}
+        />
       )}
+    </div>
+  )
+}
 
-      {showAnthropicDialog && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="anthropic-dialog-title">
-          <div className="w-full max-w-md rounded-xl border t-border t-bg-surface shadow-2xl p-4 space-y-3">
-            <div>
-              <div id="anthropic-dialog-title" className="text-sm font-semibold t-text">Anthropic API Key Required</div>
-              <div className="text-xs t-text-secondary mt-1">
-                Anthropic models require <code className="px-1 rounded t-bg-surface">ANTHROPIC_API_KEY</code>.
-              </div>
-            </div>
-            <div className="rounded-lg border t-border t-bg-base/60 p-3 space-y-2">
-              <div className="text-xs font-medium t-text">How to set it</div>
-              <ol className="text-xs t-text-secondary space-y-1 list-decimal pl-4">
-                <li>Open your environment config (for example project <code className="px-1 rounded t-bg-surface">.env</code>).</li>
-                <li>Add <code className="px-1 rounded t-bg-surface">ANTHROPIC_API_KEY=sk-ant-...</code>.</li>
-                <li>Restart the app, then select the Anthropic model again.</li>
-              </ol>
-              <div className="flex items-center gap-2">
-                <code className="text-[11px] px-2 py-1 rounded t-bg-surface border t-border">ANTHROPIC_API_KEY=sk-ant-...</code>
-                <button
-                  className="px-2 py-1 rounded text-[11px] t-bg-hover t-text-secondary"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText('ANTHROPIC_API_KEY=sk-ant-...')
-                      setAnthropicCopyHint('Template copied')
-                    } catch {
-                      setAnthropicCopyHint('Copy failed')
-                    }
-                    setTimeout(() => setAnthropicCopyHint(null), 1500)
-                  }}
-                >
-                  Copy
-                </button>
-                {anthropicCopyHint && <span className="text-[11px] t-text-muted">{anthropicCopyHint}</span>}
-              </div>
-            </div>
-            <div className="flex items-center justify-end">
-              <button
-                className="px-3 py-1.5 rounded-lg text-xs t-bg-accent text-white hover:opacity-90"
-                onClick={() => setShowAnthropicDialog(false)}
-              >
-                Got It
-              </button>
-            </div>
+/** Inline dialog for entering a missing API key */
+function ApiKeyDialog({
+  provider,
+  keyName,
+  placeholder,
+  onClose,
+  onSaved,
+  pendingModel,
+}: {
+  provider: string
+  keyName: string
+  placeholder: string
+  onClose: () => void
+  onSaved: (model: string) => void
+  pendingModel: string
+}) {
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [showKey, setShowKey] = useState(false)
+  const api = (window as any).api
+
+  const handleSave = async () => {
+    const trimmed = value.trim()
+    if (!trimmed) { setError('Please enter a valid API key.'); return }
+    setSaving(true)
+    setError(null)
+    try {
+      await api.saveApiKey(keyName, trimmed)
+      onSaved(pendingModel)
+    } catch (err: any) {
+      setError(err.message || 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+      <div className="w-full max-w-md rounded-xl border t-border t-bg-surface shadow-2xl p-4 space-y-3">
+        <div>
+          <div className="text-sm font-semibold t-text">{provider} API Key Required</div>
+          <div className="text-xs t-text-secondary mt-1">
+            Enter your <code className="px-1 rounded t-bg-surface">{keyName}</code> to use {provider} models.
           </div>
         </div>
-      )}
+        <div className="relative">
+          <input
+            type={showKey ? 'text' : 'password'}
+            className="w-full text-xs px-2.5 py-2 rounded-md border t-border t-bg-base t-text font-mono pr-8
+                       focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+            placeholder={placeholder}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSave() }}
+            autoFocus
+          />
+          <button
+            type="button"
+            className="absolute right-2 top-1/2 -translate-y-1/2 t-text-muted hover:t-text"
+            onClick={() => setShowKey(!showKey)}
+            tabIndex={-1}
+          >
+            {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+        </div>
+        <p className="text-[11px] t-text-muted">
+          Key is saved to <code className="px-1 rounded t-bg-surface">~/.research-copilot/config.json</code>. No restart needed.
+        </p>
+        {error && <p className="text-xs text-red-400">{error}</p>}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            className="px-3 py-1.5 rounded-lg text-xs t-text-secondary t-bg-hover"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-3 py-1.5 rounded-lg text-xs t-bg-accent text-white hover:opacity-90 disabled:opacity-50"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? 'Saving...' : 'Save & Use'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

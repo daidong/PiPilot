@@ -59,7 +59,7 @@ const base = import.meta.env.BASE_URL;
         </a>
         <div class="flex items-center gap-3 px-5 py-3 rounded-xl bg-slate-800/80 border border-slate-700/50 font-mono text-sm text-slate-300">
           <span class="text-slate-500">$</span>
-          <span>git clone https://github.com/daidong/PiPilot.git</span>
+          <span>npx research-copilot</span>
           <button
             id="copy-btn"
             class="text-slate-500 hover:text-white transition-colors ml-1"
@@ -235,22 +235,24 @@ const base = import.meta.env.BASE_URL;
         <div class="flex gap-5">
           <div class="shrink-0 w-10 h-10 rounded-full bg-mint-600 flex items-center justify-center text-white font-bold text-sm">1</div>
           <div class="pt-1.5">
-            <h3 class="font-semibold text-white text-lg">Clone & install</h3>
+            <h3 class="font-semibold text-white text-lg">Install & launch</h3>
             <div class="mt-3 rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 overflow-x-auto">
-              <div><span class="text-slate-500">$</span> git clone https://github.com/daidong/PiPilot.git</div>
-              <div><span class="text-slate-500">$</span> cd PiPilot && npm install</div>
+              <div><span class="text-slate-500">$</span> npx research-copilot</div>
             </div>
+            <p class="mt-2 text-slate-500 text-sm">Or install globally: <code class="text-slate-400">npm i -g research-copilot</code></p>
           </div>
         </div>
 
         <div class="flex gap-5">
           <div class="shrink-0 w-10 h-10 rounded-full bg-mint-600 flex items-center justify-center text-white font-bold text-sm">2</div>
           <div class="pt-1.5">
-            <h3 class="font-semibold text-white text-lg">Set up API keys</h3>
+            <h3 class="font-semibold text-white text-lg">Enter API keys</h3>
+            <p class="mt-2 text-slate-400 text-sm leading-relaxed">On first launch, the app prompts you to enter your API keys directly in the UI. You need at least one of:</p>
             <div class="mt-3 rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 overflow-x-auto">
-              <div><span class="text-mint-400"># Add to ~/.zshrc or ~/.bashrc</span></div>
-              <div>export <span class="text-mint-300">ANTHROPIC_API_KEY</span>="sk-ant-..."</div>
-              <div>export <span class="text-mint-300">BRAVE_API_KEY</span>="BSA..."  <span class="text-slate-500"># recommended</span></div>
+              <div><span class="text-mint-300">ANTHROPIC_API_KEY</span>  <span class="text-slate-500"># Claude models</span></div>
+              <div><span class="text-mint-300">OPENAI_API_KEY</span>     <span class="text-slate-500"># GPT / o-series models</span></div>
+              <div><span class="text-mint-300">BRAVE_API_KEY</span>      <span class="text-slate-500"># web search (recommended)</span></div>
+              <div><span class="text-mint-300">OPENROUTER_API_KEY</span> <span class="text-slate-500"># AI diagrams (optional)</span></div>
             </div>
           </div>
         </div>
@@ -258,11 +260,17 @@ const base = import.meta.env.BASE_URL;
         <div class="flex gap-5">
           <div class="shrink-0 w-10 h-10 rounded-full bg-mint-600 flex items-center justify-center text-white font-bold text-sm">3</div>
           <div class="pt-1.5">
-            <h3 class="font-semibold text-white text-lg">Launch</h3>
-            <div class="mt-3 rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300">
-              <div><span class="text-slate-500">$</span> npm run dev</div>
-            </div>
+            <h3 class="font-semibold text-white text-lg">Open a project folder</h3>
+            <p class="mt-2 text-slate-400 text-sm leading-relaxed">Pick any folder as your workspace. Research Copilot stores notes, papers, and data in a <code class="text-slate-300">.research-pilot</code> directory inside it.</p>
           </div>
+        </div>
+      </div>
+
+      <!-- Alternative: git clone -->
+      <div class="mt-12 pt-8 border-t border-slate-800/60 text-center">
+        <p class="text-slate-500 text-sm">Prefer to build from source?</p>
+        <div class="mt-3 rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 inline-block">
+          <span class="text-slate-500">$</span> git clone https://github.com/daidong/PiPilot.git && cd PiPilot && npm install && npm run dev
         </div>
       </div>
     </div>
@@ -287,7 +295,7 @@ const base = import.meta.env.BASE_URL;
   <!-- Copy to clipboard -->
   <script>
     document.getElementById('copy-btn')?.addEventListener('click', () => {
-      navigator.clipboard.writeText('git clone https://github.com/daidong/PiPilot.git');
+      navigator.clipboard.writeText('npx research-copilot');
       const btn = document.getElementById('copy-btn');
       if (btn) {
         btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>';

@@ -1,9 +1,20 @@
 {
-  "name": "research-copilot-root",
+  "name": "research-copilot",
   "version": "0.1.0",
-  "private": true,
-  "description": "AI-powered research assistant desktop application",
+  "description": "AI-powered research assistant for scientists — literature search, data analysis, academic writing, and project management",
   "type": "module",
+  "bin": {
+    "research-copilot": "./bin/cli.mjs"
+  },
+  "files": [
+    "bin/",
+    "app/out/",
+    "app/build/",
+    "app/package.json",
+    "lib/skills/",
+    "README.md",
+    "LICENSE"
+  ],
   "workspaces": [
     "app",
     "lib",
@@ -13,20 +24,39 @@
   "scripts": {
     "dev": "cd app && npx electron-vite dev",
     "build": "cd app && npx electron-vite build",
-    "clean": "rm -rf app/out app/dist"
+    "clean": "rm -rf app/out app/dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "research",
+    "ai",
+    "academic",
+    "literature-search",
+    "data-analysis",
+    "electron",
+    "desktop"
+  ],
+  "author": "daidong",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daidong/PiPilot.git"
+  },
+  "homepage": "https://daidong.github.io/PiPilot/",
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.61.1",
     "@mariozechner/pi-ai": "^0.61.1",
     "@mariozechner/pi-coding-agent": "^0.61.1",
     "@sinclair/typebox": "^0.34.48",
+    "adm-zip": "^0.5.16",
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
+    "electron": "^33.3.1",
     "ignore": "^7.0.5",
-    "lucide-react": "^0.469.0",
     "minimatch": "^10.2.4",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "zustand": "^5.0.3"
+    "node-pty": "^1.1.0"
   }
 }

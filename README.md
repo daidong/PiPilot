@@ -10,7 +10,9 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electr
 
 ## API Keys Setup (READ THIS FIRST)
 
-Research Copilot requires API keys to function. Add them to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
+Research Copilot requires API keys to function. The easiest way is to **enter them directly in the app** — on first launch you'll see a setup screen. Keys are saved to `~/.research-copilot/config.json`.
+
+Alternatively, add them to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
 
 ```bash
 # ===== REQUIRED (at least one) =====
@@ -79,33 +81,51 @@ Attach files directly in the chat input via the paperclip button, drag & drop, o
 - **Node.js** >= 18
 - **npm** >= 9
 - **Python 3** (optional, for data analysis and figure generation)
-- **macOS** (Electron desktop app; Linux/Windows support is untested)
+- **macOS** recommended (Linux/Windows: use the git clone method below, untested)
 
 ## Getting Started
 
+### Option A: Install via npm (recommended)
+
 ```bash
-# Clone the repository
+# Install globally
+npm install -g research-copilot
+
+# Launch
+research-copilot
+```
+
+Or run directly without installing:
+
+```bash
+npx research-copilot
+```
+
+### Option B: Clone from source
+
+```bash
 git clone https://github.com/daidong/PiPilot.git
 cd PiPilot
-
-# Install dependencies
 npm install
-
-# Start in development mode
 npm run dev
 ```
 
-Make sure your API keys are configured (see [API Keys Setup](#api-keys-setup-read-this-first) above).
+### API Keys
+
+On first launch, the app will prompt you to enter your API keys directly in the UI. Keys are saved to `~/.research-copilot/config.json`.
+
+You can also set them as environment variables in your shell profile (`~/.zshrc`, `~/.bashrc`):
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY="sk-..."
+```
+
+See [API Keys Setup](#api-keys-setup-read-this-first) above for the full list.
 
 ### Build for Production
 
 ```bash
-# Build the Electron app
 npm run build
-
-# Package as macOS DMG
-cd app
-npm run pack
 ```
 
 ## Project Structure

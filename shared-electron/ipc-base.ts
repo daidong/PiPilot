@@ -8,9 +8,91 @@
 import { shell } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
 import { extname, join, resolve, isAbsolute } from 'path'
+import { homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { ResolvedCoordinatorAuth } from './types'
 import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './file-tree'
+
+// ─── API Key Config ────────────────────────────────────────────────────────
+
+const CONFIG_DIR = join(homedir(), '.research-copilot')
+const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
+
+const API_KEY_NAMES = [
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'BRAVE_API_KEY',
+  'OPENROUTER_API_KEY'
+] as const
+
+interface AppConfig {
+  apiKeys?: Record<string, string>
+}
+
+function readConfig(): AppConfig {
+  try {
+    if (existsSync(CONFIG_FILE)) {
+      return JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'))
+    }
+  } catch { /* ignore corrupt config */ }
+  return {}
+}
+
+function writeConfig(config: AppConfig): void {
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true })
+  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
+}
+
+/**
+ * Load API keys from ~/.research-copilot/config.json into process.env.
+ * Only sets keys that are NOT already in the environment (env takes priority).
+ */
+export function loadApiKeysFromConfig(): void {
+  const config = readConfig()
+  if (!config.apiKeys) return
+  for (const key of API_KEY_NAMES) {
+    const envVal = (process.env[key] || '').trim()
+    const configVal = (config.apiKeys[key] || '').trim()
+    if (!envVal && configVal) {
+      process.env[key] = configVal
+    }
+  }
+}
+
+/**
+ * Register IPC handlers for API key configuration.
+ */
+export function registerConfigHandlers(
+  handleRaw: (channel: string, handler: (...args: any[]) => any) => void
+) {
+  /** Returns which keys are configured (boolean map, never exposes values) */
+  handleRaw('config:get-api-key-status', () => {
+    const result: Record<string, boolean> = {}
+    for (const key of API_KEY_NAMES) {
+      result[key] = !!(process.env[key] || '').trim()
+    }
+    return result
+  })
+
+  /** Save an API key to config file AND load into current process.env */
+  handleRaw('config:save-api-key', (keyName: string, value: string) => {
+    if (!API_KEY_NAMES.includes(keyName as any)) {
+      return { success: false, error: `Unknown key: ${keyName}` }
+    }
+    const config = readConfig()
+    if (!config.apiKeys) config.apiKeys = {}
+    const trimmed = value.trim()
+    if (trimmed) {
+      config.apiKeys[keyName] = trimmed
+      process.env[keyName] = trimmed
+    } else {
+      delete config.apiKeys[keyName]
+      delete process.env[keyName]
+    }
+    writeConfig(config)
+    return { success: true }
+  })
+}
 
 // ─── Utility helpers ────────────────────────────────────────────────────────
 

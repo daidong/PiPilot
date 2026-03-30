@@ -32,6 +32,7 @@ import {
   registerUsageHandlers,
   registerAuthHandlers,
   registerFolderOpenHandler,
+  registerConfigHandlers,
 } from '../../../shared-electron/index'
 
 // ─── Simple activity formatter (replaces AgentFoundry's createActivityFormatter) ─
@@ -506,6 +507,7 @@ export function registerIpcHandlers(): void {
   })
   registerUsageHandlers(sharedHandle, getCtx, loadUsageTotals, resetUsageTotals)
   registerAuthHandlers(sharedHandle)
+  registerConfigHandlers(sharedHandle)
   registerFolderOpenHandler(sharedHandle, getCtx)
 
   // ─── App-specific handlers ──────────────────────────────────────────────

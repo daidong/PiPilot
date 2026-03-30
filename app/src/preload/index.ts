@@ -31,6 +31,10 @@ export interface ElectronAPI {
   onAnthropicAuthStatus: (cb: (status: any) => void) => () => void
   getOpenAIAuthStatus: () => Promise<{ hasApiKey: boolean }>
 
+  // API Key Config
+  getApiKeyStatus: () => Promise<Record<string, boolean>>
+  saveApiKey: (keyName: string, value: string) => Promise<{ success: boolean; error?: string }>
+
   // Entity commands
   listNotes: () => Promise<any>
   listLiterature: () => Promise<any>
@@ -167,6 +171,9 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('auth:anthropic-status', handler)
   },
   getOpenAIAuthStatus: () => ipcRenderer.invoke('auth:get-openai-status'),
+
+  getApiKeyStatus: () => ipcRenderer.invoke('config:get-api-key-status'),
+  saveApiKey: (keyName, value) => ipcRenderer.invoke('config:save-api-key', keyName, value),
 
   listNotes: () => ipcRenderer.invoke('cmd:list-notes'),
   listLiterature: () => ipcRenderer.invoke('cmd:list-literature'),

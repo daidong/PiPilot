@@ -28,5 +28,7 @@ export {
   registerPrefsHandlers,
   registerUsageHandlers,
   registerAuthHandlers,
-  registerFolderOpenHandler
+  registerFolderOpenHandler,
+  registerConfigHandlers,
+  loadApiKeysFromConfig
 } from './ipc-base'

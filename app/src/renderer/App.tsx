@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react'
-import { FolderOpen } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { FolderOpen, Settings } from 'lucide-react'
+import { ApiKeySetup } from './components/ApiKeySetup'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { EntityPreviewPanel } from './components/layout/EntityPreviewPanel'
@@ -16,7 +17,7 @@ import { useUsageStore, type UsageEvent } from './stores/usage-store'
 
 const api = (window as any).api
 
-function FolderGate() {
+function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const pickFolder = useSessionStore((s) => s.pickFolder)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
@@ -59,18 +60,29 @@ function FolderGate() {
           Open a project folder to begin. Your notes, papers, and data will live
           in a <code className="px-1 py-0.5 rounded t-bg-surface text-xs font-mono">.research-pilot</code> directory.
         </p>
-        <button
-          onClick={handlePick}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium
-                     hover:opacity-90 transition-all duration-200"
-          style={{
-            background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
-            boxShadow: '0 4px 16px var(--color-accent-2-muted)',
-          }}
-        >
-          <FolderOpen size={16} />
-          Open Project Folder
-        </button>
+        <div className="flex flex-col items-center gap-3">
+          <button
+            onClick={handlePick}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium
+                       hover:opacity-90 transition-all duration-200"
+            style={{
+              background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
+              boxShadow: '0 4px 16px var(--color-accent-2-muted)',
+            }}
+          >
+            <FolderOpen size={16} />
+            Open Project Folder
+          </button>
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="inline-flex items-center gap-1.5 text-xs t-text-secondary hover:t-text transition-colors"
+            >
+              <Settings size={13} />
+              API Keys & Settings
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -88,6 +100,20 @@ export default function App() {
   const terminalVisible = useUIStore((s) => s.terminalVisible)
   const terminalAlive = useUIStore((s) => s.terminalAlive)
   const theme = useUIStore((s) => s.theme)
+
+  // API key setup gate: check if any LLM key is configured
+  const [apiKeyChecked, setApiKeyChecked] = useState(false)
+  const [needsApiKeySetup, setNeedsApiKeySetup] = useState(false)
+  const [showApiKeySetup, setShowApiKeySetup] = useState(false)
+
+  useEffect(() => {
+    api.getApiKeyStatus().then((status: Record<string, boolean>) => {
+      const hasLlmKey = status.ANTHROPIC_API_KEY || status.OPENAI_API_KEY
+      setNeedsApiKeySetup(!hasLlmKey)
+      setShowApiKeySetup(!hasLlmKey)
+      setApiKeyChecked(true)
+    }).catch(() => setApiKeyChecked(true))
+  }, [])
 
   // Apply theme class to html element
   useEffect(() => {
@@ -270,9 +296,21 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [previewEntity, previewEditorFocused])
 
+  // Wait for API key check to complete
+  if (!apiKeyChecked) {
+    return <div className="flex h-screen w-screen t-bg-base t-text items-center justify-center">
+      <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
+    </div>
+  }
+
+  // Show API key setup if no LLM keys are configured
+  if (showApiKeySetup) {
+    return <ApiKeySetup onComplete={() => setShowApiKeySetup(false)} />
+  }
+
   // Show folder gate if no project selected
   if (!hasProject) {
-    return <FolderGate />
+    return <FolderGate onOpenSettings={() => setShowApiKeySetup(true)} />
   }
 
   return (

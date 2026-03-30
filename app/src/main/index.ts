@@ -3,8 +3,13 @@ import { existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { join, resolve } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { loadApiKeysFromConfig } from '@shared-electron/ipc-base'
 import { registerIpcHandlers, registerWindow } from './ipc'
 import { registerTerminalHandlers, destroyAllTerminals } from './terminal'
+
+// Load API keys from ~/.research-copilot/config.json (lowest priority).
+// Environment variables from shell or process take precedence.
+loadApiKeysFromConfig()
 
 // macOS apps launched from Finder don't inherit shell env vars.
 // Load them from the user's login shell so API keys etc. are available.
