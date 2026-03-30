@@ -1,6 +1,6 @@
 {
   "name": "research-copilot",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AI-powered research assistant for scientists — literature search, data analysis, academic writing, and project management",
   "type": "module",
   "bin": {

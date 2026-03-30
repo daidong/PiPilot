@@ -21,7 +21,11 @@ export function TerminalPanel() {
   const spawn = async () => {
     if (!projectPath) return
     const result = await api.terminalSpawn(projectPath)
-    if (result.success) setAlive(true)
+    if (result.success) {
+      setAlive(true)
+    } else if (result.error) {
+      xtermRef.current?.write(`\x1b[91mTerminal failed to start: ${result.error}\x1b[0m\r\n`)
+    }
   }
 
   // Initialize xterm instance once (component stays mounted while alive)

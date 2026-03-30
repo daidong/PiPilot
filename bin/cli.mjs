@@ -12,7 +12,7 @@ import { spawn } from 'child_process'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, chmodSync, readdirSync } from 'fs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -41,12 +41,30 @@ if (!existsSync(mainEntry)) {
   process.exit(1)
 }
 
+// Fix node-pty spawn-helper permissions (npm strips executable bit during pack/install)
+const ptyPrebuilds = join(__dirname, '..', 'node_modules', 'node-pty', 'prebuilds')
+if (existsSync(ptyPrebuilds)) {
+  try {
+    for (const platform of readdirSync(ptyPrebuilds)) {
+      const helper = join(ptyPrebuilds, platform, 'spawn-helper')
+      if (existsSync(helper)) chmodSync(helper, 0o755)
+    }
+  } catch { /* best-effort */ }
+}
+
 console.log('Starting Research Copilot...')
+
+// Ensure Electron's main process can resolve npm dependencies (e.g. node-pty)
+// that live in the package root's node_modules, not inside app/.
+const pkgNodeModules = join(__dirname, '..', 'node_modules')
+const nodePath = process.env.NODE_PATH
+  ? `${pkgNodeModules}:${process.env.NODE_PATH}`
+  : pkgNodeModules
 
 // Launch Electron with the app directory
 const child = spawn(electronPath, [appDir], {
   stdio: ['inherit', 'inherit', 'inherit'],
-  env: { ...process.env },
+  env: { ...process.env, NODE_PATH: nodePath },
 })
 
 child.on('close', (code) => {
