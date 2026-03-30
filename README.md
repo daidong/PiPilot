@@ -41,6 +41,28 @@ Then reload your shell: `source ~/.zshrc`
 
 ---
 
+## How is Research Copilot different from Claude Cowork?
+
+[Claude Cowork](https://www.anthropic.com/product/claude-cowork) is Anthropic's general-purpose autonomous agent for knowledge workers — it handles file organization, document drafting, and data extraction across everyday desktop tasks.
+
+Research Copilot is a **vertical tool built specifically for academic research**. The two differ in depth, not surface:
+
+| | Claude Cowork | Research Copilot |
+|---|---|---|
+| **Scope** | Horizontal — any knowledge work | Vertical — academic research lifecycle |
+| **Literature** | No academic search | Multi-source search (Semantic Scholar, arXiv, OpenAlex, DBLP) with relevance scoring, coverage tracking, and citation tracing |
+| **Paper management** | Processes files you already have | Structured artifact system with DOI, bibtex, citeKey, citation counts, and relevance metadata |
+| **Academic writing** | Generic document drafting | Venue-specific templates (NeurIPS, ICML, journals), IMRAD structure, LaTeX, citation verification (never hallucinated) |
+| **Grant writing** | None | Agency-specific guidance (NSF, NIH, DOE, DARPA, NSTC) with compliance checklists |
+| **Data analysis** | Extracts data from documents | LLM-generated Python scripts with statistical modeling, matplotlib/seaborn visualization, and output manifests |
+| **Domain skills** | General capabilities | 13 pluggable research skills (scientific writing, visualization, scholar evaluation, etc.) — extensible via Markdown |
+| **Knowledge persistence** | Not specified | Artifact store, session summaries, cross-session memory, @-mention references |
+| **Openness** | Closed-source commercial product | Open source (MIT) — fully customizable |
+
+**In short**: Claude Cowork is like a smart office assistant. Research Copilot is like a lab partner who knows how to search literature, run stats, write papers, and apply for grants.
+
+---
+
 ## Features
 
 ### AI Chat with Coding & Writing Tools
