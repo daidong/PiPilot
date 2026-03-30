@@ -4,7 +4,6 @@
  * CLI entry point for Research Copilot.
  *
  * Usage:
- *   npx research-copilot            # Run directly
  *   npm i -g research-copilot       # Install globally
  *   research-copilot                # Then run anywhere
  */
@@ -19,15 +18,17 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const require = createRequire(import.meta.url)
 
-// Resolve the Electron binary from this package's node_modules
+// Resolve the Electron binary
 let electronPath
 try {
-  electronPath = require('electron')
+  electronPath = String(require('electron'))
 } catch {
-  console.error(
-    'Error: Electron is not installed.\n' +
-    'Run: npm install\n'
-  )
+  console.error('Error: Electron is not installed. Run: npm install')
+  process.exit(1)
+}
+
+if (!existsSync(electronPath)) {
+  console.error(`Error: Electron binary not found at ${electronPath}`)
   process.exit(1)
 }
 
@@ -36,21 +37,27 @@ const appDir = join(__dirname, '..', 'app')
 const mainEntry = join(appDir, 'out', 'main', 'index.mjs')
 
 if (!existsSync(mainEntry)) {
-  console.error(
-    'Error: App has not been built yet.\n' +
-    'Run: npm run build\n'
-  )
+  console.error(`Error: App not built. Expected: ${mainEntry}`)
   process.exit(1)
 }
 
+console.log('Starting Research Copilot...')
+
 // Launch Electron with the app directory
-const child = spawn(String(electronPath), [appDir], {
-  stdio: 'inherit',
+const child = spawn(electronPath, [appDir], {
+  stdio: ['inherit', 'inherit', 'inherit'],
   env: { ...process.env },
 })
 
-child.on('close', (code) => process.exit(code ?? 0))
+child.on('close', (code) => {
+  process.exit(code ?? 0)
+})
+
 child.on('error', (err) => {
   console.error('Failed to start Electron:', err.message)
   process.exit(1)
 })
+
+// Forward signals to Electron
+process.on('SIGINT', () => child.kill('SIGINT'))
+process.on('SIGTERM', () => child.kill('SIGTERM'))
