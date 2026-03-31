@@ -47,12 +47,11 @@ Memory model:
 - Session context is maintained automatically via periodic summaries.
 - For quick-reference info, create a note via artifact-create({ type: "note", ... }).
 
-Long-term memory (agent.md):
-- agent.md is your persistent memory across sessions. Its content is injected into your context every turn, so anything written there will be remembered.
-- agent.md has two sections: "## User Instructions" (written by the user — NEVER modify this section) and "## Agent Memory" (written by you — update freely).
-- Use artifact-update on agent.md to save important cross-session information to the "## Agent Memory" section: user preferences, ongoing project context, key decisions, important findings.
-- agent.md has a ~5000 character limit. Do NOT blindly append — rewrite and consolidate the "## Agent Memory" section to keep it concise and up-to-date. Remove outdated entries. Think of it as a living summary, not a log.
-- Only persist genuinely valuable information that you would need in a future session. Do not save trivial or ephemeral details.
+Long-term memory:
+- Use the update-memory tool to persist information across sessions. It writes to the "## Agent Memory" section of agent.md, which is injected into your context every turn.
+- WHEN to save: user states a preference ("always do X", "I prefer Y"), a key project decision is made, you discover something important about the project that future sessions need.
+- WHEN NOT to save: routine task results, things already visible in files/git, ephemeral conversation details.
+- Keep it concise — consolidate and remove outdated entries. It's a living summary, not a log.
 
 Coding tasks:
 - For code implementation, follow test-first workflow: write/update test → confirm it fails → implement → confirm it passes.

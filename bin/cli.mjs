@@ -62,8 +62,11 @@ const nodePath = process.env.NODE_PATH
   : pkgNodeModules
 
 // Launch Electron with the app directory
+// Suppress Electron's debug output (GPU warnings, CSP notices, etc.) in production.
+// Set ELECTRON_ENABLE_LOGGING=1 to see them.
+const quiet = !process.env.ELECTRON_ENABLE_LOGGING
 const child = spawn(electronPath, [appDir], {
-  stdio: ['inherit', 'inherit', 'inherit'],
+  stdio: quiet ? ['ignore', 'ignore', 'ignore'] : 'inherit',
   env: { ...process.env, NODE_PATH: nodePath },
 })
 
