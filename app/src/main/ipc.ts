@@ -268,7 +268,7 @@ function initializeProject(path: string): void {
   // Ensure agent.md note exists (pinned, always-present)
   ensureAgentMd(path)
   const migration = migrateLegacyArtifacts(path)
-  if (migration.updatedFiles > 0) {
+  if (migration.updatedFiles > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
     console.log(`[ResearchPilot] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
   }
 
@@ -314,7 +314,7 @@ async function ensureCoordinator(
       reasoningEffort: state.currentReasoningEffort,
       projectPath: state.projectPath,
       sessionId: state.sessionId,
-      debug: true,
+      debug: !!process.env.RESEARCH_COPILOT_DEBUG,
       onStream: (chunk: string) => {
         state.realtimeBuffer.appendChunk(chunk)
         safeSend(win, 'agent:stream-chunk', chunk)
@@ -638,7 +638,7 @@ export function registerIpcHandlers(): void {
       sessionId: state.sessionId,
       projectPath: state.projectPath,
       paperIds,
-      debug: true,
+      debug: !!process.env.RESEARCH_COPILOT_DEBUG,
       onProgress: (event) => {
         safeSend(win, 'enrich:progress', event)
       }
@@ -648,16 +648,10 @@ export function registerIpcHandlers(): void {
 
   // Mentions -- signature: getCandidates(projectPath, typeFilter?, query?)
   handleWindow('mention:candidates', ({ state }, query: string, type?: string) => {
-    if (!state.projectPath) {
-      console.warn('[mention:candidates] No projectPath set')
-      return []
-    }
+    if (!state.projectPath) return []
     try {
-      const result = getCandidates(state.projectPath, type as any, query)
-      console.log(`[mention:candidates] query="${query}" type=${type} → ${result.length} candidates (project: ${state.projectPath})`)
-      return result
-    } catch (err) {
-      console.error('[mention:candidates] Error:', err)
+      return getCandidates(state.projectPath, type as any, query)
+    } catch {
       return []
     }
   })
