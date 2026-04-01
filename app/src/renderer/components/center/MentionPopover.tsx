@@ -39,6 +39,27 @@ function formatMention(c: MentionCandidate): string {
   return needsQuotes ? `@${c.type}:"${c.value}"` : `@${c.type}:${c.value}`
 }
 
+/**
+ * For long paths, truncate the leading directories but preserve the filename.
+ * Example: "src/lib/agents/prompts/very-long-path/coordinator.ts"
+ *       → "…/prompts/very-long-path/coordinator.ts"
+ */
+function truncatePath(path: string, maxLen = 60): { dir: string; file: string } {
+  const lastSlash = path.lastIndexOf('/')
+  if (lastSlash === -1) return { dir: '', file: path }
+
+  const file = path.slice(lastSlash + 1)
+  const dir = path.slice(0, lastSlash)
+
+  if (path.length <= maxLen) return { dir: dir + '/', file }
+
+  // Budget for directory portion: total - filename - ellipsis
+  const budget = maxLen - file.length - 2 // 2 for "…/"
+  if (budget <= 0) return { dir: '…/', file }
+
+  return { dir: '…' + dir.slice(dir.length - budget) + '/', file }
+}
+
 export function MentionPopover({ query, onSelect, onClose }: Props) {
   const [candidates, setCandidates] = useState<MentionCandidate[]>([])
   const [selectedIdx, setSelectedIdx] = useState(0)
@@ -120,7 +141,7 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
 
   return (
     <div
-      className="absolute z-50 w-96 max-h-64 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
+      className="absolute z-50 w-[32rem] max-h-80 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
       style={{ bottom: '100%', left: 48, marginBottom: 8 }}
     >
       <div className="px-3 py-1.5 border-b t-border flex items-center gap-2 text-xs t-text-secondary">
@@ -160,10 +181,21 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
                   className={`flex items-center gap-1.5 w-full px-3 py-1 text-xs text-left transition-colors ${
                     idx === selectedIdx ? 't-bg-elevated t-text' : 't-text-secondary t-bg-hover'
                   }`}
+                  title={c.label}
                 >
-                  <span className="truncate flex-1">{c.label}</span>
+                  {c.type === 'file' ? (() => {
+                    const { dir, file } = truncatePath(c.label)
+                    return (
+                      <span className="truncate flex-1 min-w-0">
+                        {dir && <span className="t-text-muted">{dir}</span>}
+                        <span className="font-medium">{file}</span>
+                      </span>
+                    )
+                  })() : (
+                    <span className="truncate flex-1 min-w-0">{c.label}</span>
+                  )}
                   {c.detail && (
-                    <span className="text-[10px] t-text-muted truncate max-w-[100px]">{c.detail}</span>
+                    <span className="text-[10px] t-text-muted shrink-0 ml-2">{c.detail}</span>
                   )}
                 </button>
               )
