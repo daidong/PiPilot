@@ -457,7 +457,7 @@ export function ChatInput() {
     const cursor = e.target.selectionStart
     const before = val.slice(0, cursor)
 
-    const mentionMatch = before.match(/@([\w./-]*)$/)
+    const mentionMatch = before.match(/@([\p{L}\p{N}\p{M}_\-./()\[\]~:]*)$/u)
     if (mentionMatch) {
       setShowMention(true)
       setMentionQuery(mentionMatch[1])
@@ -479,7 +479,7 @@ export function ChatInput() {
     const cursor = textareaRef.current?.selectionStart ?? text.length
     const before = text.slice(0, cursor)
     const after = text.slice(cursor)
-    const replaced = before.replace(/@[\w./-]*$/, value + ' ')
+    const replaced = before.replace(/@[\p{L}\p{N}\p{M}_\-./()\[\]~:]*$/u, value + ' ')
     setText(replaced + after)
     setShowMention(false)
     textareaRef.current?.focus()

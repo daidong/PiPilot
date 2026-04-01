@@ -2,11 +2,14 @@
  * Mention Candidates
  *
  * Builds autocomplete candidates from research entities and files on disk.
+ * Uses a cached file index (git ls-files) and substring filtering.
  */
 
-import { existsSync, readdirSync, statSync } from 'fs'
+import { statSync } from 'fs'
 import { join } from 'path'
-import { listNotes, listLiterature, listData } from '../commands/index.js'
+import { getFileList } from './file-index.js'
+import { getEntityCache } from './entity-index.js'
+import { fuzzyMatch } from './fuzzy-match.js'
 import type { MentionType } from './parser.js'
 
 export interface MentionCandidate {
@@ -19,65 +22,24 @@ export interface MentionCandidate {
   detail?: string
 }
 
-// Directories to skip during recursive file walk
-const SKIP_DIRS = new Set([
-  'node_modules', '__pycache__', '.git', '.research-pilot', '.agentfoundry',
-  'dist', 'out', '.next', '.venv', 'venv'
-])
-const MAX_FILE_CANDIDATES = 500
-const MAX_DEPTH = 8
-
-/**
- * Recursively walk directories and collect file candidates.
- * Uses relative POSIX paths as values for @file: insertion.
- */
-function walkFiles(
-  root: string,
-  rel: string,
-  depth: number,
-  out: MentionCandidate[]
-): void {
-  if (depth > MAX_DEPTH || out.length >= MAX_FILE_CANDIDATES) return
-  const dir = rel ? join(root, rel) : root
-  let entries: string[]
-  try { entries = readdirSync(dir) } catch { return }
-
-  for (const name of entries) {
-    if (name.startsWith('.')) continue
-    if (out.length >= MAX_FILE_CANDIDATES) return
-    const childRel = rel ? `${rel}/${name}` : name
-    const full = join(dir, name)
-    let stat
-    try { stat = statSync(full) } catch { continue }
-
-    if (stat.isDirectory()) {
-      if (SKIP_DIRS.has(name)) continue
-      walkFiles(root, childRel, depth + 1, out)
-    } else {
-      out.push({
-        type: 'file',
-        value: childRel,
-        label: childRel,
-        detail: `${(stat.size / 1024).toFixed(1)}KB`
-      })
-    }
-  }
-}
+const MAX_EMPTY_QUERY_FILES = 30
 
 /**
  * Get all autocomplete candidates for a given project.
  * Optionally filter by type prefix if the user already typed @note: etc.
  */
-export function getCandidates(
+export async function getCandidates(
   projectPath: string,
   typeFilter?: MentionType,
   query?: string
-): MentionCandidate[] {
+): Promise<MentionCandidate[]> {
   const candidates: MentionCandidate[] = []
   const q = query?.toLowerCase() ?? ''
 
+  const entities = getEntityCache(projectPath)
+
   if (!typeFilter || typeFilter === 'note') {
-    for (const n of listNotes(projectPath)) {
+    for (const n of entities.notes) {
       candidates.push({
         type: 'note',
         value: n.id.slice(0, 8),
@@ -88,7 +50,7 @@ export function getCandidates(
   }
 
   if (!typeFilter || typeFilter === 'paper') {
-    for (const l of listLiterature(projectPath)) {
+    for (const l of entities.papers) {
       candidates.push({
         type: 'paper',
         value: l.citeKey,
@@ -99,7 +61,7 @@ export function getCandidates(
   }
 
   if (!typeFilter || typeFilter === 'data') {
-    for (const d of listData(projectPath)) {
+    for (const d of entities.data) {
       candidates.push({
         type: 'data',
         value: d.id.slice(0, 8),
@@ -110,24 +72,30 @@ export function getCandidates(
   }
 
   if (!typeFilter || typeFilter === 'file') {
-    if (existsSync(projectPath)) {
-      walkFiles(projectPath, '', 0, candidates)
+    const files = await getFileList(projectPath)
+    for (const rel of files) {
+      let detail: string | undefined
+      try {
+        const stat = statSync(join(projectPath, rel))
+        detail = `${(stat.size / 1024).toFixed(1)}KB`
+      } catch { /* skip stat errors */ }
+      candidates.push({ type: 'file', value: rel, label: rel, detail })
     }
   }
 
   // URL type has no candidates (user types it directly)
 
   if (q) {
-    return candidates.filter(c =>
-      c.label.toLowerCase().includes(q) ||
-      c.value.toLowerCase().includes(q) ||
-      c.detail?.toLowerCase().includes(q)
-    )
+    return fuzzyMatch(
+      candidates,
+      q,
+      c => `${c.label} ${c.value} ${c.detail ?? ''}`,
+      50
+    ).map(r => r.item)
   }
 
   // For empty query, cap file results to avoid overwhelming the list.
   // Sort files by path depth (shallow first) so top-level files appear first.
-  const MAX_EMPTY_QUERY_FILES = 30
   const fileCount = candidates.filter(c => c.type === 'file').length
   if (fileCount > MAX_EMPTY_QUERY_FILES) {
     const nonFiles = candidates.filter(c => c.type !== 'file')

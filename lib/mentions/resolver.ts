@@ -106,6 +106,10 @@ const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.pptx', '.doc', 
 
 function resolveFile(ref: MentionRef, projectPath: string): ResolvedMention {
   const filePath = resolve(projectPath, ref.key)
+  const normalizedProject = resolve(projectPath)
+  if (!filePath.startsWith(normalizedProject + '/') && filePath !== normalizedProject) {
+    return { ref, label: `file: ${ref.key}`, content: '', error: `Path outside workspace: ${ref.key}` }
+  }
   if (!existsSync(filePath)) {
     return { ref, label: `file: ${ref.key}`, content: '', error: `File not found: ${ref.key}` }
   }

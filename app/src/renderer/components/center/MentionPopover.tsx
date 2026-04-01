@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useRef, useState, useMemo } from 'react'
 import { StickyNote, BookOpen, Database, FileText, AtSign } from 'lucide-react'
 
 const api = (window as any).api
@@ -62,23 +62,30 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
     return grouped.flatMap((g) => g.items)
   }, [grouped])
 
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+
   useEffect(() => {
     let stale = false
     setLoading(true)
-    console.log(`[MentionPopover] fetching candidates for query="${query}"`)
-    api.getCandidates(query).then((result: MentionCandidate[]) => {
-      if (stale) return
-      console.log(`[MentionPopover] got ${result?.length ?? 0} candidates for query="${query}"`)
-      setCandidates(result || [])
-      setSelectedIdx(0)
-      setLoading(false)
-    }).catch((err: any) => {
-      if (stale) return
-      console.error('[MentionPopover] getCandidates error:', err)
-      setCandidates([])
-      setLoading(false)
-    })
-    return () => { stale = true }
+    clearTimeout(debounceRef.current)
+
+    debounceRef.current = setTimeout(() => {
+      api.getCandidates(query).then((result: MentionCandidate[]) => {
+        if (stale) return
+        setCandidates(result || [])
+        setSelectedIdx(0)
+        setLoading(false)
+      }).catch(() => {
+        if (stale) return
+        setCandidates([])
+        setLoading(false)
+      })
+    }, 50)
+
+    return () => {
+      stale = true
+      clearTimeout(debounceRef.current)
+    }
   }, [query])
 
   useEffect(() => {

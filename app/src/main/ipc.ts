@@ -10,7 +10,7 @@ import {
   sessionSummaryGet,
   enrichPaperArtifacts
 } from '../../../lib/commands/index'
-import { parseMentions, resolveMentions, getCandidates } from '../../../lib/mentions/index'
+import { parseMentions, resolveMentions, getCandidates, invalidateEntityCache } from '../../../lib/mentions/index'
 import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readEnabledSkills, setBuiltinSkillsRoot } from '../../../lib/skills/loader'
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '../../../lib/types'
@@ -377,19 +377,22 @@ async function ensureCoordinator(
           }
         }
 
-        // Notify UI to refresh entity lists when artifacts are created.
-        if (tool === 'artifact-create' && result && typeof result === 'object' && 'success' in result) {
+        // Notify UI to refresh entity lists when artifacts are created/updated.
+        if ((tool === 'artifact-create' || tool === 'artifact-update') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success) {
-            safeSend(win, 'agent:entity-created', {
-              type: r.data?.type || 'artifact',
-              id: r.data?.id,
-              title: r.data?.title
-            })
-            // Also track the artifact's source file in Working Folder
-            if (r.data?.filePath) {
-              const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
-              safeSend(win, 'agent:file-created', absPath)
+            invalidateEntityCache()
+            if (tool === 'artifact-create') {
+              safeSend(win, 'agent:entity-created', {
+                type: r.data?.type || 'artifact',
+                id: r.data?.id,
+                title: r.data?.title
+              })
+              // Also track the artifact's source file in Working Folder
+              if (r.data?.filePath) {
+                const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
+                safeSend(win, 'agent:file-created', absPath)
+              }
             }
           }
         }
@@ -650,10 +653,10 @@ export function registerIpcHandlers(): void {
 
 
   // Mentions -- signature: getCandidates(projectPath, typeFilter?, query?)
-  handleWindow('mention:candidates', ({ state }, query: string, type?: string) => {
+  handleWindow('mention:candidates', async ({ state }, query: string, type?: string) => {
     if (!state.projectPath) return []
     try {
-      return getCandidates(state.projectPath, type as any, query)
+      return await getCandidates(state.projectPath, type as any, query)
     } catch {
       return []
     }
