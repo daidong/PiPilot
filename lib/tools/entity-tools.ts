@@ -7,10 +7,9 @@
 
 import { existsSync } from 'fs'
 import { isAbsolute, resolve } from 'path'
-import { type ArtifactType, type NoteArtifact, type CLIContext, AGENT_MD_ID } from '../types.js'
+import { type ArtifactType, type CLIContext } from '../types.js'
 import {
   createArtifact,
-  findArtifactById,
   searchArtifacts,
   updateArtifact,
   type CreateArtifactInput
@@ -299,62 +298,6 @@ export function createArtifactSearchTool(projectPath: string): ResearchTool {
   }
 }
 
-export function createUpdateMemoryTool(projectPath: string): ResearchTool {
-  return {
-    name: 'update-memory',
-    description:
-      'Write to the "## Agent Memory" section of agent.md — your persistent memory across sessions. ' +
-      'Use this to save: user preferences, project context, key decisions, important findings. ' +
-      'The content you provide REPLACES the entire Agent Memory section (User Instructions section is preserved automatically). ' +
-      'Keep it concise (<5000 chars total). Consolidate and remove outdated entries rather than appending.',
-    parameters: {
-      type: 'object',
-      properties: {
-        memory: {
-          type: 'string',
-          description: 'The full content for the "## Agent Memory" section. Markdown format.'
-        }
-      },
-      required: ['memory']
-    },
-    execute: async (input) => {
-      const args = input as Record<string, unknown>
-      const memory = String(args.memory || '').trim()
-      if (!memory) return toolError('MISSING_PARAMETER', 'memory content is required.', {
-        suggestions: ['Provide the content to save in the Agent Memory section.']
-      })
-
-      // Read current agent.md to preserve User Instructions
-      const record = findArtifactById(projectPath, AGENT_MD_ID)
-      const currentContent = record?.artifact?.type === 'note'
-        ? (record.artifact as NoteArtifact).content || ''
-        : ''
-
-      // Extract User Instructions section (everything before ## Agent Memory)
-      const agentMemoryMarker = '## Agent Memory'
-      const markerIdx = currentContent.indexOf(agentMemoryMarker)
-      const userInstructions = markerIdx >= 0
-        ? currentContent.slice(0, markerIdx).trimEnd()
-        : currentContent.split('\n').filter(l => !l.startsWith('## Agent Memory')).join('\n').trimEnd()
-
-      // Rebuild content: User Instructions + Agent Memory
-      const newContent = `${userInstructions}\n\n${agentMemoryMarker}\n\n${memory}\n`
-
-      const updated = updateArtifact(projectPath, AGENT_MD_ID, { content: newContent })
-      if (!updated) {
-        return toolError('UPDATE_FAILED', 'Failed to update agent.md.', {
-          suggestions: ['agent.md may not exist. Try opening a project folder first.']
-        })
-      }
-
-      return {
-        success: true,
-        data: { message: 'Agent memory updated.', charCount: newContent.length }
-      }
-    }
-  }
-}
-
 export function createResearchMemoryTools(params: {
   sessionId: string
   projectPath: string
@@ -362,7 +305,6 @@ export function createResearchMemoryTools(params: {
   return [
     createArtifactCreateTool(params.sessionId, params.projectPath),
     createArtifactUpdateTool(params.projectPath),
-    createArtifactSearchTool(params.projectPath),
-    createUpdateMemoryTool(params.projectPath)
+    createArtifactSearchTool(params.projectPath)
   ]
 }

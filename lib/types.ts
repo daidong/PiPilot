@@ -40,6 +40,9 @@ export const PATHS = {
   explainDir: '.research-pilot/memory-v2/explain',
   sessionSummaries: '.research-pilot/memory-v2/session-summaries',
 
+  // Structured long-term memory (auto-memory)
+  memory: '.research-pilot/memory',
+
   // Skills
   skills: '.research-pilot/skills',
   skillsConfig: '.research-pilot/skills-config.json'

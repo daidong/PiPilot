@@ -15,6 +15,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { ResearchToolContext } from './types.js'
 import { toAgentResult, toolError } from './tool-utils.js'
 import { type ResearchTool, createResearchMemoryTools } from './entity-tools.js'
+import { createMemoryTools } from '../memory/memory-tools.js'
 import { createWebSearchTool, createWebFetchTool } from './web-tools.js'
 import { createLiteratureSearchTool } from './literature-search.js'
 import { createConvertDocumentTool } from './convert-document.js'
@@ -102,12 +103,18 @@ export function createResearchTools(ctx: ResearchToolContext): AgentTool[] {
   tools.push(createConvertDocumentTool(ctx))
   tools.push(createDataAnalyzeTool(ctx))
 
-  // Artifact/memory tools (ResearchTool -> AgentTool via wrapper)
-  const memoryTools = createResearchMemoryTools({
+  // Artifact tools (ResearchTool -> AgentTool via wrapper)
+  const artifactTools = createResearchMemoryTools({
     sessionId: ctx.sessionId,
     projectPath: ctx.projectPath
   })
-  for (const tool of memoryTools) {
+  for (const tool of artifactTools) {
+    tools.push(wrapResearchTool(tool))
+  }
+
+  // Structured memory tools (save-memory, delete-memory)
+  const structuredMemoryTools = createMemoryTools(ctx.projectPath)
+  for (const tool of structuredMemoryTools) {
     tools.push(wrapResearchTool(tool))
   }
 

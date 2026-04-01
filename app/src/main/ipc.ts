@@ -15,6 +15,7 @@ import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readE
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
+import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
@@ -242,7 +243,8 @@ function initializeProject(path: string): void {
     PATHS.memoryRoot,
     PATHS.explainDir,
     PATHS.sessionSummaries,
-    PATHS.skills
+    PATHS.skills,
+    PATHS.memory
   ]
 
   for (const dir of dirs) {
@@ -267,6 +269,7 @@ function initializeProject(path: string): void {
 
   // Ensure agent.md note exists (pinned, always-present)
   ensureAgentMd(path)
+  migrateAgentMemoryToFile(path)  // one-time: convert free-text Agent Memory to indexed files
   const migration = migrateLegacyArtifacts(path)
   if (migration.updatedFiles > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
     console.log(`[ResearchPilot] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)

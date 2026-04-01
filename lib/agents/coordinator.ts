@@ -21,6 +21,7 @@ import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
+import { maybeExtractMemories } from '../memory/extractor.js'
 import { createLoadSkillTool } from '../tools/skill-tools.js'
 import { loadAllSkills, readEnabledSkills, resolveSkillDependencies, buildSkillsCatalogPrompt, buildSkillSummary, type SkillEntry } from '../skills/loader.js'
 import { loadPrompt } from './prompts/index.js'
@@ -741,6 +742,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
         // Smart summary trigger
         void maybeGenerateSummary()
+
+        // Background memory extraction (gated by RESEARCH_COPILOT_AUTO_EXTRACT=1)
+        void maybeExtractMemories(
+          { projectPath, model: piModel!, apiKey, systemPrompt: enrichedSystem, debug },
+          agent.state.messages,
+          turnCount
+        )
 
         if (debug) {
           console.log(`[Chat] Result: success=true, hasOutput=${!!responseText}, turn=${turnCount}`)

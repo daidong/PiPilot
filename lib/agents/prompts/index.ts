@@ -47,11 +47,20 @@ Memory model:
 - Session context is maintained automatically via periodic summaries.
 - For quick-reference info, create a note via artifact-create({ type: "note", ... }).
 
-Long-term memory:
-- Use the update-memory tool to persist information across sessions. It writes to the "## Agent Memory" section of agent.md, which is injected into your context every turn.
-- WHEN to save: user states a preference ("always do X", "I prefer Y"), a key project decision is made, you discover something important about the project that future sessions need.
-- WHEN NOT to save: routine task results, things already visible in files/git, ephemeral conversation details.
-- Keep it concise — consolidate and remove outdated entries. It's a living summary, not a log.
+Long-term memory (auto-memory):
+- Your agent.md "## Agent Memory" section shows an index of saved memories. It is injected into your context every turn, so you always see what is remembered.
+- Use save-memory to persist information across sessions. Each memory becomes a file in .research-pilot/memory/ with one of four types:
+  * user — who the user is: role, expertise, preferences, communication style
+  * feedback — corrections to your behavior: "don't do X", "when I say Y I mean Z"
+  * project — key decisions, deadlines, collaborators, research directions
+  * reference — pointers to external resources, reusable facts, definitions
+- Use delete-memory to remove outdated entries by name.
+- WHEN to save: user explicitly states a preference, corrects your behavior, a non-obvious project decision is made, or user points to an external resource. Most turns do NOT warrant saving a memory — only save when you learn something genuinely new that a future session would need.
+- WHEN NOT to save: routine task results, things already in workspace files or git, ephemeral conversation details, information derivable from the codebase, anything already captured in an existing memory.
+- Before saving, check agent.md index — if a similar memory exists, update it instead of creating a duplicate.
+- Keep each memory atomic (one concept) and concise.
+- Note: save-memory is for cross-session meta-information (preferences, context). Use artifact-create for work products (notes, analysis results, review memos).
+- You can read full memory files with the read tool at .research-pilot/memory/<filename>.
 
 Coding tasks:
 - For code implementation, follow test-first workflow: write/update test → confirm it fails → implement → confirm it passes.
