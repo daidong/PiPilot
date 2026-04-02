@@ -667,24 +667,26 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           console.log(`[Chat] Sending message to agent (${mentions?.filter(m => !m.error).length ?? 0} mentions, summary=${!!latestSummary})...`)
         }
 
-        // Build the enriched system prompt with context
+        // Build the enriched system prompt with context.
+        // Only agent.md is injected here (changes rarely — only on user edit).
+        // Skill summaries are injected into the user message instead, to keep
+        // the system prompt stable across turns for better prompt cache hits
+        // on all providers (Anthropic explicit cache, OpenAI APC, Google).
         let enrichedSystem = fullSystemPrompt
         if (agentMdContent) {
           enrichedSystem = `${enrichedSystem}\n\n## User Instructions (agent.md)\n\n${agentMdContent}`
         }
-        if (skillSummariesPrompt) {
-          enrichedSystem = `${enrichedSystem}\n\n${skillSummariesPrompt}`
-        }
         agent.setSystemPrompt(enrichedSystem)
 
-        // Build the user message with injected context
-        let userMessage = message
-        if (mentionContext || summaryContext) {
-          const contextParts: string[] = []
-          if (summaryContext) contextParts.push(summaryContext)
-          if (mentionContext) contextParts.push(mentionContext)
-          userMessage = `${contextParts.join('\n\n')}\n\n---\n\n${message}`
-        }
+        // Build the user message with injected context.
+        // Order: session summary → skill summaries → mentions → user message
+        const contextParts: string[] = []
+        if (summaryContext) contextParts.push(summaryContext)
+        if (skillSummariesPrompt) contextParts.push(skillSummariesPrompt)
+        if (mentionContext) contextParts.push(mentionContext)
+        let userMessage = contextParts.length > 0
+          ? `${contextParts.join('\n\n')}\n\n---\n\n${message}`
+          : message
 
         // Count tool calls for this turn
         let perTurnToolCallCount = 0

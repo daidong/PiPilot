@@ -11,6 +11,12 @@ import { registerTerminalHandlers, destroyAllTerminals } from './terminal'
 // Environment variables from shell or process take precedence.
 loadApiKeysFromConfig()
 
+// Enable long-lived prompt cache (1h TTL) for Anthropic API.
+// Other providers (OpenAI, Google) use automatic prefix caching and ignore this.
+if (!process.env.PI_CACHE_RETENTION) {
+  process.env.PI_CACHE_RETENTION = 'long'
+}
+
 // macOS apps launched from Finder don't inherit shell env vars.
 // Load them from the user's login shell so API keys etc. are available.
 if (process.platform === 'darwin' && !is.dev) {
