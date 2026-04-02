@@ -16,6 +16,7 @@ export interface UsageEvent {
   promptTokens: number
   completionTokens: number
   cachedTokens: number
+  cacheWriteTokens?: number
   cost: number
   rawCost?: number
   billableCost?: number
@@ -41,7 +42,9 @@ interface PersistedTotals {
   totals: {
     tokens: number
     promptTokens: number
+    completionTokens?: number
     cachedTokens: number
+    cacheWriteTokens?: number
     cost: number
     calls: number
   }
@@ -49,6 +52,10 @@ interface PersistedTotals {
 
 interface UsageState {
   // Current run (resets when new run starts)
+  runPromptTokens: number
+  runCompletionTokens: number
+  runCachedTokens: number
+  runCacheWriteTokens: number
   runTokens: number
   runCost: number
   runCacheHitRate: number
@@ -62,7 +69,9 @@ interface UsageState {
   // All-time totals (persisted by framework)
   allTimeTokens: number
   allTimePromptTokens: number
+  allTimeCompletionTokens: number
   allTimeCachedTokens: number
+  allTimeCacheWriteTokens: number
   allTimeCost: number
   allTimeBillableCost: number
   allTimeCalls: number
@@ -92,6 +101,10 @@ async function loadFromFramework(): Promise<PersistedTotals | null> {
 export const useUsageStore = create<UsageState>((set, get) => {
   return {
     // Current run
+    runPromptTokens: 0,
+    runCompletionTokens: 0,
+    runCachedTokens: 0,
+    runCacheWriteTokens: 0,
     runTokens: 0,
     runCost: 0,
     runCacheHitRate: 0,
@@ -105,34 +118,50 @@ export const useUsageStore = create<UsageState>((set, get) => {
     // All-time totals (from framework persistence)
     allTimeTokens: 0,
     allTimePromptTokens: 0,
+    allTimeCompletionTokens: 0,
     allTimeCachedTokens: 0,
+    allTimeCacheWriteTokens: 0,
     allTimeCost: 0,
     allTimeBillableCost: 0,
     allTimeCalls: 0,
     billingSource: 'none',
 
     recordCall: (event: UsageEvent) => set((state) => {
-      const newTokens = event.promptTokens + event.completionTokens
+      // Total tokens this call: prompt + completion + cached (all processed by LLM)
+      const callTokens = event.promptTokens + event.completionTokens + event.cachedTokens
+      const cacheWrite = event.cacheWriteTokens ?? 0
       const billableCost = event.billableCost ?? event.cost
-      const newState = {
-        runTokens: state.runTokens + newTokens,
+
+      // Run-level weighted average cache hit rate
+      const newRunPrompt = state.runPromptTokens + event.promptTokens
+      const newRunCached = state.runCachedTokens + event.cachedTokens
+      const totalRunInput = newRunPrompt + newRunCached
+      const runCacheHitRate = totalRunInput > 0 ? newRunCached / totalRunInput : 0
+
+      return {
+        runPromptTokens: newRunPrompt,
+        runCompletionTokens: state.runCompletionTokens + event.completionTokens,
+        runCachedTokens: newRunCached,
+        runCacheWriteTokens: state.runCacheWriteTokens + cacheWrite,
+        runTokens: state.runTokens + callTokens,
         runCost: state.runCost + event.cost,
-        runCacheHitRate: event.cacheHitRate,
+        runCacheHitRate,
         runCallCount: state.runCallCount + 1,
-        // Also accumulate to session/all-time
-        sessionTokens: state.sessionTokens + newTokens,
+        // Session
+        sessionTokens: state.sessionTokens + callTokens,
         sessionCost: state.sessionCost + event.cost,
         sessionCalls: state.sessionCalls + 1,
-        allTimeTokens: state.allTimeTokens + newTokens,
+        // All-time
+        allTimeTokens: state.allTimeTokens + callTokens,
         allTimePromptTokens: state.allTimePromptTokens + event.promptTokens,
+        allTimeCompletionTokens: state.allTimeCompletionTokens + event.completionTokens,
         allTimeCachedTokens: state.allTimeCachedTokens + event.cachedTokens,
+        allTimeCacheWriteTokens: state.allTimeCacheWriteTokens + cacheWrite,
         allTimeCost: state.allTimeCost + event.cost,
         allTimeBillableCost: state.allTimeBillableCost + billableCost,
         allTimeCalls: state.allTimeCalls + 1,
         billingSource: event.billingSource ?? state.billingSource
       }
-
-      return newState
     }),
 
     completeRun: (_summary: RunSummary) => {
@@ -142,6 +171,10 @@ export const useUsageStore = create<UsageState>((set, get) => {
 
     // Reset run stats - called when a NEW run starts (not when old one ends)
     resetRun: () => set({
+      runPromptTokens: 0,
+      runCompletionTokens: 0,
+      runCachedTokens: 0,
+      runCacheWriteTokens: 0,
       runTokens: 0,
       runCost: 0,
       runCacheHitRate: 0,
@@ -150,6 +183,10 @@ export const useUsageStore = create<UsageState>((set, get) => {
 
     // Reset session stats (but keep all-time)
     resetSession: () => set({
+      runPromptTokens: 0,
+      runCompletionTokens: 0,
+      runCachedTokens: 0,
+      runCacheWriteTokens: 0,
       runTokens: 0,
       runCost: 0,
       runCacheHitRate: 0,
@@ -163,18 +200,21 @@ export const useUsageStore = create<UsageState>((set, get) => {
     loadPersisted: async () => {
       const persisted = await loadFromFramework()
       if (persisted?.totals) {
+        const t = persisted.totals
         set({
-          allTimeTokens: persisted.totals.tokens ?? 0,
-          allTimePromptTokens: persisted.totals.promptTokens ?? 0,
-          allTimeCachedTokens: persisted.totals.cachedTokens ?? 0,
-          allTimeCost: persisted.totals.cost ?? 0,
-          allTimeBillableCost: persisted.totals.cost ?? 0,
-          allTimeCalls: persisted.totals.calls ?? 0,
+          allTimeTokens: t.tokens ?? 0,
+          allTimePromptTokens: t.promptTokens ?? 0,
+          allTimeCompletionTokens: t.completionTokens ?? 0,
+          allTimeCachedTokens: t.cachedTokens ?? 0,
+          allTimeCacheWriteTokens: t.cacheWriteTokens ?? 0,
+          allTimeCost: t.cost ?? 0,
+          allTimeBillableCost: t.cost ?? 0,
+          allTimeCalls: t.calls ?? 0,
           billingSource: 'api-key',
           // Also restore to session totals
-          sessionTokens: persisted.totals.tokens ?? 0,
-          sessionCost: persisted.totals.cost ?? 0,
-          sessionCalls: persisted.totals.calls ?? 0
+          sessionTokens: t.tokens ?? 0,
+          sessionCost: t.cost ?? 0,
+          sessionCalls: t.calls ?? 0
         })
       }
     },
@@ -183,6 +223,10 @@ export const useUsageStore = create<UsageState>((set, get) => {
     resetAllTime: () => {
       api?.resetUsageTotals?.().catch?.(() => {})
       set({
+        runPromptTokens: 0,
+        runCompletionTokens: 0,
+        runCachedTokens: 0,
+        runCacheWriteTokens: 0,
         runTokens: 0,
         runCost: 0,
         runCacheHitRate: 0,
@@ -192,7 +236,9 @@ export const useUsageStore = create<UsageState>((set, get) => {
         sessionCalls: 0,
         allTimeTokens: 0,
         allTimePromptTokens: 0,
+        allTimeCompletionTokens: 0,
         allTimeCachedTokens: 0,
+        allTimeCacheWriteTokens: 0,
         allTimeCost: 0,
         allTimeBillableCost: 0,
         billingSource: 'none',

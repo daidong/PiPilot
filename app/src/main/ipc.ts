@@ -419,15 +419,17 @@ async function ensureCoordinator(
         const promptTokens = usage.input ?? 0
         const completionTokens = usage.output ?? 0
         const cachedTokens = usage.cacheRead ?? 0
+        const cacheWriteTokens = usage.cacheWrite ?? 0
 
         // Persist to disk (per-project accumulated totals)
         const baseDir = join(runProjectPath, PATHS.root)
-        accumulateUsage(baseDir, promptTokens, completionTokens, cachedTokens, rawCost)
+        accumulateUsage(baseDir, promptTokens, completionTokens, cachedTokens, cacheWriteTokens, rawCost)
 
         const usageEvent = {
           promptTokens,
           completionTokens,
           cachedTokens,
+          cacheWriteTokens,
           cost: rawCost,
           rawCost,
           billableCost: rawCost,

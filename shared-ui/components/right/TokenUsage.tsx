@@ -13,7 +13,9 @@ export function TokenUsage() {
   const {
     allTimeTokens,
     allTimePromptTokens,
+    allTimeCompletionTokens,
     allTimeCachedTokens,
+    allTimeCacheWriteTokens,
     allTimeBillableCost,
     allTimeCalls,
     billingSource,
@@ -22,9 +24,7 @@ export function TokenUsage() {
 
   const [confirmReset, setConfirmReset] = useState(false)
 
-  // Calculate all-time cache hit rate
-  // promptTokens = non-cached input only (pi-mono subtracts cached from total input)
-  // so total input = promptTokens + cachedTokens
+  // Cache hit rate: cached reads / total input (prompt + cached)
   const totalInputTokens = allTimePromptTokens + allTimeCachedTokens
   const allTimeCacheHitRate = totalInputTokens > 0
     ? allTimeCachedTokens / totalInputTokens
@@ -39,6 +39,13 @@ export function TokenUsage() {
       setTimeout(() => setConfirmReset(false), 3000)
     }
   }
+
+  const tokenBreakdown = [
+    `Input: ${formatTokens(allTimePromptTokens)}`,
+    `Cached: ${formatTokens(allTimeCachedTokens)}`,
+    allTimeCacheWriteTokens > 0 ? `Cache write: ${formatTokens(allTimeCacheWriteTokens)}` : null,
+    `Output: ${formatTokens(allTimeCompletionTokens)}`
+  ].filter(Boolean).join(' · ')
 
   return (
     <div className="text-[11px] t-text-muted">
@@ -57,21 +64,21 @@ export function TokenUsage() {
           </button>
         </div>
         <div className="flex items-center gap-2 font-mono">
-          <span title="All-time tokens">{formatTokens(allTimeTokens)}</span>
-          <span className="t-text-muted/50">·</span>
+          <span title={tokenBreakdown}>{formatTokens(allTimeTokens)}</span>
+          <span className="t-text-muted/50">&middot;</span>
           <span title="API-billable cost" className="t-text-success">
             {formatCost(allTimeBillableCost)}
           </span>
-          <span className="t-text-muted/50">·</span>
+          <span className="t-text-muted/50">&middot;</span>
           <span title="All-time cache hit rate" className="t-text-accent">{(allTimeCacheHitRate * 100).toFixed(0)}%</span>
-          <span className="t-text-muted/50">·</span>
+          <span className="t-text-muted/50">&middot;</span>
           <span title="Current billing source">
             {billingSource === 'none' ? 'none' : 'api-key'}
           </span>
           {allTimeCalls > 0 && (
             <>
-              <span className="t-text-muted/50">·</span>
-              <span title="All-time LLM calls">{allTimeCalls}×</span>
+              <span className="t-text-muted/50">&middot;</span>
+              <span title="All-time LLM calls">{allTimeCalls}&times;</span>
             </>
           )}
         </div>

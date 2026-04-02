@@ -19,6 +19,9 @@ export function StatusBar() {
   const events = useActivityStore((s) => s.events)
   const activeSkills = useActivityStore((s) => s.activeSkills)
   const runTokens = useUsageStore((s) => s.runTokens)
+  const runPromptTokens = useUsageStore((s) => s.runPromptTokens)
+  const runCompletionTokens = useUsageStore((s) => s.runCompletionTokens)
+  const runCachedTokens = useUsageStore((s) => s.runCachedTokens)
   const runCost = useUsageStore((s) => s.runCost)
   const runCacheHitRate = useUsageStore((s) => s.runCacheHitRate)
   const allTimeTokens = useUsageStore((s) => s.allTimeTokens)
@@ -72,14 +75,14 @@ export function StatusBar() {
           {toolSummary.map((t) => (
             <span key={t.name} className="flex items-center gap-1 whitespace-nowrap">
               {t.pending > 0 ? (
-                <span className="t-text-warning">⟳</span>
+                <span className="t-text-warning">&#x27F3;</span>
               ) : t.failed > 0 ? (
-                <span className="t-text-error">✗</span>
+                <span className="t-text-error">&#x2717;</span>
               ) : (
-                <span className="t-text-success">✓</span>
+                <span className="t-text-success">&#x2713;</span>
               )}
               <span className="capitalize">{t.name}</span>
-              <span className="t-text-muted">×{t.total}</span>
+              <span className="t-text-muted">&times;{t.total}</span>
             </span>
           ))}
         </div>
@@ -90,21 +93,23 @@ export function StatusBar() {
 
       {/* Right side: run usage | project totals */}
       <div className="flex items-center gap-3 whitespace-nowrap">
-        {/* Current run */}
+        {/* Current run with token breakdown */}
         {hasRunUsage && (
           <>
-            <span>{formatTokens(runTokens)} tokens</span>
+            <span title={`In: ${formatTokens(runPromptTokens)} · Cache: ${formatTokens(runCachedTokens)} · Out: ${formatTokens(runCompletionTokens)}`}>
+              {formatTokens(runTokens)} tokens
+            </span>
             {runCost > 0 && (
               <span className="t-text-success">{formatCost(runCost)}</span>
             )}
-            {runCacheHitRate > 0 && (
-              <span className="t-text-accent-soft">{Math.round(runCacheHitRate * 100)}% cache</span>
-            )}
+            <span className={runCacheHitRate > 0.5 ? 't-text-accent' : 't-text-accent-soft'}>
+              {Math.round(runCacheHitRate * 100)}% cache
+            </span>
           </>
         )}
         {/* Separator between run and project */}
         {hasRunUsage && hasProjectUsage && (
-          <span className="t-text-muted">│</span>
+          <span className="t-text-muted">&#x2502;</span>
         )}
         {/* Accumulated project totals */}
         {hasProjectUsage && (

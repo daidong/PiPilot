@@ -16,7 +16,9 @@ export interface UsageTotals {
   totals: {
     tokens: number
     promptTokens: number
+    completionTokens: number
     cachedTokens: number
+    cacheWriteTokens: number
     cost: number
     calls: number
   }
@@ -25,7 +27,7 @@ export interface UsageTotals {
 const EMPTY: UsageTotals = {
   version: 1,
   updatedAt: new Date(0).toISOString(),
-  totals: { tokens: 0, promptTokens: 0, cachedTokens: 0, cost: 0, calls: 0 }
+  totals: { tokens: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0, cost: 0, calls: 0 }
 }
 
 function usagePath(baseDir: string): string {
@@ -37,6 +39,10 @@ export function loadUsageTotals(baseDir: string): UsageTotals {
     const raw = readFileSync(usagePath(baseDir), 'utf-8')
     const parsed = JSON.parse(raw) as UsageTotals
     if (!parsed?.totals) return { ...EMPTY }
+    // Backfill fields added after initial release
+    const t = parsed.totals
+    t.completionTokens ??= 0
+    t.cacheWriteTokens ??= 0
     return parsed
   } catch {
     return { ...EMPTY }
@@ -69,6 +75,7 @@ export function accumulateUsage(
   promptTokens: number,
   completionTokens: number,
   cachedTokens: number,
+  cacheWriteTokens: number,
   cost: number
 ): UsageTotals {
   const existing = loadUsageTotals(baseDir)
@@ -76,9 +83,11 @@ export function accumulateUsage(
     version: 1,
     updatedAt: new Date().toISOString(),
     totals: {
-      tokens: existing.totals.tokens + promptTokens + completionTokens,
+      tokens: existing.totals.tokens + promptTokens + completionTokens + cachedTokens,
       promptTokens: existing.totals.promptTokens + promptTokens,
+      completionTokens: existing.totals.completionTokens + completionTokens,
       cachedTokens: existing.totals.cachedTokens + cachedTokens,
+      cacheWriteTokens: existing.totals.cacheWriteTokens + cacheWriteTokens,
       cost: existing.totals.cost + cost,
       calls: existing.totals.calls + 1
     }
@@ -91,7 +100,7 @@ export function resetUsageTotals(baseDir: string): UsageTotals {
   const cleared: UsageTotals = {
     version: 1,
     updatedAt: new Date().toISOString(),
-    totals: { tokens: 0, promptTokens: 0, cachedTokens: 0, cost: 0, calls: 0 }
+    totals: { tokens: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0, cost: 0, calls: 0 }
   }
   writeAtomically(usagePath(baseDir), JSON.stringify(cleared, null, 2))
   return cleared
