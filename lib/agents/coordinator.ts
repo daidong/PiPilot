@@ -217,8 +217,9 @@ export interface CoordinatorConfig {
   sessionId?: string
   reasoningEffort?: 'high' | 'medium' | 'low'
   onStream?: (text: string) => void
-  onToolCall?: (tool: string, args: unknown) => void
-  onToolResult?: (tool: string, result: unknown, args?: unknown) => void
+  onToolCall?: (tool: string, args: unknown, toolCallId?: string) => void
+  onToolResult?: (tool: string, result: unknown, args?: unknown, toolCallId?: string) => void
+  onToolProgress?: (tool: string, toolCallId: string, phase: 'start' | 'update' | 'end', data: unknown) => void
   onUsage?: (usage: unknown, cost: unknown) => void
   onSkillLoaded?: (skillName: string) => void
 }
@@ -239,6 +240,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onStream,
     onToolCall,
     onToolResult,
+    onToolProgress,
     onUsage,
     onSkillLoaded
   } = config
@@ -338,11 +340,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     }
   }
 
-  const wrappedOnToolResult = (tool: string, result: unknown, args?: unknown) => {
+  const wrappedOnToolResult = (tool: string, result: unknown, args?: unknown, toolCallId?: string) => {
     if (activeTurnToolCallCount !== null) {
       activeTurnToolCallCount++
     }
-    onToolResult?.(tool, result, args)
+    onToolResult?.(tool, result, args, toolCallId)
   }
 
   // Create research-specific tools via unified factory
@@ -498,14 +500,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
 
     beforeToolCall: async (ctx) => {
-      onToolCall?.(ctx.toolCall.name, ctx.args)
+      onToolCall?.(ctx.toolCall.name, ctx.args, ctx.toolCall.id)
       if (debug) {
         console.log(`  [Tool] ${ctx.toolCall.name}(${JSON.stringify(ctx.args).slice(0, 120)}...)`)
       }
       return undefined
     },
     afterToolCall: async (ctx) => {
-      wrappedOnToolResult(ctx.toolCall.name, ctx.result, ctx.args)
+      wrappedOnToolResult(ctx.toolCall.name, ctx.result, ctx.args, ctx.toolCall.id)
       // Notify when a skill is loaded successfully
       if (ctx.toolCall.name === 'load_skill' && onSkillLoaded) {
         const args = ctx.args as { name?: string }
@@ -518,8 +520,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     }
   })
 
-  // Subscribe to agent events for streaming
-  if (onStream || onUsage) {
+  // Subscribe to agent events for streaming, usage, and tool progress
+  if (onStream || onUsage || onToolProgress) {
     agent.subscribe((event: AgentEvent) => {
       if (event.type === 'message_update' && onStream) {
         if (event.assistantMessageEvent.type === 'text_delta') {
@@ -531,6 +533,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         if (msg && 'usage' in msg && (msg as any).usage) {
           const usage = (msg as any).usage
           onUsage(usage, usage.cost)
+        }
+      }
+      // Tool execution progress events (real-time updates during tool execution)
+      if (onToolProgress) {
+        if (event.type === 'tool_execution_start') {
+          onToolProgress(event.toolName, event.toolCallId, 'start', { args: event.args })
+        } else if (event.type === 'tool_execution_update') {
+          onToolProgress(event.toolName, event.toolCallId, 'update', { partialResult: event.partialResult })
+        } else if (event.type === 'tool_execution_end') {
+          onToolProgress(event.toolName, event.toolCallId, 'end', { result: event.result, isError: event.isError })
         }
       }
     })

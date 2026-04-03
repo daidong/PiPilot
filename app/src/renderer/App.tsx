@@ -13,6 +13,8 @@ import { useEntityStore } from './stores/entity-store'
 import { useUIStore } from './stores/ui-store'
 import { useProgressStore } from './stores/progress-store'
 import { useActivityStore } from './stores/activity-store'
+import { useToolProgressStore } from './stores/tool-progress-store'
+import { useToolEventsStore } from './stores/tool-events-store'
 import { useUsageStore, type UsageEvent } from './stores/usage-store'
 
 const api = (window as any).api
@@ -154,6 +156,17 @@ export default function App() {
           })
         }
       }
+      // Replay tool events for chat-inline card recovery
+      if (snapshot && snapshot.toolEvents?.length > 0) {
+        const toolStore = useToolEventsStore.getState()
+        for (const evt of snapshot.toolEvents) {
+          if (evt.type === 'tool-call') {
+            toolStore.onToolCall(evt)
+          } else if (evt.type === 'tool-result') {
+            toolStore.onToolResult(evt)
+          }
+        }
+      }
     })
 
     // Load chat history from previous session
@@ -176,14 +189,28 @@ export default function App() {
     // Activity is per-run - clear on new input
     const unsubActivityClear = api.onActivityClear(() => {
       useActivityStore.getState().clear()
+      useToolProgressStore.getState().clearAll()
+      useToolEventsStore.getState().clearRun()
       useUsageStore.getState().resetRun()
     })
     const unsubActivity = api.onActivity((event: any) => {
-      useActivityStore.getState().push({
+      const enrichedEvent = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         timestamp: new Date().toISOString(),
         ...event
-      })
+      }
+      useActivityStore.getState().push(enrichedEvent)
+
+      // Also feed tool events to the chat-inline store
+      if (event.type === 'tool-call') {
+        useToolEventsStore.getState().onToolCall(enrichedEvent)
+      } else if (event.type === 'tool-result') {
+        useToolEventsStore.getState().onToolResult(enrichedEvent)
+      }
+    })
+    const unsubToolProgress = api.onToolProgress((event: any) => {
+      useToolProgressStore.getState().reportProgress(event)
+      useToolEventsStore.getState().onToolProgress(event)
     })
     const unsubSkillLoaded = api.onSkillLoaded((skillName: string) => {
       useActivityStore.getState().addSkill(skillName)
@@ -239,6 +266,7 @@ export default function App() {
       unsub6()
       unsubActivity()
       unsubActivityClear()
+      unsubToolProgress()
       unsubSkillLoaded()
       unsubUsage()
     }

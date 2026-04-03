@@ -1,9 +1,10 @@
-import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react'
+import React, { useRef, useEffect, useCallback, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useChatStore, type ChatMessage } from '../../stores/chat-store'
 import { useEntityStore } from '../../stores/entity-store'
-import { useActivityStore } from '../../stores/activity-store'
+import { useToolEventsStore } from '../../stores/tool-events-store'
+import { ToolUseStream } from '@shared/components/center/ToolUseStream'
 import { Bookmark, BookmarkCheck, Loader2 } from 'lucide-react'
 
 const api = (window as any).api
@@ -235,42 +236,16 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
   )
 })
 
-// Animated dots for thinking state
-function ThinkingDots() {
+// Minimal thinking indicator — only shown when no tools are running
+// (when tools are running, the RunningToolCard spinner is the indicator)
+function ThinkingIndicator() {
   return (
-    <span className="inline-flex gap-1 items-center">
-      <span className="w-1.5 h-1.5 rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '0ms' }} />
-      <span className="w-1.5 h-1.5 rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '150ms' }} />
-      <span className="w-1.5 h-1.5 rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '300ms' }} />
-    </span>
-  )
-}
-
-function ThinkingBubble() {
-  const events = useActivityStore((s) => s.events)
-  const activity = useMemo(() => {
-    const latest = [...events].reverse().find(e => e.type === 'tool-call') || events[events.length - 1]
-    return latest?.summary || ''
-  }, [events])
-
-  return (
-    <div className="flex items-center gap-3">
-      <div
-        className="rounded-2xl px-4 py-3 text-sm t-text-secondary shrink-0"
-        style={{ background: 'var(--color-bubble-assistant)' }}
-      >
-        <div className="flex items-center gap-2">
-          <ThinkingDots />
-          <span className="text-xs">Thinking</span>
-        </div>
-      </div>
-      {activity && (
-        <div className="flex-1 flex items-center gap-2 min-w-0">
-          <div className="flex-1 h-px border-t t-border" />
-          <span className="text-xs t-text-muted whitespace-nowrap truncate max-w-[60%] animate-pulse">{activity}</span>
-          <div className="flex-1 h-px border-t t-border" />
-        </div>
-      )}
+    <div className="flex items-center gap-1.5 mt-3 ml-2">
+      <span className="inline-flex gap-[3px] items-center">
+        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '0ms' }} />
+        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '150ms' }} />
+        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '300ms' }} />
+      </span>
     </div>
   )
 }
@@ -299,10 +274,13 @@ export function ChatMessages() {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const streamingText = useChatStore((s) => s.streamingText)
   const savedMessageIds = useChatStore((s) => s.savedMessageIds)
+  const turnToolEvents = useChatStore((s) => s.turnToolEvents)
   const hasMore = useChatStore((s) => s.hasMore)
   const isLoadingHistory = useChatStore((s) => s.isLoadingHistory)
   const loadHistory = useChatStore((s) => s.loadHistory)
   const scrollToMessageId = useChatStore((s) => s.scrollToMessageId)
+  const toolEventsCount = useToolEventsStore((s) => s.currentRunEvents.length)
+  const hasRunningTools = useToolEventsStore((s) => s.currentRunEvents.some(e => e.status === 'running'))
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -341,11 +319,11 @@ export function ChatMessages() {
         isInitialMount.current = false
         bottomRef.current?.scrollIntoView({ behavior: 'instant' })
       } else {
-        // After initial mount, use smooth scrolling for new messages
+        // After initial mount, use smooth scrolling for new messages and tool events
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
       }
     }
-  }, [messages, streamingText, autoScroll])
+  }, [messages, streamingText, toolEventsCount, autoScroll])
 
   // Scroll to a specific message when requested (e.g. from provenance click)
   useEffect(() => {
@@ -380,8 +358,13 @@ export function ChatMessages() {
           // Tighter spacing within same-role runs (e.g. multi-part assistant),
           // generous space when the speaker changes (new exchange)
           const gap = prev && prev.role !== msg.role ? 'mt-5' : 'mt-3'
+          // Get historical tool events for this assistant message
+          const toolEvents = msg.role === 'assistant' ? turnToolEvents.get(msg.id) : undefined
           return (
             <div key={msg.id} className={i === 0 ? '' : gap}>
+              {toolEvents && toolEvents.length > 0 && (
+                <ToolUseStream events={toolEvents} />
+              )}
               <MessageBubble
                 msg={msg}
                 isSaved={savedMessageIds.has(msg.id)}
@@ -391,7 +374,14 @@ export function ChatMessages() {
         })}
         {isStreaming && (
           <div className="mt-5">
-            {streamingText ? <StreamingBubble /> : <ThinkingBubble />}
+            <ToolUseStream />
+            {streamingText ? (
+              <StreamingBubble />
+            ) : !hasRunningTools ? (
+              /* Show thinking dots only when no tools are running —
+                 running tool cards already have spinners as progress indicator */
+              <ThinkingIndicator />
+            ) : null}
           </div>
         )}
         <div ref={bottomRef} />

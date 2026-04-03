@@ -416,8 +416,6 @@ export function createWebSearchTool(ctx: ResearchToolContext): AgentTool {
       let effectiveProvider: 'brave' | 'arxiv' =
         providerRequested === 'auto' ? (braveApiKey ? 'brave' : 'arxiv') : providerRequested
 
-      ctx.onToolCall?.('web_search', { query, count, provider: effectiveProvider })
-
       let results: SearchResult[] = []
       try {
         if (effectiveProvider === 'brave') {
@@ -461,8 +459,6 @@ export function createWebSearchTool(ctx: ResearchToolContext): AgentTool {
         count: results.length,
         results,
       }
-
-      ctx.onToolResult?.('web_search', payload)
 
       return toAgentResult('web_search', {
         success: true,
@@ -525,7 +521,8 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
         ? Math.max(1_000, Math.floor(timeoutSecRaw * 1000))
         : WEB_DEFAULTS.defaultFetchTimeoutMs
 
-      ctx.onToolCall?.('web_fetch', { url: url.toString(), extractMode, maxChars })
+      // Note: onToolCall/onToolResult are handled by coordinator hooks (beforeToolCall/afterToolCall)
+      // with proper toolCallId for reliable call→result correlation. No need to self-report here.
 
       let response: Response
       const controller = new AbortController()
@@ -603,8 +600,6 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
           content: output || '(empty response)',
         }
       }
-
-      ctx.onToolResult?.('web_fetch', payload)
 
       return toAgentResult('web_fetch', {
         success: response.ok,

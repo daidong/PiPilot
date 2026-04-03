@@ -1,4 +1,5 @@
 import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
 import { createCoordinator } from '../../../lib/agents/coordinator'
@@ -36,94 +37,59 @@ import {
   registerConfigHandlers,
 } from '../../../shared-electron/index'
 
-// ─── Simple activity formatter (replaces AgentFoundry's createActivityFormatter) ─
-interface ActivityLabel { label: string; icon: string }
+// ─── Tool render registry (Layer 4) ─
+import { getToolRenderConfig } from '../../../shared-ui/tool-renderers/registry'
 
-/** Map tool names to human-readable activity labels */
+// ─── Simple activity formatter ─
+interface ActivityLabel { label: string; icon: string; detail?: Record<string, unknown> }
+
+/** Map tool names to human-readable activity labels with structured detail.
+ *  Uses the tool render registry (Layer 4) for registered tools, with fallback for unknown tools. */
 function formatToolCall(tool: string, args: unknown): ActivityLabel {
   const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
+  const config = getToolRenderConfig(tool)
 
-  // Custom research-pilot tool labels
-  switch (tool) {
-    case 'literature-search':
-      return { label: `Search: ${((a.query as string) || '').slice(0, 40)}${((a.query as string) || '').length > 40 ? '...' : ''}`, icon: 'search' }
-    case 'lit-subtopic':
-      return { label: (a._summary as string) || 'Searching sub-topic', icon: 'search' }
-    case 'lit-enrich':
-      return { label: (a._summary as string) || 'Enriching paper metadata', icon: 'search' }
-    case 'lit-autosave':
-      return { label: (a._summary as string) || 'Saving papers', icon: 'file' }
-    case 'data-analyze':
-      return { label: `Analyze: ${getFileName((a.filePath as string) || '') || 'data'}`, icon: 'file' }
-    case 'convert_to_markdown': {
-      const sourcePath = ((a.path as string) || (a.uri as string) || '')
-      return { label: `Convert: ${getFileName(sourcePath)}`, icon: 'file' }
+  if (config) {
+    return {
+      label: `${config.displayName}: ${config.formatCallSummary(a)}`,
+      icon: config.icon,
+      detail: config.formatCallDetail(a),
     }
-    case 'artifact-create': {
-      const type = ((a.type as string) || 'artifact').toLowerCase()
-      const title = ((a.title as string) || type).slice(0, 35)
-      return { label: `Create ${type}: ${title}`, icon: 'file' }
-    }
-    // Generic tool labels
-    case 'read': return { label: `Read: ${getFileName((a.path as string) || '')}`, icon: 'file' }
-    case 'write': return { label: `Write: ${getFileName((a.path as string) || '')}`, icon: 'file' }
-    case 'edit': return { label: `Edit: ${getFileName((a.path as string) || '')}`, icon: 'file' }
-    case 'bash': return { label: `Run command`, icon: 'terminal' }
-    case 'glob': return { label: `Search files: ${(a.pattern as string) || ''}`, icon: 'search' }
-    case 'grep': return { label: `Search content: ${((a.pattern as string) || '').slice(0, 30)}`, icon: 'search' }
-    case 'fetch': return { label: `Fetch: ${((a.url as string) || '').slice(0, 40)}`, icon: 'network' }
-    default: return { label: `${tool}`, icon: 'tool' }
   }
+
+  // Fallback for unregistered tools
+  return { label: `${tool}`, icon: 'tool' }
 }
 
+/** Format tool result into a human-readable label with structured detail.
+ *  Uses the tool render registry (Layer 4) for registered tools, with fallback for unknown tools. */
 function formatToolResult(tool: string, result: unknown, args?: unknown): ActivityLabel {
-  const r = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>
   const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
-  const data = (r.data && typeof r.data === 'object' ? r.data : {}) as Record<string, unknown>
+  const r = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>
+  const success = r.success !== false
+  const config = getToolRenderConfig(tool)
 
-  switch (tool) {
-    case 'literature-search': {
-      const totalFound = (data.totalPapersFound as number) ?? 0
-      const saved = (data.papersAutoSaved as number) ?? 0
-      const coverage = data.coverage as { score?: number } | undefined
-      if (totalFound > 0) {
-        let summary = `Found ${totalFound} papers`
-        if (coverage?.score != null) summary += ` (coverage: ${Math.round(coverage.score * 100)}%)`
-        if (saved > 0) summary += `, saved ${saved}`
-        return { label: summary, icon: 'search' }
-      }
-      const local = (data.localPapersUsed as number) ?? 0
-      const external = (data.externalPapersUsed as number) ?? 0
-      const savedV1 = (data.savedPapers as number) ?? 0
-      let summary = `Found ${local + external} papers`
-      if (local > 0) summary += ` (${local} local)`
-      if (savedV1 > 0) summary += `, saved ${savedV1}`
-      return { label: summary, icon: 'search' }
-    }
-    case 'lit-subtopic':
-      return { label: (r.data as string) || 'Search completed', icon: 'search' }
-    case 'lit-enrich':
-      return { label: (r.data as string) || 'Enriched metadata', icon: 'search' }
-    case 'lit-autosave':
-      return { label: (r.data as string) || 'Saved papers', icon: 'file' }
-    case 'convert_to_markdown': {
-      const sourcePath = ((a.path as string) || (a.uri as string) || '')
-      const skill = typeof data.converterSkill === 'string' ? data.converterSkill : ''
-      const script = typeof data.converterScript === 'string' ? data.converterScript : ''
-      if (skill && script) return { label: `Converted ${getFileName(sourcePath)} via ${skill}/${script}`, icon: 'file' }
-      if (skill) return { label: `Converted ${getFileName(sourcePath)} via ${skill}`, icon: 'file' }
-      return { label: `Converted ${getFileName(sourcePath)}`, icon: 'file' }
-    }
-    case 'artifact-create': {
-      const type = (data.type as string) || 'artifact'
-      const title = (data.title as string) || ''
-      return { label: title ? `Created ${type}: ${title.slice(0, 30)}` : `Created ${type}`, icon: 'file' }
-    }
-    default: {
-      const success = r.success !== false
-      return { label: success ? `${tool} completed` : `${tool} failed`, icon: 'tool' }
+  // On failure, show error label regardless of registry — registry formatters
+  // assume success and would produce misleading summaries like "Search completed"
+  if (config && success) {
+    return {
+      label: config.formatResultSummary(result, a),
+      icon: config.icon,
+      detail: config.formatResultDetail(result, a),
     }
   }
+  if (config && !success) {
+    const errorMsg = (r.error as string) || ''
+    const brief = errorMsg.length > 60 ? errorMsg.slice(0, 57) + '...' : errorMsg
+    return {
+      label: brief ? `${config.displayName} failed: ${brief}` : `${config.displayName} failed`,
+      icon: config.icon,
+      detail: config.formatResultDetail(result, a),
+    }
+  }
+
+  // Fallback for unregistered tools
+  return { label: success ? `${tool} completed` : `${tool} failed`, icon: 'tool', detail: { success } }
 }
 
 // ─── Persistent per-project usage totals ────────────────────────────────────
@@ -322,14 +288,18 @@ async function ensureCoordinator(
         state.realtimeBuffer.appendChunk(chunk)
         safeSend(win, 'agent:stream-chunk', chunk)
       },
-      onToolCall: (tool: string, args: unknown) => {
-        // Send activity event for tool invocation
-        const summary = formatToolCall(tool, args).label
-        const event = { type: 'tool-call', tool, summary }
+      onToolCall: (tool: string, args: unknown, toolCallId?: string) => {
+        // Send activity event for tool invocation with structured detail
+        // Use pi-agent-core's toolCallId for reliable call→result correlation
+        const id = toolCallId || randomUUID()
+        const { label, detail } = formatToolCall(tool, args)
+        const event = { type: 'tool-call', tool, toolCallId: id, summary: label, detail }
         state.realtimeBuffer.pushActivity(event)
+        // Mirror to tool events buffer for renderer remount recovery
+        state.realtimeBuffer.pushToolEvent({ type: 'tool-call', tool, toolCallId: id, summary: label, detail })
         safeSend(win, 'agent:activity', event)
       },
-      onToolResult: (tool: string, result: unknown, args?: unknown) => {
+      onToolResult: (tool: string, result: unknown, args?: unknown, toolCallId?: string) => {
         if (tool.startsWith('todo-') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success && r.item) {
@@ -348,19 +318,19 @@ async function ensureCoordinator(
           }
         }
 
-        // Track extracted markdown files created by convert_to_markdown
-        if (tool === 'convert_to_markdown' && result && typeof result === 'object' && 'success' in result) {
+        // Track extracted markdown files created by convert_document
+        if (tool === 'convert_document' && result && typeof result === 'object' && 'success' in result) {
           const r2 = result as any
           if (r2.success && r2.data?.outputFile) {
             safeSend(win, 'agent:file-created', r2.data.outputFile)
           }
         }
 
-        // Cache convert_to_markdown results for document files (path-based wrapper)
-        if (tool === 'convert_to_markdown' && result && typeof result === 'object' && 'success' in result) {
+        // Cache convert_document results for document files (path-based wrapper)
+        if (tool === 'convert_document' && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
-          if (r.success && r.data?.outputFile && args && typeof args === 'object' && 'path' in args) {
-            const sourcePath = (args as { path: string }).path
+          if (r.success && r.data?.outputFile && args && typeof args === 'object' && 'source' in args) {
+            const sourcePath = (args as { source: string }).source
             const absSourcePath = isAbsolute(sourcePath) ? sourcePath : resolve(runProjectPath, sourcePath)
             const absOutputPath = resolve(runProjectPath, r.data.outputFile as string)
 
@@ -397,14 +367,28 @@ async function ensureCoordinator(
           }
         }
 
-        // Send activity event for tool result
+        // Send activity event for tool result with structured detail and duration
         const r = result as any
         const success = r?.success !== false
         const error = !success ? (r?.error || 'Unknown error') : undefined
-        const summary = formatToolResult(tool, result, args).label
-        const actEvent = { type: 'tool-result', tool, summary, success, error }
+        const { label: resultLabel, detail: resultDetail } = formatToolResult(tool, result, args)
+        // Use the toolCallId passed from coordinator (pi-agent-core's ctx.toolCall.id)
+        const startTime = toolCallId ? state.realtimeBuffer.popToolCallStartTime(toolCallId) : undefined
+        const durationMs = startTime ? Date.now() - startTime : undefined
+        const actEvent = { type: 'tool-result', tool, toolCallId, summary: resultLabel, success, error, resultDetail, durationMs }
         state.realtimeBuffer.pushActivity(actEvent)
+        // Mirror to tool events buffer for renderer remount recovery
+        if (toolCallId) {
+          state.realtimeBuffer.updateToolEvent(toolCallId, {
+            type: 'tool-result', summary: resultLabel, success, resultDetail, durationMs
+          })
+        }
         safeSend(win, 'agent:activity', actEvent)
+      },
+
+      // Tool execution progress (real-time updates during tool execution)
+      onToolProgress: (tool: string, toolCallId: string, phase: string, data: unknown) => {
+        safeSend(win, 'agent:tool-progress', { tool, toolCallId, phase, data, timestamp: Date.now() })
       },
 
       // Skill activation tracking

@@ -5,12 +5,20 @@ export interface ActivityEvent {
   timestamp: string
   type: 'tool-call' | 'tool-result' | 'error' | 'system'
   tool?: string
+  /** Unique ID to correlate tool-call → tool-result */
+  toolCallId?: string
   /** Short summary displayed in the panel */
   summary: string
+  /** Structured tool-call parameters for rich rendering */
+  detail?: Record<string, unknown>
+  /** Structured tool-result info for rich rendering */
+  resultDetail?: Record<string, unknown>
   /** Whether the tool result was successful (only for tool-result type) */
   success?: boolean
   /** Error message if failed */
   error?: string
+  /** Execution duration in ms (set on tool-result events) */
+  durationMs?: number
 }
 
 interface ActivityState {
@@ -41,17 +49,21 @@ export const useActivityStore = create<ActivityState>((set) => ({
       // instead of appending a separate row. This turns the spinning icon into
       // a completed checkmark in-place.
       if (event.type === 'tool-result') {
-        // Find the last tool-call for the same tool that hasn't been resolved yet
-        const idx = findLastIndex(state.events, (e) => e.type === 'tool-call' && e.tool === event.tool)
+        // Prefer matching by toolCallId for reliable correlation; fall back to tool name
+        const idx = event.toolCallId
+          ? findLastIndex(state.events, (e) => e.type === 'tool-call' && e.toolCallId === event.toolCallId)
+          : findLastIndex(state.events, (e) => e.type === 'tool-call' && e.tool === event.tool)
         if (idx !== -1) {
           const updated = [...state.events]
           updated[idx] = {
-            ...updated[idx],
+            ...updated[idx],            // preserve original detail (tool-call params)
             type: 'tool-result',
             summary: event.summary,
             success: event.success,
             error: event.error,
-            timestamp: event.timestamp
+            timestamp: event.timestamp,
+            resultDetail: event.resultDetail,
+            durationMs: event.durationMs,
           }
           return { events: updated }
         }

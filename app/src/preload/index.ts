@@ -73,6 +73,9 @@ export interface ElectronAPI {
   // Activity feed
   onActivity: (cb: (event: any) => void) => () => void
 
+  // Tool execution progress (real-time updates during tool execution)
+  onToolProgress: (cb: (event: { tool: string; toolCallId: string; phase: string; data: any; timestamp: number }) => void) => () => void
+
   // Skill activation tracking
   onSkillLoaded: (cb: (skillName: string) => void) => () => void
 
@@ -216,6 +219,12 @@ const api: ElectronAPI = {
     const handler = (_: any, event: any) => cb(event)
     ipcRenderer.on('agent:activity', handler)
     return () => ipcRenderer.removeListener('agent:activity', handler)
+  },
+
+  onToolProgress: (cb) => {
+    const handler = (_: any, event: any) => cb(event)
+    ipcRenderer.on('agent:tool-progress', handler)
+    return () => ipcRenderer.removeListener('agent:tool-progress', handler)
   },
 
   onSkillLoaded: (cb) => {

@@ -14,7 +14,7 @@ export interface ResearchToolContext {
   /** Optional LLM call function for tools that need sub-calls */
   callLlm?: (systemPrompt: string, userContent: string) => Promise<string>
   /** Callback when a tool is invoked */
-  onToolCall?: (tool: string, args: unknown) => void
+  onToolCall?: (tool: string, args: unknown, toolCallId?: string) => void
   /** Callback when a tool returns */
-  onToolResult?: (tool: string, result: unknown) => void
+  onToolResult?: (tool: string, result: unknown, args?: unknown, toolCallId?: string) => void
 }

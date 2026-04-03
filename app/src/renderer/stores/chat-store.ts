@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useToolEventsStore, type ToolEvent } from '@shared/stores/tool-events-store'
 
 export interface ChatMessage {
   id: string
@@ -15,6 +16,8 @@ interface ChatState {
   streamingText: string
   isStreaming: boolean
   savedMessageIds: Set<string>
+  /** Tool events associated with each assistant message (messageId → events) */
+  turnToolEvents: Map<string, ToolEvent[]>
   hasMore: boolean
   isLoadingHistory: boolean
   _offset: number
@@ -41,6 +44,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingText: '',
   isStreaming: false,
   savedMessageIds: new Set<string>(),
+  turnToolEvents: new Map<string, ToolEvent[]>(),
   hasMore: false,
   isLoadingHistory: false,
   _offset: 0,
@@ -95,11 +99,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
       images: result.images?.map(i => `data:${i.mimeType};base64,${i.base64}`),
       timestamp: Date.now()
     }
-    set((s) => ({
-      messages: [...s.messages, assistantMsg],
-      streamingText: '',
-      isStreaming: false
-    }))
+
+    // Snapshot tool events for this turn before clearing
+    const toolEventsSnapshot = useToolEventsStore.getState().snapshot()
+    useToolEventsStore.getState().clearRun()
+
+    set((s) => {
+      const nextToolEvents = new Map(s.turnToolEvents)
+      if (toolEventsSnapshot.length > 0) {
+        nextToolEvents.set(assistantMsg.id, toolEventsSnapshot)
+      }
+      return {
+        messages: [...s.messages, assistantMsg],
+        streamingText: '',
+        isStreaming: false,
+        turnToolEvents: nextToolEvents,
+      }
+    })
 
     // Persist assistant message
     if (_sessionId) {
@@ -114,6 +130,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     streamingText: '',
     isStreaming: false,
     savedMessageIds: new Set<string>(),
+    turnToolEvents: new Map<string, ToolEvent[]>(),
     hasMore: false,
     isLoadingHistory: false,
     _offset: 0,

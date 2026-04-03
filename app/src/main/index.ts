@@ -1,6 +1,11 @@
 import { app, BrowserWindow, shell, Menu } from 'electron'
+import { setMaxListeners } from 'node:events'
 import { existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
+
+// Raise default max listeners — pi-agent-core's parallel tool execution
+// shares a single AbortSignal across many tools, exceeding the default of 10.
+setMaxListeners(20)
 import { join, resolve } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { loadApiKeysFromConfig } from '@shared-electron/ipc-base'

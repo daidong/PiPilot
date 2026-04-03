@@ -323,8 +323,6 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
         }))
       }
 
-      ctx.onToolCall?.('literature-search', { query, context: extraContext })
-
       // ── Step 1: Plan ──────────────────────────────────────────────
       const planUserPrompt = extraContext
         ? `Research request: ${query}\n\nAdditional context: ${extraContext}`
@@ -575,8 +573,6 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
         runId,
         queriesUsed: queriesUsed.slice(0, 10)
       }
-
-      ctx.onToolResult?.('literature-search', payload)
 
       return toAgentResult('literature-search', toolSuccess(payload, pipelineWarnings.length > 0 ? pipelineWarnings : undefined))
     }

@@ -100,8 +100,6 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
         }))
       }
 
-      ctx.onToolCall?.('data_analyze', { file_path: filePath, instructions, task_type: taskType })
-
       // 2. Create output directories
       const runId = Date.now().toString(36)
       const outputBase = path.join(ctx.workspacePath, '.research-pilot', 'data-runs', runId)
@@ -227,8 +225,6 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
           scriptPath: path.relative(ctx.workspacePath, scriptPath),
           runId
         }
-
-        ctx.onToolResult?.('data_analyze', payload)
 
         return toAgentResult('data_analyze', { success: true, data: payload })
       } catch (err: any) {

@@ -10,6 +10,8 @@ export { formatTokens, formatCost } from './utils'
 // Stores
 export { useActivityStore, type ActivityEvent } from './stores/activity-store'
 export { useProgressStore, type TodoItem } from './stores/progress-store'
+export { useToolProgressStore, type ToolProgressEntry } from './stores/tool-progress-store'
+export { useToolEventsStore, type ToolEvent } from './stores/tool-events-store'
 export {
   useUsageStore,
   type UsageEvent,
@@ -21,5 +23,11 @@ export { ProgressSteps } from './components/right/ProgressSteps'
 export { TokenUsage } from './components/right/TokenUsage'
 export { ActivityLog } from './components/right/ActivityLog'
 export { CommandPopover } from './components/center/CommandPopover'
+export { ToolUseCard } from './components/center/ToolUseCard'
+export { ToolUseStream } from './components/center/ToolUseStream'
 export { ReasoningToggle } from './components/left/ReasoningToggle'
 export { ModelSelector } from './components/left/ModelSelector'
+
+// Tool Renderers
+export type { ToolRenderConfig } from './tool-renderers/types'
+export { getToolRenderConfig, getToolDisplayName, getToolIcon, getToolCategory } from './tool-renderers/registry'
