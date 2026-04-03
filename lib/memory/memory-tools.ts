@@ -15,7 +15,9 @@ import {
   deleteMemoryFile,
   listMemoryFiles,
   findMemoryByName,
+  findAllMemoriesByName,
   updateAgentMdIndex,
+  withIndexLock,
   type MemoryEntry
 } from './memory-utils.js'
 
@@ -66,38 +68,45 @@ export function createSaveMemoryTool(projectPath: string): ResearchTool {
         suggestions: ['Provide the memory content to save.']
       })
 
-      ensureMemoryDir(projectPath)
+      // Fix #5: robust description — skip empty lines to find a meaningful first line
+      const lines = content.split('\n')
+      const firstNonEmpty = lines.find(l => l.trim().length > 0) || ''
+      const description = firstNonEmpty.replace(/^#+\s*/, '').trim().slice(0, 120) || name
 
-      const filename = memoryFilename(type, name)
-      const description = content.split('\n')[0].replace(/^#+\s*/, '').slice(0, 120)
+      return withIndexLock(() => {
+        ensureMemoryDir(projectPath)
 
-      const entry: MemoryEntry = {
-        frontmatter: { name, description, type },
-        content,
-        filename
-      }
-
-      writeMemoryFile(projectPath, entry)
-
-      const allEntries = listMemoryFiles(projectPath)
-      const indexResult = updateAgentMdIndex(projectPath, allEntries)
-
-      if (!indexResult.success) {
-        return toolError('OUTPUT_TOO_LARGE',
-          'agent.md index exceeded size limit. Remove some memories first.', {
-          suggestions: ['Use delete-memory to remove outdated entries before saving new ones.']
-        })
-      }
-
-      return {
-        success: true,
-        data: {
-          message: `Memory saved: ${name} (${type})`,
-          filename,
-          totalMemories: allEntries.length,
-          agentMdChars: indexResult.charCount
+        const filename = memoryFilename(type, name)
+        const entry: MemoryEntry = {
+          frontmatter: { name, description, type },
+          content,
+          filename
         }
-      }
+
+        writeMemoryFile(projectPath, entry)
+
+        const allEntries = listMemoryFiles(projectPath)
+        const indexResult = updateAgentMdIndex(projectPath, allEntries)
+
+        if (!indexResult.success) {
+          // Fix #6: rollback the memory file if index update fails
+          deleteMemoryFile(projectPath, filename)
+          return toolError('OUTPUT_TOO_LARGE',
+            'agent.md index exceeded size limit. Remove some memories first.', {
+            suggestions: ['Use delete-memory to remove outdated entries before saving new ones.']
+          })
+        }
+
+        return {
+          success: true,
+          data: {
+            message: `Memory saved: ${name} (${type})`,
+            filename,
+            totalMemories: allEntries.length,
+            agentMdChars: indexResult.charCount
+          }
+        }
+      })
     }
   }
 }
@@ -105,42 +114,68 @@ export function createSaveMemoryTool(projectPath: string): ResearchTool {
 export function createDeleteMemoryTool(projectPath: string): ResearchTool {
   return {
     name: 'delete-memory',
-    description: 'Delete a memory by name. Removes the file and its index entry in agent.md.',
+    description: 'Delete a memory by name. Removes the file and its index entry in agent.md. ' +
+      'If multiple memories share the same name (different types), specify type to disambiguate.',
     parameters: {
       type: 'object',
       properties: {
         name: {
           type: 'string',
           description: 'Name of the memory to delete (case-insensitive match)'
+        },
+        type: {
+          type: 'string',
+          enum: VALID_TYPES,
+          description: 'Optional: memory type to disambiguate when multiple memories share the same name'
         }
       },
       required: ['name']
     },
     execute: async (input) => {
       const name = String(input.name || '').trim()
+      const type = input.type ? String(input.type) as MemoryType : undefined
       if (!name) return toolError('MISSING_PARAMETER', 'name is required.', {
         suggestions: ['Provide the name of the memory to delete.']
       })
 
-      const existing = findMemoryByName(projectPath, name)
-      if (!existing) {
+      // Fix #8: check for ambiguity when multiple memories share the same name
+      const allMatches = findAllMemoriesByName(projectPath, name)
+      if (allMatches.length === 0) {
         return toolError('NOT_FOUND', `Memory not found: "${name}"`, {
           suggestions: ['Check the memory name — it is case-insensitive. Current memories are listed in agent.md.']
         })
       }
 
-      deleteMemoryFile(projectPath, existing.filename)
-
-      const allEntries = listMemoryFiles(projectPath)
-      updateAgentMdIndex(projectPath, allEntries)
-
-      return {
-        success: true,
-        data: {
-          message: `Memory deleted: ${name}`,
-          totalMemories: allEntries.length
-        }
+      if (allMatches.length > 1 && !type) {
+        const types = allMatches.map(m => m.frontmatter.type).join(', ')
+        return toolError('AMBIGUOUS', `Multiple memories named "${name}" (types: ${types}). Specify type to disambiguate.`, {
+          suggestions: [`Add type parameter: one of ${types}`]
+        })
       }
+
+      const existing = type
+        ? findMemoryByName(projectPath, name, type)
+        : allMatches[0]
+      if (!existing) {
+        return toolError('NOT_FOUND', `Memory not found: "${name}" with type "${type}"`, {
+          suggestions: ['Check the memory name and type.']
+        })
+      }
+
+      return withIndexLock(() => {
+        deleteMemoryFile(projectPath, existing.filename)
+
+        const allEntries = listMemoryFiles(projectPath)
+        updateAgentMdIndex(projectPath, allEntries)
+
+        return {
+          success: true,
+          data: {
+            message: `Memory deleted: ${name}`,
+            totalMemories: allEntries.length
+          }
+        }
+      })
     }
   }
 }

@@ -7,6 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'fs'
 import { join } from 'path'
+import { createHash } from 'crypto'
 import { PATHS, AGENT_MD_ID, AGENT_MD_MAX_CHARS, type NoteArtifact } from '../types.js'
 import { findArtifactById, updateArtifact } from '../memory-v2/store.js'
 
@@ -29,11 +30,17 @@ export interface MemoryEntry {
 // ─── Filename helpers ───────────────────────────────────────────────────────
 
 export function slugify(text: string): string {
-  return text
+  const slug = text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 60)
+  // If the slug is empty or very short (non-Latin input), use a stable hash suffix
+  if (slug.length < 3) {
+    const hash = createHash('sha256').update(text.toLowerCase().trim()).digest('hex').slice(0, 12)
+    return slug ? `${slug}-${hash}` : hash
+  }
+  return slug
 }
 
 export function memoryFilename(type: MemoryType, name: string): string {
@@ -53,14 +60,38 @@ export function ensureMemoryDir(projectPath: string): void {
 
 // ─── File I/O ───────────────────────────────────────────────────────────────
 
+/** YAML-safe value: wrap in quotes if the string contains special characters */
+function yamlSafe(value: string): string {
+  if (!value) return '""'
+  // Needs quoting if contains: colon, hash, bracket, brace, quote, newline, leading/trailing space
+  if (/[:\#{}\[\]"'`\n\r|>]/.test(value) || value !== value.trim()) {
+    // Escape backslashes and double-quotes, then wrap in double quotes
+    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+    return `"${escaped}"`
+  }
+  return value
+}
+
 function formatFrontmatter(fm: MemoryFrontmatter): string {
   return [
     '---',
-    `name: ${fm.name}`,
-    `description: ${fm.description}`,
+    `name: ${yamlSafe(fm.name)}`,
+    `description: ${yamlSafe(fm.description)}`,
     `type: ${fm.type}`,
     '---'
   ].join('\n')
+}
+
+/** Unescape a YAML value that may be double-quoted */
+function yamlUnescape(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/g, "'")
+  }
+  return trimmed
 }
 
 function parseFrontmatter(text: string): { frontmatter: MemoryFrontmatter; body: string } | null {
@@ -69,7 +100,7 @@ function parseFrontmatter(text: string): { frontmatter: MemoryFrontmatter; body:
   const fm: Record<string, string> = {}
   for (const line of match[1].split('\n')) {
     const kv = line.match(/^(\w+):\s*(.+)$/)
-    if (kv) fm[kv[1]] = kv[2].trim()
+    if (kv) fm[kv[1]] = yamlUnescape(kv[2])
   }
   if (!fm.name || !fm.type) return null
   const validTypes: MemoryType[] = ['user', 'feedback', 'project', 'reference']
@@ -128,9 +159,34 @@ export function listMemoryFiles(projectPath: string): MemoryEntry[] {
   }
 }
 
-export function findMemoryByName(projectPath: string, name: string): MemoryEntry | null {
+export function findMemoryByName(projectPath: string, name: string, type?: MemoryType): MemoryEntry | null {
   const lower = name.toLowerCase()
-  return listMemoryFiles(projectPath).find(e => e.frontmatter.name.toLowerCase() === lower) ?? null
+  const entries = listMemoryFiles(projectPath)
+  return entries.find(e =>
+    e.frontmatter.name.toLowerCase() === lower &&
+    (!type || e.frontmatter.type === type)
+  ) ?? null
+}
+
+/** Find all memories with the given name (there may be multiple if different types share a name) */
+export function findAllMemoriesByName(projectPath: string, name: string): MemoryEntry[] {
+  const lower = name.toLowerCase()
+  return listMemoryFiles(projectPath).filter(e => e.frontmatter.name.toLowerCase() === lower)
+}
+
+// ─── Agent.md index write lock (in-process mutex) ─────────────────────────
+
+let _indexWriteLock: Promise<void> = Promise.resolve()
+
+/**
+ * Serialize agent.md index writes to prevent concurrent read-modify-write races
+ * between save-memory tool calls and background extractor.
+ */
+export function withIndexLock<T>(fn: () => T): Promise<T> {
+  const next = _indexWriteLock.then(fn, fn)
+  // Chain regardless of success/failure so the queue doesn't break
+  _indexWriteLock = next.then(() => {}, () => {})
+  return next
 }
 
 // ─── Agent.md index management ──────────────────────────────────────────────
@@ -201,6 +257,11 @@ export function migrateAgentMemoryToFile(projectPath: string): boolean {
 
   // Skip if empty or already looks like an index (contains markdown links to memory/)
   if (!agentMemory || /\[.*\]\(memory\/.*\)/.test(agentMemory)) return false
+
+  // Skip if already migrated (legacy-notes file exists)
+  const legacyFilename = memoryFilename('project', 'legacy-notes')
+  const legacyPath = join(memoryDir(projectPath), legacyFilename)
+  if (existsSync(legacyPath)) return false
 
   // Save old content as a memory file
   ensureMemoryDir(projectPath)

@@ -18,6 +18,7 @@ import {
   writeMemoryFile,
   listMemoryFiles,
   updateAgentMdIndex,
+  withIndexLock,
   type MemoryEntry
 } from './memory-utils.js'
 
@@ -126,7 +127,8 @@ export async function maybeExtractMemories(
   turnCount: number,
   extractEveryN: number = 3
 ): Promise<void> {
-  if (process.env.RESEARCH_COPILOT_AUTO_EXTRACT === '0') return
+  // Fix #7: Default OFF — only run when explicitly enabled with '1'
+  if (process.env.RESEARCH_COPILOT_AUTO_EXTRACT !== '1') return
   if (turnCount % extractEveryN !== 0) return
   if (agentCalledSaveMemoryThisTurn(messages)) {
     if (config.debug) console.log('[Extractor] Skipped — agent called save-memory this turn')
@@ -155,39 +157,74 @@ export async function maybeExtractMemories(
     const text = textContent?.text?.trim() ?? ''
     if (!text || text === '[]') return
 
-    // Parse JSON — handle optional markdown fences
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? text.match(/(\[[\s\S]*?\])/)
-    const jsonStr = jsonMatch?.[1]?.trim() ?? text
-    const extracted: ExtractedMemory[] = JSON.parse(jsonStr)
+    // Fix #2: More robust JSON extraction
+    // 1. Try markdown code fences (greedy to handle nested content)
+    // 2. Try finding the outermost [...] using bracket matching
+    // 3. Fallback to raw text
+    let jsonStr: string
+    const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+    if (fenceMatch) {
+      jsonStr = fenceMatch[1].trim()
+    } else {
+      // Find outermost array brackets for robustness against ] inside content
+      const firstBracket = text.indexOf('[')
+      const lastBracket = text.lastIndexOf(']')
+      if (firstBracket !== -1 && lastBracket > firstBracket) {
+        jsonStr = text.slice(firstBracket, lastBracket + 1)
+      } else {
+        jsonStr = text
+      }
+    }
+
+    let extracted: ExtractedMemory[]
+    try {
+      extracted = JSON.parse(jsonStr)
+    } catch (parseErr) {
+      if (config.debug) {
+        console.warn('[Extractor] JSON parse failed:', parseErr, 'Raw text:', text.slice(0, 200))
+      }
+      return
+    }
 
     if (!Array.isArray(extracted) || extracted.length === 0) return
 
     ensureMemoryDir(config.projectPath)
 
-    let written = 0
+    // Validate and prepare entries before acquiring the lock
+    const validEntries: MemoryEntry[] = []
     for (const mem of extracted) {
       if (!mem.type || !mem.name || !mem.content) continue
       if (!VALID_TYPES.includes(mem.type as MemoryType)) continue
 
-      const entry: MemoryEntry = {
+      // Fix #5: robust description for auto-extracted memories too
+      const desc = (mem.description || '').trim()
+      const contentFirstLine = mem.content.split('\n').find(l => l.trim().length > 0) || ''
+      const description = (desc || contentFirstLine.replace(/^#+\s*/, '').trim().slice(0, 120) || mem.name).replace(/\n/g, ' ')
+
+      validEntries.push({
         frontmatter: {
           name: mem.name,
-          description: (mem.description || mem.content.slice(0, 120)).replace(/\n/g, ' '),
+          description,
           type: mem.type as MemoryType
         },
         content: mem.content,
         filename: memoryFilename(mem.type as MemoryType, mem.name)
-      }
-      writeMemoryFile(config.projectPath, entry)
-      written++
+      })
     }
 
-    if (written > 0) {
+    if (validEntries.length === 0) return
+
+    // Fix #3: serialize index writes via mutex
+    await withIndexLock(() => {
+      for (const entry of validEntries) {
+        writeMemoryFile(config.projectPath, entry)
+      }
       const allEntries = listMemoryFiles(config.projectPath)
       updateAgentMdIndex(config.projectPath, allEntries)
-      if (config.debug) {
-        console.log(`[Extractor] Saved ${written} memories from conversation`)
-      }
+    })
+
+    if (config.debug) {
+      console.log(`[Extractor] Saved ${validEntries.length} memories from conversation`)
     }
   } catch (err) {
     if (config.debug) {
