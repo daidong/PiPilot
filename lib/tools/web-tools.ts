@@ -8,6 +8,9 @@
  * - Hardcoded sensible defaults instead of runtime-settings
  */
 
+import { createHash } from 'crypto'
+import { writeFile, mkdir } from 'fs/promises'
+import path from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError, truncateHeadTail, type ToolResult } from './tool-utils.js'
@@ -46,6 +49,9 @@ const WEB_DEFAULTS = {
   defaultFetchTimeoutMs: 30_000,
   maxArxivCacheEntries: 100,
   arxivSearchCacheTtlMs: 10 * 60 * 1000, // 10 min
+  /** Content above this size is saved to disk; agent gets preview + file path */
+  fetchPersistThresholdChars: 30_000,
+  fetchPreviewChars: 2_000,
 } as const
 
 // ---------------------------------------------------------------------------
@@ -470,7 +476,8 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
   return {
     name: 'web_fetch',
     label: 'Web Fetch',
-    description: 'Fetch a URL and extract readable text or markdown for downstream analysis.',
+    description:
+      'Fetch a URL and extract readable text or markdown. Content over 30K chars is saved to disk — use the read tool on the returned content_path to access full content.',
     parameters: WebFetchSchema,
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as Record<string, unknown>
@@ -558,14 +565,43 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
         ? `# Fetched Content\n\nSource: ${url.toString()}\n\n---\n\n${sliced}`
         : sliced
 
-      const payload = {
-        url: url.toString(),
-        status_code: response.status,
-        content_type: contentType,
-        extract_mode: extractMode,
-        chars: normalized.length,
-        truncated,
-        content: output || '(empty response)',
+      let payload: Record<string, unknown>
+
+      if (output.length > WEB_DEFAULTS.fetchPersistThresholdChars) {
+        // Large content → write to disk, return preview + path
+        const hash = createHash('md5').update(url.toString() + Date.now()).digest('hex').slice(0, 12)
+        const ext = extractMode === 'markdown' ? 'md' : 'txt'
+        const contentDir = path.join(ctx.projectPath, 'web-content')
+        await mkdir(contentDir, { recursive: true })
+        const filePath = path.join(contentDir, `${hash}.${ext}`)
+        await writeFile(filePath, output, 'utf-8')
+
+        // Preview: up to 2K chars, cut at last newline for readability
+        const previewRaw = output.slice(0, WEB_DEFAULTS.fetchPreviewChars)
+        const lastNl = previewRaw.lastIndexOf('\n')
+        const preview = (lastNl > WEB_DEFAULTS.fetchPreviewChars * 0.5
+          ? previewRaw.slice(0, lastNl)
+          : previewRaw) + '\n...'
+
+        payload = {
+          url: url.toString(),
+          status_code: response.status,
+          content_type: contentType,
+          extract_mode: extractMode,
+          chars: normalized.length,
+          content_path: path.relative(ctx.workspacePath, filePath),
+          preview,
+        }
+      } else {
+        payload = {
+          url: url.toString(),
+          status_code: response.status,
+          content_type: contentType,
+          extract_mode: extractMode,
+          chars: normalized.length,
+          truncated,
+          content: output || '(empty response)',
+        }
       }
 
       ctx.onToolResult?.('web_fetch', payload)

@@ -113,6 +113,40 @@ export function truncateHeadTail(
 }
 
 // ---------------------------------------------------------------------------
+// Structured truncation — preserves JSON validity
+// ---------------------------------------------------------------------------
+
+/**
+ * Truncate structured data by shrinking the largest string field.
+ * Unlike truncateHeadTail on serialized JSON, this keeps the JSON structure
+ * intact so the LLM always receives parseable output.
+ */
+function truncateStructuredData(
+  data: Record<string, unknown>,
+  maxChars: number
+): Record<string, unknown> {
+  const json = JSON.stringify(data, null, 2)
+  if (json.length <= maxChars) return data
+
+  const obj = { ...data }
+  let largestKey = ''
+  let largestSize = 0
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === 'string' && v.length > largestSize) {
+      largestKey = k
+      largestSize = v.length
+    }
+  }
+
+  if (largestKey) {
+    const overhead = json.length - largestSize
+    const fieldBudget = Math.max(1000, maxChars - overhead)
+    obj[largestKey] = truncateHeadTail(obj[largestKey] as string, fieldBudget)
+  }
+  return obj
+}
+
+// ---------------------------------------------------------------------------
 // toAgentResult — convert ToolResult to pi-mono format
 // ---------------------------------------------------------------------------
 
@@ -126,6 +160,9 @@ export function truncateHeadTail(
  *   - actionable step 1
  *   - actionable step 2
  *   Context: { diagnostic metadata }
+ *
+ * On success, structured objects are truncated field-by-field to preserve
+ * JSON validity (the largest string field is shrunk first).
  */
 export function toAgentResult(
   toolName: string,
@@ -133,11 +170,20 @@ export function toAgentResult(
 ): AgentToolResult<{ success: boolean; tool_name: string }> {
   let text: string
 
+  const MAX_RESULT_CHARS = 100_000
+
   if (result.success) {
     if (result.data === undefined || result.data === null) {
       text = `[${toolName}] OK`
     } else if (typeof result.data === 'string') {
-      text = result.data
+      text = truncateHeadTail(result.data, MAX_RESULT_CHARS)
+    } else if (typeof result.data === 'object' && result.data !== null && !Array.isArray(result.data)) {
+      // Structured object — truncate inside to preserve JSON validity
+      const bounded = truncateStructuredData(
+        result.data as Record<string, unknown>,
+        MAX_RESULT_CHARS
+      )
+      text = JSON.stringify(bounded, null, 2)
     } else {
       text = JSON.stringify(result.data, null, 2)
     }
@@ -161,12 +207,13 @@ export function toAgentResult(
     text = parts.join('\n')
   }
 
-  // Cap output at 100k chars to avoid blowing up context
-  const MAX_RESULT_CHARS = 100_000
-  const bounded = truncateHeadTail(text, MAX_RESULT_CHARS)
+  // Safety net: if still too large (e.g. arrays, deeply nested), fall back to head/tail
+  if (text.length > MAX_RESULT_CHARS) {
+    text = truncateHeadTail(text, MAX_RESULT_CHARS)
+  }
 
   return {
-    content: [{ type: 'text', text: bounded }],
+    content: [{ type: 'text', text }],
     details: { success: result.success, tool_name: toolName }
   }
 }
