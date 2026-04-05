@@ -18,6 +18,9 @@ interface ChatState {
   savedMessageIds: Set<string>
   /** Tool events associated with each assistant message (messageId → events) */
   turnToolEvents: Map<string, ToolEvent[]>
+  /** Draft input text — persists across component unmount/remount */
+  draftText: string
+  setDraftText: (text: string) => void
   hasMore: boolean
   isLoadingHistory: boolean
   _offset: number
@@ -45,6 +48,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   savedMessageIds: new Set<string>(),
   turnToolEvents: new Map<string, ToolEvent[]>(),
+  draftText: '',
+  setDraftText: (text: string) => set({ draftText: text }),
   hasMore: false,
   isLoadingHistory: false,
   _offset: 0,
@@ -131,6 +136,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     isStreaming: false,
     savedMessageIds: new Set<string>(),
     turnToolEvents: new Map<string, ToolEvent[]>(),
+    draftText: '',
     hasMore: false,
     isLoadingHistory: false,
     _offset: 0,

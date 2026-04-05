@@ -66,7 +66,8 @@ interface PendingFile {
 }
 
 export function ChatInput() {
-  const [text, setText] = useState('')
+  const text = useChatStore((s) => s.draftText)
+  const setText = useChatStore((s) => s.setDraftText)
   const [showMention, setShowMention] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
   const [showCommand, setShowCommand] = useState(false)
@@ -83,9 +84,8 @@ export function ChatInput() {
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
-  // Clear draft text when switching projects
+  // Clear ephemeral UI state when switching projects
   useEffect(() => {
-    setText('')
     setShowMention(false)
     setShowCommand(false)
     setPendingImages([])
