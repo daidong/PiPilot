@@ -18,6 +18,7 @@ import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
+import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
@@ -367,6 +368,51 @@ async function ensureCoordinator(
           }
         }
 
+        // Forward compute run events to renderer
+        if (tool === 'local_compute_execute' && result && typeof result === 'object' && 'success' in result) {
+          const cr = result as any
+          if (cr.success && cr.data) {
+            safeSend(win, 'compute:run-update', {
+              runId: cr.data.run_id,
+              status: cr.data.status,
+              currentPhase: cr.data.current_phase,
+              command: (args as any)?.command ?? '',
+              sandbox: cr.data.sandbox,
+              weight: cr.data.weight,
+              startedAt: new Date().toISOString(),
+            })
+          }
+        }
+        if ((tool === 'local_compute_status' || tool === 'local_compute_wait') && result && typeof result === 'object' && 'success' in result) {
+          const cr = result as any
+          if (cr.success && cr.data?.run_id) {
+            const isComplete = ['completed', 'failed', 'timed_out', 'cancelled'].includes(cr.data.status)
+            const channel = isComplete ? 'compute:run-complete' : 'compute:run-update'
+            safeSend(win, channel, {
+              runId: cr.data.run_id,
+              status: cr.data.status,
+              currentPhase: cr.data.current_phase,
+              exitCode: cr.data.exit_code,
+              elapsedSeconds: cr.data.elapsed_seconds,
+              outputBytes: cr.data.output_bytes,
+              outputLines: cr.data.output_lines,
+              stalled: cr.data.stalled,
+              progress: cr.data.progress,
+              outputTail: cr.data.output_tail?.slice(-2048),
+              failure: cr.data.failure,
+            })
+          }
+        }
+        if (tool === 'local_compute_stop' && result && typeof result === 'object' && 'success' in result) {
+          const cr = result as any
+          if (cr.success && cr.data?.run_id) {
+            safeSend(win, 'compute:run-complete', {
+              runId: cr.data.run_id,
+              status: 'cancelled',
+            })
+          }
+        }
+
         // Send activity event for tool result with structured detail and duration
         const r = result as any
         const success = r?.success !== false
@@ -429,10 +475,43 @@ async function ensureCoordinator(
     const readyEvent = { type: 'system', summary: 'Agent ready' }
     state.realtimeBuffer.pushActivity(readyEvent)
     safeSend(win, 'agent:activity', readyEvent)
+
+    // Send compute environment info to renderer (non-blocking)
+    probeStaticProfile().then(profile => {
+      safeSend(win, 'compute:environment', {
+        os: profile.os,
+        arch: profile.arch,
+        cpuCores: profile.cpuCores,
+        totalMemoryMb: profile.totalMemoryMb,
+        gpu: profile.gpu.model,
+        mlxAvailable: profile.gpu.mlxAvailable,
+        sandbox: profile.dockerAvailable ? 'docker' : 'process',
+      })
+    }).catch(() => { /* non-fatal */ })
   }
   return state.coordinator
 }
 
+
+/**
+ * Destroy all coordinators (and their compute runners) across all windows.
+ * Called from before-quit to ensure compute processes are cleaned up.
+ */
+export async function destroyAllCoordinators(): Promise<void> {
+  const promises: Promise<void>[] = []
+  for (const [, state] of windowStates) {
+    if (state.coordinator) {
+      promises.push(
+        (state.coordinator as any).destroy().catch(() => {})
+      )
+    }
+  }
+  // Wait up to 8s for all coordinators to destroy
+  await Promise.race([
+    Promise.all(promises),
+    new Promise<void>(resolve => setTimeout(resolve, 8000)),
+  ])
+}
 
 export function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
@@ -980,6 +1059,26 @@ export function registerIpcHandlers(): void {
   // Session
   handleWindow('session:current', ({ state }) => ({ sessionId: state.sessionId, projectPath: state.projectPath }))
 
+  // Compute environment probe (called eagerly by renderer on mount)
+  handleWindow('compute:probe-environment', async ({ win }) => {
+    try {
+      const profile = await probeStaticProfile()
+      const env = {
+        os: profile.os,
+        arch: profile.arch,
+        cpuCores: profile.cpuCores,
+        totalMemoryMb: profile.totalMemoryMb,
+        gpu: profile.gpu.model,
+        mlxAvailable: profile.gpu.mlxAvailable,
+        sandbox: profile.dockerAvailable ? 'docker' : 'process',
+      }
+      safeSend(win, 'compute:environment', env)
+      return env
+    } catch {
+      return null
+    }
+  })
+
   // Project - pick folder and initialize
   handleWindow('project:pick-folder', async ({ win, state }) => {
     const result = await dialog.showOpenDialog(win, {
@@ -1009,6 +1108,21 @@ export function registerIpcHandlers(): void {
           if (prefs.reasoningEffort) state.currentReasoningEffort = prefs.reasoningEffort
         } catch { /* ignore corrupt file */ }
       }
+      // Probe compute environment on folder pick (only when feature is enabled)
+      if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
+        probeStaticProfile().then(profile => {
+          safeSend(win, 'compute:environment', {
+            os: profile.os,
+            arch: profile.arch,
+            cpuCores: profile.cpuCores,
+            totalMemoryMb: profile.totalMemoryMb,
+            gpu: profile.gpu.model,
+            mlxAvailable: profile.gpu.mlxAvailable,
+            sandbox: profile.dockerAvailable ? 'docker' : 'process',
+          })
+        }).catch(() => { /* non-fatal */ })
+      }
+
       return { projectPath: state.projectPath, sessionId: state.sessionId }
     }
     return null

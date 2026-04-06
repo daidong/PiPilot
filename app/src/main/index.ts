@@ -9,7 +9,7 @@ setMaxListeners(20)
 import { join, resolve } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { loadApiKeysFromConfig } from '@shared-electron/ipc-base'
-import { registerIpcHandlers, registerWindow } from './ipc'
+import { registerIpcHandlers, registerWindow, destroyAllCoordinators } from './ipc'
 import { registerTerminalHandlers, destroyAllTerminals } from './terminal'
 
 // Load API keys from ~/.research-copilot/config.json (lowest priority).
@@ -198,6 +198,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   destroyAllTerminals()
+  // Ensure compute processes are cleaned up before quitting.
+  // Prevent default quit, run async cleanup, then quit.
+  event.preventDefault()
+  destroyAllCoordinators().finally(() => {
+    // Remove this handler to avoid infinite loop, then quit
+    app.exit(0)
+  })
 })

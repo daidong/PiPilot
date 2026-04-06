@@ -82,6 +82,13 @@ export interface ElectronAPI {
   // Entity creation notifications
   onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
 
+  // Compute (gated behind ENABLE_LOCAL_COMPUTE=1)
+  isComputeEnabled: () => boolean
+  probeComputeEnvironment: () => Promise<any>
+  onComputeRunUpdate: (cb: (event: any) => void) => () => void
+  onComputeRunComplete: (cb: (event: any) => void) => () => void
+  onComputeEnvironment: (cb: (event: any) => void) => () => void
+
   // File tracking
   onFileCreated: (cb: (path: string) => void) => () => void
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
@@ -231,6 +238,28 @@ const api: ElectronAPI = {
     const handler = (_: any, skillName: string) => cb(skillName)
     ipcRenderer.on('agent:skill-loaded', handler)
     return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
+  },
+
+  isComputeEnabled: () => process.env.ENABLE_LOCAL_COMPUTE === '1',
+
+  probeComputeEnvironment: () => ipcRenderer.invoke('compute:probe-environment'),
+
+  onComputeRunUpdate: (cb) => {
+    const handler = (_: any, event: any) => cb(event)
+    ipcRenderer.on('compute:run-update', handler)
+    return () => ipcRenderer.removeListener('compute:run-update', handler)
+  },
+
+  onComputeRunComplete: (cb) => {
+    const handler = (_: any, event: any) => cb(event)
+    ipcRenderer.on('compute:run-complete', handler)
+    return () => ipcRenderer.removeListener('compute:run-complete', handler)
+  },
+
+  onComputeEnvironment: (cb) => {
+    const handler = (_: any, event: any) => cb(event)
+    ipcRenderer.on('compute:environment', handler)
+    return () => ipcRenderer.removeListener('compute:environment', handler)
   },
 
   onEntityCreated: (cb) => {

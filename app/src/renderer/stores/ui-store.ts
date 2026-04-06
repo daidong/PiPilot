@@ -3,7 +3,7 @@ import type { EntityItem } from './entity-store'
 
 type Theme = 'light' | 'dark'
 type LeftTab = 'library' | 'files' | 'skills'
-type CenterView = 'chat' | 'literature'
+type CenterView = 'chat' | 'literature' | 'compute'
 export type { LeftTab, CenterView }
 export type ReasoningEffort = 'high' | 'medium' | 'low' | 'max'
 

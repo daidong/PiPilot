@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compute Tab — UI Mockup (Normalized)</title>
+<style>
+  :root {
+    --bg-base: #0f1117;
+    --bg-surface: #161822;
+    --bg-elevated: #1e2030;
+    --bg-hover: #252840;
+    --border: #2a2d3e;
+    --border-subtle: #22253a;
+    --text: #e0e0e8;
+    --text-secondary: #a0a4b8;
+    --text-muted: #6b7084;
+    --accent: #7c8cf8;
+    --accent-soft: #6672d8;
+    --accent-2: #9ba4f8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg-base); color: var(--text); height: 100vh; overflow: hidden; }
+  .app { display: flex; height: 100vh; }
+
+  /* Sidebar */
+  .sidebar { width: 280px; border-right: 1px solid var(--border); display: flex; flex-direction: column; background: var(--bg-base); flex-shrink: 0; padding-top: 36px; }
+  .sidebar-header { padding: 0 16px 12px; display: flex; align-items: center; justify-content: space-between; }
+  .sidebar-header-left { display: flex; align-items: center; gap: 6px; }
+  .sidebar-header-left span { font-size: 11px; color: var(--text-muted); }
+  .sidebar-scroll { flex: 1; overflow-y: auto; }
+
+  .section-label { font-size: 9px; font-weight: 600; color: var(--accent-soft); text-transform: uppercase; letter-spacing: 0.8px; padding: 0 12px 6px; }
+
+  /* Target card */
+  .target-card { margin: 0 8px 6px; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; }
+  .target-header { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+  .dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .dot.active { background: var(--accent); }
+  .dot.idle { background: var(--text-muted); opacity: 0.5; }
+  .target-name { font-size: 12px; font-weight: 500; color: var(--text); }
+  .target-specs { font-size: 10px; color: var(--text-muted); line-height: 1.5; }
+  .tag { display: inline-block; padding: 0 4px; border-radius: 3px; font-size: 9px; font-weight: 500; }
+  .tag.accent { background: rgba(124,140,248,0.1); color: var(--accent); }
+  .tag.muted { background: var(--bg-elevated); color: var(--text-muted); }
+
+  .resource-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .resource-label { font-size: 9px; color: var(--text-muted); width: 40px; text-align: right; }
+  .resource-track { flex: 1; height: 3px; background: var(--bg-elevated); border-radius: 2px; overflow: hidden; }
+  .resource-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); opacity: 0.5; }
+  .resource-pct { font-size: 9px; color: var(--text-muted); width: 24px; }
+
+  .sandbox-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
+  .sandbox-toggle { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-muted); cursor: pointer; background: none; border: none; padding: 0; width: 100%; text-align: left; }
+  .sandbox-toggle:hover { color: var(--text-secondary); }
+  .sandbox-toggle .val { color: var(--text-secondary); }
+  .sandbox-explain { margin: 6px 0 0 14px; font-size: 9px; color: var(--text-muted); line-height: 1.5; }
+
+  .target-status { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); font-size: 10px; color: var(--text-muted); }
+
+  .future-target { margin: 0 8px 8px; padding: 8px 12px; border: 1px dashed var(--border-subtle); border-radius: 8px; font-size: 10px; color: var(--text-muted); opacity: 0.3; }
+
+  .sidebar-divider { height: 1px; background: var(--border); margin: 4px 12px; }
+  .sidebar-info { padding: 12px; font-size: 10px; color: var(--text-muted); line-height: 1.5; display: flex; gap: 8px; }
+  .sidebar-info svg { flex-shrink: 0; margin-top: 2px; opacity: 0.4; }
+
+  /* Center */
+  .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  .view-switcher { display: flex; align-items: center; gap: 2px; padding: 36px 20px 6px; }
+  .vtab { display: flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 11px; font-weight: 500; border-radius: 7px; cursor: pointer; color: var(--text-muted); border: none; background: none; transition: all 0.15s; }
+  .vtab:hover { color: var(--text-secondary); background: var(--bg-hover); }
+  .vtab.active { color: var(--accent); background: rgba(124,140,248,0.08); }
+  .vtab .badge { margin-left: 3px; padding: 0 5px; font-size: 9px; border-radius: 8px; background: rgba(124,140,248,0.1); color: var(--accent); }
+  .vtab .sc { font-size: 9px; color: var(--text-muted); opacity: 0.5; margin-left: 2px; }
+
+  /* Filter bar */
+  .filter-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); }
+  .filter-input { width: 100%; padding: 6px 10px 6px 30px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; font-size: 11px; color: var(--text); outline: none; position: relative; }
+  .filter-input::placeholder { color: var(--text-muted); }
+  .filter-input:focus { border-color: var(--accent-soft); }
+  .filter-wrap { position: relative; }
+  .filter-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
+
+  /* Table header */
+  .table-header { display: flex; align-items: center; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--border); background: var(--bg-surface); font-size: 9px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; }
+  .table-header .col-cmd { flex: 1; }
+  .table-header .col-dur { width: 56px; text-align: right; }
+  .table-header .col-phase { width: 56px; text-align: right; }
+
+  .content { flex: 1; overflow-y: auto; }
+
+  /* Run row */
+  .run-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; transition: background 0.1s; }
+  .run-row:last-child { border-bottom: none; }
+  .run-row:hover { background: rgba(124,140,248,0.03); }
+  .run-chev { color: var(--text-muted); flex-shrink: 0; font-size: 12px; width: 14px; }
+  .run-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .run-dot.active { background: var(--accent); }
+  .run-dot.done { background: var(--bg-elevated); }
+  .run-body { flex: 1; min-width: 0; }
+  .run-cmd { font-size: 12px; font-family: 'SF Mono','Fira Code',monospace; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+  .run-meta { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  .run-meta .err { font-weight: 500; }
+  .run-dur { width: 56px; text-align: right; font-size: 10px; color: var(--text-muted); font-family: 'SF Mono',monospace; flex-shrink: 0; }
+  .run-phase { width: 56px; text-align: right; font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+
+  /* Progress inline */
+  .progress-inline { padding: 2px 38px 8px; }
+  .progress-track { height: 3px; border-radius: 2px; background: var(--bg-elevated); overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.8s; }
+  .progress-stats { display: flex; gap: 12px; margin-top: 4px; font-size: 9px; color: var(--text-muted); }
+
+  /* Expanded detail */
+  .run-detail { padding: 4px 38px 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+  .chip { padding: 1px 6px; border-radius: 4px; background: var(--bg-elevated); font-size: 9px; color: var(--text-muted); }
+  .metric-chip { font-family: 'SF Mono',monospace; }
+  .metric-key { color: var(--text-muted); }
+  .metric-val { color: var(--text-secondary); }
+  .failure-block { font-size: 11px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 6px; }
+  .failure-block strong { font-weight: 500; }
+  .failure-sug { margin-top: 4px; }
+  .failure-sug li { display: flex; align-items: flex-start; gap: 6px; font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
+  .failure-sug .bullet { width: 3px; height: 3px; border-radius: 50%; background: var(--bg-elevated); flex-shrink: 0; margin-top: 6px; }
+  .output-pre { padding: 8px; border-radius: 6px; background: var(--bg-elevated); font-size: 9px; font-family: 'SF Mono',monospace; color: var(--text-secondary); line-height: 1.6; max-height: 120px; overflow: auto; white-space: pre-wrap; margin-bottom: 6px; }
+  .retry-link { font-size: 10px; color: var(--accent); cursor: pointer; }
+  .retry-link:hover { text-decoration: underline; }
+
+  /* Coverage bar */
+  .coverage { display: flex; align-items: center; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--border); background: var(--bg-surface); font-size: 10px; color: var(--text-muted); }
+  .coverage-track { flex: 1; max-width: 160px; height: 4px; border-radius: 2px; background: var(--bg-elevated); overflow: hidden; }
+  .coverage-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  /* Empty state */
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 40px; text-align: center; }
+  .empty-icon { color: var(--text-muted); opacity: 0.3; margin-bottom: 12px; }
+  .empty-title { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+  .empty-desc { font-size: 11px; color: var(--text-muted); max-width: 340px; line-height: 1.6; margin-bottom: 16px; }
+  .env-pill { padding: 8px 14px; border-radius: 8px; background: var(--bg-elevated); font-size: 10px; color: var(--text-secondary); margin-bottom: 16px; }
+  .env-pill .a { color: var(--accent); }
+  .prompt-btn { width: 100%; max-width: 320px; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-subtle); background: none; cursor: pointer; margin-bottom: 4px; transition: background 0.15s; }
+  .prompt-btn:hover { background: rgba(124,140,248,0.03); }
+  .prompt-btn span { font-size: 11px; color: var(--text-secondary); }
+  .prompt-btn .arr { color: var(--text-muted); font-size: 12px; }
+
+  /* Demo tabs */
+  .demo-tabs { position: fixed; top: 8px; right: 12px; display: flex; gap: 4px; z-index: 100; }
+  .dtab { padding: 4px 10px; border-radius: 5px; font-size: 10px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-muted); }
+  .dtab:hover { color: var(--text); }
+  .dtab.active { background: rgba(124,140,248,0.1); color: var(--accent); border-color: rgba(124,140,248,0.3); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="demo-tabs">
+  <button class="dtab active" onclick="showState('running')">Active Runs</button>
+  <button class="dtab" onclick="showState('history')">History</button>
+  <button class="dtab" onclick="showState('empty')">Empty</button>
+</div>
+
+<div class="app">
+
+<!-- ===== LEFT SIDEBAR ===== -->
+<div class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-header-left">
+      <span style="color:var(--text-muted)">Model / Settings area</span>
+    </div>
+  </div>
+  <div class="sidebar-scroll">
+    <div class="section-label">Compute Target</div>
+
+    <div class="target-card">
+      <div class="target-header">
+        <div class="dot" id="t-dot"></div>
+        <span class="target-name">Local Machine</span>
+      </div>
+      <div class="target-specs">
+        Apple M2 Pro &middot; 16 GB<br>
+        Python 3.11 &middot; <span class="tag accent">MLX</span> <span class="tag muted">Docker</span>
+      </div>
+      <div class="resource-row">
+        <span class="resource-label">Memory</span>
+        <div class="resource-track"><div class="resource-fill" style="width:62%"></div></div>
+        <span class="resource-pct">62%</span>
+      </div>
+      <div class="sandbox-row">
+        <button class="sandbox-toggle" onclick="this.nextElementSibling.classList.toggle('hidden')">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          Sandbox: <span class="val">Process (venv)</span>
+        </button>
+        <div class="sandbox-explain hidden">
+          Process sandbox chosen because Docker on macOS cannot access Metal GPU. Direct MLX/Metal acceleration for ML training.
+        </div>
+      </div>
+      <div class="target-status" id="t-status">
+        <span id="t-status-text">Ready &middot; 1 running</span>
+      </div>
+    </div>
+
+    <div class="future-target">+ Add remote target</div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-info">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <span>Ask the agent to run scripts, train models, or process data. Code executes in a sandboxed environment with progress tracking and failure analysis.</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== CENTER PANEL ===== -->
+<div class="center">
+  <div class="view-switcher">
+    <button class="vtab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      Chat <span class="sc">&ensp;&#8984;1</span>
+    </button>
+    <button class="vtab">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      Literature <span class="sc">&ensp;&#8984;2</span>
+    </button>
+    <button class="vtab active">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+      Compute <span class="badge" id="c-badge">1</span>
+      <span class="sc">&ensp;&#8984;3</span>
+    </button>
+  </div>
+
+  <!-- STATE: RUNNING -->
+  <div id="state-running">
+    <div class="filter-bar">
+      <div class="filter-wrap">
+        <svg class="filter-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="filter-input" placeholder="Search runs by command or ID...">
+      </div>
+    </div>
+    <div class="table-header">
+      <div style="width:14px"></div>
+      <div style="width:5px"></div>
+      <div class="col-cmd">Command</div>
+      <div class="col-dur">Duration</div>
+      <div class="col-phase">Phase</div>
+    </div>
+    <div class="content">
+      <!-- Active: training -->
+      <div class="run-row" onclick="this.querySelector('.run-chev').textContent=this.querySelector('.run-chev').textContent==='>' ? 'v' : '>'">
+        <span class="run-chev">v</span>
+        <div class="run-dot active"></div>
+        <div class="run-body">
+          <div class="run-cmd">python3 train_rf.py --data patient_data.csv</div>
+          <div class="run-meta">cr-a1b2c3d4</div>
+        </div>
+        <div class="run-dur">5m 42s</div>
+        <div class="run-phase">full</div>
+      </div>
+      <div class="progress-inline">
+        <div class="progress-track"><div class="progress-fill" id="pbar" style="width:42%"></div></div>
+        <div class="progress-stats">
+          <span>42%</span>
+          <span>Epoch 3/10</span>
+          <span>training</span>
+          <span>ETA 8m</span>
+        </div>
+      </div>
+      <div class="run-detail">
+        <div class="chips">
+          <span class="chip">process</span>
+          <span class="chip">heavy</span>
+          <span class="chip">2.3 MB output</span>
+        </div>
+        <div class="chips">
+          <span class="chip metric-chip"><span class="metric-key">loss</span> <span class="metric-val">0.8534</span></span>
+          <span class="chip metric-chip"><span class="metric-key">accuracy</span> <span class="metric-val">0.9215</span></span>
+          <span class="chip metric-chip"><span class="metric-key">lr</span> <span class="metric-val">0.001</span></span>
+        </div>
+        <div class="output-pre">Epoch 3/10 - step 150/500
+loss: 0.8534 - accuracy: 0.9215
+Validating fold 3/5...
+##PROGRESS## {"step": 3, "total": 10, "loss": 0.8534}</div>
+      </div>
+
+      <!-- Active: stalled -->
+      <div class="run-row">
+        <span class="run-chev">&gt;</span>
+        <div class="run-dot active"></div>
+        <div class="run-body">
+          <div class="run-cmd">python3 preprocess.py --input survey_2024.csv</div>
+          <div class="run-meta">cr-e5f6g7h8 &middot; stalled</div>
+        </div>
+        <div class="run-dur">12m 15s</div>
+        <div class="run-phase">full</div>
+      </div>
+
+      <!-- History: completed -->
+      <div class="run-row">
+        <span class="run-chev">&gt;</span>
+        <div class="run-dot done"></div>
+        <div class="run-body">
+          <div class="run-cmd">python3 plot_results.py --output figures/</div>
+          <div class="run-meta">cr-i9j0k1l2 &middot; Completed</div>
+        </div>
+        <div class="run-dur">45s</div>
+        <div class="run-phase">2m ago</div>
+      </div>
+
+      <!-- History: failed -->
+      <div class="run-row" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        <span class="run-chev">&gt;</span>
+        <div class="run-dot done"></div>
+        <div class="run-body">
+          <div class="run-cmd">python3 preprocess.py --input raw_data.csv</div>
+          <div class="run-meta">cr-m3n4o5p6 &middot; Failed &middot; <span class="err">OOM_KILLED</span> &middot; retry</div>
+        </div>
+        <div class="run-dur">12m</div>
+        <div class="run-phase">15m ago</div>
+      </div>
+      <div class="run-detail hidden">
+        <div class="chips">
+          <span class="chip">process</span>
+          <span class="chip">heavy</span>
+          <span class="chip">exit 137</span>
+        </div>
+        <div class="failure-block">
+          <strong>OOM_KILLED:</strong> Process was killed due to insufficient memory.
+          <ul class="failure-sug">
+            <li><span class="bullet"></span>Reduce the dataset size or batch size</li>
+            <li><span class="bullet"></span>Close other memory-intensive applications</li>
+          </ul>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-muted);margin-bottom:6px">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+          Retry of cr-k9l0m1n2
+        </div>
+        <span class="retry-link">Fix & retry in chat</span>
+      </div>
+
+      <!-- History: timeout -->
+      <div class="run-row">
+        <span class="run-chev">&gt;</span>
+        <div class="run-dot done"></div>
+        <div class="run-body">
+          <div class="run-cmd">python3 train_large_model.py --epochs 100</div>
+          <div class="run-meta">cr-u1v2w3x4 &middot; Timed out</div>
+        </div>
+        <div class="run-dur">60m</div>
+        <div class="run-phase">3h ago</div>
+      </div>
+    </div>
+
+    <div class="coverage">
+      <span>5 runs</span>
+      <span>2 completed</span>
+      <span>1 failed</span>
+      <div class="coverage-track"><div class="coverage-fill" style="width:40%"></div></div>
+      <span>40% success</span>
+    </div>
+  </div>
+
+  <!-- STATE: HISTORY -->
+  <div id="state-history" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <div class="filter-bar">
+      <div class="filter-wrap">
+        <svg class="filter-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="filter-input" placeholder="Search runs by command or ID...">
+      </div>
+    </div>
+    <div class="table-header">
+      <div style="width:14px"></div>
+      <div style="width:5px"></div>
+      <div class="col-cmd">Command</div>
+      <div class="col-dur">Duration</div>
+      <div class="col-phase">Phase</div>
+    </div>
+    <div class="content">
+      <div class="run-row"><span class="run-chev">&gt;</span><div class="run-dot done"></div><div class="run-body"><div class="run-cmd">python3 train_rf.py --data patient_data.csv</div><div class="run-meta">cr-a1b2c3d4 &middot; Completed</div></div><div class="run-dur">8m 32s</div><div class="run-phase">12m ago</div></div>
+      <div class="run-row"><span class="run-chev">&gt;</span><div class="run-dot done"></div><div class="run-body"><div class="run-cmd">python3 plot_results.py --output figures/</div><div class="run-meta">cr-i9j0k1l2 &middot; Completed</div></div><div class="run-dur">45s</div><div class="run-phase">25m ago</div></div>
+      <div class="run-row"><span class="run-chev">&gt;</span><div class="run-dot done"></div><div class="run-body"><div class="run-cmd">python3 preprocess.py --input raw_data.csv</div><div class="run-meta">cr-m3n4o5p6 &middot; Failed &middot; <span class="err">OOM_KILLED</span></div></div><div class="run-dur">12m</div><div class="run-phase">35m ago</div></div>
+      <div class="run-row"><span class="run-chev">&gt;</span><div class="run-dot done"></div><div class="run-body"><div class="run-cmd">python3 analyze_cohort.py --method kaplan-meier</div><div class="run-meta">cr-q7r8s9t0 &middot; Completed</div></div><div class="run-dur">3m 12s</div><div class="run-phase">2h ago</div></div>
+      <div class="run-row"><span class="run-chev">&gt;</span><div class="run-dot done"></div><div class="run-body"><div class="run-cmd">python3 train_large_model.py --epochs 100</div><div class="run-meta">cr-u1v2w3x4 &middot; Timed out</div></div><div class="run-dur">60m</div><div class="run-phase">4h ago</div></div>
+      <div class="run-row"><span class="run-chev">&gt;</span><div class="run-dot done"></div><div class="run-body"><div class="run-cmd">python3 download_dataset.py --source pubmed</div><div class="run-meta">cr-y5z6a7b8 &middot; Cancelled</div></div><div class="run-dur">--</div><div class="run-phase">6h ago</div></div>
+    </div>
+    <div class="coverage">
+      <span>6 runs</span>
+      <span>3 completed</span>
+      <span>1 failed</span>
+      <div class="coverage-track"><div class="coverage-fill" style="width:50%"></div></div>
+      <span>50% success</span>
+    </div>
+  </div>
+
+  <!-- STATE: EMPTY -->
+  <div id="state-empty" class="hidden" style="flex:1;display:flex;flex-direction:column">
+    <div class="content" style="flex:1">
+      <div class="empty">
+        <svg class="empty-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+        <div class="empty-title">Your compute environment is ready</div>
+        <div class="empty-desc">Ask the agent to run scripts, train models, or process data. Code executes in a sandboxed environment with progress tracking and failure analysis.</div>
+        <div class="env-pill">Apple M2 Pro &middot; 16 GB &middot; <span class="a">MLX</span> &middot; Python 3.11</div>
+        <div class="prompt-btn"><span>"Train a model on my dataset"</span><span class="arr">&rsaquo;</span></div>
+        <div class="prompt-btn"><span>"Run my analysis script"</span><span class="arr">&rsaquo;</span></div>
+        <div class="prompt-btn"><span>"Process and clean this data"</span><span class="arr">&rsaquo;</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+let p=42;setInterval(()=>{p+=Math.random()*0.4;if(p>95)p=42;const b=document.getElementById('pbar');if(b&&!document.getElementById('state-running').classList.contains('hidden'))b.style.width=p+'%'},2000);
+function showState(s){
+  document.querySelectorAll('.dtab').forEach(t=>t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('state-running').classList.toggle('hidden',s!=='running');
+  document.getElementById('state-running').style.display=s==='running'?'flex':'none';
+  document.getElementById('state-running').style.flexDirection='column';
+  document.getElementById('state-running').style.flex='1';
+  document.getElementById('state-running').style.minHeight='0';
+  document.getElementById('state-history').classList.toggle('hidden',s!=='history');
+  document.getElementById('state-empty').classList.toggle('hidden',s!=='empty');
+  const b=document.getElementById('c-badge');
+  const d=document.getElementById('t-dot');
+  const st=document.getElementById('t-status-text');
+  if(s==='running'){b.textContent='1';b.style.display='inline';d.className='dot active';st.textContent='Ready \u00b7 1 running';}
+  else if(s==='history'){b.textContent='';b.style.display='none';d.className='dot idle';st.textContent='Ready';}
+  else{b.textContent='';b.style.display='none';d.className='dot idle';st.textContent='Ready';}
+}
+</script>
+</body>
+</html>

@@ -29,10 +29,15 @@ export function ReasoningToggle({ selectedModel, reasoningEffort, onChangeEffort
   return (
     <button
       onClick={() => onChangeEffort(CYCLE[reasoningEffort])}
-      className="no-drag p-1.5 rounded-lg t-bg-hover transition-colors"
-      title={`Reasoning: ${reasoningEffort}`}
+      className="no-drag group relative p-1.5 rounded-lg t-bg-hover transition-colors"
     >
       <Lightbulb size={16} className={COLORS[reasoningEffort]} />
+      <span
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 px-2 py-0.5 rounded text-[10px] t-bg-elevated t-text-secondary border t-border shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 z-50"
+        style={{ transition: 'opacity 0.15s ease', transitionDelay: '0.2s' }}
+      >
+        Reasoning: {reasoningEffort}
+      </span>
     </button>
   )
 }

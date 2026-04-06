@@ -45,7 +45,10 @@ export const PATHS = {
 
   // Skills
   skills: '.research-pilot/skills',
-  skillsConfig: '.research-pilot/skills-config.json'
+  skillsConfig: '.research-pilot/skills-config.json',
+
+  // Local compute runs
+  computeRuns: '.research-pilot/compute-runs'
 } as const
 
 // ============================================================================

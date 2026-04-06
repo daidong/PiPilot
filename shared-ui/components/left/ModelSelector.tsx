@@ -98,12 +98,18 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="no-drag flex items-center gap-1.5 px-2 py-1.5 rounded-lg t-text-secondary text-xs font-medium t-bg-hover transition-colors"
-        title="Select model"
+        className="no-drag group relative flex items-center gap-1.5 px-2 py-1.5 rounded-lg t-text-secondary text-xs font-medium t-bg-hover transition-colors"
         aria-label="Select model"
         aria-haspopup="listbox"
         aria-expanded={open}
       >
+        {/* Fast tooltip — matches ToolbarButton pattern exactly */}
+        <span
+          className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 px-2 py-0.5 rounded text-[10px] t-bg-elevated t-text-secondary border t-border shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 z-50"
+          style={{ transition: 'opacity 0.15s ease', transitionDelay: '0.2s' }}
+        >
+          Select model
+        </span>
         <Cpu size={14} />
         <span className="truncate max-w-[100px]">{current?.label || selectedModel}</span>
         {authBadge && (

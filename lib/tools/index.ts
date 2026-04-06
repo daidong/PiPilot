@@ -20,6 +20,7 @@ import { createWebSearchTool, createWebFetchTool } from './web-tools.js'
 import { createLiteratureSearchTool } from './literature-search.js'
 import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
+import { createLocalComputeTools } from '../local-compute/tools.js'
 
 // ---------------------------------------------------------------------------
 // ResearchTool -> AgentTool adapter
@@ -89,10 +90,14 @@ function wrapResearchTool(tool: ResearchTool): AgentTool {
  * Create all research tools for the coordinator agent.
  *
  * @param ctx - Research tool context (workspace, session, LLM, callbacks)
- * @returns Array of pi-mono AgentTool instances
+ * @returns tools array + destroy function for cleanup of long-lived resources
  */
-export function createResearchTools(ctx: ResearchToolContext): AgentTool[] {
+export function createResearchTools(ctx: ResearchToolContext): {
+  tools: AgentTool[]
+  destroy: () => Promise<void>
+} {
   const tools: AgentTool[] = []
+  const destroyers: Array<() => Promise<void>> = []
 
   // Web tools (already AgentTool)
   tools.push(createWebSearchTool(ctx))
@@ -118,7 +123,22 @@ export function createResearchTools(ctx: ResearchToolContext): AgentTool[] {
     tools.push(wrapResearchTool(tool))
   }
 
-  return tools
+  // Local compute tools (long-running sandboxed execution)
+  // Gated behind ENABLE_LOCAL_COMPUTE env var for gradual rollout
+  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
+    const compute = createLocalComputeTools(ctx)
+    tools.push(...compute.tools)
+    destroyers.push(compute.destroy)
+  }
+
+  return {
+    tools,
+    destroy: async () => {
+      for (const d of destroyers) {
+        await d().catch(() => {})
+      }
+    },
+  }
 }
 
 export type { ResearchToolContext } from './types.js'

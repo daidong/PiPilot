@@ -16,6 +16,7 @@ import { useActivityStore } from './stores/activity-store'
 import { useToolProgressStore } from './stores/tool-progress-store'
 import { useToolEventsStore } from './stores/tool-events-store'
 import { useUsageStore, type UsageEvent } from './stores/usage-store'
+import { useComputeStore } from './stores/compute-store'
 
 const api = (window as any).api
 
@@ -257,6 +258,22 @@ export default function App() {
       refreshEntities()
     })
 
+    // Eagerly probe compute environment (only when compute feature is enabled)
+    if (api?.isComputeEnabled?.()) {
+      api.probeComputeEnvironment?.().catch(() => {})
+    }
+
+    // Compute run events
+    const unsubComputeUpdate = api.onComputeRunUpdate((event: any) => {
+      useComputeStore.getState().updateRun(event.runId, event)
+    })
+    const unsubComputeComplete = api.onComputeRunComplete((event: any) => {
+      useComputeStore.getState().updateRun(event.runId, event)
+    })
+    const unsubComputeEnv = api.onComputeEnvironment((event: any) => {
+      useComputeStore.getState().setEnvironment(event)
+    })
+
     return () => {
       unsub1()
       unsub2()
@@ -269,6 +286,9 @@ export default function App() {
       unsubToolProgress()
       unsubSkillLoaded()
       unsubUsage()
+      unsubComputeUpdate()
+      unsubComputeComplete()
+      unsubComputeEnv()
     }
   }, [hasProject])
 
@@ -291,7 +311,7 @@ export default function App() {
         useUIStore.getState().setIdle(true)
         useUIStore.getState().closePreview()
       }
-      // Cmd+1 → Chat view, Cmd+2 → Literature view
+      // Cmd+1 → Chat, Cmd+2 → Literature, Cmd+3 → Compute
       if ((e.metaKey || e.ctrlKey) && e.key === '1') {
         e.preventDefault()
         useUIStore.getState().setCenterView('chat')
@@ -299,6 +319,10 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key === '2') {
         e.preventDefault()
         useUIStore.getState().setCenterView('literature')
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '3' && api?.isComputeEnabled?.()) {
+        e.preventDefault()
+        useUIStore.getState().setCenterView('compute')
       }
       // Cmd+Shift+K → Close Project
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'K') {

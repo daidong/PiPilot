@@ -3,9 +3,32 @@ import { Sun, Moon, Eraser, Terminal } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { EntityTabs } from '../left/EntityTabs'
 import { LiteratureSidebar } from '../left/LiteratureSidebar'
+import { ComputeSidebar } from '../left/ComputeSidebar'
 import { UserProfile } from '../left/UserProfile'
 import { ModelSelector } from '../left/ModelSelector'
 import { ReasoningToggle } from '../left/ReasoningToggle'
+
+/** Toolbar icon button with fast CSS tooltip (200ms delay instead of OS default ~800ms) */
+function ToolbarButton({ onClick, tooltip, children }: {
+  onClick: () => void
+  tooltip: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="no-drag group relative p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
+    >
+      {children}
+      <span
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 px-2 py-0.5 rounded text-[10px] t-bg-elevated t-text-secondary border t-border shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 z-50"
+        style={{ transition: 'opacity 0.15s ease', transitionDelay: '0.2s' }}
+      >
+        {tooltip}
+      </span>
+    </button>
+  )
+}
 
 export function LeftSidebar() {
   const theme = useUIStore((s) => s.theme)
@@ -18,32 +41,29 @@ export function LeftSidebar() {
         <ModelSelector />
         <div className="flex items-center gap-1">
           <ReasoningToggle />
-          <button
+          <ToolbarButton
             onClick={() => (window as any).api.clearSessionMemory()}
-            className="no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
-            title="Clear session memory"
+            tooltip="Clear session memory"
           >
             <Eraser size={16} />
-          </button>
-          <button
+          </ToolbarButton>
+          <ToolbarButton
             onClick={toggleTheme}
-            className="no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            tooltip={`${theme === 'dark' ? 'Light' : 'Dark'} mode`}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
-          <button
+          </ToolbarButton>
+          <ToolbarButton
             onClick={() => useUIStore.getState().toggleTerminal()}
-            className="no-drag p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
-            title="Toggle terminal (⌘`)"
+            tooltip="Terminal  ⌘`"
           >
             <Terminal size={16} />
-          </button>
+          </ToolbarButton>
         </div>
       </div>
 
       <div className="flex-1 min-h-0">
-        {centerView === 'literature' ? <LiteratureSidebar /> : <EntityTabs />}
+        {centerView === 'literature' ? <LiteratureSidebar /> : centerView === 'compute' && (window as any).api?.isComputeEnabled?.() ? <ComputeSidebar /> : <EntityTabs />}
       </div>
 
       <div className="border-t t-border p-4">

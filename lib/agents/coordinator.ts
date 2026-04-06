@@ -21,6 +21,7 @@ import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
+import { probeStaticProfile, generateAgentGuidance } from '../local-compute/environment-model.js'
 import { maybeExtractMemories } from '../memory/extractor.js'
 import { createLoadSkillTool } from '../tools/skill-tools.js'
 import { loadAllSkills, readEnabledSkills, resolveSkillDependencies, buildSkillsCatalogPrompt, buildSkillSummary, type SkillEntry } from '../skills/loader.js'
@@ -364,7 +365,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onToolCall,
     onToolResult: wrappedOnToolResult
   }
-  const researchAgentTools: AgentTool[] = createResearchTools(toolCtx)
+  const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
 
   // Create built-in coding tools from pi-coding-agent
   const codingTools = createCodingTools(projectPath)
@@ -395,20 +396,21 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   ]
 
   // Build the full system prompt with skills catalog
+  // Environment guidance is injected asynchronously AFTER agent creation (non-blocking)
   const skillsCatalog = buildSkillsCatalogPrompt(skills)
-  const fullSystemPrompt = skillsCatalog
-    ? SYSTEM_PROMPT + '\n\n' + skillsCatalog
-    : SYSTEM_PROMPT
+
+  const baseSystemPrompt = SYSTEM_PROMPT
+    + (skillsCatalog ? '\n\n' + skillsCatalog : '')
 
   // ── Context compaction state ──
   // Tracks the summary of compacted (discarded) messages so iterative
   // compactions can update rather than regenerate from scratch.
   let compactionSummary: string | undefined
 
-  // Create the pi-mono Agent
+  // Create the pi-mono Agent immediately (no blocking on env probe)
   const agent = new Agent({
     initialState: {
-      systemPrompt: fullSystemPrompt,
+      systemPrompt: baseSystemPrompt,
       model: piModel ?? undefined as any,
       tools: allTools,
       thinkingLevel: reasoningEffort === 'high' ? 'high' : reasoningEffort === 'medium' ? 'medium' : 'low'
@@ -614,6 +616,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     }
   }
 
+  // Fire-and-forget: probe environment and update system prompt asynchronously.
+  // Gated behind ENABLE_LOCAL_COMPUTE — no env guidance when compute is disabled.
+  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
+    probeStaticProfile()
+      .then(profile => {
+        const envGuidance = generateAgentGuidance(profile)
+        agent.setSystemPrompt(baseSystemPrompt + '\n\n' + envGuidance)
+      })
+      .catch(() => { /* non-fatal */ })
+  }
+
   return {
     agent,
 
@@ -786,6 +799,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     async destroy() {
       agent.abort()
+      await destroyResearchTools()
     }
   }
 }

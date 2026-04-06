@@ -1,22 +1,29 @@
 import React from 'react'
-import { MessageSquare, BookOpen } from 'lucide-react'
+import { MessageSquare, BookOpen, Cpu } from 'lucide-react'
 import { useUIStore, type CenterView } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { useEntityStore } from '../../stores/entity-store'
+import { useActiveRunCount } from '../../stores/compute-store'
 import { HeroIdle } from '../center/HeroIdle'
 import { ChatMessages } from '../center/ChatMessages'
 import { ChatInput } from '../center/ChatInput'
 import { LiteratureView } from '../center/LiteratureView'
+import { ComputeView } from '../center/ComputeView'
+
+const api = (window as any).api
+const computeEnabled = api?.isComputeEnabled?.() ?? false
 
 const viewTabs: { key: CenterView; label: string; icon: React.ElementType; shortcut: string }[] = [
   { key: 'chat', label: 'Chat', icon: MessageSquare, shortcut: '⌘1' },
-  { key: 'literature', label: 'Literature', icon: BookOpen, shortcut: '⌘2' }
+  { key: 'literature', label: 'Literature', icon: BookOpen, shortcut: '⌘2' },
+  ...(computeEnabled ? [{ key: 'compute' as CenterView, label: 'Compute', icon: Cpu, shortcut: '⌘3' }] : [])
 ]
 
 function ViewSwitcher() {
   const centerView = useUIStore((s) => s.centerView)
   const setCenterView = useUIStore((s) => s.setCenterView)
   const paperCount = useEntityStore((s) => s.papers.length)
+  const activeComputeRuns = useActiveRunCount()
 
   return (
     <div className="flex items-center gap-0.5 px-4 pt-10 pb-1">
@@ -38,6 +45,12 @@ function ViewSwitcher() {
               {paperCount}
             </span>
           )}
+          {key === 'compute' && activeComputeRuns > 0 && (
+            <span className="ml-0.5 px-1 py-px text-[9px] rounded-full bg-[var(--color-accent-soft)]/10 t-text-accent tabular-nums">
+              {activeComputeRuns}
+            </span>
+          )}
+          <span className="text-[9px] t-text-muted opacity-40 ml-0.5">{shortcut}</span>
         </button>
       ))}
     </div>
@@ -55,6 +68,15 @@ export function CenterPanel() {
       <main className="flex-1 flex flex-col min-w-0">
         <ViewSwitcher />
         <LiteratureView />
+      </main>
+    )
+  }
+
+  if (centerView === 'compute') {
+    return (
+      <main className="flex-1 flex flex-col min-w-0">
+        <ViewSwitcher />
+        <ComputeView />
       </main>
     )
   }
