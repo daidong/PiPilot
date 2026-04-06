@@ -554,7 +554,7 @@ export function WorkspaceTree() {
       <div
         key="__creating__"
         className="flex items-center gap-1 rounded px-1.5 h-7 text-xs bg-[var(--color-accent)]/10"
-        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        style={{ paddingLeft: `${depth * 1.1 + 0.4}em` }}
       >
         <span className="w-3 shrink-0" />
         {creating.type === 'directory' ? (
@@ -581,7 +581,7 @@ export function WorkspaceTree() {
         <div
           key={row.key}
           className="flex items-center gap-1 text-xs t-text-muted h-7"
-          style={{ paddingLeft: `${row.depth * 14 + 26}px` }}
+          style={{ paddingLeft: `${row.depth * 1.1 + 2}em` }}
         >
           <Loader2 size={11} className="animate-spin" />
           Loading...
@@ -711,6 +711,7 @@ export function WorkspaceTree() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter files..."
+            aria-label="Filter files"
             className="w-full bg-transparent text-xs outline-none t-focus-ring t-text"
           />
         </div>

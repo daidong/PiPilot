@@ -15,13 +15,10 @@ function ResourceBar({ label, percent }: { label: string; percent: number }) {
       <span className="text-[10px] t-text-muted w-11 text-right shrink-0">{label}</span>
       <div className="flex-1 h-1 rounded-full t-bg-elevated overflow-hidden">
         <div
-          className="h-full rounded-full transition-all duration-700"
+          className={`h-full rounded-full transition-all duration-700 ${clamped > 85 ? '' : 't-gradient-accent-h'}`}
           style={{
             width: `${clamped}%`,
-            background: clamped > 85
-              ? 'var(--color-text-muted)'
-              : 'linear-gradient(90deg, var(--color-accent), var(--color-accent-2, var(--color-accent)))',
-            opacity: clamped > 85 ? 0.6 : 0.5,
+            ...(clamped > 85 ? { background: 'var(--color-text-muted)', opacity: 0.6 } : { opacity: 0.5 }),
           }}
         />
       </div>

@@ -75,11 +75,8 @@ function ProgressBar({ percentage }: { percentage: number }) {
   return (
     <div className="h-1 rounded-full t-bg-elevated overflow-hidden">
       <div
-        className="h-full rounded-full transition-all duration-700"
-        style={{
-          width: `${value}%`,
-          background: 'linear-gradient(90deg, var(--color-accent), var(--color-accent-2, var(--color-accent)))',
-        }}
+        className="h-full rounded-full transition-all duration-700 t-gradient-accent-h"
+        style={{ width: `${value}%` }}
       />
     </div>
   )
@@ -162,10 +159,7 @@ function RunRow({
             <ProgressBar percentage={run.progress!.percentage!} />
           ) : (
             <div className="h-1 rounded-full t-bg-elevated overflow-hidden">
-              <div className="h-full w-1/3 rounded-full animate-pulse" style={{
-                background: 'linear-gradient(90deg, var(--color-accent), var(--color-accent-2, var(--color-accent)))',
-                opacity: 0.3,
-              }} />
+              <div className="h-full w-1/3 rounded-full animate-pulse t-gradient-accent-h opacity-30" />
             </div>
           )}
           <div className="flex items-center gap-3 mt-1 text-[10px] t-text-muted">
@@ -331,11 +325,8 @@ function CoverageBar({ runs }: { runs: ComputeRunView[] }) {
           <div className="flex-1 max-w-48">
             <div className="h-1.5 rounded-full t-bg-elevated overflow-hidden">
               <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${successRate * 100}%`,
-                  background: 'linear-gradient(90deg, var(--color-accent), var(--color-accent-2, var(--color-accent)))',
-                }}
+                className="h-full rounded-full t-gradient-accent-h"
+                style={{ width: `${successRate * 100}%` }}
               />
             </div>
           </div>

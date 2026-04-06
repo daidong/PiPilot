@@ -113,7 +113,7 @@ function SelectionBookmark() {
     <button
       ref={tooltipRef}
       onMouseDown={handleSave}
-      className="fixed z-[100] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium shadow-lg border t-border transition-colors"
+      className="fixed z-50 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium shadow-lg border t-border transition-colors"
       style={{
         left: pos.x,
         top: pos.y,
@@ -196,6 +196,7 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
                 key={i}
                 src={src}
                 alt=""
+                loading="lazy"
                 className={`rounded-lg border t-border cursor-pointer hover:opacity-90 transition-opacity ${
                   isUser ? 'max-h-48' : 'max-h-80'
                 }`}
@@ -241,10 +242,10 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
 function ThinkingIndicator() {
   return (
     <div className="flex items-center gap-1.5 mt-3 ml-2">
-      <span className="inline-flex gap-[3px] items-center">
-        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '0ms' }} />
-        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '150ms' }} />
-        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce" style={{ animationDelay: '300ms' }} />
+      <span className="inline-flex gap-[3px] items-center" aria-label="Thinking">
+        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce animation-delay-0" />
+        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce animation-delay-150" />
+        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce animation-delay-300" />
       </span>
     </div>
   )
@@ -354,6 +355,17 @@ export function ChatMessages() {
           </div>
         )}
         {messages.map((msg, i) => {
+          // System messages render as a divider line
+          if (msg.role === 'system') {
+            return (
+              <div key={msg.id} className="flex items-center gap-3 my-5 px-2">
+                <div className="flex-1 h-px t-bg-elevated" />
+                <span className="text-[11px] t-text-muted shrink-0">{msg.content}</span>
+                <div className="flex-1 h-px t-bg-elevated" />
+              </div>
+            )
+          }
+
           const prev = messages[i - 1]
           // Tighter spacing within same-role runs (e.g. multi-part assistant),
           // generous space when the speaker changes (new exchange)

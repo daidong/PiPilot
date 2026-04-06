@@ -26,7 +26,7 @@ function ViewSwitcher() {
   const activeComputeRuns = useActiveRunCount()
 
   return (
-    <div className="flex items-center gap-0.5 px-4 pt-10 pb-1">
+    <nav aria-label="View switcher" className="flex items-center gap-0.5 px-4 pt-10 pb-1">
       {viewTabs.map(({ key, label, icon: Icon, shortcut }) => (
         <button
           key={key}
@@ -53,7 +53,7 @@ function ViewSwitcher() {
           <span className="text-[9px] t-text-muted opacity-40 ml-0.5">{shortcut}</span>
         </button>
       ))}
-    </div>
+    </nav>
   )
 }
 
@@ -65,7 +65,7 @@ export function CenterPanel() {
 
   if (centerView === 'literature') {
     return (
-      <main className="flex-1 flex flex-col min-w-0">
+      <main id="main-content" className="flex-1 flex flex-col min-w-0">
         <ViewSwitcher />
         <LiteratureView />
       </main>
@@ -74,7 +74,7 @@ export function CenterPanel() {
 
   if (centerView === 'compute') {
     return (
-      <main className="flex-1 flex flex-col min-w-0">
+      <main id="main-content" className="flex-1 flex flex-col min-w-0">
         <ViewSwitcher />
         <ComputeView />
       </main>
@@ -83,7 +83,7 @@ export function CenterPanel() {
 
   // Chat view
   return (
-    <main className="flex-1 flex flex-col min-w-0">
+    <main id="main-content" className="flex-1 flex flex-col min-w-0">
       <ViewSwitcher />
 
       {showHero ? (

@@ -615,6 +615,7 @@ export function ChatInput() {
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder="Ask anything, attach files, or type /commands..."
+            aria-label="Chat message input"
             rows={1}
             className="flex-1 bg-transparent text-sm t-text placeholder:t-text-muted resize-none outline-none"
           />

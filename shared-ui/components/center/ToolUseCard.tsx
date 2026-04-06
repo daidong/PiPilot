@@ -45,7 +45,7 @@ function formatDuration(ms: number): string {
 function ElapsedTimer({ startedAt }: { startedAt: number }) {
   const [elapsed, setElapsed] = useState(Date.now() - startedAt)
   useEffect(() => {
-    const interval = setInterval(() => setElapsed(Date.now() - startedAt), 100)
+    const interval = setInterval(() => setElapsed(Date.now() - startedAt), 500)
     return () => clearInterval(interval)
   }, [startedAt])
   return <span className="text-[10px] t-text-muted tabular-nums">{formatDuration(elapsed)}</span>

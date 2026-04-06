@@ -105,6 +105,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       >
         {/* Fast tooltip — matches ToolbarButton pattern exactly */}
         <span
+          role="tooltip"
           className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 px-2 py-0.5 rounded text-[10px] t-bg-elevated t-text-secondary border t-border shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 z-50"
           style={{ transition: 'opacity 0.15s ease', transitionDelay: '0.2s' }}
         >
@@ -196,7 +197,33 @@ function ApiKeyDialog({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showKey, setShowKey] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const api = (window as any).api
+
+  // Focus trap: keep Tab cycling within the dialog
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    first.focus()
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return }
+      if (e.key !== 'Tab') return
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus() }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus() }
+      }
+    }
+    dialog.addEventListener('keydown', handler)
+    return () => dialog.removeEventListener('keydown', handler)
+  }, [])
 
   const handleSave = async () => {
     const trimmed = value.trim()
@@ -214,8 +241,8 @@ function ApiKeyDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-md rounded-xl border t-border t-bg-surface shadow-2xl p-4 space-y-3">
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`${provider} API Key Required`}>
+      <div ref={dialogRef} className="w-full max-w-md rounded-xl border t-border t-bg-surface shadow-2xl p-4 space-y-3">
         <div>
           <div className="text-sm font-semibold t-text">{provider} API Key Required</div>
           <div className="text-xs t-text-secondary mt-1">
@@ -231,6 +258,7 @@ function ApiKeyDialog({
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSave() }}
+            aria-label={`${provider} API key`}
             autoFocus
           />
           <button
@@ -245,7 +273,7 @@ function ApiKeyDialog({
         <p className="text-[11px] t-text-muted">
           Key is saved to <code className="px-1 rounded t-bg-surface">~/.research-copilot/config.json</code>. No restart needed.
         </p>
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-xs text-red-400" role="alert">{error}</p>}
         <div className="flex items-center justify-end gap-2">
           <button
             className="px-3 py-1.5 rounded-lg text-xs t-text-secondary t-bg-hover"

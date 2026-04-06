@@ -54,7 +54,7 @@ export function CommandPopover({ query, commands, onSelect, onClose }: Props) {
     return (
       <div
         className="absolute z-50 w-72 rounded-xl border t-border t-bg-surface shadow-xl"
-        style={{ bottom: '100%', left: 48, marginBottom: 8 }}
+        style={{ bottom: '100%', left: 0, marginBottom: 8 }}
       >
         <div className="px-3 py-3 text-xs t-text-muted">
           No matching commands for "/{query}"
@@ -66,7 +66,7 @@ export function CommandPopover({ query, commands, onSelect, onClose }: Props) {
   return (
     <div
       className="absolute z-50 w-80 max-h-64 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
-      style={{ bottom: '100%', left: 48, marginBottom: 8 }}
+      style={{ bottom: '100%', left: 0, marginBottom: 8 }}
     >
       <div className="px-3 py-2 border-b t-border flex items-center gap-2 text-xs t-text-secondary">
         <Terminal size={12} />

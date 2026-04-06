@@ -697,7 +697,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // Skill summaries are injected into the user message instead, to keep
         // the system prompt stable across turns for better prompt cache hits
         // on all providers (Anthropic explicit cache, OpenAI APC, Google).
-        let enrichedSystem = fullSystemPrompt
+        let enrichedSystem = baseSystemPrompt
         if (agentMdContent) {
           enrichedSystem = `${enrichedSystem}\n\n## User Instructions (agent.md)\n\n${agentMdContent}`
         }

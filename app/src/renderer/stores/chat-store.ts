@@ -3,7 +3,7 @@ import { useToolEventsStore, type ToolEvent } from '@shared/stores/tool-events-s
 
 export interface ChatMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   content: string
   images?: string[] // data URLs for user-pasted images
   timestamp: number
@@ -31,6 +31,7 @@ interface ChatState {
   finalize: (result: { success: boolean; response?: string; error?: string; images?: Array<{ base64: string; mimeType: string }> }) => void
   clear: () => void
   markSaved: (messageId: string) => void
+  insertContextReset: () => void
   loadInitial: (sessionId: string) => Promise<void>
   loadHistory: () => Promise<void>
   scrollToMessageId: string | null
@@ -152,6 +153,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (_sessionId) {
       api.markMessageSaved(_sessionId, messageId).catch(() => {})
     }
+  },
+
+  insertContextReset: () => {
+    const divider: ChatMessage = {
+      id: `ctx-reset-${Date.now()}`,
+      role: 'system',
+      content: 'AI context has been reset — chat history is preserved.',
+      timestamp: Date.now()
+    }
+    set((s) => ({ messages: [...s.messages, divider] }))
   },
 
   loadInitial: async (sessionId: string) => {

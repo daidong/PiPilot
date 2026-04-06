@@ -29,10 +29,12 @@ export function ReasoningToggle({ selectedModel, reasoningEffort, onChangeEffort
   return (
     <button
       onClick={() => onChangeEffort(CYCLE[reasoningEffort])}
-      className="no-drag group relative p-1.5 rounded-lg t-bg-hover transition-colors"
+      className="no-drag group relative p-2.5 rounded-lg t-bg-hover transition-colors"
+      aria-label={`Reasoning effort: ${reasoningEffort}`}
     >
       <Lightbulb size={16} className={COLORS[reasoningEffort]} />
       <span
+        role="tooltip"
         className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 px-2 py-0.5 rounded text-[10px] t-bg-elevated t-text-secondary border t-border shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 z-50"
         style={{ transition: 'opacity 0.15s ease', transitionDelay: '0.2s' }}
       >

@@ -1,5 +1,6 @@
 import React from 'react'
 import { Sparkles, FileText, BookOpen, BarChart3 } from 'lucide-react'
+import { useChatStore } from '../../stores/chat-store'
 
 const suggestions = [
   { icon: FileText, label: 'Draft a research note', prompt: 'Help me draft a research note about ' },
@@ -9,16 +10,13 @@ const suggestions = [
 ]
 
 export function HeroIdle() {
+  const setDraftText = useChatStore((s) => s.setDraftText)
+
   const handleSuggestion = (prompt: string) => {
+    setDraftText(prompt)
+    // Focus the textarea after setting draft text
     const input = document.querySelector<HTMLTextAreaElement>('[data-chat-input]')
-    if (input) {
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype, 'value'
-      )?.set
-      nativeSetter?.call(input, prompt)
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      input.focus()
-    }
+    input?.focus()
   }
 
   return (

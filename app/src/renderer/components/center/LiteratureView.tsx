@@ -298,10 +298,9 @@ function CoverageBar({ papers }: { papers: EntityItem[] }) {
       <div className="flex-1 max-w-48">
         <div className="h-1.5 rounded-full t-bg-elevated overflow-hidden">
           <div
-            className="h-full rounded-full"
+            className="h-full rounded-full t-gradient-accent-h"
             style={{
               width: `${Math.min(100, (highRelevance / Math.max(papers.length, 1)) * 100)}%`,
-              background: 'linear-gradient(90deg, var(--color-accent), var(--color-accent-2))'
             }}
           />
         </div>

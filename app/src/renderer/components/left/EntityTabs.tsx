@@ -418,6 +418,7 @@ function SkillsContent() {
             onClick={() => fileInputRef.current?.click()}
             className="no-drag flex items-center gap-1 px-1.5 py-0.5 text-[10px] t-text-muted hover:t-text-accent-soft transition-colors rounded t-bg-hover"
             title="Upload skill (.zip)"
+            aria-label="Install skill from zip file"
           >
             <UploadCloud size={11} />
             <span>Install</span>
@@ -442,6 +443,7 @@ function SkillsContent() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search skills or tags..."
+            aria-label="Search skills"
             className="w-full pl-6 pr-2 py-1 text-[11px] rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
           />
         </div>
@@ -576,6 +578,20 @@ export function EntityTabs() {
     }
   }
 
+  const handleTabKeyDown = (e: React.KeyboardEvent) => {
+    const tabKeys = tabs.map(t => t.key)
+    const idx = tabKeys.indexOf(leftTab)
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      const next = tabKeys[(idx + 1) % tabKeys.length]
+      setLeftTab(next)
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const prev = tabKeys[(idx - 1 + tabKeys.length) % tabKeys.length]
+      setLeftTab(prev)
+    }
+  }
+
   return (
     <div className="h-full flex flex-col min-h-0">
       <div className="flex border-b t-border px-1" role="tablist" aria-label="Content categories">
@@ -583,8 +599,12 @@ export function EntityTabs() {
           <button
             key={key}
             role="tab"
+            id={`tab-${key}`}
             aria-selected={leftTab === key}
+            aria-controls={`tabpanel-${key}`}
+            tabIndex={leftTab === key ? 0 : -1}
             onClick={() => setLeftTab(key)}
+            onKeyDown={handleTabKeyDown}
             className={`no-drag flex items-center gap-1 px-2 py-2 text-[11px] font-medium border-b-2 transition-colors ${
               leftTab === key
                 ? 'border-[var(--color-accent-soft)] t-text-accent'
@@ -598,7 +618,12 @@ export function EntityTabs() {
         ))}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+      <div
+        role="tabpanel"
+        id={`tabpanel-${leftTab}`}
+        aria-labelledby={`tab-${leftTab}`}
+        className="flex-1 min-h-0 overflow-hidden flex flex-col"
+      >
         {renderContent()}
       </div>
     </div>

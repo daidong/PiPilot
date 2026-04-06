@@ -56,7 +56,7 @@ export function StatusBar() {
   const hasProjectUsage = allTimeTokens > 0
 
   return (
-    <div className="h-7 flex items-center px-4 gap-5 border-t t-border t-bg-surface text-[11px] t-text-muted select-none shrink-0">
+    <div className="h-7 flex items-center px-4 gap-5 border-t t-border t-bg-surface text-[11px] t-text-secondary select-none shrink-0">
       {/* Active skills */}
       {hasSkills && (
         <div className="flex items-center gap-2 overflow-hidden">

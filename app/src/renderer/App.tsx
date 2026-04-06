@@ -38,19 +38,14 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
         {/* Branded mark */}
         <div className="relative mx-auto mb-8 w-fit">
           <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center"
-            style={{
-              background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
-              boxShadow: '0 8px 32px var(--color-accent-2-muted)',
-            }}
+            className="w-14 h-14 rounded-2xl flex items-center justify-center t-gradient-accent t-gradient-accent-shadow-lg"
           >
             <span className="text-white text-xl font-bold tracking-tight">
               P
             </span>
           </div>
           <div
-            className="absolute -inset-2 rounded-3xl opacity-15 blur-xl -z-10"
-            style={{ background: 'linear-gradient(135deg, var(--color-accent), var(--color-accent-2))' }}
+            className="absolute -inset-2 rounded-3xl opacity-15 blur-xl -z-10 t-gradient-accent"
           />
         </div>
 
@@ -67,11 +62,7 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
           <button
             onClick={handlePick}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium
-                       hover:opacity-90 transition-all duration-200"
-            style={{
-              background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
-              boxShadow: '0 4px 16px var(--color-accent-2-muted)',
-            }}
+                       hover:opacity-90 transition-all duration-200 t-gradient-accent t-gradient-accent-shadow"
           >
             <FolderOpen size={16} />
             Open Project Folder
@@ -305,12 +296,6 @@ export default function App() {
     const handler = (e: KeyboardEvent) => {
       if (previewEditorFocused) return
 
-      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
-        e.preventDefault()
-        useChatStore.getState().clear()
-        useUIStore.getState().setIdle(true)
-        useUIStore.getState().closePreview()
-      }
       // Cmd+1 → Chat, Cmd+2 → Literature, Cmd+3 → Compute
       if ((e.metaKey || e.ctrlKey) && e.key === '1') {
         e.preventDefault()
@@ -368,6 +353,8 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className="flex flex-col h-screen w-screen t-bg-base t-text">
+        {/* Skip to main content link (C2: WCAG 2.4.1) */}
+        <a href="#main-content" className="skip-link">Skip to content</a>
         {/* Draggable title bar */}
         <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
 

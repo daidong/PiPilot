@@ -32,22 +32,17 @@ export function TerminalPanel() {
   useEffect(() => {
     if (!termRef.current) return
 
-    const isDark = theme === 'dark'
+    const cs = getComputedStyle(document.documentElement)
     const term = new Terminal({
       fontSize: 13,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       cursorBlink: true,
       allowProposedApi: true,
-      theme: isDark ? {
-        background: '#1a1a1a',
-        foreground: '#e0e0e0',
-        cursor: '#e0e0e0',
-        selectionBackground: '#3a3a5a'
-      } : {
-        background: '#fafafa',
-        foreground: '#1a1a1a',
-        cursor: '#1a1a1a',
-        selectionBackground: '#c0d0e0'
+      theme: {
+        background: cs.getPropertyValue('--color-bg-base').trim(),
+        foreground: cs.getPropertyValue('--color-text').trim(),
+        cursor: cs.getPropertyValue('--color-text').trim(),
+        selectionBackground: cs.getPropertyValue('--color-bg-elevated').trim(),
       }
     })
 
@@ -122,17 +117,12 @@ export function TerminalPanel() {
   useEffect(() => {
     const term = xtermRef.current
     if (!term) return
-    const isDark = theme === 'dark'
-    term.options.theme = isDark ? {
-      background: '#1a1a1a',
-      foreground: '#e0e0e0',
-      cursor: '#e0e0e0',
-      selectionBackground: '#3a3a5a'
-    } : {
-      background: '#fafafa',
-      foreground: '#1a1a1a',
-      cursor: '#1a1a1a',
-      selectionBackground: '#c0d0e0'
+    const cs = getComputedStyle(document.documentElement)
+    term.options.theme = {
+      background: cs.getPropertyValue('--color-bg-base').trim(),
+      foreground: cs.getPropertyValue('--color-text').trim(),
+      cursor: cs.getPropertyValue('--color-text').trim(),
+      selectionBackground: cs.getPropertyValue('--color-bg-elevated').trim(),
     }
   }, [theme])
 
@@ -165,15 +155,17 @@ export function TerminalPanel() {
         <div className="flex items-center gap-1">
           <button
             onClick={handleRestart}
-            className="p-0.5 rounded t-text-muted hover:t-text-secondary t-bg-hover"
+            className="p-1 rounded t-text-muted hover:t-text-secondary t-bg-hover"
             title="Restart terminal"
+            aria-label="Restart terminal"
           >
             <RotateCcw size={12} />
           </button>
           <button
             onClick={handleClose}
-            className="p-0.5 rounded t-text-muted hover:t-text-secondary t-bg-hover"
+            className="p-1 rounded t-text-muted hover:t-text-secondary t-bg-hover"
             title="Close terminal"
+            aria-label="Close terminal"
           >
             <X size={12} />
           </button>

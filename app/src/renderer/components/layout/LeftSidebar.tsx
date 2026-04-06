@@ -1,6 +1,7 @@
-import React from 'react'
-import { Sun, Moon, Eraser, Terminal } from 'lucide-react'
+import React, { useCallback, useRef } from 'react'
+import { Sun, Moon, RotateCcw, Terminal } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
+import { useChatStore } from '../../stores/chat-store'
 import { EntityTabs } from '../left/EntityTabs'
 import { LiteratureSidebar } from '../left/LiteratureSidebar'
 import { ComputeSidebar } from '../left/ComputeSidebar'
@@ -17,10 +18,12 @@ function ToolbarButton({ onClick, tooltip, children }: {
   return (
     <button
       onClick={onClick}
-      className="no-drag group relative p-1.5 rounded-lg t-text-muted t-bg-hover transition-colors"
+      aria-label={tooltip}
+      className="no-drag group relative p-2.5 rounded-lg t-text-muted t-bg-hover transition-colors"
     >
       {children}
       <span
+        role="tooltip"
         className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 px-2 py-0.5 rounded text-[10px] t-bg-elevated t-text-secondary border t-border shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 z-50"
         style={{ transition: 'opacity 0.15s ease', transitionDelay: '0.2s' }}
       >
@@ -34,18 +37,49 @@ export function LeftSidebar() {
   const theme = useUIStore((s) => s.theme)
   const toggleTheme = useUIStore((s) => s.toggleTheme)
   const centerView = useUIStore((s) => s.centerView)
+  const noContextShownRef = useRef(false)
+
+  const handleResetContext = useCallback(async () => {
+    const messages = useChatStore.getState().messages
+    const hasContext = messages.some(m => m.role === 'user' || m.role === 'assistant')
+
+    if (!hasContext) {
+      // No context yet — show one-time hint (don't repeat on multiple clicks)
+      if (!noContextShownRef.current) {
+        noContextShownRef.current = true
+        useChatStore.getState().insertContextReset()
+        // Replace the last inserted message content with the "no context" hint
+        useChatStore.setState((s) => {
+          const msgs = [...s.messages]
+          const last = msgs[msgs.length - 1]
+          if (last?.role === 'system') {
+            msgs[msgs.length - 1] = { ...last, content: 'No context to reset yet.' }
+          }
+          return { messages: msgs }
+        })
+      }
+      return
+    }
+
+    // Reset the agent-side LLM context
+    await (window as any).api.clearSessionMemory()
+    // Insert a visual divider in the chat
+    useChatStore.getState().insertContextReset()
+    // Reset the no-context guard so it works again after a real reset
+    noContextShownRef.current = false
+  }, [])
 
   return (
     <aside className="w-80 flex flex-col border-r t-border t-bg-base pt-10">
-      <div className="px-4 pb-3 flex items-center justify-between">
+      <nav aria-label="Sidebar tools" className="px-4 pb-3 flex items-center justify-between">
         <ModelSelector />
         <div className="flex items-center gap-1">
           <ReasoningToggle />
           <ToolbarButton
-            onClick={() => (window as any).api.clearSessionMemory()}
-            tooltip="Clear session memory"
+            onClick={handleResetContext}
+            tooltip="Reset AI context"
           >
-            <Eraser size={16} />
+            <RotateCcw size={16} />
           </ToolbarButton>
           <ToolbarButton
             onClick={toggleTheme}
@@ -60,7 +94,7 @@ export function LeftSidebar() {
             <Terminal size={16} />
           </ToolbarButton>
         </div>
-      </div>
+      </nav>
 
       <div className="flex-1 min-h-0">
         {centerView === 'literature' ? <LiteratureSidebar /> : centerView === 'compute' && (window as any).api?.isComputeEnabled?.() ? <ComputeSidebar /> : <EntityTabs />}

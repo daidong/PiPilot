@@ -141,8 +141,8 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
 
   return (
     <div
-      className="absolute z-50 w-[32rem] max-h-80 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
-      style={{ bottom: '100%', left: 48, marginBottom: 8 }}
+      className="absolute z-50 w-[32rem] max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl"
+      style={{ bottom: '100%', left: 0, marginBottom: 8 }}
     >
       <div className="px-3 py-1.5 border-b t-border flex items-center gap-2 text-xs t-text-secondary">
         <AtSign size={11} />

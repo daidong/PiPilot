@@ -86,11 +86,7 @@ export function ApiKeySetup({ onComplete }: Props) {
         <div className="text-center mb-8">
           <div className="relative mx-auto mb-6 w-fit">
             <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center"
-              style={{
-                background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
-                boxShadow: '0 8px 32px var(--color-accent-2-muted)',
-              }}
+              className="w-14 h-14 rounded-2xl flex items-center justify-center t-gradient-accent t-gradient-accent-shadow-lg"
             >
               <Key className="text-white" size={22} />
             </div>
@@ -141,6 +137,7 @@ export function ApiKeySetup({ onComplete }: Props) {
                     placeholder={alreadySet ? '••••••••  (already set — leave blank to keep)' : field.placeholder}
                     value={values[field.name] || ''}
                     onChange={(e) => setValues((prev) => ({ ...prev, [field.name]: e.target.value }))}
+                    aria-label={`${field.label} API key`}
                   />
                   <button
                     type="button"
@@ -162,7 +159,7 @@ export function ApiKeySetup({ onComplete }: Props) {
         </p>
 
         {error && (
-          <p className="text-xs text-red-400 mb-3">{error}</p>
+          <p className="text-xs text-red-400 mb-3" role="alert">{error}</p>
         )}
 
         {/* Actions */}
@@ -180,11 +177,7 @@ export function ApiKeySetup({ onComplete }: Props) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-5 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90 transition-all duration-200 disabled:opacity-50"
-            style={{
-              background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%)',
-              boxShadow: '0 4px 16px var(--color-accent-2-muted)',
-            }}
+            className="px-5 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90 transition-all duration-200 disabled:opacity-50 t-gradient-accent t-gradient-accent-shadow"
           >
             {saving ? 'Saving...' : hasAnyLlmKey ? 'Save & Continue' : 'Save & Continue'}
           </button>

@@ -161,9 +161,71 @@ body {
 }
 
 /* Subtle focus ring for standalone inputs/textareas */
-.t-focus-ring:focus {
+.t-focus-ring:focus-visible {
   box-shadow: 0 0 0 1px var(--color-input-focus);
 }
+
+/* Screen-reader-only utility (visually hidden, accessible to assistive tech) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+.sr-only:focus {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* Skip-to-content link (visible on focus) */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  background: var(--color-accent);
+  color: white;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+.skip-link:focus {
+  top: 0.5rem;
+}
+
+/* Gradient accent utility (teal → indigo) */
+.t-gradient-accent {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%);
+}
+.t-gradient-accent-h {
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2, var(--color-accent)));
+}
+.t-gradient-accent-shadow {
+  box-shadow: 0 4px 16px var(--color-accent-2-muted);
+}
+.t-gradient-accent-shadow-lg {
+  box-shadow: 0 8px 32px var(--color-accent-2-muted);
+}
+
+/* Animation delay utilities */
+.animation-delay-0 { animation-delay: 0ms; }
+.animation-delay-150 { animation-delay: 150ms; }
+.animation-delay-300 { animation-delay: 300ms; }
 
 /* Draggable title bar area */
 .drag-region {
