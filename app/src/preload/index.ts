@@ -7,8 +7,8 @@ export interface UsageEvent {
   cost: number
   rawCost?: number
   billableCost?: number
-  authMode?: 'api-key' | 'none'
-  billingSource?: 'api-key' | 'none'
+  authMode?: 'api-key' | 'subscription' | 'none'
+  billingSource?: 'api-key' | 'subscription' | 'none'
   cacheHitRate: number
 }
 
@@ -30,6 +30,11 @@ export interface ElectronAPI {
   getAnthropicAuthStatus: () => Promise<any>
   onAnthropicAuthStatus: (cb: (status: any) => void) => () => void
   getOpenAIAuthStatus: () => Promise<{ hasApiKey: boolean }>
+
+  // OpenAI Codex (ChatGPT Subscription) OAuth
+  getOpenAICodexStatus: () => Promise<{ isLoggedIn: boolean; isExpired: boolean }>
+  openaiCodexLogin: () => Promise<{ success: boolean; error?: string }>
+  openaiCodexLogout: () => Promise<{ success: boolean }>
 
   // API Key Config
   getApiKeyStatus: () => Promise<Record<string, boolean>>
@@ -181,6 +186,11 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('auth:anthropic-status', handler)
   },
   getOpenAIAuthStatus: () => ipcRenderer.invoke('auth:get-openai-status'),
+
+  // OpenAI Codex (ChatGPT Subscription) OAuth
+  getOpenAICodexStatus: () => ipcRenderer.invoke('auth:get-openai-codex-status'),
+  openaiCodexLogin: () => ipcRenderer.invoke('auth:openai-codex-login'),
+  openaiCodexLogout: () => ipcRenderer.invoke('auth:openai-codex-logout'),
 
   getApiKeyStatus: () => ipcRenderer.invoke('config:get-api-key-status'),
   saveApiKey: (keyName, value) => ipcRenderer.invoke('config:save-api-key', keyName, value),

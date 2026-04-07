@@ -212,6 +212,8 @@ function writeExplainSnapshot(projectPath: string, snapshot: TurnExplainSnapshot
 
 export interface CoordinatorConfig {
   apiKey: string
+  /** Optional async token getter — called before each LLM request. Overrides static apiKey when set. */
+  getApiKeyOverride?: () => Promise<string>
   model?: string
   projectPath?: string
   debug?: boolean
@@ -233,6 +235,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 }> {
   const {
     apiKey,
+    getApiKeyOverride,
     model: modelId,
     projectPath = process.cwd(),
     debug = false,
@@ -245,6 +248,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onUsage,
     onSkillLoaded
   } = config
+
+  /** Resolve API key — uses dynamic getter if provided (for OAuth token refresh), else static key. */
+  const resolveApiKey = getApiKeyOverride ?? (async () => apiKey)
 
   let turnCount = 0
   let activeTurnToolCallCount: number | null = null
@@ -306,6 +312,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     const routerByProvider: Record<string, string> = {
       anthropic: 'claude-haiku-4-5-20251001',
       openai: 'gpt-5.4-nano',
+      'openai-codex': 'gpt-5.4-mini',  // nano not available in openai-codex provider
       google: 'gemini-2.0-flash-lite'
     }
 
@@ -314,7 +321,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     if (modelId) {
       const parts = modelId.split(':')
       if (parts.length === 2) {
-        mainProvider = parts[0]
+        // For intent routing, openai-codex uses the same models as openai
+        mainProvider = parts[0] === 'openai-codex' ? 'openai-codex' : parts[0]
       } else {
         mainProvider = modelId.startsWith('claude-') ? 'anthropic'
           : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
@@ -355,10 +363,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     projectPath,
     callLlm: async (systemPrompt: string, userContent: string) => {
       if (!piModel) throw new Error('No model available for sub-call')
+      const currentKey = await resolveApiKey()
       const result = await completeSimple(piModel, {
         systemPrompt,
         messages: [{ role: 'user', content: userContent, timestamp: Date.now() }]
-      }, { maxTokens: 4096, apiKey })
+      }, { maxTokens: 4096, apiKey: currentKey })
       const textContent = result.content.find((c): c is TextContent => c.type === 'text')
       return textContent?.text ?? ''
     },
@@ -416,7 +425,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       thinkingLevel: reasoningEffort === 'high' ? 'high' : reasoningEffort === 'medium' ? 'medium' : 'low'
     },
     sessionId,
-    getApiKey: async () => apiKey,
+    getApiKey: resolveApiKey,
 
     // ── Context compaction via transformContext ──
     // Before each LLM call, check if accumulated messages exceed the model's
@@ -470,11 +479,12 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       const messagesToKeep = messages.slice(cutIndex)
 
       try {
+        const currentKey = await resolveApiKey()
         const summary = await generateSummary(
           messagesToSummarize,
           piModel,
           settings.reserveTokens,
-          apiKey,
+          currentKey,
           signal,
           undefined,
           compactionSummary
@@ -575,6 +585,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       .join('\n\n')
 
     try {
+      const currentKey = await resolveApiKey()
       const result = await completeSimple(intentRouterModel, {
         systemPrompt: 'You summarize research conversations concisely. Output JSON with keys: summary (string), topicsDiscussed (string[]), openQuestions (string[]). Output ONLY valid JSON.',
         messages: [{
@@ -584,7 +595,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         }]
       }, {
         maxTokens: 512,
-        apiKey
+        apiKey: currentKey
       })
 
       const textContent = result.content.find((c): c is TextContent => c.type === 'text')
@@ -636,7 +647,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const intents = detectIntentsByRules(message)
 
         // --- LLM-based skill matching (replaces intent-driven prompt modules) ---
-        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, apiKey, message, skills)
+        const currentKey = await resolveApiKey()
+        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills)
         const matchedSkills = matchedSkillNames
           .map(name => skills.find(s => s.name === name))
           .filter((s): s is SkillEntry => s !== undefined)
@@ -771,8 +783,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         void maybeGenerateSummary()
 
         // Background memory extraction (gated by RESEARCH_COPILOT_AUTO_EXTRACT=1)
+        const memoryKey = await resolveApiKey()
         void maybeExtractMemories(
-          { projectPath, model: piModel!, apiKey, systemPrompt: enrichedSystem, debug },
+          { projectPath, model: piModel!, apiKey: memoryKey, systemPrompt: enrichedSystem, debug },
           agent.state.messages,
           turnCount
         )

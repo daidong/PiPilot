@@ -27,6 +27,8 @@ import {
   safeSend,
   loadOrCreateSessionId,
   resolveCoordinatorAuth,
+  loadCodexCredentials,
+  saveCodexCredentials,
   isWithinRoot,
   toPosixPath,
   registerFileHandlers,
@@ -104,7 +106,7 @@ interface WindowRuntimeState {
   coordinator: ReturnType<typeof createCoordinator> | null
   currentModel: string
   currentReasoningEffort: 'high' | 'medium' | 'low'
-  currentAuthMode: 'api-key' | 'none'
+  currentAuthMode: 'api-key' | 'subscription' | 'none'
   projectPath: string
   sessionId: string
   isClosing: boolean
@@ -117,7 +119,7 @@ let ipcHandlersRegistered = false
 function createWindowRuntimeState(): WindowRuntimeState {
   return {
     coordinator: null,
-    currentModel: 'gpt-5.4',
+    currentModel: 'openai:gpt-5.4',
     currentReasoningEffort: 'medium',
     currentAuthMode: 'none',
     projectPath: '',
@@ -273,6 +275,26 @@ async function ensureCoordinator(
     const apiKey = resolvedAuth.apiKey
     const runProjectPath = state.projectPath
 
+    // Build dynamic token getter for subscription auth
+    const getApiKeyOverride = resolvedAuth.authMode === 'subscription'
+      ? async () => {
+          const creds = loadCodexCredentials()
+          if (!creds) throw new Error('ChatGPT subscription credentials not found. Please sign in again.')
+          // Auto-refresh if expired (with 60s buffer)
+          if (creds.expires < Date.now() + 60_000) {
+            try {
+              const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+              const newCreds = await refreshOpenAICodexToken(creds)
+              saveCodexCredentials(newCreds)
+              return newCreds.access
+            } catch {
+              return creds.access // try existing token anyway
+            }
+          }
+          return creds.access
+        }
+      : undefined
+
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
     const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
     state.realtimeBuffer.pushActivity(initEvent)
@@ -280,6 +302,7 @@ async function ensureCoordinator(
 
     state.coordinator = await createCoordinator({
       apiKey,
+      getApiKeyOverride,
       model: state.currentModel,
       reasoningEffort: state.currentReasoningEffort,
       projectPath: state.projectPath,
@@ -1104,7 +1127,18 @@ export function registerIpcHandlers(): void {
       if (existsSync(prefsFile)) {
         try {
           const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
-          if (prefs.selectedModel) state.currentModel = prefs.selectedModel
+          if (prefs.selectedModel) {
+            // Migrate legacy model IDs (e.g. 'gpt-5.4' → 'openai:gpt-5.4')
+            const m = prefs.selectedModel as string
+            if (!m.includes(':')) {
+              const provider = m.startsWith('claude-') ? 'anthropic'
+                : m.startsWith('gemini-') ? 'google'
+                : 'openai'
+              state.currentModel = `${provider}:${m}`
+            } else {
+              state.currentModel = m
+            }
+          }
           if (prefs.reasoningEffort) state.currentReasoningEffort = prefs.reasoningEffort
         } catch { /* ignore corrupt file */ }
       }
@@ -1155,7 +1189,7 @@ export function registerIpcHandlers(): void {
       state.realtimeBuffer.reset()
       state.projectPath = ''
       state.sessionId = crypto.randomUUID()
-      state.currentModel = 'gpt-5.4'
+      state.currentModel = 'openai:gpt-5.4'
       state.currentReasoningEffort = 'medium'
       state.currentAuthMode = 'none'
     } finally {

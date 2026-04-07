@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Key, Eye, EyeOff, Check, ExternalLink } from 'lucide-react'
+import { Key, Eye, EyeOff, Check, ExternalLink, LogIn } from 'lucide-react'
 
 const api = (window as any).api
 
@@ -49,19 +49,38 @@ export function ApiKeySetup({ onComplete }: Props) {
   const [visible, setVisible] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [codexStatus, setCodexStatus] = useState<{ isLoggedIn: boolean } | null>(null)
+  const [codexLoggingIn, setCodexLoggingIn] = useState(false)
 
   useEffect(() => {
     api.getApiKeyStatus().then((s: Record<string, boolean>) => setStatus(s))
+    api.getOpenAICodexStatus?.().then((s: any) => setCodexStatus(s)).catch(() => {})
   }, [])
 
+  const handleCodexLogin = async () => {
+    setCodexLoggingIn(true)
+    try {
+      const result = await api.openaiCodexLogin?.()
+      if (result?.success) {
+        setCodexStatus({ isLoggedIn: true })
+      } else {
+        setError(result?.error || 'ChatGPT sign-in failed')
+      }
+    } catch (err: any) {
+      setError(err.message || 'ChatGPT sign-in failed')
+    } finally {
+      setCodexLoggingIn(false)
+    }
+  }
+
   const hasAnyLlmKey =
-    status.ANTHROPIC_API_KEY || status.OPENAI_API_KEY ||
+    status.ANTHROPIC_API_KEY || status.OPENAI_API_KEY || codexStatus?.isLoggedIn ||
     !!(values.ANTHROPIC_API_KEY || '').trim() || !!(values.OPENAI_API_KEY || '').trim()
 
   const handleSave = async () => {
     const entries = Object.entries(values).filter(([, v]) => v.trim())
-    if (entries.length === 0 && !status.ANTHROPIC_API_KEY && !status.OPENAI_API_KEY) {
-      setError('Please enter at least one API key (Anthropic or OpenAI) to continue.')
+    if (entries.length === 0 && !status.ANTHROPIC_API_KEY && !status.OPENAI_API_KEY && !codexStatus?.isLoggedIn) {
+      setError('Please enter at least one API key or sign in with ChatGPT to continue.')
       return
     }
     setSaving(true)
@@ -154,8 +173,34 @@ export function ApiKeySetup({ onComplete }: Props) {
           })}
         </div>
 
+        {/* ChatGPT Subscription (OAuth) */}
+        <div className="rounded-lg border t-border t-bg-surface/50 p-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-medium t-text flex items-center gap-1.5">
+              ChatGPT Subscription
+              <span className="text-[10px] t-text-muted">(alternative to OpenAI API key)</span>
+              {codexStatus?.isLoggedIn && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] text-green-500">
+                  <Check size={10} /> signed in
+                </span>
+              )}
+            </label>
+          </div>
+          <button
+            onClick={handleCodexLogin}
+            disabled={codexLoggingIn || codexStatus?.isLoggedIn}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border t-border text-xs t-text-secondary hover:t-text t-bg-hover disabled:opacity-50"
+          >
+            <LogIn size={12} />
+            {codexLoggingIn ? 'Signing in...' : codexStatus?.isLoggedIn ? 'Already signed in' : 'Sign in with ChatGPT'}
+          </button>
+          <p className="text-[11px] t-text-muted mt-1">
+            Use your ChatGPT Plus/Pro subscription instead of an API key. No per-token billing.
+          </p>
+        </div>
+
         <p className="text-[11px] t-text-muted mb-1">
-          * You need at least one of Anthropic or OpenAI. Both is fine too.
+          * You need at least one of Anthropic or OpenAI (API key or ChatGPT subscription).
         </p>
 
         {error && (
@@ -165,7 +210,7 @@ export function ApiKeySetup({ onComplete }: Props) {
         {/* Actions */}
         <div className="flex items-center justify-between">
           {/* Skip only if keys already exist in env */}
-          {(status.ANTHROPIC_API_KEY || status.OPENAI_API_KEY) && (
+          {(status.ANTHROPIC_API_KEY || status.OPENAI_API_KEY || codexStatus?.isLoggedIn) && (
             <button
               onClick={onComplete}
               className="text-xs t-text-secondary hover:t-text transition-colors"

@@ -20,7 +20,9 @@ export interface GitIgnoreRule {
 
 export interface ResolvedCoordinatorAuth {
   apiKey: string
-  authMode: 'api-key' | 'none'
+  authMode: 'api-key' | 'subscription' | 'none'
   isAnthropicModel: boolean
-  billingSource: 'api-key' | 'none'
+  billingSource: 'api-key' | 'subscription' | 'none'
+  /** For subscription mode: provider string passed to pi-ai (e.g. 'openai-codex') */
+  piProvider?: string
 }

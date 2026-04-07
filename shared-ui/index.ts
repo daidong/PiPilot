@@ -2,10 +2,10 @@
 export type { Theme, ReasoningEffort, ModelId, ModelOption, WorkingFile, SlashCommand } from './types'
 
 // Constants
-export { REASONING_MODELS, GPT5_REASONING_MODELS, SUPPORTED_MODELS } from './constants'
+export { REASONING_MODELS, GPT5_REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODEL } from './constants'
 
 // Utilities
-export { formatTokens, formatCost } from './utils'
+export { formatTokens, formatCost, parseModelKey, buildModelKey } from './utils'
 
 // Stores
 export { useActivityStore, type ActivityEvent } from './stores/activity-store'

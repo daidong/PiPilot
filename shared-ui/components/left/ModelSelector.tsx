@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Check, Cpu, Eye, EyeOff } from 'lucide-react'
+import { ChevronDown, Check, Cpu, Eye, EyeOff, LogIn, LogOut } from 'lucide-react'
 import { SUPPORTED_MODELS } from '../../constants'
+import { parseModelKey } from '../../utils'
 import type { ModelOption } from '../../types'
 
 // Group models by provider
@@ -18,6 +19,8 @@ interface Props {
 export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const [open, setOpen] = useState(false)
   const [anthropicStatus, setAnthropicStatus] = useState<any>(null)
+  const [codexStatus, setCodexStatus] = useState<{ isLoggedIn: boolean; isExpired: boolean } | null>(null)
+  const [codexLoggingIn, setCodexLoggingIn] = useState(false)
   const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -31,6 +34,15 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       setAnthropicStatus(status ?? null)
     } catch {
       setAnthropicStatus(null)
+    }
+  }, [api])
+
+  const refreshCodexStatus = useCallback(async () => {
+    try {
+      const status = await api?.getOpenAICodexStatus?.()
+      setCodexStatus(status ?? null)
+    } catch {
+      setCodexStatus(null)
     }
   }, [api])
 
@@ -58,14 +70,54 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
 
   useEffect(() => {
     refreshAnthropicStatus()
+    refreshCodexStatus()
     const unsub = api?.onAnthropicAuthStatus?.((status: any) => setAnthropicStatus(status))
     return () => {
       if (typeof unsub === 'function') unsub()
     }
-  }, [api, refreshAnthropicStatus])
+  }, [api, refreshAnthropicStatus, refreshCodexStatus])
+
+  const handleCodexLogin = async () => {
+    setCodexLoggingIn(true)
+    try {
+      const result = await api?.openaiCodexLogin?.()
+      if (result?.success) {
+        await refreshCodexStatus()
+      } else {
+        console.error('[ModelSelector] Codex login failed:', result?.error)
+      }
+    } catch (err) {
+      console.error('[ModelSelector] Codex login error:', err)
+    } finally {
+      setCodexLoggingIn(false)
+    }
+  }
+
+  const handleCodexLogout = async () => {
+    await api?.openaiCodexLogout?.()
+    await refreshCodexStatus()
+  }
 
   const handleModelSelect = async (model: ModelOption) => {
-    if (model.provider === 'OpenAI') {
+    const { provider } = parseModelKey(model.id)
+
+    if (provider === 'openai-codex') {
+      // Subscription models need OAuth login
+      if (!codexStatus?.isLoggedIn) {
+        await handleCodexLogin()
+        // After login, check again
+        const status = await api?.getOpenAICodexStatus?.()
+        if (!status?.isLoggedIn) {
+          setOpen(false)
+          return
+        }
+      }
+      onSelectModel(model.id)
+      setOpen(false)
+      return
+    }
+
+    if (provider === 'openai') {
       const status = await api?.getOpenAIAuthStatus?.()
       if (!status?.hasApiKey) {
         setShowOpenAIDialog(true)
@@ -74,7 +126,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       }
     }
 
-    if (model.provider === 'Anthropic') {
+    if (provider === 'anthropic') {
       const status = await api?.getAnthropicAuthStatus?.()
       if (!status?.hasApiKeyFallback) {
         setShowAnthropicDialog(true)
@@ -88,10 +140,17 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     refreshAnthropicStatus()
   }
 
-  const authBadge = current?.provider === 'Anthropic'
-    ? anthropicStatus?.authMode === 'api-key'
-      ? 'api'
-      : 'auth'
+  // Auth badge
+  const { provider: currentProvider } = current
+    ? parseModelKey(current.id)
+    : { provider: '' }
+
+  const authBadge = currentProvider === 'anthropic'
+    ? anthropicStatus?.authMode === 'api-key' ? 'api' : 'auth'
+    : currentProvider === 'openai-codex'
+    ? 'sub'
+    : currentProvider === 'openai'
+    ? 'api'
     : null
 
   return (
@@ -126,11 +185,37 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
               <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider t-text-muted sticky top-0 t-bg-surface">
                 {provider}
               </div>
-              {(provider === 'OpenAI' || provider === 'Anthropic') && (
-                <div className="px-3 pb-1 text-[11px] t-text-muted">
-                  API Key Only
+
+              {/* Provider sub-label */}
+              {provider === 'ChatGPT Subscription' && (
+                <div className="px-3 pb-1 flex items-center justify-between">
+                  <span className="text-[11px] t-text-muted">
+                    {codexStatus?.isLoggedIn ? 'Signed in' : 'OAuth required'}
+                  </span>
+                  {codexStatus?.isLoggedIn ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleCodexLogout() }}
+                      className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5"
+                    >
+                      <LogOut size={10} /> Sign out
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleCodexLogin() }}
+                      disabled={codexLoggingIn}
+                      className="text-[10px] t-text-accent flex items-center gap-0.5 hover:opacity-80 disabled:opacity-50"
+                    >
+                      <LogIn size={10} /> {codexLoggingIn ? 'Signing in...' : 'Sign in'}
+                    </button>
+                  )}
                 </div>
               )}
+              {(provider === 'OpenAI' || provider === 'Anthropic') && (
+                <div className="px-3 pb-1 text-[11px] t-text-muted">
+                  API Key
+                </div>
+              )}
+
               {groupedModels[provider].map((model) => (
                 <button
                   key={model.id}

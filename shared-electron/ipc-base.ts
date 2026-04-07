@@ -11,6 +11,7 @@ import { extname, join, resolve, isAbsolute } from 'path'
 import { homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { ResolvedCoordinatorAuth } from './types'
+import type { OAuthCredentials } from '@mariozechner/pi-ai/oauth'
 import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './file-tree'
 
 // ─── API Key Config ────────────────────────────────────────────────────────
@@ -143,32 +144,96 @@ export function loadOrCreateSessionId(rootPathKey: string, path: string): string
   return newId
 }
 
-export function resolveCoordinatorAuth(modelId: string): ResolvedCoordinatorAuth {
+// ─── OpenAI Codex OAuth credential store ──────────────────────────────────
+const CODEX_CRED_FILE = join(CONFIG_DIR, 'openai-codex-credentials.json')
+
+export function loadCodexCredentials(): OAuthCredentials | null {
+  // First try our own store
+  try {
+    if (existsSync(CODEX_CRED_FILE)) {
+      const data = JSON.parse(readFileSync(CODEX_CRED_FILE, 'utf-8'))
+      if (data.access && data.refresh) return data as OAuthCredentials
+    }
+  } catch { /* ignore */ }
+  // Fallback: try reading Codex CLI's auth.json
+  try {
+    const codexHome = join(homedir(), '.codex')
+    const codexAuth = join(codexHome, 'auth.json')
+    if (existsSync(codexAuth)) {
+      const data = JSON.parse(readFileSync(codexAuth, 'utf-8'))
+      if (data.tokens?.access_token && data.tokens?.refresh_token) {
+        return {
+          access: data.tokens.access_token,
+          refresh: data.tokens.refresh_token,
+          expires: data.tokens.expires_at ? data.tokens.expires_at * 1000 : Date.now() + 3600_000,
+          accountId: data.tokens.account_id
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+export function saveCodexCredentials(creds: OAuthCredentials): void {
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true })
+  writeFileSync(CODEX_CRED_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 })
+}
+
+export function clearCodexCredentials(): void {
+  try {
+    if (existsSync(CODEX_CRED_FILE)) {
+      const { unlinkSync } = require('fs')
+      unlinkSync(CODEX_CRED_FILE)
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * Parse a composite model key and resolve auth credentials.
+ * Supports: 'openai:gpt-5.4', 'anthropic:claude-opus-4-6', 'openai-codex:gpt-5.4'
+ * Legacy keys like 'gpt-5.4' or 'claude-opus-4-6' are auto-migrated.
+ */
+export function resolveCoordinatorAuth(compositeKey: string): ResolvedCoordinatorAuth {
   const openaiApiKey = (process.env.OPENAI_API_KEY || '').trim()
   const anthropicApiKey = (process.env.ANTHROPIC_API_KEY || '').trim()
-  const isAnthropic = modelId.startsWith('claude-')
 
-  if (!isAnthropic) {
-    if (!openaiApiKey) {
-      throw new Error('OPENAI_API_KEY is required for the selected OpenAI model.')
-    }
-    return {
-      apiKey: openaiApiKey,
-      authMode: 'api-key',
-      isAnthropicModel: false,
-      billingSource: 'api-key'
-    }
+  // Parse provider:modelId
+  const i = compositeKey.indexOf(':')
+  let provider: string
+  if (i > 0) {
+    provider = compositeKey.slice(0, i)
+  } else {
+    // Legacy format fallback
+    provider = compositeKey.startsWith('claude-') ? 'anthropic' : 'openai'
   }
 
-  if (!anthropicApiKey) {
-    throw new Error('ANTHROPIC_API_KEY is required for the selected Anthropic model.')
-  }
-
-  return {
-    apiKey: anthropicApiKey,
-    authMode: 'api-key',
-    isAnthropicModel: true,
-    billingSource: 'api-key'
+  switch (provider) {
+    case 'openai-codex': {
+      const creds = loadCodexCredentials()
+      if (!creds) {
+        throw new Error('ChatGPT subscription login required. Please sign in via the model selector.')
+      }
+      return {
+        apiKey: creds.access,
+        authMode: 'subscription',
+        isAnthropicModel: false,
+        billingSource: 'subscription',
+        piProvider: 'openai-codex'
+      }
+    }
+    case 'anthropic': {
+      if (!anthropicApiKey) {
+        throw new Error('ANTHROPIC_API_KEY is required for the selected Anthropic model.')
+      }
+      return { apiKey: anthropicApiKey, authMode: 'api-key', isAnthropicModel: true, billingSource: 'api-key' }
+    }
+    default: {
+      // openai and any other provider
+      if (!openaiApiKey) {
+        throw new Error('OPENAI_API_KEY is required for the selected OpenAI model.')
+      }
+      return { apiKey: openaiApiKey, authMode: 'api-key', isAnthropicModel: false, billingSource: 'api-key' }
+    }
   }
 }
 
@@ -469,6 +534,53 @@ export function registerAuthHandlers(
   handleRaw('auth:get-openai-status', () => {
     return {
       hasApiKey: !!(process.env.OPENAI_API_KEY || '').trim()
+    }
+  })
+
+  // ─── OpenAI Codex (ChatGPT Subscription) OAuth ──────────────────────────
+  handleRaw('auth:get-openai-codex-status', () => {
+    const creds = loadCodexCredentials()
+    return {
+      isLoggedIn: !!creds,
+      isExpired: creds ? creds.expires < Date.now() : false
+    }
+  })
+
+  handleRaw('auth:openai-codex-login', async () => {
+    const { loginOpenAICodex } = await import('@mariozechner/pi-ai/oauth')
+    const { shell } = await import('electron')
+    try {
+      const creds = await loginOpenAICodex({
+        onAuth: (info) => { shell.openExternal(info.url) },
+        onPrompt: async (prompt) => {
+          // This shouldn't be called in normal browser flow
+          console.warn('[OAuth] Unexpected prompt:', prompt.message)
+          return ''
+        },
+        onProgress: (msg) => { console.log('[OAuth]', msg) }
+      })
+      saveCodexCredentials(creds)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'OAuth login failed' }
+    }
+  })
+
+  handleRaw('auth:openai-codex-logout', () => {
+    clearCodexCredentials()
+    return { success: true }
+  })
+
+  handleRaw('auth:openai-codex-refresh', async () => {
+    const creds = loadCodexCredentials()
+    if (!creds) return { success: false, error: 'Not logged in' }
+    try {
+      const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+      const newCreds = await refreshOpenAICodexToken(creds)
+      saveCodexCredentials(newCreds)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Token refresh failed' }
     }
   })
 }

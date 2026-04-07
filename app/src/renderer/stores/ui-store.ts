@@ -1,16 +1,17 @@
 import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
+import { REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODEL } from '../../../../shared-ui/constants'
+import { parseModelKey } from '../../../../shared-ui/utils'
+import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 
 type Theme = 'light' | 'dark'
 type LeftTab = 'library' | 'files' | 'skills'
 type CenterView = 'chat' | 'literature' | 'compute'
 export type { LeftTab, CenterView }
-export type ReasoningEffort = 'high' | 'medium' | 'low' | 'max'
+export type { ReasoningEffort }
 
-export const REASONING_MODELS = [
-  'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano',
-  'claude-opus-4-6'
-]
+// Re-export from shared-ui for backward compatibility
+export { REASONING_MODELS, SUPPORTED_MODELS }
 /** @deprecated Use REASONING_MODELS instead */
 export const GPT5_REASONING_MODELS = REASONING_MODELS
 
@@ -22,25 +23,7 @@ export interface WorkingFile {
 
 export type ModelId = string
 
-export interface ModelOption {
-  id: ModelId
-  label: string
-  provider: string
-}
-
-export const SUPPORTED_MODELS: ModelOption[] = [
-  // GPT
-  { id: 'gpt-5.4', label: 'GPT-5.4', provider: 'OpenAI' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'OpenAI' },
-  { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', provider: 'OpenAI' },
-  { id: 'gpt-4o', label: 'GPT-4o', provider: 'OpenAI' },
-  // Anthropic Claude 4.6
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'Anthropic' },
-  // Anthropic Claude 4.5
-  { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Anthropic' },
-  { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Anthropic' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'Anthropic' },
-]
+export type { ModelOption }
 
 interface UIState {
   theme: Theme
@@ -95,7 +78,7 @@ export const useUIStore = create<UIState>((set) => ({
   theme: 'light',
   leftTab: 'files',
   centerView: 'chat',
-  selectedModel: 'gpt-5.4',
+  selectedModel: DEFAULT_MODEL,
   isIdle: true,
   rightSidebarCollapsed: false,
   leftSidebarCollapsed: false,
@@ -211,7 +194,16 @@ export async function hydratePreferences(): Promise<void> {
   const prefs = await api?.loadPreferences?.()
   if (!prefs) return
   const updates: Partial<{ selectedModel: string; reasoningEffort: ReasoningEffort; theme: Theme }> = {}
-  if (prefs.selectedModel) updates.selectedModel = prefs.selectedModel
+  if (prefs.selectedModel) {
+    // Migrate legacy model IDs (e.g. 'gpt-5.4' → 'openai:gpt-5.4')
+    const m = prefs.selectedModel as string
+    if (!m.includes(':')) {
+      const { provider, modelId } = parseModelKey(m)
+      updates.selectedModel = `${provider}:${modelId}`
+    } else {
+      updates.selectedModel = m
+    }
+  }
   if (prefs.reasoningEffort) updates.reasoningEffort = prefs.reasoningEffort
   if (prefs.theme) updates.theme = prefs.theme
   if (Object.keys(updates).length > 0) useUIStore.setState(updates)
