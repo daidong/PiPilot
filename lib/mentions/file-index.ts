@@ -19,57 +19,70 @@ const SKIP_DIRS = new Set([
   'dist', 'out', '.next', '.venv', 'venv'
 ])
 
-let cachedFiles: string[] = []
-let cachedProjectPath = ''
-let lastRefreshAt = 0
-let refreshPromise: Promise<string[]> | null = null
+interface FileCache {
+  files: string[]
+  lastRefreshAt: number
+  refreshPromise: Promise<string[]> | null
+}
+
+const caches = new Map<string, FileCache>()
+
+function getOrCreateCache(projectPath: string): FileCache {
+  let c = caches.get(projectPath)
+  if (!c) {
+    c = { files: [], lastRefreshAt: 0, refreshPromise: null }
+    caches.set(projectPath, c)
+  }
+  return c
+}
 
 /**
  * Get a cached list of workspace files.
  * First call runs git ls-files (or walkFiles fallback). Subsequent calls
  * return the cache until REFRESH_THROTTLE_MS elapses.
+ * Each project path gets its own independent cache.
  */
 export async function getFileList(projectPath: string): Promise<string[]> {
-  // Invalidate if project changed
-  if (projectPath !== cachedProjectPath) {
-    cachedFiles = []
-    cachedProjectPath = projectPath
-    lastRefreshAt = 0
-  }
+  const c = getOrCreateCache(projectPath)
 
   const now = Date.now()
-  if (cachedFiles.length > 0 && now - lastRefreshAt < REFRESH_THROTTLE_MS) {
-    return cachedFiles
+  if (c.files.length > 0 && now - c.lastRefreshAt < REFRESH_THROTTLE_MS) {
+    return c.files
   }
 
   // Prevent concurrent refreshes
-  if (refreshPromise) return refreshPromise
+  if (c.refreshPromise) return c.refreshPromise
 
-  refreshPromise = refreshFileList(projectPath).finally(() => {
-    refreshPromise = null
+  c.refreshPromise = refreshFileList(projectPath, c).finally(() => {
+    c.refreshPromise = null
   })
-  return refreshPromise
+  return c.refreshPromise
 }
 
 /** Force the next getFileList call to rebuild. */
-export function invalidateFileIndex(): void {
-  lastRefreshAt = 0
+export function invalidateFileIndex(projectPath?: string): void {
+  if (projectPath) {
+    const c = caches.get(projectPath)
+    if (c) c.lastRefreshAt = 0
+  } else {
+    for (const c of caches.values()) c.lastRefreshAt = 0
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------
 
-async function refreshFileList(projectPath: string): Promise<string[]> {
+async function refreshFileList(projectPath: string, c: FileCache): Promise<string[]> {
   try {
     const files = await gitLsFiles(projectPath)
-    cachedFiles = files.slice(0, MAX_FILES)
+    c.files = files.slice(0, MAX_FILES)
   } catch {
     // Not a git repo or git not available — fall back to sync walk
-    cachedFiles = walkFilesSync(projectPath)
+    c.files = walkFilesSync(projectPath)
   }
-  lastRefreshAt = Date.now()
-  return cachedFiles
+  c.lastRefreshAt = Date.now()
+  return c.files
 }
 
 function gitLsFiles(cwd: string): Promise<string[]> {

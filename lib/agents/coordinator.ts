@@ -810,6 +810,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     clearSessionMemory,
 
+    /** Stop the current LLM turn without tearing down tools. */
+    abort() {
+      agent.abort()
+    },
+
     async destroy() {
       agent.abort()
       await destroyResearchTools()

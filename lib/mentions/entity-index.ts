@@ -14,25 +14,30 @@ export interface EntityCache {
   data: ReturnType<typeof listData>
 }
 
-let cache: EntityCache | null = null
-let cachePath = ''
+const caches = new Map<string, EntityCache>()
 
 /**
  * Get cached entity listings for a project.
  * Rebuilds on first call or after invalidation.
+ * Each project path gets its own independent cache.
  */
 export function getEntityCache(projectPath: string): EntityCache {
-  if (cache && cachePath === projectPath) return cache
-  cache = {
+  let c = caches.get(projectPath)
+  if (c) return c
+  c = {
     notes: listNotes(projectPath),
     papers: listLiterature(projectPath),
     data: listData(projectPath)
   }
-  cachePath = projectPath
-  return cache
+  caches.set(projectPath, c)
+  return c
 }
 
 /** Force the next getEntityCache call to rebuild. */
-export function invalidateEntityCache(): void {
-  cache = null
+export function invalidateEntityCache(projectPath?: string): void {
+  if (projectPath) {
+    caches.delete(projectPath)
+  } else {
+    caches.clear()
+  }
 }

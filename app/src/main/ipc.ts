@@ -375,7 +375,7 @@ async function ensureCoordinator(
         if ((tool === 'artifact-create' || tool === 'artifact-update') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success) {
-            invalidateEntityCache()
+            invalidateEntityCache(runProjectPath)
             if (tool === 'artifact-create') {
               safeSend(win, 'agent:entity-created', {
                 type: r.data?.type || 'artifact',
@@ -654,7 +654,7 @@ export function registerIpcHandlers(): void {
   // Stop running agent
   handleWindow('agent:stop', ({ state }) => {
     if (state.coordinator) {
-      (state.coordinator as any).agent.stop()
+      state.coordinator.abort()
     }
   })
 
@@ -1110,7 +1110,6 @@ export function registerIpcHandlers(): void {
     if (!result.canceled && result.filePaths[0]) {
       // Clean up previous project (same as project:close)
       if (state.coordinator) {
-        try { (state.coordinator as any).agent.stop() } catch { /* may not be running */ }
         try { await state.coordinator.destroy() } catch { /* best effort */ }
         state.coordinator = null
       }
@@ -1169,7 +1168,7 @@ export function registerIpcHandlers(): void {
       // Stop any running agent
       if (state.coordinator) {
         try {
-          ;(state.coordinator as any).agent.stop()
+          state.coordinator.abort()
         } catch {
           /* agent may not be running */
         }
