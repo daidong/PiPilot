@@ -26,6 +26,7 @@ This skill covers the full lifecycle of conference paper writing: from assemblin
 - Research is still in progress — finish experiments and analysis first.
 - You need a literature survey — use the `literature-search` tool.
 - You need to brainstorm research directions — use `brainstorming-research-ideas` or `creative-thinking-for-research`.
+- You already have a draft and want to **strategically revise** it (reframe the contribution, strengthen evidence, prepare reviewer defense, unify the narrative) — use `paper-revision` instead. That skill covers framing diagnosis, claim crystallization, and reviewer-adversarial revision, which are fundamentally different from first-draft writing.
 - You are writing a **journal article** (Nature, Science, NEJM, etc.), **technical report**, or **research summary** — use `scientific-writing` instead, which covers IMRAD structure, journal-specific citation styles (APA/AMA/Vancouver), and reporting guidelines (CONSORT/STROBE/PRISMA).
 
 ### paper-writing vs scientific-writing: Which to Use
