@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "peerDependencies": {
-    "@mariozechner/pi-agent-core": "^0.61.1",
-    "@mariozechner/pi-ai": "^0.61.1",
-    "@mariozechner/pi-coding-agent": "^0.61.1",
+    "@mariozechner/pi-agent-core": "^0.66.1",
+    "@mariozechner/pi-ai": "^0.66.1",
+    "@mariozechner/pi-coding-agent": "^0.66.1",
     "@sinclair/typebox": "^0.34.48"
   }
 }

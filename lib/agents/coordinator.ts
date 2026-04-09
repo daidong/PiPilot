@@ -561,7 +561,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   }
 
   async function clearSessionMemory() {
-    agent.clearMessages()
+    agent.reset()
     compactionSummary = undefined
   }
 
@@ -633,7 +633,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     probeStaticProfile()
       .then(profile => {
         const envGuidance = generateAgentGuidance(profile)
-        agent.setSystemPrompt(baseSystemPrompt + '\n\n' + envGuidance)
+        agent.state.systemPrompt = baseSystemPrompt + '\n\n' + envGuidance
       })
       .catch(() => { /* non-fatal */ })
   }
@@ -713,7 +713,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         if (agentMdContent) {
           enrichedSystem = `${enrichedSystem}\n\n## User Instructions (agent.md)\n\n${agentMdContent}`
         }
-        agent.setSystemPrompt(enrichedSystem)
+        agent.state.systemPrompt = enrichedSystem
 
         // Build the user message with injected context.
         // Order: session summary → skill summaries → mentions → user message
