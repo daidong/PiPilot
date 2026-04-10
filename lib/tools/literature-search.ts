@@ -357,7 +357,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
           for (const src of batch.sources) {
             const searchFn = SOURCE_DISPATCH[src]
             if (!searchFn) continue
-            const result = await searchFn(q, 10)
+            const result = await searchFn(q, 20)
             allPapers.push(...result.papers)
             if (result.error) {
               if (!sourceErrors[src]) sourceErrors[src] = []
@@ -447,7 +447,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
           // If review parsing fails, include all papers with a default score — but warn the agent
           review = {
             approved: true,
-            relevantPapers: deduplicated.slice(0, 12).map(p => ({ ...p, relevanceScore: 5, relevanceJustification: 'Review parsing failed; included by default.' })),
+            relevantPapers: deduplicated.slice(0, 25).map(p => ({ ...p, relevanceScore: 5, relevanceJustification: 'Review parsing failed; included by default.' })),
             confidence: 0.5,
             coverage: { score: 0.5, coveredTopics: [], missingTopics: [], gaps: ['Review parsing failed'] },
             issues: ['Review parsing failed'],

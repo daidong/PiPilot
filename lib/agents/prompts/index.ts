@@ -213,7 +213,7 @@ You receive:
 - Decompose the research request into 3-6 SUB-TOPICS, each with a name, description, and priority
 - For each sub-topic, generate 2-3 diverse search queries using academic terminology, synonyms, acronyms
 - Assign priority to each sub-topic: high (core to the request), medium (supporting), low (peripheral)
-- Set targetPaperCount (typically 30-50 for a comprehensive study, 10-20 for a focused query)
+- Set targetPaperCount (typically 50-80 for a comprehensive study, 20-30 for a focused query)
 - Set minimumCoveragePerSubTopic (typically 3 papers)
 
 ## Incremental planning
@@ -276,7 +276,7 @@ If conversation history contains previous literature-search results with coverag
 4. Approve only if at least 3 papers score >= 7 AND coverage >= 0.5. If confidence is low or critical coverage is missing, request targeted refinement.
 5. If not approved, suggest at most 2-3 **targeted refinement queries** for specific missing sub-topics — NOT broad re-searches. These queries run through the FULL search pipeline again, so be selective. CRITICAL: Your refinement queries MUST be DIFFERENT from the "Queries used" listed at the bottom — the system will reject duplicate queries. Use different terminology, synonyms, or narrower/broader scope to find what the original queries missed
 6. Track cumulative coverage across sub-topics
-7. Output size guard: include AT MOST 12 relevantPapers. If there are any reasonably relevant papers, include at least 3 (do NOT return an empty list unless ZERO papers are even tangentially relevant).
+7. Output size guard: include AT MOST 25 relevantPapers. If there are any reasonably relevant papers, include at least 3 (do NOT return an empty list unless ZERO papers are even tangentially relevant).
 
 ## Paper metadata preservation
 
