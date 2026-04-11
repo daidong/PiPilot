@@ -10,6 +10,7 @@ import { join } from 'path'
 import {
   getWikiRoot,
   GENERATOR_VERSION,
+  isValidArxivId,
   type WikiAgent,
   type WikiAgentConfig,
   type WikiStatus,
@@ -152,9 +153,9 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
 
     log(`processing: ${artifact.title} (${scanResult.reason})`)
 
-    // Download + convert arXiv PDF if applicable
+    // Download + convert arXiv PDF if applicable (only for genuine arXiv IDs)
     let fulltext: string | null = null
-    if (artifact.arxivId) {
+    if (artifact.arxivId && isValidArxivId(artifact.arxivId)) {
       if (!shouldContinue()) return
       fulltext = await downloadAndConvertArxiv(artifact.arxivId)
     }

@@ -9,6 +9,7 @@ import {
   computeCanonicalKey,
   computeSemanticHash,
   canonicalKeyToSlug,
+  isValidArxivId,
   GENERATOR_VERSION,
   type ScanResult,
 } from './types.js'
@@ -96,9 +97,10 @@ export function scanForNewContent(
       toProcess.push({ ...base, reason: 'semantic-change' })
     } else if (
       watermark.fulltextStatus === 'abstract-fallback' &&
-      artifact.arxivId
+      artifact.arxivId &&
+      isValidArxivId(artifact.arxivId)
     ) {
-      // Re-try fulltext download
+      // Re-try fulltext download (only for genuine arXiv IDs)
       toProcess.push({ ...base, reason: 'fulltext-upgrade' })
     }
 

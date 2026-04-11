@@ -28,6 +28,22 @@ export interface CanonicalPaperIdentity {
 }
 
 /**
+ * Validate that an arXiv ID looks genuine.
+ * Real formats: "2301.12345", "hep-th/0401001", or URL forms.
+ * Rejects bogus IDs like "803" or "912" (truncated conference paper IDs).
+ */
+export function isValidArxivId(arxivId: string): boolean {
+  const bare = arxivId
+    .replace(/^https?:\/\/arxiv\.org\/abs\//, '')
+    .replace(/v\d+$/, '')
+  // New format: YYMM.NNNNN (4+ digit suffix)
+  if (/^\d{4}\.\d{4,}$/.test(bare)) return true
+  // Old format: category/NNNNNNN
+  if (/^[a-z-]+\/\d{5,}$/.test(bare)) return true
+  return false
+}
+
+/**
  * Compute a globally-unique canonical key for a paper artifact.
  * Priority: DOI > arxivId > normalized(title+year).
  *
@@ -39,8 +55,8 @@ export function computeCanonicalKey(artifact: PaperArtifact): CanonicalPaperIden
   if (artifact.doi && !artifact.doi.startsWith('unknown:')) {
     return { canonicalKey: `doi:${normalizeDoi(artifact.doi)}`, keySource: 'doi' }
   }
-  // Priority 2: arXiv ID (stable external identifier)
-  if (artifact.arxivId) {
+  // Priority 2: arXiv ID (stable external identifier) — must look genuine
+  if (artifact.arxivId && isValidArxivId(artifact.arxivId)) {
     const bareId = artifact.arxivId
       .replace(/^https?:\/\/arxiv\.org\/abs\//, '')
       .replace(/v\d+$/, '')

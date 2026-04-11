@@ -8,7 +8,7 @@
 import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { loadPrompt } from '../agents/prompts/index.js'
-import { getWikiRoot, canonicalKeyToSlug, type FulltextStatus } from './types.js'
+import { getWikiRoot, canonicalKeyToSlug, isValidArxivId, type FulltextStatus } from './types.js'
 import { safeWriteFile, safeReadFile } from './io.js'
 import type { PaperArtifact } from '../types.js'
 
@@ -41,7 +41,10 @@ export async function generatePaperPage(
   const content = await callLlm(systemPrompt, userContent)
   if (!content || !shouldContinue()) return null
 
-  const fulltextStatus: FulltextStatus = fulltext ? 'fulltext' : (artifact.arxivId ? 'abstract-fallback' : 'abstract-only')
+  // Only mark as abstract-fallback (retryable) if the arXiv ID is genuine.
+  // Bogus IDs (e.g., "803") would cause infinite retry loops.
+  const hasRealArxiv = artifact.arxivId && isValidArxivId(artifact.arxivId)
+  const fulltextStatus: FulltextStatus = fulltext ? 'fulltext' : (hasRealArxiv ? 'abstract-fallback' : 'abstract-only')
 
   return { content, fulltextStatus }
 }
