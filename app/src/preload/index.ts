@@ -134,6 +134,11 @@ export interface ElectronAPI {
   loadPreferences: () => Promise<{ selectedModel?: string; reasoningEffort?: string; theme?: string } | null>
   savePreferences: (prefs: { selectedModel?: string; reasoningEffort?: string; theme?: string }) => Promise<void>
 
+  // Unified settings
+  hasLlmAuth: () => Promise<boolean>
+  loadSettings: () => Promise<any>
+  saveSettings: (settings: any) => Promise<{ success: boolean }>
+
   // Folder operations
   openFolderWith: (app: 'finder' | 'zed' | 'cursor' | 'vscode') => Promise<{ success: boolean; error?: string }>
 
@@ -152,6 +157,13 @@ export interface ElectronAPI {
 
   // File conversion
   convertFileToText: (fileName: string, base64Data: string) => Promise<{ success: boolean; content?: string; error?: string }>
+
+  // Chat export
+  exportChat: () => Promise<{ success: boolean; path?: string; error?: string }>
+  onExportChat: (cb: () => void) => () => void
+
+  // Version check
+  checkForUpdate: () => Promise<{ latest: string; current: string; hasUpdate: boolean }>
 
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
@@ -323,6 +335,11 @@ const api: ElectronAPI = {
   loadPreferences: () => ipcRenderer.invoke('prefs:load'),
   savePreferences: (prefs) => ipcRenderer.invoke('prefs:save', prefs),
 
+  // Unified settings
+  hasLlmAuth: () => ipcRenderer.invoke('config:has-llm-auth'),
+  loadSettings: () => ipcRenderer.invoke('settings:load'),
+  saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
+
   openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app),
 
   // Skills
@@ -331,6 +348,15 @@ const api: ElectronAPI = {
   uploadSkill: (fileName, base64Data) => ipcRenderer.invoke('skills:upload', fileName, base64Data),
 
   convertFileToText: (fileName, base64Data) => ipcRenderer.invoke('file:convert-to-text', fileName, base64Data),
+
+  checkForUpdate: () => ipcRenderer.invoke('app:check-update'),
+
+  exportChat: () => ipcRenderer.invoke('chat:export'),
+  onExportChat: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('menu:export-chat', handler)
+    return () => ipcRenderer.removeListener('menu:export-chat', handler)
+  },
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),
   loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),

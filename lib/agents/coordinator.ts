@@ -219,6 +219,8 @@ export interface CoordinatorConfig {
   debug?: boolean
   sessionId?: string
   reasoningEffort?: 'high' | 'medium' | 'low'
+  /** Resolved numeric settings from user preferences (literature intensity, web search depth, etc.) */
+  resolvedSettings?: import('../../shared-ui/settings-types').ResolvedSettings
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown, toolCallId?: string) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown, toolCallId?: string) => void
@@ -372,7 +374,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       return textContent?.text ?? ''
     },
     onToolCall,
-    onToolResult: wrappedOnToolResult
+    onToolResult: wrappedOnToolResult,
+    settings: config.resolvedSettings
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
 

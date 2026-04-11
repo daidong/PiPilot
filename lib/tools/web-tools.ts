@@ -404,12 +404,15 @@ export function createWebSearchTool(ctx: ResearchToolContext): AgentTool {
         }))
       }
 
+      const webSettings = ctx.settings?.webSearch
+      const defaultSearchCount = webSettings?.defaultSearchCount ?? WEB_DEFAULTS.defaultSearchCount
+      const maxSearchCount = webSettings?.maxSearchCount ?? WEB_DEFAULTS.maxSearchCount
       const countRaw = typeof params.count === 'number' && Number.isFinite(params.count)
         ? params.count
         : undefined
       const count = typeof countRaw === 'number'
-        ? Math.max(1, Math.min(WEB_DEFAULTS.maxSearchCount, Math.floor(countRaw)))
-        : WEB_DEFAULTS.defaultSearchCount
+        ? Math.max(1, Math.min(maxSearchCount, Math.floor(countRaw)))
+        : defaultSearchCount
 
       const providerRequested = normalizeSearchProvider(params.provider)
       const braveApiKey = process.env.BRAVE_API_KEY?.trim()
@@ -505,12 +508,16 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
         'text'
       const extractMode = extractModeRaw.trim().toLowerCase() === 'markdown' ? 'markdown' : 'text'
 
+      const fetchWebSettings = ctx.settings?.webSearch
+      const defaultFetchMaxChars = fetchWebSettings?.defaultFetchMaxChars ?? WEB_DEFAULTS.defaultFetchMaxChars
+      const defaultFetchTimeoutMs = fetchWebSettings?.defaultFetchTimeoutMs ?? WEB_DEFAULTS.defaultFetchTimeoutMs
+
       const maxCharsRaw =
         (typeof params.max_chars === 'number' && Number.isFinite(params.max_chars) ? params.max_chars : undefined) ??
         (typeof params.maxChars === 'number' && Number.isFinite(params.maxChars) ? params.maxChars : undefined)
       const maxChars = typeof maxCharsRaw === 'number'
         ? Math.max(100, Math.min(WEB_DEFAULTS.maxFetchMaxChars, Math.floor(maxCharsRaw)))
-        : WEB_DEFAULTS.defaultFetchMaxChars
+        : defaultFetchMaxChars
 
       const timeoutSecRaw =
         (typeof params.timeout_sec === 'number' && Number.isFinite(params.timeout_sec)
@@ -519,7 +526,7 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
           ? params.timeoutSec : undefined)
       const timeoutMs = typeof timeoutSecRaw === 'number'
         ? Math.max(1_000, Math.floor(timeoutSecRaw * 1000))
-        : WEB_DEFAULTS.defaultFetchTimeoutMs
+        : defaultFetchTimeoutMs
 
       // Note: onToolCall/onToolResult are handled by coordinator hooks (beforeToolCall/afterToolCall)
       // with proper toolCallId for reliable call→result correlation. No need to self-report here.

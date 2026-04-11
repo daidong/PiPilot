@@ -7,6 +7,13 @@ export { REASONING_MODELS, GPT5_REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODE
 // Utilities
 export { formatTokens, formatCost, parseModelKey, buildModelKey } from './utils'
 
+// Settings
+export type {
+  AppSettings, ResearchSettings, DataAnalysisSettings, ResolvedSettings,
+  ResearchIntensity, WebSearchDepth, AutoSaveSensitivity, DataAnalysisTimeout,
+} from './settings-types'
+export { DEFAULT_SETTINGS, resolveSettings } from './settings-types'
+
 // Stores
 export { useActivityStore, type ActivityEvent } from './stores/activity-store'
 export { useProgressStore, type TodoItem } from './stores/progress-store'

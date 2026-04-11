@@ -351,32 +351,35 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       const queriesUsed: string[] = []
       const sourceErrors: Record<string, string[]> = {}
 
+      const perSourceLimit = ctx.settings?.researchIntensity?.perSourceLimit ?? 20
+      const sleepMs = ctx.settings?.researchIntensity?.sleepMs ?? 500
+
       for (const batch of plan.queryBatches.sort((a, b) => a.priority - b.priority)) {
         for (const q of batch.queries) {
           queriesUsed.push(q)
           for (const src of batch.sources) {
             const searchFn = SOURCE_DISPATCH[src]
             if (!searchFn) continue
-            const result = await searchFn(q, 20)
+            const result = await searchFn(q, perSourceLimit)
             allPapers.push(...result.papers)
             if (result.error) {
               if (!sourceErrors[src]) sourceErrors[src] = []
               sourceErrors[src].push(result.error)
             }
-            await sleep(500) // polite rate limit
+            await sleep(sleepMs)
           }
         }
         // DBLP-specific queries
         if (batch.dblpQueries) {
           for (const dq of batch.dblpQueries) {
             queriesUsed.push(`[dblp] ${dq}`)
-            const result = await searchDblp(dq, 10)
+            const result = await searchDblp(dq, Math.min(perSourceLimit, 10))
             allPapers.push(...result.papers)
             if (result.error) {
               if (!sourceErrors['dblp']) sourceErrors['dblp'] = []
               sourceErrors['dblp'].push(result.error)
             }
-            await sleep(500)
+            await sleep(sleepMs)
           }
         }
       }
@@ -447,7 +450,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
           // If review parsing fails, include all papers with a default score — but warn the agent
           review = {
             approved: true,
-            relevantPapers: deduplicated.slice(0, 25).map(p => ({ ...p, relevanceScore: 5, relevanceJustification: 'Review parsing failed; included by default.' })),
+            relevantPapers: deduplicated.slice(0, ctx.settings?.researchIntensity?.reviewCap ?? 25).map(p => ({ ...p, relevanceScore: 5, relevanceJustification: 'Review parsing failed; included by default.' })),
             confidence: 0.5,
             coverage: { score: 0.5, coveredTopics: [], missingTopics: [], gaps: ['Review parsing failed'] },
             issues: ['Review parsing failed'],
@@ -489,7 +492,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       }
 
       // ── Step 5: Auto-save relevant papers as artifacts ──────────
-      const AUTO_SAVE_THRESHOLD = 7
+      const AUTO_SAVE_THRESHOLD = ctx.settings?.autoSaveThreshold ?? 7
       let papersAutoSaved = 0
       const runId = Date.now().toString(36)
       const roundLabel = `R-${runId}`

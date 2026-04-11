@@ -182,7 +182,7 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
       try {
         const { stdout, stderr } = await execFileAsync('python3', [scriptPath], {
           cwd: ctx.workspacePath,
-          timeout: 120_000, // 2 minutes
+          timeout: ctx.settings?.dataAnalysis?.timeoutMs ?? 120_000,
           maxBuffer: 10 * 1024 * 1024
         })
 

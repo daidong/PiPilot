@@ -1,6 +1,6 @@
 // Types
 export type { FileTreeNode, GitIgnoreRule, ResolvedCoordinatorAuth } from './types'
-export type { SharedHandlerContext } from './ipc-base'
+export type { SharedHandlerContext, AppSettings } from './ipc-base'
 
 // File tree utilities
 export {
@@ -33,5 +33,8 @@ export {
   registerAuthHandlers,
   registerFolderOpenHandler,
   registerConfigHandlers,
-  loadApiKeysFromConfig
+  registerSettingsHandlers,
+  loadApiKeysFromConfig,
+  loadSettingsFromConfig,
+  hasLlmAuth
 } from './ipc-base'

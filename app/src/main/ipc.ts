@@ -38,10 +38,24 @@ import {
   registerAuthHandlers,
   registerFolderOpenHandler,
   registerConfigHandlers,
+  registerSettingsHandlers,
+  loadSettingsFromConfig,
 } from '../../../shared-electron/index'
 
 // ─── Tool render registry (Layer 4) ─
 import { getToolRenderConfig } from '../../../shared-ui/tool-renderers/registry'
+import { resolveSettings } from '../../../shared-ui/settings-types'
+
+// ─── Semver comparison (major.minor.patch) ──────────────────────────────────
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
 
 // ─── Simple activity formatter ─
 interface ActivityLabel { label: string; icon: string; detail?: Record<string, unknown> }
@@ -305,6 +319,7 @@ async function ensureCoordinator(
       getApiKeyOverride,
       model: state.currentModel,
       reasoningEffort: state.currentReasoningEffort,
+      resolvedSettings: resolveSettings(loadSettingsFromConfig()),
       projectPath: state.projectPath,
       sessionId: state.sessionId,
       debug: !!process.env.RESEARCH_COPILOT_DEBUG,
@@ -540,6 +555,44 @@ export function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
   ipcHandlersRegistered = true
 
+  // ─── Version update check (non-blocking) ──────────────────────────────────
+  // Fetches latest version from npm registry once at startup.
+  // Read current version from root package.json (the npm-published version),
+  // NOT app.getVersion() which reads app/package.json (Electron internal version).
+  const currentVersion = (() => {
+    try {
+      const rootPkg = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf-8'))
+      return rootPkg.version as string
+    } catch {
+      return app.getVersion()
+    }
+  })()
+
+  let cachedUpdateInfo: { latest: string; current: string; hasUpdate: boolean } | null = null
+
+  const checkForUpdate = async (): Promise<{ latest: string; current: string; hasUpdate: boolean }> => {
+    if (cachedUpdateInfo) return cachedUpdateInfo
+    try {
+      const res = await fetch('https://registry.npmjs.org/research-copilot/latest', {
+        signal: AbortSignal.timeout(5000)
+      })
+      if (!res.ok) throw new Error(`npm registry returned ${res.status}`)
+      const data = await res.json() as { version: string }
+      const latest = data.version
+      const hasUpdate = latest !== currentVersion && compareVersions(latest, currentVersion) > 0
+      cachedUpdateInfo = { latest, current: currentVersion, hasUpdate }
+      return cachedUpdateInfo
+    } catch {
+      cachedUpdateInfo = { latest: currentVersion, current: currentVersion, hasUpdate: false }
+      return cachedUpdateInfo
+    }
+  }
+
+  ipcMain.handle('app:check-update', () => checkForUpdate())
+
+  // Fire-and-forget: warm the cache early
+  checkForUpdate().catch(() => {})
+
   // Set the builtin skills root so the loader can find SKILL.md files.
   // Dev: source tree at repo-root/lib/skills/builtin/
   // Production: electron-builder extraResources copies to Resources/skills/builtin/
@@ -602,6 +655,7 @@ export function registerIpcHandlers(): void {
   registerUsageHandlers(sharedHandle, getCtx, loadUsageTotals, resetUsageTotals)
   registerAuthHandlers(sharedHandle)
   registerConfigHandlers(sharedHandle)
+  registerSettingsHandlers(sharedHandle)
   registerFolderOpenHandler(sharedHandle, getCtx)
 
   // ─── App-specific handlers ──────────────────────────────────────────────
@@ -684,17 +738,27 @@ export function registerIpcHandlers(): void {
   })
   handleWindow('cmd:delete', ({ state }, id: string) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return deleteEntity(id, state.projectPath)
+    const result = deleteEntity(id, state.projectPath)
+    invalidateEntityCache(state.projectPath)
+    return result
   })
 
   // Commands - Artifact (RFC-012 canonical)
   handleWindow('cmd:artifact-create', ({ state }, input: Record<string, unknown>) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return artifactCreate(input as any, { sessionId: state.sessionId, projectPath: state.projectPath })
+    const result = artifactCreate(input as any, { sessionId: state.sessionId, projectPath: state.projectPath })
+    if (result && typeof result === 'object' && 'success' in result && (result as any).success) {
+      invalidateEntityCache(state.projectPath)
+    }
+    return result
   })
   handleWindow('cmd:artifact-update', ({ state }, artifactId: string, patch: Record<string, unknown>) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return artifactUpdate(state.projectPath, artifactId, patch as any)
+    const result = artifactUpdate(state.projectPath, artifactId, patch as any)
+    if (result && typeof result === 'object' && 'success' in result && (result as any).success) {
+      invalidateEntityCache(state.projectPath)
+    }
+    return result
   })
   handleWindow('cmd:artifact-get', ({ state }, artifactId: string) => {
     if (!state.projectPath) return null
@@ -710,7 +774,11 @@ export function registerIpcHandlers(): void {
   })
   handleWindow('cmd:artifact-delete', ({ state }, artifactId: string) => {
     if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
-    return artifactDelete(state.projectPath, artifactId)
+    const result = artifactDelete(state.projectPath, artifactId)
+    if (result && typeof result === 'object' && 'success' in result && (result as any).success) {
+      invalidateEntityCache(state.projectPath)
+    }
+    return result
   })
 
   // Commands - Context debug (read-only)
@@ -1102,6 +1170,49 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  // Export all chat messages as Markdown
+  handleWindow('chat:export', async ({ win, state }) => {
+    if (!state.projectPath || !state.sessionId) {
+      return { success: false, error: 'No project open' }
+    }
+    const file = join(state.projectPath, PATHS.sessions, `${state.sessionId}.jsonl`)
+    if (!existsSync(file)) {
+      return { success: false, error: 'No chat history found' }
+    }
+    const lines = readFileSync(file, 'utf-8').split('\n').filter(Boolean)
+    if (lines.length === 0) {
+      return { success: false, error: 'Chat history is empty' }
+    }
+
+    // Build markdown
+    const projectName = basename(state.projectPath)
+    const mdParts: string[] = [`# Chat Export — ${projectName}\n`]
+    mdParts.push(`> Exported on ${new Date().toLocaleString()}\n`)
+
+    for (const line of lines) {
+      try {
+        const msg = JSON.parse(line)
+        const time = msg.timestamp ? new Date(msg.timestamp).toLocaleString() : ''
+        const roleLabel = msg.role === 'user' ? '**You**' : msg.role === 'assistant' ? '**Assistant**' : '**System**'
+        mdParts.push(`---\n\n### ${roleLabel}  \n<sub>${time}</sub>\n\n${msg.content}\n`)
+      } catch { /* skip malformed lines */ }
+    }
+
+    const markdown = mdParts.join('\n')
+
+    // Show save dialog
+    const result = await dialog.showSaveDialog(win, {
+      title: 'Export Chat History',
+      defaultPath: join(app.getPath('documents'), `${projectName}-chat-export.md`),
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (result.canceled || !result.filePath) {
+      return { success: false, error: 'Cancelled' }
+    }
+    writeFileSync(result.filePath, markdown, 'utf-8')
+    return { success: true, path: result.filePath }
+  })
+
   // Project - pick folder and initialize
   handleWindow('project:pick-folder', async ({ win, state }) => {
     const result = await dialog.showOpenDialog(win, {
@@ -1156,6 +1267,7 @@ export function registerIpcHandlers(): void {
         }).catch(() => { /* non-fatal */ })
       }
 
+      win.setTitle(basename(state.projectPath))
       return { projectPath: state.projectPath, sessionId: state.sessionId }
     }
     return null
@@ -1188,6 +1300,9 @@ export function registerIpcHandlers(): void {
       state.realtimeBuffer.reset()
       state.projectPath = ''
       state.sessionId = crypto.randomUUID()
+      // Reset window title to app name when project is closed
+      const win = BrowserWindow.getAllWindows().find(w => windowStates.get(w.webContents.id) === state)
+      if (win) win.setTitle('Research Pilot')
       state.currentModel = 'openai:gpt-5.4'
       state.currentReasoningEffort = 'medium'
       state.currentAuthMode = 'none'

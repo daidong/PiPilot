@@ -11,6 +11,24 @@ import { extname, join, resolve, isAbsolute } from 'path'
 import { homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { ResolvedCoordinatorAuth } from './types'
+
+// ─── Settings types (duplicated from shared-ui/settings-types.ts to avoid cross-rootDir import) ─
+interface ResearchSettings {
+  researchIntensity: 'low' | 'medium' | 'high'
+  webSearchDepth: 'quick' | 'standard' | 'thorough'
+  autoSaveSensitivity: 'conservative' | 'balanced' | 'aggressive'
+}
+interface DataAnalysisSettings {
+  executionTimeLimit: 'short' | 'standard' | 'extended' | 'long'
+}
+export interface AppSettings {
+  research: ResearchSettings
+  dataAnalysis: DataAnalysisSettings
+}
+const DEFAULT_SETTINGS: AppSettings = {
+  research: { researchIntensity: 'medium', webSearchDepth: 'standard', autoSaveSensitivity: 'balanced' },
+  dataAnalysis: { executionTimeLimit: 'standard' },
+}
 import type { OAuthCredentials } from '@mariozechner/pi-ai/oauth'
 import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './file-tree'
 
@@ -28,6 +46,7 @@ const API_KEY_NAMES = [
 
 interface AppConfig {
   apiKeys?: Record<string, string>
+  settings?: AppSettings
 }
 
 function readConfig(): AppConfig {
@@ -90,6 +109,55 @@ export function registerConfigHandlers(
       delete config.apiKeys[keyName]
       delete process.env[keyName]
     }
+    writeConfig(config)
+    return { success: true }
+  })
+}
+
+// ─── Settings (research / data-analysis presets) ────────────────────────────
+
+/**
+ * Load app settings from ~/.research-copilot/config.json.
+ * Returns DEFAULT_SETTINGS if none are stored yet.
+ * Safe to call from main process at any time.
+ */
+export function loadSettingsFromConfig(): AppSettings {
+  const config = readConfig()
+  if (!config.settings) return { ...DEFAULT_SETTINGS }
+  // Merge with defaults to handle new fields added in future versions
+  return {
+    research: { ...DEFAULT_SETTINGS.research, ...config.settings.research },
+    dataAnalysis: { ...DEFAULT_SETTINGS.dataAnalysis, ...config.settings.dataAnalysis },
+  }
+}
+
+/**
+ * Check whether at least one LLM auth method is configured
+ * (API key for Anthropic/OpenAI OR Codex OAuth credentials).
+ */
+export function hasLlmAuth(): boolean {
+  const hasAnthropicKey = !!(process.env.ANTHROPIC_API_KEY || '').trim()
+  const hasOpenaiKey = !!(process.env.OPENAI_API_KEY || '').trim()
+  const hasCodex = !!loadCodexCredentials()
+  return hasAnthropicKey || hasOpenaiKey || hasCodex
+}
+
+/**
+ * Register IPC handlers for unified settings (research presets, data-analysis, etc.).
+ */
+export function registerSettingsHandlers(
+  handleRaw: (channel: string, handler: (...args: any[]) => any) => void
+) {
+  /** Returns true if at least one LLM auth is configured */
+  handleRaw('config:has-llm-auth', () => hasLlmAuth())
+
+  /** Load settings (returns full AppSettings, never partial) */
+  handleRaw('settings:load', () => loadSettingsFromConfig())
+
+  /** Save settings (expects a COMPLETE AppSettings snapshot, replaces config.settings) */
+  handleRaw('settings:save', (settings: AppSettings) => {
+    const config = readConfig()
+    config.settings = settings
     writeConfig(config)
     return { success: true }
   })
