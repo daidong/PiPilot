@@ -1,19 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { X, Key, BookOpen, BarChart2 } from 'lucide-react'
+import { X, Key, BookOpen, BarChart2, BookMarked } from 'lucide-react'
 import { ApiKeysSettings } from './ApiKeysSettings'
 import { ResearchSettings } from './ResearchSettings'
 import { DataAnalysisSettings } from './DataAnalysisSettings'
+import { WikiAgentSettings } from './WikiAgentSettings'
 import type { AppSettings } from '../../../../../shared-ui/settings-types'
 import { DEFAULT_SETTINGS } from '../../../../../shared-ui/settings-types'
 
 const api = (window as any).api
 
-type SettingsTab = 'api-keys' | 'research' | 'data-analysis'
+type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki'
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
   { id: 'api-keys', label: 'API Keys', icon: Key },
   { id: 'research', label: 'Research', icon: BookOpen },
   { id: 'data-analysis', label: 'Data Analysis', icon: BarChart2 },
+  { id: 'paper-wiki', label: 'Paper Wiki', icon: BookMarked },
 ]
 
 interface Props {
@@ -54,6 +56,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
       // Deep merge for nested objects
       if (patch.research) next.research = { ...prev.research, ...patch.research }
       if (patch.dataAnalysis) next.dataAnalysis = { ...prev.dataAnalysis, ...patch.dataAnalysis }
+      if (patch.wikiAgent) next.wikiAgent = { ...prev.wikiAgent, ...patch.wikiAgent }
       return next
     })
     setDirty(true)
@@ -152,6 +155,14 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
               <DataAnalysisSettings
                 executionTimeLimit={settings.dataAnalysis.executionTimeLimit}
                 onChange={v => updateSettings({ dataAnalysis: { executionTimeLimit: v } })}
+              />
+            )}
+            {activeTab === 'paper-wiki' && loaded && (
+              <WikiAgentSettings
+                model={settings.wikiAgent?.model ?? 'none'}
+                speed={settings.wikiAgent?.speed ?? 'medium'}
+                onChangeModel={v => updateSettings({ wikiAgent: { ...settings.wikiAgent, model: v } })}
+                onChangeSpeed={v => updateSettings({ wikiAgent: { ...settings.wikiAgent, speed: v } })}
               />
             )}
           </div>

@@ -21,6 +21,7 @@ import { createLiteratureSearchTool } from './literature-search.js'
 import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
 import { createLocalComputeTools } from '../local-compute/tools.js'
+import { createWikiLookupTool } from '../wiki/tool.js'
 
 // ---------------------------------------------------------------------------
 // ResearchTool -> AgentTool adapter
@@ -122,6 +123,10 @@ export function createResearchTools(ctx: ResearchToolContext): {
   for (const tool of structuredMemoryTools) {
     tools.push(wrapResearchTool(tool))
   }
+
+  // Wiki lookup tool (read-only access to global paper wiki)
+  // Always registered; returns "Wiki not available" at execute time if wiki doesn't exist
+  tools.push(createWikiLookupTool())
 
   // Local compute tools (long-running sandboxed execution)
   // Gated behind ENABLE_LOCAL_COMPUTE env var for gradual rollout

@@ -345,8 +345,8 @@ export default function App() {
         e.preventDefault()
         useUIStore.getState().toggleTerminal()
       }
-      // Cmd+. → Toggle settings
-      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+      // Cmd+, → Toggle settings (standard macOS Preferences shortcut)
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault()
         setSettingsOpen(prev => !prev)
       }
@@ -362,7 +362,7 @@ export default function App() {
     </div>
   }
 
-  // Settings modal renders at top level — accessible from any state via Cmd+.
+  // Settings modal renders at top level — accessible from any state via Cmd+,
   const settingsModal = (
     <SettingsModal
       open={settingsOpen}

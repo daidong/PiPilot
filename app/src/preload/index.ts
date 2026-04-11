@@ -139,6 +139,12 @@ export interface ElectronAPI {
   loadSettings: () => Promise<any>
   saveSettings: (settings: any) => Promise<{ success: boolean }>
 
+  // Wiki agent
+  wikiGetStatus: () => Promise<any>
+  wikiGetStats: () => Promise<any>
+  wikiGetLog: () => Promise<string[]>
+  onWikiStatus: (cb: (status: any) => void) => () => void
+
   // Folder operations
   openFolderWith: (app: 'finder' | 'zed' | 'cursor' | 'vscode') => Promise<{ success: boolean; error?: string }>
 
@@ -339,6 +345,16 @@ const api: ElectronAPI = {
   hasLlmAuth: () => ipcRenderer.invoke('config:has-llm-auth'),
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
+
+  // Wiki agent
+  wikiGetStatus: () => ipcRenderer.invoke('wiki:get-status'),
+  wikiGetStats: () => ipcRenderer.invoke('wiki:get-stats'),
+  wikiGetLog: () => ipcRenderer.invoke('wiki:get-log'),
+  onWikiStatus: (cb) => {
+    const handler = (_: any, status: any) => cb(status)
+    ipcRenderer.on('wiki:status', handler)
+    return () => ipcRenderer.removeListener('wiki:status', handler)
+  },
 
   openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app),
 

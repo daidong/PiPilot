@@ -44,7 +44,10 @@ import {
 
 // ─── Tool render registry (Layer 4) ─
 import { getToolRenderConfig } from '../../../shared-ui/tool-renderers/registry'
-import { resolveSettings } from '../../../shared-ui/settings-types'
+import { resolveSettings, resolveWikiPacing } from '../../../shared-ui/settings-types'
+
+// ─── Wiki agent ──────────────────────────────────────────────────────────
+import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
 
 // ─── Semver comparison (major.minor.patch) ──────────────────────────────────
 function compareVersions(a: string, b: string): number {
@@ -129,6 +132,35 @@ interface WindowRuntimeState {
 
 const windowStates = new Map<number, WindowRuntimeState>()
 let ipcHandlersRegistered = false
+
+// ─── Wiki agent singleton (shared across all windows) ────────────────────
+let wikiAgent: WikiAgentType | null = null
+let activeCoordinatorCount = 0
+let wikiIdleTimer: ReturnType<typeof setTimeout> | null = null
+let lastWikiStatus: WikiStatus = { state: 'disabled', processed: 0, pending: 0, totalInWiki: 0 }
+
+function broadcastWikiStatus(status: WikiStatus): void {
+  lastWikiStatus = status
+  for (const win of BrowserWindow.getAllWindows()) {
+    safeSend(win, 'wiki:status', status)
+  }
+}
+
+function onCoordinatorActive(): void {
+  activeCoordinatorCount++
+  if (wikiIdleTimer) { clearTimeout(wikiIdleTimer); wikiIdleTimer = null }
+  wikiAgent?.pause()
+}
+
+function onCoordinatorIdle(): void {
+  activeCoordinatorCount = Math.max(0, activeCoordinatorCount - 1)
+  if (activeCoordinatorCount === 0 && wikiAgent) {
+    wikiIdleTimer = setTimeout(() => {
+      wikiAgent?.resume()
+      wikiIdleTimer = null
+    }, 30_000)
+  }
+}
 
 function createWindowRuntimeState(): WindowRuntimeState {
   return {
@@ -536,6 +568,13 @@ async function ensureCoordinator(
  * Called from before-quit to ensure compute processes are cleaned up.
  */
 export async function destroyAllCoordinators(): Promise<void> {
+  // Destroy wiki agent
+  if (wikiAgent) {
+    wikiAgent.destroy()
+    wikiAgent = null
+  }
+  if (wikiIdleTimer) { clearTimeout(wikiIdleTimer); wikiIdleTimer = null }
+
   const promises: Promise<void>[] = []
   for (const [, state] of windowStates) {
     if (state.coordinator) {
@@ -658,6 +697,87 @@ export function registerIpcHandlers(): void {
   registerSettingsHandlers(sharedHandle)
   registerFolderOpenHandler(sharedHandle, getCtx)
 
+  // ─── Wiki agent startup (async, fire-and-forget) ────────────────────────
+  ;(async () => {
+    const wikiSettings = loadSettingsFromConfig().wikiAgent
+    if (wikiSettings && wikiSettings.model !== 'none') {
+      try {
+        const { getModel: getPiModel, completeSimple } = await import('@mariozechner/pi-ai')
+        const wikiAuth = resolveCoordinatorAuth(wikiSettings.model)
+        const [provider, modelId] = wikiSettings.model.split(':')
+        const model = getPiModel(provider, modelId)
+
+        // Build async key getter (handles subscription token refresh)
+        const resolveApiKey = wikiAuth.authMode === 'subscription'
+          ? async () => {
+              const creds = loadCodexCredentials()
+              if (!creds) throw new Error('Codex credentials not found')
+              if (creds.expires < Date.now() + 60_000) {
+                try {
+                  const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+                  const newCreds = await refreshOpenAICodexToken(creds)
+                  saveCodexCredentials(newCreds)
+                  return newCreds.access
+                } catch { return creds.access }
+              }
+              return creds.access
+            }
+          : async () => wikiAuth.apiKey
+
+        const callLlm = async (system: string, user: string) => {
+          const currentKey = await resolveApiKey()
+          const result = await completeSimple(model, {
+            systemPrompt: system,
+            messages: [{ role: 'user', content: user, timestamp: Date.now() }]
+          }, { maxTokens: 4096, apiKey: currentKey })
+          const textContent = result.content.find((c: any) => c.type === 'text') as any
+          return textContent?.text ?? ''
+        }
+
+        const pacing = resolveWikiPacing(wikiSettings.speed || 'medium')
+
+        wikiAgent = createWikiAgent({
+          callLlm,
+          projectPaths: () => {
+            const paths: string[] = []
+            for (const [, s] of windowStates) {
+              if (s.projectPath) paths.push(s.projectPath)
+            }
+            return [...new Set(paths)]
+          },
+          pacing,
+          onStatus: (status) => broadcastWikiStatus(status),
+          debug: !!process.env.RESEARCH_COPILOT_DEBUG,
+        })
+        wikiAgent.start()
+      } catch (err) {
+        // Wiki agent failed to start — coordinator unchanged
+        if (process.env.RESEARCH_COPILOT_DEBUG) {
+          console.error('[wiki-agent] failed to start:', err)
+        }
+      }
+    }
+  })().catch(() => {})
+
+  // ─── Wiki IPC handlers ─────────────────────────────────────────────────
+  ipcMain.handle('wiki:get-status', () => {
+    // Return the cached status from the most recent onStatus callback.
+    // This preserves real processed/pending/state counters from the wiki agent.
+    return lastWikiStatus
+  })
+
+  ipcMain.handle('wiki:get-stats', () => {
+    const ftStatus = countByFulltextStatus()
+    return {
+      papers: countPaperPages(),
+      concepts: countConceptPages(),
+      fulltext: ftStatus.fulltext,
+      abstractOnly: ftStatus.abstractOnly + ftStatus.abstractFallback,
+    }
+  })
+
+  ipcMain.handle('wiki:get-log', () => readRecentLog(20))
+
   // ─── App-specific handlers ──────────────────────────────────────────────
 
   // Agent chat
@@ -688,11 +808,15 @@ export function registerIpcHandlers(): void {
       mentions = await resolveMentions(parsed.mentions, state.projectPath)
     }
     try {
+      // Wiki activity broker: pause wiki agent during coordinator activity
+      onCoordinatorActive()
       const result = await coord.chat(message, mentions, images)
+      onCoordinatorIdle()
       state.realtimeBuffer.finishStreaming()
       safeSend(win, 'agent:done', result)
       return result
     } catch (err: any) {
+      onCoordinatorIdle()
       state.realtimeBuffer.finishStreaming()
       const errResult = { success: false, error: err.message }
       safeSend(win, 'agent:done', errResult)

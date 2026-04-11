@@ -22,11 +22,39 @@ export interface DataAnalysisSettings {
   executionTimeLimit: DataAnalysisTimeout
 }
 
+// ── Wiki agent settings ────────────────────────────────────────────────────
+
+export type WikiAgentSpeed = 'slow' | 'medium' | 'fast'
+
+export interface WikiAgentSettings {
+  /** Model ID (e.g., 'anthropic:claude-haiku-4-5-20251001'). 'none' = disabled. */
+  model: string
+  /** Processing speed preset */
+  speed: WikiAgentSpeed
+}
+
+export interface WikiPacingConfig {
+  papersPerCycle: number
+  cycleCooldownMs: number
+  interCallDelayMs: number
+  idleScanIntervalMs: number
+  startupDelayMs: number
+}
+
+export function resolveWikiPacing(speed: WikiAgentSpeed): WikiPacingConfig {
+  switch (speed) {
+    case 'slow':   return { papersPerCycle: 1, cycleCooldownMs: 600_000, interCallDelayMs: 8_000, idleScanIntervalMs: 120_000, startupDelayMs: 60_000 }
+    case 'medium': return { papersPerCycle: 2, cycleCooldownMs: 300_000, interCallDelayMs: 5_000, idleScanIntervalMs: 120_000, startupDelayMs: 60_000 }
+    case 'fast':   return { papersPerCycle: 3, cycleCooldownMs: 120_000, interCallDelayMs: 3_000, idleScanIntervalMs: 120_000, startupDelayMs: 60_000 }
+  }
+}
+
 // ── Combined ────────────────────────────────────────────────────────────────
 
 export interface AppSettings {
   research: ResearchSettings
   dataAnalysis: DataAnalysisSettings
+  wikiAgent: WikiAgentSettings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -37,6 +65,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   dataAnalysis: {
     executionTimeLimit: 'standard',
+  },
+  wikiAgent: {
+    model: 'none',
+    speed: 'medium',
   },
 }
 

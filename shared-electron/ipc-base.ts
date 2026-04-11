@@ -21,13 +21,19 @@ interface ResearchSettings {
 interface DataAnalysisSettings {
   executionTimeLimit: 'short' | 'standard' | 'extended' | 'long'
 }
+interface WikiAgentSettings {
+  model: string   // 'none' = disabled
+  speed: 'slow' | 'medium' | 'fast'
+}
 export interface AppSettings {
   research: ResearchSettings
   dataAnalysis: DataAnalysisSettings
+  wikiAgent: WikiAgentSettings
 }
 const DEFAULT_SETTINGS: AppSettings = {
   research: { researchIntensity: 'medium', webSearchDepth: 'standard', autoSaveSensitivity: 'balanced' },
   dataAnalysis: { executionTimeLimit: 'standard' },
+  wikiAgent: { model: 'none', speed: 'medium' },
 }
 import type { OAuthCredentials } from '@mariozechner/pi-ai/oauth'
 import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './file-tree'
@@ -128,6 +134,7 @@ export function loadSettingsFromConfig(): AppSettings {
   return {
     research: { ...DEFAULT_SETTINGS.research, ...config.settings.research },
     dataAnalysis: { ...DEFAULT_SETTINGS.dataAnalysis, ...config.settings.dataAnalysis },
+    wikiAgent: { ...DEFAULT_SETTINGS.wikiAgent, ...config.settings.wikiAgent },
   }
 }
 

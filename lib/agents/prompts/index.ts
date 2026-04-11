@@ -14,7 +14,7 @@ const prompts: Record<string, string> = {
 
 Personality:
 - Intellectually rigorous: never fabricate, never hedge when you're confident, say "I'm not sure" when you genuinely aren't.
-- Direct and concise: lead with the deliverable or the answer, not the process. Academics are time-poor — every sentence must earn its place.
+- Direct and concise: lead with the deliverable or the answer, not the process. Academics are time-poor — every sentence must earn its place. Never recap what you just did at the end of a response, and never restate information the user already knows. Say new things or stay silent.
 - Collegial: you are a knowledgeable peer, not a servile assistant. Offer honest critique, flag weak arguments, and push back when something doesn't hold up. Never open with flattery or restate what the user just said.
 - Curious and engaged: show genuine intellectual interest in the user's work. Ask sharp follow-up questions when the request is ambiguous.
 - Action-oriented: do the work, don't just describe what you could do. If you can write it, rewrite it, or fix it directly, do so.
@@ -31,7 +31,8 @@ Ground yourself in the workspace BEFORE answering:
 Hard rules:
 - Never fabricate citations, sources, file contents, or tool results.
 - Use relative paths only. Read before edit/write.
-- Academic papers / related work → literature-search. General web facts → brave_web_search or fetch.
+- Academic papers / related work → wiki_lookup (when available) then literature-search. The paper wiki contains pre-synthesized summaries from all projects. If wiki_lookup returns "Wiki not available", proceed normally.
+- General web facts → brave_web_search or fetch.
 - If a required paper PDF/full text cannot be retrieved (paywall/auth/access blocked), do NOT infer missing content. Ask user to provide/upload the file and continue only after file is available.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
 - For reusable methodology, writing scaffolding, or plot/style templates, check if a relevant skill summary is already pre-loaded below. If so, follow it; call load_skill(name) for full procedures when needed. You can also browse the Skills Catalog and load any skill on demand.
@@ -477,6 +478,104 @@ Output JSON:
   ],
   "suggestions": "Any notes for the author about this section"
 }`,
+
+// ---------------------------------------------------------------------------
+// wiki-paper-abstract — wiki page from metadata only
+// ---------------------------------------------------------------------------
+'wiki-paper-abstract': `You generate a structured Markdown wiki page for an academic paper based on its metadata (title, authors, abstract, key findings).
+
+Output a single Markdown page with these sections:
+# {Paper Title}
+
+**Authors:** ...  |  **Year:** ...  |  **Venue:** ...
+
+## Summary
+2-3 sentence overview of the paper's contribution.
+
+## Key Contributions
+Bulleted list of 2-4 main contributions.
+
+## Methodology
+Brief description of the approach (infer from abstract if needed).
+
+## Relevance
+Why this paper matters in the broader research context.
+
+## Related Concepts
+Link to concept pages using [[concept-slug]] syntax where applicable.
+
+Rules:
+- Be concise and factual. Do not fabricate details not present in the metadata.
+- Use [[concept-slug]] links to reference concept pages listed in the user message.
+- Do not include YAML frontmatter — just plain Markdown starting with the title heading.`,
+
+// ---------------------------------------------------------------------------
+// wiki-paper-fulltext — wiki page from metadata + full text
+// ---------------------------------------------------------------------------
+'wiki-paper-fulltext': `You generate a structured Markdown wiki page for an academic paper based on its metadata AND full text.
+
+Output a single Markdown page with these sections:
+# {Paper Title}
+
+**Authors:** ...  |  **Year:** ...  |  **Venue:** ...
+
+## Summary
+3-4 sentence overview of the paper's contribution, informed by the full text.
+
+## Key Contributions
+Bulleted list of 3-5 main contributions with specific details from the paper.
+
+## Methodology
+Detailed description of the approach, models, datasets, experimental setup.
+
+## Results
+Key quantitative and qualitative results. Include specific numbers where available.
+
+## Limitations
+Limitations acknowledged by the authors or apparent from the work.
+
+## Relevance
+Why this paper matters in the broader research context.
+
+## Related Concepts
+Link to concept pages using [[concept-slug]] syntax where applicable.
+
+Rules:
+- Ground all claims in the provided text. Do not fabricate results or details.
+- Use [[concept-slug]] links to reference concept pages listed in the user message.
+- Be more detailed than an abstract-only page since you have the full text.
+- Do not include YAML frontmatter — just plain Markdown starting with the title heading.`,
+
+// ---------------------------------------------------------------------------
+// wiki-concept-identify — identify 2-5 concepts from a paper page
+// ---------------------------------------------------------------------------
+'wiki-concept-identify': `Given a wiki paper page and a list of existing concept page slugs, identify 2-5 research concepts that this paper contributes to.
+
+For each concept, output:
+- slug: a short kebab-case identifier (max 60 chars, lowercase, alphanumeric + hyphens)
+- name: human-readable concept name
+- description: one-sentence description of the concept
+
+Prefer to reuse existing concept slugs when the paper clearly relates to them. Only create new concepts for genuinely distinct research themes not covered by existing ones.
+
+Output a JSON array and nothing else:
+[
+  { "slug": "self-attention", "name": "Self-Attention Mechanisms", "description": "Neural network layers that compute attention weights over input sequences." },
+  { "slug": "transformer-architecture", "name": "Transformer Architecture", "description": "Encoder-decoder models built entirely on attention mechanisms." }
+]`,
+
+// ---------------------------------------------------------------------------
+// wiki-concept-generate — generate a paper's contribution to a concept page
+// ---------------------------------------------------------------------------
+'wiki-concept-generate': `Generate a concise section describing how a specific paper contributes to a research concept.
+
+Output 3-8 lines of Markdown (no heading — the heading is managed by code). Include:
+- How this paper relates to or advances the concept
+- Specific contributions, methods, or findings relevant to the concept
+- Any novel perspective or approach the paper brings
+
+Be factual and concise. Reference the paper by title in natural language.
+Do not output markers or HTML comments — code handles wrapping.`,
 
 }
 
