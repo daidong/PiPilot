@@ -4,7 +4,7 @@ import { resolve } from 'path'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ include: ['node-pty'] })],
     build: {
       // Output ESM so external pi-mono packages (pure ESM) are import()'d, not require()'d
       rollupOptions: {
