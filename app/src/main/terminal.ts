@@ -8,11 +8,21 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import os from 'os'
 
-// node-pty is a native module — lazy-import to avoid build issues
+// node-pty is a native module and an optional dependency.
+// On platforms where it's not installed (e.g. Windows), all terminal
+// handlers degrade gracefully — spawn returns an error, other ops are no-ops.
 let pty: typeof import('node-pty') | null = null
+let ptyUnavailable = false
 async function getPty() {
-  if (!pty) pty = await import('node-pty')
-  return pty
+  if (pty) return pty
+  if (ptyUnavailable) return null
+  try {
+    pty = await import('node-pty')
+    return pty
+  } catch {
+    ptyUnavailable = true
+    return null
+  }
 }
 
 type IPty = import('node-pty').IPty
@@ -39,6 +49,9 @@ export function registerTerminalHandlers(): void {
 
     try {
       const nodePty = await getPty()
+      if (!nodePty) {
+        return { success: false, error: 'Terminal is not available on this platform (node-pty not installed).' }
+      }
       const shell = getShell()
       const term = nodePty.spawn(shell, [], {
         name: 'xterm-256color',

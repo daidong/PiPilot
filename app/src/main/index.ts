@@ -142,6 +142,15 @@ function buildMenu(): void {
         },
         { type: 'separator' },
         {
+          label: 'Export Chat…',
+          accelerator: 'CmdOrCtrl+Shift+E',
+          click: () => {
+            const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+            if (target) target.webContents.send('menu:export-chat')
+          }
+        },
+        { type: 'separator' },
+        {
           label: 'Close Project',
           accelerator: 'CmdOrCtrl+Shift+K',
           click: () => {

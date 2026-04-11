@@ -92,14 +92,14 @@ export function CenterPanel() {
         </div>
       ) : (
         <div className="flex-1 min-h-0 px-6 pt-4 pb-2">
-          <div className="mx-auto h-full" style={{ maxWidth: '48rem' }}>
+          <div className="mx-auto h-full" style={{ maxWidth: '64rem' }}>
             <ChatMessages />
           </div>
         </div>
       )}
 
       <div className="px-6 pb-5">
-        <div className="mx-auto" style={{ maxWidth: '48rem' }}>
+        <div className="mx-auto" style={{ maxWidth: '64rem' }}>
           <ChatInput />
         </div>
       </div>

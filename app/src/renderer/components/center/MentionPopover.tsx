@@ -90,8 +90,20 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
     setLoading(true)
     clearTimeout(debounceRef.current)
 
+    // Parse type prefix: "note:my query" → type="note", search="my query"
+    let search = query
+    let type: string | undefined
+    const colonIdx = query.indexOf(':')
+    if (colonIdx > 0) {
+      const prefix = query.slice(0, colonIdx)
+      if (['note', 'paper', 'data', 'file'].includes(prefix)) {
+        type = prefix
+        search = query.slice(colonIdx + 1)
+      }
+    }
+
     debounceRef.current = setTimeout(() => {
-      api.getCandidates(query).then((result: MentionCandidate[]) => {
+      api.getCandidates(search, type).then((result: MentionCandidate[]) => {
         if (stale) return
         setCandidates(result || [])
         setSelectedIdx(0)

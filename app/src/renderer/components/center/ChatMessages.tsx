@@ -1,16 +1,35 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react'
+import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useChatStore, type ChatMessage } from '../../stores/chat-store'
 import { useEntityStore } from '../../stores/entity-store'
 import { useToolEventsStore } from '../../stores/tool-events-store'
 import { ToolUseStream } from '@shared/components/center/ToolUseStream'
-import { Bookmark, BookmarkCheck, Loader2 } from 'lucide-react'
+import { Bookmark, BookmarkCheck, Copy, Check, Loader2 } from 'lucide-react'
 
 const api = (window as any).api
 
 // Stable reference to avoid re-creating array on every render
 const remarkPlugins = [remarkGfm]
+
+/** Human-readable timestamp: "10:30 AM" for today, "Yesterday 3:20 PM", "Apr 5 10:30 AM" for older */
+function formatMessageTime(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+  const isToday = d.toDateString() === now.toDateString()
+  if (isToday) return time
+
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`
+
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time
+  }
+  return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) + ' ' + time
+}
 
 // Floating tooltip that appears when user selects text inside an assistant bubble
 function SelectionBookmark() {
@@ -176,10 +195,18 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
     }
   }
 
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(msg.content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} group`}>
       <div
-        className={`relative max-w-[80%] rounded-2xl px-4 py-3 text-sm t-text ${
+        className={`relative max-w-[90%] rounded-2xl px-4 py-3 text-sm t-text ${
           !isUser ? 'assistant-bubble' : ''
         }${!isUser && isSaved ? ' border-l-2 border-[var(--color-status-success)]' : ''}`}
         style={{
@@ -209,28 +236,50 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
           <ReactMarkdown remarkPlugins={remarkPlugins}>{msg.content}</ReactMarkdown>
         </div>
 
+        {/* Timestamp */}
+        {msg.timestamp > 0 && (
+          <div className={`mt-1.5 text-[10px] t-text-muted select-none ${isUser ? 'text-right' : 'text-left'}`}>
+            {formatMessageTime(msg.timestamp)}
+          </div>
+        )}
+
+        {/* Action buttons for assistant messages */}
         {!isUser && (
-          <button
-            onClick={handleSaveNote}
-            disabled={saveState !== 'idle'}
-            className={`absolute -right-8 top-2 transition-opacity ${
-              saveState === 'saved'
-                ? 'opacity-100 t-text-success'
-                : saveState === 'saving'
-                  ? 'opacity-100 t-text-muted'
+          <div className="absolute -right-8 top-2 flex flex-col gap-1.5">
+            <button
+              onClick={handleSaveNote}
+              disabled={saveState !== 'idle'}
+              className={`transition-opacity ${
+                saveState === 'saved'
+                  ? 'opacity-100 t-text-success'
+                  : saveState === 'saving'
+                    ? 'opacity-100 t-text-muted'
+                    : 'opacity-0 group-hover:opacity-100 t-text-muted hover:t-text-accent-soft'
+              }`}
+              title={saveState === 'saved' ? 'Saved as note' : 'Save entire message as note'}
+              aria-label={saveState === 'saved' ? 'Message saved as note' : 'Save entire message as note'}
+            >
+              {saveState === 'saving' ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : saveState === 'saved' ? (
+                <BookmarkCheck size={14} />
+              ) : (
+                <Bookmark size={14} />
+              )}
+            </button>
+            <button
+              onClick={handleCopy}
+              className={`transition-opacity ${
+                copied
+                  ? 'opacity-100 t-text-success'
                   : 'opacity-0 group-hover:opacity-100 t-text-muted hover:t-text-accent-soft'
-            }`}
-            title={saveState === 'saved' ? 'Saved as note' : 'Save entire message as note'}
-            aria-label={saveState === 'saved' ? 'Message saved as note' : 'Save entire message as note'}
-          >
-            {saveState === 'saving' ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : saveState === 'saved' ? (
-              <BookmarkCheck size={14} />
-            ) : (
-              <Bookmark size={14} />
-            )}
-          </button>
+              }`}
+              title={copied ? 'Copied!' : 'Copy message'}
+              aria-label={copied ? 'Message copied' : 'Copy message to clipboard'}
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -258,7 +307,7 @@ function StreamingBubble() {
   return (
     <div className="flex justify-start">
       <div
-        className="max-w-[80%] rounded-2xl px-4 py-3 text-sm t-text assistant-bubble"
+        className="max-w-[90%] rounded-2xl px-4 py-3 text-sm t-text assistant-bubble"
         style={{ background: 'var(--color-bubble-assistant)' }}
       >
         <div className="md-prose" style={{ color: 'var(--color-text)' }}>
@@ -266,6 +315,237 @@ function StreamingBubble() {
         </div>
         <span className="inline-block w-1.5 h-4 t-bg-accent-soft animate-pulse ml-0.5 align-text-bottom" />
       </div>
+    </div>
+  )
+}
+
+// ─── Timeline Scrubber ──────────────────────────────────────────────────────
+// Right-edge rail showing user messages as ticks. Hovering reveals a preview
+// card with truncated content; clicking jumps to that message. A viewport
+// overlay shows the currently visible portion.
+
+interface ScrubNode {
+  msgId: string
+  preview: string
+  time: string
+}
+
+function buildScrubNodes(messages: ChatMessage[]): ScrubNode[] {
+  return messages
+    .filter(m => m.role === 'user')
+    .map(msg => ({
+      msgId: msg.id,
+      preview: msg.content.replace(/^#+\s*/gm, '').slice(0, 100),
+      time: msg.timestamp > 0 ? formatMessageTime(msg.timestamp) : '',
+    }))
+}
+
+function ChatTimeline({ messages, scrollContainerRef }: { messages: ChatMessage[]; scrollContainerRef: React.RefObject<HTMLDivElement> }) {
+  const requestScrollTo = useChatStore((s) => s.requestScrollTo)
+  const nodes = useMemo(() => buildScrubNodes(messages), [messages])
+  // positions: 0-1 ratio of each message within the scrollable content
+  const positionsRef = useRef<number[]>([])
+  const [, forceUpdate] = useState(0)
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+  const [hoverY, setHoverY] = useState(0)
+  const [viewport, setViewport] = useState({ top: 0, height: 1 })
+  const railRef = useRef<HTMLDivElement>(null)
+  const railHRef = useRef(0)
+
+  const RAIL_PAD = 8
+
+  // Compute positions using getBoundingClientRect (immune to offsetParent issues)
+  const computePositions = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (!container || nodes.length === 0) return
+    const scrollH = container.scrollHeight
+    if (scrollH <= 0) return
+    const containerRect = container.getBoundingClientRect()
+    const scrollTop = container.scrollTop
+
+    const pos = nodes.map(node => {
+      const el = container.querySelector(`[data-msg-id="${node.msgId}"]`)
+      if (!el) return 0
+      const elRect = el.getBoundingClientRect()
+      // Absolute position within the scrollable content
+      const absTop = elRect.top - containerRect.top + scrollTop
+      return Math.min(Math.max(absTop / scrollH, 0), 1)
+    })
+    positionsRef.current = pos
+    forceUpdate(n => n + 1)
+  }, [nodes, scrollContainerRef])
+
+  // Recompute on layout changes
+  useEffect(() => {
+    const container = scrollContainerRef.current
+    if (!container || nodes.length === 0) { positionsRef.current = []; return }
+    // Delay first computation to ensure DOM is fully laid out
+    const raf = requestAnimationFrame(() => computePositions())
+    const observer = new ResizeObserver(() => computePositions())
+    observer.observe(container)
+    return () => { cancelAnimationFrame(raf); observer.disconnect() }
+  }, [nodes, messages, scrollContainerRef, computePositions])
+
+  // Track rail height via ResizeObserver
+  useEffect(() => {
+    const rail = railRef.current
+    if (!rail) return
+    const obs = new ResizeObserver(([e]) => {
+      railHRef.current = e.contentRect.height
+      forceUpdate(n => n + 1)
+    })
+    obs.observe(rail)
+    return () => obs.disconnect()
+  }, [])
+
+  // Track viewport overlay
+  useEffect(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    const update = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container
+      if (scrollHeight <= 0) return
+      setViewport({
+        top: scrollTop / scrollHeight,
+        height: Math.min(clientHeight / scrollHeight, 1),
+      })
+    }
+    update()
+    container.addEventListener('scroll', update, { passive: true })
+    const obs = new ResizeObserver(update)
+    obs.observe(container)
+    return () => { container.removeEventListener('scroll', update); obs.disconnect() }
+  }, [scrollContainerRef, messages])
+
+  // Convert 0-1 ratio → pixel top within the rail
+  const toY = (ratio: number) => {
+    const usable = railHRef.current - RAIL_PAD * 2
+    return usable > 0 ? RAIL_PAD + ratio * usable : 0
+  }
+
+  // Scrub: find nearest node to cursor Y
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const rail = railRef.current
+    const positions = positionsRef.current
+    if (!rail || positions.length === 0) return
+    const rect = rail.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    setHoverY(y)
+
+    const usable = railHRef.current - RAIL_PAD * 2
+    if (usable <= 0) return
+    const ratio = Math.max(0, Math.min(1, (y - RAIL_PAD) / usable))
+
+    let best = 0
+    let bestDist = Infinity
+    for (let i = 0; i < positions.length; i++) {
+      const d = Math.abs(positions[i] - ratio)
+      if (d < bestDist) { bestDist = d; best = i }
+    }
+    setHoveredIdx(best)
+  }, [])
+
+  const handleMouseLeave = useCallback(() => setHoveredIdx(null), [])
+
+  const handleClick = useCallback(() => {
+    if (hoveredIdx !== null && nodes[hoveredIdx]) {
+      requestScrollTo(nodes[hoveredIdx].msgId)
+    }
+  }, [hoveredIdx, nodes, requestScrollTo])
+
+  const positions = positionsRef.current
+  const railH = railHRef.current
+  // Ready when we have enough messages, positions are computed, and rail has measured its height
+  const ready = nodes.length >= 3 && positions.length === nodes.length && railH > 0
+
+  const hovered = hoveredIdx !== null ? nodes[hoveredIdx] : null
+
+  // Always render the rail container so ResizeObserver can measure it.
+  // Only render content (ticks, viewport, preview) when ready.
+  return (
+    <div className="absolute right-0 top-0 bottom-0 w-[48px] select-none" style={{ zIndex: 10 }}>
+      <div
+        ref={railRef}
+        className="absolute inset-0 cursor-pointer"
+        role="navigation"
+        aria-label="Message timeline"
+        onMouseMove={ready ? handleMouseMove : undefined}
+        onMouseLeave={ready ? handleMouseLeave : undefined}
+        onClick={ready ? handleClick : undefined}
+      >
+        {ready && (
+          <>
+            {/* Track line */}
+            <div
+              className="absolute left-[23px] w-px"
+              style={{ top: RAIL_PAD, bottom: RAIL_PAD, background: 'var(--color-border)', opacity: 0.25 }}
+            />
+
+            {/* Viewport overlay */}
+            <div
+              className="absolute left-[18px] w-[11px] rounded-full"
+              style={{
+                top: toY(viewport.top),
+                height: Math.max(12, viewport.height * (railH - RAIL_PAD * 2)),
+                background: 'var(--color-accent-soft)',
+                opacity: 0.15,
+              }}
+            />
+
+            {/* Message ticks */}
+            {nodes.map((node, i) => {
+              const isActive = hoveredIdx === i
+              return (
+                <div
+                  key={node.msgId}
+                  className="absolute"
+                  style={{
+                    top: toY(positions[i]),
+                    left: 17,
+                    width: isActive ? 16 : 8,
+                    height: isActive ? 3 : 2,
+                    borderRadius: 1,
+                    background: 'var(--color-accent-soft)',
+                    opacity: isActive ? 1 : 0.35,
+                    transition: 'width 80ms, height 80ms, opacity 80ms',
+                  }}
+                />
+              )
+            })}
+
+            {/* Scrub cursor */}
+            {hoveredIdx !== null && (
+              <div
+                className="absolute pointer-events-none"
+                style={{ top: hoverY, left: 6, right: 6, height: 1, background: 'var(--color-accent-soft)', opacity: 0.6 }}
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Preview card */}
+      {ready && hovered && hoveredIdx !== null && (
+        <div
+          className="absolute right-[52px] pointer-events-none"
+          style={{ top: Math.max(8, Math.min(hoverY - 28, railH - 80)), zIndex: 50 }}
+        >
+          <div
+            className="w-56 rounded-lg border shadow-lg overflow-hidden"
+            style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}
+          >
+            <div className="h-[3px]" style={{ background: 'var(--color-accent-soft)' }} />
+            <div className="px-3 py-2">
+              {hovered.time && (
+                <span className="text-[9px] t-text-muted block mb-1">{hovered.time}</span>
+              )}
+              <p className="text-[11px] t-text leading-relaxed line-clamp-3">
+                {hovered.preview || '(empty)'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -339,12 +619,14 @@ export function ChatMessages() {
   }, [scrollToMessageId])
 
   return (
-    <>
+    <div className="relative h-full">
       <SelectionBookmark />
+      <ChatTimeline messages={messages} scrollContainerRef={scrollContainerRef} />
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="overflow-y-auto h-full"
+        className="overflow-y-auto h-full pr-[48px]"
+          style={{ scrollbarWidth: 'none' }}
         role="log"
         aria-label="Chat messages"
         aria-live="polite"
@@ -398,6 +680,6 @@ export function ChatMessages() {
         )}
         <div ref={bottomRef} />
       </div>
-    </>
+    </div>
   )
 }
