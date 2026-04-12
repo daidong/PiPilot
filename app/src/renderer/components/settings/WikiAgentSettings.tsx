@@ -164,8 +164,11 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
         <div className="rounded-lg border t-border t-bg-surface/50 p-3">
           <p className="text-[11px] t-text-muted">
             The wiki agent is disabled. Select a model above to enable cross-project paper
-            knowledge. Papers from all your projects will be synthesized into interlinked
-            wiki pages, accessible via the <code className="font-mono">wiki_lookup</code> tool.
+            memory. Papers from all your projects are accumulated into a searchable local
+            memory accessible via <code className="font-mono">wiki_search</code>,{' '}
+            <code className="font-mono">wiki_get</code>, <code className="font-mono">wiki_coverage</code>,
+            and <code className="font-mono">wiki_source</code> — the wiki is a research memory
+            layer, not a fact oracle.
           </p>
         </div>
       )}

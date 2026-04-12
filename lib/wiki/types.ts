@@ -17,8 +17,11 @@ export function getWikiRoot(): string {
 }
 
 // ── Generator version — bump when wiki prompts change ──────────────────────
+// V3 = RFC-005: adds embedded <!-- WIKI-META --> memory sidecar block.
+// Existing RFC-003 pages (no meta block) stay valid as body-only memory
+// until the repair pass regenerates them. See lib/docs/rfc/005-wiki-sidecar-and-retrieval.md.
 
-export const GENERATOR_VERSION = 1
+export const GENERATOR_VERSION = 3
 
 // ── Canonical paper identity ───────────────────────────────────────────────
 
@@ -168,7 +171,7 @@ export interface WikiAgent {
 
 // ── Scan result categories ─────────────────────────────────────────────────
 
-export type ScanReason = 'new' | 'semantic-change' | 'fulltext-upgrade' | 'generator-bump' | 'provenance-only'
+export type ScanReason = 'new' | 'semantic-change' | 'fulltext-upgrade' | 'generator-bump' | 'provenance-only' | 'repair'
 
 export interface ScanResult {
   canonicalKey: string

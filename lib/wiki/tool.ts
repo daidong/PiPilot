@@ -1,95 +1,57 @@
 /**
- * Wiki Lookup Tool — read-only access to the global paper wiki.
+ * Legacy Wiki Lookup — compatibility shim (RFC-005 §8.6).
  *
- * Always registered (never returns null). Returns "Wiki not available" at
- * execute time if the wiki directory doesn't exist yet. This ensures the
- * coordinator always has the tool and the RFC fallback contract is met.
+ * `wiki_lookup` is preserved only so old prompts, saved sessions, or
+ * downstream callers that hard-coded the tool name keep working. It
+ * dispatches to the RFC-005 tools:
+ *
+ *   - wiki_lookup(query)           → wiki_search(query)
+ *   - wiki_lookup(query, page)     → wiki_get(slug=page, sections=['page:full'])
+ *
+ * Scheduled for removal one release after RFC-005 lands.
+ * NEW code should call wiki_search / wiki_get directly.
  */
 
-import { existsSync, readdirSync } from 'fs'
-import { join } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
-import { toAgentResult } from '../tools/tool-utils.js'
-import { getWikiRoot } from './types.js'
-import { safeReadFile } from './io.js'
+import { createWikiSearchTool, createWikiGetTool } from './wiki-tools.js'
 
 export function createWikiLookupTool(): AgentTool {
+  // Instantiate delegates once per shim instance. Factories are cheap and
+  // stateless; this avoids re-creating them on every execute() call.
+  const search = createWikiSearchTool()
+  const get = createWikiGetTool()
+
   return {
     name: 'wiki_lookup',
-    label: 'Wiki Lookup',
-    description: 'Search or read the global paper wiki. Contains LLM-generated summaries of papers from all projects. Use to check existing knowledge before launching literature searches.',
+    label: 'Wiki Lookup (legacy shim)',
+    description:
+      'DEPRECATED: prefer wiki_search (topic search) or wiki_get (targeted memory read). ' +
+      'This tool is a compatibility shim that dispatches to the RFC-005 memory tools. ' +
+      'Scheduled for removal one release after RFC-005 ships. ' +
+      'Calls with a `page` parameter route to wiki_get; calls with only `query` route to wiki_search.',
     parameters: Type.Object({
-      query: Type.String({ description: 'Search query (paper title, topic keyword, concept name)' }),
-      page: Type.Optional(Type.String({ description: 'Exact page slug to read (e.g., "arxiv-2301-12345" or concept slug). Omit for search.' })),
+      query: Type.String({
+        description: 'Search query (topic or keyword). Ignored when `page` is provided.',
+      }),
+      page: Type.Optional(Type.String({
+        description: 'Exact page slug. When set, this call dispatches to wiki_get and returns the full Markdown body.',
+      })),
     }),
-    execute: async (_toolCallId, params, _signal): Promise<AgentToolResult> => {
+    execute: async (toolCallId, params, signal): Promise<AgentToolResult<unknown>> => {
       const { query, page } = params as { query: string; page?: string }
-      const wikiRoot = getWikiRoot()
-
-      // Runtime check — wiki may not exist yet
-      if (!existsSync(wikiRoot)) {
-        return toAgentResult('wiki_lookup', { success: true, data: 'Wiki not available.' })
-      }
-
-      // Direct page read
       if (page) {
-        for (const subdir of ['papers', 'concepts']) {
-          const filePath = join(wikiRoot, subdir, `${page}.md`)
-          const content = safeReadFile(filePath)
-          if (content) {
-            const truncated = content.length > 50_000 ? content.slice(0, 50_000) + '\n\n[truncated]' : content
-            return toAgentResult('wiki_lookup', { success: true, data: truncated })
-          }
-        }
-        return toAgentResult('wiki_lookup', { success: true, data: `No wiki page found for slug: ${page}` })
+        return get.execute(
+          toolCallId,
+          { slug: page, sections: ['page:full'] } as unknown,
+          signal,
+        )
       }
-
-      // Search mode — scan papers/ and concepts/ for query matches
-      const queryLower = query.toLowerCase()
-      const results: Array<{ title: string; slug: string; type: string; snippet: string }> = []
-
-      for (const subdir of ['papers', 'concepts']) {
-        const dir = join(wikiRoot, subdir)
-        if (!existsSync(dir)) continue
-
-        const files = readdirSync(dir).filter(f => f.endsWith('.md'))
-        for (const file of files) {
-          const content = safeReadFile(join(dir, file))
-          if (!content) continue
-          if (!content.toLowerCase().includes(queryLower)) continue
-
-          const titleMatch = content.match(/^#\s+(.+)$/m)
-          const title = titleMatch ? titleMatch[1] : file.replace('.md', '')
-          const slug = file.replace('.md', '')
-
-          // Extract snippet around first match
-          const idx = content.toLowerCase().indexOf(queryLower)
-          const start = Math.max(0, idx - 100)
-          const end = Math.min(content.length, idx + query.length + 200)
-          const snippet = (start > 0 ? '...' : '') + content.slice(start, end).trim() + (end < content.length ? '...' : '')
-
-          results.push({ title, slug, type: subdir === 'papers' ? 'paper' : 'concept', snippet })
-        }
-      }
-
-      if (results.length === 0) {
-        const indexContent = safeReadFile(join(wikiRoot, 'index.md'))
-        if (indexContent) {
-          return toAgentResult('wiki_lookup', {
-            success: true,
-            data: `No pages match "${query}". Wiki index:\n\n${indexContent.slice(0, 5000)}`
-          })
-        }
-        return toAgentResult('wiki_lookup', { success: true, data: `No wiki pages match "${query}".` })
-      }
-
-      const formatted = results.slice(0, 10).map(r =>
-        `## ${r.title}\nType: ${r.type} | Slug: ${r.slug}\n${r.snippet}`
-      ).join('\n\n---\n\n')
-
-      const header = `Found ${results.length} result${results.length > 1 ? 's' : ''} for "${query}":\n\n`
-      return toAgentResult('wiki_lookup', { success: true, data: header + formatted })
-    }
+      return search.execute(
+        toolCallId,
+        { query, k: 10 } as unknown,
+        signal,
+      )
+    },
   }
 }

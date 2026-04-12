@@ -22,6 +22,7 @@ import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
 import { createLocalComputeTools } from '../local-compute/tools.js'
 import { createWikiLookupTool } from '../wiki/tool.js'
+import { createWikiTools } from '../wiki/wiki-tools.js'
 
 // ---------------------------------------------------------------------------
 // ResearchTool -> AgentTool adapter
@@ -124,8 +125,13 @@ export function createResearchTools(ctx: ResearchToolContext): {
     tools.push(wrapResearchTool(tool))
   }
 
-  // Wiki lookup tool (read-only access to global paper wiki)
-  // Always registered; returns "Wiki not available" at execute time if wiki doesn't exist
+  // RFC-005 memory tools: wiki_search / wiki_get / wiki_coverage / wiki_facets / wiki_neighbors / wiki_source
+  // Always registered; each tool returns "Wiki not available" at execute time if the wiki doesn't exist
+  for (const tool of createWikiTools()) {
+    tools.push(tool)
+  }
+
+  // Legacy wiki_lookup compatibility shim (RFC-003). Scheduled for removal one release after RFC-005 lands.
   tools.push(createWikiLookupTool())
 
   // Local compute tools (long-running sandboxed execution)

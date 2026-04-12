@@ -38,8 +38,47 @@ import {
   listExistingConceptSlugs,
 } from './generator.js'
 import type { FulltextStatus, ProcessedEntry, ProvenanceEntry } from './types.js'
+import { parsePaperPage, writeMetaBlockInto } from './meta-parser.js'
+import { deriveLensFromArtifact, mergeLens, unionProvenanceProjects } from './lens-deriver.js'
+import { recordSidecarStatus } from './sidecar-status.js'
+import { rebuildMemoryIndex } from './indexer.js'
+import { buildRepairScanResults } from './repair.js'
+import type { PaperArtifact } from '../types.js'
 
 type AgentState = 'created' | 'idle' | 'processing' | 'cooldown' | 'paused' | 'destroyed'
+
+/**
+ * Merge a project context (lens + provenance_projects) into an existing
+ * paper memory page's meta block. No-op if the page has no meta block
+ * (legacy RFC-003 pages) or if the artifact has no useful lens content.
+ *
+ * Must be called under withWikiLock.
+ */
+function mergeProjectContextIntoPage(
+  slug: string,
+  projectPath: string,
+  artifact: PaperArtifact,
+): void {
+  const pagePath = join(getWikiRoot(), 'papers', `${slug}.md`)
+  const content = safeReadFile(pagePath)
+  if (!content) return
+
+  const parsed = parsePaperPage(content, slug)
+  if (!parsed.sidecar) return  // legacy body-only page — wait for repair pass
+
+  const lens = deriveLensFromArtifact(artifact, projectPath)
+  const updatedProvenance = unionProvenanceProjects(parsed.sidecar.provenance_projects, projectPath)
+
+  parsed.sidecar.provenance_projects = updatedProvenance
+  if (lens) {
+    parsed.sidecar.project_lenses = mergeLens(parsed.sidecar.project_lenses, lens)
+  }
+
+  const newContent = writeMetaBlockInto(parsed.body, parsed.sidecar)
+  if (newContent !== content) {
+    safeWriteFile(pagePath, newContent)
+  }
+}
 
 export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
   let state: AgentState = 'created'
@@ -98,6 +137,8 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
         const { toProcess, provenanceOnly } = scanForNewContent(projectPaths)
 
         // 5. Handle provenance-only entries (no LLM)
+        //    Each entry is an existing wiki paper being seen from a new project.
+        //    We record provenance + merge a project lens into the existing meta block.
         for (const entry of provenanceOnly) {
           addProvenance({
             canonicalKey: entry.canonicalKey,
@@ -105,6 +146,29 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
             paperId: entry.artifact.id,
             addedAt: new Date().toISOString(),
           })
+          mergeProjectContextIntoPage(entry.slug, entry.projectPath, entry.artifact)
+        }
+
+        // 5b. RFC-005 §6.4, §12, §13 Phase 1: repair pass — surface papers
+        //     whose meta block was missing / stale in sidecar_status.jsonl.
+        //     Repair entries are prepended to toProcess (healer takes priority),
+        //     with per-slug dedup against normal scan results.
+        const repairs = buildRepairScanResults(projectPaths, config.pacing.papersPerCycle)
+        if (repairs.length > 0) {
+          log(`repair: ${repairs.length} stale/missing sidecar(s) queued`)
+          const seenSlugs = new Set<string>()
+          const merged: ScanResult[] = []
+          for (const entry of repairs) {
+            if (seenSlugs.has(entry.slug)) continue
+            seenSlugs.add(entry.slug)
+            merged.push(entry)
+          }
+          for (const entry of toProcess) {
+            if (seenSlugs.has(entry.slug)) continue
+            seenSlugs.add(entry.slug)
+            merged.push(entry)
+          }
+          toProcess.splice(0, toProcess.length, ...merged)
         }
 
         if (toProcess.length === 0) {
@@ -135,8 +199,13 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
           }
         }
 
-        // 8. Rebuild index
+        // 8. Rebuild human index (index.md) and memory retrieval indices (RFC-005 Phase 2)
         rebuildIndex()
+        try {
+          rebuildMemoryIndex()
+        } catch (err) {
+          log(`rebuildMemoryIndex error: ${err}`)
+        }
 
         lastRunAt = new Date().toISOString()
         emitStatus(pendingRemaining)
@@ -200,6 +269,22 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
     // Write paper page
     const paperPath = join(getWikiRoot(), 'papers', `${slug}.md`)
     safeWriteFile(paperPath, result.content)
+
+    // RFC-005 §6.2.1: parse the just-written page, record parse status,
+    // merge a project lens from the triggering artifact. If the LLM emitted
+    // a clean meta block this enriches the sidecar; if it didn't, the
+    // status row lets the repair pass retry later.
+    const parseOutcome = parsePaperPage(result.content, slug)
+    recordSidecarStatus({
+      slug,
+      status: parseOutcome.status,
+      reason: parseOutcome.reason,
+      droppedFields: parseOutcome.droppedFields,
+      generator_version: GENERATOR_VERSION,
+      recorded_at: new Date().toISOString(),
+      repairUsed: parseOutcome.repairUsed,
+    })
+    mergeProjectContextIntoPage(slug, projectPath, artifact)
 
     // Identify concepts
     if (!shouldContinue()) return

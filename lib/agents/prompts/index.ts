@@ -5,6 +5,98 @@
  * Edit prompts here — they are inlined at build time.
  */
 
+// ---------------------------------------------------------------------------
+// Wiki memory sidecar addendum (RFC-005 §5, §8).
+// Appended to both wiki-paper-fulltext and wiki-paper-abstract.
+// The LLM emits a <!-- WIKI-META --> JSON block after the Markdown body.
+// This is a retrieval index, NOT a fact cache — see RFC-005 §4.3.
+// ---------------------------------------------------------------------------
+
+const _FENCE = '```'
+
+const WIKI_META_ADDENDUM = `
+
+---
+
+# MEMORY SIDECAR (required — emit after the Markdown body above)
+
+After the final Markdown section of the paper page, emit a structured memory sidecar in this exact form and then STOP generating (nothing after the closing marker):
+
+<!-- WIKI-META -->
+${_FENCE}json
+{ ...meta object matching the schema below... }
+${_FENCE}
+<!-- /WIKI-META -->
+
+This sidecar is a RETRIEVAL INDEX. Both the Markdown body above and this sidecar are WIKI MEMORY — derived summaries, not source evidence. When readers need exact numbers or direct quotes, they escalate to the underlying paper artifact (converted fulltext or PDF) via wiki_source, not to this wiki page. Your goal is COVERAGE, not precision. Fill fields generously wherever you have reasonable grounding. Approximate paraphrases are acceptable and useful because readers verify from the source artifact anyway.
+
+HARD RULES (the only "do not invent" constraints):
+- Do not fabricate dataset / compound / cohort names, URLs, or exact numeric values that do not appear in the source text.
+- Do not guess JSON structure. Output valid JSON with exactly the shape below.
+- If you cannot produce a well-formed meta block, OMIT it entirely — an absent meta block is safer than a malformed one.
+
+SCHEMA (only schemaVersion, canonicalKey, slug, generated_at, generator_version, source_tier, and paper_type are required; all other fields optional):
+
+{
+  "schemaVersion": 3,                        // REQUIRED, literal 3
+  "canonicalKey": "...",                     // REQUIRED, provided in the user message
+  "slug": "...",                             // REQUIRED, provided in the user message
+  "generated_at": "YYYY-MM-DDTHH:MM:SSZ",    // REQUIRED, ISO timestamp
+  "generator_version": 3,                    // REQUIRED, literal 3
+  "source_tier": "metadata-only" | "abstract-only" | "fulltext",   // REQUIRED, provided
+  "parse_quality": "clean" | "noisy" | "unknown",                  // optional; holistic judgment on converted text
+  "paper_type": "method" | "empirical" | "review" | "resource" | "theory" | "position",  // REQUIRED
+    // method    = proposes a new approach / algorithm / synthesis / tool / compound
+    // empirical = measurement / observation / experiment; no major new method
+    // review    = survey / systematic review / meta-analysis
+    // resource  = introduces a dataset / benchmark / library / corpus / named materials
+    // theory    = proof / derivation / formal analysis
+    // position  = opinion / commentary / perspective / roadmap
+
+  "tldr": "...",                             // ≤200 chars, one-sentence contribution summary
+
+  "task": ["..."],                           // free-form, discipline-native ("asymmetric hydrogenation", "long-context language modeling", ...)
+  "methods": ["..."],                        // include specific AND general method names
+
+  "datasets": [{
+    "name": "...",                           // dataset / compound / cell line / cohort / simulation config
+    "alias": "...",
+    "role": "used" | "introduced" | "compared_to",
+    "section": "..."
+  }],
+
+  "findings": [{
+    "statement": "...",                      // full-sentence paraphrase — the BM25 primary field
+    "value": "...",                          // optional isolable number: "78.2%", "3.1×", "-4.2 eV"
+    "context": "...",                        // what the finding applies to
+    "comparison": "...",                     // "vs 0.66 human baseline"
+    "section": "..."
+  }],
+
+  "baselines": [{ "name": "...", "canonicalKey": "...", "section": "..." }],
+  "code_url": "...",
+  "data_url": "...",
+
+  "concept_edges": [{
+    "slug": "...",                           // kebab-case; prefer existing slugs from the provided list
+    "relation": "introduces" | "uses" | "advances" | "critiques",
+    "section": "..."
+  }],
+
+  "aliases": ["..."],                        // alternate names for this paper's method / system / compound
+
+  "limitations": [{ "text": "...", "section": "..." }],       // paraphrase explicit limitations only
+  "negative_results": [{ "text": "...", "section": "..." }]   // paraphrase explicit "X did not work" statements
+}
+
+OUTPUT RULES:
+- Markdown body FIRST, then the <!-- WIKI-META --> block. Nothing after <!-- /WIKI-META -->.
+- Exactly one meta block per page. No trailing commas, no comments inside the JSON, use double quotes.
+- Section hints are optional navigation aids. Plausible section names are fine ("Results", "Methods §3"). Do not fabricate section numbers.
+- For abstract-only inputs: fill the required header + tldr + paper_type + task + methods + aliases + shallow concept_edges. Omit the rest. That is fine.
+- For metadata-only inputs: fill only the required header + tldr + paper_type. Omit everything else.
+- Remember: coverage beats precision. A missing field is worse than an approximate one.`
+
 const prompts: Record<string, string> = {
 
 // ---------------------------------------------------------------------------
@@ -31,7 +123,13 @@ Ground yourself in the workspace BEFORE answering:
 Hard rules:
 - Never fabricate citations, sources, file contents, or tool results.
 - Use relative paths only. Read before edit/write.
-- Academic papers / related work → wiki_lookup (when available) then literature-search. The paper wiki contains pre-synthesized summaries from all projects. If wiki_lookup returns "Wiki not available", proceed normally.
+- Academic papers / related work → the paper wiki is a CUMULATIVE RESEARCH MEMORY across projects (not a complete literature catalog, not a fact oracle). Use this flow:
+  1) wiki_coverage(topic) to check how much local memory exists on the topic.
+  2) wiki_search(query, filters?) to shortlist candidate papers from local memory.
+  3) wiki_get(slug, sections=[...]) for targeted reads. Sections prefixed page:* are Markdown prose, meta:* are structured fields, and lenses are prior project-specific interpretations.
+  4) wiki_source(slug) when you need exact quotes, precise numbers, or cross-paper comparisons — this returns paths to the underlying paper artifacts (project artifact, cached fulltext, cached PDF). Wiki memory is derived summary, NOT source evidence; always re-read from source before citing a number or quoting verbatim.
+  5) Fall through to literature-search when local memory is thin (wiki_coverage says none or thin), or when the task requires genuine coverage of the field rather than recall of what we already have.
+  6) When you DO call literature-search, ALWAYS pass wiki context via its context parameter so its planner avoids re-discovering what we already have. Construct the context string from the preceding wiki_coverage + wiki_search results: (a) a short list of paper slugs or titles we already know on this topic, (b) the dense concepts / methods / years wiki_coverage returned, (c) the specific gap you want filled. Example context string: "Local wiki already covers: flash-attention, ring-attention, sparse-attention (12 papers 2022-2023). Gap to fill: (i) 2024+ long-context methods, (ii) kernel-level optimizations not yet indexed, (iii) efficiency benchmarks beyond LRA." Without this hint the planner wastes tokens re-planning sub-topics we have already ingested.
 - General web facts → brave_web_search or fetch.
 - If a required paper PDF/full text cannot be retrieved (paywall/auth/access blocked), do NOT infer missing content. Ask user to provide/upload the file and continue only after file is available.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
@@ -507,7 +605,8 @@ Link to concept pages using [[concept-slug]] syntax where applicable.
 Rules:
 - Be concise and factual. Do not fabricate details not present in the metadata.
 - Use [[concept-slug]] links to reference concept pages listed in the user message.
-- Do not include YAML frontmatter — just plain Markdown starting with the title heading.`,
+- Do not include YAML frontmatter — just plain Markdown starting with the title heading.
+${WIKI_META_ADDENDUM}`,
 
 // ---------------------------------------------------------------------------
 // wiki-paper-fulltext — wiki page from metadata + full text
@@ -544,7 +643,8 @@ Rules:
 - Ground all claims in the provided text. Do not fabricate results or details.
 - Use [[concept-slug]] links to reference concept pages listed in the user message.
 - Be more detailed than an abstract-only page since you have the full text.
-- Do not include YAML frontmatter — just plain Markdown starting with the title heading.`,
+- Do not include YAML frontmatter — just plain Markdown starting with the title heading.
+${WIKI_META_ADDENDUM}`,
 
 // ---------------------------------------------------------------------------
 // wiki-concept-identify — identify 2-5 concepts from a paper page
