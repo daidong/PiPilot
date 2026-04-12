@@ -4,11 +4,11 @@ import { SUPPORTED_MODELS } from '../../constants'
 import { parseModelKey } from '../../utils'
 import type { ModelOption } from '../../types'
 
-// Group models by provider
-const providers = [...new Set(SUPPORTED_MODELS.map((m) => m.provider))]
-const groupedModels: Record<string, ModelOption[]> = {}
-for (const p of providers) {
-  groupedModels[p] = SUPPORTED_MODELS.filter((m) => m.provider === p)
+// Group models by provider (Claude Subscription filtered at render time via feature flag)
+const allProviders = [...new Set(SUPPORTED_MODELS.map((m) => m.provider))]
+const allGroupedModels: Record<string, ModelOption[]> = {}
+for (const p of allProviders) {
+  allGroupedModels[p] = SUPPORTED_MODELS.filter((m) => m.provider === p)
 }
 
 interface Props {
@@ -21,10 +21,21 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const [anthropicStatus, setAnthropicStatus] = useState<any>(null)
   const [codexStatus, setCodexStatus] = useState<{ isLoggedIn: boolean; isExpired: boolean } | null>(null)
   const [codexLoggingIn, setCodexLoggingIn] = useState(false)
+  const [anthropicSubStatus, setAnthropicSubStatus] = useState<{ isLoggedIn: boolean; isExpired: boolean } | null>(null)
+  const [anthropicSubLoggingIn, setAnthropicSubLoggingIn] = useState(false)
   const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const api = (window as any).api
+
+  // Feature flag: only show Claude Subscription models when ENABLE_CLAUDE_SUB=1
+  const claudeSubEnabled = api?.isClaudeSubEnabled?.() ?? false
+  const providers = claudeSubEnabled
+    ? allProviders
+    : allProviders.filter(p => p !== 'Claude Subscription')
+  const groupedModels = claudeSubEnabled
+    ? allGroupedModels
+    : Object.fromEntries(Object.entries(allGroupedModels).filter(([p]) => p !== 'Claude Subscription'))
 
   const current = SUPPORTED_MODELS.find((m) => m.id === selectedModel)
 
@@ -43,6 +54,15 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       setCodexStatus(status ?? null)
     } catch {
       setCodexStatus(null)
+    }
+  }, [api])
+
+  const refreshAnthropicSubStatus = useCallback(async () => {
+    try {
+      const status = await api?.getAnthropicSubStatus?.()
+      setAnthropicSubStatus(status ?? null)
+    } catch {
+      setAnthropicSubStatus(null)
     }
   }, [api])
 
@@ -71,11 +91,12 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   useEffect(() => {
     refreshAnthropicStatus()
     refreshCodexStatus()
+    if (claudeSubEnabled) refreshAnthropicSubStatus()
     const unsub = api?.onAnthropicAuthStatus?.((status: any) => setAnthropicStatus(status))
     return () => {
       if (typeof unsub === 'function') unsub()
     }
-  }, [api, refreshAnthropicStatus, refreshCodexStatus])
+  }, [api, refreshAnthropicStatus, refreshCodexStatus, refreshAnthropicSubStatus, claudeSubEnabled])
 
   const handleCodexLogin = async () => {
     setCodexLoggingIn(true)
@@ -98,6 +119,27 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     await refreshCodexStatus()
   }
 
+  const handleAnthropicSubLogin = async () => {
+    setAnthropicSubLoggingIn(true)
+    try {
+      const result = await api?.anthropicSubLogin?.()
+      if (result?.success) {
+        await refreshAnthropicSubStatus()
+      } else {
+        console.error('[ModelSelector] Anthropic sub login failed:', result?.error)
+      }
+    } catch (err) {
+      console.error('[ModelSelector] Anthropic sub login error:', err)
+    } finally {
+      setAnthropicSubLoggingIn(false)
+    }
+  }
+
+  const handleAnthropicSubLogout = async () => {
+    await api?.anthropicSubLogout?.()
+    await refreshAnthropicSubStatus()
+  }
+
   const handleModelSelect = async (model: ModelOption) => {
     const { provider } = parseModelKey(model.id)
 
@@ -105,8 +147,21 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       // Subscription models need OAuth login
       if (!codexStatus?.isLoggedIn) {
         await handleCodexLogin()
-        // After login, check again
         const status = await api?.getOpenAICodexStatus?.()
+        if (!status?.isLoggedIn) {
+          setOpen(false)
+          return
+        }
+      }
+      onSelectModel(model.id)
+      setOpen(false)
+      return
+    }
+
+    if (provider === 'anthropic-sub') {
+      if (!anthropicSubStatus?.isLoggedIn) {
+        await handleAnthropicSubLogin()
+        const status = await api?.getAnthropicSubStatus?.()
         if (!status?.isLoggedIn) {
           setOpen(false)
           return
@@ -147,6 +202,8 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
 
   const authBadge = currentProvider === 'anthropic'
     ? anthropicStatus?.authMode === 'api-key' ? 'api' : 'auth'
+    : currentProvider === 'anthropic-sub'
+    ? 'sub'
     : currentProvider === 'openai-codex'
     ? 'sub'
     : currentProvider === 'openai'
@@ -206,6 +263,29 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
                       className="text-[10px] t-text-accent flex items-center gap-0.5 hover:opacity-80 disabled:opacity-50"
                     >
                       <LogIn size={10} /> {codexLoggingIn ? 'Signing in...' : 'Sign in'}
+                    </button>
+                  )}
+                </div>
+              )}
+              {provider === 'Claude Subscription' && (
+                <div className="px-3 pb-1 flex items-center justify-between">
+                  <span className="text-[11px] t-text-muted">
+                    {anthropicSubStatus?.isLoggedIn ? 'Signed in' : 'OAuth required'}
+                  </span>
+                  {anthropicSubStatus?.isLoggedIn ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleAnthropicSubLogout() }}
+                      className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5"
+                    >
+                      <LogOut size={10} /> Sign out
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleAnthropicSubLogin() }}
+                      disabled={anthropicSubLoggingIn}
+                      className="text-[10px] t-text-accent flex items-center gap-0.5 hover:opacity-80 disabled:opacity-50"
+                    >
+                      <LogIn size={10} /> {anthropicSubLoggingIn ? 'Signing in...' : 'Sign in'}
                     </button>
                   )}
                 </div>

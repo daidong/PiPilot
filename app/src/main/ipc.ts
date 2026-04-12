@@ -29,6 +29,8 @@ import {
   resolveCoordinatorAuth,
   loadCodexCredentials,
   saveCodexCredentials,
+  loadAnthropicSubCredentials,
+  saveAnthropicSubCredentials,
   isWithinRoot,
   toPosixPath,
   registerFileHandlers,
@@ -322,24 +324,40 @@ async function ensureCoordinator(
     const runProjectPath = state.projectPath
 
     // Build dynamic token getter for subscription auth
-    const getApiKeyOverride = resolvedAuth.authMode === 'subscription'
-      ? async () => {
-          const creds = loadCodexCredentials()
-          if (!creds) throw new Error('ChatGPT subscription credentials not found. Please sign in again.')
-          // Auto-refresh if expired (with 60s buffer)
-          if (creds.expires < Date.now() + 60_000) {
-            try {
-              const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
-              const newCreds = await refreshOpenAICodexToken(creds)
-              saveCodexCredentials(newCreds)
-              return newCreds.access
-            } catch {
-              return creds.access // try existing token anyway
-            }
+    let getApiKeyOverride: (() => Promise<string>) | undefined
+    if (resolvedAuth.authMode === 'subscription' && resolvedAuth.piProvider === 'anthropic-sub') {
+      getApiKeyOverride = async () => {
+        const creds = loadAnthropicSubCredentials()
+        if (!creds) throw new Error('Claude subscription credentials not found. Please sign in again.')
+        if (creds.expires < Date.now() + 60_000) {
+          try {
+            const { refreshAnthropicToken } = await import('@mariozechner/pi-ai/oauth')
+            const newCreds = await refreshAnthropicToken(creds.refresh)
+            saveAnthropicSubCredentials(newCreds)
+            return newCreds.access
+          } catch {
+            return creds.access
           }
-          return creds.access
         }
-      : undefined
+        return creds.access
+      }
+    } else if (resolvedAuth.authMode === 'subscription') {
+      getApiKeyOverride = async () => {
+        const creds = loadCodexCredentials()
+        if (!creds) throw new Error('ChatGPT subscription credentials not found. Please sign in again.')
+        if (creds.expires < Date.now() + 60_000) {
+          try {
+            const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+            const newCreds = await refreshOpenAICodexToken(creds)
+            saveCodexCredentials(newCreds)
+            return newCreds.access
+          } catch {
+            return creds.access
+          }
+        }
+        return creds.access
+      }
+    }
 
     // Notify UI that we're initializing (includes MCP servers like MarkItDown)
     const initEvent = { type: 'system', summary: 'Initializing agent (first run may take 1-2 minutes for document processing setup)...' }
@@ -704,25 +722,44 @@ export function registerIpcHandlers(): void {
       try {
         const { getModel: getPiModel, completeSimple } = await import('@mariozechner/pi-ai')
         const wikiAuth = resolveCoordinatorAuth(wikiSettings.model)
-        const [provider, modelId] = wikiSettings.model.split(':')
-        const model = getPiModel(provider, modelId)
+        const [rawProvider, modelId] = wikiSettings.model.split(':')
+        // Map subscription providers to their pi-ai provider name
+        const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
+        const model = getPiModel(piProvider, modelId)
 
         // Build async key getter (handles subscription token refresh)
-        const resolveApiKey = wikiAuth.authMode === 'subscription'
-          ? async () => {
-              const creds = loadCodexCredentials()
-              if (!creds) throw new Error('Codex credentials not found')
-              if (creds.expires < Date.now() + 60_000) {
-                try {
-                  const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
-                  const newCreds = await refreshOpenAICodexToken(creds)
-                  saveCodexCredentials(newCreds)
-                  return newCreds.access
-                } catch { return creds.access }
-              }
-              return creds.access
+        let resolveApiKey: () => Promise<string>
+        if (wikiAuth.authMode === 'subscription' && wikiAuth.piProvider === 'anthropic-sub') {
+          resolveApiKey = async () => {
+            const creds = loadAnthropicSubCredentials()
+            if (!creds) throw new Error('Claude subscription credentials not found')
+            if (creds.expires < Date.now() + 60_000) {
+              try {
+                const { refreshAnthropicToken } = await import('@mariozechner/pi-ai/oauth')
+                const newCreds = await refreshAnthropicToken(creds.refresh)
+                saveAnthropicSubCredentials(newCreds)
+                return newCreds.access
+              } catch { return creds.access }
             }
-          : async () => wikiAuth.apiKey
+            return creds.access
+          }
+        } else if (wikiAuth.authMode === 'subscription') {
+          resolveApiKey = async () => {
+            const creds = loadCodexCredentials()
+            if (!creds) throw new Error('Codex credentials not found')
+            if (creds.expires < Date.now() + 60_000) {
+              try {
+                const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+                const newCreds = await refreshOpenAICodexToken(creds)
+                saveCodexCredentials(newCreds)
+                return newCreds.access
+              } catch { return creds.access }
+            }
+            return creds.access
+          }
+        } else {
+          resolveApiKey = async () => wikiAuth.apiKey
+        }
 
         const callLlm = async (system: string, user: string) => {
           const currentKey = await resolveApiKey()

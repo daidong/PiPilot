@@ -3,7 +3,8 @@ import type { ModelOption } from './types'
 export const REASONING_MODELS = [
   'openai:gpt-5.4', 'openai:gpt-5.4-mini', 'openai:gpt-5.4-nano', 'openai:gpt-5.4-pro',
   'openai-codex:gpt-5.4', 'openai-codex:gpt-5.4-mini',
-  'anthropic:claude-opus-4-6'
+  'anthropic:claude-opus-4-6',
+  'anthropic-sub:claude-opus-4-6'
 ]
 
 /** @deprecated Use REASONING_MODELS instead */
@@ -24,6 +25,11 @@ export const SUPPORTED_MODELS: ModelOption[] = [
   { id: 'anthropic:claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Anthropic' },
   { id: 'anthropic:claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Anthropic' },
   { id: 'anthropic:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'Anthropic' },
+  // Claude Subscription (OAuth) — gated behind ENABLE_CLAUDE_SUB=1
+  { id: 'anthropic-sub:claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'Claude Subscription' },
+  { id: 'anthropic-sub:claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Claude Subscription' },
+  { id: 'anthropic-sub:claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Claude Subscription' },
+  { id: 'anthropic-sub:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'Claude Subscription' },
 ]
 
 export const DEFAULT_MODEL = 'openai:gpt-5.4'

@@ -36,6 +36,12 @@ export interface ElectronAPI {
   openaiCodexLogin: () => Promise<{ success: boolean; error?: string }>
   openaiCodexLogout: () => Promise<{ success: boolean }>
 
+  // Anthropic Subscription (Claude Pro/Max) OAuth — gated behind ENABLE_CLAUDE_SUB=1
+  isClaudeSubEnabled: () => boolean
+  getAnthropicSubStatus: () => Promise<{ isLoggedIn: boolean; isExpired: boolean }>
+  anthropicSubLogin: () => Promise<{ success: boolean; error?: string }>
+  anthropicSubLogout: () => Promise<{ success: boolean }>
+
   // API Key Config
   getApiKeyStatus: () => Promise<Record<string, boolean>>
   saveApiKey: (keyName: string, value: string) => Promise<{ success: boolean; error?: string }>
@@ -209,6 +215,12 @@ const api: ElectronAPI = {
   getOpenAICodexStatus: () => ipcRenderer.invoke('auth:get-openai-codex-status'),
   openaiCodexLogin: () => ipcRenderer.invoke('auth:openai-codex-login'),
   openaiCodexLogout: () => ipcRenderer.invoke('auth:openai-codex-logout'),
+
+  // Anthropic Subscription (Claude Pro/Max) OAuth
+  isClaudeSubEnabled: () => process.env.ENABLE_CLAUDE_SUB === '1',
+  getAnthropicSubStatus: () => ipcRenderer.invoke('auth:get-anthropic-sub-status'),
+  anthropicSubLogin: () => ipcRenderer.invoke('auth:anthropic-sub-login'),
+  anthropicSubLogout: () => ipcRenderer.invoke('auth:anthropic-sub-logout'),
 
   getApiKeyStatus: () => ipcRenderer.invoke('config:get-api-key-status'),
   saveApiKey: (keyName, value) => ipcRenderer.invoke('config:save-api-key', keyName, value),

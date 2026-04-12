@@ -146,7 +146,8 @@ export function hasLlmAuth(): boolean {
   const hasAnthropicKey = !!(process.env.ANTHROPIC_API_KEY || '').trim()
   const hasOpenaiKey = !!(process.env.OPENAI_API_KEY || '').trim()
   const hasCodex = !!loadCodexCredentials()
-  return hasAnthropicKey || hasOpenaiKey || hasCodex
+  const hasAnthropicSub = !!loadAnthropicSubCredentials()
+  return hasAnthropicKey || hasOpenaiKey || hasCodex || hasAnthropicSub
 }
 
 /**
@@ -217,6 +218,33 @@ export function loadOrCreateSessionId(rootPathKey: string, path: string): string
   const newId = crypto.randomUUID()
   writeFileSync(sessionFile, JSON.stringify({ sessionId: newId }))
   return newId
+}
+
+// ─── Anthropic Subscription OAuth credential store ────────────────────────
+const ANTHROPIC_SUB_CRED_FILE = join(CONFIG_DIR, 'anthropic-sub-credentials.json')
+
+export function loadAnthropicSubCredentials(): OAuthCredentials | null {
+  try {
+    if (existsSync(ANTHROPIC_SUB_CRED_FILE)) {
+      const data = JSON.parse(readFileSync(ANTHROPIC_SUB_CRED_FILE, 'utf-8'))
+      if (data.access && data.refresh) return data as OAuthCredentials
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+export function saveAnthropicSubCredentials(creds: OAuthCredentials): void {
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true })
+  writeFileSync(ANTHROPIC_SUB_CRED_FILE, JSON.stringify(creds, null, 2), { mode: 0o600 })
+}
+
+export function clearAnthropicSubCredentials(): void {
+  try {
+    if (existsSync(ANTHROPIC_SUB_CRED_FILE)) {
+      const { unlinkSync } = require('fs')
+      unlinkSync(ANTHROPIC_SUB_CRED_FILE)
+    }
+  } catch { /* ignore */ }
 }
 
 // ─── OpenAI Codex OAuth credential store ──────────────────────────────────
@@ -294,6 +322,19 @@ export function resolveCoordinatorAuth(compositeKey: string): ResolvedCoordinato
         isAnthropicModel: false,
         billingSource: 'subscription',
         piProvider: 'openai-codex'
+      }
+    }
+    case 'anthropic-sub': {
+      const creds = loadAnthropicSubCredentials()
+      if (!creds) {
+        throw new Error('Claude subscription login required. Please sign in via the model selector.')
+      }
+      return {
+        apiKey: creds.access,
+        authMode: 'subscription',
+        isAnthropicModel: true,
+        billingSource: 'subscription',
+        piProvider: 'anthropic-sub'
       }
     }
     case 'anthropic': {
@@ -609,6 +650,52 @@ export function registerAuthHandlers(
   handleRaw('auth:get-openai-status', () => {
     return {
       hasApiKey: !!(process.env.OPENAI_API_KEY || '').trim()
+    }
+  })
+
+  // ─── Anthropic Subscription (Claude Pro/Max) OAuth ──────────────────────
+  handleRaw('auth:get-anthropic-sub-status', () => {
+    const creds = loadAnthropicSubCredentials()
+    return {
+      isLoggedIn: !!creds,
+      isExpired: creds ? creds.expires < Date.now() : false
+    }
+  })
+
+  handleRaw('auth:anthropic-sub-login', async () => {
+    const { loginAnthropic } = await import('@mariozechner/pi-ai/oauth')
+    const { shell } = await import('electron')
+    try {
+      const creds = await loginAnthropic({
+        onAuth: (info) => { shell.openExternal(info.url) },
+        onPrompt: async (prompt) => {
+          console.warn('[OAuth Anthropic] Unexpected prompt:', prompt.message)
+          return ''
+        },
+        onProgress: (msg) => { console.log('[OAuth Anthropic]', msg) }
+      })
+      saveAnthropicSubCredentials(creds)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Anthropic OAuth login failed' }
+    }
+  })
+
+  handleRaw('auth:anthropic-sub-logout', () => {
+    clearAnthropicSubCredentials()
+    return { success: true }
+  })
+
+  handleRaw('auth:anthropic-sub-refresh', async () => {
+    const creds = loadAnthropicSubCredentials()
+    if (!creds) return { success: false, error: 'Not logged in' }
+    try {
+      const { refreshAnthropicToken } = await import('@mariozechner/pi-ai/oauth')
+      const newCreds = await refreshAnthropicToken(creds.refresh)
+      saveAnthropicSubCredentials(newCreds)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Token refresh failed' }
     }
   })
 

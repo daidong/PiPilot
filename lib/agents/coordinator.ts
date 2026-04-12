@@ -269,11 +269,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     const parts = modelId.split(':')
     if (parts.length === 2) {
       // Explicit provider:model format
+      // Map subscription providers to their pi-ai provider name
+      const piProvider = parts[0] === 'anthropic-sub' ? 'anthropic' : parts[0]
       try {
-        const result = getPiModel(parts[0] as any, parts[1] as any)
+        const result = getPiModel(piProvider as any, parts[1] as any)
         if (result) piModel = result
       } catch (err) {
-        if (debug) console.warn(`[Coordinator] getPiModel("${parts[0]}", "${parts[1]}") failed:`, err)
+        if (debug) console.warn(`[Coordinator] getPiModel("${piProvider}", "${parts[1]}") failed:`, err)
       }
     } else {
       // Infer provider from model name
@@ -323,8 +325,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     if (modelId) {
       const parts = modelId.split(':')
       if (parts.length === 2) {
-        // For intent routing, openai-codex uses the same models as openai
-        mainProvider = parts[0] === 'openai-codex' ? 'openai-codex' : parts[0]
+        // For intent routing, map subscription providers to their base provider
+        mainProvider = parts[0] === 'openai-codex' ? 'openai-codex'
+          : parts[0] === 'anthropic-sub' ? 'anthropic'
+          : parts[0]
       } else {
         mainProvider = modelId.startsWith('claude-') ? 'anthropic'
           : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
