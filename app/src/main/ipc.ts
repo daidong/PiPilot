@@ -47,7 +47,7 @@ import { getToolRenderConfig } from '../../../shared-ui/tool-renderers/registry'
 import { resolveSettings, resolveWikiPacing } from '../../../shared-ui/settings-types'
 
 // ─── Wiki agent ──────────────────────────────────────────────────────────
-import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
+import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
 
 // ─── Semver comparison (major.minor.patch) ──────────────────────────────────
 function compareVersions(a: string, b: string): number {
@@ -777,6 +777,28 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('wiki:get-log', () => readRecentLog(20))
+
+  ipcMain.handle('wiki:pause', () => {
+    if (!wikiAgent) return { success: false, error: 'Wiki agent not running' }
+    wikiAgent.pause()
+    return { success: true }
+  })
+
+  ipcMain.handle('wiki:resume', () => {
+    if (!wikiAgent) return { success: false, error: 'Wiki agent not running' }
+    wikiAgent.resume()
+    return { success: true }
+  })
+
+  ipcMain.handle('wiki:list-pages', () => listWikiPages())
+
+  ipcMain.handle('wiki:read-page', (_event: any, slug: string) => readWikiPage(slug))
+
+  ipcMain.handle('wiki:slug-for-paper', (_event: any, artifactId: string, projectPath: string) =>
+    wikiSlugForPaperArtifact(artifactId, projectPath)
+  )
+
+  ipcMain.handle('wiki:paper-slug-map', () => buildPaperSlugMap())
 
   // ─── App-specific handlers ──────────────────────────────────────────────
 

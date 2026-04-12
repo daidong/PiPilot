@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from 'react'
+import React, { useMemo, useState, useCallback, useEffect } from 'react'
 import {
   Search,
   ArrowUpDown,
@@ -12,57 +12,9 @@ import {
 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
+import { WikiReaderPanel } from './WikiReaderPanel'
 
-// ─── Sub-topic tree sidebar ───────────────────────────────────────────────────
-
-function TopicTree({
-  papers,
-  selectedTopic,
-  onSelect
-}: {
-  papers: EntityItem[]
-  selectedTopic: string | null
-  onSelect: (topic: string | null) => void
-}) {
-  const topicCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const p of papers) {
-      const topic = (p.subTopic as string) || 'Uncategorized'
-      counts.set(topic, (counts.get(topic) || 0) + 1)
-    }
-    // Sort by count desc
-    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
-  }, [papers])
-
-  return (
-    <div className="w-48 shrink-0 border-r t-border overflow-y-auto py-2">
-      <button
-        onClick={() => onSelect(null)}
-        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-          selectedTopic === null
-            ? 't-text-accent font-medium bg-[var(--color-accent-soft)]/10'
-            : 't-text-secondary hover:t-bg-hover'
-        }`}
-      >
-        All Topics ({papers.length})
-      </button>
-      {topicCounts.map(([topic, count]) => (
-        <button
-          key={topic}
-          onClick={() => onSelect(selectedTopic === topic ? null : topic)}
-          className={`w-full text-left px-3 py-1.5 text-xs transition-colors truncate ${
-            selectedTopic === topic
-              ? 't-text-accent font-medium bg-[var(--color-accent-soft)]/10'
-              : 't-text-secondary hover:t-bg-hover'
-          }`}
-          title={topic}
-        >
-          {topic} ({count})
-        </button>
-      ))}
-    </div>
-  )
-}
+const api = (window as any).api
 
 // ─── Score badge ──────────────────────────────────────────────────────────────
 
@@ -118,13 +70,16 @@ function PaperRow({
   paper,
   expanded,
   onToggle,
-  onPreview
+  wikiSlug,
+  isActive
 }: {
   paper: EntityItem
   expanded: boolean
   onToggle: () => void
-  onPreview: () => void
+  wikiSlug?: string | null
+  isActive?: boolean
 }) {
+  const setWikiSlug = useUIStore((s) => s.setWikiReaderSlug)
   const authors = (paper.authors as string[]) || []
   const authorStr =
     authors.length <= 3
@@ -133,9 +88,11 @@ function PaperRow({
   const keyFindings = (paper.keyFindings as string[]) || []
 
   return (
-    <div className="border-b t-border last:border-b-0">
+    <div className={`border-b t-border last:border-b-0 ${isActive ? 'bg-[var(--color-accent-soft)]/8' : ''}`}>
       <div
-        className="flex items-center gap-3 px-3 py-2 hover:bg-[var(--color-accent-soft)]/5 transition-colors cursor-pointer"
+        className={`flex items-center gap-3 px-3 py-2 transition-colors cursor-pointer ${
+          isActive ? 'bg-[var(--color-accent-soft)]/10' : 'hover:bg-[var(--color-accent-soft)]/5'
+        }`}
         onClick={onToggle}
       >
         <button className="shrink-0 t-text-muted">
@@ -162,18 +119,20 @@ function PaperRow({
           <ScoreBadge score={paper.relevanceScore as number | undefined} />
         </div>
 
-        {/* Citations */}
-        <span className="shrink-0 text-[11px] t-text-muted tabular-nums w-12 text-right">
-          {(paper.citationCount as number) != null ? paper.citationCount : '—'}
-        </span>
-
-        {/* Preview button */}
+        {/* Open in wiki reader */}
         <button
-          onClick={(e) => { e.stopPropagation(); onPreview() }}
-          className="shrink-0 p-1 rounded t-text-muted hover:t-text-accent-soft transition-colors"
-          title="Open detail"
+          onClick={(e) => {
+            e.stopPropagation()
+            setWikiSlug(wikiSlug || `paper:${paper.id}`)
+          }}
+          className={`shrink-0 p-1 rounded transition-colors ${
+            wikiSlug
+              ? 't-text-accent-soft hover:t-text-accent'
+              : 't-text-muted hover:t-text-accent-soft'
+          }`}
+          title={wikiSlug ? 'View wiki page' : 'View paper details'}
         >
-          <BookOpen size={14} />
+          <BookOpen size={13} />
         </button>
       </div>
 
@@ -190,16 +149,6 @@ function PaperRow({
             {paper.subTopic && (
               <span className="px-1.5 py-0.5 text-[10px] rounded bg-[var(--color-accent-soft)]/10 t-text-accent">
                 {paper.subTopic as string}
-              </span>
-            )}
-            {paper.externalSource && (
-              <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-muted">
-                {paper.externalSource as string}
-              </span>
-            )}
-            {paper.addedInRound && (
-              <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-muted">
-                {paper.addedInRound as string}
               </span>
             )}
             {paper.doi && !(paper.doi as string).startsWith('unknown:') && (
@@ -294,7 +243,6 @@ function CoverageBar({ papers }: { papers: EntityItem[] }) {
       {highRelevance > 0 && (
         <span className="t-text-accent-soft">{highRelevance} highly relevant</span>
       )}
-      {/* Simple progress bar */}
       <div className="flex-1 max-w-48">
         <div className="h-1.5 rounded-full t-bg-elevated overflow-hidden">
           <div
@@ -311,7 +259,7 @@ function CoverageBar({ papers }: { papers: EntityItem[] }) {
 
 // ─── Filter bar ───────────────────────────────────────────────────────────────
 
-function FilterBar() {
+function FilterBar({ topics }: { topics: string[] }) {
   const filter = useUIStore((s) => s.literatureFilter)
   const setFilter = useUIStore((s) => s.setLiteratureFilter)
   const [showFilters, setShowFilters] = useState(false)
@@ -328,7 +276,7 @@ function FilterBar() {
             type="text"
             value={filter.search}
             onChange={(e) => setFilter({ search: e.target.value })}
-            placeholder="Search papers by title, author, abstract..."
+            placeholder="Search papers..."
             className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
           />
           {filter.search && (
@@ -341,6 +289,20 @@ function FilterBar() {
           )}
         </div>
 
+        {/* Topic dropdown */}
+        {topics.length > 0 && (
+          <select
+            value={filter.subTopic || ''}
+            onChange={(e) => setFilter({ subTopic: e.target.value || null })}
+            className="px-2 py-1.5 text-xs rounded-lg border t-border t-bg-surface t-text max-w-40"
+          >
+            <option value="">All topics</option>
+            {topics.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
+
         {/* Filter toggle */}
         <button
           onClick={() => setShowFilters(!showFilters)}
@@ -351,7 +313,6 @@ function FilterBar() {
           }`}
         >
           <Filter size={12} />
-          Filters
           {hasActiveFilters && (
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent-soft)]" />
           )}
@@ -392,8 +353,20 @@ export function LiteratureView() {
   const papers = useEntityStore((s) => s.papers)
   const filter = useUIStore((s) => s.literatureFilter)
   const setFilter = useUIStore((s) => s.setLiteratureFilter)
-  const openPreview = useUIStore((s) => s.openPreview)
+  const wikiReaderSlug = useUIStore((s) => s.wikiReaderSlug)
+  const setWikiSlug = useUIStore((s) => s.setWikiReaderSlug)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  // Wiki slug lookup: paperId → slug (batch loaded once)
+  const [wikiSlugs, setWikiSlugs] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    api.wikiPaperSlugMap?.().then((map: Record<string, string>) => {
+      if (!cancelled && map) setWikiSlugs(map)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [papers])
 
   // Sort toggle
   const handleSort = useCallback(
@@ -407,11 +380,22 @@ export function LiteratureView() {
     [filter.sortBy, filter.sortDir, setFilter]
   )
 
+  // Collect topics for dropdown
+  const topics = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of papers) {
+      const topic = (p.subTopic as string)
+      if (topic) counts.set(topic, (counts.get(topic) || 0) + 1)
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([t]) => t)
+  }, [papers])
+
   // Filter + sort papers
   const filtered = useMemo(() => {
     let result = [...papers]
 
-    // Text search
     if (filter.search.trim()) {
       const q = filter.search.toLowerCase()
       result = result.filter((p) => {
@@ -422,29 +406,24 @@ export function LiteratureView() {
       })
     }
 
-    // Sub-topic filter
     if (filter.subTopic) {
       result = result.filter(
         (p) => ((p.subTopic as string) || 'Uncategorized') === filter.subTopic
       )
     }
 
-    // Min score
     if (filter.minScore > 0) {
       result = result.filter((p) => ((p.relevanceScore as number) || 0) >= filter.minScore)
     }
 
-    // Source
     if (filter.source) {
       result = result.filter((p) => (p.externalSource as string) === filter.source)
     }
 
-    // Round
     if (filter.round) {
       result = result.filter((p) => (p.addedInRound as string) === filter.round)
     }
 
-    // Sort
     result.sort((a, b) => {
       const dir = filter.sortDir === 'desc' ? -1 : 1
       switch (filter.sortBy) {
@@ -473,27 +452,35 @@ export function LiteratureView() {
     return result
   }, [papers, filter])
 
-  const hasTopics = papers.some((p) => p.subTopic)
+  // Auto-select first paper in wiki reader when none is selected
+  useEffect(() => {
+    if (wikiReaderSlug || filtered.length === 0) return
+    const first = filtered[0]
+    const slug = wikiSlugs[first.id]
+    setWikiSlug(slug || `paper:${first.id}`)
+  }, [filtered, wikiSlugs, wikiReaderSlug, setWikiSlug])
+
+  // Determine which paper is active in the reader (for row highlighting)
+  const activePaperId = useMemo(() => {
+    if (!wikiReaderSlug) return null
+    if (wikiReaderSlug.startsWith('paper:')) return wikiReaderSlug.replace('paper:', '')
+    // Reverse lookup: find paperId whose wiki slug matches
+    for (const [paperId, slug] of Object.entries(wikiSlugs)) {
+      if (slug === wikiReaderSlug) return paperId
+    }
+    return null
+  }, [wikiReaderSlug, wikiSlugs])
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <FilterBar />
+      <FilterBar topics={topics} />
 
       <div className="flex-1 flex min-h-0">
-        {/* Topic tree — only show if papers have sub-topics */}
-        {hasTopics && (
-          <TopicTree
-            papers={papers}
-            selectedTopic={filter.subTopic}
-            onSelect={(topic) => setFilter({ subTopic: topic })}
-          />
-        )}
-
         {/* Paper table */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="w-1/2 flex flex-col min-w-0 border-r t-border">
           {/* Table header */}
           <div className="flex items-center gap-3 px-3 py-1.5 border-b t-border t-bg-surface">
-            <div className="w-5" /> {/* chevron spacer */}
+            <div className="w-5" />
             <div className="flex-1">
               <SortHeader
                 label="Title"
@@ -519,15 +506,7 @@ export function LiteratureView() {
               onSort={handleSort}
               className="w-10 justify-end"
             />
-            <SortHeader
-              label="Cites"
-              sortKey="citations"
-              currentSort={filter.sortBy}
-              currentDir={filter.sortDir}
-              onSort={handleSort}
-              className="w-12 justify-end"
-            />
-            <div className="w-8" /> {/* action spacer */}
+            <div className="w-8" />
           </div>
 
           {/* Paper rows */}
@@ -547,14 +526,23 @@ export function LiteratureView() {
                   key={paper.id}
                   paper={paper}
                   expanded={expandedId === paper.id}
-                  onToggle={() =>
+                  isActive={activePaperId === paper.id}
+                  onToggle={() => {
                     setExpandedId(expandedId === paper.id ? null : paper.id)
-                  }
-                  onPreview={() => openPreview(paper)}
+                    // Open in wiki reader
+                    const slug = wikiSlugs[paper.id]
+                    setWikiSlug(slug || `paper:${paper.id}`)
+                  }}
+                  wikiSlug={wikiSlugs[paper.id]}
                 />
               ))
             )}
           </div>
+        </div>
+
+        {/* Wiki reader panel — always visible */}
+        <div className="w-1/2 min-w-0">
+          <WikiReaderPanel />
         </div>
       </div>
 

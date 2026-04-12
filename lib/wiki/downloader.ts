@@ -34,6 +34,68 @@ export function deriveArxivPdfUrl(arxivId: string): string {
   return `https://arxiv.org/pdf/${bareId}.pdf`
 }
 
+// ── Resolve arXiv ID by title search ──────────────────────────────────────
+
+/**
+ * Search arXiv by title to find the correct arXiv ID for a paper.
+ * Returns a valid arXiv ID (e.g. "2301.12345") or null if no match.
+ */
+export async function resolveArxivIdByTitle(
+  title: string,
+  year?: number | null,
+): Promise<string | null> {
+  // Clean title for query: remove special chars that break arXiv search
+  const cleanTitle = title.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (cleanTitle.length < 10) return null
+
+  await waitForArxivRate()
+
+  const url = new URL('http://export.arxiv.org/api/query')
+  url.searchParams.set('search_query', `ti:"${cleanTitle}"`)
+  url.searchParams.set('start', '0')
+  url.searchParams.set('max_results', '5')
+  url.searchParams.set('sortBy', 'relevance')
+
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { Accept: 'application/atom+xml' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) return null
+
+    const xml = await res.text()
+    const entries = xml.match(/<entry>([\s\S]*?)<\/entry>/gi) ?? []
+
+    for (const entry of entries) {
+      const tag = (name: string) => {
+        const m = entry.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, 'i'))
+        return m ? m[1].trim() : ''
+      }
+      const entryTitle = tag('title').replace(/\s+/g, ' ')
+      const entryId = tag('id')  // e.g. "http://arxiv.org/abs/2301.12345v1"
+
+      // Title similarity check: normalize both and compare
+      const normalize = (s: string) => s.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+      const sim = normalize(entryTitle) === normalize(title)
+      if (!sim) continue
+
+      // Optional year check
+      if (year) {
+        const entryYear = parseInt(tag('published').slice(0, 4), 10)
+        if (entryYear && Math.abs(entryYear - year) > 1) continue
+      }
+
+      // Extract bare arXiv ID from URL
+      const idMatch = entryId.match(/arxiv\.org\/abs\/(.+?)(?:v\d+)?$/)
+      if (idMatch) return idMatch[1]
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
 // ── Download + conversion ──────────────────────────────────────────────────
 
 /**

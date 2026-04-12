@@ -350,6 +350,12 @@ const api: ElectronAPI = {
   wikiGetStatus: () => ipcRenderer.invoke('wiki:get-status'),
   wikiGetStats: () => ipcRenderer.invoke('wiki:get-stats'),
   wikiGetLog: () => ipcRenderer.invoke('wiki:get-log'),
+  wikiPause: () => ipcRenderer.invoke('wiki:pause'),
+  wikiResume: () => ipcRenderer.invoke('wiki:resume'),
+  wikiListPages: () => ipcRenderer.invoke('wiki:list-pages'),
+  wikiReadPage: (slug: string) => ipcRenderer.invoke('wiki:read-page', slug),
+  wikiSlugForPaper: (artifactId: string, projectPath: string) => ipcRenderer.invoke('wiki:slug-for-paper', artifactId, projectPath),
+  wikiPaperSlugMap: () => ipcRenderer.invoke('wiki:paper-slug-map'),
   onWikiStatus: (cb) => {
     const handler = (_: any, status: any) => cb(status)
     ipcRenderer.on('wiki:status', handler)

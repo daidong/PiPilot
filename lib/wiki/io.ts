@@ -224,6 +224,80 @@ export function countConceptPages(): number {
   return readdirSync(dir).filter(f => f.endsWith('.md')).length
 }
 
+// ── Page listing + reading (for UI) ───────────────────────────────────────
+
+export interface WikiPageEntry {
+  slug: string
+  title: string
+  kind: 'paper' | 'concept'
+}
+
+/** List all wiki pages (papers + concepts) with titles extracted from markdown. */
+export function listWikiPages(): { papers: WikiPageEntry[]; concepts: WikiPageEntry[] } {
+  const root = getWikiRoot()
+  const readEntries = (subdir: string, kind: 'paper' | 'concept'): WikiPageEntry[] => {
+    const dir = join(root, subdir)
+    if (!existsSync(dir)) return []
+    return readdirSync(dir)
+      .filter(f => f.endsWith('.md'))
+      .map(f => {
+        const slug = f.replace('.md', '')
+        const content = safeReadFile(join(dir, f))
+        const titleMatch = content?.match(/^#\s+(.+)$/m)
+        const title = titleMatch ? titleMatch[1] : slug
+        return { slug, title, kind }
+      })
+      .sort((a, b) => a.title.localeCompare(b.title))
+  }
+  return {
+    papers: readEntries('papers', 'paper'),
+    concepts: readEntries('concepts', 'concept'),
+  }
+}
+
+/** Read a single wiki page by slug. Returns markdown content or null. */
+export function readWikiPage(slug: string): string | null {
+  const root = getWikiRoot()
+  // Try papers/ first, then concepts/
+  for (const subdir of ['papers', 'concepts']) {
+    const content = safeReadFile(join(root, subdir, `${slug}.md`))
+    if (content) return content
+  }
+  return null
+}
+
+/** Find the wiki slug for a paper artifact by matching canonical key in the watermark. */
+export function wikiSlugForPaperArtifact(artifactId: string, projectPath: string): string | null {
+  const provenance = readProvenance()
+  const match = provenance.find(e => e.paperId === artifactId && e.projectPath === projectPath)
+  if (!match) return null
+  const processed = readProcessedWatermark()
+  const entry = processed.get(match.canonicalKey)
+  return entry?.slug ?? null
+}
+
+/**
+ * Build a mapping of paperId → wiki slug for all known papers.
+ * Matches provenance entries against processed watermark and verifies the page file exists.
+ */
+export function buildPaperSlugMap(): Record<string, string> {
+  const provenance = readProvenance()
+  const processed = readProcessedWatermark()
+  const root = getWikiRoot()
+  const map: Record<string, string> = {}
+
+  for (const entry of provenance) {
+    if (map[entry.paperId]) continue  // already mapped
+    const watermark = processed.get(entry.canonicalKey)
+    if (!watermark?.slug) continue
+    // Verify the wiki page file actually exists
+    if (existsSync(join(root, 'papers', `${watermark.slug}.md`))) {
+      map[entry.paperId] = watermark.slug
+    }
+  }
+  return map
+}
+
 /** Count papers by fulltext status from watermark */
 export function countByFulltextStatus(): { fulltext: number; abstractOnly: number; abstractFallback: number } {
   const processed = readProcessedWatermark()

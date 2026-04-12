@@ -5,4 +5,5 @@
 export { createWikiAgent } from './agent.js'
 export { createWikiLookupTool } from './tool.js'
 export { getWikiRoot, type WikiAgent, type WikiAgentConfig, type WikiStatus, type WikiPacingConfig } from './types.js'
-export { countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog } from './io.js'
+export { countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap } from './io.js'
+export type { WikiPageEntry } from './io.js'

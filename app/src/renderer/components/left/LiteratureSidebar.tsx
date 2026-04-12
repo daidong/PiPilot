@@ -5,11 +5,11 @@ import {
   GitBranch,
   RefreshCw,
   BarChart3,
-  Loader2
 } from 'lucide-react'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
+import { ConceptsList } from './ConceptsList'
 
 function QuickAction({
   icon: Icon,
@@ -38,56 +38,6 @@ function QuickAction({
         <p className="text-[10px] t-text-muted leading-tight mt-0.5">{description}</p>
       </div>
     </button>
-  )
-}
-
-function SourceBreakdown({ papers }: { papers: EntityItem[] }) {
-  const sources = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const p of papers) {
-      const src = (p.externalSource as string) || 'unknown'
-      counts.set(src, (counts.get(src) || 0) + 1)
-    }
-    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
-  }, [papers])
-
-  if (sources.length === 0) return null
-
-  return (
-    <div className="space-y-1">
-      <p className="text-[10px] t-text-muted uppercase tracking-wider font-medium">Sources</p>
-      {sources.map(([src, count]) => (
-        <div key={src} className="flex items-center justify-between px-1">
-          <span className="text-[11px] t-text-secondary capitalize">{src.replace(/_/g, ' ')}</span>
-          <span className="text-[10px] t-text-muted tabular-nums">{count}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function RoundHistory({ papers }: { papers: EntityItem[] }) {
-  const rounds = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const p of papers) {
-      const round = (p.addedInRound as string) || ''
-      if (round) map.set(round, (map.get(round) || 0) + 1)
-    }
-    return Array.from(map.entries()).sort()
-  }, [papers])
-
-  if (rounds.length === 0) return null
-
-  return (
-    <div className="space-y-1">
-      <p className="text-[10px] t-text-muted uppercase tracking-wider font-medium">Search Rounds</p>
-      {rounds.map(([round, count]) => (
-        <div key={round} className="flex items-center justify-between px-1">
-          <span className="text-[11px] t-text-secondary">{round}</span>
-          <span className="text-[10px] t-text-muted tabular-nums">{count} papers</span>
-        </div>
-      ))}
-    </div>
   )
 }
 
@@ -209,10 +159,9 @@ export function LiteratureSidebar() {
       {/* Divider */}
       <div className="mx-3 border-t t-border" />
 
-      {/* Stats & Breakdowns */}
+      {/* Concepts & Gaps */}
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
-        <SourceBreakdown papers={papers} />
-        <RoundHistory papers={papers} />
+        <ConceptsList />
         <GapAlerts papers={papers} />
 
         {papers.length === 0 && (

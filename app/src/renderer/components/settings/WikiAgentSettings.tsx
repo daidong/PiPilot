@@ -92,7 +92,23 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
       {/* Section 2: Status Dashboard */}
       {enabled && (
         <div className="rounded-lg border t-border t-bg-surface/50 p-3 space-y-3">
-          <h4 className="text-xs font-semibold t-text">Status</h4>
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold t-text">Status</h4>
+            {status?.state && status.state !== 'disabled' && (
+              <button
+                onClick={() => {
+                  if (status.state === 'paused') {
+                    api.wikiResume?.()
+                  } else {
+                    api.wikiPause?.()
+                  }
+                }}
+                className="px-2.5 py-1 rounded-md border t-border t-bg-base t-text text-[11px] font-medium hover:t-bg-hover transition-colors"
+              >
+                {status.state === 'paused' ? 'Resume' : 'Pause'}
+              </button>
+            )}
+          </div>
 
           <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[11px]">
             <span className="t-text-muted">State:</span>

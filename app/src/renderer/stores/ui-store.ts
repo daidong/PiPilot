@@ -42,6 +42,12 @@ interface UIState {
   // Literature view state
   literatureFilter: LiteratureFilter
 
+  // Wiki reader state
+  wikiReaderSlug: string | null
+  wikiReaderHistory: string[]
+  setWikiReaderSlug: (slug: string | null) => void
+  wikiReaderBack: () => void
+
   setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
@@ -98,6 +104,17 @@ export const useUIStore = create<UIState>((set) => ({
     source: null,
     round: null
   },
+  wikiReaderSlug: null,
+  wikiReaderHistory: [],
+  setWikiReaderSlug: (slug) => set((s) => ({
+    wikiReaderHistory: s.wikiReaderSlug ? [...s.wikiReaderHistory, s.wikiReaderSlug] : s.wikiReaderHistory,
+    wikiReaderSlug: slug,
+  })),
+  wikiReaderBack: () => set((s) => {
+    const history = [...s.wikiReaderHistory]
+    const prev = history.pop() ?? null
+    return { wikiReaderSlug: prev, wikiReaderHistory: history }
+  }),
 
   setReasoningEffort: (reasoningEffort) => {
     set({ reasoningEffort })
@@ -181,7 +198,9 @@ export const useUIStore = create<UIState>((set) => ({
       previewEntity: null,
       previewSourceTab: null,
       previewEditorFocused: false,
-      literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null }
+      literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null },
+      wikiReaderSlug: null,
+      wikiReaderHistory: []
     }),
   openPreview: (entity) => set((s) => ({ previewEntity: entity, previewSourceTab: s.leftTab, leftSidebarCollapsed: true, previewEditorFocused: false })),
   closePreview: () => set({ previewEntity: null, previewSourceTab: null, leftSidebarCollapsed: false, previewEditorFocused: false }),

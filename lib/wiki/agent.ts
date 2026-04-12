@@ -29,7 +29,8 @@ import {
   safeReadFile,
 } from './io.js'
 import { scanForNewContent } from './scanner.js'
-import { downloadAndConvertArxiv } from './downloader.js'
+import { downloadAndConvertArxiv, resolveArxivIdByTitle } from './downloader.js'
+import { updateArtifact } from '../memory-v2/store.js'
 import {
   generatePaperPage,
   identifyConcepts,
@@ -153,11 +154,33 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
 
     log(`processing: ${artifact.title} (${scanResult.reason})`)
 
-    // Download + convert arXiv PDF if applicable (only for genuine arXiv IDs)
+    // Resolve arXiv ID + download fulltext PDF
     let fulltext: string | null = null
-    if (artifact.arxivId && isValidArxivId(artifact.arxivId)) {
+    let resolvedArxivId = artifact.arxivId && isValidArxivId(artifact.arxivId)
+      ? artifact.arxivId
+      : null
+
+    // Phase 1: If no valid arXiv ID, try to find one via title search
+    if (!resolvedArxivId) {
       if (!shouldContinue()) return
-      fulltext = await downloadAndConvertArxiv(artifact.arxivId)
+      log(`resolving arXiv ID for: ${artifact.title}`)
+      resolvedArxivId = await resolveArxivIdByTitle(artifact.title, artifact.year)
+
+      // Write back to artifact: either the found ID or clear the garbage value
+      const newArxivId = resolvedArxivId ?? undefined
+      if (newArxivId !== artifact.arxivId) {
+        updateArtifact(projectPath, artifact.id, { arxivId: newArxivId } as any)
+        artifact.arxivId = newArxivId  // keep local copy in sync
+        log(resolvedArxivId
+          ? `resolved arXiv ID: ${resolvedArxivId}`
+          : `no arXiv match, cleared garbage arxivId`)
+      }
+    }
+
+    // Phase 2: Download + convert if we have a valid arXiv ID
+    if (resolvedArxivId) {
+      if (!shouldContinue()) return
+      fulltext = await downloadAndConvertArxiv(resolvedArxivId)
     }
 
     // Generate paper page
