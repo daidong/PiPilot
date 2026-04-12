@@ -1,4 +1,4 @@
-# RFC-005: Wiki Structured Sidecar, Reliability Semantics & Keyword-First Retrieval
+# RFC-005: Wiki Structured Sidecar, Retrieval/Citation Separation & Keyword-First Retrieval
 
 **Status:** Proposed
 **Author:** Captain + Claude
@@ -12,11 +12,11 @@ RFC-003 shipped a global paper wiki whose unit of knowledge is a Markdown page (
 - `wiki_lookup` is a single omnibus tool doing substring scan over whole files. It cannot rank, cannot filter, cannot normalize synonyms, and cannot tell the coordinator **how much the wiki already knows about a topic** before the coordinator decides to launch an external literature search.
 - Every downstream question ("what dataset?", "what SOTA number?", "is there code?", "what didn't work?") re-parses the same prose at runtime. We pay the LLM tax on every read instead of once at write time.
 - Concept pages are typed as prose, not as a graph. `flash-attn` and `flash-attention` fragment into two slugs because there is no alias discipline. Edges are implied by `[[slug]]` links inside paragraphs, with no relation type.
-- The current wiki distinguishes **source availability** (`fulltext` vs `abstract-only`) but not **trust level**. A PDF converted to Markdown may still be noisy; the coordinator needs to know what was explicit in the source, what was lightly inferred, and what is unsafe to cite as a hard fact.
+- The current wiki does not distinguish **retrieval signals** from **citation sources**. A PDF converted to Markdown may be noisy, and an LLM-paraphrased summary may be subtly wrong. If the coordinator treats the same paragraph as both "search preview" and "citable fact", one wrong extraction propagates into drafts. The architecture needs to hold those roles separate, so that wrong previews are harmless.
 
 This RFC proposes two tightly coupled upgrades:
 
-1. **Embedded structured sidecar with reliability semantics**: every paper page gains a JSON meta block appended to `papers/<slug>.md`, wrapped in `<!-- WIKI-META --> ... <!-- /WIKI-META -->` HTML comment markers. Produced by the **same single LLM call** that writes the Markdown body — no doubling of per-paper LLM spend. Optional fields, graceful degradation, never load-bearing. The sidecar records not just *what* we think the paper says, but *how grounded* each high-risk field is.
+1. **Embedded structured sidecar with retrieval/citation separation** (§4.3): every paper page gains a JSON meta block appended to `papers/<slug>.md`, wrapped in `<!-- WIKI-META --> ... <!-- /WIKI-META -->` HTML comment markers. Produced by the **same single LLM call** that writes the Markdown body — no doubling of per-paper LLM spend. Optional fields, graceful degradation, never load-bearing. Critically, the sidecar is treated as a **retrieval index only** — the Markdown body is the single authoritative source of text for quoting, citing, or comparing. A wrong number in the sidecar costs a wasted read, never a wrong quote.
 2. **Keyword-first retrieval stack**: a small set of focused tools (`wiki_search`, `wiki_get`, `wiki_coverage`, `wiki_facets`, `wiki_neighbors`) backed by write-time indices (inverted, alias, BM25). **No embeddings in v1** — purely deterministic code and pre-built files. Embeddings are a natural v2 extension but explicitly out of scope here.
 
 ### Design Axioms
@@ -25,14 +25,14 @@ This RFC proposes two tightly coupled upgrades:
 
 Specialized to this RFC:
 
-1. **Sidecar is a cache, not a source of truth.** The Markdown body is always the canonical artifact. Every read path has a fallback that works when the meta block is absent, malformed, or stale. Stripping every `<!-- WIKI-META -->` block from `papers/*.md` must leave the coordinator working.
-2. **Almost every sidecar field is optional.** Only a small top-level header is required (`schemaVersion`, identity/provenance, `source_tier`, `trust_tier`, `parse_quality`). Everything else is sparse by design. Abstract-only papers, non-empirical papers, survey papers, and partially-parsed fulltexts all produce valid sidecars — just sparser ones.
-3. **Write-time LLM work is amortized retrieval.** Anything the coordinator would re-derive at runtime (tl;dr, citation sentences, dataset list, Q&A pairs) is paid for once during sidecar extraction and reused forever.
+1. **Retrieval from sidecar, citation from body.** The Markdown body is the single authoritative text. The sidecar is a retrieval index that helps the coordinator find the right paper and decide what to read; it is never the source of a direct quote, cited number, or comparison claim. Wrong sidecar values are tolerated at the cost of one wasted read, never a wrong output. See §4.3 for the full reasoning.
+2. **Almost every sidecar field is optional.** Only six fields are required: `schemaVersion`, `canonicalKey`, `slug`, `source_tier`, `parse_quality`, `paper_type`. Everything else is sparse by design. Abstract-only papers, theory papers, position pieces, resource releases, and partially-parsed fulltexts all produce valid sidecars — just sparser ones.
+3. **Sidecar errors must degrade to wasted reads, not to wrong outputs.** Every field that could be wrong is consumed by a code path whose worst-case cost is one extra body read. No sidecar value flows directly into a draft, answer, or comparison table.
 4. **Keyword retrieval must be smarter than substring, but not more complex than a JSON file.** No embeddings, no vector DB, no external dependencies. The win comes from write-time indexing + query-time alias expansion + facet filtering.
 5. **Tools announce their own coverage.** The coordinator must never have to guess whether the wiki has useful material on a topic. Every search result includes a coverage signal; a dedicated `wiki_coverage` tool exposes the global facet distribution.
-6. **Source tier is not trust tier.** `fulltext` only means “we had converted fulltext available”, not “every extracted detail is reliable”. Trust is a separate signal surfaced to the coordinator.
-7. **Observed and inferred knowledge must be distinguishable.** For high-risk fields, the sidecar records whether a statement was explicit in the source, lightly inferred, or synthesized.
-8. **Abstention beats brittle detail.** If the extractor cannot ground a metric, limitation, negative result, or relation edge with enough confidence, it omits the field and records the unknown instead of hallucinating a precise answer.
+6. **Do not manufacture signals that can't be verified.** If we do not have a reliable way to produce a confidence / trust / reliability signal — whether from LLM self-report or parser heuristics — we do not fake it. We design the architecture so that the signal is unnecessary instead. (See §4.3 for why `trust_tier`, `FieldEvidence.confidence`, and related machinery were removed.)
+7. **Let the LLM do what the LLM is good at.** Sidecar fields ask the LLM to summarize, paraphrase, extract named entities from provided text, select from closed enums, and pick from provided lists — all tasks where LLMs are reliable. The schema does not ask the LLM to self-assess, judge its own certainty, or claim whether a detail is "explicit" vs "inferred".
+8. **Coverage beats precision in the sidecar.** The extractor is encouraged to fill fields broadly rather than abstain on uncertainty. An approximate paraphrase that surfaces the paper in retrieval is more useful than a missing field, because the body is always available as the verification path.
 
 ## 2. Architecture Overview
 
@@ -50,7 +50,7 @@ Specialized to this RFC:
 │           ├─ by-dataset.json                                 │
 │           ├─ by-concept.json                                 │
 │           ├─ by-year.json                                    │
-│           ├─ by-trust-tier.json                              │
+│           ├─ by-paper-type.json                              │
 │           ├─ graph.jsonl     (typed edges)                   │
 │           └─ facets.json     (top-level counts)              │
 └──────────────────────────────────────────────────────────────┘
@@ -83,9 +83,9 @@ No new processes. No new dependencies. All new state lives under `~/.research-pi
 │   ├── by-dataset.json            # dataset name → [slug]
 │   ├── by-concept.json            # concept slug → [slug]
 │   ├── by-year.json               # year → [slug]
-│   ├── by-trust-tier.json         # trust_tier → [slug]
+│   ├── by-paper-type.json         # paper_type → [slug]
 │   ├── graph.jsonl                # {from, to, type}
-│   ├── facets.json                # {datasets: {...counts}, concepts: {...}, years: {...}, trustTiers: {...}}
+│   ├── facets.json                # {datasets: {...counts}, concepts: {...}, years: {...}, paper_types: {...}}
 │   └── query_log.jsonl            # NEW — empty-result queries for coverage analysis
 └── .state/
     └── sidecar_status.jsonl       # NEW — per-paper sidecar extraction outcome
@@ -467,9 +467,11 @@ Concept meta blocks are built **deterministically** from paper meta blocks — n
 
 1. Loads `concepts/flash-attention.md` (or creates it if absent).
 2. Parses any existing `<!-- WIKI-META -->` block; if missing, starts with an empty concept sidecar object.
-3. Appends `{slug: <paperSlug>, relation: "introduces", added_at: now}` to `papers[]` (idempotent by `paperSlug`) **only when the edge has `evidence.confidence !== "low"` and `evidence.inference_level !== "synthesized"`**.
-4. Merges the paper's relevant `aliases` into the concept's alias list.
+3. Appends `{slug: <paperSlug>, relation: "introduces", added_at: now}` to `papers[]` (idempotent by `paperSlug`).
+4. Merges the paper's `aliases` into the concept's alias list.
 5. Serializes the updated concept sidecar and rewrites the `<!-- WIKI-META -->` block at the end of the concept page, leaving the human-readable body above it untouched.
+
+No confidence filtering: under the retrieval/citation separation principle (§4.3), a spurious edge costs at most one wasted graph traversal, not a wrong fact in a draft. The V1 draft of this section filtered edges by `evidence.confidence !== "low"` — that filter is deleted along with the rest of the reliability machinery.
 
 The concept **Markdown body** is still LLM-generated (existing `wiki-concept-generate` prompt, untouched). Only the trailing meta block is deterministic. Body and meta block are independent writers into the same file; both use `safeWriteFile` under the wiki lock, so there is no race.
 
@@ -479,15 +481,11 @@ The concept **Markdown body** is still LLM-generated (existing `wiki-concept-gen
 
 The system has **four layers of resilience**, each designed so the layer below can fail without breaking anything above it.
 
-### 6.1 Layer 1 — Schema accepts everything and rewards abstention
+### 6.1 Layer 1 — Schema accepts everything and rewards coverage
 
-Only the top-level provenance + reliability header is required. Everything else may be omitted. Abstract-only papers, theory papers, and surveys produce valid sparse sidecars. There is no "this paper failed to produce metrics" — metrics are simply omitted. The schema *encodes* the fact that papers are heterogeneous.
+Only six fields are required: `schemaVersion`, `canonicalKey`, `slug`, `source_tier`, `parse_quality`, `paper_type`. Everything else may be omitted. Abstract-only papers, theory papers, position pieces, and surveys produce valid sparse sidecars. There is no "this paper failed to produce findings" — findings are simply omitted. The schema *encodes* the fact that papers are heterogeneous across disciplines and formats.
 
-High-risk fields are intentionally shaped so the extractor can abstain:
-
-- `metrics`, `limitations`, `negative_results`, `concept_edges`, and `qa_pairs` can be dropped individually without invalidating the sidecar.
-- `known_unknowns` and `unsafe_to_assume` give the coordinator useful output even when the extractor withholds a specific detail.
-- `trust_tier` can stay conservative (`abstract-grounded` or `fulltext-unverified`) even when other top-level fields are present.
+Under the retrieval/citation separation principle (§4.3), the LLM is directed toward **coverage** rather than abstention. A paraphrased finding with an approximate value is more useful than a missing field, because readers verify from the body anyway. The V1 draft of this section encouraged the LLM to "abstain" on uncertain fields; V2 flips that guidance — include the field, flag is unnecessary.
 
 ### 6.2 Layer 2 — Meta block parsing is a synchronous, offline operation
 
@@ -536,8 +534,8 @@ export function parsePaperPage(content: string, slug: string): MetaParseOutcome 
     parsed = repaired
   }
 
-  // Drop-don't-reject validation against WikiPaperSidecarV1
-  const { sidecar, droppedFields } = validateAndCoerce(parsed, WikiPaperSidecarV1)
+  // Drop-don't-reject validation against WikiPaperSidecarV2
+  const { sidecar, droppedFields } = validateAndCoerce(parsed, WikiPaperSidecarV2)
   if (!sidecar) {
     return { body, sidecar: null, status: 'missing', droppedFields, reason: 'schema-invalid' }
   }
@@ -559,8 +557,7 @@ Key points:
 - **Markers survive mid-content breakage.** Finding `<!-- WIKI-META -->` by `lastIndexOf` is robust against the LLM accidentally mentioning the marker string earlier in the body.
 - **Drop-don't-reject.** `validateAndCoerce` walks the parsed object field-by-field and omits ones that fail. A single bad `metrics[3].value` never kills the whole sidecar.
 - **Two-tier repair, then the big hammer.** On `JSON.parse` failure, `tryRepairJson()` first runs a **free regex pass** that strips trailing commas before `]` / `}` — the single most common LLM JSON bug, validated in the RFC-005 mock. If the regex pass produces valid JSON, no LLM call is needed. Only when regex cannot fix the string do we fall through to **one** cheap-model LLM call ("here is broken JSON, return a valid version, nothing else") for less common failures (unbalanced quotes, stray prose, missing brackets). If the LLM repair also fails, the paper is marked `status: 'missing'` in `.state/sidecar_status.jsonl` and the repair pass (§6.4) re-runs the **full** generation prompt later. Three escalation levels, no recursion, hard bound on cost.
-- **Evidence can fail locally.** If a high-risk entry parses but lacks valid `FieldEvidence`, the validator keeps the parent sidecar and drops the weak entry. One shaky metric does not contaminate the whole paper.
-- **Body is always safe.** The function returns the `body` (everything before the opening marker) even when sidecar parsing fails, so every downstream tool can still render / score / search the prose.
+- **Body is always safe.** The function returns the `body` (everything before the opening marker) even when sidecar parsing fails, so every downstream tool can still render / score / search the prose. This is the load-bearing invariant of the whole design: body preservation is what lets us treat the sidecar as a cache that can be wrong without consequence (§4.3).
 
 ### 6.3 Layer 3 — `wiki_*` tools never hard-depend on sidecar presence
 
@@ -568,9 +565,9 @@ Every tool has a graceful fallback path:
 
 | Tool | If sidecar present | If sidecar missing |
 |---|---|---|
-| `wiki_search` | score over sidecar fields (tldr, concepts, aliases) + prose | score over prose only (current behavior) |
-| `wiki_get` | return structured sections from sidecar, including evidence/trust metadata for high-risk fields | return parsed headings from Markdown |
-| `wiki_coverage` | aggregate from `index/facets.json` (including trust-tier histograms) | count files under `papers/` + heading scan |
+| `wiki_search` | score over sidecar fields (tldr, concepts, aliases, findings.statement) + body prose | score over body prose only (current behavior) |
+| `wiki_get` | serve `body:*` sections from Markdown, `index:*` sections from parsed sidecar | serve `body:*` only; `index:*` returns `{unavailable: true}` |
+| `wiki_coverage` | aggregate from `index/facets.json` | count files under `papers/` + heading scan |
 | `wiki_facets` | read `index/*.json` | return `{unavailable: true, reason: "no index"}` |
 | `wiki_neighbors` | walk `graph.jsonl` | return `{unavailable: true}` |
 
@@ -587,7 +584,7 @@ Two mechanisms keep the sidecar cache healthy over time:
 
 - **If the entire sidecar extraction feature is disabled**: same as today. `wiki_*` tools fall back to Markdown-only paths.
 - **If one paper's sidecar extraction fails**: that paper's `.md` is still written. Other papers are unaffected. The failed one goes into the repair queue.
-- **If the sidecar schema has a bug that rejects valid data**: extraction-status becomes `'partial'` across the board. Coordinator still reads what landed. Fix the schema, bump the version, repair sweep rebuilds clean sidecars.
+- **If the sidecar schema has a bug that rejects valid data**: `.state/sidecar_status.jsonl` fills with `'partial'` or `'missing'` entries. Coordinator still reads what landed (drop-don't-reject keeps the valid fields). Fix the schema, bump `SIDECAR_GENERATOR_VERSION`, repair sweep rebuilds clean sidecars.
 - **If the `index/` directory is corrupted or deleted**: next `rebuildIndex()` rebuilds from scratch by re-parsing every `papers/*.md` (body + embedded meta block). No user data is lost; indices are pure derivations.
 - **If a coordinator tool is called with filters the index doesn't support**: tool returns `{filters_applied: [...], filters_ignored: [...]}` — partial filtering is advertised, not silent.
 
@@ -624,10 +621,10 @@ At write time, for each paper, tokenize every field and emit postings. Field wei
 |---|---|
 | `title` | 10 |
 | `tldr` | 8 |
-| `contribution_oneliner` | 7 |
+| `findings[].statement` | 7 |
 | `aliases` (paper or concept) | 7 |
-| `dataset name` | 6 |
-| `method_family` / `task` | 5 |
+| `datasets[].name` | 6 |
+| `methods` / `task` | 5 |
 | concept page title | 5 |
 | markdown heading | 3 |
 | body prose | 1 |
@@ -673,9 +670,9 @@ At query time: every token goes through the alias map. If `"flash-attn"` resolve
 
 **Coverage delta example.** Query: `"flash attn"`
 - Today (substring): zero hits unless a paper literally uses `"flash attn"`.
-- After: alias expansion to `flash-attention`, BM25 match on paper titles, method_family, concept links. Returns all 8 relevant papers in the wiki.
+- After: alias expansion to `flash-attention`, BM25 match on paper titles, `methods`, concept links. Returns all 8 relevant papers in the wiki.
 
-### 7.3 Technique C — Facet filters on structured fields and trust
+### 7.3 Technique C — Facet filters on structured fields
 
 BM25 tells us "how well does this paper match this query". Facets tell us "which papers are even eligible". Combining them cuts false positives hard.
 
@@ -687,9 +684,9 @@ wiki_search({
     year_gte: 2023,
     datasets: ["LRA", "PG19"],     // any-of
     concepts: ["flash-attention"], // all-of
+    paper_type: "method",          // from §4.1 required enum
     has_code: true,
     source_tier: "fulltext",       // only papers we fully ingested
-    trust_tier: "fulltext-grounded"
   }
 })
 ```
@@ -698,7 +695,7 @@ Implementation: each filter maps to a pre-built index under `index/`:
 - `by-year.json` → set intersection
 - `by-concept.json` → set intersection (all-of) or union (any-of)
 - `by-dataset.json` → same
-- `by-trust-tier.json` → set intersection
+- `by-paper-type.json` → set intersection (cheap — paper_type is required, index always complete)
 - `has_code` → bitmap built at index time from parsed meta blocks (cheap, cached)
 
 Filters apply **before** BM25, shrinking the candidate set. This is how we get "high precision on a specific question" without sacrificing recall on broad queries — the agent chooses how much to constrain.
@@ -717,7 +714,8 @@ Every `wiki_search` result includes:
     top_facet_context: {
       years: { "2023": 4, "2024": 2 },
       concepts: { "flash-attention": 5, "retrieval": 1 },
-      trust_tiers: { "fulltext-grounded": 3, "fulltext-unverified": 2, "abstract-grounded": 1 },
+      paper_types: { "method": 4, "empirical": 2 },
+      source_tiers: { "fulltext": 5, "abstract-only": 1 },
     },
     alias_expansions_used: ["flash-attn → flash-attention"],
     suggested_refinements: [
@@ -732,8 +730,7 @@ This turns each search into a *conversation* about what the wiki knows. The coor
 
 - **`matched === 0`**: log query to `index/query_log.jsonl`. The wiki agent periodically inspects this log and reports "these 14 query terms are consistently missing" to the user — a data-driven signal for which concepts need alias additions or which topics need external literature search to fill.
 - **`matched < 3 and total_candidates_before_filters < 20`**: wiki is *thin* on this topic. Coordinator should run external literature search.
-- **`matched >= 5`**: wiki is rich. Coordinator should read-before-search.
-- **Rich but low-trust**: if results cluster in `abstract-grounded` or `fulltext-unverified`, the wiki is good enough to map the area but not necessarily good enough to support strong result comparisons or citation-heavy prose.
+- **`matched >= 5`**: wiki is rich. Coordinator should read-before-search — but always via `wiki_get(slug, sections=['body:*'])`, not by repeating raw sidecar values (see §4.3, §8.2).
 
 A separate `wiki_coverage(topic?)` tool exposes the global view (no query, just facet distribution) so the coordinator can decide upfront, before even issuing a query, whether the wiki is worth consulting.
 
@@ -746,7 +743,7 @@ A separate `wiki_coverage(topic?)` tool exposes the global view (no query, just 
 | Multi-term queries fail if substring not contiguous | Token-based BM25 (§7.1) |
 | No way to restrict to recent / with-code / on-specific-dataset | Facet filters (§7.3) |
 | Agent doesn't know whether to trust the wiki | Coverage signal + `wiki_coverage` (§7.4) |
-| `fulltext` papers with noisy conversion look too authoritative | Separate `trust_tier` + field evidence (§4.3, §7.3) |
+| `fulltext` papers with noisy conversion look too authoritative | Retrieval/citation separation: coordinator never quotes from sidecar (§4.3, §8.2) |
 | Wiki never learns what queries it's failing | `query_log.jsonl` (§7.4) |
 
 Everything above is code, not ML. Every piece is inspectable as a flat JSON file. Embeddings stay out of scope for v1.
@@ -758,7 +755,7 @@ Everything above is code, not ML. Every piece is inspectable as a flat JSON file
 ```typescript
 {
   name: 'wiki_search',
-  description: 'Hybrid keyword search over the global paper wiki with BM25 ranking, alias expansion, and facet filters. Always call this before external literature search when the topic might already be in the wiki. Returns hits plus a coverage signal describing how thin or rich the wiki is on this topic.',
+  description: 'Hybrid keyword search over the global paper wiki with BM25 ranking, alias expansion, and facet filters. Always call this before external literature search when the topic might already be in the wiki. Returns hits plus a coverage signal describing how thin or rich the wiki is on this topic. Hits contain preview text only (tldr, matched-fields breakdown) — to read specific results, methods, or limitations, call wiki_get with a body:* section.',
   parameters: Type.Object({
     query: Type.String(),
     k: Type.Optional(Type.Number({ default: 10, maximum: 30 })),
@@ -767,52 +764,76 @@ Everything above is code, not ML. Every piece is inspectable as a flat JSON file
       year_lte: Type.Optional(Type.Number()),
       datasets: Type.Optional(Type.Array(Type.String())),
       concepts: Type.Optional(Type.Array(Type.String())),
-      method_family: Type.Optional(Type.Array(Type.String())),
+      methods: Type.Optional(Type.Array(Type.String())),
+      paper_type: Type.Optional(Type.Union([
+        Type.Literal('method'),
+        Type.Literal('empirical'),
+        Type.Literal('review'),
+        Type.Literal('resource'),
+        Type.Literal('theory'),
+        Type.Literal('position'),
+      ])),
       has_code: Type.Optional(Type.Boolean()),
       source_tier: Type.Optional(Type.Union([
-        Type.Literal('fulltext'),
-        Type.Literal('abstract-only'),
-        Type.Literal('abstract-fallback'),
-      ])),
-      trust_tier: Type.Optional(Type.Union([
         Type.Literal('metadata-only'),
-        Type.Literal('abstract-grounded'),
-        Type.Literal('fulltext-unverified'),
-        Type.Literal('fulltext-grounded'),
+        Type.Literal('abstract-only'),
+        Type.Literal('fulltext'),
       ])),
     }))
   })
 }
 ```
 
-Returns `{ hits: [{slug, title, tldr, score, matched_fields}], coverage: {...} }`.
+Returns `{ hits: [{slug, title, tldr, paper_type, score, matched_fields}], coverage: {...} }`. **Notably absent from hits**: specific `findings[].value` numbers, comparison deltas, or any raw numeric data from the sidecar. Hits are preview-only; to read any number the coordinator intends to quote, call `wiki_get(slug, sections=['body:results'])` and extract from the body Markdown. See §4.3 for rationale.
 
 ### 8.2 `wiki_get`
 
 ```typescript
 {
   name: 'wiki_get',
-  description: 'Read a paper or concept page from the wiki. Prefer requesting specific sections to avoid dumping the full page into context.',
+  description: `Read a paper or concept page from the wiki.
+
+Sections are split into two namespaces:
+
+  body:*   — parsed from the Markdown body (AUTHORITATIVE TEXT).
+             Use these for any factual claim that will be quoted, cited, or
+             compared. Preserves the original hedging, units, and context.
+  index:*  — served from the parsed sidecar (RETRIEVAL SUMMARY).
+             Approximate, paraphrased, may be wrong in detail. Use only to
+             decide which body:* sections to read next. NEVER quote or cite
+             from an index:* section.
+
+If you need to write "Paper X reports 78% accuracy on Y", that number must
+come from body:results, not index:findings.`,
   parameters: Type.Object({
     slug: Type.String(),
     sections: Type.Optional(Type.Array(Type.Union([
-      Type.Literal('tldr'),
-      Type.Literal('contributions'),
-      Type.Literal('methodology'),
-      Type.Literal('results'),
-      Type.Literal('limitations'),
-      Type.Literal('citation_snippet'),
-      Type.Literal('known_unknowns'),
-      Type.Literal('unsafe_to_assume'),
-      Type.Literal('evidence'),
-      Type.Literal('qa_pairs'),
-      Type.Literal('full'),
+      // body:* — authoritative Markdown sections
+      Type.Literal('body:summary'),
+      Type.Literal('body:contributions'),
+      Type.Literal('body:methodology'),
+      Type.Literal('body:results'),
+      Type.Literal('body:limitations'),
+      Type.Literal('body:related'),
+      Type.Literal('body:full'),
+
+      // index:* — retrieval summary, never cite from these
+      Type.Literal('index:tldr'),
+      Type.Literal('index:paper_type'),
+      Type.Literal('index:task'),
+      Type.Literal('index:methods'),
+      Type.Literal('index:datasets'),
+      Type.Literal('index:findings'),
+      Type.Literal('index:concept_edges'),
+      Type.Literal('index:aliases'),
     ])))
   })
 }
 ```
 
-When sidecar is present, sections are served from it (fast, structured) and high-risk fields carry `trust_tier` / `FieldEvidence` metadata. When missing, sections are parsed from the Markdown headings.
+When the meta block is parsed successfully, `index:*` sections are served from the structured sidecar. When it's missing or malformed, `index:*` returns `{unavailable: true, reason: 'no-sidecar'}` and `body:*` still works fine — the body is always authoritative and always available. This is the operational expression of the §4.3 principle: sidecar errors degrade preview quality only, never corrupt the quoted text.
+
+Concept pages follow the same convention (`body:*` for the human-readable Markdown, `index:*` for the aggregated graph node).
 
 ### 8.3 `wiki_coverage`
 
@@ -826,7 +847,7 @@ When sidecar is present, sections are served from it (fast, structured) and high
 }
 ```
 
-With no `topic`: returns global facet summary. With `topic`: runs an internal `wiki_search` and summarizes the distribution (e.g., "412 papers total; 18 match 'long context', clustered in 2023–2024, top concepts: flash-attention, ring-attention, trust split: 6 grounded / 8 unverified / 4 abstract").
+With no `topic`: returns global facet summary. With `topic`: runs an internal `wiki_search` and summarizes the distribution (e.g., "412 papers total; 18 match 'long context', clustered in 2023–2024, top concepts: flash-attention, ring-attention; paper_type split: 14 method / 3 empirical / 1 review; 12 papers have code links").
 
 ### 8.4 `wiki_facets`
 
@@ -838,10 +859,11 @@ With no `topic`: returns global facet summary. With `topic`: runs an internal `w
     facet: Type.Union([
       Type.Literal('datasets'),
       Type.Literal('concepts'),
-      Type.Literal('method_family'),
+      Type.Literal('methods'),
       Type.Literal('year'),
       Type.Literal('task'),
-      Type.Literal('trust_tier'),
+      Type.Literal('paper_type'),
+      Type.Literal('source_tier'),
     ]),
     limit: Type.Optional(Type.Number({ default: 30 })),
   })
@@ -853,14 +875,12 @@ With no `topic`: returns global facet summary. With `topic`: runs an internal `w
 ```typescript
 {
   name: 'wiki_neighbors',
-  description: 'Graph traversal: find papers or concepts related to a given slug via typed edges (shared concepts, baseline comparisons, cited prior work).',
+  description: 'Graph traversal: find papers related to a given slug via shared concepts or baseline comparisons.',
   parameters: Type.Object({
     slug: Type.String(),
     relation: Type.Optional(Type.Union([
       Type.Literal('shares_concept'),
       Type.Literal('baseline_of'),
-      Type.Literal('prior_work'),
-      Type.Literal('ablated_by'),
       Type.Literal('all'),
     ])),
     depth: Type.Optional(Type.Number({ default: 1, maximum: 2 })),
@@ -878,39 +898,44 @@ Add a brief coverage preamble to the coordinator system prompt, injected dynamic
 
 ```
 WIKI COVERAGE SNAPSHOT (as of <timestamp>):
-- 412 papers total (289 fulltext, 123 abstract-only)
-- trust tiers: 173 fulltext-grounded, 116 fulltext-unverified, 123 abstract-grounded
+- 412 papers total (289 fulltext, 123 abstract-only, 0 metadata-only)
+- paper_type split: 247 method / 98 empirical / 42 review / 18 resource / 6 theory / 1 position
 - 89 concepts, strongest coverage: attention (42), retrieval (31), quantization (19), long-context (15)
 - Known thin areas: molecular dynamics, formal verification
 
 Before running external literature search, call wiki_coverage(topic) to check whether
 the wiki already has useful material. Prefer wiki_search with facet filters when you
-know the dataset/method/year you care about.
+know the dataset/method/year/paper_type you care about.
+
+IMPORTANT — sidecar/body separation: wiki_search results and index:* sections in
+wiki_get are retrieval summaries only. For any quote, comparison, or cited number,
+call wiki_get(slug, sections=['body:*']) and read from the Markdown body.
 ```
 
 This is built from `index/facets.json` in one call — cheap, always fresh. It's what makes the wiki proactively used instead of passively queryable.
 
 ### 9.1 Coordinator Decision Rules
 
-The coordinator should use the upgraded wiki in three passes:
+**One rule:**
 
-1. **Map** — call `wiki_coverage(topic)` and `wiki_search(...)` to learn whether the wiki is rich or thin on the topic, and which concepts / datasets / years dominate.
-2. **Ground** — call `wiki_get(slug, sections)` for targeted reads. Use `trust_tier` and `FieldEvidence` to decide whether a fact is strong enough to repeat directly.
-3. **Gap-check** — if the answer depends on quantitative comparisons, limitations, or graph relations and the available evidence is mostly `abstract-grounded` or `fulltext-unverified`, escalate to external literature search or original-paper reading instead of over-claiming.
+> For any statement that will be written into a draft, answer, comparison table, or direct quote, pull the source text from `wiki_get(slug, sections=['body:*'])`. Never from `index:*` fields, never from `wiki_search` hits, never from `wiki_coverage` summaries.
 
-Operationally:
+That's it. The V1 draft had a three-tier decision table keyed on `trust_tier`; it's deleted. There is no "is this paper grounded enough to cite" question to answer, because citations never read the sidecar in the first place.
 
-- `abstract-grounded` is good for topic maps, query expansion, representative-paper selection, and broad related-work framing.
-- `fulltext-unverified` is good for navigation and tentative summaries, but not for high-confidence result tables unless the specific field evidence is explicit and medium+ confidence.
-- `fulltext-grounded` is the default threshold for strong comparison claims, citation-heavy drafting, or “paper A beats paper B on metric X” style answers.
-- `known_unknowns` and `unsafe_to_assume` should be surfaced to the coordinator, not hidden. They are the mechanism that keeps the agent from treating the wiki as a truth oracle.
+Supporting guidelines (which fall out of the single rule):
+
+- **Map with `index:*`, ground with `body:*`.** `wiki_search` and `index:*` sections tell the coordinator which papers exist and roughly what they discuss. `body:*` sections provide the actual text to quote.
+- **Approximate sidecar values are fine.** If `wiki_search` returns a hit because the query matched an imperfectly paraphrased finding, that's working as intended — the paper has been surfaced. The coordinator then reads `body:results` to get the exact number. If the body says something different from the sidecar preview, trust the body and discard the sidecar's value silently.
+- **Use `paper_type` and `source_tier` as navigation hints, not trust signals.** A `source_tier: 'abstract-only'` paper still returns valid `body:*` content — it's just a shorter body. A `paper_type: 'position'` paper returns real position-paper prose. Neither is "less trustworthy" in a way that should change citation behavior; the body is the body.
+- **External literature search is a complement, not a tier-based fallback.** Trigger it based on **coverage** (does the wiki know about this topic at all?), not based on "trust tier too low". The wiki's job is to tell you whether a topic has been covered — the `wiki_coverage` tool is the right interface for that decision.
+- **When in doubt, read the body.** Reading a body section is cheap and never wrong. Reading a sidecar field is cheap but may be wrong; it's only used to decide what body section to read.
 
 ## 10. Implementation Plan
 
 Phased rollout, each phase independently shippable and independently valuable.
 
 ### Phase 1 — Sidecar pipeline (no retrieval changes)
-1. Add `lib/wiki/sidecar-schema.ts` with TypeBox schema, including `trust_tier`, `parse_quality`, `FieldEvidence`, and abstention fields.
+1. Add `lib/wiki/sidecar-schema.ts` with the V2 TypeBox schema (§4.1) — required fields (`schemaVersion`, `canonicalKey`, `slug`, `source_tier`, `parse_quality`, `paper_type`) plus the optional retrieval fields. No `trust_tier`, no `FieldEvidence`, no reliability-assessment fields.
 2. Append the meta-block addendum (§5.2) to both `wiki-paper-fulltext` and `wiki-paper-abstract` in `lib/agents/prompts/index.ts`. No new prompt key. Bump `GENERATOR_VERSION` so older pages are flagged stale.
 3. Add `lib/wiki/meta-parser.ts` with `parsePaperPage()` (drop-don't-reject validator, no LLM call).
 4. **No change** to `processPaper()` control flow or to `generatePaperPage()`: the LLM response already contains the meta block, and `safeWriteFile` continues to write the full response verbatim.
@@ -921,7 +946,7 @@ Phased rollout, each phase independently shippable and independently valuable.
 ### Phase 2 — Indices
 1. Add `lib/wiki/indexer.ts` — for every `papers/*.md`, call `parsePaperPage()` to split body + sidecar, then build `bm25.json`, `aliases.json`, `by-*.json`, `graph.jsonl`, `facets.json`. Papers with no sidecar fall through to body-only indexing.
 2. Call `rebuildIndex()` at the end of each `processSinglePass()` (scoped, only touches indices if any paper was written that cycle).
-3. Concept meta blocks generated deterministically during indexing (no LLM call), but only from medium+ confidence non-synthesized concept edges. Indexer rewrites the `<!-- WIKI-META -->` block at the end of each `concepts/<slug>.md` without touching the body.
+3. Concept meta blocks generated deterministically during indexing from all concept edges (no confidence filtering — §4.3). Indexer rewrites the `<!-- WIKI-META -->` block at the end of each `concepts/<slug>.md` without touching the body.
 4. **Observable outcome:** `index/` populated. Coordinator still unchanged. User can inspect files for sanity.
 
 ### Phase 3 — New tools
@@ -929,7 +954,7 @@ Phased rollout, each phase independently shippable and independently valuable.
 2. Each tool has a "sidecar absent" fallback path so it works against a Phase-0 wiki too.
 3. Register new tools in `lib/tools/index.ts`.
 4. Keep `wiki_lookup` as a shim for one release.
-5. Update coordinator system prompt with coverage snapshot injection + trust-aware decision rules.
+5. Update coordinator system prompt with coverage snapshot injection (§9) + the single body/index separation rule (§9.1).
 6. **Observable outcome:** coordinator uses new tools, quality improves.
 
 ### Phase 4 — Feedback loop (optional)
@@ -948,7 +973,7 @@ Resolved during the §5 rewrite — **not** tracked here: (a) per-paper LLM cost
 3. **Backfill.** Existing papers in the wiki have no meta blocks. Do we bulk-backfill on upgrade, or let the repair pass slowly catch up? Proposed: repair pass only (cheap, unobtrusive, caps LLM spend). A manual "backfill now" button in Settings is a later addition.
 4. **Concept page Markdown regeneration.** Currently concept page bodies append per-paper sections via HTML comment markers. When sidecars change concept edges (e.g., relation type flips from `uses` to `advances`), do we rewrite the body? Proposed: rewrite only when the paper set changes, not on every tick. The trailing meta block is rewritten more aggressively since it is cheap and deterministic.
 5. **Concurrency with the existing single-writer lock.** Indices and concept meta blocks are written inside the same `withWikiLock()` as paper pages, so there is no lock contention — but `rebuildIndex()` is O(N) in paper count. Above ~5k papers we may need incremental index updates. Not a v1 concern.
-6. **Numeric result verification.** Table extraction from converted Markdown is fragile. Proposed: in v1, keep metrics only when a plausible local `FieldEvidence` span exists; otherwise omit or mark low confidence and avoid `fulltext-grounded`. A dedicated table/figure verifier is explicitly deferred.
+6. **Numeric result verification.** Table extraction from converted Markdown is fragile. Under retrieval/citation separation (§4.3) this becomes a non-blocking concern: wrong numbers in `findings[].value` can only cause one wasted read, not a wrong cited result. So v1 does nothing special — the LLM fills `findings` liberally, and the coordinator is instructed to re-read numbers from `body:results`. If noisy-table BM25 pollution ever becomes a measurable problem, a dedicated table verifier is a later addition, not a v1 blocker.
 7. **Body/meta drift during repair.** The repair pass regenerates the full page, which means the body can change between revisions even when nothing factual has. Proposed: accept this — the body is a derived summary, not the paper itself, and repair is rare. If user-visible churn becomes annoying, add a "body hash" check and only rewrite the file when the body actually changes.
 
 ## 12. What This Is Not
@@ -958,4 +983,4 @@ Resolved during the §5 rewrite — **not** tracked here: (a) per-paper LLM cost
 - **Not a schema validator for artifacts.** The sidecar describes wiki pages, not the original `PaperArtifact` — those remain per-project and untouched.
 - **Not a required dependency.** Every phase degrades gracefully. Deleting `index/` or stripping every `<!-- WIKI-META -->` block leaves the coordinator in its current working state.
 - **Not a replacement for external literature search.** The wiki's job is to tell the coordinator *when the external search is unnecessary*, not to replace it.
-- **Not a fact oracle.** Even with sidecars, the coordinator is expected to respect `trust_tier`, `FieldEvidence`, and `unsafe_to_assume` rather than treating every extracted field as equally reliable.
+- **Not a fact oracle.** The sidecar is a retrieval index (§4.3). The coordinator must quote, cite, and compare from the `body:*` Markdown sections, not from `index:*` sidecar fields or `wiki_search` previews. There is no "trusted" sidecar tier — all sidecar values are treated as approximate retrieval hints regardless of `source_tier`.
