@@ -228,7 +228,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
           Select model
         </span>
         <Cpu size={14} />
-        <span className="truncate max-w-[100px]">{current?.label || selectedModel}</span>
+        <span className="truncate max-w-[72px]">{current?.label || selectedModel}</span>
         {authBadge && (
           <span className="text-[10px] px-1 rounded border t-border t-text-muted uppercase">{authBadge}</span>
         )}
