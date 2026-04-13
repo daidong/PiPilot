@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { SettingsModal, type SettingsTab } from './components/settings/SettingsModal'
+import { UpdateBanner } from './components/UpdateBanner'
 import type { WikiPaperMeta } from '../../../lib/wiki/paper-meta-cache'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
@@ -501,7 +502,7 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
         <div className="mx-auto w-full max-w-6xl">
           {/* Wordmark — typography only, no glyph. h1 is the welcome
               surface's primary heading (required for screen-reader nav). */}
-          <div className="mb-12 pl-1">
+          <div className="mb-8 pl-1">
             <h1 className="text-[16px] font-semibold t-text tracking-tight leading-none">
               Research Pilot
             </h1>
@@ -509,6 +510,11 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
               A research workflow, not a chat window.
             </div>
           </div>
+
+          {/* Update banner — only renders when a newer npm version exists.
+              Sits above the two-column grid so it's the first thing users
+              see on launch, dismissable per-session. */}
+          <UpdateBanner variant="welcome" className="mb-10" />
 
           {/* Two-column layout: recents on the left, wiki/tips on the right.
               Collapses to single column on narrow windows. */}

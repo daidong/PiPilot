@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Eye, EyeOff, Check, ExternalLink, LogIn, ArrowUpCircle, Copy, X } from 'lucide-react'
+import { Eye, EyeOff, Check, ExternalLink, LogIn } from 'lucide-react'
+import { UpdateBanner } from '../UpdateBanner'
 
 const api = (window as any).api
 
@@ -37,57 +38,6 @@ const KEY_FIELDS = [
     required: false,
   },
 ] as const
-
-function UpdateBanner() {
-  const [update, setUpdate] = useState<{ latest: string; current: string; hasUpdate: boolean } | null>(null)
-  const [dismissed, setDismissed] = useState(false)
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    api.checkForUpdate().then((info: { latest: string; current: string; hasUpdate: boolean }) => {
-      if (info.hasUpdate) setUpdate(info)
-    }).catch(() => {})
-  }, [])
-
-  if (!update || dismissed) return null
-
-  const command = 'npm update -g research-copilot'
-
-  return (
-    <div className="mb-4 relative rounded-lg border t-border-subtle t-bg-elevated overflow-hidden">
-      {/* 2px accent bar — same distinguishing treatment used on wiki-only
-          rows in LiteratureView and active rows in FolderGate. */}
-      <span aria-hidden className="absolute left-0 top-0 bottom-0 w-[2px] t-bg-accent-soft" />
-      <div className="px-3 py-2.5 flex items-start gap-2.5">
-        <ArrowUpCircle size={15} className="t-text-accent-soft mt-0.5 shrink-0" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium t-text">
-            v{update.latest} available
-            <span className="t-text-secondary font-normal ml-1.5">(current: v{update.current})</span>
-          </p>
-          <div className="mt-1.5 flex items-center gap-1.5">
-            <code className="flex-1 text-[10px] font-mono px-2 py-1 rounded t-bg-surface t-text select-all">
-              {command}
-            </code>
-            <button
-              onClick={() => { navigator.clipboard.writeText(command); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
-              className="shrink-0 p-1 rounded t-bg-surface hover:opacity-80 transition-opacity"
-              title="Copy command"
-            >
-              {copied ? <Check size={12} className="t-text-success" /> : <Copy size={12} className="t-text-secondary" />}
-            </button>
-          </div>
-        </div>
-        <button
-          onClick={() => setDismissed(true)}
-          className="shrink-0 p-0.5 rounded hover:t-bg-surface transition-colors t-text-secondary hover:t-text"
-        >
-          <X size={12} />
-        </button>
-      </div>
-    </div>
-  )
-}
 
 interface Props {
   /** When true, shows a "Save & Continue" button instead of just auto-saving */
