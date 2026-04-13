@@ -499,7 +499,9 @@ function ChatTimeline({ messages, scrollContainerRef }: { messages: ChatMessage[
               }}
             />
 
-            {/* Message ticks */}
+            {/* Message ticks — size change is instant on hover (80ms was
+                imperceptible anyway), only opacity transitions. Avoids
+                animating layout properties in favor of paint-only changes. */}
             {nodes.map((node, i) => {
               const isActive = hoveredIdx === i
               return (
@@ -514,7 +516,7 @@ function ChatTimeline({ messages, scrollContainerRef }: { messages: ChatMessage[
                     borderRadius: 1,
                     background: 'var(--color-accent-soft)',
                     opacity: isActive ? 1 : 0.35,
-                    transition: 'width 80ms, height 80ms, opacity 80ms',
+                    transition: 'opacity 80ms',
                   }}
                 />
               )

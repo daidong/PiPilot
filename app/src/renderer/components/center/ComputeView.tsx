@@ -118,7 +118,12 @@ function RunRow({
         className="flex items-center gap-3 px-3 py-2 hover:bg-[var(--color-accent-soft)]/5 transition-colors cursor-pointer"
         onClick={onToggle}
       >
-        <button className="shrink-0 t-text-muted">
+        <button
+          type="button"
+          aria-label={expanded ? 'Collapse run details' : 'Expand run details'}
+          aria-expanded={expanded}
+          className="shrink-0 t-text-muted"
+        >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
 
@@ -296,7 +301,9 @@ function FilterBar({
         />
         {search && (
           <button
+            type="button"
             onClick={() => onSearchChange('')}
+            aria-label="Clear search"
             className="absolute right-2 top-1/2 -translate-y-1/2 t-text-muted hover:t-text"
           >
             <X size={12} />

@@ -70,7 +70,12 @@ export function LeftSidebar() {
   }, [])
 
   return (
-    <aside className="w-80 flex flex-col border-r t-border t-bg-base pt-10">
+    // Narrow windows (≤1279px) get w-80 (320px) so the center panel keeps
+    // room to breathe; wider windows (≥1280px) get w-[22rem] (352px) so the
+    // toolbar has comfortable slack. Below ~1024px the ModelSelector label
+    // is the first thing to truncate — see ModelSelector for the shrink
+    // pattern introduced in commit 95312df.
+    <aside className="w-80 xl:w-[22rem] flex flex-col border-r t-border t-bg-base pt-10">
       <nav aria-label="Sidebar tools" className="px-4 pb-3 flex items-center justify-between">
         <ModelSelector />
         <div className="flex items-center gap-1">

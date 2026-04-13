@@ -73,17 +73,23 @@ export function WorkingFolder() {
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
             className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] t-text-muted t-bg-hover transition-colors"
-            title="Open folder with..."
+            aria-label="Open folder with external app"
+            aria-haspopup="menu"
+            aria-expanded={dropdownOpen}
           >
             <Folder size={10} />
             <ChevronDown size={10} />
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 top-full mt-1 z-50 min-w-[100px] rounded-md border t-border t-bg-surface shadow-lg py-1">
+            <div
+              role="menu"
+              className="absolute right-0 top-full mt-1 z-50 min-w-[100px] rounded-md border t-border t-bg-surface shadow-lg py-1"
+            >
               {EDITOR_OPTIONS.map((opt) => (
                 <button
                   key={opt.id}
+                  role="menuitem"
                   onClick={() => handleOpenWith(opt.id)}
                   className="flex items-center gap-2 w-full px-3 py-1.5 text-xs t-text-secondary t-bg-hover text-left"
                 >

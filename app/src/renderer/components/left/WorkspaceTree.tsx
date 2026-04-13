@@ -569,7 +569,7 @@ export function WorkspaceTree() {
           onKeyDown={handleCreateKeyDown}
           onBlur={() => void commitCreate()}
           placeholder={creating.type === 'file' ? 'filename.ext' : 'folder name'}
-          className="flex-1 bg-transparent outline-none border-b border-[var(--color-accent-soft)] text-xs t-text"
+          className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
         />
       </div>
     )
