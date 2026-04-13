@@ -12,8 +12,32 @@ import {
   isValidArxivId,
   GENERATOR_VERSION,
   type ScanResult,
+  type ProcessedEntry,
 } from './types.js'
 import { readProcessedWatermark, readProvenance } from './io.js'
+import { applyIdentityMigration, computeAllCanonicalKeys } from './identity-migration.js'
+
+// ── Fulltext retry backoff ─────────────────────────────────────────────────
+// When a paper sits in abstract-fallback and its arXiv download keeps
+// failing, we must NOT re-run the full LLM pipeline every idle cycle.
+// Backoff: give up after MAX_FAILURES attempts; otherwise require a
+// minimum delay that doubles with each failure (1h, 2h, 4h, 8h, capped at
+// 24h). Entries missing the counter (legacy) are allowed through so the
+// first post-upgrade scan can retry once, and the counter starts tracking.
+
+const MAX_FULLTEXT_FAILURES = 5
+const BASE_BACKOFF_MS = 60 * 60 * 1000  // 1h
+const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000
+
+export function canRetryFulltext(w: ProcessedEntry, now: number = Date.now()): boolean {
+  const fails = w.fulltextFailures ?? 0
+  if (fails >= MAX_FULLTEXT_FAILURES) return false
+  if (!w.lastFulltextTryAt) return true
+  const lastMs = new Date(w.lastFulltextTryAt).getTime()
+  if (!Number.isFinite(lastMs)) return true
+  const backoffMs = Math.min(BASE_BACKOFF_MS * Math.pow(2, fails), MAX_BACKOFF_MS)
+  return now - lastMs >= backoffMs
+}
 
 /**
  * Scan all projects for paper artifacts, compare against watermark,
@@ -76,8 +100,60 @@ export function scanForNewContent(
     const { artifact, projectPath, identity } = best
     const semanticHash = computeSemanticHash(artifact)
     const slug = canonicalKeyToSlug(canonicalKey)
+
+    // ── Identity-drift pre-pass ─────────────────────────────────────────
+    // If a lower-priority canonicalKey for this same paper already exists
+    // in the watermark (because the paper was first processed before its
+    // DOI/arxivId was backfilled, or the agent's own resolveArxivIdByTitle
+    // wrote back an arXiv ID between passes), migrate it onto the primary
+    // key atomically. This blocks the reprocessing cascade and sweeps any
+    // pre-existing drift (processed.jsonl, provenance.jsonl, paper page,
+    // concept markers) to the new key in a single step.
+    //
+    // Runs under withWikiLock (held by the agent) so the in-place file
+    // mutations are safe.
+    const allKeys = computeAllCanonicalKeys(artifact)
+    for (let i = 1; i < allKeys.length; i++) {
+      const fallbackKey = allKeys[i]
+      if (fallbackKey === canonicalKey) continue
+      const oldEntry = processed.get(fallbackKey)
+      if (!oldEntry) continue
+
+      const primaryEntry = processed.get(canonicalKey)
+      applyIdentityMigration({
+        oldKey: fallbackKey,
+        oldSlug: oldEntry.slug,
+        newKey: canonicalKey,
+        newSlug: primaryEntry?.slug ?? slug,
+      })
+      // Keep the in-memory processed map aligned with the file we just
+      // mutated; otherwise the watermark check below would use stale data.
+      processed.delete(fallbackKey)
+      if (!primaryEntry) {
+        processed.set(canonicalKey, { ...oldEntry, canonicalKey, slug })
+      }
+
+      // Same-key provenance cleanup: any provenance entry still pointing at
+      // the fallback key is now orphaned. Rebuild this canonicalKey's bucket
+      // from provenanceIndex so the later provenance-only check sees the
+      // merged state.
+      const fallbackProv = provenanceIndex.get(fallbackKey)
+      if (fallbackProv) {
+        const merged = provenanceIndex.get(canonicalKey) || new Set<string>()
+        for (const k of fallbackProv) merged.add(k)
+        provenanceIndex.set(canonicalKey, merged)
+        provenanceIndex.delete(fallbackKey)
+      }
+    }
+
     const watermark = processed.get(canonicalKey)
     const knownProvenance = provenanceIndex.get(canonicalKey) || new Set<string>()
+
+    // Siblings: non-best (projectPath, artifact) pairs for the same paper.
+    // processPaper uses these to merge project lenses after the page exists.
+    const siblings = entries
+      .filter(e => e.artifact.id !== artifact.id || e.projectPath !== projectPath)
+      .map(e => ({ projectPath: e.projectPath, artifact: e.artifact }))
 
     const base: Omit<ScanResult, 'reason'> = {
       canonicalKey,
@@ -86,6 +162,7 @@ export function scanForNewContent(
       artifact,
       projectPath,
       semanticHash,
+      siblings,
     }
 
     if (!watermark) {
@@ -98,9 +175,10 @@ export function scanForNewContent(
     } else if (
       watermark.fulltextStatus === 'abstract-fallback' &&
       artifact.arxivId &&
-      isValidArxivId(artifact.arxivId)
+      isValidArxivId(artifact.arxivId) &&
+      canRetryFulltext(watermark)
     ) {
-      // Re-try fulltext download (only for genuine arXiv IDs)
+      // Re-try fulltext download (only for genuine arXiv IDs, backoff-gated)
       toProcess.push({ ...base, reason: 'fulltext-upgrade' })
     }
 

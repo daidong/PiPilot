@@ -11,6 +11,9 @@ import {
   getWikiRoot,
   GENERATOR_VERSION,
   isValidArxivId,
+  computeCanonicalKey,
+  computeSemanticHash,
+  canonicalKeyToSlug,
   type WikiAgent,
   type WikiAgentConfig,
   type WikiStatus,
@@ -20,6 +23,7 @@ import { withWikiLock, acquireProcessLock, releaseProcessLock } from './lock.js'
 import {
   ensureWikiStructure,
   markPaperProcessed,
+  markFulltextFailure,
   addProvenance,
   rebuildIndex,
   appendLog,
@@ -219,7 +223,15 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
   }
 
   async function processPaper(scanResult: ScanResult): Promise<void> {
-    const { artifact, slug, canonicalKey, projectPath, semanticHash } = scanResult
+    const { artifact, projectPath } = scanResult
+    // canonicalKey / slug / semanticHash may be refreshed mid-function if
+    // resolveArxivIdByTitle elevates the artifact to a higher-priority key.
+    // We use the post-resolve values for the page path, watermark write, and
+    // concept markers so the next scan sees a stable identity and doesn't
+    // trigger a spurious `semantic-change` reprocess.
+    let canonicalKey = scanResult.canonicalKey
+    let slug = scanResult.slug
+    let semanticHash = scanResult.semanticHash
 
     log(`processing: ${artifact.title} (${scanResult.reason})`)
 
@@ -244,12 +256,55 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
           ? `resolved arXiv ID: ${resolvedArxivId}`
           : `no arXiv match, cleared garbage arxivId`)
       }
+
+      // Gap A fix — propagate a newly-discovered arXiv ID to every sibling
+      // project's artifact. Without this, the next scan would split the
+      // paper across canonicalKeys (this project → `arxiv:X`, siblings →
+      // `title:...`) and the sibling copies would be reprocessed as new.
+      // We only propagate positive discoveries; clearing a bogus ID is
+      // NOT propagated because sibling copies may legitimately still hold
+      // different metadata that we shouldn't clobber.
+      if (resolvedArxivId && scanResult.siblings) {
+        for (const sib of scanResult.siblings) {
+          if (sib.artifact.arxivId === resolvedArxivId) continue
+          try {
+            updateArtifact(sib.projectPath, sib.artifact.id, { arxivId: resolvedArxivId } as any)
+            sib.artifact.arxivId = resolvedArxivId
+            log(`propagated arXiv ID to sibling project ${sib.projectPath}`)
+          } catch (err) {
+            log(`failed to propagate arXiv ID to ${sib.projectPath}/${sib.artifact.id}: ${err}`)
+          }
+        }
+      }
+
+      // Refresh the post-resolve identity. The page path, watermark, and
+      // concept markers all downstream use these locals — pinning them to
+      // the post-resolve state means the next scan's semanticHash and key
+      // lookups both match and no spurious reprocess is triggered.
+      const postResolve = computeCanonicalKey(artifact)
+      const postResolveCanonicalKey = postResolve.canonicalKey
+      if (postResolveCanonicalKey !== canonicalKey) {
+        canonicalKey = postResolveCanonicalKey
+        slug = canonicalKeyToSlug(canonicalKey)
+        log(`identity upgraded: ${scanResult.canonicalKey} → ${canonicalKey}`)
+      }
+      semanticHash = computeSemanticHash(artifact)
     }
 
     // Phase 2: Download + convert if we have a valid arXiv ID
     if (resolvedArxivId) {
       if (!shouldContinue()) return
       fulltext = await downloadAndConvertArxiv(resolvedArxivId)
+    }
+
+    // Fulltext retry backoff: if this pass was a pure fulltext-upgrade retry
+    // and the arXiv download still failed, bump the failure counter and bail
+    // out. We must NOT re-run the LLM pipeline for a retry that produced no
+    // new material — that's the "burn tokens every idle cycle" bug.
+    if (scanResult.reason === 'fulltext-upgrade' && !fulltext) {
+      log(`fulltext retry failed for ${slug}; updating backoff and skipping LLM`)
+      markFulltextFailure(canonicalKey)
+      return
     }
 
     // Generate paper page
@@ -326,6 +381,24 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       paperId: artifact.id,
       addedAt: new Date().toISOString(),
     })
+
+    // Multi-project lens backfill: for every other (projectPath, artifact)
+    // pair that shares this canonicalKey, add provenance and merge the
+    // project lens now that the page file exists. The provenance-only
+    // branch at the top of processSinglePass runs BEFORE the page is
+    // written, so its mergeProjectContextIntoPage call was a silent no-op
+    // for brand-new papers — this loop is the fix for that lens loss.
+    if (scanResult.siblings && scanResult.siblings.length > 0) {
+      for (const sib of scanResult.siblings) {
+        addProvenance({
+          canonicalKey,
+          projectPath: sib.projectPath,
+          paperId: sib.artifact.id,
+          addedAt: new Date().toISOString(),
+        })
+        mergeProjectContextIntoPage(slug, sib.projectPath, sib.artifact)
+      }
+    }
 
     // Log
     const tierLabel = result.fulltextStatus === 'fulltext' ? 'fulltext' : 'abstract'

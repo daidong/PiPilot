@@ -31,3 +31,6 @@ export {
 } from './meta-parser.js'
 export { rebuildMemoryIndex, loadFacets, loadBy } from './indexer.js'
 export { createWikiTools } from './wiki-tools.js'
+export { listWikiPaperMeta, clearWikiPaperMetaCache, type WikiPaperMeta } from './paper-meta-cache.js'
+export { reconcileIdentityDrift, type ReconcileReport, type ReconcilePlanGroup } from './reconcile-identity.js'
+export { applyIdentityMigration, computeAllCanonicalKeys, type IdentityChange, type MigrationResult } from './identity-migration.js'

@@ -368,6 +368,8 @@ const api: ElectronAPI = {
   wikiReadPage: (slug: string) => ipcRenderer.invoke('wiki:read-page', slug),
   wikiSlugForPaper: (artifactId: string, projectPath: string) => ipcRenderer.invoke('wiki:slug-for-paper', artifactId, projectPath),
   wikiPaperSlugMap: () => ipcRenderer.invoke('wiki:paper-slug-map'),
+  wikiListPaperMeta: () => ipcRenderer.invoke('wiki:list-paper-meta'),
+  wikiReconcileIdentity: (opts?: { dryRun?: boolean }) => ipcRenderer.invoke('wiki:reconcile-identity', opts),
   onWikiStatus: (cb) => {
     const handler = (_: any, status: any) => cb(status)
     ipcRenderer.on('wiki:status', handler)

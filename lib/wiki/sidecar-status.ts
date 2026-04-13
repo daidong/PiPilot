@@ -78,3 +78,27 @@ export function listStaleOrMissing(currentGeneratorVersion: number): SidecarStat
   }
   return result
 }
+
+/**
+ * Drop status entries whose slug is no longer in the provided live set.
+ * Called after identity reconcile / page deletion to keep the status log
+ * from accumulating dead rows that the repair pass would otherwise read and
+ * silently skip every cycle.
+ *
+ * Returns the number of entries removed.
+ */
+export function pruneSidecarStatus(liveSlugs: Set<string>): number {
+  const current = readSidecarStatus()
+  let removed = 0
+  const kept: SidecarStatusEntry[] = []
+  for (const entry of current.values()) {
+    if (liveSlugs.has(entry.slug)) kept.push(entry)
+    else removed++
+  }
+  if (removed === 0) return 0
+  const content = kept.length > 0
+    ? kept.map(e => JSON.stringify(e)).join('\n') + '\n'
+    : ''
+  safeWriteFile(statusFilePath(), content)
+  return removed
+}

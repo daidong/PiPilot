@@ -115,6 +115,11 @@ export interface ProcessedEntry {
   fulltextStatus: FulltextStatus
   generatorVersion: number
   processedAt: string  // ISO timestamp
+
+  // Fulltext retry backoff (set when fulltextStatus='abstract-fallback').
+  // Absent for legacy entries — treat as 0.
+  fulltextFailures?: number
+  lastFulltextTryAt?: string  // ISO timestamp
 }
 
 export interface ProvenanceEntry {
@@ -181,4 +186,13 @@ export interface ScanResult {
   artifact: PaperArtifact
   projectPath: string
   semanticHash: string
+
+  /**
+   * Additional (projectPath, artifact) pairs sharing the same canonicalKey.
+   * Used after processPaper writes the page to merge project lenses for all
+   * projects that already contributed this paper — fixes the "multi-project
+   * new paper lens loss" where the provenance-only branch would no-op
+   * because the page didn't exist yet.
+   */
+  siblings?: { projectPath: string; artifact: PaperArtifact }[]
 }

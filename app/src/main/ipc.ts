@@ -49,7 +49,7 @@ import { getToolRenderConfig } from '../../../shared-ui/tool-renderers/registry'
 import { resolveSettings, resolveWikiPacing } from '../../../shared-ui/settings-types'
 
 // ─── Wiki agent ──────────────────────────────────────────────────────────
-import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
+import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap, listWikiPaperMeta, reconcileIdentityDrift, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
 
 // ─── Semver comparison (major.minor.patch) ──────────────────────────────────
 function compareVersions(a: string, b: string): number {
@@ -836,6 +836,18 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle('wiki:paper-slug-map', () => buildPaperSlugMap())
+
+  ipcMain.handle('wiki:list-paper-meta', () => listWikiPaperMeta())
+
+  ipcMain.handle('wiki:reconcile-identity', async (_event: any, opts?: { dryRun?: boolean }) => {
+    const dryRun = opts?.dryRun !== false  // default to dry-run for safety
+    try {
+      const report = await reconcileIdentityDrift({ dryRun })
+      return { success: true, report }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
 
   // ─── App-specific handlers ──────────────────────────────────────────────
 

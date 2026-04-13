@@ -13,6 +13,13 @@ import {
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { WikiReaderPanel } from './WikiReaderPanel'
+import {
+  makeSearchable,
+  scorePaper,
+  tokenizeQuery,
+  type SearchablePaper,
+} from '../../../../../lib/search/paper-match'
+import type { WikiPaperMeta } from '../../../../../lib/wiki/paper-meta-cache'
 
 const api = (window as any).api
 
@@ -71,13 +78,15 @@ function PaperRow({
   expanded,
   onToggle,
   wikiSlug,
-  isActive
+  isActive,
+  source = 'project'
 }: {
   paper: EntityItem
   expanded: boolean
   onToggle: () => void
   wikiSlug?: string | null
   isActive?: boolean
+  source?: 'project' | 'wiki'
 }) {
   const setWikiSlug = useUIStore((s) => s.setWikiReaderSlug)
   const authors = (paper.authors as string[]) || []
@@ -86,9 +95,10 @@ function PaperRow({
       ? authors.join(', ')
       : `${authors.slice(0, 2).join(', ')} et al.`
   const keyFindings = (paper.keyFindings as string[]) || []
+  const isWiki = source === 'wiki'
 
   return (
-    <div className={`border-b t-border last:border-b-0 ${isActive ? 'bg-[var(--color-accent-soft)]/8' : ''}`}>
+    <div className={`border-b t-border last:border-b-0 ${isActive ? 'bg-[var(--color-accent-soft)]/8' : ''} ${isWiki ? 'border-l-2 border-l-[var(--color-accent-soft)]' : ''}`}>
       <div
         className={`flex items-center gap-3 px-3 py-2 transition-colors cursor-pointer ${
           isActive ? 'bg-[var(--color-accent-soft)]/10' : 'hover:bg-[var(--color-accent-soft)]/5'
@@ -101,9 +111,19 @@ function PaperRow({
 
         {/* Title + authors */}
         <div className="flex-1 min-w-0">
-          <p className="text-[13px] t-text font-medium truncate leading-tight">
-            {paper.title}
-          </p>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <p className="text-[13px] t-text font-medium truncate leading-tight">
+              {paper.title}
+            </p>
+            {isWiki && (
+              <span
+                className="shrink-0 px-1.5 py-0 text-[9px] uppercase tracking-wider rounded t-text-accent bg-[var(--color-accent-soft)]/15 border border-[var(--color-accent-soft)]/30"
+                title="From paper wiki — not in this project"
+              >
+                Wiki
+              </span>
+            )}
+          </div>
           <p className="text-[11px] t-text-muted truncate mt-0.5">
             {authorStr}
           </p>
@@ -214,6 +234,73 @@ function PaperRow({
   )
 }
 
+// ─── Wiki status pill ─────────────────────────────────────────────────────────
+// Compact live indicator for the background Paper Wiki agent. Subscribes to
+// `wiki:status` events so the state dot and progress update in real time.
+// Self-hides when the agent is disabled (model = none) so it doesn't clutter
+// the bar when the feature is turned off.
+
+interface WikiStatusShape {
+  state: 'processing' | 'idle' | 'paused' | 'disabled'
+  processed: number
+  pending: number
+  totalInWiki: number
+  lastRunAt?: string
+}
+
+function WikiStatusPill() {
+  const [status, setStatus] = useState<WikiStatusShape | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.wikiGetStatus?.().then((s: WikiStatusShape | null) => {
+      if (!cancelled) setStatus(s)
+    }).catch(() => {})
+    const unsub = api.onWikiStatus?.((s: WikiStatusShape) => setStatus(s))
+    return () => { cancelled = true; unsub?.() }
+  }, [])
+
+  if (!status || status.state === 'disabled') return null
+
+  const isProcessing = status.state === 'processing'
+  const isPaused = status.state === 'paused'
+
+  // Progress: processed / (processed + pending) within the current batch.
+  // When idle, we show totalInWiki instead of a progress bar.
+  const totalInBatch = status.processed + status.pending
+  const pct = totalInBatch > 0 ? Math.round((status.processed / totalInBatch) * 100) : 0
+
+  const dotClass = isProcessing
+    ? 'bg-blue-500 animate-pulse'
+    : isPaused
+      ? 'bg-yellow-500'
+      : 'bg-emerald-500'
+
+  const label = isProcessing
+    ? `Wiki · processing${totalInBatch > 0 ? ` ${status.processed}/${totalInBatch}` : ''}`
+    : isPaused
+      ? 'Wiki · paused'
+      : `Wiki · idle${status.totalInWiki > 0 ? ` · ${status.totalInWiki} pages` : ''}`
+
+  return (
+    <div
+      className="ml-auto flex items-center gap-2 shrink-0"
+      title={status.lastRunAt ? `Last tick: ${new Date(status.lastRunAt).toLocaleString()}` : undefined}
+    >
+      <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotClass}`} />
+      <span className="t-text-muted tabular-nums">{label}</span>
+      {isProcessing && totalInBatch > 0 && (
+        <div className="w-16 h-1 rounded-full t-bg-elevated overflow-hidden">
+          <div
+            className="h-full bg-blue-500 transition-[width] duration-500 ease-out"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Coverage bar ─────────────────────────────────────────────────────────────
 
 function CoverageBar({ papers }: { papers: EntityItem[] }) {
@@ -243,7 +330,7 @@ function CoverageBar({ papers }: { papers: EntityItem[] }) {
       {highRelevance > 0 && (
         <span className="t-text-accent-soft">{highRelevance} highly relevant</span>
       )}
-      <div className="flex-1 max-w-48">
+      <div className="max-w-48 w-48">
         <div className="h-1.5 rounded-full t-bg-elevated overflow-hidden">
           <div
             className="h-full rounded-full t-gradient-accent-h"
@@ -253,6 +340,7 @@ function CoverageBar({ papers }: { papers: EntityItem[] }) {
           />
         </div>
       </div>
+      <WikiStatusPill />
     </div>
   )
 }
@@ -349,16 +437,41 @@ function FilterBar({ topics }: { topics: string[] }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+// ─── Row view-model ───────────────────────────────────────────────────────
+
+interface SearchRow {
+  key: string                // stable React key, also the activeRowKey target
+  source: 'project' | 'wiki'
+  paper: EntityItem          // real EntityItem for project rows, pseudo for wiki
+  wikiSlug?: string          // wiki page slug if known
+  searchable: SearchablePaper
+}
+
+/** Build a pseudo-EntityItem from a wiki paper meta so PaperRow can render it. */
+function wikiMetaToEntityItem(meta: WikiPaperMeta): EntityItem {
+  return {
+    id: `wiki:${meta.slug}`,
+    type: 'paper',
+    title: meta.title,
+    authors: meta.authors,
+    year: meta.year,
+    venue: meta.venue,
+    abstract: meta.tldr,   // show tldr as abstract preview for wiki rows
+  }
+}
+
 export function LiteratureView() {
   const papers = useEntityStore((s) => s.papers)
   const filter = useUIStore((s) => s.literatureFilter)
   const setFilter = useUIStore((s) => s.setLiteratureFilter)
   const wikiReaderSlug = useUIStore((s) => s.wikiReaderSlug)
   const setWikiSlug = useUIStore((s) => s.setWikiReaderSlug)
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
   // Wiki slug lookup: paperId → slug (batch loaded once)
   const [wikiSlugs, setWikiSlugs] = useState<Record<string, string>>({})
+  // Wiki paper metadata, loaded once per session for cross-project search
+  const [wikiMeta, setWikiMeta] = useState<WikiPaperMeta[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -367,6 +480,14 @@ export function LiteratureView() {
     }).catch(() => {})
     return () => { cancelled = true }
   }, [papers])
+
+  useEffect(() => {
+    let cancelled = false
+    api.wikiListPaperMeta?.().then((list: WikiPaperMeta[]) => {
+      if (!cancelled && Array.isArray(list)) setWikiMeta(list)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   // Sort toggle
   const handleSort = useCallback(
@@ -392,83 +513,131 @@ export function LiteratureView() {
       .map(([t]) => t)
   }, [papers])
 
-  // Filter + sort papers
-  const filtered = useMemo(() => {
-    let result = [...papers]
+  // ── Row view-models: project rows + wiki-only rows (deduped) ─────────────
 
-    if (filter.search.trim()) {
-      const q = filter.search.toLowerCase()
-      result = result.filter((p) => {
-        const title = (p.title || '').toLowerCase()
-        const abstract = ((p.abstract as string) || '').toLowerCase()
-        const authors = ((p.authors as string[]) || []).join(' ').toLowerCase()
-        return title.includes(q) || abstract.includes(q) || authors.includes(q)
-      })
+  const projectRows = useMemo<SearchRow[]>(() => {
+    return papers.map((p) => ({
+      key: `project:${p.id}`,
+      source: 'project',
+      paper: p,
+      wikiSlug: wikiSlugs[p.id],
+      searchable: makeSearchable({
+        title: p.title || '',
+        authors: (p.authors as string[]) || [],
+        venue: p.venue as string | undefined,
+        tldr: undefined,
+        abstract: p.abstract as string | undefined,
+      }),
+    }))
+  }, [papers, wikiSlugs])
+
+  const wikiOnlyRows = useMemo<SearchRow[]>(() => {
+    // `wikiSlugs` is already a canonicalKey-driven mapping (buildPaperSlugMap()
+    // in lib/wiki/io.ts pairs project papers to wiki pages by canonical key),
+    // so a slug hit here implies a canonical match too. No separate canonicalKey
+    // index is needed on the renderer side.
+    const usedSlugs = new Set(Object.values(wikiSlugs))
+
+    return wikiMeta
+      .filter((m) => !usedSlugs.has(m.slug))
+      .map((m) => ({
+        key: `wiki:${m.slug}`,
+        source: 'wiki' as const,
+        paper: wikiMetaToEntityItem(m),
+        wikiSlug: m.slug,
+        searchable: makeSearchable({
+          title: m.title,
+          authors: m.authors,
+          venue: m.venue,
+          tldr: m.tldr,
+        }),
+      }))
+  }, [wikiMeta, papers, wikiSlugs])
+
+  // ── Filter + sort into the final row list ────────────────────────────────
+
+  const filteredRows = useMemo<SearchRow[]>(() => {
+    const query = filter.search.trim()
+    const tokens = query ? tokenizeQuery(query) : []
+    const searching = tokens.length > 0
+
+    // Non-search filters apply only to project rows. Wiki rows always bypass
+    // them — they're the secondary recall pool and don't carry those fields.
+    const passesProjectFilters = (p: EntityItem): boolean => {
+      if (filter.subTopic && ((p.subTopic as string) || 'Uncategorized') !== filter.subTopic) return false
+      if (filter.minScore > 0 && ((p.relevanceScore as number) || 0) < filter.minScore) return false
+      if (filter.source && (p.externalSource as string) !== filter.source) return false
+      if (filter.round && (p.addedInRound as string) !== filter.round) return false
+      return true
     }
 
-    if (filter.subTopic) {
-      result = result.filter(
-        (p) => ((p.subTopic as string) || 'Uncategorized') === filter.subTopic
-      )
-    }
+    type Scored = { row: SearchRow; score: number }
+    const scored: Scored[] = []
 
-    if (filter.minScore > 0) {
-      result = result.filter((p) => ((p.relevanceScore as number) || 0) >= filter.minScore)
-    }
-
-    if (filter.source) {
-      result = result.filter((p) => (p.externalSource as string) === filter.source)
-    }
-
-    if (filter.round) {
-      result = result.filter((p) => (p.addedInRound as string) === filter.round)
-    }
-
-    result.sort((a, b) => {
-      const dir = filter.sortDir === 'desc' ? -1 : 1
-      switch (filter.sortBy) {
-        case 'year': {
-          const ay = (a.year as number) || 0
-          const by = (b.year as number) || 0
-          return (ay - by) * dir
-        }
-        case 'relevance': {
-          const as2 = (a.relevanceScore as number) || 0
-          const bs = (b.relevanceScore as number) || 0
-          return (as2 - bs) * dir
-        }
-        case 'citations': {
-          const ac = (a.citationCount as number) || 0
-          const bc = (b.citationCount as number) || 0
-          return (ac - bc) * dir
-        }
-        case 'title':
-          return a.title.localeCompare(b.title) * dir
-        default:
-          return 0
+    for (const row of projectRows) {
+      if (!passesProjectFilters(row.paper)) continue
+      if (searching) {
+        const s = scorePaper(tokens, row.searchable)
+        if (s == null) continue
+        scored.push({ row, score: s })
+      } else {
+        scored.push({ row, score: 0 })
       }
+    }
+
+    if (searching) {
+      for (const row of wikiOnlyRows) {
+        const s = scorePaper(tokens, row.searchable)
+        if (s == null) continue
+        scored.push({ row, score: s })
+      }
+    }
+
+    const dir = filter.sortDir === 'desc' ? -1 : 1
+    const compareSortKey = (a: EntityItem, b: EntityItem): number => {
+      switch (filter.sortBy) {
+        case 'year': return (((a.year as number) || 0) - ((b.year as number) || 0)) * dir
+        case 'relevance': return (((a.relevanceScore as number) || 0) - ((b.relevanceScore as number) || 0)) * dir
+        case 'citations': return (((a.citationCount as number) || 0) - ((b.citationCount as number) || 0)) * dir
+        case 'title': return a.title.localeCompare(b.title) * dir
+        default: return 0
+      }
+    }
+
+    scored.sort((a, b) => {
+      if (searching) {
+        // matchScore desc primary, current sort key as tie-break
+        if (a.score !== b.score) return b.score - a.score
+      }
+      return compareSortKey(a.row.paper, b.row.paper)
     })
 
-    return result
-  }, [papers, filter])
+    return scored.map((s) => s.row)
+  }, [projectRows, wikiOnlyRows, filter])
 
-  // Auto-select first paper in wiki reader when none is selected
+  // Auto-select first row in wiki reader when none is selected
   useEffect(() => {
-    if (wikiReaderSlug || filtered.length === 0) return
-    const first = filtered[0]
-    const slug = wikiSlugs[first.id]
-    setWikiSlug(slug || `paper:${first.id}`)
-  }, [filtered, wikiSlugs, wikiReaderSlug, setWikiSlug])
-
-  // Determine which paper is active in the reader (for row highlighting)
-  const activePaperId = useMemo(() => {
-    if (!wikiReaderSlug) return null
-    if (wikiReaderSlug.startsWith('paper:')) return wikiReaderSlug.replace('paper:', '')
-    // Reverse lookup: find paperId whose wiki slug matches
-    for (const [paperId, slug] of Object.entries(wikiSlugs)) {
-      if (slug === wikiReaderSlug) return paperId
+    if (wikiReaderSlug || filteredRows.length === 0) return
+    const first = filteredRows[0]
+    if (first.source === 'wiki') {
+      setWikiSlug(first.wikiSlug!)
+    } else {
+      setWikiSlug(first.wikiSlug || `paper:${first.paper.id}`)
     }
-    return null
+  }, [filteredRows, wikiReaderSlug, setWikiSlug])
+
+  // Which row is currently active in the reader (for highlighting)
+  const activeRowKey = useMemo<string | null>(() => {
+    if (!wikiReaderSlug) return null
+    if (wikiReaderSlug.startsWith('paper:')) {
+      return `project:${wikiReaderSlug.slice('paper:'.length)}`
+    }
+    // A real wiki slug. First try to match a project row that points to it.
+    for (const [paperId, slug] of Object.entries(wikiSlugs)) {
+      if (slug === wikiReaderSlug) return `project:${paperId}`
+    }
+    // Otherwise it must be a wiki-only row.
+    return `wiki:${wikiReaderSlug}`
   }, [wikiReaderSlug, wikiSlugs])
 
   return (
@@ -511,7 +680,7 @@ export function LiteratureView() {
 
           {/* Paper rows */}
           <div className="flex-1 overflow-y-auto">
-            {filtered.length === 0 ? (
+            {filteredRows.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
                 <BookOpen size={32} className="t-text-muted mb-3 opacity-40" />
                 <p className="text-sm t-text-muted">
@@ -521,19 +690,22 @@ export function LiteratureView() {
                 </p>
               </div>
             ) : (
-              filtered.map((paper) => (
+              filteredRows.map((row) => (
                 <PaperRow
-                  key={paper.id}
-                  paper={paper}
-                  expanded={expandedId === paper.id}
-                  isActive={activePaperId === paper.id}
+                  key={row.key}
+                  paper={row.paper}
+                  source={row.source}
+                  expanded={expandedKey === row.key}
+                  isActive={activeRowKey === row.key}
                   onToggle={() => {
-                    setExpandedId(expandedId === paper.id ? null : paper.id)
-                    // Open in wiki reader
-                    const slug = wikiSlugs[paper.id]
-                    setWikiSlug(slug || `paper:${paper.id}`)
+                    setExpandedKey(expandedKey === row.key ? null : row.key)
+                    if (row.source === 'wiki') {
+                      setWikiSlug(row.wikiSlug!)
+                    } else {
+                      setWikiSlug(row.wikiSlug || `paper:${row.paper.id}`)
+                    }
                   }}
-                  wikiSlug={wikiSlugs[paper.id]}
+                  wikiSlug={row.wikiSlug}
                 />
               ))
             )}
@@ -546,7 +718,7 @@ export function LiteratureView() {
         </div>
       </div>
 
-      <CoverageBar papers={filtered} />
+      <CoverageBar papers={filteredRows.filter((r) => r.source === 'project').map((r) => r.paper)} />
     </div>
   )
 }

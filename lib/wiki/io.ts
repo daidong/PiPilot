@@ -110,6 +110,29 @@ export function markPaperProcessed(entry: ProcessedEntry): void {
   safeWriteFile(path, content)
 }
 
+/**
+ * Bump the fulltext-failure counter on an existing watermark entry without
+ * touching any other field. Called from processPaper when a fulltext-upgrade
+ * retry's arXiv download fails again — we want to reschedule the retry with
+ * exponential backoff, but we must NOT rerun the LLM pipeline.
+ */
+export function markFulltextFailure(canonicalKey: string): void {
+  const existing = readProcessedWatermark()
+  const entry = existing.get(canonicalKey)
+  if (!entry) return
+  const updated: ProcessedEntry = {
+    ...entry,
+    fulltextFailures: (entry.fulltextFailures ?? 0) + 1,
+    lastFulltextTryAt: new Date().toISOString(),
+  }
+  existing.set(canonicalKey, updated)
+  const path = processedPath()
+  const content = Array.from(existing.values())
+    .map(e => JSON.stringify(e))
+    .join('\n') + '\n'
+  safeWriteFile(path, content)
+}
+
 // ── Provenance: provenance.jsonl ───────────────────────────────────────────
 
 function provenancePath(): string {
