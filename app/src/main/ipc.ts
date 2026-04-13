@@ -42,6 +42,7 @@ import {
   registerConfigHandlers,
   registerSettingsHandlers,
   loadSettingsFromConfig,
+  pickPreferredModelId,
   listRecentProjects,
   addRecentProject,
   removeRecentProject,
@@ -721,11 +722,24 @@ export function registerIpcHandlers(): void {
   // ─── Wiki agent startup (async, fire-and-forget) ────────────────────────
   ;(async () => {
     const wikiSettings = loadSettingsFromConfig().wikiAgent
-    if (wikiSettings && wikiSettings.model !== 'none') {
+    // Resolve 'auto' to the highest-priority available provider (sub > api).
+    // 'none' (default) disables the wiki agent entirely — user must opt in.
+    let wikiModel = wikiSettings?.model ?? 'none'
+    if (wikiModel === 'auto') {
+      const preferred = pickPreferredModelId()
+      if (!preferred) {
+        if (process.env.RESEARCH_COPILOT_DEBUG) {
+          console.log('[wiki-agent] auto mode but no auth configured; skipping startup')
+        }
+        return
+      }
+      wikiModel = preferred
+    }
+    if (wikiSettings && wikiModel !== 'none') {
       try {
         const { getModel: getPiModel, completeSimple } = await import('@mariozechner/pi-ai')
-        const wikiAuth = resolveCoordinatorAuth(wikiSettings.model)
-        const [rawProvider, modelId] = wikiSettings.model.split(':')
+        const wikiAuth = resolveCoordinatorAuth(wikiModel)
+        const [rawProvider, modelId] = wikiModel.split(':')
         // Map subscription providers to their pi-ai provider name
         const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
         const model = getPiModel(piProvider, modelId)

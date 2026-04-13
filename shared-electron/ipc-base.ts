@@ -100,6 +100,9 @@ export function registerConfigHandlers(
     return result
   })
 
+  /** Return the highest-priority model ID that has working auth, or null. */
+  handleRaw('config:pick-preferred-model', () => pickPreferredModelId())
+
   /** Save an API key to config file AND load into current process.env */
   handleRaw('config:save-api-key', (keyName: string, value: string) => {
     if (!API_KEY_NAMES.includes(keyName as any)) {
@@ -148,6 +151,19 @@ export function hasLlmAuth(): boolean {
   const hasCodex = !!loadCodexCredentials()
   const hasAnthropicSub = !!loadAnthropicSubCredentials()
   return hasAnthropicKey || hasOpenaiKey || hasCodex || hasAnthropicSub
+}
+
+/**
+ * Resolve the highest-priority model ID that has working auth.
+ * Priority (user preference): OpenAI sub → Anthropic sub → OpenAI API → Anthropic API.
+ * Returns null if nothing is configured.
+ */
+export function pickPreferredModelId(): string | null {
+  if (loadCodexCredentials()) return 'openai-codex:gpt-5.4'
+  if (loadAnthropicSubCredentials()) return 'anthropic-sub:claude-opus-4-6'
+  if ((process.env.OPENAI_API_KEY || '').trim()) return 'openai:gpt-5.4'
+  if ((process.env.ANTHROPIC_API_KEY || '').trim()) return 'anthropic:claude-opus-4-6'
+  return null
 }
 
 /**

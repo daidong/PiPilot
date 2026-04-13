@@ -217,9 +217,8 @@ export const useUIStore = create<UIState>((set) => ({
 export async function hydratePreferences(): Promise<void> {
   const api = (window as any).api
   const prefs = await api?.loadPreferences?.()
-  if (!prefs) return
   const updates: Partial<{ selectedModel: string; reasoningEffort: ReasoningEffort; theme: Theme }> = {}
-  if (prefs.selectedModel) {
+  if (prefs?.selectedModel) {
     // Migrate legacy model IDs (e.g. 'gpt-5.4' → 'openai:gpt-5.4')
     const m = prefs.selectedModel as string
     if (!m.includes(':')) {
@@ -228,8 +227,15 @@ export async function hydratePreferences(): Promise<void> {
     } else {
       updates.selectedModel = m
     }
+  } else {
+    // No saved preference — pick highest-priority available auth
+    // Priority: OpenAI sub → Anthropic sub → OpenAI API → Anthropic API
+    try {
+      const preferred = await api?.pickPreferredModel?.()
+      if (preferred) updates.selectedModel = preferred
+    } catch { /* fall back to DEFAULT_MODEL already in store */ }
   }
-  if (prefs.reasoningEffort) updates.reasoningEffort = prefs.reasoningEffort
+  if (prefs?.reasoningEffort) updates.reasoningEffort = prefs.reasoningEffort
   // NOTE: theme is deliberately NOT restored from per-project prefs. It's
   // a global user preference managed via localStorage (see theme-boot.ts)
   // so the welcome screen respects it even when no project is open.

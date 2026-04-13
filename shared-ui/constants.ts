@@ -25,7 +25,7 @@ export const SUPPORTED_MODELS: ModelOption[] = [
   { id: 'anthropic:claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Anthropic' },
   { id: 'anthropic:claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Anthropic' },
   { id: 'anthropic:claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', provider: 'Anthropic' },
-  // Claude Subscription (OAuth) — gated behind ENABLE_CLAUDE_SUB=1
+  // Claude Subscription (OAuth) — enabled by default alongside ChatGPT Subscription
   { id: 'anthropic-sub:claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'Claude Subscription' },
   { id: 'anthropic-sub:claude-opus-4-5-20251101', label: 'Claude Opus 4.5', provider: 'Claude Subscription' },
   { id: 'anthropic-sub:claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'Claude Subscription' },

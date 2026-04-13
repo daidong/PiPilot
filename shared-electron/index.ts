@@ -39,7 +39,8 @@ export {
   registerSettingsHandlers,
   loadApiKeysFromConfig,
   loadSettingsFromConfig,
-  hasLlmAuth
+  hasLlmAuth,
+  pickPreferredModelId
 } from './ipc-base'
 
 // Recent projects persistence (FolderGate welcome screen)

@@ -4,8 +4,17 @@ import { SUPPORTED_MODELS } from '../../constants'
 import { parseModelKey } from '../../utils'
 import type { ModelOption } from '../../types'
 
-// Group models by provider (Claude Subscription filtered at render time via feature flag)
-const allProviders = [...new Set(SUPPORTED_MODELS.map((m) => m.provider))]
+// Group models by provider. Subscription providers come first so they are the
+// first thing the user sees — we prefer sub over API key when both work.
+const PROVIDER_ORDER = [
+  'ChatGPT Subscription',
+  'Claude Subscription',
+  'OpenAI',
+  'Anthropic',
+]
+const allProviders = PROVIDER_ORDER.filter(p =>
+  SUPPORTED_MODELS.some(m => m.provider === p)
+)
 const allGroupedModels: Record<string, ModelOption[]> = {}
 for (const p of allProviders) {
   allGroupedModels[p] = SUPPORTED_MODELS.filter((m) => m.provider === p)
@@ -28,14 +37,9 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const api = (window as any).api
 
-  // Feature flag: only show Claude Subscription models when ENABLE_CLAUDE_SUB=1
-  const claudeSubEnabled = api?.isClaudeSubEnabled?.() ?? false
-  const providers = claudeSubEnabled
-    ? allProviders
-    : allProviders.filter(p => p !== 'Claude Subscription')
-  const groupedModels = claudeSubEnabled
-    ? allGroupedModels
-    : Object.fromEntries(Object.entries(allGroupedModels).filter(([p]) => p !== 'Claude Subscription'))
+  // Claude Subscription is enabled by default (the OAuth handlers are always wired)
+  const providers = allProviders
+  const groupedModels = allGroupedModels
 
   const current = SUPPORTED_MODELS.find((m) => m.id === selectedModel)
 
@@ -91,12 +95,12 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   useEffect(() => {
     refreshAnthropicStatus()
     refreshCodexStatus()
-    if (claudeSubEnabled) refreshAnthropicSubStatus()
+    refreshAnthropicSubStatus()
     const unsub = api?.onAnthropicAuthStatus?.((status: any) => setAnthropicStatus(status))
     return () => {
       if (typeof unsub === 'function') unsub()
     }
-  }, [api, refreshAnthropicStatus, refreshCodexStatus, refreshAnthropicSubStatus, claudeSubEnabled])
+  }, [api, refreshAnthropicStatus, refreshCodexStatus, refreshAnthropicSubStatus])
 
   const handleCodexLogin = async () => {
     setCodexLoggingIn(true)
@@ -195,20 +199,18 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     refreshAnthropicStatus()
   }
 
-  // Auth badge
+  // Auth suffix — shown inline in the button label so users can tell at a
+  // glance whether they're on a subscription or an API key.
   const { provider: currentProvider } = current
     ? parseModelKey(current.id)
     : { provider: '' }
 
-  const authBadge = currentProvider === 'anthropic'
-    ? anthropicStatus?.authMode === 'api-key' ? 'api' : 'auth'
-    : currentProvider === 'anthropic-sub'
-    ? 'sub'
-    : currentProvider === 'openai-codex'
-    ? 'sub'
-    : currentProvider === 'openai'
-    ? 'api'
-    : null
+  const authSuffix =
+    currentProvider === 'anthropic-sub' || currentProvider === 'openai-codex'
+      ? 'sub'
+      : currentProvider === 'openai' || currentProvider === 'anthropic'
+      ? 'api'
+      : null
 
   return (
     <div ref={ref} className="relative">
@@ -228,10 +230,10 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
           Select model
         </span>
         <Cpu size={14} />
-        <span className="truncate max-w-[72px]">{current?.label || selectedModel}</span>
-        {authBadge && (
-          <span className="text-[10px] px-1 rounded border t-border t-text-muted uppercase">{authBadge}</span>
-        )}
+        <span className="truncate max-w-[108px]">
+          {current?.label || selectedModel}
+          {authSuffix && <span className="t-text-muted"> ({authSuffix})</span>}
+        </span>
         <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 

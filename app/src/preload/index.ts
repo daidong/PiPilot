@@ -36,11 +36,14 @@ export interface ElectronAPI {
   openaiCodexLogin: () => Promise<{ success: boolean; error?: string }>
   openaiCodexLogout: () => Promise<{ success: boolean }>
 
-  // Anthropic Subscription (Claude Pro/Max) OAuth — gated behind ENABLE_CLAUDE_SUB=1
+  // Anthropic Subscription (Claude Pro/Max) OAuth — enabled by default
   isClaudeSubEnabled: () => boolean
   getAnthropicSubStatus: () => Promise<{ isLoggedIn: boolean; isExpired: boolean }>
   anthropicSubLogin: () => Promise<{ success: boolean; error?: string }>
   anthropicSubLogout: () => Promise<{ success: boolean }>
+
+  // Preferred-model resolver (picks highest-priority available auth)
+  pickPreferredModel: () => Promise<string | null>
 
   // API Key Config
   getApiKeyStatus: () => Promise<Record<string, boolean>>
@@ -220,11 +223,13 @@ const api: ElectronAPI = {
   openaiCodexLogin: () => ipcRenderer.invoke('auth:openai-codex-login'),
   openaiCodexLogout: () => ipcRenderer.invoke('auth:openai-codex-logout'),
 
-  // Anthropic Subscription (Claude Pro/Max) OAuth
-  isClaudeSubEnabled: () => process.env.ENABLE_CLAUDE_SUB === '1',
+  // Anthropic Subscription (Claude Pro/Max) OAuth — enabled by default
+  isClaudeSubEnabled: () => true,
   getAnthropicSubStatus: () => ipcRenderer.invoke('auth:get-anthropic-sub-status'),
   anthropicSubLogin: () => ipcRenderer.invoke('auth:anthropic-sub-login'),
   anthropicSubLogout: () => ipcRenderer.invoke('auth:anthropic-sub-logout'),
+
+  pickPreferredModel: () => ipcRenderer.invoke('config:pick-preferred-model'),
 
   getApiKeyStatus: () => ipcRenderer.invoke('config:get-api-key-status'),
   saveApiKey: (keyName, value) => ipcRenderer.invoke('config:save-api-key', keyName, value),
