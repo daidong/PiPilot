@@ -218,7 +218,7 @@ export interface CoordinatorConfig {
   projectPath?: string
   debug?: boolean
   sessionId?: string
-  reasoningEffort?: 'high' | 'medium' | 'low'
+  reasoningEffort?: 'max' | 'high' | 'medium' | 'low'
   /** Resolved numeric settings from user preferences (literature intensity, web search depth, etc.) */
   resolvedSettings?: import('../../shared-ui/settings-types').ResolvedSettings
   onStream?: (text: string) => void
@@ -429,7 +429,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       systemPrompt: baseSystemPrompt,
       model: piModel ?? undefined as any,
       tools: allTools,
-      thinkingLevel: reasoningEffort === 'high' ? 'high' : reasoningEffort === 'medium' ? 'medium' : 'low'
+      thinkingLevel:
+        reasoningEffort === 'max' ? 'xhigh'
+        : reasoningEffort === 'high' ? 'high'
+        : reasoningEffort === 'medium' ? 'medium'
+        : 'low'
     },
     sessionId,
     getApiKey: resolveApiKey,

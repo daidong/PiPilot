@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Check, Cpu, Eye, EyeOff, LogIn, LogOut } from 'lucide-react'
+import { ChevronDown, Check, Cpu, Eye, EyeOff, LogIn, LogOut, X } from 'lucide-react'
 import { SUPPORTED_MODELS } from '../../constants'
 import { parseModelKey } from '../../utils'
 import type { ModelOption } from '../../types'
@@ -30,8 +30,10 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const [anthropicStatus, setAnthropicStatus] = useState<any>(null)
   const [codexStatus, setCodexStatus] = useState<{ isLoggedIn: boolean; isExpired: boolean } | null>(null)
   const [codexLoggingIn, setCodexLoggingIn] = useState(false)
+  const [codexLoginError, setCodexLoginError] = useState<string | null>(null)
   const [anthropicSubStatus, setAnthropicSubStatus] = useState<{ isLoggedIn: boolean; isExpired: boolean } | null>(null)
   const [anthropicSubLoggingIn, setAnthropicSubLoggingIn] = useState(false)
+  const [anthropicSubLoginError, setAnthropicSubLoginError] = useState<string | null>(null)
   const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -104,18 +106,23 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
 
   const handleCodexLogin = async () => {
     setCodexLoggingIn(true)
+    setCodexLoginError(null)
     try {
       const result = await api?.openaiCodexLogin?.()
       if (result?.success) {
         await refreshCodexStatus()
       } else {
-        console.error('[ModelSelector] Codex login failed:', result?.error)
+        setCodexLoginError(result?.error || 'ChatGPT sign-in failed')
       }
-    } catch (err) {
-      console.error('[ModelSelector] Codex login error:', err)
+    } catch (err: any) {
+      setCodexLoginError(err?.message || 'ChatGPT sign-in failed')
     } finally {
       setCodexLoggingIn(false)
     }
+  }
+
+  const handleCodexCancel = async () => {
+    await api?.openaiCodexCancel?.()
   }
 
   const handleCodexLogout = async () => {
@@ -125,18 +132,23 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
 
   const handleAnthropicSubLogin = async () => {
     setAnthropicSubLoggingIn(true)
+    setAnthropicSubLoginError(null)
     try {
       const result = await api?.anthropicSubLogin?.()
       if (result?.success) {
         await refreshAnthropicSubStatus()
       } else {
-        console.error('[ModelSelector] Anthropic sub login failed:', result?.error)
+        setAnthropicSubLoginError(result?.error || 'Anthropic sign-in failed')
       }
-    } catch (err) {
-      console.error('[ModelSelector] Anthropic sub login error:', err)
+    } catch (err: any) {
+      setAnthropicSubLoginError(err?.message || 'Anthropic sign-in failed')
     } finally {
       setAnthropicSubLoggingIn(false)
     }
+  }
+
+  const handleAnthropicSubCancel = async () => {
+    await api?.anthropicSubCancel?.()
   }
 
   const handleAnthropicSubLogout = async () => {
@@ -247,48 +259,82 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
 
               {/* Provider sub-label */}
               {provider === 'ChatGPT Subscription' && (
-                <div className="px-3 pb-1 flex items-center justify-between">
-                  <span className="text-[11px] t-text-muted">
-                    {codexStatus?.isLoggedIn ? 'Signed in' : 'OAuth required'}
-                  </span>
-                  {codexStatus?.isLoggedIn ? (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleCodexLogout() }}
-                      className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5"
-                    >
-                      <LogOut size={10} /> Sign out
-                    </button>
-                  ) : (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleCodexLogin() }}
-                      disabled={codexLoggingIn}
-                      className="text-[10px] t-text-accent flex items-center gap-0.5 hover:opacity-80 disabled:opacity-50"
-                    >
-                      <LogIn size={10} /> {codexLoggingIn ? 'Signing in...' : 'Sign in'}
-                    </button>
+                <div className="px-3 pb-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] t-text-muted">
+                      {codexStatus?.isLoggedIn
+                        ? 'Signed in'
+                        : codexLoggingIn
+                        ? 'Waiting for browser…'
+                        : 'OAuth required'}
+                    </span>
+                    {codexStatus?.isLoggedIn ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleCodexLogout() }}
+                        className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5"
+                      >
+                        <LogOut size={10} /> Sign out
+                      </button>
+                    ) : codexLoggingIn ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleCodexCancel() }}
+                        className="text-[10px] t-text-error flex items-center gap-0.5 hover:opacity-80"
+                      >
+                        <X size={10} /> Cancel
+                      </button>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleCodexLogin() }}
+                        className="text-[10px] t-text-accent flex items-center gap-0.5 hover:opacity-80"
+                      >
+                        <LogIn size={10} /> Sign in
+                      </button>
+                    )}
+                  </div>
+                  {codexLoginError && !codexLoggingIn && (
+                    <p className="text-[10px] t-text-error mt-1 leading-snug" role="alert">
+                      {codexLoginError}
+                    </p>
                   )}
                 </div>
               )}
               {provider === 'Claude Subscription' && (
-                <div className="px-3 pb-1 flex items-center justify-between">
-                  <span className="text-[11px] t-text-muted">
-                    {anthropicSubStatus?.isLoggedIn ? 'Signed in' : 'OAuth required'}
-                  </span>
-                  {anthropicSubStatus?.isLoggedIn ? (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleAnthropicSubLogout() }}
-                      className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5"
-                    >
-                      <LogOut size={10} /> Sign out
-                    </button>
-                  ) : (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleAnthropicSubLogin() }}
-                      disabled={anthropicSubLoggingIn}
-                      className="text-[10px] t-text-accent flex items-center gap-0.5 hover:opacity-80 disabled:opacity-50"
-                    >
-                      <LogIn size={10} /> {anthropicSubLoggingIn ? 'Signing in...' : 'Sign in'}
-                    </button>
+                <div className="px-3 pb-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] t-text-muted">
+                      {anthropicSubStatus?.isLoggedIn
+                        ? 'Signed in'
+                        : anthropicSubLoggingIn
+                        ? 'Waiting for browser…'
+                        : 'OAuth required'}
+                    </span>
+                    {anthropicSubStatus?.isLoggedIn ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleAnthropicSubLogout() }}
+                        className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5"
+                      >
+                        <LogOut size={10} /> Sign out
+                      </button>
+                    ) : anthropicSubLoggingIn ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleAnthropicSubCancel() }}
+                        className="text-[10px] t-text-error flex items-center gap-0.5 hover:opacity-80"
+                      >
+                        <X size={10} /> Cancel
+                      </button>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleAnthropicSubLogin() }}
+                        className="text-[10px] t-text-accent flex items-center gap-0.5 hover:opacity-80"
+                      >
+                        <LogIn size={10} /> Sign in
+                      </button>
+                    )}
+                  </div>
+                  {anthropicSubLoginError && !anthropicSubLoggingIn && (
+                    <p className="text-[10px] t-text-error mt-1 leading-snug" role="alert">
+                      {anthropicSubLoginError}
+                    </p>
                   )}
                 </div>
               )}

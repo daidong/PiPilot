@@ -11,8 +11,8 @@ const CYCLE: Record<ReasoningEffort, ReasoningEffort> = {
 }
 
 const COLORS: Record<ReasoningEffort, string> = {
-  max: 't-text-accent',
-  high: 't-text-error',
+  max: 't-text-error',
+  high: 't-text-warning',
   medium: 't-text-info',
   low: 't-text-muted'
 }

@@ -128,7 +128,7 @@ import {
 interface WindowRuntimeState {
   coordinator: ReturnType<typeof createCoordinator> | null
   currentModel: string
-  currentReasoningEffort: 'high' | 'medium' | 'low'
+  currentReasoningEffort: 'max' | 'high' | 'medium' | 'low'
   currentAuthMode: 'api-key' | 'subscription' | 'none'
   projectPath: string
   sessionId: string

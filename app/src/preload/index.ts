@@ -34,12 +34,14 @@ export interface ElectronAPI {
   // OpenAI Codex (ChatGPT Subscription) OAuth
   getOpenAICodexStatus: () => Promise<{ isLoggedIn: boolean; isExpired: boolean }>
   openaiCodexLogin: () => Promise<{ success: boolean; error?: string }>
+  openaiCodexCancel: () => Promise<{ success: boolean; error?: string }>
   openaiCodexLogout: () => Promise<{ success: boolean }>
 
   // Anthropic Subscription (Claude Pro/Max) OAuth — enabled by default
   isClaudeSubEnabled: () => boolean
   getAnthropicSubStatus: () => Promise<{ isLoggedIn: boolean; isExpired: boolean }>
   anthropicSubLogin: () => Promise<{ success: boolean; error?: string }>
+  anthropicSubCancel: () => Promise<{ success: boolean; error?: string }>
   anthropicSubLogout: () => Promise<{ success: boolean }>
 
   // Preferred-model resolver (picks highest-priority available auth)
@@ -221,12 +223,14 @@ const api: ElectronAPI = {
   // OpenAI Codex (ChatGPT Subscription) OAuth
   getOpenAICodexStatus: () => ipcRenderer.invoke('auth:get-openai-codex-status'),
   openaiCodexLogin: () => ipcRenderer.invoke('auth:openai-codex-login'),
+  openaiCodexCancel: () => ipcRenderer.invoke('auth:openai-codex-cancel'),
   openaiCodexLogout: () => ipcRenderer.invoke('auth:openai-codex-logout'),
 
   // Anthropic Subscription (Claude Pro/Max) OAuth — enabled by default
   isClaudeSubEnabled: () => true,
   getAnthropicSubStatus: () => ipcRenderer.invoke('auth:get-anthropic-sub-status'),
   anthropicSubLogin: () => ipcRenderer.invoke('auth:anthropic-sub-login'),
+  anthropicSubCancel: () => ipcRenderer.invoke('auth:anthropic-sub-cancel'),
   anthropicSubLogout: () => ipcRenderer.invoke('auth:anthropic-sub-logout'),
 
   pickPreferredModel: () => ipcRenderer.invoke('config:pick-preferred-model'),

@@ -646,6 +646,76 @@ export function registerUsageHandlers(
   })
 }
 
+// ─── OAuth login lifecycle (timeout + cancel) ───────────────────────────────
+//
+// pi-ai's loginAnthropic / loginOpenAICodex start a local http callback
+// server and `await server.waitForCode()` with no timeout or AbortSignal, so
+// if the user closes the browser the promise never settles and the renderer
+// "Signing in…" button stays disabled forever.
+//
+// They DO accept `onManualCodeInput?: () => Promise<string>`, which pi-ai
+// races against the browser callback. If our manual promise rejects, pi-ai
+// catches it, calls `server.cancelWait()`, throws the error, and runs its
+// own `finally { server.close() }` — so the callback port is released
+// cleanly. We use that as our abort channel: on timeout or cancel, reject
+// the manual promise and pi-ai tears everything down for us.
+
+const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
+
+type LoginKey = 'anthropic-sub' | 'openai-codex'
+
+interface LoginAttempt {
+  abort: (reason: string) => void
+}
+
+const inFlightLogin = new Map<LoginKey, LoginAttempt>()
+
+function loginErrorMessage(raw: unknown, label: string): string {
+  const msg = (raw instanceof Error ? raw.message : String(raw ?? '')).trim()
+  return msg || `${label} OAuth login failed`
+}
+
+async function runLoginWithTimeout<T>(
+  key: LoginKey,
+  label: string,
+  runLogin: (onManualCodeInput: () => Promise<string>) => Promise<T>,
+  onSuccess: (creds: T) => void
+): Promise<{ success: boolean; error?: string }> {
+  if (inFlightLogin.has(key)) {
+    return { success: false, error: `${label} sign-in is already in progress. Cancel it first.` }
+  }
+
+  let rejectManual: (err: Error) => void = () => {}
+  const manualPromise = new Promise<string>((_, reject) => {
+    rejectManual = reject
+  })
+  // Prevent unhandled-rejection noise if pi-ai never awaits the manual promise
+  // (e.g. the browser callback wins before cancel/timeout fires).
+  manualPromise.catch(() => {})
+
+  const attempt: LoginAttempt = {
+    abort: (reason) => rejectManual(new Error(reason))
+  }
+  inFlightLogin.set(key, attempt)
+
+  const timer = setTimeout(() => {
+    attempt.abort(
+      `${label} sign-in timed out after ${Math.round(LOGIN_TIMEOUT_MS / 60000)} minutes. Please try again.`
+    )
+  }, LOGIN_TIMEOUT_MS)
+
+  try {
+    const creds = await runLogin(() => manualPromise)
+    onSuccess(creds)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: loginErrorMessage(err, label) }
+  } finally {
+    clearTimeout(timer)
+    if (inFlightLogin.get(key) === attempt) inFlightLogin.delete(key)
+  }
+}
+
 /**
  * Register auth status IPC handlers (stateless, no project needed).
  */
@@ -681,20 +751,27 @@ export function registerAuthHandlers(
   handleRaw('auth:anthropic-sub-login', async () => {
     const { loginAnthropic } = await import('@mariozechner/pi-ai/oauth')
     const { shell } = await import('electron')
-    try {
-      const creds = await loginAnthropic({
+    return runLoginWithTimeout(
+      'anthropic-sub',
+      'Anthropic',
+      (onManualCodeInput) => loginAnthropic({
         onAuth: (info) => { shell.openExternal(info.url) },
         onPrompt: async (prompt) => {
           console.warn('[OAuth Anthropic] Unexpected prompt:', prompt.message)
           return ''
         },
-        onProgress: (msg) => { console.log('[OAuth Anthropic]', msg) }
-      })
-      saveAnthropicSubCredentials(creds)
-      return { success: true }
-    } catch (err: any) {
-      return { success: false, error: err.message || 'Anthropic OAuth login failed' }
-    }
+        onProgress: (msg) => { console.log('[OAuth Anthropic]', msg) },
+        onManualCodeInput
+      }),
+      (creds) => saveAnthropicSubCredentials(creds)
+    )
+  })
+
+  handleRaw('auth:anthropic-sub-cancel', () => {
+    const attempt = inFlightLogin.get('anthropic-sub')
+    if (!attempt) return { success: false, error: 'No Anthropic sign-in in progress' }
+    attempt.abort('Anthropic sign-in cancelled.')
+    return { success: true }
   })
 
   handleRaw('auth:anthropic-sub-logout', () => {
@@ -727,21 +804,27 @@ export function registerAuthHandlers(
   handleRaw('auth:openai-codex-login', async () => {
     const { loginOpenAICodex } = await import('@mariozechner/pi-ai/oauth')
     const { shell } = await import('electron')
-    try {
-      const creds = await loginOpenAICodex({
+    return runLoginWithTimeout(
+      'openai-codex',
+      'ChatGPT',
+      (onManualCodeInput) => loginOpenAICodex({
         onAuth: (info) => { shell.openExternal(info.url) },
         onPrompt: async (prompt) => {
-          // This shouldn't be called in normal browser flow
           console.warn('[OAuth] Unexpected prompt:', prompt.message)
           return ''
         },
-        onProgress: (msg) => { console.log('[OAuth]', msg) }
-      })
-      saveCodexCredentials(creds)
-      return { success: true }
-    } catch (err: any) {
-      return { success: false, error: err.message || 'OAuth login failed' }
-    }
+        onProgress: (msg) => { console.log('[OAuth]', msg) },
+        onManualCodeInput
+      }),
+      (creds) => saveCodexCredentials(creds)
+    )
+  })
+
+  handleRaw('auth:openai-codex-cancel', () => {
+    const attempt = inFlightLogin.get('openai-codex')
+    if (!attempt) return { success: false, error: 'No ChatGPT sign-in in progress' }
+    attempt.abort('ChatGPT sign-in cancelled.')
+    return { success: true }
   })
 
   handleRaw('auth:openai-codex-logout', () => {
