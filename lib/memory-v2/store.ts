@@ -19,6 +19,29 @@ export interface ArtifactFileRecord<T extends Artifact = Artifact> {
   filePath: string
 }
 
+/**
+ * Tolerant readdir: returns [] when the directory can't be scanned.
+ * Swallows EPERM (macOS TCC denial on iCloud/protected dirs), ENOENT
+ * (race with delete), and ENOTDIR — anything else is re-thrown. A single
+ * warning is emitted per path per process so the failure is still visible.
+ */
+const _warnedReaddirPaths = new Set<string>()
+function safeReaddir(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+  } catch (err: any) {
+    const code = err?.code
+    if (code === 'EPERM' || code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') {
+      if (!_warnedReaddirPaths.has(dir)) {
+        _warnedReaddirPaths.add(dir)
+        console.warn(`[memory-v2] cannot read artifact dir (${code}): ${dir}`)
+      }
+      return []
+    }
+    throw err
+  }
+}
+
 export interface LegacyMigrationResult {
   updatedFiles: number
   convertedLiteratureType: number
@@ -260,7 +283,7 @@ export function migrateLegacyArtifacts(projectPath: string): LegacyMigrationResu
   for (const { dir } of dirs) {
     if (!existsSync(dir)) continue
 
-    for (const file of readdirSync(dir)) {
+    for (const file of safeReaddir(dir)) {
       if (!file.endsWith('.json')) continue
       const filePath = join(dir, file)
       let raw: Record<string, unknown>
@@ -393,7 +416,7 @@ export function listArtifacts(projectPath: string, types?: ArtifactType[]): Arti
     if (typeSet && !typeSet.has(type)) continue
     if (!existsSync(dir)) continue
 
-    for (const file of readdirSync(dir)) {
+    for (const file of safeReaddir(dir)) {
       if (!file.endsWith('.json')) continue
       const artifact = readArtifactFromFile(join(dir, file))
       if (!artifact) continue
@@ -409,7 +432,7 @@ export function findArtifactById(projectPath: string, artifactId: string): Artif
   for (const { dir } of dirs) {
     if (!existsSync(dir)) continue
 
-    for (const file of readdirSync(dir)) {
+    for (const file of safeReaddir(dir)) {
       if (!file.endsWith('.json')) continue
       const fullPath = join(dir, file)
       const artifact = readArtifactFromFile(fullPath)
@@ -552,7 +575,7 @@ export function writeSessionSummary(projectPath: string, summary: SessionSummary
 export function readLatestSessionSummary(projectPath: string, sessionId: string): SessionSummary | null {
   const dir = join(projectPath, PATHS.sessionSummaries, sessionId)
   if (!existsSync(dir)) return null
-  const files = readdirSync(dir).filter(f => f.endsWith('.json'))
+  const files = safeReaddir(dir).filter(f => f.endsWith('.json'))
   if (files.length === 0) return null
   // Sort by numeric filename descending (ms epoch)
   files.sort((a, b) => {
