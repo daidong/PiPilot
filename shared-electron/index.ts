@@ -41,3 +41,12 @@ export {
   loadSettingsFromConfig,
   hasLlmAuth
 } from './ipc-base'
+
+// Recent projects persistence (FolderGate welcome screen)
+export {
+  listRecentProjects,
+  addRecentProject,
+  removeRecentProject,
+  setRecentProjectPinned,
+  type RecentProjectEntry
+} from './recent-projects'

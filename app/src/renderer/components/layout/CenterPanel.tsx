@@ -26,33 +26,66 @@ function ViewSwitcher() {
   const activeComputeRuns = useActiveRunCount()
 
   return (
-    <nav aria-label="View switcher" className="flex items-center gap-0.5 px-4 pt-10 pb-1">
-      {viewTabs.map(({ key, label, icon: Icon, shortcut }) => (
-        <button
-          key={key}
-          onClick={() => setCenterView(key)}
-          className={`no-drag flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-            centerView === key
-              ? 't-text-accent bg-[var(--color-accent-soft)]/10'
-              : 't-text-muted hover:t-text-secondary hover:t-bg-hover'
-          }`}
-          title={`${label} (${shortcut})`}
-        >
-          <Icon size={13} />
-          {label}
-          {key === 'literature' && paperCount > 0 && (
-            <span className="ml-0.5 px-1 py-px text-[9px] rounded-full t-bg-elevated t-text-muted tabular-nums">
-              {paperCount}
-            </span>
-          )}
-          {key === 'compute' && activeComputeRuns > 0 && (
-            <span className="ml-0.5 px-1 py-px text-[9px] rounded-full bg-[var(--color-accent-soft)]/10 t-text-accent tabular-nums">
-              {activeComputeRuns}
-            </span>
-          )}
-          <span className="text-[9px] t-text-muted opacity-40 ml-0.5">{shortcut}</span>
-        </button>
-      ))}
+    // Bottom hairline gives the nav a real anchor — without it, the tabs
+    // float in a gray area between the drag region and the content.
+    <nav
+      aria-label="View switcher"
+      className="flex items-stretch gap-1 px-4 pt-10 border-b t-border"
+    >
+      {viewTabs.map(({ key, label, icon: Icon, shortcut }) => {
+        const isActive = centerView === key
+        return (
+          <button
+            key={key}
+            onClick={() => setCenterView(key)}
+            aria-current={isActive ? 'page' : undefined}
+            title={`${label} (${shortcut})`}
+            className={`no-drag relative group flex items-center gap-2 px-3 pt-1.5 pb-2 text-[13px] font-medium transition-colors ${
+              isActive ? 't-text' : 't-text-muted hover:t-text-secondary'
+            }`}
+          >
+            <Icon size={14} className={isActive ? 't-text-accent' : ''} />
+            <span>{label}</span>
+
+            {/* Count chips — kept compact but legible */}
+            {key === 'literature' && paperCount > 0 && (
+              <span
+                className={`px-1.5 py-px text-[10px] rounded-full tabular-nums ${
+                  isActive ? 't-bg-accent/15 t-text-accent' : 't-bg-elevated t-text-muted'
+                }`}
+              >
+                {paperCount}
+              </span>
+            )}
+            {key === 'compute' && activeComputeRuns > 0 && (
+              <span className="px-1.5 py-px text-[10px] rounded-full tabular-nums t-bg-accent/15 t-text-accent">
+                {activeComputeRuns}
+              </span>
+            )}
+
+            {/* Shortcut chip — real kbd affordance, not a faded hint */}
+            <kbd
+              className={`inline-flex items-center px-1 py-0 rounded border text-[9.5px] font-mono leading-[1.4] transition-colors ${
+                isActive
+                  ? 't-border-accent-soft t-text-accent-soft bg-transparent'
+                  : 't-border-subtle t-bg-elevated t-text-muted group-hover:t-text-secondary'
+              }`}
+            >
+              {shortcut}
+            </kbd>
+
+            {/* Active-state bottom indicator — 2px accent bar overlapping the
+                nav's own bottom hairline. Replaces the old bg-tint which was
+                too quiet to read as "this tab is selected." */}
+            <span
+              aria-hidden
+              className={`pointer-events-none absolute left-0 right-0 -bottom-px h-[2px] transition-colors ${
+                isActive ? 't-bg-accent' : 'bg-transparent'
+              }`}
+            />
+          </button>
+        )
+      })}
     </nav>
   )
 }

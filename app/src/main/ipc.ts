@@ -42,6 +42,9 @@ import {
   registerConfigHandlers,
   registerSettingsHandlers,
   loadSettingsFromConfig,
+  listRecentProjects,
+  addRecentProject,
+  removeRecentProject,
 } from '../../../shared-electron/index'
 
 // ─── Tool render registry (Layer 4) ─
@@ -1408,64 +1411,96 @@ export function registerIpcHandlers(): void {
     return { success: true, path: result.filePath }
   })
 
-  // Project - pick folder and initialize
+  /**
+   * Initialize a project folder: tear down any previous coordinator, set up
+   * state, hydrate per-project preferences, record the path in the recent
+   * projects list. Used by both the folder-picker dialog and direct-open
+   * paths (FolderGate recent list, deep links, tests).
+   *
+   * Returns the standard `{ projectPath, sessionId }` shape that the
+   * renderer's session store expects, or `null` if the path is unusable.
+   */
+  async function openProjectFolder(
+    state: any,
+    win: BrowserWindow,
+    projectPath: string,
+  ): Promise<{ projectPath: string; sessionId: string } | null> {
+    if (!projectPath || !existsSync(projectPath)) return null
+
+    // Clean up previous project (same as project:close)
+    if (state.coordinator) {
+      try { await state.coordinator.destroy() } catch { /* best effort */ }
+      state.coordinator = null
+    }
+    state.realtimeBuffer.reset()
+
+    // Set up new project
+    state.projectPath = projectPath
+    initializeProject(state.projectPath)
+    state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
+
+    // Restore persisted model + reasoning preferences
+    const prefsFile = join(state.projectPath, PATHS.root, 'preferences.json')
+    if (existsSync(prefsFile)) {
+      try {
+        const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
+        if (prefs.selectedModel) {
+          const m = prefs.selectedModel as string
+          if (!m.includes(':')) {
+            const provider = m.startsWith('claude-') ? 'anthropic'
+              : m.startsWith('gemini-') ? 'google'
+              : 'openai'
+            state.currentModel = `${provider}:${m}`
+          } else {
+            state.currentModel = m
+          }
+        }
+        if (prefs.reasoningEffort) state.currentReasoningEffort = prefs.reasoningEffort
+      } catch { /* ignore corrupt file */ }
+    }
+
+    // Probe compute environment on folder open (only when feature is enabled)
+    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
+      probeStaticProfile().then(profile => {
+        safeSend(win, 'compute:environment', {
+          os: profile.os,
+          arch: profile.arch,
+          cpuCores: profile.cpuCores,
+          totalMemoryMb: profile.totalMemoryMb,
+          gpu: profile.gpu.model,
+          mlxAvailable: profile.gpu.mlxAvailable,
+          sandbox: profile.dockerAvailable ? 'docker' : 'process',
+        })
+      }).catch(() => { /* non-fatal */ })
+    }
+
+    win.setTitle(basename(state.projectPath))
+
+    // Record in the recents list so FolderGate can surface it next time.
+    try { addRecentProject(state.projectPath) } catch { /* best effort */ }
+
+    return { projectPath: state.projectPath, sessionId: state.sessionId }
+  }
+
+  // Project - pick folder via native dialog + initialize
   handleWindow('project:pick-folder', async ({ win, state }) => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory']
     })
-    if (!result.canceled && result.filePaths[0]) {
-      // Clean up previous project (same as project:close)
-      if (state.coordinator) {
-        try { await state.coordinator.destroy() } catch { /* best effort */ }
-        state.coordinator = null
-      }
-      state.realtimeBuffer.reset()
+    if (result.canceled || !result.filePaths[0]) return null
+    return openProjectFolder(state, win, result.filePaths[0])
+  })
 
-      // Set up new project
-      state.projectPath = result.filePaths[0]
-      // Initialize .research-pilot directory structure
-      initializeProject(state.projectPath)
-      // Reuse persistent session ID for this project folder
-      state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
-      // Restore persisted model + reasoning preferences
-      const prefsFile = join(state.projectPath, PATHS.root, 'preferences.json')
-      if (existsSync(prefsFile)) {
-        try {
-          const prefs = JSON.parse(readFileSync(prefsFile, 'utf-8'))
-          if (prefs.selectedModel) {
-            // Migrate legacy model IDs (e.g. 'gpt-5.4' → 'openai:gpt-5.4')
-            const m = prefs.selectedModel as string
-            if (!m.includes(':')) {
-              const provider = m.startsWith('claude-') ? 'anthropic'
-                : m.startsWith('gemini-') ? 'google'
-                : 'openai'
-              state.currentModel = `${provider}:${m}`
-            } else {
-              state.currentModel = m
-            }
-          }
-          if (prefs.reasoningEffort) state.currentReasoningEffort = prefs.reasoningEffort
-        } catch { /* ignore corrupt file */ }
-      }
-      // Probe compute environment on folder pick (only when feature is enabled)
-      if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-        probeStaticProfile().then(profile => {
-          safeSend(win, 'compute:environment', {
-            os: profile.os,
-            arch: profile.arch,
-            cpuCores: profile.cpuCores,
-            totalMemoryMb: profile.totalMemoryMb,
-            gpu: profile.gpu.model,
-            mlxAvailable: profile.gpu.mlxAvailable,
-            sandbox: profile.dockerAvailable ? 'docker' : 'process',
-          })
-        }).catch(() => { /* non-fatal */ })
-      }
+  // Project - open an already-known folder (FolderGate recents list)
+  handleWindow('project:open-path', async ({ win, state }, projectPath: string) => {
+    return openProjectFolder(state, win, projectPath)
+  })
 
-      win.setTitle(basename(state.projectPath))
-      return { projectPath: state.projectPath, sessionId: state.sessionId }
-    }
-    return null
+  // Recent projects CRUD
+  ipcMain.handle('project:list-recents', () => listRecentProjects())
+  ipcMain.handle('project:remove-recent', (_event: any, projectPath: string) => {
+    const removed = removeRecentProject(projectPath)
+    return { success: removed > 0 }
   })
 
   // Close project: stop agent, destroy coordinator, reset state

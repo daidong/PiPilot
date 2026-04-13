@@ -239,9 +239,9 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-5 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90 transition-all duration-200 disabled:opacity-50 t-gradient-accent t-gradient-accent-shadow"
+            className="px-4 py-1.5 rounded-md text-white text-[13px] font-medium hover:brightness-110 transition-[filter] duration-150 disabled:opacity-50 bg-[var(--color-accent)]"
           >
-            {saving ? 'Saving...' : 'Save & Continue'}
+            {saving ? 'Saving…' : 'Save & Continue'}
           </button>
         </div>
       )}

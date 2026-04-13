@@ -12,10 +12,45 @@ interface SessionState {
   hasProject: boolean
   init: () => Promise<void>
   pickFolder: () => Promise<boolean>
+  openPath: (projectPath: string) => Promise<boolean>
   closeProject: () => Promise<void>
 }
 
 const api = (window as any).api
+
+type OpenResult = { projectPath: string; sessionId: string } | null
+
+/**
+ * Shared post-open logic for both pickFolder and openPath: clears every
+ * renderer store, toggles hasProject to force the App effect to re-bind
+ * listeners, then hydrates preferences for the new project.
+ */
+async function applyOpenResult(
+  set: (partial: Partial<SessionState>) => void,
+  result: OpenResult,
+): Promise<boolean> {
+  if (!result) return false
+
+  useChatStore.getState().clear()
+  useProgressStore.getState().clear()
+  useActivityStore.getState().clear()
+  useUIStore.getState().reset()
+  useEntityStore.getState().reset()
+  useUsageStore.getState().resetSession()
+
+  // Briefly toggle hasProject so App's useEffect([hasProject]) re-fires
+  // and re-initializes IPC listeners, entity fetches, chat history, etc.
+  set({ hasProject: false, sessionId: '', projectPath: '' })
+  await new Promise((r) => setTimeout(r, 0))
+
+  set({
+    sessionId: result.sessionId,
+    projectPath: result.projectPath,
+    hasProject: true,
+  })
+  await hydratePreferences()
+  return true
+}
 
 export const useSessionStore = create<SessionState>((set) => ({
   sessionId: '',
@@ -36,31 +71,12 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   pickFolder: async () => {
     const result = await api.pickFolder()
-    if (result) {
-      // Clear all stores before loading new project (same cleanup as closeProject)
-      useChatStore.getState().clear()
-      useProgressStore.getState().clear()
-      useActivityStore.getState().clear()
-      useUIStore.getState().reset()
-      useEntityStore.getState().reset()
-      useUsageStore.getState().resetSession()
+    return applyOpenResult(set, result)
+  },
 
-      // Briefly toggle hasProject so the App.tsx useEffect([hasProject]) re-fires
-      // and re-initializes IPC listeners, entities, chat history, etc.
-      set({ hasProject: false, sessionId: '', projectPath: '' })
-
-      // Allow React to process the false state before setting true
-      await new Promise((r) => setTimeout(r, 0))
-
-      set({
-        sessionId: result.sessionId,
-        projectPath: result.projectPath,
-        hasProject: true
-      })
-      await hydratePreferences()
-      return true
-    }
-    return false
+  openPath: async (projectPath: string) => {
+    const result = await api.openProjectPath(projectPath)
+    return applyOpenResult(set, result)
   },
 
   closeProject: async () => {

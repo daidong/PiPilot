@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react'
+import { Check, X as XIcon, Loader2, CircleDot } from 'lucide-react'
 import { useActivityStore } from '../../stores/activity-store'
 import { useUsageStore } from '../../stores/usage-store'
 
@@ -61,8 +62,11 @@ export function StatusBar() {
       {hasSkills && (
         <div className="flex items-center gap-2 overflow-hidden">
           {activeSkills.map((name) => (
-            <span key={name} className="flex items-center gap-1 px-1.5 py-0.5 rounded t-bg-accent/10 t-text-accent whitespace-nowrap">
-              <span className="text-[10px]">&#x26A1;</span>
+            <span
+              key={name}
+              className="flex items-center gap-1.5 px-1.5 py-0.5 rounded t-bg-accent/10 t-text-accent whitespace-nowrap"
+            >
+              <CircleDot size={10} className="shrink-0" aria-hidden />
               <span>{name}</span>
             </span>
           ))}
@@ -73,16 +77,16 @@ export function StatusBar() {
       {hasActivity && (
         <div className="flex items-center gap-3 overflow-hidden">
           {toolSummary.map((t) => (
-            <span key={t.name} className="flex items-center gap-1 whitespace-nowrap">
+            <span key={t.name} className="flex items-center gap-1.5 whitespace-nowrap">
               {t.pending > 0 ? (
-                <span className="t-text-warning">&#x27F3;</span>
+                <Loader2 size={11} className="t-text-warning shrink-0 animate-spin" aria-label="In progress" />
               ) : t.failed > 0 ? (
-                <span className="t-text-error">&#x2717;</span>
+                <XIcon size={11} className="t-text-error shrink-0" aria-label="Failed" />
               ) : (
-                <span className="t-text-success">&#x2713;</span>
+                <Check size={11} className="t-text-success shrink-0" aria-label="Done" />
               )}
               <span className="capitalize">{t.name}</span>
-              <span className="t-text-muted">&times;{t.total}</span>
+              <span className="t-text-muted tabular-nums">×{t.total}</span>
             </span>
           ))}
         </div>
@@ -109,7 +113,7 @@ export function StatusBar() {
         )}
         {/* Separator between run and project */}
         {hasRunUsage && hasProjectUsage && (
-          <span className="t-text-muted">&#x2502;</span>
+          <span className="t-text-muted opacity-50" aria-hidden>·</span>
         )}
         {/* Accumulated project totals */}
         {hasProjectUsage && (

@@ -208,18 +208,23 @@ body {
   top: 0.5rem;
 }
 
-/* Gradient accent utility (teal → indigo) */
+/**
+ * Gradient accent (teal → indigo).
+ *
+ * RESERVED USE ONLY. This is the product's closest thing to a brand mark
+ * and must not be used decoratively. Allowed surfaces:
+ *   1. Progress / fill bars where the gradient encodes "toward completion"
+ *      (Literature CoverageBar, Compute usage bars, Wiki status pill).
+ *   2. Nowhere else. No logomarks, no primary buttons, no halos, no text.
+ *
+ * If you reach for this class from a surface not on the above list, the
+ * answer is almost always "use a solid accent, a muted neutral, or nothing."
+ */
 .t-gradient-accent {
   background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%);
 }
 .t-gradient-accent-h {
   background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2, var(--color-accent)));
-}
-.t-gradient-accent-shadow {
-  box-shadow: 0 4px 16px var(--color-accent-2-muted);
-}
-.t-gradient-accent-shadow-lg {
-  box-shadow: 0 8px 32px var(--color-accent-2-muted);
 }
 
 /* Animation delay utilities */

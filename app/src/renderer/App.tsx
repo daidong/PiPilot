@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react'
-import { FolderOpen, Settings } from 'lucide-react'
+import React, { useEffect, useState, useCallback } from 'react'
 import { SettingsModal, type SettingsTab } from './components/settings/SettingsModal'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
@@ -20,64 +19,307 @@ import { useComputeStore } from './stores/compute-store'
 
 const api = (window as any).api
 
+// ─── Folder gate ──────────────────────────────────────────────────────────
+//
+// Welcome surface shown when no project is open. Deliberately stripped of
+// hero imagery, gradient chrome, and centered marketing composition — the
+// dialect here matches the Literature tab: left-aligned, dense, keyboard-
+// first. Recent projects are the primary affordance; a new-folder picker
+// is the secondary one.
+
+interface RecentProjectEntry {
+  path: string
+  openedAt: string
+  pinned?: boolean
+}
+
+/** Format an ISO timestamp as a short relative label. */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return ''
+  const diffMs = Date.now() - then
+  const mins = Math.floor(diffMs / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w ago`
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/** Split a POSIX path into basename + parent. Returns parent without the
+ *  trailing slash; both strings may be empty. */
+function splitPath(p: string): { name: string; parent: string } {
+  const clean = p.replace(/\/+$/, '')
+  const idx = clean.lastIndexOf('/')
+  if (idx < 0) return { name: clean, parent: '' }
+  return { name: clean.slice(idx + 1), parent: clean.slice(0, idx) }
+}
+
+/** Small monospaced keyboard-cap chip. Consistent across the gate surface. */
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">
+      {children}
+    </kbd>
+  )
+}
+
+function RecentRow({
+  entry,
+  active,
+  confirmRemove,
+  onActivate,
+  onHover,
+}: {
+  entry: RecentProjectEntry
+  active: boolean
+  confirmRemove: boolean
+  onActivate: () => void
+  onHover: () => void
+}) {
+  const { name, parent } = splitPath(entry.path)
+  return (
+    <button
+      type="button"
+      onClick={onActivate}
+      onMouseEnter={onHover}
+      className={`group relative w-full text-left flex items-baseline gap-4 py-2 pl-4 pr-3 rounded-sm transition-colors ${
+        active ? 't-bg-hover' : ''
+      }`}
+    >
+      {/* Left accent bar — matches Literature tab's wiki-row treatment */}
+      <span
+        aria-hidden
+        className={`absolute left-0 top-1 bottom-1 w-[2px] rounded-full transition-colors ${
+          active ? 't-bg-accent' : 'bg-transparent group-hover:t-bg-accent-soft'
+        }`}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className={`text-[13px] font-medium truncate ${active ? 't-text' : 't-text-secondary group-hover:t-text'}`}>
+            {name}
+          </span>
+          {entry.pinned && (
+            <span className="text-[9px] uppercase tracking-wider t-text-muted">pinned</span>
+          )}
+        </div>
+        {parent && (
+          <div className="text-[11px] t-text-muted truncate font-mono mt-0.5">
+            {parent}
+          </div>
+        )}
+      </div>
+      <div className="shrink-0 flex items-center gap-2 tabular-nums text-[10px] t-text-muted">
+        {confirmRemove ? (
+          <span className="t-text-error-soft">press ⌫ again</span>
+        ) : (
+          relativeTime(entry.openedAt)
+        )}
+      </div>
+    </button>
+  )
+}
+
 function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const pickFolder = useSessionStore((s) => s.pickFolder)
+  const openPath = useSessionStore((s) => s.openPath)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
-  const handlePick = async () => {
-    const picked = await pickFolder()
-    if (picked) {
-      await refreshEntities()
+  const [recents, setRecents] = useState<RecentProjectEntry[]>([])
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const [opening, setOpening] = useState(false)
+
+  // Load recents once on mount. The main process prunes stale paths server
+  // side, so whatever comes back is safe to render.
+  useEffect(() => {
+    let cancelled = false
+    api.listRecentProjects?.().then((list: RecentProjectEntry[] | null) => {
+      if (!cancelled && Array.isArray(list)) setRecents(list)
+    }).catch(() => { /* leave recents empty */ })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleOpen = useCallback(async (path: string) => {
+    if (opening) return
+    setOpening(true)
+    try {
+      const ok = await openPath(path)
+      if (ok) await refreshEntities()
+    } finally {
+      setOpening(false)
     }
-  }
+  }, [openPath, refreshEntities, opening])
+
+  const handlePickNew = useCallback(async () => {
+    if (opening) return
+    setOpening(true)
+    try {
+      const ok = await pickFolder()
+      if (ok) await refreshEntities()
+    } finally {
+      setOpening(false)
+    }
+  }, [pickFolder, refreshEntities, opening])
+
+  const handleRemove = useCallback(async (path: string) => {
+    await api.removeRecentProject?.(path)
+    setRecents((prev) => {
+      const next = prev.filter((e) => e.path !== path)
+      setActiveIndex((i) => Math.min(Math.max(0, i), Math.max(0, next.length - 1)))
+      return next
+    })
+    setConfirmRemove(null)
+  }, [])
+
+  // Keyboard navigation — arrow keys move focus through the list, ↵ opens
+  // the focused entry, ⌫ twice removes it, ⌘O launches the native picker.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault()
+        handlePickNew()
+        return
+      }
+      // Cmd+, is handled globally in App for the settings modal.
+
+      if (e.key === 'ArrowDown') {
+        if (recents.length === 0) return
+        e.preventDefault()
+        setActiveIndex((i) => (i + 1) % recents.length)
+        setConfirmRemove(null)
+      } else if (e.key === 'ArrowUp') {
+        if (recents.length === 0) return
+        e.preventDefault()
+        setActiveIndex((i) => (i - 1 + recents.length) % recents.length)
+        setConfirmRemove(null)
+      } else if (e.key === 'Enter') {
+        if (recents.length === 0) {
+          e.preventDefault()
+          handlePickNew()
+          return
+        }
+        const target = recents[activeIndex]
+        if (target) {
+          e.preventDefault()
+          handleOpen(target.path)
+        }
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        if (recents.length === 0) return
+        const target = recents[activeIndex]
+        if (!target) return
+        e.preventDefault()
+        if (confirmRemove === target.path) {
+          handleRemove(target.path)
+        } else {
+          setConfirmRemove(target.path)
+        }
+      } else if (e.key === 'Escape') {
+        setConfirmRemove(null)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [recents, activeIndex, confirmRemove, handleOpen, handlePickNew, handleRemove])
+
+  const hasRecents = recents.length > 0
 
   return (
-    <div className="flex h-screen w-screen t-bg-base t-text items-center justify-center">
-      <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
-      <div className="flex flex-col items-center max-w-sm px-8">
-        <div className="text-center">
-          {/* Branded mark */}
-          <div className="relative mx-auto mb-8 w-fit">
-            <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center t-gradient-accent t-gradient-accent-shadow-lg"
-            >
-              <span className="text-white text-xl font-bold tracking-tight">
-                P
-              </span>
+    <div className="flex h-screen w-screen t-bg-base t-text overflow-hidden">
+      {/* Draggable macOS title bar strip */}
+      <div className="drag-region fixed top-0 left-0 right-0 h-10 z-50" />
+
+      {/* Left-aligned content column, generously offset from the top-left */}
+      <div className="w-full pt-[14vh] pl-[11vw] pr-8 min-h-0 overflow-y-auto">
+        <div className="w-full max-w-[32rem]">
+          {/* Wordmark — typography only, no glyph */}
+          <div className="mb-14">
+            <div className="text-[15px] font-semibold t-text tracking-tight leading-none">
+              Research Pilot
             </div>
-            <div
-              className="absolute -inset-2 rounded-3xl opacity-15 blur-xl -z-10 t-gradient-accent"
-            />
+            <div className="text-[11px] t-text-muted mt-1.5 leading-none">
+              A research workflow, not a chat window.
+            </div>
           </div>
 
-          <h1
-            className="text-2xl font-semibold mb-2 tracking-tight"
-          >
-            Research Pilot
-          </h1>
-          <p className="t-text-secondary text-[13px] mb-8 leading-relaxed">
-            Open a project folder to begin. Your notes, papers, and data will live
-            in a <code className="px-1 py-0.5 rounded t-bg-surface text-xs font-mono">.research-pilot</code> directory.
-          </p>
-          <div className="flex flex-col items-center gap-3">
+          {/* Section label + recent list */}
+          {hasRecents ? (
+            <div className="mb-6">
+              <div className="flex items-baseline justify-between mb-2 pl-4">
+                <span className="text-[10px] uppercase tracking-wider t-text-muted font-medium">
+                  Recent projects
+                </span>
+                <span className="text-[10px] t-text-muted tabular-nums">
+                  {recents.length}
+                </span>
+              </div>
+              <div className="flex flex-col">
+                {recents.map((entry, i) => (
+                  <RecentRow
+                    key={entry.path}
+                    entry={entry}
+                    active={i === activeIndex}
+                    confirmRemove={confirmRemove === entry.path}
+                    onActivate={() => handleOpen(entry.path)}
+                    onHover={() => { setActiveIndex(i); if (confirmRemove !== entry.path) setConfirmRemove(null) }}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mb-8 pl-4">
+              <div className="text-[13px] t-text-secondary mb-1">
+                No recent projects yet.
+              </div>
+              <div className="text-[11px] t-text-muted">
+                Point at a folder — anything you capture will live in a
+                {' '}
+                <code className="px-1 py-0.5 rounded t-bg-surface text-[10px] font-mono">.research-pilot</code>
+                {' '}
+                sibling directory beside it.
+              </div>
+            </div>
+          )}
+
+          {/* New-folder affordance — ghost button, not primary */}
+          <div className="pl-4">
             <button
-              onClick={handlePick}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium
-                         hover:opacity-90 transition-all duration-200 t-gradient-accent t-gradient-accent-shadow"
+              onClick={handlePickNew}
+              disabled={opening}
+              className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-md border t-border t-text-secondary hover:t-text hover:t-border-accent-soft text-[12px] transition-colors disabled:opacity-50"
             >
-              <FolderOpen size={16} />
-              Open Project Folder
+              {hasRecents ? 'Open another folder…' : 'Choose a folder to begin'}
+              <Kbd>⌘O</Kbd>
             </button>
+          </div>
+
+          {/* Keyboard hint line + settings link */}
+          <div className="mt-16 pl-4 flex items-center gap-5 text-[10px] t-text-muted flex-wrap">
+            {hasRecents && (
+              <>
+                <span className="inline-flex items-center gap-1.5"><Kbd>↑↓</Kbd> navigate</span>
+                <span className="inline-flex items-center gap-1.5"><Kbd>↵</Kbd> open</span>
+                <span className="inline-flex items-center gap-1.5"><Kbd>⌫</Kbd> remove</span>
+              </>
+            )}
+            <span className="inline-flex items-center gap-1.5"><Kbd>⌘O</Kbd> new folder</span>
             {onOpenSettings && (
-              <button
-                onClick={onOpenSettings}
-                className="inline-flex items-center gap-1.5 text-xs t-text-secondary hover:t-text transition-colors"
-              >
-                <Settings size={13} />
-                API Keys & Settings
-              </button>
+              <span className="inline-flex items-center gap-1.5"><Kbd>⌘,</Kbd> settings</span>
             )}
           </div>
+
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="mt-10 pl-4 text-[11px] t-text-muted hover:t-text-secondary transition-colors"
+            >
+              API keys & settings →
+            </button>
+          )}
         </div>
       </div>
     </div>

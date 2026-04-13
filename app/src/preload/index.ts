@@ -129,6 +129,9 @@ export interface ElectronAPI {
   // Session/Project
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
   pickFolder: () => Promise<{ projectPath: string; sessionId: string } | null>
+  openProjectPath: (projectPath: string) => Promise<{ projectPath: string; sessionId: string } | null>
+  listRecentProjects: () => Promise<Array<{ path: string; openedAt: string; pinned?: boolean }>>
+  removeRecentProject: (projectPath: string) => Promise<{ success: boolean }>
   closeProject: () => Promise<void>
   onProjectClosed: (cb: () => void) => () => void
 
@@ -340,6 +343,9 @@ const api: ElectronAPI = {
 
   getCurrentSession: () => ipcRenderer.invoke('session:current'),
   pickFolder: () => ipcRenderer.invoke('project:pick-folder'),
+  openProjectPath: (projectPath: string) => ipcRenderer.invoke('project:open-path', projectPath),
+  listRecentProjects: () => ipcRenderer.invoke('project:list-recents'),
+  removeRecentProject: (projectPath: string) => ipcRenderer.invoke('project:remove-recent', projectPath),
   closeProject: () => ipcRenderer.invoke('project:close'),
   onProjectClosed: (cb) => {
     const handler = () => cb()
