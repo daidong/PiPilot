@@ -4,7 +4,7 @@ import { REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODEL } from '../../../../s
 import { parseModelKey } from '../../../../shared-ui/utils'
 import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 
-type Theme = 'light' | 'dark'
+import { getInitialTheme, persistTheme, applyThemeClass, type Theme } from '../theme-boot'
 type LeftTab = 'library' | 'files' | 'skills'
 type CenterView = 'chat' | 'literature' | 'compute'
 export type { LeftTab, CenterView }
@@ -81,7 +81,10 @@ export interface LiteratureFilter {
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  theme: 'light',
+  // Theme hydrates from localStorage (or OS preference) at module init so
+  // the zustand state matches the <html> class applied by bootTheme() in
+  // main.tsx. Both ends derive from getInitialTheme() — they stay in sync.
+  theme: getInitialTheme(),
   leftTab: 'files',
   centerView: 'chat',
   selectedModel: DEFAULT_MODEL,
@@ -124,8 +127,11 @@ export const useUIStore = create<UIState>((set) => ({
   },
   setTheme: (theme) => {
     set({ theme })
-    const api = (window as any).api
-    api?.savePreferences?.({ theme })
+    // Theme is a GLOBAL user preference, not per-project — persist to
+    // localStorage and update the <html> class immediately so the next
+    // app launch (and the welcome screen in particular) respects it.
+    persistTheme(theme)
+    applyThemeClass(theme)
   },
   toggleTheme: () => {
     const newTheme = useUIStore.getState().theme === 'dark' ? 'light' : 'dark'
@@ -224,6 +230,8 @@ export async function hydratePreferences(): Promise<void> {
     }
   }
   if (prefs.reasoningEffort) updates.reasoningEffort = prefs.reasoningEffort
-  if (prefs.theme) updates.theme = prefs.theme
+  // NOTE: theme is deliberately NOT restored from per-project prefs. It's
+  // a global user preference managed via localStorage (see theme-boot.ts)
+  // so the welcome screen respects it even when no project is open.
   if (Object.keys(updates).length > 0) useUIStore.setState(updates)
 }
