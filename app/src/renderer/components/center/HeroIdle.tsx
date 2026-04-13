@@ -3,32 +3,60 @@ import { useChatStore } from '../../stores/chat-store'
 
 // ─── HeroIdle ─────────────────────────────────────────────────────────────
 //
-// Empty-state surface for the chat view. Not a welcome hero: a quiet
-// command-palette preview. Four real slash commands that already exist in
-// ChatInput's SLASH_COMMANDS list, rendered as a left-aligned text list
-// with keyboard-affordance chips on the right. Clicking a row pre-fills
-// the input with the command and focuses it — the user learns the palette
-// by using it.
+// Empty-state surface for the chat view. Three task-level starters that
+// prefill the input with natural-language prompts — not slash commands.
+//
+// Why natural language over slash commands: the agent's coordinator system
+// prompt already tells it to ground in the workspace (glob/grep/artifact-
+// search for any non-trivial request), to walk the wiki_coverage →
+// wiki_search → literature-search flow for literature requests, and to use
+// artifact-create for notes when the user asks to save something. Each
+// starter below maps directly to one of those existing agent behaviors, so
+// clicking a row triggers real work — not a palette lookup.
 //
 // Anti-refs obeyed: no icons, no cards, no centered hero, no Sparkles,
-// no generic "What would you like to do?" prompt.
+// no 2×2 grid, no marketing prompt. Left-aligned, two-line rows, muted
+// neutrals + accent-soft on hover. Same dialect as FolderGate RecentRow.
 
 interface Starter {
+  /** Clickable headline — also the text prefilled into the chat input. */
   label: string
-  command: string      // what gets written into the input
-  display: string      // what's shown in the kbd chip on the right
+  /** Muted one-line description of what the agent will do. Teaches by
+   *  example without promising more than the agent actually delivers. */
+  description: string
 }
 
 const STARTERS: Starter[] = [
-  { label: 'Capture a research note',  command: '/note ',    display: '/note'    },
-  { label: 'Search notes & papers',    command: '/search ',  display: '/search'  },
-  { label: 'Browse literature',        command: '/papers',   display: '/papers'  },
-  { label: 'See all commands',         command: '/help',     display: '/help'    },
+  {
+    label: 'Understand this folder',
+    description: 'Scan files, existing artifacts, and recent work to get oriented.',
+  },
+  {
+    label: 'Start a literature review on …',
+    description: 'Plan sub-topics, search multiple sources, score and summarize.',
+  },
+  {
+    label: 'Capture a research note about …',
+    description: 'Draft a note artifact from your description.',
+  },
 ]
 
 function focusInput() {
   const input = document.querySelector<HTMLTextAreaElement>('[data-chat-input]')
-  input?.focus()
+  if (!input) return
+  input.focus()
+  // Drop the caret at the end so the user can keep typing from where the
+  // ellipsis used to be — the "…" at the end of a starter label is the
+  // natural continuation point.
+  const end = input.value.length
+  try { input.setSelectionRange(end, end) } catch { /* older textarea APIs */ }
+}
+
+/** Strip a trailing ellipsis so the prefilled text invites continuation
+ *  without the user having to delete the "…" first. Leading/trailing
+ *  whitespace is normalized. */
+function prefillFromLabel(label: string): string {
+  return label.replace(/…\s*$/, '').replace(/\s+$/, '') + (label.endsWith('…') ? ' ' : '')
 }
 
 function StarterRow({ starter, onActivate }: { starter: Starter; onActivate: () => void }) {
@@ -36,20 +64,20 @@ function StarterRow({ starter, onActivate }: { starter: Starter; onActivate: () 
     <button
       type="button"
       onClick={onActivate}
-      className="group relative w-full text-left flex items-center gap-6 py-1.5 pl-4 pr-2 rounded-sm t-bg-hover transition-colors"
+      className="group relative w-full text-left flex flex-col gap-0.5 py-2.5 pl-4 pr-2 rounded-sm t-bg-hover transition-colors"
     >
       {/* Left accent bar on hover — same dialect as RecentRow in FolderGate
-          and the Wiki-row treatment in LiteratureView */}
+          and the wiki-row treatment in LiteratureView. */}
       <span
         aria-hidden
-        className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-transparent group-hover:t-bg-accent-soft transition-colors"
+        className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-transparent group-hover:t-bg-accent-soft transition-colors"
       />
-      <span className="flex-1 truncate text-[13px] t-text-secondary group-hover:t-text transition-colors">
+      <span className="text-[13px] t-text-secondary group-hover:t-text transition-colors leading-snug">
         {starter.label}
       </span>
-      <kbd className="shrink-0 inline-flex items-center px-1.5 py-0 rounded border t-border-subtle t-bg-elevated text-[10px] font-mono t-text-muted leading-[1.5] group-hover:t-text-accent-soft transition-colors">
-        {starter.display}
-      </kbd>
+      <span className="text-[11px] t-text-muted leading-snug">
+        {starter.description}
+      </span>
     </button>
   )
 }
@@ -57,43 +85,41 @@ function StarterRow({ starter, onActivate }: { starter: Starter; onActivate: () 
 export function HeroIdle() {
   const setDraftText = useChatStore((s) => s.setDraftText)
 
-  const handleStarter = (command: string) => {
-    setDraftText(command)
-    // Defer focus one tick so the state update has committed before the
-    // caret is placed at the end of the new text.
+  const handleStarter = (label: string) => {
+    const prefill = prefillFromLabel(label)
+    setDraftText(prefill)
+    // Defer focus one tick so React has committed the new draft text
+    // before we place the caret.
     requestAnimationFrame(focusInput)
   }
 
   return (
-    <div className="w-full max-w-md px-8">
+    <div className="w-full max-w-lg px-8">
       {/* Section label — matches FolderGate's "Recent projects" treatment */}
       <div className="pl-4 mb-2 text-[10px] uppercase tracking-wider t-text-muted font-medium">
         Start
       </div>
 
-      {/* Command list */}
+      {/* Task starter list */}
       <div className="flex flex-col">
         {STARTERS.map((s) => (
-          <StarterRow key={s.command} starter={s} onActivate={() => handleStarter(s.command)} />
+          <StarterRow key={s.label} starter={s} onActivate={() => handleStarter(s.label)} />
         ))}
       </div>
 
-      {/* Keyboard hint line */}
-      <div className="mt-8 pl-4 flex flex-col gap-1 text-[10px] t-text-muted">
-        <div className="flex items-center gap-2">
-          <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">/</kbd>
-          <span>or</span>
-          <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">⌘K</kbd>
-          <span>command palette</span>
-        </div>
+      {/* Keyboard tips — deliberately minimal. Only surfaces features
+          that are fully wired today: @ mentions and the send/newline
+          bindings. The slash command palette is hidden until its
+          backend is complete. */}
+      <div className="mt-8 pl-4 flex flex-col gap-1.5 text-[10px] t-text-muted">
         <div className="flex items-center gap-2">
           <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">@</kbd>
-          <span>mention notes, papers, or files</span>
+          <span>mention a note, paper, or file</span>
         </div>
         <div className="flex items-center gap-2">
           <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">↵</kbd>
           <span>send</span>
-          <span className="t-text-muted opacity-50">·</span>
+          <span className="opacity-50" aria-hidden>·</span>
           <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">⇧↵</kbd>
           <span>newline</span>
         </div>
