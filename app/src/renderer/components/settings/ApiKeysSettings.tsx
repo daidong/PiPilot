@@ -54,8 +54,10 @@ function UpdateBanner() {
   const command = 'npm update -g research-copilot'
 
   return (
-    <div className="mb-4 rounded-lg border t-border-subtle overflow-hidden"
-         style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(168,85,247,0.10))' }}>
+    <div className="mb-4 relative rounded-lg border t-border-subtle t-bg-elevated overflow-hidden">
+      {/* 2px accent bar — same distinguishing treatment used on wiki-only
+          rows in LiteratureView and active rows in FolderGate. */}
+      <span aria-hidden className="absolute left-0 top-0 bottom-0 w-[2px] t-bg-accent-soft" />
       <div className="px-3 py-2.5 flex items-start gap-2.5">
         <ArrowUpCircle size={15} className="t-text-accent-soft mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">

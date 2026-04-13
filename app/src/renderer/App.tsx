@@ -233,14 +233,16 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
       {/* Draggable macOS title bar strip */}
       <div className="drag-region fixed top-0 left-0 right-0 h-10 z-50" />
 
-      {/* Left-aligned content column, generously offset from the top-left */}
-      <div className="w-full pt-[14vh] pl-[11vw] pr-8 min-h-0 overflow-y-auto">
+      {/* Left-aligned content column, generously offset from the top-left.
+          <main> landmark so the global skip-to-content link has a target. */}
+      <main id="main-content" className="w-full pt-[14vh] pl-[11vw] pr-8 min-h-0 overflow-y-auto">
         <div className="w-full max-w-[32rem]">
-          {/* Wordmark — typography only, no glyph */}
+          {/* Wordmark — typography only, no glyph. h1 is the welcome
+              surface's primary heading (required for screen-reader nav). */}
           <div className="mb-14">
-            <div className="text-[15px] font-semibold t-text tracking-tight leading-none">
+            <h1 className="text-[15px] font-semibold t-text tracking-tight leading-none">
               Research Pilot
-            </div>
+            </h1>
             <div className="text-[11px] t-text-muted mt-1.5 leading-none">
               A research workflow, not a chat window.
             </div>
@@ -321,7 +323,7 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
             </button>
           )}
         </div>
-      </div>
+      </main>
     </div>
   )
 }

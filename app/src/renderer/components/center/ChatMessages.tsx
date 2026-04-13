@@ -287,15 +287,22 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
 })
 
 // Minimal thinking indicator — only shown when no tools are running
-// (when tools are running, the RunningToolCard spinner is the indicator)
+// (when tools are running, the RunningToolCard spinner is the indicator).
+//
+// Matches the rest of the app's loader idiom: a single Loader2 + muted
+// caption. The prior 3-dot bounce animation was the only use of
+// `animate-bounce` in the codebase and violated the "no bounce easing"
+// motion principle. aria-live="polite" lets screen readers announce the
+// state change when the indicator appears without interrupting speech.
 function ThinkingIndicator() {
   return (
-    <div className="flex items-center gap-1.5 mt-3 ml-2">
-      <span className="inline-flex gap-[3px] items-center" aria-label="Thinking">
-        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce animation-delay-0" />
-        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce animation-delay-150" />
-        <span className="w-[5px] h-[5px] rounded-full t-bg-accent-soft animate-bounce animation-delay-300" />
-      </span>
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center gap-2 mt-3 ml-2 text-[11px] t-text-muted"
+    >
+      <Loader2 size={11} className="t-text-accent-soft animate-spin shrink-0" aria-hidden />
+      <span>Thinking…</span>
     </div>
   )
 }
