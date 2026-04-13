@@ -1,6 +1,6 @@
 # Research Copilot
 
-An AI-powered desktop research assistant for scientists and academics. Literature search, data analysis, academic writing, and project management — all in one place.
+An AI-powered desktop research assistant for scientists and academics. Literature search, data analysis, academic writing, cross-project paper memory, and project management — powered by your **ChatGPT Pro / Claude Max subscription** (or an API key), all in one desktop app.
 
 Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electron + React.
 
@@ -8,36 +8,42 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electr
 
 ---
 
-## API Keys Setup (READ THIS FIRST)
+## Signing in (READ THIS FIRST)
 
-Research Copilot requires API keys to function. The easiest way is to **enter them directly in the app** — on first launch you'll see a setup screen. Keys are saved to `~/.research-copilot/config.json`.
+Research Copilot supports three auth methods and automatically prefers the cheapest working one. When multiple are configured, priority is:
 
-Alternatively, add them to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
+**ChatGPT subscription → Claude subscription → OpenAI API key → Anthropic API key**
+
+First-launch model selection follows this order; you can override it any time from the model selector.
+
+### Option 1 — Sign in with a subscription (recommended)
+
+The fastest and most cost-predictable path. No API key needed, no metered billing surprises.
+
+- **ChatGPT Pro / Plus** — click the model selector, pick a `GPT-5.4 (sub)` entry, sign in via OAuth. Uses the official ChatGPT subscription endpoint.
+- **Claude Pro / Max** — click the model selector, pick a `Claude … (sub)` entry, sign in via OAuth. Uses the official Anthropic subscription endpoint. *(Previously gated behind `ENABLE_CLAUDE_SUB=1`; enabled by default since `0235a3f`.)*
+
+Credentials are stored in the OS keychain via pi-ai's OAuth helper and refreshed automatically.
+
+### Option 2 — Bring an API key
+
+Open the unified settings panel (**Cmd+.**) and paste a key, or set it in your shell profile:
 
 ```bash
-# ===== REQUIRED (at least one) =====
-export OPENAI_API_KEY="sk-..."           # For OpenAI models (GPT-4o, GPT-5, o3, etc.)
-export ANTHROPIC_API_KEY="sk-ant-..."    # For Anthropic models (Claude Sonnet, Opus, etc.)
-
-# ===== RECOMMENDED =====
-export BRAVE_API_KEY="BSA..."            # For web search (https://brave.com/search/api/)
-export OPENROUTER_API_KEY="sk-or-..."    # For AI-generated scientific diagrams (https://openrouter.ai/)
+export OPENAI_API_KEY="sk-..."           # GPT-5.4, GPT-4o, o-series
+export ANTHROPIC_API_KEY="sk-ant-..."    # Claude Opus / Sonnet / Haiku
 ```
 
-Then reload your shell: `source ~/.zshrc`
+Keys entered in the UI are saved to `~/.research-copilot/config.json`.
 
-### What happens without each key?
+### Optional supporting keys
 
-| Key | Required? | What it powers | Without it |
-|-----|-----------|---------------|------------|
-| `OPENAI_API_KEY` | **Yes** (if using OpenAI models) | Core AI agent — all chat, coding, writing, analysis | App cannot start the agent. You'll see an error dialog on first message. |
-| `ANTHROPIC_API_KEY` | **Yes** (if using Anthropic models) | Core AI agent (same as above, for Claude models) | Same — agent won't initialize for Claude models. |
-| `BRAVE_API_KEY` | Recommended | `web_search` tool — general web search via Brave Search | **Graceful fallback**: web search automatically degrades to arXiv-only (academic papers). No general web results. |
-| `OPENROUTER_API_KEY` | Optional | `scientific-schematics` skill — AI-generated diagrams, flowcharts, graphical abstracts | The schematics skill fails when invoked. All other skills (writing, visualization, data analysis) work fine. |
+| Key | Enhances | Without it |
+|-----|----------|------------|
+| `BRAVE_API_KEY` | `web_search` tool — general web search via Brave | Falls back gracefully to arXiv-only academic search |
+| `OPENROUTER_API_KEY` | `scientific-schematics` skill — AI-generated diagrams | The schematics skill fails when invoked; all other skills still work |
 
-> **Minimum viable setup**: You need **at least one** of `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` to use the app. Everything else enhances the experience but is not strictly required.
-
-> **Semantic Scholar, arXiv, OpenAlex, DBLP**: These academic APIs are used for literature search and **do not require API keys**. They work out of the box.
+> **Semantic Scholar, arXiv, OpenAlex, DBLP**: used for literature search and **do not require API keys**. They work out of the box.
 
 ---
 
@@ -55,8 +61,10 @@ Research Copilot is a **vertical tool built specifically for academic research**
 | **Academic writing** | Generic document drafting | Venue-specific templates (NeurIPS, ICML, journals), IMRAD structure, LaTeX, citation verification (never hallucinated) |
 | **Grant writing** | None | Agency-specific guidance (NSF, NIH, DOE, DARPA, NSTC) with compliance checklists |
 | **Data analysis** | Extracts data from documents | LLM-generated Python scripts with statistical modeling, matplotlib/seaborn visualization, and output manifests |
-| **Domain skills** | General capabilities | 13 pluggable research skills (scientific writing, visualization, scholar evaluation, etc.) — extensible via Markdown |
+| **Domain skills** | General capabilities | 14 pluggable research skills (scientific writing, visualization, scholar evaluation, paper revision, slides, etc.) — extensible via Markdown |
+| **Cross-project memory** | Per-conversation only | Background **Paper Wiki** agent that indexes every paper you touch into a local, concept-organized knowledge base shared across all your projects |
 | **Knowledge persistence** | Not specified | Artifact store, session summaries, cross-session memory, @-mention references |
+| **Auth** | Claude subscription only | **ChatGPT Pro / Claude Max** via OAuth *or* OpenAI / Anthropic API keys — priority-ordered so subscriptions are preferred automatically |
 | **Openness** | Closed-source commercial product | Open source (MIT) — fully customizable |
 
 **In short**: Claude Cowork is like a smart office assistant. Research Copilot is like a lab partner who knows how to search literature, run stats, write papers, and apply for grants.
@@ -73,8 +81,13 @@ Search across **Semantic Scholar**, **arXiv**, **OpenAlex**, and **DBLP** simult
 
 ![Literature Management](docs/literature.png)
 
+### Cross-Project Paper Wiki
+A background agent that turns every paper you've ever opened into a **local, concept-organized knowledge base** shared across all your projects. Each paper gets a summarized wiki page; recurring concepts get their own pages with back-references to the papers that mention them. The wiki is searchable from any project via `wiki_search` / `wiki_get` / `wiki_coverage` tools, so the AI can recall and cite work from earlier projects without you re-feeding it context.
+
+The wiki runs offline and **is disabled by default** — it consumes LLM tokens (roughly 8K–25K input / 2K–4K output per paper), so you opt in from the Settings panel and pick a model you're comfortable paying for. Subscription-backed models are recommended; an "Auto" option follows the system-wide priority (sub before API key). Identity drift across DOI/arXiv/title lookups is reconciled automatically so papers don't get reprocessed.
+
 ### Extensible Skills System
-Skills are lazy-loaded knowledge modules that give the AI domain expertise. The app ships with 13 builtin skills covering academic writing (paper-writing, grant proposals, rewrite-humanize), visualization (matplotlib, scientific schematics), data analysis, and more. You can also add your own project-specific skills.
+Skills are lazy-loaded knowledge modules that give the AI domain expertise. The app ships with **14 builtin skills** covering academic writing (paper-writing, paper-revision, research-grants, rewrite-humanize, scientific-writing, scholar-evaluation), visualization (matplotlib, seaborn, scientific-schematics, scientific-visualization, marp-slides), research ideation (brainstorming, creative-thinking), and general coding. You can also add your own project-specific skills as plain Markdown files.
 
 ### File Attachments in Chat
 Attach files directly in the chat input via the paperclip button, drag & drop, or paste. Supported formats:
@@ -96,7 +109,8 @@ Attach files directly in the chat input via the paperclip button, drag & drop, o
 - **@-mention system** — reference entities inline in chat
 - **Session continuity** — automatic context compaction and session summaries
 - **Integrated terminal** — run commands without leaving the app
-- **LLM providers** — OpenAI and Anthropic models supported
+- **LLM providers** — OpenAI and Anthropic, via ChatGPT Pro / Claude Max subscription OAuth *or* API keys, with automatic priority selection
+- **Unified settings panel** — `Cmd+.` opens a single pane for models, API keys, research presets, data-analysis timeouts, and the Paper Wiki agent
 
 ## Prerequisites
 
@@ -123,17 +137,11 @@ npm install
 npm run dev
 ```
 
-### API Keys
+### Authentication
 
-On first launch, the app will prompt you to enter your API keys directly in the UI. Keys are saved to `~/.research-copilot/config.json`.
+On first launch, open the model selector (top of the chat pane) and either **sign in** with ChatGPT Pro / Claude Max via OAuth, or paste an `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` into the unified settings panel (`Cmd+.`). Everything else is optional.
 
-You can also set them as environment variables in your shell profile (`~/.zshrc`, `~/.bashrc`):
-
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY="sk-..."
-```
-
-See [API Keys Setup](#api-keys-setup-read-this-first) above for the full list.
+See [Signing in](#signing-in-read-this-first) above for the full breakdown and optional supporting keys.
 
 ### Build for Production
 
