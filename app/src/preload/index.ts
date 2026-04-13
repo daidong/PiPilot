@@ -132,6 +132,7 @@ export interface ElectronAPI {
   openProjectPath: (projectPath: string) => Promise<{ projectPath: string; sessionId: string } | null>
   listRecentProjects: () => Promise<Array<{ path: string; openedAt: string; pinned?: boolean }>>
   removeRecentProject: (projectPath: string) => Promise<{ success: boolean }>
+  projectStatsBatch: (paths: string[]) => Promise<Record<string, { papers: number; notes: number; data: number; initialized: boolean }>>
   closeProject: () => Promise<void>
   onProjectClosed: (cb: () => void) => () => void
 
@@ -346,6 +347,7 @@ const api: ElectronAPI = {
   openProjectPath: (projectPath: string) => ipcRenderer.invoke('project:open-path', projectPath),
   listRecentProjects: () => ipcRenderer.invoke('project:list-recents'),
   removeRecentProject: (projectPath: string) => ipcRenderer.invoke('project:remove-recent', projectPath),
+  projectStatsBatch: (paths: string[]) => ipcRenderer.invoke('project:stats-batch', paths),
   closeProject: () => ipcRenderer.invoke('project:close'),
   onProjectClosed: (cb) => {
     const handler = () => cb()

@@ -1503,6 +1503,39 @@ export function registerIpcHandlers(): void {
     return { success: removed > 0 }
   })
 
+  /**
+   * Batch artifact stats lookup for the FolderGate recent projects list.
+   * Reads the `.research-pilot/artifacts/*` subdirectories for each given
+   * path and returns file counts — no project initialization, no state
+   * mutation, just synchronous file system reads. `initialized=false` means
+   * the folder exists but has no `.research-pilot` directory (pristine
+   * project about to be set up on first open).
+   */
+  ipcMain.handle('project:stats-batch', (_event: any, paths: string[]) => {
+    const result: Record<string, { papers: number; notes: number; data: number; initialized: boolean }> = {}
+    const countFiles = (dir: string): number => {
+      try {
+        return readdirSync(dir).filter((f) => !f.startsWith('.')).length
+      } catch {
+        return 0
+      }
+    }
+    for (const p of paths || []) {
+      if (!p || !existsSync(p)) {
+        result[p] = { papers: 0, notes: 0, data: 0, initialized: false }
+        continue
+      }
+      const initialized = existsSync(join(p, PATHS.root))
+      result[p] = {
+        papers: countFiles(join(p, PATHS.papers)),
+        notes: countFiles(join(p, PATHS.notes)),
+        data: countFiles(join(p, PATHS.data)),
+        initialized,
+      }
+    }
+    return result
+  })
+
   // Close project: stop agent, destroy coordinator, reset state
   handleWindow('project:close', async ({ state }) => {
     state.isClosing = true

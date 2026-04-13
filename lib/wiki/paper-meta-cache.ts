@@ -23,6 +23,9 @@ export interface WikiPaperMeta {
   venue?: string
   tldr?: string
   sourceTier?: 'metadata-only' | 'abstract-only' | 'fulltext'
+  /** File mtime — used by the FolderGate welcome panel to sort by most
+   *  recently processed. ISO string. */
+  updatedAt?: string
 }
 
 interface CacheEntry {
@@ -128,6 +131,7 @@ export function listWikiPaperMeta(): WikiPaperMeta[] {
 
     const meta = parsePaperFile(slug, filePath)
     if (!meta) continue
+    meta.updatedAt = new Date(mtimeMs).toISOString()
     cache.set(slug, { mtimeMs, meta })
     results.push(meta)
   }

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { SettingsModal, type SettingsTab } from './components/settings/SettingsModal'
+import type { WikiPaperMeta } from '../../../lib/wiki/paper-meta-cache'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { EntityPreviewPanel } from './components/layout/EntityPreviewPanel'
@@ -68,20 +69,30 @@ function Kbd({ children }: { children: React.ReactNode }) {
   )
 }
 
+interface ProjectStats {
+  papers: number
+  notes: number
+  data: number
+  initialized: boolean
+}
+
 function RecentRow({
   entry,
   active,
   confirmRemove,
+  stats,
   onActivate,
   onHover,
 }: {
   entry: RecentProjectEntry
   active: boolean
   confirmRemove: boolean
+  stats?: ProjectStats
   onActivate: () => void
   onHover: () => void
 }) {
   const { name, parent } = splitPath(entry.path)
+  const totalArtifacts = stats ? stats.papers + stats.notes + stats.data : 0
   return (
     <button
       type="button"
@@ -106,6 +117,11 @@ function RecentRow({
           {entry.pinned && (
             <span className="text-[9px] uppercase tracking-wider t-text-muted">pinned</span>
           )}
+          {stats && !stats.initialized && (
+            <span className="text-[9px] uppercase tracking-wider t-text-muted" title="No .research-pilot directory yet">
+              new
+            </span>
+          )}
         </div>
         {parent && (
           <div className="text-[11px] t-text-muted truncate font-mono mt-0.5">
@@ -113,14 +129,240 @@ function RecentRow({
           </div>
         )}
       </div>
-      <div className="shrink-0 flex items-center gap-2 tabular-nums text-[10px] t-text-muted">
+      <div className="shrink-0 flex flex-col items-end gap-0.5 tabular-nums text-[10px] t-text-muted">
         {confirmRemove ? (
           <span className="t-text-error-soft">press ⌫ again</span>
         ) : (
-          relativeTime(entry.openedAt)
+          <>
+            {/* Artifact counts — compact, only shown when non-zero */}
+            {stats && totalArtifacts > 0 && (
+              <div className="flex gap-1.5 t-text-secondary">
+                {stats.papers > 0 && <span>{stats.papers}p</span>}
+                {stats.notes > 0 && <span>{stats.notes}n</span>}
+                {stats.data > 0 && <span>{stats.data}d</span>}
+              </div>
+            )}
+            <span>{relativeTime(entry.openedAt)}</span>
+          </>
         )}
       </div>
     </button>
+  )
+}
+
+// ─── Wiki panel (FolderGate right column) ────────────────────────────────
+//
+// Cross-project paper wiki summary shown alongside the recent-projects list.
+// Reuses the same IPCs that feed the Literature tab's WikiStatusPill and
+// wiki paper search: wiki:get-stats, wiki:list-paper-meta, wiki:get-status.
+// Has three visual states:
+//   1. Loading / unknown → skeletal nothing, quietly
+//   2. Wiki disabled (model = 'none')   → teaching empty state + settings link
+//   3. Wiki enabled but empty           → teaching empty state
+//   4. Wiki populated                   → stats + recent-added + status dot
+
+interface WikiStats { papers: number; concepts: number; fulltext: number; abstractOnly: number }
+interface WikiStatusShape {
+  state: 'processing' | 'idle' | 'paused' | 'disabled'
+  processed: number
+  pending: number
+  totalInWiki: number
+  lastRunAt?: string
+}
+
+function WikiPanel({ onOpenSettings }: { onOpenSettings?: () => void }) {
+  const [stats, setStats] = useState<WikiStats | null>(null)
+  const [recentPapers, setRecentPapers] = useState<WikiPaperMeta[]>([])
+  const [status, setStatus] = useState<WikiStatusShape | null>(null)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      api.wikiGetStats?.().catch(() => null),
+      api.wikiListPaperMeta?.().catch(() => null),
+      api.wikiGetStatus?.().catch(() => null),
+    ]).then(([s, list, st]) => {
+      if (cancelled) return
+      if (s) setStats(s)
+      if (Array.isArray(list)) {
+        const sorted = [...list].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+        setRecentPapers(sorted.slice(0, 3))
+      }
+      if (st) setStatus(st)
+      setLoaded(true)
+    })
+    const unsub = api.onWikiStatus?.((s: WikiStatusShape) => setStatus(s))
+    return () => { cancelled = true; unsub?.() }
+  }, [])
+
+  if (!loaded) return null
+
+  const isDisabled = status?.state === 'disabled'
+  const isEmpty = (stats?.papers ?? 0) === 0
+
+  const header = (
+    <div className="flex items-baseline justify-between mb-3">
+      <span className="text-[10px] uppercase tracking-wider t-text-muted font-medium">
+        Paper wiki
+      </span>
+      {!isEmpty && stats && (
+        <span className="text-[10px] t-text-muted tabular-nums">{stats.papers}</span>
+      )}
+      {isDisabled && (
+        <span className="text-[10px] uppercase tracking-wider t-text-muted">off</span>
+      )}
+    </div>
+  )
+
+  // ── Empty: wiki agent disabled ───────────────────────────────────────
+  if (isDisabled) {
+    return (
+      <section aria-labelledby="wiki-panel-heading">
+        <h2 id="wiki-panel-heading" className="sr-only">Paper wiki</h2>
+        {header}
+        <p className="text-[12px] t-text-secondary leading-relaxed">
+          Turn the wiki agent on in settings to build a cross-project
+          summary of every paper you save. It runs quietly in the
+          background.
+        </p>
+        {onOpenSettings && (
+          <button
+            onClick={onOpenSettings}
+            className="mt-3 inline-flex items-center gap-1.5 text-[11px] t-text-accent-soft hover:t-text-accent transition-colors"
+          >
+            Open settings →
+          </button>
+        )}
+      </section>
+    )
+  }
+
+  // ── Empty: enabled but no papers yet (first-run) ─────────────────────
+  if (isEmpty) {
+    return (
+      <section aria-labelledby="wiki-panel-heading">
+        <h2 id="wiki-panel-heading" className="sr-only">Paper wiki</h2>
+        {header}
+        <p className="text-[12px] t-text-secondary leading-relaxed">
+          Your cross-project library. As you save papers in any project,
+          the agent summarizes each one here — visible from every project
+          afterwards.
+        </p>
+        <p className="mt-3 text-[11px] t-text-muted leading-relaxed">
+          Nothing here yet. Open a project and add your first paper.
+        </p>
+      </section>
+    )
+  }
+
+  // ── Populated ────────────────────────────────────────────────────────
+  return (
+    <section aria-labelledby="wiki-panel-heading">
+      <h2 id="wiki-panel-heading" className="sr-only">Paper wiki</h2>
+      {header}
+
+      {/* Stats breakdown */}
+      <div className="flex items-baseline gap-3 text-[11px] t-text-secondary tabular-nums mb-6">
+        {(stats?.fulltext ?? 0) > 0 && (
+          <span>
+            <span className="t-text font-medium">{stats!.fulltext}</span>{' '}
+            <span className="t-text-muted">fulltext</span>
+          </span>
+        )}
+        {(stats?.abstractOnly ?? 0) > 0 && (
+          <>
+            <span className="t-text-muted opacity-50" aria-hidden>·</span>
+            <span>
+              <span className="t-text font-medium">{stats!.abstractOnly}</span>{' '}
+              <span className="t-text-muted">abstract</span>
+            </span>
+          </>
+        )}
+        {(stats?.concepts ?? 0) > 0 && (
+          <>
+            <span className="t-text-muted opacity-50" aria-hidden>·</span>
+            <span>
+              <span className="t-text font-medium">{stats!.concepts}</span>{' '}
+              <span className="t-text-muted">concepts</span>
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Recently added */}
+      {recentPapers.length > 0 && (
+        <div className="mb-6">
+          <div className="text-[10px] uppercase tracking-wider t-text-muted font-medium mb-2">
+            Recently added
+          </div>
+          <ul className="flex flex-col gap-1.5">
+            {recentPapers.map((p) => (
+              <li key={p.slug} className="flex items-baseline gap-2">
+                <span className="shrink-0 text-[10px] t-text-muted mt-1">·</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] t-text-secondary truncate leading-snug">
+                    {p.title}
+                  </div>
+                  <div className="text-[10px] t-text-muted font-mono truncate">
+                    {p.slug}
+                    {p.updatedAt && <> · {relativeTime(p.updatedAt)}</>}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Status strip */}
+      {status && (
+        <div className="flex items-center gap-1.5 text-[10px] t-text-muted">
+          <span
+            className={`inline-block w-1.5 h-1.5 rounded-full ${
+              status.state === 'processing' ? 'bg-blue-500 animate-pulse' :
+              status.state === 'paused' ? 'bg-yellow-500' :
+              'bg-emerald-500'
+            }`}
+            aria-hidden
+          />
+          <span className="capitalize">{status.state}</span>
+          {status.lastRunAt && (
+            <>
+              <span className="opacity-50" aria-hidden>·</span>
+              <span>last tick {relativeTime(status.lastRunAt)}</span>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ─── Tips block (always shown below WikiPanel) ────────────────────────
+function TipsBlock() {
+  return (
+    <section aria-label="Tips">
+      <div className="text-[10px] uppercase tracking-wider t-text-muted font-medium mb-2">
+        Tips
+      </div>
+      <ul className="flex flex-col gap-1.5 text-[11px] t-text-secondary">
+        <li className="flex items-center gap-2">
+          <Kbd>/</Kbd>
+          <span className="t-text-muted">or</span>
+          <Kbd>⌘K</Kbd>
+          <span>open the command palette</span>
+        </li>
+        <li className="flex items-center gap-2">
+          <Kbd>@</Kbd>
+          <span>mention a note, paper, or file</span>
+        </li>
+        <li className="flex items-center gap-2">
+          <Kbd>⌘1</Kbd><Kbd>⌘2</Kbd>
+          <span>switch between chat and literature</span>
+        </li>
+      </ul>
+    </section>
   )
 }
 
@@ -130,6 +372,7 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
   const [recents, setRecents] = useState<RecentProjectEntry[]>([])
+  const [projectStats, setProjectStats] = useState<Record<string, ProjectStats>>({})
   const [activeIndex, setActiveIndex] = useState(0)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [opening, setOpening] = useState(false)
@@ -143,6 +386,22 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
     }).catch(() => { /* leave recents empty */ })
     return () => { cancelled = true }
   }, [])
+
+  // Fetch per-project artifact counts whenever the recents list changes.
+  // Pure file system read — no project initialization, no side effects.
+  useEffect(() => {
+    if (recents.length === 0) {
+      setProjectStats({})
+      return
+    }
+    let cancelled = false
+    api.projectStatsBatch?.(recents.map((r) => r.path)).then(
+      (map: Record<string, ProjectStats> | null) => {
+        if (!cancelled && map) setProjectStats(map)
+      },
+    ).catch(() => { /* keep stats empty */ })
+    return () => { cancelled = true }
+  }, [recents])
 
   const handleOpen = useCallback(async (path: string) => {
     if (opening) return
@@ -229,18 +488,21 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const hasRecents = recents.length > 0
 
   return (
-    <div className="flex h-screen w-screen t-bg-base t-text overflow-hidden">
+    <div className="flex flex-col h-screen w-screen t-bg-base t-text overflow-hidden">
       {/* Draggable macOS title bar strip */}
       <div className="drag-region fixed top-0 left-0 right-0 h-10 z-50" />
 
-      {/* Left-aligned content column, generously offset from the top-left.
+      {/* Main content — two-column grid at xl, single column below. Uses
           <main> landmark so the global skip-to-content link has a target. */}
-      <main id="main-content" className="w-full pt-[14vh] pl-[11vw] pr-8 min-h-0 overflow-y-auto">
-        <div className="w-full max-w-[32rem]">
+      <main
+        id="main-content"
+        className="flex-1 overflow-y-auto pt-[12vh] px-[8vw] pb-6"
+      >
+        <div className="mx-auto w-full max-w-6xl">
           {/* Wordmark — typography only, no glyph. h1 is the welcome
               surface's primary heading (required for screen-reader nav). */}
-          <div className="mb-14">
-            <h1 className="text-[15px] font-semibold t-text tracking-tight leading-none">
+          <div className="mb-12 pl-1">
+            <h1 className="text-[16px] font-semibold t-text tracking-tight leading-none">
               Research Pilot
             </h1>
             <div className="text-[11px] t-text-muted mt-1.5 leading-none">
@@ -248,59 +510,88 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
             </div>
           </div>
 
-          {/* Section label + recent list */}
-          {hasRecents ? (
-            <div className="mb-6">
-              <div className="flex items-baseline justify-between mb-2 pl-4">
-                <span className="text-[10px] uppercase tracking-wider t-text-muted font-medium">
-                  Recent projects
-                </span>
-                <span className="text-[10px] t-text-muted tabular-nums">
-                  {recents.length}
-                </span>
-              </div>
-              <div className="flex flex-col">
-                {recents.map((entry, i) => (
-                  <RecentRow
-                    key={entry.path}
-                    entry={entry}
-                    active={i === activeIndex}
-                    confirmRemove={confirmRemove === entry.path}
-                    onActivate={() => handleOpen(entry.path)}
-                    onHover={() => { setActiveIndex(i); if (confirmRemove !== entry.path) setConfirmRemove(null) }}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="mb-8 pl-4">
-              <div className="text-[13px] t-text-secondary mb-1">
-                No recent projects yet.
-              </div>
-              <div className="text-[11px] t-text-muted">
-                Point at a folder — anything you capture will live in a
-                {' '}
-                <code className="px-1 py-0.5 rounded t-bg-surface text-[10px] font-mono">.research-pilot</code>
-                {' '}
-                sibling directory beside it.
-              </div>
-            </div>
-          )}
+          {/* Two-column layout: recents on the left, wiki/tips on the right.
+              Collapses to single column on narrow windows. */}
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem] gap-12 xl:gap-16 items-start">
+            {/* ── Left column: recent projects ──────────────────────── */}
+            <section aria-labelledby="recents-heading">
+              <h2 id="recents-heading" className="sr-only">Recent projects</h2>
 
-          {/* New-folder affordance — ghost button, not primary */}
-          <div className="pl-4">
-            <button
-              onClick={handlePickNew}
-              disabled={opening}
-              className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-md border t-border t-text-secondary hover:t-text hover:t-border-accent-soft text-[12px] transition-colors disabled:opacity-50"
-            >
-              {hasRecents ? 'Open another folder…' : 'Choose a folder to begin'}
-              <Kbd>⌘O</Kbd>
-            </button>
+              {hasRecents ? (
+                <>
+                  <div className="flex items-baseline justify-between mb-2 pl-4">
+                    <span className="text-[10px] uppercase tracking-wider t-text-muted font-medium">
+                      Recent projects
+                    </span>
+                    <span className="text-[10px] t-text-muted tabular-nums">
+                      {recents.length}
+                    </span>
+                  </div>
+                  <div className="flex flex-col mb-6">
+                    {recents.map((entry, i) => (
+                      <RecentRow
+                        key={entry.path}
+                        entry={entry}
+                        stats={projectStats[entry.path]}
+                        active={i === activeIndex}
+                        confirmRemove={confirmRemove === entry.path}
+                        onActivate={() => handleOpen(entry.path)}
+                        onHover={() => {
+                          setActiveIndex(i)
+                          if (confirmRemove !== entry.path) setConfirmRemove(null)
+                        }}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="mb-6 pl-4">
+                  <div className="flex items-baseline justify-between mb-3">
+                    <span className="text-[10px] uppercase tracking-wider t-text-muted font-medium">
+                      Recent projects
+                    </span>
+                    <span className="text-[10px] t-text-muted">—</span>
+                  </div>
+                  <p className="text-[13px] t-text-secondary leading-relaxed mb-1">
+                    No projects yet.
+                  </p>
+                  <p className="text-[12px] t-text-muted leading-relaxed max-w-md">
+                    Pick a folder to begin — we'll create a
+                    {' '}
+                    <code className="px-1 py-0.5 rounded t-bg-elevated text-[10.5px] font-mono t-text-secondary">.research-pilot</code>
+                    {' '}
+                    directory beside it for your notes, papers, and data.
+                    Everything stays on disk; nothing goes to the cloud.
+                  </p>
+                </div>
+              )}
+
+              {/* New-folder affordance — ghost button, not primary */}
+              <div className="pl-4">
+                <button
+                  onClick={handlePickNew}
+                  disabled={opening}
+                  className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-md border t-border t-text-secondary hover:t-text hover:t-border-accent-soft text-[12px] transition-colors disabled:opacity-50"
+                >
+                  {hasRecents ? 'Open another folder…' : 'Choose a folder to begin'}
+                  <Kbd>⌘O</Kbd>
+                </button>
+              </div>
+            </section>
+
+            {/* ── Right column: wiki panel + tips ──────────────────── */}
+            <aside aria-label="Global status" className="flex flex-col gap-10 xl:pl-4 xl:border-l t-border-subtle">
+              <div className="xl:pl-8">
+                <WikiPanel onOpenSettings={onOpenSettings} />
+              </div>
+              <div className="xl:pl-8">
+                <TipsBlock />
+              </div>
+            </aside>
           </div>
 
-          {/* Keyboard hint line + settings link */}
-          <div className="mt-16 pl-4 flex items-center gap-5 text-[10px] t-text-muted flex-wrap">
+          {/* Bottom strip: keyboard hints + settings link */}
+          <div className="mt-16 pl-1 flex items-center gap-5 text-[10px] t-text-muted flex-wrap">
             {hasRecents && (
               <>
                 <span className="inline-flex items-center gap-1.5"><Kbd>↑↓</Kbd> navigate</span>
@@ -312,16 +603,15 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
             {onOpenSettings && (
               <span className="inline-flex items-center gap-1.5"><Kbd>⌘,</Kbd> settings</span>
             )}
+            {onOpenSettings && (
+              <button
+                onClick={onOpenSettings}
+                className="ml-auto text-[11px] t-text-muted hover:t-text-secondary transition-colors"
+              >
+                API keys & settings →
+              </button>
+            )}
           </div>
-
-          {onOpenSettings && (
-            <button
-              onClick={onOpenSettings}
-              className="mt-10 pl-4 text-[11px] t-text-muted hover:t-text-secondary transition-colors"
-            >
-              API keys & settings →
-            </button>
-          )}
         </div>
       </main>
     </div>
