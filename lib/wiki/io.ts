@@ -111,6 +111,42 @@ export function markPaperProcessed(entry: ProcessedEntry): void {
 }
 
 /**
+ * Re-stamp a batch of watermark entries in place — only `semanticHash` and
+ * `hashSchemaVersion` are overwritten, everything else is preserved. Used by
+ * the scanner when it detects entries at an old HASH_SCHEMA_VERSION after a
+ * hash-projection change: we recompute the hash with the new function and
+ * store it so subsequent scans see a match, WITHOUT triggering a reprocess.
+ *
+ * Entries not present in the current watermark are silently dropped (they
+ * may have been removed by an earlier identity-drift migration). One atomic
+ * rewrite, not N rewrites — this is called on hotfix-first-scan paths where
+ * potentially hundreds of entries need the upgrade.
+ */
+export function restampProcessedBatch(
+  updates: Array<{ canonicalKey: string; semanticHash: string; hashSchemaVersion: number }>
+): void {
+  if (updates.length === 0) return
+  const existing = readProcessedWatermark()
+  let changed = 0
+  for (const upd of updates) {
+    const entry = existing.get(upd.canonicalKey)
+    if (!entry) continue
+    existing.set(upd.canonicalKey, {
+      ...entry,
+      semanticHash: upd.semanticHash,
+      hashSchemaVersion: upd.hashSchemaVersion,
+    })
+    changed++
+  }
+  if (changed === 0) return
+  const path = processedPath()
+  const content = Array.from(existing.values())
+    .map(e => JSON.stringify(e))
+    .join('\n') + '\n'
+  safeWriteFile(path, content)
+}
+
+/**
  * Bump the fulltext-failure counter on an existing watermark entry without
  * touching any other field. Called from processPaper when a fulltext-upgrade
  * retry's arXiv download fails again — we want to reschedule the retry with

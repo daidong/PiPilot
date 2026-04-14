@@ -8,13 +8,15 @@ import type { PaperArtifact } from '../types.js'
 import {
   computeCanonicalKey,
   computeSemanticHash,
+  canSilentRestampLegacyWatermark,
   canonicalKeyToSlug,
   isValidArxivId,
   GENERATOR_VERSION,
+  HASH_SCHEMA_VERSION,
   type ScanResult,
   type ProcessedEntry,
 } from './types.js'
-import { readProcessedWatermark, readProvenance } from './io.js'
+import { readProcessedWatermark, readProvenance, restampProcessedBatch } from './io.js'
 import { applyIdentityMigration, computeAllCanonicalKeys } from './identity-migration.js'
 
 // ── Fulltext retry backoff ─────────────────────────────────────────────────
@@ -56,6 +58,13 @@ export function scanForNewContent(
   const processed = readProcessedWatermark()
   const toProcess: ScanResult[] = []
   const provenanceOnly: ScanResult[] = []
+
+  // Hash schema migration queue. Collected across the scan and flushed in
+  // a single atomic rewrite at the end (see bottom of this function).
+  // Entries land here when their watermark was written under an older
+  // HASH_SCHEMA_VERSION — we re-stamp them with the new hash in place so
+  // subsequent scans match, without triggering a reprocess avalanche.
+  const restamps: Array<{ canonicalKey: string; semanticHash: string; hashSchemaVersion: number }> = []
 
   // Build provenance index: canonicalKey → Set of known (projectPath, paperId) pairs
   const existingProvenance = readProvenance()
@@ -146,6 +155,56 @@ export function scanForNewContent(
       }
     }
 
+    // ── Hash schema migration (HASH_SCHEMA_VERSION bump) ────────────────
+    // Narrow, guarded migration path. The hotfix changed what
+    // computeSemanticHash projects, so legacy V1 watermarks cannot be
+    // compared directly to V2 hashes of current artifacts without losing
+    // the "paper changed → reprocess" invariant. We solve this by re-deriving
+    // the V1 hash from the current artifact and ONLY re-stamping when it
+    // matches the stored V1 hash — i.e., when the canonical content (and
+    // the lens fields V1 included) is byte-for-byte identical to what V1
+    // last saw.
+    //
+    //  - match   → no change since last V1 processing; safe to silently
+    //              re-stamp with the V2 hash. Prevents the hash projection
+    //              change from triggering a reprocess avalanche across the
+    //              entire wiki.
+    //  - no match → something changed. We don't know whether it was
+    //              canonical content or a lens-only edit that V1 mistakenly
+    //              captured. Fall through: leave the watermark untouched,
+    //              let the normal check below see `stored (V1) !== current
+    //              (V2)` and raise 'semantic-change', which reprocesses the
+    //              paper. The resulting markPaperProcessed stamps the new
+    //              V2 entry with HASH_SCHEMA_VERSION. This intentionally
+    //              accepts a small rate of false reprocesses for pre-hotfix
+    //              lens-only edits in exchange for never silently dropping
+    //              a real canonical change. RFC-005 follow-up's controlled
+    //              regen pass will re-canonicalize any remaining stale
+    //              bodies.
+    //
+    // Migration is NOT a claim that existing page bodies are canonically
+    // clean — pages written under V1 may still contain lens contamination
+    // in the prose. That is follow-up work, not this hotfix.
+    const priorWatermark = processed.get(canonicalKey)
+    if (priorWatermark && canSilentRestampLegacyWatermark(priorWatermark, artifact)) {
+      const restamped: ProcessedEntry = {
+        ...priorWatermark,
+        semanticHash,
+        hashSchemaVersion: HASH_SCHEMA_VERSION,
+      }
+      processed.set(canonicalKey, restamped)
+      restamps.push({
+        canonicalKey,
+        semanticHash,
+        hashSchemaVersion: HASH_SCHEMA_VERSION,
+      })
+    }
+    // If the predicate returns false on a legacy watermark, we intentionally
+    // leave it untouched. The normal branch below will see
+    //   priorWatermark.semanticHash (V1) !== semanticHash (V2)
+    // and push a 'semantic-change' reprocess, which is the correct
+    // conservative behavior when canonical content may have changed.
+
     const watermark = processed.get(canonicalKey)
     const knownProvenance = provenanceIndex.get(canonicalKey) || new Set<string>()
 
@@ -203,6 +262,13 @@ export function scanForNewContent(
     const bTime = new Date(b.artifact.createdAt).getTime()
     return bTime - aTime
   })
+
+  // Flush hash schema migration: one atomic rewrite instead of N. Called
+  // even when the scan has nothing to process, so a warm wiki picks up the
+  // schema upgrade on its first post-hotfix scan.
+  if (restamps.length > 0) {
+    restampProcessedBatch(restamps)
+  }
 
   return { toProcess, provenanceOnly }
 }

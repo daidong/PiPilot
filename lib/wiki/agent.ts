@@ -10,6 +10,7 @@ import { join } from 'path'
 import {
   getWikiRoot,
   GENERATOR_VERSION,
+  HASH_SCHEMA_VERSION,
   isValidArxivId,
   computeCanonicalKey,
   computeSemanticHash,
@@ -372,6 +373,7 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       semanticHash,
       fulltextStatus: result.fulltextStatus,
       generatorVersion: GENERATOR_VERSION,
+      hashSchemaVersion: HASH_SCHEMA_VERSION,
       processedAt: new Date().toISOString(),
     }
     markPaperProcessed(entry)

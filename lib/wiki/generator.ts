@@ -49,11 +49,22 @@ export async function generatePaperPage(
   return { content, fulltextStatus }
 }
 
-function buildPaperUserContent(
+// Exported for the hash-isolation regression test (lib/wiki/hash-isolation.test.ts).
+// Consumers in the app still get it transitively via generatePaperPage.
+export function buildPaperUserContent(
   artifact: PaperArtifact,
   fulltext: string | null,
   existingConceptSlugs: string[],
 ): string {
+  // IMPORTANT: this function builds the SHARED page body prompt. It must
+  // consume canonical paper fields only. keyFindings / relevanceJustification
+  // / subTopic are per-project lenses and belong in the sidecar
+  // (project_lenses), NOT in the body prose — mixing them produced pages
+  // that read as if written from one particular project's point of view.
+  // Lenses are derived separately by lib/wiki/lens-deriver.ts and stored in
+  // the <!-- WIKI-META --> sidecar block; readers/tools render them as an
+  // independent perspectives panel at display time. See RFC-005 §4 on the
+  // source/memory/decision layering.
   const parts: string[] = []
 
   parts.push(`Title: ${artifact.title}`)
@@ -64,16 +75,6 @@ function buildPaperUserContent(
   if (artifact.arxivId) parts.push(`arXiv: ${artifact.arxivId}`)
 
   parts.push(`\nAbstract:\n${artifact.abstract || '(no abstract)'}`)
-
-  if (artifact.keyFindings?.length) {
-    parts.push(`\nKey Findings:\n${artifact.keyFindings.map(f => `- ${f}`).join('\n')}`)
-  }
-  if (artifact.relevanceJustification) {
-    parts.push(`\nRelevance: ${artifact.relevanceJustification}`)
-  }
-  if (artifact.subTopic) {
-    parts.push(`\nSub-topic: ${artifact.subTopic}`)
-  }
 
   if (fulltext) {
     // Truncate fulltext to ~30k chars to stay within token limits
