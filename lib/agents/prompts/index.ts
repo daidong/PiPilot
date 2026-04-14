@@ -370,29 +370,30 @@ If conversation history contains previous literature-search results with coverag
 ## Rules
 
 1. You MUST provide a \`relevanceJustification\` for EVERY paper explaining WHY it received that score
-2. After scoring all papers, perform a FORCED RANKING: cut the bottom 30% — papers in the bottom 30% get excluded from relevantPapers even if their score is above threshold
+2. After scoring all papers, perform a FORCED RANKING: cut the bottom 30% — papers in the bottom 30% get excluded from scoredPapers even if their score is above threshold
 3. Auto-save threshold is **>= 7**. Papers scoring 7+ are saved to the local library. Be decisive: if a paper is meaningfully relevant (not just tangential), score it >= 7.
 4. Approve only if at least 3 papers score >= 7 AND coverage >= 0.5. If confidence is low or critical coverage is missing, request targeted refinement.
 5. If not approved, suggest at most 2-3 **targeted refinement queries** for specific missing sub-topics — NOT broad re-searches. These queries run through the FULL search pipeline again, so be selective. CRITICAL: Your refinement queries MUST be DIFFERENT from the "Queries used" listed at the bottom — the system will reject duplicate queries. Use different terminology, synonyms, or narrower/broader scope to find what the original queries missed
 6. Track cumulative coverage across sub-topics
-7. Output size guard: include AT MOST 25 relevantPapers. If there are any reasonably relevant papers, include at least 3 (do NOT return an empty list unless ZERO papers are even tangentially relevant).
+7. Output size guard: include AT MOST 25 scoredPapers. If there are any reasonably relevant papers, include at least 3 (do NOT return an empty list unless ZERO papers are even tangentially relevant).
 
-## Paper metadata preservation
+## CRITICAL: Compact output contract
 
-IMPORTANT: Preserve ALL paper metadata in relevantPapers. Every paper MUST include ALL fields — copy exactly from input, using null for missing values:
-- id, title, authors (full array), abstract (full text if possible; may truncate if very long), year, url
-- source (e.g. "semantic_scholar", "arxiv", "openalex", "dblp", "local")
-- relevanceScore (your 0-10 rating), relevanceJustification (1-2 sentence explanation)
-- doi (string or null), venue (string or null), citationCount (number or null)
+The caller already holds the full paper metadata (title, authors, abstract, venue, doi, year, url, citationCount, source). You MUST NOT echo any of it back. Your ONLY job is to return scoring decisions keyed by the paper's **index number** — the 1-based number shown at the start of each paper line in the input (e.g. \`1. [semantic_scholar] "Foo..."\` → \`index: 1\`).
 
-If the full abstract is very long, you may truncate it to ~800 characters, but preserve the core meaning. Do NOT omit authors. Do NOT drop any field.
+- Output ONLY integers for \`index\`, integers 0-10 for \`relevanceScore\`, and a short 1-2 sentence \`relevanceJustification\`.
+- Do NOT include title, authors, abstract, venue, doi, year, url, source, or citationCount fields in scoredPapers. Those will be merged by the caller.
+- Every \`index\` MUST refer to a paper actually shown in the input. Do not invent indices.
+- Do not wrap the JSON in markdown fences unless strictly necessary; raw JSON is preferred.
+
+Keeping the output compact is REQUIRED — echoing metadata caused past responses to be truncated, making the entire review unparseable.
 
 ## Output JSON
 
 {
   "approved": boolean,
-  "relevantPapers": [
-    { "id": "...", "title": "...", "authors": [...], "abstract": "full text...", "year": number, "url": "...", "source": "...", "relevanceScore": number, "relevanceJustification": "why this score", "doi": "..." or null, "venue": "..." or null, "citationCount": number or null }
+  "scoredPapers": [
+    { "index": 1, "relevanceScore": 9, "relevanceJustification": "1-2 sentence explanation" }
   ],
   "confidence": number,
   "coverage": {

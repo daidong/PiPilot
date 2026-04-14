@@ -68,6 +68,28 @@ interface ReviewResult {
   additionalQueries: string[] | null
 }
 
+// What the reviewer LLM actually returns. Compact by design so the response
+// cannot be truncated at max-tokens: no paper metadata is echoed, just an
+// index into the caller's deduplicated[] plus the score/justification.
+// See literature-reviewer-system prompt for the contract.
+interface ReviewerLLMOutput {
+  approved: boolean
+  scoredPapers: Array<{
+    index: number
+    relevanceScore: number
+    relevanceJustification: string
+  }>
+  confidence: number
+  coverage: {
+    score: number
+    coveredTopics: string[]
+    missingTopics: string[]
+    gaps: string[]
+  }
+  issues: string[]
+  additionalQueries: string[] | null
+}
+
 interface LiteratureSummary {
   title: string
   overview: string
@@ -445,23 +467,57 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
 
       try {
         const reviewText = await ctx.callLlm(REVIEWER_SYSTEM, reviewInput)
-        const parsed = safeJsonParse<ReviewResult>(reviewText)
-        if (!parsed) {
-          // If review parsing fails, include all papers with a default score — but warn the agent
+        const parsed = safeJsonParse<ReviewerLLMOutput>(reviewText)
+        if (!parsed || !Array.isArray(parsed.scoredPapers)) {
+          // Parse failure fallback: the reviewer LLM output was unparseable
+          // (truncation, malformed JSON, prose envelope). Don't silently drop
+          // the whole run — save the top N papers with a safe default score
+          // so auto-save still triggers. The threshold is 7, so the fallback
+          // must be >= 7 to let papers through; we intentionally let some
+          // noise into the library rather than lose everything.
+          const fallbackCap = ctx.settings?.researchIntensity?.reviewCap ?? 25
           review = {
             approved: true,
-            relevantPapers: deduplicated.slice(0, ctx.settings?.researchIntensity?.reviewCap ?? 25).map(p => ({ ...p, relevanceScore: 5, relevanceJustification: 'Review parsing failed; included by default.' })),
-            confidence: 0.5,
-            coverage: { score: 0.5, coveredTopics: [], missingTopics: [], gaps: ['Review parsing failed'] },
+            relevantPapers: deduplicated.slice(0, fallbackCap).map(p => ({
+              ...p,
+              relevanceScore: 7,
+              relevanceJustification: 'Review parsing failed; included with default score 7 so the paper is still saved. Re-review manually.'
+            })),
+            confidence: 0.3,
+            coverage: { score: 0.3, coveredTopics: [], missingTopics: [], gaps: ['Review parsing failed'] },
             issues: ['Review parsing failed'],
             additionalQueries: null
           }
           pipelineWarnings.push(
-            'LLM review parsing failed — papers included with default relevance score of 5. '
-            + 'Relevance scores may not be accurate. Consider re-reviewing the top papers manually.'
+            'LLM review parsing failed — papers saved with default relevance score of 7. '
+            + 'Relevance scores are NOT accurate. Re-review the saved papers manually.'
           )
         } else {
-          review = parsed
+          // Merge compact LLM output with the original deduplicated[] to
+          // reconstruct the full ReviewedPaper[] shape downstream consumers
+          // (summary, auto-save, review.json, topPapers payload) expect.
+          const seenIndices = new Set<number>()
+          const merged: ReviewedPaper[] = []
+          for (const s of parsed.scoredPapers) {
+            const idx = (Number(s?.index) | 0) - 1
+            if (idx < 0 || idx >= deduplicated.length) continue
+            if (seenIndices.has(idx)) continue
+            seenIndices.add(idx)
+            const score = Number(s?.relevanceScore)
+            merged.push({
+              ...deduplicated[idx],
+              relevanceScore: Number.isFinite(score) ? score : 0,
+              relevanceJustification: typeof s?.relevanceJustification === 'string' ? s.relevanceJustification : ''
+            })
+          }
+          review = {
+            approved: parsed.approved ?? false,
+            relevantPapers: merged,
+            confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+            coverage: parsed.coverage ?? { score: 0.5, coveredTopics: [], missingTopics: [], gaps: [] },
+            issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+            additionalQueries: parsed.additionalQueries ?? null
+          }
         }
       } catch (err: any) {
         return toAgentResult('literature-search', toolError('EXECUTION_FAILED', `Review step failed: ${err.message}`, {
