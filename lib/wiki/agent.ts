@@ -123,6 +123,11 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
     // 1. Acquire cross-process lock
     if (!acquireProcessLock()) {
       log('process lock held by another instance, skipping')
+      // Another instance owns the wiki right now; we have no new work
+      // of our own. Emit 'idle' so the UI does not get stuck on the
+      // hardcoded initial 'disabled'. Better to report the optimistic
+      // local view than to lie about being disabled.
+      emitStatus(0)
       return { processed: 0, errors: 0, pendingRemaining: 0 }
     }
 
@@ -136,6 +141,10 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
         const projectPaths = config.projectPaths()
         if (projectPaths.length === 0) {
           log('no project paths, nothing to scan')
+          // Emit so the UI does not remain stuck on a stale 'disabled'
+          // from app startup. We are technically idle, just with nothing
+          // to look at yet.
+          emitStatus(0)
           return { processed: 0, errors: 0, pendingRemaining: 0 }
         }
 
@@ -448,6 +457,13 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
     start() {
       if (state !== 'created') return
       state = 'idle'
+      // Emit immediately so the settings UI flips from the hardcoded
+      // initial 'disabled' value to 'idle' the moment the agent exists.
+      // Without this, the Settings → Paper Wiki panel shows State: disabled
+      // for at least startupDelayMs (60s on medium speed) after app launch,
+      // and potentially indefinitely if the first tick hits a
+      // no-emit early-return path (no projects open, lock held, etc.).
+      emitStatus(0)
       log(`starting (delay ${config.pacing.startupDelayMs / 1000}s)`)
       timer = setTimeout(() => tick(), config.pacing.startupDelayMs)
     },
