@@ -825,6 +825,39 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
         writeExplainSnapshot(projectPath, explain)
 
+        // Surface server-side / auth errors that pi-agent-core packs into the
+        // assistant message rather than throwing. Without this, an errored
+        // turn returns success=true with an empty response, and the renderer
+        // shows "No response" with no actionable info.
+        const stopReason = (lastMsg && 'stopReason' in lastMsg)
+          ? ((lastMsg as any).stopReason as string | undefined)
+          : undefined
+        const errorMessage = (lastMsg && 'errorMessage' in lastMsg)
+          ? ((lastMsg as any).errorMessage as string | undefined)
+          : undefined
+
+        if (stopReason === 'aborted') {
+          return { success: false, error: 'Generation stopped by user.' }
+        }
+
+        if (stopReason === 'error') {
+          return {
+            success: false,
+            error: errorMessage
+              || 'The LLM request failed. This usually indicates an issue on the model server or with authentication. If you are using a Claude or ChatGPT subscription, try signing out and back in via Settings. Otherwise verify your API key, model selection, and network connection.'
+          }
+        }
+
+        // Defensive: empty content with a normal stop reason — should not
+        // normally happen, but if it does, surface a generic hint instead of
+        // letting the renderer fall through to "No response".
+        if (!responseText && responseImages.length === 0) {
+          return {
+            success: false,
+            error: `The model returned an empty response (stopReason=${stopReason ?? 'unknown'}). This usually indicates a transient issue with the LLM server. Please try again. If the problem persists and you are using a Claude or ChatGPT subscription, try signing out and back in via Settings.`
+          }
+        }
+
         // Update turn history and count
         turnCount++
         turnHistory.push({

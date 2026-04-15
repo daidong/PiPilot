@@ -97,7 +97,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   finalize: (result) => {
-    const content = result.response || result.error || 'No response'
+    const content = result.response || result.error
+      || 'Something unexpected happened — the agent returned no response and no error. This usually indicates an issue on the LLM server side. Please try again. If you are using a Claude or ChatGPT subscription, try signing out and back in via Settings.'
     const assistantMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'assistant',
