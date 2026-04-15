@@ -585,3 +585,46 @@ export function readLatestSessionSummary(projectPath: string, sessionId: string)
   })
   return readJson<SessionSummary | null>(join(dir, files[0]), null)
 }
+
+export interface OrphanMessage {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: number
+}
+
+/**
+ * Read user/assistant messages persisted to the session JSONL whose timestamp
+ * is strictly greater than `cutoffMs`. Used by the coordinator's restart
+ * bootstrap to recover any conversation turns that were never folded into a
+ * SessionSummary before the previous process exited.
+ */
+export function readOrphanMessages(
+  projectPath: string,
+  sessionId: string,
+  cutoffMs: number
+): OrphanMessage[] {
+  const file = join(projectPath, PATHS.sessions, `${sessionId}.jsonl`)
+  if (!existsSync(file)) return []
+  const result: OrphanMessage[] = []
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf-8')
+  } catch {
+    return []
+  }
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    let msg: any
+    try {
+      msg = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!msg || typeof msg !== 'object') continue
+    if (msg.role !== 'user' && msg.role !== 'assistant') continue
+    if (typeof msg.timestamp !== 'number' || msg.timestamp <= cutoffMs) continue
+    if (typeof msg.content !== 'string' || msg.content.length === 0) continue
+    result.push({ role: msg.role, content: msg.content, timestamp: msg.timestamp })
+  }
+  return result
+}

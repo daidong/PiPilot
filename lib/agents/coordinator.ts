@@ -32,7 +32,9 @@ import {
   migrateLegacyArtifacts,
   findArtifactById,
   readLatestSessionSummary,
-  writeSessionSummary
+  writeSessionSummary,
+  readOrphanMessages,
+  type OrphanMessage
 } from '../memory-v2/store.js'
 
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
@@ -200,6 +202,15 @@ function buildSessionSummaryContext(summary: SessionSummary): string {
       : [])
   ]
   return lines.join('\n')
+}
+
+function buildRecentConversationContext(messages: OrphanMessage[]): string {
+  const lines = ['## Recent Conversation (resumed from prior session)', '']
+  for (const msg of messages) {
+    const speaker = msg.role === 'user' ? 'User' : 'Assistant'
+    lines.push(`**${speaker}:** ${msg.content}`, '')
+  }
+  return lines.join('\n').trimEnd()
 }
 
 function writeExplainSnapshot(projectPath: string, snapshot: TurnExplainSnapshot): void {
@@ -422,6 +433,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // Tracks the summary of compacted (discarded) messages so iterative
   // compactions can update rather than regenerate from scratch.
   let compactionSummary: string | undefined
+
+  // ── Restart bootstrap state ──
+  // On the first chat() call after coordinator creation, we recover any
+  // user/assistant messages from the persisted JSONL that postdate the
+  // latest SessionSummary. They get injected verbatim into the first user
+  // message so the LLM resumes with the same context the user sees in the UI.
+  // Flips to true on the first chat() call (success or failure) — subsequent
+  // turns rely on agent.state.messages naturally accumulating as usual.
+  let bootstrapDone = false
 
   // Create the pi-mono Agent immediately (no blocking on env probe)
   const agent = new Agent({
@@ -682,6 +702,30 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const latestSummary = readLatestSessionSummary(projectPath, sessionId)
         const summaryContext = latestSummary ? buildSessionSummaryContext(latestSummary) : ''
 
+        // Restart bootstrap: on the first chat after coordinator creation,
+        // pull any user/assistant messages persisted to the session JSONL
+        // that are newer than the latest summary's createdAt. These are turns
+        // that happened in a previous process and were never folded into a
+        // summary. We inject them as a "Recent Conversation" block so the LLM
+        // resumes with the same context the user sees in the UI — no extra
+        // LLM call, no compression, lossless.
+        let bootstrapContext = ''
+        if (!bootstrapDone) {
+          bootstrapDone = true
+          try {
+            const cutoffMs = latestSummary ? Date.parse(latestSummary.createdAt) || 0 : 0
+            const orphans = readOrphanMessages(projectPath, sessionId, cutoffMs)
+            if (orphans.length > 0) {
+              bootstrapContext = buildRecentConversationContext(orphans)
+              if (debug) {
+                console.log(`[Bootstrap] Recovered ${orphans.length} orphan message(s) from prior session`)
+              }
+            }
+          } catch (err) {
+            if (debug) console.warn('[Bootstrap] Failed to read orphan messages:', err)
+          }
+        }
+
         const persistence = classifyPersistenceDecision(message)
 
         const explain: TurnExplainSnapshot = {
@@ -727,9 +771,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         agent.state.systemPrompt = enrichedSystem
 
         // Build the user message with injected context.
-        // Order: session summary → skill summaries → mentions → user message
+        // Order: session summary → recent conversation (bootstrap) → skill summaries → mentions → user message
         const contextParts: string[] = []
         if (summaryContext) contextParts.push(summaryContext)
+        if (bootstrapContext) contextParts.push(bootstrapContext)
         if (skillSummariesPrompt) contextParts.push(skillSummariesPrompt)
         if (mentionContext) contextParts.push(mentionContext)
         let userMessage = contextParts.length > 0
