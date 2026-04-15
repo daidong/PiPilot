@@ -532,11 +532,18 @@ export function LiteratureView() {
   }, [papers, wikiSlugs])
 
   const wikiOnlyRows = useMemo<SearchRow[]>(() => {
-    // `wikiSlugs` is already a canonicalKey-driven mapping (buildPaperSlugMap()
-    // in lib/wiki/io.ts pairs project papers to wiki pages by canonical key),
-    // so a slug hit here implies a canonical match too. No separate canonicalKey
-    // index is needed on the renderer side.
-    const usedSlugs = new Set(Object.values(wikiSlugs))
+    // buildPaperSlugMap() in lib/wiki/io.ts walks the GLOBAL provenance log,
+    // so wikiSlugs contains paperId→slug entries for every project that ever
+    // touched the wiki — not just the current one. Deduping against all of
+    // its values would treat any wiki page any project ever processed as
+    // "already in this project" and empty the wiki-only recall pool.
+    // We must scope dedupe to slugs reachable from the CURRENT project's
+    // papers only.
+    const usedSlugs = new Set<string>()
+    for (const p of papers) {
+      const slug = wikiSlugs[p.id]
+      if (slug) usedSlugs.add(slug)
+    }
 
     return wikiMeta
       .filter((m) => !usedSlugs.has(m.slug))
