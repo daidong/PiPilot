@@ -25,6 +25,7 @@
     "dev": "cd app && npx electron-vite dev",
     "build": "cd app && npx electron-vite build",
     "clean": "rm -rf app/out app/dist",
+    "postinstall": "node ./scripts/fix-node-pty-perms.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
