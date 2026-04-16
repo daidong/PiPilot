@@ -55,6 +55,9 @@ import { resolveSettings, resolveWikiPacing } from '../../../shared-ui/settings-
 // ─── Wiki agent ──────────────────────────────────────────────────────────
 import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap, listWikiPaperMeta, reconcileIdentityDrift, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
 
+// One-time warning flag for the Linux recursive-watch limitation (see startFsWatcher).
+let loggedLinuxWatchWarning = false
+
 // ─── Semver comparison (major.minor.patch) ──────────────────────────────────
 function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map(Number)
@@ -1442,6 +1445,19 @@ export function registerIpcHandlers(): void {
     }
     if (!state.projectPath) return
 
+    // Node's `recursive: true` is only supported on macOS and Windows. On Linux
+    // it silently falls back to watching just the top-level directory, so
+    // subdirectory changes won't trigger an auto-refresh. Surface this once so
+    // Linux users aren't left wondering why the tree looks stale.
+    if (process.platform === 'linux' && !loggedLinuxWatchWarning) {
+      loggedLinuxWatchWarning = true
+      console.warn(
+        '[fs-watcher] Recursive fs.watch is not supported on Linux. ' +
+        'Only top-level changes in the workspace will auto-refresh the file tree; ' +
+        'changes in subdirectories will require a manual refresh.'
+      )
+    }
+
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
     try {
@@ -1457,6 +1473,17 @@ export function registerIpcHandlers(): void {
           debounceTimer = null
           safeSend(win, 'fs:external-change')
         }, 500)
+      })
+      // Handle runtime errors (e.g., watched dir deleted, permission revoked,
+      // OS watcher limit hit). Without this, an emitted 'error' would crash the
+      // main process. Tear down cleanly; the next project open will re-arm.
+      state.fsWatcher.on('error', () => {
+        if (debounceTimer) {
+          clearTimeout(debounceTimer)
+          debounceTimer = null
+        }
+        state.fsWatcher?.close()
+        state.fsWatcher = null
       })
     } catch {
       // fs.watch can throw on unsupported platforms or permission issues — non-fatal
