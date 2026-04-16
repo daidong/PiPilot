@@ -106,6 +106,7 @@ export interface ElectronAPI {
   onComputeEnvironment: (cb: (event: any) => void) => () => void
 
   // File tracking
+  onExternalChange: (cb: () => void) => () => void
   onFileCreated: (cb: (path: string) => void) => () => void
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
   writeFile: (path: string, content: string) => Promise<{ success: boolean; path?: string; error?: string }>
@@ -321,6 +322,11 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:entity-created', handler)
   },
 
+  onExternalChange: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('fs:external-change', handler)
+    return () => ipcRenderer.removeListener('fs:external-change', handler)
+  },
   onFileCreated: (cb) => {
     const handler = (_: any, path: string) => cb(path)
     ipcRenderer.on('agent:file-created', handler)

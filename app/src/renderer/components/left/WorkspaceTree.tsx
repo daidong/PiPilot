@@ -172,10 +172,12 @@ export function WorkspaceTree() {
 
     const unsubFileCreated = api.onFileCreated(scheduleRefresh)
     const unsubAgentDone = api.onAgentDone(scheduleRefresh)
+    const unsubExternalChange = api.onExternalChange(scheduleRefresh)
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer)
       unsubFileCreated()
       unsubAgentDone()
+      unsubExternalChange()
     }
   }, [expanded, loadChildren])
 

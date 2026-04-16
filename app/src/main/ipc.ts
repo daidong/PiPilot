@@ -1,6 +1,6 @@
 import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, watch, type FSWatcher } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
 import { createCoordinator } from '../../../lib/agents/coordinator'
 import {
@@ -54,6 +54,9 @@ import { resolveSettings, resolveWikiPacing } from '../../../shared-ui/settings-
 
 // ─── Wiki agent ──────────────────────────────────────────────────────────
 import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap, listWikiPaperMeta, reconcileIdentityDrift, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
+
+// One-time warning flag for the Linux recursive-watch limitation (see startFsWatcher).
+let loggedLinuxWatchWarning = false
 
 // ─── Semver comparison (major.minor.patch) ──────────────────────────────────
 function compareVersions(a: string, b: string): number {
@@ -134,6 +137,7 @@ interface WindowRuntimeState {
   sessionId: string
   isClosing: boolean
   realtimeBuffer: RealtimeBuffer
+  fsWatcher: FSWatcher | null
 }
 
 const windowStates = new Map<number, WindowRuntimeState>()
@@ -178,6 +182,7 @@ function createWindowRuntimeState(): WindowRuntimeState {
     sessionId: crypto.randomUUID(),
     isClosing: false,
     realtimeBuffer: createRealtimeBuffer(),
+    fsWatcher: null,
   }
 }
 
@@ -205,6 +210,10 @@ export function registerWindow(win: BrowserWindow): void {
   win.on('closed', () => {
     const state = windowStates.get(key)
     if (!state) return
+    if (state.fsWatcher) {
+      state.fsWatcher.close()
+      state.fsWatcher = null
+    }
     if (state.coordinator) {
       state.coordinator.destroy().catch(() => {})
     }
@@ -1425,6 +1434,62 @@ export function registerIpcHandlers(): void {
     return { success: true, path: result.filePath }
   })
 
+  // ─── Filesystem watcher for auto-refreshing the file tree ──────────────
+  const IGNORED_SEGMENTS = new Set(['node_modules', '.git', '.research-pilot'])
+
+  function startFsWatcher(state: WindowRuntimeState, win: BrowserWindow): void {
+    // Tear down any existing watcher
+    if (state.fsWatcher) {
+      state.fsWatcher.close()
+      state.fsWatcher = null
+    }
+    if (!state.projectPath) return
+
+    // Node's `recursive: true` is only supported on macOS and Windows. On Linux
+    // it silently falls back to watching just the top-level directory, so
+    // subdirectory changes won't trigger an auto-refresh. Surface this once so
+    // Linux users aren't left wondering why the tree looks stale.
+    if (process.platform === 'linux' && !loggedLinuxWatchWarning) {
+      loggedLinuxWatchWarning = true
+      console.warn(
+        '[fs-watcher] Recursive fs.watch is not supported on Linux. ' +
+        'Only top-level changes in the workspace will auto-refresh the file tree; ' +
+        'changes in subdirectories will require a manual refresh.'
+      )
+    }
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+    try {
+      state.fsWatcher = watch(state.projectPath, { recursive: true }, (_event, filename) => {
+        // Filter out noisy directories
+        if (filename) {
+          const segments = filename.toString().split(/[/\\]/)
+          if (segments.some((s) => IGNORED_SEGMENTS.has(s))) return
+        }
+        // Debounce: batch rapid changes into a single emission
+        if (debounceTimer) clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null
+          safeSend(win, 'fs:external-change')
+        }, 500)
+      })
+      // Handle runtime errors (e.g., watched dir deleted, permission revoked,
+      // OS watcher limit hit). Without this, an emitted 'error' would crash the
+      // main process. Tear down cleanly; the next project open will re-arm.
+      state.fsWatcher.on('error', () => {
+        if (debounceTimer) {
+          clearTimeout(debounceTimer)
+          debounceTimer = null
+        }
+        state.fsWatcher?.close()
+        state.fsWatcher = null
+      })
+    } catch {
+      // fs.watch can throw on unsupported platforms or permission issues — non-fatal
+    }
+  }
+
   /**
    * Initialize a project folder: tear down any previous coordinator, set up
    * state, hydrate per-project preferences, record the path in the recent
@@ -1451,6 +1516,7 @@ export function registerIpcHandlers(): void {
     // Set up new project
     state.projectPath = projectPath
     initializeProject(state.projectPath)
+    startFsWatcher(state, win)
     state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
 
     // Restore persisted model + reasoning preferences
@@ -1554,6 +1620,12 @@ export function registerIpcHandlers(): void {
   handleWindow('project:close', async ({ state }) => {
     state.isClosing = true
     try {
+      // Stop filesystem watcher
+      if (state.fsWatcher) {
+        state.fsWatcher.close()
+        state.fsWatcher = null
+      }
+
       // Stop any running agent
       if (state.coordinator) {
         try {
