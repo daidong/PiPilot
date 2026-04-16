@@ -367,6 +367,33 @@ export function parsePaperPage(content: string, slug: string): MetaParseOutcome 
   }
 }
 
+// ── Fallback synthesis ────────────────────────────────────────────────────
+//
+// When the LLM output is truncated (token limit, network, etc.) and the
+// WIKI-META block is missing or unparseable, we synthesize a minimal valid
+// sidecar from deterministic artifact data. All required fields can be
+// derived without an LLM call. The enriched optional fields (findings,
+// datasets, baselines, etc.) are lost, but the page body is intact and
+// retrieval still works. paper_type defaults to 'empirical' — acceptable
+// for a retrieval cache (memory-schema.ts §4.3).
+
+export function synthesizeMinimalSidecar(
+  canonicalKey: string,
+  slug: string,
+  sourceTier: WikiPaperMemoryMeta['source_tier'],
+  generatorVersion: number,
+): WikiPaperMemoryMeta {
+  return {
+    schemaVersion: 3,
+    canonicalKey,
+    slug,
+    generated_at: new Date().toISOString(),
+    generator_version: generatorVersion,
+    source_tier: sourceTier,
+    paper_type: 'empirical',
+  }
+}
+
 // ── Meta block writer ──────────────────────────────────────────────────────
 
 /**

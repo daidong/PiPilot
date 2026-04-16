@@ -43,9 +43,9 @@ import {
   listExistingConceptSlugs,
 } from './generator.js'
 import type { FulltextStatus, ProcessedEntry, ProvenanceEntry } from './types.js'
-import { parsePaperPage, writeMetaBlockInto } from './meta-parser.js'
+import { parsePaperPage, writeMetaBlockInto, synthesizeMinimalSidecar } from './meta-parser.js'
 import { deriveLensFromArtifact, mergeLens, unionProvenanceProjects } from './lens-deriver.js'
-import { recordSidecarStatus } from './sidecar-status.js'
+import { readSidecarStatus, recordSidecarStatus } from './sidecar-status.js'
 import { rebuildMemoryIndex } from './indexer.js'
 import { buildRepairScanResults } from './repair.js'
 import type { PaperArtifact } from '../types.js'
@@ -337,9 +337,19 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
 
     // RFC-005 §6.2.1: parse the just-written page, record parse status,
     // merge a project lens from the triggering artifact. If the LLM emitted
-    // a clean meta block this enriches the sidecar; if it didn't, the
-    // status row lets the repair pass retry later.
-    const parseOutcome = parsePaperPage(result.content, slug)
+    // a clean meta block this enriches the sidecar; if it didn't, synthesize
+    // a minimal valid one from artifact data so retrieval works and the
+    // repair pass doesn't loop.
+    let parseOutcome = parsePaperPage(result.content, slug)
+    if (parseOutcome.status === 'missing') {
+      const sourceTier = result.fulltextStatus === 'fulltext' ? 'fulltext' as const : 'abstract-only' as const
+      const fallback = synthesizeMinimalSidecar(canonicalKey, slug, sourceTier, GENERATOR_VERSION)
+      const patched = writeMetaBlockInto(parseOutcome.body, fallback)
+      safeWriteFile(paperPath, patched)
+      parseOutcome = parsePaperPage(patched, slug)
+      log(`synthesized fallback sidecar for ${slug}`)
+    }
+    const priorStatus = scanResult.reason === 'repair' ? readSidecarStatus().get(slug) : undefined
     recordSidecarStatus({
       slug,
       status: parseOutcome.status,
@@ -348,6 +358,9 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       generator_version: GENERATOR_VERSION,
       recorded_at: new Date().toISOString(),
       repairUsed: parseOutcome.repairUsed,
+      repairAttempts: scanResult.reason === 'repair'
+        ? (priorStatus?.repairAttempts ?? 0) + 1
+        : undefined,
     })
     mergeProjectContextIntoPage(slug, projectPath, artifact)
 

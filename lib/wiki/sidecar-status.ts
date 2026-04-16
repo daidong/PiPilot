@@ -19,6 +19,7 @@ export interface SidecarStatusEntry {
   generator_version: number
   recorded_at: string
   repairUsed?: boolean
+  repairAttempts?: number
 }
 
 function statusFilePath(): string {
@@ -65,13 +66,19 @@ export function recordSidecarStatus(entry: SidecarStatusEntry): void {
   safeWriteFile(statusFilePath(), content)
 }
 
+const MAX_REPAIR_ATTEMPTS = 2
+
 /**
  * List slugs whose status is 'missing' or whose generator_version is stale.
  * Used by the repair pass to prioritize re-extraction.
+ * Entries that have already been repaired MAX_REPAIR_ATTEMPTS times are
+ * excluded to prevent infinite reprocess loops when the LLM persistently
+ * fails to emit valid meta markers.
  */
 export function listStaleOrMissing(currentGeneratorVersion: number): SidecarStatusEntry[] {
   const result: SidecarStatusEntry[] = []
   for (const entry of readSidecarStatus().values()) {
+    if ((entry.repairAttempts ?? 0) >= MAX_REPAIR_ATTEMPTS) continue
     if (entry.status === 'missing' || entry.generator_version < currentGeneratorVersion) {
       result.push(entry)
     }
