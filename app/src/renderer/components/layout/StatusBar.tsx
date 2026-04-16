@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react'
-import { Check, X as XIcon, Loader2, CircleDot } from 'lucide-react'
+import { Check, X as XIcon, Loader2, CircleDot, Settings } from 'lucide-react'
 import { useActivityStore } from '../../stores/activity-store'
 import { useUsageStore } from '../../stores/usage-store'
 
@@ -16,7 +16,11 @@ function formatTokens(tokens: number): string {
   return String(tokens)
 }
 
-export function StatusBar() {
+interface StatusBarProps {
+  onOpenSettings: () => void
+}
+
+export function StatusBar({ onOpenSettings }: StatusBarProps) {
   const events = useActivityStore((s) => s.events)
   const activeSkills = useActivityStore((s) => s.activeSkills)
   const runTokens = useUsageStore((s) => s.runTokens)
@@ -58,6 +62,16 @@ export function StatusBar() {
 
   return (
     <div className="h-7 flex items-center px-4 gap-5 border-t t-border t-bg-surface text-[11px] t-text-secondary select-none shrink-0">
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        aria-label="Open Settings (⌘,)"
+        title="Settings (⌘,)"
+        className="no-drag group relative -ml-2 p-1 rounded t-text-muted hover:t-text transition-colors"
+      >
+        <Settings size={13} aria-hidden />
+      </button>
+
       {/* Active skills */}
       {hasSkills && (
         <div className="flex items-center gap-2 overflow-hidden">

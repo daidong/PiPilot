@@ -121,6 +121,15 @@ function buildMenu(): void {
             submenu: [
               { role: 'about' as const },
               { type: 'separator' as const },
+              {
+                label: 'Settings…',
+                accelerator: 'CmdOrCtrl+,',
+                click: () => {
+                  const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+                  if (target) target.webContents.send('menu:open-settings')
+                }
+              },
+              { type: 'separator' as const },
               { role: 'hide' as const },
               { role: 'hideOthers' as const },
               { role: 'unhide' as const },
@@ -158,6 +167,19 @@ function buildMenu(): void {
             if (target) target.webContents.send('project:closed')
           }
         },
+        ...(process.platform === 'darwin'
+          ? []
+          : [
+              { type: 'separator' as const },
+              {
+                label: 'Settings…',
+                accelerator: 'CmdOrCtrl+,',
+                click: () => {
+                  const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+                  if (target) target.webContents.send('menu:open-settings')
+                }
+              }
+            ]),
         { type: 'separator' },
         process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' }
       ]

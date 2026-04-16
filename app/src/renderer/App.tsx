@@ -835,12 +835,16 @@ export default function App() {
     return unsub
   }, [])
 
-  // Listen for menu-triggered Export Chat
+  // Listen for menu-triggered Export Chat and Settings
   useEffect(() => {
-    const unsub = api.onExportChat(() => {
+    const unsubExport = api.onExportChat(() => {
       api.exportChat()
     })
-    return unsub
+    const unsubSettings = api.onOpenSettings(() => setSettingsOpen(true))
+    return () => {
+      unsubExport()
+      unsubSettings()
+    }
   }, [])
 
   // Keyboard shortcuts
@@ -960,7 +964,7 @@ export default function App() {
         </div>
 
         {/* Bottom status bar */}
-        <StatusBar />
+        <StatusBar onOpenSettings={() => setSettingsOpen(true)} />
 
         {/* Settings modal overlay */}
         {settingsModal}
