@@ -184,6 +184,9 @@ export interface ElectronAPI {
   exportChat: () => Promise<{ success: boolean; path?: string; error?: string }>
   onExportChat: (cb: () => void) => () => void
 
+  // Settings (menu-triggered open)
+  onOpenSettings: (cb: () => void) => () => void
+
   // Version check
   checkForUpdate: () => Promise<{ latest: string; current: string; hasUpdate: boolean }>
 
@@ -415,6 +418,12 @@ const api: ElectronAPI = {
     const handler = () => cb()
     ipcRenderer.on('menu:export-chat', handler)
     return () => ipcRenderer.removeListener('menu:export-chat', handler)
+  },
+
+  onOpenSettings: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('menu:open-settings', handler)
+    return () => ipcRenderer.removeListener('menu:open-settings', handler)
   },
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),

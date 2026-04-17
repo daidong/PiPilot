@@ -835,12 +835,16 @@ export default function App() {
     return unsub
   }, [])
 
-  // Listen for menu-triggered Export Chat
+  // Listen for menu-triggered Export Chat and Settings
   useEffect(() => {
-    const unsub = api.onExportChat(() => {
+    const unsubExport = api.onExportChat(() => {
       api.exportChat()
     })
-    return unsub
+    const unsubSettings = api.onOpenSettings(() => setSettingsOpen(true))
+    return () => {
+      unsubExport()
+      unsubSettings()
+    }
   }, [])
 
   // Keyboard shortcuts
@@ -935,7 +939,7 @@ export default function App() {
               WorkspaceTree expanded state, scroll position, and loaded children */}
           {!leftCollapsed && (
             <div className={previewEntity ? 'hidden' : 'contents'}>
-              <LeftSidebar />
+              <LeftSidebar onOpenSettings={() => setSettingsOpen(true)} />
             </div>
           )}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
