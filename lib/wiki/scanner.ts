@@ -95,6 +95,66 @@ export function scanForNewContent(
     }
   }
 
+  // ── ArXiv alias merge ──────────────────────────────────────────────────
+  // Two artifacts of the same paper can land in different canonical groups
+  // when one has a real DOI (→ doi:X) and the other only has an arXiv ID
+  // (→ arxiv:Y). Merge groups that share a valid arXiv ID under the
+  // highest-priority key (DOI > arXiv > title), matching computeCanonicalKey.
+  {
+    const byArxivId = new Map<string, string[]>()
+    for (const [key, entries] of byCanonicalKey) {
+      for (const { artifact } of entries) {
+        if (artifact.arxivId && isValidArxivId(artifact.arxivId)) {
+          const bareId = artifact.arxivId
+            .replace(/^https?:\/\/arxiv\.org\/abs\//, '')
+            .replace(/v\d+$/, '')
+          const keys = byArxivId.get(bareId)
+          if (keys) {
+            if (!keys.includes(key)) keys.push(key)
+          } else {
+            byArxivId.set(bareId, [key])
+          }
+        }
+      }
+    }
+
+    for (const [, keys] of byArxivId) {
+      if (keys.length < 2) continue
+
+      // Pick the winner: find the artifact across all groups that yields
+      // the highest-priority canonicalKey, then use that key as the merge
+      // target. This ensures canonicalKey and keySource stay consistent.
+      let winnerKey: string | null = null
+      const keyPriority = (k: string): number =>
+        k.startsWith('doi:') ? 3 : k.startsWith('arxiv:') ? 2 : 1
+
+      for (const k of keys) {
+        for (const entry of byCanonicalKey.get(k) || []) {
+          const ident = computeCanonicalKey(entry.artifact)
+          if (!winnerKey || keyPriority(ident.canonicalKey) > keyPriority(winnerKey)) {
+            winnerKey = ident.canonicalKey
+          }
+        }
+      }
+      if (!winnerKey || !keys.includes(winnerKey)) {
+        // Winner key doesn't match any existing group key — the highest-
+        // priority artifact lives in a group keyed differently (e.g. the
+        // artifact with a real DOI landed in a group keyed by that DOI).
+        // Find which group key produced the winner.
+        winnerKey = keys.reduce((a, b) => keyPriority(a) > keyPriority(b) ? a : b)
+      }
+
+      for (const loserKey of keys) {
+        if (loserKey === winnerKey) continue
+        const loserEntries = byCanonicalKey.get(loserKey)
+        if (!loserEntries) continue
+        const winnerEntries = byCanonicalKey.get(winnerKey)!
+        winnerEntries.push(...loserEntries)
+        byCanonicalKey.delete(loserKey)
+      }
+    }
+  }
+
   // For each unique paper, determine scan result
   for (const [canonicalKey, entries] of byCanonicalKey) {
     // Pick the best version: prefer one with fulltextPath, then newest

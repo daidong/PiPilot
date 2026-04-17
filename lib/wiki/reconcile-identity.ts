@@ -46,8 +46,8 @@ function classifyKey(canonicalKey: string): KeyTier {
 }
 
 const TIER_RANK: Record<KeyTier, number> = {
-  arxiv: 3,  // prefer real arxiv
-  doi:   2,
+  doi:   3,  // DOI > arXiv > title — matches computeCanonicalKey priority
+  arxiv: 2,
   title: 1,
   bogus: 0,
 }
