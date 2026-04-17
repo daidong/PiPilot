@@ -12,6 +12,7 @@
     "app/build/",
     "app/package.json",
     "lib/skills/",
+    "scripts/",
     "README.md",
     "LICENSE"
   ],
