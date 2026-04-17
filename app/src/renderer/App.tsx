@@ -939,7 +939,7 @@ export default function App() {
               WorkspaceTree expanded state, scroll position, and loaded children */}
           {!leftCollapsed && (
             <div className={previewEntity ? 'hidden' : 'contents'}>
-              <LeftSidebar />
+              <LeftSidebar onOpenSettings={() => setSettingsOpen(true)} />
             </div>
           )}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -964,7 +964,7 @@ export default function App() {
         </div>
 
         {/* Bottom status bar */}
-        <StatusBar onOpenSettings={() => setSettingsOpen(true)} />
+        <StatusBar />
 
         {/* Settings modal overlay */}
         {settingsModal}

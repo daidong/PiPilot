@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react'
-import { Sun, Moon, RotateCcw, Terminal } from 'lucide-react'
+import { Sun, Moon, RotateCcw, Terminal, Settings } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { EntityTabs } from '../left/EntityTabs'
@@ -33,7 +33,7 @@ function ToolbarButton({ onClick, tooltip, children }: {
   )
 }
 
-export function LeftSidebar() {
+export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const theme = useUIStore((s) => s.theme)
   const toggleTheme = useUIStore((s) => s.toggleTheme)
   const centerView = useUIStore((s) => s.centerView)
@@ -105,8 +105,11 @@ export function LeftSidebar() {
         {centerView === 'literature' ? <LiteratureSidebar /> : centerView === 'compute' && (window as any).api?.isComputeEnabled?.() ? <ComputeSidebar /> : <EntityTabs />}
       </div>
 
-      <div className="border-t t-border p-4">
+      <div className="border-t t-border p-4 flex items-center justify-between">
         <UserProfile />
+        <ToolbarButton onClick={onOpenSettings} tooltip="Settings  ⌘,">
+          <Settings size={16} />
+        </ToolbarButton>
       </div>
     </aside>
   )
