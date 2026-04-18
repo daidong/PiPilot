@@ -236,7 +236,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
           {/* Content */}
           <div className="flex-1 overflow-y-auto px-6 pb-4">
             {activeTab === 'api-keys' && (
-              <ApiKeysSettings />
+              <ApiKeysSettings showSaveButton />
             )}
             {activeTab === 'research' && loaded && (
               <ResearchSettings
