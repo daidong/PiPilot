@@ -6,6 +6,12 @@ Welcome to the **Research Copilot** wiki — a community knowledge base for setu
 - **[FAQ](FAQ)** — common questions and known issues
 - **[Troubleshooting](FAQ#troubleshooting)** — auth failures, missing PDFs, Paper Wiki setup
 
+## Go deeper
+
+- **[Skills Catalog](Skills-Catalog)** — all 14 builtin skills with example prompts
+- **[Paper Wiki](Paper-Wiki)** — cross-project memory: how it works, costs, tools
+- **[Glossary](Glossary)** — artifact, skill, mention, session summary, and other terms
+
 ## Where to go for what
 
 | I want to… | Go to |
