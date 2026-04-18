@@ -206,6 +206,12 @@ Research Copilot stores its data in the workspace under `.research-pilot/`:
     └── session-summaries/
 ```
 
+## Community & Support
+
+- **[Discussions](https://github.com/daidong/PiPilot/discussions)** — questions, ideas, usage tips, and general Q&A
+- **[Issues](https://github.com/daidong/PiPilot/issues)** — bug reports and feature requests
+- **[Wiki](https://github.com/daidong/PiPilot/wiki)** — setup walkthroughs, troubleshooting, and how-tos
+
 ## License
 
 [MIT](LICENSE)
