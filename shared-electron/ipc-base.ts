@@ -6,8 +6,8 @@
  * Both personal-assistant and research-pilot-desktop import from here.
  */
 import { shell } from 'electron'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from 'fs'
-import { extname, join, resolve, isAbsolute } from 'path'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync, cpSync } from 'fs'
+import { extname, join, resolve, isAbsolute, basename } from 'path'
 import { homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { ResolvedCoordinatorAuth } from './types'
@@ -477,6 +477,42 @@ export function registerFileHandlers(
     try {
       await shell.trashItem(absPath)
       return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Reveal a file or directory in the OS file manager
+  handle('file:reveal', (filePath: string) => {
+    const { projectPath } = getCtx()
+    const absPath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
+    if (!existsSync(absPath)) return { success: false, error: 'Path not found.' }
+    shell.showItemInFolder(absPath)
+    return { success: true }
+  })
+
+  // Copy a file or directory within the workspace to a destination directory
+  handle('file:copy-item', (srcRelPath: string, destDirRelPath: string) => {
+    const { projectPath } = getCtx()
+    if (!projectPath) return { success: false, error: 'No project folder selected.' }
+    const srcAbs = isAbsolute(srcRelPath) ? srcRelPath : resolve(projectPath, srcRelPath)
+    const destDirAbs = isAbsolute(destDirRelPath) ? destDirRelPath : resolve(projectPath, destDirRelPath)
+    if (!isWithinRoot(projectPath, srcAbs)) return { success: false, error: 'Source is outside workspace.' }
+    if (!isWithinRoot(projectPath, destDirAbs)) return { success: false, error: 'Destination is outside workspace.' }
+    if (!existsSync(srcAbs)) return { success: false, error: 'Source not found.' }
+    const name = basename(srcAbs)
+    const ext = extname(name)
+    const stem = ext ? name.slice(0, -ext.length) : name
+    let destAbs = join(destDirAbs, name)
+    let counter = 1
+    while (existsSync(destAbs)) {
+      const suffix = counter === 1 ? ' copy' : ` copy ${counter}`
+      destAbs = join(destDirAbs, ext ? `${stem}${suffix}${ext}` : `${stem}${suffix}`)
+      counter++
+    }
+    try {
+      cpSync(srcAbs, destAbs, { recursive: true })
+      return { success: true, destPath: destAbs }
     } catch (err: any) {
       return { success: false, error: err.message }
     }

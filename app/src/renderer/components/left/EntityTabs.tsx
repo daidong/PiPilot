@@ -565,19 +565,6 @@ export function EntityTabs() {
     refreshAll()
   }, [])
 
-  const renderContent = () => {
-    switch (leftTab) {
-      case 'library':
-        return <LibraryContent notes={notes} data={data} refreshAll={refreshAll} />
-      case 'files':
-        return <WorkspaceTree />
-      case 'skills':
-        return <SkillsContent />
-      default:
-        return null
-    }
-  }
-
   const handleTabKeyDown = (e: React.KeyboardEvent) => {
     const tabKeys = tabs.map(t => t.key)
     const idx = tabKeys.indexOf(leftTab)
@@ -618,13 +605,37 @@ export function EntityTabs() {
         ))}
       </div>
 
-      <div
-        role="tabpanel"
-        id={`tabpanel-${leftTab}`}
-        aria-labelledby={`tab-${leftTab}`}
-        className="flex-1 min-h-0 overflow-hidden flex flex-col"
-      >
-        {renderContent()}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div
+          role="tabpanel"
+          id="tabpanel-library"
+          aria-labelledby="tab-library"
+          className={`h-full flex flex-col min-h-0 ${leftTab === 'library' ? '' : 'hidden'}`}
+          aria-hidden={leftTab !== 'library'}
+          inert={leftTab !== 'library'}
+        >
+          <LibraryContent notes={notes} data={data} refreshAll={refreshAll} />
+        </div>
+        <div
+          role="tabpanel"
+          id="tabpanel-files"
+          aria-labelledby="tab-files"
+          className={`h-full flex flex-col min-h-0 ${leftTab === 'files' ? '' : 'hidden'}`}
+          aria-hidden={leftTab !== 'files'}
+          inert={leftTab !== 'files'}
+        >
+          <WorkspaceTree />
+        </div>
+        <div
+          role="tabpanel"
+          id="tabpanel-skills"
+          aria-labelledby="tab-skills"
+          className={`h-full flex flex-col min-h-0 ${leftTab === 'skills' ? '' : 'hidden'}`}
+          aria-hidden={leftTab !== 'skills'}
+          inert={leftTab !== 'skills'}
+        >
+          <SkillsContent />
+        </div>
       </div>
     </div>
   )
