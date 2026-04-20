@@ -82,6 +82,8 @@ export function WorkspaceTree() {
   const { projectPath } = useSessionStore()
   const openPreview = useUIStore((s) => s.openPreview)
   const previewEntity = useUIStore((s) => s.previewEntity)
+  const leftTab = useUIStore((s) => s.leftTab)
+  const centerView = useUIStore((s) => s.centerView)
   const data = useEntityStore((s) => s.data)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
@@ -120,6 +122,11 @@ export function WorkspaceTree() {
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [contextMenu])
+
+  // Close context menu when navigating away (tabs stay mounted, so clear stale UI)
+  useEffect(() => {
+    setContextMenu(null)
+  }, [leftTab, centerView])
 
   // Auto-focus rename input
   useEffect(() => {
