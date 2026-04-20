@@ -101,8 +101,28 @@ export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) 
         </div>
       </nav>
 
-      <div className="flex-1 min-h-0">
-        {centerView === 'literature' ? <LiteratureSidebar /> : centerView === 'compute' && (window as any).api?.isComputeEnabled?.() ? <ComputeSidebar /> : <EntityTabs />}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {(() => {
+          const computeEnabled = !!(window as any).api?.isComputeEnabled?.()
+          const showLit = centerView === 'literature'
+          const showCompute = centerView === 'compute' && computeEnabled
+          const showEntity = !showLit && !showCompute
+          return (
+            <>
+              <div className={`h-full ${showLit ? '' : 'hidden'}`} aria-hidden={!showLit} inert={!showLit}>
+                <LiteratureSidebar />
+              </div>
+              {computeEnabled && (
+                <div className={`h-full ${showCompute ? '' : 'hidden'}`} aria-hidden={!showCompute} inert={!showCompute}>
+                  <ComputeSidebar />
+                </div>
+              )}
+              <div className={`h-full ${showEntity ? '' : 'hidden'}`} aria-hidden={!showEntity} inert={!showEntity}>
+                <EntityTabs />
+              </div>
+            </>
+          )
+        })()}
       </div>
 
       <div className="border-t t-border p-4 flex items-center justify-between">
