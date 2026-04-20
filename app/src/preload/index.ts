@@ -123,6 +123,8 @@ export interface ElectronAPI {
 
   // Workspace file operations
   trashFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  revealInFinder: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  copyItem: (srcRelPath: string, destDirRelPath: string) => Promise<{ success: boolean; destPath?: string; error?: string }>
   dropToDir: (fileName: string, base64Content: string, targetDirRelPath: string) => Promise<{ success: boolean; path?: string; error?: string }>
 
   // File drop
@@ -349,6 +351,8 @@ const api: ElectronAPI = {
   renameFile: (oldPath, newPath) => ipcRenderer.invoke('file:rename', oldPath, newPath),
 
   trashFile: (filePath) => ipcRenderer.invoke('file:trash', filePath),
+  revealInFinder: (filePath) => ipcRenderer.invoke('file:reveal', filePath),
+  copyItem: (srcRelPath, destDirRelPath) => ipcRenderer.invoke('file:copy-item', srcRelPath, destDirRelPath),
   dropToDir: (fileName, base64Content, targetDirRelPath) => ipcRenderer.invoke('file:drop-to-dir', fileName, base64Content, targetDirRelPath),
 
   dropFile: (fileName, content, tab) => ipcRenderer.invoke('file:drop', fileName, content, tab),

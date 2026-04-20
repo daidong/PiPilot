@@ -4,9 +4,15 @@ import {
   ChevronRight,
   File,
   Folder,
+  FolderOpen,
   RefreshCw,
   Search,
   Eye,
+  ExternalLink,
+  Copy,
+  ClipboardPaste,
+  Hash,
+  Link2,
   Plus,
   FolderPlus,
   Loader2,
@@ -97,6 +103,7 @@ export function WorkspaceTree() {
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
   const [confirmTrashPath, setConfirmTrashPath] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [clipboardNode, setClipboardNode] = useState<FileTreeNode | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null) // relativePath being renamed
   const [renameValue, setRenameValue] = useState('')
   const [creating, setCreating] = useState<{ parentDir: string; type: 'file' | 'directory' } | null>(null)
@@ -330,6 +337,41 @@ export function WorkspaceTree() {
     return node.relativePath.includes('/')
       ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
       : ''
+  }, [])
+
+  const handleRevealInFinder = useCallback((node: FileTreeNode) => {
+    void api.revealInFinder(node.path)
+    setContextMenu(null)
+  }, [])
+
+  const handleOpenInDefaultApp = useCallback((node: FileTreeNode) => {
+    void api.openFile(node.path)
+    setContextMenu(null)
+  }, [])
+
+  const handleCopyFile = useCallback((node: FileTreeNode) => {
+    setClipboardNode(node)
+    setContextMenu(null)
+  }, [])
+
+  const handlePasteFile = useCallback(async (targetNode: FileTreeNode) => {
+    if (!clipboardNode) return
+    const destDir = targetNode.type === 'directory' ? targetNode.relativePath : getParentDir(targetNode)
+    setContextMenu(null)
+    const result = await api.copyItem(clipboardNode.relativePath, destDir)
+    if (result.success) {
+      await loadChildren(destDir)
+    }
+  }, [clipboardNode, getParentDir, loadChildren])
+
+  const handleCopyPath = useCallback((node: FileTreeNode) => {
+    void navigator.clipboard.writeText(node.path)
+    setContextMenu(null)
+  }, [])
+
+  const handleCopyRelativePath = useCallback((node: FileTreeNode) => {
+    void navigator.clipboard.writeText(node.relativePath)
+    setContextMenu(null)
   }, [])
 
   const handleNewFile = useCallback((parentRelPath: string) => {
@@ -730,6 +772,7 @@ export function WorkspaceTree() {
       <div
         ref={viewportRef}
         className={`flex-1 min-h-0 overflow-y-auto px-1 py-1 ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/5' : ''}`}
+        style={{ overflowAnchor: 'none' }}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         onDragOver={handleViewportDragOver}
         onDragLeave={handleViewportDragLeave}
@@ -748,9 +791,9 @@ export function WorkspaceTree() {
           <div>
             {/* Inline create input at root level */}
             {creating && creating.parentDir === '' && renderCreateInput(0)}
-            {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
+            <div style={{ height: `${topSpacerHeight}px` }} />
             {visibleRows.map((row) => renderVisibleRow(row))}
-            {bottomSpacerHeight > 0 && <div style={{ height: `${bottomSpacerHeight}px` }} />}
+            <div style={{ height: `${bottomSpacerHeight}px` }} />
           </div>
         )}
       </div>
@@ -758,7 +801,7 @@ export function WorkspaceTree() {
       {/* Right-click context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 min-w-[160px] rounded-lg border t-border t-bg-surface shadow-xl py-1"
+          className="fixed z-50 min-w-[180px] rounded-lg border t-border t-bg-surface shadow-xl py-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -770,6 +813,49 @@ export function WorkspaceTree() {
               <Eye size={11} /> Open
             </button>
           )}
+          {contextMenu.node.type === 'file' && (
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+              onClick={() => handleOpenInDefaultApp(contextMenu.node)}
+            >
+              <ExternalLink size={11} /> Open in Default App
+            </button>
+          )}
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+            onClick={() => handleRevealInFinder(contextMenu.node)}
+          >
+            <FolderOpen size={11} /> Reveal in Finder
+          </button>
+          <div className="border-t t-border my-1" />
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+            onClick={() => handleCopyFile(contextMenu.node)}
+          >
+            <Copy size={11} /> Copy
+          </button>
+          {clipboardNode && (
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+              onClick={() => void handlePasteFile(contextMenu.node)}
+            >
+              <ClipboardPaste size={11} /> Paste
+            </button>
+          )}
+          <div className="border-t t-border my-1" />
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+            onClick={() => handleCopyPath(contextMenu.node)}
+          >
+            <Hash size={11} /> Copy Path
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
+            onClick={() => handleCopyRelativePath(contextMenu.node)}
+          >
+            <Link2 size={11} /> Copy Relative Path
+          </button>
+          <div className="border-t t-border my-1" />
           <button
             className="w-full text-left px-3 py-1.5 text-xs t-text-secondary hover:t-bg-hover flex items-center gap-2"
             onClick={() => startRename(contextMenu.node)}
