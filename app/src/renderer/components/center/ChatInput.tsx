@@ -6,6 +6,7 @@ import { useSessionStore } from '../../stores/session-store'
 import { useEntityStore } from '../../stores/entity-store'
 import { MentionPopover } from './MentionPopover'
 import { CommandPopover } from './CommandPopover'
+import { ImageLightbox } from './ImageLightbox'
 
 const SLASH_COMMANDS = [
   { name: '/note', description: 'Create a note artifact', args: '<title>' },
@@ -75,6 +76,7 @@ export function ChatInput() {
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const send = useChatStore((s) => s.send)
@@ -498,6 +500,7 @@ export function ChatInput() {
 
   return (
     <div className="relative">
+      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
       {showMention && (
         <MentionPopover
           query={mentionQuery}
@@ -545,10 +548,14 @@ export function ChatInput() {
                 <img
                   src={img.dataUrl}
                   alt=""
-                  className="h-16 w-16 object-cover rounded-lg border t-border"
+                  onClick={() => setLightboxSrc(img.dataUrl)}
+                  className="h-16 w-16 object-cover rounded-lg border t-border cursor-pointer hover:opacity-90 transition-opacity"
                 />
                 <button
-                  onClick={() => setPendingImages(prev => prev.filter((_, j) => j !== i))}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setPendingImages(prev => prev.filter((_, j) => j !== i))
+                  }}
                   className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full t-bg-error text-white text-[10px]
                              leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                   aria-label="Remove image"
