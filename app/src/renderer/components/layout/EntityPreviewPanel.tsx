@@ -607,7 +607,15 @@ export function EntityPreviewPanel() {
 
     const content = entity.content || entity.abstract || entity.valueText || 'No content available.'
     return (
-      <div className="md-prose" style={{ color: 'var(--color-text)' }}>
+      <div
+        className="md-prose"
+        style={{
+          color: 'var(--color-text)',
+          fontFamily: READING_FONT,
+          fontSize: '15.5px',
+          lineHeight: 1.72,
+        }}
+      >
         <ReactMarkdown remarkPlugins={remarkPlugins}>
           {typeof content === 'string' ? content : JSON.stringify(content, null, 2)}
         </ReactMarkdown>
@@ -616,17 +624,34 @@ export function EntityPreviewPanel() {
   }
 
   const isPinned = drawerMode === 'pinned'
-  const overlayShadow = !isPinned
-    ? 'shadow-[-8px_0_32px_-12px_rgba(0,0,0,0.18)] dark:shadow-[-8px_0_32px_-6px_rgba(0,0,0,0.55)]'
-    : ''
 
-  // pt-10 mirrors the ViewSwitcher's top offset — the drawer's own header
-  // row then sits at the same baseline as the view tabs, giving a peer-like
-  // relationship instead of the tabs' border-b colliding into the drawer.
+  // Visual signature: a 3px accent rail inset on the drawer's left edge —
+  // a single colored line that tells the user "this surface is bound to
+  // the conversation." In overlay mode it's layered with a soft outer
+  // drop-shadow; in pinned mode the shadow is dropped so the drawer sits
+  // flush against the chat column.
+  // pt-10 mirrors the ViewSwitcher's top offset so the drawer's header
+  // row lines up with the view tabs (peer-like rather than stacked).
+  const RAIL = 'inset 3px 0 0 0 var(--color-accent)'
+  const OVERLAY_SHADOW = '-12px 0 32px -14px rgba(0,0,0,0.18)'
+  const drawerBoxShadow = isPinned ? RAIL : `${RAIL}, ${OVERLAY_SHADOW}`
+
+  // Editorial crumb displayed above the file name — gives the drawer
+  // a clear sense of place ("where did this come from?") without competing
+  // with the title itself.
+  const crumb = entity.filePath
+    ? `files · ${(getExtension(entity.filePath) || 'file').toLowerCase()}`
+    : `library · ${entity.type}`
+
+  // System serif stack for the reading surface. No external font deps —
+  // Iowan Old Style ships with macOS, Charter is wide-fallback, Georgia
+  // is universal. The drawer body inherits this; chrome stays sans.
+  const READING_FONT = '"Iowan Old Style", "Charter", "Sitka Text", Georgia, serif'
+
   return (
     <div
-      className={`absolute top-0 right-0 bottom-0 flex flex-col border-l t-border t-bg-base min-w-0 z-[5] pt-10 transition-[width,box-shadow] duration-500 ease-[cubic-bezier(0.32,0.72,0.24,1)] ${overlayShadow}`}
-      style={{ width: drawerWidth }}
+      className="absolute top-0 right-0 bottom-0 flex flex-col t-bg-base min-w-0 z-[5] pt-10 transition-[width,box-shadow] duration-500 ease-[cubic-bezier(0.32,0.72,0.24,1)]"
+      style={{ width: drawerWidth, boxShadow: drawerBoxShadow }}
       aria-label={`Preview: ${entity.title}`}
     >
       {/* Left-edge drag handle — 6px hit area; a 2px pill shows on hover. */}
@@ -640,85 +665,111 @@ export function EntityPreviewPanel() {
         <div className="absolute left-[3px] top-1/2 -translate-y-1/2 w-[2px] h-9 rounded bg-transparent group-hover:t-bg-accent transition-colors" />
       </div>
 
-      <div className="flex items-center gap-3 px-4 py-3 border-b t-border">
-        {typeIcons[entity.type] || null}
-        <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
-        {isEditable && isDirty && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--color-status-warning)]/15 t-text-warning">Unsaved</span>
-        )}
+      <header className="px-5 pt-3.5 pb-3 border-b t-border">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            {/* Uppercase mono crumb — editorial metadata line. Tells the
+                user where this surface came from ("files · md", "library ·
+                note") without fighting the filename for attention. */}
+            <div className="text-[10px] font-mono uppercase tracking-[0.14em] t-text-muted mb-1.5 flex items-center gap-2 flex-wrap">
+              <span>{crumb}</span>
+              {isEditable && isDirty && (
+                <span className="normal-case tracking-normal px-1.5 py-0.5 rounded-full bg-[var(--color-status-warning)]/15 t-text-warning">
+                  Unsaved
+                </span>
+              )}
+            </div>
+            {/* Title row — serif, display-size. Gives the drawer a
+                distinct typographic voice from the chat's sans ui. */}
+            <div className="flex items-center gap-2 min-w-0">
+              {typeIcons[entity.type] || null}
+              <h2
+                className="min-w-0 truncate t-text"
+                style={{
+                  fontFamily: READING_FONT,
+                  fontSize: '17px',
+                  lineHeight: 1.2,
+                  fontWeight: 500,
+                  letterSpacing: '-0.012em',
+                }}
+              >
+                {entity.title}
+              </h2>
+            </div>
+          </div>
 
-        {nav.canNavigate && (
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-1 flex-shrink-0 pt-1">
+            {nav.canNavigate && (
+              <div className="flex items-center gap-0.5 mr-1">
+                <button
+                  onClick={handleNavPrev}
+                  className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+                  title="Previous item (Alt+Up)"
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <span className="text-[10px] t-text-muted tabular-nums min-w-[2.5rem] text-center">
+                  {nav.currentIndex + 1} / {nav.total}
+                </span>
+                <button
+                  onClick={handleNavNext}
+                  className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+                  title="Next item (Alt+Down)"
+                >
+                  <ChevronDown size={14} />
+                </button>
+              </div>
+            )}
+            {isEditable && (
+              <button
+                onClick={() => void handleSave()}
+                disabled={!isDirty}
+                className={`p-1 rounded transition-colors ${
+                  isDirty ? 't-text-accent-soft hover:t-text-accent' : 't-text-muted opacity-50'
+                }`}
+                title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
+              >
+                <Save size={14} />
+              </button>
+            )}
+            {entity.id !== 'agent-md' && (
+              <button
+                onClick={handleDelete}
+                className={`p-1 rounded transition-colors ${
+                  confirmDelete ? 't-text-error' : 't-text-muted t-bg-hover'
+                }`}
+                title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
             <button
-              onClick={handleNavPrev}
-              className="p-1 rounded t-text-muted t-bg-hover transition-colors"
-              title="Previous item (Alt+Up)"
+              onClick={() => setDrawerMode(isPinned ? 'overlay' : 'pinned')}
+              className={`p-1 rounded transition-colors ${
+                isPinned ? 't-text-accent' : 't-text-muted t-bg-hover'
+              }`}
+              title={isPinned ? 'Unpin (float over chat)' : 'Pin (anchor alongside chat)'}
+              aria-pressed={isPinned}
             >
-              <ChevronUp size={14} />
+              <Pin size={14} />
             </button>
-            <span className="text-[10px] t-text-muted tabular-nums min-w-[2.5rem] text-center">
-              {nav.currentIndex + 1} / {nav.total}
-            </span>
             <button
-              onClick={handleNavNext}
+              onClick={() => setDrawerMode('parked')}
               className="p-1 rounded t-text-muted t-bg-hover transition-colors"
-              title="Next item (Alt+Down)"
+              title="Park to edge"
             >
-              <ChevronDown size={14} />
+              <Minimize2 size={14} />
+            </button>
+            <button
+              onClick={handleClosePreview}
+              className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+              title="Close preview (Esc)"
+            >
+              <X size={14} />
             </button>
           </div>
-        )}
-
-        <div className="flex items-center gap-1">
-          {isEditable && (
-            <button
-              onClick={() => void handleSave()}
-              disabled={!isDirty}
-              className={`p-1 rounded transition-colors ${
-                isDirty ? 't-text-accent-soft hover:t-text-accent' : 't-text-muted opacity-50'
-              }`}
-              title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
-            >
-              <Save size={14} />
-            </button>
-          )}
-          {entity.id !== 'agent-md' && (
-            <button
-              onClick={handleDelete}
-              className={`p-1 rounded transition-colors ${
-                confirmDelete ? 't-text-error' : 't-text-muted t-bg-hover'
-              }`}
-              title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
-          <button
-            onClick={() => setDrawerMode(isPinned ? 'overlay' : 'pinned')}
-            className={`p-1 rounded transition-colors ${
-              isPinned ? 't-text-accent' : 't-text-muted t-bg-hover'
-            }`}
-            title={isPinned ? 'Unpin (float over chat)' : 'Pin (anchor alongside chat)'}
-            aria-pressed={isPinned}
-          >
-            <Pin size={14} />
-          </button>
-          <button
-            onClick={() => setDrawerMode('parked')}
-            className="p-1 rounded t-text-muted t-bg-hover transition-colors"
-            title="Park to edge"
-          >
-            <Minimize2 size={14} />
-          </button>
-          <button
-            onClick={handleClosePreview}
-            className="p-1 rounded t-text-muted t-bg-hover transition-colors"
-            title="Close preview (Esc)"
-          >
-            <X size={14} />
-          </button>
         </div>
-      </div>
+      </header>
 
       {entity.type === 'paper' && (
         <div className="px-4 py-2 border-b t-border text-xs t-text-secondary space-y-1">
@@ -757,9 +808,26 @@ export function EntityPreviewPanel() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="flex-1 overflow-y-auto px-5 py-5 min-h-0">
         {renderContent()}
       </div>
+
+      {/* Footer strip — a quiet signature. The pulsing accent dot plus
+          "Bound to chat" tells the user the drawer isn't a modal popup
+          but a live surface tied to the conversation: when the agent
+          edits the file in the background, this view reloads in place. */}
+      <footer className="shrink-0 px-5 py-2.5 border-t t-border flex items-center justify-between gap-3 text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted">
+        <span className="inline-flex items-center gap-2 min-w-0 truncate">
+          <span
+            className="inline-block w-[7px] h-[7px] rounded-full t-bg-accent animate-pulse shrink-0"
+            aria-hidden="true"
+          />
+          <span className="truncate">Bound to chat</span>
+        </span>
+        <span className="truncate shrink-0">
+          Drag edge · {isPinned ? '⌘P unpin' : 'Esc to close'}
+        </span>
+      </footer>
     </div>
   )
 }
