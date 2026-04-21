@@ -79,22 +79,28 @@ html.dark {
 }
 
 html.light {
-  /* Neutrals — warm-tinted for approachability (not pure gray) */
-  --color-bg-base: #fafafa;
-  --color-bg-surface: #f3f3f6;
-  --color-bg-elevated: #e4e4e9;
-  --color-bg-hover: rgba(0 0 0 / 0.04);
-  --color-border: #e4e4e9;
-  --color-border-subtle: #ededf1;
-  --color-text: #18181b;
-  --color-text-secondary: #52525b;
-  --color-text-muted: #a1a1ab;
-  --color-bubble-user: #eef2ff;
-  --color-bubble-assistant: #f3f3f6;
-  --color-input-bg: #ffffff;
-  --color-input-border: #d4d4d8;
+  /* Warm-paper palette — reduces eye strain during long reading sessions
+     (research notes, paper drafts, markdown previews). Base is a soft
+     off-white (#f6f1e7); surface and elevated step incrementally darker
+     for recessed surfaces; borders and text shift warmer to sit
+     coherently on the ground. Accent and status colors are unchanged
+     for this first pass so the change is focused on the neutrals. */
+  --color-bg-base: #f6f1e7;
+  --color-bg-surface: #efe8d8;
+  --color-bg-elevated: #e6ddca;
+  --color-bg-hover: rgba(27, 23, 19, 0.045);
+  --color-border: #d4cbb8;
+  --color-border-subtle: #e4dcc7;
+  --color-text: #1b1713;
+  --color-text-secondary: #524a41;
+  --color-text-muted: #857b6d;
+  --color-bubble-user: #ece5d2;
+  --color-bubble-assistant: #efe8d8;
+  --color-input-bg: #fbf7ed;
+  --color-input-border: #c7bda8;
   --color-input-focus: rgba(13, 148, 136, 0.4);
-  /* Primary accent — teal/cyan */
+  /* Primary accent — teal/cyan (unchanged; revisit if it feels cool
+     against the warm ground). */
   --color-accent: #0d9488;
   --color-accent-soft: #14b8a6;
   /* Secondary accent — indigo (brand mark, highlights) */
@@ -104,13 +110,23 @@ html.light {
   --color-code-text: #0f766e;
   --color-code-bg: rgba(15, 118, 110, 0.08);
   --color-code-border: rgba(15, 118, 110, 0.2);
-  /* Semantic status colors */
+  /* Semantic status colors — unchanged */
   --color-status-success: #16a34a;
   --color-status-error: #dc2626;
   --color-status-error-soft: #ef4444;
   --color-status-warning: #d97706;
   --color-status-info: #3b82f6;
   color-scheme: light;
+}
+
+/* Very subtle atmospheric gradient beneath light-theme surfaces: a
+   warm flicker top-left, a sage breath bottom-right. Both are below
+   5% opacity, so they read as "the paper has depth" rather than
+   color. Dark theme is unaffected. */
+html.light body {
+  background-image:
+    radial-gradient(1200px 700px at 8% -10%, rgba(168, 70, 46, 0.035), transparent 60%),
+    radial-gradient(1000px 600px at 95% 110%, rgba(107, 122, 90, 0.04), transparent 60%);
 }
 
 /* Apply tokens globally */
