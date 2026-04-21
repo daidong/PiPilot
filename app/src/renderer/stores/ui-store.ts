@@ -7,8 +7,15 @@ import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 import { getInitialTheme, persistTheme, applyThemeClass, type Theme } from '../theme-boot'
 type LeftTab = 'library' | 'files' | 'skills'
 type CenterView = 'chat' | 'literature' | 'compute'
-export type { LeftTab, CenterView }
+type DrawerMode = 'overlay' | 'pinned' | 'parked'
+export type { LeftTab, CenterView, DrawerMode }
 export type { ReasoningEffort }
+
+const DRAWER_WIDTH_MIN = 360
+const DRAWER_WIDTH_MAX = 720
+const DRAWER_WIDTH_DEFAULT = 540
+const clampDrawerWidth = (px: number): number =>
+  Math.max(DRAWER_WIDTH_MIN, Math.min(DRAWER_WIDTH_MAX, Math.round(px)))
 
 // Re-export from shared-ui for backward compatibility
 export { REASONING_MODELS, SUPPORTED_MODELS }
@@ -38,6 +45,8 @@ interface UIState {
   previewEntity: EntityItem | null
   previewSourceTab: LeftTab | null
   previewEditorFocused: boolean
+  drawerMode: DrawerMode
+  drawerWidth: number
 
   // Literature view state
   literatureFilter: LiteratureFilter
@@ -67,6 +76,8 @@ interface UIState {
   openPreview: (entity: EntityItem) => void
   closePreview: () => void
   setPreviewEditorFocused: (focused: boolean) => void
+  setDrawerMode: (mode: DrawerMode) => void
+  setDrawerWidth: (width: number) => void
   setLiteratureFilter: (filter: Partial<LiteratureFilter>) => void
 }
 
@@ -98,6 +109,8 @@ export const useUIStore = create<UIState>((set) => ({
   previewEntity: null,
   previewSourceTab: null,
   previewEditorFocused: false,
+  drawerMode: 'overlay',
+  drawerWidth: DRAWER_WIDTH_DEFAULT,
   literatureFilter: {
     search: '',
     subTopic: null,
@@ -204,13 +217,26 @@ export const useUIStore = create<UIState>((set) => ({
       previewEntity: null,
       previewSourceTab: null,
       previewEditorFocused: false,
+      drawerMode: 'overlay',
+      drawerWidth: DRAWER_WIDTH_DEFAULT,
       literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null },
       wikiReaderSlug: null,
       wikiReaderHistory: []
     }),
-  openPreview: (entity) => set((s) => ({ previewEntity: entity, previewSourceTab: s.leftTab, previewEditorFocused: false })),
+  // Opening a preview routes the user to chat view — the drawer is mounted
+  // inside the chat-body host, so it only renders there. Researchers expect
+  // clicking a file to show them the file; forcing the view switch is the
+  // honest implementation of that expectation.
+  openPreview: (entity) => set((s) => ({
+    previewEntity: entity,
+    previewSourceTab: s.leftTab,
+    previewEditorFocused: false,
+    centerView: 'chat',
+  })),
   closePreview: () => set({ previewEntity: null, previewSourceTab: null, previewEditorFocused: false }),
-  setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused })
+  setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused }),
+  setDrawerMode: (drawerMode) => set({ drawerMode }),
+  setDrawerWidth: (drawerWidth) => set({ drawerWidth: clampDrawerWidth(drawerWidth) })
 }))
 
 /** Load persisted model, reasoning, and theme preferences from disk. Call after project path is set. */
