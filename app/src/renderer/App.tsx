@@ -935,12 +935,8 @@ export default function App() {
 
         {/* Main content area */}
         <div className="flex flex-1 min-h-0">
-          {/* Keep LeftSidebar mounted (hidden) when preview is open to preserve
-              WorkspaceTree expanded state, scroll position, and loaded children */}
           {!leftCollapsed && (
-            <div className={previewEntity ? 'hidden' : 'contents'}>
-              <LeftSidebar onOpenSettings={() => setSettingsOpen(true)} />
-            </div>
+            <LeftSidebar onOpenSettings={() => setSettingsOpen(true)} />
           )}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
             <div className={`flex min-h-0 ${terminalVisible ? 'flex-[2]' : 'flex-1'}`}>

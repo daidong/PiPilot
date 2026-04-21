@@ -208,8 +208,8 @@ export const useUIStore = create<UIState>((set) => ({
       wikiReaderSlug: null,
       wikiReaderHistory: []
     }),
-  openPreview: (entity) => set((s) => ({ previewEntity: entity, previewSourceTab: s.leftTab, leftSidebarCollapsed: true, previewEditorFocused: false })),
-  closePreview: () => set({ previewEntity: null, previewSourceTab: null, leftSidebarCollapsed: false, previewEditorFocused: false }),
+  openPreview: (entity) => set((s) => ({ previewEntity: entity, previewSourceTab: s.leftTab, previewEditorFocused: false })),
+  closePreview: () => set({ previewEntity: null, previewSourceTab: null, previewEditorFocused: false }),
   setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused })
 }))
 
