@@ -72,7 +72,7 @@ function GapAlerts({ papers }: { papers: EntityItem[] }) {
       {gaps.map((topic) => (
         <div key={topic} className="flex items-center gap-1.5 px-1">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-          <span className="text-[11px] t-text-secondary truncate">{topic}</span>
+          <span className="text-[11px] t-text-secondary truncate" title={topic}>{topic}</span>
         </div>
       ))}
     </div>

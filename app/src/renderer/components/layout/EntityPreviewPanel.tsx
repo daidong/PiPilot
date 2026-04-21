@@ -9,7 +9,7 @@ import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useSessionStore } from '../../stores/session-store'
 import { dirnameOf, resolveMarkdownImageUrl } from '../../utils/markdown-image'
-import { parseMarp } from '../../utils/marp'
+import { isMarpFrontmatter, splitFrontmatter, splitSlides } from '../../utils/marp'
 import { MarpSlideView } from './MarpSlideView'
 
 // Mirrors WorkspaceTree.TEXT_EXTENSIONS — the set of file types that open
@@ -432,6 +432,17 @@ export function EntityPreviewPanel() {
     baselineRef.current = baselineMarkdown
   }, [baselineMarkdown])
 
+  // Per-mode scroll memory for the Marp source/slides toggle. The two
+  // modes have unrelated layouts (slide cards vs. a long editor), so
+  // sharing scrollTop would land in the wrong place. Instead we remember
+  // each mode's last position independently and restore on toggle.
+  // Resets on entity change so each file starts at the top.
+  const scrollContentRef = useRef<HTMLDivElement>(null)
+  const modeScrollRef = useRef<{ source: number; slides: number }>({ source: 0, slides: 0 })
+  useEffect(() => {
+    modeScrollRef.current = { source: 0, slides: 0 }
+  }, [entity?.id])
+
   // Auto-reload when agent modifies the currently previewed markdown file
   useEffect(() => {
     if (!entity?.filePath) return
@@ -485,14 +496,78 @@ export function EntityPreviewPanel() {
   const isEditable = isInlineEditable || isFileMarkdown
   const isDirty = isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown)
 
-  // Detect Marp slide decks on the fly and pick the default render mode.
-  // Detection is gated on `marp: true` in the frontmatter, so a plain
-  // markdown file with `---` separators is never treated as slides.
-  const marpDoc = useMemo(() => parseMarp(draftMarkdown), [draftMarkdown])
+  // Bare-remark (Milkdown's underlying parser) has no frontmatter plugin
+  // and will mangle YAML frontmatter on the first round-trip: the opening
+  // `---` becomes a thematic break, the closing `---` becomes a setext
+  // heading underline, and the directives get absorbed into a heading's
+  // text. Saving from the editor would then write that corrupted shape
+  // back to disk. Instead, we peel the frontmatter off whatever the user
+  // loaded, hand only the body to Milkdown, and re-prepend the block on
+  // every state transition so the file on disk stays intact. The block
+  // itself is never edited from this panel — advanced frontmatter edits
+  // happen through the file's source in an external tool.
+  const { frontmatterBlock, body: baselineBody } = useMemo(
+    () => splitFrontmatter(baselineMarkdown),
+    [baselineMarkdown]
+  )
+  const isMarpFile = useMemo(() => isMarpFrontmatter(frontmatterBlock), [frontmatterBlock])
+
+  // `draftMarkdown` always carries the full file (frontmatter + body)
+  // so dirty detection, save, and external flows stay uniform. The body
+  // subset is what Milkdown actually sees and emits.
+  const draftBody = useMemo(() => {
+    if (!frontmatterBlock) return draftMarkdown
+    return draftMarkdown.startsWith(frontmatterBlock)
+      ? draftMarkdown.slice(frontmatterBlock.length)
+      : splitFrontmatter(draftMarkdown).body
+  }, [draftMarkdown, frontmatterBlock])
+
+  const editorSeedBody = useMemo(() => splitFrontmatter(editorSeedMarkdown).body, [editorSeedMarkdown])
+  const externalBody = useMemo(() => {
+    if (externalMarkdown === undefined) return undefined
+    return splitFrontmatter(externalMarkdown).body
+  }, [externalMarkdown])
+
+  const slides = useMemo(
+    () => (isMarpFile ? splitSlides(draftBody) : []),
+    [isMarpFile, draftBody]
+  )
+
   const effectiveViewMode: 'source' | 'slides' =
-    viewModeOverride ?? (marpDoc.isMarp ? 'slides' : 'source')
-  const showSlideView = marpDoc.isMarp && effectiveViewMode === 'slides'
-  const seedFp = buildFingerprint(editorSeedMarkdown)
+    viewModeOverride ?? (isMarpFile ? 'slides' : 'source')
+  const showSlideView = isMarpFile && effectiveViewMode === 'slides'
+
+  // Continuously record scroll position for the current mode so that
+  // toggling at any moment returns the user to where they were. The
+  // listener is re-attached when the mode flips so each mode's key in
+  // modeScrollRef only receives scroll events while that mode is live.
+  useEffect(() => {
+    const el = scrollContentRef.current
+    if (!el) return
+    const onScroll = () => {
+      modeScrollRef.current[effectiveViewMode] = el.scrollTop
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [effectiveViewMode])
+
+  // Restore remembered scroll on mode change. rAF delays the write until
+  // after the new content has laid out; a second pass covers Milkdown's
+  // async hydration (the editor Suspense-loads and its content height
+  // lands a tick later, which can clamp an early scrollTop to 0).
+  useEffect(() => {
+    const target = modeScrollRef.current[effectiveViewMode] ?? 0
+    const apply = () => {
+      if (scrollContentRef.current) scrollContentRef.current.scrollTop = target
+    }
+    const raf = requestAnimationFrame(apply)
+    const retry = window.setTimeout(apply, 200)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.clearTimeout(retry)
+    }
+  }, [effectiveViewMode, entity?.id])
+  const seedFp = buildFingerprint(editorSeedBody)
   const editorKey = `${entity.id}:${entity.filePath ?? 'inline'}:${seedFp.length}:${seedFp.codeFenceCount}:${seedFp.mermaidFenceCount}:${seedFp.mathBlockCount}:${seedFp.imageCount}`
 
   const handleNavNext = useCallback(() => {
@@ -626,11 +701,11 @@ export function EntityPreviewPanel() {
         <Suspense fallback={<div className="px-3 py-2 text-xs t-text-muted">Loading markdown editor...</div>}>
           <LazyMilkdownMarkdownEditor
             editorId={editorKey}
-            initialMarkdown={baselineMarkdown}
-            externalMarkdown={externalMarkdown}
+            initialMarkdown={baselineBody}
+            externalMarkdown={externalBody}
             baseDir={dirnameOf(entity.filePath)}
             onChange={(markdown) => {
-              setDraftMarkdown(markdown)
+              setDraftMarkdown((frontmatterBlock ?? '') + markdown)
               if (saveError) setSaveError(null)
             }}
             onFocusChange={setPreviewEditorFocused}
@@ -678,7 +753,7 @@ export function EntityPreviewPanel() {
         const isMarkdown = ext === 'md' || ext === 'markdown'
         if (isMarkdown) {
           if (showSlideView) {
-            return <MarpSlideView slides={marpDoc.slides} baseDir={dirnameOf(entity.filePath)} />
+            return <MarpSlideView slides={slides} baseDir={dirnameOf(entity.filePath)} />
           }
           return renderMarkdownEditor()
         }
@@ -692,7 +767,7 @@ export function EntityPreviewPanel() {
 
     if (isInlineEditable) {
       if (showSlideView) {
-        return <MarpSlideView slides={marpDoc.slides} baseDir={dirnameOf(entity.filePath)} />
+        return <MarpSlideView slides={slides} baseDir={dirnameOf(entity.filePath)} />
       }
       return renderMarkdownEditor()
     }
@@ -833,7 +908,7 @@ export function EntityPreviewPanel() {
                 <Save size={14} />
               </button>
             )}
-            {marpDoc.isMarp && (
+            {isMarpFile && (
               <button
                 onClick={() => setViewModeOverride(showSlideView ? 'source' : 'slides')}
                 className="p-1 rounded t-text-muted t-bg-hover transition-colors"
@@ -891,7 +966,7 @@ export function EntityPreviewPanel() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-5 py-5 min-h-0">
+      <div ref={scrollContentRef} className="flex-1 overflow-y-auto px-5 py-5 min-h-0">
         {renderContent()}
       </div>
 

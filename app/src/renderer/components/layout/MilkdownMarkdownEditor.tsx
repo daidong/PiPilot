@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react'
 import { Crepe } from '@milkdown/crepe'
+import { remarkStringifyOptionsCtx } from '@milkdown/core'
 import { diagram } from '@milkdown/plugin-diagram'
 import { replaceAll } from '@milkdown/utils'
 import '@milkdown/crepe/theme/common/style.css'
@@ -73,6 +74,19 @@ function MilkdownInner({
 
     // Mermaid code fences (```mermaid) render as diagrams.
     crepe.editor.use(diagram)
+
+    // remark-stringify defaults to `***` for thematic breaks; Marp decks
+    // use `---` as slide separators and authors universally write them
+    // that way. Without this override, every save would rewrite `---` to
+    // `***`, which Marp's detection and user muscle memory both depend
+    // on. Pinning `rule: '-'` keeps the source stable across round-trips.
+    crepe.editor.config((ctx) => {
+      ctx.update(remarkStringifyOptionsCtx, (prev) => ({
+        ...prev,
+        rule: '-'
+      }))
+    })
+
     crepe.setReadonly(false)
 
     crepe.on((listener) => {

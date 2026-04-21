@@ -688,7 +688,7 @@ export function WorkspaceTree() {
               className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
             />
           ) : (
-            <span className="truncate flex-1">{node.name}</span>
+            <span className="truncate flex-1" title={node.name}>{node.name}</span>
           )}
           <div className="hidden group-hover:flex items-center gap-0.5">
             {node.type === 'file' && (

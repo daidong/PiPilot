@@ -1,5 +1,5 @@
-import React, { useCallback, useRef } from 'react'
-import { Sun, Moon, RotateCcw, Terminal, Settings } from 'lucide-react'
+import React, { useCallback, useEffect, useRef } from 'react'
+import { Sun, Moon, RotateCcw, Terminal, Settings, MoreHorizontal } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { EntityTabs } from '../left/EntityTabs'
@@ -10,15 +10,17 @@ import { ModelSelector } from '../left/ModelSelector'
 import { ReasoningToggle } from '../left/ReasoningToggle'
 
 /** Toolbar icon button with fast CSS tooltip (200ms delay instead of OS default ~800ms) */
-function ToolbarButton({ onClick, tooltip, children }: {
+function ToolbarButton({ onClick, tooltip, children, ariaExpanded }: {
   onClick: () => void
   tooltip: string
   children: React.ReactNode
+  ariaExpanded?: boolean
 }) {
   return (
     <button
       onClick={onClick}
       aria-label={tooltip}
+      aria-expanded={ariaExpanded}
       className="no-drag group relative p-2.5 rounded-lg t-text-muted t-bg-hover transition-colors"
     >
       {children}
@@ -33,10 +35,101 @@ function ToolbarButton({ onClick, tooltip, children }: {
   )
 }
 
+// Low-frequency toolbar actions (reset context, theme, terminal) live
+// behind a single kebab. Keeping them out of the primary row preserves
+// breathing room for the ModelSelector at narrow sidebar widths and
+// matches the design principle "top bar configures this conversation;
+// everything else is one click away."
+function OverflowMenu({
+  theme,
+  onToggleTheme,
+  onResetContext,
+  onToggleTerminal,
+}: {
+  theme: 'dark' | 'light'
+  onToggleTheme: () => void
+  onResetContext: () => void
+  onToggleTerminal: () => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const escHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    document.addEventListener('keydown', escHandler)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('keydown', escHandler)
+    }
+  }, [open])
+
+  const run = (fn: () => void) => () => {
+    fn()
+    setOpen(false)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <ToolbarButton
+        onClick={() => setOpen((v) => !v)}
+        tooltip="More"
+        ariaExpanded={open}
+      >
+        <MoreHorizontal size={16} />
+      </ToolbarButton>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 min-w-[180px] rounded-lg border t-border t-bg-surface shadow-xl z-50 py-1"
+        >
+          <button
+            role="menuitem"
+            onClick={run(onResetContext)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs t-text t-bg-hover transition-colors"
+          >
+            <RotateCcw size={14} className="t-text-muted" />
+            Reset AI context
+          </button>
+          <button
+            role="menuitem"
+            onClick={run(onToggleTheme)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs t-text t-bg-hover transition-colors"
+          >
+            {theme === 'dark'
+              ? <Sun size={14} className="t-text-muted" />
+              : <Moon size={14} className="t-text-muted" />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
+          <button
+            role="menuitem"
+            onClick={run(onToggleTerminal)}
+            className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs t-text t-bg-hover transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <Terminal size={14} className="t-text-muted" />
+              Terminal
+            </span>
+            <span className="t-text-muted font-mono text-[10px]">⌘`</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const theme = useUIStore((s) => s.theme)
   const toggleTheme = useUIStore((s) => s.toggleTheme)
   const centerView = useUIStore((s) => s.centerView)
+  const leftSidebarWidth = useUIStore((s) => s.leftSidebarWidth)
+  const setLeftSidebarWidth = useUIStore((s) => s.setLeftSidebarWidth)
   const noContextShownRef = useRef(false)
 
   const handleResetContext = useCallback(async () => {
@@ -69,35 +162,54 @@ export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) 
     noContextShownRef.current = false
   }, [])
 
+  // Drag-to-resize the sidebar's right edge. Mirrors the EntityPreviewPanel
+  // pattern: capture start cursor X + width on mousedown, update width on
+  // mousemove, release on mouseup. Clamping lives in the store so we don't
+  // duplicate bounds here.
+  const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const handleEdgeMouseDown = useCallback((e: React.MouseEvent) => {
+    dragStateRef.current = { startX: e.clientX, startWidth: leftSidebarWidth }
+    document.body.style.cursor = 'ew-resize'
+    e.preventDefault()
+  }, [leftSidebarWidth])
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragStateRef.current) return
+      const dx = e.clientX - dragStateRef.current.startX
+      setLeftSidebarWidth(dragStateRef.current.startWidth + dx)
+    }
+    const onUp = () => {
+      if (dragStateRef.current) document.body.style.cursor = ''
+      dragStateRef.current = null
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [setLeftSidebarWidth])
+
+  // Double-click the edge to reset to default.
+  const handleEdgeDoubleClick = useCallback(() => {
+    setLeftSidebarWidth(320)
+  }, [setLeftSidebarWidth])
+
   return (
-    // Narrow windows (≤1279px) get w-80 (320px) so the center panel keeps
-    // room to breathe; wider windows (≥1280px) get w-[22rem] (352px) so the
-    // toolbar has comfortable slack. Below ~1024px the ModelSelector label
-    // is the first thing to truncate — see ModelSelector for the shrink
-    // pattern introduced in commit 95312df.
-    <aside className="w-80 xl:w-[22rem] flex flex-col border-r t-border t-bg-base pt-10">
-      <nav aria-label="Sidebar tools" className="px-4 pb-3 flex items-center justify-between">
+    <aside
+      className="relative flex flex-col border-r t-border t-bg-base pt-10 shrink-0"
+      style={{ width: `${leftSidebarWidth}px` }}
+    >
+      <nav aria-label="Sidebar tools" className="px-4 pb-3 flex items-center justify-between gap-2">
         <ModelSelector />
         <div className="flex items-center gap-1">
           <ReasoningToggle />
-          <ToolbarButton
-            onClick={handleResetContext}
-            tooltip="Reset AI context"
-          >
-            <RotateCcw size={16} />
-          </ToolbarButton>
-          <ToolbarButton
-            onClick={toggleTheme}
-            tooltip={`${theme === 'dark' ? 'Light' : 'Dark'} mode`}
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-          </ToolbarButton>
-          <ToolbarButton
-            onClick={() => useUIStore.getState().toggleTerminal()}
-            tooltip="Terminal  ⌘`"
-          >
-            <Terminal size={16} />
-          </ToolbarButton>
+          <OverflowMenu
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            onResetContext={handleResetContext}
+            onToggleTerminal={() => useUIStore.getState().toggleTerminal()}
+          />
         </div>
       </nav>
 
@@ -130,6 +242,21 @@ export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) 
         <ToolbarButton onClick={onOpenSettings} tooltip="Settings  ⌘,">
           <Settings size={16} />
         </ToolbarButton>
+      </div>
+
+      {/* Right-edge resize handle. 6px hit area, 2px visible stripe on
+          hover. Double-click resets to default width. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar (drag to resize, double-click to reset)"
+        tabIndex={-1}
+        className="absolute right-0 top-0 bottom-0 w-[6px] cursor-ew-resize group z-[6]"
+        style={{ marginRight: -3 }}
+        onMouseDown={handleEdgeMouseDown}
+        onDoubleClick={handleEdgeDoubleClick}
+      >
+        <div className="absolute right-[3px] top-1/2 -translate-y-1/2 w-[2px] h-9 rounded bg-transparent group-hover:t-bg-accent transition-colors" />
       </div>
     </aside>
   )

@@ -20,33 +20,69 @@ export interface MarpDoc {
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
-export function parseMarp(markdown: string | null | undefined): MarpDoc {
-  if (!markdown) return { isMarp: false, frontmatter: {}, slides: [] }
-
+// Split a markdown document into its leading YAML frontmatter block and
+// the body. `frontmatterBlock`, if present, is returned verbatim
+// (including its closing `---` and any trailing newline) so callers can
+// round-trip it by simple concatenation: `frontmatterBlock + body` is
+// byte-equivalent to the original input.
+//
+// Motivation: bare `remark` (what Milkdown's transformer uses) has no
+// frontmatter plugin and will parse the leading `---` as a thematic
+// break and the rest as a setext heading — destroying the block on the
+// first save. Stripping before the editor sees it and re-prepending on
+// save keeps the frontmatter safe without teaching Milkdown new tricks.
+export function splitFrontmatter(markdown: string | null | undefined): {
+  frontmatterBlock: string | null
+  body: string
+} {
+  if (!markdown) return { frontmatterBlock: null, body: markdown ?? '' }
   const match = markdown.match(FRONTMATTER_RE)
-  if (!match) return { isMarp: false, frontmatter: {}, slides: [] }
+  if (!match) return { frontmatterBlock: null, body: markdown }
+  return { frontmatterBlock: match[0], body: markdown.slice(match[0].length) }
+}
 
-  const frontmatter: Record<string, string> = {}
-  for (const rawLine of match[1].split('\n')) {
+function parseFrontmatterPairs(block: string | null): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!block) return out
+  const inner = block.match(FRONTMATTER_RE)?.[1] ?? ''
+  for (const rawLine of inner.split('\n')) {
     const line = rawLine.trim()
     if (!line || line.startsWith('#')) continue
     const colonIdx = line.indexOf(':')
     if (colonIdx < 0) continue
     const key = line.slice(0, colonIdx).trim()
-    const value = line.slice(colonIdx + 1).trim()
-    if (key) frontmatter[key] = value
+    if (key) out[key] = line.slice(colonIdx + 1).trim()
   }
+  return out
+}
 
-  const isMarp = /^(?:true|yes|on)$/i.test(frontmatter.marp || '')
-  if (!isMarp) return { isMarp: false, frontmatter, slides: [] }
+// Returns true iff the given frontmatter block declares `marp: true`
+// (also accepts `yes` / `on`). Null / absent block returns false.
+export function isMarpFrontmatter(block: string | null): boolean {
+  const pairs = parseFrontmatterPairs(block)
+  return /^(?:true|yes|on)$/i.test(pairs.marp || '')
+}
 
-  // Strip the frontmatter block, then split on `^---$` lines. Filter out
-  // empty chunks so a trailing separator doesn't produce a blank slide.
-  const body = markdown.slice(match[0].length)
-  const slides = body
-    .split(/^---[ \t]*\r?$/m)
+// Splits a Marp deck's body (frontmatter already removed) into slide
+// chunks on any CommonMark thematic break line — three or more `-`,
+// `*`, or `_`, optionally indented up to 3 spaces and with trailing
+// whitespace. Accepting all three forms matches what Cursor, Marp CLI,
+// and every CommonMark parser do: a deck that a user (or another tool)
+// authored with `***` separators must render as separate slides, not
+// fuse into one monster card. Empty chunks (e.g. from a trailing
+// separator) are filtered out so the deck doesn't end with a blank.
+const THEMATIC_BREAK_RE = /^[ \t]{0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*\r?$/m
+
+export function splitSlides(body: string): string[] {
+  return body
+    .split(THEMATIC_BREAK_RE)
     .map((chunk) => chunk.trim())
     .filter((chunk) => chunk.length > 0)
+}
 
-  return { isMarp: true, frontmatter, slides }
+export function parseMarp(markdown: string | null | undefined): MarpDoc {
+  const { frontmatterBlock, body } = splitFrontmatter(markdown)
+  const isMarp = isMarpFrontmatter(frontmatterBlock)
+  const frontmatter = parseFrontmatterPairs(frontmatterBlock)
+  return { isMarp, frontmatter, slides: isMarp ? splitSlides(body) : [] }
 }
