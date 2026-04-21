@@ -7,6 +7,23 @@ import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown } from 
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
+import { useSessionStore } from '../../stores/session-store'
+
+// Mirrors WorkspaceTree.TEXT_EXTENSIONS — the set of file types that open
+// in the preview drawer on click (rather than launching in the system's
+// default app). Used here to filter sibling files that should be
+// reachable via the drawer's prev/next navigation.
+const NAVIGABLE_FILE_EXTS = new Set([
+  'md', 'txt', 'json', 'ts', 'js', 'css', 'html', 'yml', 'yaml',
+  'toml', 'env', 'sh', 'py', 'cfg', 'ini', 'log', 'csv', 'xml',
+  'rst', 'jsx', 'tsx', 'mjs', 'cjs', 'markdown', 'gitignore',
+])
+
+interface FileSibling {
+  name: string
+  path: string
+  modifiedAt: number
+}
 
 const LazyMilkdownMarkdownEditor = lazy(async () => {
   const mod = await import('./MilkdownMarkdownEditor')
@@ -151,6 +168,10 @@ function CsvPreview({ content, separator }: { content: string; separator: string
   )
 }
 
+function normalizePathSep(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
 function usePreviewNavigation() {
   const previewSourceTab = useUIStore((s) => s.previewSourceTab)
   const previewEntity = useUIStore((s) => s.previewEntity)
@@ -158,6 +179,83 @@ function usePreviewNavigation() {
   const notes = useEntityStore((s) => s.notes)
   const papers = useEntityStore((s) => s.papers)
   const data = useEntityStore((s) => s.data)
+  const projectPath = useSessionStore((s) => s.projectPath)
+
+  // Files-tab navigation: fetch the current file's folder via api.listTree
+  // and keep only text-renderable siblings (same set WorkspaceTree uses for
+  // in-drawer opening). Order mirrors what the tree shows, so ↑/↓ walks
+  // through files the way the user just saw them listed.
+  const [fileSiblings, setFileSiblings] = useState<FileSibling[]>([])
+  const currentFilePath = previewSourceTab === 'files' ? previewEntity?.filePath : undefined
+  useEffect(() => {
+    if (!currentFilePath || !projectPath) {
+      setFileSiblings([])
+      return
+    }
+    const absFile = normalizePathSep(currentFilePath)
+    const absProj = normalizePathSep(projectPath)
+    let relParent: string
+    if (absFile === absProj) {
+      relParent = ''
+    } else if (absFile.startsWith(absProj + '/')) {
+      const rel = absFile.slice(absProj.length + 1)
+      relParent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+    } else {
+      // File lives outside the project root — can't list its folder safely.
+      setFileSiblings([])
+      return
+    }
+    let cancelled = false
+    const api = (window as any).api
+    Promise.resolve(api.listTree({ relativePath: relParent, showIgnored: true, limit: 2000 }))
+      .then((nodes: any[]) => {
+        if (cancelled || !Array.isArray(nodes)) return
+        const siblings: FileSibling[] = []
+        for (const n of nodes) {
+          if (n.type !== 'file') continue
+          const ext = (n.name.split('.').pop() || '').toLowerCase()
+          if (!NAVIGABLE_FILE_EXTS.has(ext)) continue
+          siblings.push({ name: n.name, path: n.path, modifiedAt: n.modifiedAt || Date.now() })
+        }
+        setFileSiblings(siblings)
+      })
+      .catch(() => {
+        if (!cancelled) setFileSiblings([])
+      })
+    return () => { cancelled = true }
+  }, [currentFilePath, projectPath])
+
+  // Resolve a file path to an EntityItem — reuses the matching data
+  // artifact if one exists (so nav'ing into a tracked file keeps its
+  // artifact metadata), otherwise builds a raw-file entity, same shape
+  // WorkspaceTree.openFile produces.
+  const entityForFilePath = useCallback((filePath: string, displayName: string, modifiedAt?: number): EntityItem => {
+    const norm = normalizePathSep(filePath)
+    const existing = data.find((item) => normalizePathSep(item.filePath || '') === norm)
+    if (existing) {
+      return {
+        ...existing,
+        type: 'data',
+        title: existing.title || (existing as any).name || displayName,
+        filePath,
+      } as EntityItem
+    }
+    const iso = new Date(modifiedAt || Date.now()).toISOString()
+    return {
+      id: filePath,
+      type: 'data',
+      title: displayName,
+      filePath,
+      tags: [],
+      createdAt: iso,
+      updatedAt: iso,
+    } as EntityItem
+  }, [data])
+
+  const fileSiblingEntities: EntityItem[] = useMemo(
+    () => fileSiblings.map((s) => entityForFilePath(s.path, s.name, s.modifiedAt)),
+    [fileSiblings, entityForFilePath]
+  )
 
   const list: EntityItem[] = (() => {
     switch (previewSourceTab) {
@@ -166,12 +264,22 @@ function usePreviewNavigation() {
       case 'papers':
         return papers
       case 'files':
+        return fileSiblingEntities
       default:
         return []
     }
   })()
 
-  const currentIndex = previewEntity ? list.findIndex((item) => item.id === previewEntity.id) : -1
+  // Match by filePath when navigating files (ids may drift between raw
+  // file entities and tracked data artifacts); otherwise match by id.
+  const currentIndex = (() => {
+    if (!previewEntity) return -1
+    if (previewSourceTab === 'files' && previewEntity.filePath) {
+      const target = normalizePathSep(previewEntity.filePath)
+      return list.findIndex((item) => normalizePathSep(item.filePath || '') === target)
+    }
+    return list.findIndex((item) => item.id === previewEntity.id)
+  })()
   const total = list.length
   const canNavigate = total > 1 && currentIndex >= 0
 
