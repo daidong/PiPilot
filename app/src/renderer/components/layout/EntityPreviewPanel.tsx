@@ -3,12 +3,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 const remarkPlugins = [remarkGfm]
-import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown } from 'lucide-react'
+import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown, Presentation, FileText } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useSessionStore } from '../../stores/session-store'
 import { dirnameOf, resolveMarkdownImageUrl } from '../../utils/markdown-image'
+import { parseMarp } from '../../utils/marp'
+import { MarpSlideView } from './MarpSlideView'
 
 // Mirrors WorkspaceTree.TEXT_EXTENSIONS — the set of file types that open
 // in the preview drawer on click (rather than launching in the system's
@@ -349,6 +351,10 @@ export function EntityPreviewPanel() {
   const [fileType, setFileType] = useState<'text' | 'external' | 'csv' | null>(null)
   const [loading, setLoading] = useState(false)
   const [externalMarkdown, setExternalMarkdown] = useState<string | undefined>(undefined)
+  // Marp rendering: null = follow detection (slides if marp, source if not).
+  // A user click on the header toggle explicitly sets 'slides' or 'source'
+  // for the current entity. Reset when the entity changes.
+  const [viewModeOverride, setViewModeOverride] = useState<'source' | 'slides' | null>(null)
   const resolvedAbsPathRef = useRef<string | null>(null)
   const baselineRef = useRef('')
 
@@ -374,6 +380,7 @@ export function EntityPreviewPanel() {
     setSaveError(null)
     setSaveSuccess(null)
     setPreviewEditorFocused(false)
+    setViewModeOverride(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity?.id])
 
@@ -477,6 +484,14 @@ export function EntityPreviewPanel() {
   const isInlineEditable = !entity.filePath
   const isEditable = isInlineEditable || isFileMarkdown
   const isDirty = isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown)
+
+  // Detect Marp slide decks on the fly and pick the default render mode.
+  // Detection is gated on `marp: true` in the frontmatter, so a plain
+  // markdown file with `---` separators is never treated as slides.
+  const marpDoc = useMemo(() => parseMarp(draftMarkdown), [draftMarkdown])
+  const effectiveViewMode: 'source' | 'slides' =
+    viewModeOverride ?? (marpDoc.isMarp ? 'slides' : 'source')
+  const showSlideView = marpDoc.isMarp && effectiveViewMode === 'slides'
   const seedFp = buildFingerprint(editorSeedMarkdown)
   const editorKey = `${entity.id}:${entity.filePath ?? 'inline'}:${seedFp.length}:${seedFp.codeFenceCount}:${seedFp.mermaidFenceCount}:${seedFp.mathBlockCount}:${seedFp.imageCount}`
 
@@ -662,6 +677,9 @@ export function EntityPreviewPanel() {
         const ext = getExtension(entity.filePath)
         const isMarkdown = ext === 'md' || ext === 'markdown'
         if (isMarkdown) {
+          if (showSlideView) {
+            return <MarpSlideView slides={marpDoc.slides} baseDir={dirnameOf(entity.filePath)} />
+          }
           return renderMarkdownEditor()
         }
         return (
@@ -673,6 +691,9 @@ export function EntityPreviewPanel() {
     }
 
     if (isInlineEditable) {
+      if (showSlideView) {
+        return <MarpSlideView slides={marpDoc.slides} baseDir={dirnameOf(entity.filePath)} />
+      }
       return renderMarkdownEditor()
     }
 
@@ -810,6 +831,16 @@ export function EntityPreviewPanel() {
                 title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
               >
                 <Save size={14} />
+              </button>
+            )}
+            {marpDoc.isMarp && (
+              <button
+                onClick={() => setViewModeOverride(showSlideView ? 'source' : 'slides')}
+                className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+                title={showSlideView ? 'Edit source' : 'View as slides'}
+                aria-pressed={showSlideView}
+              >
+                {showSlideView ? <FileText size={14} /> : <Presentation size={14} />}
               </button>
             )}
             <button
