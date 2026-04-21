@@ -1,6 +1,6 @@
 ---
 name: marp-slides
-description: "Create polished research presentation slides in Markdown using Marp. Use when the user needs conference talk slides, lab meeting decks, thesis defense presentations, research seminars, or poster-style overviews. Converts research artifacts (papers, notes, data) into visual narratives. For written documents use paper-writing or scientific-writing; for individual figures use scientific-visualization."
+description: "Create polished presentation slides in Markdown using Marp. Use when the user needs conference talk slides, lab meeting decks, thesis defense presentations, research seminars, or poster-style overviews. Converts research artifacts (papers, notes, data) into visual narratives. For written documents use paper-writing or scientific-writing; for individual figures use scientific-schematics."
 category: Presentation
 tags: [Marp, Slides, Presentation, Conference Talk, Lab Meeting, Thesis Defense, Seminar, Research Talk, Markdown Slides, 做PPT, 演示文稿, 学术报告, 幻灯片]
 triggers: [make slides, create presentation, conference talk, lab meeting slides, thesis defense, research presentation, seminar slides, marp, slide deck, 做幻灯片, 做报告, 学术演讲, PPT]
