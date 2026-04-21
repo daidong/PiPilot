@@ -98,23 +98,20 @@ export function ChatInput() {
     const imageFiles = files.filter(f => ACCEPTED_IMAGE_TYPES.includes(f.type))
     if (imageFiles.length === 0) return
 
-    setPendingImages(prev => {
-      const remaining = MAX_IMAGES - prev.length
-      if (remaining <= 0) return prev
-      const toAdd = imageFiles.slice(0, remaining)
-      toAdd.forEach(file => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const dataUrl = reader.result as string
-          const base64 = dataUrl.split(',')[1]
-          setPendingImages(p => {
-            if (p.length >= MAX_IMAGES) return p
-            return [...p, { base64, mimeType: file.type, dataUrl }]
-          })
-        }
-        reader.readAsDataURL(file)
-      })
-      return prev // actual updates happen in reader.onload
+    // Side effects (FileReader) must live outside the state updater — StrictMode
+    // invokes updaters twice in dev, which previously caused each pasted image
+    // to be read (and appended) twice.
+    imageFiles.forEach(file => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const dataUrl = reader.result as string
+        const base64 = dataUrl.split(',')[1]
+        setPendingImages(p => {
+          if (p.length >= MAX_IMAGES) return p
+          return [...p, { base64, mimeType: file.type, dataUrl }]
+        })
+      }
+      reader.readAsDataURL(file)
     })
   }, [])
 
