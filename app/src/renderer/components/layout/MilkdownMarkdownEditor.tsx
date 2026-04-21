@@ -7,6 +7,7 @@ import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/frame.css'
 import 'katex/dist/katex.min.css'
 import './MilkdownMarkdownEditor.css'
+import { resolveMarkdownImageUrl } from '../../utils/markdown-image'
 
 interface MilkdownMarkdownEditorProps {
   editorId: string
@@ -16,6 +17,10 @@ interface MilkdownMarkdownEditorProps {
   onChange: (markdown: string) => void
   onFocusChange?: (focused: boolean) => void
   onSaveShortcut?: () => void
+  /** Absolute directory the markdown file lives in. Used to resolve
+   *  relative image refs (`![](./foo.png)`) to workspace-asset:// URLs
+   *  so they actually load in the preview. */
+  baseDir?: string
 }
 
 function MilkdownInner({
@@ -24,7 +29,8 @@ function MilkdownInner({
   externalMarkdown,
   onChange,
   onFocusChange,
-  onSaveShortcut
+  onSaveShortcut,
+  baseDir
 }: MilkdownMarkdownEditorProps) {
   const onChangeRef = useRef(onChange)
   const onFocusChangeRef = useRef(onFocusChange)
@@ -123,6 +129,54 @@ function MilkdownInner({
   useEffect(() => {
     return () => onFocusChangeRef.current?.(false)
   }, [])
+
+  // Rewrite <img src> within the editor to workspace-asset:// URLs so
+  // relative / absolute disk paths in the markdown actually load. We do
+  // this in the DOM (not in the markdown source) so saves preserve the
+  // author's original relative paths.
+  //
+  // Uses a MutationObserver because Crepe/ProseMirror may mount images
+  // lazily (code-fence → diagram → embedded image, external content
+  // swaps, etc.) — a single initial pass wouldn't catch them all.
+  useEffect(() => {
+    const host = shellRef.current
+    if (!host) return
+
+    const rewriteImg = (img: HTMLImageElement) => {
+      const currentSrc = img.getAttribute('src')
+      if (!currentSrc) return
+      const resolved = resolveMarkdownImageUrl(currentSrc, baseDir)
+      if (resolved && resolved !== currentSrc) {
+        img.setAttribute('src', resolved)
+      }
+    }
+    const rewriteAllWithin = (el: Element) => {
+      if (el instanceof HTMLImageElement) rewriteImg(el)
+      el.querySelectorAll('img').forEach((img) => rewriteImg(img as HTMLImageElement))
+    }
+
+    rewriteAllWithin(host)
+
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.target instanceof HTMLImageElement) {
+          rewriteImg(m.target)
+        } else {
+          m.addedNodes.forEach((node) => {
+            if (node instanceof Element) rewriteAllWithin(node)
+          })
+        }
+      }
+    })
+    observer.observe(host, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src']
+    })
+
+    return () => observer.disconnect()
+  }, [baseDir, editorId])
 
   const onKeyDownCapture = (e: React.KeyboardEvent<HTMLDivElement>) => {
     userInteractedRef.current = true

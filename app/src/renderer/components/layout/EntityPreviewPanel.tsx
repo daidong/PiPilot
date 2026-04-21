@@ -8,6 +8,7 @@ import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useSessionStore } from '../../stores/session-store'
+import { dirnameOf, resolveMarkdownImageUrl } from '../../utils/markdown-image'
 
 // Mirrors WorkspaceTree.TEXT_EXTENSIONS — the set of file types that open
 // in the preview drawer on click (rather than launching in the system's
@@ -612,6 +613,7 @@ export function EntityPreviewPanel() {
             editorId={editorKey}
             initialMarkdown={baselineMarkdown}
             externalMarkdown={externalMarkdown}
+            baseDir={dirnameOf(entity.filePath)}
             onChange={(markdown) => {
               setDraftMarkdown(markdown)
               if (saveError) setSaveError(null)
@@ -675,6 +677,7 @@ export function EntityPreviewPanel() {
     }
 
     const content = entity.content || entity.abstract || entity.valueText || 'No content available.'
+    const mdBaseDir = dirnameOf(entity.filePath)
     return (
       <div
         className="md-prose"
@@ -685,7 +688,20 @@ export function EntityPreviewPanel() {
           lineHeight: 1.55,
         }}
       >
-        <ReactMarkdown remarkPlugins={remarkPlugins}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          components={{
+            // Rewrite relative / absolute disk paths to workspace-asset://
+            // URLs so images actually load. Remote URLs pass through.
+            img: ({ src, alt, ...rest }) => (
+              <img
+                src={resolveMarkdownImageUrl(src as string | undefined, mdBaseDir)}
+                alt={alt}
+                {...rest}
+              />
+            )
+          }}
+        >
           {typeof content === 'string' ? content : JSON.stringify(content, null, 2)}
         </ReactMarkdown>
       </div>

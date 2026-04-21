@@ -1,7 +1,45 @@
-import { app, BrowserWindow, shell, Menu } from 'electron'
+import { app, BrowserWindow, protocol, shell, Menu } from 'electron'
 import { setMaxListeners } from 'node:events'
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { execSync } from 'node:child_process'
+
+// workspace-asset://  —  serves local workspace files (e.g. images
+// referenced by markdown previews) to the renderer. Registered before
+// app-ready so it's treated like a first-class web origin: supports
+// fetch, streams, and image-element src. URLs look like:
+//   workspace-asset://asset/<percent-encoded-absolute-path>
+// The handler below decodes the pathname and readFile's it.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'workspace-asset',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true
+    }
+  }
+])
+
+function mimeForExtension(p: string): string {
+  const ext = (p.split('.').pop() || '').toLowerCase()
+  const table: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    bmp: 'image/bmp',
+    avif: 'image/avif',
+    ico: 'image/x-icon',
+    heic: 'image/heic',
+    heif: 'image/heif'
+  }
+  return table[ext] || 'application/octet-stream'
+}
 
 // Raise default max listeners — pi-agent-core's parallel tool execution
 // shares a single AbortSignal across many tools, exceeding the default of 10.
@@ -100,6 +138,28 @@ app.whenReady().then(() => {
   if (iconPath && process.platform === 'darwin') {
     app.dock?.setIcon(iconPath)
   }
+
+  // Bind the workspace-asset:// handler once the app is ready. Any failure
+  // (missing file, permission denied, etc.) returns 404 — the <img> tag
+  // falls back to the browser's broken-image glyph rather than breaking
+  // the whole drawer.
+  protocol.handle('workspace-asset', async (request) => {
+    try {
+      const url = new URL(request.url)
+      const absPath = decodeURIComponent(url.pathname)
+      const data = await readFile(absPath)
+      return new Response(data, {
+        status: 200,
+        headers: {
+          'Content-Type': mimeForExtension(absPath),
+          'Cache-Control': 'no-cache'
+        }
+      })
+    } catch {
+      return new Response('', { status: 404 })
+    }
+  })
+
   registerIpcHandlers()
   registerTerminalHandlers()
   registerWindow(createWindow())
