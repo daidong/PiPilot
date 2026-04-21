@@ -681,8 +681,8 @@ export function EntityPreviewPanel() {
         style={{
           color: 'var(--color-text)',
           fontFamily: READING_FONT,
-          fontSize: '15.5px',
-          lineHeight: 1.72,
+          fontSize: '14px',
+          lineHeight: 1.55,
         }}
       >
         <ReactMarkdown remarkPlugins={remarkPlugins}>

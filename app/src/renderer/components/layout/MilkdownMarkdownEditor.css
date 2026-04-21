@@ -28,52 +28,58 @@
   caret-color: var(--color-accent);
 }
 
+/* Typographic scale sized to match the chat column (text-sm = 14px).
+   Previously h1 was 26px and p line-height 1.6, which made the drawer
+   feel a full octave louder than the surrounding chat. This scale keeps
+   a readable hierarchy while keeping body text visually equivalent to
+   the chat on both character size and line rhythm. */
+
 .entity-preview-milkdown-shell .milkdown .ProseMirror h1 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 26px;
-  line-height: 34px;
+  font-size: 20px;
+  line-height: 28px;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h2 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 22px;
-  line-height: 30px;
+  font-size: 17px;
+  line-height: 24px;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h3 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 19px;
-  line-height: 27px;
+  font-size: 15px;
+  line-height: 22px;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h4 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 17px;
-  line-height: 25px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h5 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 15px;
-  line-height: 23px;
+  font-size: 13px;
+  line-height: 19px;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h6 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 19px;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror p,
 .entity-preview-milkdown-shell .milkdown .ProseMirror li {
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.45;
   font-weight: 400;
 }
 
