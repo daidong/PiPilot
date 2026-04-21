@@ -64,11 +64,18 @@ export function isMarpFrontmatter(block: string | null): boolean {
 }
 
 // Splits a Marp deck's body (frontmatter already removed) into slide
-// chunks on `^---$` lines. Empty chunks (e.g. from a trailing separator)
-// are filtered out so the deck doesn't end with a blank card.
+// chunks on any CommonMark thematic break line — three or more `-`,
+// `*`, or `_`, optionally indented up to 3 spaces and with trailing
+// whitespace. Accepting all three forms matches what Cursor, Marp CLI,
+// and every CommonMark parser do: a deck that a user (or another tool)
+// authored with `***` separators must render as separate slides, not
+// fuse into one monster card. Empty chunks (e.g. from a trailing
+// separator) are filtered out so the deck doesn't end with a blank.
+const THEMATIC_BREAK_RE = /^[ \t]{0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*\r?$/m
+
 export function splitSlides(body: string): string[] {
   return body
-    .split(/^---[ \t]*\r?$/m)
+    .split(THEMATIC_BREAK_RE)
     .map((chunk) => chunk.trim())
     .filter((chunk) => chunk.length > 0)
 }
