@@ -6,6 +6,7 @@ import { useEntityStore } from '../../stores/entity-store'
 import { useToolEventsStore } from '../../stores/tool-events-store'
 import { ToolUseStream } from '@shared/components/center/ToolUseStream'
 import { Bookmark, BookmarkCheck, Copy, Check, Loader2 } from 'lucide-react'
+import { ImageLightbox } from './ImageLightbox'
 
 const api = (window as any).api
 
@@ -196,6 +197,7 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
   }
 
   const [copied, setCopied] = useState(false)
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(msg.content)
@@ -227,7 +229,7 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
                 className={`rounded-lg border t-border cursor-pointer hover:opacity-90 transition-opacity ${
                   isUser ? 'max-h-48' : 'max-h-80'
                 }`}
-                onClick={() => window.open(src, '_blank')}
+                onClick={() => setLightboxSrc(src)}
               />
             ))}
           </div>
@@ -282,6 +284,7 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
           </div>
         )}
       </div>
+      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
     </div>
   )
 })
