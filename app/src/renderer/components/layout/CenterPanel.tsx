@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React from 'react'
 import { MessageSquare, BookOpen, Cpu } from 'lucide-react'
 import { useUIStore, type CenterView } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
@@ -97,88 +97,93 @@ export function CenterPanel() {
   const messages = useChatStore((s) => s.messages)
   const previewEntity = useUIStore((s) => s.previewEntity)
   const drawerWidth = useUIStore((s) => s.drawerWidth)
-  const closePreview = useUIStore((s) => s.closePreview)
   const showHero = isIdle && messages.length === 0
 
-  // If the user switches away from chat while a preview is open, close it.
-  // The drawer only renders in chat view, and leaving it open would mean
-  // losing the editor's local state silently on return.
-  useEffect(() => {
-    if (centerView !== 'chat' && previewEntity) {
-      closePreview()
-    }
-  }, [centerView, previewEntity, closePreview])
-
-  if (centerView === 'literature') {
-    return (
-      <main id="main-content" className="flex-1 flex flex-col min-w-0">
-        <ViewSwitcher />
-        <LiteratureView />
-      </main>
-    )
-  }
-
-  if (centerView === 'compute') {
-    return (
-      <main id="main-content" className="flex-1 flex flex-col min-w-0">
-        <ViewSwitcher />
-        <ComputeView />
-      </main>
-    )
-  }
-
-  // Chat view — the drawer is hosted inside chat-body so it is bounded above
-  // by ViewSwitcher and below by the ChatInput row; it cannot cover either.
-  // Messages and input are both shifted left when the drawer is open, so
-  // their column stays visually aligned with each other.
+  // State-preservation strategy: every view stays mounted at all times and
+  // we toggle visibility with the HTML `hidden` attribute (equivalent to
+  // display:none). The React tree never tears down, so every useState /
+  // useRef / scroll position / textarea draft survives ⌘1/⌘2/⌘3 switches.
+  // The drawer lives inside the chat <main>, so its editor state survives
+  // too — switching away and back returns you to the exact same place.
   const drawerOpen = !!previewEntity
   const rightGutter = drawerOpen ? drawerWidth : 0
 
   // The entire chat column — tabs, messages, input — shrinks in lockstep
-  // when the drawer opens. This keeps the view-tabs' bottom border from
-  // running past the drawer's left edge and creates a single clean vertical
-  // divider between chat and drawer that spans the full height of <main>.
+  // when the drawer opens. Keeps the view-tabs' bottom border from running
+  // past the drawer's left edge and creates a single clean vertical divider
+  // between chat and drawer that spans the full height of <main>.
   const columnShiftStyle = { paddingRight: `${rightGutter}px` }
   const columnShiftClass = 'transition-[padding] duration-500 ease-[cubic-bezier(0.32,0.72,0.24,1)]'
 
   return (
-    <main id="main-content" className="flex-1 flex flex-col min-w-0 relative overflow-hidden">
-      <div className={columnShiftClass} style={columnShiftStyle}>
-        <ViewSwitcher />
-      </div>
-
-      <div className="flex-1 min-h-0">
-        {showHero ? (
-          <div
-            className={`h-full flex items-center justify-center ${columnShiftClass}`}
-            style={columnShiftStyle}
-          >
-            <HeroIdle />
-          </div>
-        ) : (
-          <div
-            className={`h-full pl-6 pt-4 pb-2 ${columnShiftClass}`}
-            style={{ paddingRight: `${24 + rightGutter}px` }}
-          >
-            <div className="mx-auto h-full" style={{ maxWidth: '64rem' }}>
-              <ChatMessages />
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div
-        className={`pl-6 pb-5 ${columnShiftClass}`}
-        style={{ paddingRight: `${24 + rightGutter}px` }}
+    <>
+      {/* Chat view — always mounted so scroll position, the ChatInput
+          draft, and the drawer's editor state persist across view
+          switches. The id="main-content" skip-link anchor follows the
+          currently-visible view. */}
+      <main
+        id={centerView === 'chat' ? 'main-content' : undefined}
+        hidden={centerView !== 'chat'}
+        className="flex-1 flex flex-col min-w-0 relative overflow-hidden"
       >
-        <div className="mx-auto" style={{ maxWidth: '64rem' }}>
-          <ChatInput />
+        <div className={columnShiftClass} style={columnShiftStyle}>
+          <ViewSwitcher />
         </div>
-      </div>
 
-      {/* Drawer — spans full main height so its border-l runs uninterrupted
-          from the top of the view-tabs to the bottom of the input row. */}
-      {drawerOpen && <EntityPreviewPanel />}
-    </main>
+        <div className="flex-1 min-h-0">
+          {showHero ? (
+            <div
+              className={`h-full flex items-center justify-center ${columnShiftClass}`}
+              style={columnShiftStyle}
+            >
+              <HeroIdle />
+            </div>
+          ) : (
+            <div
+              className={`h-full pl-6 pt-4 pb-2 ${columnShiftClass}`}
+              style={{ paddingRight: `${24 + rightGutter}px` }}
+            >
+              <div className="mx-auto h-full" style={{ maxWidth: '64rem' }}>
+                <ChatMessages />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          className={`pl-6 pb-5 ${columnShiftClass}`}
+          style={{ paddingRight: `${24 + rightGutter}px` }}
+        >
+          <div className="mx-auto" style={{ maxWidth: '64rem' }}>
+            <ChatInput />
+          </div>
+        </div>
+
+        {/* Drawer — spans full main height so its border-l runs uninterrupted
+            from the top of the view-tabs to the bottom of the input row. */}
+        {drawerOpen && <EntityPreviewPanel />}
+      </main>
+
+      {/* Literature view — always mounted; its filter/scroll/selection
+          state persists when the user flips away and back. */}
+      <main
+        id={centerView === 'literature' ? 'main-content' : undefined}
+        hidden={centerView !== 'literature'}
+        className="flex-1 flex flex-col min-w-0"
+      >
+        <ViewSwitcher />
+        <LiteratureView />
+      </main>
+
+      {/* Compute view — always mounted for the same reason. */}
+      <main
+        id={centerView === 'compute' ? 'main-content' : undefined}
+        hidden={centerView !== 'compute'}
+        className="flex-1 flex flex-col min-w-0"
+      >
+        <ViewSwitcher />
+        <ComputeView />
+      </main>
+    </>
   )
 }
