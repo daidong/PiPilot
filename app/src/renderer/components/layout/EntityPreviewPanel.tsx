@@ -368,20 +368,22 @@ export function EntityPreviewPanel() {
 
   if (!entity) return null
 
-  // Parked mode: collapse to a 44px strip on the right edge of the chat-body
+  // Parked mode: collapse to a 44px strip on the right edge of <main>
   // with a rotated title, so the file is one click away without consuming
   // any real estate. Clicking anywhere on the strip re-opens to overlay.
+  // pt-10 mirrors the ViewSwitcher's top offset so the label clears the
+  // window's drag region.
   if (drawerMode === 'parked') {
     return (
       <aside
-        className="absolute top-0 right-0 bottom-0 flex items-center justify-center cursor-pointer border-l t-border t-bg-base hover:t-bg-hover transition-colors z-[5]"
+        className="absolute top-0 right-0 bottom-0 flex items-center justify-center cursor-pointer border-l t-border t-bg-base hover:t-bg-hover transition-colors z-[5] pt-10"
         style={{ width: 44 }}
         onClick={() => setDrawerMode('overlay')}
         title={`Reopen ${entity.title}`}
         aria-label={`Parked preview: ${entity.title}`}
       >
         <span
-          className="text-xs font-medium t-text-secondary truncate max-h-[calc(100%-40px)]"
+          className="text-xs font-medium t-text-secondary truncate max-h-[calc(100%-64px)]"
           style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
         >
           {entity.title}
@@ -618,9 +620,12 @@ export function EntityPreviewPanel() {
     ? 'shadow-[-8px_0_32px_-12px_rgba(0,0,0,0.18)] dark:shadow-[-8px_0_32px_-6px_rgba(0,0,0,0.55)]'
     : ''
 
+  // pt-10 mirrors the ViewSwitcher's top offset — the drawer's own header
+  // row then sits at the same baseline as the view tabs, giving a peer-like
+  // relationship instead of the tabs' border-b colliding into the drawer.
   return (
     <div
-      className={`absolute top-0 right-0 bottom-0 flex flex-col border-l t-border t-bg-base min-w-0 z-[5] transition-[width,box-shadow] duration-500 ease-[cubic-bezier(0.32,0.72,0.24,1)] ${overlayShadow}`}
+      className={`absolute top-0 right-0 bottom-0 flex flex-col border-l t-border t-bg-base min-w-0 z-[5] pt-10 transition-[width,box-shadow] duration-500 ease-[cubic-bezier(0.32,0.72,0.24,1)] ${overlayShadow}`}
       style={{ width: drawerWidth }}
       aria-label={`Preview: ${entity.title}`}
     >
