@@ -7,8 +7,7 @@ import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 import { getInitialTheme, persistTheme, applyThemeClass, type Theme } from '../theme-boot'
 type LeftTab = 'library' | 'files' | 'skills'
 type CenterView = 'chat' | 'literature' | 'compute'
-type DrawerMode = 'overlay' | 'pinned' | 'parked'
-export type { LeftTab, CenterView, DrawerMode }
+export type { LeftTab, CenterView }
 export type { ReasoningEffort }
 
 const DRAWER_WIDTH_MIN = 360
@@ -45,7 +44,6 @@ interface UIState {
   previewEntity: EntityItem | null
   previewSourceTab: LeftTab | null
   previewEditorFocused: boolean
-  drawerMode: DrawerMode
   drawerWidth: number
 
   // Literature view state
@@ -76,7 +74,6 @@ interface UIState {
   openPreview: (entity: EntityItem) => void
   closePreview: () => void
   setPreviewEditorFocused: (focused: boolean) => void
-  setDrawerMode: (mode: DrawerMode) => void
   setDrawerWidth: (width: number) => void
   setLiteratureFilter: (filter: Partial<LiteratureFilter>) => void
 }
@@ -109,7 +106,6 @@ export const useUIStore = create<UIState>((set) => ({
   previewEntity: null,
   previewSourceTab: null,
   previewEditorFocused: false,
-  drawerMode: 'overlay',
   drawerWidth: DRAWER_WIDTH_DEFAULT,
   literatureFilter: {
     search: '',
@@ -217,7 +213,6 @@ export const useUIStore = create<UIState>((set) => ({
       previewEntity: null,
       previewSourceTab: null,
       previewEditorFocused: false,
-      drawerMode: 'overlay',
       drawerWidth: DRAWER_WIDTH_DEFAULT,
       literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null },
       wikiReaderSlug: null,
@@ -235,7 +230,6 @@ export const useUIStore = create<UIState>((set) => ({
   })),
   closePreview: () => set({ previewEntity: null, previewSourceTab: null, previewEditorFocused: false }),
   setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused }),
-  setDrawerMode: (drawerMode) => set({ drawerMode }),
   setDrawerWidth: (drawerWidth) => set({ drawerWidth: clampDrawerWidth(drawerWidth) })
 }))
 

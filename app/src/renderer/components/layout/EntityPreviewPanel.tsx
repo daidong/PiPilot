@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 const remarkPlugins = [remarkGfm]
-import { X, StickyNote, BookOpen, Database, Trash2, Save, ChevronUp, ChevronDown, Pin, Minimize2 } from 'lucide-react'
+import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
@@ -194,11 +194,8 @@ export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
   const setPreviewEditorFocused = useUIStore((s) => s.setPreviewEditorFocused)
-  const drawerMode = useUIStore((s) => s.drawerMode)
   const drawerWidth = useUIStore((s) => s.drawerWidth)
-  const setDrawerMode = useUIStore((s) => s.setDrawerMode)
   const setDrawerWidth = useUIStore((s) => s.setDrawerWidth)
-  const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const refreshAll = useEntityStore((s) => s.refreshAll)
 
   const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
@@ -209,11 +206,10 @@ export function EntityPreviewPanel() {
   // lives in the store (setDrawerWidth), so we don't re-derive bounds here.
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const handleEdgeMouseDown = useCallback((e: React.MouseEvent) => {
-    if (drawerMode === 'parked') return
     dragStateRef.current = { startX: e.clientX, startWidth: drawerWidth }
     document.body.style.cursor = 'ew-resize'
     e.preventDefault()
-  }, [drawerMode, drawerWidth])
+  }, [drawerWidth])
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!dragStateRef.current) return
@@ -234,7 +230,6 @@ export function EntityPreviewPanel() {
 
   const entity = rawEntity ? { ...rawEntity } : null
 
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const [draftMarkdown, setDraftMarkdown] = useState('')
   const [baselineMarkdown, setBaselineMarkdown] = useState('')
   const [editorSeedMarkdown, setEditorSeedMarkdown] = useState('')
@@ -368,30 +363,6 @@ export function EntityPreviewPanel() {
 
   if (!entity) return null
 
-  // Parked mode: collapse to a 44px strip on the right edge of <main>
-  // with a rotated title, so the file is one click away without consuming
-  // any real estate. Clicking anywhere on the strip re-opens to overlay.
-  // pt-10 mirrors the ViewSwitcher's top offset so the label clears the
-  // window's drag region.
-  if (drawerMode === 'parked') {
-    return (
-      <aside
-        className="absolute top-0 right-0 bottom-0 flex items-center justify-center cursor-pointer border-l t-border t-bg-base hover:t-bg-hover transition-colors z-[5] pt-10"
-        style={{ width: 44 }}
-        onClick={() => setDrawerMode('overlay')}
-        title={`Reopen ${entity.title}`}
-        aria-label={`Parked preview: ${entity.title}`}
-      >
-        <span
-          className="text-xs font-medium t-text-secondary truncate max-h-[calc(100%-64px)]"
-          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-        >
-          {entity.title}
-        </span>
-      </aside>
-    )
-  }
-
   const fileExt = entity.filePath ? getExtension(entity.filePath) : ''
   const isFileMarkdown = Boolean(entity.filePath && (fileExt === 'md' || fileExt === 'markdown'))
   const isInlineEditable = !entity.filePath
@@ -434,16 +405,6 @@ export function EntityPreviewPanel() {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [nav.canNavigate, previewEditorFocused, handleNavPrev, handleNavNext])
-
-  const handleDelete = async () => {
-    if (!confirmDelete) {
-      setConfirmDelete(true)
-      setTimeout(() => setConfirmDelete(false), 2000)
-      return
-    }
-    await deleteEntity(entity.id)
-    closePreview()
-  }
 
   const handleSave = async () => {
     if (!isEditable || !isDirty) return
@@ -623,18 +584,13 @@ export function EntityPreviewPanel() {
     )
   }
 
-  const isPinned = drawerMode === 'pinned'
-
-  // Visual signature: a 3px accent rail inset on the drawer's left edge —
-  // a single colored line that tells the user "this surface is bound to
-  // the conversation." In overlay mode it's layered with a soft outer
-  // drop-shadow; in pinned mode the shadow is dropped so the drawer sits
-  // flush against the chat column.
+  // Visual signature: a 3px accent rail inset on the drawer's left edge
+  // layered with a soft outer drop-shadow — a single colored line that
+  // tells the user "this surface is bound to the conversation."
   // pt-10 mirrors the ViewSwitcher's top offset so the drawer's header
   // row lines up with the view tabs (peer-like rather than stacked).
-  const RAIL = 'inset 3px 0 0 0 var(--color-accent)'
-  const OVERLAY_SHADOW = '-12px 0 32px -14px rgba(0,0,0,0.18)'
-  const drawerBoxShadow = isPinned ? RAIL : `${RAIL}, ${OVERLAY_SHADOW}`
+  const drawerBoxShadow =
+    'inset 3px 0 0 0 var(--color-accent), -12px 0 32px -14px rgba(0,0,0,0.18)'
 
   // Editorial crumb displayed above the file name — gives the drawer
   // a clear sense of place ("where did this come from?") without competing
@@ -732,34 +688,6 @@ export function EntityPreviewPanel() {
                 <Save size={14} />
               </button>
             )}
-            {entity.id !== 'agent-md' && (
-              <button
-                onClick={handleDelete}
-                className={`p-1 rounded transition-colors ${
-                  confirmDelete ? 't-text-error' : 't-text-muted t-bg-hover'
-                }`}
-                title={confirmDelete ? 'Click again to confirm delete' : 'Delete'}
-              >
-                <Trash2 size={14} />
-              </button>
-            )}
-            <button
-              onClick={() => setDrawerMode(isPinned ? 'overlay' : 'pinned')}
-              className={`p-1 rounded transition-colors ${
-                isPinned ? 't-text-accent' : 't-text-muted t-bg-hover'
-              }`}
-              title={isPinned ? 'Unpin (float over chat)' : 'Pin (anchor alongside chat)'}
-              aria-pressed={isPinned}
-            >
-              <Pin size={14} />
-            </button>
-            <button
-              onClick={() => setDrawerMode('parked')}
-              className="p-1 rounded t-text-muted t-bg-hover transition-colors"
-              title="Park to edge"
-            >
-              <Minimize2 size={14} />
-            </button>
             <button
               onClick={handleClosePreview}
               className="p-1 rounded t-text-muted t-bg-hover transition-colors"
@@ -825,7 +753,7 @@ export function EntityPreviewPanel() {
           <span className="truncate">Bound to chat</span>
         </span>
         <span className="truncate shrink-0">
-          Drag edge · {isPinned ? '⌘P unpin' : 'Esc to close'}
+          Drag edge · Esc to close
         </span>
       </footer>
     </div>
