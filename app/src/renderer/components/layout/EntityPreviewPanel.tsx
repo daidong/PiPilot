@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 const remarkPlugins = [remarkGfm]
-import { X, StickyNote, BookOpen, Database, Trash2, Save, ChevronUp, ChevronDown } from 'lucide-react'
+import { X, StickyNote, BookOpen, Database, Trash2, Save, ChevronUp, ChevronDown, Pin, Minimize2 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
@@ -194,11 +194,43 @@ export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
   const setPreviewEditorFocused = useUIStore((s) => s.setPreviewEditorFocused)
+  const drawerMode = useUIStore((s) => s.drawerMode)
+  const drawerWidth = useUIStore((s) => s.drawerWidth)
+  const setDrawerMode = useUIStore((s) => s.setDrawerMode)
+  const setDrawerWidth = useUIStore((s) => s.setDrawerWidth)
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const refreshAll = useEntityStore((s) => s.refreshAll)
 
   const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
   const nav = usePreviewNavigation()
+
+  // Drag-to-resize the drawer's left edge. Captures start width + cursor X
+  // on mousedown, then adjusts drawerWidth as the cursor moves. Clamping
+  // lives in the store (setDrawerWidth), so we don't re-derive bounds here.
+  const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const handleEdgeMouseDown = useCallback((e: React.MouseEvent) => {
+    if (drawerMode === 'parked') return
+    dragStateRef.current = { startX: e.clientX, startWidth: drawerWidth }
+    document.body.style.cursor = 'ew-resize'
+    e.preventDefault()
+  }, [drawerMode, drawerWidth])
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragStateRef.current) return
+      const dx = dragStateRef.current.startX - e.clientX
+      setDrawerWidth(dragStateRef.current.startWidth + dx)
+    }
+    const onUp = () => {
+      if (dragStateRef.current) document.body.style.cursor = ''
+      dragStateRef.current = null
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [setDrawerWidth])
 
   const entity = rawEntity ? { ...rawEntity } : null
 
@@ -335,6 +367,30 @@ export function EntityPreviewPanel() {
   }, [entity?.id, entity?.filePath, entity?.type])
 
   if (!entity) return null
+
+  // Parked mode: collapse to a 44px strip on the right edge of <main>
+  // with a rotated title, so the file is one click away without consuming
+  // any real estate. Clicking anywhere on the strip re-opens to overlay.
+  // pt-10 mirrors the ViewSwitcher's top offset so the label clears the
+  // window's drag region.
+  if (drawerMode === 'parked') {
+    return (
+      <aside
+        className="absolute top-0 right-0 bottom-0 flex items-center justify-center cursor-pointer border-l t-border t-bg-base hover:t-bg-hover transition-colors z-[5] pt-10"
+        style={{ width: 44 }}
+        onClick={() => setDrawerMode('overlay')}
+        title={`Reopen ${entity.title}`}
+        aria-label={`Parked preview: ${entity.title}`}
+      >
+        <span
+          className="text-xs font-medium t-text-secondary truncate max-h-[calc(100%-64px)]"
+          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+        >
+          {entity.title}
+        </span>
+      </aside>
+    )
+  }
 
   const fileExt = entity.filePath ? getExtension(entity.filePath) : ''
   const isFileMarkdown = Boolean(entity.filePath && (fileExt === 'md' || fileExt === 'markdown'))
@@ -559,8 +615,31 @@ export function EntityPreviewPanel() {
     )
   }
 
+  const isPinned = drawerMode === 'pinned'
+  const overlayShadow = !isPinned
+    ? 'shadow-[-8px_0_32px_-12px_rgba(0,0,0,0.18)] dark:shadow-[-8px_0_32px_-6px_rgba(0,0,0,0.55)]'
+    : ''
+
+  // pt-10 mirrors the ViewSwitcher's top offset — the drawer's own header
+  // row then sits at the same baseline as the view tabs, giving a peer-like
+  // relationship instead of the tabs' border-b colliding into the drawer.
   return (
-    <div className="flex-1 flex flex-col border-l t-border t-bg-base pt-10 min-w-0">
+    <div
+      className={`absolute top-0 right-0 bottom-0 flex flex-col border-l t-border t-bg-base min-w-0 z-[5] pt-10 transition-[width,box-shadow] duration-500 ease-[cubic-bezier(0.32,0.72,0.24,1)] ${overlayShadow}`}
+      style={{ width: drawerWidth }}
+      aria-label={`Preview: ${entity.title}`}
+    >
+      {/* Left-edge drag handle — 6px hit area; a 2px pill shows on hover. */}
+      <div
+        className="absolute left-0 top-0 bottom-0 w-[6px] cursor-ew-resize group z-[6]"
+        style={{ marginLeft: -3 }}
+        onMouseDown={handleEdgeMouseDown}
+        title="Drag to resize"
+        aria-hidden="true"
+      >
+        <div className="absolute left-[3px] top-1/2 -translate-y-1/2 w-[2px] h-9 rounded bg-transparent group-hover:t-bg-accent transition-colors" />
+      </div>
+
       <div className="flex items-center gap-3 px-4 py-3 border-b t-border">
         {typeIcons[entity.type] || null}
         <h2 className="flex-1 text-sm font-semibold t-text truncate">{entity.title}</h2>
@@ -615,9 +694,26 @@ export function EntityPreviewPanel() {
             </button>
           )}
           <button
+            onClick={() => setDrawerMode(isPinned ? 'overlay' : 'pinned')}
+            className={`p-1 rounded transition-colors ${
+              isPinned ? 't-text-accent' : 't-text-muted t-bg-hover'
+            }`}
+            title={isPinned ? 'Unpin (float over chat)' : 'Pin (anchor alongside chat)'}
+            aria-pressed={isPinned}
+          >
+            <Pin size={14} />
+          </button>
+          <button
+            onClick={() => setDrawerMode('parked')}
+            className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+            title="Park to edge"
+          >
+            <Minimize2 size={14} />
+          </button>
+          <button
             onClick={handleClosePreview}
             className="p-1 rounded t-text-muted t-bg-hover transition-colors"
-            title="Close preview"
+            title="Close preview (Esc)"
           >
             <X size={14} />
           </button>

@@ -4,7 +4,6 @@ import { UpdateBanner } from './components/UpdateBanner'
 import type { WikiPaperMeta } from '../../../lib/wiki/paper-meta-cache'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
-import { EntityPreviewPanel } from './components/layout/EntityPreviewPanel'
 import { StatusBar } from './components/layout/StatusBar'
 import { TerminalPanel } from './components/layout/TerminalPanel'
 import { ErrorBoundary } from './components/layout/ErrorBoundary'
@@ -940,8 +939,9 @@ export default function App() {
           )}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
             <div className={`flex min-h-0 ${terminalVisible ? 'flex-[2]' : 'flex-1'}`}>
+              {/* The entity preview is rendered inside CenterPanel's chat view
+                  as a drawer bounded by the chat-body zone. See CenterPanel.tsx. */}
               <CenterPanel />
-              {previewEntity && <EntityPreviewPanel />}
             </div>
             {/* Integrated terminal — stays mounted while alive, hidden when not visible */}
             {terminalAlive && (

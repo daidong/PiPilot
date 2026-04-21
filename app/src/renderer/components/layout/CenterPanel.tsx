@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { MessageSquare, BookOpen, Cpu } from 'lucide-react'
 import { useUIStore, type CenterView } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
@@ -9,6 +9,7 @@ import { ChatMessages } from '../center/ChatMessages'
 import { ChatInput } from '../center/ChatInput'
 import { LiteratureView } from '../center/LiteratureView'
 import { ComputeView } from '../center/ComputeView'
+import { EntityPreviewPanel } from './EntityPreviewPanel'
 
 const api = (window as any).api
 const computeEnabled = api?.isComputeEnabled?.() ?? false
@@ -94,7 +95,20 @@ export function CenterPanel() {
   const centerView = useUIStore((s) => s.centerView)
   const isIdle = useUIStore((s) => s.isIdle)
   const messages = useChatStore((s) => s.messages)
+  const previewEntity = useUIStore((s) => s.previewEntity)
+  const drawerMode = useUIStore((s) => s.drawerMode)
+  const drawerWidth = useUIStore((s) => s.drawerWidth)
+  const closePreview = useUIStore((s) => s.closePreview)
   const showHero = isIdle && messages.length === 0
+
+  // If the user switches away from chat while a preview is open, close it.
+  // The drawer only renders in chat view, and leaving it open would mean
+  // losing the editor's local state silently on return.
+  useEffect(() => {
+    if (centerView !== 'chat' && previewEntity) {
+      closePreview()
+    }
+  }, [centerView, previewEntity, closePreview])
 
   if (centerView === 'literature') {
     return (
@@ -114,28 +128,60 @@ export function CenterPanel() {
     )
   }
 
-  // Chat view
+  // Chat view — the drawer is hosted inside chat-body so it is bounded above
+  // by ViewSwitcher and below by the ChatInput row; it cannot cover either.
+  // Messages and input are both shifted left when the drawer is open, so
+  // their column stays visually aligned with each other.
+  const drawerOpen = !!previewEntity
+  const rightGutter = drawerOpen
+    ? (drawerMode === 'parked' ? 56 : drawerWidth)
+    : 0
+
+  // The entire chat column — tabs, messages, input — shrinks in lockstep
+  // when the drawer opens. This keeps the view-tabs' bottom border from
+  // running past the drawer's left edge and creates a single clean vertical
+  // divider between chat and drawer that spans the full height of <main>.
+  const columnShiftStyle = { paddingRight: `${rightGutter}px` }
+  const columnShiftClass = 'transition-[padding] duration-500 ease-[cubic-bezier(0.32,0.72,0.24,1)]'
+
   return (
-    <main id="main-content" className="flex-1 flex flex-col min-w-0">
-      <ViewSwitcher />
+    <main id="main-content" className="flex-1 flex flex-col min-w-0 relative overflow-hidden">
+      <div className={columnShiftClass} style={columnShiftStyle}>
+        <ViewSwitcher />
+      </div>
 
-      {showHero ? (
-        <div className="flex-1 flex items-center justify-center">
-          <HeroIdle />
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0 px-6 pt-4 pb-2">
-          <div className="mx-auto h-full" style={{ maxWidth: '64rem' }}>
-            <ChatMessages />
+      <div className="flex-1 min-h-0">
+        {showHero ? (
+          <div
+            className={`h-full flex items-center justify-center ${columnShiftClass}`}
+            style={columnShiftStyle}
+          >
+            <HeroIdle />
           </div>
-        </div>
-      )}
+        ) : (
+          <div
+            className={`h-full pl-6 pt-4 pb-2 ${columnShiftClass}`}
+            style={{ paddingRight: `${24 + rightGutter}px` }}
+          >
+            <div className="mx-auto h-full" style={{ maxWidth: '64rem' }}>
+              <ChatMessages />
+            </div>
+          </div>
+        )}
+      </div>
 
-      <div className="px-6 pb-5">
+      <div
+        className={`pl-6 pb-5 ${columnShiftClass}`}
+        style={{ paddingRight: `${24 + rightGutter}px` }}
+      >
         <div className="mx-auto" style={{ maxWidth: '64rem' }}>
           <ChatInput />
         </div>
       </div>
+
+      {/* Drawer — spans full main height so its border-l runs uninterrupted
+          from the top of the view-tabs to the bottom of the input row. */}
+      {drawerOpen && <EntityPreviewPanel />}
     </main>
   )
 }
