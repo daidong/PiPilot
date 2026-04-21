@@ -16,6 +16,22 @@ const DRAWER_WIDTH_DEFAULT = 540
 const clampDrawerWidth = (px: number): number =>
   Math.max(DRAWER_WIDTH_MIN, Math.min(DRAWER_WIDTH_MAX, Math.round(px)))
 
+// Left sidebar width. Bounds chosen so the top toolbar (ModelSelector +
+// ReasoningToggle + overflow menu) never clips at min, and so the center
+// panel keeps reading-comfortable width at max on a 13" laptop.
+const LEFT_WIDTH_MIN = 260
+const LEFT_WIDTH_MAX = 480
+const LEFT_WIDTH_DEFAULT = 320
+const LEFT_WIDTH_KEY = 'ui.leftSidebarWidth'
+const clampLeftWidth = (px: number): number =>
+  Math.max(LEFT_WIDTH_MIN, Math.min(LEFT_WIDTH_MAX, Math.round(px)))
+const readLeftWidth = (): number => {
+  if (typeof window === 'undefined') return LEFT_WIDTH_DEFAULT
+  const raw = window.localStorage?.getItem(LEFT_WIDTH_KEY)
+  const n = raw ? Number.parseInt(raw, 10) : NaN
+  return Number.isFinite(n) ? clampLeftWidth(n) : LEFT_WIDTH_DEFAULT
+}
+
 // Re-export from shared-ui for backward compatibility
 export { REASONING_MODELS, SUPPORTED_MODELS }
 /** @deprecated Use REASONING_MODELS instead */
@@ -45,6 +61,7 @@ interface UIState {
   previewSourceTab: LeftTab | null
   previewEditorFocused: boolean
   drawerWidth: number
+  leftSidebarWidth: number
 
   // Literature view state
   literatureFilter: LiteratureFilter
@@ -75,6 +92,7 @@ interface UIState {
   closePreview: () => void
   setPreviewEditorFocused: (focused: boolean) => void
   setDrawerWidth: (width: number) => void
+  setLeftSidebarWidth: (width: number) => void
   setLiteratureFilter: (filter: Partial<LiteratureFilter>) => void
 }
 
@@ -107,6 +125,7 @@ export const useUIStore = create<UIState>((set) => ({
   previewSourceTab: null,
   previewEditorFocused: false,
   drawerWidth: DRAWER_WIDTH_DEFAULT,
+  leftSidebarWidth: readLeftWidth(),
   literatureFilter: {
     search: '',
     subTopic: null,
@@ -214,6 +233,7 @@ export const useUIStore = create<UIState>((set) => ({
       previewSourceTab: null,
       previewEditorFocused: false,
       drawerWidth: DRAWER_WIDTH_DEFAULT,
+      leftSidebarWidth: readLeftWidth(),
       literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null },
       wikiReaderSlug: null,
       wikiReaderHistory: []
@@ -230,7 +250,12 @@ export const useUIStore = create<UIState>((set) => ({
   })),
   closePreview: () => set({ previewEntity: null, previewSourceTab: null, previewEditorFocused: false }),
   setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused }),
-  setDrawerWidth: (drawerWidth) => set({ drawerWidth: clampDrawerWidth(drawerWidth) })
+  setDrawerWidth: (drawerWidth) => set({ drawerWidth: clampDrawerWidth(drawerWidth) }),
+  setLeftSidebarWidth: (width) => {
+    const clamped = clampLeftWidth(width)
+    set({ leftSidebarWidth: clamped })
+    try { window.localStorage?.setItem(LEFT_WIDTH_KEY, String(clamped)) } catch { /* quota/disabled */ }
+  }
 }))
 
 /** Load persisted model, reasoning, and theme preferences from disk. Call after project path is set. */
