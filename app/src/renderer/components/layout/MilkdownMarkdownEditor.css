@@ -23,9 +23,71 @@
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror {
-  padding: 18px 20px;
-  min-height: 280px;
+  padding: 10px 16px 16px;
+  min-height: 240px;
   caret-color: var(--color-accent);
+}
+
+/* Compact vertical rhythm — Crepe's defaults leave a lot of breathing
+   room between blocks that feels roomy in a full-width editor but wastes
+   a quarter of a drawer's real estate. Each override below halves (or
+   close to it) the original margin while preserving readable hierarchy. */
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror > :first-child {
+  margin-top: 0;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror h1,
+.entity-preview-milkdown-shell .milkdown .ProseMirror h2,
+.entity-preview-milkdown-shell .milkdown .ProseMirror h3,
+.entity-preview-milkdown-shell .milkdown .ProseMirror h4,
+.entity-preview-milkdown-shell .milkdown .ProseMirror h5,
+.entity-preview-milkdown-shell .milkdown .ProseMirror h6 {
+  margin-top: 18px;
+  margin-bottom: 6px;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror h1:first-child,
+.entity-preview-milkdown-shell .milkdown .ProseMirror h2:first-child,
+.entity-preview-milkdown-shell .milkdown .ProseMirror h3:first-child {
+  margin-top: 0;
+}
+
+.entity-preview-milkdown-shell .milkdown .ProseMirror p {
+  margin: 0 0 8px;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror ul,
+.entity-preview-milkdown-shell .milkdown .ProseMirror ol {
+  margin: 4px 0 8px;
+  padding-left: 1.4em;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror li {
+  margin: 1px 0;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror li > p {
+  margin: 0;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror blockquote {
+  margin: 8px 0;
+  padding: 2px 12px;
+  border-left: 2px solid var(--color-border);
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror img {
+  margin: 6px 0;
+  max-width: 100%;
+  height: auto;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror table {
+  margin: 8px 0;
+  border-collapse: collapse;
+}
+.entity-preview-milkdown-shell .milkdown .ProseMirror table th,
+.entity-preview-milkdown-shell .milkdown .ProseMirror table td {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
 }
 
 /* Typographic scale sized to match the chat column (text-sm = 14px).
@@ -92,10 +154,15 @@
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror pre {
   border: 1px solid var(--color-border);
+  margin: 8px 0;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror code {
   border-radius: 4px;
+  font-size: 12.5px;
 }
 
 .entity-preview-milkdown-shell .milkdown .milkdown-toolbar {
