@@ -432,6 +432,17 @@ export function EntityPreviewPanel() {
     baselineRef.current = baselineMarkdown
   }, [baselineMarkdown])
 
+  // Per-mode scroll memory for the Marp source/slides toggle. The two
+  // modes have unrelated layouts (slide cards vs. a long editor), so
+  // sharing scrollTop would land in the wrong place. Instead we remember
+  // each mode's last position independently and restore on toggle.
+  // Resets on entity change so each file starts at the top.
+  const scrollContentRef = useRef<HTMLDivElement>(null)
+  const modeScrollRef = useRef<{ source: number; slides: number }>({ source: 0, slides: 0 })
+  useEffect(() => {
+    modeScrollRef.current = { source: 0, slides: 0 }
+  }, [entity?.id])
+
   // Auto-reload when agent modifies the currently previewed markdown file
   useEffect(() => {
     if (!entity?.filePath) return
@@ -525,6 +536,37 @@ export function EntityPreviewPanel() {
   const effectiveViewMode: 'source' | 'slides' =
     viewModeOverride ?? (isMarpFile ? 'slides' : 'source')
   const showSlideView = isMarpFile && effectiveViewMode === 'slides'
+
+  // Continuously record scroll position for the current mode so that
+  // toggling at any moment returns the user to where they were. The
+  // listener is re-attached when the mode flips so each mode's key in
+  // modeScrollRef only receives scroll events while that mode is live.
+  useEffect(() => {
+    const el = scrollContentRef.current
+    if (!el) return
+    const onScroll = () => {
+      modeScrollRef.current[effectiveViewMode] = el.scrollTop
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [effectiveViewMode])
+
+  // Restore remembered scroll on mode change. rAF delays the write until
+  // after the new content has laid out; a second pass covers Milkdown's
+  // async hydration (the editor Suspense-loads and its content height
+  // lands a tick later, which can clamp an early scrollTop to 0).
+  useEffect(() => {
+    const target = modeScrollRef.current[effectiveViewMode] ?? 0
+    const apply = () => {
+      if (scrollContentRef.current) scrollContentRef.current.scrollTop = target
+    }
+    const raf = requestAnimationFrame(apply)
+    const retry = window.setTimeout(apply, 200)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.clearTimeout(retry)
+    }
+  }, [effectiveViewMode, entity?.id])
   const seedFp = buildFingerprint(editorSeedBody)
   const editorKey = `${entity.id}:${entity.filePath ?? 'inline'}:${seedFp.length}:${seedFp.codeFenceCount}:${seedFp.mermaidFenceCount}:${seedFp.mathBlockCount}:${seedFp.imageCount}`
 
@@ -924,7 +966,7 @@ export function EntityPreviewPanel() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-5 py-5 min-h-0">
+      <div ref={scrollContentRef} className="flex-1 overflow-y-auto px-5 py-5 min-h-0">
         {renderContent()}
       </div>
 
