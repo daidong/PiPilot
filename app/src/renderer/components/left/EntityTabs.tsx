@@ -178,7 +178,7 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
         ) : (
           <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
         )}
-        <span className="text-xs t-text truncate">{entity.title}</span>
+        <span className="text-xs t-text truncate" title={entity.title}>{entity.title}</span>
       </div>
       {messageId && (
         <button
@@ -242,7 +242,11 @@ function DataTreeView({ items }: { items: EntityItem[] }) {
                 {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               </button>
               <FlaskConical size={13} className="shrink-0 t-text-accent" />
-              <span className="text-xs t-text truncate" onClick={() => openPreview(children[0])}>
+              <span
+                className="text-xs t-text truncate"
+                title={`Analysis: ${label}`}
+                onClick={() => openPreview(children[0])}
+              >
                 Analysis: {label}
               </span>
             </div>
@@ -500,7 +504,7 @@ function SkillsContent() {
                       <div className="min-w-0 flex-1">
                         {/* Name + source badge */}
                         <div className="flex items-center gap-1.5">
-                          <p className="text-xs t-text font-medium truncate">{skill.name}</p>
+                          <p className="text-xs t-text font-medium truncate" title={skill.name}>{skill.name}</p>
                           {skill.source !== 'builtin' && (
                             <span className="shrink-0 px-1 py-px text-[9px] rounded t-bg-elevated t-text-muted">
                               {skill.source}

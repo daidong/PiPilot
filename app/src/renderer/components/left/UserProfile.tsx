@@ -22,6 +22,7 @@ export function UserProfile() {
   return (
     <button
       onClick={handlePickFolder}
+      title={displayPath}
       className="no-drag flex items-center gap-2 w-full text-left text-sm t-text-secondary hover:t-text transition-colors"
     >
       <Folder size={16} className="shrink-0" />
