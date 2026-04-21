@@ -96,7 +96,6 @@ export function CenterPanel() {
   const isIdle = useUIStore((s) => s.isIdle)
   const messages = useChatStore((s) => s.messages)
   const previewEntity = useUIStore((s) => s.previewEntity)
-  const drawerMode = useUIStore((s) => s.drawerMode)
   const drawerWidth = useUIStore((s) => s.drawerWidth)
   const closePreview = useUIStore((s) => s.closePreview)
   const showHero = isIdle && messages.length === 0
@@ -133,9 +132,7 @@ export function CenterPanel() {
   // Messages and input are both shifted left when the drawer is open, so
   // their column stays visually aligned with each other.
   const drawerOpen = !!previewEntity
-  const rightGutter = drawerOpen
-    ? (drawerMode === 'parked' ? 56 : drawerWidth)
-    : 0
+  const rightGutter = drawerOpen ? drawerWidth : 0
 
   // The entire chat column — tabs, messages, input — shrinks in lockstep
   // when the drawer opens. This keeps the view-tabs' bottom border from
