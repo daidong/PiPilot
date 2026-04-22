@@ -873,7 +873,7 @@ export function registerAuthHandlers(
     if (!creds) return { success: false, error: 'Not logged in' }
     try {
       const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
-      const newCreds = await refreshOpenAICodexToken(creds)
+      const newCreds = await refreshOpenAICodexToken(creds.refresh)
       saveCodexCredentials(newCreds)
       return { success: true }
     } catch (err: any) {
