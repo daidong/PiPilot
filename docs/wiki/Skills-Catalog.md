@@ -1,4 +1,4 @@
-Research Copilot ships with **14 builtin skills** — lazy-loaded Markdown modules that give the agent domain expertise. Skills auto-activate when the coordinator detects a matching intent or when you invoke them by name.
+Research Copilot ships with **15 builtin skills** — lazy-loaded Markdown modules that give the agent domain expertise. Skills auto-activate when the coordinator detects a matching intent or when you invoke them by name.
 
 For how skills work and how to write your own, see [Getting Started → Add custom skills](Getting-Started#5-add-custom-skills-optional).
 
@@ -46,9 +46,15 @@ Meta-skill for journal-ready multi-panel figures. Orchestrates matplotlib/seabor
 Publication-quality diagrams via OpenRouter (Gemini 3 Pro Image + review). Iterative refinement, only regenerates below quality threshold. Requires `OPENROUTER_API_KEY`.
 > *"Generate a system architecture diagram for <topic>."*
 
-### `marp-slides`
-Polished research presentation slides in Markdown via Marp — conference talks, lab meetings, thesis defense, posters.
+## Presentations
+
+### `academic-marp-slides`
+Create or revise research presentation slides in Markdown via Marp, following a disciplined 4-phase workflow (Storyline → Skeleton → Content → Polish). Enforces Assertion-Evidence structure and Mayer's multimedia principles. Conference talks, lab meetings, thesis defenses, invited talks.
 > *"Turn this paper draft into a 12-slide conference talk."*
+
+### `teaching-marp-slides`
+Create or revise lecture/teaching slides in Markdown via Marp for upper-undergrad and graduate courses. 6-phase workflow (Objectives → Prereqs → Arc → Content → Engagement → Dual Export). Enforces Cognitive Load Theory, worked-example effect, scaffolding, retrieval practice. Produces both lecture and handout versions.
+> *"Make a 50-minute lecture on backpropagation for my grad ML class."*
 
 ## Research Ideation
 

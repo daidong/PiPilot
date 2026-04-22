@@ -100,13 +100,14 @@ async function matchSkillsWithLLM(
   model: Model<any> | null,
   apiKey: string,
   message: string,
-  skills: SkillEntry[]
+  skills: SkillEntry[],
+  priorTurns: Array<{ userMessage: string; response: string }> = []
 ): Promise<string[]> {
   if (!model || skills.length === 0) return []
 
   const skillList = skills.map(s => `- ${s.name}: ${s.description}`).join('\n')
   const systemPrompt = [
-    'You are a skill router for a research assistant. Given a user message, select which skills should be activated.',
+    'You are a skill router for a research assistant. Given a user message (and recent conversation context, if any), select which skills should be activated.',
     'Return ONLY a JSON array of skill names. Return [] if none are relevant.',
     '',
     'Rules:',
@@ -114,15 +115,27 @@ async function matchSkillsWithLLM(
     '- Do not select skills speculatively',
     `- Maximum ${MAX_SKILL_PRELOAD} skills`,
     '- Consider both English and Chinese messages',
+    '- If the current message is a short follow-up or confirmation (e.g. "yes", "do that", "go ahead", "好的", "继续"), infer intent from the recent context',
     '',
     'Available skills:',
     skillList
   ].join('\n')
 
+  // Build a compact context block from prior turns (already truncated to ~300 chars each upstream).
+  const contextBlock = priorTurns.length > 0
+    ? priorTurns
+        .map(t => `User: ${t.userMessage}\nAssistant: ${t.response}`)
+        .join('\n\n')
+    : ''
+
+  const userContent = contextBlock
+    ? `Recent conversation:\n${contextBlock}\n\nCurrent user message:\n${message}`
+    : message
+
   try {
     const result = await completeSimple(model, {
       systemPrompt,
-      messages: [{ role: 'user', content: message, timestamp: Date.now() }]
+      messages: [{ role: 'user', content: userContent, timestamp: Date.now() }]
     }, {
       maxTokens: 100,
       apiKey
@@ -678,8 +691,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const intents = detectIntentsByRules(message)
 
         // --- LLM-based skill matching (replaces intent-driven prompt modules) ---
+        // Pass the last 2 turns so short follow-ups ("yes, do that") can be routed
+        // using recent context. turnHistory entries are already truncated to ~300
+        // chars per side, so token cost stays small.
+        const priorTurns = turnHistory.slice(-2).map(t => ({
+          userMessage: t.userMessage,
+          response: t.response
+        }))
         const currentKey = await resolveApiKey()
-        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills)
+        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills, priorTurns)
         const matchedSkills = matchedSkillNames
           .map(name => skills.find(s => s.name === name))
           .filter((s): s is SkillEntry => s !== undefined)

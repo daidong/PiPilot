@@ -87,7 +87,7 @@ A background agent that turns every paper you've ever opened into a **local, con
 The wiki runs offline and **is disabled by default** — it consumes LLM tokens (roughly 8K–25K input / 2K–4K output per paper), so you opt in from the Settings panel and pick a model you're comfortable paying for. Subscription-backed models are recommended; an "Auto" option follows the system-wide priority (sub before API key). Identity drift across DOI/arXiv/title lookups is reconciled automatically so papers don't get reprocessed.
 
 ### Extensible Skills System
-Skills are lazy-loaded knowledge modules that give the AI domain expertise. The app ships with **14 builtin skills** covering academic writing (paper-writing, paper-revision, research-grants, rewrite-humanize, scientific-writing, scholar-evaluation), visualization (matplotlib, seaborn, scientific-schematics, scientific-visualization, marp-slides), research ideation (brainstorming, creative-thinking), and general coding. You can also add your own project-specific skills as plain Markdown files.
+Skills are lazy-loaded knowledge modules that give the AI domain expertise. The app ships with **15 builtin skills** covering academic writing (paper-writing, paper-revision, research-grants, rewrite-humanize, scientific-writing, scholar-evaluation), visualization (matplotlib, seaborn, scientific-schematics, scientific-visualization), presentations (academic-marp-slides, teaching-marp-slides), research ideation (brainstorming, creative-thinking), and general coding. You can also add your own project-specific skills as plain Markdown files.
 
 ### File Attachments in Chat
 Attach files directly in the chat input via the paperclip button, drag & drop, or paste. Supported formats:
