@@ -53,7 +53,7 @@ function hasCoreMetadataDelta(
   },
   after: PaperInput
 ): boolean {
-  return (
+  return Boolean(
     (after.venue && after.venue !== before.venue) ||
     (after.doi && after.doi !== before.doi) ||
     (after.citationCount != null && after.citationCount !== before.citationCount) ||

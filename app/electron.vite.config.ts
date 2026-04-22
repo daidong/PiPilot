@@ -5,15 +5,17 @@ import { resolve } from 'path'
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ include: ['node-pty'] })],
+    // Cast needed: electron-vite 5 declares BuildEnvironmentOptions from vite 7,
+    // but vite resolves to 5.x here, so MainBuildOptions appears to lack
+    // rollupOptions in the type graph. Runtime config is valid.
     build: {
-      // Output ESM so external pi-mono packages (pure ESM) are import()'d, not require()'d
       rollupOptions: {
         output: {
           format: 'es',
           entryFileNames: '[name].mjs'
         }
       }
-    },
+    } as any,
     resolve: {
       alias: {
         '@shared-electron': resolve(__dirname, '../shared-electron'),

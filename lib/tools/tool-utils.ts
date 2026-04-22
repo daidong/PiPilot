@@ -40,6 +40,7 @@ export type ToolErrorCode =
   // Data errors
   | 'NOT_FOUND'
   | 'UNSUPPORTED_FORMAT'
+  | 'AMBIGUOUS'
 
 // ---------------------------------------------------------------------------
 // ToolResult — standardized result envelope
