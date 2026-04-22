@@ -51,3 +51,6 @@ __pycache__/
 
 # Claude Code local settings
 .claude/
+
+# Local-only design exploration scratch
+design-explorations/
