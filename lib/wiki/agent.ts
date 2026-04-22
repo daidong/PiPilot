@@ -438,9 +438,12 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
 
     try {
       const result = await processSinglePass()
-      if (state === 'destroyed') return
+      // Cast: state is a closure-shared `let` that background timers and
+      // external pause/destroy calls may mutate during the await above.
+      // TS narrows it out by the entry guard, so re-widen to AgentState.
+      if ((state as AgentState) === 'destroyed') return
 
-      if (state !== 'paused') {
+      if ((state as AgentState) !== 'paused') {
         state = 'cooldown'
         const delay = result.pendingRemaining > 0
           ? config.pacing.cycleCooldownMs
@@ -455,7 +458,7 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
     } catch (err) {
       log(`tick error: ${err}`)
       // Retry after idle interval
-      if (state !== 'paused' && state !== 'destroyed') {
+      if ((state as AgentState) !== 'paused' && (state as AgentState) !== 'destroyed') {
         timer = setTimeout(() => {
           state = 'idle'
           tick()

@@ -153,6 +153,16 @@ export interface UpdateArtifactInput {
   citationCount?: number
   enrichmentSource?: string
   enrichedAt?: string
+  subTopic?: string
+  keyFindings?: string[]
+  relevanceJustification?: string
+  addedInRound?: string
+  addedByTask?: string
+  fulltextPath?: string
+  identityConfidence?: 'high' | 'medium' | 'low'
+  arxivId?: string
+  pubmedId?: string
+  semanticScholarId?: string
 }
 
 function nowIso(): string {

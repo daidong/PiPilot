@@ -161,6 +161,14 @@ export interface ElectronAPI {
   wikiGetStatus: () => Promise<any>
   wikiGetStats: () => Promise<any>
   wikiGetLog: () => Promise<string[]>
+  wikiPause: () => Promise<any>
+  wikiResume: () => Promise<any>
+  wikiListPages: () => Promise<any>
+  wikiReadPage: (slug: string) => Promise<any>
+  wikiSlugForPaper: (artifactId: string, projectPath: string) => Promise<any>
+  wikiPaperSlugMap: () => Promise<any>
+  wikiListPaperMeta: () => Promise<any>
+  wikiReconcileIdentity: (opts?: { dryRun?: boolean }) => Promise<any>
   onWikiStatus: (cb: (status: any) => void) => () => void
 
   // Folder operations

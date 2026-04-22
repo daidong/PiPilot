@@ -1,6 +1,6 @@
 import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, watch, type FSWatcher } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, watch, type FSWatcher } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
 import { createCoordinator } from '../../../lib/agents/coordinator'
 import {
@@ -129,7 +129,7 @@ import {
 } from './usage-totals'
 
 interface WindowRuntimeState {
-  coordinator: ReturnType<typeof createCoordinator> | null
+  coordinator: Awaited<ReturnType<typeof createCoordinator>> | null
   currentModel: string
   currentReasoningEffort: 'max' | 'high' | 'medium' | 'low'
   currentAuthMode: 'api-key' | 'subscription' | 'none'
@@ -751,7 +751,7 @@ export function registerIpcHandlers(): void {
         const [rawProvider, modelId] = wikiModel.split(':')
         // Map subscription providers to their pi-ai provider name
         const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
-        const model = getPiModel(piProvider, modelId)
+        const model = getPiModel(piProvider as any, modelId)
 
         // Build async key getter (handles subscription token refresh)
         let resolveApiKey: () => Promise<string>
@@ -1595,7 +1595,7 @@ export function registerIpcHandlers(): void {
     const result: Record<string, { papers: number; notes: number; data: number; initialized: boolean }> = {}
     const countFiles = (dir: string): number => {
       try {
-        return readdirSync(dir).filter((f) => !f.startsWith('.')).length
+        return readdirSync(dir).filter((f: string) => !f.startsWith('.')).length
       } catch {
         return 0
       }

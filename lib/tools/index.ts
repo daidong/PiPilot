@@ -68,7 +68,7 @@ function wrapResearchTool(tool: ResearchTool): AgentTool {
       _toolCallId: string,
       params: any,
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult> => {
+    ): Promise<AgentToolResult<any>> => {
       try {
         const result = await tool.execute(params as Record<string, unknown>)
         // Pass through structured error fields (error_code, suggestions, etc.) from ResearchTool results

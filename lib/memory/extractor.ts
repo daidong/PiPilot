@@ -77,7 +77,7 @@ function simplifyMessages(
             const text = (block as any).text as string
             content += text.length > 500 ? text.slice(0, 500) + '...[truncated]' : text
             content += '\n'
-          } else if (block.type === 'tool_use' && 'name' in block) {
+          } else if (block.type === 'toolCall' && 'name' in block) {
             content += `[Called ${(block as any).name}]\n`
           }
         }
@@ -107,7 +107,7 @@ function agentCalledSaveMemoryThisTurn(messages: AgentMessage[]): boolean {
     if (msg.role === 'user') break
     if (msg.role === 'assistant' && Array.isArray(msg.content)) {
       for (const block of msg.content) {
-        if (block && typeof block === 'object' && 'type' in block && block.type === 'tool_use') {
+        if (block && typeof block === 'object' && 'type' in block && block.type === 'toolCall') {
           if ((block as any).name === 'save-memory') return true
         }
       }
@@ -147,7 +147,9 @@ export async function maybeExtractMemories(
 
     const result = await completeSimple(config.model, {
       systemPrompt: config.systemPrompt,
-      messages: simplified
+      // pi-ai's Message union requires extra fields on assistant turns, but
+      // for this context-only replay the providers read role/content/timestamp.
+      messages: simplified as any
     }, {
       maxTokens: 1024,
       apiKey: config.apiKey

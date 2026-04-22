@@ -255,8 +255,13 @@ export interface CoordinatorConfig {
 
 export async function createCoordinator(config: CoordinatorConfig): Promise<{
   agent: Agent
-  chat: (message: string, mentions?: ResolvedMention[]) => Promise<{ success: boolean; response?: string; error?: string }>
+  chat: (
+    message: string,
+    mentions?: ResolvedMention[],
+    images?: Array<{ base64: string; mimeType: string }>
+  ) => Promise<{ success: boolean; response?: string; error?: string }>
   clearSessionMemory: () => Promise<void>
+  abort: () => void
   destroy: () => Promise<void>
 }> {
   const {
@@ -425,8 +430,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   }
   const loadSkillTool = createLoadSkillTool(skills)
 
-  // Combine all tools
-  const allTools: AgentTool[] = [
+  // Combine all tools. pi-agent-core's AgentTool generic is invariant over its
+  // schema, so a heterogeneous tool array needs the wildcard form at the
+  // container boundary.
+  const allTools: AgentTool<any, any>[] = [
     ...codingTools,
     grepTool,
     findTool,
