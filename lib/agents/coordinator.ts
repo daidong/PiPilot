@@ -529,6 +529,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           piModel,
           settings.reserveTokens,
           currentKey,
+          undefined,
           signal,
           undefined,
           compactionSummary

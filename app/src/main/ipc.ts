@@ -361,7 +361,7 @@ async function ensureCoordinator(
         if (creds.expires < Date.now() + 60_000) {
           try {
             const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
-            const newCreds = await refreshOpenAICodexToken(creds)
+            const newCreds = await refreshOpenAICodexToken(creds.refresh)
             saveCodexCredentials(newCreds)
             return newCreds.access
           } catch {
@@ -776,7 +776,7 @@ export function registerIpcHandlers(): void {
             if (creds.expires < Date.now() + 60_000) {
               try {
                 const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
-                const newCreds = await refreshOpenAICodexToken(creds)
+                const newCreds = await refreshOpenAICodexToken(creds.refresh)
                 saveCodexCredentials(newCreds)
                 return newCreds.access
               } catch { return creds.access }
