@@ -26,7 +26,10 @@ import {
   detectDiagramType,
 } from './diagram-backends/prompts.js'
 import { resolveProviders, type DiagramProviderPrefs } from './diagram-backends/registry.js'
+import { fixedBetween, regressionsAgainst } from './diagram-backends/issue-tracking.js'
 import type {
+  BlockingIssue,
+  BlockingIssueKind,
   DiagramType,
   DocType,
   Quality,
@@ -189,6 +192,8 @@ interface IterationRecord {
   rawVerdict: ReviewResult['verdict']
   /** Populated when the reviewer's verdict was overridden due to contradictory fields. */
   verdictOverrideReason?: string
+  /** Populated when this iteration reintroduced a previously-fixed issue. */
+  regressedIssues?: BlockingIssue[]
   promptSnippet: string
 }
 
@@ -204,6 +209,8 @@ interface DiagramToolPayload {
   provider: { image: string; review: string }
   reviewLogPath: string
   stoppedEarly: boolean
+  /** Why the loop stopped: 'acceptable' / 'max_iterations' / 'regression_detected: …'. */
+  stoppedReason?: string
   /** Non-null when the output extension was rewritten (e.g. user asked for .png, fallback produced .svg). */
   extensionChanged?: { requested: string; actual: string }
 }
@@ -259,29 +266,62 @@ function sanitizeReferenceMode(value: unknown): ReferenceModeResult {
  * a score below the threshold is either confused or adversarial; in
  * either case we should not silently trust the `verdict` field.
  */
+// Issue kinds that should never be silently tolerated even when the score
+// comfortably clears threshold — they represent actual content errors or
+// readability failures, not merely aesthetic roughness.
+const CRITICAL_ISSUE_KINDS: BlockingIssueKind[] = [
+  'wrong_content',
+  'missing_element',
+  'illegible_text',
+]
+
+function hasCriticalIssue(issues: BlockingIssue[]): boolean {
+  return issues.some((i) => CRITICAL_ISSUE_KINDS.includes(i.kind))
+}
+
+/**
+ * Reconcile the reviewer's verdict against its own fields. Two moves:
+ *
+ *   1. Tighten when verdict says 'acceptable' but score is below threshold
+ *      or blocking issues exist — the reviewer contradicted itself.
+ *   2. Relax when verdict says 'needs_edit' but score comfortably exceeds
+ *      threshold (gap ≥ 1.0) AND no critical issues are present. Minor
+ *      cosmetic gripes should not force the loop to burn another round.
+ */
 function reconcileVerdict(
   review: ReviewResult,
   threshold: number
 ): { final: ReviewResult; override?: string } {
-  if (review.verdict !== 'acceptable') {
+  if (review.verdict === 'acceptable') {
+    if (review.score < threshold) {
+      return {
+        final: { ...review, verdict: 'needs_edit' },
+        override: `reviewer said acceptable but score ${review.score} < threshold ${threshold}`,
+      }
+    }
+    if (review.blockingIssues.length > 0) {
+      const hasStructural = hasCriticalIssue(review.blockingIssues)
+      return {
+        final: { ...review, verdict: hasStructural ? 'needs_regen' : 'needs_edit' },
+        override: `reviewer said acceptable but listed ${review.blockingIssues.length} blocking issues`,
+      }
+    }
     return { final: review }
   }
-  if (review.score < threshold) {
+
+  if (
+    review.verdict === 'needs_edit' &&
+    review.score >= threshold + 1.0 &&
+    !hasCriticalIssue(review.blockingIssues)
+  ) {
+    // Score gap is comfortable and every remaining issue is cosmetic
+    // (layout_collision / style_mismatch). Ship it.
     return {
-      final: { ...review, verdict: 'needs_edit' },
-      override: `reviewer said acceptable but score ${review.score} < threshold ${threshold}`,
+      final: { ...review, verdict: 'acceptable' },
+      override: `score ${review.score} ≥ threshold ${threshold} + 1.0 with no critical issues — accepting despite ${review.blockingIssues.length} minor note(s)`,
     }
   }
-  if (review.blockingIssues.length > 0) {
-    // Kind-sensitive: if a blocking issue is structural, needs_regen; else needs_edit.
-    const hasStructural = review.blockingIssues.some(
-      (i) => i.kind === 'wrong_content' || i.kind === 'missing_element'
-    )
-    return {
-      final: { ...review, verdict: hasStructural ? 'needs_regen' : 'needs_edit' },
-      override: `reviewer said acceptable but listed ${review.blockingIssues.length} blocking issues`,
-    }
-  }
+
   return { final: review }
 }
 
@@ -448,6 +488,13 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const history: IterationRecord[] = []
       let prevImage: Buffer | null = referenceBytes && referenceMode !== 'style_only' ? referenceBytes : null
       let stoppedEarly = false
+      let stoppedReason: string | undefined
+      // Accumulated corrections across iterations. An issue lands here
+      // the first iteration the reviewer stops complaining about it.
+      // Used to (a) feed preserved items into the next edit prompt so
+      // the model keeps earlier fixes intact, and (b) detect regression
+      // when a later draft reintroduces a once-fixed problem.
+      const fixedSoFar: BlockingIssue[] = []
       // Quality ladder: first iteration uses the doc_type default (or
       // explicit override); needs_edit bumps one tier so expensive
       // refinement only fires when the reviewer said the draft was
@@ -475,7 +522,12 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           }
         } else if (lastReview?.verdict === 'needs_edit' && prevImage && canEdit) {
           currentQuality = bumpedQuality(currentQuality)
-          promptForThisIter = composeEditPrompt(userPrompt, diagramType, lastReview.blockingIssues)
+          promptForThisIter = composeEditPrompt(
+            userPrompt,
+            diagramType,
+            lastReview.blockingIssues,
+            fixedSoFar
+          )
           image = await providers.image.imageToImage!(promptForThisIter, prevImage, { quality: currentQuality })
           usedEdit = true
         } else {
@@ -513,6 +565,12 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         const reconciled = reconcileVerdict(rawReview, threshold)
         const review = reconciled.final
 
+        // Regression detection: did this review re-introduce any issue
+        // that was marked fixed in a previous iteration? If so, another
+        // edit round will likely keep oscillating — stop now and return
+        // the current best draft with a warning in the log.
+        const regressed = regressionsAgainst(fixedSoFar, review.blockingIssues)
+
         history.push({
           iteration: i,
           imagePath: path.relative(ctx.workspacePath, iterPath),
@@ -521,13 +579,29 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           review,
           rawVerdict: rawReview.verdict,
           verdictOverrideReason: reconciled.override,
+          regressedIssues: regressed.length > 0 ? regressed : undefined,
           promptSnippet: promptForThisIter.slice(0, 400),
         })
 
         prevImage = image
 
+        // Update the "already fixed" set for the NEXT iteration's edit
+        // prompt. Diff previous→current: any issue the reviewer stopped
+        // complaining about joins fixedSoFar.
+        if (lastReview) {
+          const newlyFixed = fixedBetween(lastReview.blockingIssues, review.blockingIssues)
+          for (const f of newlyFixed) fixedSoFar.push(f)
+        }
+
         if (review.verdict === 'acceptable') {
           stoppedEarly = i < iterations
+          stoppedReason = 'acceptable'
+          break
+        }
+
+        if (regressed.length > 0 && i < iterations) {
+          stoppedEarly = true
+          stoppedReason = `regression_detected: ${regressed.length} previously-fixed issue(s) returned`
           break
         }
       }
@@ -589,8 +663,11 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           review: h.review,
           rawVerdict: h.rawVerdict,
           verdictOverrideReason: h.verdictOverrideReason,
+          regressedIssues: h.regressedIssues,
         })),
         stoppedEarly,
+        stoppedReason: stoppedReason ?? (stoppedEarly ? undefined : 'max_iterations'),
+        fixedAcrossIterations: fixedSoFar,
       }
       fs.writeFileSync(reviewLogPath, JSON.stringify(logPayload, null, 2), 'utf-8')
 
@@ -608,6 +685,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         },
         reviewLogPath: path.relative(ctx.workspacePath, reviewLogPath),
         stoppedEarly,
+        stoppedReason: stoppedReason ?? (stoppedEarly ? undefined : 'max_iterations'),
         extensionChanged: originalExtension !== extension
           ? { requested: originalExtension, actual: extension }
           : undefined,

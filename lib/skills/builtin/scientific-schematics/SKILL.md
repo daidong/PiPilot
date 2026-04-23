@@ -237,18 +237,57 @@ applied threshold on each run).
 
 ## Iteration strategy
 
-- `iterations: 1` — use only when you want the first-pass output without
-  review-driven rework.
+Default is **2 iterations** for almost every case. Do not bump to 3
+without concrete evidence — the third iteration frequently *regresses*
+a fix from the second, and the tool now detects this and stops early
+anyway (see "Regression detection" below).
+
+- `iterations: 1` — only when you want the first-pass output without
+  any review-driven rework.
 - `iterations: 2` (default) — one draft plus one review-driven revision.
   The second pass uses image-to-image editing when the reviewer judges
   issues are cosmetic (needs_edit). When the reviewer flags structural
-  problems (needs_regen) the second pass redraws from scratch with the
-  blocking issues appended as negatives.
-- `iterations: 3` — use for journal-quality figures where the first two
-  passes are likely to leave blocking issues.
+  problems (needs_regen) the second pass redraws from scratch.
+- `iterations: 3` — only when iter 2 is expected to still be below
+  threshold. Good signals: `doc_type: journal | conference` AND the
+  prompt asks for something dense (many labels, multi-panel, intricate
+  relationships). Bad signals: `doc_type: presentation | poster`,
+  single-concept diagrams, simple flowcharts.
 
 The tool stops early the moment a review comes back with verdict
-`acceptable`, so higher `iterations` only costs API calls when needed.
+`acceptable`, so higher `iterations` costs nothing when not needed —
+but each *unnecessary* iteration risks the model undoing earlier
+corrections.
+
+### Relaxed acceptance
+
+When the reviewer returns `needs_edit` but the score is comfortably
+above threshold (**≥ threshold + 1.0**) and no critical issues remain
+(`wrong_content`, `missing_element`, `illegible_text`), the tool
+promotes the verdict to `acceptable` and stops. Cosmetic notes
+(`layout_collision`, `style_mismatch`) do not force another round
+when the diagram is already well past the bar.
+
+### Regression detection
+
+The tool tracks which blocking issues the reviewer stops complaining
+about between iterations — those are the corrections we want to keep.
+Each subsequent edit prompt explicitly reminds the model of the
+already-fixed items and forbids regressing them. If the reviewer in a
+later draft nevertheless re-introduces an issue from that fixed set,
+the loop terminates early with `stoppedReason: "regression_detected"`
+and the current best draft is returned. Two common causes of
+regression:
+
+- Too many iterations on a diagram that is already good enough (ships
+  a new cosmetic flaw while fixing an old cosmetic flaw).
+- Prompt overspecification — the original request listed dozens of
+  tiny details, and the model keeps dropping a different one each
+  round.
+
+When you see `regressedIssues` or `stoppedReason: "regression_detected"`
+in the review log, prefer the current output over re-running with
+more iterations; re-running usually makes it worse.
 
 ---
 

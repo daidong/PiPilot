@@ -153,7 +153,8 @@ export function composeGenerationPrompt(
 export function composeEditPrompt(
   userPrompt: string,
   diagramType: DiagramType,
-  issues: BlockingIssue[]
+  issues: BlockingIssue[],
+  preservedFixes: BlockingIssue[] = []
 ): string {
   const dt = resolveDiagramType(diagramType)
   const literals = extractLiterals(userPrompt)
@@ -161,23 +162,40 @@ export function composeEditPrompt(
     ? issues.map((i, idx) => `${idx + 1}. [${i.kind}] ${i.fix}`).join('\n')
     : 'Tighten the details that needed tightening; keep the rest unchanged.'
 
+  // When earlier iterations already resolved other problems, surface
+  // those resolutions so the model keeps them intact. Without this the
+  // edit pass can fix the current complaint while inadvertently
+  // undoing earlier corrections (the regression we observed in
+  // multi-iteration runs).
+  const keyDetailLines: string[] = [
+    `TARGETED FIXES (in priority order):`,
+    fixes,
+    `Apply ONLY these fixes. Every other element — including existing labels, arrows, boxes, and whitespace — must be preserved exactly as in the attached image.`,
+  ]
+  if (preservedFixes.length > 0) {
+    const preservedLines = preservedFixes
+      .map((p, idx) => `${idx + 1}. [${p.kind}] ${p.description} — already resolved; keep it that way`)
+      .join('\n')
+    keyDetailLines.push(
+      `ALREADY-RESOLVED ITEMS (DO NOT regress these — they were broken in a previous draft and fixed):`,
+      preservedLines,
+    )
+  }
+  keyDetailLines.push(`Type-specific rules still apply: ${DIAGRAM_TYPE_DETAILS[dt]}`)
+
   return [
     buildBrief({
       sceneUse: `Surgical revision of an existing ${dt} diagram.`,
       subject: userPrompt,
       composition: `Keep the existing layout, sizing, colour palette, and element positions UNCHANGED unless a specific fix below requires otherwise. Do not redraw from scratch.`,
-      keyDetails: [
-        `TARGETED FIXES (in priority order):`,
-        fixes,
-        `Apply ONLY these fixes. Every other element — including existing labels, arrows, boxes, and whitespace — must be preserved exactly as in the attached image.`,
-        `Type-specific rules still apply: ${DIAGRAM_TYPE_DETAILS[dt]}`,
-      ].join('\n'),
+      keyDetails: keyDetailLines.join('\n'),
       textRules: VERBATIM_TEXT_RULE,
       mustKeep: literals,
       avoid: [
         ...UNIVERSAL_AVOID,
         'Any change to the overall composition, aspect ratio, or background',
         'Any change to elements that were already correct',
+        'Regressing any item listed in ALREADY-RESOLVED ITEMS',
       ],
     }),
   ].join('\n\n')
