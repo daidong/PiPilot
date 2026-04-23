@@ -23,8 +23,10 @@ import {
   composeEditPrompt,
   composeGenerationPrompt,
   composeRegenPrompt,
+  composeStyleOnlyPrompt,
   detectDiagramType,
 } from './diagram-backends/prompts.js'
+import { DEFAULT_HOUSE_PROFILE, renderProfile } from './diagram-backends/house-style.js'
 import { resolveProviders, type DiagramProviderPrefs } from './diagram-backends/registry.js'
 import { fixedBetween, regressionsAgainst } from './diagram-backends/issue-tracking.js'
 import type {
@@ -47,13 +49,14 @@ const VALID_DIAGRAM_TYPES: DiagramType[] = [
   'network', 'conceptual', 'auto',
 ]
 
-// All modes the schema advertises. Only `revise_layout` is plumbed end-to-end
-// today; the other two are planned but the tool intentionally rejects them
-// rather than accept them silently (see execute body below).
+// Reference modes supported end-to-end. `local_edit` (masked region edit)
+// is still deliberately unimplemented — surfacing it would require mask
+// handling we don't have yet — and is rejected with an explicit error
+// further down.
 const VALID_REFERENCE_MODES: ReferenceMode[] = [
   'revise_layout', 'style_only', 'local_edit',
 ]
-const SUPPORTED_REFERENCE_MODES: ReferenceMode[] = ['revise_layout']
+const SUPPORTED_REFERENCE_MODES: ReferenceMode[] = ['revise_layout', 'style_only']
 
 // Aspect → OpenAI size string. 'auto' lets the model pick based on prompt
 // content; the other three map to the three sizes gpt-image-2 accepts.
@@ -485,6 +488,9 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       }
 
       const threshold = providers.review.thresholds[docType] ?? providers.review.thresholds.default
+      // Profile summary shared with the reviewer so the 5th rubric
+      // dimension (house-style adherence) has a concrete target.
+      const houseProfileSummary = renderProfile(DEFAULT_HOUSE_PROFILE).summaryForReviewer
       const history: IterationRecord[] = []
       let prevImage: Buffer | null = referenceBytes && referenceMode !== 'style_only' ? referenceBytes : null
       let stoppedEarly = false
@@ -512,12 +518,34 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         let promptForThisIter: string
 
         if (i === 1) {
-          promptForThisIter = composeGenerationPrompt(userPrompt, diagramType)
-          // Reference image on first iteration: if revise_layout + backend supports edit, use it.
-          if (prevImage && canEdit && referenceMode === 'revise_layout') {
-            image = await providers.image.imageToImage!(promptForThisIter, prevImage, { quality: currentQuality })
+          // First-iteration reference handling:
+          //   revise_layout — reference image IS the starting draft; edit
+          //     it into the requested subject via image-to-image.
+          //   style_only    — reference image is a style board; we redraw
+          //     the subject from scratch but signal the model via both
+          //     the prompt (composeStyleOnlyPrompt) and the API channel
+          //     (image-to-image with the reference so it CAN see the
+          //     style, plus the textual "do not copy layout" instruction)
+          //     to lift only the visual idiom.
+          //   no reference — ordinary text-to-image.
+          if (referenceBytes && referenceMode === 'style_only' && canEdit) {
+            promptForThisIter = composeStyleOnlyPrompt(userPrompt, diagramType)
+            image = await providers.image.imageToImage!(
+              promptForThisIter,
+              referenceBytes,
+              { quality: currentQuality }
+            )
+            usedEdit = true
+          } else if (referenceBytes && referenceMode === 'revise_layout' && canEdit) {
+            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType)
+            image = await providers.image.imageToImage!(
+              promptForThisIter,
+              referenceBytes,
+              { quality: currentQuality }
+            )
             usedEdit = true
           } else {
+            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType)
             image = await providers.image.textToImage(promptForThisIter, { quality: currentQuality })
           }
         } else if (lastReview?.verdict === 'needs_edit' && prevImage && canEdit) {
@@ -547,6 +575,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
             diagramType,
             iteration: i,
             maxIterations: iterations,
+            houseProfileSummary,
           })
         } catch (err) {
           return toAgentResult('generate_diagram', toolError('API_ERROR', `Review failed: ${(err as Error).message}`, {
@@ -651,6 +680,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           defaultForDocType: defaultQuality,
           explicit: explicitQuality ?? null,
         },
+        houseProfile: DEFAULT_HOUSE_PROFILE.id,
         provider: {
           image: providers.image.id,
           review: providers.review.id,
