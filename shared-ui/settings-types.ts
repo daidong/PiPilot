@@ -49,12 +49,27 @@ export function resolveWikiPacing(speed: WikiAgentSpeed): WikiPacingConfig {
   }
 }
 
+// ── Diagram generation settings ─────────────────────────────────────────────
+
+/**
+ * Image generation for generate_diagram currently has one backend (OpenAI
+ * gpt-image-2). Review can use either GPT-4o or Claude; `auto` prefers
+ * heterogeneous review (Anthropic when both keys are present, so the
+ * generator does not grade its own family).
+ */
+export type DiagramReviewProvider = 'auto' | 'openai' | 'anthropic'
+
+export interface DiagramSettings {
+  reviewProvider: DiagramReviewProvider
+}
+
 // ── Combined ────────────────────────────────────────────────────────────────
 
 export interface AppSettings {
   research: ResearchSettings
   dataAnalysis: DataAnalysisSettings
   wikiAgent: WikiAgentSettings
+  diagram: DiagramSettings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -69,6 +84,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   wikiAgent: {
     model: 'none',
     speed: 'medium',
+  },
+  diagram: {
+    reviewProvider: 'auto',
   },
 }
 
@@ -92,6 +110,7 @@ export interface ResolvedSettings {
   webSearch: ResolvedWebSearch
   dataAnalysis: { timeoutMs: number }
   autoSaveThreshold: number
+  diagram: { reviewProvider: DiagramReviewProvider }
 }
 
 // ── Resolver functions ──────────────────────────────────────────────────────
@@ -136,5 +155,6 @@ export function resolveSettings(settings: AppSettings): ResolvedSettings {
     webSearch: resolveWebSearchDepth(settings.research.webSearchDepth),
     dataAnalysis: { timeoutMs: resolveDataAnalysisTimeout(settings.dataAnalysis.executionTimeLimit) },
     autoSaveThreshold: resolveAutoSaveThreshold(settings.research.autoSaveSensitivity),
+    diagram: { reviewProvider: settings.diagram?.reviewProvider ?? 'auto' },
   }
 }

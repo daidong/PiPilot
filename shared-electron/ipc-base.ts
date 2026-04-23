@@ -25,15 +25,20 @@ interface WikiAgentSettings {
   model: string   // 'none' = disabled
   speed: 'slow' | 'medium' | 'fast'
 }
+interface DiagramSettings {
+  reviewProvider: 'auto' | 'openai' | 'anthropic'
+}
 export interface AppSettings {
   research: ResearchSettings
   dataAnalysis: DataAnalysisSettings
   wikiAgent: WikiAgentSettings
+  diagram: DiagramSettings
 }
 const DEFAULT_SETTINGS: AppSettings = {
   research: { researchIntensity: 'medium', webSearchDepth: 'standard', autoSaveSensitivity: 'balanced' },
   dataAnalysis: { executionTimeLimit: 'standard' },
   wikiAgent: { model: 'none', speed: 'medium' },
+  diagram: { reviewProvider: 'auto' },
 }
 import type { OAuthCredentials } from '@mariozechner/pi-ai/oauth'
 import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './file-tree'
@@ -138,6 +143,7 @@ export function loadSettingsFromConfig(): AppSettings {
     research: { ...DEFAULT_SETTINGS.research, ...config.settings.research },
     dataAnalysis: { ...DEFAULT_SETTINGS.dataAnalysis, ...config.settings.dataAnalysis },
     wikiAgent: { ...DEFAULT_SETTINGS.wikiAgent, ...config.settings.wikiAgent },
+    diagram: { ...DEFAULT_SETTINGS.diagram, ...config.settings.diagram },
   }
 }
 

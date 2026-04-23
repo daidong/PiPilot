@@ -1,21 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { X, Key, BookOpen, BarChart2, BookMarked } from 'lucide-react'
+import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon } from 'lucide-react'
 import { ApiKeysSettings } from './ApiKeysSettings'
 import { ResearchSettings } from './ResearchSettings'
 import { DataAnalysisSettings } from './DataAnalysisSettings'
 import { WikiAgentSettings } from './WikiAgentSettings'
+import { DiagramSettings } from './DiagramSettings'
 import type { AppSettings } from '../../../../../shared-ui/settings-types'
 import { DEFAULT_SETTINGS } from '../../../../../shared-ui/settings-types'
 
 const api = (window as any).api
 
-type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki'
+type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram'
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
   { id: 'api-keys', label: 'API Keys', icon: Key },
   { id: 'research', label: 'Research', icon: BookOpen },
   { id: 'data-analysis', label: 'Data Analysis', icon: BarChart2 },
   { id: 'paper-wiki', label: 'Paper Wiki', icon: BookMarked },
+  { id: 'diagram', label: 'Diagrams', icon: ImageIcon },
 ]
 
 interface Props {
@@ -142,6 +144,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
       if (patch.research) next.research = { ...prev.research, ...patch.research }
       if (patch.dataAnalysis) next.dataAnalysis = { ...prev.dataAnalysis, ...patch.dataAnalysis }
       if (patch.wikiAgent) next.wikiAgent = { ...prev.wikiAgent, ...patch.wikiAgent }
+      if (patch.diagram) next.diagram = { ...prev.diagram, ...patch.diagram }
       return next
     })
     setDirty(true)
@@ -260,6 +263,12 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
                 speed={settings.wikiAgent?.speed ?? 'medium'}
                 onChangeModel={v => updateSettings({ wikiAgent: { ...settings.wikiAgent, model: v } })}
                 onChangeSpeed={v => updateSettings({ wikiAgent: { ...settings.wikiAgent, speed: v } })}
+              />
+            )}
+            {activeTab === 'diagram' && loaded && (
+              <DiagramSettings
+                reviewProvider={settings.diagram?.reviewProvider ?? 'auto'}
+                onChangeReviewProvider={v => updateSettings({ diagram: { reviewProvider: v } })}
               />
             )}
           </div>
