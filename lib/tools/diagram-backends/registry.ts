@@ -22,8 +22,18 @@
 import { createOpenAIImageProvider } from './openai-image.js'
 import { createOpenAIReviewProvider } from './openai-review.js'
 import { createAnthropicReviewProvider } from './anthropic-review.js'
+import { createSvgFallbackImageProvider, type Aspect } from './svg-fallback-image.js'
+import { createSvgFallbackReviewProvider } from './svg-fallback-review.js'
 import type { DiagramProviderSet, ImageProvider, ReviewProvider } from './types.js'
 import type { DiagramAuth } from '../types.js'
+
+export type CallLlmFn = (systemPrompt: string, userContent: string) => Promise<string>
+
+export interface FallbackContext {
+  callLlm: CallLlmFn
+  /** Short model label for logs and provider.id. Typically the chat model name. */
+  modelLabel?: string
+}
 
 export type ReviewProviderChoice = 'openai' | 'anthropic' | 'auto'
 export type GenProviderChoice = 'openai'
@@ -35,6 +45,8 @@ export interface DiagramProviderPrefs {
   reviewModel?: string
   /** Explicit image size passed straight through to the provider (e.g. '1024x1024', '1536x1024', '1024x1536', 'auto'). */
   imageSize?: string
+  /** Aspect hint for the SVG fallback (ignored by the OpenAI image provider — it reads imageSize directly). */
+  svgAspect?: Aspect
 }
 
 interface ResolvedAuth {
@@ -58,26 +70,57 @@ function resolveAuth(auth?: DiagramAuth): ResolvedAuth {
   }
 }
 
-function pickImageProvider(prefs: DiagramProviderPrefs, auth: ResolvedAuth): ImageProvider {
+function pickImageProvider(
+  prefs: DiagramProviderPrefs,
+  auth: ResolvedAuth,
+  fallback?: FallbackContext
+): ImageProvider {
   const choice: GenProviderChoice = prefs.generation ?? 'openai'
   if (choice === 'openai') {
-    if (!auth.openaiKey) {
-      throw new Error(
-        'Diagram generation requires an OpenAI API key. Add OPENAI_API_KEY under Settings → API Keys. ' +
-        'Claude does not expose an image-generation API, so subscription login alone is not sufficient.'
-      )
+    if (auth.openaiKey) {
+      return createOpenAIImageProvider({
+        apiKey: auth.openaiKey,
+        model: prefs.imageModel,
+        size: prefs.imageSize,
+      })
     }
-    return createOpenAIImageProvider({
-      apiKey: auth.openaiKey,
-      model: prefs.imageModel,
-      size: prefs.imageSize,
-    })
+    // No OpenAI key → fall back to SVG-via-LLM if the host gave us a callLlm.
+    // This keeps the tool producing usable output instead of hard-failing.
+    if (fallback) {
+      return createSvgFallbackImageProvider({
+        callLlm: fallback.callLlm,
+        modelLabel: fallback.modelLabel,
+        aspect: prefs.svgAspect,
+      })
+    }
+    throw new Error(
+      'Diagram generation requires either OPENAI_API_KEY or a callLlm fallback ' +
+      '(which the coordinator supplies from the current chat model). Neither is available here.'
+    )
   }
   throw new Error(`Unknown generation provider: ${choice}`)
 }
 
-function pickReviewProvider(prefs: DiagramProviderPrefs, auth: ResolvedAuth): ReviewProvider {
+function pickReviewProvider(
+  prefs: DiagramProviderPrefs,
+  auth: ResolvedAuth,
+  fallback?: FallbackContext,
+  usingSvgGen = false
+): ReviewProvider {
   const choice: ReviewProviderChoice = prefs.review ?? 'auto'
+
+  // When generation is SVG-fallback we review via the same fallback channel:
+  // structured reviewers like gpt-4o expect an image, not SVG source, so
+  // feeding them markup would make legibility / layout judgements unreliable.
+  if (usingSvgGen) {
+    if (!fallback) {
+      throw new Error('SVG review fallback requires a callLlm fallback.')
+    }
+    return createSvgFallbackReviewProvider({
+      callLlm: fallback.callLlm,
+      modelLabel: fallback.modelLabel,
+    })
+  }
 
   if (choice === 'openai') {
     if (!auth.openaiKey) {
@@ -116,13 +159,19 @@ function pickReviewProvider(prefs: DiagramProviderPrefs, auth: ResolvedAuth): Re
   throw new Error('No review provider is configured. Add OPENAI_API_KEY or sign in to Claude.')
 }
 
+export interface DiagramProviderResolution extends DiagramProviderSet {
+  /** True when both image and review went through the SVG-via-LLM fallback path. */
+  svgFallback: boolean
+}
+
 export function resolveProviders(
   prefs: DiagramProviderPrefs = {},
-  auth?: DiagramAuth
-): DiagramProviderSet {
+  auth?: DiagramAuth,
+  fallback?: FallbackContext
+): DiagramProviderResolution {
   const resolved = resolveAuth(auth)
-  return {
-    image: pickImageProvider(prefs, resolved),
-    review: pickReviewProvider(prefs, resolved),
-  }
+  const image = pickImageProvider(prefs, resolved, fallback)
+  const usingSvgGen = image.id.startsWith('svg-fallback:')
+  const review = pickReviewProvider(prefs, resolved, fallback, usingSvgGen)
+  return { image, review, svgFallback: usingSvgGen }
 }

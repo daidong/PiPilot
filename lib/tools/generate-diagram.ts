@@ -119,9 +119,13 @@ interface DiagramToolPayload {
   finalScore: number
   finalVerdict: ReviewResult['verdict']
   threshold: number
+  /** 'image' when gpt-image-2 drew a raster PNG; 'svg_fallback' when the chat model produced SVG. */
+  mode: 'image' | 'svg_fallback'
   provider: { image: string; review: string }
   reviewLogPath: string
   stoppedEarly: boolean
+  /** Non-null when the output extension was rewritten (e.g. user asked for .png, fallback produced .svg). */
+  extensionChanged?: { requested: string; actual: string }
 }
 
 function sanitizeDocType(value: unknown): DocType {
@@ -274,7 +278,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
 
       const outDir = path.dirname(absOutput)
       const baseName = path.basename(absOutput, path.extname(absOutput))
-      const extension = path.extname(absOutput) || '.png'
+      const originalExtension = path.extname(absOutput) || '.png'
       fs.mkdirSync(outDir, { recursive: true })
 
       // Read live settings (hot-reload) — falls back to the static snapshot.
@@ -286,23 +290,37 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         generation: 'openai',
         review: reviewPref,
         imageSize: aspectToSize(aspect),
+        svgAspect: aspect,
       }
       // Auth is also read fresh — user may have just signed in to Claude
       // subscription or saved a new OPENAI_API_KEY from Settings.
       const auth = ctx.getDiagramAuth?.()
+      // Fallback bundle: when OpenAI image generation is unavailable, the
+      // registry will route both gen and review through the chat model via
+      // ctx.callLlm. Pass `undefined` when callLlm is missing so the
+      // registry raises the original "no provider" error instead of a
+      // silent fallback to nothing.
+      const fallback = ctx.callLlm ? { callLlm: ctx.callLlm } : undefined
       let providers
       try {
-        providers = resolveProviders(prefs, auth)
+        providers = resolveProviders(prefs, auth, fallback)
       } catch (err) {
         return toAgentResult('generate_diagram', toolError('LLM_UNAVAILABLE', (err as Error).message, {
           suggestions: [
-            'Ask the user to add OPENAI_API_KEY under Settings → API Keys. ChatGPT / Codex subscription tokens are scoped to the Codex endpoint and do NOT grant Images API access, so subscription-only users must supply a real sk-… API key for diagram generation.',
-            'While the user is adding the key, offer to draft an inline SVG placeholder or ASCII sketch so the surrounding document is not blocked.',
-            'Alternatively, leave a "figure TBD" caption with a textual description of what the figure should show, so the user can regenerate later without re-explaining the intent.',
-            'For review (separate from generation), ANTHROPIC_API_KEY or a Claude subscription login is also sufficient — but both paths require OPENAI_API_KEY for the generation step itself.',
+            'Ask the user to add OPENAI_API_KEY under Settings → API Keys for native image generation (gpt-image-2). ChatGPT / Codex subscription tokens are scoped to the Codex endpoint and cannot call the Images API.',
+            'Alternatively, leave a "figure TBD" caption with a textual description so the user can regenerate later without re-explaining the intent.',
           ],
         }))
       }
+
+      // In SVG-fallback mode, output has to land as .svg. If the caller
+      // asked for a raster extension, rewrite the on-disk paths so the
+      // file matches its format — a .png that is actually SVG would be
+      // embedded wrong in Markdown/LaTeX and would confuse readers.
+      const extension = providers.svgFallback ? '.svg' : originalExtension
+      const finalAbsOutput = providers.svgFallback && originalExtension !== '.svg'
+        ? path.join(outDir, `${baseName}.svg`)
+        : absOutput
 
       // Optional reference image — read bytes for later use.
       let referenceBytes: Buffer | null = null
@@ -407,10 +425,11 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         }))
       }
 
-      // Copy final image to canonical output path.
+      // Copy final image to canonical output path (finalAbsOutput rewrites
+      // the extension to .svg when fallback mode is active).
       const finalAbsIter = path.resolve(ctx.workspacePath, last.imagePath)
-      if (finalAbsIter !== absOutput) {
-        fs.copyFileSync(finalAbsIter, absOutput)
+      if (finalAbsIter !== finalAbsOutput) {
+        fs.copyFileSync(finalAbsIter, finalAbsOutput)
       }
 
       // Write review log alongside the output.
@@ -420,6 +439,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         docType,
         diagramType,
         threshold,
+        mode: providers.svgFallback ? 'svg_fallback' : 'image',
         provider: {
           image: providers.image.id,
           review: providers.review.id,
@@ -437,18 +457,22 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       fs.writeFileSync(reviewLogPath, JSON.stringify(logPayload, null, 2), 'utf-8')
 
       const payload: DiagramToolPayload = {
-        outputPath: path.relative(ctx.workspacePath, absOutput),
-        absoluteOutputPath: absOutput,
+        outputPath: path.relative(ctx.workspacePath, finalAbsOutput),
+        absoluteOutputPath: finalAbsOutput,
         iterations: history,
         finalScore: last.review.score,
         finalVerdict: last.review.verdict,
         threshold,
+        mode: providers.svgFallback ? 'svg_fallback' : 'image',
         provider: {
           image: providers.image.id,
           review: providers.review.id,
         },
         reviewLogPath: path.relative(ctx.workspacePath, reviewLogPath),
         stoppedEarly,
+        extensionChanged: originalExtension !== extension
+          ? { requested: originalExtension, actual: extension }
+          : undefined,
       }
 
       return toAgentResult('generate_diagram', { success: true, data: payload })

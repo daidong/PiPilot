@@ -237,10 +237,37 @@ show the image.
 
 ## Configuration
 
-Image generation requires `OPENAI_API_KEY` (set under Settings → API
-Keys). Review uses either OpenAI or Anthropic based on Settings →
-Diagrams. The `auto` setting prefers Claude when both keys are
-available, so the generator does not grade its own family.
+Raster image generation (gpt-image-2) requires `OPENAI_API_KEY`
+(set under Settings → API Keys). Review uses either OpenAI or
+Anthropic based on Settings → Diagrams. The `auto` setting prefers
+Claude when both keys are available, so the generator does not grade
+its own family.
 
-Claude has no image-generation API, so `OPENAI_API_KEY` is mandatory
-regardless of which review provider is selected.
+### SVG fallback (no OpenAI key required)
+
+When `OPENAI_API_KEY` is not configured, the tool automatically falls
+back to producing **SVG** via the currently-selected chat model. The
+same verdict-driven iteration loop runs, but both generation and
+review go through the chat model:
+
+- Output file: `.svg` instead of `.png`. If you asked for `.png`, the
+  tool rewrites the extension and reports `extensionChanged` in the
+  response.
+- `mode: "svg_fallback"` appears in the tool result and review log.
+- Quality depends on the chat model's spatial reasoning. Claude Opus
+  and GPT-4o / GPT-5 produce usable output for flowcharts, simple
+  architecture, and box-and-arrow schemas. Pathway illustrations and
+  complex circuits will be noticeably weaker than gpt-image-2.
+- Self-grading bias is real: the generator and reviewer are usually
+  the same model, so thresholds are set marginally higher to
+  compensate. Scores across raster and SVG modes are not directly
+  comparable.
+
+To embed an SVG in Markdown:
+
+```markdown
+![Figure 1: workflow](figures/workflow.svg)
+```
+
+Most Markdown renderers (GitHub, typical preview extensions) and
+Milkdown render SVG inline just like PNG.
