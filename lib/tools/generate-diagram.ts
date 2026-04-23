@@ -43,9 +43,13 @@ const VALID_DIAGRAM_TYPES: DiagramType[] = [
   'network', 'conceptual', 'auto',
 ]
 
+// All modes the schema advertises. Only `revise_layout` is plumbed end-to-end
+// today; the other two are planned but the tool intentionally rejects them
+// rather than accept them silently (see execute body below).
 const VALID_REFERENCE_MODES: ReferenceMode[] = [
   'revise_layout', 'style_only', 'local_edit',
 ]
+const SUPPORTED_REFERENCE_MODES: ReferenceMode[] = ['revise_layout']
 
 const GenerateDiagramSchema = Type.Object({
   prompt: Type.String({
@@ -64,10 +68,10 @@ const GenerateDiagramSchema = Type.Object({
     description: 'Maximum refinement iterations (1-3). Each costs one generation + one review. Default: 2.',
   })),
   reference_path: Type.Optional(Type.String({
-    description: 'Optional workspace-relative path to a reference image to build upon or use as style.',
+    description: 'Optional workspace-relative path to a reference image the first iteration edits instead of drawing from scratch. Requires reference_mode: revise_layout (other modes are not yet implemented).',
   })),
   reference_mode: Type.Optional(Type.String({
-    description: `How to use the reference image. One of: ${VALID_REFERENCE_MODES.join(' | ')}. Defaults to revise_layout.`,
+    description: `How to use the reference image. Only "revise_layout" is implemented in this version; "style_only" and "local_edit" are reserved and currently rejected. Default: revise_layout.`,
   })),
 })
 
@@ -76,6 +80,10 @@ interface IterationRecord {
   imagePath: string
   usedEdit: boolean
   review: ReviewResult
+  /** The verdict the reviewer originally emitted, before tool-side reconciliation. */
+  rawVerdict: ReviewResult['verdict']
+  /** Populated when the reviewer's verdict was overridden due to contradictory fields. */
+  verdictOverrideReason?: string
   promptSnippet: string
 }
 
@@ -110,9 +118,62 @@ function sanitizeIterations(value: unknown): number {
   return Math.max(1, Math.min(3, Math.round(n)))
 }
 
-function sanitizeReferenceMode(value: unknown): ReferenceMode {
-  const v = typeof value === 'string' ? value.trim().toLowerCase() : 'revise_layout'
-  return (VALID_REFERENCE_MODES as string[]).includes(v) ? (v as ReferenceMode) : 'revise_layout'
+type ReferenceModeResult =
+  | { ok: true; mode: ReferenceMode }
+  | { ok: false; reason: string; value: string }
+
+function sanitizeReferenceMode(value: unknown): ReferenceModeResult {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) {
+    return { ok: true, mode: 'revise_layout' }
+  }
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (!(VALID_REFERENCE_MODES as string[]).includes(v)) {
+    return {
+      ok: false,
+      value: typeof value === 'string' ? value : String(value),
+      reason: `Unknown reference_mode. Must be one of: ${VALID_REFERENCE_MODES.join(' | ')}.`,
+    }
+  }
+  if (!(SUPPORTED_REFERENCE_MODES as string[]).includes(v)) {
+    return {
+      ok: false,
+      value: v,
+      reason: `reference_mode "${v}" is reserved but not yet implemented. Only ${SUPPORTED_REFERENCE_MODES.join(', ')} is available in this version.`,
+    }
+  }
+  return { ok: true, mode: v as ReferenceMode }
+}
+
+/**
+ * Refuse to early-stop when the reviewer's fields contradict the verdict.
+ * A reviewer that returns `acceptable` together with blocking_issues or
+ * a score below the threshold is either confused or adversarial; in
+ * either case we should not silently trust the `verdict` field.
+ */
+function reconcileVerdict(
+  review: ReviewResult,
+  threshold: number
+): { final: ReviewResult; override?: string } {
+  if (review.verdict !== 'acceptable') {
+    return { final: review }
+  }
+  if (review.score < threshold) {
+    return {
+      final: { ...review, verdict: 'needs_edit' },
+      override: `reviewer said acceptable but score ${review.score} < threshold ${threshold}`,
+    }
+  }
+  if (review.blockingIssues.length > 0) {
+    // Kind-sensitive: if a blocking issue is structural, needs_regen; else needs_edit.
+    const hasStructural = review.blockingIssues.some(
+      (i) => i.kind === 'wrong_content' || i.kind === 'missing_element'
+    )
+    return {
+      final: { ...review, verdict: hasStructural ? 'needs_regen' : 'needs_edit' },
+      override: `reviewer said acceptable but listed ${review.blockingIssues.length} blocking issues`,
+    }
+  }
+  return { final: review }
 }
 
 function ensureInsideWorkspace(workspace: string, target: string): string {
@@ -156,6 +217,26 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const diagramType = sanitizeDiagramType(params.diagram_type, userPrompt)
       const iterations = sanitizeIterations(params.iterations)
 
+      // Only validate reference_mode when a reference_path was supplied.
+      // The schema advertises three modes for forward compatibility but
+      // we refuse to silently ignore the unimplemented two; an explicit
+      // error is more honest than pretending we did what we were asked.
+      const hasReference = typeof params.reference_path === 'string' && !!params.reference_path.trim()
+      let referenceMode: ReferenceMode = 'revise_layout'
+      if (hasReference || params.reference_mode !== undefined) {
+        const parsed = sanitizeReferenceMode(params.reference_mode)
+        if (!parsed.ok) {
+          return toAgentResult('generate_diagram', toolError('INVALID_PARAMETER', parsed.reason, {
+            suggestions: [
+              `Use reference_mode: ${SUPPORTED_REFERENCE_MODES.join(' or ')}.`,
+              'Omit reference_path to draw without a reference image.',
+            ],
+            context: { provided: parsed.value },
+          }))
+        }
+        referenceMode = parsed.mode
+      }
+
       let absOutput: string
       try {
         absOutput = ensureInsideWorkspace(ctx.workspacePath, outputArg)
@@ -170,31 +251,35 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const extension = path.extname(absOutput) || '.png'
       fs.mkdirSync(outDir, { recursive: true })
 
-      // Resolve providers. Review provider comes from user settings; falls
-      // back to 'auto' (prefer heterogeneous review) when unconfigured.
-      const reviewPref = ctx.settings?.diagram?.reviewProvider ?? 'auto'
+      // Read live settings (hot-reload) — falls back to the static snapshot.
+      // Note: `ctx.settings.diagram` is set by resolveSettings(); older
+      // snapshots without the field default to 'auto'.
+      const liveSettings = ctx.getSettings?.() ?? ctx.settings
+      const reviewPref = liveSettings?.diagram?.reviewProvider ?? 'auto'
       const prefs: DiagramProviderPrefs = {
         generation: 'openai',
         review: reviewPref,
       }
+      // Auth is also read fresh — user may have just signed in to Claude
+      // subscription or saved a new OPENAI_API_KEY from Settings.
+      const auth = ctx.getDiagramAuth?.()
       let providers
       try {
-        providers = resolveProviders(prefs)
+        providers = resolveProviders(prefs, auth)
       } catch (err) {
         return toAgentResult('generate_diagram', toolError('LLM_UNAVAILABLE', (err as Error).message, {
           suggestions: [
             'Add OPENAI_API_KEY under Settings → API Keys (required for image generation).',
-            'Optionally add ANTHROPIC_API_KEY for cross-provider review.',
+            'For review, also configure ANTHROPIC_API_KEY or sign in to Claude subscription.',
           ],
         }))
       }
 
       // Optional reference image — read bytes for later use.
       let referenceBytes: Buffer | null = null
-      const referenceMode = sanitizeReferenceMode(params.reference_mode)
-      if (typeof params.reference_path === 'string' && params.reference_path.trim()) {
+      if (hasReference) {
         try {
-          const refAbs = ensureInsideWorkspace(ctx.workspacePath, params.reference_path.trim())
+          const refAbs = ensureInsideWorkspace(ctx.workspacePath, (params.reference_path as string).trim())
           if (!fs.existsSync(refAbs)) {
             return toAgentResult('generate_diagram', toolError('FILE_NOT_FOUND', `Reference image not found: ${params.reference_path}`, {
               suggestions: ['Check the reference_path is relative to the workspace root.'],
@@ -241,9 +326,9 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         const iterPath = path.join(outDir, `${baseName}_v${i}${extension}`)
         fs.writeFileSync(iterPath, image)
 
-        let review: ReviewResult
+        let rawReview: ReviewResult
         try {
-          review = await providers.review.review({
+          rawReview = await providers.review.review({
             image,
             prompt: userPrompt,
             docType,
@@ -260,11 +345,21 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           }))
         }
 
+        // Guard the verdict against reviewer output that says "acceptable"
+        // while contradicting itself with a low score or non-empty blocking
+        // issues. Without this check the loop could stop early on a
+        // structurally wrong image just because the reviewer mislabelled
+        // its own verdict.
+        const reconciled = reconcileVerdict(rawReview, threshold)
+        const review = reconciled.final
+
         history.push({
           iteration: i,
           imagePath: path.relative(ctx.workspacePath, iterPath),
           usedEdit,
           review,
+          rawVerdict: rawReview.verdict,
+          verdictOverrideReason: reconciled.override,
           promptSnippet: promptForThisIter.slice(0, 400),
         })
 
@@ -305,6 +400,8 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           imagePath: h.imagePath,
           usedEdit: h.usedEdit,
           review: h.review,
+          rawVerdict: h.rawVerdict,
+          verdictOverrideReason: h.verdictOverrideReason,
         })),
         stoppedEarly,
       }
