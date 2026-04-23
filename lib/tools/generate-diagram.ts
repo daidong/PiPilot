@@ -51,6 +51,28 @@ const VALID_REFERENCE_MODES: ReferenceMode[] = [
 ]
 const SUPPORTED_REFERENCE_MODES: ReferenceMode[] = ['revise_layout']
 
+// Aspect → OpenAI size string. 'auto' lets the model pick based on prompt
+// content; the other three map to the three sizes gpt-image-2 accepts.
+// Exposed as a named knob so the agent can lock an aspect when it knows the
+// diagram is clearly horizontal/vertical (agents otherwise tend to describe
+// the figure without signalling shape, and 'auto' then picks conservatively).
+type Aspect = 'auto' | 'square' | 'landscape' | 'portrait'
+const VALID_ASPECTS: Aspect[] = ['auto', 'square', 'landscape', 'portrait']
+
+function aspectToSize(aspect: Aspect): string {
+  switch (aspect) {
+    case 'square':    return '1024x1024'
+    case 'landscape': return '1536x1024'
+    case 'portrait':  return '1024x1536'
+    case 'auto':      return 'auto'
+  }
+}
+
+function sanitizeAspect(value: unknown): Aspect {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : 'auto'
+  return (VALID_ASPECTS as string[]).includes(v) ? (v as Aspect) : 'auto'
+}
+
 const GenerateDiagramSchema = Type.Object({
   prompt: Type.String({
     description: 'Natural-language description of the diagram to generate. Be specific about components, labels, layout, and quantities.',
@@ -66,6 +88,9 @@ const GenerateDiagramSchema = Type.Object({
   })),
   iterations: Type.Optional(Type.Number({
     description: 'Maximum refinement iterations (1-3). Each costs one generation + one review. Default: 2.',
+  })),
+  aspect: Type.Optional(Type.String({
+    description: 'Output aspect ratio. One of: auto | square | landscape | portrait. Default: auto (model picks from the prompt). Use "landscape" for wide architecture / flow diagrams with >3 horizontal panels, "portrait" for top-to-bottom CONSORT / PRISMA flows, "square" for single-concept schematics.',
   })),
   reference_path: Type.Optional(Type.String({
     description: 'Optional workspace-relative path to a reference image the first iteration edits instead of drawing from scratch. Requires reference_mode: revise_layout (other modes are not yet implemented).',
@@ -216,6 +241,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const docType = sanitizeDocType(params.doc_type)
       const diagramType = sanitizeDiagramType(params.diagram_type, userPrompt)
       const iterations = sanitizeIterations(params.iterations)
+      const aspect = sanitizeAspect(params.aspect)
 
       // Only validate reference_mode when a reference_path was supplied.
       // The schema advertises three modes for forward compatibility but
@@ -259,6 +285,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const prefs: DiagramProviderPrefs = {
         generation: 'openai',
         review: reviewPref,
+        imageSize: aspectToSize(aspect),
       }
       // Auth is also read fresh — user may have just signed in to Claude
       // subscription or saved a new OPENAI_API_KEY from Settings.

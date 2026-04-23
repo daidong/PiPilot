@@ -33,6 +33,8 @@ export interface DiagramProviderPrefs {
   review?: ReviewProviderChoice
   imageModel?: string
   reviewModel?: string
+  /** Explicit image size passed straight through to the provider (e.g. '1024x1024', '1536x1024', '1024x1536', 'auto'). */
+  imageSize?: string
 }
 
 interface ResolvedAuth {
@@ -65,7 +67,11 @@ function pickImageProvider(prefs: DiagramProviderPrefs, auth: ResolvedAuth): Ima
         'Claude does not expose an image-generation API, so subscription login alone is not sufficient.'
       )
     }
-    return createOpenAIImageProvider({ apiKey: auth.openaiKey, model: prefs.imageModel })
+    return createOpenAIImageProvider({
+      apiKey: auth.openaiKey,
+      model: prefs.imageModel,
+      size: prefs.imageSize,
+    })
   }
   throw new Error(`Unknown generation provider: ${choice}`)
 }

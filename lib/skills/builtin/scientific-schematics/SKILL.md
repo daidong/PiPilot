@@ -44,7 +44,18 @@ doc_type:       journal | conference | thesis | grant | preprint |
 diagram_type:   flowchart | architecture | pathway | circuit |
                 network | conceptual | auto
 iterations:     1 | 2 | 3   (default 2)
+aspect:         auto | square | landscape | portrait   (default auto)
 ```
+
+**aspect guidance** — the default `auto` lets the model pick, but
+when you already know the figure's shape, set it explicitly:
+- `landscape` for wide architecture diagrams, left-to-right pipelines,
+  multi-panel (3+ columns) layouts
+- `portrait` for CONSORT/PRISMA flows, top-to-bottom pathway cascades,
+  tall hierarchies
+- `square` for single-concept schematics, cycles, small callouts
+- `auto` when the shape is genuinely ambiguous or the prompt already
+  describes the layout strongly
 
 The tool returns the final image path, per-iteration review scores,
 the verdict trail (acceptable / needs_edit / needs_regen), and a JSON

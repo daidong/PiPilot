@@ -22,7 +22,12 @@ import type { ImageCapability, ImageProvider } from './types.js'
 const GENERATIONS_URL = 'https://api.openai.com/v1/images/generations'
 const EDITS_URL = 'https://api.openai.com/v1/images/edits'
 const DEFAULT_MODEL = 'gpt-image-2'
-const DEFAULT_SIZE = '1024x1024'
+// 'auto' lets the model pick between the three canonical aspects (square,
+// landscape, portrait) based on prompt content. The previous default
+// '1024x1024' forced every diagram into a square frame regardless of what
+// was being drawn — horizontal architecture diagrams got squished, portrait
+// flowcharts got padded with whitespace.
+const DEFAULT_SIZE = 'auto'
 const REQUEST_TIMEOUT_MS = 300_000
 
 interface OpenAIImageChoice {
