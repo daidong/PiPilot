@@ -7,7 +7,7 @@ triggers: [diagram, schematic, flowchart, architecture diagram, pathway, circuit
 allowed-tools: [Read, Write, Edit]
 license: MIT license
 metadata:
-    skill-author: K-Dense Inc.
+    skill-author: Dong Dai
 ---
 
 # Scientific Schematics
@@ -45,6 +45,7 @@ diagram_type:   flowchart | architecture | pathway | circuit |
                 network | conceptual | auto
 iterations:     1 | 2 | 3   (default 2)
 aspect:         auto | square | landscape | portrait   (default auto)
+quality:        low | medium | high | auto   (default derived from doc_type)
 ```
 
 **aspect guidance** — the default `auto` lets the model pick, but
@@ -57,12 +58,65 @@ when you already know the figure's shape, set it explicitly:
 - `auto` when the shape is genuinely ambiguous or the prompt already
   describes the layout strongly
 
+**quality guidance** — gpt-image-2 exposes four tiers; the cost and
+render time roughly follow low < medium < high. Omitting the field
+selects a sensible default from `doc_type`:
+
+| doc_type                             | default quality |
+|--------------------------------------|-----------------|
+| journal / conference / thesis / grant| high            |
+| preprint / report / poster           | medium          |
+| presentation                         | low             |
+| default                              | medium          |
+
+The loop automatically bumps one tier on a `needs_edit` verdict, so the
+first iteration runs cheap and refinement only spends more compute when
+the reviewer signals the draft was close-but-not-there. Override with
+`quality: "low"` for explicit exploration / drafts, or `"high"` to force
+camera-ready on the first pass.
+
 The tool returns the final image path, per-iteration review scores,
-the verdict trail (acceptable / needs_edit / needs_regen), and a JSON
-review log at `<name>_review_log.json`.
+the quality tier used for each iteration, the verdict trail
+(acceptable / needs_edit / needs_regen), and a JSON review log at
+`<name>_review_log.json`.
 
 When `diagram_type: auto`, the tool infers from keywords in the prompt.
 Explicit types beat inference when you know what you want.
+
+### Internal prompt structure
+
+Under the hood the tool converts your `prompt` into a fixed-slot
+production brief that gpt-image-2 parses reliably:
+
+```
+【SCENE / USE】  publication-grade scientific <diagram_type>
+【SUBJECT】      <your prompt verbatim>
+【COMPOSITION】  <derived from diagram_type and aspect>
+【KEY DETAILS】  <type-specific rules + typography + colour>
+【TEXT】          render every quoted literal verbatim
+【MUST KEEP】    <auto-extracted: quoted strings, n=X, numeric+unit>
+【AVOID】         no figure numbers, titles, captions, 3D, mascots
+```
+
+Two practical consequences for **how you write the prompt**:
+
+1. **Put every label, number, and identifier in quotes.** The tool
+   auto-extracts quoted strings (and `n=...`, `1kΩ` / `10µF` / `128
+   nodes` style numeric+unit tokens) into a `MUST KEEP` checklist the
+   model must render verbatim. `"EGFR"` survives better than just
+   EGFR; `"n=350"` survives better than just n=350.
+2. **Describe in fixed-slot order when you can** — scene/use → subject
+   → key details → composition → text → must-keep → avoid. The tool
+   will structure whatever you write, but pre-structured prose rewrites
+   less aggressively.
+
+### Iterative refinement
+
+To revise an already-good diagram, pass `reference_path` (and
+`reference_mode: revise_layout` — the default) pointing at the
+existing image. The tool treats iteration 1 as a surgical edit:
+it tells gpt-image-2 to keep layout, colour, and positions unchanged
+unless the specific blocking issues from review require otherwise.
 
 ---
 
