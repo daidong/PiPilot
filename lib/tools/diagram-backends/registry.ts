@@ -49,6 +49,13 @@ export interface DiagramProviderPrefs {
   imageQuality?: Quality
   /** Aspect hint for the SVG fallback (ignored by the OpenAI image provider — it reads imageSize directly). */
   svgAspect?: Aspect
+  /**
+   * Force the SVG-via-LLM path even when an OpenAI API key is available.
+   * Set this when the caller wants SVG output specifically (e.g. user
+   * asked for a .svg file) — routing such requests through gpt-image-2
+   * would produce PNG bytes mislabelled as .svg.
+   */
+  forceSvg?: boolean
 }
 
 interface ResolvedAuth {
@@ -78,6 +85,26 @@ function pickImageProvider(
   fallback?: FallbackContext
 ): ImageProvider {
   const choice: GenProviderChoice = prefs.generation ?? 'openai'
+
+  // Forced-SVG path: caller wants SVG output (typically because the
+  // output filename ends in .svg). Skip gpt-image-2 entirely — routing
+  // through it would write PNG bytes into a .svg file. The SVG
+  // fallback becomes the ONLY option here; hard-fail when callLlm is
+  // also unavailable rather than silently producing a raster.
+  if (prefs.forceSvg) {
+    if (!fallback) {
+      throw new Error(
+        'SVG output requested but no chat model is available to synthesize the SVG. ' +
+        'Either pick a chat model (it powers the SVG fallback path) or request a raster filename like .png.'
+      )
+    }
+    return createSvgFallbackImageProvider({
+      callLlm: fallback.callLlm,
+      modelLabel: fallback.modelLabel,
+      aspect: prefs.svgAspect,
+    })
+  }
+
   if (choice === 'openai') {
     if (auth.openaiKey) {
       return createOpenAIImageProvider({

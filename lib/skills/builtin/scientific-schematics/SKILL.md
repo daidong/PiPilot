@@ -297,16 +297,27 @@ Anthropic based on Settings → Diagrams. The `auto` setting prefers
 Claude when both keys are available, so the generator does not grade
 its own family.
 
-### SVG fallback (no OpenAI key required)
+### Output format selection (png vs svg)
 
-When `OPENAI_API_KEY` is not configured, the tool automatically falls
-back to producing **SVG** via the currently-selected chat model. The
-same verdict-driven iteration loop runs, but both generation and
-review go through the chat model:
+The **output file extension decides the format**:
 
-- Output file: `.svg` instead of `.png`. If you asked for `.png`, the
-  tool rewrites the extension and reports `extensionChanged` in the
-  response.
+- `output: figures/foo.png` → raster via gpt-image-2 (needs
+  `OPENAI_API_KEY`). Falls back to SVG-via-chat-model automatically
+  when the key is missing; the file gets renamed to `.svg` in that
+  case and the result payload reports `extensionChanged`.
+- `output: figures/foo.svg` → **always** goes through the SVG-via-chat
+  path, even when `OPENAI_API_KEY` is present. Choose this when you
+  specifically want vector output (scales infinitely, small filesize,
+  editable after the fact). Requires a chat model that can produce
+  SVG — any configured model works, since the SVG path uses whichever
+  model is driving the conversation.
+
+### SVG fallback
+
+The same verdict-driven iteration loop runs for both formats. In SVG
+mode, generation and review both go through the chat model (the
+reviewer reads the SVG source as text):
+
 - `mode: "svg_fallback"` appears in the tool result and review log.
 - Quality depends on the chat model's spatial reasoning. Claude Opus
   and GPT-4o / GPT-5 produce usable output for flowcharts, simple

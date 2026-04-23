@@ -335,6 +335,15 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const originalExtension = path.extname(absOutput) || '.png'
       fs.mkdirSync(outDir, { recursive: true })
 
+      // The output extension drives provider choice. A .svg request
+      // must be honoured literally: gpt-image-2 produces PNG bytes, so
+      // routing a .svg request through it would result in a file named
+      // .svg containing binary PNG data (which no renderer will read
+      // as SVG). The registry treats `forceSvg` as a hard override
+      // that picks the SVG-via-LLM path regardless of whether an
+      // OpenAI key is configured.
+      const userRequestedSvg = originalExtension.toLowerCase() === '.svg'
+
       // Read live settings (hot-reload) — falls back to the static snapshot.
       // Note: `ctx.settings.diagram` is set by resolveSettings(); older
       // snapshots without the field default to 'auto'.
@@ -346,6 +355,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         imageSize: aspectToSize(aspect),
         imageQuality: initialQuality,
         svgAspect: aspect,
+        forceSvg: userRequestedSvg,
       }
       // Auth is also read fresh — user may have just signed in to Claude
       // subscription or saved a new OPENAI_API_KEY from Settings.
