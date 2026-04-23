@@ -59,12 +59,15 @@ Verdict rules:
 - "needs_regen" for structural or content errors — the diagram must be redrawn`
 
 function buildUser(req: ReviewRequest, threshold: number, svgSource: string): string {
+  const houseBlock = req.houseProfileSummary
+    ? `\nHOUSE STYLE (figure must belong to this visual system):\n${req.houseProfileSummary}\n\nUnder blockingIssues of kind style_mismatch, call out any deviation from this house style — wrong palette tokens, wrong stroke widths, wrong corner radii, wrong typography voice, broken motifs.\n`
+    : ''
   return `Evaluate this diagram for "${req.docType}" publication (acceptance threshold: ${threshold}/10).
 
 DIAGRAM TYPE: ${req.diagramType}
 ORIGINAL REQUEST: ${req.prompt}
 ITERATION: ${req.iteration}/${req.maxIterations}
-
+${houseBlock}
 SVG SOURCE:
 \`\`\`svg
 ${svgSource}

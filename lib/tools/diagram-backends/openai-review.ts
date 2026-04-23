@@ -39,22 +39,31 @@ const REVIEW_SYSTEM = `You are a rigorous reviewer for scientific publication-gr
 Rate on a strict scale — 9+ is reserved for camera-ready figures. Return only valid JSON matching the schema. Be specific: every blocking_issue must describe exactly what is wrong AND a concrete fix another tool can act on.`
 
 function buildUserPrompt(req: ReviewRequest, threshold: number): string {
+  const houseBlock = req.houseProfileSummary
+    ? `HOUSE STYLE (the figure must belong to this visual system):
+${req.houseProfileSummary}
+
+`
+    : ''
+  const fifthDimension = req.houseProfileSummary
+    ? '5. House-style adherence & consistency — matches the supplied palette, typography voice, geometry tokens, and motifs; feels like a sibling of other figures in the same system'
+    : '5. Professional appearance — publication-ready polish'
   return `Evaluate this diagram for "${req.docType}" publication (acceptance threshold: ${threshold}/10).
 
 DIAGRAM TYPE: ${req.diagramType}
 ORIGINAL REQUEST: ${req.prompt}
 ITERATION: ${req.iteration}/${req.maxIterations}
-
+${houseBlock}
 Score five dimensions independently (0-2 each, total 0-10):
   1. Scientific accuracy — concepts, relationships, notation correct
   2. Clarity & readability — hierarchy, unambiguous at a glance
   3. Label quality — complete, legible, consistent
   4. Layout & composition — balanced, no overlap, logical flow
-  5. Professional appearance — publication-ready polish
+  ${fifthDimension}
 
 For every issue that blocks acceptance, emit an entry in blocking_issues with:
   - kind: wrong_content | illegible_text | layout_collision | missing_element | style_mismatch
-  - description: what is wrong
+  - description: what is wrong (call out house-style deviations under style_mismatch — wrong palette role, wrong corner radius, wrong typography voice, broken motif, etc.)
   - fix: precise instruction to correct it (will be fed to an image editor)
 
 Choose verdict:

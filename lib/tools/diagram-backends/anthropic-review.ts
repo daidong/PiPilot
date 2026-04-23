@@ -51,13 +51,21 @@ const REVIEW_SYSTEM = `You are a rigorous reviewer for scientific publication-gr
 Rate on a strict scale — 9+ is reserved for camera-ready figures. Always emit your answer by calling the emit_review tool. Every blocking_issue must describe what is wrong AND a concrete fix another tool can act on.`
 
 function buildUserText(req: ReviewRequest, threshold: number): string {
+  const houseBlock = req.houseProfileSummary
+    ? `\nHOUSE STYLE (figure must belong to this visual system):\n${req.houseProfileSummary}\n`
+    : ''
+  const fifthDimension = req.houseProfileSummary
+    ? 'house-style adherence & consistency'
+    : 'professional appearance'
   return `Evaluate this diagram for "${req.docType}" publication (acceptance threshold: ${threshold}/10).
 
 DIAGRAM TYPE: ${req.diagramType}
 ORIGINAL REQUEST: ${req.prompt}
 ITERATION: ${req.iteration}/${req.maxIterations}
+${houseBlock}
+Score five dimensions (0-2 each, total 0-10): scientific accuracy, clarity & readability, label quality, layout & composition, ${fifthDimension}.
 
-Score five dimensions (0-2 each, total 0-10): scientific accuracy, clarity & readability, label quality, layout & composition, professional appearance.
+When scoring dimension 5, compare against the HOUSE STYLE block above — wrong palette roles, wrong corner radius, wrong typography voice, or broken motifs are all style_mismatch blocking issues.
 
 Choose verdict:
   - "acceptable"  if score >= ${threshold} and no blocking_issues

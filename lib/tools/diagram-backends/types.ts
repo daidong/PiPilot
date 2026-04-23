@@ -98,6 +98,13 @@ export interface ReviewRequest {
   diagramType: DiagramType
   iteration: number
   maxIterations: number
+  /**
+   * Short summary of the house-style profile this figure is meant to
+   * belong to. Used by the reviewer as the ground truth for the 5th
+   * rubric dimension (house-style adherence). Omit to fall back to
+   * generic professional-appearance evaluation.
+   */
+  houseProfileSummary?: string
 }
 
 export interface ImageGenOptions {
