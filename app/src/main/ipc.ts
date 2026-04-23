@@ -450,21 +450,19 @@ async function ensureCoordinator(
         }
 
         // Notify UI to refresh entity lists when artifacts are created/updated.
+        // Renderer debounces the resulting refresh so bursts of tool calls coalesce.
         if ((tool === 'artifact-create' || tool === 'artifact-update') && result && typeof result === 'object' && 'success' in result) {
           const r = result as any
           if (r.success) {
             invalidateEntityCache(runProjectPath)
-            if (tool === 'artifact-create') {
-              safeSend(win, 'agent:entity-created', {
-                type: r.data?.type || 'artifact',
-                id: r.data?.id,
-                title: r.data?.title
-              })
-              // Also track the artifact's source file in Working Folder
-              if (r.data?.filePath) {
-                const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
-                safeSend(win, 'agent:file-created', absPath)
-              }
+            safeSend(win, 'agent:entity-created', {
+              type: r.data?.type || 'artifact',
+              id: r.data?.id,
+              title: r.data?.title
+            })
+            if (tool === 'artifact-create' && r.data?.filePath) {
+              const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
+              safeSend(win, 'agent:file-created', absPath)
             }
           }
         }

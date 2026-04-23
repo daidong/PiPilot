@@ -369,7 +369,6 @@ function TipsBlock() {
 function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const pickFolder = useSessionStore((s) => s.pickFolder)
   const openPath = useSessionStore((s) => s.openPath)
-  const refreshEntities = useEntityStore((s) => s.refreshAll)
 
   const [recents, setRecents] = useState<RecentProjectEntry[]>([])
   const [projectStats, setProjectStats] = useState<Record<string, ProjectStats>>({})
@@ -407,23 +406,21 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
     if (opening) return
     setOpening(true)
     try {
-      const ok = await openPath(path)
-      if (ok) await refreshEntities()
+      await openPath(path)
     } finally {
       setOpening(false)
     }
-  }, [openPath, refreshEntities, opening])
+  }, [openPath, opening])
 
   const handlePickNew = useCallback(async () => {
     if (opening) return
     setOpening(true)
     try {
-      const ok = await pickFolder()
-      if (ok) await refreshEntities()
+      await pickFolder()
     } finally {
       setOpening(false)
     }
-  }, [pickFolder, refreshEntities, opening])
+  }, [pickFolder, opening])
 
   const handleRemove = useCallback(async (path: string) => {
     await api.removeRecentProject?.(path)
@@ -751,10 +748,20 @@ export default function App() {
       useActivityStore.getState().addSkill(skillName)
     })
 
+    // Debounce entity-change bursts: a single agent turn can emit many
+    // artifact-create / artifact-update events; coalesce into one refresh.
+    let entityRefreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleEntityRefresh = () => {
+      if (entityRefreshTimer) clearTimeout(entityRefreshTimer)
+      entityRefreshTimer = setTimeout(() => {
+        entityRefreshTimer = null
+        refreshEntities()
+      }, 300)
+    }
+
     const unsub1 = api.onStreamChunk((chunk: string) => appendChunk(chunk))
     const unsub2 = api.onAgentDone((result: any) => {
       finalize(result)
-      refreshEntities()
 
       // Extract file paths from agent response and add to working files
       // Matches both absolute (/foo/bar.txt) and relative (docs/bar.txt) paths
@@ -788,8 +795,8 @@ export default function App() {
       useUIStore.getState().addWorkingFile(path)
     })
     const unsub6 = api.onEntityCreated(() => {
-      // Refresh entity lists when agent creates notes/papers
-      refreshEntities()
+      // Fires on both artifact-create and artifact-update; debounced above.
+      scheduleEntityRefresh()
     })
 
     // Eagerly probe compute environment (only when compute feature is enabled)
@@ -809,6 +816,7 @@ export default function App() {
     })
 
     return () => {
+      if (entityRefreshTimer) clearTimeout(entityRefreshTimer)
       unsub1()
       unsub2()
       unsub3()

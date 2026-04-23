@@ -565,10 +565,6 @@ export function EntityTabs() {
   const data = useEntityStore((s) => s.data)
   const refreshAll = useEntityStore((s) => s.refreshAll)
 
-  useEffect(() => {
-    refreshAll()
-  }, [])
-
   const handleTabKeyDown = (e: React.KeyboardEvent) => {
     const tabKeys = tabs.map(t => t.key)
     const idx = tabKeys.indexOf(leftTab)

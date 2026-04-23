@@ -73,21 +73,21 @@ function SortHeader({
 
 // ─── Paper row ────────────────────────────────────────────────────────────────
 
-function PaperRow({
-  paper,
+// Memoized so that changes to expandedKey/activeRowKey only re-render the two
+// affected rows instead of the whole list. Callers must pass a stable onToggle
+// (e.g. useCallback) for memo to be effective.
+const PaperRow = React.memo(function PaperRow({
+  row,
   expanded,
-  onToggle,
-  wikiSlug,
   isActive,
-  source = 'project'
+  onToggle,
 }: {
-  paper: EntityItem
+  row: SearchRow
   expanded: boolean
-  onToggle: () => void
-  wikiSlug?: string | null
-  isActive?: boolean
-  source?: 'project' | 'wiki'
+  isActive: boolean
+  onToggle: (row: SearchRow) => void
 }) {
+  const { paper, source, wikiSlug } = row
   const setWikiSlug = useUIStore((s) => s.setWikiReaderSlug)
   const authors = (paper.authors as string[]) || []
   const authorStr =
@@ -103,7 +103,7 @@ function PaperRow({
         className={`flex items-center gap-3 px-3 py-2 transition-colors cursor-pointer ${
           isActive ? 'bg-[var(--color-accent-soft)]/10' : 'hover:bg-[var(--color-accent-soft)]/5'
         }`}
-        onClick={onToggle}
+        onClick={() => onToggle(row)}
       >
         <button className="shrink-0 t-text-muted">
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -232,7 +232,7 @@ function PaperRow({
       )}
     </div>
   )
-}
+})
 
 // ─── Wiki status pill ─────────────────────────────────────────────────────────
 // Compact live indicator for the background Paper Wiki agent. Subscribes to
@@ -468,6 +468,17 @@ export function LiteratureView() {
   const setWikiSlug = useUIStore((s) => s.setWikiReaderSlug)
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
+  // Stable callback so PaperRow's React.memo can short-circuit. Functional
+  // setState keeps expandedKey out of the deps, pinning the identity.
+  const handleRowToggle = useCallback((row: SearchRow) => {
+    setExpandedKey((prev) => (prev === row.key ? null : row.key))
+    if (row.source === 'wiki') {
+      setWikiSlug(row.wikiSlug!)
+    } else {
+      setWikiSlug(row.wikiSlug || `paper:${row.paper.id}`)
+    }
+  }, [setWikiSlug])
+
   // Wiki slug lookup: paperId → slug (batch loaded once)
   const [wikiSlugs, setWikiSlugs] = useState<Record<string, string>>({})
   // Wiki paper metadata, loaded once per session for cross-project search
@@ -700,19 +711,10 @@ export function LiteratureView() {
               filteredRows.map((row) => (
                 <PaperRow
                   key={row.key}
-                  paper={row.paper}
-                  source={row.source}
+                  row={row}
                   expanded={expandedKey === row.key}
                   isActive={activeRowKey === row.key}
-                  onToggle={() => {
-                    setExpandedKey(expandedKey === row.key ? null : row.key)
-                    if (row.source === 'wiki') {
-                      setWikiSlug(row.wikiSlug!)
-                    } else {
-                      setWikiSlug(row.wikiSlug || `paper:${row.paper.id}`)
-                    }
-                  }}
-                  wikiSlug={row.wikiSlug}
+                  onToggle={handleRowToggle}
                 />
               ))
             )}
