@@ -425,11 +425,21 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         }))
       }
 
-      // Copy final image to canonical output path (finalAbsOutput rewrites
-      // the extension to .svg when fallback mode is active).
+      // Materialise the final output. On a single-iteration hit v1 is
+      // bit-identical to the final file, so copying would leave 2× the
+      // bytes on disk for no benefit — rename instead. In multi-iteration
+      // runs we keep every intermediate v_i as evidence of the draft
+      // history and copy v_last → final so readers can diff drafts.
       const finalAbsIter = path.resolve(ctx.workspacePath, last.imagePath)
       if (finalAbsIter !== finalAbsOutput) {
-        fs.copyFileSync(finalAbsIter, finalAbsOutput)
+        if (history.length === 1) {
+          fs.renameSync(finalAbsIter, finalAbsOutput)
+          // Keep the review log consistent: iter 1's imagePath now points
+          // at the canonical output, not the (gone) v1 path.
+          last.imagePath = path.relative(ctx.workspacePath, finalAbsOutput)
+        } else {
+          fs.copyFileSync(finalAbsIter, finalAbsOutput)
+        }
       }
 
       // Write review log alongside the output.
@@ -438,6 +448,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         prompt: userPrompt,
         docType,
         diagramType,
+        aspect,
         threshold,
         mode: providers.svgFallback ? 'svg_fallback' : 'image',
         provider: {
