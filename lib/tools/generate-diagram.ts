@@ -74,6 +74,32 @@ function sanitizeAspect(value: unknown): Aspect {
   return (VALID_ASPECTS as string[]).includes(v) ? (v as Aspect) : 'auto'
 }
 
+// Output format handling.
+// Agents carry the user's "I want SVG" / "I want PNG" intent into the tool
+// via TWO redundant channels:
+//   - an explicit `format` parameter, and
+//   - the extension of the `output` path.
+// Either one is enough; when both are present and disagree, `format` wins
+// and we rewrite the output extension to match (reported via
+// `extensionChanged` in the result payload so the agent can correct any
+// follow-up Markdown embed).
+type Format = 'auto' | 'png' | 'svg'
+const VALID_FORMATS: Format[] = ['auto', 'png', 'svg']
+
+function sanitizeFormat(value: unknown): Format {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : 'auto'
+  return (VALID_FORMATS as string[]).includes(v) ? (v as Format) : 'auto'
+}
+
+type EffectiveFormat = 'png' | 'svg'
+
+function resolveEffectiveFormat(format: Format, extension: string): EffectiveFormat {
+  if (format === 'svg') return 'svg'
+  if (format === 'png') return 'png'
+  // auto → infer from extension; anything that is not .svg falls to raster.
+  return extension.toLowerCase() === '.svg' ? 'svg' : 'png'
+}
+
 // Quality tier handling.
 // Default mapping balances cost against the minimum fidelity each document
 // type can tolerate: strict venues (journal / conference / thesis / grant)
@@ -137,6 +163,9 @@ const GenerateDiagramSchema = Type.Object({
   })),
   aspect: Type.Optional(Type.String({
     description: 'Output aspect ratio. One of: auto | square | landscape | portrait. Default: auto (model picks from the prompt). Use "landscape" for wide architecture / flow diagrams with >3 horizontal panels, "portrait" for top-to-bottom CONSORT / PRISMA flows, "square" for single-concept schematics.',
+  })),
+  format: Type.Optional(Type.String({
+    description: 'Desired output format: auto | png | svg. Default: auto (inferred from the output extension). Pass "svg" when the user says "SVG / 矢量图 / vector / 向量图", pass "png" when they say "PNG / 图片 / raster". Explicit format beats the extension: if format="svg" but output="foo.png", the file is renamed to foo.svg and extensionChanged is reported.',
   })),
   quality: Type.Optional(Type.String({
     description: 'gpt-image-2 rendering quality: low | medium | high | auto. When omitted, defaults from doc_type — high for journal/conference/thesis/grant, medium for preprint/report/poster, low for presentation. Start at low for cheap exploration; the tool automatically bumps one tier on a needs_edit verdict in later iterations.',
@@ -335,14 +364,15 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const originalExtension = path.extname(absOutput) || '.png'
       fs.mkdirSync(outDir, { recursive: true })
 
-      // The output extension drives provider choice. A .svg request
-      // must be honoured literally: gpt-image-2 produces PNG bytes, so
-      // routing a .svg request through it would result in a file named
-      // .svg containing binary PNG data (which no renderer will read
-      // as SVG). The registry treats `forceSvg` as a hard override
-      // that picks the SVG-via-LLM path regardless of whether an
-      // OpenAI key is configured.
-      const userRequestedSvg = originalExtension.toLowerCase() === '.svg'
+      // Format intent flows through two redundant channels: the explicit
+      // `format` parameter and the extension of `output`. Explicit wins
+      // when they disagree — the agent may know the user wanted SVG even
+      // if it wrote a .png filename out of habit. When `format: 'svg'`
+      // overrides a .png path (or vice versa), the actual on-disk
+      // extension is adjusted so the file matches its content.
+      const formatPref = sanitizeFormat(params.format)
+      const effectiveFormat = resolveEffectiveFormat(formatPref, originalExtension)
+      const userRequestedSvg = effectiveFormat === 'svg'
 
       // Read live settings (hot-reload) — falls back to the static snapshot.
       // Note: `ctx.settings.diagram` is set by resolveSettings(); older
@@ -378,13 +408,18 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         }))
       }
 
-      // In SVG-fallback mode, output has to land as .svg. If the caller
-      // asked for a raster extension, rewrite the on-disk paths so the
-      // file matches its format — a .png that is actually SVG would be
-      // embedded wrong in Markdown/LaTeX and would confuse readers.
-      const extension = providers.svgFallback ? '.svg' : originalExtension
-      const finalAbsOutput = providers.svgFallback && originalExtension !== '.svg'
-        ? path.join(outDir, `${baseName}.svg`)
+      // Reconcile requested vs. actual output format. Three sources can
+      // disagree:
+      //   (a) the file extension the agent passed on `output`,
+      //   (b) the explicit `format` parameter (format wins over extension
+      //       when they disagree — agent may know intent the filename missed),
+      //   (c) auto-fallback inside the registry (no OpenAI key forces SVG).
+      // The on-disk extension must match the bytes we are about to write,
+      // so we always derive it from the provider's actual output format.
+      const providerFormat: EffectiveFormat = providers.svgFallback ? 'svg' : 'png'
+      const extension = providerFormat === 'svg' ? '.svg' : '.png'
+      const finalAbsOutput = extension !== originalExtension
+        ? path.join(outDir, `${baseName}${extension}`)
         : absOutput
 
       // Optional reference image — read bytes for later use.
@@ -522,6 +557,13 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         docType,
         diagramType,
         aspect,
+        format: {
+          requested: formatPref,
+          effectiveFromParams: effectiveFormat,
+          actual: providerFormat,
+          originalExtension,
+          finalExtension: extension,
+        },
         threshold,
         mode: providers.svgFallback ? 'svg_fallback' : 'image',
         quality: {

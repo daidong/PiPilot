@@ -46,6 +46,7 @@ diagram_type:   flowchart | architecture | pathway | circuit |
 iterations:     1 | 2 | 3   (default 2)
 aspect:         auto | square | landscape | portrait   (default auto)
 quality:        low | medium | high | auto   (default derived from doc_type)
+format:         auto | png | svg   (default auto — inferred from output extension)
 ```
 
 **aspect guidance** — the default `auto` lets the model pick, but
@@ -299,18 +300,29 @@ its own family.
 
 ### Output format selection (png vs svg)
 
-The **output file extension decides the format**:
+Format intent flows through two redundant channels — either is enough,
+and when they disagree the explicit `format` parameter wins:
 
-- `output: figures/foo.png` → raster via gpt-image-2 (needs
-  `OPENAI_API_KEY`). Falls back to SVG-via-chat-model automatically
-  when the key is missing; the file gets renamed to `.svg` in that
-  case and the result payload reports `extensionChanged`.
-- `output: figures/foo.svg` → **always** goes through the SVG-via-chat
-  path, even when `OPENAI_API_KEY` is present. Choose this when you
-  specifically want vector output (scales infinitely, small filesize,
-  editable after the fact). Requires a chat model that can produce
-  SVG — any configured model works, since the SVG path uses whichever
-  model is driving the conversation.
+1. **Explicit `format` parameter** — use this when the user said
+   something format-specific in the prompt:
+   - "SVG / 矢量图 / vector / 向量图" → `format: "svg"`
+   - "PNG / 图片 / raster / bitmap" → `format: "png"`
+   - Otherwise omit (defaults to `auto`).
+2. **Output filename extension** — `output: figures/foo.svg` implies
+   `format: "svg"`, `output: figures/foo.png` implies `format: "png"`.
+   The tool will rewrite the extension to match `format` if they
+   disagree (and report `extensionChanged` in the result so you know
+   to update any Markdown embed).
+
+Behavioural summary:
+
+- `format: "svg"` (or `.svg` extension) → **always** synthesises SVG
+  via the chat model, even when `OPENAI_API_KEY` is present. Choose
+  this for vector output (scales infinitely, small filesize, editable).
+- `format: "png"` (or `.png` extension, the default) → raster via
+  `gpt-image-2` when `OPENAI_API_KEY` is configured. Falls back to
+  SVG-via-chat-model automatically when the key is missing; the file
+  is renamed `.svg` and `extensionChanged` is reported.
 
 ### SVG fallback
 
