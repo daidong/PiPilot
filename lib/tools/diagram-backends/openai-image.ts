@@ -1,0 +1,152 @@
+/**
+ * OpenAI image generation backend (gpt-image-2).
+ *
+ * Supports:
+ *   - text-to-image via /v1/images/generations
+ *   - image-to-image editing via /v1/images/edits (multipart form)
+ *
+ * Reads OPENAI_API_KEY from process.env, matching the pattern used by
+ * web-tools.ts:418 for Brave. Credentials are seeded into env from the
+ * settings manager at app startup.
+ */
+
+import { Blob } from 'node:buffer'
+import type { ImageCapability, ImageProvider } from './types.js'
+
+const GENERATIONS_URL = 'https://api.openai.com/v1/images/generations'
+const EDITS_URL = 'https://api.openai.com/v1/images/edits'
+const DEFAULT_MODEL = 'gpt-image-2'
+const DEFAULT_SIZE = '1024x1024'
+const REQUEST_TIMEOUT_MS = 300_000
+
+interface OpenAIImageChoice {
+  b64_json?: string
+  url?: string
+}
+
+interface OpenAIImageResponse {
+  data?: OpenAIImageChoice[]
+  error?: { message?: string; type?: string }
+}
+
+function extractBytes(response: OpenAIImageResponse): Buffer {
+  const choice = response.data?.[0]
+  if (!choice) throw new Error('OpenAI image response had no choices')
+  if (choice.b64_json) {
+    return Buffer.from(choice.b64_json, 'base64')
+  }
+  if (choice.url) {
+    throw new Error(
+      'OpenAI returned an image URL instead of base64. Set response_format=b64_json or configure the client to request binary.'
+    )
+  }
+  throw new Error('OpenAI image response did not contain image data')
+}
+
+async function postJson(url: string, apiKey: string, body: unknown): Promise<OpenAIImageResponse> {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    })
+    const json = (await res.json()) as OpenAIImageResponse
+    if (!res.ok) {
+      const msg = json.error?.message || `HTTP ${res.status}`
+      throw new Error(`OpenAI image API error: ${msg}`)
+    }
+    return json
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function postMultipart(
+  url: string,
+  apiKey: string,
+  fields: Record<string, string>,
+  files: Record<string, { data: Buffer; filename: string; contentType: string }>
+): Promise<OpenAIImageResponse> {
+  const form = new FormData()
+  for (const [k, v] of Object.entries(fields)) {
+    form.append(k, v)
+  }
+  for (const [k, f] of Object.entries(files)) {
+    const view = new Uint8Array(f.data.buffer, f.data.byteOffset, f.data.byteLength)
+    form.append(k, new Blob([view], { type: f.contentType }) as unknown as globalThis.Blob, f.filename)
+  }
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      body: form as unknown as ReadableStream,
+      signal: ctl.signal,
+    })
+    const json = (await res.json()) as OpenAIImageResponse
+    if (!res.ok) {
+      const msg = json.error?.message || `HTTP ${res.status}`
+      throw new Error(`OpenAI image edit API error: ${msg}`)
+    }
+    return json
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export interface OpenAIImageProviderOptions {
+  apiKey?: string
+  model?: string
+  size?: string
+}
+
+export function createOpenAIImageProvider(
+  opts: OpenAIImageProviderOptions = {}
+): ImageProvider {
+  const apiKey = opts.apiKey ?? process.env.OPENAI_API_KEY?.trim()
+  if (!apiKey) {
+    throw new Error(
+      'OPENAI_API_KEY is required for diagram generation. ' +
+      'Add it under Settings → API Keys, or set OPENAI_API_KEY in your shell.'
+    )
+  }
+  const model = opts.model || DEFAULT_MODEL
+  const size = opts.size || DEFAULT_SIZE
+
+  const capabilities = new Set<ImageCapability>(['text_to_image', 'image_to_image'])
+
+  return {
+    id: `openai:${model}`,
+    label: `OpenAI ${model}`,
+    capabilities,
+
+    async textToImage(prompt: string): Promise<Buffer> {
+      const body = {
+        model,
+        prompt,
+        size,
+        n: 1,
+        response_format: 'b64_json',
+      }
+      const response = await postJson(GENERATIONS_URL, apiKey, body)
+      return extractBytes(response)
+    },
+
+    async imageToImage(prompt: string, image: Buffer): Promise<Buffer> {
+      const response = await postMultipart(
+        EDITS_URL,
+        apiKey,
+        { model, prompt, size, n: '1', response_format: 'b64_json' },
+        { image: { data: image, filename: 'image.png', contentType: 'image/png' } }
+      )
+      return extractBytes(response)
+    },
+  }
+}
