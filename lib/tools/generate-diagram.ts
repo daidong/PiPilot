@@ -269,8 +269,10 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       } catch (err) {
         return toAgentResult('generate_diagram', toolError('LLM_UNAVAILABLE', (err as Error).message, {
           suggestions: [
-            'Add OPENAI_API_KEY under Settings → API Keys (required for image generation).',
-            'For review, also configure ANTHROPIC_API_KEY or sign in to Claude subscription.',
+            'Ask the user to add OPENAI_API_KEY under Settings → API Keys. ChatGPT / Codex subscription tokens are scoped to the Codex endpoint and do NOT grant Images API access, so subscription-only users must supply a real sk-… API key for diagram generation.',
+            'While the user is adding the key, offer to draft an inline SVG placeholder or ASCII sketch so the surrounding document is not blocked.',
+            'Alternatively, leave a "figure TBD" caption with a textual description of what the figure should show, so the user can regenerate later without re-explaining the intent.',
+            'For review (separate from generation), ANTHROPIC_API_KEY or a Claude subscription login is also sufficient — but both paths require OPENAI_API_KEY for the generation step itself.',
           ],
         }))
       }
