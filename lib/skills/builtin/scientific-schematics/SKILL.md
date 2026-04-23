@@ -111,13 +111,35 @@ Two practical consequences for **how you write the prompt**:
    will structure whatever you write, but pre-structured prose rewrites
    less aggressively.
 
-### Iterative refinement
+### Reference images (iterative refinement and style boards)
 
-To revise an already-good diagram, pass `reference_path` (and
-`reference_mode: revise_layout` — the default) pointing at the
-existing image. The tool treats iteration 1 as a surgical edit:
-it tells gpt-image-2 to keep layout, colour, and positions unchanged
-unless the specific blocking issues from review require otherwise.
+Two modes of `reference_mode` are supported; a third is reserved.
+
+**`reference_mode: "revise_layout"`** (default) — the reference is the
+existing draft to polish. The tool treats iteration 1 as a surgical
+edit: gpt-image-2 keeps layout, colour, and positions unchanged unless
+specific blocking issues require otherwise. Use this when the user
+says "improve this figure" or "fix X in this figure".
+
+**`reference_mode: "style_only"`** — the reference is a **style board**,
+not a layout. The tool redraws the subject from scratch in the
+reference's visual idiom (palette, typography, line weights, geometry)
+while ignoring its layout and content. Use this when:
+- The user points at an older figure and says "use this style" but
+  wants a completely different diagram.
+- A lab or institution has a house-style exemplar you want the tool
+  to lift from without copying content.
+- Reference and subject are semantically different (e.g., reference is
+  a CONSORT flowchart, subject is an architecture diagram) but you want
+  them to look like siblings.
+
+`style_only` works with both raster and SVG outputs. In raster mode the
+reference is passed through `/v1/images/edits` with an explicit
+"style only, do not copy layout" instruction. In SVG mode the
+reference SVG source is embedded in the prompt as a style exemplar.
+
+**`reference_mode: "local_edit"`** — reserved; masked-region edit is
+not yet implemented and the tool rejects it with a clear error.
 
 ---
 
@@ -328,6 +350,50 @@ show the image.
   intermediates are left on disk for inspection.
 
 ---
+
+## House style — what gives every figure its shared identity
+
+Every diagram produced by this tool is drawn against a fixed **house
+visual style** — a single profile bundled with the system that pins:
+
+- **Theme** — editorial institutional, off-white background, graphite
+  text/strokes, restrained contrast, disciplined whitespace. Not
+  "AI-aesthetic", not startup-whitepaper.
+- **Typography** — Inter / SF Pro Text / Helvetica Neue / Arial stack,
+  with fixed size tokens for section labels, node labels, edge
+  annotations, and foot labels.
+- **Palette roles** — text/stroke, primaryStructure, secondaryStructure,
+  contextFill, resultAccent, warningAccent, grid — each mapped to a
+  specific hex. Not "Okabe-Ito preferred" — a concrete editorial blue/red
+  identity with accessibility as fallback, not default.
+- **Geometry tokens** — stroke widths (1.5px / 1px), corner radius 8px,
+  filled-triangle arrowheads, dashed-border group containers, 32px min
+  gutter, 3-step box height scale.
+- **Motifs** — labels outside boxes, arrow stroke matches source colour,
+  at most two accent colours per figure.
+
+The reviewer is explicitly told to grade "house-style adherence" as the
+fifth rubric dimension, so iterations that drift from the profile get
+blocked from acceptance. You'll see `houseProfile: editorial-institutional-v1`
+in the review log to confirm which profile was applied.
+
+### Overriding the house style via prompt
+
+There is **no** user-facing theme selector — consistency across figures
+is the whole point. If a user needs to deviate for a specific figure
+(e.g., matching a publication's brand colours), express the overrides
+in the `prompt` itself using quoted tokens or hex codes:
+
+```
+prompt: >
+  Workflow diagram, three stages.
+  Use "#E30613" for the final "Result" node (publication brand red);
+  rest of the figure follows the default house palette.
+```
+
+The tool's literal extractor picks up hex codes (`#RRGGBB`,
+`#RRGGBBAA`), rgb()/rgba(), hsl()/hsla() tokens from plain prose and
+pins them in MUST KEEP, so the override survives rendering.
 
 ## Configuration
 
