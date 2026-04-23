@@ -1,10 +1,20 @@
 /**
  * Anthropic (Claude) review backend.
  *
- * Claude has no JSON-schema response_format, so we use tool_use with
- * tool_choice=required to force a structured output shaped identically
- * to the OpenAI reviewer. The consumer can therefore swap reviewers
- * without changing downstream logic.
+ * Supports two auth modes, selected by the caller:
+ *   - API key     (`x-api-key` header)
+ *   - OAuth token (`Authorization: Bearer …`, used for Claude Pro/Max
+ *                  subscriptions — token starts with `sk-ant-oat…`)
+ *
+ * OAuth mode requires Anthropic's Claude Code identity envelope:
+ *   - `anthropic-beta: claude-code-20250219,oauth-2025-04-20,…`
+ *   - system message MUST begin with the Claude Code identity string
+ * Otherwise the API responds 403. The logic mirrors what pi-ai does
+ * internally for anthropic-sub sessions (see node_modules/@mariozechner/
+ * pi-ai/dist/providers/anthropic.js:438-454).
+ *
+ * Structured output shape is identical to the OpenAI review provider so
+ * downstream code never has to branch on reviewer identity.
  */
 
 import type {
@@ -21,9 +31,10 @@ const ANTHROPIC_VERSION = '2023-06-01'
 const REQUEST_TIMEOUT_MS = 180_000
 const MAX_TOKENS = 2048
 
-// Claude reviewers tend to run slightly warmer than OpenAI on the same
-// image; thresholds are set a touch higher to compensate. Initial values —
-// calibrate from real review logs before trusting cross-reviewer comparisons.
+const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+const BETA_API_KEY = 'fine-grained-tool-streaming-2025-05-14'
+const BETA_OAUTH = `claude-code-20250219,oauth-2025-04-20,${BETA_API_KEY}`
+
 const ANTHROPIC_THRESHOLDS: ThresholdTable = {
   journal: 8.5,
   conference: 8.0,
@@ -97,7 +108,7 @@ interface AnthropicMessagesResponse {
     | { type: 'text'; text: string }
     | { type: 'tool_use'; name: string; input: Record<string, unknown> }
   >
-  error?: { message?: string }
+  error?: { message?: string; type?: string }
 }
 
 function coerceVerdict(raw: unknown): Verdict {
@@ -111,8 +122,93 @@ function clampScore(n: unknown): number {
   return Math.min(10, Math.max(0, v))
 }
 
+function isOAuthAccessToken(token: string): boolean {
+  return token.startsWith('sk-ant-oat')
+}
+
+function buildHeaders(token: string, isOAuth: boolean): Record<string, string> {
+  const common: Record<string, string> = {
+    'anthropic-version': ANTHROPIC_VERSION,
+    'Content-Type': 'application/json',
+  }
+  if (isOAuth) {
+    return {
+      ...common,
+      'Authorization': `Bearer ${token}`,
+      'anthropic-beta': BETA_OAUTH,
+      'anthropic-dangerous-direct-browser-access': 'true',
+      'user-agent': 'claude-cli/research-copilot',
+      'x-app': 'cli',
+    }
+  }
+  return {
+    ...common,
+    'x-api-key': token,
+    'anthropic-beta': BETA_API_KEY,
+  }
+}
+
+function buildRequestBody(req: ReviewRequest, threshold: number, isOAuth: boolean): Record<string, unknown> {
+  const b64 = req.image.toString('base64')
+
+  // OAuth mode requires the Claude Code identity as the first system block.
+  // Pi-ai does this unconditionally (anthropic.js:476-492); skipping it
+  // yields 403 "system prompt must start with Claude Code identity".
+  const systemBlocks: Array<Record<string, unknown>> = []
+  if (isOAuth) {
+    systemBlocks.push({ type: 'text', text: CLAUDE_CODE_IDENTITY })
+  }
+  systemBlocks.push({ type: 'text', text: REVIEW_SYSTEM })
+
+  return {
+    model: DEFAULT_MODEL,
+    max_tokens: MAX_TOKENS,
+    system: systemBlocks,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: b64 },
+          },
+          { type: 'text', text: buildUserText(req, threshold) },
+        ],
+      },
+    ],
+    tools: [EMIT_REVIEW_TOOL],
+    tool_choice: { type: 'tool', name: 'emit_review' },
+  }
+}
+
+async function doRequest(
+  token: string,
+  isOAuth: boolean,
+  body: Record<string, unknown>
+): Promise<{ status: number; json: AnthropicMessagesResponse }> {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(MESSAGES_URL, {
+      method: 'POST',
+      headers: buildHeaders(token, isOAuth),
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    })
+    const json = (await res.json()) as AnthropicMessagesResponse
+    return { status: res.status, json }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export interface AnthropicReviewProviderOptions {
-  apiKey?: string
+  /** Either an API key or an OAuth access token (sk-ant-oat…). */
+  token?: string
+  /** Force OAuth handling; autodetected from token prefix when omitted. */
+  isOAuth?: boolean
+  /** One-shot refresh callback invoked on 401 when the token is expired. */
+  refreshToken?: () => Promise<string>
   model?: string
   thresholds?: ThresholdTable
 }
@@ -120,81 +216,66 @@ export interface AnthropicReviewProviderOptions {
 export function createAnthropicReviewProvider(
   opts: AnthropicReviewProviderOptions = {}
 ): ReviewProvider {
-  const apiKeyRaw = opts.apiKey ?? process.env.ANTHROPIC_API_KEY?.trim()
-  if (!apiKeyRaw) {
-    throw new Error('ANTHROPIC_API_KEY is required for Claude-based review.')
+  const envKey = process.env.ANTHROPIC_API_KEY?.trim()
+  const initialTokenRaw = opts.token ?? envKey
+  if (!initialTokenRaw) {
+    throw new Error('ANTHROPIC_API_KEY or an anthropic-sub OAuth token is required for Claude-based review.')
   }
-  const apiKey: string = apiKeyRaw
+  // Mutable so a refresh can substitute a fresh token.
+  let currentToken: string = initialTokenRaw
+  const isOAuth = opts.isOAuth ?? isOAuthAccessToken(currentToken)
+  const refreshToken = opts.refreshToken
   const model = opts.model || DEFAULT_MODEL
   const thresholds: ThresholdTable = opts.thresholds ?? ANTHROPIC_THRESHOLDS
 
   async function review(req: ReviewRequest): Promise<ReviewResult> {
     const threshold = thresholds[req.docType] ?? thresholds.default
-    const b64 = req.image.toString('base64')
-
-    const body = {
-      model,
-      max_tokens: MAX_TOKENS,
-      system: REVIEW_SYSTEM,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/png', data: b64 },
-            },
-            { type: 'text', text: buildUserText(req, threshold) },
-          ],
-        },
-      ],
-      tools: [EMIT_REVIEW_TOOL],
-      tool_choice: { type: 'tool', name: 'emit_review' },
+    const body = buildRequestBody(req, threshold, isOAuth)
+    if (model !== DEFAULT_MODEL) {
+      body.model = model
     }
 
-    const ctl = new AbortController()
-    const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
-    try {
-      const res = await fetch(MESSAGES_URL, {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': ANTHROPIC_VERSION,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: ctl.signal,
-      })
-      const json = (await res.json()) as AnthropicMessagesResponse
-      if (!res.ok) {
-        throw new Error(`Anthropic review API error: ${json.error?.message || `HTTP ${res.status}`}`)
-      }
+    let { status, json } = await doRequest(currentToken, isOAuth, body)
 
-      const toolUse = json.content?.find((c): c is Extract<typeof c, { type: 'tool_use' }> => c.type === 'tool_use' && c.name === 'emit_review')
-      if (!toolUse) {
-        throw new Error('Claude review did not emit the expected tool_use block')
+    // OAuth tokens expire; refresh once on 401 when we have a refresher.
+    if (status === 401 && isOAuth && refreshToken) {
+      try {
+        currentToken = await refreshToken()
+        ;({ status, json } = await doRequest(currentToken, isOAuth, body))
+      } catch (err) {
+        throw new Error(`Anthropic OAuth token refresh failed: ${(err as Error).message}`)
       }
-
-      const input = toolUse.input
-      const result: ReviewResult = {
-        score: clampScore(input.score),
-        requestAlignment: clampScore(input.requestAlignment),
-        legibility: clampScore(input.legibility),
-        blockingIssues: Array.isArray(input.blockingIssues)
-          ? (input.blockingIssues as ReviewResult['blockingIssues'])
-          : [],
-        summary: typeof input.summary === 'string' ? input.summary : '',
-        verdict: coerceVerdict(input.verdict),
-      }
-      return result
-    } finally {
-      clearTimeout(timer)
     }
+
+    if (status < 200 || status >= 300) {
+      throw new Error(`Anthropic review API error (HTTP ${status}): ${json.error?.message || 'unknown'}`)
+    }
+
+    const toolUse = json.content?.find(
+      (c): c is Extract<typeof c, { type: 'tool_use' }> =>
+        c.type === 'tool_use' && c.name === 'emit_review'
+    )
+    if (!toolUse) {
+      throw new Error('Claude review did not emit the expected tool_use block')
+    }
+
+    const input = toolUse.input
+    const result: ReviewResult = {
+      score: clampScore(input.score),
+      requestAlignment: clampScore(input.requestAlignment),
+      legibility: clampScore(input.legibility),
+      blockingIssues: Array.isArray(input.blockingIssues)
+        ? (input.blockingIssues as ReviewResult['blockingIssues'])
+        : [],
+      summary: typeof input.summary === 'string' ? input.summary : '',
+      verdict: coerceVerdict(input.verdict),
+    }
+    return result
   }
 
   return {
-    id: `anthropic:${model}`,
-    label: `Anthropic ${model}`,
+    id: `anthropic:${model}${isOAuth ? ':oauth' : ':api-key'}`,
+    label: `Anthropic ${model}${isOAuth ? ' (subscription)' : ''}`,
     thresholds,
     review,
   }

@@ -245,6 +245,14 @@ export interface CoordinatorConfig {
   reasoningEffort?: 'max' | 'high' | 'medium' | 'low'
   /** Resolved numeric settings from user preferences (literature intensity, web search depth, etc.) */
   resolvedSettings?: import('../../shared-ui/settings-types').ResolvedSettings
+  /**
+   * Live accessor for resolved settings. Called by tools that must react
+   * to user-driven changes without requiring a coordinator rebuild
+   * (e.g., diagram review-provider selection).
+   */
+  getResolvedSettings?: () => import('../../shared-ui/settings-types').ResolvedSettings
+  /** Live accessor for diagram-tool auth (see lib/tools/types.ts DiagramAuth). */
+  getDiagramAuth?: () => import('../tools/types.js').DiagramAuth
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown, toolCallId?: string) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown, toolCallId?: string) => void
@@ -408,7 +416,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
     onToolCall,
     onToolResult: wrappedOnToolResult,
-    settings: config.resolvedSettings
+    settings: config.resolvedSettings,
+    getSettings: config.getResolvedSettings,
+    getDiagramAuth: config.getDiagramAuth,
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
 
