@@ -253,6 +253,13 @@ export interface CoordinatorConfig {
   getResolvedSettings?: () => import('../../shared-ui/settings-types').ResolvedSettings
   /** Live accessor for diagram-tool auth (see lib/tools/types.ts DiagramAuth). */
   getDiagramAuth?: () => import('../tools/types.js').DiagramAuth
+  /**
+   * Optional SVG rasterizer the coordinator forwards to tools. Populated
+   * only when running inside Electron (the main process owns the
+   * BrowserWindow needed to render SVG at fidelity). Tools degrade to
+   * source-level review when absent.
+   */
+  rasterizeSvg?: (svg: Buffer, options?: import('../tools/types.js').SvgRasterizeOptions) => Promise<Buffer>
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown, toolCallId?: string) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown, toolCallId?: string) => void
@@ -419,6 +426,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     settings: config.resolvedSettings,
     getSettings: config.getResolvedSettings,
     getDiagramAuth: config.getDiagramAuth,
+    rasterizeSvg: config.rasterizeSvg,
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
 

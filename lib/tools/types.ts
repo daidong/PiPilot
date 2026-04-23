@@ -29,6 +29,11 @@ export interface DiagramAuth {
   } | null
 }
 
+export interface SvgRasterizeOptions {
+  width?: number
+  height?: number
+}
+
 export interface ResearchToolContext {
   /** Root of the workspace (e.g., project directory) */
   workspacePath: string
@@ -55,4 +60,15 @@ export interface ResearchToolContext {
   getSettings?: () => ResolvedSettings
   /** Live accessor for diagram-tool auth (see `DiagramAuth`). */
   getDiagramAuth?: () => DiagramAuth
+  /**
+   * Rasterize an SVG document to PNG bytes, when a renderer is available.
+   * Used by the diagram tool's SVG-fallback review path so a vision model
+   * can evaluate the rendered output (not just the SVG source) and catch
+   * overflow / overlap / legibility problems that markup inspection misses.
+   *
+   * The coordinator wires this up only when running under Electron (main
+   * process uses an offscreen BrowserWindow). Tools must treat it as
+   * optional and degrade to source-level review when absent.
+   */
+  rasterizeSvg?: (svg: Buffer, options?: SvgRasterizeOptions) => Promise<Buffer>
 }

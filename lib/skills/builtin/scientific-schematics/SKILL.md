@@ -327,18 +327,36 @@ Behavioural summary:
 ### SVG fallback
 
 The same verdict-driven iteration loop runs for both formats. In SVG
-mode, generation and review both go through the chat model (the
-reviewer reads the SVG source as text):
+mode, generation goes through the chat model, and review picks the
+strongest option available at runtime:
+
+1. **Rasterise-then-vision (preferred)** — when an offscreen renderer
+   is available (Electron main process) and a real vision reviewer
+   (OpenAI or Anthropic) is configured, the generated SVG is
+   rendered to PNG and passed to the vision model. This catches text
+   overflow, element overlap, and other problems invisible at the
+   SVG-source level.
+2. **Source-level fallback** — when rasterisation is unavailable (e.g.
+   running outside Electron) or no vision reviewer auth is present,
+   the reviewer reads the SVG markup as text. Structural checks work;
+   visual-layout checks do not.
+
+Other SVG-mode notes:
 
 - `mode: "svg_fallback"` appears in the tool result and review log.
-- Quality depends on the chat model's spatial reasoning. Claude Opus
-  and GPT-4o / GPT-5 produce usable output for flowcharts, simple
-  architecture, and box-and-arrow schemas. Pathway illustrations and
-  complex circuits will be noticeably weaker than gpt-image-2.
-- Self-grading bias is real: the generator and reviewer are usually
-  the same model, so thresholds are set marginally higher to
-  compensate. Scores across raster and SVG modes are not directly
-  comparable.
+  The provider id distinguishes the two review paths:
+  `rasterize+openai:…` or `rasterize+anthropic:…` vs
+  `svg-fallback:…`.
+- Quality of the SVG itself depends on the chat model's spatial
+  reasoning. Claude Opus and GPT-4o / GPT-5 produce usable output for
+  flowcharts, simple architecture, and box-and-arrow schemas. Pathway
+  illustrations and complex circuits will be noticeably weaker than
+  gpt-image-2.
+- Self-grading bias only applies in the source-level path (same model
+  reads back its own SVG). The rasterise-then-vision path sends the
+  rendered image to a different model, so bias is negligible.
+- Scores across raster and SVG modes are still not directly
+  comparable — thresholds are calibrated per reviewer and per path.
 
 To embed an SVG in Markdown:
 

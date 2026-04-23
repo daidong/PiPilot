@@ -24,6 +24,7 @@ import { createOpenAIReviewProvider } from './openai-review.js'
 import { createAnthropicReviewProvider } from './anthropic-review.js'
 import { createSvgFallbackImageProvider, type Aspect } from './svg-fallback-image.js'
 import { createSvgFallbackReviewProvider } from './svg-fallback-review.js'
+import { createRasterizeThenReviewProvider, type RasterizerFn } from './rasterize-review.js'
 import type { DiagramProviderSet, ImageProvider, Quality, ReviewProvider } from './types.js'
 import type { DiagramAuth } from '../types.js'
 
@@ -33,6 +34,13 @@ export interface FallbackContext {
   callLlm: CallLlmFn
   /** Short model label for logs and provider.id. Typically the chat model name. */
   modelLabel?: string
+  /**
+   * When present, SVG-fallback review is rasterised first and handed to
+   * a real vision reviewer (OpenAI / Anthropic) — catches layout and
+   * overflow issues that reading SVG source misses. Populated only when
+   * the host provides an offscreen renderer (Electron main process).
+   */
+  rasterizeSvg?: RasterizerFn
 }
 
 export type ReviewProviderChoice = 'openai' | 'anthropic' | 'auto'
@@ -131,6 +139,46 @@ function pickImageProvider(
   throw new Error(`Unknown generation provider: ${choice}`)
 }
 
+/**
+ * Build a "real" (vision-model) review provider from the currently
+ * configured auth, honouring the user's `review` preference. Returns
+ * null when no vision reviewer can be constructed; callers then pick a
+ * text-only or SVG-source fallback.
+ */
+function buildRealReviewProvider(
+  choice: ReviewProviderChoice,
+  auth: ResolvedAuth,
+  reviewModel?: string
+): ReviewProvider | null {
+  if (choice === 'openai') {
+    if (!auth.openaiKey) return null
+    return createOpenAIReviewProvider({ apiKey: auth.openaiKey, model: reviewModel })
+  }
+  if (choice === 'anthropic') {
+    if (!auth.anthropic) return null
+    return createAnthropicReviewProvider({
+      token: auth.anthropic.token,
+      isOAuth: auth.anthropic.isOAuth,
+      refreshToken: auth.anthropic.refresh,
+      model: reviewModel,
+    })
+  }
+  // 'auto' — prefer heterogeneous for the PNG path; for SVG this helper
+  // may be called with either preference, so honour whichever is present.
+  if (auth.anthropic) {
+    return createAnthropicReviewProvider({
+      token: auth.anthropic.token,
+      isOAuth: auth.anthropic.isOAuth,
+      refreshToken: auth.anthropic.refresh,
+      model: reviewModel,
+    })
+  }
+  if (auth.openaiKey) {
+    return createOpenAIReviewProvider({ apiKey: auth.openaiKey, model: reviewModel })
+  }
+  return null
+}
+
 function pickReviewProvider(
   prefs: DiagramProviderPrefs,
   auth: ResolvedAuth,
@@ -139,12 +187,24 @@ function pickReviewProvider(
 ): ReviewProvider {
   const choice: ReviewProviderChoice = prefs.review ?? 'auto'
 
-  // When generation is SVG-fallback we review via the same fallback channel:
-  // structured reviewers like gpt-4o expect an image, not SVG source, so
-  // feeding them markup would make legibility / layout judgements unreliable.
+  // SVG generation path. Preference order:
+  //   1. Rasterize SVG → PNG and send to a real vision reviewer. This
+  //      catches text overflow, overlap, and other post-render problems
+  //      that reading SVG source cannot see.
+  //   2. If no rasterizer is available, or no vision auth is configured,
+  //      fall back to source-level review via ctx.callLlm.
   if (usingSvgGen) {
     if (!fallback) {
       throw new Error('SVG review fallback requires a callLlm fallback.')
+    }
+    if (fallback.rasterizeSvg) {
+      const visionReviewer = buildRealReviewProvider(choice, auth, prefs.reviewModel)
+      if (visionReviewer) {
+        return createRasterizeThenReviewProvider({
+          rasterizer: fallback.rasterizeSvg,
+          inner: visionReviewer,
+        })
+      }
     }
     return createSvgFallbackReviewProvider({
       callLlm: fallback.callLlm,

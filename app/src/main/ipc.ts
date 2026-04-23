@@ -55,6 +55,9 @@ import { resolveSettings, resolveWikiPacing } from '../../../shared-ui/settings-
 // ─── Wiki agent ──────────────────────────────────────────────────────────
 import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap, listWikiPaperMeta, reconcileIdentityDrift, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
 
+// ─── SVG rasterizer (Electron-only) ──────────────────────────────────────
+import { rasterizeSvg } from './svg-rasterizer'
+
 // One-time warning flag for the Linux recursive-watch limitation (see startFsWatcher).
 let loggedLinuxWatchWarning = false
 
@@ -417,6 +420,10 @@ async function ensureCoordinator(
       // presentation-layer settings) take effect without restart.
       getResolvedSettings: () => resolveSettings(loadSettingsFromConfig()),
       getDiagramAuth,
+      // Only wired in Electron's main process; pure-Node contexts (tests)
+      // will leave this undefined and the tool will degrade to source-
+      // level SVG review.
+      rasterizeSvg,
       projectPath: state.projectPath,
       sessionId: state.sessionId,
       debug: !!process.env.RESEARCH_COPILOT_DEBUG,

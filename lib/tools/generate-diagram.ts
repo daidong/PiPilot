@@ -395,7 +395,13 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       // ctx.callLlm. Pass `undefined` when callLlm is missing so the
       // registry raises the original "no provider" error instead of a
       // silent fallback to nothing.
-      const fallback = ctx.callLlm ? { callLlm: ctx.callLlm } : undefined
+      // `rasterizeSvg` rides along so the registry can upgrade SVG-path
+      // review from source-level to visual (rasterize → vision model).
+      // Safe when absent: registry falls back to the existing text
+      // review via callLlm.
+      const fallback = ctx.callLlm
+        ? { callLlm: ctx.callLlm, rasterizeSvg: ctx.rasterizeSvg }
+        : undefined
       let providers
       try {
         providers = resolveProviders(prefs, auth, fallback)
