@@ -42,20 +42,24 @@ This is not optional. Grant proposals without visual elements are incomplete and
 2. Prefer 2-3 figures for comprehensive proposals (research workflow, Gantt chart, preliminary data visualization)
 
 **How to generate figures:**
-- Use the **scientific-schematics** skill to generate AI-powered publication-quality diagrams
-- Simply describe your desired diagram in natural language
-- Nano Banana Pro will automatically generate, review, and refine the schematic
+- Call the **`generate_diagram`** tool. The `scientific-schematics` skill, when loaded, sharpens the prompt for specific diagram types (flowchart, pathway, architecture, etc.).
+- Describe the desired diagram in natural language; specify exact counts, labels, and flow direction.
+- Image generation uses OpenAI `gpt-image-2` (requires `OPENAI_API_KEY`). Review runs on OpenAI or Claude based on Settings → Diagrams.
 
-**How to generate schematics:**
-```bash
-python @skill:scientific-schematics/scripts/generate_schematic.py "your diagram description" -o @ws/figures/output.png
+**Example tool call:**
+```
+generate_diagram(
+  prompt: "Research workflow: data collection → preprocessing → model training → evaluation, with feedback arrow from evaluation back to preprocessing. Label each stage with its duration.",
+  output: "figures/workflow.png",
+  doc_type: "grant",
+  diagram_type: "flowchart"
+)
 ```
 
-The AI will automatically:
-- Create publication-quality images with proper formatting
-- Review and refine through multiple iterations
-- Ensure accessibility (colorblind-friendly, high contrast)
-- Save outputs in the @ws/figures/ directory
+The tool automatically:
+- Produces publication-quality output with proper typography and colour.
+- Runs a verdict-driven review loop (up to 2 iterations by default).
+- Writes a JSON review log next to the image for inspection.
 
 **When to add schematics:**
 - Research methodology and workflow diagrams
