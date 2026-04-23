@@ -5,9 +5,15 @@
  *   - text-to-image via /v1/images/generations
  *   - image-to-image editing via /v1/images/edits (multipart form)
  *
- * Reads OPENAI_API_KEY from process.env, matching the pattern used by
- * web-tools.ts:418 for Brave. Credentials are seeded into env from the
- * settings manager at app startup.
+ * Note on `response_format`: gpt-image-1 and gpt-image-2 always return
+ * b64_json and reject the `response_format` parameter as unknown. Only
+ * dall-e-2 / dall-e-3 accept it. We therefore omit it from every request.
+ *
+ * Reads OPENAI_API_KEY from process.env (or accepts an explicit apiKey)
+ * matching the pattern used by web-tools.ts for Brave. A ChatGPT /
+ * Codex subscription access token will NOT work here — subscription
+ * auth is scoped to the Codex endpoint and is rejected by the Images
+ * API; users need a real sk-... API key for image generation.
  */
 
 import { Blob } from 'node:buffer'
@@ -36,8 +42,9 @@ function extractBytes(response: OpenAIImageResponse): Buffer {
     return Buffer.from(choice.b64_json, 'base64')
   }
   if (choice.url) {
+    // Should not happen for gpt-image-* (always base64), but guard anyway.
     throw new Error(
-      'OpenAI returned an image URL instead of base64. Set response_format=b64_json or configure the client to request binary.'
+      'OpenAI returned an image URL instead of base64 bytes. The selected model may be dall-e-*; this backend targets gpt-image-2 which returns b64_json by default.'
     )
   }
   throw new Error('OpenAI image response did not contain image data')
@@ -128,12 +135,12 @@ export function createOpenAIImageProvider(
     capabilities,
 
     async textToImage(prompt: string): Promise<Buffer> {
+      // gpt-image-* reject `response_format`; they always return b64_json.
       const body = {
         model,
         prompt,
         size,
         n: 1,
-        response_format: 'b64_json',
       }
       const response = await postJson(GENERATIONS_URL, apiKey, body)
       return extractBytes(response)
@@ -143,7 +150,7 @@ export function createOpenAIImageProvider(
       const response = await postMultipart(
         EDITS_URL,
         apiKey,
-        { model, prompt, size, n: '1', response_format: 'b64_json' },
+        { model, prompt, size, n: '1' },
         { image: { data: image, filename: 'image.png', contentType: 'image/png' } }
       )
       return extractBytes(response)
