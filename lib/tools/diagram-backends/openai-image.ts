@@ -17,7 +17,7 @@
  */
 
 import { Blob } from 'node:buffer'
-import type { ImageCapability, ImageProvider } from './types.js'
+import type { ImageCapability, ImageGenOptions, ImageProvider, Quality } from './types.js'
 
 const GENERATIONS_URL = 'https://api.openai.com/v1/images/generations'
 const EDITS_URL = 'https://api.openai.com/v1/images/edits'
@@ -117,6 +117,8 @@ export interface OpenAIImageProviderOptions {
   apiKey?: string
   model?: string
   size?: string
+  /** Default quality tier; per-call options can override. Defaults to 'auto'. */
+  quality?: Quality
 }
 
 export function createOpenAIImageProvider(
@@ -131,31 +133,35 @@ export function createOpenAIImageProvider(
   }
   const model = opts.model || DEFAULT_MODEL
   const size = opts.size || DEFAULT_SIZE
+  const defaultQuality: Quality = opts.quality || 'auto'
 
   const capabilities = new Set<ImageCapability>(['text_to_image', 'image_to_image'])
+
+  const effectiveQuality = (callOpts?: ImageGenOptions): Quality => callOpts?.quality ?? defaultQuality
 
   return {
     id: `openai:${model}`,
     label: `OpenAI ${model}`,
     capabilities,
 
-    async textToImage(prompt: string): Promise<Buffer> {
+    async textToImage(prompt: string, options?: ImageGenOptions): Promise<Buffer> {
       // gpt-image-* reject `response_format`; they always return b64_json.
       const body = {
         model,
         prompt,
         size,
         n: 1,
+        quality: effectiveQuality(options),
       }
       const response = await postJson(GENERATIONS_URL, apiKey, body)
       return extractBytes(response)
     },
 
-    async imageToImage(prompt: string, image: Buffer): Promise<Buffer> {
+    async imageToImage(prompt: string, image: Buffer, options?: ImageGenOptions): Promise<Buffer> {
       const response = await postMultipart(
         EDITS_URL,
         apiKey,
-        { model, prompt, size, n: '1' },
+        { model, prompt, size, n: '1', quality: effectiveQuality(options) },
         { image: { data: image, filename: 'image.png', contentType: 'image/png' } }
       )
       return extractBytes(response)

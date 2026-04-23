@@ -15,6 +15,19 @@
 
 export type ImageCapability = 'text_to_image' | 'image_to_image' | 'masked_edit'
 
+/**
+ * Rendering quality tier, mirroring gpt-image-2's `quality` parameter:
+ *   - low    fastest + cheapest, drafts / layout exploration
+ *   - medium default, balances cost and fidelity
+ *   - high   typography + photoreal detail, for camera-ready output
+ *   - auto   let the model pick
+ *
+ * The review loop starts at the doc_type-derived default and bumps one
+ * tier on a `needs_edit` verdict, so iteration spends more compute only
+ * when there is evidence the first pass was close-but-not-there.
+ */
+export type Quality = 'low' | 'medium' | 'high' | 'auto'
+
 export type DocType =
   | 'journal'
   | 'conference'
@@ -87,15 +100,20 @@ export interface ReviewRequest {
   maxIterations: number
 }
 
+export interface ImageGenOptions {
+  /** Overrides the provider's configured quality for this single call. */
+  quality?: Quality
+}
+
 export interface ImageProvider {
   /** Stable identifier, e.g. "openai:gpt-image-2". */
   id: string
   /** Human-readable label for logs and UI. */
   label: string
   capabilities: Set<ImageCapability>
-  textToImage(prompt: string): Promise<Buffer>
-  imageToImage?(prompt: string, image: Buffer): Promise<Buffer>
-  maskedEdit?(prompt: string, image: Buffer, mask: Buffer): Promise<Buffer>
+  textToImage(prompt: string, options?: ImageGenOptions): Promise<Buffer>
+  imageToImage?(prompt: string, image: Buffer, options?: ImageGenOptions): Promise<Buffer>
+  maskedEdit?(prompt: string, image: Buffer, mask: Buffer, options?: ImageGenOptions): Promise<Buffer>
 }
 
 /** Per-reviewer threshold table. Keys default to `default` when unlisted. */

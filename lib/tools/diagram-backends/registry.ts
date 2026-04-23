@@ -24,7 +24,7 @@ import { createOpenAIReviewProvider } from './openai-review.js'
 import { createAnthropicReviewProvider } from './anthropic-review.js'
 import { createSvgFallbackImageProvider, type Aspect } from './svg-fallback-image.js'
 import { createSvgFallbackReviewProvider } from './svg-fallback-review.js'
-import type { DiagramProviderSet, ImageProvider, ReviewProvider } from './types.js'
+import type { DiagramProviderSet, ImageProvider, Quality, ReviewProvider } from './types.js'
 import type { DiagramAuth } from '../types.js'
 
 export type CallLlmFn = (systemPrompt: string, userContent: string) => Promise<string>
@@ -45,6 +45,8 @@ export interface DiagramProviderPrefs {
   reviewModel?: string
   /** Explicit image size passed straight through to the provider (e.g. '1024x1024', '1536x1024', '1024x1536', 'auto'). */
   imageSize?: string
+  /** Default rendering quality; per-call options can still override. */
+  imageQuality?: Quality
   /** Aspect hint for the SVG fallback (ignored by the OpenAI image provider — it reads imageSize directly). */
   svgAspect?: Aspect
 }
@@ -82,6 +84,7 @@ function pickImageProvider(
         apiKey: auth.openaiKey,
         model: prefs.imageModel,
         size: prefs.imageSize,
+        quality: prefs.imageQuality,
       })
     }
     // No OpenAI key → fall back to SVG-via-LLM if the host gave us a callLlm.

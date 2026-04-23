@@ -29,6 +29,7 @@ import { resolveProviders, type DiagramProviderPrefs } from './diagram-backends/
 import type {
   DiagramType,
   DocType,
+  Quality,
   ReferenceMode,
   ReviewResult,
 } from './diagram-backends/types.js'
@@ -73,6 +74,51 @@ function sanitizeAspect(value: unknown): Aspect {
   return (VALID_ASPECTS as string[]).includes(v) ? (v as Aspect) : 'auto'
 }
 
+// Quality tier handling.
+// Default mapping balances cost against the minimum fidelity each document
+// type can tolerate: strict venues (journal / conference / thesis / grant)
+// start at 'high'; mid-tier docs at 'medium'; presentations default to
+// 'low' so the first draft is cheap and the agent can upgrade if needed.
+const VALID_QUALITIES: Quality[] = ['low', 'medium', 'high', 'auto']
+const QUALITY_ORDER: Quality[] = ['low', 'medium', 'high']
+
+function defaultQualityForDocType(docType: DocType): Quality {
+  switch (docType) {
+    case 'journal':
+    case 'conference':
+    case 'thesis':
+    case 'grant':
+      return 'high'
+    case 'preprint':
+    case 'report':
+    case 'poster':
+      return 'medium'
+    case 'presentation':
+      return 'low'
+    default:
+      return 'medium'
+  }
+}
+
+function sanitizeQuality(value: unknown): Quality | undefined {
+  if (value === undefined || value === null) return undefined
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return (VALID_QUALITIES as string[]).includes(v) ? (v as Quality) : undefined
+}
+
+/**
+ * Bump one tier up the ladder on a `needs_edit` iteration — 'needs_edit'
+ * means the draft was close but needs polish, which is exactly where
+ * extra compute pays off. 'auto' is treated as 'medium' for bumping
+ * since we cannot introspect what the model actually chose.
+ */
+function bumpedQuality(current: Quality): Quality {
+  const anchor: Quality = current === 'auto' ? 'medium' : current
+  const idx = QUALITY_ORDER.indexOf(anchor)
+  if (idx < 0 || idx >= QUALITY_ORDER.length - 1) return current
+  return QUALITY_ORDER[idx + 1]
+}
+
 const GenerateDiagramSchema = Type.Object({
   prompt: Type.String({
     description: 'Natural-language description of the diagram to generate. Be specific about components, labels, layout, and quantities.',
@@ -92,6 +138,9 @@ const GenerateDiagramSchema = Type.Object({
   aspect: Type.Optional(Type.String({
     description: 'Output aspect ratio. One of: auto | square | landscape | portrait. Default: auto (model picks from the prompt). Use "landscape" for wide architecture / flow diagrams with >3 horizontal panels, "portrait" for top-to-bottom CONSORT / PRISMA flows, "square" for single-concept schematics.',
   })),
+  quality: Type.Optional(Type.String({
+    description: 'gpt-image-2 rendering quality: low | medium | high | auto. When omitted, defaults from doc_type — high for journal/conference/thesis/grant, medium for preprint/report/poster, low for presentation. Start at low for cheap exploration; the tool automatically bumps one tier on a needs_edit verdict in later iterations.',
+  })),
   reference_path: Type.Optional(Type.String({
     description: 'Optional workspace-relative path to a reference image the first iteration edits instead of drawing from scratch. Requires reference_mode: revise_layout (other modes are not yet implemented).',
   })),
@@ -104,6 +153,8 @@ interface IterationRecord {
   iteration: number
   imagePath: string
   usedEdit: boolean
+  /** Quality tier actually sent to the image backend for this iteration. */
+  quality: Quality
   review: ReviewResult
   /** The verdict the reviewer originally emitted, before tool-side reconciliation. */
   rawVerdict: ReviewResult['verdict']
@@ -246,6 +297,9 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const diagramType = sanitizeDiagramType(params.diagram_type, userPrompt)
       const iterations = sanitizeIterations(params.iterations)
       const aspect = sanitizeAspect(params.aspect)
+      const explicitQuality = sanitizeQuality(params.quality)
+      const defaultQuality = defaultQualityForDocType(docType)
+      const initialQuality: Quality = explicitQuality ?? defaultQuality
 
       // Only validate reference_mode when a reference_path was supplied.
       // The schema advertises three modes for forward compatibility but
@@ -290,6 +344,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         generation: 'openai',
         review: reviewPref,
         imageSize: aspectToSize(aspect),
+        imageQuality: initialQuality,
         svgAspect: aspect,
       }
       // Auth is also read fresh — user may have just signed in to Claude
@@ -342,6 +397,12 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const history: IterationRecord[] = []
       let prevImage: Buffer | null = referenceBytes && referenceMode !== 'style_only' ? referenceBytes : null
       let stoppedEarly = false
+      // Quality ladder: first iteration uses the doc_type default (or
+      // explicit override); needs_edit bumps one tier so expensive
+      // refinement only fires when the reviewer said the draft was
+      // close. needs_regen keeps the same tier — regenerating at a
+      // higher tier would amplify a fundamentally wrong draft.
+      let currentQuality: Quality = initialQuality
 
       for (let i = 1; i <= iterations; i++) {
         // Pick generation strategy.
@@ -356,18 +417,19 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           promptForThisIter = composeGenerationPrompt(userPrompt, diagramType)
           // Reference image on first iteration: if revise_layout + backend supports edit, use it.
           if (prevImage && canEdit && referenceMode === 'revise_layout') {
-            image = await providers.image.imageToImage!(promptForThisIter, prevImage)
+            image = await providers.image.imageToImage!(promptForThisIter, prevImage, { quality: currentQuality })
             usedEdit = true
           } else {
-            image = await providers.image.textToImage(promptForThisIter)
+            image = await providers.image.textToImage(promptForThisIter, { quality: currentQuality })
           }
         } else if (lastReview?.verdict === 'needs_edit' && prevImage && canEdit) {
+          currentQuality = bumpedQuality(currentQuality)
           promptForThisIter = composeEditPrompt(userPrompt, diagramType, lastReview.blockingIssues)
-          image = await providers.image.imageToImage!(promptForThisIter, prevImage)
+          image = await providers.image.imageToImage!(promptForThisIter, prevImage, { quality: currentQuality })
           usedEdit = true
         } else {
           promptForThisIter = composeRegenPrompt(userPrompt, diagramType, lastReview?.blockingIssues ?? [])
-          image = await providers.image.textToImage(promptForThisIter)
+          image = await providers.image.textToImage(promptForThisIter, { quality: currentQuality })
         }
 
         const iterPath = path.join(outDir, `${baseName}_v${i}${extension}`)
@@ -404,6 +466,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           iteration: i,
           imagePath: path.relative(ctx.workspacePath, iterPath),
           usedEdit,
+          quality: currentQuality,
           review,
           rawVerdict: rawReview.verdict,
           verdictOverrideReason: reconciled.override,
@@ -451,6 +514,11 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         aspect,
         threshold,
         mode: providers.svgFallback ? 'svg_fallback' : 'image',
+        quality: {
+          initial: initialQuality,
+          defaultForDocType: defaultQuality,
+          explicit: explicitQuality ?? null,
+        },
         provider: {
           image: providers.image.id,
           review: providers.review.id,
@@ -459,6 +527,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           iteration: h.iteration,
           imagePath: h.imagePath,
           usedEdit: h.usedEdit,
+          quality: h.quality,
           review: h.review,
           rawVerdict: h.rawVerdict,
           verdictOverrideReason: h.verdictOverrideReason,
