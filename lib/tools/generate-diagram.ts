@@ -25,6 +25,7 @@ import {
   composeRegenPrompt,
   composeStyleOnlyPrompt,
   detectDiagramType,
+  type PromptFormat,
 } from './diagram-backends/prompts.js'
 import { DEFAULT_HOUSE_PROFILE, renderProfile } from './diagram-backends/house-style.js'
 import { resolveProviders, type DiagramProviderPrefs } from './diagram-backends/registry.js'
@@ -470,6 +471,10 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const finalAbsOutput = extension !== originalExtension
         ? path.join(outDir, `${baseName}${extension}`)
         : absOutput
+      // Composer format hint: 'svg' path gets the full design guide
+      // (principles + positive SVG example + pixel geometry + mistakes);
+      // 'raster' path gets only the semantic blocks (principles + mistakes).
+      const promptFormat: PromptFormat = providerFormat === 'svg' ? 'svg' : 'raster'
 
       // Optional reference image — read bytes for later use.
       let referenceBytes: Buffer | null = null
@@ -529,7 +534,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           //     to lift only the visual idiom.
           //   no reference — ordinary text-to-image.
           if (referenceBytes && referenceMode === 'style_only' && canEdit) {
-            promptForThisIter = composeStyleOnlyPrompt(userPrompt, diagramType)
+            promptForThisIter = composeStyleOnlyPrompt(userPrompt, diagramType, promptFormat)
             image = await providers.image.imageToImage!(
               promptForThisIter,
               referenceBytes,
@@ -537,7 +542,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
             )
             usedEdit = true
           } else if (referenceBytes && referenceMode === 'revise_layout' && canEdit) {
-            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType)
+            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType, promptFormat)
             image = await providers.image.imageToImage!(
               promptForThisIter,
               referenceBytes,
@@ -545,7 +550,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
             )
             usedEdit = true
           } else {
-            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType)
+            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType, promptFormat)
             image = await providers.image.textToImage(promptForThisIter, { quality: currentQuality })
           }
         } else if (lastReview?.verdict === 'needs_edit' && prevImage && canEdit) {
@@ -559,7 +564,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           image = await providers.image.imageToImage!(promptForThisIter, prevImage, { quality: currentQuality })
           usedEdit = true
         } else {
-          promptForThisIter = composeRegenPrompt(userPrompt, diagramType, lastReview?.blockingIssues ?? [])
+          promptForThisIter = composeRegenPrompt(userPrompt, diagramType, lastReview?.blockingIssues ?? [], promptFormat)
           image = await providers.image.textToImage(promptForThisIter, { quality: currentQuality })
         }
 

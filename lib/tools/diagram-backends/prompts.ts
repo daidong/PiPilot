@@ -20,6 +20,25 @@
 
 import type { BlockingIssue, DiagramType } from './types.js'
 import { DEFAULT_HOUSE_PROFILE, renderProfile, type HouseStyleProfile } from './house-style.js'
+import {
+  COMMON_MISTAKES,
+  DESIGN_PRINCIPLES,
+  GEOMETRIC_DISCIPLINE,
+  POSITIVE_EXAMPLE_BLOCK,
+} from './prompts-design-guide.js'
+
+/**
+ * Output format hint. Controls which design-guide blocks are included
+ * in the brief:
+ *   - 'svg' paths get all four blocks (principles, positive SVG
+ *     example, pixel-level geometric discipline, common mistakes).
+ *   - 'raster' paths get only the semantic blocks (principles +
+ *     common mistakes). Pixel math and SVG-source teaching cannot
+ *     be acted on by a raster model.
+ *   - undefined → treat as 'raster' (safer default: don't spam the
+ *     raster path with SVG-specific material it will ignore).
+ */
+export type PromptFormat = 'svg' | 'raster'
 
 // ─── Diagram-type specific key details ───────────────────────────────────────
 
@@ -122,15 +141,45 @@ interface BriefSections {
   textRules: string
   mustKeep: string[]
   avoid: string[]
+  /**
+   * Output format — when 'svg', the brief includes the full design
+   * guide (principles + positive SVG example + pixel-level geometric
+   * discipline + common mistakes). When 'raster' or undefined, only
+   * the semantic blocks (principles + mistakes) are included.
+   */
+  format?: PromptFormat
+  /**
+   * Surgical-edit paths set this true. The edit brief already tells
+   * the model "apply ONLY the listed fixes, preserve everything else"
+   * — re-teaching global design principles on top would invite the
+   * model to "improve" things that were intentionally fine.
+   */
+  skipDesignGuide?: boolean
 }
 
 function buildBrief(s: BriefSections): string {
   const lines: string[] = []
+  const svgPath = s.format === 'svg'
+  const includeGuide = !s.skipDesignGuide
+
   lines.push(`【SCENE / USE】 ${s.sceneUse}`)
   lines.push(`【SUBJECT】 ${s.subject}`)
+  if (includeGuide) {
+    lines.push('')
+    lines.push(DESIGN_PRINCIPLES)
+    if (svgPath) {
+      lines.push('')
+      lines.push(POSITIVE_EXAMPLE_BLOCK)
+    }
+  }
+  lines.push('')
   lines.push(`【COMPOSITION】 ${s.composition}`)
   lines.push(`【KEY DETAILS】`)
   lines.push(s.keyDetails)
+  if (includeGuide && svgPath) {
+    lines.push('')
+    lines.push(GEOMETRIC_DISCIPLINE)
+  }
   if (s.motifs) {
     lines.push(`【MOTIFS】`)
     lines.push(s.motifs)
@@ -139,6 +188,10 @@ function buildBrief(s: BriefSections): string {
   if (s.mustKeep.length > 0) {
     lines.push(`【MUST KEEP】`)
     for (const item of s.mustKeep) lines.push(`- ${item}`)
+  }
+  if (includeGuide) {
+    lines.push('')
+    lines.push(COMMON_MISTAKES)
   }
   lines.push(`【AVOID】`)
   for (const item of s.avoid) lines.push(`- ${item}`)
@@ -173,6 +226,7 @@ function buildAvoid(profile: HouseStyleProfile): string[] {
 export function composeGenerationPrompt(
   userPrompt: string,
   diagramType: DiagramType,
+  format?: PromptFormat,
   profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE
 ): string {
   const dt = resolveDiagramType(diagramType)
@@ -188,6 +242,7 @@ export function composeGenerationPrompt(
     textRules: VERBATIM_TEXT_RULE,
     mustKeep: literals,
     avoid: buildAvoid(profile),
+    format,
   })
 }
 
@@ -245,6 +300,10 @@ export function composeEditPrompt(
       'Regressing any item listed in ALREADY-RESOLVED ITEMS',
       'Drifting away from the house-style tokens (typography, palette, geometry) listed above',
     ],
+    // Edit is surgical — the caller has an already-composed draft. Injecting
+    // global design principles here would invite the model to "improve"
+    // elements that were intentionally left alone. Suppress the guide.
+    skipDesignGuide: true,
   })
 }
 
@@ -252,9 +311,10 @@ export function composeRegenPrompt(
   userPrompt: string,
   diagramType: DiagramType,
   issues: BlockingIssue[],
+  format?: PromptFormat,
   profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE
 ): string {
-  const base = composeGenerationPrompt(userPrompt, diagramType, profile)
+  const base = composeGenerationPrompt(userPrompt, diagramType, format, profile)
   if (issues.length === 0) return base
   const negatives = issues
     .map((i) => `- ${i.description} (fix: ${i.fix})`)
@@ -271,9 +331,10 @@ export function composeRegenPrompt(
 export function composeStyleOnlyPrompt(
   userPrompt: string,
   diagramType: DiagramType,
+  format?: PromptFormat,
   profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE
 ): string {
-  const base = composeGenerationPrompt(userPrompt, diagramType, profile)
+  const base = composeGenerationPrompt(userPrompt, diagramType, format, profile)
   return [
     'The attached image is provided as a STYLE REFERENCE ONLY.',
     'Match its visual idiom — colour palette, line weights, typography, corner radii, arrow style, spacing rhythm.',
