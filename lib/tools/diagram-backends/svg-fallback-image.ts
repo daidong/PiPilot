@@ -37,6 +37,10 @@ export interface SvgFallbackImageOptions {
 
 // viewBox aspect ratios — chosen to match gpt-image-2's three canonical
 // sizes so the downstream look lines up whether or not fallback is used.
+// These are HINTS, not hard constraints — the generation prompt tells
+// the model it may shrink either dimension by up to 30% to avoid empty
+// gutters (see buildGenerationUser). Edit-path preserves the existing
+// viewBox verbatim (see buildEditUser).
 const ASPECT_VIEWBOX: Record<Aspect, string> = {
   auto:      '0 0 1200 900',   // 4:3 lands moderate info density
   square:    '0 0 900 900',
@@ -65,7 +69,15 @@ function buildGenerationUser(prompt: string, aspect: Aspect): string {
   const viewBox = ASPECT_VIEWBOX[aspect]
   return `Produce an SVG diagram for the request below.
 
-VIEWBOX: ${viewBox}  (use exactly this viewBox; design within it)
+VIEWBOX HINT: ${viewBox}
+  - Use this as a starting hint. If your content fits compactly in a
+    smaller area, SHRINK either dimension (by up to 30%) to eliminate
+    empty gutters. A figure with visible empty regions at the bottom
+    or side looks unfinished.
+  - Keep the overall aspect (landscape / portrait / square) close to
+    the hint. Do NOT flip orientation.
+  - Do NOT grow either dimension beyond the hint — that pushes the
+    figure past canonical paper-column widths.
 
 REQUEST:
 ${prompt}
@@ -75,6 +87,8 @@ Emit the SVG now.`
 
 function buildEditUser(prompt: string, previousSvg: string): string {
   return `Revise the SVG below by applying the changes in REQUEST. Preserve everything that is already correct — do not redraw the whole diagram from scratch.
+
+VIEWBOX: preserve the viewBox attribute from the PREVIOUS SVG exactly. Do NOT change its dimensions, origin, or aspect.
 
 REQUEST:
 ${prompt}
