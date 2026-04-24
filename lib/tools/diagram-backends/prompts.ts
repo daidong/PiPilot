@@ -346,6 +346,55 @@ export function composeStyleOnlyPrompt(
 }
 
 /**
+ * Surgical-revision brief for the "please edit this existing figure"
+ * case. Used when the caller supplied a reference image with
+ * reference_mode = 'revise_layout' — the image provider already wraps
+ * this prompt with the previous SVG source (see svg-fallback-image.ts
+ * buildEditUser), so the composer only needs to deliver the user's
+ * change request with strong "preserve everything else" framing.
+ *
+ * Critically this composer does NOT go through buildBrief. The full
+ * design guide (principles, positive example, geometric discipline,
+ * common mistakes) is DESIGNED for fresh creation — re-teaching it
+ * here would invite the model to "improve" elements the user
+ * deliberately left alone, and in our earlier test run produced
+ * exactly the drift pathology we were trying to avoid.
+ *
+ * Keep this prompt short and declarative. The user's change list is
+ * the authority.
+ */
+export function composeSurgicalRevisionPrompt(
+  userPrompt: string,
+  diagramType: DiagramType,
+): string {
+  const dt = resolveDiagramType(diagramType)
+  const literals = extractLiterals(userPrompt)
+  const mustKeep = literals.length > 0
+    ? `\n\n【MUST KEEP — verbatim from the request】\n${literals.map((l) => `- ${l}`).join('\n')}`
+    : ''
+
+  return [
+    '【MODE】 SURGICAL REVISION of an existing SVG.',
+    '',
+    `The SVG source is provided separately. It is a ${dt} diagram already in the house visual system.`,
+    'Apply ONLY the changes described in the REQUEST below. Preserve',
+    'every other element exactly — layout, sizing, colours, typography,',
+    'arrow routing, group boundaries, viewBox, background. Do NOT redraw',
+    'from scratch. Do NOT "improve" anything the user did not mention.',
+    'Do NOT introduce new design principles, legends, or colours that',
+    'the existing SVG does not already use.',
+    '',
+    'If a requested change appears to conflict with something already in',
+    'the SVG, honour the REQUEST — the user knows what they asked for.',
+    'If a change is ambiguous, make the smallest edit that satisfies it.',
+    '',
+    '【REQUEST — apply only these changes】',
+    userPrompt,
+    mustKeep,
+  ].join('\n')
+}
+
+/**
  * Extremely light-weight diagram-type classifier when `auto` is chosen.
  * Keyword-based; intentionally simple. Falls back to `conceptual`.
  */

@@ -24,6 +24,7 @@ import {
   composeGenerationPrompt,
   composeRegenPrompt,
   composeStyleOnlyPrompt,
+  composeSurgicalRevisionPrompt,
   detectDiagramType,
   type PromptFormat,
 } from './diagram-backends/prompts.js'
@@ -542,7 +543,15 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
             )
             usedEdit = true
           } else if (referenceBytes && referenceMode === 'revise_layout' && canEdit) {
-            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType, promptFormat)
+            // Surgical revision — caller supplied an existing figure and
+            // wants specific edits. The image provider's edit path wraps
+            // the previous SVG as context; the composer's job is to
+            // deliver the change list with strong "preserve everything
+            // else" framing. We deliberately skip the full design guide
+            // here — re-teaching principles during a surgical edit
+            // invites drift on elements that were intentionally left
+            // alone (see the 2026-04 CASCADE overview case).
+            promptForThisIter = composeSurgicalRevisionPrompt(userPrompt, diagramType)
             image = await providers.image.imageToImage!(
               promptForThisIter,
               referenceBytes,
