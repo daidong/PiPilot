@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react'
 import { Crepe } from '@milkdown/crepe'
-import { editorViewOptionsCtx, remarkStringifyOptionsCtx } from '@milkdown/core'
+import { remarkStringifyOptionsCtx } from '@milkdown/core'
 import { diagram } from '@milkdown/plugin-diagram'
 import { replaceAll } from '@milkdown/utils'
 import '@milkdown/crepe/theme/common/style.css'
@@ -68,7 +68,12 @@ function MilkdownInner({
   useEditor((root) => {
     const crepe = new Crepe({
       root,
-      defaultValue: initialMarkdown
+      defaultValue: initialMarkdown,
+      features: {
+        [Crepe.Feature.BlockEdit]: false,
+        [Crepe.Feature.Toolbar]: false,
+        [Crepe.Feature.LinkTooltip]: false,
+      }
     })
     crepeRef.current = crepe
 
@@ -84,16 +89,6 @@ function MilkdownInner({
       ctx.update(remarkStringifyOptionsCtx, (prev) => ({
         ...prev,
         rule: '-'
-      }))
-      // Tell ProseMirror not to auto-scroll the caret into view when the
-      // user clicks or types. Returning `true` tells PM the scroll was
-      // handled — i.e., do nothing. Without this, every selection change
-      // re-aligns the caret to the editor's scroll padding, which (with
-      // PM's default 5px scrollMargin) shifts the panel up by ~one line
-      // when the click lands near the visible top edge.
-      ctx.update(editorViewOptionsCtx, (prev) => ({
-        ...prev,
-        scrollToSelection: () => true
       }))
     })
 
@@ -224,46 +219,6 @@ function MilkdownInner({
     }
   }
 
-  // Click and double-click inside a contenteditable cause Chromium and
-  // ProseMirror to "scroll the caret into view," which shifts the panel
-  // by roughly one line of text whenever the click lands close to the
-  // visible top or bottom of the scroller. Reading and selecting words
-  // shouldn't move the viewport — capture the scrollTop on mousedown
-  // and re-pin it on every frame for a short window so any late scroll
-  // adjustment (some land on a setTimeout, not the next rAF) is undone
-  // before the user perceives the jump. We bail when the user actually
-  // wheels or drags a selection past the edge, so intentional scroll
-  // and selection-extension auto-scroll still work.
-  const pinScrollAcrossInteraction = () => {
-    const scrollable = shellRef.current?.closest('.overflow-y-auto') as HTMLElement | null
-    if (!scrollable) return
-    const target = scrollable.scrollTop
-    let cancelled = false
-    const cancel = () => { cancelled = true }
-
-    scrollable.addEventListener('wheel', cancel, { once: true, passive: true })
-    const onMove = (e: MouseEvent) => {
-      // Only treat as a drag-selection if the primary button is still down
-      if (e.buttons !== 0) cancel()
-    }
-    window.addEventListener('mousemove', onMove)
-
-    const start = performance.now()
-    const tick = () => {
-      if (cancelled) return
-      if (scrollable.scrollTop !== target) scrollable.scrollTop = target
-      if (performance.now() - start < 350) {
-        requestAnimationFrame(tick)
-      }
-    }
-    requestAnimationFrame(tick)
-
-    window.setTimeout(() => {
-      scrollable.removeEventListener('wheel', cancel)
-      window.removeEventListener('mousemove', onMove)
-    }, 400)
-  }
-
   return (
     <div
       ref={shellRef}
@@ -272,7 +227,6 @@ function MilkdownInner({
       onMouseDownCapture={() => {
         userInteractedRef.current = true
         onFocusChangeRef.current?.(true)
-        pinScrollAcrossInteraction()
       }}
       onPasteCapture={() => {
         userInteractedRef.current = true

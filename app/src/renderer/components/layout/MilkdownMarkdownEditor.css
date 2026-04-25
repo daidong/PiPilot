@@ -47,7 +47,19 @@
 }
 .entity-preview-milkdown-shell .milkdown .ProseMirror h1:first-child,
 .entity-preview-milkdown-shell .milkdown .ProseMirror h2:first-child,
-.entity-preview-milkdown-shell .milkdown .ProseMirror h3:first-child {
+.entity-preview-milkdown-shell .milkdown .ProseMirror h3:first-child,
+/* When the cursor sits at the start of the document, ProseMirror inserts
+   a `<div class="ProseMirror-gapcursor">` as the first child of
+   `.ProseMirror`. That displaces the leading heading from `:first-child`,
+   so its `margin-top: 0` rule stops applying and the 18px heading margin
+   kicks in, shifting the entire panel down by ~30px. Selecting text
+   removes the gapcursor and the layout snaps back. The heading is the
+   first piece of *visible flow content* whether or not a gapcursor sits
+   before it (gapcursor is `position: absolute`), so its top margin
+   should be zeroed in both DOM shapes. */
+.entity-preview-milkdown-shell .milkdown .ProseMirror > .ProseMirror-gapcursor + h1,
+.entity-preview-milkdown-shell .milkdown .ProseMirror > .ProseMirror-gapcursor + h2,
+.entity-preview-milkdown-shell .milkdown .ProseMirror > .ProseMirror-gapcursor + h3 {
   margin-top: 0;
 }
 
