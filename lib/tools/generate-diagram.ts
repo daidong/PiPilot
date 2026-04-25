@@ -209,8 +209,12 @@ interface DiagramToolPayload {
   finalScore: number
   finalVerdict: ReviewResult['verdict']
   threshold: number
-  /** 'image' when gpt-image-2 drew a raster PNG; 'svg_fallback' when the chat model produced SVG. */
-  mode: 'image' | 'svg_fallback'
+  /**
+   *   'image'             — PNG-only path (no SVG requested)
+   *   'svg_fallback'      — Path C, chat-model SVG synthesis (no OpenAI key)
+   *   'png_anchored_svg'  — Path A, gpt-image-2 PNG verdict-loop + vision-LLM transcription
+   */
+  mode: 'image' | 'svg_fallback' | 'png_anchored_svg'
   provider: { image: string; review: string }
   reviewLogPath: string
   stoppedEarly: boolean
@@ -218,6 +222,17 @@ interface DiagramToolPayload {
   stoppedReason?: string
   /** Non-null when the output extension was rewritten (e.g. user asked for .png, fallback produced .svg). */
   extensionChanged?: { requested: string; actual: string }
+  /**
+   * Set in mode=png_anchored_svg only. Captures the post-loop vision-LLM
+   * transcription metadata. The PNG anchor (the verdict-loop final image)
+   * is preserved at `anchorPngPath` for traceability.
+   */
+  transcription?: {
+    anchorPngPath: string
+    repaired: boolean
+    visionModelLabel: string
+    svgBytes: number
+  }
 }
 
 function sanitizeDocType(value: unknown): DocType {
@@ -348,7 +363,12 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       'The tool runs a verdict-driven generate → review → (optional) edit loop using the configured ' +
       'image provider (OpenAI) and review provider (OpenAI or Anthropic). Supports flowcharts, ' +
       'architecture, pathways, circuits, networks, and conceptual frameworks. ' +
-      'Prompt guidance: be specific about components, labels, exact counts/values, and layout direction.',
+      'Prompt guidance: be specific about components, labels, exact counts/values, and layout direction. ' +
+      'Decomposition: if the diagram has more than ~6 top-level components or crosses more than 2 logical ' +
+      'regions/phases (e.g. offline+online, frontend+backend+storage, multi-stage pipelines with nested loops), ' +
+      'prefer producing 2–3 linked diagrams (one per region/phase, plus an optional overview) over a single ' +
+      'dense figure — gpt-image-2 reliability drops sharply on crowded geometry, and reviewer scores plateau ' +
+      'around 7/10 for monolithic architectures.',
     parameters: GenerateDiagramSchema,
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as Record<string, unknown>
@@ -445,13 +465,33 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       // Safe when absent: registry falls back to the existing text
       // review via callLlm.
       const fallback = ctx.callLlm
-        ? { callLlm: ctx.callLlm, rasterizeSvg: ctx.rasterizeSvg }
+        ? {
+            callLlm: ctx.callLlm,
+            rasterizeSvg: ctx.rasterizeSvg,
+            // Vision channel powers Path A (PNG-anchored SVG transcription).
+            // When absent, registry chooses Path B (hard error if user has
+            // OpenAI key) or Path C (chat-model-only safety net).
+            callLlmVision: ctx.callLlmVision,
+            visionCapable: ctx.visionCapable,
+          }
         : undefined
       let providers
       try {
         providers = resolveProviders(prefs, auth, fallback)
       } catch (err) {
-        return toAgentResult('generate_diagram', toolError('LLM_UNAVAILABLE', (err as Error).message, {
+        const msg = (err as Error).message
+        // Path B: user has OpenAI key but selected a non-vision chat model.
+        // Surface a distinct, actionable error code rather than a generic
+        // "LLM unavailable" so the agent can recover (switch model / use PNG).
+        if (msg.startsWith('SVG_REQUIRES_VISION_MODEL:')) {
+          return toAgentResult('generate_diagram', toolError('SVG_REQUIRES_VISION_MODEL', msg.slice('SVG_REQUIRES_VISION_MODEL:'.length).trim(), {
+            suggestions: [
+              'Switch the chat model to a vision-capable one (GPT-4o, Claude Opus 4.5, Gemini 2.5) under Settings → Model.',
+              'Or, request a raster output by using a .png extension instead of .svg, or by setting format: "png".',
+            ],
+          }))
+        }
+        return toAgentResult('generate_diagram', toolError('LLM_UNAVAILABLE', msg, {
           suggestions: [
             'Ask the user to add OPENAI_API_KEY under Settings → API Keys for native image generation (gpt-image-2). ChatGPT / Codex subscription tokens are scoped to the Codex endpoint and cannot call the Images API.',
             'Alternatively, leave a "figure TBD" caption with a textual description so the user can regenerate later without re-explaining the intent.',
@@ -459,22 +499,34 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         }))
       }
 
-      // Reconcile requested vs. actual output format. Three sources can
+      // Reconcile requested vs. actual output format. Four sources can
       // disagree:
       //   (a) the file extension the agent passed on `output`,
       //   (b) the explicit `format` parameter (format wins over extension
       //       when they disagree — agent may know intent the filename missed),
-      //   (c) auto-fallback inside the registry (no OpenAI key forces SVG).
+      //   (c) auto-fallback inside the registry (no OpenAI key forces SVG),
+      //   (d) Path A (png_anchored): user requested SVG but the verdict
+      //       loop runs on PNG; final SVG is produced post-loop via
+      //       transcription. Loop intermediates are PNG; final output is SVG.
       // The on-disk extension must match the bytes we are about to write,
       // so we always derive it from the provider's actual output format.
+      const pathAActive = providers.svgPath === 'png_anchored' && !!providers.pngToSvgTranscriber
+      // During the verdict loop: Path A and PNG-only both work in PNG;
+      // Path C (chat-model SVG) works in SVG.
       const providerFormat: EffectiveFormat = providers.svgFallback ? 'svg' : 'png'
       const extension = providerFormat === 'svg' ? '.svg' : '.png'
-      const finalAbsOutput = extension !== originalExtension
-        ? path.join(outDir, `${baseName}${extension}`)
+      // Final on-disk extension for the user-facing output. Path A produces
+      // .svg even though the loop runs on .png — the .png anchor is kept
+      // alongside as a sibling for traceability.
+      const finalExtension = pathAActive ? '.svg' : extension
+      const finalAbsOutput = finalExtension !== originalExtension
+        ? path.join(outDir, `${baseName}${finalExtension}`)
         : absOutput
       // Composer format hint: 'svg' path gets the full design guide
       // (principles + positive SVG example + pixel geometry + mistakes);
       // 'raster' path gets only the semantic blocks (principles + mistakes).
+      // Path A uses raster — gpt-image-2 draws the PNG, transcriber doesn't
+      // need the design guide (its job is faithful copying, not designing).
       const promptFormat: PromptFormat = providerFormat === 'svg' ? 'svg' : 'raster'
 
       // Optional reference image — read bytes for later use.
@@ -662,7 +714,59 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       // runs we keep every intermediate v_i as evidence of the draft
       // history and copy v_last → final so readers can diff drafts.
       const finalAbsIter = path.resolve(ctx.workspacePath, last.imagePath)
-      if (finalAbsIter !== finalAbsOutput) {
+
+      // Path A (PNG-anchored SVG): the verdict loop produced a final PNG.
+      // Transcribe it to editable SVG via the vision LLM, write the .svg
+      // as the user-facing output, and keep the final PNG as a sibling
+      // anchor ({baseName}.png) so users can diff visual drift later.
+      let transcriptionRecord: {
+        repaired: boolean
+        firstAttemptFailure?: string
+        visionModelLabel: string
+        anchorPngPath: string
+        svgBytes: number
+      } | undefined
+      if (pathAActive && providers.pngToSvgTranscriber) {
+        const pngBytes = fs.readFileSync(finalAbsIter)
+        let transcribed
+        try {
+          transcribed = await providers.pngToSvgTranscriber(pngBytes, userPrompt)
+        } catch (err) {
+          // Transcription is the only step that can fail post-loop. Surface
+          // a distinct error so the agent can retry with format=png and
+          // still hand the user the (already-good) PNG. The PNG anchor
+          // file is intact at finalAbsIter.
+          return toAgentResult('generate_diagram', toolError('SVG_TRANSCRIPTION_FAILED', (err as Error).message, {
+            retryable: true,
+            suggestions: [
+              'Retry the tool call with format: "png" — the PNG anchor was already generated successfully.',
+              'Or, switch to a different vision-capable chat model and retry.',
+            ],
+            context: { pngAnchorPath: path.relative(ctx.workspacePath, finalAbsIter) },
+          }))
+        }
+
+        // Preserve the final PNG anchor next to the SVG. The intermediate
+        // v_N path lives under outDir/baseName_v{N}.png; copy it to
+        // outDir/baseName.png so the SVG and its anchor share basename.
+        const anchorAbs = path.join(outDir, `${baseName}.png`)
+        if (history.length === 1 && finalAbsIter !== anchorAbs) {
+          fs.renameSync(finalAbsIter, anchorAbs)
+          last.imagePath = path.relative(ctx.workspacePath, anchorAbs)
+        } else if (finalAbsIter !== anchorAbs) {
+          fs.copyFileSync(finalAbsIter, anchorAbs)
+        }
+
+        fs.writeFileSync(finalAbsOutput, transcribed.svg, 'utf-8')
+
+        transcriptionRecord = {
+          repaired: transcribed.repaired,
+          firstAttemptFailure: transcribed.firstAttemptFailure,
+          visionModelLabel: transcribed.visionModelLabel,
+          anchorPngPath: path.relative(ctx.workspacePath, anchorAbs),
+          svgBytes: Buffer.byteLength(transcribed.svg, 'utf-8'),
+        }
+      } else if (finalAbsIter !== finalAbsOutput) {
         if (history.length === 1) {
           fs.renameSync(finalAbsIter, finalAbsOutput)
           // Keep the review log consistent: iter 1's imagePath now points
@@ -685,10 +789,18 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           effectiveFromParams: effectiveFormat,
           actual: providerFormat,
           originalExtension,
-          finalExtension: extension,
+          finalExtension,
         },
         threshold,
-        mode: providers.svgFallback ? 'svg_fallback' : 'image',
+        // mode classifications:
+        //   'image'           — PNG path, no SVG output requested
+        //   'svg_fallback'    — Path C, chat-model SVG synthesis (no OpenAI key)
+        //   'png_anchored_svg' — Path A, PNG-anchored vision transcription
+        mode: providers.svgFallback
+          ? 'svg_fallback'
+          : pathAActive ? 'png_anchored_svg' : 'image',
+        svgPath: providers.svgPath,
+        transcription: transcriptionRecord ?? undefined,
         quality: {
           initial: initialQuality,
           defaultForDocType: defaultQuality,
@@ -722,7 +834,9 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         finalScore: last.review.score,
         finalVerdict: last.review.verdict,
         threshold,
-        mode: providers.svgFallback ? 'svg_fallback' : 'image',
+        mode: providers.svgFallback
+          ? 'svg_fallback'
+          : pathAActive ? 'png_anchored_svg' : 'image',
         provider: {
           image: providers.image.id,
           review: providers.review.id,
@@ -730,8 +844,16 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         reviewLogPath: path.relative(ctx.workspacePath, reviewLogPath),
         stoppedEarly,
         stoppedReason: stoppedReason ?? (stoppedEarly ? undefined : 'max_iterations'),
-        extensionChanged: originalExtension !== extension
-          ? { requested: originalExtension, actual: extension }
+        extensionChanged: originalExtension !== finalExtension
+          ? { requested: originalExtension, actual: finalExtension }
+          : undefined,
+        transcription: transcriptionRecord
+          ? {
+              anchorPngPath: transcriptionRecord.anchorPngPath,
+              repaired: transcriptionRecord.repaired,
+              visionModelLabel: transcriptionRecord.visionModelLabel,
+              svgBytes: transcriptionRecord.svgBytes,
+            }
           : undefined,
       }
 

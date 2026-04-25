@@ -43,6 +43,23 @@ export interface ResearchToolContext {
   projectPath: string
   /** Optional LLM call function for tools that need sub-calls */
   callLlm?: (systemPrompt: string, userContent: string) => Promise<string>
+  /**
+   * Vision-capable variant of `callLlm`. Stateless single-shot sub-call —
+   * does not pass through the agent tool loop or mutate session state.
+   * Throws if the currently-selected model does not accept image input;
+   * callers should gate on `visionCapable` first.
+   *
+   * Image parameter shape (`{ base64, mimeType }`) mirrors the convention
+   * used by `Coordinator.chat()` for user-attached images, so renderer ↔
+   * IPC ↔ tool plumbing speaks one dialect.
+   */
+  callLlmVision?: (
+    systemPrompt: string,
+    userContent: string,
+    images: Array<{ base64: string; mimeType: string }>
+  ) => Promise<string>
+  /** True when the active model declares image input support (pi-ai Model.input). */
+  visionCapable?: boolean
   /** Callback when a tool is invoked */
   onToolCall?: (tool: string, args: unknown, toolCallId?: string) => void
   /** Callback when a tool returns */

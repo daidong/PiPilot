@@ -25,10 +25,17 @@ import { createAnthropicReviewProvider } from './anthropic-review.js'
 import { createSvgFallbackImageProvider, type Aspect } from './svg-fallback-image.js'
 import { createSvgFallbackReviewProvider } from './svg-fallback-review.js'
 import { createRasterizeThenReviewProvider, type RasterizerFn } from './rasterize-review.js'
-import type { DiagramProviderSet, ImageProvider, Quality, ReviewProvider } from './types.js'
+import { transcribePngToSvg } from './png-to-svg-transcriber.js'
+import type { DiagramProviderSet, ImageCapability, ImageProvider, Quality, ReviewProvider } from './types.js'
 import type { DiagramAuth } from '../types.js'
 
 export type CallLlmFn = (systemPrompt: string, userContent: string) => Promise<string>
+
+export type CallLlmVisionFn = (
+  systemPrompt: string,
+  userContent: string,
+  images: Array<{ base64: string; mimeType: string }>,
+) => Promise<string>
 
 export interface FallbackContext {
   callLlm: CallLlmFn
@@ -41,6 +48,20 @@ export interface FallbackContext {
    * the host provides an offscreen renderer (Electron main process).
    */
   rasterizeSvg?: RasterizerFn
+  /**
+   * Vision-capable variant of callLlm. Required by the PNG-anchored SVG
+   * path (Path A): a finalized PNG is fed to the model which re-emits it
+   * as editable SVG. Absent when the active chat model does not accept
+   * image input — the SVG path then degrades to chat-model-only (Path C)
+   * or hard-fails when the user has an OpenAI key but no vision model
+   * (Path B), depending on which is present.
+   */
+  callLlmVision?: CallLlmVisionFn
+  /**
+   * Mirrors `pi-ai Model.input.includes('image')`. Treated as authoritative
+   * when present; gates Path A vs Path B selection.
+   */
+  visionCapable?: boolean
 }
 
 export type ReviewProviderChoice = 'openai' | 'anthropic' | 'auto'
@@ -87,49 +108,142 @@ function resolveAuth(auth?: DiagramAuth): ResolvedAuth {
   }
 }
 
+// viewBox hints handed to the transcriber per requested aspect. Mirrors
+// svg-fallback-image.ts so the two SVG paths emit congruent canvases.
+const ASPECT_TO_VIEWBOX: Record<Aspect, string> = {
+  auto:      '0 0 1200 900',
+  square:    '0 0 900 900',
+  landscape: '0 0 1400 900',
+  portrait:  '0 0 900 1400',
+}
+
+/**
+ * Path A transcription action: take the final PNG out of the verdict
+ * loop and convert it to editable SVG. Returned alongside the image
+ * provider so generate-diagram.ts can short-circuit the SVG output:
+ *   1. The image provider IS the regular OpenAI provider — verdict loop
+ *      runs entirely on PNGs (which the vision reviewer can score).
+ *   2. After the loop accepts (or runs out of iterations), the tool
+ *      writes the .svg by feeding the final PNG through this transcriber.
+ *   3. SVG never enters the review/edit loop — see png-to-svg-transcriber.ts
+ *      header for why self-review on transcribed SVG is a dead-weight pass.
+ */
+export type PngToSvgTranscriber = (png: Buffer, originalPromptHint: string) => Promise<{
+  svg: string
+  /** True if the first transcription pass needed a repair retry. */
+  repaired: boolean
+  /** First-attempt failure reason when `repaired` is true. */
+  firstAttemptFailure?: string
+  visionModelLabel: string
+}>
+
+function buildPngToSvgTranscriber(
+  callLlmVision: CallLlmVisionFn,
+  visionModelLabel: string,
+  viewBoxHint: string,
+): PngToSvgTranscriber {
+  return async (png, originalPromptHint) => {
+    const result = await transcribePngToSvg(
+      { callLlmVision, modelLabel: visionModelLabel },
+      { png, viewBoxHint, originalPromptHint },
+    )
+    return {
+      svg: result.svg,
+      repaired: result.repaired,
+      firstAttemptFailure: result.firstAttemptFailure,
+      visionModelLabel,
+    }
+  }
+}
+
+interface PickImageResult {
+  provider: ImageProvider
+  /** Set when Path A is active — generate-diagram.ts runs this on the final PNG. */
+  pngToSvgTranscriber?: PngToSvgTranscriber
+  /** Path classification for logging. */
+  svgPath?: 'png_anchored' | 'chat_model_only' | null
+}
+
 function pickImageProvider(
   prefs: DiagramProviderPrefs,
   auth: ResolvedAuth,
   fallback?: FallbackContext
-): ImageProvider {
+): PickImageResult {
   const choice: GenProviderChoice = prefs.generation ?? 'openai'
 
-  // Forced-SVG path: caller wants SVG output (typically because the
-  // output filename ends in .svg). Skip gpt-image-2 entirely — routing
-  // through it would write PNG bytes into a .svg file. The SVG
-  // fallback becomes the ONLY option here; hard-fail when callLlm is
-  // also unavailable rather than silently producing a raster.
+  // Forced-SVG path. Three sub-paths:
+  //   A. openaiKey + visionCapable callLlm → PNG verdict loop, then
+  //      transcribe final PNG to editable SVG (best quality).
+  //   B. openaiKey + non-vision chat model → hard fail with an actionable
+  //      error. Honest "not supported" beats producing a 6/10 fallback
+  //      result that misleads the user about the system's capabilities.
+  //   C. no openaiKey + callLlm available → chat-model-only SVG (legacy
+  //      safety-net path; quality ceiling ~6/10 but better than nothing).
   if (prefs.forceSvg) {
-    if (!fallback) {
+    if (auth.openaiKey) {
+      // Subpath A: vision LLM available → run PNG path through verdict
+      // loop, then transcribe. The image provider here is the standard
+      // OpenAI provider (returns PNG bytes); the transcriber is invoked
+      // by generate-diagram.ts after the loop terminates.
+      if (fallback?.callLlmVision && fallback.visionCapable !== false) {
+        const provider = createOpenAIImageProvider({
+          apiKey: auth.openaiKey,
+          model: prefs.imageModel,
+          size: prefs.imageSize,
+          quality: prefs.imageQuality,
+        })
+        const transcriber = buildPngToSvgTranscriber(
+          fallback.callLlmVision,
+          fallback.modelLabel || 'chat-model',
+          ASPECT_TO_VIEWBOX[prefs.svgAspect ?? 'auto'],
+        )
+        return { provider, pngToSvgTranscriber: transcriber, svgPath: 'png_anchored' }
+      }
+      // Subpath B: openaiKey but no vision model.
       throw new Error(
-        'SVG output requested but no chat model is available to synthesize the SVG. ' +
-        'Either pick a chat model (it powers the SVG fallback path) or request a raster filename like .png.'
+        'SVG_REQUIRES_VISION_MODEL: Editable SVG output requires a vision-capable chat model ' +
+        '(e.g. GPT-4o, Claude Opus, Gemini 2.5) to transcribe the rendered PNG into SVG markup. ' +
+        'Either switch to a vision-capable model in Settings, or request a raster output (.png).'
       )
     }
-    return createSvgFallbackImageProvider({
-      callLlm: fallback.callLlm,
-      modelLabel: fallback.modelLabel,
-      aspect: prefs.svgAspect,
-    })
-  }
-
-  if (choice === 'openai') {
-    if (auth.openaiKey) {
-      return createOpenAIImageProvider({
-        apiKey: auth.openaiKey,
-        model: prefs.imageModel,
-        size: prefs.imageSize,
-        quality: prefs.imageQuality,
-      })
-    }
-    // No OpenAI key → fall back to SVG-via-LLM if the host gave us a callLlm.
-    // This keeps the tool producing usable output instead of hard-failing.
+    // Subpath C: no OpenAI key — chat-model-only safety net.
     if (fallback) {
-      return createSvgFallbackImageProvider({
+      const provider = createSvgFallbackImageProvider({
         callLlm: fallback.callLlm,
         modelLabel: fallback.modelLabel,
         aspect: prefs.svgAspect,
       })
+      return { provider, svgPath: 'chat_model_only' }
+    }
+    throw new Error(
+      'SVG output requested but neither an OpenAI API key (for the PNG-anchored path) ' +
+      'nor a chat model (for the safety-net path) is configured.'
+    )
+  }
+
+  if (choice === 'openai') {
+    if (auth.openaiKey) {
+      return {
+        provider: createOpenAIImageProvider({
+          apiKey: auth.openaiKey,
+          model: prefs.imageModel,
+          size: prefs.imageSize,
+          quality: prefs.imageQuality,
+        }),
+        svgPath: null,
+      }
+    }
+    // No OpenAI key → fall back to SVG-via-LLM if the host gave us a callLlm.
+    // This keeps the tool producing usable output instead of hard-failing.
+    if (fallback) {
+      return {
+        provider: createSvgFallbackImageProvider({
+          callLlm: fallback.callLlm,
+          modelLabel: fallback.modelLabel,
+          aspect: prefs.svgAspect,
+        }),
+        svgPath: 'chat_model_only',
+      }
     }
     throw new Error(
       'Diagram generation requires either OPENAI_API_KEY or a callLlm fallback ' +
@@ -250,8 +364,21 @@ function pickReviewProvider(
 }
 
 export interface DiagramProviderResolution extends DiagramProviderSet {
-  /** True when both image and review went through the SVG-via-LLM fallback path. */
+  /**
+   * True when the image provider is the chat-model-only SVG safety net
+   * (Path C). False for both PNG-only mode and PNG-anchored SVG (Path A) —
+   * those run the vision reviewer loop on PNGs.
+   */
   svgFallback: boolean
+  /**
+   * Set when Path A is active. After the verdict-driven PNG loop in
+   * generate-diagram.ts terminates, the tool invokes this on the final
+   * PNG to produce the editable .svg output. Absent for non-SVG runs
+   * and for Path C (which produces SVG directly via the image provider).
+   */
+  pngToSvgTranscriber?: PngToSvgTranscriber
+  /** Path classification: 'png_anchored' (A), 'chat_model_only' (C), or null (PNG-only). */
+  svgPath: 'png_anchored' | 'chat_model_only' | null
 }
 
 export function resolveProviders(
@@ -260,8 +387,18 @@ export function resolveProviders(
   fallback?: FallbackContext
 ): DiagramProviderResolution {
   const resolved = resolveAuth(auth)
-  const image = pickImageProvider(prefs, resolved, fallback)
-  const usingSvgGen = image.id.startsWith('svg-fallback:')
+  const picked = pickImageProvider(prefs, resolved, fallback)
+  // Path C only: the image provider is itself an SVG-from-LLM synthesizer,
+  // so the review path must use the SVG-source reviewer (or rasterize-then-
+  // vision when a renderer is present). Path A returns PNG bytes from its
+  // image provider, so the regular PNG review path is correct.
+  const usingSvgGen = picked.svgPath === 'chat_model_only'
   const review = pickReviewProvider(prefs, resolved, fallback, usingSvgGen)
-  return { image, review, svgFallback: usingSvgGen }
+  return {
+    image: picked.provider,
+    review,
+    svgFallback: usingSvgGen,
+    pngToSvgTranscriber: picked.pngToSvgTranscriber,
+    svgPath: picked.svgPath ?? null,
+  }
 }
