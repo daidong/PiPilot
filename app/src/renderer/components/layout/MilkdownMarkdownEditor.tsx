@@ -68,7 +68,12 @@ function MilkdownInner({
   useEditor((root) => {
     const crepe = new Crepe({
       root,
-      defaultValue: initialMarkdown
+      defaultValue: initialMarkdown,
+      features: {
+        [Crepe.Feature.BlockEdit]: false,
+        [Crepe.Feature.Toolbar]: false,
+        [Crepe.Feature.LinkTooltip]: false,
+      }
     })
     crepeRef.current = crepe
 
