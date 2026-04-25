@@ -214,6 +214,37 @@ function MilkdownInner({
     }
   }
 
+  // Click and double-click inside a contenteditable cause Chromium and
+  // ProseMirror to "scroll the caret into view," which shifts the panel
+  // by roughly one line of text whenever the click lands close to the
+  // visible top or bottom of the scroller. Reading and selecting words
+  // shouldn't move the viewport — capture the scrollTop on mousedown
+  // and restore it across the next two frames (covers PM's post-apply
+  // scroll and the browser's focus-scroll, which arrive on different
+  // ticks). We bail if the user is actively dragging a selection, so
+  // legitimate auto-scroll-to-extend-selection still works.
+  const pinScrollAcrossInteraction = () => {
+    const scrollable = shellRef.current?.closest('.overflow-y-auto') as HTMLElement | null
+    if (!scrollable) return
+    const target = scrollable.scrollTop
+    let cancelled = false
+    const restore = () => {
+      if (cancelled) return
+      if (scrollable.scrollTop !== target) scrollable.scrollTop = target
+    }
+    requestAnimationFrame(() => {
+      restore()
+      requestAnimationFrame(restore)
+    })
+    // If the user starts dragging (selection extension), let the editor
+    // scroll naturally to follow the pointer.
+    const cancel = () => { cancelled = true }
+    window.addEventListener('mousemove', cancel, { once: true })
+    window.addEventListener('mouseup', () => {
+      window.removeEventListener('mousemove', cancel)
+    }, { once: true })
+  }
+
   return (
     <div
       ref={shellRef}
@@ -222,6 +253,7 @@ function MilkdownInner({
       onMouseDownCapture={() => {
         userInteractedRef.current = true
         onFocusChangeRef.current?.(true)
+        pinScrollAcrossInteraction()
       }}
       onPasteCapture={() => {
         userInteractedRef.current = true
