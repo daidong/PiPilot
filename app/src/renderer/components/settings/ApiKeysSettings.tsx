@@ -17,7 +17,7 @@ const KEY_FIELDS = [
     name: 'OPENAI_API_KEY',
     label: 'OpenAI',
     placeholder: 'sk-...',
-    hint: 'Powers GPT / o-series models. Get a key at platform.openai.com',
+    hint: 'Powers GPT / o-series models AND publication-quality diagram generation (gpt-image-2 + PNG-anchored SVG transcription). Without this key, diagrams fall back to a chat-model-only path with reduced quality. Get a key at platform.openai.com',
     url: 'https://platform.openai.com/api-keys',
     required: true,
   },
