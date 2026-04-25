@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react'
 import { Crepe } from '@milkdown/crepe'
-import { remarkStringifyOptionsCtx } from '@milkdown/core'
+import { editorViewOptionsCtx, remarkStringifyOptionsCtx } from '@milkdown/core'
 import { diagram } from '@milkdown/plugin-diagram'
 import { replaceAll } from '@milkdown/utils'
 import '@milkdown/crepe/theme/common/style.css'
@@ -84,6 +84,16 @@ function MilkdownInner({
       ctx.update(remarkStringifyOptionsCtx, (prev) => ({
         ...prev,
         rule: '-'
+      }))
+      // Tell ProseMirror not to auto-scroll the caret into view when the
+      // user clicks or types. Returning `true` tells PM the scroll was
+      // handled — i.e., do nothing. Without this, every selection change
+      // re-aligns the caret to the editor's scroll padding, which (with
+      // PM's default 5px scrollMargin) shifts the panel up by ~one line
+      // when the click lands near the visible top edge.
+      ctx.update(editorViewOptionsCtx, (prev) => ({
+        ...prev,
+        scrollToSelection: () => true
       }))
     })
 
@@ -219,30 +229,39 @@ function MilkdownInner({
   // by roughly one line of text whenever the click lands close to the
   // visible top or bottom of the scroller. Reading and selecting words
   // shouldn't move the viewport — capture the scrollTop on mousedown
-  // and restore it across the next two frames (covers PM's post-apply
-  // scroll and the browser's focus-scroll, which arrive on different
-  // ticks). We bail if the user is actively dragging a selection, so
-  // legitimate auto-scroll-to-extend-selection still works.
+  // and re-pin it on every frame for a short window so any late scroll
+  // adjustment (some land on a setTimeout, not the next rAF) is undone
+  // before the user perceives the jump. We bail when the user actually
+  // wheels or drags a selection past the edge, so intentional scroll
+  // and selection-extension auto-scroll still work.
   const pinScrollAcrossInteraction = () => {
     const scrollable = shellRef.current?.closest('.overflow-y-auto') as HTMLElement | null
     if (!scrollable) return
     const target = scrollable.scrollTop
     let cancelled = false
-    const restore = () => {
+    const cancel = () => { cancelled = true }
+
+    scrollable.addEventListener('wheel', cancel, { once: true, passive: true })
+    const onMove = (e: MouseEvent) => {
+      // Only treat as a drag-selection if the primary button is still down
+      if (e.buttons !== 0) cancel()
+    }
+    window.addEventListener('mousemove', onMove)
+
+    const start = performance.now()
+    const tick = () => {
       if (cancelled) return
       if (scrollable.scrollTop !== target) scrollable.scrollTop = target
+      if (performance.now() - start < 350) {
+        requestAnimationFrame(tick)
+      }
     }
-    requestAnimationFrame(() => {
-      restore()
-      requestAnimationFrame(restore)
-    })
-    // If the user starts dragging (selection extension), let the editor
-    // scroll naturally to follow the pointer.
-    const cancel = () => { cancelled = true }
-    window.addEventListener('mousemove', cancel, { once: true })
-    window.addEventListener('mouseup', () => {
-      window.removeEventListener('mousemove', cancel)
-    }, { once: true })
+    requestAnimationFrame(tick)
+
+    window.setTimeout(() => {
+      scrollable.removeEventListener('wheel', cancel)
+      window.removeEventListener('mousemove', onMove)
+    }, 400)
   }
 
   return (
