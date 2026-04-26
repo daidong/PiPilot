@@ -133,6 +133,7 @@ Hard rules:
 - General web facts → brave_web_search or fetch.
 - If a required paper PDF/full text cannot be retrieved (paywall/auth/access blocked), do NOT infer missing content. Ask user to provide/upload the file and continue only after file is available.
 - Any data analysis / visualization / statistics → data-analyze (do not analyze raw data with read/grep).
+- Any scientific diagram / schematic / flowchart / architecture / pathway / circuit → generate_diagram (it runs a provider-backed generate → review → edit loop; do not draft SVG or ASCII diagrams by hand). If the scientific-schematics skill is loaded, use its guidance to shape the prompt before calling the tool.
 - For reusable methodology, writing scaffolding, or plot/style templates, check if a relevant skill summary is already pre-loaded below. If so, follow it; call load_skill(name) for full procedures when needed. You can also browse the Skills Catalog and load any skill on demand.
 - For repository/text inspection, use this order by default:
   1) glob/grep to locate relevant files/sections;

@@ -18,7 +18,7 @@ import { Agent } from '@mariozechner/pi-agent-core'
 import { getModel as getPiModel, completeSimple } from '@mariozechner/pi-ai'
 import { createCodingTools, createGrepTool, createFindTool, createLsTool, estimateTokens, shouldCompact, generateSummary, DEFAULT_COMPACTION_SETTINGS } from '@mariozechner/pi-coding-agent'
 import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
-import type { Model, TextContent } from '@mariozechner/pi-ai'
+import type { Model, TextContent, ImageContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
 import { probeStaticProfile, generateAgentGuidance } from '../local-compute/environment-model.js'
@@ -245,6 +245,21 @@ export interface CoordinatorConfig {
   reasoningEffort?: 'max' | 'high' | 'medium' | 'low'
   /** Resolved numeric settings from user preferences (literature intensity, web search depth, etc.) */
   resolvedSettings?: import('../../shared-ui/settings-types').ResolvedSettings
+  /**
+   * Live accessor for resolved settings. Called by tools that must react
+   * to user-driven changes without requiring a coordinator rebuild
+   * (e.g., diagram review-provider selection).
+   */
+  getResolvedSettings?: () => import('../../shared-ui/settings-types').ResolvedSettings
+  /** Live accessor for diagram-tool auth (see lib/tools/types.ts DiagramAuth). */
+  getDiagramAuth?: () => import('../tools/types.js').DiagramAuth
+  /**
+   * Optional SVG rasterizer the coordinator forwards to tools. Populated
+   * only when running inside Electron (the main process owns the
+   * BrowserWindow needed to render SVG at fidelity). Tools degrade to
+   * source-level review when absent.
+   */
+  rasterizeSvg?: (svg: Buffer, options?: import('../tools/types.js').SvgRasterizeOptions) => Promise<Buffer>
   onStream?: (text: string) => void
   onToolCall?: (tool: string, args: unknown, toolCallId?: string) => void
   onToolResult?: (tool: string, result: unknown, args?: unknown, toolCallId?: string) => void
@@ -406,9 +421,44 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       const textContent = result.content.find((c): c is TextContent => c.type === 'text')
       return textContent?.text ?? ''
     },
+    // Vision-capable sibling of callLlm. Mirrors the stateless completeSimple
+    // shape above plus the ImageContent transformation used by chat() at the
+    // user-attached-images path. Reused by the diagram tool's PNG-anchored
+    // SVG transcription path, where a final PNG is fed back to the model to
+    // be re-emitted as editable SVG markup.
+    callLlmVision: async (systemPrompt, userContent, images) => {
+      if (!piModel) throw new Error('No model available for sub-call')
+      if (!piModel.input.includes('image')) {
+        throw new Error(
+          `Selected model "${piModel.id}" does not accept image input. ` +
+          `Switch to a vision-capable model (e.g. GPT-4o, Claude Opus, Gemini 2.5).`
+        )
+      }
+      const currentKey = await resolveApiKey()
+      const content: (TextContent | ImageContent)[] = [
+        { type: 'text', text: userContent },
+        ...images.map((img): ImageContent => ({
+          type: 'image',
+          data: img.base64,
+          mimeType: img.mimeType,
+        })),
+      ]
+      // 8K output budget — SVG transcription of a moderately complex
+      // diagram (20-30 nodes) typically lands around 4-6K characters.
+      const result = await completeSimple(piModel, {
+        systemPrompt,
+        messages: [{ role: 'user', content, timestamp: Date.now() }]
+      }, { maxTokens: 8192, apiKey: currentKey })
+      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
+      return textContent?.text ?? ''
+    },
+    visionCapable: !!piModel?.input.includes('image'),
     onToolCall,
     onToolResult: wrappedOnToolResult,
-    settings: config.resolvedSettings
+    settings: config.resolvedSettings,
+    getSettings: config.getResolvedSettings,
+    getDiagramAuth: config.getDiagramAuth,
+    rasterizeSvg: config.rasterizeSvg,
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
 

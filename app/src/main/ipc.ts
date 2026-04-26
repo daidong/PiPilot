@@ -55,6 +55,9 @@ import { resolveSettings, resolveWikiPacing } from '../../../shared-ui/settings-
 // ─── Wiki agent ──────────────────────────────────────────────────────────
 import { createWikiAgent, countPaperPages, countConceptPages, countByFulltextStatus, readRecentLog, listWikiPages, readWikiPage, wikiSlugForPaperArtifact, buildPaperSlugMap, listWikiPaperMeta, reconcileIdentityDrift, type WikiAgent as WikiAgentType, type WikiStatus } from '../../../lib/wiki/index'
 
+// ─── SVG rasterizer (Electron-only) ──────────────────────────────────────
+import { rasterizeSvg } from './svg-rasterizer'
+
 // One-time warning flag for the Linux recursive-watch limitation (see startFsWatcher).
 let loggedLinuxWatchWarning = false
 
@@ -377,12 +380,50 @@ async function ensureCoordinator(
     state.realtimeBuffer.pushActivity(initEvent)
     safeSend(win, 'agent:activity', initEvent)
 
+    // Build a live diagram-auth getter — reads env + anthropic-sub creds
+    // each call so that API-key edits or subscription sign-ins propagate
+    // to generate_diagram without requiring a coordinator rebuild.
+    const getDiagramAuth = () => {
+      const openaiKey = (process.env.OPENAI_API_KEY || '').trim() || null
+      const envAnthropic = (process.env.ANTHROPIC_API_KEY || '').trim()
+      if (envAnthropic) {
+        return { openaiKey, anthropic: { token: envAnthropic, isOAuth: false } }
+      }
+      const creds = loadAnthropicSubCredentials()
+      if (creds?.access) {
+        const refreshTokenSymbol = creds.refresh
+        return {
+          openaiKey,
+          anthropic: {
+            token: creds.access,
+            isOAuth: true,
+            refresh: async () => {
+              const { refreshAnthropicToken } = await import('@mariozechner/pi-ai/oauth')
+              const fresh = await refreshAnthropicToken(refreshTokenSymbol)
+              saveAnthropicSubCredentials(fresh)
+              return fresh.access
+            },
+          },
+        }
+      }
+      return { openaiKey, anthropic: null }
+    }
+
     state.coordinator = await createCoordinator({
       apiKey,
       getApiKeyOverride,
       model: state.currentModel,
       reasoningEffort: state.currentReasoningEffort,
       resolvedSettings: resolveSettings(loadSettingsFromConfig()),
+      // Live settings reader: re-reads ~/.research-copilot/config.json per
+      // tool call so diagram review-provider choice (and similar
+      // presentation-layer settings) take effect without restart.
+      getResolvedSettings: () => resolveSettings(loadSettingsFromConfig()),
+      getDiagramAuth,
+      // Only wired in Electron's main process; pure-Node contexts (tests)
+      // will leave this undefined and the tool will degrade to source-
+      // level SVG review.
+      rasterizeSvg,
       projectPath: state.projectPath,
       sessionId: state.sessionId,
       debug: !!process.env.RESEARCH_COPILOT_DEBUG,

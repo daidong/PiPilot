@@ -16,8 +16,10 @@ import { MarpSlideView } from './MarpSlideView'
 // in the preview drawer on click (rather than launching in the system's
 // default app). Used here to filter sibling files that should be
 // reachable via the drawer's prev/next navigation.
+// HTML is deliberately excluded — it launches externally (browser) so
+// the user sees the rendered page, not the source.
 const NAVIGABLE_FILE_EXTS = new Set([
-  'md', 'txt', 'json', 'ts', 'js', 'css', 'html', 'yml', 'yaml',
+  'md', 'txt', 'json', 'ts', 'js', 'css', 'yml', 'yaml',
   'toml', 'env', 'sh', 'py', 'cfg', 'ini', 'log', 'csv', 'xml',
   'rst', 'jsx', 'tsx', 'mjs', 'cjs', 'markdown', 'gitignore',
 ])

@@ -20,6 +20,7 @@ import { createWebSearchTool, createWebFetchTool } from './web-tools.js'
 import { createLiteratureSearchTool } from './literature-search.js'
 import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
+import { createGenerateDiagramTool } from './generate-diagram.js'
 import { createLocalComputeTools } from '../local-compute/tools.js'
 import { createWikiLookupTool } from '../wiki/tool.js'
 import { createWikiTools } from '../wiki/wiki-tools.js'
@@ -109,6 +110,7 @@ export function createResearchTools(ctx: ResearchToolContext): {
   tools.push(createLiteratureSearchTool(ctx))
   tools.push(createConvertDocumentTool(ctx))
   tools.push(createDataAnalyzeTool(ctx))
+  tools.push(createGenerateDiagramTool(ctx))
 
   // Artifact tools (ResearchTool -> AgentTool via wrapper)
   const artifactTools = createResearchMemoryTools({

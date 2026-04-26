@@ -346,7 +346,7 @@ Wait for approval before Phase 3.
    - For low-level custom plots → `load_skill('matplotlib')` or `load_skill('seaborn')`
    - Export to `<workspace>/.research-pilot/artifacts/tool-output/slides/figures/` and embed with a relative path.
 3. **Fresh data-driven numbers or charts** — if a claim needs a computation or re-plot the user doesn't have yet, call the `data-analyze` tool first; persist its output, then embed it.
-4. **Schematics and concept diagrams** — `load_skill('scientific-schematics')` and embed the resulting SVG/PNG. Requires `OPENROUTER_API_KEY`; if unavailable, fall back to inline SVG (see Component Library) or ask the user to supply.
+4. **Schematics and concept diagrams** — call the `generate_diagram` tool (load `scientific-schematics` first for type-specific prompt guidance). Output format: PNG for final embed (recommended for slides — fixed, predictable visual), or `format: "svg"` when the author wants to hand-tweak labels / colors afterwards (writes a `.png` anchor sibling for diffing). Best quality requires `OPENAI_API_KEY`; without the key, SVG falls back to a chat-model-only path with reduced quality, or hand-write inline SVG using the Component Library below.
 5. **Related-work / citation slides** — use the `literature-search` tool to gather references with proper metadata; pull BibTeX/DOIs into speaker notes or a References backup slide.
 6. **Inline SVG / HTML components** — for metric cards, simple bar charts, timelines (see Component Library below).
 

@@ -29,8 +29,11 @@ const ROW_HEIGHT = 28
 const OVERSCAN_ROWS = 10
 const MAX_DROP_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
 
+// HTML is deliberately NOT in this set — clicking an .html file opens it
+// in the system default app (usually a browser) so the user can see the
+// rendered page, not the source. Same reasoning as PDFs and images.
 const TEXT_EXTENSIONS = new Set([
-  'md', 'txt', 'json', 'ts', 'js', 'css', 'html', 'yml', 'yaml',
+  'md', 'txt', 'json', 'ts', 'js', 'css', 'yml', 'yaml',
   'toml', 'env', 'sh', 'py', 'cfg', 'ini', 'log', 'csv', 'xml',
   'rst', 'jsx', 'tsx', 'mjs', 'cjs', 'markdown', 'gitignore',
 ])
