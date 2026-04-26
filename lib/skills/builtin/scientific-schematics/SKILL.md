@@ -84,6 +84,39 @@ the quality tier used for each iteration, the verdict trail
 When `diagram_type: auto`, the tool infers from keywords in the prompt.
 Explicit types beat inference when you know what you want.
 
+### Choosing PNG vs SVG output
+
+The `format` parameter (or the `output` extension) selects the output
+shape. The two formats have different quality envelopes and use cases:
+
+**PNG (default)** — gpt-image-2 native raster, drives the verdict-driven
+review loop directly. Best raw visual quality. Use when:
+- The figure is final and won't be edited further
+- Embedding in slides, posters, web, or as a paper raster figure
+- The user said "image", "PNG", "图片"
+
+**SVG** — same gpt-image-2 PNG verdict loop, then a vision-capable chat
+model transcribes the finalized PNG into editable SVG markup. The .png
+anchor is preserved as a sibling file (`<name>.png` next to `<name>.svg`)
+so the user can diff visual drift later. Use when:
+- The user wants to **edit labels / colors** in Inkscape, draw.io, or
+  by hand
+- Embedding in LaTeX as `\includegraphics{*.svg}` or in HTML/Markdown
+  for crisp scaling
+- The user said "SVG", "vector", "矢量图", "向量图"
+
+Quality tiers depending on the user's configuration:
+
+| Configuration                                | SVG path active           | Quality |
+|----------------------------------------------|---------------------------|---------|
+| `OPENAI_API_KEY` + vision-capable chat model | PNG-anchored transcription | High (~7+/10, matches PNG) |
+| `OPENAI_API_KEY` + non-vision chat model     | Tool returns `SVG_REQUIRES_VISION_MODEL` error | — (recover by switching model or using PNG) |
+| No `OPENAI_API_KEY`                          | Chat-model-only synthesis  | Limited (~6/10) |
+
+All catalog chat models in this app currently support vision input, so
+the second row is rare in practice — Path B exists as a safety net for
+future non-vision models.
+
 ### Internal prompt structure
 
 Under the hood the tool converts your `prompt` into a fixed-slot
