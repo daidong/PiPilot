@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 const remarkPlugins = [remarkGfm]
-import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown, Presentation, FileText } from 'lucide-react'
+import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown, Presentation, FileText, Code, Eye } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
@@ -33,6 +33,11 @@ interface FileSibling {
 const LazyMilkdownMarkdownEditor = lazy(async () => {
   const mod = await import('./MilkdownMarkdownEditor')
   return { default: mod.MilkdownMarkdownEditor }
+})
+
+const LazySourceMarkdownEditor = lazy(async () => {
+  const mod = await import('./SourceMarkdownEditor')
+  return { default: mod.SourceMarkdownEditor }
 })
 
 const typeIcons: Record<string, React.ReactNode> = {
@@ -312,6 +317,8 @@ export function EntityPreviewPanel() {
   const refreshAll = useEntityStore((s) => s.refreshAll)
 
   const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
+  const markdownEditMode = useUIStore((s) => s.markdownEditMode)
+  const toggleMarkdownEditMode = useUIStore((s) => s.toggleMarkdownEditMode)
   const nav = usePreviewNavigation()
 
   // Drag-to-resize the drawer's left edge. Captures start width + cursor X
@@ -434,15 +441,17 @@ export function EntityPreviewPanel() {
     baselineRef.current = baselineMarkdown
   }, [baselineMarkdown])
 
-  // Per-mode scroll memory for the Marp source/slides toggle. The two
-  // modes have unrelated layouts (slide cards vs. a long editor), so
-  // sharing scrollTop would land in the wrong place. Instead we remember
-  // each mode's last position independently and restore on toggle.
-  // Resets on entity change so each file starts at the top.
+  // Per-mode scroll memory for view/edit toggles. The three layouts —
+  // slide cards, rendered Milkdown, raw CodeMirror — have unrelated DOM
+  // heights, so sharing scrollTop would land each toggle in the wrong
+  // place. We remember each mode's last position independently and
+  // restore on toggle. Resets on entity change so each file starts at
+  // the top.
+  type ScrollMode = 'rendered' | 'raw' | 'slides'
   const scrollContentRef = useRef<HTMLDivElement>(null)
-  const modeScrollRef = useRef<{ source: number; slides: number }>({ source: 0, slides: 0 })
+  const modeScrollRef = useRef<Record<ScrollMode, number>>({ rendered: 0, raw: 0, slides: 0 })
   useEffect(() => {
-    modeScrollRef.current = { source: 0, slides: 0 }
+    modeScrollRef.current = { rendered: 0, raw: 0, slides: 0 }
   }, [entity?.id])
 
   // Auto-reload when agent modifies the currently previewed markdown file
@@ -539,6 +548,14 @@ export function EntityPreviewPanel() {
     viewModeOverride ?? (isMarpFile ? 'slides' : 'source')
   const showSlideView = isMarpFile && effectiveViewMode === 'slides'
 
+  // Resolve which scroll-memory slot the current view/edit combo writes
+  // to. `slides` collapses both edit modes (the Marp slide view doesn't
+  // expose an editor); the source view splits along WYSIWYG vs raw so
+  // toggling between them snaps back to where each one was last left.
+  const scrollMode: ScrollMode = effectiveViewMode === 'slides'
+    ? 'slides'
+    : (markdownEditMode === 'raw' ? 'raw' : 'rendered')
+
   // Continuously record scroll position for the current mode so that
   // toggling at any moment returns the user to where they were. The
   // listener is re-attached when the mode flips so each mode's key in
@@ -547,18 +564,18 @@ export function EntityPreviewPanel() {
     const el = scrollContentRef.current
     if (!el) return
     const onScroll = () => {
-      modeScrollRef.current[effectiveViewMode] = el.scrollTop
+      modeScrollRef.current[scrollMode] = el.scrollTop
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [effectiveViewMode])
+  }, [scrollMode])
 
   // Restore remembered scroll on mode change. rAF delays the write until
   // after the new content has laid out; a second pass covers Milkdown's
   // async hydration (the editor Suspense-loads and its content height
   // lands a tick later, which can clamp an early scrollTop to 0).
   useEffect(() => {
-    const target = modeScrollRef.current[effectiveViewMode] ?? 0
+    const target = modeScrollRef.current[scrollMode] ?? 0
     const apply = () => {
       if (scrollContentRef.current) scrollContentRef.current.scrollTop = target
     }
@@ -568,7 +585,7 @@ export function EntityPreviewPanel() {
       cancelAnimationFrame(raf)
       window.clearTimeout(retry)
     }
-  }, [effectiveViewMode, entity?.id])
+  }, [scrollMode, entity?.id])
   const seedFp = buildFingerprint(editorSeedBody)
   const editorKey = `${entity.id}:${entity.filePath ?? 'inline'}:${seedFp.length}:${seedFp.codeFenceCount}:${seedFp.mermaidFenceCount}:${seedFp.mathBlockCount}:${seedFp.imageCount}`
 
@@ -701,20 +718,42 @@ export function EntityPreviewPanel() {
 
       <div className="border t-border rounded-lg overflow-hidden">
         <Suspense fallback={<div className="px-3 py-2 text-xs t-text-muted">Loading markdown editor...</div>}>
-          <LazyMilkdownMarkdownEditor
-            editorId={editorKey}
-            initialMarkdown={baselineBody}
-            externalMarkdown={externalBody}
-            baseDir={dirnameOf(entity.filePath)}
-            onChange={(markdown) => {
-              setDraftMarkdown((frontmatterBlock ?? '') + markdown)
-              if (saveError) setSaveError(null)
-            }}
-            onFocusChange={setPreviewEditorFocused}
-            onSaveShortcut={() => {
-              void handleSave()
-            }}
-          />
+          {markdownEditMode === 'raw' ? (
+            // Raw mode shows the *full* file (frontmatter + body) in
+            // CodeMirror so the user can verify every character on disk.
+            // The save flow expects draftMarkdown to be the full file, so
+            // onChange writes it through directly without re-prepending.
+            // Seeded from the live draft (not baseline) so unsaved edits
+            // made in rendered mode survive the toggle.
+            <LazySourceMarkdownEditor
+              editorId={`${editorKey}:raw`}
+              initialMarkdown={draftMarkdown || baselineMarkdown}
+              externalMarkdown={externalMarkdown}
+              onChange={(markdown) => {
+                setDraftMarkdown(markdown)
+                if (saveError) setSaveError(null)
+              }}
+              onFocusChange={setPreviewEditorFocused}
+              onSaveShortcut={() => {
+                void handleSave()
+              }}
+            />
+          ) : (
+            <LazyMilkdownMarkdownEditor
+              editorId={`${editorKey}:rendered`}
+              initialMarkdown={draftBody || baselineBody}
+              externalMarkdown={externalBody}
+              baseDir={dirnameOf(entity.filePath)}
+              onChange={(markdown) => {
+                setDraftMarkdown((frontmatterBlock ?? '') + markdown)
+                if (saveError) setSaveError(null)
+              }}
+              onFocusChange={setPreviewEditorFocused}
+              onSaveShortcut={() => {
+                void handleSave()
+              }}
+            />
+          )}
         </Suspense>
       </div>
       {entity.id === 'agent-md' && (
@@ -908,6 +947,16 @@ export function EntityPreviewPanel() {
                 title={isDirty ? 'Save markdown (Cmd/Ctrl+S)' : 'No changes to save'}
               >
                 <Save size={14} />
+              </button>
+            )}
+            {isEditable && !showSlideView && (
+              <button
+                onClick={toggleMarkdownEditMode}
+                className="p-1 rounded t-text-muted t-bg-hover transition-colors"
+                title={markdownEditMode === 'raw' ? 'Switch to rendered editor' : 'Edit raw markdown'}
+                aria-pressed={markdownEditMode === 'raw'}
+              >
+                {markdownEditMode === 'raw' ? <Eye size={14} /> : <Code size={14} />}
               </button>
             )}
             {isMarpFile && (

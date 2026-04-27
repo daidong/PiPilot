@@ -32,6 +32,17 @@ const readLeftWidth = (): number => {
   return Number.isFinite(n) ? clampLeftWidth(n) : LEFT_WIDTH_DEFAULT
 }
 
+// Markdown edit mode preference (rendered Milkdown vs raw CodeMirror).
+// Global, persisted across sessions and tab switches — see ui-store.ts
+// design notes for why this lives in localStorage rather than per-entity.
+export type MarkdownEditMode = 'rendered' | 'raw'
+const MARKDOWN_EDIT_MODE_KEY = 'ui.markdownEditMode'
+const readMarkdownEditMode = (): MarkdownEditMode => {
+  if (typeof window === 'undefined') return 'rendered'
+  const raw = window.localStorage?.getItem(MARKDOWN_EDIT_MODE_KEY)
+  return raw === 'raw' ? 'raw' : 'rendered'
+}
+
 // Re-export from shared-ui for backward compatibility
 export { REASONING_MODELS, SUPPORTED_MODELS }
 /** @deprecated Use REASONING_MODELS instead */
@@ -62,6 +73,7 @@ interface UIState {
   previewEditorFocused: boolean
   drawerWidth: number
   leftSidebarWidth: number
+  markdownEditMode: MarkdownEditMode
 
   // Literature view state
   literatureFilter: LiteratureFilter
@@ -94,6 +106,8 @@ interface UIState {
   setDrawerWidth: (width: number) => void
   setLeftSidebarWidth: (width: number) => void
   setLiteratureFilter: (filter: Partial<LiteratureFilter>) => void
+  setMarkdownEditMode: (mode: MarkdownEditMode) => void
+  toggleMarkdownEditMode: () => void
 }
 
 export interface LiteratureFilter {
@@ -126,6 +140,7 @@ export const useUIStore = create<UIState>((set) => ({
   previewEditorFocused: false,
   drawerWidth: DRAWER_WIDTH_DEFAULT,
   leftSidebarWidth: readLeftWidth(),
+  markdownEditMode: readMarkdownEditMode(),
   literatureFilter: {
     search: '',
     subTopic: null,
@@ -255,6 +270,14 @@ export const useUIStore = create<UIState>((set) => ({
     const clamped = clampLeftWidth(width)
     set({ leftSidebarWidth: clamped })
     try { window.localStorage?.setItem(LEFT_WIDTH_KEY, String(clamped)) } catch { /* quota/disabled */ }
+  },
+  setMarkdownEditMode: (mode) => {
+    set({ markdownEditMode: mode })
+    try { window.localStorage?.setItem(MARKDOWN_EDIT_MODE_KEY, mode) } catch { /* quota/disabled */ }
+  },
+  toggleMarkdownEditMode: () => {
+    const next: MarkdownEditMode = useUIStore.getState().markdownEditMode === 'rendered' ? 'raw' : 'rendered'
+    useUIStore.getState().setMarkdownEditMode(next)
   }
 }))
 
