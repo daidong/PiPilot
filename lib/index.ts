@@ -55,6 +55,17 @@ export type { MentionType, MentionRef, ParseResult, ResolvedMention, MentionCand
 // Mention utilities
 export { setCachedMarkdown, fileUriToPath } from './mentions/document-cache.js'
 
+// Models (centralized tier table)
+export {
+  MODEL_TIERS,
+  ROUTER_MODELS,
+  ROUTER_PROVIDER_TO_PI,
+  ANTHROPIC_SONNET,
+  DEFAULT_MODEL_ID,
+  RETIRED_MODEL_MIGRATIONS,
+} from './models.js'
+export type { ModelTier, ModelTierKey } from './models.js'
+
 // Types
 export {
   PATHS

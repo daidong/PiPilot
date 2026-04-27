@@ -26,7 +26,8 @@ import type {
 } from './types.js'
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
-const DEFAULT_MODEL = 'claude-opus-4-5'
+// Keep in sync with lib/models.ts:MODEL_TIERS.anthropic.flagship
+const DEFAULT_MODEL = 'claude-opus-4-7'
 const ANTHROPIC_VERSION = '2023-06-01'
 const REQUEST_TIMEOUT_MS = 180_000
 const MAX_TOKENS = 2048

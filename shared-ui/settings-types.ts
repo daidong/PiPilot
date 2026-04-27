@@ -27,7 +27,7 @@ export interface DataAnalysisSettings {
 export type WikiAgentSpeed = 'slow' | 'medium' | 'fast'
 
 export interface WikiAgentSettings {
-  /** Model ID (e.g., 'anthropic:claude-haiku-4-5-20251001'). 'none' = disabled. */
+  /** Model ID (e.g., 'anthropic:claude-opus-4-7'). 'none' = disabled. */
   model: string
   /** Processing speed preset */
   speed: WikiAgentSpeed

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { EntityItem } from './entity-store'
-import { REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODEL } from '../../../../shared-ui/constants'
+import { REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODEL, RETIRED_MODEL_MIGRATIONS } from '../../../../shared-ui/constants'
 import { parseModelKey } from '../../../../shared-ui/utils'
 import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 
@@ -287,14 +287,17 @@ export async function hydratePreferences(): Promise<void> {
   const prefs = await api?.loadPreferences?.()
   const updates: Partial<{ selectedModel: string; reasoningEffort: ReasoningEffort; theme: Theme }> = {}
   if (prefs?.selectedModel) {
-    // Migrate legacy model IDs (e.g. 'gpt-5.4' → 'openai:gpt-5.4')
-    const m = prefs.selectedModel as string
-    if (!m.includes(':')) {
-      const { provider, modelId } = parseModelKey(m)
-      updates.selectedModel = `${provider}:${modelId}`
+    // Step 1: legacy bare-ID format (e.g. 'gpt-5.4' → 'openai:gpt-5.4')
+    const raw = prefs.selectedModel as string
+    let normalized: string
+    if (!raw.includes(':')) {
+      const { provider, modelId } = parseModelKey(raw)
+      normalized = `${provider}:${modelId}`
     } else {
-      updates.selectedModel = m
+      normalized = raw
     }
+    // Step 2: retired flagship/low-tier IDs → current replacement (see lib/models.ts)
+    updates.selectedModel = RETIRED_MODEL_MIGRATIONS[normalized] ?? normalized
   } else {
     // No saved preference — pick highest-priority available auth
     // Priority: OpenAI sub → Anthropic sub → OpenAI API → Anthropic API

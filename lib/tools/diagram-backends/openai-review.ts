@@ -1,9 +1,9 @@
 /**
  * OpenAI review backend (vision model with structured output).
  *
- * Uses gpt-4o by default because vision + JSON-schema response_format is
- * broadly supported on that model. Returns a fully-structured ReviewResult
- * so the generator never has to regex natural-language.
+ * Uses GPT-5.5 by default — supports image input, structured outputs, and
+ * JSON-schema response_format. Returns a fully-structured ReviewResult so the
+ * generator never has to regex natural-language.
  */
 
 import type {
@@ -17,7 +17,8 @@ import type {
 } from './types.js'
 
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
-const DEFAULT_MODEL = 'gpt-4o'
+// Keep in sync with lib/models.ts:MODEL_TIERS.openai.flagship
+const DEFAULT_MODEL = 'gpt-5.5'
 const REQUEST_TIMEOUT_MS = 180_000
 
 // OpenAI reviewers tend to be slightly harsher than Claude on layout quality,

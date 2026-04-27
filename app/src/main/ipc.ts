@@ -178,7 +178,7 @@ function onCoordinatorIdle(): void {
 function createWindowRuntimeState(): WindowRuntimeState {
   return {
     coordinator: null,
-    currentModel: 'openai:gpt-5.4',
+    currentModel: 'openai:gpt-5.5',
     currentReasoningEffort: 'medium',
     currentAuthMode: 'none',
     projectPath: '',
@@ -1691,7 +1691,7 @@ export function registerIpcHandlers(): void {
       // Reset window title to app name when project is closed
       const win = BrowserWindow.getAllWindows().find(w => windowStates.get(w.webContents.id) === state)
       if (win) win.setTitle('Research Pilot')
-      state.currentModel = 'openai:gpt-5.4'
+      state.currentModel = 'openai:gpt-5.5'
       state.currentReasoningEffort = 'medium'
       state.currentAuthMode = 'none'
     } finally {

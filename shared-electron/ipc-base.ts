@@ -40,6 +40,22 @@ const DEFAULT_SETTINGS: AppSettings = {
   wikiAgent: { model: 'none', speed: 'medium' },
   diagram: { reviewProvider: 'auto' },
 }
+
+// Mirrors lib/models.ts:RETIRED_MODEL_MIGRATIONS — kept inline because
+// shared-electron can't import from lib or shared-ui (cross-rootDir).
+const RETIRED_MODEL_MIGRATIONS: Record<string, string> = {
+  'openai:gpt-5.4-mini': 'openai:gpt-5.5',
+  'openai:gpt-5.4-nano': 'openai:gpt-5.5',
+  'openai:gpt-5.4-pro': 'openai:gpt-5.5',
+  'openai:gpt-4o': 'openai:gpt-5.5',
+  'openai-codex:gpt-5.4-mini': 'openai-codex:gpt-5.5',
+  'anthropic:claude-opus-4-5-20251101': 'anthropic:claude-opus-4-7',
+  'anthropic:claude-sonnet-4-5-20250929': 'anthropic:claude-sonnet-4-6',
+  'anthropic:claude-haiku-4-5-20251001': 'anthropic:claude-opus-4-7',
+  'anthropic-sub:claude-opus-4-5-20251101': 'anthropic-sub:claude-opus-4-7',
+  'anthropic-sub:claude-sonnet-4-5-20250929': 'anthropic-sub:claude-sonnet-4-6',
+  'anthropic-sub:claude-haiku-4-5-20251001': 'anthropic-sub:claude-opus-4-7',
+}
 import type { OAuthCredentials } from '@mariozechner/pi-ai/oauth'
 import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './file-tree'
 
@@ -139,12 +155,18 @@ export function loadSettingsFromConfig(): AppSettings {
   const config = readConfig()
   if (!config.settings) return { ...DEFAULT_SETTINGS }
   // Merge with defaults to handle new fields added in future versions
-  return {
+  const merged: AppSettings = {
     research: { ...DEFAULT_SETTINGS.research, ...config.settings.research },
     dataAnalysis: { ...DEFAULT_SETTINGS.dataAnalysis, ...config.settings.dataAnalysis },
     wikiAgent: { ...DEFAULT_SETTINGS.wikiAgent, ...config.settings.wikiAgent },
     diagram: { ...DEFAULT_SETTINGS.diagram, ...config.settings.diagram },
   }
+  // Migrate retired wiki-agent model IDs to current flagship (mirrors the
+  // main selectedModel migration in app/src/renderer/stores/ui-store.ts).
+  const wikiModel = merged.wikiAgent.model
+  const migratedWiki = RETIRED_MODEL_MIGRATIONS[wikiModel]
+  if (migratedWiki) merged.wikiAgent.model = migratedWiki
+  return merged
 }
 
 /**

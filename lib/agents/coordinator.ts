@@ -28,6 +28,7 @@ import { loadAllSkills, readEnabledSkills, resolveSkillDependencies, buildSkills
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
+import { ROUTER_MODELS } from '../models.js'
 import {
   migrateLegacyArtifacts,
   findArtifactById,
@@ -357,12 +358,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // so the existing apiKey is guaranteed to work.
   let intentRouterModel: Model<any> | null = null
   {
-    const routerByProvider: Record<string, string> = {
-      anthropic: 'claude-haiku-4-5-20251001',
-      openai: 'gpt-5.4-nano',
-      'openai-codex': 'gpt-5.4-mini',  // nano not available in openai-codex provider
-      google: 'gemini-2.0-flash-lite'
-    }
+    const routerByProvider: Record<string, string> = ROUTER_MODELS
 
     // Determine which provider the main model resolved to
     let mainProvider: string | null = null
@@ -431,7 +427,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       if (!piModel.input.includes('image')) {
         throw new Error(
           `Selected model "${piModel.id}" does not accept image input. ` +
-          `Switch to a vision-capable model (e.g. GPT-4o, Claude Opus, Gemini 2.5).`
+          `Switch to a vision-capable model (e.g. GPT-5.5, Claude Opus 4.7, Gemini 2.5).`
         )
       }
       const currentKey = await resolveApiKey()
