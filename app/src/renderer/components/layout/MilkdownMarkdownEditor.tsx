@@ -10,6 +10,16 @@ import 'katex/dist/katex.min.css'
 import './MilkdownMarkdownEditor.css'
 import { resolveMarkdownImageUrl } from '../../utils/markdown-image'
 
+// Crepe enables a LaTeX feature that treats `$...$` as inline math, so plain
+// currency like `$50 ... $100` gets swallowed as a math span. We escape `$`
+// when it directly precedes a digit on the way *in*, and reverse the escape
+// on the way *out* so the file on disk stays unchanged.
+const escapeCurrencyDollars = (md: string): string =>
+  md.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+
+const unescapeCurrencyDollars = (md: string): string =>
+  md.replace(/\\\$(?=\d)/g, '$')
+
 interface MilkdownMarkdownEditorProps {
   editorId: string
   initialMarkdown: string
@@ -68,7 +78,7 @@ function MilkdownInner({
   useEditor((root) => {
     const crepe = new Crepe({
       root,
-      defaultValue: initialMarkdown,
+      defaultValue: escapeCurrencyDollars(initialMarkdown),
       features: {
         [Crepe.Feature.BlockEdit]: false,
         [Crepe.Feature.Toolbar]: false,
@@ -105,7 +115,9 @@ function MilkdownInner({
           // Ignore the initial normalization update emitted during editor boot.
           if (!userInteractedRef.current && elapsedMs < 1200) return
         }
-        onChangeRef.current(markdown)
+        // Reverse the currency-dollar escape we applied on input so the saved
+        // file matches what the user actually wrote.
+        onChangeRef.current(unescapeCurrencyDollars(markdown))
       })
       listener.focus(() => onFocusChangeRef.current?.(true))
       listener.blur(() => onFocusChangeRef.current?.(false))
@@ -130,7 +142,7 @@ function MilkdownInner({
 
     try {
       isExternalUpdateRef.current = true
-      crepeRef.current.editor.action(replaceAll(externalMarkdown))
+      crepeRef.current.editor.action(replaceAll(escapeCurrencyDollars(externalMarkdown)))
     } catch {
       // Editor might not be ready yet — ignore
     } finally {
