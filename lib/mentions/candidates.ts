@@ -38,6 +38,22 @@ export async function getCandidates(
 
   const entities = getEntityCache(projectPath)
 
+  // Order matters: candidates are surfaced in this sequence (Files first, then
+  // Notes, Papers, Data). The UI also enforces this order via `typeOrder` in
+  // MentionPopover.tsx — keep the two in sync.
+
+  if (!typeFilter || typeFilter === 'file') {
+    const files = await getFileList(projectPath)
+    for (const rel of files) {
+      let detail: string | undefined
+      try {
+        const stat = statSync(join(projectPath, rel))
+        detail = `${(stat.size / 1024).toFixed(1)}KB`
+      } catch { /* skip stat errors */ }
+      candidates.push({ type: 'file', value: rel, label: rel, detail })
+    }
+  }
+
   if (!typeFilter || typeFilter === 'note') {
     for (const n of entities.notes) {
       candidates.push({
@@ -71,18 +87,6 @@ export async function getCandidates(
     }
   }
 
-  if (!typeFilter || typeFilter === 'file') {
-    const files = await getFileList(projectPath)
-    for (const rel of files) {
-      let detail: string | undefined
-      try {
-        const stat = statSync(join(projectPath, rel))
-        detail = `${(stat.size / 1024).toFixed(1)}KB`
-      } catch { /* skip stat errors */ }
-      candidates.push({ type: 'file', value: rel, label: rel, detail })
-    }
-  }
-
   // URL type has no candidates (user types it directly)
 
   if (q) {
@@ -107,7 +111,7 @@ export async function getCandidates(
         return depthA - depthB || a.value.localeCompare(b.value)
       })
       .slice(0, MAX_EMPTY_QUERY_FILES)
-    return [...nonFiles, ...files]
+    return [...files, ...nonFiles]
   }
 
   return candidates

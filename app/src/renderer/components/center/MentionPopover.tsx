@@ -31,7 +31,7 @@ const typeLabels: Record<string, string> = {
   file: 'Files'
 }
 
-const typeOrder = ['note', 'paper', 'data', 'file']
+const typeOrder = ['file', 'note', 'paper', 'data']
 
 /** Wrap value in quotes if it contains spaces so the parser handles it correctly */
 function formatMention(c: MentionCandidate): string {
@@ -167,7 +167,7 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
         <div className="px-3 py-3 text-xs t-text-muted">
           {query
             ? `No matches for "${query}"`
-            : 'Type to search notes, papers, data, or files'}
+            : 'Type to search files, notes, papers, or data'}
         </div>
       ) : (
         grouped.map((group) => (
