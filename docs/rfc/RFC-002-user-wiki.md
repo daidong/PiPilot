@@ -101,15 +101,17 @@ The previous draft conflated two questions. Separating them:
 1. **Trigger** — what causes the agent to *propose* a write?
 2. **Capture** — once proposed, how does the value (including details like dates) actually get filled in?
 
-#### 4.2.1 Triggers — only three paths, never silent
+#### 4.2.1 Triggers — four paths, never silent
 
 a. **User explicitly says "remember this" / "save to my profile" / "add this to my bio".** The agent surfaces a lightweight confirm modal pre-filled with the extracted fields.
 
 b. **Agent hits a missing-fact gap during a real task.** Example: user asks "draft my bio paragraph", agent has no `end_date` for a previous position. The agent does **not** guess and does **not** silently store. It asks the user inline ("when did you leave NCSU?"), and after the user answers, offers a one-tap save.
 
-c. **Agent notices a recurring entity across projects.** Example: a collaborator name appears in two or more project memories. The agent surfaces a confirm modal: "Add 'Dr. K' to your collaborator network?" This is the gradual cross-project learning channel for the collaborator network. The threshold is a *prompt threshold*, not a *silent-write threshold* — every addition is still user-confirmed.
+c. **Agent notices a recurring entity across projects.** Example: a collaborator name appears in two or more project memories. The agent surfaces a confirm modal: "Add 'Dr. K' to your collaborator network?" This is the gradual cross-project learning channel. The threshold is a *prompt threshold*, not a *silent-write threshold* — every addition is still user-confirmed.
 
-We **drop** the earlier "stable signal across ≥N sessions" rule from the previous draft. "Stable signal" is too vague to implement reliably and risks silent writes the user never approved. The current rule: **the agent never writes Layer 1 silently. Period.**
+d. **Post-session purification queue (deferred review).** After each project session summary is generated, a small LLM pass extracts objective-fact candidates that match Layer 1 categories (positions, dates, affiliations, collaborator names). Candidates land in a pending queue, **not directly in Layer 1**. The user reviews them at their own pace via `/profile`. See §4.2.5 for the full mechanism — this is the most likely source of real wiki content in practice and the most invasive in terms of impact on other systems.
+
+We **drop** the earlier "stable signal across ≥N sessions" rule from the previous draft. "Stable signal" is too vague to implement reliably and risks silent writes the user never approved. The current rule across all four paths: **the agent never writes Layer 1 silently. Period.**
 
 #### 4.2.2 Capture — agent never invents factual values
 
@@ -140,17 +142,96 @@ A "remember this" command lands only in user-wiki. A session summary never auto-
 
 The crucial design move: **the agent never writes silently and never invents factual content.** Stale entries are the user's problem to clean up via `/profile`. This trades some staleness for a much lower pollution rate.
 
+#### 4.2.5 Pending Promotion Queue (Trigger Path d)
+
+The motivation: paths (a)/(b)/(c) all require the user (or the active session) to *initiate* something. In practice users rarely remember to say "remember this" mid-conversation. Most real biographical facts get casually mentioned ("when I was at NCSU…") and then lost. We piggyback on the existing session-summary pipeline to capture them automatically — but **only as candidates**, not as writes.
+
+**Mechanism:**
+
+1. **Hook point.** After `.research-pilot/memory-v2/session-summaries/<id>.md` is written, fire a `userWikiExtract` step.
+2. **Extraction.** A small LLM call with a tight prompt: *"From this session summary, list any sentences that state objective biographical facts about the user (position, dates, affiliation, education, personal-site URL, collaborator names). Output a JSON array of candidates with {category, value, source_quote}. If none, return []."*
+3. **Filtering.** Drop candidates that already match an existing Layer 1 entry, that match an entry on the user's blacklist, or that fail a structural validity check (e.g., a "position" candidate without an institution).
+4. **Queue write.** Surviving candidates are appended to `~/.research-pilot/user-wiki/pending.jsonl` with `{candidate_id, source_session_id, source_quote, extracted_at, category, value}`.
+5. **Surfacing.** The `/profile` view shows a "Pending suggestions (N)" badge. Each item has three actions: **Accept** (writes to `identity.jsonl` with `as_of = extracted_at`, `source = session_id`), **Dismiss** (removes from pending, won't re-suggest this session's quote), **Dismiss & blacklist** (adds the normalized value to a blacklist so future sessions don't re-extract it).
+6. **Optional opportunistic surfacing.** When the user opens `/profile` for any reason, or once per N sessions on a quiet moment, the UI can nudge them to review. Frequency is a tunable; default conservative.
+
+**Why this respects D5:**
+- Each accept is still a one-tap user action. The agent extracts and proposes; it never writes Layer 1 itself.
+- Dates and other values come verbatim from the source session text (the user's own utterances), not from agent inference. The `source_quote` field makes this auditable — the user sees exactly what they said before accepting.
+
+**Known failure modes:**
+- *Queue rot.* If users never review, the queue grows. Mitigation: cap at K (e.g., 50) entries; oldest auto-dropped with a log entry; strong badge visibility.
+- *Repetitive candidates.* The same fact may be re-extracted across sessions if the user ignores rather than dismisses. Mitigation: dedupe on normalized `(category, value)` before appending to pending.
+- *Extraction false positives.* The LLM may flag project-context as identity. Mitigation: strict prompt with examples of Layer 3 things to skip; user dismissal is cheap; blacklist is sticky.
+
+### 4.3 Impact on Other Systems
+
+Trigger path (d) is the most invasive change in this RFC. Here is the surface area:
+
+| System | Impact |
+|---|---|
+| **Session-summary pipeline** (`lib/memory-v2/session-summaries/`) | Add a post-write hook that triggers `userWikiExtract`. Hook is async and best-effort — its failure must not break summary writing. |
+| **Coordinator agent** (`lib/agents/coordinator.ts`) | No change to in-session behavior. Path (d) runs *after* the session ends, not during. |
+| **Prompt registry** (`lib/agents/prompts/index.ts`) | Add new prompts: `user-wiki-extractor-system`, `user-wiki-promotion-confirm`. Reuse existing prompt-loading conventions. |
+| **Intent detection** | No new intent label. Path (d) is not intent-routed; it always runs after sessions. (The read-side still uses intent gating per §4.1.) |
+| **Tools** (`lib/tools/`) | Add `user-profile-search` tool (read side, §4.1) gated by intent. No new tool needed for path (d) — it runs as a background step, not as an in-session tool call. |
+| **Storage** | New files: `~/.research-pilot/user-wiki/identity.jsonl`, `pending.jsonl`, `blacklist.jsonl`. All plain JSONL, exportable, deletable. |
+| **UI** (`app/src/renderer/components/`) | New `/profile` view with three sections: identity entries (editable list), pending suggestions (with Accept / Dismiss / Blacklist), export/delete controls. New badge in the global UI shell when pending count > 0. |
+| **Zustand stores** (`shared-ui/`) | New `userWikiStore` for identity entries, pending queue, blacklist, plus IPC bindings. |
+| **IPC** (`app/src/main/ipc.ts`, `app/src/preload/index.ts`) | New handlers: `userWiki:listIdentity`, `userWiki:listPending`, `userWiki:accept`, `userWiki:dismiss`, `userWiki:blacklist`, `userWiki:export`, `userWiki:delete`. |
+| **Token / cost budget** | One extra small-model LLM call per session, scoped to the summary text only (typically <2K tokens input). At normal session cadence this is negligible, but we should make the extractor model configurable and let users disable path (d) entirely. |
+| **System prompt for in-session agent** | Inject the always-on Layer 1 summary (§4.1). Path (d) does not affect in-session prompt — only future sessions, after the user accepts candidates. |
+| **Privacy posture** | Path (d) means the system reads each session summary *with intent to extract personal facts*. This must be documented in the user-facing description of the feature, and disabling path (d) must fully halt the extraction pass — not just suppress the queue UI. |
+| **Cross-project recurrence (path c)** | Path (c) and path (d) overlap: (d) extracts from session summaries; (c) detects entity recurrence across project memories. Resolution: (d) feeds candidates with `recurrence_count = 1`; if the same normalized candidate is extracted from K different projects, it gets a `recurrence_count = K` flag in pending, and the UI prioritizes it. So (c) becomes a *prioritization signal on the queue*, not a separate trigger. |
+| **Existing focus / memory-v2 stores** | Read-only consumer for path (c) prioritization. No schema changes. |
+| **Build / packaging** | New JSONL paths under `~/.research-pilot/user-wiki/` need to be created on first run. No bundler changes. |
+
 ### 4.3 Scope: Global vs. Project-Local Isolation
 
 **Problem:** How do we keep project-specific context from polluting the global identity layer when projects open and close?
 
-**Proposed rule — one-way injection, never reflux:**
+**Proposed rule — one-way injection, gated reflux:**
 
 - On project open: Layer 1 summary is injected into the project's session context. Read-only.
-- Inside a project: writes go to Layer 2 (project memory). They **never** flow back to Layer 1 automatically.
-- Promotion is explicit: the user (or agent, with explicit user confirmation) can `/profile-promote` a Layer 2 fact into Layer 1. This is the *only* path from project → global.
+- Inside a project: routine writes go to Layer 2 (project memory). They **never** flow back to Layer 1 automatically.
+- The only paths from project → global are paths (a)/(b)/(c)/(d) from §4.2.1, **and every one of them ends in an explicit user confirm**. There is no auto-promotion.
+- The pending queue (path d) lives in `~/.research-pilot/user-wiki/`, not inside any project — extracted candidates leave the project boundary the moment they're queued, but they don't reach `identity.jsonl` until accepted.
 
 Simple, blunt, and prevents the most common failure mode (project-specific transient becomes a "fact" about you forever).
+
+### 4.4 Impact on Other Systems
+
+Path (d) — the post-session purification queue — is the most invasive change in this RFC. Paths (a)/(b)/(c) and the read-side §4.1 each touch one or two surfaces; (d) touches many. The full surface area:
+
+| System | Impact |
+|---|---|
+| **Session-summary pipeline** (`lib/memory-v2/session-summaries/`) | Add a post-write hook that triggers `userWikiExtract`. Hook is async and best-effort — its failure must not break summary writing. |
+| **Coordinator agent** (`lib/agents/coordinator.ts`) | No change to in-session behavior. Path (d) runs *after* the session ends, not during. |
+| **Prompt registry** (`lib/agents/prompts/index.ts`) | Add new prompts: `user-wiki-extractor-system`, `user-wiki-promotion-confirm`. Reuse existing prompt-loading conventions. |
+| **Intent detection** | No new intent label. Path (d) is not intent-routed; it always runs after sessions. (The read-side still uses intent gating per §4.1.) |
+| **Tools** (`lib/tools/`) | Add `user-profile-search` tool (read side, §4.1) gated by intent. No new tool needed for path (d) — it runs as a background step, not as an in-session tool call. |
+| **Storage** | New files: `~/.research-pilot/user-wiki/identity.jsonl`, `pending.jsonl`, `blacklist.jsonl`. All plain JSONL, exportable, deletable. |
+| **UI** (`app/src/renderer/components/`) | New `/profile` view with three sections: identity entries (editable list), pending suggestions (with Accept / Dismiss / Blacklist), export/delete controls. New badge in the global UI shell when pending count > 0. |
+| **Zustand stores** (`shared-ui/`) | New `userWikiStore` for identity entries, pending queue, blacklist, plus IPC bindings. |
+| **IPC** (`app/src/main/ipc.ts`, `app/src/preload/index.ts`) | New handlers: `userWiki:listIdentity`, `userWiki:listPending`, `userWiki:accept`, `userWiki:dismiss`, `userWiki:blacklist`, `userWiki:export`, `userWiki:delete`. |
+| **Token / cost budget** | One extra small-model LLM call per session, scoped to the summary text only (typically <2K tokens input). At normal session cadence this is negligible, but the extractor model must be configurable and the entire path (d) must be disable-able. |
+| **System prompt for in-session agent** | Inject the always-on Layer 1 summary (§4.1). Path (d) does not affect in-session prompt — only *future* sessions, after the user accepts candidates. |
+| **Privacy posture** | Path (d) means the system reads each session summary *with intent to extract personal facts*. This must be documented in the user-facing description of the feature, and disabling path (d) must fully halt the extraction pass — not merely suppress the queue UI. |
+| **Cross-project recurrence (path c)** | Paths (c) and (d) overlap: (d) extracts from session summaries; (c) detects entity recurrence across project memories. Resolution: (d) feeds candidates with `recurrence_count = 1`; if the same normalized candidate is extracted from K different projects, it gets a `recurrence_count = K` flag in pending, and the UI prioritizes it. So (c) becomes a *prioritization signal on the queue*, not a separate trigger. |
+| **Existing focus / memory-v2 stores** | Read-only consumer for path (c) prioritization. No schema changes. |
+| **Build / packaging** | New JSONL paths under `~/.research-pilot/user-wiki/` need to be created on first run. No bundler changes. |
+| **Existing skills** (e.g., `paper-writing`, `research-grants`) | Indirect: these can opt-in to use the always-on Layer 1 summary or call `user-profile-search`. No required changes. |
+
+**Net assessment:**
+
+- *Implementation cost* — medium. One new pipeline stage, one new UI surface, one new IPC bundle, one new store. Concentrated in a few files.
+- *Operational risk* — low. (d) never writes Layer 1 directly and is disable-able. Failure modes (queue rot, false positives, repetitive candidates) are bounded and have clear mitigations.
+- *Reversibility* — high. Disabling path (d) leaves identity.jsonl intact; the user can fall back to paths (a)/(b)/(c). Removing the feature entirely means deleting the `user-wiki/` directory.
+
+**What this proposal merges or removes from earlier drafts:**
+
+- Path (c) is no longer a standalone modal-trigger — it becomes a `recurrence_count` prioritization signal on path (d)'s queue. The user still sees a confirm; it just lives in the same queue UI as everything else, not as a separate per-name modal.
+- The "agent surfaces a confirm modal" description in path (a)/(b) is preserved but those paths now share the same confirm-modal component as the queue's per-item Accept action — one widget, used three ways.
 
 ## 5. Reference Patterns
 
@@ -187,7 +268,8 @@ Before drafting an implementation plan, I want agreement on:
 - **(D2)** Layer 1 stores **objective facts only** — no preferences, writing-style, or likes/dislikes. Append-only with `as_of` timestamps; no auto-GC.
 - **(D3)** One-way injection from Layer 1 → project; promotion from project → Layer 1 requires explicit user action.
 - **(D4)** Read trigger: always-on summary + intent-gated `user_profile_search` tool.
-- **(D5)** Write trigger: only three paths — explicit "remember this", task-driven gap-filling with inline ask, and cross-project recurrence-as-prompt. **No silent writes ever.** Agent never invents factual values (especially dates).
-- **(D6)** User-wiki is trivially exportable, inspectable, and deletable by the user via a `/profile` view.
+- **(D5)** Write trigger: four paths — (a) explicit "remember this", (b) task-driven gap-filling with inline ask, (c) cross-project recurrence (now folded into (d) as a `recurrence_count` prioritization signal), (d) post-session purification queue with deferred user review. **No silent writes ever.** Agent never invents factual values (especially dates).
+- **(D6)** User-wiki is trivially exportable, inspectable, and deletable by the user via a `/profile` view. Path (d) must be disable-able and disabling must fully halt the extraction pass, not just the queue UI.
+- **(D7)** Path (d) is the primary expected source of real wiki content; paths (a)/(b)/(c) are fallbacks. Acceptance of this RFC commits to building the post-session extractor + pending queue + `/profile` review surface, with the impact described in §4.4.
 
-If these six hold, the next PR will turn §3–§4 into concrete schemas, file layouts, and tool definitions.
+If these seven hold, the next PR will turn §3–§4 into concrete schemas, file layouts, and tool definitions.
