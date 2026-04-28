@@ -19,6 +19,7 @@ Concretely, when the agent is asked to:
 - Write a grant proposal section about the PI
 - Compose an email mentioning the user's background or collaborators
 - Decide whether a recommendation matches the user's research area / writing style
+- Collect the relevant publications from the PI
 
 …it currently has no structured way to know who the user is. It either guesses, asks, or relies on whatever happens to be in the current session's context.
 
@@ -42,16 +43,19 @@ The central design claim of this RFC is that **user information should be split 
 
 ### Layer 1 — Identity (Global, Append-Only)
 
+**Guiding principle:** **objective facts only.** No preferences, no likes/dislikes, no inferred personality traits, no writing-style. If a human couldn't verify it from a CV, a website, or the user's own statement, it doesn't go here. This is a deliberate departure from how Claude.ai / ChatGPT memory work — those systems happily store "user prefers concise responses", and that drift is exactly what we want to avoid.
+
 **What goes here:** facts that change at the timescale of *years*.
 
 - Position history (current + past), with `start_date` / `end_date`
 - Affiliations, education
 - Personal sites, ORCID, social handles
-- Long-term collaborator network ("has co-authored with X, Y, Z")
-- Stable research area at the **field** level (e.g., "HPC storage systems")
-- Writing-style signals collected over many sessions (e.g., "prefers active voice", "writes in en-US")
+- Collaborator network — names of people the user has worked with, **gradually accumulated from cross-project interactions** (see §4.2 for the trigger). Not derived from paper authorship lists.
+- Stable research field at a **very high level only** (e.g., "HPC storage systems"). The agent decides at write-time whether a candidate is "high-level enough"; topic-level interests ("CXL memory pooling") are explicitly Layer 3.
 
-**Storage:** `~/.research-pilot/user-wiki/identity.jsonl` (append-only, one event per line, latest-wins on read).
+**Explicitly NOT here:** writing-style preferences, tone preferences, "likes coffee", current focus, current papers being written, anything dynamic.
+
+**Storage:** `~/.research-pilot/user-wiki/identity.jsonl` (append-only, one event per line, latest-wins on read). Plain JSONL so it's trivially exportable, inspectable, and deletable by the user.
 
 **Key property:** entries are never deleted by the agent. Old jobs get an `end_date` added; they don't disappear. Users can manually edit via a UI.
 
@@ -90,22 +94,51 @@ The cost of polluting Layer 1 is high (it leaks into every future project), so t
 
 The summary covers the common case; the tool covers depth-on-demand.
 
-### 4.2 Volatility: How Does It Stay Fresh Without Becoming Garbage?
+### 4.2 Writes: When Is a Write Triggered, and How Is the Value Captured?
 
-**Problem:** If we let the agent automatically write/update/GC entries, we get garbage-in-garbage-out. If we never update, the wiki becomes stale.
+The previous draft conflated two questions. Separating them:
 
-**Proposed approach — high write bar, no auto-GC, human-in-the-loop:**
+1. **Trigger** — what causes the agent to *propose* a write?
+2. **Capture** — once proposed, how does the value (including details like dates) actually get filled in?
 
-- **Writing into Layer 1 requires one of:**
-  - User explicitly says "remember this" / "save to my profile"
-  - The same fact appears as a stable signal across ≥N (e.g., 3) sessions
-  - User runs a `/profile-promote <fact>` command to lift something from a session into Layer 1
+#### 4.2.1 Triggers — only three paths, never silent
 
-- **No automatic deletion.** Append-only with `as_of` timestamps. "Was at NCSU 2018–2023" and "is at UNC Charlotte 2023–present" coexist; readers resolve "current" by latest non-ended entry.
+a. **User explicitly says "remember this" / "save to my profile" / "add this to my bio".** The agent surfaces a lightweight confirm modal pre-filled with the extracted fields.
 
-- **Editing UI.** A `/profile` view in the app lets the user see and edit Layer 1 directly. Agent never edits without user-visible confirmation.
+b. **Agent hits a missing-fact gap during a real task.** Example: user asks "draft my bio paragraph", agent has no `end_date` for a previous position. The agent does **not** guess and does **not** silently store. It asks the user inline ("when did you leave NCSU?"), and after the user answers, offers a one-tap save.
 
-The crucial design move: **don't ask the agent to garbage-collect.** Stale entries are the user's problem to clean up, not the agent's. This trades some staleness for a much lower pollution rate.
+c. **Agent notices a recurring entity across projects.** Example: a collaborator name appears in two or more project memories. The agent surfaces a confirm modal: "Add 'Dr. K' to your collaborator network?" This is the gradual cross-project learning channel for the collaborator network. The threshold is a *prompt threshold*, not a *silent-write threshold* — every addition is still user-confirmed.
+
+We **drop** the earlier "stable signal across ≥N sessions" rule from the previous draft. "Stable signal" is too vague to implement reliably and risks silent writes the user never approved. The current rule: **the agent never writes Layer 1 silently. Period.**
+
+#### 4.2.2 Capture — agent never invents factual values
+
+For Layer 1 entries, the agent's job is to *prompt for and structure* the value, not to infer it.
+
+- **Dates.** `start_date` / `end_date` come from the user's reply, never from agent guesswork. If the user is vague ("a few years ago"), store the imprecise value verbatim with a `precision: "approximate"` flag rather than inventing a year.
+- **Same form regardless of trigger.** Whether triggered by (a), (b), or (c), the user sees the same modal shape — extracted fields shown, editable, one-tap save or cancel. This is what makes "lightweight" tractable: one widget, predictable behavior.
+
+#### 4.2.3 Relationship to the existing memory system
+
+We already have project-scoped session summaries in `.research-pilot/memory-v2/session-summaries/`, plus the focus mechanism. The user-wiki is **not** a replacement and does **not** subsume them. The two stores coexist on purpose:
+
+| | Existing project memory | User-wiki (Layer 1) |
+|---|---|---|
+| Scope | Per-project | Global, cross-project |
+| Trigger | Automatic, session-driven | Explicit user confirmation only |
+| Content | Free-form summaries, focus snapshots | Structured biographical facts |
+| Lifecycle | Mutable, may rotate | Append-only with `as_of` |
+| Consumer | This project's agent loop | Cross-project system-prompt summary |
+
+A "remember this" command lands only in user-wiki. A session summary never auto-promotes to user-wiki. The same fact may legitimately appear in both (a session summary may mention the user's job; user-wiki holds the canonical structured version) — this is intentional duplication across stores with different consumers, not a bug to dedupe.
+
+#### 4.2.4 No auto-GC
+
+**No automatic deletion.** Append-only with `as_of` timestamps. "Was at NCSU 2018–2023" and "is at UNC Charlotte 2023–present" coexist; readers resolve "current" by latest non-ended entry.
+
+**Editing UI.** A `/profile` view lets the user see, edit, export, or delete Layer 1 entries directly. The agent never edits without user-visible confirmation.
+
+The crucial design move: **the agent never writes silently and never invents factual content.** Stale entries are the user's problem to clean up via `/profile`. This trades some staleness for a much lower pollution rate.
 
 ### 4.3 Scope: Global vs. Project-Local Isolation
 
@@ -132,27 +165,29 @@ This RFC is consciously a variant of that pattern, with the addition of the **th
 ## 6. Out of Scope (For This RFC)
 
 - Schema details for individual identity fields (will follow once the frame is approved)
-- UI design for the `/profile` editor
+- Detailed UI design for the `/profile` editor (the *shape* — lightweight modal — is decided; pixel-level design is not)
 - Migration path from existing focus/session-summary data
 - Multi-user / shared profiles
 - Cross-device sync of `~/.research-pilot/user-wiki/`
 
 ## 7. Open Questions
 
+Several open questions from the prior draft have been resolved by feedback (writing-style → excluded; collaborator-network → cross-project gradual via confirm; export/delete → in scope; field-vs-topic → field-only, agent decides). Remaining:
+
 1. **Granularity of the always-on summary.** Is 500 tokens the right budget? Should it adapt to the active intent (e.g., longer for writing tasks)?
-2. **Confirmation UX.** What does the "agent wants to remember X" prompt look like — modal, inline toast, deferred batch review?
-3. **Style signals.** Should writing-style preferences live in Layer 1 (identity) or be a separate Layer 1.5? They're stable but qualitatively different from biographical facts.
-4. **Collaborator network.** Auto-derivable from past papers in the paper-wiki vs. manually curated — which source of truth wins on conflict?
-5. **Privacy & export.** Should the user-wiki be trivially exportable / deletable as a single artifact? (Probably yes.)
-6. **Field-level vs. topic-level research interests.** Where exactly is the boundary, and who decides — user or agent?
+2. **Confirmation modal UX details.** Decided: lightweight, one-tap confirm, single consistent shape across all three trigger paths. Open: should multiple pending writes batch into a single review prompt vs. interrupting per-fact?
+3. **Cross-project recurrence threshold.** For trigger path (c), how many projects must mention the same entity before the agent surfaces a confirm? (Likely 2, but worth checking against false-positive rate.)
+4. **Imprecise-date handling.** Is the `precision: "approximate"` flag enough, or should we allow date *ranges* as first-class values?
 
 ## 8. Decision Requested
 
 Before drafting an implementation plan, I want agreement on:
 
 - **(D1)** The three-layer model (Identity / Project Context / Forbidden Zone) is the right frame.
-- **(D2)** Layer 1 is append-only with `as_of` timestamps; no auto-GC.
+- **(D2)** Layer 1 stores **objective facts only** — no preferences, writing-style, or likes/dislikes. Append-only with `as_of` timestamps; no auto-GC.
 - **(D3)** One-way injection from Layer 1 → project; promotion from project → Layer 1 requires explicit user action.
-- **(D4)** Trigger strategy: always-on summary + intent-gated `user_profile_search` tool.
+- **(D4)** Read trigger: always-on summary + intent-gated `user_profile_search` tool.
+- **(D5)** Write trigger: only three paths — explicit "remember this", task-driven gap-filling with inline ask, and cross-project recurrence-as-prompt. **No silent writes ever.** Agent never invents factual values (especially dates).
+- **(D6)** User-wiki is trivially exportable, inspectable, and deletable by the user via a `/profile` view.
 
-If these four hold, the next PR will turn §3–§4 into concrete schemas, file layouts, and tool definitions.
+If these six hold, the next PR will turn §3–§4 into concrete schemas, file layouts, and tool definitions.
