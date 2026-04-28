@@ -10,7 +10,7 @@ import { ErrorBoundary } from './components/layout/ErrorBoundary'
 import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
 import { useEntityStore } from './stores/entity-store'
-import { useUIStore } from './stores/ui-store'
+import { useUIStore, applyThemeFromBroadcast } from './stores/ui-store'
 import { useProgressStore } from './stores/progress-store'
 import { useActivityStore } from './stores/activity-store'
 import { useToolProgressStore } from './stores/tool-progress-store'
@@ -654,6 +654,16 @@ export default function App() {
     document.documentElement.classList.remove('dark', 'light')
     document.documentElement.classList.add(theme)
   }, [theme])
+
+  // Subscribe to global theme broadcasts so a toggle in any window updates
+  // every other open window in lockstep. Listener short-circuits when the
+  // store already matches, so the sender's own echo is a no-op.
+  useEffect(() => {
+    const unsub = api.onThemeChanged?.((next: 'light' | 'dark') => {
+      applyThemeFromBroadcast(next)
+    })
+    return () => { unsub?.() }
+  }, [])
 
   useEffect(() => {
     initSession()

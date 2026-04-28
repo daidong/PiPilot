@@ -197,6 +197,12 @@ export interface ElectronAPI {
   // Settings (menu-triggered open)
   onOpenSettings: (cb: () => void) => () => void
 
+  // Theme broadcast — set is invoked by the window that toggled; main fans
+  // out via 'theme:changed' to every renderer (including the sender) so all
+  // open windows re-apply the <html> class in lockstep.
+  setTheme: (theme: 'light' | 'dark') => Promise<void>
+  onThemeChanged: (cb: (theme: 'light' | 'dark') => void) => () => void
+
   // Version check
   checkForUpdate: () => Promise<{ latest: string; current: string; hasUpdate: boolean }>
 
@@ -436,6 +442,13 @@ const api: ElectronAPI = {
     const handler = () => cb()
     ipcRenderer.on('menu:open-settings', handler)
     return () => ipcRenderer.removeListener('menu:open-settings', handler)
+  },
+
+  setTheme: (theme) => ipcRenderer.invoke('theme:set', theme),
+  onThemeChanged: (cb) => {
+    const handler = (_: any, theme: 'light' | 'dark') => cb(theme)
+    ipcRenderer.on('theme:changed', handler)
+    return () => ipcRenderer.removeListener('theme:changed', handler)
   },
 
   saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),

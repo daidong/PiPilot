@@ -175,6 +175,10 @@ export const useUIStore = create<UIState>((set) => ({
     // app launch (and the welcome screen in particular) respects it.
     persistTheme(theme)
     applyThemeClass(theme)
+    // Broadcast to every other open window via main, so multi-window
+    // sessions keep the same theme. Main echoes back to the sender too;
+    // applyThemeFromBroadcast() below short-circuits if state already matches.
+    ;(window as any).api?.setTheme?.(theme)
   },
   toggleTheme: () => {
     const newTheme = useUIStore.getState().theme === 'dark' ? 'light' : 'dark'
@@ -280,6 +284,15 @@ export const useUIStore = create<UIState>((set) => ({
     useUIStore.getState().setMarkdownEditMode(next)
   }
 }))
+
+/** Apply a theme broadcast from another window. Idempotent: short-circuits
+ *  when local state already matches, breaking any echo loop with main. */
+export function applyThemeFromBroadcast(theme: Theme): void {
+  if (useUIStore.getState().theme === theme) return
+  useUIStore.setState({ theme })
+  persistTheme(theme)
+  applyThemeClass(theme)
+}
 
 /** Load persisted model, reasoning, and theme preferences from disk. Call after project path is set. */
 export async function hydratePreferences(): Promise<void> {

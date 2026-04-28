@@ -702,6 +702,19 @@ export function registerIpcHandlers(): void {
   // Fire-and-forget: warm the cache early
   checkForUpdate().catch(() => {})
 
+  // Theme is a global app-wide preference. When any window flips it, fan out
+  // to every other window so all renderers re-apply the <html> class together.
+  // Sender included on purpose — its own listener is idempotent (no-ops when
+  // its store already matches), and treating sender like everyone else keeps
+  // the broadcast logic uniform.
+  ipcMain.handle('theme:set', (_event, theme: 'light' | 'dark') => {
+    if (theme !== 'light' && theme !== 'dark') return
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue
+      win.webContents.send('theme:changed', theme)
+    }
+  })
+
   // Set the builtin skills root so the loader can find SKILL.md files.
   // Dev: source tree at repo-root/lib/skills/builtin/
   // Production: electron-builder extraResources copies to Resources/skills/builtin/
