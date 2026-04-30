@@ -28,6 +28,13 @@ export interface ModelTier {
   previous: string | null
   /** Cheap/fast model for internal use (intent routing, enrichment). `null` if provider doesn't have one. */
   light: string | null
+  /**
+   * Adversarial review tier — capable enough to mount a credible critique,
+   * distinct enough from `flagship` to add cross-tier disagreement value.
+   * Used by the trust-audit auditor agent (RFC: docs/spec/trust-audit.md §4.1).
+   * NOT the same as `light` (routing tier is too weak for adversarial review).
+   */
+  auditor: string | null
 }
 
 /**
@@ -44,26 +51,31 @@ export const MODEL_TIERS: Record<ModelTierKey, ModelTier> = {
     flagship: 'gpt-5.5',
     previous: 'gpt-5.4',
     light: 'gpt-5.4-nano',
+    auditor: 'gpt-5.4-mini',  // mini, NOT nano (light tier is too weak for adversarial review)
   },
   'openai-codex': {
     flagship: 'gpt-5.5',
     previous: 'gpt-5.4',
     light: 'gpt-5.4-mini', // nano not available in openai-codex provider
+    auditor: 'gpt-5.4-mini',
   },
   anthropic: {
     flagship: 'claude-opus-4-7',
     previous: 'claude-opus-4-6',
     light: 'claude-haiku-4-5-20251001',
+    auditor: 'claude-sonnet-4-6',  // Sonnet, not Haiku
   },
   'anthropic-sub': {
     flagship: 'claude-opus-4-7',
     previous: 'claude-opus-4-6',
     light: 'claude-haiku-4-5-20251001',
+    auditor: 'claude-sonnet-4-6',  // sub mode reaches the same model IDs
   },
   google: {
     flagship: '', // not exposed in UI; google is router-only for now
     previous: null,
     light: 'gemini-2.0-flash-lite',
+    auditor: null,  // no audit-tier choice yet for google
   },
 }
 
@@ -88,6 +100,27 @@ export const ROUTER_MODELS: Record<string, string> = {
 
 /** Sonnet stays separate — current at 4.6 and not on the flagship/previous ladder. */
 export const ANTHROPIC_SONNET = 'claude-sonnet-4-6'
+
+/**
+ * Resolve the auditor model for a given coordinator provider.
+ *
+ * Pairing rule (RFC §4.1):
+ *   - `anthropic` / `anthropic-sub` → Sonnet 4.6
+ *   - `openai` / `openai-codex`     → gpt-5.4-mini
+ *   - `google` (no auditor tier)    → null
+ *
+ * Returns the bare model id (no provider prefix). Caller composes the
+ * provider:model string for `getModel()`.
+ *
+ * Fallback chain when `auditor` is missing: `previous` → null. A null result
+ * means the audit run must use `audit.modelOverride` from settings, otherwise
+ * it errors out with a clear message.
+ */
+export function getAuditorModel(provider: ModelTierKey): string | null {
+  const tier = MODEL_TIERS[provider]
+  if (!tier) return null
+  return tier.auditor ?? tier.previous ?? null
+}
 
 /** Default model on first launch / store reset. */
 export const DEFAULT_MODEL_ID = `openai:${MODEL_TIERS.openai.flagship}`
