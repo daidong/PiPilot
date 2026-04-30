@@ -19,6 +19,15 @@ import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/st
 import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
+import { recordDraftDrift, isDraftPath, ProvenanceGraph } from '../../../lib/provenance/index'
+import {
+  runAudit,
+  listAuditReports,
+  readAuditReport,
+  setFindingResolution,
+  type AuditEvent,
+  type AuditRequest
+} from '../../../lib/audit/index'
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
@@ -1116,6 +1125,14 @@ export function registerIpcHandlers(): void {
       }
 
       writeFileSync(absPath, content, 'utf-8')
+
+      // Provenance: record drift on the latest draft node for this path, if any.
+      // Per axiom A2 we never create new nodes here — that's the audit runner's job.
+      if (process.env.ENABLE_PROVENANCE === '1' && isDraftPath(state.projectPath, absPath)) {
+        // fire-and-forget; never block the save
+        void recordDraftDrift(state.projectPath, absPath)
+      }
+
       return { success: true, path: absPath }
     } catch (err: any) {
       return { success: false, error: err.message }
@@ -1422,6 +1439,130 @@ export function registerIpcHandlers(): void {
 
   // Session
   handleWindow('session:current', ({ state }) => ({ sessionId: state.sessionId, projectPath: state.projectPath }))
+
+  // ─── Provenance / Audit (RFC: docs/spec/trust-audit.md) ──────────────────
+  handleWindow('provenance:enabled', () => ({ enabled: process.env.ENABLE_PROVENANCE === '1' }))
+
+  handleWindow('provenance:get-graph', async ({ state }) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      const graph = await ProvenanceGraph.load(state.projectPath)
+      return {
+        success: true,
+        nodes: graph.allNodes(),
+        edges: graph.allNodes().flatMap(n => graph.getOutgoing(n.id)),
+        nodeCount: graph.nodeCount(),
+        edgeCount: graph.edgeCount()
+      }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  handleWindow('provenance:get-upstream', async ({ state }, rootIds: string[], maxDepth?: number) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      const graph = await ProvenanceGraph.load(state.projectPath)
+      const sub = graph.getUpstreamCone(rootIds, maxDepth)
+      return { success: true, nodes: sub.nodes, edges: sub.edges }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // ─── Audit (RFC: docs/spec/trust-audit.md) ─────────────────────────────
+  // Per-window AbortController so audit:cancel can interrupt the active run.
+  const auditAborters = new WeakMap<BrowserWindow, AbortController>()
+
+  handleWindow('audit:cancel', ({ win }) => {
+    const ctrl = auditAborters.get(win)
+    if (ctrl && !ctrl.signal.aborted) {
+      ctrl.abort()
+      return { success: true }
+    }
+    return { success: false, error: 'no active audit' }
+  })
+
+  handleWindow('audit:run', async ({ win, state }, request: AuditRequest) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    if (!request?.scope || !Array.isArray(request.scope.rootNodeIds) || request.scope.rootNodeIds.length === 0) {
+      return { success: false, error: 'Invalid audit request: scope.rootNodeIds is required.' }
+    }
+
+    // Coordinator provider (e.g. 'anthropic' / 'openai' / 'anthropic-sub') drives
+    // the auditor model selection in lib/audit. Default to the active model's
+    // provider; fall back to anthropic if nothing's set yet.
+    const currentModel = state.currentModel || ''
+    const coordinatorProvider = (currentModel.split(':')[0] || 'anthropic') as
+      'anthropic' | 'anthropic-sub' | 'openai' | 'openai-codex' | 'google'
+
+    // Auth: reuse the same resolver pattern as the chat coordinator.
+    const resolvedAuth = resolveCoordinatorAuth(currentModel)
+    const getApiKey = async (_provider: string) => {
+      if (resolvedAuth.authMode === 'subscription' && resolvedAuth.piProvider === 'anthropic-sub') {
+        const creds = loadAnthropicSubCredentials()
+        if (!creds) throw new Error('Claude subscription credentials not found.')
+        return creds.access
+      }
+      if (resolvedAuth.authMode === 'subscription') {
+        const creds = loadCodexCredentials()
+        if (!creds) throw new Error('ChatGPT subscription credentials not found.')
+        return creds.access
+      }
+      return resolvedAuth.apiKey ?? ''
+    }
+
+    const aborter = new AbortController()
+    auditAborters.set(win, aborter)
+    try {
+      const report = await runAudit(request, {
+        projectPath: state.projectPath,
+        coordinatorProvider,
+        getApiKey,
+        debug: false,
+        abortSignal: aborter.signal,
+        onEvent: (ev: AuditEvent) => safeSend(win, 'audit:event', ev)
+      })
+      return { success: true, report }
+    } catch (err: any) {
+      const msg = err?.message ?? String(err)
+      safeSend(win, 'audit:event', { type: 'error', message: msg })
+      return { success: false, error: msg }
+    } finally {
+      auditAborters.delete(win)
+    }
+  })
+
+  handleWindow('audit:list', async ({ state }) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      const reports = await listAuditReports(state.projectPath)
+      return { success: true, reports }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  handleWindow('audit:get', async ({ state }, auditId: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      const report = await readAuditReport(state.projectPath, auditId)
+      if (!report) return { success: false, error: `Audit report not found: ${auditId}` }
+      return { success: true, report }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  handleWindow('audit:resolve-finding', async ({ state }, auditId: string, findingId: string, resolution: 'open' | 'resolved' | 'dismissed', reason?: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      await setFindingResolution(state.projectPath, auditId, findingId, resolution, reason)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
 
   // Compute environment probe (called eagerly by renderer on mount)
   handleWindow('compute:probe-environment', async ({ win }) => {

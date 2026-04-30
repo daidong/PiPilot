@@ -100,6 +100,18 @@ export interface ElectronAPI {
 
   // Compute (gated behind ENABLE_LOCAL_COMPUTE=1)
   isComputeEnabled: () => boolean
+
+  // Provenance / Audit (gated behind ENABLE_PROVENANCE=1; RFC: docs/spec/trust-audit.md)
+  isProvenanceEnabled: () => Promise<{ enabled: boolean }>
+  provenanceGetGraph: () => Promise<{ success: boolean; nodes?: any[]; edges?: any[]; nodeCount?: number; edgeCount?: number; error?: string }>
+  provenanceGetUpstream: (rootIds: string[], maxDepth?: number) => Promise<{ success: boolean; nodes?: any[]; edges?: any[]; error?: string }>
+
+  auditRun: (request: any) => Promise<{ success: boolean; report?: any; error?: string }>
+  auditCancel: () => Promise<{ success: boolean; error?: string }>
+  auditList: () => Promise<{ success: boolean; reports?: any[]; error?: string }>
+  auditGet: (auditId: string) => Promise<{ success: boolean; report?: any; error?: string }>
+  auditResolveFinding: (auditId: string, findingId: string, resolution: 'open' | 'resolved' | 'dismissed', reason?: string) => Promise<{ success: boolean; error?: string }>
+  onAuditEvent: (cb: (event: any) => void) => () => void
   probeComputeEnvironment: () => Promise<any>
   onComputeRunUpdate: (cb: (event: any) => void) => () => void
   onComputeRunComplete: (cb: (event: any) => void) => () => void
@@ -314,6 +326,21 @@ const api: ElectronAPI = {
   },
 
   isComputeEnabled: () => process.env.ENABLE_LOCAL_COMPUTE === '1',
+
+  // Provenance / Audit
+  isProvenanceEnabled: () => ipcRenderer.invoke('provenance:enabled'),
+  provenanceGetGraph: () => ipcRenderer.invoke('provenance:get-graph'),
+  provenanceGetUpstream: (rootIds, maxDepth) => ipcRenderer.invoke('provenance:get-upstream', rootIds, maxDepth),
+  auditRun: (request) => ipcRenderer.invoke('audit:run', request),
+  auditCancel: () => ipcRenderer.invoke('audit:cancel'),
+  auditList: () => ipcRenderer.invoke('audit:list'),
+  auditGet: (auditId) => ipcRenderer.invoke('audit:get', auditId),
+  auditResolveFinding: (auditId, findingId, resolution, reason) => ipcRenderer.invoke('audit:resolve-finding', auditId, findingId, resolution, reason),
+  onAuditEvent: (cb) => {
+    const handler = (_: any, event: any) => cb(event)
+    ipcRenderer.on('audit:event', handler)
+    return () => ipcRenderer.removeListener('audit:event', handler)
+  },
 
   probeComputeEnvironment: () => ipcRenderer.invoke('compute:probe-environment'),
 
