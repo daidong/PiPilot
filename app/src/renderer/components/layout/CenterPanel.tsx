@@ -1,5 +1,5 @@
 import React from 'react'
-import { MessageSquare, BookOpen, Cpu } from 'lucide-react'
+import { MessageSquare, BookOpen, Cpu, ShieldCheck } from 'lucide-react'
 import { useUIStore, type CenterView } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { useEntityStore } from '../../stores/entity-store'
@@ -9,6 +9,7 @@ import { ChatMessages } from '../center/ChatMessages'
 import { ChatInput } from '../center/ChatInput'
 import { LiteratureView } from '../center/LiteratureView'
 import { ComputeView } from '../center/ComputeView'
+import { AuditView } from '../center/AuditView'
 import { EntityPreviewPanel } from './EntityPreviewPanel'
 
 const api = (window as any).api
@@ -17,7 +18,12 @@ const computeEnabled = api?.isComputeEnabled?.() ?? false
 const viewTabs: { key: CenterView; label: string; icon: React.ElementType; shortcut: string }[] = [
   { key: 'chat', label: 'Chat', icon: MessageSquare, shortcut: '⌘1' },
   { key: 'literature', label: 'Literature', icon: BookOpen, shortcut: '⌘2' },
-  ...(computeEnabled ? [{ key: 'compute' as CenterView, label: 'Compute', icon: Cpu, shortcut: '⌘3' }] : [])
+  ...(computeEnabled
+    ? [
+        { key: 'compute' as CenterView, label: 'Compute', icon: Cpu, shortcut: '⌘3' },
+        { key: 'audit' as CenterView, label: 'Audit', icon: ShieldCheck, shortcut: '⌘4' }
+      ]
+    : [{ key: 'audit' as CenterView, label: 'Audit', icon: ShieldCheck, shortcut: '⌘3' }])
 ]
 
 function ViewSwitcher() {
@@ -183,6 +189,16 @@ export function CenterPanel() {
       >
         <ViewSwitcher />
         <ComputeView />
+      </main>
+
+      {/* Audit view — always mounted; React Flow keeps zoom/selection state. */}
+      <main
+        id={centerView === 'audit' ? 'main-content' : undefined}
+        hidden={centerView !== 'audit'}
+        className="flex-1 flex flex-col min-w-0"
+      >
+        <ViewSwitcher />
+        <AuditView />
       </main>
     </>
   )

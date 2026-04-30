@@ -627,6 +627,7 @@ export default function App() {
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
   const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
+  const centerView = useUIStore((s) => s.centerView)
   const previewEntity = useUIStore((s) => s.previewEntity)
   const previewEditorFocused = useUIStore((s) => s.previewEditorFocused)
   const terminalVisible = useUIStore((s) => s.terminalVisible)
@@ -950,7 +951,7 @@ export default function App() {
         {/* Draggable title bar */}
         <div className="drag-region fixed top-0 left-0 right-0 h-8 z-50" />
 
-        {/* Main content area */}
+        {/* Main content area. */}
         <div className="flex flex-1 min-h-0">
           {!leftCollapsed && (
             <LeftSidebar onOpenSettings={() => setSettingsOpen(true)} />

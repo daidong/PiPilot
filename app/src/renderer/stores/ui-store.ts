@@ -6,7 +6,7 @@ import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 
 import { getInitialTheme, persistTheme, applyThemeClass, type Theme } from '../theme-boot'
 type LeftTab = 'library' | 'files' | 'skills'
-type CenterView = 'chat' | 'literature' | 'compute'
+type CenterView = 'chat' | 'literature' | 'compute' | 'audit'
 export type { LeftTab, CenterView }
 export type { ReasoningEffort }
 
@@ -84,6 +84,13 @@ interface UIState {
   setWikiReaderSlug: (slug: string | null) => void
   wikiReaderBack: () => void
 
+  // Audit tab — selection trail (entity ids). The last id is the current
+  // selection; earlier entries are breadcrumb crumbs you can jump back to.
+  // Lives here (not in audit-store) because both the left rail and the
+  // center pane read/write it.
+  auditTrail: string[]
+  setAuditTrail: (trail: string[]) => void
+
   setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
@@ -152,6 +159,8 @@ export const useUIStore = create<UIState>((set) => ({
   },
   wikiReaderSlug: null,
   wikiReaderHistory: [],
+  auditTrail: [],
+  setAuditTrail: (auditTrail) => set({ auditTrail }),
   setWikiReaderSlug: (slug) => set((s) => ({
     wikiReaderHistory: s.wikiReaderSlug ? [...s.wikiReaderHistory, s.wikiReaderSlug] : s.wikiReaderHistory,
     wikiReaderSlug: slug,
@@ -255,7 +264,8 @@ export const useUIStore = create<UIState>((set) => ({
       leftSidebarWidth: readLeftWidth(),
       literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null },
       wikiReaderSlug: null,
-      wikiReaderHistory: []
+      wikiReaderHistory: [],
+      auditTrail: []
     }),
   // Opening a preview routes the user to chat view — the drawer is mounted
   // inside the chat-body host, so it only renders there. Researchers expect

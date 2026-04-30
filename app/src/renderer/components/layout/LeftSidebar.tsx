@@ -5,6 +5,7 @@ import { useChatStore } from '../../stores/chat-store'
 import { EntityTabs } from '../left/EntityTabs'
 import { LiteratureSidebar } from '../left/LiteratureSidebar'
 import { ComputeSidebar } from '../left/ComputeSidebar'
+import { AuditSidebar } from '../left/AuditSidebar'
 import { UserProfile } from '../left/UserProfile'
 import { ModelSelector } from '../left/ModelSelector'
 import { ReasoningToggle } from '../left/ReasoningToggle'
@@ -218,7 +219,8 @@ export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) 
           const computeEnabled = !!(window as any).api?.isComputeEnabled?.()
           const showLit = centerView === 'literature'
           const showCompute = centerView === 'compute' && computeEnabled
-          const showEntity = !showLit && !showCompute
+          const showAudit = centerView === 'audit'
+          const showEntity = !showLit && !showCompute && !showAudit
           return (
             <>
               <div className={`h-full ${showLit ? '' : 'hidden'}`} aria-hidden={!showLit} inert={!showLit}>
@@ -229,6 +231,9 @@ export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) 
                   <ComputeSidebar />
                 </div>
               )}
+              <div className={`h-full ${showAudit ? '' : 'hidden'}`} aria-hidden={!showAudit} inert={!showAudit}>
+                <AuditSidebar />
+              </div>
               <div className={`h-full ${showEntity ? '' : 'hidden'}`} aria-hidden={!showEntity} inert={!showEntity}>
                 <EntityTabs />
               </div>
