@@ -128,6 +128,14 @@ export interface ReviewRequest {
 export interface ImageGenOptions {
   /** Overrides the provider's configured quality for this single call. */
   quality?: Quality
+  /**
+   * Overrides the provider's configured `size` for this single call.
+   * Lets image-to-image edits track the source PNG's aspect — without
+   * this, OpenAI re-renders to whatever size the provider was created
+   * with and squishes the source. Format mirrors the provider's expected
+   * size string (e.g. '1024x1024', '1536x1024', '1024x1536', 'auto').
+   */
+  size?: string
 }
 
 export interface ImageProvider {

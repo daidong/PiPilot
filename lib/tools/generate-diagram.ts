@@ -82,6 +82,97 @@ function sanitizeAspect(value: unknown): Aspect {
   return (VALID_ASPECTS as string[]).includes(v) ? (v as Aspect) : 'auto'
 }
 
+/**
+ * Resolve `aspect: 'auto'` against the doc_type when the agent did not
+ * commit to an orientation. Slides and similar single-screen formats
+ * almost always want landscape — leaving `auto` lets gpt-image-2
+ * conservatively pick square, which then renders the figure inside
+ * thick whitespace borders when embedded into a 16:9 deck. Other
+ * doc_types stay 'auto' so the model can still respond to prompt
+ * content (CONSORT/PRISMA flows tend to be portrait, etc.).
+ */
+function resolveAspectForDocType(aspect: Aspect, docType: DocType): Aspect {
+  if (aspect !== 'auto') return aspect
+  if (docType === 'presentation') return 'landscape'
+  return 'auto'
+}
+
+/**
+ * Decode a PNG's intrinsic dimensions from its IHDR chunk so we can
+ * pick an edit-call `size` that matches the source. Avoids pulling in
+ * sharp/imagesize as a dependency: PNG always begins with the 8-byte
+ * signature followed by the IHDR chunk where width/height live at byte
+ * offsets 16-19 and 20-23 respectively (big-endian uint32). Returns
+ * null when the buffer does not look like a PNG (e.g. SVG bytes from
+ * the chat-model fallback).
+ */
+function readPngDimensions(bytes: Buffer): { width: number; height: number } | null {
+  if (bytes.length < 24) return null
+  if (
+    bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e ||
+    bytes[3] !== 0x47 || bytes[4] !== 0x0d || bytes[5] !== 0x0a ||
+    bytes[6] !== 0x1a || bytes[7] !== 0x0a
+  ) {
+    return null
+  }
+  const width = bytes.readUInt32BE(16)
+  const height = bytes.readUInt32BE(20)
+  if (width <= 0 || height <= 0) return null
+  return { width, height }
+}
+
+/**
+ * Map an arbitrary width/height ratio onto one of the three canonical
+ * gpt-image-2 sizes. Thresholds are chosen so the canonical sizes are
+ * each picked when the source is "clearly" that orientation:
+ *   ratio ≥ 1.20 → landscape (3:2)
+ *   ratio ≤ 0.83 → portrait  (2:3)
+ *   otherwise    → square    (1:1)
+ * Edits to a 1:1 source therefore stay 1:1, edits to a 3:2 source stay
+ * landscape, etc. — eliminating the "OpenAI re-rendered to the original
+ * provider size and squashed my image" failure mode.
+ */
+function sizeForPng(width: number, height: number): string {
+  const ratio = width / height
+  if (ratio >= 1.2) return '1536x1024'
+  if (ratio <= 1 / 1.2) return '1024x1536'
+  return '1024x1024'
+}
+
+/**
+ * Canvas hint for the composer. Returns null when size === 'auto' (no
+ * hint to give — telling the model "it's auto" adds nothing).
+ */
+function canvasFromSize(sizeStr: string): {
+  width: number
+  height: number
+  orientation: 'landscape' | 'portrait' | 'square'
+  ratioLabel: string
+} | null {
+  const m = /^(\d+)x(\d+)$/i.exec(sizeStr.trim())
+  if (!m) return null
+  const width = Number(m[1])
+  const height = Number(m[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  const ratio = width / height
+  const orientation: 'landscape' | 'portrait' | 'square' =
+    ratio > 1.05 ? 'landscape' : ratio < 0.95 ? 'portrait' : 'square'
+  // Reduce to a small integer ratio — for the three canonical sizes
+  // this is exactly 3:2, 2:3, 1:1; for arbitrary inputs we round to
+  // tenths so the label stays readable.
+  const ratioLabel = orientation === 'square'
+    ? '1:1'
+    : orientation === 'landscape'
+      ? '3:2'
+      : '2:3'
+  // Override the ratio label when the actual numbers don't reduce to
+  // 3:2 / 2:3 — keeps the hint accurate for any future canonical sizes.
+  const exact3to2 = (width === 1536 && height === 1024) || (width === 1024 && height === 1536)
+  const exact1to1 = width === height
+  const finalLabel = exact3to2 || exact1to1 ? ratioLabel : `${ratio.toFixed(2)}:1`
+  return { width, height, orientation, ratioLabel: finalLabel }
+}
+
 // Output format handling.
 // Agents carry the user's "I want SVG" / "I want PNG" intent into the tool
 // via TWO redundant channels:
@@ -390,7 +481,10 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const docType = sanitizeDocType(params.doc_type)
       const diagramType = sanitizeDiagramType(params.diagram_type, userPrompt)
       const iterations = sanitizeIterations(params.iterations)
-      const aspect = sanitizeAspect(params.aspect)
+      const requestedAspect = sanitizeAspect(params.aspect)
+      // doc_type override only fires when the agent passed `auto`; an
+      // explicit aspect from the agent always wins.
+      const aspect = resolveAspectForDocType(requestedAspect, docType)
       const explicitQuality = sanitizeQuality(params.quality)
       const defaultQuality = defaultQualityForDocType(docType)
       const initialQuality: Quality = explicitQuality ?? defaultQuality
@@ -566,6 +660,23 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       // higher tier would amplify a fundamentally wrong draft.
       let currentQuality: Quality = initialQuality
 
+      // Base canvas for fresh text-to-image calls — derived from the
+      // resolved aspect (which already folds in the doc_type override).
+      const baseSize = aspectToSize(aspect)
+      const baseCanvas = canvasFromSize(baseSize)
+
+      // For image-to-image edits we prefer to track the SOURCE PNG's
+      // aspect rather than re-asserting `baseSize`. Otherwise gpt-image-2
+      // re-renders the source to the configured size and squashes/pads
+      // the figure, regressing aspects that were already correct in the
+      // previous iteration.
+      const editSizeForSource = (source: Buffer): { size: string; canvas: ReturnType<typeof canvasFromSize> } => {
+        const dims = readPngDimensions(source)
+        if (!dims) return { size: baseSize, canvas: baseCanvas }
+        const matched = sizeForPng(dims.width, dims.height)
+        return { size: matched, canvas: canvasFromSize(matched) }
+      }
+
       for (let i = 1; i <= iterations; i++) {
         // Pick generation strategy.
         const canEdit = !!providers.image.imageToImage && providers.image.capabilities.has('image_to_image')
@@ -587,11 +698,16 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
           //     to lift only the visual idiom.
           //   no reference — ordinary text-to-image.
           if (referenceBytes && referenceMode === 'style_only' && canEdit) {
-            promptForThisIter = composeStyleOnlyPrompt(userPrompt, diagramType, promptFormat)
+            // Style-only redraws the subject from scratch — keep the
+            // base canvas (the reference is a style board, not a layout
+            // anchor; the new diagram should fit the requested aspect).
+            promptForThisIter = composeStyleOnlyPrompt(
+              userPrompt, diagramType, promptFormat, undefined, baseCanvas ?? undefined,
+            )
             image = await providers.image.imageToImage!(
               promptForThisIter,
               referenceBytes,
-              { quality: currentQuality }
+              { quality: currentQuality, size: baseSize }
             )
             usedEdit = true
           } else if (referenceBytes && referenceMode === 'revise_layout' && canEdit) {
@@ -602,31 +718,50 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
             // else" framing. We deliberately skip the full design guide
             // here — re-teaching principles during a surgical edit
             // invites drift on elements that were intentionally left
-            // alone (see the 2026-04 CASCADE overview case).
+            // alone (see the 2026-04 CASCADE overview case). The
+            // edit `size` follows the reference image's aspect so the
+            // surgical edit doesn't silently change orientation.
+            const refEdit = editSizeForSource(referenceBytes)
             promptForThisIter = composeSurgicalRevisionPrompt(userPrompt, diagramType)
             image = await providers.image.imageToImage!(
               promptForThisIter,
               referenceBytes,
-              { quality: currentQuality }
+              { quality: currentQuality, size: refEdit.size }
             )
             usedEdit = true
           } else {
-            promptForThisIter = composeGenerationPrompt(userPrompt, diagramType, promptFormat)
-            image = await providers.image.textToImage(promptForThisIter, { quality: currentQuality })
+            promptForThisIter = composeGenerationPrompt(
+              userPrompt, diagramType, promptFormat, undefined, baseCanvas ?? undefined,
+            )
+            image = await providers.image.textToImage(
+              promptForThisIter, { quality: currentQuality, size: baseSize }
+            )
           }
         } else if (lastReview?.verdict === 'needs_edit' && prevImage && canEdit) {
           currentQuality = bumpedQuality(currentQuality)
+          // Edit size and canvas hint follow the previous image's
+          // intrinsic dimensions — see editSizeForSource above.
+          const editPick = editSizeForSource(prevImage)
           promptForThisIter = composeEditPrompt(
             userPrompt,
             diagramType,
             lastReview.blockingIssues,
-            fixedSoFar
+            fixedSoFar,
+            undefined,
+            editPick.canvas ?? undefined,
           )
-          image = await providers.image.imageToImage!(promptForThisIter, prevImage, { quality: currentQuality })
+          image = await providers.image.imageToImage!(
+            promptForThisIter, prevImage, { quality: currentQuality, size: editPick.size }
+          )
           usedEdit = true
         } else {
-          promptForThisIter = composeRegenPrompt(userPrompt, diagramType, lastReview?.blockingIssues ?? [], promptFormat)
-          image = await providers.image.textToImage(promptForThisIter, { quality: currentQuality })
+          promptForThisIter = composeRegenPrompt(
+            userPrompt, diagramType, lastReview?.blockingIssues ?? [], promptFormat,
+            undefined, baseCanvas ?? undefined,
+          )
+          image = await providers.image.textToImage(
+            promptForThisIter, { quality: currentQuality, size: baseSize }
+          )
         }
 
         const iterPath = path.join(outDir, `${baseName}_v${i}${extension}`)
@@ -784,6 +919,11 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         docType,
         diagramType,
         aspect,
+        // Audit trail: when doc_type promoted 'auto' (e.g. presentation
+        // → landscape), record both the agent's request and the resolved
+        // value so diffs across runs are debuggable.
+        aspectRequested: requestedAspect,
+        baseSize,
         format: {
           requested: formatPref,
           effectiveFromParams: effectiveFormat,

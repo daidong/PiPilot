@@ -40,6 +40,36 @@ import {
  */
 export type PromptFormat = 'svg' | 'raster'
 
+/**
+ * Explicit canvas hint threaded into every brief. gpt-image-2 only
+ * supports a small set of canonical sizes; without this block the model
+ * routinely centred a near-square figure inside a wider canvas, leaving
+ * thick whitespace borders and giving the impression that the aspect
+ * ratio "was wrong". Telling the model the exact pixel dimensions and
+ * orientation moves the figure to fill the canvas.
+ *
+ * Pass undefined to skip the block entirely (e.g. surgical edits where
+ * the canvas is already pinned by the source SVG/PNG).
+ */
+export interface CanvasHint {
+  width: number
+  height: number
+  /** "landscape" | "portrait" | "square" — used in the natural-language nudge. */
+  orientation: 'landscape' | 'portrait' | 'square'
+  /** Display ratio like "3:2", "2:3", "1:1". */
+  ratioLabel: string
+}
+
+function buildCanvasBlock(canvas: CanvasHint): string {
+  return [
+    `【CANVAS】 ${canvas.width}×${canvas.height} px (${canvas.orientation}, ${canvas.ratioLabel}). ` +
+    `Compose so the figure fills the entire canvas — extend boxes, arrows, and labels ` +
+    `to use the available width and height. Do NOT draw a small square figure centred ` +
+    `inside whitespace borders, and do NOT reproduce a different aspect ratio inside ` +
+    `the frame.`,
+  ].join('\n')
+}
+
 // ─── Diagram-type specific key details ───────────────────────────────────────
 
 const DIAGRAM_TYPE_DETAILS: Record<Exclude<DiagramType, 'auto'>, string> = {
@@ -149,6 +179,12 @@ interface BriefSections {
    */
   format?: PromptFormat
   /**
+   * Canvas dimensions for the rendered output. When set, prepended to
+   * the brief so the model fills the canvas instead of embedding a
+   * smaller composition with whitespace borders.
+   */
+  canvas?: CanvasHint
+  /**
    * Surgical-edit paths set this true. The edit brief already tells
    * the model "apply ONLY the listed fixes, preserve everything else"
    * — re-teaching global design principles on top would invite the
@@ -164,6 +200,9 @@ function buildBrief(s: BriefSections): string {
 
   lines.push(`【SCENE / USE】 ${s.sceneUse}`)
   lines.push(`【SUBJECT】 ${s.subject}`)
+  if (s.canvas) {
+    lines.push(buildCanvasBlock(s.canvas))
+  }
   if (includeGuide) {
     lines.push('')
     lines.push(DESIGN_PRINCIPLES)
@@ -227,7 +266,8 @@ export function composeGenerationPrompt(
   userPrompt: string,
   diagramType: DiagramType,
   format?: PromptFormat,
-  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE
+  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE,
+  canvas?: CanvasHint
 ): string {
   const dt = resolveDiagramType(diagramType)
   const rendered = renderProfile(profile)
@@ -243,6 +283,7 @@ export function composeGenerationPrompt(
     mustKeep: literals,
     avoid: buildAvoid(profile),
     format,
+    canvas,
   })
 }
 
@@ -251,7 +292,8 @@ export function composeEditPrompt(
   diagramType: DiagramType,
   issues: BlockingIssue[],
   preservedFixes: BlockingIssue[] = [],
-  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE
+  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE,
+  canvas?: CanvasHint
 ): string {
   const dt = resolveDiagramType(diagramType)
   const rendered = renderProfile(profile)
@@ -304,6 +346,7 @@ export function composeEditPrompt(
     // global design principles here would invite the model to "improve"
     // elements that were intentionally left alone. Suppress the guide.
     skipDesignGuide: true,
+    canvas,
   })
 }
 
@@ -312,9 +355,10 @@ export function composeRegenPrompt(
   diagramType: DiagramType,
   issues: BlockingIssue[],
   format?: PromptFormat,
-  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE
+  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE,
+  canvas?: CanvasHint
 ): string {
-  const base = composeGenerationPrompt(userPrompt, diagramType, format, profile)
+  const base = composeGenerationPrompt(userPrompt, diagramType, format, profile, canvas)
   if (issues.length === 0) return base
   const negatives = issues
     .map((i) => `- ${i.description} (fix: ${i.fix})`)
@@ -332,9 +376,10 @@ export function composeStyleOnlyPrompt(
   userPrompt: string,
   diagramType: DiagramType,
   format?: PromptFormat,
-  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE
+  profile: HouseStyleProfile = DEFAULT_HOUSE_PROFILE,
+  canvas?: CanvasHint
 ): string {
-  const base = composeGenerationPrompt(userPrompt, diagramType, format, profile)
+  const base = composeGenerationPrompt(userPrompt, diagramType, format, profile, canvas)
   return [
     'The attached image is provided as a STYLE REFERENCE ONLY.',
     'Match its visual idiom — colour palette, line weights, typography, corner radii, arrow style, spacing rhythm.',

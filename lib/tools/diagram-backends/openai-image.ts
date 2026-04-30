@@ -138,6 +138,7 @@ export function createOpenAIImageProvider(
   const capabilities = new Set<ImageCapability>(['text_to_image', 'image_to_image'])
 
   const effectiveQuality = (callOpts?: ImageGenOptions): Quality => callOpts?.quality ?? defaultQuality
+  const effectiveSize = (callOpts?: ImageGenOptions): string => callOpts?.size?.trim() || size
 
   return {
     id: `openai:${model}`,
@@ -149,7 +150,7 @@ export function createOpenAIImageProvider(
       const body = {
         model,
         prompt,
-        size,
+        size: effectiveSize(options),
         n: 1,
         quality: effectiveQuality(options),
       }
@@ -161,7 +162,7 @@ export function createOpenAIImageProvider(
       const response = await postMultipart(
         EDITS_URL,
         apiKey,
-        { model, prompt, size, n: '1', quality: effectiveQuality(options) },
+        { model, prompt, size: effectiveSize(options), n: '1', quality: effectiveQuality(options) },
         { image: { data: image, filename: 'image.png', contentType: 'image/png' } }
       )
       return extractBytes(response)
