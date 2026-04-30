@@ -69,6 +69,11 @@ export async function runAudit(req: AuditRequest, opts: RunAuditOptions): Promis
   const piProvider = provider === 'anthropic-sub' ? 'anthropic' : provider
   const modelId = req.modelOverride ?? getAuditorModel(provider)
   if (!modelId) {
+    // Google has no auditor tier yet (RFC §4.1). Tell the user how to recover
+    // instead of leaving them with a generic "no model available".
+    if (provider === 'google') {
+      throw new Error('No auditor model is configured for Google. Switch the chat model to an Anthropic or OpenAI model before running an audit, or set audit.modelOverride in settings.')
+    }
     throw new Error(`No auditor model available for provider "${provider}". Set audit.modelOverride in settings.`)
   }
   const fullModelId = `${provider}:${modelId}`
@@ -82,7 +87,17 @@ export async function runAudit(req: AuditRequest, opts: RunAuditOptions): Promis
   const subgraph = graph.getUpstreamCone(req.scope.rootNodeIds, req.scope.maxDepth ?? undefined)
   const scopeNodeCount = subgraph.nodes.length
   if (scopeNodeCount === 0) {
-    throw new Error(`Empty audit scope: no nodes reachable from ${req.scope.rootNodeIds.length} root id(s).`)
+    // Common cause: the renderer's projection holds an entity whose newest
+    // raw node id was rewritten or pruned (e.g., graph.jsonl manually edited,
+    // or a different project loaded since the rail was populated). The fix
+    // for the user is to refresh the entity list. Surface that hint.
+    const ids = req.scope.rootNodeIds.slice(0, 3).map(s => s.slice(0, 16)).join(', ')
+    throw new Error(
+      `Empty audit scope — the selected entity does not resolve to any node in the current provenance graph ` +
+      `(rootNodeIds=[${ids}${req.scope.rootNodeIds.length > 3 ? ', …' : ''}]). ` +
+      `Click the ↻ refresh button in the entity rail and try again. If the file was created outside the agent ` +
+      `(e.g. by a bash subprocess), it has no tracked provenance and cannot be audited from a workspace-only entity.`
+    )
   }
   const scopeSummary = buildScopeSummary(subgraph.nodes)
 

@@ -841,14 +841,23 @@ function RunHeader({
       : 0
     const m = Math.floor(elapsed / 60), s = elapsed % 60
     const elapsedStr = m > 0 ? `${m}m ${s}s` : `${s}s`
+    // When the run errored out (run.error set, run.running=false) the header
+    // becomes an error card, not a live-status indicator. Pulse animation off,
+    // message is full-width, hint about where to look. Previous design tucked
+    // the error into a small "· {msg}" snippet that was easy to miss when the
+    // user's eyes were on pane A.
+    const errored = !!run.error && !run.running
     return (
-      <div className="px-5 pt-3 pb-3 border-b t-border t-bg-surface">
+      <div className={`px-5 pt-3 pb-3 border-b t-border ${errored ? 'bg-[var(--color-status-error)]/8' : 't-bg-surface'}`}>
         <div className="flex items-baseline gap-2">
-          <PulseDot />
-          <span className="text-[12px] tracking-wider uppercase t-text-accent">Live audit</span>
-          {run.error && (
-            <span className="text-[11px] t-text-error">· {run.error}</span>
+          {errored ? (
+            <span aria-hidden="true" className="inline-block w-1.5 h-1.5 rounded-full t-bg-error" />
+          ) : (
+            <PulseDot />
           )}
+          <span className={`text-[12px] tracking-wider uppercase ${errored ? 't-text-error' : 't-text-accent'}`}>
+            {errored ? 'Audit failed' : 'Live audit'}
+          </span>
           {run.running && (
             <button onClick={onCancel}
                     className="ml-auto text-[10px] tracking-wider uppercase t-text-error hover:underline">
@@ -856,17 +865,23 @@ function RunHeader({
             </button>
           )}
         </div>
-        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0 text-[10px] tabular-nums t-text-muted">
-          <span className="font-mono t-text-secondary">{run.model ?? '?'}</span>
-          <span>·</span>
-          <span>{run.scopeNodeCount} nodes</span>
-          <span>·</span>
-          <span>{elapsedStr}</span>
-          <span>·</span>
-          <span>{run.toolTurnCount} turns</span>
-          <span>·</span>
-          <span>{run.liveFindings.length} findings</span>
-        </div>
+        {errored ? (
+          <div className="mt-2 text-[12px] leading-relaxed t-text-error break-words">
+            {run.error}
+          </div>
+        ) : (
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0 text-[10px] tabular-nums t-text-muted">
+            <span className="font-mono t-text-secondary">{run.model ?? '?'}</span>
+            <span>·</span>
+            <span>{run.scopeNodeCount} nodes</span>
+            <span>·</span>
+            <span>{elapsedStr}</span>
+            <span>·</span>
+            <span>{run.toolTurnCount} turns</span>
+            <span>·</span>
+            <span>{run.liveFindings.length} findings</span>
+          </div>
+        )}
       </div>
     )
   }
