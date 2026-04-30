@@ -48,7 +48,16 @@ export const PATHS = {
   skillsConfig: '.research-pilot/skills-config.json',
 
   // Local compute runs
-  computeRuns: '.research-pilot/compute-runs'
+  computeRuns: '.research-pilot/compute-runs',
+
+  // Trust & Audit (RFC: docs/spec/trust-audit.md)
+  // Provenance graph is an *index*; content lives in fit-for-purpose stores.
+  provenanceRoot: '.research-pilot/provenance',
+  provenanceGraph: '.research-pilot/provenance/graph.jsonl',
+  provenanceParams: '.research-pilot/provenance/params',
+  provenanceBlobs: '.research-pilot/provenance/blobs',
+  // Audit reports — quarantined; only the Audit tab reads this store.
+  auditReports: '.research-pilot/audit-reports'
 } as const
 
 // ============================================================================

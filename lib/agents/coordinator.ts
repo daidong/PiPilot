@@ -29,6 +29,8 @@ import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS } from '../models.js'
+import { CaptureContext, defaultAdapters } from '../provenance/index.js'
+import type { NodeRef } from '../provenance/index.js'
 import {
   migrateLegacyArtifacts,
   findArtifactById,
@@ -306,6 +308,41 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   const migration = migrateLegacyArtifacts(projectPath)
   if (debug && migration.updatedFiles > 0) {
     console.log(`[Coordinator] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
+  }
+
+  // Provenance capture (RFC: docs/spec/trust-audit.md). Off by default; opt in
+  // via ENABLE_PROVENANCE=1 until Phase 1 stabilizes.
+  let provenance: CaptureContext | null = null
+  /** Turn-scoped @-mention refs — set in chat() at the start of each user
+   *  message, consumed by beforeToolCall, cleared at end of chat(). */
+  let currentTurnMentions: NodeRef[] = []
+  if (process.env.ENABLE_PROVENANCE === '1') {
+    try {
+      provenance = await CaptureContext.load(projectPath, defaultAdapters)
+      if (debug) {
+        console.log(`[Provenance] loaded graph: nodes=${provenance.graph.nodeCount()}, edges=${provenance.graph.edgeCount()}`)
+      }
+    } catch (err) {
+      console.warn('[Provenance] failed to load graph; capture disabled for this session:', err)
+      provenance = null
+    }
+  }
+
+  /** Convert resolved @-mentions to provenance NodeRefs. URL mentions skipped
+   *  (transient); file/note/paper/data become typed refs. */
+  function mentionsToNodeRefs(mentions: ResolvedMention[] | undefined): NodeRef[] {
+    if (!mentions?.length) return []
+    const out: NodeRef[] = []
+    for (const m of mentions) {
+      const t = m.ref.type
+      if ((t === 'note' || t === 'paper' || t === 'data') && m.entityId) {
+        out.push({ kind: 'memory-artifact', artifactType: t, artifactId: m.entityId })
+      } else if (t === 'file') {
+        out.push({ kind: 'workspace-file', path: m.ref.key })
+      }
+      // 'url' intentionally skipped — too noisy and not stable
+    }
+    return out
   }
 
   // Resolve pi-mono model
@@ -614,6 +651,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       if (debug) {
         console.log(`  [Tool] ${ctx.toolCall.name}(${JSON.stringify(ctx.args).slice(0, 120)}...)`)
       }
+      // Provenance: stash args/turn keyed by toolCallId; afterToolCall consumes.
+      if (provenance) {
+        provenance.markStart(ctx.toolCall.id, {
+          name: ctx.toolCall.name,
+          args: ctx.args as Record<string, unknown>,
+          turn: { sessionId, turnIndex: turnCount, model: modelId ?? '' },
+          citedFromTurn: currentTurnMentions
+        })
+      }
       return undefined
     },
     afterToolCall: async (ctx) => {
@@ -624,6 +670,22 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const result = ctx.result as any
         if (args?.name && result?.success !== false) {
           onSkillLoaded(args.name)
+        }
+      }
+      // Provenance: best-effort capture — never break the agent on failure.
+      if (provenance) {
+        const start = provenance.takeStart(ctx.toolCall.id)
+        if (start) {
+          try {
+            await provenance.recordToolCall(
+              ctx.toolCall.id,
+              start.args,
+              ctx.result,
+              { name: start.name, turn: start.turn, isError: ctx.isError, citedFromTurn: start.citedFromTurn }
+            )
+          } catch (err) {
+            if (debug) console.warn(`[Provenance] capture failed for ${ctx.toolCall.name}:`, err)
+          }
         }
       }
       return undefined
@@ -741,6 +803,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     async chat(message: string, mentions?: ResolvedMention[], images?: Array<{ base64: string; mimeType: string }>) {
       try {
+        // Provenance: capture turn-scoped @-mention refs so that every tool
+        // call this turn picks them up as `cited` edges (RFC §3.5).
+        currentTurnMentions = mentionsToNodeRefs(mentions)
+
         // --- Intent detection (rule-based only, for explain snapshots) ---
         const intents = detectIntentsByRules(message)
 
@@ -968,6 +1034,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           console.log(`[Chat] Exception: ${errorMsg}`)
         }
         return { success: false, error: errorMsg }
+      } finally {
+        // Provenance: clear turn-scoped mentions; next chat() will refill.
+        currentTurnMentions = []
       }
     },
 
