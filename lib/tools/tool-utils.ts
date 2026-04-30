@@ -37,6 +37,9 @@ export type ToolErrorCode =
   | 'EXECUTION_FAILED'
   | 'PARSE_FAILED'
   | 'OUTPUT_TOO_LARGE'
+  // Diagram-pipeline specific (generate_diagram tool)
+  | 'SVG_REQUIRES_VISION_MODEL'    // Path B: chat model can't transcribe PNG → SVG
+  | 'SVG_TRANSCRIPTION_FAILED'     // PNG→SVG step failed; PNG anchor still usable
   // Data errors
   | 'NOT_FOUND'
   | 'UNSUPPORTED_FORMAT'
