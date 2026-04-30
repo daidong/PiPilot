@@ -49,27 +49,38 @@ const ANTHROPIC_THRESHOLDS: ThresholdTable = {
 }
 
 const REVIEW_SYSTEM = `You are a rigorous reviewer for scientific publication-grade diagrams.
-Rate on a strict scale — 9+ is reserved for camera-ready figures. Always emit your answer by calling the emit_review tool. Every blocking_issue must describe what is wrong AND a concrete fix another tool can act on.`
+Rate on a strict scale: each dimension is 0-2, the total (sum of five) is 0-10, and a total of 9+ is reserved for camera-ready figures. Always emit your answer by calling the emit_review tool. Every blocking_issue must describe what is wrong AND a concrete fix another tool can act on.`
 
 function buildUserText(req: ReviewRequest, threshold: number): string {
   const houseBlock = req.houseProfileSummary
     ? `\nHOUSE STYLE (figure must belong to this visual system):\n${req.houseProfileSummary}\n`
     : ''
-  const fifthDimension = req.houseProfileSummary
-    ? 'house-style adherence & consistency'
-    : 'professional appearance'
-  return `Evaluate this diagram for "${req.docType}" publication (acceptance threshold: ${threshold}/10).
+  const styleDimension = req.houseProfileSummary
+    ? 'style    — house-style adherence & consistency: matches the supplied palette, typography voice, geometry tokens, and motifs'
+    : 'style    — professional appearance: publication-ready polish'
+  return `Evaluate this diagram for "${req.docType}" publication (acceptance threshold: ${threshold}/10 total).
 
 DIAGRAM TYPE: ${req.diagramType}
 ORIGINAL REQUEST: ${req.prompt}
 ITERATION: ${req.iteration}/${req.maxIterations}
 ${houseBlock}
-Score five dimensions (0-2 each, total 0-10): scientific accuracy, clarity & readability, label quality, layout & composition, ${fifthDimension}.
+Score these five dimensions independently. Each is 0, 1, or 2:
+  0 = absent / wrong
+  1 = present but flawed
+  2 = publication-ready
 
-When scoring dimension 5, compare against the HOUSE STYLE block above — wrong palette roles, wrong corner radius, wrong typography voice, or broken motifs are all style_mismatch blocking issues.
+  accuracy — scientific accuracy: concepts, relationships, notation correct
+  clarity  — clarity & readability: hierarchy, unambiguous at a glance
+  labels   — label quality: complete, legible, consistent
+  layout   — layout & composition: balanced, no overlap, logical flow
+  ${styleDimension}
+
+Then set "score" to the sum of the five dimensions (an integer 0-10).
+
+When scoring "style", compare against the HOUSE STYLE block above (when provided) — wrong palette roles, wrong corner radius, wrong typography voice, or broken motifs are all style_mismatch blocking issues.
 
 Choose verdict:
-  - "acceptable"  if score >= ${threshold} and no blocking_issues
+  - "acceptable"  if score >= ${threshold} and no blockingIssues
   - "needs_edit"  if problems are localised (labels, overlaps, styling) — image-to-image can fix them
   - "needs_regen" if content is wrong or structure is broken — must redraw
 
@@ -82,11 +93,17 @@ const EMIT_REVIEW_TOOL = {
   input_schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['score', 'requestAlignment', 'legibility', 'blockingIssues', 'summary', 'verdict'],
+    required: [
+      'accuracy', 'clarity', 'labels', 'layout', 'style',
+      'score', 'blockingIssues', 'summary', 'verdict',
+    ],
     properties: {
+      accuracy: { type: 'number' },
+      clarity: { type: 'number' },
+      labels: { type: 'number' },
+      layout: { type: 'number' },
+      style: { type: 'number' },
       score: { type: 'number' },
-      requestAlignment: { type: 'number' },
-      legibility: { type: 'number' },
       blockingIssues: {
         type: 'array',
         items: {
@@ -129,6 +146,25 @@ function clampScore(n: unknown): number {
   const v = typeof n === 'number' ? n : Number(n)
   if (Number.isNaN(v)) return 0
   return Math.min(10, Math.max(0, v))
+}
+
+function clampDim(n: unknown): number {
+  const v = typeof n === 'number' ? n : Number(n)
+  if (Number.isNaN(v)) return 0
+  return Math.min(2, Math.max(0, v))
+}
+
+/**
+ * Reconcile the model-supplied total against the sum of five dimensions.
+ * If the model left `score` at 0 (or far from the dimension sum), prefer
+ * the sum — that's the value the prompt told it to compute, and the only
+ * one we can audit field-by-field.
+ */
+function resolveTotal(score: number, dims: number[]): number {
+  const sum = dims.reduce((a, b) => a + b, 0)
+  if (sum === 0) return Math.min(10, Math.max(0, score))
+  if (score === 0 || Math.abs(score - sum) > 0.5) return Math.min(10, Math.max(0, sum))
+  return Math.min(10, Math.max(0, score))
 }
 
 function isOAuthAccessToken(token: string): boolean {
@@ -269,10 +305,18 @@ export function createAnthropicReviewProvider(
     }
 
     const input = toolUse.input
+    const accuracy = clampDim(input.accuracy)
+    const clarity = clampDim(input.clarity)
+    const labels = clampDim(input.labels)
+    const layout = clampDim(input.layout)
+    const style = clampDim(input.style)
     const result: ReviewResult = {
-      score: clampScore(input.score),
-      requestAlignment: clampScore(input.requestAlignment),
-      legibility: clampScore(input.legibility),
+      score: resolveTotal(clampScore(input.score), [accuracy, clarity, labels, layout, style]),
+      accuracy,
+      clarity,
+      labels,
+      layout,
+      style,
       blockingIssues: Array.isArray(input.blockingIssues)
         ? (input.blockingIssues as ReviewResult['blockingIssues'])
         : [],

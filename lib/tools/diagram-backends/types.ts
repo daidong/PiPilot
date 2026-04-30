@@ -79,12 +79,30 @@ export interface BlockingIssue {
  */
 export type Verdict = 'acceptable' | 'needs_edit' | 'needs_regen'
 
+/**
+ * Five dimension breakdown. Each is scored 0-2:
+ *   0 = absent / wrong
+ *   1 = present but flawed
+ *   2 = publication-ready
+ *
+ * `score` is the total (0-10) — kept as a redundant field so the threshold
+ * check stays a single comparison, and so reviewers that prefer to grade
+ * holistically can still set it directly. Downstream code that needs to
+ * route fixes (e.g. "labels are weak → bump label tier") reads the
+ * individual dimensions.
+ */
 export interface ReviewResult {
   score: number
-  /** How well the image matches the user's described intent (0-10). */
-  requestAlignment: number
-  /** Text/label readability (0-10). */
-  legibility: number
+  /** Scientific accuracy — concepts, relationships, notation correct. */
+  accuracy: number
+  /** Clarity & readability — hierarchy, unambiguous at a glance. */
+  clarity: number
+  /** Label quality — complete, legible, consistent. */
+  labels: number
+  /** Layout & composition — balanced, no overlap, logical flow. */
+  layout: number
+  /** House-style adherence (or generic professional appearance when no profile). */
+  style: number
   blockingIssues: BlockingIssue[]
   /** Reviewer's short natural-language summary. */
   summary: string

@@ -34,14 +34,30 @@ const FALLBACK_THRESHOLDS: ThresholdTable = {
   default: 7.7,
 }
 
-const REVIEW_SYSTEM_PROMPT = `You are a rigorous reviewer of SVG scientific diagrams. The SVG source is provided; read it as text to evaluate structure, labels, and layout. Use a strict scale — 9+ is reserved for camera-ready figures.
+const REVIEW_SYSTEM_PROMPT = `You are a rigorous reviewer of SVG scientific diagrams. The SVG source is provided; read it as text to evaluate structure, labels, and layout. Use a strict scale: each dimension is 0-2, the total (sum of five) is 0-10, and a total of 9+ is reserved for camera-ready figures.
+
+Score these five dimensions independently. Each is 0, 1, or 2:
+  0 = absent / wrong
+  1 = present but flawed
+  2 = publication-ready
+
+  accuracy — scientific accuracy: concepts, relationships, notation correct
+  clarity  — clarity & readability: hierarchy, unambiguous at a glance
+  labels   — label quality: complete, legible, consistent
+  layout   — layout & composition: balanced, no overlap, logical flow
+  style    — house-style adherence (or generic professional appearance when no profile is supplied)
+
+Then set "score" to the sum of the five dimensions (an integer 0-10).
 
 Always respond with exactly one JSON object wrapped in \`\`\`json fences. No prose before or after. Schema:
 
 {
-  "score": number,             // 0-10 total
-  "requestAlignment": number,  // 0-10, matches user intent?
-  "legibility": number,        // 0-10, labels readable at intended size?
+  "accuracy": number,   // 0-2
+  "clarity": number,    // 0-2
+  "labels": number,     // 0-2
+  "layout": number,     // 0-2
+  "style": number,      // 0-2
+  "score": number,      // 0-10 (sum of the five dimensions above)
   "blockingIssues": [
     {
       "kind": "wrong_content" | "illegible_text" | "layout_collision" | "missing_element" | "style_mismatch",
@@ -85,6 +101,25 @@ function clampScore(n: unknown): number {
   const v = typeof n === 'number' ? n : Number(n)
   if (Number.isNaN(v)) return 0
   return Math.min(10, Math.max(0, v))
+}
+
+function clampDim(n: unknown): number {
+  const v = typeof n === 'number' ? n : Number(n)
+  if (Number.isNaN(v)) return 0
+  return Math.min(2, Math.max(0, v))
+}
+
+/**
+ * Reconcile the model-supplied total against the sum of five dimensions.
+ * If the model left `score` at 0 (or far from the dimension sum), prefer
+ * the sum — that's the value the prompt told it to compute, and the only
+ * one we can audit field-by-field.
+ */
+function resolveTotal(score: number, dims: number[]): number {
+  const sum = dims.reduce((a, b) => a + b, 0)
+  if (sum === 0) return Math.min(10, Math.max(0, score))
+  if (score === 0 || Math.abs(score - sum) > 0.5) return Math.min(10, Math.max(0, sum))
+  return Math.min(10, Math.max(0, score))
 }
 
 /**
@@ -136,10 +171,16 @@ export function createSvgFallbackReviewProvider(
     if (!parsed) {
       // Conservative stance: no usable structured output → treat as needs_edit
       // with a synthetic issue so the next iteration at least retries.
+      // Synthesize dimension scores just below threshold/5 so the total
+      // sits a hair under acceptance — matches the previous semantics.
+      const perDim = Math.max(0, Math.min(2, (threshold - 0.5) / 5))
       return {
         score: Math.max(0, threshold - 0.5),
-        requestAlignment: Math.max(0, threshold - 0.5),
-        legibility: Math.max(0, threshold - 0.5),
+        accuracy: perDim,
+        clarity: perDim,
+        labels: perDim,
+        layout: perDim,
+        style: perDim,
         blockingIssues: [{
           kind: 'style_mismatch',
           description: 'Reviewer did not return a parseable structured response.',
@@ -150,10 +191,18 @@ export function createSvgFallbackReviewProvider(
       }
     }
 
+    const accuracy = clampDim(parsed.accuracy)
+    const clarity = clampDim(parsed.clarity)
+    const labels = clampDim(parsed.labels)
+    const layout = clampDim(parsed.layout)
+    const style = clampDim(parsed.style)
     return {
-      score: clampScore(parsed.score),
-      requestAlignment: clampScore(parsed.requestAlignment),
-      legibility: clampScore(parsed.legibility),
+      score: resolveTotal(clampScore(parsed.score), [accuracy, clarity, labels, layout, style]),
+      accuracy,
+      clarity,
+      labels,
+      layout,
+      style,
       blockingIssues: Array.isArray(parsed.blockingIssues)
         ? (parsed.blockingIssues as ReviewResult['blockingIssues'])
         : [],

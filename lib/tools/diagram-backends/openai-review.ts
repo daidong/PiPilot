@@ -37,7 +37,7 @@ const OPENAI_THRESHOLDS: ThresholdTable = {
 }
 
 const REVIEW_SYSTEM = `You are a rigorous reviewer for scientific publication-grade diagrams.
-Rate on a strict scale — 9+ is reserved for camera-ready figures. Return only valid JSON matching the schema. Be specific: every blocking_issue must describe exactly what is wrong AND a concrete fix another tool can act on.`
+Rate on a strict scale: each dimension is 0-2, the total (sum of five) is 0-10, and a total of 9+ is reserved for camera-ready figures. Return only valid JSON matching the schema. Be specific: every blocking_issue must describe exactly what is wrong AND a concrete fix another tool can act on.`
 
 function buildUserPrompt(req: ReviewRequest, threshold: number): string {
   const houseBlock = req.houseProfileSummary
@@ -46,29 +46,35 @@ ${req.houseProfileSummary}
 
 `
     : ''
-  const fifthDimension = req.houseProfileSummary
-    ? '5. House-style adherence & consistency — matches the supplied palette, typography voice, geometry tokens, and motifs; feels like a sibling of other figures in the same system'
-    : '5. Professional appearance — publication-ready polish'
-  return `Evaluate this diagram for "${req.docType}" publication (acceptance threshold: ${threshold}/10).
+  const styleDimension = req.houseProfileSummary
+    ? 'style    — house-style adherence & consistency: matches the supplied palette, typography voice, geometry tokens, and motifs; feels like a sibling of other figures in the same system'
+    : 'style    — professional appearance: publication-ready polish'
+  return `Evaluate this diagram for "${req.docType}" publication (acceptance threshold: ${threshold}/10 total).
 
 DIAGRAM TYPE: ${req.diagramType}
 ORIGINAL REQUEST: ${req.prompt}
 ITERATION: ${req.iteration}/${req.maxIterations}
 ${houseBlock}
-Score five dimensions independently (0-2 each, total 0-10):
-  1. Scientific accuracy — concepts, relationships, notation correct
-  2. Clarity & readability — hierarchy, unambiguous at a glance
-  3. Label quality — complete, legible, consistent
-  4. Layout & composition — balanced, no overlap, logical flow
-  ${fifthDimension}
+Score these five dimensions independently. Each is 0, 1, or 2:
+  0 = absent / wrong
+  1 = present but flawed
+  2 = publication-ready
 
-For every issue that blocks acceptance, emit an entry in blocking_issues with:
+  accuracy — scientific accuracy: concepts, relationships, notation correct
+  clarity  — clarity & readability: hierarchy, unambiguous at a glance
+  labels   — label quality: complete, legible, consistent
+  layout   — layout & composition: balanced, no overlap, logical flow
+  ${styleDimension}
+
+Then set "score" to the sum of the five dimensions (an integer 0-10).
+
+For every issue that blocks acceptance, emit an entry in blockingIssues with:
   - kind: wrong_content | illegible_text | layout_collision | missing_element | style_mismatch
   - description: what is wrong (call out house-style deviations under style_mismatch — wrong palette role, wrong corner radius, wrong typography voice, broken motif, etc.)
   - fix: precise instruction to correct it (will be fed to an image editor)
 
 Choose verdict:
-  - "acceptable" if score >= ${threshold} and no blocking_issues
+  - "acceptable" if score >= ${threshold} and no blockingIssues
   - "needs_edit" if problems are localised/cosmetic (labels, overlaps, styling) — image-to-image editing can fix them
   - "needs_regen" if content is wrong or structure is broken — the image must be redrawn`
 
@@ -90,14 +96,40 @@ function clampScore(n: unknown): number {
   return Math.min(10, Math.max(0, v))
 }
 
+function clampDim(n: unknown): number {
+  const v = typeof n === 'number' ? n : Number(n)
+  if (Number.isNaN(v)) return 0
+  return Math.min(2, Math.max(0, v))
+}
+
+/**
+ * Reconcile the model-supplied total against the sum of the five
+ * dimensions. If the model emitted dimensions that disagree with `score`
+ * (typically because it forgot to fill `score` and left it at 0), prefer
+ * the dimension sum — that is the value the prompt told the model to
+ * compute, and the only one we can audit field-by-field.
+ */
+function resolveTotal(score: number, dims: number[]): number {
+  const sum = dims.reduce((a, b) => a + b, 0)
+  if (sum === 0) return Math.min(10, Math.max(0, score))
+  if (score === 0 || Math.abs(score - sum) > 0.5) return Math.min(10, Math.max(0, sum))
+  return Math.min(10, Math.max(0, score))
+}
+
 const RESPONSE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['score', 'requestAlignment', 'legibility', 'blockingIssues', 'summary', 'verdict'],
+  required: [
+    'accuracy', 'clarity', 'labels', 'layout', 'style',
+    'score', 'blockingIssues', 'summary', 'verdict',
+  ],
   properties: {
+    accuracy: { type: 'number' },
+    clarity: { type: 'number' },
+    labels: { type: 'number' },
+    layout: { type: 'number' },
+    style: { type: 'number' },
     score: { type: 'number' },
-    requestAlignment: { type: 'number' },
-    legibility: { type: 'number' },
     blockingIssues: {
       type: 'array',
       items: {
@@ -183,10 +215,18 @@ export function createOpenAIReviewProvider(
       if (!content) throw new Error('OpenAI review returned empty content')
 
       const parsed = JSON.parse(content) as Record<string, unknown>
+      const accuracy = clampDim(parsed.accuracy)
+      const clarity = clampDim(parsed.clarity)
+      const labels = clampDim(parsed.labels)
+      const layout = clampDim(parsed.layout)
+      const style = clampDim(parsed.style)
       const result: ReviewResult = {
-        score: clampScore(parsed.score),
-        requestAlignment: clampScore(parsed.requestAlignment),
-        legibility: clampScore(parsed.legibility),
+        score: resolveTotal(clampScore(parsed.score), [accuracy, clarity, labels, layout, style]),
+        accuracy,
+        clarity,
+        labels,
+        layout,
+        style,
         blockingIssues: Array.isArray(parsed.blockingIssues)
           ? (parsed.blockingIssues as ReviewResult['blockingIssues'])
           : [],
