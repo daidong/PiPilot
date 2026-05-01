@@ -133,6 +133,13 @@ html.light body {
 body {
   background: var(--color-bg-base);
   color: var(--color-text);
+  /* Electron frameless windows inherit `-webkit-user-select: none` from the
+     chromeless host, which silently disables text selection app-wide. We
+     opt back in at the body and let chrome (drag region, sidebars, etc.)
+     opt out explicitly via Tailwind's `select-none`. Without this, users
+     can't even copy text out of chat messages. */
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* Themed utility classes */

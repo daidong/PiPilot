@@ -12,7 +12,7 @@
  * Duplicating the indicator was dead weight (RFC-style: one source of truth).
  */
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useProvenanceStore, type ProvenanceNode } from '../../stores/provenance-store'
 import { useAuditStore } from '../../stores/audit-store'
@@ -143,6 +143,36 @@ export function AuditSidebar() {
     () => projectGraph(rawNodes as ProvenanceNode[], rawEdges, projectionFilters),
     [rawNodes, rawEdges, projectionFilters]
   )
+
+  // Audited-entity index: which entities have been touched by some audit
+  // report, and was that touch direct (this entity was a scope root) or
+  // indirect (only mentioned in someone else's findings)? Mirrors the index
+  // computed in AuditView so the rail can mark rows without re-running the
+  // joins. Storing the set lets us color the marker per row in O(1).
+  const reports = useAuditStore(s => s.reports)
+  const auditStatusByEntity = useMemo(() => {
+    // version-id → canonical entity id
+    const v2e = new Map<string, string>()
+    for (const n of projection.nodes) {
+      for (const v of n.versions) v2e.set(v.id, n.id)
+    }
+    const direct = new Set<string>()
+    const indirect = new Set<string>()
+    for (const r of reports) {
+      const roots = new Set<string>()
+      for (const id of r.scope.rootNodeIds) {
+        const eid = v2e.get(id); if (eid) roots.add(eid)
+      }
+      for (const eid of roots) direct.add(eid)
+      for (const f of r.findings) {
+        for (const id of f.implicatedNodeIds) {
+          const eid = v2e.get(id)
+          if (eid && !roots.has(eid)) indirect.add(eid)
+        }
+      }
+    }
+    return { direct, indirect }
+  }, [reports, projection.nodes])
   const kindsPresent = useMemo<Kind[]>(() => {
     const s = new Set<Kind>()
     for (const n of projection.nodes) s.add(n.kind)
@@ -173,6 +203,47 @@ export function AuditSidebar() {
     // because exploration restarts from a new anchor.
     setAuditTrail([id])
   }
+
+  // If the current selection is filter-hidden (e.g. user navigated from the
+  // detail pane to an upstream/downstream entity that doesn't match the
+  // active search/kind filters), pin it to the top of the list. Without
+  // this, traversing the graph silently drops the row out of sight and the
+  // breadcrumb becomes the only evidence the entity exists.
+  const selectedNode = selectedId ? projection.nodes.find(n => n.id === selectedId) ?? null : null
+  const selectedHidden = selectedNode != null && !visibleEntities.some(n => n.id === selectedId)
+  const renderedEntities = selectedHidden && selectedNode
+    ? [selectedNode, ...visibleEntities]
+    : visibleEntities
+
+  // Auto-scroll the rail to keep the selected row in view whenever the trail
+  // changes — i.e. whenever the user clicks an upstream/downstream chip in
+  // the detail pane, jumps via the breadcrumb, or follows a finding's
+  // implicated node. The rail behaves as the canonical "you are here" map.
+  const listRef = useRef<HTMLDivElement>(null)
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  useEffect(() => {
+    if (!selectedId) return
+    const el = rowRefs.current.get(selectedId)
+    const container = listRef.current
+    if (!el || !container) return
+    // Use the container directly instead of scrollIntoView to avoid the
+    // page also scrolling when the rail is inside a flex layout.
+    const elRect = el.getBoundingClientRect()
+    const cRect = container.getBoundingClientRect()
+    const above = elRect.top < cRect.top
+    const below = elRect.bottom > cRect.bottom
+    if (above || below) {
+      const offset = el.offsetTop - container.offsetTop - container.clientHeight / 2 + el.clientHeight / 2
+      container.scrollTo({ top: offset, behavior: 'smooth' })
+    }
+  }, [selectedId])
+
+  // Brief flash on the selected row whenever the trail length changes — this
+  // is the visual cue that "the rail just followed you here" when navigation
+  // came from the detail pane. Length-keyed so manual rail clicks (which
+  // reset to length 1) and detail-pane pushes (which grow length) both pulse.
+  const [pulseToken, setPulseToken] = useState(0)
+  useEffect(() => { setPulseToken(t => t + 1) }, [auditTrail.length, selectedId])
 
   // Disabled / loading / error / empty states
   if (enabled === null || loading) {
@@ -210,6 +281,13 @@ export function AuditSidebar() {
 
   return (
     <div className="h-full flex flex-col min-h-0">
+      <style>{`
+        @keyframes auditRowPulse {
+          0%   { background-color: var(--color-accent-soft); }
+          40%  { background-color: var(--color-accent-soft); }
+          100% { background-color: transparent; }
+        }
+      `}</style>
       <RailHeader
         filters={filters}
         onFiltersChange={setFilters}
@@ -218,20 +296,37 @@ export function AuditSidebar() {
         onRefresh={() => { void loadGraph(); void loadReports() }}
       />
 
-      <div className="flex-1 overflow-y-auto">
-        {visibleEntities.length === 0 ? (
+      <div ref={listRef} className="flex-1 overflow-y-auto">
+        {renderedEntities.length === 0 ? (
           <div className="px-3 py-4 text-[11px] t-text-muted italic">
             No entities match the filters.
           </div>
         ) : (
-          visibleEntities.map(n => (
-            <EntityRow
-              key={n.id}
-              node={n}
-              selected={n.id === selectedId}
-              onClick={() => onSelect(n.id)}
-            />
-          ))
+          <>
+            {selectedHidden && (
+              <div className="px-3 py-1 text-[10px] tracking-wider uppercase t-text-muted bg-[var(--color-accent-soft)]/5 border-b t-border-subtle">
+                pinned · hidden by filter
+              </div>
+            )}
+            {renderedEntities.map(n => (
+              <EntityRow
+                key={n.id}
+                node={n}
+                selected={n.id === selectedId}
+                pulseToken={n.id === selectedId ? pulseToken : 0}
+                rowRef={(el) => {
+                  if (el) rowRefs.current.set(n.id, el)
+                  else rowRefs.current.delete(n.id)
+                }}
+                auditStatus={
+                  auditStatusByEntity.direct.has(n.id) ? 'direct'
+                  : auditStatusByEntity.indirect.has(n.id) ? 'indirect'
+                  : 'none'
+                }
+                onClick={() => onSelect(n.id)}
+              />
+            ))}
+          </>
         )}
       </div>
     </div>
@@ -335,18 +430,48 @@ function RailHeader({
 // Row
 // ───────────────────────────────────────────────────────────────────────────
 
-function EntityRow({ node, selected, onClick }: {
+function AuditedMarker({ status }: { status: 'direct' | 'indirect' }) {
+  // Filled shield = this entity was a scope root for some audit ("audited").
+  // Outlined shield = entity only appears as an implicated finding in another
+  // report ("touched by audit but not directly reviewed"). The two glyphs
+  // share the same silhouette so the eye reads them as the same family.
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10"
+         className={status === 'direct' ? 't-text-accent' : 't-text-accent-soft'}
+         role="img"
+         aria-label={status === 'direct' ? 'audited' : 'referenced by audit'}>
+      <title>{status === 'direct' ? 'audited' : 'referenced by an audit of another entity'}</title>
+      {status === 'direct' ? (
+        <path d="M5 0.5 L9 2 V5 Q9 8 5 9.5 Q1 8 1 5 V2 Z" fill="currentColor" />
+      ) : (
+        <path d="M5 0.5 L9 2 V5 Q9 8 5 9.5 Q1 8 1 5 V2 Z"
+              fill="none" stroke="currentColor" strokeWidth="1" />
+      )}
+    </svg>
+  )
+}
+
+function EntityRow({ node, selected, auditStatus, pulseToken, rowRef, onClick }: {
   node: ViewNode
   selected: boolean
+  auditStatus: 'none' | 'direct' | 'indirect'
+  pulseToken: number
+  rowRef: (el: HTMLDivElement | null) => void
   onClick: () => void
 }) {
   const v = node.versions[node.versions.length - 1]!
   const filename = basename(node.label)
   const dot = KIND_DOT[node.kind]
 
+  // Re-key the wrapper on every pulseToken bump so the CSS animation actually
+  // restarts on consecutive trail pushes (without a remount, the keyframe
+  // wouldn't replay when the same row is re-selected).
   return (
     <div
+      ref={rowRef}
       onClick={onClick}
+      key={`row-${pulseToken}`}
+      style={selected && pulseToken > 0 ? { animation: 'auditRowPulse 600ms ease-out 1' } : undefined}
       className={`group relative flex items-center gap-2 px-2.5 py-1.5 border-b t-border-subtle last:border-b-0 cursor-pointer transition-colors ${
         selected
           ? 'bg-[var(--color-accent-soft)]/10'
@@ -372,6 +497,7 @@ function EntityRow({ node, selected, onClick }: {
         <div className="flex items-center gap-1">
           <span className={`text-[12px] truncate ${selected ? 't-text-accent' : 't-text'}`}
                 title={node.label}>{filename}</span>
+          {auditStatus !== 'none' && <AuditedMarker status={auditStatus} />}
           {node.hasDrift && <DriftMarker />}
           {node.hasOversize && <OversizeMarker />}
         </div>

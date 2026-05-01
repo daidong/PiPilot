@@ -10,7 +10,7 @@ const api = (window as any).api
 
 export type Severity = 'critical' | 'major' | 'minor' | 'info'
 export type FindingCategory =
-  | 'data-misuse' | 'method' | 'citation' | 'overreach' | 'inconsistency' | 'reproducibility'
+  | 'data-misuse' | 'method' | 'citation' | 'overreach' | 'inconsistency'
 
 export interface Finding {
   id: string

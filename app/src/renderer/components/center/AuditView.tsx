@@ -19,7 +19,7 @@
  * RFC: docs/spec/trust-audit.md §5 (UI).
  */
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useProvenanceStore, type ProvenanceNode } from '../../stores/provenance-store'
 import { useAuditStore, type AuditReport, type Finding, type TimelineItem } from '../../stores/audit-store'
@@ -230,6 +230,11 @@ export function AuditView() {
   const setTrail     = useUIStore(s => s.setAuditTrail)
   const selectedEntityId = trail[trail.length - 1] ?? null
 
+  // Right-pane sub-tab (findings/history/scope) — lifted to ui-store so it
+  // survives tab switches like the rest of the audit-tab UI state.
+  const auditRunTab    = useUIStore(s => s.auditRunTab)
+  const setAuditRunTab = useUIStore(s => s.setAuditRunTab)
+
   const [projectionFilters] = useState<AuditFilters>(defaultFilters)
 
   useEffect(() => {
@@ -277,6 +282,90 @@ export function AuditView() {
   }, [nodeById, trail, setTrail])
 
   const selectedEntity = selectedEntityId ? nodeById.get(selectedEntityId) ?? null : null
+
+  // Map raw provenance node id → canonical ViewNode.id, so we can resolve
+  // a report's rootNodeIds / a finding's implicatedNodeIds back to the
+  // entity rows on the left rail. Reports reference *version* ids, the
+  // sidebar groups them under refKey, so this bridge is required.
+  const versionIdToEntityId = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const n of projection.nodes) {
+      for (const v of n.versions) m.set(v.id, n.id)
+    }
+    return m
+  }, [projection.nodes])
+
+  // For each entity (canonical id), which reports cover it directly (one of
+  // its versions is in scope.rootNodeIds) vs indirectly (only implicated by
+  // a finding while the report's root entity is something else)?
+  // Sorted newest-first inside each list so picking [0] = "most recent".
+  const reportIndex = useMemo(() => {
+    const direct = new Map<string, AuditReport[]>()
+    const indirect = new Map<string, { report: AuditReport; rootEntityId: string | null }[]>()
+    const sorted = [...reports].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    for (const r of sorted) {
+      const rootEntities = new Set<string>()
+      for (const id of r.scope.rootNodeIds) {
+        const eid = versionIdToEntityId.get(id)
+        if (eid) rootEntities.add(eid)
+      }
+      const rootEntityId = rootEntities.size > 0 ? [...rootEntities][0]! : null
+      for (const eid of rootEntities) {
+        const arr = direct.get(eid) ?? []
+        arr.push(r); direct.set(eid, arr)
+      }
+      // Indirect: any finding implicates an entity that is NOT a root.
+      const implicated = new Set<string>()
+      for (const f of r.findings) {
+        for (const id of f.implicatedNodeIds) {
+          const eid = versionIdToEntityId.get(id)
+          if (eid && !rootEntities.has(eid)) implicated.add(eid)
+        }
+      }
+      for (const eid of implicated) {
+        const arr = indirect.get(eid) ?? []
+        arr.push({ report: r, rootEntityId }); indirect.set(eid, arr)
+      }
+    }
+    return { direct, indirect }
+  }, [reports, versionIdToEntityId])
+
+  const auditedEntityIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const id of reportIndex.direct.keys()) s.add(id)
+    for (const id of reportIndex.indirect.keys()) s.add(id)
+    return s
+  }, [reportIndex])
+
+  // Auto-select the first entity when entering the audit tab and nothing is
+  // selected yet. "First" follows the sidebar's default sort (newest-first by
+  // latest version createdAt) so the rail and the detail pane agree.
+  useEffect(() => {
+    if (trail.length > 0) return
+    if (projection.nodes.length === 0) return
+    const sorted = [...projection.nodes].sort((a, b) =>
+      (b.versions[b.versions.length - 1]?.createdAt ?? '')
+        .localeCompare(a.versions[a.versions.length - 1]?.createdAt ?? '')
+    )
+    setTrail([sorted[0]!.id])
+  }, [trail.length, projection.nodes, setTrail])
+
+  // When the user switches entity, swing the right pane to the most relevant
+  // archived report — direct match wins, indirect (implicated) match second,
+  // null otherwise. We track the last entity we auto-selected for so manual
+  // dropdown choices aren't clobbered when `reports` re-emits.
+  const lastAutoEntityRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedEntityId) return
+    if (lastAutoEntityRef.current === selectedEntityId) return
+    lastAutoEntityRef.current = selectedEntityId
+    if (run.running) return  // don't disturb a live run
+    const direct = reportIndex.direct.get(selectedEntityId)
+    if (direct && direct.length > 0) { selectAudit(direct[0]!.id); return }
+    const indirect = reportIndex.indirect.get(selectedEntityId)
+    if (indirect && indirect.length > 0) { selectAudit(indirect[0]!.report.id); return }
+    selectAudit(null)
+  }, [selectedEntityId, reportIndex, selectAudit, run.running])
 
   // ── selection actions ──────────────────────────────────────────────────
   const navigateAlongEdge = (id: string) => {
@@ -330,7 +419,36 @@ export function AuditView() {
     void startAudit({ rootNodeIds: [node.representative.id] })
   }
 
-  const archivedReport = reports.find(r => r.id === selectedAuditId) ?? reports[0] ?? null
+  // Only fall back to "any first report" when nothing is selected AND no
+  // entity is selected (cold start). Once an entity is picked, the auto-
+  // selection effect above is the source of truth — falling back here would
+  // surface an unrelated report and confuse the "report follows entity" UX.
+  const archivedReport =
+    reports.find(r => r.id === selectedAuditId) ??
+    (selectedEntityId ? null : reports[0]) ??
+    null
+
+  // Status of the selected entity wrt audits — drives both the audit button's
+  // appearance and the "referred from" hint in the right pane.
+  const entityAuditStatus: 'none' | 'direct' | 'indirect' = !selectedEntityId
+    ? 'none'
+    : reportIndex.direct.has(selectedEntityId)
+      ? 'direct'
+      : reportIndex.indirect.has(selectedEntityId)
+        ? 'indirect'
+        : 'none'
+
+  // If the selected entity is only referenced indirectly, find which entity
+  // the displayed report was *actually* rooted on so the right pane can say
+  // "referred from {root}".
+  const referredFromEntity: ViewNode | null = (() => {
+    if (!selectedEntityId || !archivedReport) return null
+    if (entityAuditStatus !== 'indirect') return null
+    const indirect = reportIndex.indirect.get(selectedEntityId) ?? []
+    const match = indirect.find(x => x.report.id === archivedReport.id)
+    if (!match || !match.rootEntityId) return null
+    return nodeById.get(match.rootEntityId) ?? null
+  })()
 
   // Cross-highlight: when a finding is selected, walk the trail to its first
   // implicated node (no-op if not implicated or already shown).
@@ -359,6 +477,7 @@ export function AuditView() {
               downstream={downstreamBySource.get(selectedEntity.id) ?? []}
               edgeLookup={nodeById}
               auditDisabled={run.running}
+              auditStatus={entityAuditStatus}
               onAudit={() => auditFromNode(selectedEntity)}
               onNavigate={navigateAlongEdge}
               onJumpTrail={jumpTrail}
@@ -376,6 +495,9 @@ export function AuditView() {
             selectedAuditId={selectedAuditId}
             selectedFindingId={selectedFindingId}
             archivedReport={archivedReport}
+            referredFromEntity={referredFromEntity}
+            tab={auditRunTab}
+            onTab={setAuditRunTab}
             onSelectAudit={selectAudit}
             onSelectFinding={onSelectFinding}
             onCancel={() => void cancelAudit()}
@@ -421,7 +543,7 @@ function StatusBar({ nodeCount, edgeCount, driftCount, running }: {
 
 function EntityDetailPanel({
   node, trail, upstream, downstream, edgeLookup,
-  auditDisabled, onAudit, onNavigate, onJumpTrail
+  auditDisabled, auditStatus, onAudit, onNavigate, onJumpTrail
 }: {
   node: ViewNode
   trail: ViewNode[]
@@ -429,6 +551,7 @@ function EntityDetailPanel({
   downstream: ViewEdge[]
   edgeLookup: Map<string, ViewNode>
   auditDisabled: boolean
+  auditStatus: 'none' | 'direct' | 'indirect'
   onAudit: () => void
   onNavigate: (id: string) => void
   onJumpTrail: (idx: number) => void
@@ -437,9 +560,20 @@ function EntityDetailPanel({
   const dir = dirname(node.label)
   const versions = node.versions
   const v = versions[versions.length - 1]!
-  const auditLabel = upstream.length === 0
+  // Button copy reflects whether this entity has been reviewed before — a
+  // "Re-audit" affordance is more honest than offering "Audit" again, and
+  // the indirect case (only mentioned in someone else's findings) deserves
+  // its own label so the user knows there's no dedicated report yet.
+  const baseLabel = upstream.length === 0
     ? 'Audit this artifact'
     : `Audit cone · ${upstream.length + 1} nodes`
+  const auditLabel = auditDisabled
+    ? baseLabel
+    : auditStatus === 'direct'
+      ? (upstream.length === 0 ? 'Re-audit this artifact' : `Re-audit cone · ${upstream.length + 1} nodes`)
+      : auditStatus === 'indirect'
+        ? `Audit this artifact · referenced before`
+        : baseLabel
 
   const [showAllVersions, setShowAllVersions] = useState(false)
 
@@ -487,15 +621,25 @@ function EntityDetailPanel({
             className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${
               auditDisabled
                 ? 't-text-muted t-border-subtle cursor-not-allowed'
-                : 't-text-accent t-border-accent-soft bg-[var(--color-accent-soft)]/8 hover:bg-[var(--color-accent-soft)]/18'
+                : auditStatus === 'direct'
+                  ? 't-text t-border-subtle bg-[var(--color-accent-soft)]/4 hover:bg-[var(--color-accent-soft)]/12'
+                  : 't-text-accent t-border-accent-soft bg-[var(--color-accent-soft)]/8 hover:bg-[var(--color-accent-soft)]/18'
             }`}
             title={auditDisabled ? 'audit running…' : auditLabel}
           >
+            {auditStatus === 'direct' && !auditDisabled && (
+              <span aria-hidden="true" className="mr-1.5 t-text-accent">✓</span>
+            )}
             {auditLabel}
           </button>
           {auditDisabled && (
             <span className="flex items-center gap-1.5 text-[10px] t-text-accent">
               <PulseDot /> running
+            </span>
+          )}
+          {!auditDisabled && auditStatus === 'indirect' && (
+            <span className="text-[10px] t-text-muted italic">
+              implicated by another audit
             </span>
           )}
         </div>
@@ -669,38 +813,102 @@ function EdgeList({
   /** 'up' = render the producer (e.from); 'down' = render the consumer (e.to). */
   direction: 'up' | 'down'
 }) {
+  // Each row is two lines:
+  //   ●  filename                               →
+  //      └─ {relationship phrase}
+  // The relationship line uses a category-colored vertical bar so the eye can
+  // group multiple consecutive edges of the same kind without re-reading the
+  // label. Phrasing is direction-aware ("produced by …" vs "consumed by …")
+  // so the user doesn't have to mentally invert UPSTREAM vs DOWNSTREAM.
   return (
-    <ul className="mt-1.5 space-y-0.5">
+    <ul className="mt-1.5 space-y-1">
       {edges.map(e => {
         const other = resolveOther(e)
         if (!other) return null
         const accent = KIND_DOT[other.kind]
+        const rel = relationshipPhrase(direction, e)
+        const cColor = CATEGORY_COLOR[e.category]
         return (
           <li key={e.id}>
             <button
               type="button"
               onClick={() => onNavigate(other.id)}
-              className="w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-[var(--color-accent-soft)]/6 transition-colors"
+              className="w-full text-left rounded px-2 py-1 hover:bg-[var(--color-accent-soft)]/6 transition-colors"
             >
-              <span aria-hidden="true"
-                    className="shrink-0 inline-block w-1.5 h-1.5 rounded-full"
-                    style={{ background: accent }} />
-              <span className="text-[11px] t-text truncate flex-1"
-                    title={other.label}>
-                {basename(other.label)}
-              </span>
-              <span className="text-[9px] tabular-nums uppercase tracking-wider"
-                    style={{ color: CATEGORY_COLOR[e.category], opacity: 0.85 }}
-                    title={`edge category: ${e.category} (${direction === 'up' ? 'producer' : 'consumer'})`}>
-                {e.label}
-              </span>
-              <ChevronRight />
+              <div className="flex items-center gap-2">
+                <span aria-hidden="true"
+                      className="shrink-0 inline-block w-1.5 h-1.5 rounded-full"
+                      style={{ background: accent }} />
+                <span className="text-[11px] t-text truncate flex-1"
+                      title={other.label}>
+                  {basename(other.label)}
+                </span>
+                <ChevronRight />
+              </div>
+              <div className="mt-0.5 pl-3.5 flex items-center gap-1.5 text-[10px] t-text-muted"
+                   title={`edge category: ${e.category} · raw label: ${e.label}`}>
+                <span aria-hidden="true"
+                      className="font-mono leading-none"
+                      style={{ color: cColor, opacity: 0.85 }}>└─</span>
+                <span className="tracking-wide">{rel}</span>
+                <span aria-hidden="true"
+                      className="px-1 rounded text-[9px] uppercase tracking-wider"
+                      style={{ color: cColor, opacity: 0.85 }}>
+                  {e.label}
+                </span>
+              </div>
             </button>
           </li>
         )
       })}
     </ul>
   )
+}
+
+/**
+ * Direction-aware natural-language phrasing for an edge.
+ *
+ * UPSTREAM (the row IS the producer/source of the selected entity):
+ *   - input        → "selected was produced from this"
+ *   - derived-from → "selected is a new version of this"
+ *   - cited        → "selected cites this"
+ *   - else         → fallback to the raw category
+ *
+ * DOWNSTREAM (the row IS the consumer of the selected entity):
+ *   - input        → "this consumes selected as input"
+ *   - derived-from → "this is a new version of selected"
+ *   - cited        → "this cites selected"
+ *
+ * We don't reach back to the actual selected node's label — keeping the
+ * phrasing relative ("selected") makes the line short enough to fit at the
+ * width of the rail without truncation, and the breadcrumb already names
+ * the selected entity above.
+ */
+function relationshipPhrase(direction: 'up' | 'down', e: ViewEdge): string {
+  if (direction === 'up') {
+    switch (e.category) {
+      case 'edit':    return 'edited from this'
+      case 'compute': return 'computed from this'
+      case 'fetch':   return 'fetched from this'
+      case 'memory':  return 'created from this memory'
+      case 'bash':    return 'shell-produced from this'
+      case 'version': return 'derived from this version'
+      case 'cited':   return 'cites this'
+      case 'input':
+      default:        return 'produced from this'
+    }
+  }
+  switch (e.category) {
+    case 'edit':    return 'edited into this'
+    case 'compute': return 'fed into this computation'
+    case 'fetch':   return 'fetched into this'
+    case 'memory':  return 'saved into this memory'
+    case 'bash':    return 'used by this shell call'
+    case 'version': return 'this version was derived from selected'
+    case 'cited':   return 'cited by this'
+    case 'input':
+    default:        return 'used by this'
+  }
 }
 
 function DetailEmptyState({ entityCount }: { entityCount: number }) {
@@ -729,19 +937,21 @@ type RunTab = 'findings' | 'history' | 'scope'
 
 function AuditRunPanel({
   run, reports, selectedAuditId, selectedFindingId,
-  archivedReport, onSelectAudit, onSelectFinding, onCancel
+  archivedReport, referredFromEntity, tab, onTab,
+  onSelectAudit, onSelectFinding, onCancel
 }: {
   run: ReturnType<typeof useAuditStore.getState>['run']
   reports: AuditReport[]
   selectedAuditId: string | null
   selectedFindingId: string | null
   archivedReport: AuditReport | null
+  referredFromEntity: ViewNode | null
+  tab: RunTab
+  onTab: (t: RunTab) => void
   onSelectAudit: (id: string | null) => void
   onSelectFinding: (id: string | null) => void
   onCancel: () => void
 }) {
-  const [tab, setTab] = useState<RunTab>('findings')
-
   // Live run wins over archive: as soon as the auditor starts, snap to it.
   const showLive = run.running || !!run.error
 
@@ -767,32 +977,58 @@ function AuditRunPanel({
         onCancel={onCancel}
       />
 
-      <RunTabs tab={tab} onTab={setTab}
+      {/* Cross-pane breadcrumb when the displayed report wasn't directly
+          rooted on the selected entity — the entity only shows up because a
+          finding implicated it. Without this banner the user sees a report
+          for "entity 1" while looking at "entity 2" and has no way to tell
+          why. */}
+      {!showLive && referredFromEntity && (
+        <div className="px-5 py-1.5 text-[10px] tracking-wider uppercase t-text-muted border-b t-border bg-[var(--color-accent-soft)]/5 flex items-center gap-1.5">
+          <span aria-hidden="true">↳</span>
+          <span>referred from</span>
+          <span aria-hidden="true"
+                className="inline-block w-1 h-1 rounded-full"
+                style={{ background: KIND_DOT[referredFromEntity.kind] }} />
+          <span className="normal-case tracking-normal t-text-secondary truncate"
+                title={referredFromEntity.label}>
+            {basename(referredFromEntity.label)}
+          </span>
+        </div>
+      )}
+
+      <RunTabs tab={tab} onTab={onTab}
                counts={{
                  findings: findings.length,
                  history: timeline.length,
                  scope: showLive ? run.scopeNodeCount : (archivedReport?.scopeNodeCount ?? 0)
                }} />
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      {/* Each tab body owns its own scroll container so HistoryTab can manage
+          its sticky-bottom scroll behavior without yanking the other tabs'
+          scroll positions when the user switches between them. */}
+      <div className="flex-1 min-h-0 relative">
         {tab === 'findings' && (
-          <FindingsTab
-            findings={findings}
-            summary={showLive ? null : (archivedReport?.summary ?? null)}
-            selectedFindingId={selectedFindingId}
-            onSelectFinding={onSelectFinding}
-            isLive={showLive}
-          />
+          <div className="absolute inset-0 overflow-y-auto">
+            <FindingsTab
+              findings={findings}
+              summary={showLive ? null : (archivedReport?.summary ?? null)}
+              selectedFindingId={selectedFindingId}
+              onSelectFinding={onSelectFinding}
+              isLive={showLive}
+            />
+          </div>
         )}
         {tab === 'history' && (
           <HistoryTab timeline={timeline} live={showLive} />
         )}
         {tab === 'scope' && (
-          <ScopeTab
-            showLive={showLive}
-            run={run}
-            archivedReport={archivedReport}
-          />
+          <div className="absolute inset-0 overflow-y-auto">
+            <ScopeTab
+              showLive={showLive}
+              run={run}
+              archivedReport={archivedReport}
+            />
+          </div>
         )}
       </div>
     </div>
@@ -974,6 +1210,7 @@ function FindingsTab({
       </div>
     )
   }
+  const sorted = sortFindings(findings)
   return (
     <div className="px-5 py-4 space-y-4">
       {summary && (
@@ -983,14 +1220,25 @@ function FindingsTab({
         </section>
       )}
       <section>
-        <SectionLabel count={findings.length}>{isLive ? 'Live findings' : 'Findings'}</SectionLabel>
+        <div className="flex items-center gap-2">
+          <SectionLabel count={findings.length}>{isLive ? 'Live findings' : 'Findings'}</SectionLabel>
+          {findings.length > 0 && (
+            <CopyButton
+              ariaLabel="Copy all findings as Markdown"
+              getText={() => formatFindingsMarkdown(sorted, summary, isLive)}
+              className="ml-auto"
+            >
+              Copy all
+            </CopyButton>
+          )}
+        </div>
         {findings.length === 0 ? (
           <p className="mt-1.5 text-[11px] t-text-muted italic">
             {isLive ? 'No findings emitted yet.' : 'No findings on this scope.'}
           </p>
         ) : (
           <div className="mt-1.5 space-y-1">
-            {sortFindings(findings).map(f => (
+            {sorted.map(f => (
               <FindingCard
                 key={f.id}
                 finding={f}
@@ -1002,6 +1250,105 @@ function FindingsTab({
         )}
       </section>
     </div>
+  )
+}
+
+// ── Findings → Markdown (paste-into-coordinator format) ─────────────────────
+//
+// The coordinator agent reads structured Markdown reliably; we lean on
+// fenced code blocks for ids/hashes (so it doesn't autolink them) and use
+// stable section headers so the agent can pick fields out without prompting.
+// Copying is the user's primary handoff to the fixer; the format is part
+// of the contract — keep it stable unless we deliberately revise it.
+
+function formatFindingMarkdown(f: Finding): string {
+  const lines: string[] = []
+  lines.push(`### [${f.severity.toUpperCase()}] ${f.category}: ${f.claim}`)
+  lines.push('')
+  lines.push('**Evidence**')
+  lines.push('')
+  // Indent evidence as a blockquote so it survives paste into a chat that
+  // soft-wraps prose. Empty lines inside evidence get a quote marker too.
+  for (const line of f.evidence.split(/\r?\n/)) {
+    lines.push(`> ${line}`)
+  }
+  if (f.suggestedAction && f.suggestedAction.trim()) {
+    lines.push('')
+    lines.push('**Suggested action**')
+    lines.push('')
+    lines.push(f.suggestedAction.trim())
+  }
+  if (f.implicatedNodeIds.length > 0) {
+    lines.push('')
+    lines.push('**Implicated nodes**')
+    lines.push('')
+    lines.push('```')
+    for (const id of f.implicatedNodeIds) lines.push(id)
+    lines.push('```')
+  }
+  lines.push('')
+  lines.push(`_finding-id: \`${f.id}\`_`)
+  return lines.join('\n')
+}
+
+function formatFindingsMarkdown(findings: Finding[], summary: string | null, isLive: boolean): string {
+  const header = [
+    `# Audit findings (${isLive ? 'live run' : 'archived report'})`,
+    '',
+    `Generated at ${new Date().toISOString()} — ${findings.length} finding${findings.length === 1 ? '' : 's'}.`
+  ]
+  if (summary) {
+    header.push('')
+    header.push('## Summary')
+    header.push('')
+    header.push(summary)
+  }
+  header.push('')
+  header.push('## Findings')
+  header.push('')
+  const body = findings.map(formatFindingMarkdown).join('\n\n---\n\n')
+  return [...header, body].join('\n')
+}
+
+// Compact copy-to-clipboard button with a 1.2s "Copied" confirmation.
+// The `getText` callback is lazy so we don't serialise large reports until
+// the user actually clicks. `stopPropagation` prevents the click from
+// bubbling into a parent clickable card.
+function CopyButton({
+  getText, ariaLabel, children, className
+}: {
+  getText: () => string
+  ariaLabel: string
+  children?: React.ReactNode
+  className?: string
+}) {
+  const [copied, setCopied] = useState(false)
+  const onClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const text = getText()
+    void navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1200)
+      },
+      () => { /* clipboard denied — no-op, button stays untriggered */ }
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title={copied ? 'Copied — paste into coordinator chat' : ariaLabel}
+      className={`px-2 py-0.5 rounded text-[10px] tracking-wider uppercase border transition-colors ${
+        copied
+          ? 't-text-accent t-border-accent-soft bg-[var(--color-accent-soft)]/15'
+          : 't-text-muted t-border-subtle hover:t-text hover:t-border'
+      } ${className ?? ''}`}
+    >
+      {copied ? '✓ Copied' : (children ?? 'Copy')}
+    </button>
   )
 }
 
@@ -1028,12 +1375,24 @@ function FindingCard({ finding, selected, onSelect }: {
                   : finding.severity === 'major'    ? 'var(--color-status-warning)'
                   : finding.severity === 'minor'    ? 'var(--color-status-info)'
                   :                                   'var(--color-text-muted)'
+  // Outer is a `div role="button"` (not a `<button>`) so the inner CopyButton
+  // and the user's text selection on evidence both work — nesting a button
+  // inside a button is invalid HTML, and `<button>` blocks selection on the
+  // span children in some browsers.
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onSelect()
+    }
+  }
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={onKey}
       aria-expanded={selected}
-      className={`relative w-full text-left rounded border px-3 py-2 transition-colors ${
+      className={`relative w-full text-left rounded border px-3 py-2 transition-colors cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-soft)] ${
         selected
           ? 'bg-[var(--color-accent-soft)]/10 t-border-accent-soft'
           : 't-border-subtle hover:bg-[var(--color-accent-soft)]/5 hover:t-border'
@@ -1049,6 +1408,11 @@ function FindingCard({ finding, selected, onSelect }: {
         <span className="text-[9px] uppercase tracking-wider t-text-muted">
           {finding.category}
         </span>
+        <CopyButton
+          ariaLabel="Copy this finding as Markdown"
+          getText={() => formatFindingMarkdown(finding)}
+          className="ml-auto"
+        />
       </div>
       <div className="mt-1 text-[12px] leading-snug t-text pl-1.5">{finding.claim}</div>
       {selected && (
@@ -1078,25 +1442,95 @@ function FindingCard({ finding, selected, onSelect }: {
           )}
         </div>
       )}
-    </button>
+    </div>
   )
 }
 
 // ── History tab (persistent timeline replay — live or archived) ───────────
 
 function HistoryTab({ timeline, live }: { timeline: TimelineItem[]; live: boolean }) {
+  // Sticky-bottom: the timeline streams new items during a live run, and the
+  // expectation is "I see the latest line without chasing the scrollbar."
+  // We track whether the user is currently anchored near the bottom; if so,
+  // every growth pins them to the bottom. If the user has scrolled up to read
+  // earlier reasoning, we leave their position alone — re-anchoring to the
+  // bottom mid-read would be hostile.
+  //
+  // When the run completes and the timeline reloads from the persisted
+  // report, the previous behavior snapped the scroll to the top (because the
+  // ol element gets fully rebuilt). If the user was at the bottom, we keep
+  // them there; otherwise we leave the position they were in.
+  const containerRef = useRef<HTMLDivElement>(null)
+  const stuckToBottomRef = useRef(true)
+  const prevLenRef = useRef(0)
+
+  // Threshold (px) — within this distance of the bottom counts as "at bottom".
+  const STICK_PX = 32
+
+  const onScroll = () => {
+    const el = containerRef.current
+    if (!el) return
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+    stuckToBottomRef.current = distance <= STICK_PX
+  }
+
+  // Scroll on mount to the bottom too, so opening the tab on an in-flight
+  // (or just-finished) audit doesn't park us at the top by default.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    stuckToBottomRef.current = true
+    // run once on mount; subsequent timeline growth handled below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // On every timeline change, if the user was at the bottom before this
+  // update, glue them to the bottom afterwards. Use rAF so we run after
+  // the new items are laid out and scrollHeight reflects them.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const grew = timeline.length > prevLenRef.current
+    prevLenRef.current = timeline.length
+    if (!grew) return
+    if (!stuckToBottomRef.current) return
+    requestAnimationFrame(() => {
+      if (!containerRef.current) return
+      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    })
+  }, [timeline.length])
+
+  // When the live run finishes and the timeline is replaced by the archived
+  // version (often longer), keep the user pinned to the bottom rather than
+  // jumping to the top of the rebuilt ol. This effect fires on the
+  // live-flag flip; the length-based effect above handles incremental growth.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    if (!stuckToBottomRef.current) return
+    requestAnimationFrame(() => {
+      if (!containerRef.current) return
+      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    })
+  }, [live])
+
   if (timeline.length === 0) {
     return (
-      <div className="px-5 py-4 text-[11px] t-text-muted italic">
+      <div ref={containerRef} onScroll={onScroll}
+           className="absolute inset-0 overflow-y-auto px-5 py-4 text-[11px] t-text-muted italic">
         {live ? 'Auditor warming up…' : 'No timeline persisted for this audit.'}
       </div>
     )
   }
   const grouped = groupTimeline(timeline)
   return (
-    <ol className="px-5 py-4 space-y-2.5">
-      {grouped.map((g, i) => <TimelineNode key={i} item={g} />)}
-    </ol>
+    <div ref={containerRef} onScroll={onScroll}
+         className="absolute inset-0 overflow-y-auto">
+      <ol className="px-5 py-4 space-y-2.5">
+        {grouped.map((g, i) => <TimelineNode key={i} item={g} />)}
+      </ol>
+    </div>
   )
 }
 

@@ -142,6 +142,20 @@ export interface ProvenanceFacts {
   inputs: NodeRef[]
   /** Optional: things the tool call cited (e.g. @-mentions). Adds `cited-by` edges. */
   cited?: NodeRef[]
+  /**
+   * Refs whose content flowed into the agent's context without this tool
+   * itself producing a node — e.g. `read` loads a file's bytes into the LLM
+   * conversation but emits no artifact. Capture pools these per-agent-turn;
+   * the next call in the same turn that has outputs picks them up as
+   * additional inputs (PROV `wasInformedBy` semantics, see RFC §3.5).
+   *
+   * Pool is cleared at turn boundaries, NOT on each producer flush — within
+   * a single turn, every producer sees every consumed ref. This matches the
+   * intuition "in this turn the agent looked at A and B, then wrote X and Y;
+   * X and Y are derived from A and B" without trying to track a finer
+   * read-vs-write order that the agent itself doesn't reliably expose.
+   */
+  consumed?: NodeRef[]
 }
 
 export interface OutputFact {

@@ -40,13 +40,24 @@ export interface AuditRequest {
 
 export type Severity = 'critical' | 'major' | 'minor' | 'info'
 
+/**
+ * Finding categories. Each one represents a *claim-vs-evidence* mismatch
+ * found in the workspace; the audit subject is the paper, not the producing
+ * agent's record-keeping.
+ *
+ * `reproducibility` was deliberately removed (2026-05): it conflated
+ * "provenance graph is incomplete" with "the paper has a problem", which
+ * generated false positives whenever the user produced files manually
+ * outside the agent (e.g. a CSV from a separate analysis session, a
+ * manuscript edited in their IDE between captures). Provenance gaps are
+ * not findings; only contradicted or missing evidence is.
+ */
 export type FindingCategory =
   | 'data-misuse'        // wrong slice, wrong filter, wrong cohort
   | 'method'             // wrong test, violated assumptions, p-hacking
   | 'citation'           // wrong source, fabricated, misattributed
   | 'overreach'          // claim exceeds evidence
   | 'inconsistency'      // numbers don't match across artifacts
-  | 'reproducibility'    // can't be traced to inputs (orphan workspace-files etc.)
 
 export interface Finding {
   id: string

@@ -184,7 +184,7 @@ function createProvenanceCheckDriftTool(projectPath: string, graph: ProvenanceGr
   return {
     name: 'provenance_check_drift',
     label: 'provenance_check_drift',
-    description: 'For each provenance node id, verify that the live store still matches the captured content hash. Returns a structured report (ok / drifted / missing). Use this BEFORE reading content to know which inputs are still trustworthy. Pass node ids you got from provenance_get_upstream.',
+    description: 'For each provenance node id, verify that the live store still matches the captured content hash. Returns a structured report (ok / drifted / draft-evolving / missing). Use this BEFORE reading content to know which inputs are still trustworthy. Pass node ids you got from provenance_get_upstream. NOTE: drift on `draft` nodes is reported as `draft-evolving` instead of `drifted` — drafts are by definition still being edited; that is expected state, not a reproducibility risk.',
     parameters: Type.Object({
       nodeIds: Type.Array(Type.String(), { description: 'Provenance node ids to check.' })
     }),
@@ -199,6 +199,11 @@ function createProvenanceCheckDriftTool(projectPath: string, graph: ProvenanceGr
       type Row =
         | { id: string; status: 'ok'; label: string; hash: string }
         | { id: string; status: 'drifted'; label: string; capturedHash: string; currentHash: string }
+        // `draft-evolving` mirrors `drifted` mechanically (live hash ≠ captured),
+        // but on a `draft` node that is the *expected* state. Surfacing it
+        // separately stops the auditor from filing a `reproducibility` finding
+        // every time the user edits their manuscript between captures.
+        | { id: string; status: 'draft-evolving'; label: string; capturedHash: string; currentHash: string }
         | { id: string; status: 'missing'; label: string; capturedHash?: string }
         | { id: string; status: 'no-snapshot'; label: string }
         | { id: string; status: 'skipped'; label: string; reason: string }
@@ -242,17 +247,26 @@ function createProvenanceCheckDriftTool(projectPath: string, graph: ProvenanceGr
 
         if (!captured) { rows.push({ id, status: 'no-snapshot', label }); continue }
         if (liveHash === null) { rows.push({ id, status: 'missing', label, capturedHash: captured }); continue }
-        if (liveHash === captured) rows.push({ id, status: 'ok', label, hash: captured })
-        else rows.push({ id, status: 'drifted', label, capturedHash: captured, currentHash: liveHash })
+        if (liveHash === captured) {
+          rows.push({ id, status: 'ok', label, hash: captured })
+        } else if (node.kind === 'draft') {
+          // Draft nodes are user-edited manuscripts; the producing-agent
+          // captured one snapshot, the user kept writing. Don't conflate
+          // that with data drift — it'd cause false reproducibility findings.
+          rows.push({ id, status: 'draft-evolving', label, capturedHash: captured, currentHash: liveHash })
+        } else {
+          rows.push({ id, status: 'drifted', label, capturedHash: captured, currentHash: liveHash })
+        }
       }
 
       const summary = {
         checked: rows.length,
-        ok:          rows.filter(r => r.status === 'ok').length,
-        drifted:     rows.filter(r => r.status === 'drifted').length,
-        missing:     rows.filter(r => r.status === 'missing').length,
-        noSnapshot:  rows.filter(r => r.status === 'no-snapshot').length,
-        skipped:     rows.filter(r => r.status === 'skipped').length
+        ok:             rows.filter(r => r.status === 'ok').length,
+        drifted:        rows.filter(r => r.status === 'drifted').length,
+        draftEvolving:  rows.filter(r => r.status === 'draft-evolving').length,
+        missing:        rows.filter(r => r.status === 'missing').length,
+        noSnapshot:     rows.filter(r => r.status === 'no-snapshot').length,
+        skipped:        rows.filter(r => r.status === 'skipped').length
       }
       return {
         content: [{ type: 'text', text: JSON.stringify({ summary, rows }, null, 2) }],
@@ -286,7 +300,7 @@ export interface SubmittedReport {
 
 const SEVERITIES: Severity[] = ['critical', 'major', 'minor', 'info']
 const CATEGORIES: FindingCategory[] = [
-  'data-misuse', 'method', 'citation', 'overreach', 'inconsistency', 'reproducibility'
+  'data-misuse', 'method', 'citation', 'overreach', 'inconsistency'
 ]
 
 function createSubmitAuditReportTool(sink: ReportSink): AgentTool {

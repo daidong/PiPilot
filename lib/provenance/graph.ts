@@ -259,8 +259,11 @@ export class ProvenanceGraph {
   /**
    * Workspace-file nodes with no incoming `derived-from` edge from a
    * `computation` node. These represent files whose origin is not tracked —
-   * typically files written by `bash` subprocesses (Python scripts etc.). The
-   * auditor surfaces these as `reproducibility` findings (see RFC §3.5).
+   * typically files written by `bash` subprocesses, files the user
+   * produced manually outside the agent, or data prepared on another
+   * machine. They are NOT findings by themselves; the auditor (paper-
+   * centric since 2026-05) searches the workspace for evidence either way.
+   * This API stays around for diagnostics and Audit-tab badging.
    */
   findOrphanWorkspaceFiles(): ProvenanceNode[] {
     const out: ProvenanceNode[] = []

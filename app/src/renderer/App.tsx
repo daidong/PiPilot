@@ -870,7 +870,7 @@ export default function App() {
     const handler = (e: KeyboardEvent) => {
       if (previewEditorFocused) return
 
-      // Cmd+1 → Chat, Cmd+2 → Literature, Cmd+3 → Compute
+      // Cmd+1 → Chat, Cmd+2 → Literature, Cmd+3 → Compute (or Audit if compute disabled), Cmd+4 → Audit
       if ((e.metaKey || e.ctrlKey) && e.key === '1') {
         e.preventDefault()
         useUIStore.getState().setCenterView('chat')
@@ -879,9 +879,13 @@ export default function App() {
         e.preventDefault()
         useUIStore.getState().setCenterView('literature')
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === '3' && api?.isComputeEnabled?.()) {
+      if ((e.metaKey || e.ctrlKey) && e.key === '3') {
         e.preventDefault()
-        useUIStore.getState().setCenterView('compute')
+        useUIStore.getState().setCenterView(api?.isComputeEnabled?.() ? 'compute' : 'audit')
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '4' && api?.isComputeEnabled?.()) {
+        e.preventDefault()
+        useUIStore.getState().setCenterView('audit')
       }
       // Cmd+Shift+K → Close Project
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'K') {

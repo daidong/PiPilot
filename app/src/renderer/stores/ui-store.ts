@@ -90,6 +90,10 @@ interface UIState {
   // center pane read/write it.
   auditTrail: string[]
   setAuditTrail: (trail: string[]) => void
+  // Which sub-tab of the right-side audit run panel is active. Lifted out of
+  // local React state so it survives tab switches (Audit ↔ Chat ↔ …).
+  auditRunTab: 'findings' | 'history' | 'scope'
+  setAuditRunTab: (tab: 'findings' | 'history' | 'scope') => void
 
   setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
@@ -161,6 +165,8 @@ export const useUIStore = create<UIState>((set) => ({
   wikiReaderHistory: [],
   auditTrail: [],
   setAuditTrail: (auditTrail) => set({ auditTrail }),
+  auditRunTab: 'findings',
+  setAuditRunTab: (auditRunTab) => set({ auditRunTab }),
   setWikiReaderSlug: (slug) => set((s) => ({
     wikiReaderHistory: s.wikiReaderSlug ? [...s.wikiReaderHistory, s.wikiReaderSlug] : s.wikiReaderHistory,
     wikiReaderSlug: slug,
@@ -265,7 +271,8 @@ export const useUIStore = create<UIState>((set) => ({
       literatureFilter: { search: '', subTopic: null, sortBy: 'year', sortDir: 'desc', minScore: 0, source: null, round: null },
       wikiReaderSlug: null,
       wikiReaderHistory: [],
-      auditTrail: []
+      auditTrail: [],
+      auditRunTab: 'findings'
     }),
   // Opening a preview routes the user to chat view — the drawer is mounted
   // inside the chat-body host, so it only renders there. Researchers expect

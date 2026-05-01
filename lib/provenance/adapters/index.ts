@@ -20,6 +20,7 @@ import { artifactCreateAdapter, artifactUpdateAdapter } from './entity-tools.js'
 import { writeAdapter } from './write.js'
 import { editAdapter } from './edit.js'
 import { bashAdapter } from './bash.js'
+import { readAdapter } from './read.js'
 
 // ---------------------------------------------------------------------------
 // Result-parsing helpers (shared across adapters)
@@ -75,5 +76,10 @@ export const defaultAdapters: Record<string, ProvenanceAdapter> = {
   // pi-coding-agent built-in tools
   write: writeAdapter,
   edit:  editAdapter,
-  bash:  bashAdapter
+  bash:  bashAdapter,
+  // Read is captured via the `consumed` channel (wasInformedBy) — it produces
+  // no node itself but its file refs are pooled per turn and folded into the
+  // next producer's inputs. grep / find / ls are intentionally absent: they
+  // surface paths and snippets, not document content (RFC §3.5).
+  read:  readAdapter
 }

@@ -72,6 +72,20 @@ export class CaptureContext {
     citedFromTurn?: NodeRef[]
   }>()
 
+  /**
+   * Per-turn pool of refs that were `consumed` (read into agent context) by
+   * read-only tools like `read` / `wiki_get`. Keyed by refKey so multiple
+   * reads of the same path collapse to one entry, last-write-wins on the ref
+   * payload (which carries no version anyway — versions are picked up at
+   * resolveRef time from the live store).
+   *
+   * Cleared on turn boundary in `syncTurnBoundary`. Each subsequent producer
+   * call in the same turn folds these refs into its `inputs` (deduped against
+   * the adapter's own declared inputs).
+   */
+  private readonly pendingConsumed = new Map<string, NodeRef>()
+  private currentTurn: { sessionId: string; turnIndex: number } | null = null
+
   constructor(
     public readonly projectPath: string,
     public readonly graph: ProvenanceGraph,
@@ -102,6 +116,22 @@ export class CaptureContext {
     return info
   }
 
+  /**
+   * Clear the per-turn consumption pool whenever the agent moves to a new
+   * (sessionId, turnIndex) pair. Called from `recordToolCall` before facts
+   * are processed, so reads in turn N never leak into producers in turn N+1.
+   */
+  private syncTurnBoundary(turn: AgentTurnRecord): void {
+    if (
+      this.currentTurn === null ||
+      this.currentTurn.sessionId !== turn.sessionId ||
+      this.currentTurn.turnIndex !== turn.turnIndex
+    ) {
+      this.pendingConsumed.clear()
+      this.currentTurn = { sessionId: turn.sessionId, turnIndex: turn.turnIndex }
+    }
+  }
+
   /** Append + apply in lock-step so on-disk and in-memory don't diverge. */
   private async emit(event: GraphEvent): Promise<void> {
     await appendEvent(this.projectPath, event)
@@ -128,6 +158,11 @@ export class CaptureContext {
     const adapter = this.adapters[info.name]
     if (!adapter) return [] // tool isn't artifact-producing; silently skip
 
+    // Maintain the per-turn consumption pool BEFORE we look at the adapter's
+    // facts, so the boundary check fires even on read-only calls that come
+    // first in a turn.
+    this.syncTurnBoundary(info.turn)
+
     const factsOrPromise = adapter(args, result, info.turn)
     const facts = (await factsOrPromise) as ProvenanceFacts | null
     if (!facts) return []
@@ -137,6 +172,34 @@ export class CaptureContext {
     // see only tool-specific args; turn-level context comes from the coordinator.
     if (info.citedFromTurn?.length) {
       facts.cited = [...(facts.cited ?? []), ...info.citedFromTurn]
+    }
+
+    // ── Consumption pool, the wasInformedBy channel ──────────────────────
+    // Read-only tools (read, wiki_get) declare `consumed` instead of outputs.
+    // We pool their refs per turn; producers later in the same turn pick
+    // them up as inputs. Pool is NOT cleared on producer flush (see RFC
+    // §3.5 / type docs) — A1 semantics: "all reads in this turn inform all
+    // producers in this turn", duplicates allowed.
+    if (facts.consumed?.length) {
+      for (const ref of facts.consumed) {
+        this.pendingConsumed.set(refKey(ref), ref)
+      }
+    }
+    // Pure-consumption call (e.g. `read`) has no outputs and nothing more
+    // to emit. We've already updated the pool; bail out early so we don't
+    // run the params/output machinery for a tool that produced nothing.
+    if (facts.outputs.length === 0) return []
+
+    // Producer call: fold the pool into inputs. Dedup against the adapter's
+    // own declared inputs by refKey so explicit + pooled refs don't double up.
+    if (this.pendingConsumed.size > 0) {
+      const declared = new Set(facts.inputs.map(r => refKey(r)))
+      for (const [k, ref] of this.pendingConsumed) {
+        if (!declared.has(k)) {
+          facts.inputs.push(ref)
+          declared.add(k)
+        }
+      }
     }
 
     // 1. Persist canonical params (used by every output node's toolCall block).

@@ -5,8 +5,9 @@
  *
  * Per RFC §3.5: we record the *act* of running the command but never try to
  * infer what files it produced. Files written by subprocesses (Python scripts
- * etc.) become orphan workspace-file nodes if a later artifact-producing tool
- * consumes them — the auditor surfaces those as `reproducibility` findings.
+ * etc.) appear in the workspace without a tracked producer; the auditor — now
+ * paper-centric — searches the workspace for evidence either way and does not
+ * treat orphan-from-graph as a finding by itself.
  *
  * Output: one `computation` node only.
  */
