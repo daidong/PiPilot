@@ -1,6 +1,6 @@
 # Full-Text Retrieval: Unified Service for Paper Wiki + Agent Tools
 
-> Spec version: 0.2 (DRAFT — incorporating review-round-1 feedback) | Last updated: 2026-05-02 | Author: dialogue with Captain
+> Spec version: 0.3 (DRAFT — review-round-2: cuts and decisions) | Last updated: 2026-05-02 | Author: dialogue with Captain
 
 ## 1. Summary
 
@@ -9,15 +9,16 @@ Add a single, shared full-text retrieval service that backs both:
 1. The **Paper Wiki** background indexer (currently arXiv-only via local PDF download + `markitdown`).
 2. A **new agent-facing tool `fetch-fulltext`** the LLM can call in foreground conversations.
 
-The service unifies three sources:
+The service unifies two sources:
 
 | Source | Coverage | Output |
 |---|---|---|
-| **arXiv** (existing, kept) | arXiv papers | local PDF → `markitdown` → markdown |
 | **Paperclip** (new, hosted MCP) | bioRxiv + medRxiv + PubMed Central + arXiv | network call → section-aware markdown |
-| **Unpaywall** (new, fallback) | any DOI with an open-access copy | OA PDF URL → `markitdown` |
+| **arXiv** (existing, kept) | arXiv papers | local PDF → `markitdown` → markdown |
 
 The motivating gap: **the Paper Wiki currently has no full-text path for any non-arXiv paper.** Roughly half of biomedical work never appears on arXiv, so for those papers the wiki produces summaries from the abstract alone — visibly worse pages, and the user has no way to upgrade them.
+
+A third "open-access generic DOI" source (Unpaywall) was considered and **explicitly cut** for v0.1: we have no measured data on how many papers Paperclip + arXiv would miss but Unpaywall would catch. Phase 2 of this RFC reconsiders it with real `abstract-only` corpus measurements after the two-source service has been running.
 
 ## 2. Design Axiom
 
@@ -99,17 +100,15 @@ These two stay untouched; this RFC does not unify chat-attachment cache with wik
 
 ```
 lib/fulltext/                          (NEW)
-├── index.ts            public API: resolveFulltext({...}) → FulltextResult
-├── paperclip.ts        Paperclip MCP fetcher (lookup + cat sections)
-├── arxiv.ts            arXiv PDF fetch + markitdown convert
-│                       (logic moved verbatim from lib/wiki/downloader.ts)
-├── unpaywall.ts        Unpaywall DOI → OA URL → markitdown convert
-├── cache.ts            shared local cache w/ index.json reverse map
+├── index.ts            public API: resolveFulltext({...}) → FulltextResult | null
+├── paperclip.ts        Paperclip MCP fetcher (lookup + cat sections + parse text)
+├── arxiv.ts            arXiv PDF fetch + markitdown convert + title-resolve
+│                       (logic moved from lib/wiki/downloader.ts, now reachable
+│                        only through resolveFulltext)
+├── cache.ts            local cache (pure path convention, no index file)
 └── types.ts            FulltextRequest, FulltextResult, FulltextSource
 
-lib/wiki/downloader.ts                 (RETAINED, becomes thin wrapper)
-└── re-exports resolveArxivIdByTitle() and downloadAndConvertArxiv()
-    that now delegate to lib/fulltext
+lib/wiki/downloader.ts                 (DELETED)
 
 lib/tools/fetch-fulltext.ts            (NEW) agent-facing tool
 ```
@@ -118,7 +117,7 @@ lib/tools/fetch-fulltext.ts            (NEW) agent-facing tool
 
 ```typescript
 // lib/fulltext/types.ts
-export type FulltextSource = 'paperclip' | 'arxiv' | 'unpaywall'
+export type FulltextSource = 'paperclip' | 'arxiv'
 
 export interface FulltextRequest {
   doi?: string                  // canonical key when available
@@ -128,7 +127,7 @@ export interface FulltextRequest {
   title?: string                // last-resort: arXiv title-resolve
   year?: number                 // disambiguates title-resolve
   sections?: string[]           // optional: only fetch named sections (Paperclip)
-  preferSource?: FulltextSource // optional priority hint; defaults to dispatch order
+  preferSource?: FulltextSource // optional priority hint ('paperclip' | 'arxiv'); defaults to dispatch order
 }
 
 export interface FulltextResult {
@@ -150,80 +149,83 @@ export async function resolveFulltext(
 ### 5.3 Source Dispatch Order
 
 ```
-                   ┌────────────────────────────────────────────────┐
-                   │   resolveFulltext(req)                          │
-                   └─────────────────┬──────────────────────────────┘
-                                     │
-              ┌──────────────────────┴───────────────────────────┐
-              │ 1. cache.lookup(req) — by doi/pmcId/arxivId/title │
-              │    → if hit, return immediately                   │
-              └──────────────────────┬───────────────────────────┘
-                                     │ miss
-              ┌──────────────────────┴───────────────────────────┐
-              │ 2. PAPERCLIP                                      │
-              │    eligibility: PAPERCLIP_API_KEY set             │
-              │                AND (pmcId OR doi OR arxivId)      │
-              │    on success: cache + return                     │
-              │    on miss/fail: log, continue                    │
-              └──────────────────────┬───────────────────────────┘
-                                     │ miss
-              ┌──────────────────────┴───────────────────────────┐
-              │ 3. ARXIV (existing path)                          │
-              │    eligibility: arxivId valid                     │
-              │                OR (title resolve succeeds)        │
-              │    on success: cache + return                     │
-              │    on fail: log, continue                         │
-              └──────────────────────┬───────────────────────────┘
-                                     │ miss
-              ┌──────────────────────┴───────────────────────────┐
-              │ 4. UNPAYWALL                                      │
-              │    eligibility: doi present                       │
-              │    behavior: query Unpaywall, follow OA URL,      │
-              │              markitdown the PDF                   │
-              │    on success: cache + return                     │
-              │    on fail: log, return null                      │
-              └──────────────────────┬───────────────────────────┘
-                                     │
-                                  ┌──┴──┐
-                                  │ null │
-                                  └──────┘
+  resolveFulltext(req)
+        │
+        ▼
+  ┌─────────────────────────────────────────────┐
+  │ 1. cache.lookup(req)                        │
+  │    → if hit, return immediately             │
+  └─────────────────────────┬───────────────────┘
+                            │ miss
+                            ▼
+  ┌─────────────────────────────────────────────┐
+  │ 2. PAPERCLIP                                 │
+  │    eligibility: PAPERCLIP_API_KEY set        │
+  │                AND (pmcId OR doi OR arxivId) │
+  │    success: cache + return                   │
+  │    fail/miss: continue                       │
+  └─────────────────────────┬───────────────────┘
+                            │ miss
+                            ▼
+  ┌─────────────────────────────────────────────┐
+  │ 3. ARXIV (existing path)                     │
+  │    eligibility: arxivId valid                │
+  │                OR (title resolve succeeds)   │
+  │    success: cache + return                   │
+  │    fail: return null                         │
+  └─────────────────────────────────────────────┘
 ```
 
-**Why Paperclip first?** When available, it returns clean section-aware markdown without `markitdown` overhead, and covers four sources at once. When unavailable (no API key, paper not in their corpus), the existing arXiv path is unchanged.
+**Why Paperclip first?** Returns clean section-aware markdown without `markitdown` overhead and covers four upstream sources at once. When unavailable (no API key, paper not in corpus), the existing arXiv path runs unchanged.
 
-`preferSource` overrides the order — useful for the `fetch-fulltext` tool when the agent has a specific reason (e.g., the paper is on arXiv and the agent wants the formal version, not a Paperclip preprint copy).
+`preferSource` overrides the order — useful for the `fetch-fulltext` tool when the agent has a specific reason (e.g., paper is on arXiv and the agent wants the formal version, not a Paperclip preprint copy).
 
-### 5.4 Cache Layout
+### 5.4 Cache Layout — Pure Path Convention
 
 ```
 <wiki-root>/                                (= ~/.research-pilot/paper-wiki)
 ├── raw/
 │   ├── arxiv/<safeArxivId>.pdf            (existing)
-│   └── paperclip/<paperId>.json           (new — raw MCP response)
+│   └── paperclip/<paperclipId>.json       (new — raw MCP response, for debugging)
 ├── converted/
 │   ├── arxiv/<safeArxivId>.md             (existing layout, now nested)
-│   ├── paperclip/<pmcOrBio>.md            (new)
-│   └── unpaywall/<doiSafe>.md             (new)
-├── index.json                              (new)
+│   └── paperclip/<paperclipId>.md         (new)
 └── pages/                                  (existing — wiki page bodies)
 ```
 
-`index.json` is a flat reverse-lookup map:
+`<paperclipId>` is whatever ID Paperclip returned for that paper (typically `PMC<id>`, `bio_<hash>`, `med_<hash>`, or `arx_<id>`). The cache file name is the source's own canonical ID — no separate index file needed.
 
-```json
-{
-  "doi:10.1038/nbt.4194":      "converted/paperclip/PMC6130889.md",
-  "pmc:PMC6130889":            "converted/paperclip/PMC6130889.md",
-  "arxiv:2404.18021":          "converted/arxiv/2404.18021.md",
-  "doi:10.48550/arxiv.2404.18021": "converted/arxiv/2404.18021.md"
+#### 5.4.1 Cache lookup is a path probe, not a database query
+
+Given a `FulltextRequest` with whatever IDs the caller has, the lookup tries known paths in source-priority order:
+
+```typescript
+async function cacheLookup(req: FulltextRequest): Promise<CacheHit | null> {
+  // Paperclip path tried first (matches dispatch order)
+  if (req.pmcId) {
+    const p = paperclipPath(req.pmcId)              // e.g. converted/paperclip/PMC6130889.md
+    if (await exists(p)) return { path: p, source: 'paperclip' }
+  }
+  // Note: we do NOT try arbitrary doi -> paperclipId mapping here. If a caller
+  // only has a DOI, dispatch falls through to Paperclip's lookup-by-doi
+  // online; if it succeeds, the response includes the paperclipId and we
+  // cache under that ID. Next call with the same DOI but with pmcId now
+  // populated on the artifact will hit the cache.
+
+  if (req.arxivId) {
+    const p = arxivPath(stripVersion(req.arxivId))  // e.g. converted/arxiv/2404.18021.md
+    if (await exists(p)) return { path: p, source: 'arxiv' }
+  }
+
+  return null
 }
 ```
 
-Multiple identifiers can point to the same cache file (e.g., a paper has both a DOI and a PMC ID). Cache is content-addressed by source's canonical paper ID, then aliased by `index.json` for reverse lookup from any input identifier.
+**Trade-off accepted**: a caller who has only a DOI will not get a cache hit for a Paperclip-cached paper on the first call (they'll go online, get the paperclipId back, then subsequent calls hit the cache). This is fine because in practice the upstream `PaperArtifact` accumulates IDs as it gets enriched — by the time a paper is in the wiki, it usually has its strongest ID populated. The alternative (a reverse-lookup index file that has to be written-on-cache and read-on-lookup) solves a problem we don't have.
 
-**Cache invalidation:** none in v0.1. Explicit `cache.clear(req)` API for future use; no TTL. (Open question §11.4.)
+**Existing `<wiki-root>/converted/<id>.md` files** (current flat layout) — `cacheLookup` also probes the legacy flat path as a fallback. Old files are not moved.
 
-**Existing `<wiki-root>/converted/<id>.md` files** (flat layout from current code) get migrated lazily: `cache.lookup` checks both the new nested path and the legacy flat path. Old files are not moved.
+**Cache invalidation:** none in v0.1. No TTL, no purge API. (See §13 decision row 6.)
 
 ### 5.5 State Machine Extension — Provenance vs. Evidence Tier
 
@@ -234,7 +236,7 @@ The two fields answer different questions and must not be conflated:
 | Field | Question it answers | Domain |
 |---|---|---|
 | `source_tier` | *How strong is the evidence backing this wiki page?* | `'metadata-only' \| 'abstract-only' \| 'fulltext'` — **unchanged from today** |
-| `fulltextSource` | *Which provider supplied the fulltext (when present)?* | `'paperclip' \| 'arxiv' \| 'unpaywall' \| undefined` — **NEW** |
+| `fulltextSource` | *Which provider supplied the fulltext (when present)?* | `'paperclip' \| 'arxiv' \| undefined` — **NEW** |
 
 This split was a review-round-1 correction. An earlier draft of this RFC merged provenance into `source_tier` (`fulltext-arxiv`, `fulltext-paperclip`, …). That breaks every existing parser, indexer, sidecar reader, and wiki filter that switches on `source_tier`. Keep them orthogonal.
 
@@ -259,7 +261,7 @@ interface ProcessedEntry {
 `fulltextSource` is not part of the canonical key, not part of the semantic hash, and is set only when `fulltextStatus === 'fulltext'`. It is additive metadata used by:
 
 - Wiki UI: small badge on each wiki page indicating source.
-- Backfill / observability: count `arxiv` vs `paperclip` vs `unpaywall` coverage.
+- Backfill / observability: count `arxiv` vs `paperclip` coverage.
 - Future cache invalidation: target a single source for forced refresh.
 
 #### 5.5.2 Wiki sidecar schema
@@ -329,16 +331,15 @@ Proposed:
 ```typescript
 // lib/fulltext/index.ts — exported for use by both scanner.ts and generator.ts
 export function hasAnyFulltextSource(a: PaperArtifact, s: Settings): boolean {
-  if (a.arxivId && isValidArxivId(a.arxivId)) return true
   if (s.paperclipApiKey && (a.doi || a.pmcId || a.pubmedId)) return true
-  if (a.doi) return true   // unpaywall fallback
+  if (a.arxivId && isValidArxivId(a.arxivId)) return true
   return false
 }
 ```
 
 #### 5.6.4 Backoff coordination
 
-Backoff state (`fulltextFailures`, `lastFulltextTryAt`) remains **per-canonical-key, not per-source** (constraint 3.6). A retry tries Paperclip → arXiv → Unpaywall in dispatch order; an all-fail bumps the counter once. (Open question §11.6 → resolved as "1 budget consumed per tick.")
+Backoff state (`fulltextFailures`, `lastFulltextTryAt`) remains **per-canonical-key, not per-source** (constraint 3.6). A retry tries Paperclip → arXiv in dispatch order; an all-fail bumps the counter once. See §13 decision row 4 ("1 budget consumed per tick").
 
 **3.6 enforcement:** if Paperclip succeeds where arXiv would have failed (e.g., paper has DOI but no arxivId), backoff state is *consumed* — `markFulltextFailure` is not called. The wiki transitions `abstract-fallback → fulltext` cleanly and resets the failure counter on success (existing behavior preserved).
 
@@ -389,7 +390,7 @@ This is non-trivial work but unavoidable — without `pmcId` as a first-class id
 
 ### 5.8 Agent Tool: `fetch-fulltext` — Metadata-First by Default
 
-A naive default of "return up to 80 000 chars of body" floods the agent's context with material it usually doesn't need. The reviewer flagged this directly. Default behavior is now **metadata + section list + cache path**; body is opt-in.
+A naive default of "return up to 80 000 chars of body" floods the agent's context with material it usually doesn't need. Default behavior is **metadata + section list + cache path**; body is opt-in via two orthogonal levers (no enum, no implicit mode rules):
 
 ```typescript
 // lib/tools/fetch-fulltext.ts
@@ -398,11 +399,10 @@ A naive default of "return up to 80 000 chars of body" floods the agent's contex
   label: 'Fetch Full Text',
   description:
     'Retrieve metadata, section listing, and (optionally) body of a paper. ' +
-    'Tries Paperclip (section-aware biomedical/arXiv) first, then arXiv direct, ' +
-    'then Unpaywall for open-access copies. Default mode returns metadata + ' +
-    'section list + cache path so the agent can decide which section to read ' +
-    'next. Pass `sections=[...]` for specific sections, or `mode="body"` for ' +
-    'the full body.',
+    'Tries Paperclip (section-aware biomedical/arXiv) first, then arXiv ' +
+    'direct. Default returns metadata + section list + cache path so the ' +
+    'agent can decide what to read next. Pass `sections=[...]` for specific ' +
+    'sections or `include_body=true` for the entire body.',
   parameters: Type.Object({
     doi:      Type.Optional(Type.String()),
     arxiv_id: Type.Optional(Type.String()),
@@ -410,29 +410,28 @@ A naive default of "return up to 80 000 chars of body" floods the agent's contex
     title:    Type.Optional(Type.String()),
     year:     Type.Optional(Type.Integer()),
 
-    mode: Type.Optional(Type.Union([
-      Type.Literal('metadata'),   // DEFAULT. Metadata + section list + cache path. No body bytes.
-      Type.Literal('sections'),   // Implied when `sections=[...]` is non-empty.
-      Type.Literal('body')        // Full body, capped by max_chars.
-    ], { default: 'metadata' })),
-
     sections: Type.Optional(Type.Array(Type.String(), {
-      description: 'Section names (Paperclip only, fuzzy-matched). Setting this implies mode="sections".'
+      description: 'Section names (Paperclip only, fuzzy-matched). Returns just these sections in `sections_returned`.'
+    })),
+
+    include_body: Type.Optional(Type.Boolean({
+      default: false,
+      description: 'When true, returns the entire body (capped by max_chars).'
     })),
 
     max_chars: Type.Optional(Type.Integer({
-      default: 40_000,                       // halved from earlier draft
-      description: 'Cap on returned body bytes. Only applies when mode="body" or mode="sections".'
+      default: 40_000,
+      description: 'Cap on returned body/section bytes. Applies when `sections` or `include_body` is set.'
     })),
 
     prefer_source: Type.Optional(Type.Union([
-      Type.Literal('paperclip'), Type.Literal('arxiv'), Type.Literal('unpaywall')
+      Type.Literal('paperclip'), Type.Literal('arxiv')
     ]))
   }),
 }
 ```
 
-**Default-mode return shape** (`mode='metadata'`):
+**Default return shape** (`sections` empty, `include_body` false):
 
 ```jsonc
 {
@@ -445,41 +444,35 @@ A naive default of "return up to 80 000 chars of body" floods the agent's contex
     "pmc_id": "PMC6130889",
     "arxiv_id": null,
     "abstract": "...",
-    "fulltext_available": true               // if any source returned content
+    "fulltext_available": true
   },
   "sections": ["Title", "Abstract", "Online Methods", "Cell culture, ...", "Statistics", ...],
-                                             // present if Paperclip succeeded
   "cache_path": "<wiki-root>/converted/paperclip/PMC6130889.md",
-                                             // absolute path; agent can use Read tool to view it
   "source": "paperclip",
-  "fetched_at": "2026-05-02T20:15:00Z",
-  "next_actions": [                          // hint to the agent about cheap follow-ups
-    "Call fetch-fulltext again with sections=['Online Methods'] to read just the methods.",
-    "Or use the Read tool on cache_path to view the full converted markdown."
-  ]
+  "fetched_at": "2026-05-02T20:15:00Z"
 }
 ```
 
-Body-modes return shape (`mode='sections'` or `mode='body'`):
+**Body return shape** (when `sections=[...]` or `include_body=true`):
 
 ```jsonc
 {
   "metadata": { ... },
-  "body": "...markdown...",                  // present (truncated to max_chars if needed)
-  "sections_returned": { "Methods": "..." }, // present in mode='sections'
-  "sections_unmatched": ["typo-name"],       // names that didn't match any actual section
-  "truncated": false,                        // true when max_chars hit
+  "sections": [...],
   "cache_path": "...",
   "source": "paperclip",
-  "fetched_at": "..."
+  "fetched_at": "...",
+
+  // Present when sections=[...] was passed:
+  "sections_returned": { "Methods": "...markdown..." },
+  "sections_unmatched": ["typo-name"],
+
+  // Present when include_body=true:
+  "body": "...markdown...",
+
+  "truncated": false                         // true when max_chars hit
 }
 ```
-
-**Why this default is better** (from the reviewer's framing):
-
-- The metadata response is small (~1 KB), so the agent can call it speculatively for many papers without bloating context.
-- The `sections` array exposes Paperclip's most differentiated capability — the agent learns *what is available* before deciding *what to read*.
-- `cache_path` lets the agent fall through to the Read tool for ad-hoc inspection without re-fetching.
 
 **Coordinator prompt addition** (after the existing wiki guidance, around line 132 of `lib/agents/prompts/index.ts`):
 
@@ -487,58 +480,52 @@ Body-modes return shape (`mode='sections'` or `mode='body'`):
 After literature-search, when an abstract is not sufficient (extracting
 methods, comparing baselines, quoting specific results):
 
-  1. Call fetch-fulltext with mode='metadata' (the default) to learn
-     which sections are available and confirm fulltext exists.
+  1. Call fetch-fulltext (default) to learn which sections are available
+     and confirm fulltext exists. Returns metadata + section list + cache
+     path — small, cheap to call speculatively.
   2. Then call fetch-fulltext again with sections=['Methods', ...] for
      just the sections you need.
 
-Avoid mode='body' unless you genuinely need the whole paper — section
-reads are cheaper and more focused. Results are cached and shared with
-the paper wiki, so the wiki entry will upgrade on next scan.
+Avoid include_body=true unless you genuinely need the whole paper.
+Results are cached and shared with the paper wiki, so the wiki entry
+will upgrade on next scan.
 ```
 
-### 5.9 Wiki Agent Integration
+### 5.9 Wiki Agent Integration — Single Entry Point
 
-`lib/wiki/agent.ts:304-308` becomes:
+`lib/wiki/agent.ts:304-308` becomes a single `resolveFulltext` call:
 
 ```typescript
-// existing
-let fulltext: string | null = null
-if (resolvedArxivId && isValidArxivId(resolvedArxivId)) {
-  fulltext = await downloadAndConvertArxiv(resolvedArxivId)
-}
+const result = await resolveFulltext({
+  doi:      artifact.doi,
+  arxivId:  resolvedArxivId ?? undefined,
+  pmcId:    artifact.pmcId,
+  pubmedId: artifact.pubmedId,
+  title:    artifact.title,                 // last-resort for arXiv title-resolve
+  year:     artifact.year,
+})
 
-// NEW (additive — only runs if existing path missed)
-let fulltextSource: FulltextSource | undefined = fulltext ? 'arxiv' : undefined
-if (!fulltext) {
-  const result = await resolveFulltext({
-    doi: artifact.doi,
-    arxivId: resolvedArxivId ?? undefined,
-    pmcId: artifact.pmcId,
-    pubmedId: artifact.pubmedId,
-  })
-  if (result) {
-    fulltext = result.markdown
-    fulltextSource = result.source            // for watermark + sidecar
-  }
-}
+const fulltext: string | null = result?.markdown ?? null
+const fulltextSource: FulltextSource | undefined = result?.source
+
+// Existing fulltext-retry-failed branch is unchanged — still keys off `!fulltext`.
 ```
 
-`downloadAndConvertArxiv()` retained as a thin wrapper (calls `resolveFulltext({arxivId})`) so that **existing callers and tests don't break.** The wiki agent now has two entry points — explicit arXiv-first (back-compat) and unified (new). Over time the explicit branch can be removed.
+The old `downloadAndConvertArxiv` and `resolveArxivIdByTitle` exports are **deleted, not wrapped**. `lib/wiki/downloader.ts` is removed; its arXiv logic now lives in `lib/fulltext/arxiv.ts` and is reachable only through `resolveFulltext`. There are no external callers — `wiki/agent.ts` is the only consumer — so a back-compat wrapper would be code with no purpose. (See §13 decision row 8.)
 
 ### 5.10 `wiki_source` Tool — Cache Index Integration (review-round-1 issue 5)
 
 `wiki_source(slug)` is the existing tool the coordinator is told to use *"when you need exact quotes, precise numbers, or cross-paper comparisons"* (`lib/agents/prompts/index.ts:130`). It returns paths to underlying paper artifacts including any cached fulltext. The whole "wiki memory is derived summary, not source evidence" closed-loop in the prompt rests on this tool surfacing the same fulltext the agent could have fetched directly.
 
-**Without this section, the closed loop breaks.** A user-uploaded chat PDF currently surfaces via the existing `fulltextPath` field. An arXiv paper surfaces via `<wiki-root>/converted/<id>.md`. But a Paperclip- or Unpaywall-sourced paper would land in `<wiki-root>/converted/paperclip/...` or `.../unpaywall/...` — a path `wiki_source` doesn't currently know how to resolve.
+**Without this section, the closed loop breaks.** An arXiv paper surfaces via `<wiki-root>/converted/arxiv/<id>.md`. A Paperclip-sourced paper lands in `<wiki-root>/converted/paperclip/<paperclipId>.md` — a path `wiki_source` doesn't currently know how to resolve.
 
 **Required change to `lib/wiki/wiki-tools.ts`:**
 
-`wiki_source` must consult the new `cache.index.json` (§5.4) to resolve fulltext paths regardless of source:
+`wiki_source` must call `fulltextCache.lookup()` (§5.4) to resolve fulltext paths regardless of which source produced them:
 
 ```typescript
 // pseudocode for the relevant branch in wiki_source
-const cacheLookup = await fulltextCache.lookup({
+const hit = await fulltextCache.lookup({
   doi: artifact.doi,
   arxivId: artifact.arxivId,
   pmcId: artifact.pmcId,
@@ -548,9 +535,9 @@ const cacheLookup = await fulltextCache.lookup({
 return {
   artifactPath: ...,
   pdfPath: ...,                                 // unchanged — only arXiv path has PDF
-  fulltextPath: cacheLookup?.cachePath ?? null, // now finds Paperclip + Unpaywall too
-  fulltextSource: cacheLookup?.source ?? null,  // NEW field in the response
-  sectionList: cacheLookup?.sectionList ?? null,// Paperclip only
+  fulltextPath: hit?.path ?? null,              // now finds Paperclip too
+  fulltextSource: hit?.source ?? null,          // NEW: 'paperclip' | 'arxiv' | null
+  sectionList: hit?.sectionList ?? null,        // Paperclip only
 }
 ```
 
@@ -564,35 +551,39 @@ The response schema gains `fulltextSource` and `sectionList` fields; existing `f
 
 | # | File | Action | Lines | Risk |
 |---|---|---|---|---|
-| 1 | `lib/fulltext/index.ts` | NEW — public `resolveFulltext()` + dispatch | ~80 | new |
+| 1 | `lib/fulltext/index.ts` | NEW — public `resolveFulltext()` + dispatch + `hasAnyFulltextSource` | ~90 | new |
 | 2 | `lib/fulltext/paperclip.ts` | NEW — MCP HTTP client, text-output parser, section fetch | ~150 | new |
-| 3 | `lib/fulltext/arxiv.ts` | MOVE — verbatim from `lib/wiki/downloader.ts` | ~100 | semantics-preserving move |
-| 4 | `lib/fulltext/unpaywall.ts` | NEW — DOI → OA URL → markitdown | ~60 | new |
-| 5 | `lib/fulltext/cache.ts` | NEW — index.json + nested dirs + lookup | ~120 | new |
-| 6 | `lib/fulltext/types.ts` | NEW — types | ~30 | new |
-| 7 | `lib/wiki/downloader.ts` | REWRITE — delegate to `lib/fulltext` | -125 / +30 | low (pure delegation) |
-| 8 | `lib/wiki/types.ts` | EXTEND — `ProcessedEntry.fulltextSource?: FulltextSource` | +2 | low |
-| 9 | `lib/wiki/scanner.ts` | EXTEND — `hasAnyFulltextSource` in upgrade predicate | +15 | medium (touches scan logic) |
-| 10 | `lib/wiki/agent.ts` | EXTEND — additive Paperclip fallback after arXiv attempt | +20 | medium (touches main flow) |
-| 11 | `lib/wiki/generator.ts` | EXTEND — `fulltextStatus` decision uses `hasAnyFulltextSource`; sidecar adds `fulltext_source` field | +10 | low |
-| 12 | `lib/wiki/wiki-tools.ts` | EXTEND — `wiki_source` consults fulltext cache index, returns `fulltextSource` + `sectionList` | +25 | medium (touches retrieval contract) |
-| 13 | `lib/tools/fetch-fulltext.ts` | NEW — agent tool, metadata-default | ~180 | new |
-| 14 | `lib/tools/index.ts` | REGISTER — add to `createResearchTools()` | +3 | trivial |
-| 15 | `lib/tools/types.ts` | EXTEND — `ResolvedSettings.paperclipApiKey?` | +1 | trivial |
-| 16 | `lib/agents/prompts/index.ts` | EXTEND — coordinator prompt: metadata-first guidance | +10 | low |
-| 17 | `shared-electron/ipc-base.ts` | EXTEND — `API_KEY_NAMES` adds `PAPERCLIP_API_KEY` | +1 | trivial |
-| 18 | `app/src/renderer/components/settings/ApiKeysSettings.tsx` | EXTEND — `KEY_FIELDS` adds Paperclip entry | +6 | trivial |
-| 19 | `lib/types.ts` | **EXTEND — `PaperArtifact.pmcId?: string`** | +1 | low |
-| 20 | `lib/commands/paper-artifact.ts` | EXTEND — `pmcId` in `opts`, persistence, dedup unchanged | +10 | low |
-| 21 | `lib/tools/literature-search.ts` | EXTEND — extract `pmcId` from S2 (`externalIds.PubMedCentral`) and OpenAlex (`ids.pmcid`); pass to upsert | +20 | low |
-| 22 | `lib/wiki/agent.ts` (sibling propagation block, lines 277-288) | EXTEND — propagate `pmcId` alongside `arxivId` | +15 | low |
-| 23 | `lib/wiki/hash-isolation.test.ts` | EXTEND — `pmcId` not in hash; `fulltextSource` change doesn't trigger semantic-change | +40 | low (test-only) |
-| 24 | `lib/fulltext/index.test.ts` | NEW — dispatch, cache hit, all-fail, section fuzzy, `hasAnyFulltextSource` matrix | ~180 | new (test-only) |
-| 25 | `README.md` + `docs/wiki/Paper-Wiki.md` | UPDATE — describe Paperclip integration, pmcId field | ~30 | docs |
+| 3 | `lib/fulltext/arxiv.ts` | MOVE — verbatim relocation from `lib/wiki/downloader.ts` | ~100 | semantics-preserving move |
+| 4 | `lib/fulltext/cache.ts` | NEW — pure path-convention probe + legacy fallback | ~50 | new |
+| 5 | `lib/fulltext/types.ts` | NEW — `FulltextRequest`, `FulltextResult`, `FulltextSource` | ~30 | new |
+| 6 | `lib/wiki/downloader.ts` | **DELETE** | -155 | low |
+| 7 | `lib/wiki/agent.ts` | REPLACE arXiv block with single `resolveFulltext` call (line 304-308) + propagate `pmcId` to siblings (line 277-288) | -10 / +30 | medium (touches main flow) |
+| 8 | `lib/wiki/scanner.ts` | EXTEND — retry predicate uses `hasAnyFulltextSource` | +10 | medium (touches scan logic) |
+| 9 | `lib/wiki/generator.ts` | EXTEND — `fulltextStatus` initial decision uses `hasAnyFulltextSource`; sidecar adds `fulltext_source` field | +10 | low |
+| 10 | `lib/wiki/types.ts` | EXTEND — `ProcessedEntry.fulltextSource?: FulltextSource` | +2 | low |
+| 11 | `lib/wiki/wiki-tools.ts` | EXTEND — `wiki_source` consults fulltext cache, returns `fulltextSource` + `sectionList` | +25 | medium (touches retrieval contract) |
+| 12 | `lib/tools/fetch-fulltext.ts` | NEW — agent tool, metadata-default | ~160 | new |
+| 13 | `lib/tools/index.ts` | REGISTER — add to `createResearchTools()` | +3 | trivial |
+| 14 | `lib/tools/types.ts` | EXTEND — `ResolvedSettings.paperclipApiKey?` | +1 | trivial |
+| 15 | `lib/agents/prompts/index.ts` | EXTEND — coordinator prompt: metadata-first guidance | +10 | low |
+| 16 | `shared-electron/ipc-base.ts` | EXTEND — `API_KEY_NAMES` adds `PAPERCLIP_API_KEY` | +1 | trivial |
+| 17 | `app/src/renderer/components/settings/ApiKeysSettings.tsx` | EXTEND — `KEY_FIELDS` adds Paperclip entry | +6 | trivial |
+| 18 | `lib/types.ts` | EXTEND — `PaperArtifact.pmcId?: string` | +1 | low |
+| 19 | `lib/commands/paper-artifact.ts` | EXTEND — `pmcId` in `opts`, persistence, dedup unchanged | +10 | low |
+| 20 | `lib/tools/literature-search.ts` | EXTEND — extract `pmcId` from S2 (`externalIds.PubMedCentral`) and OpenAlex (`ids.pmcid`) and pass to upsert | +20 | low |
+| 21 | `lib/wiki/hash-isolation.test.ts` | EXTEND — `pmcId` not in hash; `fulltextSource` change doesn't trigger semantic-change | +40 | low (test-only) |
+| 22 | `lib/fulltext/index.test.ts` | NEW — dispatch, cache hit, all-fail, section fuzzy, `hasAnyFulltextSource` matrix | ~150 | new (test-only) |
+| 23 | `README.md` + `docs/wiki/Paper-Wiki.md` | UPDATE — describe Paperclip integration, pmcId field | ~30 | docs |
 
-**Total**: ~1 050 lines of code (incl. ~220 lines of tests), 14 modified files, 7 new files.
+**Total**: ~770 lines added, ~165 lines deleted, 12 modified files, 5 new files, 1 deleted file.
 
-**Net delta vs. spec v0.1**: +180 lines from the pmcId schema work (rows 19-22) and the `wiki_source` patch (row 12). These are **non-optional** consequences of review-round-1 issues 2 and 5; without them the integration loses biomedical reach (no PMC ID matching) or evidence reach (`wiki_source` can't surface Paperclip cache).
+**v0.2 → v0.3 delta** (review-round-2 cuts):
+- Unpaywall removed → -60 lines code, -1 file, -1 dispatch branch, -1 open question.
+- `index.json` removed → -70 lines code in `cache.ts`, -1 maintenance burden.
+- Wiki `downloader.ts` thin wrapper deleted instead of retained → -30 lines, no parallel API surface.
+- `mode` enum collapsed to `include_body` boolean + `sections` array → -20 lines tool definition, no implicit-mode rules.
+- `next_actions` field deleted from tool output → -10 lines, no duplicated coordinator guidance at runtime.
+- CI live-probe removed → -1 secret, -1 flaky test surface.
 
 **Files we're explicitly NOT touching:** `lib/mentions/resolver.ts`, `lib/tools/convert-document.ts`, `lib/mentions/document-cache.ts`, `app/src/main/ipc.ts`, `lib/memory-v2/*`, all skill markdown files. Future RFCs can extend mentions to surface fulltext (§10.1) and skills to recommend `fetch-fulltext` (§10.2).
 
@@ -600,7 +591,9 @@ The response schema gains `fulltextSource` and `sectionList` fields; existing `f
 
 ### 7.1 Cache hit semantics
 
-`cache.lookup` resolves any of: `doi`, `arxivId` (bare or full), `pmcId`, `pubmedId`. All four are first-class lookup keys (constraint 3.9). Returns the same cache entry regardless of which identifier was used; `index.json` aliases all known identifiers of a paper to the same cache file. `arxivId` matching strips version suffix (`v2`). `pmcId` matching is case-insensitive on the `PMC` prefix.
+`cache.lookup` is a sequential path probe (§5.4): given whatever IDs the `FulltextRequest` carries, it tries `paperclipPath(pmcId)` first, then `arxivPath(arxivId)`. First-existing-file wins. No reverse-lookup index. `arxivId` matching strips version suffix (`v2`). `pmcId` matching is case-insensitive on the `PMC` prefix.
+
+Trade-off: a request that has only a `doi` (no `pmcId`, no `arxivId`) does not hit the cache locally; it will go online, get the canonical ID back, and cache under that. Subsequent calls that *do* carry the source-typed ID will hit the cache. In practice, by the time a paper is in the wiki, it has usually accumulated its strongest ID via enrichment.
 
 ### 7.2 Network failure handling
 
@@ -611,7 +604,7 @@ The response schema gains `fulltextSource` and `sectionList` fields; existing `f
 | 429 | Paperclip | Wait, retry once with exponential backoff (1s, 4s); then continue to next source |
 | 5xx | Paperclip | Log; continue to next source (do not retry; let backoff handle next pass) |
 | Network timeout (>15s) | any | Log; continue to next source |
-| Markitdown missing | arXiv / Unpaywall | Log "markitdown not installed"; continue to next source. Paperclip path remains usable. |
+| Markitdown missing | arXiv | Log "markitdown not installed"; arXiv source unavailable. Paperclip path remains usable. |
 
 ### 7.3 Section fuzzy match (Paperclip)
 
@@ -622,22 +615,11 @@ User passes `sections: ['methods']`. Paperclip's section names vary: `'Methods'`
 3. Return only matched sections in `result.sections[name]`. Unmatched names returned in `result.unmatchedSections[]` for the caller's benefit.
 4. If `sections` is omitted, return `content.lines` as the body.
 
-### 7.4 Unpaywall integration
-
-```
-GET https://api.unpaywall.org/v2/<doi>?email=<configured>
-→ {best_oa_location: {url_for_pdf: "..."}}
-→ download PDF
-→ markitdown
-```
-
-Email parameter required by Unpaywall's TOS. Use `process.env.UNPAYWALL_EMAIL` if set, else fall back to a project-wide neutral address (Open question §11.3 — choose a value).
-
-### 7.5 Wiki retry coordination
+### 7.4 Wiki retry coordination
 
 When the wiki processes a `fulltext-upgrade` for a paper:
 
-1. Call `resolveFulltext` (cache lookup → Paperclip → arXiv → Unpaywall).
+1. Call `resolveFulltext` (cache lookup → Paperclip → arXiv).
 2. If returns a result:
    - Update wiki page (regenerate via `generatePaperPage`).
    - Set `processed.fulltextStatus = 'fulltext'`, `processed.fulltextSource = result.source`, clear `fulltextFailures`.
@@ -667,83 +649,54 @@ The sidecar `source_tier` field is extended (§5.5). Existing pages with bare `s
 **Unit (new):**
 
 1. `lib/fulltext/index.test.ts`
-   - cache hit short-circuits dispatch
-   - dispatch order respected (Paperclip → arXiv → Unpaywall)
-   - `preferSource` overrides order
+   - cache hit short-circuits dispatch (probes paperclip path, then arxiv path, in that order)
+   - dispatch order respected (Paperclip → arXiv) when cache misses
+   - `preferSource` overrides dispatch order
    - all sources fail → returns null
    - PAPERCLIP_API_KEY absent → Paperclip silently skipped
-   - section fuzzy matching produces expected pairs
-2. `lib/fulltext/cache.test.ts`
-   - identifier aliasing (DOI + PMC ID hit same file)
-   - legacy flat-layout files still resolved
-3. `lib/fulltext/paperclip.test.ts`
-   - text response parser extracts title/authors/source/date/DOI/abstract
+   - `hasAnyFulltextSource` matrix: arxivId-only, doi-only-with-key, doi-only-no-key, pmcId-only, none
+   - section fuzzy matching produces expected pairs (`['methods']` → `Online Methods`, `Methods`)
+   - legacy `<wiki-root>/converted/<id>.md` flat path still hits cache
+2. `lib/fulltext/paperclip.test.ts`
+   - text response parser extracts title / authors / source-id / date / DOI / abstract
    - error responses (401/404/429) classified correctly
 
 **Regression (extend existing):**
 
-4. `lib/wiki/hash-isolation.test.ts`
-   - same paper, `fulltextSource` change (arXiv → Paperclip): semantic hash unchanged, `processedAt` updates, `fulltextStatus` may change but no `semantic-change` reason fires
+3. `lib/wiki/hash-isolation.test.ts`
+   - same paper, `fulltextSource` flips arXiv ↔ Paperclip: semantic hash unchanged, `processedAt` updates, `fulltextStatus` may change but no `semantic-change` reason fires
    - `processedEntry.fulltextSource` round-trips through serialization
+   - `pmcId` not in semantic hash (constraint 3.2)
 
 **Integration (manual, with live token):**
 
-5. End-to-end via `fetch-fulltext` tool — search a known paper (PMC6130889), call tool, verify cache file written under `<wiki-root>/converted/paperclip/`, verify next wiki scan picks up the cached file as `fulltext-upgrade`.
+4. End-to-end via `fetch-fulltext` tool — search a known paper (PMC6130889), call tool, verify cache file written under `<wiki-root>/converted/paperclip/`, verify next wiki scan picks up the cached file as `fulltext-upgrade` and transitions the wiki page from `abstract-only`/`abstract-fallback` to `fulltext`.
 
 ## 10. Migration & Rollout
 
 **Phase 0 — RFC review & sign-off** (this document).
 
-**Phase 1 — `lib/fulltext/` skeleton + tests.** Ship the new modules with arXiv path as a verbatim move; wiki delegates to the new module. Behavior identical to today. Goal: zero-regression refactor lands first.
+**Phase 1 — Implementation.** Single PR. Ship `lib/fulltext/` (Paperclip + arXiv + cache + types), delete `lib/wiki/downloader.ts`, switch `wiki/agent.ts` to `resolveFulltext`, add `pmcId` to artifact + literature search + sibling propagation, wire `PAPERCLIP_API_KEY` settings, ship `fetch-fulltext` tool, update `wiki_source` to consult cache, update tests. The arXiv-only-relocation phase from v0.2 is folded in here — there's no point landing the move separately when the new source code is the same diff.
 
-**Phase 2 — Paperclip + Unpaywall sources.** Ship `paperclip.ts` and `unpaywall.ts`. Wire `PAPERCLIP_API_KEY` plumbing. Wiki agent gains additive fallback. New papers in Paperclip's corpus get fulltext immediately.
+**Phase 2 — Backfill (optional CLI).** `npm run wiki:backfill-fulltext` walks all `abstract-only` and `abstract-fallback` wiki entries with DOI / PMC ID / arxivId and triggers a `fulltext-upgrade` rescan, bypassing backoff timer once. Idempotent. Off by default. (See §13 decision row 5.)
 
-**Phase 3 — `fetch-fulltext` agent tool + coordinator prompt.** Foreground access. Documented in README + wiki docs.
+**Phase 3 — Reconsider Unpaywall (data-driven).** After Phase 1 has run for ~2 weeks, query `processed.json` for the `abstract-only` set. If a meaningful fraction has DOIs and Unpaywall would have caught them, write a follow-up RFC to add it. Without that data, do not add it.
 
-**Phase 4 — Backfill.** Optional one-shot script that walks all `abstract-only` wiki entries with DOI/PMC IDs and triggers a `fulltext-upgrade` rescan. Bypasses backoff timer once. (Open question §11.5.)
+**Phase 4 (later RFC) — Mentions integration, skills updates.**
 
-**Phase 5 (later RFC) — Mentions integration, skills updates.**
-
-Each phase is a separate PR. Phase 1 must land green before Phase 2 starts.
-
-## 11. Open Questions
-
-**11.1 — Source priority for arXiv papers.**
-Paperclip indexes arXiv. For a paper that's on both arXiv and Paperclip, we prefer Paperclip (cleaner section parsing). But the arXiv version is "official" and the Paperclip copy is derived. Is this OK, or should we always prefer arXiv direct for arXiv-first papers? **Proposed default: Paperclip first when API key present.** Easy to flip.
-
-**11.2 — Backoff reset on enrichment.**
-A paper in `abstract-fallback` with no DOI is later enriched (literature-search adds a DOI). Today the backoff timer is still active. Should adding a new identifier reset the failure counter? **Proposed: yes**, but adds enrichment-aware logic to the scanner. (Constraint 3.6 says backoff is per-canonical-key, but enrichment changes the eligibility set.)
-
-**11.3 — Unpaywall email.**
-TOS requires an email. Options: (a) hardcode `research-pilot@noreply.invalid` (not a real address but accepted by their endpoint), (b) reuse the user's git config email, (c) require explicit configuration. **Proposed: (a) by default**, override via `UNPAYWALL_EMAIL` env var.
-
-**11.4 — Cache TTL.**
-Paperclip papers can be revised; arXiv papers have versions. Currently no eviction. **Proposed: no TTL in v0.1**; revisit if users report stale content. Add `cache.purge({doi, olderThan})` API for future use without using it.
-
-**11.5 — One-shot backfill.**
-Should Phase 4 (backfill) be a CLI command? An auto-run on first launch after upgrade? Off-by-default? **Proposed: explicit CLI** (`npm run wiki:backfill-fulltext`), runs in background, idempotent. Auto-run feels intrusive.
-
-**11.6 — Retry-budget semantics.**
-Today: 5 failures = terminal. With 3 sources, a paper might fail Paperclip + arXiv + Unpaywall in one tick. Does that count as 1 failure or 3? **Proposed: 1** (one tick = one budget consumed regardless of how many sources tried).
-
-**11.7 — `fetch-fulltext` token budget.** ✅ **RESOLVED (review-round-1):** default mode is `metadata` — returns metadata + section list + cache path only. Body returned only when `sections=[...]` or `mode='body'` is explicitly passed. `max_chars` default lowered from 80k to 40k. See §5.8.
-
-**11.8 — Paperclip rate limits.**
-Not documented. Reasonable: 1 req/s. If we batch wiki backfill, we may need a `ProviderRateGate` per `lib/tools/web-tools.ts`. **Proposed: reuse the existing `ProviderRateGate` class with a 1000ms interval**; tighten if Paperclip team specifies.
-
-## 12. Risks
+## 11. Risks
 
 **R1 — Paperclip outage.** Hosted dependency. Mitigation: graceful degradation to arXiv path; Paperclip-only papers stay `abstract-fallback` until service returns. Documented in operator runbook.
 
-**R2 — Paperclip changes API or auth model.** Their MCP server returns text not JSON; format could shift. Mitigation: paperclip.ts has small, well-isolated parser; one-file fix per change. Add a `paperclip-api-version-probe` test that runs against their live API in CI (gated by API key secret) to catch shifts early.
+**R2 — Paperclip changes API or auth model.** Their MCP server returns text not JSON; format could shift. Mitigation: `paperclip.ts` has a small, well-isolated parser. If they ship a breaking change, it's a one-file fix on first user report. No CI live-probe needed (it would be flaky and would consume secrets for a low-probability event).
 
-**R3 — markitdown unavailable** in user environments (already a risk). Mitigation: Paperclip path doesn't need markitdown, so biomedical papers continue to work; arXiv-only papers degrade as today. Logged loudly.
+**R3 — markitdown unavailable** in user environments (already a risk). Mitigation: Paperclip path doesn't need markitdown, so biomedical and arXiv-via-Paperclip papers continue to work. Pure arXiv-only papers degrade exactly as today.
 
-**R4 — Cache disk usage.** `<wiki-root>/raw/` and `converted/` grow unbounded. Mitigation: documented disk-cost; future TTL hook (§11.4).
+**R4 — Cache disk usage.** `<wiki-root>/raw/` and `converted/` grow unbounded. Mitigation: documented disk cost; no automated eviction in v0.1 (decision row 6). If reports come in, revisit with a manual `wiki:cache-prune --older-than 90d` script in a follow-up.
 
-**R5 — Wiki state-machine drift.** Adding a new fulltext source path is invasive on `agent.ts` flow. Mitigation: additive-only changes (no rewrites of existing branches), heavy test coverage on `hash-isolation.test.ts`.
+**R5 — Wiki state-machine drift.** Touching `agent.ts` flow is the riskiest part of this change. Mitigation: a single `resolveFulltext` call replaces the existing `downloadAndConvertArxiv` block (§5.9 — same surface area, not parallel paths). Heavy regression coverage on `hash-isolation.test.ts` to prove `fulltextSource` flips don't trigger `semantic-change` rescans.
 
-## 13. Decision Log
+## 12. Decision Log
 
 | Date | Decision | Author | Rationale |
 |---|---|---|---|
@@ -752,6 +705,19 @@ Not documented. Reasonable: 1 req/s. If we batch wiki backfill, we may need a `P
 | 2026-05-02 | `abstract-fallback` semantics broaden from "arXiv retryable" to "any source retryable"; both initial classification (`generator.ts`) and retry trigger (`scanner.ts`) share `hasAnyFulltextSource` | Captain (review-round-1) | Otherwise DOI-only biomedical papers terminal-fail on first miss and never get Paperclip retry. §3.3, §5.6. |
 | 2026-05-02 | `fetch-fulltext` defaults to `mode='metadata'`; body opt-in via `sections=[...]` or `mode='body'`; `max_chars` 80k → 40k | Captain (review-round-1) | Naive 80k-body default floods agent context for typical use cases; metadata + section list is far more useful as a first-pass response. §5.8, §11.7. |
 | 2026-05-02 | `wiki_source` consults the new fulltext cache index; response gains `fulltextSource` and `sectionList` fields | Captain (review-round-1) | Without this, Paperclip-cached fulltext is invisible to the coordinator's "exact quotes / precise numbers" path, breaking the "wiki memory ≠ source evidence" closed loop. §5.10. |
+| 2026-05-02 | **Drop Unpaywall from v0.1.** Two sources: Paperclip + arXiv. | Captain (review-round-2) | No measured evidence Unpaywall would meaningfully extend coverage. Reconsider in Phase 3 (§10) using actual `abstract-only` corpus measurements. Delete one file, one dispatch branch, one source enum variant. |
+| 2026-05-02 | **Drop `index.json` reverse-lookup file.** Cache lookup is a path probe with the source's canonical ID. | Captain (review-round-2) | The "I have an ID but don't know which source's it is" problem doesn't exist — `FulltextRequest` carries the source-typed IDs. Index file solves a non-problem at the cost of write/read maintenance and a "lazy migration" path. §5.4. |
+| 2026-05-02 | **Delete `lib/wiki/downloader.ts` outright; no thin wrapper retained.** | Captain (review-round-2) | The only caller is `wiki/agent.ts`, which we're updating. A back-compat wrapper would be code with no future caller — pre-promised cleanup that never happens. §5.9. |
+| 2026-05-02 | **`fetch-fulltext` parameters: `include_body: boolean` + `sections: string[]`** instead of `mode: 'metadata' \| 'sections' \| 'body'` enum. | Captain (review-round-2) | The enum had an implicit "sections is implied by sections=[...]" rule — a third state that was never explicitly settable. Two orthogonal levers are clearer than a three-state enum with implicit transitions. §5.8. |
+| 2026-05-02 | **Drop `next_actions` field from tool output.** | Captain (review-round-2) | Coordinator usage guidance lives entirely in the system prompt. Repeating it in tool runtime output is duplicated source of truth. §5.8. |
+| 2026-05-02 | **No CI live-probe against Paperclip.** | Captain (review-round-2) | Flaky, consumes secrets, exists for an isolated parser. Failure mode is "user reports, we patch one file." Off-axiom. §11 R2. |
+| 2026-05-02 | **Phase 1 + Phase 2 merged into one shipping PR.** | Captain (review-round-2) | The "verbatim arXiv move" phase exists for PR hygiene; the diff is the same whether shipped alone or with Paperclip. §10. |
+| 2026-05-02 | **Source priority: Paperclip first when API key present, arXiv otherwise.** | Captain (review-round-2 — promoted from open question 11.1) | Paperclip's section-aware output is consistently more useful for LLM consumption than markitdown'd PDF; cleaner format outweighs "official" provenance for our use case. `preferSource` overrides per-call. |
+| 2026-05-02 | **Backoff timer resets when artifact gains a new identifier.** | Captain (review-round-2 — promoted from 11.2) | A paper acquiring a DOI changes the eligibility set for `hasAnyFulltextSource`, so prior failures (which had no DOI to try) are no longer evidence of a permanent miss. Scanner detects new identifiers via `semantic-change`-adjacent hash on the identifier set; one-line clear of `fulltextFailures`/`lastFulltextTryAt`. |
+| 2026-05-02 | **Cache: no TTL, no purge API in v0.1.** | Captain (review-round-2 — promoted from 11.4) | YAGNI. Manual prune script ships only when first user reports excessive disk usage. |
+| 2026-05-02 | **Backfill Phase 2: explicit `npm run wiki:backfill-fulltext` CLI; no auto-run.** | Captain (review-round-2 — promoted from 11.5) | Auto-run on first launch is intrusive — it would silently spend Paperclip quota and LLM tokens. CLI keeps the user in control. |
+| 2026-05-02 | **Retry budget: 1 per tick regardless of how many sources tried.** | Captain (review-round-2 — promoted from 11.6) | Counter is per-canonical-key, not per-source (constraint 3.6). All-source-fail-in-one-tick = 1 budget consumed. |
+| 2026-05-02 | **Paperclip rate limit: 1 req/s via existing `ProviderRateGate`.** | Captain (review-round-2 — promoted from 11.8) | Reuse `lib/tools/web-tools.ts:ProviderRateGate`. Tighten only if Paperclip team specifies. |
 
 
 ## Appendix A — Paperclip MCP Probe Results (Verified 2026-05-02)
