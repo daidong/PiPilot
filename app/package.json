@@ -16,7 +16,10 @@
     "pack:linux": "electron-vite build && electron-builder --linux",
     "pack:all": "electron-vite build && electron-builder -mwl"
   },
-  "author": "Research Copilot",
+  "author": {
+    "name": "Dong Dai",
+    "email": "daidongly@gmail.com"
+  },
   "build": {
     "appId": "com.research-copilot.app",
     "productName": "Research Copilot",
