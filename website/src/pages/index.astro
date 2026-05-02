@@ -60,7 +60,7 @@ const base = import.meta.env.BASE_URL;
         </a>
         <div class="flex items-center gap-3 px-5 py-3 rounded-xl bg-slate-800/80 border border-slate-700/50 font-mono text-sm text-slate-300">
           <span class="text-slate-500">$</span>
-          <span>npm i -g research-copilot</span>
+          <span id="install-cmd">curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash</span>
           <button
             id="copy-btn"
             class="text-slate-500 hover:text-white transition-colors ml-1"
@@ -417,13 +417,37 @@ const base = import.meta.env.BASE_URL;
       <div class="space-y-6">
         <div class="flex gap-5">
           <div class="shrink-0 w-10 h-10 rounded-full bg-mint-600 flex items-center justify-center text-white font-bold text-sm">1</div>
-          <div class="pt-1.5">
+          <div class="pt-1.5 w-full">
             <h3 class="font-semibold text-white text-lg">Install & launch</h3>
-            <div class="mt-3 rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 overflow-x-auto">
-              <div><span class="text-slate-500">$</span> npm i -g research-copilot</div>
-              <div><span class="text-slate-500">$</span> research-copilot</div>
+            <p class="mt-2 text-slate-400 text-sm">One-liner installers — pick your OS:</p>
+
+            <div class="mt-4 space-y-4">
+              <div>
+                <div class="text-xs uppercase tracking-wider text-mint-400 mb-1.5">macOS</div>
+                <div class="rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 overflow-x-auto">
+                  <span class="text-slate-500">$</span> curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
+                </div>
+                <p class="mt-1.5 text-slate-500 text-xs">Apple Silicon &amp; Intel. Unsigned build — script auto-runs <code class="text-slate-400">xattr -dr com.apple.quarantine</code> for you.</p>
+              </div>
+
+              <div>
+                <div class="text-xs uppercase tracking-wider text-mint-400 mb-1.5">Linux</div>
+                <div class="rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 overflow-x-auto">
+                  <span class="text-slate-500">$</span> curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
+                </div>
+                <p class="mt-1.5 text-slate-500 text-xs">x86_64 AppImage installed to <code class="text-slate-400">~/.local/bin/research-copilot</code> + desktop entry. Needs <code class="text-slate-400">libfuse2</code> on Ubuntu 22.04+.</p>
+              </div>
+
+              <div>
+                <div class="text-xs uppercase tracking-wider text-mint-400 mb-1.5">Windows (PowerShell)</div>
+                <div class="rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 overflow-x-auto">
+                  <span class="text-slate-500">PS&gt;</span> irm https://raw.githubusercontent.com/daidong/PiPilot/main/install.ps1 | iex
+                </div>
+                <p class="mt-1.5 text-slate-500 text-xs">Unsigned NSIS installer — SmartScreen warns "Unrecognized app", click <em>More info → Run anyway</em>.</p>
+              </div>
             </div>
-            <p class="mt-2 text-slate-500 text-sm">Update to latest: <code class="text-slate-400">npm update -g research-copilot</code></p>
+
+            <p class="mt-4 text-slate-500 text-sm">Update to latest: re-run the same install command. Then launch <code class="text-slate-400">Research Copilot</code> from your applications menu.</p>
           </div>
         </div>
 
@@ -482,7 +506,7 @@ const base = import.meta.env.BASE_URL;
   <!-- Copy to clipboard -->
   <script>
     document.getElementById('copy-btn')?.addEventListener('click', () => {
-      navigator.clipboard.writeText('npm i -g research-copilot');
+      navigator.clipboard.writeText('curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash');
       const btn = document.getElementById('copy-btn');
       if (btn) {
         btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg>';

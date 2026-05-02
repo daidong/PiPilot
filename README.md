@@ -112,30 +112,57 @@ Attach files directly in the chat input via the paperclip button, drag & drop, o
 - **LLM providers** — OpenAI and Anthropic, via ChatGPT Pro / Claude Max subscription OAuth *or* API keys, with automatic priority selection
 - **Unified settings panel** — `Cmd+.` opens a single pane for models, API keys, research presets, data-analysis timeouts, and the Paper Wiki agent
 
-## Prerequisites
+## Installation
 
-- **Node.js** >= 18
-- **npm** >= 9
-- **Python 3** (optional, for data analysis and figure generation)
-- **macOS** recommended (Linux/Windows: use the git clone method below, untested)
+Prebuilt binaries for **macOS / Linux / Windows** are published on every tagged release. Pick the one-liner for your OS:
 
-## Getting Started
-
-### Option A: Install via npm (recommended)
+### macOS (Apple Silicon & Intel)
 
 ```bash
-npm install -g research-copilot
-research-copilot
+curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
 ```
 
-### Option B: Clone from source
+The installer detects your arch (`arm64` / `x64`), downloads the latest `.dmg`, copies the app to `/Applications`, and runs `xattr -dr com.apple.quarantine` for you (the build is unsigned — proper notarization will come once we have an Apple Developer ID).
+
+### Linux (x86_64)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
+```
+
+Installs the AppImage to `~/.local/share/research-copilot/`, symlinks `~/.local/bin/research-copilot`, and writes a `.desktop` entry. Ubuntu 22.04+ needs `libfuse2`:
+
+```bash
+sudo apt install libfuse2
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/daidong/PiPilot/main/install.ps1 | iex
+```
+
+Downloads and runs the NSIS installer. SmartScreen will show "Unrecognized app" — click **More info → Run anyway** (the build is unsigned).
+
+### Updating
+
+Re-run the same install command. It always pulls the latest GitHub release.
+
+### Build from source
 
 ```bash
 git clone https://github.com/daidong/PiPilot.git
 cd PiPilot
 npm install
-npm run dev
+npm run dev          # dev mode with hot reload
+# or:
+cd app && npm run pack:mac      # macOS DMG (arm64 + x64)
+cd app && npm run pack:win      # Windows NSIS installer
+cd app && npm run pack:linux    # Linux AppImage + .deb
+cd app && npm run pack:all      # all three (requires native runners or VMs)
 ```
+
+Prerequisites for source builds: **Node.js ≥ 18**, **npm ≥ 9**, and **Python 3** (optional, for data analysis and figure generation).
 
 ### Authentication
 

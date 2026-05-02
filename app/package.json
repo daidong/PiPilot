@@ -9,7 +9,11 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "icon:generate": "python3 scripts/generate-app-icon.py",
-    "pack": "electron-vite build && electron-builder --mac"
+    "pack": "electron-vite build && electron-builder --mac",
+    "pack:mac": "electron-vite build && electron-builder --mac",
+    "pack:win": "electron-vite build && electron-builder --win",
+    "pack:linux": "electron-vite build && electron-builder --linux",
+    "pack:all": "electron-vite build && electron-builder -mwl"
   },
   "author": "Research Copilot",
   "build": {
@@ -17,10 +21,33 @@
     "productName": "Research Copilot",
     "electronVersion": "33.4.11",
     "mac": {
-      "target": "dmg",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
       "category": "public.app-category.productivity",
       "identity": null
     },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Science",
+      "icon": "build/icon.png",
+      "synopsis": "AI-powered research assistant",
+      "description": "Literature search, data analysis, academic writing, and cross-project paper memory."
+    },
+    "publish": [
+      { "provider": "github", "owner": "daidong", "repo": "PiPilot" }
+    ],
     "directories": {
       "output": "release"
     },
