@@ -44,27 +44,36 @@ fetch_release_json() {
 
 pick_asset_url() {
   # $1 = regex matching the desired asset name
+  # $2 = optional regex to exclude (skip assets whose name matches this)
   local pattern="$1"
+  local exclude="${2:-}"
   local json
   json="$(fetch_release_json)"
-  # Use grep/sed if jq is absent; jq is preferred when available.
   if command -v jq >/dev/null 2>&1; then
-    echo "$json" | jq -r --arg p "$pattern" '
-      .assets[] | select(.name | test($p)) | .browser_download_url' | head -n 1
+    echo "$json" | jq -r --arg p "$pattern" --arg x "$exclude" '
+      .assets[]
+      | select(.name | test($p))
+      | select($x == "" or (.name | test($x) | not))
+      | .browser_download_url' | head -n 1
   else
-    echo "$json" \
+    local urls
+    urls="$(echo "$json" \
       | grep -Eo '"browser_download_url"\s*:\s*"[^"]+"' \
       | sed -E 's/.*"([^"]+)"$/\1/' \
-      | grep -E "$pattern" \
-      | head -n 1
+      | grep -E "$pattern")"
+    if [ -n "$exclude" ]; then
+      urls="$(echo "$urls" | grep -vE "$exclude")"
+    fi
+    echo "$urls" | head -n 1
   fi
 }
 
+EXCLUDE=''
 case "$OS" in
   Darwin)
     case "$ARCH" in
       arm64)        PATTERN='-arm64\.dmg$' ;;
-      x86_64|amd64) PATTERN='-x64\.dmg$' ;;
+      x86_64|amd64) PATTERN='\.dmg$'; EXCLUDE='arm64' ;;
       *)            err "unsupported macOS arch: $ARCH"; exit 1 ;;
     esac
     ;;
@@ -82,7 +91,7 @@ case "$OS" in
 esac
 
 bold "Resolving latest release asset…"
-URL="$(pick_asset_url "$PATTERN")"
+URL="$(pick_asset_url "$PATTERN" "$EXCLUDE")"
 if [ -z "${URL:-}" ]; then
   err "no matching asset found for pattern: $PATTERN"
   err "check https://github.com/${REPO}/releases/latest"
