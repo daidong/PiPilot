@@ -117,6 +117,7 @@ export interface PaperArtifact extends ArtifactBase {
   identityConfidence?: 'high' | 'medium' | 'low'
   arxivId?: string
   pubmedId?: string
+  pmcId?: string                     // e.g. "PMC6130889" (with prefix)
   semanticScholarId?: string
 }
 

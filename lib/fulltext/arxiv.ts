@@ -1,17 +1,25 @@
 /**
- * Wiki Downloader — arXiv PDF download + markitdown conversion.
+ * arXiv full-text — PDF download + markitdown convert.
  *
- * Rate-limited to 3s between arXiv requests.
- * On failure: returns null; caller marks paper as abstract-fallback.
+ * Logic moved verbatim from lib/wiki/downloader.ts. Reachable only via
+ * resolveFulltext() in lib/fulltext/index.ts.
+ *
+ * Rate-limited: 3s between arXiv requests (process-global token bucket).
+ * On failure: returns null — caller maps that to abstract-fallback.
  */
 
 import { existsSync, writeFileSync } from 'fs'
-import { join } from 'path'
 import { execSync } from 'child_process'
-import { getWikiRoot } from './types.js'
-import { safeReadFile } from './io.js'
+import { dirname } from 'path'
+import {
+  arxivConvertedPath,
+  arxivRawPdfPath,
+  fileMtimeIso,
+  writeArxivConverted,
+} from './cache.js'
+import { mkdirSync, readFileSync } from 'fs'
 
-// ── Rate gate — same pattern as ProviderRateGate in lib/tools/web-tools.ts ─
+// ── Rate gate ──────────────────────────────────────────────────────────────
 
 const ARXIV_RATE_LIMIT_MS = 3_000
 let arxivNextAllowedAt = 0
@@ -27,14 +35,13 @@ async function waitForArxivRate(): Promise<void> {
 // ── URL derivation ─────────────────────────────────────────────────────────
 
 export function deriveArxivPdfUrl(arxivId: string): string {
-  // Strip any URL prefix and version suffix
   const bareId = arxivId
     .replace(/^https?:\/\/arxiv\.org\/abs\//, '')
     .replace(/v\d+$/, '')
   return `https://arxiv.org/pdf/${bareId}.pdf`
 }
 
-// ── Resolve arXiv ID by title search ──────────────────────────────────────
+// ── Resolve arXiv ID by title search ───────────────────────────────────────
 
 /**
  * Search arXiv by title to find the correct arXiv ID for a paper.
@@ -44,7 +51,6 @@ export async function resolveArxivIdByTitle(
   title: string,
   year?: number | null,
 ): Promise<string | null> {
-  // Clean title for query: remove special chars that break arXiv search
   const cleanTitle = title.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
   if (cleanTitle.length < 10) return null
 
@@ -72,20 +78,17 @@ export async function resolveArxivIdByTitle(
         return m ? m[1].trim() : ''
       }
       const entryTitle = tag('title').replace(/\s+/g, ' ')
-      const entryId = tag('id')  // e.g. "http://arxiv.org/abs/2301.12345v1"
+      const entryId = tag('id')
 
-      // Title similarity check: normalize both and compare
       const normalize = (s: string) => s.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
       const sim = normalize(entryTitle) === normalize(title)
       if (!sim) continue
 
-      // Optional year check
       if (year) {
         const entryYear = parseInt(tag('published').slice(0, 4), 10)
         if (entryYear && Math.abs(entryYear - year) > 1) continue
       }
 
-      // Extract bare arXiv ID from URL
       const idMatch = entryId.match(/arxiv\.org\/abs\/(.+?)(?:v\d+)?$/)
       if (idMatch) return idMatch[1]
     }
@@ -98,25 +101,36 @@ export async function resolveArxivIdByTitle(
 
 // ── Download + conversion ──────────────────────────────────────────────────
 
+export interface ArxivFetchResult {
+  markdown: string
+  cachePath: string
+  fetchedAt: string
+}
+
 /**
- * Download arXiv PDF and convert to Markdown.
- * Returns converted markdown text, or null on failure.
+ * Download arXiv PDF and convert to Markdown via the markitdown CLI.
+ * Returns the converted markdown + cache metadata, or null on failure
+ * (network, missing markitdown, conversion error, undersized PDF).
+ *
+ * Idempotent — returns the cached `.md` if one already exists with
+ * non-trivial content.
  */
-export async function downloadAndConvertArxiv(arxivId: string): Promise<string | null> {
-  const root = getWikiRoot()
-  const bareId = arxivId
-    .replace(/^https?:\/\/arxiv\.org\/abs\//, '')
-    .replace(/v\d+$/, '')
-  const safeName = bareId.replace(/[^a-zA-Z0-9.-]/g, '_')
+export async function fetchArxivFulltext(arxivId: string): Promise<ArxivFetchResult | null> {
+  const mdPath = arxivConvertedPath(arxivId)
+  const pdfPath = arxivRawPdfPath(arxivId)
 
-  const pdfDir = join(root, 'raw', 'arxiv')
-  const convertedDir = join(root, 'converted')
-  const pdfPath = join(pdfDir, `${safeName}.pdf`)
-  const mdPath = join(convertedDir, `${safeName}.md`)
-
-  // Return cached conversion if available
-  const cached = safeReadFile(mdPath)
-  if (cached && cached.trim().length > 100) return cached
+  // Cache check (also handled by cacheLookup() upstream, but keeping this
+  // local short-circuit avoids re-running markitdown on a partial download).
+  try {
+    if (existsSync(mdPath)) {
+      const cached = readFileSync(mdPath, 'utf-8')
+      if (cached && cached.trim().length > 100) {
+        return { markdown: cached, cachePath: mdPath, fetchedAt: fileMtimeIso(mdPath) }
+      }
+    }
+  } catch {
+    // fall through to re-fetch
+  }
 
   // Download PDF if not cached
   if (!existsSync(pdfPath)) {
@@ -129,7 +143,8 @@ export async function downloadAndConvertArxiv(arxivId: string): Promise<string |
       })
       if (!response.ok) return null
       const buffer = Buffer.from(await response.arrayBuffer())
-      if (buffer.length < 1000) return null  // too small to be a real PDF
+      if (buffer.length < 1000) return null
+      mkdirSync(dirname(pdfPath), { recursive: true })
       writeFileSync(pdfPath, buffer)
     } catch {
       return null
@@ -144,12 +159,12 @@ export async function downloadAndConvertArxiv(arxivId: string): Promise<string |
       encoding: 'utf-8',
     })
     if (output && output.trim().length > 100) {
-      writeFileSync(mdPath, output, 'utf-8')
-      return output
+      const cachePath = writeArxivConverted(arxivId, output)
+      return { markdown: output, cachePath, fetchedAt: new Date().toISOString() }
     }
     return null
   } catch {
-    // markitdown not available or conversion failed
+    // markitdown not installed or conversion failed
     return null
   }
 }

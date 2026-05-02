@@ -8,9 +8,10 @@
 import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { loadPrompt } from '../agents/prompts/index.js'
-import { getWikiRoot, canonicalKeyToSlug, isValidArxivId, type FulltextStatus } from './types.js'
+import { getWikiRoot, canonicalKeyToSlug, type FulltextStatus } from './types.js'
 import { safeWriteFile, safeReadFile } from './io.js'
 import type { PaperArtifact } from '../types.js'
+import { hasAnyFulltextSource } from '../fulltext/index.js'
 
 type CallLlm = (systemPrompt: string, userContent: string) => Promise<string>
 
@@ -41,10 +42,14 @@ export async function generatePaperPage(
   const content = await callLlm(systemPrompt, userContent)
   if (!content || !shouldContinue()) return null
 
-  // Only mark as abstract-fallback (retryable) if the arXiv ID is genuine.
-  // Bogus IDs (e.g., "803") would cause infinite retry loops.
-  const hasRealArxiv = artifact.arxivId && isValidArxivId(artifact.arxivId)
-  const fulltextStatus: FulltextStatus = fulltext ? 'fulltext' : (hasRealArxiv ? 'abstract-fallback' : 'abstract-only')
+  // Mark as abstract-fallback (retryable) if there is any usable fulltext
+  // source on file (genuine arXiv ID, OR Paperclip-eligible IDs with the
+  // API key configured). Without this widening, a DOI-only biomedical paper
+  // would terminal-fail to abstract-only on first miss and never get
+  // upgraded once Paperclip succeeds.
+  const fulltextStatus: FulltextStatus = fulltext
+    ? 'fulltext'
+    : (hasAnyFulltextSource(artifact) ? 'abstract-fallback' : 'abstract-only')
 
   return { content, fulltextStatus }
 }

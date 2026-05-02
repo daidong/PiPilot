@@ -225,7 +225,7 @@ async function cacheLookup(req: FulltextRequest): Promise<CacheHit | null> {
 
 **Existing `<wiki-root>/converted/<id>.md` files** (current flat layout) — `cacheLookup` also probes the legacy flat path as a fallback. Old files are not moved.
 
-**Cache invalidation:** none in v0.1. No TTL, no purge API. (See §13 decision row 6.)
+**Cache invalidation:** none in v0.1. No TTL, no purge API. (See §12 decision row 15.)
 
 ### 5.5 State Machine Extension — Provenance vs. Evidence Tier
 
@@ -339,7 +339,7 @@ export function hasAnyFulltextSource(a: PaperArtifact, s: Settings): boolean {
 
 #### 5.6.4 Backoff coordination
 
-Backoff state (`fulltextFailures`, `lastFulltextTryAt`) remains **per-canonical-key, not per-source** (constraint 3.6). A retry tries Paperclip → arXiv in dispatch order; an all-fail bumps the counter once. See §13 decision row 4 ("1 budget consumed per tick").
+Backoff state (`fulltextFailures`, `lastFulltextTryAt`) remains **per-canonical-key, not per-source** (constraint 3.6). A retry tries Paperclip → arXiv in dispatch order; an all-fail bumps the counter once. See §12 decision row 17 ("1 budget consumed per tick").
 
 **3.6 enforcement:** if Paperclip succeeds where arXiv would have failed (e.g., paper has DOI but no arxivId), backoff state is *consumed* — `markFulltextFailure` is not called. The wiki transitions `abstract-fallback → fulltext` cleanly and resets the failure counter on success (existing behavior preserved).
 
@@ -511,7 +511,7 @@ const fulltextSource: FulltextSource | undefined = result?.source
 // Existing fulltext-retry-failed branch is unchanged — still keys off `!fulltext`.
 ```
 
-The old `downloadAndConvertArxiv` and `resolveArxivIdByTitle` exports are **deleted, not wrapped**. `lib/wiki/downloader.ts` is removed; its arXiv logic now lives in `lib/fulltext/arxiv.ts` and is reachable only through `resolveFulltext`. There are no external callers — `wiki/agent.ts` is the only consumer — so a back-compat wrapper would be code with no purpose. (See §13 decision row 8.)
+The old `downloadAndConvertArxiv` and `resolveArxivIdByTitle` exports are **deleted, not wrapped**. `lib/wiki/downloader.ts` is removed; its arXiv logic now lives in `lib/fulltext/arxiv.ts` and is reachable only through `resolveFulltext`. There are no external callers — `wiki/agent.ts` is the only consumer — so a back-compat wrapper would be code with no purpose. (See §12 decision row 8.)
 
 ### 5.10 `wiki_source` Tool — Cache Index Integration (review-round-1 issue 5)
 
@@ -676,9 +676,9 @@ The sidecar `source_tier` field is extended (§5.5). Existing pages with bare `s
 
 **Phase 0 — RFC review & sign-off** (this document).
 
-**Phase 1 — Implementation.** Single PR. Ship `lib/fulltext/` (Paperclip + arXiv + cache + types), delete `lib/wiki/downloader.ts`, switch `wiki/agent.ts` to `resolveFulltext`, add `pmcId` to artifact + literature search + sibling propagation, wire `PAPERCLIP_API_KEY` settings, ship `fetch-fulltext` tool, update `wiki_source` to consult cache, update tests. The arXiv-only-relocation phase from v0.2 is folded in here — there's no point landing the move separately when the new source code is the same diff.
+**Phase 1 — Implementation.** Single PR. Ship `lib/fulltext/` (Paperclip + arXiv + cache + types), delete `lib/wiki/downloader.ts`, switch `wiki/agent.ts` to `resolveFulltext`, add `pmcId` to artifact + literature search + sibling propagation, wire `PAPERCLIP_API_KEY` settings, ship `fetch-fulltext` tool, update `wiki_source` to consult cache, update tests.
 
-**Phase 2 — Backfill (optional CLI).** `npm run wiki:backfill-fulltext` walks all `abstract-only` and `abstract-fallback` wiki entries with DOI / PMC ID / arxivId and triggers a `fulltext-upgrade` rescan, bypassing backoff timer once. Idempotent. Off by default. (See §13 decision row 5.)
+**Phase 2 — Backfill (optional CLI).** `npm run wiki:backfill-fulltext` walks all `abstract-only` and `abstract-fallback` wiki entries with DOI / PMC ID / arxivId and triggers a `fulltext-upgrade` rescan, bypassing backoff timer once. Idempotent. Off by default. (See §12 decision row 16.)
 
 **Phase 3 — Reconsider Unpaywall (data-driven).** After Phase 1 has run for ~2 weeks, query `processed.json` for the `abstract-only` set. If a meaningful fraction has DOIs and Unpaywall would have caught them, write a follow-up RFC to add it. Without that data, do not add it.
 
@@ -703,7 +703,7 @@ The sidecar `source_tier` field is extended (§5.5). Existing pages with bare `s
 | 2026-05-02 | `source_tier` and `fulltextSource` kept orthogonal — provenance does NOT live inside `source_tier` | Captain (review-round-1) | Merging would break every existing parser/indexer/wiki filter that switches on `source_tier`. §5.5 split. |
 | 2026-05-02 | `pmcId` added as first-class identifier on `PaperArtifact`; populated from S2 / OpenAlex / Paperclip lookup; propagated to siblings | Captain (review-round-1) | Without pmcId persistence, Paperclip's strongest matching path (`lookup pmc`) is unreachable from a wiki rescan. §3.9, §5.7.2. |
 | 2026-05-02 | `abstract-fallback` semantics broaden from "arXiv retryable" to "any source retryable"; both initial classification (`generator.ts`) and retry trigger (`scanner.ts`) share `hasAnyFulltextSource` | Captain (review-round-1) | Otherwise DOI-only biomedical papers terminal-fail on first miss and never get Paperclip retry. §3.3, §5.6. |
-| 2026-05-02 | `fetch-fulltext` defaults to `mode='metadata'`; body opt-in via `sections=[...]` or `mode='body'`; `max_chars` 80k → 40k | Captain (review-round-1) | Naive 80k-body default floods agent context for typical use cases; metadata + section list is far more useful as a first-pass response. §5.8, §11.7. |
+| 2026-05-02 | `fetch-fulltext` defaults to returning metadata + section list + cache_path only; body opt-in via `sections=[...]` or `include_body=true`; `max_chars` default 80k → 40k | Captain (review-round-1; parameter shape further refined in review-round-2 — see row 9) | Naive 80k-body default floods agent context for typical use cases; metadata + section list is far more useful as a first-pass response. §5.8. |
 | 2026-05-02 | `wiki_source` consults the new fulltext cache index; response gains `fulltextSource` and `sectionList` fields | Captain (review-round-1) | Without this, Paperclip-cached fulltext is invisible to the coordinator's "exact quotes / precise numbers" path, breaking the "wiki memory ≠ source evidence" closed loop. §5.10. |
 | 2026-05-02 | **Drop Unpaywall from v0.1.** Two sources: Paperclip + arXiv. | Captain (review-round-2) | No measured evidence Unpaywall would meaningfully extend coverage. Reconsider in Phase 3 (§10) using actual `abstract-only` corpus measurements. Delete one file, one dispatch branch, one source enum variant. |
 | 2026-05-02 | **Drop `index.json` reverse-lookup file.** Cache lookup is a path probe with the source's canonical ID. | Captain (review-round-2) | The "I have an ID but don't know which source's it is" problem doesn't exist — `FulltextRequest` carries the source-typed IDs. Index file solves a non-problem at the cost of write/read maintenance and a "lazy migration" path. §5.4. |
@@ -785,7 +785,7 @@ Found N papers  [s_<id>]
 - `lib/tools/literature-search.ts` — 4-source pipeline (§4)
 - `lib/tools/index.ts` — `createResearchTools()` (§6 row 13)
 - `lib/tools/types.ts` — ResolvedSettings (§5.7)
-- `lib/tools/web-tools.ts` — `ProviderRateGate` (§11.8)
+- `lib/tools/web-tools.ts` — `ProviderRateGate` (§12 decision row 18)
 - `lib/tools/convert-document.ts` — markitdown CLI (§4 last bullet)
 - `lib/mentions/resolver.ts` — paper mention shape (§4, §10.1)
 - `lib/mentions/document-cache.ts` — separate cache (§4)

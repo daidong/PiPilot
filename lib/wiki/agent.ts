@@ -34,7 +34,8 @@ import {
   safeReadFile,
 } from './io.js'
 import { scanForNewContent } from './scanner.js'
-import { downloadAndConvertArxiv, resolveArxivIdByTitle } from './downloader.js'
+import { resolveFulltext, resolveArxivIdByTitle } from '../fulltext/index.js'
+import type { FulltextSource } from './types.js'
 import { updateArtifact } from '../memory-v2/store.js'
 import {
   generatePaperPage,
@@ -274,6 +275,11 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       // We only propagate positive discoveries; clearing a bogus ID is
       // NOT propagated because sibling copies may legitimately still hold
       // different metadata that we shouldn't clobber.
+      //
+      // pmcId is also a stable external identifier (constraint 3.5 in the
+      // fulltext-retrieval spec — pmcId IS propagated, fulltextPath is NOT)
+      // and is propagated alongside arxivId here so the next wiki scan
+      // hits the Paperclip cache for siblings.
       if (resolvedArxivId && scanResult.siblings) {
         for (const sib of scanResult.siblings) {
           if (sib.artifact.arxivId === resolvedArxivId) continue
@@ -283,6 +289,17 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
             log(`propagated arXiv ID to sibling project ${sib.projectPath}`)
           } catch (err) {
             log(`failed to propagate arXiv ID to ${sib.projectPath}/${sib.artifact.id}: ${err}`)
+          }
+        }
+      }
+      if (artifact.pmcId && scanResult.siblings) {
+        for (const sib of scanResult.siblings) {
+          if (sib.artifact.pmcId === artifact.pmcId) continue
+          try {
+            updateArtifact(sib.projectPath, sib.artifact.id, { pmcId: artifact.pmcId } as any)
+            sib.artifact.pmcId = artifact.pmcId
+          } catch (err) {
+            log(`failed to propagate PMC ID to ${sib.projectPath}/${sib.artifact.id}: ${err}`)
           }
         }
       }
@@ -301,16 +318,52 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       semanticHash = computeSemanticHash(artifact)
     }
 
-    // Phase 2: Download + convert if we have a valid arXiv ID
-    if (resolvedArxivId) {
-      if (!shouldContinue()) return
-      fulltext = await downloadAndConvertArxiv(resolvedArxivId)
+    // Phase 2: Resolve fulltext via the unified service (Paperclip first,
+    // then arXiv direct). Provider-agnostic: the wiki page generator
+    // doesn't care which source produced the markdown, only that it has it.
+    let fulltextSource: FulltextSource | undefined
+    if (!shouldContinue()) return
+    {
+      const result = await resolveFulltext({
+        doi: artifact.doi && !artifact.doi.startsWith('unknown:') ? artifact.doi : undefined,
+        arxivId: resolvedArxivId ?? undefined,
+        pmcId: artifact.pmcId,
+        pubmedId: artifact.pubmedId,
+        title: artifact.title,
+        year: artifact.year,
+      })
+      if (result) {
+        fulltext = result.markdown
+        fulltextSource = result.source
+
+        // Paperclip may surface a PMC id we didn't have. Persist it back to
+        // the artifact + propagate to siblings so the next scan hits cache.
+        if (result.resolvedPmcId && result.resolvedPmcId !== artifact.pmcId) {
+          try {
+            updateArtifact(projectPath, artifact.id, { pmcId: result.resolvedPmcId } as any)
+            artifact.pmcId = result.resolvedPmcId
+            log(`resolved PMC ID via paperclip: ${result.resolvedPmcId}`)
+          } catch (err) {
+            log(`failed to persist resolved pmcId: ${err}`)
+          }
+          if (scanResult.siblings) {
+            for (const sib of scanResult.siblings) {
+              if (sib.artifact.pmcId === result.resolvedPmcId) continue
+              try {
+                updateArtifact(sib.projectPath, sib.artifact.id, { pmcId: result.resolvedPmcId } as any)
+                sib.artifact.pmcId = result.resolvedPmcId
+              } catch { /* swallow */ }
+            }
+          }
+        }
+      }
     }
 
     // Fulltext retry backoff: if this pass was a pure fulltext-upgrade retry
-    // and the arXiv download still failed, bump the failure counter and bail
-    // out. We must NOT re-run the LLM pipeline for a retry that produced no
-    // new material — that's the "burn tokens every idle cycle" bug.
+    // and EVERY source failed, bump the failure counter and bail out. We
+    // must NOT re-run the LLM pipeline for a retry that produced no new
+    // material — that's the "burn tokens every idle cycle" bug. Backoff is
+    // per-canonical-key, not per-source (one tick = one budget consumed).
     if (scanResult.reason === 'fulltext-upgrade' && !fulltext) {
       log(`fulltext retry failed for ${slug}; updating backoff and skipping LLM`)
       markFulltextFailure(canonicalKey)
@@ -397,6 +450,12 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       generatorVersion: GENERATOR_VERSION,
       hashSchemaVersion: HASH_SCHEMA_VERSION,
       processedAt: new Date().toISOString(),
+      // Provenance: only set when we actually have fulltext. fulltextSource
+      // is orthogonal to fulltextStatus — it answers "which provider", not
+      // "what tier of evidence".
+      ...(result.fulltextStatus === 'fulltext' && fulltextSource
+        ? { fulltextSource }
+        : {}),
     }
     markPaperProcessed(entry)
     addProvenance({

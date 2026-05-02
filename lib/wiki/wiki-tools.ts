@@ -27,6 +27,9 @@ import { toAgentResult } from '../tools/tool-utils.js'
 import { getWikiRoot } from './types.js'
 import { safeReadFile, readProvenance, readProcessedWatermark } from './io.js'
 import { parsePaperPage } from './meta-parser.js'
+import { lookupCachedFulltext } from '../fulltext/index.js'
+import { listArtifacts } from '../memory-v2/store.js'
+import type { PaperArtifact } from '../types.js'
 import {
   loadBm25Index,
   loadAliasMap,
@@ -761,16 +764,46 @@ export function createWikiSourceTool(): AgentTool {
         })
       }
 
-      // Cached fulltext under the wiki
-      const cachedFulltextPath = join(wikiRoot, 'converted', `${slug}.md`)
-      const cachedFulltext = existsSync(cachedFulltextPath) ? cachedFulltextPath : null
+      // Cached fulltext: probe the unified fulltext cache (Paperclip- or
+      // arXiv-sourced markdown), regardless of which provider produced it.
+      // Falls back to the legacy flat layout when neither nested path hits.
+      // Identifiers are pulled from the first available project artifact
+      // because the canonical key alone (DOI / arXiv / title+year) doesn't
+      // carry the pmcId we need for Paperclip-cached papers.
+      const idsForLookup: { doi?: string; arxivId?: string; pmcId?: string; pubmedId?: string } = {}
+      if (canonicalKey.startsWith('doi:')) idsForLookup.doi = canonicalKey.slice('doi:'.length)
+      if (canonicalKey.startsWith('arxiv:')) idsForLookup.arxivId = canonicalKey.slice('arxiv:'.length)
+      // Augment with full identifiers from the project artifact (cheap — one
+      // file read; only happens when the agent calls wiki_source).
+      let firstArtifact: PaperArtifact | null = null
+      for (const pa of projectArtifacts) {
+        if (!pa.exists) continue
+        try {
+          const arts = listArtifacts(pa.project_path, ['paper'])
+          firstArtifact = arts.find(a => a.id === pa.artifact_id && a.type === 'paper') as PaperArtifact ?? null
+          if (firstArtifact) break
+        } catch { /* skip */ }
+      }
+      if (firstArtifact) {
+        if (!idsForLookup.doi && firstArtifact.doi && !firstArtifact.doi.startsWith('unknown:')) {
+          idsForLookup.doi = firstArtifact.doi
+        }
+        if (!idsForLookup.arxivId && firstArtifact.arxivId) idsForLookup.arxivId = firstArtifact.arxivId
+        if (firstArtifact.pmcId) idsForLookup.pmcId = firstArtifact.pmcId
+        if (firstArtifact.pubmedId) idsForLookup.pubmedId = firstArtifact.pubmedId
+      }
+      const cacheHit = lookupCachedFulltext(idsForLookup)
+      const cachedFulltext: string | null = cacheHit?.path ?? null
+      const fulltextSource: 'paperclip' | 'arxiv' | null = cacheHit?.source ?? null
+      const sectionList: string[] | null = cacheHit?.sectionList ?? null
 
-      // Cached PDF (arxiv only for now — canonicalKey encodes arxiv ID)
+      // Cached PDF (arxiv only — Paperclip is markdown-only, no PDF cached)
       let cachedPdf: string | null = null
-      if (canonicalKey.startsWith('arxiv:')) {
-        const arxivId = canonicalKey.slice('arxiv:'.length)
-        // Match the wiki downloader layout: raw/arxiv/<id>.pdf (with various id formats)
-        const safe = arxivId.replace(/\//g, '_')
+      if (idsForLookup.arxivId) {
+        const safe = idsForLookup.arxivId
+          .replace(/^https?:\/\/arxiv\.org\/abs\//, '')
+          .replace(/v\d+$/, '')
+          .replace(/[^a-zA-Z0-9.-]/g, '_')
         const candidate = join(wikiRoot, 'raw', 'arxiv', `${safe}.pdf`)
         if (existsSync(candidate)) cachedPdf = candidate
       }
@@ -794,6 +827,8 @@ export function createWikiSourceTool(): AgentTool {
             ? projectArtifacts
             : [],
           cached_fulltext: cachedFulltext,
+          fulltext_source: fulltextSource,    // 'paperclip' | 'arxiv' | null
+          section_list: sectionList,           // Paperclip only — null when source='arxiv' or absent
           cached_pdf: cachedPdf,
           canonical_external: Object.keys(canonicalExternal).length > 0 ? canonicalExternal : null,
           note:
@@ -801,7 +836,9 @@ export function createWikiSourceTool(): AgentTool {
               ? 'No source-layer artifacts available. This paper only exists as wiki memory. ' +
                 'Use canonical_external to pursue the paper externally, or run a fresh literature search.'
               : 'Source-layer artifacts located. Prefer cached_fulltext or project_artifacts for targeted reads; ' +
-                'use cached_pdf for exact quotes or structured data (tables, figures).',
+                'use cached_pdf for exact quotes or structured data (tables, figures). ' +
+                'When fulltext_source is "paperclip" and section_list is non-null, you can call ' +
+                'fetch-fulltext with sections=[...] to read specific sections.',
         },
       })
     },

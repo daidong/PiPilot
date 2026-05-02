@@ -155,6 +155,21 @@ function main(): void {
     )
   })
 
+  record('computeSemanticHash ignores pmcId (constraint 3.2 / fulltext-retrieval RFC)', () => {
+    // pmcId is an alternate external identifier added for Paperclip
+    // matching. Like fulltextPath, it must not influence the canonical
+    // hash — adding/discovering a PMC id for an existing paper is
+    // metadata enrichment, not canonical content change, and must NOT
+    // trigger a 'semantic-change' reprocess.
+    const withPmc = makePaper({ pmcId: 'PMC6130889' })
+    const withoutPmc = makePaper()
+    assert.equal(
+      computeSemanticHash(withPmc),
+      computeSemanticHash(withoutPmc),
+      'hash must be equal whether or not pmcId is set',
+    )
+  })
+
   record('buildPaperUserContent ignores lens fields', () => {
     const promptA = buildPaperUserContent(paperA, null, [])
     const promptB = buildPaperUserContent(paperB, null, [])
@@ -293,6 +308,55 @@ function main(): void {
       hashSchemaVersion: HASH_SCHEMA_VERSION + 5,
     })
     assert.equal(canSilentRestampLegacyWatermark(watermark, paperA), false)
+  })
+
+  // ── fulltextSource provenance (fulltext-retrieval RFC §5.5) ───────────
+  // The new optional ProcessedEntry.fulltextSource field tracks WHICH
+  // provider produced the fulltext (paperclip / arxiv) when fulltextStatus
+  // is 'fulltext'. It is orthogonal to fulltextStatus, NOT part of the
+  // semantic hash, NOT part of the canonical key. Flipping its value must
+  // NOT trigger a semantic-change reprocess.
+
+  record('fulltextSource is not a generation input — hash invariant under flip', () => {
+    // Two ProcessedEntry watermarks for the same paper, same canonical
+    // hash, only fulltextSource differs (e.g. arXiv → Paperclip upgrade
+    // discovered on a later scan). This is purely provenance — neither
+    // hash nor migration predicate care.
+    const sameHash = computeSemanticHash(paperA)
+    const arxivEntry = makeWatermark({
+      semanticHash: sameHash,
+      fulltextStatus: 'fulltext',
+      fulltextSource: 'arxiv',
+      hashSchemaVersion: HASH_SCHEMA_VERSION,
+    })
+    const paperclipEntry = makeWatermark({
+      semanticHash: sameHash,
+      fulltextStatus: 'fulltext',
+      fulltextSource: 'paperclip',
+      hashSchemaVersion: HASH_SCHEMA_VERSION,
+    })
+    // The migration predicate must reject silent restamp on both (they're
+    // already at current schema), AND fulltextSource must round-trip
+    // through the type without affecting any hash decision.
+    assert.equal(canSilentRestampLegacyWatermark(arxivEntry, paperA), false)
+    assert.equal(canSilentRestampLegacyWatermark(paperclipEntry, paperA), false)
+    // Sanity: hash is the same regardless of fulltextSource value.
+    assert.equal(arxivEntry.semanticHash, paperclipEntry.semanticHash)
+  })
+
+  record('fulltextSource undefined remains valid (legacy back-compat)', () => {
+    // ProcessedEntry.fulltextSource is optional. Pre-RFC entries lack it
+    // entirely; they must continue to deserialize cleanly.
+    const legacy = makeWatermark({
+      semanticHash: computeSemanticHash(paperA),
+      hashSchemaVersion: HASH_SCHEMA_VERSION,
+      // fulltextSource omitted
+    })
+    assert.equal(legacy.fulltextSource, undefined)
+    // And it round-trips through JSON without coercion surprises.
+    const round: ProcessedEntry = JSON.parse(JSON.stringify(legacy))
+    assert.equal(round.fulltextSource, undefined)
+    assert.equal(round.semanticHash, legacy.semanticHash)
   })
 
   if (failures.length > 0) {

@@ -63,6 +63,7 @@ export function upsertPaperArtifact(
     identityConfidence?: 'high' | 'medium' | 'low'
     arxivId?: string
     pubmedId?: string
+    pmcId?: string
     semanticScholarId?: string
   },
   context: CLIContext
@@ -114,6 +115,7 @@ export function upsertPaperArtifact(
       identityConfidence: opts.identityConfidence ?? dedup.identityConfidence,
       arxivId: opts.arxivId ?? dedup.arxivId,
       pubmedId: opts.pubmedId ?? dedup.pubmedId,
+      pmcId: opts.pmcId ?? dedup.pmcId,
       semanticScholarId: opts.semanticScholarId ?? dedup.semanticScholarId
     })
 
@@ -154,6 +156,7 @@ export function upsertPaperArtifact(
     identityConfidence: opts.identityConfidence,
     arxivId: opts.arxivId,
     pubmedId: opts.pubmedId,
+    pmcId: opts.pmcId,
     semanticScholarId: opts.semanticScholarId,
     provenance: {
       source: opts.externalSource ? 'agent' : 'user',
