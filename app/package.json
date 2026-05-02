@@ -46,6 +46,7 @@
       "target": ["AppImage", "deb"],
       "category": "Science",
       "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "synopsis": "AI-powered research assistant",
       "description": "Literature search, data analysis, academic writing, and cross-project paper memory."
     },
