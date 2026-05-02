@@ -1020,23 +1020,6 @@ export function EntityPreviewPanel() {
       <div ref={scrollContentRef} className="flex-1 overflow-y-auto px-5 py-5 min-h-0">
         {renderContent()}
       </div>
-
-      {/* Footer strip — a quiet signature. The pulsing accent dot plus
-          "Bound to chat" tells the user the drawer isn't a modal popup
-          but a live surface tied to the conversation: when the agent
-          edits the file in the background, this view reloads in place. */}
-      <footer className="shrink-0 px-5 py-2.5 border-t t-border flex items-center justify-between gap-3 text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted">
-        <span className="inline-flex items-center gap-2 min-w-0 truncate">
-          <span
-            className="inline-block w-[7px] h-[7px] rounded-full t-bg-accent animate-pulse shrink-0"
-            aria-hidden="true"
-          />
-          <span className="truncate">Bound to chat</span>
-        </span>
-        <span className="truncate shrink-0">
-          Drag edge · Esc to close
-        </span>
-      </footer>
     </div>
   )
 }
