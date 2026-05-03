@@ -68,7 +68,8 @@ const API_KEY_NAMES = [
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'BRAVE_API_KEY',
-  'OPENROUTER_API_KEY'
+  'OPENROUTER_API_KEY',
+  'PAPERCLIP_API_KEY'
 ] as const
 
 interface AppConfig {

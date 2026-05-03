@@ -47,6 +47,8 @@ interface PaperResult {
   doi?: string | null
   venue?: string | null
   citationCount?: number | null
+  pmcId?: string | null      // e.g. "PMC6130889" — stable PubMed Central id
+  pubmedId?: string | null   // e.g. "29969439"
 }
 
 interface ReviewedPaper extends PaperResult {
@@ -130,18 +132,26 @@ async function searchSemanticScholar(query: string, limit = 10): Promise<SourceS
       return { papers: [], error: `Semantic Scholar API returned HTTP ${res.status}`, statusCode: res.status }
     }
     const json = await res.json() as any
-    const papers = (json.data ?? []).map((p: any) => ({
-      id: p.paperId ?? '',
-      title: p.title ?? '',
-      authors: (p.authors ?? []).map((a: any) => a.name ?? ''),
-      abstract: p.abstract ?? '',
-      year: p.year ?? null,
-      url: p.url ?? `https://www.semanticscholar.org/paper/${p.paperId}`,
-      source: 'semantic_scholar',
-      doi: p.externalIds?.DOI ?? null,
-      venue: p.venue ?? null,
-      citationCount: p.citationCount ?? null
-    }))
+    const papers = (json.data ?? []).map((p: any) => {
+      // Semantic Scholar's externalIds field includes PubMedCentral as
+      // "PMC6130889" (already prefixed) and PubMed as a numeric string.
+      const pmc = p.externalIds?.PubMedCentral
+      const pmid = p.externalIds?.PubMed
+      return {
+        id: p.paperId ?? '',
+        title: p.title ?? '',
+        authors: (p.authors ?? []).map((a: any) => a.name ?? ''),
+        abstract: p.abstract ?? '',
+        year: p.year ?? null,
+        url: p.url ?? `https://www.semanticscholar.org/paper/${p.paperId}`,
+        source: 'semantic_scholar',
+        doi: p.externalIds?.DOI ?? null,
+        venue: p.venue ?? null,
+        citationCount: p.citationCount ?? null,
+        pmcId: typeof pmc === 'string' ? (pmc.startsWith('PMC') ? pmc : `PMC${pmc}`) : null,
+        pubmedId: typeof pmid === 'string' ? pmid : (typeof pmid === 'number' ? String(pmid) : null),
+      }
+    })
     return { papers }
   } catch (err) {
     return { papers: [], error: `Semantic Scholar request failed: ${err instanceof Error ? err.message : String(err)}` }
@@ -203,24 +213,35 @@ async function searchOpenAlex(query: string, limit = 10): Promise<SourceSearchRe
       return { papers: [], error: `OpenAlex API returned HTTP ${res.status}`, statusCode: res.status }
     }
     const json = await res.json() as any
-    const papers = (json.results ?? []).map((w: any) => ({
-      id: w.id ?? '',
-      title: w.title ?? '',
-      authors: (w.authorships ?? []).map((a: any) => a.author?.display_name ?? '').filter(Boolean),
-      abstract: w.abstract_inverted_index
-        ? Object.entries(w.abstract_inverted_index as Record<string, number[]>)
-            .flatMap(([word, positions]) => (positions as number[]).map(p => ({ word, p })))
-            .sort((a, b) => a.p - b.p)
-            .map(x => x.word)
-            .join(' ')
-        : '',
-      year: w.publication_year ?? null,
-      url: w.primary_location?.landing_page_url ?? w.id ?? '',
-      source: 'openalex',
-      doi: w.doi ?? null,
-      venue: w.primary_location?.source?.display_name ?? null,
-      citationCount: w.cited_by_count ?? null
-    }))
+    const papers = (json.results ?? []).map((w: any) => {
+      // OpenAlex `ids.pmcid` is a full URL like
+      // "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6130889". Extract
+      // the bare ID. `ids.pmid` is a similar URL.
+      const pmcUrl = typeof w.ids?.pmcid === 'string' ? w.ids.pmcid : null
+      const pmcMatch = pmcUrl ? pmcUrl.match(/PMC\d+/) : null
+      const pmidUrl = typeof w.ids?.pmid === 'string' ? w.ids.pmid : null
+      const pmidMatch = pmidUrl ? pmidUrl.match(/\d+$/) : null
+      return {
+        id: w.id ?? '',
+        title: w.title ?? '',
+        authors: (w.authorships ?? []).map((a: any) => a.author?.display_name ?? '').filter(Boolean),
+        abstract: w.abstract_inverted_index
+          ? Object.entries(w.abstract_inverted_index as Record<string, number[]>)
+              .flatMap(([word, positions]) => (positions as number[]).map(p => ({ word, p })))
+              .sort((a, b) => a.p - b.p)
+              .map(x => x.word)
+              .join(' ')
+          : '',
+        year: w.publication_year ?? null,
+        url: w.primary_location?.landing_page_url ?? w.id ?? '',
+        source: 'openalex',
+        doi: w.doi ?? null,
+        venue: w.primary_location?.source?.display_name ?? null,
+        citationCount: w.cited_by_count ?? null,
+        pmcId: pmcMatch ? pmcMatch[0] : null,
+        pubmedId: pmidMatch ? pmidMatch[0] : null,
+      }
+    })
     return { papers }
   } catch (err) {
     return { papers: [], error: `OpenAlex request failed: ${err instanceof Error ? err.message : String(err)}` }
@@ -578,6 +599,11 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
               identityConfidence: paper.doi ? 'high' : 'medium',
               semanticScholarId: paper.source === 'semantic_scholar' ? paper.id : undefined,
               arxivId: paper.source === 'arxiv' ? paper.id : undefined,
+              // PMC / PubMed ids surfaced by Semantic Scholar / OpenAlex.
+              // Persisting these unlocks Paperclip lookup-by-pmc on the
+              // first wiki scan. Fulltext-retrieval RFC §3.9, §5.7.2.
+              pmcId: paper.pmcId ?? undefined,
+              pubmedId: paper.pubmedId ?? undefined,
             }, {
               sessionId: ctx.sessionId ?? 'unknown',
               projectPath: ctx.projectPath

@@ -8,9 +8,10 @@
 import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { loadPrompt } from '../agents/prompts/index.js'
-import { getWikiRoot, canonicalKeyToSlug, isValidArxivId, type FulltextStatus } from './types.js'
+import { getWikiRoot, canonicalKeyToSlug, type FulltextStatus } from './types.js'
 import { safeWriteFile, safeReadFile } from './io.js'
 import type { PaperArtifact } from '../types.js'
+import { hasAnyFulltextSource } from '../fulltext/index.js'
 
 type CallLlm = (systemPrompt: string, userContent: string) => Promise<string>
 
@@ -41,10 +42,14 @@ export async function generatePaperPage(
   const content = await callLlm(systemPrompt, userContent)
   if (!content || !shouldContinue()) return null
 
-  // Only mark as abstract-fallback (retryable) if the arXiv ID is genuine.
-  // Bogus IDs (e.g., "803") would cause infinite retry loops.
-  const hasRealArxiv = artifact.arxivId && isValidArxivId(artifact.arxivId)
-  const fulltextStatus: FulltextStatus = fulltext ? 'fulltext' : (hasRealArxiv ? 'abstract-fallback' : 'abstract-only')
+  // Mark as abstract-fallback (retryable) if there is any usable fulltext
+  // source on file (genuine arXiv ID, OR Paperclip-eligible IDs with the
+  // API key configured). Without this widening, a DOI-only biomedical paper
+  // would terminal-fail to abstract-only on first miss and never get
+  // upgraded once Paperclip succeeds.
+  const fulltextStatus: FulltextStatus = fulltext
+    ? 'fulltext'
+    : (hasAnyFulltextSource(artifact) ? 'abstract-fallback' : 'abstract-only')
 
   return { content, fulltextStatus }
 }
@@ -77,9 +82,17 @@ export function buildPaperUserContent(
   parts.push(`\nAbstract:\n${artifact.abstract || '(no abstract)'}`)
 
   if (fulltext) {
-    // Truncate fulltext to ~30k chars to stay within token limits
-    const truncated = fulltext.length > 30_000
-      ? fulltext.slice(0, 30_000) + '\n\n[... truncated for length ...]'
+    // Truncate fulltext to ~120k chars (~30k tokens) to stay within token
+    // limits. Bumped from 30k chars after the fulltext-retrieval RFC: with
+    // section-aware assembly via Paperclip, modern biomedical papers
+    // produce 100-150k chars of structured content; the prior 30k cap
+    // dropped most of it. 120k chars fits comfortably in any flagship
+    // model's context window (Opus 1M, Sonnet 200k, GPT-5.4 400k+) while
+    // still leaving headroom for the system prompt, sidecar emission, and
+    // concept-identification follow-up calls.
+    const FULLTEXT_CHAR_CAP = 120_000
+    const truncated = fulltext.length > FULLTEXT_CHAR_CAP
+      ? fulltext.slice(0, FULLTEXT_CHAR_CAP) + '\n\n[... truncated for length ...]'
       : fulltext
     parts.push(`\nFull Text:\n${truncated}`)
   }

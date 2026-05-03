@@ -205,6 +205,16 @@ export function canonicalKeyToSlug(canonicalKey: string): string {
 
 export type FulltextStatus = 'fulltext' | 'abstract-only' | 'abstract-fallback'
 
+/**
+ * Which provider supplied the fulltext (when present). Orthogonal to
+ * `FulltextStatus` — that field encodes the EVIDENCE TIER (do we have
+ * full-text at all?), this one encodes PROVENANCE (which source).
+ *
+ * Absent on legacy watermarks written before the fulltext-retrieval
+ * service. Set only when `fulltextStatus === 'fulltext'`.
+ */
+export type FulltextSource = 'paperclip' | 'arxiv'
+
 // ── Watermark types (JSONL records) ────────────────────────────────────────
 
 export interface ProcessedEntry {
@@ -224,6 +234,11 @@ export interface ProcessedEntry {
   // Absent for legacy entries — treat as 0.
   fulltextFailures?: number
   lastFulltextTryAt?: string  // ISO timestamp
+
+  // Provenance for the fulltext (when fulltextStatus==='fulltext').
+  // Absent → unknown/legacy. Not part of the canonical key, not part of
+  // the semantic hash — purely additive metadata.
+  fulltextSource?: FulltextSource
 }
 
 export interface ProvenanceEntry {

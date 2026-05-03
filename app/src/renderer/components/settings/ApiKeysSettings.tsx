@@ -37,6 +37,14 @@ const KEY_FIELDS = [
     url: 'https://openrouter.ai/',
     required: false,
   },
+  {
+    name: 'PAPERCLIP_API_KEY',
+    label: 'Paperclip',
+    placeholder: 'gxl_...',
+    hint: 'Enables section-aware full-text retrieval for biomedical papers (PubMed Central, bioRxiv, medRxiv) and arXiv via the hosted Paperclip MCP server. Without it, full-text falls back to arXiv-only PDF download (loses biomedical coverage and section-by-section reads). Get a free key at paperclip.gxl.ai.',
+    url: 'https://paperclip.gxl.ai',
+    required: false,
+  },
 ] as const
 
 interface Props {

@@ -18,6 +18,7 @@ import {
 } from './types.js'
 import { readProcessedWatermark, readProvenance, restampProcessedBatch } from './io.js'
 import { applyIdentityMigration, computeAllCanonicalKeys } from './identity-migration.js'
+import { hasAnyFulltextSource } from '../fulltext/index.js'
 
 // ── Fulltext retry backoff ─────────────────────────────────────────────────
 // When a paper sits in abstract-fallback and its arXiv download keeps
@@ -293,11 +294,13 @@ export function scanForNewContent(
       toProcess.push({ ...base, reason: 'semantic-change' })
     } else if (
       watermark.fulltextStatus === 'abstract-fallback' &&
-      artifact.arxivId &&
-      isValidArxivId(artifact.arxivId) &&
+      hasAnyFulltextSource(artifact) &&
       canRetryFulltext(watermark)
     ) {
-      // Re-try fulltext download (only for genuine arXiv IDs, backoff-gated)
+      // Re-try fulltext via any available source (Paperclip or arXiv),
+      // backoff-gated. Predicate is shared with generator.ts so the initial
+      // 'abstract-fallback' classification accepts the same set of papers
+      // this retry trigger does.
       toProcess.push({ ...base, reason: 'fulltext-upgrade' })
     }
 

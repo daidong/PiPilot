@@ -18,6 +18,7 @@ import { type ResearchTool, createResearchMemoryTools } from './entity-tools.js'
 import { createMemoryTools } from '../memory/memory-tools.js'
 import { createWebSearchTool, createWebFetchTool } from './web-tools.js'
 import { createLiteratureSearchTool } from './literature-search.js'
+import { createFetchFulltextTool } from './fetch-fulltext.js'
 import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
 import { createGenerateDiagramTool } from './generate-diagram.js'
@@ -108,6 +109,7 @@ export function createResearchTools(ctx: ResearchToolContext): {
 
   // Research tools (already AgentTool)
   tools.push(createLiteratureSearchTool(ctx))
+  tools.push(createFetchFulltextTool())
   tools.push(createConvertDocumentTool(ctx))
   tools.push(createDataAnalyzeTool(ctx))
   tools.push(createGenerateDiagramTool(ctx))
