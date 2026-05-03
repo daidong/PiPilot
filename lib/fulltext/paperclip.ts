@@ -21,12 +21,15 @@
 
 import {
   paperclipConvertedPath,
+  paperclipRawPath,
   fileMtimeIso,
   writePaperclipConverted,
   writePaperclipRaw,
   writePaperclipSectionList,
 } from './cache.js'
-import { existsSync, readFileSync } from 'fs'
+import { getWikiRoot } from '../wiki/types.js'
+import { existsSync, readFileSync, renameSync } from 'fs'
+import { join } from 'path'
 
 const MCP_URL = 'https://paperclip.gxl.ai/mcp'
 const NETWORK_TIMEOUT_MS = 20_000
@@ -337,30 +340,69 @@ export async function fetchPaperclipFulltext(
     return null
   }
   if (!lookupHit) return null
-  paperclipId = lookupHit.paperclipId
+  // The ID Paperclip's lookup command returned. Different commands return
+  // different forms for the SAME paper:
+  //   lookup pmc <pmc>  → "PMC8371605"           (matches document_id)
+  //   lookup doi <doi>  → "f712b12b-6d54-..."    (UUID, ≠ document_id)
+  //   search ...        → "bio_f712b12b6d54"     (matches document_id)
+  // We treat the returned form as a possibly-non-canonical ALIAS used only
+  // to address the paper at the MCP level. The CANONICAL form (used for
+  // cache file naming, alias resolution, observability) is `meta.document_id`,
+  // resolved via meta.json below. Mirrors lib/wiki/types.ts:computeCanonicalKey
+  // pattern: pick one canonical key + lazy-migrate aliases.
+  const lookupResultId = lookupHit.paperclipId
+  paperclipId = lookupResultId  // re-pointed to canonicalId below
 
-  // Cache short-circuit (paperclipPath uses the source's canonical ID,
-  // which we now have). Skip when specific sections were requested — the
-  // cached file is the concatenated body and we cannot split it back into
-  // named sections without re-fetching the section files.
+  // Step 2 (now first): meta.json — fetched up-front so we can derive the
+  // canonical ID before doing any cache I/O. `.json` files use `cat` (not
+  // head). Empirically: head returns empty on JSON files in Paperclip's vsh,
+  // while cat returns the full content without the auto-summary header that
+  // triggers on large `.lines` files. The summary mode appears to be
+  // size-/extension-keyed, not just on cat.
+  let meta: MetaJson | undefined
+  {
+    const r = await mcpCall(`cat /papers/${lookupResultId}/meta.json`)
+    if (r?.text) {
+      const parsed = safeJson<MetaJson>(r.text)
+      if (parsed) meta = parsed
+    }
+  }
+
+  // Canonical ID — Paperclip's own stable form. Falls back to lookup-result
+  // when meta.json couldn't be fetched (e.g. transient outage).
+  const canonicalId = meta?.document_id ?? lookupResultId
+  paperclipId = canonicalId  // all downstream cache I/O uses this
+
+  // Lazy migration: if a previous run cached this paper under the lookup-
+  // result alias (e.g. UUID from lookup-by-doi BEFORE this fix), rename the
+  // legacy files to canonical paths so subsequent reads hit cache by
+  // canonical ID instead of duplicating. Idempotent: skipped when no legacy
+  // files exist or canonical files already do.
+  if (canonicalId !== lookupResultId) {
+    migrateLegacyAlias(lookupResultId, canonicalId)
+  }
+
+  // Cache short-circuit (now uses canonical paths). Skip when specific
+  // sections were requested — the cached file is the concatenated body and
+  // we cannot split it back into named sections without re-fetching.
   //
   // Also invalidate caches that look like the legacy `cat` truncated preview
   // ("[~XXXX tokens total, showing first ~YYYY chars]" header) — those were
-  // written before we switched to `head -N` and are dramatically thinner
-  // than what the new path produces.
+  // written before we switched to `head -N` and are dramatically thinner.
   const wantsSections = !!(input.sections && input.sections.length > 0)
-  const cachedPath = paperclipConvertedPath(paperclipId)
+  const cachedPath = paperclipConvertedPath(canonicalId)
   if (!wantsSections && existsSync(cachedPath)) {
     try {
       const cached = readFileSync(cachedPath, 'utf-8')
       const looksTruncated = /^\[~\d+\s+tokens total,\s+showing first/i.test(cached.trim())
       if (cached && cached.trim().length > 100 && !looksTruncated) {
         return {
-          paperclipId,
+          paperclipId: canonicalId,
           markdown: cached,
           cachePath: cachedPath,
           fetchedAt: fileMtimeIso(cachedPath),
-          resolvedPmcId: paperclipId.startsWith('PMC') ? paperclipId : undefined,
+          resolvedPmcId: meta?.pmc_id ?? (canonicalId.startsWith('PMC') ? canonicalId : undefined),
+          meta,
         }
       }
       if (looksTruncated) {
@@ -370,20 +412,6 @@ export async function fetchPaperclipFulltext(
       }
     } catch {
       // fall through to re-fetch
-    }
-  }
-
-  // Step 2: meta.json (best-effort, for surfaced metadata).
-  // `.json` files use `cat` (not head). Empirically: head returns empty
-  // on JSON files in Paperclip's vsh, while cat returns the full content
-  // without the auto-summary header that triggers on large `.lines` files.
-  // The summary mode appears to be size-/extension-keyed, not just on cat.
-  let meta: MetaJson | undefined
-  {
-    const r = await mcpCall(`cat /papers/${paperclipId}/meta.json`)
-    if (r?.text) {
-      const parsed = safeJson<MetaJson>(r.text)
-      if (parsed) meta = parsed
     }
   }
 
@@ -481,13 +509,15 @@ export async function fetchPaperclipFulltext(
   }
 
   return {
-    paperclipId,
+    paperclipId: canonicalId,
     markdown: body,
     cachePath,
     fetchedAt: new Date().toISOString(),
     sections,
     sectionList,
-    resolvedPmcId: paperclipId.startsWith('PMC') ? paperclipId : (meta?.pmc_id ?? undefined),
+    // Prefer meta.pmc_id (authoritative). Falls back to canonicalId if it
+    // happens to be a PMC<id> form (PMC papers have document_id == pmc_id).
+    resolvedPmcId: meta?.pmc_id ?? (canonicalId.startsWith('PMC') ? canonicalId : undefined),
     meta,
   }
 }
@@ -581,24 +611,77 @@ export async function fetchPaperclipMetadata(
     if (r?.text) lookupHit = parseLookupOutput(r.text)
   }
   if (!lookupHit) return null
-  paperclipId = lookupHit.paperclipId
+  const lookupResultId = lookupHit.paperclipId
 
   let meta: MetaJson | undefined
   // .json files use cat (head returns empty on JSON in Paperclip's vsh).
-  const metaCall = await mcpCall(`cat /papers/${paperclipId}/meta.json`)
+  const metaCall = await mcpCall(`cat /papers/${lookupResultId}/meta.json`)
   if (metaCall?.text) {
     const parsed = safeJson<MetaJson>(metaCall.text)
     if (parsed) meta = parsed
   }
 
-  let sectionList: string[] = []
-  const lsCall = await mcpCall(`ls /papers/${paperclipId}/sections/`)
-  if (lsCall?.text) sectionList = parseLsOutput(lsCall.text)
-  if (sectionList.length > 0) {
-    try { writePaperclipSectionList(paperclipId, sectionList) } catch { /* ignore */ }
+  // Canonical ID — same pattern as fetchPaperclipFulltext. Falls back to the
+  // lookup result if meta.json couldn't be fetched.
+  const canonicalId = meta?.document_id ?? lookupResultId
+  paperclipId = canonicalId
+  if (canonicalId !== lookupResultId) {
+    migrateLegacyAlias(lookupResultId, canonicalId)
   }
 
-  return { paperclipId, meta, sectionList }
+  let sectionList: string[] = []
+  const lsCall = await mcpCall(`ls /papers/${canonicalId}/sections/`)
+  if (lsCall?.text) sectionList = parseLsOutput(lsCall.text)
+  if (sectionList.length > 0) {
+    try { writePaperclipSectionList(canonicalId, sectionList) } catch { /* ignore */ }
+  }
+
+  return { paperclipId: canonicalId, meta, sectionList }
+}
+
+// ── Lazy alias migration ───────────────────────────────────────────────────
+//
+// Mirrors the wiki's identity-migration pattern (lib/wiki/identity-migration.ts):
+// when a stronger / canonical identifier is discovered, rewrite stored state
+// in place under the canonical key so subsequent lookups don't duplicate.
+//
+// The case it solves: prior to this fix, lookup-by-doi returned a UUID and we
+// cached body / meta / sections.json under <UUID>.{md,json,sections.json}.
+// After the fix, the same paper resolves to canonicalId=meta.document_id
+// (e.g. "bio_f712b12b6d54"). Rather than orphan the UUID files, rename them
+// in place when first seen. Idempotent: if canonical files already exist,
+// no rename — the legacy files become orphans (next manual prune cleans up).
+
+function sectionsListPath(paperclipId: string): string {
+  // Mirror the path used by writePaperclipSectionList in cache.ts.
+  return join(getWikiRoot(), 'raw', 'paperclip',
+    `${paperclipId.replace(/[^a-zA-Z0-9.-]/g, '_')}.sections.json`)
+}
+
+function migrateLegacyAlias(legacyId: string, canonicalId: string): void {
+  if (legacyId === canonicalId) return
+  const moves: Array<[string, string]> = [
+    [paperclipConvertedPath(legacyId), paperclipConvertedPath(canonicalId)],
+    [paperclipRawPath(legacyId), paperclipRawPath(canonicalId)],
+    [sectionsListPath(legacyId), sectionsListPath(canonicalId)],
+  ]
+  let migrated = 0
+  for (const [from, to] of moves) {
+    if (!existsSync(from) || existsSync(to)) continue
+    try {
+      renameSync(from, to)
+      migrated++
+    } catch (err) {
+      console.warn(
+        `[paperclip] alias migration failed: ${from} -> ${to}: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+  if (migrated > 0) {
+    console.log(
+      `[paperclip] migrated ${migrated} legacy alias file(s) from ${legacyId} -> ${canonicalId}`,
+    )
+  }
 }
 
 // ── Section-aware assembly (Mode B) ────────────────────────────────────────
