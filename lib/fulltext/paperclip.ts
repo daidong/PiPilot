@@ -525,18 +525,39 @@ export async function fetchPaperclipFulltext(
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Parse the output of `ls /papers/<id>/sections/`. Paperclip prints names
- * separated by 2+ spaces, with an optional trailing notice line.
+ * Parse the output of `ls /papers/<id>/sections/`.
+ *
+ * Paperclip's vsh prints filenames on a single line, separated by 2+ spaces,
+ * each ending in `.lines`, with an optional trailing notice line below.
+ *
+ * The naive splitter `line.split(/\s{2,}/)` was incorrect: section names
+ * themselves can contain 2+ internal whitespace runs because Paperclip's
+ * upstream parser renders italic markers as double spaces. For example, the
+ * RadD paper's heading "tumor cell killing *in vitro* and *in vivo*" comes
+ * out of vsh as a SINGLE filename:
+ *
+ *   "NKp46-RadD interactions lead to tumor cell killing  in vitro  and  in vivo.lines"
+ *
+ * Splitting on `\s{2,}` shredded that into 4 stub filenames ("...killing",
+ * "in vitro", "and", "in vivo") which then all failed the MIN_SECTION_BYTES
+ * filter — silently dropping the Figure 5 Results body (verified during the
+ * v0.3 RadD smoke test, where the model itself flagged the missing block).
+ *
+ * Correct boundary token: `.lines` followed by either 2+ spaces (next
+ * filename) or end-of-line. Lazy regex captures the shortest leading text
+ * that ends in `.lines` at a real boundary.
  */
-function parseLsOutput(text: string): string[] {
+export function parseLsOutput(text: string): string[] {
   const tokens: string[] = []
+  const re = /([^\n]+?)\.lines(?=\s{2,}|$)/g
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim()
     if (!line) continue
     if (line.startsWith('(') || line.startsWith('ERR')) continue  // notice / error lines
-    // Section file names end in `.lines` per Paperclip convention.
-    for (const tok of line.split(/\s{2,}/)) {
-      const name = tok.trim().replace(/\.lines$/, '')
+    re.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(line)) !== null) {
+      const name = m[1].trim()
       if (name) tokens.push(name)
     }
   }

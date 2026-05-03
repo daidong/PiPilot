@@ -20,7 +20,7 @@ import { strict as assert } from 'node:assert'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { hasAnyFulltextSource, resolveFulltext } from './index.js'
-import { fuzzyMatchSection } from './paperclip.js'
+import { fuzzyMatchSection, parseLsOutput } from './paperclip.js'
 import {
   arxivConvertedPath,
   paperclipConvertedPath,
@@ -231,6 +231,54 @@ async function main(): Promise<void> {
 
   await record('fuzzyMatchSection: empty query returns null', () => {
     assert.equal(fuzzyMatchSection('', ['Methods']), null)
+  })
+
+  // ── parseLsOutput edge cases ─────────────────────────────────────────────
+  // Section-file filenames can contain internal multi-space runs because
+  // Paperclip's parser renders italic markers as double spaces. The boundary
+  // is `.lines` followed by 2+ spaces or end-of-line, NOT 2+ spaces alone.
+
+  await record('parseLsOutput: simple multi-file list', () => {
+    const out = parseLsOutput('Methods.lines  Results.lines  Discussion.lines')
+    assert.deepEqual(out, ['Methods', 'Results', 'Discussion'])
+  })
+
+  await record('parseLsOutput: filename with internal multi-space (italic split bug)', () => {
+    // Real example from RadD bioRxiv paper: italics around "in vitro" / "in
+    // vivo" rendered as double-space gaps; the WHOLE thing is one filename.
+    const out = parseLsOutput(
+      'Title.lines  NKp46-RadD interactions lead to tumor cell killing  in vitro  and  in vivo.lines  Discussion.lines',
+    )
+    assert.deepEqual(out, [
+      'Title',
+      'NKp46-RadD interactions lead to tumor cell killing  in vitro  and  in vivo',
+      'Discussion',
+    ])
+  })
+
+  await record('parseLsOutput: filename containing dot but not .lines', () => {
+    const out = parseLsOutput('NKp46 Expression of  F. nucleatum  in HNSC.lines  Methods.lines')
+    assert.deepEqual(out, ['NKp46 Expression of  F. nucleatum  in HNSC', 'Methods'])
+  })
+
+  await record('parseLsOutput: trailing notice line is ignored', () => {
+    const out = parseLsOutput(
+      'Methods.lines  Results.lines\n  (read-only — use /.gxl/ for writable storage)',
+    )
+    assert.deepEqual(out, ['Methods', 'Results'])
+  })
+
+  await record('parseLsOutput: ERR line is ignored', () => {
+    const out = parseLsOutput('ERR: not a directory')
+    assert.deepEqual(out, [])
+  })
+
+  await record('parseLsOutput: empty input', () => {
+    assert.deepEqual(parseLsOutput(''), [])
+  })
+
+  await record('parseLsOutput: single filename, no separator', () => {
+    assert.deepEqual(parseLsOutput('Methods.lines'), ['Methods'])
   })
 
   // ── Dispatch null-return when nothing eligible ───────────────────────────
