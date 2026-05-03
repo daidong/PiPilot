@@ -186,3 +186,30 @@ For unsigned local packs (demos, smoke tests) skip the env file and run `CSC_IDE
 
 ### Release flow
 Bump `app/package.json` version, commit, tag `vX.Y.Z`, push the tag. `release.yml` reads signing credentials from GitHub Secrets (`MAC_CERTS`, `MAC_CERTS_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`), builds all three platforms, signs+notarizes macOS, and uploads to a draft GitHub Release. Manually publish the draft when the artifacts look right; `deploy-website.yml` listens for `release: published` and rebuilds the marketing site so download links stay current.
+
+## Main Branch Protection
+
+The `main` branch is protected via GitHub branch protection rules. The intent is "fail-safe by default, fast path for the maintainer":
+
+- **Required status check**: `build` (the `ci.yml` job) must pass before a PR can merge
+- **Strict mode**: PR branches must be up-to-date with `main` before merging
+- **Required approvals**: 0 — solo maintainer doesn't need to self-approve
+- **Force pushes**: blocked
+- **Deletions**: blocked
+- **`enforce_admins: false`**: admins (the maintainer) bypass all rules, so direct `git push origin main` and tag pushes still work for routine version bumps and emergency fixes
+
+This means the day-to-day release flow above is unchanged. The protection only catches accidents: a stray `git push --force`, a leaked token, or a misconfigured automation.
+
+### Inspecting and modifying protection
+```bash
+# View current settings
+gh api repos/daidong/PiPilot/branches/main/protection
+
+# Update (re-PUT the full payload)
+gh api -X PUT repos/daidong/PiPilot/branches/main/protection --input rules.json
+
+# Temporarily disable (e.g. to rewrite history) — remember to re-enable
+gh api -X DELETE repos/daidong/PiPilot/branches/main/protection
+```
+
+If a PR is stuck because the `build` check name changed, update `required_status_checks.contexts` to match the new job name from `ci.yml`.
