@@ -35,6 +35,7 @@ coverage/
 app/out/
 app/dist/
 app/node_modules/
+app/.env.local
 
 # AgentFoundry framework data
 .agentfoundry/
