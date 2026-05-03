@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths: ['website/**']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +29,8 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - run: cd website && npm ci
       - run: cd website && npm run build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-pages-artifact@v4
         with:
           path: website/dist
