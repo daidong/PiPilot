@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, Check, Cpu, Eye, EyeOff, LogIn, LogOut, X, Image as ImageIcon, FileText } from 'lucide-react'
 import { SUPPORTED_MODELS } from '../../constants'
 import { parseModelKey } from '../../utils'
@@ -488,7 +489,11 @@ function ApiKeyDialog({
     }
   }
 
-  return (
+  // Portal to <body> so the modal escapes any transformed/contained
+  // ancestor in the left sidebar (a fixed element gets trapped by ancestors
+  // with `transform`, `filter`, `contain`, etc., which collapsed the dialog
+  // into a thin strip on the right edge before).
+  return createPortal(
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`${provider} API Key Required`}>
       <div ref={dialogRef} className="w-full max-w-md rounded-xl border t-border t-bg-surface shadow-2xl p-4 space-y-3">
         <div>
@@ -538,6 +543,7 @@ function ApiKeyDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
