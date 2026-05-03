@@ -45,6 +45,14 @@ const KEY_FIELDS = [
     url: 'https://paperclip.gxl.ai',
     required: false,
   },
+  {
+    name: 'DEEPSEEK_API_KEY',
+    label: 'DeepSeek',
+    placeholder: 'sk-...',
+    hint: 'Enables DeepSeek V4 Pro / Flash models. Note: text-only — image inputs and diagram review/generation will be disabled when a DeepSeek model is selected.',
+    url: 'https://platform.deepseek.com/api_keys',
+    required: false,
+  },
 ] as const
 
 interface Props {

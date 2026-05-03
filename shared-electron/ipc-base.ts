@@ -69,7 +69,8 @@ const API_KEY_NAMES = [
   'ANTHROPIC_API_KEY',
   'BRAVE_API_KEY',
   'OPENROUTER_API_KEY',
-  'PAPERCLIP_API_KEY'
+  'PAPERCLIP_API_KEY',
+  'DEEPSEEK_API_KEY'
 ] as const
 
 interface AppConfig {
@@ -344,6 +345,7 @@ export function clearCodexCredentials(): void {
 export function resolveCoordinatorAuth(compositeKey: string): ResolvedCoordinatorAuth {
   const openaiApiKey = (process.env.OPENAI_API_KEY || '').trim()
   const anthropicApiKey = (process.env.ANTHROPIC_API_KEY || '').trim()
+  const deepseekApiKey = (process.env.DEEPSEEK_API_KEY || '').trim()
 
   // Parse provider:modelId
   const i = compositeKey.indexOf(':')
@@ -387,6 +389,12 @@ export function resolveCoordinatorAuth(compositeKey: string): ResolvedCoordinato
         throw new Error('ANTHROPIC_API_KEY is required for the selected Anthropic model.')
       }
       return { apiKey: anthropicApiKey, authMode: 'api-key', isAnthropicModel: true, billingSource: 'api-key' }
+    }
+    case 'deepseek': {
+      if (!deepseekApiKey) {
+        throw new Error('DEEPSEEK_API_KEY is required for the selected DeepSeek model. Add it in Settings → API Keys or set the DEEPSEEK_API_KEY environment variable.')
+      }
+      return { apiKey: deepseekApiKey, authMode: 'api-key', isAnthropicModel: false, billingSource: 'api-key', piProvider: 'deepseek' }
     }
     default: {
       // openai and any other provider

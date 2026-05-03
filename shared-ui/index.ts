@@ -6,6 +6,11 @@ export { REASONING_MODELS, GPT5_REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODE
 
 // Utilities
 export { formatTokens, formatCost, parseModelKey, buildModelKey } from './utils'
+export {
+  getModelCapabilities,
+  modelSupportsVision,
+  type ModelCapabilities,
+} from './lib/model-capabilities'
 
 // Settings
 export type {

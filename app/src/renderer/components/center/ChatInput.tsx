@@ -1,5 +1,5 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react'
-import { Send, Square, Paperclip, FileText, X } from 'lucide-react'
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { Send, Square, Paperclip, FileText, X, AlertTriangle } from 'lucide-react'
 import { useChatStore } from '../../stores/chat-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useSessionStore } from '../../stores/session-store'
@@ -7,6 +7,7 @@ import { useEntityStore } from '../../stores/entity-store'
 import { MentionPopover } from './MentionPopover'
 import { CommandPopover } from './CommandPopover'
 import { ImageLightbox } from './ImageLightbox'
+import { getModelCapabilities } from '../../../../../shared-ui/lib/model-capabilities'
 
 const SLASH_COMMANDS = [
   { name: '/note', description: 'Create a note artifact', args: '<title>' },
@@ -83,8 +84,12 @@ export function ChatInput() {
   const stop = useChatStore((s) => s.stop)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const setIdle = useUIStore((s) => s.setIdle)
+  const selectedModel = useUIStore((s) => s.selectedModel)
   const hasProject = useSessionStore((s) => s.hasProject)
   const refreshEntities = useEntityStore((s) => s.refreshAll)
+
+  const modelCaps = useMemo(() => getModelCapabilities(selectedModel), [selectedModel])
+  const visionSupported = modelCaps.vision
 
   // Clear ephemeral UI state when switching projects
   useEffect(() => {
@@ -99,6 +104,11 @@ export function ChatInput() {
   const addImageFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter(f => ACCEPTED_IMAGE_TYPES.includes(f.type))
     if (imageFiles.length === 0) return
+    if (!visionSupported) {
+      // Silently drop — the persistent banner already explains why the attach
+      // button is disabled. Re-emitting an alert on every paste/drop would be noisy.
+      return
+    }
 
     // Side effects (FileReader) must live outside the state updater — StrictMode
     // invokes updaters twice in dev, which previously caused each pasted image
@@ -115,7 +125,7 @@ export function ChatInput() {
       }
       reader.readAsDataURL(file)
     })
-  }, [])
+  }, [visionSupported])
 
   // ── Document ingestion (PDF, CSV, MD, TXT, etc.) ──
 
@@ -518,11 +528,17 @@ export function ChatInput() {
         />
       )}
 
-      {/* Hidden file input for the attach button */}
+      {/* Hidden file input for the attach button.
+          When the selected model is text-only (e.g. DeepSeek V4), drop image
+          MIME types from the accept list so the picker hides them. */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.csv,.md,.txt,.json,.xml,.html,.docx"
+        accept={
+          visionSupported
+            ? 'image/png,image/jpeg,image/gif,image/webp,.pdf,.csv,.md,.txt,.json,.xml,.html,.docx'
+            : '.pdf,.csv,.md,.txt,.json,.xml,.html,.docx'
+        }
         multiple
         className="hidden"
         onChange={handleFileInputChange}
@@ -540,6 +556,21 @@ export function ChatInput() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {/* Vision-unsupported warning */}
+        {!visionSupported && (
+          <div
+            className="flex items-start gap-2 mb-2 px-2.5 py-1.5 rounded-lg text-[11px] t-text-secondary"
+            style={{ background: 'var(--color-warning-bg, rgba(234,179,8,0.08))', border: '1px solid var(--color-warning-border, rgba(234,179,8,0.25))' }}
+            role="status"
+          >
+            <AlertTriangle size={13} className="shrink-0 mt-0.5" style={{ color: 'var(--color-warning, #eab308)' }} />
+            <span>
+              The selected model is text-only — image attachments and diagram review will be disabled.
+              Switch to GPT-5.5, Claude Opus, or another vision-capable model to send images.
+            </span>
+          </div>
+        )}
+
         {/* Image thumbnails */}
         {pendingImages.length > 0 && (
           <div className="flex gap-2 pb-2 flex-wrap">

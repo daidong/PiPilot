@@ -1,16 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Check, Cpu, Eye, EyeOff, LogIn, LogOut, X } from 'lucide-react'
+import { ChevronDown, Check, Cpu, Eye, EyeOff, LogIn, LogOut, X, Image as ImageIcon, FileText } from 'lucide-react'
 import { SUPPORTED_MODELS } from '../../constants'
 import { parseModelKey } from '../../utils'
+import { getModelCapabilities } from '../../lib/model-capabilities'
 import type { ModelOption } from '../../types'
 
 // Group models by provider. Subscription providers come first so they are the
 // first thing the user sees — we prefer sub over API key when both work.
+// DeepSeek is intentionally listed last (text-only, niche pricing tier).
 const PROVIDER_ORDER = [
   'ChatGPT Subscription',
   'Claude Subscription',
   'OpenAI',
   'Anthropic',
+  'DeepSeek',
 ]
 const allProviders = PROVIDER_ORDER.filter(p =>
   SUPPORTED_MODELS.some(m => m.provider === p)
@@ -36,6 +39,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const [anthropicSubLoginError, setAnthropicSubLoginError] = useState<string | null>(null)
   const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
+  const [showDeepSeekDialog, setShowDeepSeekDialog] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const api = (window as any).api
 
@@ -206,6 +210,15 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
       }
     }
 
+    if (provider === 'deepseek') {
+      const status = await api?.getApiKeyStatus?.()
+      if (!status?.DEEPSEEK_API_KEY) {
+        setShowDeepSeekDialog(true)
+        setOpen(false)
+        return
+      }
+    }
+
     onSelectModel(model.id)
     setOpen(false)
     refreshAnthropicStatus()
@@ -338,47 +351,69 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
                   )}
                 </div>
               )}
-              {(provider === 'OpenAI' || provider === 'Anthropic') && (
+              {(provider === 'OpenAI' || provider === 'Anthropic' || provider === 'DeepSeek') && (
                 <div className="px-3 pb-1 text-[11px] t-text-muted">
                   API Key
                 </div>
               )}
 
-              {groupedModels[provider].map((model) => (
-                <button
-                  key={model.id}
-                  role="option"
-                  aria-selected={model.id === selectedModel}
-                  onClick={() => {
-                    handleModelSelect(model).catch((err) => {
-                      console.error('[ModelSelector] failed to switch model:', err)
-                      window.alert(err?.message || 'Failed to switch model.')
-                    })
-                  }}
-                  className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left transition-colors t-bg-hover ${
-                    model.id === selectedModel ? 't-text' : 't-text-secondary'
-                  }`}
-                >
-                  <span className="w-4 shrink-0">
-                    {model.id === selectedModel && <Check size={14} className="t-text-accent-soft" />}
-                  </span>
-                  <span className="truncate">{model.label}</span>
-                </button>
-              ))}
+              {groupedModels[provider].map((model) => {
+                const caps = getModelCapabilities(model.id)
+                return (
+                  <button
+                    key={model.id}
+                    role="option"
+                    aria-selected={model.id === selectedModel}
+                    onClick={() => {
+                      handleModelSelect(model).catch((err) => {
+                        console.error('[ModelSelector] failed to switch model:', err)
+                        window.alert(err?.message || 'Failed to switch model.')
+                      })
+                    }}
+                    className={`flex items-center gap-2 w-full px-3 py-2 text-sm text-left transition-colors t-bg-hover ${
+                      model.id === selectedModel ? 't-text' : 't-text-secondary'
+                    }`}
+                  >
+                    <span className="w-4 shrink-0">
+                      {model.id === selectedModel && <Check size={14} className="t-text-accent-soft" />}
+                    </span>
+                    <span className="truncate flex-1">{model.label}</span>
+                    {/* Capability badge: vision-capable models get an image icon;
+                        text-only models get a "Text" tag so users can spot them
+                        before sending images. */}
+                    {caps.vision ? (
+                      <span
+                        className="shrink-0 inline-flex items-center gap-0.5 text-[10px] t-text-muted"
+                        title="Supports image input"
+                      >
+                        <ImageIcon size={10} />
+                      </span>
+                    ) : (
+                      <span
+                        className="shrink-0 inline-flex items-center gap-0.5 text-[10px] t-text-muted"
+                        title="Text-only — no image input"
+                      >
+                        <FileText size={10} /> Text
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           ))}
         </div>
       )}
 
-      {(showOpenAIDialog || showAnthropicDialog) && (
+      {(showOpenAIDialog || showAnthropicDialog || showDeepSeekDialog) && (
         <ApiKeyDialog
-          provider={showOpenAIDialog ? 'OpenAI' : 'Anthropic'}
-          keyName={showOpenAIDialog ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'}
-          placeholder={showOpenAIDialog ? 'sk-...' : 'sk-ant-...'}
-          onClose={() => { setShowOpenAIDialog(false); setShowAnthropicDialog(false) }}
+          provider={showOpenAIDialog ? 'OpenAI' : showAnthropicDialog ? 'Anthropic' : 'DeepSeek'}
+          keyName={showOpenAIDialog ? 'OPENAI_API_KEY' : showAnthropicDialog ? 'ANTHROPIC_API_KEY' : 'DEEPSEEK_API_KEY'}
+          placeholder={showOpenAIDialog ? 'sk-...' : showAnthropicDialog ? 'sk-ant-...' : 'sk-...'}
+          onClose={() => { setShowOpenAIDialog(false); setShowAnthropicDialog(false); setShowDeepSeekDialog(false) }}
           onSaved={(model) => {
             setShowOpenAIDialog(false)
             setShowAnthropicDialog(false)
+            setShowDeepSeekDialog(false)
             // Select the model that triggered the dialog
             onSelectModel(model)
             refreshAnthropicStatus()
