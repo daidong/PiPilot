@@ -12,6 +12,14 @@ export interface UsageEvent {
   cacheHitRate: number
 }
 
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
+  version: string
+  current: string
+  progress?: number
+  error?: string
+}
+
 export interface FileTreeNode {
   name: string
   path: string
@@ -203,8 +211,11 @@ export interface ElectronAPI {
   setTheme: (theme: 'light' | 'dark') => Promise<void>
   onThemeChanged: (cb: (theme: 'light' | 'dark') => void) => () => void
 
-  // Version check
-  checkForUpdate: () => Promise<{ latest: string; current: string; hasUpdate: boolean }>
+  // Auto-update (electron-updater backed by GitHub Releases)
+  updateGetState: () => Promise<UpdateState>
+  updateCheckNow: () => Promise<{ ok: boolean; reason?: string }>
+  updateQuitAndInstall: () => Promise<{ ok: boolean; reason?: string }>
+  onUpdateState: (cb: (state: UpdateState) => void) => () => void
 
   // Session history
   saveMessage: (sessionId: string, msg: any) => Promise<void>
@@ -429,7 +440,14 @@ const api: ElectronAPI = {
 
   convertFileToText: (fileName, base64Data) => ipcRenderer.invoke('file:convert-to-text', fileName, base64Data),
 
-  checkForUpdate: () => ipcRenderer.invoke('app:check-update'),
+  updateGetState: () => ipcRenderer.invoke('update:get-state'),
+  updateCheckNow: () => ipcRenderer.invoke('update:check-now'),
+  updateQuitAndInstall: () => ipcRenderer.invoke('update:quit-and-install'),
+  onUpdateState: (cb) => {
+    const handler = (_: any, state: UpdateState) => cb(state)
+    ipcRenderer.on('update:state', handler)
+    return () => ipcRenderer.removeListener('update:state', handler)
+  },
 
   exportChat: () => ipcRenderer.invoke('chat:export'),
   onExportChat: (cb) => {

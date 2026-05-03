@@ -1,4 +1,5 @@
 import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, watch, type FSWatcher } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
@@ -61,16 +62,6 @@ import { rasterizeSvg } from './svg-rasterizer'
 // One-time warning flag for the Linux recursive-watch limitation (see startFsWatcher).
 let loggedLinuxWatchWarning = false
 
-// ─── Semver comparison (major.minor.patch) ──────────────────────────────────
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number)
-  const pb = b.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    const diff = (pa[i] || 0) - (pb[i] || 0)
-    if (diff !== 0) return diff
-  }
-  return 0
-}
 
 // ─── Simple activity formatter ─
 interface ActivityLabel { label: string; icon: string; detail?: Record<string, unknown> }
@@ -664,43 +655,89 @@ export function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
   ipcHandlersRegistered = true
 
-  // ─── Version update check (non-blocking) ──────────────────────────────────
-  // Fetches latest version from npm registry once at startup.
-  // Read current version from root package.json (the npm-published version),
-  // NOT app.getVersion() which reads app/package.json (Electron internal version).
-  const currentVersion = (() => {
-    try {
-      const rootPkg = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf-8'))
-      return rootPkg.version as string
-    } catch {
-      return app.getVersion()
-    }
-  })()
+  // ─── Auto-update via electron-updater ──────────────────────────────────────
+  // Checks GitHub Releases for newer signed+notarized builds, downloads in
+  // background, and surfaces an "update ready" state to the renderer. The
+  // user clicks "Restart to upgrade" → quitAndInstall().
+  //
+  // Disabled in dev (no signature). On Linux outside AppImage the updater
+  // also auto-disables itself; .deb users must apt-update themselves.
+  const currentVersion = app.getVersion()
+  let updateState: {
+    status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
+    version: string
+    current: string
+    progress?: number
+    error?: string
+  } = { status: 'idle', version: currentVersion, current: currentVersion }
 
-  let cachedUpdateInfo: { latest: string; current: string; hasUpdate: boolean } | null = null
-
-  const checkForUpdate = async (): Promise<{ latest: string; current: string; hasUpdate: boolean }> => {
-    if (cachedUpdateInfo) return cachedUpdateInfo
-    try {
-      const res = await fetch('https://registry.npmjs.org/research-copilot/latest', {
-        signal: AbortSignal.timeout(5000)
-      })
-      if (!res.ok) throw new Error(`npm registry returned ${res.status}`)
-      const data = await res.json() as { version: string }
-      const latest = data.version
-      const hasUpdate = latest !== currentVersion && compareVersions(latest, currentVersion) > 0
-      cachedUpdateInfo = { latest, current: currentVersion, hasUpdate }
-      return cachedUpdateInfo
-    } catch {
-      cachedUpdateInfo = { latest: currentVersion, current: currentVersion, hasUpdate: false }
-      return cachedUpdateInfo
+  const broadcastUpdateState = (): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('update:state', updateState)
     }
   }
 
-  ipcMain.handle('app:check-update', () => checkForUpdate())
+  if (app.isPackaged) {
+    autoUpdater.autoDownload = true
+    autoUpdater.autoInstallOnAppQuit = false
 
-  // Fire-and-forget: warm the cache early
-  checkForUpdate().catch(() => {})
+    autoUpdater.on('checking-for-update', () => {
+      updateState = { ...updateState, status: 'checking' }
+      broadcastUpdateState()
+    })
+    autoUpdater.on('update-available', (info) => {
+      updateState = { ...updateState, status: 'downloading', version: info.version, progress: 0 }
+      broadcastUpdateState()
+    })
+    autoUpdater.on('update-not-available', () => {
+      updateState = { ...updateState, status: 'idle' }
+      broadcastUpdateState()
+    })
+    autoUpdater.on('download-progress', (p) => {
+      updateState = { ...updateState, status: 'downloading', progress: Math.round(p.percent) }
+      broadcastUpdateState()
+    })
+    autoUpdater.on('update-downloaded', (info) => {
+      updateState = { status: 'ready', version: info.version, current: currentVersion, progress: 100 }
+      broadcastUpdateState()
+    })
+    autoUpdater.on('error', (err) => {
+      updateState = { ...updateState, status: 'error', error: err?.message || 'Unknown updater error' }
+      broadcastUpdateState()
+    })
+
+    // Initial check after a short delay so the window is up first
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 5000)
+
+    // Re-check every 4 hours while the app is running
+    setInterval(() => {
+      if (updateState.status === 'ready' || updateState.status === 'downloading') return
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 4 * 60 * 60 * 1000)
+  }
+
+  // Renderer can pull the current state any time (e.g. on mount, after
+  // navigating to a tab) without waiting for the next event broadcast.
+  ipcMain.handle('update:get-state', () => updateState)
+
+  ipcMain.handle('update:check-now', async () => {
+    if (!app.isPackaged) return { ok: false, reason: 'dev-mode' }
+    try {
+      await autoUpdater.checkForUpdates()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, reason: (err as Error)?.message || 'check failed' }
+    }
+  })
+
+  ipcMain.handle('update:quit-and-install', () => {
+    if (updateState.status !== 'ready') return { ok: false, reason: 'not-ready' }
+    // isSilent=false (show progress on Windows), isForceRunAfter=true (relaunch)
+    setImmediate(() => autoUpdater.quitAndInstall(false, true))
+    return { ok: true }
+  })
 
   // Theme is a global app-wide preference. When any window flips it, fan out
   // to every other window so all renderers re-apply the <html> class together.
