@@ -374,12 +374,13 @@ export async function fetchPaperclipFulltext(
   }
 
   // Step 2: meta.json (best-effort, for surfaced metadata).
-  // `head -N` instead of `cat` to bypass Paperclip's auto-summary mode.
-  // meta.json is small so HEAD_LINE_CAP is dramatically more than needed,
-  // but `head` always stops at EOF.
+  // `.json` files use `cat` (not head). Empirically: head returns empty
+  // on JSON files in Paperclip's vsh, while cat returns the full content
+  // without the auto-summary header that triggers on large `.lines` files.
+  // The summary mode appears to be size-/extension-keyed, not just on cat.
   let meta: MetaJson | undefined
   {
-    const r = await mcpCall(`head -${HEAD_LINE_CAP} /papers/${paperclipId}/meta.json`)
+    const r = await mcpCall(`cat /papers/${paperclipId}/meta.json`)
     if (r?.text) {
       const parsed = safeJson<MetaJson>(r.text)
       if (parsed) meta = parsed
@@ -459,10 +460,20 @@ export async function fetchPaperclipFulltext(
 
   if (!body || body.trim().length < 100) return null
 
-  // Step 5: cache + return.
+  // Step 5: cache + return. Mode A (targeted sections) must NOT overwrite
+  // the body cache — the caller asked for a slice, not the full paper, and
+  // writing 2 sections back as the body cache would silently truncate the
+  // full-paper Mode B cache the next default call expects to hit.
+  // Mode A still writes meta.json + sections.json (both are paper-wide
+  // metadata, not request-shape-specific).
+  const wroteFullBody = !(input.sections && input.sections.length > 0)
   let cachePath: string
   try {
-    cachePath = writePaperclipConverted(paperclipId, body)
+    if (wroteFullBody) {
+      cachePath = writePaperclipConverted(paperclipId, body)
+    } else {
+      cachePath = paperclipConvertedPath(paperclipId)
+    }
     if (meta) writePaperclipRaw(paperclipId, meta)
   } catch (err) {
     console.warn(`[paperclip] cache write failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -573,7 +584,8 @@ export async function fetchPaperclipMetadata(
   paperclipId = lookupHit.paperclipId
 
   let meta: MetaJson | undefined
-  const metaCall = await mcpCall(`head -${HEAD_LINE_CAP} /papers/${paperclipId}/meta.json`)
+  // .json files use cat (head returns empty on JSON in Paperclip's vsh).
+  const metaCall = await mcpCall(`cat /papers/${paperclipId}/meta.json`)
   if (metaCall?.text) {
     const parsed = safeJson<MetaJson>(metaCall.text)
     if (parsed) meta = parsed
