@@ -1,5 +1,9 @@
 import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
-import { autoUpdater } from 'electron-updater'
+// electron-updater is CJS-only; the named-export form breaks the packaged
+// ESM build (`out/main/index.mjs`). Default-import the namespace and pull
+// `autoUpdater` off it.
+import electronUpdater from 'electron-updater'
+const { autoUpdater } = electronUpdater
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, watch, type FSWatcher } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
