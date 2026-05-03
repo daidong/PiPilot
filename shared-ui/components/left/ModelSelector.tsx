@@ -41,6 +41,9 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
   const [showDeepSeekDialog, setShowDeepSeekDialog] = useState(false)
+  // Tracks the model the user clicked while it was missing a key.
+  // Falls back to `selectedModel` so the dialog never receives `null`.
+  const [pendingModelId, setPendingModelId] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const api = (window as any).api
 
@@ -196,6 +199,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     if (provider === 'openai') {
       const status = await api?.getOpenAIAuthStatus?.()
       if (!status?.hasApiKey) {
+        setPendingModelId(model.id)
         setShowOpenAIDialog(true)
         setOpen(false)
         return
@@ -205,6 +209,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     if (provider === 'anthropic') {
       const status = await api?.getAnthropicAuthStatus?.()
       if (!status?.hasApiKeyFallback) {
+        setPendingModelId(model.id)
         setShowAnthropicDialog(true)
         setOpen(false)
         return
@@ -214,6 +219,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     if (provider === 'deepseek') {
       const status = await api?.getApiKeyStatus?.()
       if (!status?.DEEPSEEK_API_KEY) {
+        setPendingModelId(model.id)
         setShowDeepSeekDialog(true)
         setOpen(false)
         return
@@ -410,16 +416,24 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
           provider={showOpenAIDialog ? 'OpenAI' : showAnthropicDialog ? 'Anthropic' : 'DeepSeek'}
           keyName={showOpenAIDialog ? 'OPENAI_API_KEY' : showAnthropicDialog ? 'ANTHROPIC_API_KEY' : 'DEEPSEEK_API_KEY'}
           placeholder={showOpenAIDialog ? 'sk-...' : showAnthropicDialog ? 'sk-ant-...' : 'sk-...'}
-          onClose={() => { setShowOpenAIDialog(false); setShowAnthropicDialog(false); setShowDeepSeekDialog(false) }}
+          onClose={() => {
+            setShowOpenAIDialog(false)
+            setShowAnthropicDialog(false)
+            setShowDeepSeekDialog(false)
+            setPendingModelId(null)
+          }}
           onSaved={(model) => {
             setShowOpenAIDialog(false)
             setShowAnthropicDialog(false)
             setShowDeepSeekDialog(false)
-            // Select the model that triggered the dialog
+            setPendingModelId(null)
+            // Select the model that triggered the dialog (NOT the previous
+            // active model — that bug made users have to pick the model again
+            // after entering the key).
             onSelectModel(model)
             refreshAnthropicStatus()
           }}
-          pendingModel={selectedModel}
+          pendingModel={pendingModelId ?? selectedModel}
         />
       )}
     </div>
