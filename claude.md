@@ -154,3 +154,35 @@ Skills are auto-discovered from three locations (later overrides earlier):
 Add prompt strings to `lib/agents/prompts/index.ts` as key-value entries in the `prompts` record. Access via `loadPrompt('key-name')`.
 
 Current prompts: `coordinator-system`, `data-analysis-system`, `data-analysis-tasks`, `data-code-template`, `literature-planner-system`, `literature-reviewer-system`, `literature-summarizer-system`, `data-analyzer-system`, `writing-outliner-system`, `writing-drafter-system`.
+
+## Signing, Notarization & Auto-Update
+
+The macOS build is signed with a Developer ID Application certificate, notarized via Apple's notarytool, and stapled — first-launch has zero Gatekeeper warning. Inside the app, `electron-updater` checks GitHub Releases on startup and every 4 hours; when an update has finished downloading the StatusBar shows a small `Update ready · Restart` pill. All update logic is gated behind `app.isPackaged`, so it stays inert during `npm run dev`.
+
+### Day-to-day development
+Nothing extra. `npm install && npm run dev` is unchanged. The auto-updater is dormant in dev (no network calls, no pill, no events). To preview the StatusBar pill while developing, set the store directly in DevTools:
+```js
+window.__zustand_useUpdateStore?.getState().setState({ status: 'ready', version: '0.3.99', current: '0.3.3' })
+```
+…or import `useUpdateStore` and do the same from a temporary component.
+
+### Local `pack` with signing (release maintainers only)
+Required only when reproducing a signed build locally (rare — CI handles real releases). Create `app/.env.local` (gitignored) with:
+```
+APPLE_ID=<developer apple id email>
+APPLE_APP_SPECIFIC_PASSWORD=<from appleid.apple.com>
+APPLE_TEAM_ID=<10-char team id>
+CSC_LINK=<absolute path to Developer ID .p12>
+CSC_KEY_PASSWORD=<.p12 password>
+```
+Then `set -a && source .env.local && set +a && npm run pack`. Verify with:
+```
+codesign --verify --deep --strict --verbose=2 "release/mac-arm64/Research Copilot.app"
+xcrun stapler validate "release/mac-arm64/Research Copilot.app"
+spctl -a -vvv -t install "release/mac-arm64/Research Copilot.app"   # expect: source=Notarized Developer ID
+```
+
+For unsigned local packs (demos, smoke tests) skip the env file and run `CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack`.
+
+### Release flow
+Bump `app/package.json` version, commit, tag `vX.Y.Z`, push the tag. `release.yml` reads signing credentials from GitHub Secrets (`MAC_CERTS`, `MAC_CERTS_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`), builds all three platforms, signs+notarizes macOS, and uploads to a draft GitHub Release. Manually publish the draft when the artifacts look right; `deploy-website.yml` listens for `release: published` and rebuilds the marketing site so download links stay current.
