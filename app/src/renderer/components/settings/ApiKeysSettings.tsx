@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 import { Eye, EyeOff, Check, ExternalLink, LogIn } from 'lucide-react'
-import { UpdateBanner } from '../UpdateBanner'
 
 const api = (window as any).api
 
@@ -117,8 +116,6 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
 
   return (
     <div>
-      <UpdateBanner />
-
       <div className="space-y-3.5">
         {KEY_FIELDS.map((field) => {
           const alreadySet = status[field.name]

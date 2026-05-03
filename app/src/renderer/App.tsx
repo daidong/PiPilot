@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { SettingsModal, type SettingsTab } from './components/settings/SettingsModal'
-import { UpdateBanner } from './components/UpdateBanner'
 import type { WikiPaperMeta } from '../../../lib/wiki/paper-meta-cache'
 import { LeftSidebar } from './components/layout/LeftSidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
@@ -17,6 +16,7 @@ import { useToolProgressStore } from './stores/tool-progress-store'
 import { useToolEventsStore } from './stores/tool-events-store'
 import { useUsageStore, type UsageEvent } from './stores/usage-store'
 import { useComputeStore } from './stores/compute-store'
+import { useUpdateStore } from './stores/update-store'
 
 const api = (window as any).api
 
@@ -507,11 +507,6 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
             </div>
           </div>
 
-          {/* Update banner — only renders when a newer npm version exists.
-              Sits above the two-column grid so it's the first thing users
-              see on launch, dismissable per-session. */}
-          <UpdateBanner variant="welcome" className="mb-10" />
-
           {/* Two-column layout: recents on the left, wiki/tips on the right.
               Collapses to single column on narrow windows. */}
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem] gap-12 xl:gap-16 items-start">
@@ -662,6 +657,15 @@ export default function App() {
     const unsub = api.onThemeChanged?.((next: 'light' | 'dark') => {
       applyThemeFromBroadcast(next)
     })
+    return () => { unsub?.() }
+  }, [])
+
+  // Subscribe to auto-update lifecycle. The pill in the StatusBar reads
+  // from the store and only renders when status === 'ready'.
+  useEffect(() => {
+    const setUpdateState = useUpdateStore.getState().setState
+    const unsub = api.onUpdateState?.(setUpdateState)
+    useUpdateStore.getState().refresh().catch(() => {})
     return () => { unsub?.() }
   }, [])
 
