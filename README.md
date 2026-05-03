@@ -25,8 +25,17 @@ Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electr
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/aE0-2O9_ALE">▶ Watch the demo on YouTube</a>
+  <a href="https://youtu.be/aE0-2O9_ALE">▶ Watch the full demo on YouTube</a>
 </p>
+
+## Live research demo — replicating GW150914
+
+The video above is an **unedited recording** of Research Copilot reproducing the core results of [**Abbott et al. 2016 (PRL 116, 061102)**](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.116.061102) — the paper that announced the first direct detection of gravitational waves.
+
+**Goal**: reproduce strain whitening, Q-transform chirp visualization, and matched-filter SNR ≈ 24 for the GW150914 event, from a minimal prompt.
+
+- 🎬 **[Full unedited workflow](https://youtu.be/aE0-2O9_ALE)** — every prompt, every tool call, every plot. Best for getting a real sense of how the app works end-to-end.
+- 🎯 **[Final result only](https://youtu.be/cgf_Ui2HB8o)** — skip the live process and jump straight to the reproduced figures.
 
 ## What's new in 0.3.4
 
