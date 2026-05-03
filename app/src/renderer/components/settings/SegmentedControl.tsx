@@ -21,7 +21,7 @@ export function SegmentedControl<T extends string = string>({ options, value, on
           <button
             key={opt.value}
             onClick={() => onChange(opt.value)}
-            className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors
+            className={`flex-1 px-3.5 py-2 text-[13px] font-medium transition-colors
               ${active
                 ? 't-text-accent bg-[var(--color-accent)]/10'
                 : 't-text-secondary hover:t-text hover:t-bg-hover'

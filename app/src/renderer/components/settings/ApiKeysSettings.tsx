@@ -119,19 +119,19 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
     <div>
       <UpdateBanner />
 
-      <div className="space-y-3">
+      <div className="space-y-3.5">
         {KEY_FIELDS.map((field) => {
           const alreadySet = status[field.name]
           return (
-            <div key={field.name} className="rounded-lg border t-border t-bg-surface/50 p-3">
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-medium t-text flex items-center gap-1.5">
+            <div key={field.name} className="rounded-lg border t-border t-bg-surface/50 p-3.5">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-[13px] font-medium t-text flex items-center gap-2">
                   {field.label}
-                  {field.required && <span className="text-[10px] t-text-muted">(required*)</span>}
-                  {!field.required && <span className="text-[10px] t-text-muted">(optional)</span>}
+                  {field.required && <span className="text-[11px] t-text-muted">(required*)</span>}
+                  {!field.required && <span className="text-[11px] t-text-muted">(optional)</span>}
                   {alreadySet && (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] text-green-500">
-                      <Check size={10} /> configured
+                    <span className="inline-flex items-center gap-1 text-[11px] text-green-500">
+                      <Check size={11} /> configured
                     </span>
                   )}
                 </label>
@@ -139,16 +139,16 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
                   href={field.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-[10px] t-text-muted hover:t-text flex items-center gap-0.5"
+                  className="text-[11px] t-text-muted hover:t-text flex items-center gap-1"
                   onClick={(e) => { e.preventDefault(); window.open(field.url, '_blank') }}
                 >
-                  Get key <ExternalLink size={9} />
+                  Get key <ExternalLink size={11} />
                 </a>
               </div>
               <div className="relative">
                 <input
                   type={visible[field.name] ? 'text' : 'password'}
-                  className="w-full text-xs px-2.5 py-1.5 rounded-md border t-border t-bg-base t-text font-mono pr-8
+                  className="w-full text-[13px] px-3 py-2 rounded-md border t-border t-bg-base t-text font-mono pr-9
                              focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
                   placeholder={alreadySet ? '••••••••  (already set — leave blank to keep)' : field.placeholder}
                   value={values[field.name] || ''}
@@ -157,28 +157,28 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
                 />
                 <button
                   type="button"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 t-text-muted hover:t-text"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 t-text-muted hover:t-text"
                   onClick={() => setVisible((prev) => ({ ...prev, [field.name]: !prev[field.name] }))}
                   tabIndex={-1}
                 >
-                  {visible[field.name] ? <EyeOff size={13} /> : <Eye size={13} />}
+                  {visible[field.name] ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
               </div>
-              <p className="text-[11px] t-text-muted mt-1">{field.hint}</p>
+              <p className="text-[12px] t-text-muted mt-1.5 leading-relaxed">{field.hint}</p>
             </div>
           )
         })}
       </div>
 
       {/* ChatGPT Subscription */}
-      <div className="rounded-lg border t-border t-bg-surface/50 p-3 mt-3">
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs font-medium t-text flex items-center gap-1.5">
+      <div className="rounded-lg border t-border t-bg-surface/50 p-3.5 mt-3.5">
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-[13px] font-medium t-text flex items-center gap-2">
             ChatGPT Subscription
-            <span className="text-[10px] t-text-muted">(alternative to OpenAI API key)</span>
+            <span className="text-[11px] t-text-muted">(alternative to OpenAI API key)</span>
             {codexStatus?.isLoggedIn && (
-              <span className="inline-flex items-center gap-0.5 text-[10px] text-green-500">
-                <Check size={10} /> signed in
+              <span className="inline-flex items-center gap-1 text-[11px] text-green-500">
+                <Check size={11} /> signed in
               </span>
             )}
           </label>
@@ -186,28 +186,28 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
         <button
           onClick={handleCodexLogin}
           disabled={codexLoggingIn || codexStatus?.isLoggedIn}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border t-border text-xs t-text-secondary hover:t-text t-bg-hover disabled:opacity-50"
+          className="flex items-center gap-2 px-3.5 py-2 rounded-md border t-border text-[13px] t-text-secondary hover:t-text t-bg-hover disabled:opacity-50"
         >
-          <LogIn size={12} />
+          <LogIn size={14} />
           {codexLoggingIn ? 'Signing in...' : codexStatus?.isLoggedIn ? 'Already signed in' : 'Sign in with ChatGPT'}
         </button>
-        <p className="text-[11px] t-text-muted mt-1">
+        <p className="text-[12px] t-text-muted mt-1.5 leading-relaxed">
           Use your ChatGPT Plus/Pro subscription instead of an API key. No per-token billing.
         </p>
       </div>
 
-      <p className="text-[11px] t-text-muted mt-2">
+      <p className="text-[12px] t-text-muted mt-3 leading-relaxed">
         * At least one of Anthropic or OpenAI (API key or ChatGPT subscription) is required.
       </p>
 
-      {error && <p className="text-xs text-red-400 mt-2" role="alert">{error}</p>}
+      {error && <p className="text-[12px] text-red-400 mt-2.5" role="alert">{error}</p>}
 
       {showSaveButton && (
-        <div className="mt-4 flex justify-end">
+        <div className="mt-5 flex justify-end">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-4 py-1.5 rounded-md text-white text-[13px] font-medium hover:brightness-110 transition-[filter] duration-150 disabled:opacity-50 bg-[var(--color-accent)]"
+            className="px-4 py-2 rounded-md text-white text-[13px] font-medium hover:brightness-110 transition-[filter] duration-150 disabled:opacity-50 bg-[var(--color-accent)]"
           >
             {saving ? 'Saving…' : 'Save & Continue'}
           </button>

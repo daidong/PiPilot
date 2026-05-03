@@ -9,10 +9,10 @@ interface Props {
 
 export function DataAnalysisSettings({ executionTimeLimit, onChange }: Props) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       <div>
-        <h4 className="text-xs font-semibold t-text mb-1.5">Execution Time Limit</h4>
-        <p className="text-[11px] t-text-muted mb-2.5">
+        <h4 className="text-sm font-semibold t-text mb-2">Execution Time Limit</h4>
+        <p className="text-[12px] t-text-muted mb-3 leading-relaxed">
           Maximum time allowed for Python data analysis scripts to run before timeout.
         </p>
         <SegmentedControl
@@ -25,7 +25,7 @@ export function DataAnalysisSettings({ executionTimeLimit, onChange }: Props) {
           value={executionTimeLimit}
           onChange={onChange}
         />
-        <p className="text-[10px] t-text-muted mt-1.5">
+        <p className="text-[11px] t-text-muted mt-2 leading-relaxed">
           {executionTimeLimit === 'short' && 'Quick timeout for simple analyses.'}
           {executionTimeLimit === 'standard' && 'Suitable for most data analysis tasks.'}
           {executionTimeLimit === 'extended' && 'For larger datasets or complex computations.'}

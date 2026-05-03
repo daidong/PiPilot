@@ -88,13 +88,13 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
   }, [model, autoResolved])
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       {/* Token cost warning — always visible so users understand the trade-off */}
-      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 flex gap-2.5">
-        <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-500" />
-        <div className="space-y-1">
-          <p className="text-[11px] font-semibold t-text">Heads up: background token usage</p>
-          <p className="text-[11px] t-text-muted leading-relaxed">
+      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3.5 flex gap-3">
+        <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-500" />
+        <div className="space-y-1.5">
+          <p className="text-[13px] font-semibold t-text">Heads up: background token usage</p>
+          <p className="text-[12px] t-text-muted leading-relaxed">
             The Paper Wiki runs in the background and sends every new paper through an LLM
             (intro + abstract + full text if available). A typical paper consumes roughly
             <span className="t-text"> 8K–25K input tokens</span> and produces{' '}
@@ -109,8 +109,8 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
 
       {/* Section 1: Configuration */}
       <div>
-        <h4 className="text-xs font-semibold t-text mb-1.5">Wiki Agent Model</h4>
-        <p className="text-[11px] t-text-muted mb-2.5">
+        <h4 className="text-sm font-semibold t-text mb-2">Wiki Agent Model</h4>
+        <p className="text-[12px] t-text-muted mb-3 leading-relaxed">
           Select a model to power the background Paper Wiki agent. The wiki accumulates
           LLM-generated summaries of papers across all your projects. A smaller model
           is recommended for background processing. Pick <em>Auto</em> to follow the
@@ -119,7 +119,7 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
         <select
           value={model}
           onChange={e => onChangeModel(e.target.value)}
-          className="w-full px-3 py-1.5 rounded-lg border t-border t-bg-base t-text text-xs"
+          className="w-full px-3 py-2 rounded-lg border t-border t-bg-base t-text text-[13px]"
         >
           <option value="none">None (disabled — default)</option>
           <option value="auto">Auto (match main model priority)</option>
@@ -133,32 +133,32 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
           ))}
         </select>
         {enabled && (
-          <p className="text-[10px] t-text-muted mt-1.5">
+          <p className="text-[11px] t-text-muted mt-2">
             Running: <span className="t-text">{runningModelLabel}</span>
           </p>
         )}
-        <p className="text-[10px] t-text-muted mt-1.5 italic">
+        <p className="text-[11px] t-text-muted mt-2 italic">
           Changes take effect after app restart.
         </p>
       </div>
 
       {enabled && (
         <div>
-          <h4 className="text-xs font-semibold t-text mb-1.5">Processing Speed</h4>
+          <h4 className="text-sm font-semibold t-text mb-2">Processing Speed</h4>
           <SegmentedControl
             options={SPEED_OPTIONS}
             value={speed}
             onChange={onChangeSpeed}
           />
-          <p className="text-[11px] t-text-muted mt-2">{speedDesc}</p>
+          <p className="text-[12px] t-text-muted mt-2.5 leading-relaxed">{speedDesc}</p>
         </div>
       )}
 
       {/* Section 2: Status Dashboard */}
       {enabled && (
-        <div className="rounded-lg border t-border t-bg-surface/50 p-3 space-y-3">
+        <div className="rounded-lg border t-border t-bg-surface/50 p-3.5 space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold t-text">Status</h4>
+            <h4 className="text-sm font-semibold t-text">Status</h4>
             {status?.state && status.state !== 'disabled' && (
               <button
                 onClick={() => {
@@ -168,14 +168,14 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
                     api.wikiPause?.()
                   }
                 }}
-                className="px-2.5 py-1 rounded-md border t-border t-bg-base t-text text-[11px] font-medium hover:t-bg-hover transition-colors"
+                className="px-3 py-1.5 rounded-md border t-border t-bg-base t-text text-[12px] font-medium hover:t-bg-hover transition-colors"
               >
                 {status.state === 'paused' ? 'Resume' : 'Pause'}
               </button>
             )}
           </div>
 
-          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[11px]">
+          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12px]">
             <span className="t-text-muted">State:</span>
             <span className="t-text flex items-center gap-1.5">
               <span className={`inline-block w-1.5 h-1.5 rounded-full ${
@@ -212,10 +212,10 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
           {/* Recent Activity */}
           {recentLog.length > 0 && (
             <div>
-              <h5 className="text-[11px] font-medium t-text-muted mb-1">Recent Activity</h5>
+              <h5 className="text-[12px] font-medium t-text-muted mb-1.5">Recent Activity</h5>
               <div className="space-y-0.5 max-h-32 overflow-y-auto">
                 {recentLog.slice(0, 10).map((entry, i) => (
-                  <p key={i} className="text-[10px] t-text-muted font-mono leading-relaxed truncate">
+                  <p key={i} className="text-[11px] t-text-muted font-mono leading-relaxed truncate">
                     {entry}
                   </p>
                 ))}
@@ -226,8 +226,8 @@ export function WikiAgentSettings({ model, speed, onChangeModel, onChangeSpeed }
       )}
 
       {!enabled && (
-        <div className="rounded-lg border t-border t-bg-surface/50 p-3">
-          <p className="text-[11px] t-text-muted">
+        <div className="rounded-lg border t-border t-bg-surface/50 p-3.5">
+          <p className="text-[12px] t-text-muted leading-relaxed">
             The wiki agent is disabled. Select a model above to enable cross-project paper
             memory. Papers from all your projects are accumulated into a searchable local
             memory accessible via <code className="font-mono">wiki_search</code>,{' '}
