@@ -33,6 +33,17 @@ export const SourceTier = Type.Union([
   Type.Literal('fulltext'),
 ])
 
+/**
+ * Provenance for fulltext (when source_tier === 'fulltext'). Orthogonal to
+ * source_tier: source_tier answers "how strong is the evidence", this one
+ * answers "which provider supplied it". Optional and absent on legacy
+ * sidecars written before the fulltext-retrieval RFC.
+ */
+export const FulltextSourceMeta = Type.Union([
+  Type.Literal('paperclip'),
+  Type.Literal('arxiv'),
+])
+
 export const ParseQuality = Type.Union([
   Type.Literal('clean'),
   Type.Literal('noisy'),
@@ -110,6 +121,12 @@ export const WikiPaperMemoryMetaV3 = Type.Object({
   generated_at: Type.String(),
   generator_version: Type.Number(),
   source_tier: SourceTier,
+  /**
+   * Which provider supplied the fulltext, when present. Set only when
+   * source_tier === 'fulltext'. Absent on legacy sidecars (treat as
+   * 'unknown'). See lib/fulltext/types.ts for the canonical type.
+   */
+  fulltext_source: Type.Optional(FulltextSourceMeta),
   parse_quality: Type.Optional(ParseQuality),
   paper_type: PaperType,
 

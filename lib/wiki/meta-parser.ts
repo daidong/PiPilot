@@ -382,6 +382,7 @@ export function synthesizeMinimalSidecar(
   slug: string,
   sourceTier: WikiPaperMemoryMeta['source_tier'],
   generatorVersion: number,
+  fulltextSource?: WikiPaperMemoryMeta['fulltext_source'],
 ): WikiPaperMemoryMeta {
   return {
     schemaVersion: 3,
@@ -390,6 +391,7 @@ export function synthesizeMinimalSidecar(
     generated_at: new Date().toISOString(),
     generator_version: generatorVersion,
     source_tier: sourceTier,
+    ...(sourceTier === 'fulltext' && fulltextSource ? { fulltext_source: fulltextSource } : {}),
     paper_type: 'empirical',
   }
 }

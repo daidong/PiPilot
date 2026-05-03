@@ -396,11 +396,28 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
     let parseOutcome = parsePaperPage(result.content, slug)
     if (parseOutcome.status === 'missing') {
       const sourceTier = result.fulltextStatus === 'fulltext' ? 'fulltext' as const : 'abstract-only' as const
-      const fallback = synthesizeMinimalSidecar(canonicalKey, slug, sourceTier, GENERATOR_VERSION)
+      const fallback = synthesizeMinimalSidecar(
+        canonicalKey, slug, sourceTier, GENERATOR_VERSION, fulltextSource,
+      )
       const patched = writeMetaBlockInto(parseOutcome.body, fallback)
       safeWriteFile(paperPath, patched)
       parseOutcome = parsePaperPage(patched, slug)
       log(`synthesized fallback sidecar for ${slug}`)
+    } else if (
+      (parseOutcome.status === 'ok' || parseOutcome.status === 'partial') &&
+      parseOutcome.sidecar &&
+      parseOutcome.sidecar.source_tier === 'fulltext' &&
+      fulltextSource &&
+      parseOutcome.sidecar.fulltext_source !== fulltextSource
+    ) {
+      // The LLM doesn't know which provider supplied the fulltext, so it
+      // never emits `fulltext_source`. We stamp it deterministically here
+      // so wiki_source / observability has consistent provenance regardless
+      // of which path produced the page (Paperclip / arXiv / Mode B etc.).
+      parseOutcome.sidecar.fulltext_source = fulltextSource
+      const patched = writeMetaBlockInto(parseOutcome.body, parseOutcome.sidecar)
+      safeWriteFile(paperPath, patched)
+      parseOutcome = parsePaperPage(patched, slug)
     }
     const priorStatus = scanResult.reason === 'repair' ? readSidecarStatus().get(slug) : undefined
     recordSidecarStatus({
