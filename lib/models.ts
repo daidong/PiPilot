@@ -20,6 +20,7 @@ export type ModelTierKey =
   | 'anthropic'
   | 'anthropic-sub'
   | 'google'
+  | 'deepseek'
 
 export interface ModelTier {
   /** Latest user-facing flagship. Bare model ID (no provider prefix). */
@@ -31,10 +32,11 @@ export interface ModelTier {
 }
 
 /**
- * Pi-ai 0.70.2 verified IDs (2026-04-27):
+ * Pi-ai 0.70.2 verified IDs (2026-05-02):
  *   openai: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.4-pro
  *   openai-codex: gpt-5.5, gpt-5.4, gpt-5.4-mini
  *   anthropic: claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001
+ *   deepseek: deepseek-v4-pro, deepseek-v4-flash (text-only — no image input)
  *
  * TODO: gpt-5.5-pro was released 2026-04-23 but is not yet in pi-ai 0.70.2.
  * Add it to the openai tier (as a separate flagship-pro entry) once pi-ai picks it up.
@@ -65,6 +67,11 @@ export const MODEL_TIERS: Record<ModelTierKey, ModelTier> = {
     previous: null,
     light: 'gemini-2.0-flash-lite',
   },
+  deepseek: {
+    flagship: 'deepseek-v4-pro',
+    previous: null,
+    light: 'deepseek-v4-flash',
+  },
 }
 
 /**
@@ -76,6 +83,7 @@ export const ROUTER_PROVIDER_TO_PI: Record<string, string> = {
   openai: 'openai',
   'openai-codex': 'openai-codex',
   google: 'google',
+  deepseek: 'deepseek',
 }
 
 /** Pi-ai provider name → light model ID for intent routing. */
@@ -84,6 +92,7 @@ export const ROUTER_MODELS: Record<string, string> = {
   openai: MODEL_TIERS.openai.light!,
   'openai-codex': MODEL_TIERS['openai-codex'].light!,
   google: MODEL_TIERS.google.light!,
+  deepseek: MODEL_TIERS.deepseek.light!,
 }
 
 /** Sonnet stays separate — current at 4.6 and not on the flagship/previous ladder. */

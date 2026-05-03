@@ -177,20 +177,20 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
         aria-modal="true"
         aria-labelledby="settings-dialog-title"
         tabIndex={-1}
-        className="relative w-full max-w-2xl h-[520px] rounded-xl border t-border t-bg-surface shadow-xl flex overflow-hidden outline-none"
+        className="relative w-full max-w-3xl h-[620px] rounded-xl border t-border t-bg-surface shadow-xl flex overflow-hidden outline-none"
       >
         {/* Left sidebar nav — h1 is the stable dialog title (H5) */}
         <nav
           aria-label="Settings categories"
-          className="w-48 shrink-0 border-r t-border t-bg-base flex flex-col py-4 px-2"
+          className="w-56 shrink-0 border-r t-border t-bg-base flex flex-col py-5 px-2.5"
         >
           <h1
             id="settings-dialog-title"
-            className="px-3 mb-3 text-sm font-semibold t-text tracking-tight"
+            className="px-3 mb-4 text-base font-semibold t-text tracking-tight"
           >
             Settings
           </h1>
-          <div className="space-y-0.5">
+          <div className="space-y-1">
             {TABS.map(tab => {
               const Icon = tab.icon
               const active = activeTab === tab.id
@@ -199,21 +199,21 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   aria-current={active ? 'page' : undefined}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors
                     ${active
                       ? 't-text-accent bg-[var(--color-accent)]/10'
                       : 't-text-secondary hover:t-text hover:t-bg-hover'
                     }
                   `}
                 >
-                  <Icon size={14} />
+                  <Icon size={16} />
                   {tab.label}
                 </button>
               )
             })}
           </div>
           <div className="flex-1" />
-          <p className="px-3 text-[10px] t-text-muted leading-relaxed">
+          <p className="px-3 text-[11px] t-text-muted leading-relaxed">
             Keys are stored in<br />
             <code className="font-mono">~/.research-copilot/</code>
           </p>
@@ -223,8 +223,8 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
         <div className="flex-1 flex flex-col min-w-0">
           {/* Header with close button. Tab-section heading is h2 under the
               dialog's h1 "Settings" title. */}
-          <div className="flex items-center justify-between px-6 pt-4 pb-2">
-            <h2 className="text-sm font-semibold t-text">
+          <div className="flex items-center justify-between px-7 pt-5 pb-3">
+            <h2 className="text-[15px] font-semibold t-text">
               {activeLabel}
             </h2>
             <button
@@ -232,12 +232,12 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
               className="p-1.5 rounded-lg t-text-muted hover:t-text hover:t-bg-hover transition-colors"
               aria-label="Close settings"
             >
-              <X size={16} />
+              <X size={18} />
             </button>
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto px-6 pb-4">
+          <div className="flex-1 overflow-y-auto px-7 pb-5">
             {activeTab === 'api-keys' && (
               <ApiKeysSettings showSaveButton />
             )}
@@ -275,8 +275,8 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
 
           {/* Footer note for non-api-keys tabs */}
           {activeTab !== 'api-keys' && (
-            <div className="px-6 py-2.5 border-t t-border-subtle">
-              <p className="text-[10px] t-text-muted">
+            <div className="px-7 py-3 border-t t-border-subtle">
+              <p className="text-[11px] t-text-muted leading-relaxed">
                 Settings are saved automatically. Changes to research and analysis settings take effect for new agent sessions. Existing sessions require an app restart.
               </p>
             </div>

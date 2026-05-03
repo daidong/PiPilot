@@ -12,7 +12,7 @@ import type { ModelOption } from './types'
  * bumping a flagship/previous, update both files. The router/light-tier IDs
  * live in `lib/models.ts` only.
  *
- * Verified against pi-ai 0.70.2 (2026-04-27).
+ * Verified against pi-ai 0.70.2 (2026-05-02).
  * TODO: add `openai:gpt-5.5-pro` once pi-ai picks up the new model entry.
  */
 export const SUPPORTED_MODELS: ModelOption[] = [
@@ -30,6 +30,9 @@ export const SUPPORTED_MODELS: ModelOption[] = [
   { id: 'anthropic-sub:claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'Claude Subscription' },
   { id: 'anthropic-sub:claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'Claude Subscription' },
   { id: 'anthropic-sub:claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'Claude Subscription' },
+  // DeepSeek (API key) — text-only, no image input
+  { id: 'deepseek:deepseek-v4-pro', label: 'DeepSeek V4 Pro', provider: 'DeepSeek' },
+  { id: 'deepseek:deepseek-v4-flash', label: 'DeepSeek V4 Flash', provider: 'DeepSeek' },
 ]
 
 /**
@@ -41,6 +44,7 @@ export const REASONING_MODELS = [
   'openai-codex:gpt-5.5', 'openai-codex:gpt-5.4',
   'anthropic:claude-opus-4-7', 'anthropic:claude-opus-4-6',
   'anthropic-sub:claude-opus-4-7', 'anthropic-sub:claude-opus-4-6',
+  'deepseek:deepseek-v4-pro', 'deepseek:deepseek-v4-flash',
 ]
 
 /** @deprecated Use REASONING_MODELS instead */

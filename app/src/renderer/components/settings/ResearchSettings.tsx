@@ -16,11 +16,11 @@ export function ResearchSettings({
   onChangeIntensity, onChangeWebDepth, onChangeAutoSave,
 }: Props) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       {/* Literature Search Intensity */}
       <div>
-        <h4 className="text-xs font-semibold t-text mb-1.5">Literature Search Intensity</h4>
-        <p className="text-[11px] t-text-muted mb-2.5">
+        <h4 className="text-sm font-semibold t-text mb-2">Literature Search Intensity</h4>
+        <p className="text-[12px] t-text-muted mb-3 leading-relaxed">
           Controls how many papers are fetched per source and how thoroughly results are reviewed.
         </p>
         <SegmentedControl
@@ -32,7 +32,7 @@ export function ResearchSettings({
           value={researchIntensity}
           onChange={onChangeIntensity}
         />
-        <p className="text-[10px] t-text-muted mt-1.5">
+        <p className="text-[11px] t-text-muted mt-2 leading-relaxed">
           {researchIntensity === 'low' && 'Faster searches, fewer papers. Good for quick checks.'}
           {researchIntensity === 'medium' && 'Balanced coverage. Suitable for most research tasks.'}
           {researchIntensity === 'high' && 'Thorough searches with more papers per source. Best for comprehensive reviews.'}
@@ -41,8 +41,8 @@ export function ResearchSettings({
 
       {/* Web Search Depth */}
       <div>
-        <h4 className="text-xs font-semibold t-text mb-1.5">Web Search Depth</h4>
-        <p className="text-[11px] t-text-muted mb-2.5">
+        <h4 className="text-sm font-semibold t-text mb-2">Web Search Depth</h4>
+        <p className="text-[12px] t-text-muted mb-3 leading-relaxed">
           Controls the number of results and how much content is fetched from each page.
         </p>
         <SegmentedControl
@@ -54,7 +54,7 @@ export function ResearchSettings({
           value={webSearchDepth}
           onChange={onChangeWebDepth}
         />
-        <p className="text-[10px] t-text-muted mt-1.5">
+        <p className="text-[11px] t-text-muted mt-2 leading-relaxed">
           {webSearchDepth === 'quick' && 'Fewer results, smaller page fetches. Good for simple lookups.'}
           {webSearchDepth === 'standard' && 'Balanced results. Suitable for most searches.'}
           {webSearchDepth === 'thorough' && 'More results and larger page fetches. Best for deep research.'}
@@ -63,8 +63,8 @@ export function ResearchSettings({
 
       {/* Auto-Save Sensitivity */}
       <div>
-        <h4 className="text-xs font-semibold t-text mb-1.5">Auto-Save Sensitivity</h4>
-        <p className="text-[11px] t-text-muted mb-2.5">
+        <h4 className="text-sm font-semibold t-text mb-2">Auto-Save Sensitivity</h4>
+        <p className="text-[12px] t-text-muted mb-3 leading-relaxed">
           How aggressively papers are auto-saved to your library based on relevance scores.
         </p>
         <SegmentedControl
@@ -76,7 +76,7 @@ export function ResearchSettings({
           value={autoSaveSensitivity}
           onChange={onChangeAutoSave}
         />
-        <p className="text-[10px] t-text-muted mt-1.5">
+        <p className="text-[11px] t-text-muted mt-2 leading-relaxed">
           {autoSaveSensitivity === 'conservative' && 'Only saves highly relevant papers. Keeps your library focused.'}
           {autoSaveSensitivity === 'balanced' && 'Saves papers with good relevance. A sensible default.'}
           {autoSaveSensitivity === 'aggressive' && 'Saves more papers for broader coverage. May include tangential results.'}
