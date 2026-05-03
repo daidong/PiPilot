@@ -1529,6 +1529,10 @@ export function registerIpcHandlers(): void {
 
   // ─── Filesystem watcher for auto-refreshing the file tree ──────────────
   const IGNORED_SEGMENTS = new Set(['node_modules', '.git', '.research-pilot'])
+  // Editor temp files / OS metadata — saving a file in VS Code, vim, etc.
+  // generates a flurry of these. Filtering them at the watcher cuts the
+  // refresh storm at the source.
+  const NOISY_BASENAME_RE = /^(\.DS_Store|\.#.*|.*\.swp|.*\.swx|.*~|.*\.tmp|\d+\..*\.tmp)$/
 
   function startFsWatcher(state: WindowRuntimeState, win: BrowserWindow): void {
     // Tear down any existing watcher
@@ -1552,19 +1556,40 @@ export function registerIpcHandlers(): void {
     }
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    // Coalesce all parent dirs touched within the debounce window into one
+    // payload so the renderer can do targeted reloads instead of refreshing
+    // every expanded directory.
+    const pendingParents = new Set<string>()
+    let sawUnknownParent = false
 
     try {
       state.fsWatcher = watch(state.projectPath, { recursive: true }, (_event, filename) => {
-        // Filter out noisy directories
+        let parentRel: string | null = null
         if (filename) {
-          const segments = filename.toString().split(/[/\\]/)
+          const rel = filename.toString()
+          const segments = rel.split(/[/\\]/)
           if (segments.some((s) => IGNORED_SEGMENTS.has(s))) return
+          const base = segments[segments.length - 1] || ''
+          if (NOISY_BASENAME_RE.test(base)) return
+          // Parent directory relative to project root. Empty string == root.
+          parentRel = segments.slice(0, -1).join('/')
+        } else {
+          // Some platforms fire callbacks without a filename — fall back to
+          // a full refresh in that case.
+          sawUnknownParent = true
         }
-        // Debounce: batch rapid changes into a single emission
+
+        if (parentRel !== null) pendingParents.add(parentRel)
+
         if (debounceTimer) clearTimeout(debounceTimer)
         debounceTimer = setTimeout(() => {
           debounceTimer = null
-          safeSend(win, 'fs:external-change')
+          const payload = sawUnknownParent
+            ? { parents: null }
+            : { parents: Array.from(pendingParents) }
+          pendingParents.clear()
+          sawUnknownParent = false
+          safeSend(win, 'fs:external-change', payload)
         }, 500)
       })
       // Handle runtime errors (e.g., watched dir deleted, permission revoked,
@@ -1575,6 +1600,8 @@ export function registerIpcHandlers(): void {
           clearTimeout(debounceTimer)
           debounceTimer = null
         }
+        pendingParents.clear()
+        sawUnknownParent = false
         state.fsWatcher?.close()
         state.fsWatcher = null
       })
