@@ -185,7 +185,11 @@ export function hasLlmAuth(): boolean {
 
 /**
  * Resolve the highest-priority model ID that has working auth.
- * Priority (user preference): OpenAI sub → Anthropic sub → OpenAI API → Anthropic API.
+ * Priority (user preference): OpenAI sub → Anthropic sub → OpenAI API → Anthropic API → DeepSeek.
+ * DeepSeek sits last because it's text-only — Auto-resolved background work
+ * (e.g. Paper Wiki) shouldn't silently lose vision capability if the user
+ * happens to have only a DeepSeek key configured. It still gets picked when
+ * nothing else is available.
  * Returns null if nothing is configured.
  */
 export function pickPreferredModelId(): string | null {
@@ -193,6 +197,7 @@ export function pickPreferredModelId(): string | null {
   if (loadAnthropicSubCredentials()) return 'anthropic-sub:claude-opus-4-6'
   if ((process.env.OPENAI_API_KEY || '').trim()) return 'openai:gpt-5.4'
   if ((process.env.ANTHROPIC_API_KEY || '').trim()) return 'anthropic:claude-opus-4-6'
+  if ((process.env.DEEPSEEK_API_KEY || '').trim()) return 'deepseek:deepseek-v4-flash'
   return null
 }
 

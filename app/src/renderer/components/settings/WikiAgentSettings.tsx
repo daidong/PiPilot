@@ -21,11 +21,14 @@ const SPEED_OPTIONS: Array<{ label: string; value: WikiAgentSpeed; desc: string 
 
 // Providers ordered with subscription tiers first so users see them as the
 // first/natural choice — matches the main ModelSelector's priority.
+// DeepSeek is appended last (text-only, niche pricing tier) and is fully
+// usable for wiki work, which never needs image input.
 const PROVIDER_ORDER = [
   'ChatGPT Subscription',
   'Claude Subscription',
   'OpenAI',
   'Anthropic',
+  'DeepSeek',
 ]
 
 const MODEL_GROUPS: Array<[string, typeof SUPPORTED_MODELS]> = PROVIDER_ORDER
