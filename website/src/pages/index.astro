@@ -111,16 +111,37 @@ const fmtSize = (bytes?: number) => (bytes ? `${(bytes / 1024 / 1024).toFixed(0)
         <span>Auto-updates from {versionLabel}</span>
       </div>
 
-      <!-- Hero screenshot -->
+      <!-- Hero video — defaults to a YouTube thumbnail with a play button.
+           Clicking swaps it for the real iframe so we don't ship YouTube's
+           tracking JS on every first paint. Static screenshot moves to the
+           Features section so users still see UI while content loads. -->
       <div class="mt-16 md:mt-20 relative">
         <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent z-10 pointer-events-none"></div>
-        <div class="rounded-xl overflow-hidden border border-slate-800/60 shadow-2xl shadow-black/50">
+        <div
+          id="hero-video"
+          data-video-id="aE0-2O9_ALE"
+          class="relative rounded-xl overflow-hidden border border-slate-800/60 shadow-2xl shadow-black/50 cursor-pointer aspect-video bg-slate-900 group"
+          role="button"
+          tabindex="0"
+          aria-label="Play Research Copilot demo video"
+        >
           <img
-            src={`${base}default-screen.png`}
-            alt="Research Copilot main interface"
-            class="w-full"
+            src="https://img.youtube.com/vi/aE0-2O9_ALE/maxresdefault.jpg"
+            alt="Research Copilot demo — click to play"
+            class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
             loading="eager"
           />
+          <!-- Play button overlay -->
+          <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div class="w-20 h-20 md:w-24 md:h-24 rounded-full bg-mint-600/90 backdrop-blur-sm flex items-center justify-center shadow-2xl shadow-mint-600/40 group-hover:bg-mint-500 group-hover:scale-110 transition-all duration-200">
+              <svg class="w-8 h-8 md:w-10 md:h-10 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            </div>
+          </div>
+          <!-- Caption strip -->
+          <div class="absolute bottom-0 left-0 right-0 px-5 py-3 bg-gradient-to-t from-slate-950/90 to-transparent pointer-events-none">
+            <div class="text-xs uppercase tracking-wider text-mint-300/90 font-medium">Watch the demo</div>
+            <div class="text-sm text-white/90 mt-0.5">3-minute walkthrough · plays on YouTube</div>
+          </div>
         </div>
       </div>
     </div>
@@ -608,5 +629,26 @@ const fmtSize = (bytes?: number) => (bytes ? `${(bytes / 1024 / 1024).toFixed(0)
       </div>
     </div>
   </footer>
+
+  <!-- Hero video: swap thumbnail for iframe on click. Privacy-friendly
+       youtube-nocookie embed; only loads when the user opts in. -->
+  <script>
+    const heroVideo = document.getElementById('hero-video');
+    if (heroVideo) {
+      const playVideo = () => {
+        const id = heroVideo.dataset.videoId;
+        if (!id) return;
+        heroVideo.innerHTML = `<iframe class="absolute inset-0 w-full h-full" src="https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1" title="Research Copilot demo" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`;
+        heroVideo.classList.remove('cursor-pointer', 'group');
+      };
+      heroVideo.addEventListener('click', playVideo);
+      heroVideo.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          playVideo();
+        }
+      });
+    }
+  </script>
 
 </Layout>

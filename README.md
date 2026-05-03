@@ -18,7 +18,15 @@ An AI-powered desktop research assistant for scientists and academics. Literatur
 
 Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electron + React.
 
-![Main Interface](docs/default-screen.png)
+<p align="center">
+  <a href="https://youtu.be/aE0-2O9_ALE" title="Watch the demo on YouTube">
+    <img alt="Research Copilot demo — click to play on YouTube" src="https://img.youtube.com/vi/aE0-2O9_ALE/maxresdefault.jpg" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://youtu.be/aE0-2O9_ALE">▶ Watch the demo on YouTube</a>
+</p>
 
 ## What's new in 0.3.4
 
