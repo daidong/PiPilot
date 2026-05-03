@@ -31,19 +31,72 @@ import { existsSync, readFileSync } from 'fs'
 const MCP_URL = 'https://paperclip.gxl.ai/mcp'
 const NETWORK_TIMEOUT_MS = 20_000
 
-// ── Rate gate ──────────────────────────────────────────────────────────────
-// 1 req/s — undocumented by Paperclip, so this is a polite default.
-// (Spec §13 decision row 18.)
+// `cat` triggers Paperclip's auto-summary mode (~1000 char preview with a
+// `[~XXXX tokens total, showing first ~YYYY chars]` header). `head -N` returns
+// raw bytes. We use head everywhere for the wiki + agent paths so we can read
+// full content; the safety upper bound is HEAD_LINE_CAP and head stops at EOF.
+const HEAD_LINE_CAP = 100_000
 
-const RATE_LIMIT_MS = 1_000
+// Sections that are pure metadata or already covered by the wiki page header
+// — skip during section-aware assembly to avoid wasting tokens repeating
+// authors / affiliations / keywords. Abstract is also already injected into
+// the wiki prompt by buildPaperUserContent, so skipping it here keeps the
+// "Full Text" section focused on body content.
+const SKIP_SECTIONS = new Set([
+  'Title',
+  'Metadata',
+  'Authors',
+  'Affiliations',
+  'Categories',
+  'Keywords',
+  'Abstract',
+])
+
+// Skip section bodies shorter than this — usually heading-only stubs that
+// Paperclip's parser couldn't extract real content for.
+const MIN_SECTION_BYTES = 80
+
+// ── Rate gate + defensive observability ────────────────────────────────────
+// Bumped to 30 req/s (≈33 ms between calls) to support per-section fetching
+// (a single paper can need 25-35 cat calls). Paperclip's actual server-side
+// limit isn't documented; the logging below captures empirical data so we
+// can tune this number if 429s start showing up.
+
+const RATE_LIMIT_MS = 33   // ~30 req/s
 let nextAllowedAt = 0
 
-async function waitRate(): Promise<void> {
+// Rolling 1-second request log — used to annotate 429 events with how many
+// requests we sent in the moments leading up to the throttle.
+const recentRequests: number[] = []
+function recordRequest(): void {
   const now = Date.now()
+  recentRequests.push(now)
+  // Drop entries older than 5 seconds — we only need a short rolling window
+  // to characterize rate-at-throttle.
+  while (recentRequests.length > 0 && now - recentRequests[0] > 5_000) {
+    recentRequests.shift()
+  }
+}
+function requestsInLastMs(windowMs: number): number {
+  const cutoff = Date.now() - windowMs
+  let count = 0
+  for (let i = recentRequests.length - 1; i >= 0; i--) {
+    if (recentRequests[i] < cutoff) break
+    count++
+  }
+  return count
+}
+
+async function waitRate(): Promise<number> {
+  const now = Date.now()
+  let waited = 0
   if (now < nextAllowedAt) {
-    await new Promise(resolve => setTimeout(resolve, nextAllowedAt - now))
+    waited = nextAllowedAt - now
+    await new Promise(resolve => setTimeout(resolve, waited))
   }
   nextAllowedAt = Date.now() + RATE_LIMIT_MS
+  recordRequest()
+  return waited
 }
 
 // ── In-process disable flag (tripped on auth failure) ──────────────────────
@@ -68,7 +121,8 @@ async function mcpCall(command: string): Promise<McpTextResult | null> {
   const key = apiKey()
   if (!key) return null
 
-  await waitRate()
+  const waited = await waitRate()
+  const t0 = Date.now()
 
   const body = {
     jsonrpc: '2.0',
@@ -79,6 +133,10 @@ async function mcpCall(command: string): Promise<McpTextResult | null> {
       arguments: { command },
     },
   }
+
+  // Truncate the logged command for grep-friendliness — full body is in the
+  // network/server logs if we ever need it.
+  const cmdShort = command.length > 80 ? command.slice(0, 77) + '...' : command
 
   let res: Response
   try {
@@ -93,31 +151,56 @@ async function mcpCall(command: string): Promise<McpTextResult | null> {
       signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
     })
   } catch (err) {
-    console.warn(`[paperclip] network error: ${err instanceof Error ? err.message : String(err)}`)
+    console.warn(
+      `[paperclip] network error after ${Date.now() - t0}ms (waited ${waited}ms): ${err instanceof Error ? err.message : String(err)} | cmd: ${cmdShort}`,
+    )
     return null
   }
 
+  const elapsed = Date.now() - t0
+
   if (res.status === 401 || res.status === 403) {
-    console.warn('[paperclip] auth rejected — disabling Paperclip source for this process lifetime')
+    console.warn(
+      `[paperclip] auth rejected (HTTP ${res.status}) — disabling Paperclip source for this process lifetime | cmd: ${cmdShort}`,
+    )
     disabledForSession = true
     return null
   }
   if (res.status === 429) {
-    // Server-rate-limited. Wait a beat, then surface as failure (let backoff
-    // handle the next pass; a single retry inline would be intrusive).
-    console.warn('[paperclip] 429 rate-limited; skipping for this attempt')
+    // Server-side rate limit hit. Surface the empirical rate that triggered
+    // the throttle so we can tune RATE_LIMIT_MS. NOTE: this is the most
+    // important defensive log — if you see this, our client-side rate is
+    // too aggressive for the actual server policy.
+    const inLast1s = requestsInLastMs(1_000)
+    const inLast5s = requestsInLastMs(5_000)
+    console.warn(
+      `[paperclip] 429 RATE-LIMITED — sent ${inLast1s} req in last 1s, ${inLast5s} in last 5s ` +
+      `(client-side limit is currently ~${Math.round(1000 / RATE_LIMIT_MS)} req/s). ` +
+      `Consider raising RATE_LIMIT_MS in lib/fulltext/paperclip.ts. | cmd: ${cmdShort}`,
+    )
     return null
   }
   if (!res.ok) {
-    console.warn(`[paperclip] HTTP ${res.status} on command: ${command}`)
+    console.warn(
+      `[paperclip] HTTP ${res.status} after ${elapsed}ms | cmd: ${cmdShort}`,
+    )
     return null
   }
 
   let json: any
   try {
     json = await res.json()
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[paperclip] response parse error after ${elapsed}ms: ${err instanceof Error ? err.message : String(err)} | cmd: ${cmdShort}`,
+    )
     return null
+  }
+
+  // Slow-call observability: server-side latency >5s is a signal worth
+  // surfacing without spamming for normal calls.
+  if (elapsed > 5_000) {
+    console.warn(`[paperclip] slow call (${elapsed}ms) | cmd: ${cmdShort}`)
   }
 
   const result = json?.result ?? {}
@@ -258,14 +341,20 @@ export async function fetchPaperclipFulltext(
 
   // Cache short-circuit (paperclipPath uses the source's canonical ID,
   // which we now have). Skip when specific sections were requested — the
-  // cached file is the concatenated content.lines body and we cannot split
-  // it back into named sections without re-fetching the section files.
+  // cached file is the concatenated body and we cannot split it back into
+  // named sections without re-fetching the section files.
+  //
+  // Also invalidate caches that look like the legacy `cat` truncated preview
+  // ("[~XXXX tokens total, showing first ~YYYY chars]" header) — those were
+  // written before we switched to `head -N` and are dramatically thinner
+  // than what the new path produces.
   const wantsSections = !!(input.sections && input.sections.length > 0)
   const cachedPath = paperclipConvertedPath(paperclipId)
   if (!wantsSections && existsSync(cachedPath)) {
     try {
       const cached = readFileSync(cachedPath, 'utf-8')
-      if (cached && cached.trim().length > 100) {
+      const looksTruncated = /^\[~\d+\s+tokens total,\s+showing first/i.test(cached.trim())
+      if (cached && cached.trim().length > 100 && !looksTruncated) {
         return {
           paperclipId,
           markdown: cached,
@@ -274,15 +363,23 @@ export async function fetchPaperclipFulltext(
           resolvedPmcId: paperclipId.startsWith('PMC') ? paperclipId : undefined,
         }
       }
+      if (looksTruncated) {
+        console.warn(
+          `[paperclip] cache invalidated — found legacy ~1000-char preview at ${cachedPath}; re-fetching with head -N`,
+        )
+      }
     } catch {
       // fall through to re-fetch
     }
   }
 
   // Step 2: meta.json (best-effort, for surfaced metadata).
+  // `head -N` instead of `cat` to bypass Paperclip's auto-summary mode.
+  // meta.json is small so HEAD_LINE_CAP is dramatically more than needed,
+  // but `head` always stops at EOF.
   let meta: MetaJson | undefined
   {
-    const r = await mcpCall(`cat /papers/${paperclipId}/meta.json`)
+    const r = await mcpCall(`head -${HEAD_LINE_CAP} /papers/${paperclipId}/meta.json`)
     if (r?.text) {
       const parsed = safeJson<MetaJson>(r.text)
       if (parsed) meta = parsed
@@ -304,11 +401,17 @@ export async function fetchPaperclipFulltext(
     }
   }
 
-  // Step 4: body.
+  // Step 4: body. Three modes:
+  //   A. caller asked for specific sections → fuzzy-match + fetch each
+  //   B. caller didn't specify, but a section list exists → assemble
+  //      section-aware markdown (the Wiki indexer's path; gives the LLM
+  //      explicit `## Section` headers instead of flat prose)
+  //   C. no section list available → fall back to content.lines via head
   let body: string | null = null
   let sections: Record<string, string> | undefined
 
   if (input.sections && input.sections.length > 0 && sectionList && sectionList.length > 0) {
+    // Mode A: targeted sections.
     sections = {}
     for (const requested of input.sections) {
       const matched = fuzzyMatchSection(requested, sectionList)
@@ -316,23 +419,41 @@ export async function fetchPaperclipFulltext(
       // Section names often contain spaces (e.g. "Online Methods"); the
       // Paperclip shell parser splits unquoted arguments on whitespace.
       // Wrap the path in double quotes so the section file resolves.
-      const r = await mcpCall(`cat "/papers/${paperclipId}/sections/${matched}.lines"`)
-      if (r?.text) sections[matched] = stripLineNumbers(r.text)
+      const r = await mcpCall(`head -${HEAD_LINE_CAP} "/papers/${paperclipId}/sections/${matched}.lines"`)
+      if (r?.text) {
+        const stripped = stripLineNumbers(r.text)
+        if (stripped.trim().length >= MIN_SECTION_BYTES) {
+          sections[matched] = stripped
+        }
+      }
     }
     body = Object.entries(sections)
       .map(([name, text]) => `## ${name}\n\n${text}`)
       .join('\n\n')
 
     // Fallback: if no requested sections matched OR all section fetches
-    // failed, fall back to the full body so the caller still gets
-    // something usable. The empty `sections` object signals to the caller
-    // that no specific sections were resolved.
+    // produced empty/heading-stub content, return the assembled full body
+    // (Mode B) so the caller still gets something useful.
     if (!body || body.trim().length < 100) {
-      const r = await mcpCall(`cat /papers/${paperclipId}/content.lines`)
+      body = await assembleSectionAwareBody(paperclipId, sectionList)
+      if (!body) {
+        const r = await mcpCall(`head -${HEAD_LINE_CAP} /papers/${paperclipId}/content.lines`)
+        if (r?.text) body = stripLineNumbers(r.text)
+      }
+    }
+  } else if (sectionList && sectionList.length > 0) {
+    // Mode B: section-aware assembly — the wiki indexer's default path.
+    body = await assembleSectionAwareBody(paperclipId, sectionList)
+
+    // Fallback to flat content.lines if section assembly produced too
+    // little (e.g. all sections were heading stubs).
+    if (!body || body.trim().length < 100) {
+      const r = await mcpCall(`head -${HEAD_LINE_CAP} /papers/${paperclipId}/content.lines`)
       if (r?.text) body = stripLineNumbers(r.text)
     }
   } else {
-    const r = await mcpCall(`cat /papers/${paperclipId}/content.lines`)
+    // Mode C: no section structure available — flat body.
+    const r = await mcpCall(`head -${HEAD_LINE_CAP} /papers/${paperclipId}/content.lines`)
     if (r?.text) body = stripLineNumbers(r.text)
   }
 
@@ -427,7 +548,7 @@ export function fuzzyMatchSection(requested: string, sectionList: string[]): str
 
 /**
  * Convenience: return only metadata + section list for a paper, without
- * fetching the body. Used by the agent tool's default `mode='metadata'`.
+ * fetching the body. Used by the agent tool's default metadata-only mode.
  *
  * Returns null on any failure.
  */
@@ -452,7 +573,7 @@ export async function fetchPaperclipMetadata(
   paperclipId = lookupHit.paperclipId
 
   let meta: MetaJson | undefined
-  const metaCall = await mcpCall(`cat /papers/${paperclipId}/meta.json`)
+  const metaCall = await mcpCall(`head -${HEAD_LINE_CAP} /papers/${paperclipId}/meta.json`)
   if (metaCall?.text) {
     const parsed = safeJson<MetaJson>(metaCall.text)
     if (parsed) meta = parsed
@@ -466,4 +587,39 @@ export async function fetchPaperclipMetadata(
   }
 
   return { paperclipId, meta, sectionList }
+}
+
+// ── Section-aware assembly (Mode B) ────────────────────────────────────────
+
+/**
+ * Walk the section list, fetch each meaningful section file, and concatenate
+ * as `## <Name>\n\n<body>` markdown.
+ *
+ * Skips structural / metadata sections (Title, Authors, Abstract, etc.) and
+ * heading-only stubs (< MIN_SECTION_BYTES). Each section uses `head -N` so
+ * Paperclip's auto-summary doesn't truncate. Cost: ~30 MCP calls per paper
+ * for a typical biomedical paper, paced by the rate gate above.
+ *
+ * Returns null on total failure (no section produced usable content).
+ */
+async function assembleSectionAwareBody(
+  paperclipId: string,
+  sectionList: string[],
+): Promise<string | null> {
+  const parts: string[] = []
+  for (const name of sectionList) {
+    if (SKIP_SECTIONS.has(name)) continue
+    // Some section names start with markdown markers like "**1 Supplementary
+    // Methods**" (bold-wrapped headings extracted from the source PDF). They
+    // are real content sections; fetch them anyway. Don't filter on shape.
+    const r = await mcpCall(
+      `head -${HEAD_LINE_CAP} "/papers/${paperclipId}/sections/${name}.lines"`,
+    )
+    if (!r?.text) continue
+    const text = stripLineNumbers(r.text)
+    if (text.trim().length < MIN_SECTION_BYTES) continue
+    parts.push(`## ${name}\n\n${text.trim()}`)
+  }
+  if (parts.length === 0) return null
+  return parts.join('\n\n')
 }
