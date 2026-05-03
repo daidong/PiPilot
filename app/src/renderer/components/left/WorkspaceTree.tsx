@@ -81,6 +81,33 @@ function normalizePath(path: string): string {
   return path.replace(/\\/g, '/')
 }
 
+/**
+ * Returns true if `a` and `b` describe the same children — same length,
+ * same name+type+modifiedAt+hasChildren in the same order. We use this to
+ * preserve the array reference when fs.watch fires for an unrelated reason
+ * (editor saving an open file, log rotation, etc.) so downstream `useMemo`s
+ * don't invalidate and the tree doesn't visibly re-render.
+ */
+function childrenEqual(a: FileTreeNode[], b: FileTreeNode[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]
+    const y = b[i]
+    if (
+      x.name !== y.name ||
+      x.type !== y.type ||
+      x.modifiedAt !== y.modifiedAt ||
+      x.hasChildren !== y.hasChildren ||
+      x.relativePath !== y.relativePath
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+
 export function WorkspaceTree() {
   const { projectPath } = useSessionStore()
   const openPreview = useUIStore((s) => s.openPreview)
@@ -159,44 +186,92 @@ export function WorkspaceTree() {
     const parentKey = toKey(relativePath)
     setParentLoading(parentKey, true)
     try {
-      const children = await api.listTree({
+      const children: FileTreeNode[] = await api.listTree({
         relativePath,
         showIgnored,
         limit: 2000
       })
-      setTree((state) => ({
-        ...state,
-        byParent: {
-          ...state.byParent,
-          [parentKey]: children
+      setTree((state) => {
+        const prev = state.byParent[parentKey]
+        // Preserve reference when nothing changed — keeps `rows` useMemo
+        // stable so the visible list doesn't re-render on noisy fs events.
+        if (prev && childrenEqual(prev, children)) return state
+        return {
+          ...state,
+          byParent: {
+            ...state.byParent,
+            [parentKey]: children
+          }
         }
-      }))
+      })
     } finally {
       setParentLoading(parentKey, false)
     }
   }, [setParentLoading, showIgnored])
 
-  // Auto-refresh when agent creates/modifies files
+  // `expandedRef` lets the auto-refresh effect read the latest expanded set
+  // without re-subscribing every time the user expands/collapses a folder.
+  // Previously `[expanded, loadChildren]` deps caused the IPC listeners to
+  // tear down + re-attach on every toggle, contributing to the "lots of
+  // random refresh" feel.
+  const expandedRef = useRef(expanded)
+  useEffect(() => { expandedRef.current = expanded }, [expanded])
+
+  // Auto-refresh when agent or external editor modifies files. Targeted:
+  // when the watcher tells us which parent dirs changed, we only reload
+  // those (intersected with currently-expanded dirs + root). When the
+  // payload is missing (unknown filename, agent events), fall back to
+  // reloading root + all expanded dirs.
   useEffect(() => {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
-    const scheduleRefresh = () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(() => {
-        const dirs = ['', ...Array.from(expanded)]
-        void Promise.all(dirs.map((dir) => loadChildren(dir)))
-      }, 500)
+    let pendingParents: Set<string> | null = new Set()
+
+    const flush = () => {
+      debounceTimer = null
+      const exp = expandedRef.current
+      let dirs: string[]
+      if (pendingParents === null) {
+        // Sentinel: full refresh requested.
+        dirs = ['', ...Array.from(exp)]
+      } else {
+        // Targeted: only reload root or expanded dirs that actually changed.
+        // Skip parents that aren't loaded — they'll be fetched on first expand.
+        const visible = new Set<string>(['', ...Array.from(exp)])
+        dirs = Array.from(pendingParents).filter((p) => visible.has(p))
+      }
+      pendingParents = new Set()
+      if (dirs.length === 0) return
+      void Promise.all(dirs.map((dir) => loadChildren(dir)))
     }
 
-    const unsubFileCreated = api.onFileCreated(scheduleRefresh)
-    const unsubAgentDone = api.onAgentDone(scheduleRefresh)
-    const unsubExternalChange = api.onExternalChange(scheduleRefresh)
+    const scheduleTargeted = (parents: string[] | null) => {
+      if (parents === null) {
+        pendingParents = null
+      } else if (pendingParents !== null) {
+        for (const p of parents) pendingParents.add(p)
+      }
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(flush, 500)
+    }
+
+    const scheduleFull = () => scheduleTargeted(null)
+
+    // onFileCreated gives us the absolute path. We don't try to resolve it
+    // against projectPath here (would need the project root in deps);
+    // a full refresh is fine because agent-created files are the user's
+    // active intent and they want to see them immediately.
+    const unsubFileCreated = api.onFileCreated(scheduleFull)
+    const unsubAgentDone = api.onAgentDone(scheduleFull)
+    const unsubExternalChange = api.onExternalChange((event: { parents: string[] | null }) => {
+      scheduleTargeted(event.parents)
+    })
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer)
       unsubFileCreated()
       unsubAgentDone()
       unsubExternalChange()
     }
-  }, [expanded, loadChildren])
+  }, [loadChildren])
 
   const refreshRoot = useCallback(async () => {
     await loadChildren('')

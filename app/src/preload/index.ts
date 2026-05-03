@@ -114,7 +114,15 @@ export interface ElectronAPI {
   onComputeEnvironment: (cb: (event: any) => void) => () => void
 
   // File tracking
-  onExternalChange: (cb: () => void) => () => void
+  /**
+   * Auto-refresh hook for the workspace file tree.
+   *
+   * `parents` is a list of parent-directory relative paths whose contents
+   * changed (empty string == project root). It's `null` when the underlying
+   * fs.watch event arrived without a filename, in which case the renderer
+   * should fall back to refreshing every expanded directory.
+   */
+  onExternalChange: (cb: (event: { parents: string[] | null }) => void) => () => void
   onFileCreated: (cb: (path: string) => void) => () => void
   readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
   writeFile: (path: string, content: string) => Promise<{ success: boolean; path?: string; error?: string }>
@@ -353,7 +361,11 @@ const api: ElectronAPI = {
   },
 
   onExternalChange: (cb) => {
-    const handler = () => cb()
+    const handler = (_: any, payload?: { parents?: string[] | null }) => {
+      // Older main payloads may be missing — treat as full refresh.
+      const parents = payload && 'parents' in payload ? payload.parents ?? null : null
+      cb({ parents })
+    }
     ipcRenderer.on('fs:external-change', handler)
     return () => ipcRenderer.removeListener('fs:external-change', handler)
   },
