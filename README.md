@@ -1,10 +1,30 @@
 # Research Copilot
 
+<p align="center">
+  <a href="https://github.com/daidong/PiPilot/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/daidong/PiPilot?style=for-the-badge&color=14B8A6&labelColor=1f2937&label=LATEST"></a>
+  <a href="https://github.com/daidong/PiPilot/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/daidong/PiPilot?style=for-the-badge&color=eab308&labelColor=1f2937&logo=github&logoColor=white&label=STARS"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/daidong/PiPilot?style=for-the-badge&color=14B8A6&labelColor=1f2937&label=LICENSE"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/PLATFORMS-macOS_%7C_Windows_%7C_Linux-7c3aed?style=for-the-badge&labelColor=1f2937">
+</p>
+
+<p align="center">
+  <img alt="macOS signed" src="https://img.shields.io/badge/MACOS-SIGNED_%26_NOTARIZED-14B8A6?style=for-the-badge&labelColor=1f2937&logo=apple&logoColor=white">
+  <img alt="Auto-update" src="https://img.shields.io/badge/AUTO--UPDATE-ENABLED-14B8A6?style=for-the-badge&labelColor=1f2937">
+  <img alt="Electron" src="https://img.shields.io/badge/ELECTRON-DESKTOP-2dd4bf?style=for-the-badge&labelColor=1f2937&logo=electron&logoColor=white">
+  <a href="https://github.com/daidong/PiPilot/discussions"><img alt="Discussions" src="https://img.shields.io/badge/COMMUNITY-DISCUSSIONS-7c3aed?style=for-the-badge&labelColor=1f2937&logo=github&logoColor=white"></a>
+</p>
+
 An AI-powered desktop research assistant for scientists and academics. Literature search, data analysis, academic writing, cross-project paper memory, and project management — powered by your **ChatGPT Pro / Claude Max subscription** (or an API key), all in one desktop app.
 
 Built on [pi-mono](https://github.com/badlogic/pi-mono) (agent runtime) + Electron + React.
 
 ![Main Interface](docs/default-screen.png)
+
+## What's new in 0.3.4
+
+- 🔐 **Signed & notarized macOS builds** — first launch from a fresh download is now zero-warning. Apple Silicon and Intel both pass Gatekeeper out of the box.
+- ⤴️ **In-app auto-update** — the app checks GitHub Releases on startup and every 4 hours. When a new version finishes downloading, a small `Update ready · Restart` pill appears in the StatusBar; one click and the app relaunches into the new build.
+- 🧹 **One-time migration**: pre-0.3.4 users need to download once more from the [latest release](https://github.com/daidong/PiPilot/releases/latest) to migrate to the auto-updating channel. Every subsequent release reaches you automatically.
 
 ---
 
@@ -114,15 +134,17 @@ Attach files directly in the chat input via the paperclip button, drag & drop, o
 
 ## Installation
 
-Prebuilt binaries for **macOS / Linux / Windows** are published on every tagged release. Pick the one-liner for your OS:
+Prebuilt binaries for **macOS / Linux / Windows** are published on every tagged release.
+👉 **[Download the latest release](https://github.com/daidong/PiPilot/releases/latest)** or use the one-liner installer for your OS:
 
 ### macOS (Apple Silicon & Intel)
 
+The macOS build is **signed with a Developer ID certificate and notarized by Apple** — first launch has zero Gatekeeper warning. Just download the `.dmg`, drag to Applications, and double-click.
+
 ```bash
+# or via the install script (auto-detects arm64 / x64):
 curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
 ```
-
-The installer detects your arch (`arm64` / `x64`), downloads the latest `.dmg`, copies the app to `/Applications`, and runs `xattr -dr com.apple.quarantine` for you (the build is unsigned — proper notarization will come once we have an Apple Developer ID).
 
 ### Linux (x86_64)
 
@@ -142,11 +164,13 @@ sudo apt install libfuse2
 irm https://raw.githubusercontent.com/daidong/PiPilot/main/install.ps1 | iex
 ```
 
-Downloads and runs the NSIS installer. SmartScreen will show "Unrecognized app" — click **More info → Run anyway** (the build is unsigned).
+Downloads and runs the NSIS installer. SmartScreen still shows "Unrecognized app" — click **More info → Run anyway**. (Windows code signing is on the roadmap.)
 
 ### Updating
 
-Re-run the same install command. It always pulls the latest GitHub release.
+**0.3.4 and later** — the app updates itself. It checks GitHub Releases in the background and shows a small `Update ready · Restart` button in the status bar when a new build is downloaded. One click restarts into the new version. No more re-running the installer.
+
+**Pre-0.3.4** — please download the latest installer one more time to migrate to the auto-updating channel. After that, you're set.
 
 ### Build from source
 
