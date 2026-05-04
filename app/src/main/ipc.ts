@@ -485,43 +485,55 @@ async function ensureCoordinator(
           }
         }
 
-        // Notify UI to refresh entity lists when artifacts are created/updated.
-        // Renderer debounces the resulting refresh so bursts of tool calls coalesce.
-        if ((tool === 'artifact-create' || tool === 'artifact-update') && result && typeof result === 'object' && 'success' in result) {
-          const r = result as any
-          if (r.success) {
-            invalidateEntityCache(runProjectPath)
-            safeSend(win, 'agent:entity-created', {
-              type: r.data?.type || 'artifact',
-              id: r.data?.id,
-              title: r.data?.title
-            })
-            if (tool === 'artifact-create' && r.data?.filePath) {
-              const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
-              safeSend(win, 'agent:file-created', absPath)
-            }
-          }
-        }
-
-        // literature-search auto-saves Paper artifacts via upsertPaperArtifact()
-        // directly, bypassing the artifact-create tool. Without this branch the
-        // Library/Papers tab would only see the new entries after re-opening
-        // the project (the entity store mounts once, then relies on the
-        // 'agent:entity-created' event for refreshes).
+        // Notify UI to refresh entity lists when an agent run creates new
+        // artifacts. Renderer debounces the resulting refresh so bursts of
+        // tool calls coalesce.
         //
-        // Defensive about result shape: the agent loop may surface either the
-        // raw ToolResult ({ success, data }) or pi-mono's wrapped AgentToolResult
-        // ({ content, details: { success, tool_name } }). Check both.
-        if (tool === 'literature-search' && result && typeof result === 'object') {
+        // Three tool names trigger this:
+        //   - artifact-create / artifact-update: ResearchTools that go through
+        //     wrapResearchTool -> toAgentResult, surfacing the wrapped
+        //     AgentToolResult shape { content, details: { success, tool_name } }
+        //     (so 'success' is nested under details, not on the top level).
+        //   - literature-search: AgentTool that auto-saves Paper artifacts
+        //     directly via upsertPaperArtifact(), then returns its own
+        //     toAgentResult-wrapped payload.
+        //
+        // Without this branch, every agent-driven artifact creation (notes,
+        // papers, data) would only become visible in the Library/Papers tab
+        // after the user re-opened the project — EntityTabs.tsx mounts once
+        // and otherwise relies on this 'agent:entity-created' event for
+        // incremental refreshes.
+        //
+        // Defensive about result shape: read success from both r.details
+        // (wrapped, the current code path) and r.success (raw, in case a
+        // future router emits the unwrapped ToolResult), so this branch
+        // survives a routing change. r.data is only populated on the raw
+        // form — the wrapped form keeps payload data inside content[0].text
+        // — so the file-created sub-event below only fires when r.data is
+        // available. The workspace fs watcher (state.fsWatcher) catches the
+        // new file independently for the file-tree view, so missing this
+        // event in the wrapped path costs only the working-files UIStore
+        // signal, not visibility.
+        const triggersEntityRefresh =
+          tool === 'artifact-create' ||
+          tool === 'artifact-update' ||
+          tool === 'literature-search'
+        if (triggersEntityRefresh && result && typeof result === 'object') {
           const r = result as any
           const success = r.details?.success ?? r.success
           if (success === true) {
             invalidateEntityCache(runProjectPath)
             safeSend(win, 'agent:entity-created', {
-              type: 'paper',
-              id: '',
-              title: 'literature-search batch'
+              type: tool === 'literature-search'
+                ? 'paper'
+                : (r.data?.type || 'artifact'),
+              id: r.data?.id ?? '',
+              title: r.data?.title ?? `${tool} batch`
             })
+            if (tool === 'artifact-create' && r.data?.filePath) {
+              const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
+              safeSend(win, 'agent:file-created', absPath)
+            }
           }
         }
 
