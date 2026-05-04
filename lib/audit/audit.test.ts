@@ -156,7 +156,8 @@ await runCase('prosecutor system prompt — contains required clauses', () => {
   // Anchor clauses from RFC §4.6 — losing any of these would weaken the
   // adversarial posture and should fail loudly.
   assert.match(prompt, /prosecutor/i, 'must establish prosecutor posture')
-  assert.match(prompt, /independent verification|INDEPENDENT verification/i, 'must require independent verification')
+  // v0.9 prompt rewrite phrased this as "Read INDEPENDENTLY" — accept either form.
+  assert.match(prompt, /independent verification|read independently/i, 'must require independent verification')
   assert.match(prompt, /\bcritical\b.*invalidates/is, 'must define `critical` severity')
   assert.match(prompt, /implicatedNodeIds|node ids/i, 'must require implicated node ids')
   assert.match(prompt, /submit_audit_report/, 'must reference the submit tool')
@@ -164,10 +165,54 @@ await runCase('prosecutor system prompt — contains required clauses', () => {
   // Submission-urgency anchors — without these, deep audits chronically
   // exhaust the turn budget and never submit.
   assert.match(prompt, /MUST call .submit_audit_report. exactly once/i, 'must require submission before session end')
-  assert.match(prompt, /imperfect report.*beats no report/i, 'must permit/encourage submitting with uncertainty')
+  // v0.9 prompt rewrote this as "report with explicit uncertainty … beats no report".
+  assert.match(prompt, /(?:imperfect report|report with explicit uncertainty).*beats no report/is,
+    'must permit/encourage submitting with uncertainty')
   // Tool-hygiene anchors — prevent the bash-cd exploration failure mode.
   assert.match(prompt, /bash.*stateless|stateless.*bash/i, 'must warn that bash is stateless')
   assert.match(prompt, /workspace-relative path/i, 'must instruct using read with workspace-relative paths')
+})
+
+await runCase('prosecutor system prompt — canonical paper section is omitted when null', () => {
+  const prompt = buildAuditorSystemPrompt({
+    projectPath: '/tmp/p',
+    scope: { rootNodeIds: ['pn_x'] },
+    scopeNodeCount: 0,
+    scopeSummary: '(empty)',
+    canonicalPaper: null
+  })
+  assert.equal(prompt.includes('### Canonical paper'), false,
+    'no canonical-paper section when canonical resolution returned null')
+})
+
+await runCase('prosecutor system prompt — canonical paper section is rendered when provided', () => {
+  const canonical = {
+    rootPath: 'paper-7/main.tex',
+    texFiles: new Set(['paper-7/main.tex', 'paper-7/intro.tex']),
+    bibFiles: new Set(['paper-7/refs.bib']),
+    images: new Set(['paper-7/figures/fig1.pdf']),
+    otherAssets: new Set<string>(),
+    allFiles: new Set([
+      'paper-7/main.tex', 'paper-7/intro.tex',
+      'paper-7/refs.bib', 'paper-7/figures/fig1.pdf'
+    ])
+  }
+  const prompt = buildAuditorSystemPrompt({
+    projectPath: '/tmp/p',
+    scope: { rootNodeIds: ['pn_x'] },
+    scopeNodeCount: 0,
+    scopeSummary: '(empty)',
+    canonicalPaper: canonical
+  })
+  assert.match(prompt, /### Canonical paper/, 'section header present')
+  assert.match(prompt, /paper-7\/main\.tex/, 'root path inlined')
+  assert.match(prompt, /paper-7\/intro\.tex/, 'tex deps inlined')
+  assert.match(prompt, /paper-7\/refs\.bib/, 'bib inlined')
+  assert.match(prompt, /paper-7\/figures\/fig1\.pdf/, 'image inlined')
+  assert.match(prompt, /Findings should be filed\s+against assertions in these files only/i,
+    'instructs scope of findings')
+  assert.match(prompt, /not the paper/i,
+    'forbids findings against non-canonical files')
 })
 
 await runCase('scope summary — truncates at MAX_NODES + MAX_CHARS', () => {

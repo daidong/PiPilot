@@ -16,6 +16,7 @@
 import { Agent } from '@mariozechner/pi-agent-core'
 import { getModel as getPiModel } from '@mariozechner/pi-ai'
 import { ProvenanceGraph } from '../provenance/index.js'
+import { getCanonicalPaper } from '../active-project/index.js'
 import { getAuditorModel, type ModelTierKey } from '../models.js'
 import { buildAuditorSystemPrompt, buildScopeSummary } from './prompt.js'
 import { createAuditorTools, type ReportSink } from './tools.js'
@@ -101,6 +102,16 @@ export async function runAudit(req: AuditRequest, opts: RunAuditOptions): Promis
   }
   const scopeSummary = buildScopeSummary(subgraph.nodes)
 
+  // ── 2b. Resolve canonical paper (LaTeX dep walk) ────────────────────
+  // Returns null for non-LaTeX projects — the prompt section is omitted in
+  // that case and the auditor falls back to its prior workspace-first
+  // behavior. Hint with the first draft node's path so multi-paper
+  // workspaces lock onto the paper that contains the audited draft.
+  const draftHint = subgraph.nodes.find(n => n.kind === 'draft' && (n.ref as { path?: string })?.path)
+  const canonicalPaper = await getCanonicalPaper(opts.projectPath, {
+    hintPath: (draftHint?.ref as { path?: string } | undefined)?.path
+  })
+
   // ── 3. Set up the report sink + tools ────────────────────────────────
   const findings: Finding[] = []
   // Persisted narrative of the run. Every event that contributes to the
@@ -155,7 +166,8 @@ export async function runAudit(req: AuditRequest, opts: RunAuditOptions): Promis
     scope: req.scope,
     scopeNodeCount,
     draftPreview: req.draftText,
-    scopeSummary
+    scopeSummary,
+    canonicalPaper
   })
   const focusHint = req.focus?.length ? `\n\nFocus categories: ${req.focus.join(', ')}` : ''
   const starter = `Begin your audit. Walk the upstream cone, verify claims, and submit the report via \`submit_audit_report\` when done.${focusHint}`

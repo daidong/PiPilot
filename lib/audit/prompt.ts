@@ -16,6 +16,7 @@
  * coordinator's reasoning trace — independence is the entire point.
  */
 
+import type { CanonicalPaper } from '../active-project/index.js'
 import type { AuditScope } from './types.js'
 
 /**
@@ -34,11 +35,14 @@ export function buildAuditorSystemPrompt(args: {
   draftPreview?: string
   /** Provenance graph summary the auditor uses as ONE evidence index. */
   scopeSummary: string
+  /** Canonical-paper file set when the project is LaTeX; null otherwise. */
+  canonicalPaper?: CanonicalPaper | null
 }): string {
-  const { projectPath, scopeNodeCount, draftPreview, scopeSummary } = args
+  const { projectPath, scopeNodeCount, draftPreview, scopeSummary, canonicalPaper } = args
   const draftBody = draftPreview ?? ''
   const draftTruncated = draftBody.length > DRAFT_INLINE_CAP
   const draftInline = draftTruncated ? draftBody.slice(0, DRAFT_INLINE_CAP) : draftBody
+  const canonicalSection = canonicalPaper ? buildCanonicalSection(canonicalPaper) : ''
   return `You are an adversarial auditor reviewing a research draft. Your role is the prosecutor, not an assistant. Your job is to find what is wrong **with the paper** — not with how the producing agent kept its records.
 
 ## What this audit answers
@@ -196,7 +200,7 @@ lacks the supporting evidence or directly contradicts the claim.
 ## Project context
 
 Project path: \`${projectPath}\`
-
+${canonicalSection}
 ### Provenance graph (one evidence index — partial map of the workspace)
 
 The producing agent recorded ${scopeNodeCount} node(s) below. Files the
@@ -215,6 +219,45 @@ Submit exactly one audit report via \`submit_audit_report\`:
 - each finding: \`severity\`, \`category\`, \`claim\`, \`evidence\` (multi-paragraph), \`implicatedNodeIds\` (provenance ids when applicable; may be empty if the evidence is a workspace file not in the graph), optionally \`suggestedAction\`
 
 Begin.`
+}
+
+/**
+ * Render the canonical-paper section. Inserted between "Project path"
+ * and the Provenance graph summary so the auditor sees the paper's
+ * physical boundary BEFORE forming a search plan.
+ *
+ * Lists are truncated visually beyond ~25 entries — the full set is
+ * also available via the workspace tools, so the prompt body stays
+ * compact for projects with hundreds of figures.
+ */
+function buildCanonicalSection(canonical: CanonicalPaper): string {
+  const fmt = (s: Set<string>): string => {
+    const arr = [...s].sort()
+    if (arr.length === 0) return '(none)'
+    if (arr.length <= 25) return arr.join(', ')
+    return arr.slice(0, 25).join(', ') + `, … (+${arr.length - 25} more)`
+  }
+  return `
+### Canonical paper
+
+The paper compiles from the files listed below. **Findings should be filed
+against assertions in these files only.** Other workspace files (scratch
+drafts, abandoned versions, unused figures, in-flight analyses the user
+hasn't yet integrated) MAY be read as supplementary evidence, but:
+
+- Do **NOT** file findings against assertions in non-canonical files —
+  they are not the paper.
+- Do **NOT** report "this file isn't referenced by the paper" as a
+  finding. Files outside the canonical set are normal workspace state.
+- Do **NOT** report inconsistencies between canonical and non-canonical
+  files unless the canonical file is the one that is wrong.
+
+Root: \`${canonical.rootPath}\`
+TeX:  ${fmt(canonical.texFiles)}
+Bib:  ${fmt(canonical.bibFiles)}
+Imgs: ${fmt(canonical.images)}
+Other: ${fmt(canonical.otherAssets)}
+`
 }
 
 /**
