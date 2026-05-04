@@ -1,8 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ChevronDown,
   ChevronRight,
   File,
+  FileArchive,
+  FileAudio,
+  FileCode,
+  FileImage,
+  FileJson,
+  FileSpreadsheet,
+  FileText,
+  FileVideo,
   Folder,
   FolderOpen,
   RefreshCw,
@@ -20,6 +27,7 @@ import {
   Pencil,
   FilePlus
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { useEntityStore } from '../../stores/entity-store'
 import { useSessionStore } from '../../stores/session-store'
 import { useUIStore } from '../../stores/ui-store'
@@ -37,6 +45,83 @@ const TEXT_EXTENSIONS = new Set([
   'toml', 'env', 'sh', 'py', 'cfg', 'ini', 'log', 'csv', 'xml',
   'rst', 'jsx', 'tsx', 'mjs', 'cjs', 'markdown', 'gitignore',
 ])
+
+// Per-extension icon + tint. Kept as a plain map (not a switch) so it's easy
+// to extend; falls back to a generic <File> for anything unmapped. The tint
+// classes use the existing theme tokens so light/dark themes work for free.
+const FILE_ICON_BY_EXT: Record<string, { Icon: LucideIcon; tint: string }> = {
+  // Code
+  ts:    { Icon: FileCode, tint: 't-text-info' },
+  tsx:   { Icon: FileCode, tint: 't-text-info' },
+  js:    { Icon: FileCode, tint: 't-text-warning' },
+  jsx:   { Icon: FileCode, tint: 't-text-warning' },
+  mjs:   { Icon: FileCode, tint: 't-text-warning' },
+  cjs:   { Icon: FileCode, tint: 't-text-warning' },
+  py:    { Icon: FileCode, tint: 't-text-info' },
+  rs:    { Icon: FileCode, tint: 't-text-warning' },
+  go:    { Icon: FileCode, tint: 't-text-info' },
+  java:  { Icon: FileCode, tint: 't-text-warning' },
+  c:     { Icon: FileCode, tint: 't-text-muted' },
+  h:     { Icon: FileCode, tint: 't-text-muted' },
+  cpp:   { Icon: FileCode, tint: 't-text-muted' },
+  hpp:   { Icon: FileCode, tint: 't-text-muted' },
+  sh:    { Icon: FileCode, tint: 't-text-success' },
+  bash:  { Icon: FileCode, tint: 't-text-success' },
+  zsh:   { Icon: FileCode, tint: 't-text-success' },
+  // Web / markup
+  html:  { Icon: FileCode, tint: 't-text-warning' },
+  htm:   { Icon: FileCode, tint: 't-text-warning' },
+  css:   { Icon: FileCode, tint: 't-text-info' },
+  scss:  { Icon: FileCode, tint: 't-text-info' },
+  // Data
+  json:  { Icon: FileJson, tint: 't-text-warning' },
+  yaml:  { Icon: FileJson, tint: 't-text-warning' },
+  yml:   { Icon: FileJson, tint: 't-text-warning' },
+  toml:  { Icon: FileJson, tint: 't-text-warning' },
+  xml:   { Icon: FileCode, tint: 't-text-muted' },
+  csv:   { Icon: FileSpreadsheet, tint: 't-text-success' },
+  tsv:   { Icon: FileSpreadsheet, tint: 't-text-success' },
+  xlsx:  { Icon: FileSpreadsheet, tint: 't-text-success' },
+  xls:   { Icon: FileSpreadsheet, tint: 't-text-success' },
+  // Docs / prose
+  md:    { Icon: FileText, tint: 't-text-accent-soft' },
+  markdown: { Icon: FileText, tint: 't-text-accent-soft' },
+  txt:   { Icon: FileText, tint: 't-text-secondary' },
+  rst:   { Icon: FileText, tint: 't-text-secondary' },
+  pdf:   { Icon: FileText, tint: 't-text-error-soft' },
+  doc:   { Icon: FileText, tint: 't-text-info' },
+  docx:  { Icon: FileText, tint: 't-text-info' },
+  tex:   { Icon: FileText, tint: 't-text-info' },
+  bib:   { Icon: FileText, tint: 't-text-muted' },
+  // Images
+  png:   { Icon: FileImage, tint: 't-text-accent-soft' },
+  jpg:   { Icon: FileImage, tint: 't-text-accent-soft' },
+  jpeg:  { Icon: FileImage, tint: 't-text-accent-soft' },
+  gif:   { Icon: FileImage, tint: 't-text-accent-soft' },
+  svg:   { Icon: FileImage, tint: 't-text-accent-soft' },
+  webp:  { Icon: FileImage, tint: 't-text-accent-soft' },
+  bmp:   { Icon: FileImage, tint: 't-text-accent-soft' },
+  ico:   { Icon: FileImage, tint: 't-text-accent-soft' },
+  // Media
+  mp4:   { Icon: FileVideo, tint: 't-text-info' },
+  mov:   { Icon: FileVideo, tint: 't-text-info' },
+  webm:  { Icon: FileVideo, tint: 't-text-info' },
+  mp3:   { Icon: FileAudio, tint: 't-text-info' },
+  wav:   { Icon: FileAudio, tint: 't-text-info' },
+  flac:  { Icon: FileAudio, tint: 't-text-info' },
+  // Archives
+  zip:   { Icon: FileArchive, tint: 't-text-warning' },
+  tar:   { Icon: FileArchive, tint: 't-text-warning' },
+  gz:    { Icon: FileArchive, tint: 't-text-warning' },
+  tgz:   { Icon: FileArchive, tint: 't-text-warning' },
+  '7z':  { Icon: FileArchive, tint: 't-text-warning' },
+  rar:   { Icon: FileArchive, tint: 't-text-warning' },
+}
+
+function getFileIcon(name: string): { Icon: LucideIcon; tint: string } {
+  const ext = (name.split('.').pop() || '').toLowerCase()
+  return FILE_ICON_BY_EXT[ext] ?? { Icon: File, tint: 't-text-muted' }
+}
 
 interface FileTreeNode {
   name: string
@@ -73,6 +158,25 @@ interface ContextMenuState {
   node: FileTreeNode
 }
 
+/**
+ * Per-row callbacks held in a ref so the memoized <TreeRow> never has to
+ * re-render when a handler closure is recreated. The ref object itself is
+ * stable across renders; only `.current` mutates.
+ */
+interface RowHandlers {
+  toggleExpand: (node: FileTreeNode) => void
+  openFile: (node: FileTreeNode) => void
+  createArtifact: (node: FileTreeNode) => void
+  handleTrashClick: (node: FileTreeNode) => void
+  handleContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void
+  handleRowDragOver: (e: React.DragEvent, node: FileTreeNode) => void
+  handleRowDragLeave: (e: React.DragEvent) => void
+  handleRowDrop: (e: React.DragEvent, node: FileTreeNode) => void
+  handleRenameKeyDown: (e: React.KeyboardEvent) => void
+  commitRename: () => void
+  setRenameValue: (v: string) => void
+}
+
 function toKey(relativePath: string): string {
   return relativePath || '__root__'
 }
@@ -80,6 +184,169 @@ function toKey(relativePath: string): string {
 function normalizePath(path: string): string {
   return path.replace(/\\/g, '/')
 }
+
+interface TreeRowProps {
+  node: FileTreeNode
+  depth: number
+  isExpanded: boolean
+  isActive: boolean
+  isDropTarget: boolean
+  isRenaming: boolean
+  confirmTrash: boolean
+  renameValue: string
+  /**
+   * When non-empty, the row highlights matching substrings in the file name.
+   * Empty string when no search is active — keeping it a primitive (vs.
+   * undefined) means React.memo's shallow compare stays simple.
+   */
+  highlightQuery: string
+  handlersRef: React.MutableRefObject<RowHandlers>
+  renameInputRef: React.RefObject<HTMLInputElement>
+}
+
+/**
+ * Wrap every case-insensitive occurrence of `query` in `name` with a
+ * <mark> for visual highlighting. Returns the raw string when no query.
+ * Cheap enough to call inline; no memo needed because TreeRow itself is
+ * memoized and only re-renders when name or highlightQuery change.
+ */
+function renderHighlighted(name: string, query: string): React.ReactNode {
+  const q = query.trim().toLowerCase()
+  if (!q) return name
+  const lower = name.toLowerCase()
+  const parts: React.ReactNode[] = []
+  let cursor = 0
+  let key = 0
+  while (cursor < name.length) {
+    const idx = lower.indexOf(q, cursor)
+    if (idx < 0) {
+      parts.push(name.slice(cursor))
+      break
+    }
+    if (idx > cursor) parts.push(name.slice(cursor, idx))
+    parts.push(
+      <mark
+        key={key++}
+        className="bg-[var(--color-accent)]/30 t-text-accent-soft rounded-sm px-0.5 -mx-0.5"
+      >
+        {name.slice(idx, idx + q.length)}
+      </mark>
+    )
+    cursor = idx + q.length
+  }
+  return parts
+}
+
+/**
+ * Pure row renderer. Wrapped in React.memo with the default shallow
+ * compare — props are either primitives, the stable `handlersRef` object,
+ * or the `node` reference (preserved by `childrenEqual`). So a row only
+ * re-renders when something visible to it actually changes.
+ */
+const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
+  const {
+    node, depth, isExpanded, isActive, isDropTarget, isRenaming,
+    confirmTrash, renameValue, highlightQuery, handlersRef, renameInputRef
+  } = props
+  const h = handlersRef.current
+  // Per-extension icon for files; folders keep the warning-tint Folder.
+  const fileIconInfo = node.type === 'file' ? getFileIcon(node.name) : null
+  // Indent guides: a vertical 1px line every 14px in the row's left padding.
+  // Single repeating-gradient = no extra DOM per depth level.
+  const guideStyle: React.CSSProperties = depth > 0
+    ? {
+        paddingLeft: `${depth * 14 + 6}px`,
+        backgroundImage:
+          'repeating-linear-gradient(to right, transparent 0 13px, var(--color-border) 13px 14px)',
+        backgroundSize: `${depth * 14}px 100%`,
+        backgroundRepeat: 'no-repeat',
+        backgroundPosition: '0 0'
+      }
+    : { paddingLeft: '6px' }
+  return (
+    <div
+      className={`group flex items-center gap-1 rounded px-1.5 h-7 text-xs cursor-pointer ${
+        isDropTarget
+          ? 'ring-2 ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/10'
+          : isActive
+            ? 'bg-[var(--color-accent)]/20 t-text-accent-soft'
+            : 't-bg-hover t-text-secondary'
+      }`}
+      style={guideStyle}
+      onClick={() => (node.type === 'directory' ? h.toggleExpand(node) : h.openFile(node))}
+      onContextMenu={(e) => h.handleContextMenu(e, node)}
+      title={node.relativePath}
+      onDragOver={(e) => h.handleRowDragOver(e, node)}
+      onDragLeave={h.handleRowDragLeave}
+      onDrop={(e) => h.handleRowDrop(e, node)}
+    >
+      {node.type === 'directory' ? (
+        <button
+          className="shrink-0 t-text-muted"
+          onClick={(e) => { e.stopPropagation(); h.toggleExpand(node) }}
+        >
+          <ChevronRight
+            size={12}
+            className={`transition-transform duration-150 ease-out ${isExpanded ? 'rotate-90' : ''}`}
+          />
+        </button>
+      ) : (
+        <span className="w-3 shrink-0" />
+      )}
+      {node.type === 'directory' ? (
+        <Folder size={12} className="shrink-0 t-text-warning" />
+      ) : fileIconInfo ? (
+        <fileIconInfo.Icon size={12} className={`shrink-0 ${fileIconInfo.tint}`} />
+      ) : null}
+      {isRenaming ? (
+        <input
+          ref={renameInputRef}
+          value={renameValue}
+          onChange={(e) => h.setRenameValue(e.target.value)}
+          onKeyDown={h.handleRenameKeyDown}
+          onBlur={() => h.commitRename()}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
+        />
+      ) : (
+        <span className="truncate flex-1" title={node.name}>
+          {renderHighlighted(node.name, highlightQuery)}
+        </span>
+      )}
+      <div className="hidden group-hover:flex items-center gap-0.5">
+        {node.type === 'file' && (
+          <>
+            <button
+              className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
+              title="Preview file"
+              onClick={(e) => { e.stopPropagation(); h.openFile(node) }}
+            >
+              <Eye size={11} />
+            </button>
+            <button
+              className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
+              title="Create Artifact from file"
+              onClick={(e) => { e.stopPropagation(); h.createArtifact(node) }}
+            >
+              <File size={11} />
+            </button>
+          </>
+        )}
+        <button
+          className={`p-0.5 rounded ${
+            confirmTrash
+              ? 't-text-error bg-[var(--color-status-error)]/20 animate-pulse'
+              : 't-text-error-soft/70 hover:t-text-error'
+          }`}
+          title={confirmTrash ? 'Click again to confirm' : 'Move to trash'}
+          onClick={(e) => { e.stopPropagation(); h.handleTrashClick(node) }}
+        >
+          <Trash2 size={11} />
+        </button>
+      </div>
+    </div>
+  )
+})
 
 /**
  * Returns true if `a` and `b` describe the same children — same length,
@@ -704,106 +971,24 @@ export function WorkspaceTree() {
     )
   }, [creating, createValue, handleCreateKeyDown, commitCreate])
 
-  const renderVisibleRow = useCallback((row: VisibleRow) => {
-    if (row.kind === 'loading') {
-      return (
-        <div
-          key={row.key}
-          className="flex items-center gap-1 text-xs t-text-muted h-7"
-          style={{ paddingLeft: `${row.depth * 1.1 + 2}em` }}
-        >
-          <Loader2 size={11} className="animate-spin" />
-          Loading...
-        </div>
-      )
-    }
-
-    const node = row.node
-    const isExpanded = node.type === 'directory' && expanded.has(node.relativePath)
-    const isActive = !!activePath && normalizePath(node.path) === activePath
-    const isDropTarget = node.type === 'directory' && dropTargetPath === node.relativePath
-    const isRenaming = renaming === node.relativePath
-    const showCreateHere = creating && creating.parentDir === node.relativePath && isExpanded
-
-    return (
-      <React.Fragment key={row.key}>
-        <div
-          className={`group flex items-center gap-1 rounded px-1.5 h-7 text-xs cursor-pointer ${
-            isDropTarget
-              ? 'ring-2 ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/10'
-              : isActive
-                ? 'bg-[var(--color-accent)]/20 t-text-accent-soft'
-                : 't-bg-hover t-text-secondary'
-          }`}
-          style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
-          onClick={() => (node.type === 'directory' ? void toggleExpand(node) : openFile(node))}
-          onContextMenu={(e) => handleContextMenu(e, node)}
-          title={node.relativePath}
-          onDragOver={(e) => handleRowDragOver(e, node)}
-          onDragLeave={handleRowDragLeave}
-          onDrop={(e) => handleRowDrop(e, node)}
-        >
-          {node.type === 'directory' ? (
-            <button className="shrink-0 t-text-muted" onClick={(e) => { e.stopPropagation(); void toggleExpand(node) }}>
-              {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            </button>
-          ) : (
-            <span className="w-3 shrink-0" />
-          )}
-          {node.type === 'directory' ? (
-            <Folder size={12} className="shrink-0 t-text-warning" />
-          ) : (
-            <File size={12} className="shrink-0 t-text-muted" />
-          )}
-          {isRenaming ? (
-            <input
-              ref={renameInputRef}
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={handleRenameKeyDown}
-              onBlur={() => void commitRename()}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
-            />
-          ) : (
-            <span className="truncate flex-1" title={node.name}>{node.name}</span>
-          )}
-          <div className="hidden group-hover:flex items-center gap-0.5">
-            {node.type === 'file' && (
-              <>
-                <button
-                  className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
-                  title="Preview file"
-                  onClick={(e) => { e.stopPropagation(); openFile(node) }}
-                >
-                  <Eye size={11} />
-                </button>
-                <button
-                  className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
-                  title="Create Artifact from file"
-                  onClick={(e) => { e.stopPropagation(); void createArtifact(node) }}
-                >
-                  <File size={11} />
-                </button>
-              </>
-            )}
-            <button
-              className={`p-0.5 rounded ${
-                confirmTrashPath === node.relativePath
-                  ? 't-text-error bg-[var(--color-status-error)]/20 animate-pulse'
-                  : 't-text-error-soft/70 hover:t-text-error'
-              }`}
-              title={confirmTrashPath === node.relativePath ? 'Click again to confirm' : 'Move to trash'}
-              onClick={(e) => { e.stopPropagation(); void handleTrashClick(node) }}
-            >
-              <Trash2 size={11} />
-            </button>
-          </div>
-        </div>
-        {showCreateHere && renderCreateInput(row.depth + 1)}
-      </React.Fragment>
-    )
-  }, [expanded, activePath, dropTargetPath, confirmTrashPath, renaming, renameValue, creating, toggleExpand, openFile, createArtifact, handleTrashClick, handleContextMenu, handleRowDragOver, handleRowDragLeave, handleRowDrop, handleRenameKeyDown, commitRename, renderCreateInput])
+  // Stable handler bag for <TreeRow>. The ref object is the same across
+  // renders; only `.current` is reassigned. Using a ref (not useMemo) means
+  // each row gets the latest handler closure without needing the row to
+  // re-render when a closure is recreated.
+  const handlersRef = useRef<RowHandlers>({} as RowHandlers)
+  handlersRef.current = {
+    toggleExpand: (node) => { void toggleExpand(node) },
+    openFile,
+    createArtifact: (node) => { void createArtifact(node) },
+    handleTrashClick: (node) => { void handleTrashClick(node) },
+    handleContextMenu,
+    handleRowDragOver,
+    handleRowDragLeave,
+    handleRowDrop: (e, node) => { void handleRowDrop(e, node) },
+    handleRenameKeyDown,
+    commitRename: () => { void commitRename() },
+    setRenameValue
+  }
 
   return (
     <section className="h-full min-h-0 flex flex-col border-t t-border">
@@ -877,7 +1062,44 @@ export function WorkspaceTree() {
             {/* Inline create input at root level */}
             {creating && creating.parentDir === '' && renderCreateInput(0)}
             <div style={{ height: `${topSpacerHeight}px` }} />
-            {visibleRows.map((row) => renderVisibleRow(row))}
+            {visibleRows.map((row) => {
+              if (row.kind === 'loading') {
+                return (
+                  <div
+                    key={row.key}
+                    className="flex items-center gap-1 text-xs t-text-muted h-7"
+                    style={{ paddingLeft: `${row.depth * 1.1 + 2}em` }}
+                  >
+                    <Loader2 size={11} className="animate-spin" />
+                    Loading...
+                  </div>
+                )
+              }
+              const node = row.node
+              const isExpanded = node.type === 'directory' && expanded.has(node.relativePath)
+              const isActive = !!activePath && normalizePath(node.path) === activePath
+              const isDropTarget = node.type === 'directory' && dropTargetPath === node.relativePath
+              const isRenaming = renaming === node.relativePath
+              const showCreateHere = !!creating && creating.parentDir === node.relativePath && isExpanded
+              return (
+                <React.Fragment key={row.key}>
+                  <TreeRow
+                    node={node}
+                    depth={row.depth}
+                    isExpanded={isExpanded}
+                    isActive={isActive}
+                    isDropTarget={isDropTarget}
+                    isRenaming={isRenaming}
+                    confirmTrash={confirmTrashPath === node.relativePath}
+                    renameValue={isRenaming ? renameValue : ''}
+                    highlightQuery={query.trim()}
+                    handlersRef={handlersRef}
+                    renameInputRef={renameInputRef}
+                  />
+                  {showCreateHere && renderCreateInput(row.depth + 1)}
+                </React.Fragment>
+              )
+            })}
             <div style={{ height: `${bottomSpacerHeight}px` }} />
           </div>
         )}
