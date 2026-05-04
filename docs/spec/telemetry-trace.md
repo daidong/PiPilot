@@ -1,17 +1,48 @@
-# Telemetry & Trace: Unified Observability and Research Data Capture
+# Telemetry & Trace: Objective Runtime Data Capture
 
-> Spec version: 0.2 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
+> Spec version: 0.3 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
 >
-> Changelog v0.1 → v0.2: incorporate research-side review (M0-1..M0-5, M1-1..M1-6, renderer view-log). Adds §5.5 trace digest, §6.8 skill activation events, §6.9 compaction discarded payload, §8.0 turnId definition, §8.5 view-log, P5 split (P5a CLI annotator now parallel with P1), §9.5 longitudinal-survival contract, §11.8/§11.9 added, §12.1 #2 resolved.
+> **Major rewrite vs v0.2.** Establishes a hard boundary: this spec covers **objective runtime data capture only**. Subjective research analysis (Paper 1 findings, repair classification, anchor-fact judgments, role migration, context-debt labeling) is explicitly **out of scope** and lives in a Layer 3 post-hoc annotation pipeline (human or LLM annotators), not in PiPilot runtime. Specific changes:
+>
+> - New §0 boundary declaration; §1 goals rewritten
+> - Trace retention configurable: `7-days | 1-month | forever`, **default `forever`** (§5.1)
+> - Storage estimates added (§5.6)
+> - Removed from runtime: `pipilot.user_message_type` classifier, `pipilot.referring_expressions`, memory-ledger lifecycle (`state`, `supersedes`, etc.), outcome `signal` enum, `project.type` semantic enum
+> - Outcome ledger renamed to user-response-signals ledger (§8.3); records facts only, no judgments
+> - Annotation ledger moved out of PiPilot runtime; brief Layer 3 stub in §9
+> - §9 Paper 1 mapping deleted; replaced with a one-paragraph Layer 3 boundary
+> - Phases simplified: P5 (annotator) removed from PiPilot scope; §10 is now engineering-only
+> - Open questions §11 cleaned: removed every "subjective" question
 
-## 0. Reading Guide
+---
 
-This is a **design spec for review**, not a built feature. It supersedes ad-hoc proposals exchanged during the May 2026 design discussion. Two audiences:
+## 0. Boundary Declaration (read this first)
 
-1. **Engineering** — needs §1–§7 (architecture, schema, storage, integration points).
-2. **Research (Paper 1)** — needs §1, §6, §8, §9 (what data we capture and why it supports empirical claims).
+This spec defines **two layers** of data that PiPilot collects:
 
-Sections marked **OPEN** require the project owner to decide before P0 freezes. Sections marked **DEFERRED** are intentionally out of scope for the first cut.
+- **Layer 1 — Trace**: per-operation OpenTelemetry spans (LLM call, tool call, compaction event, etc.).
+- **Layer 2 — Ledgers**: entity-centric records (artifact versions, memory operations, raw user-response signals, view log).
+
+Both layers capture **only objective, machine-observable facts**. The single test for inclusion in this spec is:
+
+> **Can this field be produced deterministically from observable runtime events without human or LLM judgment?**
+
+If yes → it may belong in Layer 1+2.
+If no → it belongs in **Layer 3**, which is **outside this spec and outside PiPilot runtime**.
+
+**Layer 3 (out of scope for this spec)**: post-hoc analysis that labels, classifies, or judges the Layer 1+2 data. Done by:
+
+- Human annotators (researchers, RAs) with a codebook.
+- LLM annotators (offline scripts that read the objective record and produce labels).
+
+Layer 3 produces things like "this turn was a revision-request", "this anchor-fact went stale at turn 234", "the agent overstepped here", "role migrated from research-assistant to teaching-assistant in week 6". **PiPilot runtime never produces these labels and the user is never asked to provide them.**
+
+This split serves both audiences:
+
+- **Engineering** uses Layer 1+2 for debugging, performance analysis, regression detection, and user support.
+- **Research** uses Layer 1+2 as the raw substrate, then runs Layer 3 annotation pipelines (separate codebase, separate tooling) to derive findings.
+
+If Paper 1's research questions change, or new papers are written, **Layer 1+2 does not change** — only the Layer 3 codebook does.
 
 ---
 
@@ -19,34 +50,37 @@ Sections marked **OPEN** require the project owner to decide before P0 freezes. 
 
 ### 1.1 Goals
 
-1. **Engineering observability**: explain *why an agent run was slow / wrong / expensive* across the full execution tree (root LLM → tool → sub-LLM → retrieval → local-compute → memory compaction). The current `console.log + activity-store + explain-snapshot + run-store` patchwork only covers the surface.
-2. **Research data capture**: produce trace + ledger artifacts sufficient to support Paper 1's empirical claims (artifact-centered collaboration, context debt, resumption cost, repair behavior, role migration, co-adaptation). Without this, Paper 1 degenerates into a longitudinal chatbot study.
-3. **Standards-first portability**: emit OpenTelemetry-conformant traces so Langfuse, Phoenix, Tempo, Datadog, or any OTLP backend can consume our data without bespoke adapters.
+1. **Complete objective capture of agent execution**: every LLM call (main + 8 sub-LLM blind spots), every tool call, every artifact / memory operation, every compaction event, every user input boundary, every user passive view in the UI. Cover the full execution tree, not just surface symptoms.
+2. **Standards-first portability**: emit OpenTelemetry-conformant traces so Langfuse, Phoenix, Tempo, Datadog, or any OTLP backend can consume our data without bespoke adapters.
+3. **Long-horizon retention by default**: traces and ledgers retained for the lifetime of the project by default, configurable per project to `7-days | 1-month | forever`.
 4. **Pluggable export**: local JSONL by default (zero-dep), OTLP endpoint behind an env flag, never block the agent on exporter failure.
+5. **Privacy as a project-level contract**: redaction, blob retention, and export gating governed by a per-project privacy profile.
 
 ### 1.2 Non-Goals
 
+- **Subjective labels**: no anchor-fact lifecycle, no repair classification, no role migration tagging, no `user_message_type` enum at runtime, no referring-expression counters, no project-type semantics. These are Layer 3 concerns.
+- **User-driven labeling UX**: no thumbs-up/thumbs-down buttons designed to feed research, no "is this an anchor fact?" prompts, no taxonomy questionnaires. The user uses PiPilot normally; data accrues in the background.
 - **Real-time alerting / SLO dashboards**: telemetry is for post-hoc analysis and developer debugging. No paging, no on-call.
-- **Cross-user analytics**: we do not aggregate across users. Each install is its own data plane.
+- **Cross-user analytics**: each install is its own data plane. Cross-install aggregation is a Layer 3 problem.
 - **Replacing domain stores**: `compute-store`, `entity-store`, `session-store`, etc. remain authoritative for their domains. Trace references them by ID, never replicates them.
-- **Automatic research labels**: the runtime never writes subjective judgments (e.g., `wrong_artifact_used`, `agent_overstepped`). Those belong in the annotation ledger (§8.4).
 
 ### 1.3 Design axioms
 
 Anchors all subsequent decisions. If a later section appears to violate these, it is wrong, not the axioms.
 
-- **A1 — Trace ≠ Ledger.** Traces are time-line + causal structure, append-only, retention-limited (default 7 days). Ledgers are entity-centric (artifact / memory / outcome / annotation), retained with the project. Research analysis joins them by ID; runtime writes them separately.
-- **A2 — Capture facts, not judgments.** Runtime records observable events (calls, tokens, status, hashes). Subjective labels (repair type, context staleness, trust) are added in post-hoc annotation, not by detectors at runtime.
-- **A3 — OTel skeleton, PiPilot semantics.** Standard OTel GenAI conventions for portability. PiPilot-specific schema lives under `pipilot.*` namespace and never overloads standard fields.
+- **A1 — Trace ≠ Ledger.** Traces are time-line + causal structure. Ledgers are entity-keyed (artifact / memory / response-signal / view). Both retained per project policy. Layer 3 joins them by ID at analysis time.
+- **A2 — Capture facts, not judgments.** Runtime records observable events (calls, tokens, status, hashes, raw user message metadata). Subjective labels (repair type, context staleness, trust, anchor-factness) are added in post-hoc Layer 3 annotation, not by the runtime.
+- **A3 — OTel skeleton, PiPilot extensions.** Standard OTel GenAI conventions for portability. PiPilot-specific schema lives under `pipilot.*` namespace and never overloads standard fields.
 - **A4 — Never block the agent.** Tracing failures (disk full, OTLP endpoint down, exporter bug) must degrade silently. The agent path tolerates trace loss; trace path tolerates agent abort.
 - **A5 — Privacy is a project-level contract, not a per-span flag.** Privacy profile is configured once per project; per-span detectors only adjust redaction aggressiveness.
-- **A6 — Minimum discipline for survival.** Per the project-wide design axiom: we do not pursue complete instrumentation up front. P0 freezes interfaces; P1+ fills coverage incrementally with evidence.
+- **A6 — Minimum discipline for survival.** P0 freezes interfaces; P1+ fills coverage incrementally with evidence.
+- **A7 — Layer 3 is not part of PiPilot.** Annotation tooling, codebooks, and analysis pipelines live in a separate research codebase. The runtime never depends on them.
 
 ---
 
 ## 2. Background: What We Already Have
 
-This spec **must build on existing infrastructure**, not replace it. Inventory of reusable hooks:
+This spec must build on existing infrastructure, not replace it. Inventory of reusable hooks:
 
 ### 2.1 Event sources already in place
 
@@ -57,67 +91,71 @@ This spec **must build on existing infrastructure**, not replace it. Inventory o
 | `transformContext` callback | `lib/agents/coordinator.ts:530` | compaction trigger + summarization input |
 | Coordinator callbacks | `onStream/onToolCall/onToolResult/onToolProgress/onUsage/onSkillLoaded` | streamed back to renderer via IPC |
 | `RealtimeBuffer` | `app/src/main/realtime-buffer.ts:41` | live push + remount-recovery snapshot for renderer stores |
-| `RunStore` JSONL pattern | `lib/local-compute/run-store.ts` | atomic temp+rename, debounced flush, 7-day retention — **template only**, not direct reuse (§5) |
-| Explain snapshot | `lib/agents/coordinator.ts:230,805–826` | per-`chat()` JSON dump (intents, matched skills, budget) — proto-task-span (§6.6) |
-| Artifact JSONL | `lib/memory-v2/store.ts` | already an artifact ledger; needs version_before/initiator/turnId fields (§8.1) |
-| Compute run ledger | `lib/local-compute/run-store.ts` (`.research-pilot/compute-runs/runs.jsonl`) | already long-running async records; integrates as §6.5 |
+| `RunStore` JSONL pattern | `lib/local-compute/run-store.ts` | atomic temp+rename, debounced flush, retention — **template only**, not direct reuse (§5) |
+| Explain snapshot | `lib/agents/coordinator.ts:230,805–826` | per-`chat()` JSON dump (matched skills, budget) — proto-task-span; deprecated by trace (§6.6) |
+| Artifact JSONL | `lib/memory-v2/store.ts` | upgraded to artifact ledger (§8.1) |
+| Compute run ledger | `lib/local-compute/run-store.ts` | already long-running async records; integrates as §6.5 |
 | `session.json` | `shared-electron/ipc-base.ts:260` | stable cross-process session id |
+| `AppSettings.research` | `shared-ui/settings-types.ts:7` | precedent for the 3-option picker pattern adopted in §5.1 |
 
 ### 2.2 Sub-LLM blind spots (currently invisible)
 
 These sites bypass `agent.subscribe`'s event stream and are the highest-value targets:
 
-- `ResearchToolContext.callLlm` — `lib/agents/coordinator.ts:410` (used by literature-search, data-analyze, etc.)
-- `ResearchToolContext.callLlmVision` — `lib/agents/coordinator.ts:425` (diagram tool)
-- `matchSkillsWithLLM` — `lib/agents/coordinator.ts:100` (skill router)
-- `maybeGenerateSummary` → `completeSimple` — `lib/agents/coordinator.ts:687` (session summary)
-- `transformContext` → `generateSummary` — `lib/agents/coordinator.ts:580` (compaction)
-- `maybeExtractMemories` — `lib/memory/extractor.ts:148` (auto memory extraction)
+- `ResearchToolContext.callLlm` — `lib/agents/coordinator.ts:410`
+- `ResearchToolContext.callLlmVision` — `lib/agents/coordinator.ts:425`
+- `matchSkillsWithLLM` — `lib/agents/coordinator.ts:100`
+- `maybeGenerateSummary` → `completeSimple` — `lib/agents/coordinator.ts:687`
+- `transformContext` → `generateSummary` — `lib/agents/coordinator.ts:580`
+- `maybeExtractMemories` — `lib/memory/extractor.ts:148`
 - Wiki background agent — `app/src/main/ipc.ts:917`
-- Diagram backend direct `fetch()` to OpenAI/Anthropic — review/generation paths
+- Diagram backend direct `fetch()` to OpenAI/Anthropic
 
-All eight must be covered. P1 introduces a single `tracedCompleteSimple` helper plus closure-level wrappers for the two non-`completeSimple` cases (wiki bg agent, diagram fetch).
+All eight covered by a single `tracedCompleteSimple` helper plus closure-level wrappers for the two non-`completeSimple` cases.
 
 ### 2.3 Renderer stores already consuming events
 
-`activity-store`, `tool-events-store`, `tool-progress-store`, `usage-store`, `progress-store`, `compute-store`. Each is currently a parallel source of truth. Post-P3 they become derived views over the trace stream (§6.7) — except `compute-store`, which retains domain ownership of run records.
+`activity-store`, `tool-events-store`, `tool-progress-store`, `usage-store`, `progress-store`, `compute-store`. Post-P3 they become derived views over the trace stream; `compute-store` retains domain ownership of run records.
 
 ---
 
 ## 3. Architecture
 
-### 3.1 Three layers, three lifetimes
+### 3.1 Two layers in PiPilot, one outside
 
 ```
-+------------------------------------------------------------+
-|  Layer 3: Research analysis (off-runtime)                  |
-|  - CLI / notebook                                          |
-|  - JOIN traces + ledgers + annotations + outcomes          |
-|  - Derived fields (session.gap, repair.cost_turns, etc.)   |
-+--------+----------------------+----------------------------+
-         |                      |
-         | reads                | reads
-         |                      |
-+--------+--------+    +--------+----------+
-|  Layer 2: Trace |    |  Layer 2: Ledgers |
-|  (append-only,  |    |  (entity-keyed,   |
-|   7d retention, |    |   project-life,   |
-|   OTel format)  |    |   versioned)      |
-+--------+--------+    +--------+----------+
-         |                      |
-         | spans / events       | rows
-         |                      |
-+--------+----------------------+----------------------------+
-|  Layer 1: Instrumented runtime                             |
-|  - AsyncLocalStorage propagated TraceContext               |
-|  - tracedCompleteSimple, beforeToolCall, after, ALS wrap   |
-|  - ledger writers in the same call path                    |
-+------------------------------------------------------------+
++--------------------------------------------------------------+
+|  Layer 3: post-hoc analysis (OUTSIDE PiPilot)                |
+|  - Human annotators with codebooks                           |
+|  - LLM annotators (offline scripts)                          |
+|  - Reads Layer 1+2; writes annotation files in a separate    |
+|    research repo.                                            |
++----+----------------------+----------------------------------+
+     ^                      ^
+     | reads only           | reads only
+     |                      |
++----+--------+    +--------+----------+
+|  Layer 1:   |    |  Layer 2:         |
+|  Trace      |    |  Ledgers          |
+|  (OTel,     |    |  (entity-keyed,   |
+|   per-op,   |    |   project-life,   |
+|   retention |    |   versioned)      |
+|   per       |    |                   |
+|   policy)   |    |                   |
++----+--------+    +--------+----------+
+     |                      |
+     | spans / events       | rows
+     |                      |
++----+----------------------+----------------------------------+
+|  Instrumented runtime                                        |
+|  - AsyncLocalStorage propagated TraceContext                 |
+|  - tracedCompleteSimple, beforeToolCall/after, ALS wrap      |
+|  - ledger writers in the same call path                      |
++--------------------------------------------------------------+
 ```
 
 **Lifetimes:**
-- Trace: 7 days (configurable), evicted by trace-id age.
-- Ledgers: project lifetime (artifact, memory, outcome, annotation).
+- Trace and ledgers share a single project-level retention policy: `7-days | 1-month | forever` (default `forever`).
 - Resource attributes (versions, hashes): per-process, attached to every span.
 
 ### 3.2 Components added
@@ -130,14 +168,14 @@ All eight must be covered. P1 introduces a single `tracedCompleteSimple` helper 
 | `OtlpSpanExporter` | `lib/telemetry/exporters/otlp.ts` | gated by `RESEARCH_COPILOT_OTLP_ENDPOINT` |
 | `tracedCompleteSimple` | `lib/telemetry/llm-trace.ts` | wraps `completeSimple` with span + redaction |
 | Redaction pipeline | `lib/telemetry/redaction.ts` | shared by trace events and ledger writes |
-| `LedgerWriter` (artifact / memory / outcome / annotation) | `lib/ledger/*.ts` | each ledger isolated; writers idempotent on `(traceId, spanId, op)` |
-| `pipilot.*` semantic registry | `lib/telemetry/semantic-registry.ts` | enumerates allowed namespaced attributes; validation in dev mode |
+| `LedgerWriter` (artifact / memory / response-signal / view) | `lib/ledger/*.ts` | each ledger isolated; writers idempotent on `(traceId, spanId, op)` |
+| `pipilot.*` semantic registry | `lib/telemetry/semantic-registry.ts` | enumerates allowed namespaced attributes; validates in dev mode |
 
 ### 3.3 What `coordinator.ts` does *not* do
 
 - Does **not** allocate `traceId`. (See §4.1.)
 - Does **not** hold mutable trace state on `ResearchToolContext`. (See §4.2.)
-- Does **not** become an "instrumentation hub"; it stays a coordinator. Instrumentation is a layer wrapped around it.
+- Does **not** classify user messages, count referring expressions, or judge anchor-factness. (Layer 3 concerns.)
 
 ---
 
@@ -161,61 +199,79 @@ project.id               (resource attribute, from .research-pilot/project.json)
         span: execute_task local_compute  (long-running async run)
 ```
 
-Decisions:
-- **`traceId` per user task**, allocated at `agent:send` IPC entry. Not per-coordinator (coordinators rebuild on settings/model changes; one coordinator handles many tasks).
-- **`session.id` is an attribute and link target, not a span.** A months-long session does not become a months-long trace. Cross-trace continuity is reconstructed at analysis time by joining on `gen_ai.conversation.id`.
-- **`project.id` is a resource attribute** (per process), not per span — it does not change for the life of a coordinator process.
+- `traceId` per user task, allocated at `agent:send` IPC entry.
+- `session.id` is an attribute and link target, not a span. Cross-trace continuity is reconstructed at analysis time by joining on `gen_ai.conversation.id`.
+- `project.id` is a resource attribute (per process).
+- `turnId = userMessageId`: a stable identifier minted at IPC entry the moment the user submits a message (one user input → one turnId), regardless of how many internal steps follow. Propagated as `pipilot.turn.id`. Assistant-only events (e.g., background memory-extract) carry `pipilot.turn.id = null` and reference the most recent prior turn via `pipilot.turn.followsId`.
 
 ### 4.2 Concurrent parent-child
 
-`pi-agent-core` parallelizes tool calls. A single mutable "active span" on `ResearchToolContext` would cross-link siblings. Solution:
+Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cross-link siblings. Solution:
 
-- **Primary**: `AsyncLocalStorage<TraceContext>` via `@opentelemetry/context-async-hooks`'s `AsyncLocalStorageContextManager`. Each `tool.execute` and each `tracedCompleteSimple` runs in a child context. This is the same mechanism OTel auto-instrumentations expect, so future automatic instrumentation will compose cleanly.
-- **Fallback**: `Map<toolCallId, TraceContext>` populated in `beforeToolCall`, drained in `afterToolCall`. Used when ALS is unavailable (rare; e.g., callbacks crossing IPC boundaries) or when an explicit `parentToolCallId` hint is provided.
+- **Primary**: `AsyncLocalStorage<TraceContext>` via `@opentelemetry/context-async-hooks`'s `AsyncLocalStorageContextManager`.
+- **Fallback**: `Map<toolCallId, TraceContext>` populated in `beforeToolCall`, drained in `afterToolCall`.
 - **Explicit override**: `tracedCompleteSimple(model, req, opts, { parent: explicitCtx })` for cases like the wiki background agent where the natural async parent has already exited.
 
 ### 4.3 What we do not propagate
 
-- We do not propagate trace context across the IPC boundary into the renderer at runtime. The renderer subscribes to a separate `trace:live` channel (§6.7); it does not produce spans. (Adding renderer-side spans is DEFERRED.)
-- We do not propagate trace context to external HTTP requests (web_search, web_fetch, fulltext) by default. OPEN: should we inject W3C `traceparent` headers? Backend cooperation is rare and adds fingerprinting risk. Default off.
+- Trace context does not cross IPC into the renderer at runtime. Renderer subscribes to a separate `trace:live` channel (§6.7); it does not produce spans.
+- Trace context is not propagated to external HTTP requests by default.
 
 ---
 
 ## 5. Storage Model
 
-### 5.1 Trace store: append-only
-
-Rejects the `RunStore` pattern of "Map-of-records, full rewrite on flush" (`lib/local-compute/run-store.ts:60`). Trace span counts will exceed run counts by 2–3 orders of magnitude.
+### 5.1 Trace store: append-only, configurable retention
 
 **Format**: `.research-pilot/traces/spans.{date}.jsonl`, one OTLP/JSON `ResourceSpans` envelope per line, batched.
 
-**Write path**:
-1. Span ends → in-memory queue.
-2. Batch trigger: 64 spans **or** 200ms idle.
-3. Flush: append-only `write()`, no rewrite.
-4. Process exit: synchronous `flushNow()`.
+**Write path**: span ends → in-memory queue → flush at 64 spans or 200 ms idle → append-only write. Process exit calls synchronous `flushNow()`.
 
-**Indices** (rebuilt on startup, atomic temp+rename):
-- `traces/index.{date}.json`: `{ traceId → { firstByteOffset, byteLen, rootSpanId, status } }` for fast viewer lookup.
-- In-memory `Map<traceId, SpanIndex>` is a query cache, not source of truth.
+**Indices** (rebuilt on startup, atomic temp+rename): `traces/index.{date}.json` for fast viewer lookup.
 
-**Retention**:
-- Default 7 days, configurable via `pipilot.trace.retention_days`.
-- Eviction: drop entire daily file when newest span in it ages past threshold. Never partial-rewrite.
-- Project deletion deletes the trace directory.
+**Retention setting**: per project, configured in `project.json` and surfaced in Settings UI alongside the existing Research Intensity / Web Search Depth pickers.
+
+```typescript
+// shared-ui/settings-types.ts (proposed addition)
+export type TraceRetention = '7-days' | '1-month' | 'forever'
+
+export interface TelemetrySettings {
+  traceRetention: TraceRetention   // default: 'forever'
+  tracingMode: 'enabled' | 'disabled'  // default: 'enabled'
+}
+
+// in DEFAULT_SETTINGS
+telemetry: {
+  traceRetention: 'forever',
+  tracingMode: 'enabled',
+}
+
+// resolver
+export function resolveTraceRetention(level: TraceRetention): { evictAfterDays: number | null } {
+  switch (level) {
+    case '7-days':  return { evictAfterDays: 7 }
+    case '1-month': return { evictAfterDays: 30 }
+    case 'forever': return { evictAfterDays: null }
+  }
+}
+```
+
+**Eviction**: when `evictAfterDays` is set, drop entire daily JSONL files where the newest span ages past the threshold. Never partial-rewrite. When `evictAfterDays = null` (forever), no automatic eviction; only manual project deletion or user-initiated cleanup removes data.
+
+**Retention change**: when a project's retention is downgraded (e.g., `forever → 1-month`), past data older than the new threshold is **not** automatically deleted — the change applies forward. A separate "Compact telemetry" action in Settings runs the eviction sweep on demand. This preserves the principle that the system never silently destroys research data.
 
 ### 5.2 Ledgers: entity-keyed, versioned
-
-Each ledger is its own JSONL file under `.research-pilot/`:
 
 | Ledger | Path | Key | Status |
 |---|---|---|---|
 | Artifact | `artifacts/ledger.jsonl` | `(artifactId, version)` | upgrade existing artifact JSONL |
-| Memory | `memory-v2/ledger.jsonl` | `memoryId` (with lifecycle transitions) | upgrade existing memory store |
-| Outcome | `outcomes.jsonl` | `(turnId, signal)` | new |
-| Annotation | `annotations/{traceId}.jsonl` | `(traceId, spanId, label)` | new (Layer 3 tool writes here) |
+| Memory | `memory-v2/ledger.jsonl` | `memoryId` | upgrade existing memory store |
+| User-response signals | `user-response-signals.jsonl` | `(turnId)` | new (§8.3) |
+| View log | `view-log.jsonl` | `(viewId)` | new (§8.5) |
 
-**Cross-reference**: each ledger row records `{ traceId, spanId, turnId, toolCallId? }` so analysis can join either direction.
+All ledgers retained per project policy (same setting as trace).
+
+**Cross-reference**: each ledger row records `{ traceId?, spanId?, turnId?, toolCallId? }` so analysis can join either direction.
 
 **Idempotency**: ledger writers are idempotent on the natural key. Replays during crash recovery do not duplicate.
 
@@ -225,87 +281,12 @@ Large content (turn text > 4 KB, tool I/O over cap, diagram SVG, base64 images) 
 
 - Stored once at `.research-pilot/blobs/{sha256}` (single file per hash).
 - Referenced from spans / ledgers as `{ contentHash, size, redactionLevel }`.
-- **Retention** (M1-5, reconciled with §9.4):
-  - Default profile: blobs are reference-counted; unreferenced blobs garbage-collected after `blobRetentionDays` (default 7) by a background sweep on app startup. References are counted across traces, ledgers, digest, and view log.
-  - `privacy.level = high`: blobs are written **either** with `blobEncryption=at-rest` (libsodium secretstream, key in OS keychain) **or not at all** (`blobEncryption=none` is rejected by the export gate as a configuration error). Encrypted blobs use the same retention as the default profile.
-  - Project deletion deletes the blob directory.
-- Background sweep is itself observable: writes one row per sweep to `.research-pilot/tracing-state.jsonl` (§9.6) with deletion counts.
-
-### 5.5 Trace digest (longitudinal survival contract — M0-1)
-
-7-day trace retention is sufficient for engineering debugging but **not** for Paper 1's longitudinal claims (prompt length over project age, implicit-reference rate, tool-call mix evolution, session burstiness, topic drift). Ledgers preserve artifact / memory / outcome facts but **not** turn-level timing or LLM-call sequencing. Without an intermediate layer, every claim that requires "what happened across months" degrades to cross-sectional.
-
-**Solution**: before a trace file is evicted (§5.1 daily-file eviction), every trace it contains is materialized into one row in an append-only project-lifetime ledger.
-
-**Path**: `.research-pilot/trace-digest.jsonl` (project-life retention; survives trace eviction).
-
-**Schema (one row per `traceId`)**:
-
-```jsonc
-{
-  "traceId": "...",
-  "sessionId": "...",
-  "projectId": "...",
-  "startedAt": "...",
-  "endedAt": "...",
-  "durationMs": 0,
-
-  // Root invoke_agent attributes (verbatim copy)
-  "userMessageType": "...",         // pipilot.user_message_type
-  "userMessageTypeV2": "...",       // M1-1, when present
-  "intentLabels": ["..."],
-  "matchedSkills": ["..."],
-  "activeSkillsByStep": [{ "stepId": "...", "active": ["..."] }],  // M0-5
-
-  // Aggregates over child spans
-  "stepCount": 0,
-  "toolCallsByCategory": { "literature": 3, "data-analysis": 1, ... },
-  "subLlmCallsByPurpose": { "skill_router": 1, "memory_extract": 1, ... },
-  "tokens": { "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0 },
-  "compactionTriggered": false,
-  "compactionDiscardedTurnIds": ["..."],   // M0-4 — IDs only, no content
-  "artifactOps": [{ "op": "edit", "artifactId": "...", "version": 7 }],
-  "memoryOps": [{ "op": "retrieve", "memoryId": "...", "scope": "project" }],
-
-  // Per-turn time series (IDs + sizes only, never content)
-  "turns": [
-    { "turnId": "...", "role": "user", "timestamp": "...", "charLen": 0, "contentHash": "sha256:..." },
-    { "turnId": "...", "role": "assistant", "timestamp": "...", "charLen": 0, "contentHash": "sha256:..." }
-  ],
-
-  // Per-step time series (for prefill / context-growth analysis)
-  "steps": [
-    { "stepId": "...", "approxInputTokens": 0, "messageCount": 0, "artifactMentionCount": 0, "activeSkills": ["..."] }
-  ],
-
-  // Outcome aggregation
-  "outcomeSignals": [{ "signal": "approval", "source": "ui-button", "confidence": 1.0 }],
-
-  // Provenance
-  "tracePolicyVersion": "...",        // schema version of this digest
-  "redactionPolicyVersion": "...",
-  "digestWrittenAt": "..."
-}
-```
-
-**Write trigger**: `TraceStore.evictDailyFile(date)` first iterates traces in the file, materializes each into a digest row, then deletes the trace file. Atomic: digest write must succeed before trace deletion.
-
-**Crash safety**: if process dies mid-eviction, on next startup `TraceStore` checks for trace files where the newest span is past retention but no digest row exists; finishes materialization before any new eviction.
-
-**Reconstruction guarantees**:
-- ✅ turn-level timing, role, length, hash
-- ✅ context growth and compaction triggers
-- ✅ tool / sub-LLM call mix and token totals
-- ✅ skill activation evolution
-- ✅ artifact / memory op references (joinable to ledgers, which are project-life)
-- ❌ raw prompt / completion content (intentionally; if needed, blob store retains it under `blobRetentionDays`)
-- ❌ inter-span millisecond-resolution timing (digest captures step-level, not span-level)
-
-This is the contract: **engineering analyses use traces (rich, recent); research analyses use digest + ledgers (longitudinal, lossy on detail, lossless on causality)**.
+- **Retention**: blobs follow the same project policy as trace + ledgers. Reference-counted GC runs only when retention is finite (`7-days` / `1-month`). For `forever`, blobs are never auto-GC'd; project deletion removes them.
+- `privacy.level = high`: blobs are written with `blobEncryption = at-rest` (libsodium secretstream, key in OS keychain) or not at all (`blobEncryption = none` rejected by the export gate as a configuration error).
 
 ### 5.4 Resource attributes (per-process)
 
-Set once at TraceProvider initialization, attached to every span via OTel `Resource`:
+Set once at TraceProvider initialization, attached to every span:
 
 ```
 service.name = "research-copilot"
@@ -315,10 +296,89 @@ pipilot.runtime.system_prompt_hash = sha256(baseSystemPrompt)
 pipilot.runtime.workspace_commit = git rev-parse HEAD (best effort)
 pipilot.runtime.memory_index_version = <wiki manifest version>
 pipilot.project.id = <project.json id>
-pipilot.project.type = <enum: research-cycle | paper-writing | teaching-cycle | coding | analysis | literature-review | course-material | other>
+pipilot.project.tag = <free-form user-provided tag, optional>
 pipilot.project.privacy_profile = <low | medium | high>
 gen_ai.conversation.id = <session.id>
 ```
+
+Note: `pipilot.project.tag` is an **optional, free-form** label. There is no enum, no fixed taxonomy. Layer 3 may classify projects post-hoc using its own scheme.
+
+### 5.5 Trace digest (query acceleration, optional)
+
+Even with `forever` retention, trace files become slow to scan for cross-task questions ("how did prompt length evolve over 3 months?"). Digest provides a one-row-per-trace pre-aggregate.
+
+**Path**: `.research-pilot/trace-digest.jsonl` (same retention as trace).
+
+**Schema** (one row per `traceId`, materialized when the trace's last span ends):
+
+```jsonc
+{
+  "traceId": "...",
+  "sessionId": "...",
+  "projectId": "...",
+  "startedAt": "...",
+  "endedAt": "...",
+  "durationMs": 0,
+  "stepCount": 0,
+  "toolCallsByCategory": { "literature": 3, "data-analysis": 1 },
+  "subLlmCallsByPurpose": { "skill_router": 1, "memory_extract": 1 },
+  "tokens": { "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0 },
+  "compactionTriggered": false,
+  "compactionDiscardedTurnIds": ["..."],
+  "artifactOps": [{ "op": "edit", "artifactId": "...", "version": 7 }],
+  "memoryOps": [{ "op": "retrieve", "memoryId": "...", "scope": "project" }],
+  "matchedSkills": ["..."],
+  "activeSkillsByStep": [{ "stepId": "...", "active": ["..."] }],
+  "turns": [
+    { "turnId": "...", "role": "user", "timestamp": "...", "charLen": 0, "contentHash": "sha256:..." }
+  ],
+  "steps": [
+    { "stepId": "...", "approxInputTokens": 0, "messageCount": 0, "artifactMentionCount": 0 }
+  ],
+  "tracePolicyVersion": "...",
+  "redactionPolicyVersion": "...",
+  "digestWrittenAt": "..."
+}
+```
+
+Digest is **derived data**, not a primary record. If a digest schema bug is found, regenerate from traces (when present). Under `7-days` retention, digest is the longitudinal pre-aggregate that survives trace eviction; under `forever`, digest just speeds up queries.
+
+### 5.6 Storage size estimates
+
+Per-task volumes are estimated from the proposed schema. Numbers are conservative (assume worst-case event sizes within the redaction cap):
+
+**Per `chat()` task:**
+
+| User profile | Spans | Events | Trace size | Blobs | Total per task |
+|---|---|---|---|---|---|
+| Light (Q&A, few tools) | 5–10 | 20–40 | ~80 KB | ~30 KB | ~110 KB |
+| Average (research session) | 15–25 | 50–100 | ~200 KB | ~60 KB | ~260 KB |
+| Heavy (literature search + compaction + multiple sub-LLM) | 40–80 | 150–300 | ~500 KB | ~150 KB | ~650 KB |
+
+**Daily volume:**
+
+| User profile | Tasks/day | Daily total |
+|---|---|---|
+| Light | 5 | ~550 KB |
+| Average | 15 | ~3.9 MB |
+| Heavy | 50 | ~32 MB |
+
+**Annual estimates (forever retention, traces + digest + ledgers + blobs):**
+
+| User profile | One year | Three years |
+|---|---|---|
+| Light | ~200 MB | ~600 MB |
+| Average | ~1.4 GB | ~4.2 GB |
+| Heavy | ~12 GB | ~36 GB |
+
+**Reference comparisons:**
+- One hour of 1080p screen recording: ~3 GB.
+- Heavy researcher's full year of telemetry: less than four hours of video.
+- Typical paper repo with figures and PDFs: often already 1–5 GB.
+
+**Conclusion**: `forever` is a reasonable default on modern SSDs for typical use. The 3-option picker exists to give privacy-sensitive projects or storage-constrained users an explicit choice. Heavy users on long-horizon studies who hit `>10 GB/year` can either (a) leave it (still small relative to disk), (b) flip to `1-month` and rely on digest+ledgers for longitudinal claims, or (c) periodically run "Compact telemetry" with a custom horizon.
+
+The estimates above will be validated empirically during P1 with a self-monitoring counter on the TraceStore that writes daily byte totals to `.research-pilot/trace-storage-stats.jsonl`. If real-world numbers exceed estimates by >2×, retention defaults are revisited.
 
 ---
 
@@ -329,116 +389,108 @@ gen_ai.conversation.id = <session.id>
 Per OpenTelemetry GenAI v1.37 conventions:
 
 - Span name = `{operation} {target}` (e.g., `chat claude-opus-4-7`, `execute_tool web_search`).
-- `gen_ai.operation.name` enum: `chat`, `embeddings`, `execute_tool`, `invoke_agent`, `create_agent`. PiPilot does **not** invent values for this field.
+- `gen_ai.operation.name` enum: `chat`, `embeddings`, `execute_tool`, `invoke_agent`, `create_agent`. PiPilot does not invent values for this field.
 - Operations OTel does not cover (long-running async tasks, compaction, memory extraction) use OTel-style verbs but live in the `pipilot.*` operation namespace.
 
 ### 6.2 Span types
 
-| PiPilot semantic | Span name | `gen_ai.operation.name` | Kind | Lifetime |
-|---|---|---|---|---|
-| User task | `invoke_agent {agent.name}` | `invoke_agent` | INTERNAL (root) | one `chat()` call |
-| Agent step (pi-agent-core turn) | `invoke_agent step` | `invoke_agent` | INTERNAL | turn_start..turn_end |
-| Main / sub LLM call | `chat {model}` | `chat` | CLIENT | single LLM round-trip |
-| Tool execution | `execute_tool {tool.name}` | `execute_tool` | INTERNAL | tool.execute() |
-| Local compute submit | `execute_tool local_compute_execute` | `execute_tool` | INTERNAL | submit only |
-| Local compute async run | `execute_task local_compute` | (custom: `pipilot.execute_task`) | INTERNAL (separate root, link follows_from to submit) | run lifetime |
-| Compaction | `summarize context` | (custom: `pipilot.summarize`) | INTERNAL | one compaction event; child `chat` span for the LLM call |
-| Memory extraction | `extract memory` | (custom: `pipilot.memory.extract`) | INTERNAL | one extraction; child `chat` span |
+| PiPilot semantic | Span name | `gen_ai.operation.name` | Kind |
+|---|---|---|---|
+| User task | `invoke_agent {agent.name}` | `invoke_agent` | INTERNAL (root) |
+| Agent step (pi-agent-core turn) | `invoke_agent step` | `invoke_agent` | INTERNAL |
+| Main / sub LLM call | `chat {model}` | `chat` | CLIENT |
+| Tool execution | `execute_tool {tool.name}` | `execute_tool` | INTERNAL |
+| Local compute submit | `execute_tool local_compute_execute` | `execute_tool` | INTERNAL |
+| Local compute async run | `execute_task local_compute` | `pipilot.execute_task` | INTERNAL (separate root, link `follows_from` to submit) |
+| Compaction | `summarize context` | `pipilot.summarize` | INTERNAL |
+| Memory extraction | `extract memory` | `pipilot.memory.extract` | INTERNAL |
 
 ### 6.3 Standard OTel attributes (every applicable span)
 
 - `gen_ai.system` ∈ `{anthropic, openai, gcp.gemini, anthropic.subscription, openai.codex}`.
-  Subscription tiers are kept distinct from direct API to enable separate cost accounting.
-- `gen_ai.request.model`, `gen_ai.response.model` (post-resolution model id).
+- `gen_ai.request.model`, `gen_ai.response.model`.
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`.
 - `gen_ai.usage.cache_read_input_tokens`, `gen_ai.usage.cache_creation_input_tokens` (Anthropic).
-- `gen_ai.response.finish_reasons` (array).
+- `gen_ai.response.finish_reasons`.
 - `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` ∈ `{function, retrieval, extension}`.
 - `gen_ai.conversation.id` (= session.id).
-- `error.type`, `span.status` on failure; `error.type=client.aborted` for user abort, `server.error` for upstream LLM errors.
+- `error.type`, `span.status` on failure.
 
 ### 6.4 PiPilot extension attributes (`pipilot.*` namespace)
 
-Validated against `lib/telemetry/semantic-registry.ts` in dev mode (drops invalid keys, warns).
+Validated against `lib/telemetry/semantic-registry.ts` in dev mode.
 
 | Attribute | Where | Purpose |
 |---|---|---|
-| `pipilot.tool.category` | `execute_tool` spans | enum from `lib/tools/index.ts` factory: `file, shell, code, data-analysis, literature, web, memory, artifact, document, diagram, wiki, citation, compute` |
+| `pipilot.tool.category` | `execute_tool` spans | enum from tool factory: `file, shell, code, data-analysis, literature, web, memory, artifact, document, diagram, wiki, citation, compute` |
 | `pipilot.tool.error_class` | failed `execute_tool` spans | mapped from `toolError` `error_code` |
 | `pipilot.tool.retry_count` | `execute_tool` spans | tool-level retries (not LLM retries) |
-| `pipilot.user_message_type` | root `invoke_agent` span | rule-based classifier (§9.2): `new-request \| correction \| approval \| rejection \| clarification \| status-query \| preference \| planning \| continuation \| unknown` |
-| `pipilot.compaction.discarded_messages`, `.kept_tokens`, `.input_tokens`, `.output_tokens` | `summarize context` span | compaction metrics |
-| `pipilot.resumption.bootstrap_orphans`, `.summary_loaded`, `.first_artifact_op_at_step`, `.first_tool_call_at_step`, `.user_reexplained_context` | first step of a session | resumption signals |
-| `pipilot.redaction.level`, `.fields_redacted_count`, `.policy_version` | every span | audit trail of what was redacted |
-| `pipilot.privacy.flag` | spans where detector triggered | `{rule, severity, redaction_upgraded}` |
+| `pipilot.compaction.discarded_messages`, `.kept_tokens`, `.input_tokens`, `.output_tokens` | `summarize context` span | compaction counters |
+| `pipilot.resumption.bootstrap_orphans`, `.summary_loaded`, `.first_artifact_op_at_step`, `.first_tool_call_at_step` | first step of a session | objective resumption signals (no judgments) |
+| `pipilot.redaction.level`, `.fields_redacted_count`, `.policy_version` | every span | audit trail |
+| `pipilot.privacy.flag` | spans where detector triggered | `{rule, severity, redaction_upgraded}` (objective regex hit, not a judgment about content) |
+| `pipilot.turn.id`, `pipilot.turn.followsId` | every span | turnId propagation (§4.1) |
+| `pipilot.matched_skills` | root `invoke_agent` span | objective record of which skills the router selected (a routing decision is a fact, not a judgment) |
+| `pipilot.active_skills` | every `invoke_agent step` span | set of skills active at step start |
+
+**Removed in v0.3** (subjective; moved to Layer 3): `pipilot.user_message_type`, `pipilot.user_message_type.v2`, `pipilot.referring_expressions`, `pipilot.intent_labels`.
 
 ### 6.5 Local compute: dual-span model
 
-Submission and execution are split:
-
-- `execute_tool local_compute_execute` (**submit span**): completes when `submitRun()` returns the `runId`. Status `ok` means submission succeeded, not run succeeded. Attributes include `pipilot.local_compute.run_id`.
-- `execute_task local_compute` (**run span**): independent root, `traceId` matches the submitting trace, `parentSpanId = null`, has OTel `Link { type: "follows_from", spanId: <submit_span_id> }`. Run lifetime — emits `start_time` on `runner.ts:queue`, attribute updates on progress events, `end_time + status` on terminal state.
-
-This avoids a long-running run holding the user's task span open across hours/days.
+- `execute_tool local_compute_execute` (submit): completes when `submitRun()` returns the `runId`.
+- `execute_task local_compute` (run): independent root, `traceId` matches submitter, `parentSpanId = null`, OTel `Link { type: "follows_from", spanId: <submit_span_id> }`. Run lifetime — `runner.ts` updates produce span events; terminal state ends the span.
 
 ### 6.6 Explain snapshot reconciliation
 
-Existing `writeExplainSnapshot` (`lib/agents/coordinator.ts:230`) becomes part of the root `invoke_agent` span:
+Existing `writeExplainSnapshot` (`lib/agents/coordinator.ts:230`) is deprecated. Its objective fields move to the root `invoke_agent` span:
 
-- `intents` → `pipilot.intent_labels` array attribute.
-- `matchedSkills` → `pipilot.matched_skills` array attribute.
+- `matchedSkills` → `pipilot.matched_skills`.
 - `selectedContext.mentionSelections`, `.approxTokens` → `pipilot.context.{mention_selections, approx_tokens}`.
-- `persistence.{decision, reason}` → `pipilot.persistence.{decision, reason}`.
 - `sessionSummary.{included, turnRange, approxTokens}` → `pipilot.session_summary.{included, turn_start, turn_end, approx_tokens}`.
-- `budget.*` → standard `gen_ai.usage.*` on the root span (aggregated from children — see §7).
+- `budget.*` → standard `gen_ai.usage.*` on the root span.
 
-Standalone `.research-pilot/explain/*.turn.json` files are deprecated once trace is GA. During P1 they continue to be written for debugging continuity.
+**Removed**: `intents`, `persistence.{decision, reason}` — these were rule-based judgments.
 
-### 6.8 Skill activation events (M0-5)
+Standalone `.research-pilot/memory-v2/explain/*.turn.json` files continue during P1 for debugging continuity, then removed.
 
-`pipilot.matched_skills` on the root span captures only the *initial* skill router decision. Skills can also be loaded mid-task via `load_skill` tool calls or implicit triggers, and roles drift across steps. Role-migration analysis requires this evolution as a time series.
+### 6.7 Skill activation events
 
-**New events**:
-- On every skill activation (initial match or `load_skill` invocation):
-  ```jsonc
-  pipilot.skill.load {
-    skillName: string,
-    trigger: "router-match" | "explicit-load" | "dependency",
-    stepId: string,           // step span id active at the time
-    sourceToolCallId?: string // present when trigger="explicit-load"
-  }
-  ```
-  Attached to the step span where activation occurred.
+Skills can be loaded mid-task via `load_skill` tool calls. Activation evolution is an objective fact (a load happened, the runtime knows the name and the cause).
 
-**New attribute**:
-- Every `invoke_agent step` span carries `pipilot.active_skills` (array): the set of skills active at the start of that step. Emitted regardless of whether a load happened in this step (so a step inherits the prior set).
-
-`trace-digest.jsonl` aggregates these into `activeSkillsByStep` (§5.5).
-
-### 6.9 Compaction discarded payload (M0-4)
-
-`pipilot.compaction.discarded_messages` count alone is insufficient. Compaction is a primary source of stale memory and false continuity; analysis must know **which** turns were dropped.
-
-**New event** on `summarize context` spans:
+**Event** on the step span where activation occurred:
 ```jsonc
-pipilot.compaction.discarded {
-  turnIds: string[],          // IDs only — see §8.0 turnId definition
-  roles: ("user" | "assistant" | "tool")[],
-  charLens: number[],
-  artifactMentionIds: string[][]   // per-turn artifact IDs that were dropped
+pipilot.skill.load {
+  skillName: string,
+  trigger: "router-match" | "explicit-load" | "dependency",
+  stepId: string,
+  sourceToolCallId?: string
 }
 ```
 
-Content is **not** included (already covered by content blobs §5.3 if retained). The point is to enable post-hoc questions like "did compaction drop the turn that established this anchor fact?"
+Every `invoke_agent step` carries `pipilot.active_skills` (array): the set active at step start.
 
-### 6.7 Events (large / sensitive payloads)
+### 6.8 Compaction discarded payload
+
+**Event** on `summarize context` spans:
+```jsonc
+pipilot.compaction.discarded {
+  turnIds: string[],
+  roles: ("user" | "assistant" | "tool")[],
+  charLens: number[],
+  artifactMentionIds: string[][]
+}
+```
+
+Content not included (already in blob store if retained). Pure facts.
+
+### 6.9 Events (large / sensitive payloads)
 
 Spans carry small attributes. Large or sensitive payloads attach as OTel events:
 
-- `gen_ai.user.message`, `gen_ai.assistant.message`, `gen_ai.tool.message`, `gen_ai.choice` — OTel-standard events for prompt/completion content.
+- `gen_ai.user.message`, `gen_ai.assistant.message`, `gen_ai.tool.message`, `gen_ai.choice` — OTel-standard events.
 - `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` — tool I/O.
 - `pipilot.artifact.op` — `{artifactId, op, version_after, contentHash, ledgerRowId}`.
-- `pipilot.memory.op` — `{memoryId, op, scope, type, lifecycle_transition, ledgerRowId}`.
+- `pipilot.memory.op` — `{memoryId, op, scope, type, ledgerRowId}`.
 - `pipilot.detector.flag` — `{rule, severity, action_taken}`.
 
 Event bodies pass through redaction (§7) before being attached.
@@ -447,51 +499,28 @@ Event bodies pass through redaction (§7) before being attached.
 
 ## 7. Redaction Pipeline
 
-Single shared pipeline, applied to **both args and results**, on **trace events and ledger rows**. Args are not exempt: tools include `write/edit` (file content), `local_compute_execute` (env vars, scripts), diagram (SVG), and prompts that may include base64 images or secrets.
+Single shared pipeline applied to **both args and results**, on **trace events and ledger rows**.
 
-**Stages (applied in order):**
+**Stages (in order):**
 
-1. **Field-level deny list**: `apiKey`, `password`, `Authorization`, `cookie`, `csc_*`, `APPLE_*_PASSWORD`, `secret`, plus user-configurable additions. Match by key name (case-insensitive).
-2. **Pattern-based scrubber**: regex catalog (Anthropic/OpenAI keys, GitHub tokens `ghp_*`, AWS access keys, generic `Bearer <token>`, RFC822 emails when privacy=high). Replacement: `<redacted:type>`.
-3. **Path scrubbing**: replace `$HOME`, `/Users/<name>` prefixes with `~`; preserve workspace-relative paths.
-4. **Size cap**: per-field, default 4 KB. Over-cap → `{ truncated: true, contentHash, size }` and the full content goes to the blob store (§5.3) with privacy-aware retention.
+1. **Field-level deny list**: `apiKey`, `password`, `Authorization`, `cookie`, `csc_*`, `APPLE_*_PASSWORD`, `secret`, plus user-configurable additions.
+2. **Pattern-based scrubber**: Anthropic/OpenAI keys, GitHub tokens, AWS access keys, generic `Bearer <token>`, RFC822 emails when `privacy.level = high`. Replacement: `<redacted:type>`.
+3. **Path scrubbing**: replace `$HOME`, `/Users/<name>` with `~`; preserve workspace-relative paths.
+4. **Size cap**: per-field, default 4 KB. Over-cap → `{ truncated: true, contentHash, size }` and the full content goes to the blob store.
 5. **Artifact reference shortcut**: if the field is already an artifact (artifactId present), emit `{ artifactRef }` only.
 6. **Image / SVG / binary**: never inline; always `{ contentHash, mimeType, size }`.
 
-**Auditability**: every span emits `pipilot.redaction.{level, fields_redacted_count, policy_version}`. Bumping the policy version is observable in retrospective analysis.
+Every span emits `pipilot.redaction.{level, fields_redacted_count, policy_version}`. Bumping the policy version is observable.
 
-**Privacy escalation**: when a `pipilot.detector.flag` fires (e.g., regex hit on a secret), the redaction pipeline **upgrades** for that span: more aggressive truncation, image hashes only, no raw content events. The flag itself is recorded.
-
-**Out-of-scope for redaction**: ledger content is also redacted, but blob store contents are not (they are intentionally the raw fallback). Blob retention is bounded by privacy profile (§9.4).
+When a `pipilot.detector.flag` fires, the redaction pipeline upgrades for that span: more aggressive truncation, image hashes only, no raw content events.
 
 ---
 
-## 8. Ledgers (research data backbone)
+## 8. Ledgers
 
-Ledgers carry the entity-centric truth that traces only point to.
-
-### 8.0 `turnId` formal definition (M0-3)
-
-All ledgers and the trace digest use `turnId`. Definition:
-
-> **`turnId` = `userMessageId`**: a stable identifier minted at IPC entry the moment the user submits a message (one user input → one turnId), regardless of how many internal `invoke_agent step` cycles, tool calls, or sub-LLM calls follow.
-
-Rationale:
-- Matches the analysis-side framing: "after the user said X, what happened?"
-- Makes `repair.cost_turns` well-defined (= count of user-side turns between failure and successful follow-up).
-- Decouples from pi-agent-core internals: a future change in step granularity will not invalidate joins.
-- Stable across retries: if pi-agent-core retries an LLM call, the turn does not split.
-
-`turnId` is propagated as:
-- Resource-level not applicable (turn is per-task, not per-process).
-- Span attribute `pipilot.turn.id` on the root `invoke_agent` span and inherited by all descendants via context propagation.
-- Foreign key in every ledger row that ties a fact back to "which user input caused this".
-
-Assistant-only events (e.g., a background memory-extract triggered by no user turn) carry `pipilot.turn.id = null` and instead reference the most recent prior `turnId` via `pipilot.turn.followsId`.
+Ledgers carry the entity-centric truth that traces only point to. **All ledgers in this section record only objective facts. Subjective interpretation is Layer 3.**
 
 ### 8.1 Artifact ledger
-
-Upgraded from existing artifact JSONL.
 
 ```jsonc
 {
@@ -501,7 +530,7 @@ Upgraded from existing artifact JSONL.
   "type": "note | paper | data | web-content | tool-output | manuscript | outline | slides | code | dataset | figure | bibliography | teaching-material",
   "path": "<workspace-relative>",
   "contentHash": "sha256:...",
-  "diffPath": ".research-pilot/blobs/<hash>",   // for edit ops
+  "diffPath": ".research-pilot/blobs/<hash>",
   "versionBefore": 6,
   "initiator": "user | assistant | tool | external",
   "traceId": "...",
@@ -512,27 +541,18 @@ Upgraded from existing artifact JSONL.
 }
 ```
 
-**Migration**: existing artifact JSONL gains `versionBefore`, `initiator`, `traceId`, `spanId`, `turnId`, `toolCallId`. New writes populate them; old rows stay readable.
+**Snapshot policy** (clarified in v0.3): for text-type artifacts (note, paper, outline, manuscript, code, slides) under 100 KB, the full content of every version is preserved in the blob store. For data-type artifacts (data, dataset) over 1 MB, only `contentHash` and metadata are kept; full historical content is **not** written to blob store. This is configurable per-project under `privacy.artifactSnapshotPolicy`.
 
 ### 8.2 Memory ledger
-
-Upgrades memory-v2 with explicit lifecycle:
 
 ```jsonc
 {
   "memoryId": "...",
-  "op": "search | retrieve | create | update | delete | summarize | retire",
+  "op": "search | retrieve | create | update | delete",
   "scope": "session | project | user-global | cross-project | wiki",
-  "type": "preference | decision | anchor-fact | todo | rationale | artifact-summary",
-  "state": "proposed | accepted | active | superseded | retired | disputed",
-  "confidence": 0.0,
-  "verifiedStatus": "unverified | confirmed | contradicted",
-  "expirationTime": null,
-  "supersedes": ["..."],
-  "supersededBy": null,
-  "conflictWith": [],
-  "originatingProjectId": "...",         // M1-3: cross-project provenance
-  "originatingArtifactId": "...",        // M1-3: source artifact in originating project
+  "type": "preference | decision | todo | rationale | artifact-summary | user-stated-fact | extracted-claim",
+  "originatingProjectId": "...",
+  "originatingArtifactId": "...",
   "provenance": { "source": "user-message | tool-output | extraction | import", "ref": "..." },
   "traceId": "...",
   "spanId": "...",
@@ -541,140 +561,93 @@ Upgrades memory-v2 with explicit lifecycle:
 }
 ```
 
-Retrieval ops also write `{ retrievedMemoryIds, scores }` to the corresponding `pipilot.memory.op` event in the trace, enabling "was retrieved memory used in the final answer?" questions to be answered by joining trace + ledger.
+**Removed in v0.3** (subjective; moved to Layer 3): `state`, `confidence`, `verifiedStatus`, `expirationTime`, `supersedes`, `supersededBy`, `conflictWith`. The memory ledger is now a pure event log: each operation is a fact. Whether an extracted claim is a "valid anchor fact", whether a memory has "gone stale", whether two memories "conflict" — all Layer 3 judgments.
 
-### 8.3 Outcome ledger
+`type` enum is descriptive of the source (`user-stated-fact` = came verbatim from user; `extracted-claim` = LLM extractor produced it), not evaluative.
 
-Captures explicit user signals.
+Retrieval operations write `{ retrievedMemoryIds, scores }` to the corresponding `pipilot.memory.op` event in the trace.
+
+### 8.3 User-response signals ledger
+
+Renamed from "outcome ledger" in v0.3 to make the boundary explicit. **Records raw signals only.** No `signal` enum, no `confidence`, no `approval`/`rejection` labels.
+
+**Path**: `.research-pilot/user-response-signals.jsonl`.
+
+**Schema** (one row per user input):
 
 ```jsonc
 {
-  "turnId": "...",
-  "signal": "approval | rejection | revision-request | correction | abandonment",
-  "targetArtifact": "artifactId@version",
-  "targetTurn": "turnId",
-  "freeText": "...",
-  "source": "ui-button | text-classifier | timeout-heuristic",
-  "confidence": 1.0,             // M1-4: source-dependent — see below
+  "turnId": "u-235",
+  "previousTurnId": "u-234",
+  "previousAssistantMsgId": "a-234",
+  "gapMsSincePreviousAssistant": 73000,
+  "messageContentHash": "sha256:...",
+  "messageCharLen": 84,
+  "referencedArtifactIds": ["paper.md@v7"],
+  "uiInteractionsSincePreviousAssistant": [
+    { "kind": "view", "target": "paper.md@v7", "durationMs": 8200 }
+  ],
+  "sessionTerminatedAfterThis": false,
   "traceId": "...",
-  "spanId": "...",
   "timestamp": "..."
 }
 ```
 
-Sources and confidence (M1-4):
-- `ui-button`: explicit thumbs / revision-request UI → `confidence = 1.0`.
-- `text-classifier`: rule-based reading of the next user message → `confidence ∈ [0.4, 0.7]` per rule strength (registry-defined).
-- `timeout-heuristic`: no follow-up + session ended → `confidence = 0.3` and only ever produces `abandonment`.
+Layer 3 reads this ledger plus the trace (or its blob-stored content) to classify what the user response *meant*. PiPilot runtime never makes that classification.
 
-Analysis must filter or weight by `confidence`. Aggregations that mix sources without weighting are explicitly invalid per this spec.
+### 8.4 View log
 
-`output_status` (accepted / reused / revised / rejected / abandoned) is **derived** at analysis time from this ledger plus subsequent artifact reads; not written at runtime.
+Renderer-side passive observation: artifact / memory / trace items the user looked at without speaking.
 
-### 8.5 View log (renderer-side passive observation)
+**Path**: `.research-pilot/view-log.jsonl`.
 
-Layer 1 captures chat-driven action; **passive verification ("looked at history but said nothing")** is invisible. This is real Paper 1 behavior (RQ5 user verification / repair). Full renderer-side OTel spans are deferred (§4.3, §11.7), but a minimal append-only view log closes the gap at near-zero engineering cost.
-
-**Path**: `.research-pilot/view-log.jsonl` (project-life retention).
-
-**Schema**:
 ```jsonc
 {
-  "viewId": "...",                       // ULID
+  "viewId": "...",
   "projectId": "...",
   "sessionId": "...",
-  "turnId": "...",                       // most recent user turn at view time, may be null
-  "target": {
-    "kind": "artifact | memory | trace | session-summary | annotation",
-    "id": "..."
-  },
+  "turnId": "...",
+  "target": { "kind": "artifact | memory | trace | session-summary", "id": "..." },
   "op": "view | hover | scroll | dismiss",
-  "durationMs": 0,                        // ms the view was active; 0 for instantaneous
+  "durationMs": 0,
   "timestamp": "..."
 }
 ```
 
-**Privacy**: view log inherits the project privacy profile. `level=high` defaults view log off (UI toggle); detector flags fire identically. Export gate (§9.4) treats view log identically to trace events.
+Privacy: inherits project privacy profile. `level = high` defaults view log off (UI toggle).
 
-**Out of scope**: this is **not** a span. It does not propagate trace context. Layer 3 joins by `(projectId, sessionId, turnId, target.id)`.
+---
 
-### 8.4 Annotation ledger
+## 9. Layer 3 (out of scope, brief reference)
 
-Out-of-band labels added by Layer 3 tooling. Runtime never writes here.
+This spec **does not specify** Layer 3. It exists in a separate research codebase. PiPilot's only obligation to Layer 3 is to make Layer 1+2 data:
+
+- Joinable by stable IDs (`traceId`, `spanId`, `turnId`, `artifactId`, `memoryId`, `viewId`, `sessionId`, `projectId`).
+- Read-only accessible (Layer 3 must never modify Layer 1+2 data).
+- Versioned (every record carries `tracePolicyVersion`, `redactionPolicyVersion` so Layer 3 knows what shape it's reading).
+
+Layer 3 produces annotation files in its own repo (e.g., `papers/01-empirical-atlas-concepts/annotations/{traceId}.jsonl`). Whether those annotations are produced by humans, by LLM scripts, or by both is a Layer 3 design choice.
+
+A reasonable Layer 3 annotation row, for orientation only:
 
 ```jsonc
 {
   "traceId": "...",
   "spanId": "...",
-  "label": "wrong-artifact-used | stale-goal | false-continuity | provenance-loss | citation-uncertainty | memory-conflict | cross-project-contamination | downstream-error | agent-overstep | privacy-issue | repair-factual | repair-style | resumption-success | ...",
-  "annotator": "...",
+  "turnId": "...",
+  "label": "...",
   "rationale": "...",
+  "annotator": "human:dong | llm:claude-opus-4-7+codebook-v3",
+  "codebookVersion": "...",
   "createdAt": "..."
 }
 ```
 
+PiPilot runtime does not write, read, or schema-check this file.
+
 ---
 
-## 9. Research Coverage (Paper 1 mapping)
-
-Map of Paper 1 claims → telemetry support. If a row says "annotation", runtime cannot supply it; Layer 3 tooling must.
-
-| Paper 1 claim | Support |
-|---|---|
-| Prompt compression | turn span tokens + `pipilot.user_message_type` (`continuation`, `clarification`) + `pipilot.context.approx_tokens` over time |
-| Artifact-centered collaboration | artifact ledger + `pipilot.artifact.op` events; reuse graph derived |
-| Anchor facts | memory ledger `state=accepted, type=anchor-fact` over time + retrieval frequency |
-| Context debt | derived: span tokens growth + retrieved-but-unused memories + repair turns + annotation |
-| Stale memory | memory ledger lifecycle transitions + annotation (`stale-goal`) |
-| Resumption cost | `pipilot.resumption.*` attributes + session.gap (derived) + `turns_until_productive_work` (derived) |
-| Role migration | annotation-driven (over-time series of `agent.role` labels per project phase) |
-| Co-adaptation | derived: prompt length, implicit-reference rate, tool mix evolution, plus annotation |
-| User verification / repair | outcome ledger + annotation (repair-* labels); `repair.cost_turns` derived |
-
-### 9.1 Project type & phase
-
-`project.type` is fixed enum + `other` + free-form `pipilot.project.subtype`. Configured in `.research-pilot/project.json` UI. **Project phase** is annotation-only (we do not auto-detect).
-
-### 9.2 User message classifier
-
-Rule-based v1, run at chat() entry. Reuses the regex style of `classifyPersistenceDecision` (`lib/agents/coordinator.ts:179`). Outputs `pipilot.user_message_type`. Goals: cheap, deterministic, good-enough for repair detection. Precision-recall tuning is a research task; runtime only commits the regex set + version (`pipilot.user_message_type.classifier_version`).
-
-### 9.3 Derivable fields (do not instrument)
-
-- `session.gap_since_previous`, `project.age`
-- `prompt.length_chars`, `implicit_reference_rate`
-- `tool_call_mix`, `artifact_reuse_graph`, `memory_reuse_frequency`
-- `repair_loop_length`, `topic_drift`, `phase_transition_matrix`
-- `burstiness`
-- `output_status`
-
-These are SQL/notebook problems, not runtime problems.
-
-### 9.5 Longitudinal survival contract (M0-1, ties to §5.5)
-
-Paper 1's longitudinal claims rely on data outliving 7-day trace retention. The contract:
-
-- **Permanent (project-life)**: `trace-digest.jsonl`, all four ledgers, `view-log.jsonl`, `compute-runs/*.jsonl`, `usage.json`, content blobs (subject to `blobRetentionDays` per privacy profile — see §5.3 + §11.5 resolution below).
-- **Recent (≤ 7 days default)**: `traces/spans.{date}.jsonl`, exporter error log.
-- **Joins**: digest is the longitudinal join key; ledgers are entity-keyed; trace is recent-detail. Layer 3 first joins digest + ledgers, then optionally enriches with trace where `traceId` is still resident.
-
-This contract is what makes the "ledger ≠ trace" axiom (A1) actually load-bearing for research, not just engineering.
-
-### 9.6 Tracing-state guarantee (M1-6)
-
-Project-level `pipilot.tracing.mode` ∈ `{research, engineering, off}` (configured in `project.json`). For `research` mode:
-
-- Tracing **cannot be silently disabled**.
-- Any toggle (off, mode change, retention change, redaction policy bump) appends a row to `.research-pilot/tracing-state.jsonl`:
-  ```jsonc
-  { "timestamp": "...", "fromState": "...", "toState": "...", "actor": "user | system | export-gate", "reason": "..." }
-  ```
-- Layer 3 reads this log to detect coverage gaps; analyses spanning a gap must annotate the gap explicitly.
-- Process startup in `research` mode with tracing disabled produces a warning row in this log and a UI banner.
-
-`engineering` mode allows silent toggles. `off` is for users who never enable tracing.
-
-### 9.4 Privacy contract
+## 10. Privacy Contract
 
 Per-project, written once to `.research-pilot/project.json`:
 
@@ -686,226 +659,192 @@ Per-project, written once to `.research-pilot/project.json`:
   "publicationPermission": "none | aggregate-only | with-redaction | full",
   "benchmarkReleasePermission": "none | with-consent | full",
   "redactionPolicy": "default | strict",
-  "blobRetentionDays": 7,
-  "blobEncryption": "none | at-rest",   // M1-5: required when level=high
-  "tracingMode": "research | engineering | off"  // §9.6
+  "blobEncryption": "none | at-rest",
+  "artifactSnapshotPolicy": { "textCapKb": 100, "skipDataArtifactsOverMb": 1 }
 }
 ```
 
 **Enforcement**:
 - Resource attributes carry the profile to every span.
-- `level=high` upgrades default redaction (image hashes only, narrower size cap, email scrubbing).
-- **Export gate**: any OTLP / file export (manual or automated) checks `publicationPermission`. `none` blocks export. `aggregate-only` strips event bodies. `with-redaction` re-runs the strict pipeline. Override requires explicit user confirmation per export, which itself writes an outcome ledger row.
-- `containsThirdPartyData=true` defaults OTLP export to disabled.
+- `level = high` upgrades default redaction; requires `blobEncryption = at-rest`.
+- **Export gate**: any OTLP / file export checks `publicationPermission`. `none` blocks. `aggregate-only` strips event bodies. `with-redaction` re-runs the strict pipeline. Override requires per-export confirmation; the override itself writes a row to `tracing-state.jsonl`.
+- `containsThirdPartyData = true` defaults OTLP export to disabled.
+
+### 10.1 Tracing-state log
+
+`tracing-state.jsonl` records every toggle (mode change, retention change, redaction policy bump, export override, manual eviction sweep). Append-only, project-life retention.
+
+```jsonc
+{ "timestamp": "...", "fromState": "...", "toState": "...", "actor": "user | system | export-gate", "reason": "..." }
+```
+
+Tracing cannot be silently disabled: any toggle while `tracingMode = enabled` is auditable.
 
 ---
 
-## 10. Phased Delivery
-
-Each phase has explicit gates. Phase Pn does not start until Pn-1's gate is met.
+## 11. Phased Delivery
 
 ### P0 — Interface freeze (no functional output)
 
-Defines and freezes:
 - Span schema (§6), `pipilot.*` semantic registry, ID hierarchy (§4.1).
-- **`turnId` definition (§8.0) — M0-3.**
-- **Trace digest schema (§5.5) — M0-1.** Schema only; writer arrives in P1.
-- **Skill activation events (§6.8) — M0-5.**
-- **Compaction discarded payload (§6.9) — M0-4.**
-- Ledger schemas (§8.1–§8.5, including view log).
+- `turnId` definition (§4.1).
+- Trace digest schema (§5.5).
+- Skill activation events (§6.7).
+- Compaction discarded payload (§6.8).
+- Ledger schemas (§8.1–§8.4) — all in objective form, no subjective fields.
 - Redaction policy v1 (§7).
 - TraceStore append-only model + JsonlSpanExporter shape (§5.1).
 - AsyncLocalStorage propagation contract (§4.2).
 - `tracedCompleteSimple` helper signature.
-- Privacy profile schema (§9.4) including `blobEncryption` and `tracingMode`.
-- Tracing-state log schema (§9.6) — M1-6.
-- `project.json` upgrade with `type` + `privacy.*` + `tracingMode`.
+- Privacy profile schema (§10).
+- Tracing-state log schema (§10.1).
+- `project.json` upgrade with `privacy.*` and `telemetry.{traceRetention, tracingMode}`.
+- Settings UI: add **Trace retention** picker (`7-days | 1-month | forever`, default `forever`) alongside existing pickers in `shared-ui/settings-types.ts`.
 
-**Gate**: spec accepted; semantic registry committed; types compile; no runtime behavior change.
+**Gate**: spec accepted; semantic registry committed; types compile; settings UI mockup approved; no runtime behavior change.
 
-### P1 — Sub-LLM coverage + tool spans + usage re-source
+### P1 — Sub-LLM coverage + tool spans + usage re-source + ledgers
 
 - Wire `tracedCompleteSimple` for all 8 sub-LLM sites (§2.2).
 - Wrap `beforeToolCall`/`afterToolCall` to emit `execute_tool` spans.
 - Subscribe to `AgentEvent` to emit `invoke_agent` and `invoke_agent step` spans.
-- Re-source usage totals: `app/src/main/ipc.ts:614` reads from trace aggregation, not directly from `turn_end.usage`. Run dual-write (old + new) for one release; reconcile diffs in CI.
-- Artifact ledger upgrade (§8.1) + `pipilot.artifact.op` events.
-- Memory ledger lifecycle (§8.2) + `pipilot.memory.op` events.
-- `pipilot.user_message_type` classifier v1.
-- `pipilot.resumption.*` attributes.
-- Outcome ledger writers from text-classifier + timeout-heuristic with `confidence` (§8.3, M1-4); UI button DEFERRED to P3.
-- **Trace digest writer (§5.5) — M0-1**: invoked at trace eviction.
-- **Skill activation events (§6.8) — M0-5**: emitted on every router match and `load_skill` call; step span carries `pipilot.active_skills`.
-- **Compaction discarded payload (§6.9) — M0-4**: emitted from `transformContext`.
-- **`pipilot.user_message_type.v2` dual-write — M1-1**: small-LLM classifier writes alongside regex v1 from day one.
-- **Referring-expression counter — M1-2**: `pipilot.referring_expressions { count, kinds }` on root span; regex-based.
-- **Cross-project memory provenance — M1-3**: `originatingProjectId` / `originatingArtifactId` populated by memory ledger writers when a wiki / cross-project source is the trigger.
-- **Tracing-state log (§9.6) — M1-6** wired up; toggles produce log rows.
-- **View log writers (§8.5)**: minimal renderer-side passive observation.
+- Re-source usage totals: `app/src/main/ipc.ts:614` reads from trace aggregation; one-release dual-write window.
+- Artifact ledger upgrade (§8.1) + `pipilot.artifact.op` events + snapshot policy.
+- Memory ledger (§8.2) + `pipilot.memory.op` events.
+- User-response signals ledger (§8.3) — pure facts only.
+- View log (§8.4).
+- Skill activation events (§6.7), compaction discarded payload (§6.8).
+- Resumption attribute set (`pipilot.resumption.*`).
+- Trace digest writer.
+- Self-monitoring storage stats (§5.6 validation).
+- Settings UI for trace retention picker wired up.
 
-**Gate**: traces produced for an end-to-end research session contain all 8 sub-LLM call sites; usage totals match dual-write within tolerance for two weeks; trace digest reproduces a representative session's longitudinal series with no missing turns; no agent-path regressions.
+**Gate**: traces produced for an end-to-end research session contain all 8 sub-LLM call sites; usage totals match dual-write within tolerance for two weeks; storage stats match estimates within 2×; no agent-path regressions.
 
-### P1.5 — Privacy & export gate (must precede any external sink)
+### P1.5 — Privacy & export gate
 
 - Detector pipeline (regex catalog) wired into redaction.
-- Project privacy UI in `.research-pilot/project.json` editor.
-- Export gate enforced (§9.4).
+- Project privacy UI in `project.json` editor.
+- Export gate enforced (§10).
 - Audit log for export overrides.
 
-**Gate**: external export is impossible without a configured privacy profile and per-export confirmation. Verified by red-team test (attempted export with `level=high`, `permission=none` must fail).
+**Gate**: external export impossible without configured privacy profile and per-export confirmation. Verified by red-team test.
 
 ### P2 — OTLP exporter
 
 - `OtlpSpanExporter` behind `RESEARCH_COPILOT_OTLP_ENDPOINT`.
-- Async batch, 64-span / 200ms triggers, ring buffer for backpressure.
-- Exporter failures never bubble to agent; failures themselves logged to a separate `.research-pilot/traces/exporter-errors.log`.
-- Verify with Langfuse + Phoenix end-to-end on a sample session.
+- Async batch, ring buffer for backpressure.
+- Exporter failures isolated to `.research-pilot/traces/exporter-errors.log`.
+- Verify with Langfuse + Phoenix end-to-end.
 
-**Gate**: failure injection (kill endpoint mid-session) does not impact agent latency or cause data loss within the ring buffer's retention window.
+**Gate**: failure injection (kill endpoint) does not impact agent latency or cause data loss within the ring buffer's window.
 
 ### P3 — Renderer integration
 
-- New IPC channels: `trace:live` (push), `trace:snapshot(traceId)` (pull).
-- New `trace-store.ts` Zustand store, parallel to existing stores.
-- Diff tool runs for two weeks comparing `activity-store` events vs trace-derived events; gate on zero divergence.
-- Then: switch `activity-store` and `tool-events-store` to derived selectors over `trace-store`. `compute-store` unchanged (domain state). `usage-store` unchanged (already trace-aggregated by P1).
-- Outcome UI (thumbs / revision-request) writes to outcome ledger.
+- IPC channels: `trace:live`, `trace:snapshot(traceId)`.
+- New `trace-store.ts` Zustand store; two-week diff vs `activity-store` before switching to derived selectors.
+- View log writers wired up via renderer events.
+- `compute-store` unchanged.
 - `RealtimeBuffer` retained until trace channel demonstrates equivalent remount-recovery.
 
 **Gate**: a renderer remount during an active trace produces an identical view via either path.
 
-### P4a — Engineering diagnostic rules
+### P4 — Engineering diagnostic rules
 
 CLI / notebook checks computed off the trace store:
-- Prefill explosion (per-step input_token growth > N% with no compaction).
-- Slow-tool tail (per-tool p99/mean ratio).
-- Repeated work (same tool name + args hash within one task).
-- Sequential dependency (linear chain depth > K with single child each level — missed parallelization).
-- Cache miss attribution (input_tokens up + cache_read_input_tokens flat → likely cache invalidation).
+- Prefill explosion.
+- Slow-tool tail.
+- Repeated work.
+- Sequential dependency.
+- Cache miss attribution.
 
-### P4b — Research analysis layer (Paper 1)
+### Deferred / out of scope
 
-Off-runtime CLI / notebook joining traces + ledgers + annotations + outcomes. Computes derived fields (§9.3). Not part of the app.
-
-### P5a — CLI annotator (parallel with P1, gated to land before P1.5)
-
-Minimum-viable CLI for writing annotation ledger rows (§8.4):
-- `pipilot annotate <traceId>` — opens trace summary (digest + ledger references) in `$EDITOR`.
-- Inputs: `spanId | label | rationale | annotator`.
-- Output: append to `.research-pilot/annotations/{traceId}.jsonl`.
-- Lookup helpers: `pipilot trace ls`, `pipilot trace show <traceId>`.
-
-Engineering cost: 1–2 days. Without P5a, every Paper 1 subjective claim (role migration, context debt, stale memory, false continuity, cross-project contamination, repair classification) is unanalyzable. Hence promoted ahead of P3/P4.
-
-**Gate**: annotator can label a corpus of 20 representative traces in one sitting without requiring trace files (works off digest + ledgers).
-
-### P5b — Electron annotation UI
-
-Full UI: trace tree, ledger sidebar, label palette, free-text rationale, batch mode. Lands after P3 (renderer integration), reusing the trace-store and view log.
-
-### Deferred
-
-- Renderer-side spans (composing into the same trace) — DEFERRED.
-- Automatic phase detection — DEFERRED, annotation only.
-- Cross-project trace correlation UI — DEFERRED.
-- W3C `traceparent` propagation to external HTTP — DEFERRED.
+- Layer 3 annotation tooling (separate codebase).
+- Renderer-side spans composing into the same trace.
+- W3C `traceparent` propagation to external HTTP.
+- Cross-project trace correlation UI.
 
 ---
 
-## 11. Open Questions (require maintainer decision before P0 closes)
+## 12. Open Questions
 
-### 11.1 Prompt/completion as events vs attributes
+All remaining open questions are engineering decisions; subjective/research questions were removed in v0.3 by clarifying the boundary.
 
-OTel recommends events (sampling-friendly, easier to disable for PII). Attributes are easier to grep with `jq`. **Recommendation**: events; local CLI viewer auto-expands them. Phoenix and Langfuse both prefer events.
+### 12.1 Prompt/completion as events vs attributes
 
-### 11.2 OpenInference dual-emit
+OTel recommends events; attributes easier to grep with `jq`. **Recommendation**: events; local CLI viewer auto-expands them. Phoenix and Langfuse both prefer events.
 
-Phoenix's native UI keys off OpenInference (`llm.input_messages`, `llm.token_count.*`). To work out-of-the-box there, we'd dual-emit OTel GenAI + OpenInference mirror attributes. Cost: ~2× span size on `chat` spans. **Recommendation**: default OTel-only; opt-in via `RESEARCH_COPILOT_TRACE_FORMAT=openinference` for users targeting Phoenix.
+### 12.2 OpenInference dual-emit
 
-### 11.3 Annotation tool priority (P5 vs earlier)
+Phoenix's native UI keys off OpenInference. Dual-emit costs ~2× span size on `chat` spans. **Recommendation**: default OTel-only; opt-in via `RESEARCH_COPILOT_TRACE_FORMAT=openinference`.
 
-Paper 1's subjective claims (§9 rows tagged "annotation") cannot be analyzed without P5. If Paper 1 deadline is within ~3 months, P5 must move ahead of P3/P4. **Needs maintainer call.**
+### 12.3 Cross-project trace isolation
 
-### 11.4 Outcome UI scope
+When `privacy.containsThirdPartyData = true`, default-disable OTLP. **Recommendation**: yes, default-disable; require explicit per-project override; override writes an audit row.
 
-P3 proposes thumbs + revision-request buttons. Without UI, outcome capture relies on next-message text classification + timeout heuristics → low recall, biased. **Recommendation**: include UI in P3, classifier as fallback, not the primary source.
+### 12.4 Subscription provider naming
 
-### 11.5 Cross-project trace isolation
+`anthropic-sub` → `gen_ai.system = anthropic.subscription` (separate from direct API). **Recommendation**: keep separate; merging is a SQL operation, splitting after the fact is not.
 
-When `privacy.containsThirdPartyData=true`, default-disable OTLP. **Recommendation**: yes, default-disable; require explicit per-project override; override writes an audit row.
+### 12.5 Storage stats validation
 
-### 11.6 Subscription provider naming
+§5.6 estimates need empirical validation. P1 introduces self-monitoring; if real-world numbers exceed estimates by >2× for `forever` retention, defaults are revisited and a warning surfaces in Settings UI.
 
-`anthropic-sub` → `gen_ai.system=anthropic.subscription` (separate from direct API). This separates cost accounting at the cost of one extra system value. **Recommendation**: keep separate; merging is a SQL operation, splitting after the fact is not.
+### 12.6 Redaction policy version drift
 
-### 11.8 `user_message_type.v2` model choice
+When we tighten redaction, old spans look more leaky than new ones. Recommendation: on policy bump, re-run redaction over recent spans before any export. Adds complexity; call before P1.5 closes.
 
-The dual-write classifier (M1-1) needs a small-LLM picker. Candidates: project's intent-router model (already configured), Haiku-4.5, or local rule-LLM. **Recommendation**: reuse the intent router model — it already has API key + cost line, and discrepancy with v1 regex is the research signal. Confirm acceptable.
+### 12.7 View log default in `engineering` mode
 
-### 11.9 View log default in `engineering` mode
-
-`view-log.jsonl` is high signal for Paper 1 but irrelevant to engineering debugging. Default-on for `tracingMode=research`, default-off for `engineering`. **Confirm.**
-
-### 11.7 Span context propagation across IPC
-
-Renderer-originated work (e.g., user clicks artifact reuse) is currently invisible to the trace. P3+ adds renderer push only; renderer-originated spans are DEFERRED. **Confirm acceptable for Paper 1.**
+(Carried over from v0.2.) View log is high signal for research uses but irrelevant to engineering debugging. **Recommendation**: default-on for `tracingMode = enabled`, simple toggle in Settings.
 
 ---
 
-## 12. Self-Review Checklist (consistency with prior axioms)
+## 13. Self-Review Checklist
 
-This section is a sanity audit. Each row tests this spec against earlier review feedback.
-
-| Concern | Resolution in this spec | Section |
+| Concern | Resolution | Section |
 |---|---|---|
-| `traceId` per coordinator was wrong | `traceId` per `agent:send`, session as attribute/link | §4.1 |
-| Shared mutable `activeSpan` was a concurrency hazard | AsyncLocalStorage primary, toolCallId-map fallback, explicit override | §4.2 |
-| Sub-LLM coverage was incomplete | Eight sites enumerated; single `tracedCompleteSimple` helper | §2.2, §6.2 |
-| Usage double-counting between turn and sub-LLM | Single source: leaf `chat` spans; ipc usage re-aggregated; dual-write window | §6.3, P1 gate |
-| `agent.turn` clashed with pi-agent-core's `turn_*` events | Renamed: `invoke_agent` (root) and `invoke_agent step` (loop) | §6.2 |
-| Local compute can't be a sync child of submit | Dual-span model with `follows_from` link | §6.5 |
-| RunStore "Map + full rewrite" doesn't scale | Append-only JSONL, batched flush, daily-file eviction | §5.1 |
+| `traceId` per coordinator was wrong | per `agent:send`, session as attribute/link | §4.1 |
+| Shared mutable `activeSpan` was a concurrency hazard | AsyncLocalStorage primary, toolCallId-map fallback | §4.2 |
+| Sub-LLM coverage incomplete | Eight sites enumerated; single `tracedCompleteSimple` helper | §2.2, §6.2 |
+| Usage double-counting | Single source: leaf `chat` spans; ipc usage re-aggregated | §6.3, P1 |
+| `agent.turn` clashed with pi-agent-core | `invoke_agent` (root), `invoke_agent step` (loop) | §6.2 |
+| Local compute can't be sync child | Dual-span model with `follows_from` link | §6.5 |
+| RunStore pattern doesn't scale | Append-only JSONL, batched flush, daily-file eviction | §5.1 |
 | RealtimeBuffer semantics must be preserved | Phase gate requires equivalence diff before switching | P3 |
 | `args` cannot be exempt from redaction | Redaction pipeline applies to args + result + events + ledgers | §7 |
-| Subjective labels must not be auto-emitted | Annotation ledger; runtime emits detector flags only | §8.4, A2 |
-| Privacy as per-span flag is fragile | Project-level privacy profile, span-level upgrade only | §9.4, A5 |
-| Trace ≠ Ledger | Three layers, three lifetimes | §3.1, A1 |
-| OTel must be the skeleton | OTel GenAI conventions throughout; PiPilot extensions are namespaced | §6.1, A3 |
-| Tracing must never block agent | A4 axiom; exporter failures isolated; ring buffer for backpressure | §1.3, P2 gate |
-| Span schema growth must be controlled | Semantic registry validates `pipilot.*` keys in dev | §3.2 |
-| Longitudinal claims must survive 7d trace eviction (M0-1) | Trace digest at eviction; longitudinal survival contract | §5.5, §9.5 |
-| Subjective claims unanalyzable without annotator (M0-2) | P5a CLI annotator parallel with P1, lands before P1.5 | §10 P5a |
-| `turnId` undefined across ledgers (M0-3) | `turnId = userMessageId`, propagated as `pipilot.turn.id` | §8.0 |
-| Compaction loses what was dropped (M0-4) | `pipilot.compaction.discarded` event with turn IDs and artifact refs | §6.9 |
-| Skill activation only captured at root (M0-5) | `pipilot.skill.load` events + per-step `pipilot.active_skills` | §6.8 |
-| Bilingual classifier weakness (M1-1) | dual-write `user_message_type.v2` from day one | P1, §11.8 |
-| Implicit-reference too coarse (M1-2) | `pipilot.referring_expressions` with kinds | P1 |
-| Cross-project memory has no provenance (M1-3) | `originatingProjectId` / `originatingArtifactId` in memory ledger | §8.2 |
-| Outcome confidence collapsed across sources (M1-4) | per-row `confidence` keyed to source | §8.3 |
-| §5.3 "no auto-GC" vs §9.4 retention (M1-5) | Reference-counted GC with `blobRetentionDays`; encryption required at `level=high` | §5.3, §9.4 |
-| Coverage can be silently disabled (M1-6) | `tracingMode` + `tracing-state.jsonl` audit log | §9.6 |
-| Passive verification invisible | View log `.research-pilot/view-log.jsonl` | §8.5 |
+| Trace ≠ Ledger | Two layers, two lifetimes (now both per-policy) | §3.1, A1 |
+| OTel skeleton | OTel GenAI conventions throughout; PiPilot extensions namespaced | §6.1, A3 |
+| Tracing must never block agent | A4; exporter failures isolated; ring buffer | §1.3, P2 |
+| Span schema growth controlled | Semantic registry validates `pipilot.*` keys in dev | §3.2 |
+| **NEW v0.3: Subjective fields contaminating runtime** | Removed from runtime; Layer 3 boundary made explicit | §0, §1.2, §6.4, §8.2, §8.3 |
+| **NEW v0.3: Ledger lifecycle was a research judgment** | Memory ledger is a pure event log; lifecycle moved to Layer 3 | §8.2 |
+| **NEW v0.3: Outcome ledger had embedded judgments** | Renamed to user-response-signals; raw facts only | §8.3 |
+| **NEW v0.3: User shouldn't be a research labeler** | No thumbs UI in spec; signals ledger captures behavior, not user-provided labels | §8.3, §1.2 |
+| **NEW v0.3: Trace retention was hardcoded 7d** | Configurable picker `7-days | 1-month | forever`, default `forever` | §5.1 |
+| `turnId` undefined across ledgers | `turnId = userMessageId`, propagated as `pipilot.turn.id` | §4.1 |
+| Compaction loses what was dropped | `pipilot.compaction.discarded` event with turn IDs and artifact refs | §6.8 |
+| Skill activation only captured at root | `pipilot.skill.load` events + per-step `pipilot.active_skills` | §6.7 |
+| §5.3 retention contradicted §10 | Reference-counted GC tied to project policy; encryption required at `level=high` | §5.3, §10 |
+| Coverage can be silently disabled | `tracingMode` + `tracing-state.jsonl` audit log | §10.1 |
+| Passive verification invisible | View log `.research-pilot/view-log.jsonl` | §8.4 |
 
-### 12.1 Known unresolved tensions
+### 13.1 Known unresolved tensions
 
-Honest list of where this spec is **not yet self-consistent**:
-
-1. **§4.3 deferral vs §11.7 — partially resolved by §8.5 view log.** Passive verification ("looked but didn't speak") now has a minimal capture path. Renderer-originated *spans* remain deferred. Unresolved whether view log alone supports RQ5's full claim space — research call.
-2. ~~**§5.1 retention vs §9 longitudinal claims**~~ — **RESOLVED in v0.2** by §5.5 trace digest + §9.5 longitudinal survival contract. Trace eviction now loses span-level millisecond timing but preserves all longitudinal series Paper 1 needs.
-3. **§6.4 `pipilot.user_message_type` classifier v1 reliability** — partially mitigated by M1-1 dual-write to v2. Open: which model serves v2 (§11.8).
-4. **§7 redaction policy version drift**: when we tighten redaction, old spans look more leaky than new ones. Recommendation (not yet specified): on policy bump, re-run redaction over recent spans before any export. Adds complexity — call before P1.5 closes.
-5. **§9.4 export gate trust model**: the gate relies on the user setting privacy profile honestly. There is no enforcement against a user marking a project `low / full permission` when it actually contains third-party data. Out of scope for this spec; documented as a known limitation.
-6. **NEW: digest writer atomicity under crash**: §5.5 mandates "digest write must succeed before trace deletion", but a crash between digest write and trace delete leaves both copies. Recovery is idempotent (same `traceId` digest replaces prior on writer rerun), but two-week dual-write reconciliation must include digest-trace consistency checks. Not yet specified — call before P1 closes.
-7. **NEW: skill activation event ordering**: §6.8 emits events on the step span where activation occurred, but pi-agent-core may parallelize tool calls within a step, and `load_skill` is itself a tool. Ordering between sibling tool spans and the step's `pipilot.active_skills` set is well-defined per AsyncLocalStorage, but Layer 3 must read events as ordered, not the step attribute (which is a snapshot at step entry). Documented; analysts must follow.
-8. **NEW: `turnId` for assistant-only events**: §8.0 uses `pipilot.turn.followsId` for events not caused by a user turn. This makes `repair.cost_turns` trickier — a repair cycle that includes background memory-extract turns must skip them. Layer 3 SQL needs explicit "user-turn only" filters. Documented as analysis convention.
+1. **Storage at `forever` for very heavy users**: estimates suggest ~12 GB/year for the heaviest profile. Acceptable on modern SSDs; may surprise users on smaller laptops. P1 self-monitoring + Settings warning planned (§5.6, §12.5).
+2. **Redaction policy version drift**: §12.6.
+3. **Export gate trust model**: relies on user setting privacy profile honestly; no enforcement against mislabeling. Documented as known limitation.
+4. **Digest under retention downgrade**: if a user flips `forever → 7-days` and then runs "Compact telemetry", they lose blob content but keep digest+ledgers. Layer 3 longitudinal queries still work but cannot retrieve original prompt/completion text. This is the intended trade-off; surfaced in the Compact action's confirmation dialog.
 
 ---
 
-## 13. References
+## 14. References
 
 - OpenTelemetry GenAI Semantic Conventions v1.37 — `gen_ai.*` attributes, operation enums, message events.
 - OpenTelemetry Trace Semantic Conventions v1.30+ — `error.type`, `service.*`, span status.
 - OpenInference Specification — retrieval / embedding span conventions used as fallback.
-- W3C Trace Context — `traceparent` header (DEFERRED for HTTP propagation).
-- Existing PiPilot specs: `docs/spec/local-compute.md`, `docs/spec/fulltext-retrieval.md`, `docs/spec/trust-audit.md` (referenced by user memory).
+- W3C Trace Context — `traceparent` header (deferred for HTTP propagation).
+- Existing PiPilot specs: `docs/spec/local-compute.md`, `docs/spec/fulltext-retrieval.md`.
 - pi-agent-core `AgentEvent` types — `node_modules/@mariozechner/pi-agent-core/dist/types.d.ts`.
+- `shared-ui/settings-types.ts` — pattern for the 3-option Settings picker (Research Intensity / Web Search Depth) adopted for Trace Retention in §5.1.
