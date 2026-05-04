@@ -106,6 +106,20 @@ export interface ElectronAPI {
   provenanceGetGraph: () => Promise<{ success: boolean; nodes?: any[]; edges?: any[]; nodeCount?: number; edgeCount?: number; error?: string }>
   provenanceGetUpstream: (rootIds: string[], maxDepth?: number) => Promise<{ success: boolean; nodes?: any[]; edges?: any[]; error?: string }>
 
+  // Canonical paper for the active project (LaTeX dep walk). null = no LaTeX root.
+  activeProjectGet: (hintPath?: string) => Promise<{
+    success: boolean
+    canonicalPaper?: {
+      rootPath: string
+      texFiles: string[]
+      bibFiles: string[]
+      images: string[]
+      otherAssets: string[]
+      allFiles: string[]
+    } | null
+    error?: string
+  }>
+
   auditRun: (request: any) => Promise<{ success: boolean; report?: any; error?: string }>
   auditCancel: () => Promise<{ success: boolean; error?: string }>
   auditList: () => Promise<{ success: boolean; reports?: any[]; error?: string }>
@@ -331,6 +345,7 @@ const api: ElectronAPI = {
   isProvenanceEnabled: () => ipcRenderer.invoke('provenance:enabled'),
   provenanceGetGraph: () => ipcRenderer.invoke('provenance:get-graph'),
   provenanceGetUpstream: (rootIds, maxDepth) => ipcRenderer.invoke('provenance:get-upstream', rootIds, maxDepth),
+  activeProjectGet: (hintPath) => ipcRenderer.invoke('active-project:get', hintPath),
   auditRun: (request) => ipcRenderer.invoke('audit:run', request),
   auditCancel: () => ipcRenderer.invoke('audit:cancel'),
   auditList: () => ipcRenderer.invoke('audit:list'),

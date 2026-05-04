@@ -20,6 +20,7 @@ import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 import { recordDraftDrift, isDraftPath, ProvenanceGraph } from '../../../lib/provenance/index'
+import { getCanonicalPaper } from '../../../lib/active-project/index'
 import {
   runAudit,
   listAuditReports,
@@ -1465,6 +1466,30 @@ export function registerIpcHandlers(): void {
       const graph = await ProvenanceGraph.load(state.projectPath)
       const sub = graph.getUpstreamCone(rootIds, maxDepth)
       return { success: true, nodes: sub.nodes, edges: sub.edges }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // ─── Active Project (canonical-paper resolver; RFC: docs/spec/trust-audit.md) ─
+  handleWindow('active-project:get', async ({ state }, hintPath?: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    try {
+      const canonical = await getCanonicalPaper(state.projectPath, { hintPath })
+      if (!canonical) return { success: true, canonicalPaper: null }
+      // Sets don't survive IPC structured cloning reliably across versions —
+      // serialize to arrays. Renderer rehydrates as needed.
+      return {
+        success: true,
+        canonicalPaper: {
+          rootPath: canonical.rootPath,
+          texFiles: [...canonical.texFiles],
+          bibFiles: [...canonical.bibFiles],
+          images: [...canonical.images],
+          otherAssets: [...canonical.otherAssets],
+          allFiles: [...canonical.allFiles]
+        }
+      }
     } catch (err: any) {
       return { success: false, error: err.message }
     }
