@@ -485,16 +485,50 @@ async function ensureCoordinator(
           }
         }
 
-        // Notify UI to refresh entity lists when artifacts are created/updated.
-        // Renderer debounces the resulting refresh so bursts of tool calls coalesce.
-        if ((tool === 'artifact-create' || tool === 'artifact-update') && result && typeof result === 'object' && 'success' in result) {
+        // Notify UI to refresh entity lists when an agent run creates new
+        // artifacts. Renderer debounces the resulting refresh so bursts of
+        // tool calls coalesce.
+        //
+        // Three tool names trigger this:
+        //   - artifact-create / artifact-update: ResearchTools that go through
+        //     wrapResearchTool -> toAgentResult, surfacing the wrapped
+        //     AgentToolResult shape { content, details: { success, tool_name } }
+        //     (so 'success' is nested under details, not on the top level).
+        //   - literature-search: AgentTool that auto-saves Paper artifacts
+        //     directly via upsertPaperArtifact(), then returns its own
+        //     toAgentResult-wrapped payload.
+        //
+        // Without this branch, every agent-driven artifact creation (notes,
+        // papers, data) would only become visible in the Library/Papers tab
+        // after the user re-opened the project — EntityTabs.tsx mounts once
+        // and otherwise relies on this 'agent:entity-created' event for
+        // incremental refreshes.
+        //
+        // Defensive about result shape: read success from both r.details
+        // (wrapped, the current code path) and r.success (raw, in case a
+        // future router emits the unwrapped ToolResult), so this branch
+        // survives a routing change. r.data is only populated on the raw
+        // form — the wrapped form keeps payload data inside content[0].text
+        // — so the file-created sub-event below only fires when r.data is
+        // available. The workspace fs watcher (state.fsWatcher) catches the
+        // new file independently for the file-tree view, so missing this
+        // event in the wrapped path costs only the working-files UIStore
+        // signal, not visibility.
+        const triggersEntityRefresh =
+          tool === 'artifact-create' ||
+          tool === 'artifact-update' ||
+          tool === 'literature-search'
+        if (triggersEntityRefresh && result && typeof result === 'object') {
           const r = result as any
-          if (r.success) {
+          const success = r.details?.success ?? r.success
+          if (success === true) {
             invalidateEntityCache(runProjectPath)
             safeSend(win, 'agent:entity-created', {
-              type: r.data?.type || 'artifact',
-              id: r.data?.id,
-              title: r.data?.title
+              type: tool === 'literature-search'
+                ? 'paper'
+                : (r.data?.type || 'artifact'),
+              id: r.data?.id ?? '',
+              title: r.data?.title ?? `${tool} batch`
             })
             if (tool === 'artifact-create' && r.data?.filePath) {
               const absPath = isAbsolute(r.data.filePath) ? r.data.filePath : resolve(runProjectPath, r.data.filePath)
