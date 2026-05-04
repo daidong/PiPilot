@@ -31,6 +31,7 @@ import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../t
 import { ROUTER_MODELS } from '../models.js'
 import { CaptureContext, defaultAdapters } from '../provenance/index.js'
 import type { NodeRef } from '../provenance/index.js'
+import { getCanonicalPaper } from '../active-project/index.js'
 import {
   migrateLegacyArtifacts,
   findArtifactById,
@@ -900,13 +901,43 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         }
 
         // Build the enriched system prompt with context.
-        // Only agent.md is injected here (changes rarely — only on user edit).
-        // Skill summaries are injected into the user message instead, to keep
+        // Only agent.md and canonical-paper context are injected here
+        // (both change rarely — agent.md only on user edit; canonical only
+        // when user adds/removes a \input or changes \documentclass). Skill
+        // summaries are injected into the user message instead, to keep
         // the system prompt stable across turns for better prompt cache hits
         // on all providers (Anthropic explicit cache, OpenAI APC, Google).
         let enrichedSystem = baseSystemPrompt
         if (agentMdContent) {
           enrichedSystem = `${enrichedSystem}\n\n## User Instructions (agent.md)\n\n${agentMdContent}`
+        }
+        // LaTeX-aware: when the workspace contains a canonical paper, tell
+        // the agent which files compose it so phrases like "the paper" /
+        // "the draft" resolve unambiguously and the agent doesn't pull
+        // material from scratch / abandoned files.
+        try {
+          const canonicalPaper = await getCanonicalPaper(projectPath)
+          if (canonicalPaper) {
+            const fmt = (s: Set<string>): string => {
+              const arr = [...s].sort()
+              if (arr.length === 0) return '(none)'
+              if (arr.length <= 25) return arr.join(', ')
+              return arr.slice(0, 25).join(', ') + `, … (+${arr.length - 25} more)`
+            }
+            enrichedSystem = `${enrichedSystem}
+
+## Canonical Paper
+
+The current paper compiles from these files:
+- Root: ${canonicalPaper.rootPath}
+- TeX: ${fmt(canonicalPaper.texFiles)}
+- Bib: ${fmt(canonicalPaper.bibFiles)}
+- Imgs: ${fmt(canonicalPaper.images)}
+
+When the user says "the paper" / "the draft" / "the manuscript" they mean these files. Other workspace files may exist (in-flight work, raw data, scratch) — read them when relevant, but they are not the paper itself.`
+          }
+        } catch {
+          // Non-fatal: agent operates without canonical context.
         }
         agent.state.systemPrompt = enrichedSystem
 
