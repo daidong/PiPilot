@@ -12,13 +12,30 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
+  # The github-pages environment's "Deployment branches and tags" protection
+  # rule allows main but blocks v* tags. The release:published event runs
+  # this workflow with GITHUB_REF=refs/tags/vX.Y.Z, so the deploy job is
+  # rejected by the environment guard. Re-dispatch the same workflow on
+  # main and let the original tag-triggered run exit early; the new run
+  # arrives via workflow_dispatch (allowed) and completes normally.
+  trampoline:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-dispatch on main to satisfy github-pages env protection
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy-website.yml --ref main --repo "$GITHUB_REPOSITORY"
+
   build:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +53,7 @@ jobs:
           path: website/dist
 
   deploy:
+    if: github.event_name != 'release'
     needs: build
     runs-on: ubuntu-latest
     environment:
