@@ -17,6 +17,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useProvenanceStore, type ProvenanceNode } from '../../stores/provenance-store'
 import { useAuditStore } from '../../stores/audit-store'
 import { useUIStore } from '../../stores/ui-store'
+import { useActiveProjectStore } from '../../stores/active-project-store'
 import {
   projectGraph,
   defaultFilters,
@@ -110,6 +111,20 @@ function OversizeMarker() {
     </svg>
   )
 }
+// Shown for workspace-file / draft entities whose path is NOT part of the
+// LaTeX canonical paper (root \input cone). Pure label — no row is ever
+// hidden because of this state.
+function OutsidePaperMarker() {
+  return (
+    <svg width="9" height="8" viewBox="0 0 9 8" className="inline-block t-text-muted"
+         role="img" aria-label="outside paper">
+      <title>not part of the canonical paper</title>
+      {/* dashed page outline = the paper exists but this file isn't in it */}
+      <rect x="0.5" y="0.5" width="6" height="7" fill="none"
+            stroke="currentColor" strokeWidth="1" strokeDasharray="1.5 1" />
+    </svg>
+  )
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Main
@@ -129,10 +144,18 @@ export function AuditSidebar() {
   const auditTrail    = useUIStore(s => s.auditTrail)
   const setAuditTrail = useUIStore(s => s.setAuditTrail)
 
+  const loadActiveProject = useActiveProjectStore(s => s.load)
+  const canonicalAvailable = useActiveProjectStore(s => s.canonical !== null)
+  const isCanonicalPath    = useActiveProjectStore(s => s.isCanonical)
+
   useEffect(() => {
     void probeEnabled().then(() => loadGraph())
     void loadReports()
-  }, [probeEnabled, loadGraph, loadReports])
+    // Canonical-paper file set: surfaces "is this entity part of the
+    // LaTeX paper?" to row markers. Independent of provenance graph load,
+    // so failure in either path doesn't block the other.
+    void loadActiveProject()
+  }, [probeEnabled, loadGraph, loadReports, loadActiveProject])
 
   const [projectionFilters] = useState<AuditFilters>(defaultFilters)
   const [filters, setFilters] = useState<ListFilters>({
@@ -323,6 +346,15 @@ export function AuditSidebar() {
                   : auditStatusByEntity.indirect.has(n.id) ? 'indirect'
                   : 'none'
                 }
+                isOutsidePaper={
+                  // Only show the marker when (a) we have a canonical paper
+                  // to compare against, and (b) the row is a path-bearing
+                  // ref kind that isn't in the canonical set.
+                  canonicalAvailable
+                  && (n.kind === 'workspace-file' || n.kind === 'draft')
+                  && !!(n.ref as { path?: string })?.path
+                  && !isCanonicalPath((n.ref as { path: string }).path)
+                }
                 onClick={() => onSelect(n.id)}
               />
             ))}
@@ -451,10 +483,12 @@ function AuditedMarker({ status }: { status: 'direct' | 'indirect' }) {
   )
 }
 
-function EntityRow({ node, selected, auditStatus, pulseToken, rowRef, onClick }: {
+function EntityRow({ node, selected, auditStatus, isOutsidePaper, pulseToken, rowRef, onClick }: {
   node: ViewNode
   selected: boolean
   auditStatus: 'none' | 'direct' | 'indirect'
+  /** True iff this row is a path-bearing ref kind whose path is not in the canonical paper. */
+  isOutsidePaper: boolean
   pulseToken: number
   rowRef: (el: HTMLDivElement | null) => void
   onClick: () => void
@@ -500,6 +534,7 @@ function EntityRow({ node, selected, auditStatus, pulseToken, rowRef, onClick }:
           {auditStatus !== 'none' && <AuditedMarker status={auditStatus} />}
           {node.hasDrift && <DriftMarker />}
           {node.hasOversize && <OversizeMarker />}
+          {isOutsidePaper && <OutsidePaperMarker />}
         </div>
         <div className="text-[10px] tabular-nums t-text-muted truncate">
           {node.producedBy
