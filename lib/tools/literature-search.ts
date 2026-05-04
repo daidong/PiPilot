@@ -124,10 +124,14 @@ async function searchSemanticScholar(query: string, limit = 10): Promise<SourceS
   url.searchParams.set('limit', String(limit))
   url.searchParams.set('fields', 'paperId,title,authors,abstract,year,url,externalIds,venue,citationCount')
 
+  // Without x-api-key, anonymous requests share a per-IP bucket of ~100 req / 5min
+  // and frequently 429 — silently dropping S2 from a multi-batch run.
+  const apiKey = (process.env.SEMANTIC_SCHOLAR_API_KEY || '').trim()
+  const headers: Record<string, string> = { 'User-Agent': 'research-pilot/0.1' }
+  if (apiKey) headers['x-api-key'] = apiKey
+
   try {
-    const res = await fetch(url.toString(), {
-      headers: { 'User-Agent': 'research-pilot/0.1' }
-    })
+    const res = await fetch(url.toString(), { headers })
     if (!res.ok) {
       return { papers: [], error: `Semantic Scholar API returned HTTP ${res.status}`, statusCode: res.status }
     }
@@ -393,6 +397,18 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       const allPapers: PaperResult[] = []
       const queriesUsed: string[] = []
       const sourceErrors: Record<string, string[]> = {}
+      const sourceStats: Record<string, { calls: number; papers: number; errors: number }> = {}
+
+      const trackCall = (src: string, papers: number, error?: string) => {
+        if (!sourceStats[src]) sourceStats[src] = { calls: 0, papers: 0, errors: 0 }
+        sourceStats[src].calls += 1
+        sourceStats[src].papers += papers
+        if (error) {
+          sourceStats[src].errors += 1
+          if (!sourceErrors[src]) sourceErrors[src] = []
+          sourceErrors[src].push(error)
+        }
+      }
 
       const perSourceLimit = ctx.settings?.researchIntensity?.perSourceLimit ?? 20
       const sleepMs = ctx.settings?.researchIntensity?.sleepMs ?? 500
@@ -405,10 +421,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
             if (!searchFn) continue
             const result = await searchFn(q, perSourceLimit)
             allPapers.push(...result.papers)
-            if (result.error) {
-              if (!sourceErrors[src]) sourceErrors[src] = []
-              sourceErrors[src].push(result.error)
-            }
+            trackCall(src, result.papers.length, result.error)
             await sleep(sleepMs)
           }
         }
@@ -418,10 +431,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
             queriesUsed.push(`[dblp] ${dq}`)
             const result = await searchDblp(dq, Math.min(perSourceLimit, 10))
             allPapers.push(...result.papers)
-            if (result.error) {
-              if (!sourceErrors['dblp']) sourceErrors['dblp'] = []
-              sourceErrors['dblp'].push(result.error)
-            }
+            trackCall('dblp', result.papers.length, result.error)
             await sleep(sleepMs)
           }
         }
@@ -430,11 +440,33 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       const deduplicated = deduplicatePapers(allPapers)
       const failedSourceNames = Object.keys(sourceErrors)
       const hasSourceFailures = failedSourceNames.length > 0
+      // A source is "silently dead" if it was called but never returned any
+      // paper — usually a 429 (S2 without API key) or query syntax that the
+      // backend rejects (e.g. DBLP with venue:/author: prefixes). Worth
+      // surfacing even when other sources kept the run from being all-zero.
+      const silentlyEmptySources = Object.entries(sourceStats)
+        .filter(([, s]) => s.calls > 0 && s.papers === 0)
+        .map(([src]) => src)
 
       if (deduplicated.length === 0) {
         // Distinguish "no papers exist" from "all APIs failed"
         const failedDetails = failedSourceNames
           .map(src => `${src}: ${sourceErrors[src][0]}`)
+        const s2Missing = silentlyEmptySources.includes('semantic_scholar')
+          && !(process.env.SEMANTIC_SCHOLAR_API_KEY || '').trim()
+
+        const suggestions: string[] = []
+        if (s2Missing) {
+          suggestions.push('Set SEMANTIC_SCHOLAR_API_KEY in Settings → API Keys — anonymous S2 traffic is aggressively rate-limited and likely returned no usable results.')
+        }
+        if (hasSourceFailures || silentlyEmptySources.length > 0) {
+          suggestions.push('Some academic APIs may be temporarily unavailable. Retry in a few minutes.')
+          suggestions.push('Try different or broader search terms.')
+        } else {
+          suggestions.push('Try broader or alternative search terms.')
+          suggestions.push('Check if the topic uses different terminology in academic literature.')
+          suggestions.push('Consider searching for related sub-topics individually.')
+        }
 
         return toAgentResult('literature-search', toolError(
           hasSourceFailures ? 'API_ERROR' : 'NOT_FOUND',
@@ -446,18 +478,11 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
             context: {
               queriesUsed,
               failedSources: failedDetails,
+              sourceStats,
+              silentlyEmptySources,
               subTopics: plan.subTopics.map(s => s.name),
             },
-            suggestions: hasSourceFailures
-              ? [
-                  'Some academic APIs may be temporarily unavailable. Retry in a few minutes.',
-                  'Try different or broader search terms.',
-                ]
-              : [
-                  'Try broader or alternative search terms.',
-                  'Check if the topic uses different terminology in academic literature.',
-                  'Consider searching for related sub-topics individually.',
-                ],
+            suggestions,
           }
         ))
       }
@@ -481,8 +506,25 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
 
       // Propagate source failure warnings
       if (hasSourceFailures) {
+        const detail = failedSourceNames
+          .map(src => `${src} (${sourceStats[src].errors}/${sourceStats[src].calls} calls failed; ${sourceStats[src].errors > 0 ? sourceErrors[src][0] : 'see review.json'})`)
+          .join('; ')
         pipelineWarnings.push(
-          `${failedSourceNames.length} source(s) had errors: ${failedSourceNames.join(', ')}. Results may be incomplete.`
+          `Partial source failure: ${detail}. Results may be incomplete.`
+        )
+      }
+      const silentDeadNoErrors = silentlyEmptySources.filter(s => !sourceErrors[s])
+      if (silentDeadNoErrors.length > 0) {
+        // Source returned 200 OK but no papers across every query — typically
+        // a query-syntax mismatch (DBLP venue:/author:) or upstream throttling
+        // that doesn't surface as an HTTP error code.
+        pipelineWarnings.push(
+          `Source(s) returned 0 papers across all queries: ${silentDeadNoErrors.join(', ')}. Check API key / query syntax — coverage from these sources is missing from this run.`
+        )
+      }
+      if (silentlyEmptySources.includes('semantic_scholar') && !(process.env.SEMANTIC_SCHOLAR_API_KEY || '').trim()) {
+        pipelineWarnings.push(
+          'Semantic Scholar contributed 0 papers and SEMANTIC_SCHOLAR_API_KEY is not set. Anonymous S2 requests are aggressively rate-limited; configure the key in Settings → API Keys to restore S2 coverage.'
         )
       }
 
@@ -627,6 +669,9 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
         review,
         summary,
         queriesUsed,
+        sourceStats,
+        sourceErrors,
+        warnings: pipelineWarnings,
         timestamp: new Date().toISOString()
       }, null, 2), 'utf-8')
 
@@ -656,7 +701,8 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
         researchGaps: summary?.researchGaps?.slice(0, 3),
         fullReviewPath: relReviewPath,
         runId,
-        queriesUsed: queriesUsed.slice(0, 10)
+        queriesUsed: queriesUsed.slice(0, 10),
+        sourceStats
       }
 
       return toAgentResult('literature-search', toolSuccess(payload, pipelineWarnings.length > 0 ? pipelineWarnings : undefined))

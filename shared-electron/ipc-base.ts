@@ -70,7 +70,8 @@ const API_KEY_NAMES = [
   'BRAVE_API_KEY',
   'OPENROUTER_API_KEY',
   'PAPERCLIP_API_KEY',
-  'DEEPSEEK_API_KEY'
+  'DEEPSEEK_API_KEY',
+  'SEMANTIC_SCHOLAR_API_KEY'
 ] as const
 
 interface AppConfig {

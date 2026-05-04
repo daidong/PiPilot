@@ -52,6 +52,14 @@ const KEY_FIELDS = [
     url: 'https://platform.deepseek.com/api_keys',
     required: false,
   },
+  {
+    name: 'SEMANTIC_SCHOLAR_API_KEY',
+    label: 'Semantic Scholar',
+    placeholder: '••••••••••••',
+    hint: 'Improves literature-search coverage. Without it, Semantic Scholar requests are anonymous and heavily rate-limited (HTTP 429), which silently drops Semantic Scholar results from your search runs. Request a free key at semanticscholar.org/product/api.',
+    url: 'https://www.semanticscholar.org/product/api#api-key-form',
+    required: false,
+  },
 ] as const
 
 interface Props {

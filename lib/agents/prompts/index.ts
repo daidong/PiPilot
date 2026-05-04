@@ -331,9 +331,16 @@ If conversation history contains previous literature-search results with coverag
 
 ## DBLP-specific query syntax (use in dblpQueries only)
 
-- author:LastName — filter by author (e.g. "author:Bengio deep learning")
-- venue:CONF — filter by venue (e.g. "venue:NIPS attention mechanism")
-- These prefixes do NOT work on other sources, so keep regular queries free of them.
+DBLP's /search/publ/api endpoint treats the q= parameter as plain keywords. It
+does NOT understand "author:" / "venue:" / other field prefixes — those are
+Google Scholar / Semantic Scholar conventions, and using them returns zero hits
+on DBLP. Keep dblpQueries to plain keyword strings (author surnames, venue
+acronyms, and topic terms separated by spaces). Examples:
+
+- "Bengio deep learning attention"   ✓
+- "SC Lustre metadata performance"   ✓
+- "author:Bengio deep learning"      ✗  (returns 0 results on DBLP)
+- "venue:NIPS attention mechanism"   ✗  (returns 0 results on DBLP)
 
 ## Output JSON
 
@@ -346,7 +353,7 @@ If conversation history contains previous literature-search results with coverag
     {
       "subTopic": "sub-topic name",
       "queries": ["query1", "query2"],
-      "dblpQueries": ["author:Name topic"] or null,
+      "dblpQueries": ["LastName topic keywords"] or null,
       "sources": ["semantic_scholar", "arxiv", "openalex", "dblp"],
       "priority": 1
     }
