@@ -503,6 +503,28 @@ async function ensureCoordinator(
           }
         }
 
+        // literature-search auto-saves Paper artifacts via upsertPaperArtifact()
+        // directly, bypassing the artifact-create tool. Without this branch the
+        // Library/Papers tab would only see the new entries after re-opening
+        // the project (the entity store mounts once, then relies on the
+        // 'agent:entity-created' event for refreshes).
+        //
+        // Defensive about result shape: the agent loop may surface either the
+        // raw ToolResult ({ success, data }) or pi-mono's wrapped AgentToolResult
+        // ({ content, details: { success, tool_name } }). Check both.
+        if (tool === 'literature-search' && result && typeof result === 'object') {
+          const r = result as any
+          const success = r.details?.success ?? r.success
+          if (success === true) {
+            invalidateEntityCache(runProjectPath)
+            safeSend(win, 'agent:entity-created', {
+              type: 'paper',
+              id: '',
+              title: 'literature-search batch'
+            })
+          }
+        }
+
         // Forward compute run events to renderer
         if (tool === 'local_compute_execute' && result && typeof result === 'object' && 'success' in result) {
           const cr = result as any
