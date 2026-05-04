@@ -41,6 +41,12 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
   const [showAnthropicDialog, setShowAnthropicDialog] = useState(false)
   const [showOpenAIDialog, setShowOpenAIDialog] = useState(false)
   const [showDeepSeekDialog, setShowDeepSeekDialog] = useState(false)
+  // Boolean-only map of which API keys are configured. Read once on mount
+  // and re-read every time the dropdown opens so a key the user added in
+  // Settings is reflected immediately. Drives the configured-vs-not-configured
+  // visual cue: configured providers render in solid foreground, others
+  // render dimmed so the user can tell at a glance which models will work.
+  const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({})
   // Tracks the model the user clicked while it was missing a key.
   // Falls back to `selectedModel` so the dialog never receives `null`.
   const [pendingModelId, setPendingModelId] = useState<string | null>(null)
@@ -80,6 +86,36 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     }
   }, [api])
 
+  const refreshKeyStatus = useCallback(async () => {
+    try {
+      const status = await api?.getApiKeyStatus?.()
+      setKeyStatus(status ?? {})
+    } catch {
+      setKeyStatus({})
+    }
+  }, [api])
+
+  // Per-provider "do we have any usable credential?" check. Doesn't validate
+  // the credential — only checks that the user has configured one. That
+  // matches the user's request: "configured (regardless of whether actually
+  // usable) shows in solid color, others greyed".
+  const isProviderConfigured = useCallback((provider: string): boolean => {
+    switch (provider) {
+      case 'ChatGPT Subscription':
+        return codexStatus?.isLoggedIn === true
+      case 'Claude Subscription':
+        return anthropicSubStatus?.isLoggedIn === true
+      case 'OpenAI':
+        return keyStatus.OPENAI_API_KEY === true
+      case 'Anthropic':
+        return keyStatus.ANTHROPIC_API_KEY === true
+      case 'DeepSeek':
+        return keyStatus.DEEPSEEK_API_KEY === true
+      default:
+        return false
+    }
+  }, [codexStatus, anthropicSubStatus, keyStatus])
+
   // Close on click outside
   useEffect(() => {
     if (!open) return
@@ -106,11 +142,24 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
     refreshAnthropicStatus()
     refreshCodexStatus()
     refreshAnthropicSubStatus()
+    refreshKeyStatus()
     const unsub = api?.onAnthropicAuthStatus?.((status: any) => setAnthropicStatus(status))
     return () => {
       if (typeof unsub === 'function') unsub()
     }
-  }, [api, refreshAnthropicStatus, refreshCodexStatus, refreshAnthropicSubStatus])
+  }, [api, refreshAnthropicStatus, refreshCodexStatus, refreshAnthropicSubStatus, refreshKeyStatus])
+
+  // Re-read all credential signals every time the dropdown opens. Cheap IPC
+  // round-trips, and ensures keys the user added in Settings (or via the
+  // inline ApiKeyDialog below) are reflected the next time the menu is shown
+  // — without requiring a reload.
+  useEffect(() => {
+    if (!open) return
+    refreshKeyStatus()
+    refreshCodexStatus()
+    refreshAnthropicSubStatus()
+    refreshAnthropicStatus()
+  }, [open, refreshKeyStatus, refreshCodexStatus, refreshAnthropicSubStatus, refreshAnthropicStatus])
 
   const handleCodexLogin = async () => {
     setCodexLoggingIn(true)
@@ -271,10 +320,20 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
 
       {open && (
         <div className="absolute top-full left-0 mt-1 w-64 max-h-80 overflow-y-auto rounded-xl border t-border t-bg-surface shadow-xl z-50" role="listbox" aria-label="Available models">
-          {providers.map((provider) => (
-            <div key={provider}>
-              <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider t-text-muted sticky top-0 t-bg-surface">
-                {provider}
+          {providers.map((provider) => {
+            const configured = isProviderConfigured(provider)
+            return (
+            <div key={provider} className={configured ? '' : 'opacity-50'}>
+              <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider t-text-muted sticky top-0 t-bg-surface flex items-center gap-1.5">
+                <span>{provider}</span>
+                {!configured && (
+                  <span
+                    className="text-[9px] normal-case font-normal tracking-normal t-text-muted"
+                    title="No credential configured for this provider"
+                  >
+                    not configured
+                  </span>
+                )}
               </div>
 
               {/* Provider sub-label */}
@@ -407,7 +466,8 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
                 )
               })}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -432,6 +492,7 @@ export function ModelSelector({ selectedModel, onSelectModel }: Props) {
             // after entering the key).
             onSelectModel(model)
             refreshAnthropicStatus()
+            refreshKeyStatus()
           }}
           pendingModel={pendingModelId ?? selectedModel}
         />
