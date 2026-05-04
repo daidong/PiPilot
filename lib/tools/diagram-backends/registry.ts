@@ -6,10 +6,17 @@
  *     has no image-generation API, so no review-provider choice changes
  *     this. When no OpenAI credential is available, generation fails
  *     loudly.
- *   - Review provider defaults to 'auto', which prefers heterogeneous
- *     review (use Anthropic if its credentials are present, so the
- *     generator is not grading its own family). Explicit 'openai' or
- *     'anthropic' overrides.
+ *   - Review provider defaults to 'auto', which prefers same-family
+ *     review (OpenAI). Generation is OpenAI-only, so an OpenAI key is
+ *     guaranteed to be present whenever the tool is reachable; routing
+ *     review through the same family means we never depend on a
+ *     credential that may be absent or stale (Anthropic). The previous
+ *     'prefer-heterogeneous, use Anthropic' default was theoretically
+ *     stronger (cross-family reviewer reduces self-grading bias) but
+ *     left the most common path dependent on a non-required credential
+ *     and a backend whose tool_use parsing was less defensive than the
+ *     OpenAI strict-json-schema path. Explicit 'openai' or 'anthropic'
+ *     overrides remain available in Settings → Diagram.
  *
  * Credentials are passed in via `DiagramAuth` rather than read from env
  * directly so the coordinator can surface anthropic-sub OAuth tokens
@@ -277,8 +284,13 @@ function buildRealReviewProvider(
       model: reviewModel,
     })
   }
-  // 'auto' — prefer heterogeneous for the PNG path; for SVG this helper
-  // may be called with either preference, so honour whichever is present.
+  // 'auto' — prefer same-family (OpenAI). Generation is OpenAI-only, so
+  // openaiKey is the credential guaranteed to be present in any working
+  // setup; falling back to Anthropic only when no OpenAI key is around
+  // keeps the default path on the most reliable backend.
+  if (auth.openaiKey) {
+    return createOpenAIReviewProvider({ apiKey: auth.openaiKey, model: reviewModel })
+  }
   if (auth.anthropic) {
     return createAnthropicReviewProvider({
       token: auth.anthropic.token,
@@ -286,9 +298,6 @@ function buildRealReviewProvider(
       refreshToken: auth.anthropic.refresh,
       model: reviewModel,
     })
-  }
-  if (auth.openaiKey) {
-    return createOpenAIReviewProvider({ apiKey: auth.openaiKey, model: reviewModel })
   }
   return null
 }
@@ -348,7 +357,15 @@ function pickReviewProvider(
     })
   }
 
-  // 'auto': prefer heterogeneous (Anthropic when available, since gen is OpenAI).
+  // 'auto': prefer same-family (OpenAI). Since generation is OpenAI-only,
+  // an OpenAI key is the credential guaranteed to exist; we route review
+  // through it by default so the diagram tool never silently depends on
+  // a non-required credential. Anthropic stays as a fallback for the
+  // edge case where the user has an Anthropic key but no OpenAI key
+  // (e.g. SVG-fallback path with chat-only auth).
+  if (auth.openaiKey) {
+    return createOpenAIReviewProvider({ apiKey: auth.openaiKey, model: prefs.reviewModel })
+  }
   if (auth.anthropic) {
     return createAnthropicReviewProvider({
       token: auth.anthropic.token,
@@ -356,9 +373,6 @@ function pickReviewProvider(
       refreshToken: auth.anthropic.refresh,
       model: prefs.reviewModel,
     })
-  }
-  if (auth.openaiKey) {
-    return createOpenAIReviewProvider({ apiKey: auth.openaiKey, model: prefs.reviewModel })
   }
   throw new Error('No review provider is configured. Add OPENAI_API_KEY or sign in to Claude.')
 }
