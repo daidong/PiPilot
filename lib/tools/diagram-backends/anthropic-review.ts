@@ -30,7 +30,13 @@ const MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
 const DEFAULT_MODEL = 'claude-opus-4-7'
 const ANTHROPIC_VERSION = '2023-06-01'
 const REQUEST_TIMEOUT_MS = 180_000
-const MAX_TOKENS = 2048
+// Five structured dimensions + an enumerated blockingIssues array can
+// blow past 2 048 output tokens once the model emits more than 2-3
+// non-trivial issues. Truncation manifested as an empty tool_use.input,
+// which the old fallback path silently coerced into a fake "needs_edit"
+// verdict with score 0/0/0 and empty blockingIssues — the exact garbage
+// payload that wasted two image-edit iterations per figure.
+const MAX_TOKENS = 4096
 
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 const BETA_API_KEY = 'fine-grained-tool-streaming-2025-05-14'
@@ -117,12 +123,31 @@ interface AnthropicMessagesResponse {
     | { type: 'text'; text: string }
     | { type: 'tool_use'; name: string; input: Record<string, unknown> }
   >
+  stop_reason?: string
+  usage?: { input_tokens?: number; output_tokens?: number }
   error?: { message?: string; type?: string }
 }
 
-function coerceVerdict(raw: unknown): Verdict {
+const REQUIRED_REVIEW_FIELDS = [
+  'score',
+  'requestAlignment',
+  'legibility',
+  'blockingIssues',
+  'summary',
+  'verdict',
+] as const
+
+// Strict verdict coercion. Rejects unknown / missing values so the caller
+// sees a real parse error instead of inheriting a default verdict — the
+// previous default-to-`needs_edit` behaviour silently turned every empty
+// tool_use.input into a fake review and burned a second image-edit
+// iteration with no actionable feedback.
+function strictVerdict(raw: unknown): Verdict {
   if (raw === 'acceptable' || raw === 'needs_edit' || raw === 'needs_regen') return raw
-  return 'needs_edit'
+  throw new Error(
+    `Claude review returned an invalid verdict (${JSON.stringify(raw)}). ` +
+    `Expected one of acceptable | needs_edit | needs_regen.`
+  )
 }
 
 function clampScore(n: unknown): number {
@@ -260,6 +285,18 @@ export function createAnthropicReviewProvider(
       throw new Error(`Anthropic review API error (HTTP ${status}): ${json.error?.message || 'unknown'}`)
     }
 
+    // The endpoint can return 200 OK with a truncated response when the
+    // model hits max_tokens mid-tool-call. tool_use exists but its input
+    // is empty / partial. Surface this as a hard error so the caller
+    // doesn't run another image-edit loop on an empty review.
+    if (json.stop_reason === 'max_tokens') {
+      const out = json.usage?.output_tokens ?? 'unknown'
+      throw new Error(
+        `Claude review hit max_tokens before emitting a complete tool call ` +
+        `(output_tokens=${out}, MAX_TOKENS=${MAX_TOKENS}). The tool_use payload is incomplete.`
+      )
+    }
+
     const toolUse = json.content?.find(
       (c): c is Extract<typeof c, { type: 'tool_use' }> =>
         c.type === 'tool_use' && c.name === 'emit_review'
@@ -268,7 +305,22 @@ export function createAnthropicReviewProvider(
       throw new Error('Claude review did not emit the expected tool_use block')
     }
 
-    const input = toolUse.input
+    const input = toolUse.input ?? {}
+    const missing = REQUIRED_REVIEW_FIELDS.filter(
+      (k) => !(k in input)
+    )
+    if (missing.length > 0) {
+      // Empty / partial tool_use.input. Most commonly caused by max_tokens
+      // truncation that didn't get caught by the stop_reason check (e.g.
+      // when the API doesn't emit stop_reason on the older beta), or by
+      // the model emitting a malformed tool call. Either way, treat as
+      // a real failure rather than fabricating a default review.
+      throw new Error(
+        `Claude review tool_use payload is missing required fields: ${missing.join(', ')}. ` +
+        `Received keys: ${Object.keys(input).join(', ') || '(none)'}. stop_reason=${json.stop_reason ?? 'unknown'}.`
+      )
+    }
+
     const result: ReviewResult = {
       score: clampScore(input.score),
       requestAlignment: clampScore(input.requestAlignment),
@@ -277,7 +329,7 @@ export function createAnthropicReviewProvider(
         ? (input.blockingIssues as ReviewResult['blockingIssues'])
         : [],
       summary: typeof input.summary === 'string' ? input.summary : '',
-      verdict: coerceVerdict(input.verdict),
+      verdict: strictVerdict(input.verdict),
     }
     return result
   }
