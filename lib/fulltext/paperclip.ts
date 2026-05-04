@@ -120,7 +120,49 @@ interface McpTextResult {
   isError: boolean
 }
 
+// Process-local cache for `lookup …` commands.
+//
+// The same DOI / PMC / arxiv id can show up in multiple places during one
+// session — fetchPaperclipMetadata and fetchPaperclipFulltext both run the
+// resolution path independently, and a paper that appears in literature-
+// search and is later opened by the agent for fulltext yields two more.
+// Each lookup is a 5-7 s round-trip (per [paperclip] slow-call telemetry),
+// so duplicate lookups blow the wall-clock budget and waste API quota.
+//
+// Caching only `lookup …` commands keeps the rest of the surface area
+// (`cat`, `head`, `ls`) live — those can theoretically change as Paperclip
+// updates the corpus, and the cost of a fresh call there is dominated by
+// content size, not lookup overhead.
+//
+// Coalescing semantics: store the in-flight Promise (not just the resolved
+// value) so two concurrent callers issuing the same command share a single
+// request. On failure we evict the entry so the next call retries against
+// the wire — failures should not poison the cache.
+const LOOKUP_CMD_RE = /^lookup (pmc|doi|arxiv) /
+const lookupCache = new Map<string, Promise<McpTextResult | null>>()
+
 async function mcpCall(command: string): Promise<McpTextResult | null> {
+  if (LOOKUP_CMD_RE.test(command)) {
+    const cached = lookupCache.get(command)
+    if (cached) return cached
+
+    const promise = mcpCallUncached(command).then((r) => {
+      // Negative cache eviction — let the next caller retry transient
+      // failures (auth blip, 429, network reset). Hits stay cached for the
+      // process lifetime; the underlying Paperclip lookup tables are
+      // effectively immutable per session.
+      if (!r || r.isError || !r.text) {
+        lookupCache.delete(command)
+      }
+      return r
+    })
+    lookupCache.set(command, promise)
+    return promise
+  }
+  return mcpCallUncached(command)
+}
+
+async function mcpCallUncached(command: string): Promise<McpTextResult | null> {
   const key = apiKey()
   if (!key) return null
 

@@ -41,9 +41,19 @@ function mimeForExtension(p: string): string {
   return table[ext] || 'application/octet-stream'
 }
 
-// Raise default max listeners — pi-agent-core's parallel tool execution
-// shares a single AbortSignal across many tools, exceeding the default of 10.
-setMaxListeners(20)
+// Raise the default EventTarget max-listener threshold for the main process.
+//
+// pi-agent-core shares a single AbortSignal across an entire agent turn and
+// attaches a per-LLM-call abort listener inside its proxy fetch path
+// (node_modules/@mariozechner/pi-agent-core/dist/proxy.js:79-81) without ever
+// removing it on completion. A long turn with many sub-LLM calls (e.g. a
+// literature-search batch + several follow-on tool calls) easily blows past
+// Node's default of 10, and with the previous setting of 20 we still saw
+// 21-listener warnings in the wild. Bump to 50 — the listeners are bounded
+// per turn (signal is discarded when agent.run() returns and GC reclaims
+// everything attached to it), so this caps the warning without masking a
+// genuine indefinite leak.
+setMaxListeners(50)
 import { join, resolve } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { loadApiKeysFromConfig } from '@shared-electron/ipc-base'
