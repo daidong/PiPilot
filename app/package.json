@@ -1,6 +1,6 @@
 {
   "name": "@research-copilot/app",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "description": "AI-powered research assistant desktop application",
   "homepage": "https://github.com/daidong/PiPilot",
