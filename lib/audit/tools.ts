@@ -17,6 +17,7 @@ import {
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
 import { ProvenanceGraph } from '../provenance/index.js'
 import { createWebFetchTool } from '../tools/web-tools.js'
+import { isCanonicalPath, type CanonicalPaper } from '../active-project/index.js'
 import type { ResearchToolContext } from '../tools/types.js'
 import type { Finding, FindingCategory, Severity } from './types.js'
 
@@ -180,11 +181,15 @@ function createProvenanceGetParamsTool(projectPath: string): AgentTool {
  * "did the data files we relied on change since the analysis?" gets a
  * mechanical answer instead of a vibe.
  */
-function createProvenanceCheckDriftTool(projectPath: string, graph: ProvenanceGraph): AgentTool {
+function createProvenanceCheckDriftTool(
+  projectPath: string,
+  graph: ProvenanceGraph,
+  canonicalPaper: CanonicalPaper | null
+): AgentTool {
   return {
     name: 'provenance_check_drift',
     label: 'provenance_check_drift',
-    description: 'For each provenance node id, verify that the live store still matches the captured content hash. Returns a structured report (ok / drifted / draft-evolving / missing). Use this BEFORE reading content to know which inputs are still trustworthy. Pass node ids you got from provenance_get_upstream. NOTE: drift on `draft` nodes is reported as `draft-evolving` instead of `drifted` — drafts are by definition still being edited; that is expected state, not a reproducibility risk.',
+    description: 'For each provenance node id, verify that the live store still matches the captured content hash. Returns a structured report (ok / drifted / draft-evolving / missing). Use this BEFORE reading content to know which inputs are still trustworthy. Pass node ids you got from provenance_get_upstream. NOTE: drift on `draft` nodes is reported as `draft-evolving` instead of `drifted` — drafts are by definition still being edited; that is expected state, not a reproducibility risk. Each row also carries `isCanonical` (true if the file is part of the canonical paper, false if outside it, undefined when not applicable e.g. computation nodes) — drift on canonical files is high-priority signal; drift on non-canonical files is informational only.',
     parameters: Type.Object({
       nodeIds: Type.Array(Type.String(), { description: 'Provenance node ids to check.' })
     }),
@@ -197,18 +202,29 @@ function createProvenanceCheckDriftTool(projectPath: string, graph: ProvenanceGr
       const { PATHS } = await import('../types.js')
 
       type Row =
-        | { id: string; status: 'ok'; label: string; hash: string }
-        | { id: string; status: 'drifted'; label: string; capturedHash: string; currentHash: string }
+        | { id: string; status: 'ok'; label: string; hash: string; isCanonical?: boolean }
+        | { id: string; status: 'drifted'; label: string; capturedHash: string; currentHash: string; isCanonical?: boolean }
         // `draft-evolving` mirrors `drifted` mechanically (live hash ≠ captured),
         // but on a `draft` node that is the *expected* state. Surfacing it
         // separately stops the auditor from filing a `reproducibility` finding
         // every time the user edits their manuscript between captures.
-        | { id: string; status: 'draft-evolving'; label: string; capturedHash: string; currentHash: string }
-        | { id: string; status: 'missing'; label: string; capturedHash?: string }
-        | { id: string; status: 'no-snapshot'; label: string }
-        | { id: string; status: 'skipped'; label: string; reason: string }
+        | { id: string; status: 'draft-evolving'; label: string; capturedHash: string; currentHash: string; isCanonical?: boolean }
+        | { id: string; status: 'missing'; label: string; capturedHash?: string; isCanonical?: boolean }
+        | { id: string; status: 'no-snapshot'; label: string; isCanonical?: boolean }
+        | { id: string; status: 'skipped'; label: string; reason: string; isCanonical?: boolean }
 
       const rows: Row[] = []
+
+      // Compute isCanonical for a node ref. Returns undefined when the
+      // ref kind has no path-based notion of canonicality (memory-artifact,
+      // audit-report, computation) OR when no canonical paper was resolved.
+      const refIsCanonical = (refKind: string, path?: string): boolean | undefined => {
+        if (!canonicalPaper) return undefined
+        if ((refKind === 'workspace-file' || refKind === 'draft') && path) {
+          return isCanonicalPath(canonicalPaper, projectPath, path)
+        }
+        return undefined
+      }
 
       for (const id of ids) {
         const node = graph.getNode(id)
@@ -218,6 +234,8 @@ function createProvenanceCheckDriftTool(projectPath: string, graph: ProvenanceGr
         }
         const label = node.label
         const captured = node.snapshot?.contentHash
+        const canon = refIsCanonical(node.ref.kind,
+          (node.ref as { path?: string }).path)
         // Compute live hash by ref kind.
         let liveHash: string | null = null
         try {
@@ -245,17 +263,17 @@ function createProvenanceCheckDriftTool(projectPath: string, graph: ProvenanceGr
           continue
         }
 
-        if (!captured) { rows.push({ id, status: 'no-snapshot', label }); continue }
-        if (liveHash === null) { rows.push({ id, status: 'missing', label, capturedHash: captured }); continue }
+        if (!captured) { rows.push({ id, status: 'no-snapshot', label, isCanonical: canon }); continue }
+        if (liveHash === null) { rows.push({ id, status: 'missing', label, capturedHash: captured, isCanonical: canon }); continue }
         if (liveHash === captured) {
-          rows.push({ id, status: 'ok', label, hash: captured })
+          rows.push({ id, status: 'ok', label, hash: captured, isCanonical: canon })
         } else if (node.kind === 'draft') {
           // Draft nodes are user-edited manuscripts; the producing-agent
           // captured one snapshot, the user kept writing. Don't conflate
           // that with data drift — it'd cause false reproducibility findings.
-          rows.push({ id, status: 'draft-evolving', label, capturedHash: captured, currentHash: liveHash })
+          rows.push({ id, status: 'draft-evolving', label, capturedHash: captured, currentHash: liveHash, isCanonical: canon })
         } else {
-          rows.push({ id, status: 'drifted', label, capturedHash: captured, currentHash: liveHash })
+          rows.push({ id, status: 'drifted', label, capturedHash: captured, currentHash: liveHash, isCanonical: canon })
         }
       }
 
@@ -351,6 +369,11 @@ export interface AuditorToolsArgs {
   sink: ReportSink
   /** Optional research-tools context for web_fetch (citation grounding). */
   researchCtx?: ResearchToolContext
+  /**
+   * Canonical-paper file set (LaTeX dep walk result). null = non-LaTeX
+   * project; isCanonical fields in tool outputs will be undefined.
+   */
+  canonicalPaper?: CanonicalPaper | null
 }
 
 export function createAuditorTools(args: AuditorToolsArgs): AgentTool[] {
@@ -376,7 +399,7 @@ export function createAuditorTools(args: AuditorToolsArgs): AgentTool[] {
   tools.push(createProvenanceGetUpstreamTool(args.graph))
   tools.push(createProvenanceReadBlobTool(args.projectPath))
   tools.push(createProvenanceGetParamsTool(args.projectPath))
-  tools.push(createProvenanceCheckDriftTool(args.projectPath, args.graph))
+  tools.push(createProvenanceCheckDriftTool(args.projectPath, args.graph, args.canonicalPaper ?? null))
 
   // Output channel.
   tools.push(createSubmitAuditReportTool(args.sink))

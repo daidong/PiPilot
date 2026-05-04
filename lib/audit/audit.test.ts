@@ -303,6 +303,60 @@ await runCase('provenance_check_drift — detects ok / drifted / missing / no-sn
   rmSync(project, { recursive: true, force: true })
 })
 
+await runCase('provenance_check_drift — populates isCanonical when canonicalPaper is provided', async () => {
+  const project = makeProject()
+  // A LaTeX project: paper.tex \input{intro} + a non-canonical data file
+  writeFileSync(join(project, 'paper.tex'),
+    '\\documentclass{article}\n\\begin{document}\n\\input{intro}\n\\end{document}', 'utf-8')
+  writeFileSync(join(project, 'intro.tex'), 'Intro', 'utf-8')
+  mkdirSync(join(project, 'data'), { recursive: true })
+  writeFileSync(join(project, 'data/raw.csv'), 'a,b\n1,2\n', 'utf-8')
+
+  const { sha256 } = await import('../provenance/store.js')
+  const introHash = sha256(readFileSync(join(project, 'intro.tex')))
+  const csvHash = sha256(readFileSync(join(project, 'data/raw.csv')))
+
+  const graph = new ProvenanceGraph()
+  graph.applyEvent({ type: 'node', node: {
+    id: 'pn_intro', kind: 'workspace-file', ref: { kind: 'workspace-file', path: 'intro.tex' },
+    label: 'intro.tex', createdAt: new Date().toISOString(),
+    snapshot: { contentHash: introHash, sizeBytes: 5, snapshotted: true, oversizeSkipped: false }
+  } })
+  graph.applyEvent({ type: 'node', node: {
+    id: 'pn_csv', kind: 'workspace-file', ref: { kind: 'workspace-file', path: 'data/raw.csv' },
+    label: 'data/raw.csv', createdAt: new Date().toISOString(),
+    snapshot: { contentHash: csvHash, sizeBytes: 8, snapshotted: true, oversizeSkipped: false }
+  } })
+
+  const { getCanonicalPaper } = await import('../active-project/index.js')
+  const canonical = await getCanonicalPaper(project)
+  assert.notEqual(canonical, null, 'should resolve canonical for this fixture')
+
+  const sink: ReportSink = { report: null }
+  const tools = createAuditorTools({ projectPath: project, graph, sink, canonicalPaper: canonical })
+  const drift = tools.find(t => t.name === 'provenance_check_drift')!
+  const result = await drift.execute('tc', { nodeIds: ['pn_intro', 'pn_csv'] })
+  const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+    rows: Array<{ id: string; status: string; isCanonical?: boolean }>
+  }
+  const intro = payload.rows.find(r => r.id === 'pn_intro')!
+  const csv = payload.rows.find(r => r.id === 'pn_csv')!
+  assert.equal(intro.isCanonical, true, 'intro.tex is part of the canonical paper')
+  assert.equal(csv.isCanonical, false, 'data/raw.csv is NOT part of the canonical paper')
+
+  // When canonicalPaper is omitted/null, isCanonical should be undefined.
+  const tools2 = createAuditorTools({ projectPath: project, graph, sink, canonicalPaper: null })
+  const drift2 = tools2.find(t => t.name === 'provenance_check_drift')!
+  const result2 = await drift2.execute('tc', { nodeIds: ['pn_intro'] })
+  const payload2 = JSON.parse((result2.content[0] as { text: string }).text) as {
+    rows: Array<{ isCanonical?: boolean }>
+  }
+  assert.equal(payload2.rows[0]!.isCanonical, undefined,
+    'isCanonical undefined when canonicalPaper not supplied')
+
+  rmSync(project, { recursive: true, force: true })
+})
+
 await runCase('provenance_get_params — reads params blob via ref or hash', async () => {
   const project = makeProject()
   const graph = new ProvenanceGraph()

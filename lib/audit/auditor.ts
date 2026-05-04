@@ -157,7 +157,8 @@ export async function runAudit(req: AuditRequest, opts: RunAuditOptions): Promis
     projectPath: opts.projectPath,
     graph,
     sink,
-    researchCtx: opts.researchCtx
+    researchCtx: opts.researchCtx,
+    canonicalPaper
   })
 
   // ── 4. Build the prompt ──────────────────────────────────────────────
