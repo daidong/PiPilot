@@ -14,6 +14,12 @@ export type { TraceStoreOptions } from './trace-store.js'
 
 export { TraceDigestProcessor } from './digest.js'
 
+export { LiveSpanProcessor } from './live-processor.js'
+export type { LiveSpanSummary, LiveSpanSubscriber } from './live-processor.js'
+
+export { loadTraceSnapshot } from './snapshot.js'
+export type { TraceSnapshot } from './snapshot.js'
+
 export { JsonlSpanExporter } from './exporters/jsonl.js'
 export type { JsonlSpanExporterOptions } from './exporters/jsonl.js'
 

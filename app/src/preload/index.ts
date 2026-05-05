@@ -74,6 +74,46 @@ export interface ElectronAPI {
 
   /** Telemetry: toggle tracingMode at runtime. */
   telemetrySetTracingMode: (mode: 'enabled' | 'disabled') => Promise<{ success: boolean; error?: string }>
+
+  /** Telemetry: subscribe to live span events. Returns an unsubscribe fn. */
+  onTraceLive: (
+    cb: (summary: {
+      traceId: string
+      spanId: string
+      parentSpanId?: string
+      name: string
+      kind: number
+      startTime: string
+      endTime: string
+      durationMs: number
+      statusCode: number
+      statusMessage?: string
+      attributes: Record<string, string | number | boolean>
+      events: Array<{ name: string; timestamp: string }>
+    }) => void
+  ) => () => void
+
+  /** Telemetry: read all spans for a traceId from disk (remount recovery). */
+  telemetryTraceSnapshot: (traceId: string) => Promise<{
+    traceId: string
+    spans: Array<{
+      traceId: string
+      spanId: string
+      parentSpanId?: string
+      name: string
+      kind: number
+      startTime: string
+      endTime: string
+      durationMs: number
+      statusCode: number
+      statusMessage?: string
+      attributes: Record<string, string | number | boolean>
+      events: Array<{ name: string; timestamp: string }>
+    }>
+    dropped?: boolean
+    dropReason?: string
+    error?: string
+  }>
   onStreamChunk: (cb: (chunk: string) => void) => () => void
   onAgentDone: (cb: (result: any) => void) => () => void
   onUsage: (cb: (event: UsageEvent) => void) => () => void
@@ -458,6 +498,13 @@ const api: ElectronAPI = {
   telemetryGetProjectConfig: () => ipcRenderer.invoke('telemetry:get-project-config'),
   telemetrySetTracingMode: (mode: 'enabled' | 'disabled') =>
     ipcRenderer.invoke('telemetry:set-tracing-mode', mode),
+  onTraceLive: (cb) => {
+    const handler = (_: unknown, summary: Parameters<typeof cb>[0]) => cb(summary)
+    ipcRenderer.on('trace:live', handler as (...args: unknown[]) => void)
+    return () => ipcRenderer.removeListener('trace:live', handler as (...args: unknown[]) => void)
+  },
+  telemetryTraceSnapshot: (traceId: string) =>
+    ipcRenderer.invoke('telemetry:trace-snapshot', traceId),
   pickFolder: () => ipcRenderer.invoke('project:pick-folder'),
   openProjectPath: (projectPath: string) => ipcRenderer.invoke('project:open-path', projectPath),
   listRecentProjects: () => ipcRenderer.invoke('project:list-recents'),

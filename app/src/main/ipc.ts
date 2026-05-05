@@ -23,7 +23,7 @@ import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
-import { PipilotTracer, migrateProjectConfig, tracedCompleteSimple } from '../../../lib/telemetry/index'
+import { PipilotTracer, migrateProjectConfig, tracedCompleteSimple, loadTraceSnapshot } from '../../../lib/telemetry/index'
 import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
@@ -1699,6 +1699,19 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // ─── Telemetry: trace snapshot (P2.2 — remount recovery) ──────────────
+  handleWindow('telemetry:trace-snapshot', ({ state }, traceId: string) => {
+    if (!state.projectPath) return { traceId, spans: [] }
+    if (typeof traceId !== 'string' || !/^[0-9a-f]{32}$/.test(traceId)) {
+      return { traceId, spans: [], error: 'invalid traceId' }
+    }
+    try {
+      return loadTraceSnapshot(state.projectPath, traceId)
+    } catch (err: any) {
+      return { traceId, spans: [], error: err?.message ?? 'snapshot failed' }
+    }
+  })
+
   // ─── Telemetry: view log (§8.4) ────────────────────────────────────────
   // Renderer pushes passive view events (artifact opened, summary scrolled).
   // Disabled when tracingMode=disabled (no tracer = no writer).
@@ -1949,6 +1962,15 @@ export function registerIpcHandlers(): void {
       }
       return null
     })
+    // Telemetry §6.7: forward live span summaries to the renderer over the
+    // `trace:live` IPC channel. The Zustand trace-store on the renderer side
+    // accumulates spans for a flame-graph / inspector view. Subscription is
+    // cleared on project close (via tracer.shutdown → live.clear).
+    if (state.tracer) {
+      state.tracer.live.subscribe((summary) => {
+        safeSend(win, 'trace:live', summary)
+      })
+    }
 
     // Restore persisted model + reasoning preferences
     const prefsFile = join(state.projectPath, PATHS.root, 'preferences.json')

@@ -23,6 +23,7 @@ import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-ho
 import { SCHEMA_URL, validatePipilotAttribute } from './semantic-registry.js'
 import { TraceStore } from './trace-store.js'
 import { TraceDigestProcessor } from './digest.js'
+import { LiveSpanProcessor, type LiveSpanSubscriber } from './live-processor.js'
 import { ulid } from './ulid.js'
 
 export interface TracerInitOptions {
@@ -90,6 +91,8 @@ export function getActiveTracer(): PipilotTracer | null {
 export class PipilotTracer {
   readonly provider: NodeTracerProvider
   readonly store: TraceStore
+  /** Live span fan-out — used by main process to forward spans to renderer. */
+  readonly live: LiveSpanProcessor
   private readonly tracer: OtelTracer
   private readonly defaultScope: ProjectScope
 
@@ -112,10 +115,11 @@ export class PipilotTracer {
       })
 
     const digestProcessor = new TraceDigestProcessor(opts.projectPath)
+    this.live = new LiveSpanProcessor()
     this.provider = new NodeTracerProvider({
       resource,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      spanProcessors: [this.store as any, digestProcessor as any]
+      spanProcessors: [this.store as any, digestProcessor as any, this.live as any]
     })
 
     // Pin AsyncLocalStorageContextManager. (sdk-trace-node uses it by default but we
