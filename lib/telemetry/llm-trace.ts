@@ -104,8 +104,65 @@ export async function tracedCompleteSimple<TApi extends string>(
     body: JSON.stringify(redactedInput)
   } as Attributes)
 
+  // Wire-level capture via pi-ai's existing onPayload + onResponse hooks
+  // (`StreamOptions` in `node_modules/@mariozechner/pi-ai/dist/types.d.ts`).
+  // onPayload fires right before the HTTP request goes out with the final
+  // provider-format payload (post-`convertMessages`, post-`cache_control`
+  // markers, post-system-prompt augmentation). onResponse fires after HTTP
+  // headers are received but before the body stream is consumed. Together
+  // they give us 100% wire-faithful capture without reconstruction.
+  //
+  // Both must NEVER throw or modify the payload — return undefined to keep
+  // it unchanged. Caller-supplied hooks are chained: if `llmOpts.onPayload`
+  // already exists, we invoke ours after recording the wire payload.
+  const userOnPayload = llmOpts?.onPayload
+  const userOnResponse = llmOpts?.onResponse
+  const wiredOpts: SimpleStreamOptions = {
+    ...llmOpts,
+    onPayload: async (payload, m) => {
+      try {
+        const { value: redactedPayload } = redact(payload, {
+          sizeCapBytes: 4096,
+          blobStore: tracer.blobs
+        })
+        span.addEvent('pipilot.chat.request_payload', {
+          body: JSON.stringify(redactedPayload)
+        } as Attributes)
+      } catch {
+        // Telemetry must never affect the LLM call.
+      }
+      // Honor user-supplied hook chained after our observation.
+      return userOnPayload ? userOnPayload(payload, m) : undefined
+    },
+    onResponse: async (resp, m) => {
+      try {
+        span.setAttributes({
+          'http.response.status_code': resp.status
+        })
+        // Forward a few well-known rate-limit / id headers when present —
+        // they're useful for cost / quota analysis. Provider-specific keys.
+        const wanted = [
+          'request-id',
+          'x-request-id',
+          'anthropic-request-id',
+          'anthropic-ratelimit-input-tokens-remaining',
+          'anthropic-ratelimit-output-tokens-remaining',
+          'x-ratelimit-remaining-requests',
+          'x-ratelimit-remaining-tokens'
+        ]
+        for (const k of wanted) {
+          const v = resp.headers?.[k] ?? resp.headers?.[k.toLowerCase()]
+          if (typeof v === 'string') span.setAttribute(`http.response.header.${k}`, v)
+        }
+      } catch {
+        // ignore
+      }
+      if (userOnResponse) await userOnResponse(resp, m)
+    }
+  }
+
   try {
-    const result = await context.with(ctxWithSpan, () => completeSimple(model, pi, llmOpts))
+    const result = await context.with(ctxWithSpan, () => completeSimple(model, pi, wiredOpts))
 
     // Response-side attributes (§6.3).
     const respAttrs: Attributes = {

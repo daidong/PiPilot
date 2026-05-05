@@ -585,6 +585,56 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     sessionId,
     getApiKey: resolveApiKey,
 
+    // Wire-level capture of every LLM call inside the agent loop.
+    // `AgentLoopConfig extends SimpleStreamOptions`, so onPayload/onResponse
+    // (defined in pi-ai's StreamOptions) are inherited and fire for the
+    // main per-step provider call. Closes the "main loop chat span" gap
+    // without any reconstruction — the payload is the actual wire request
+    // (post-convertMessages, post-cache_control, post-system-augmentation)
+    // and resp is the HTTP status+headers before body consumption.
+    //
+    // Both hooks must NEVER throw or modify the payload. They attach to the
+    // currently-active step span (set up by the AgentEvent subscriber on
+    // turn_start). Without an active step span (defensive case), they no-op.
+    onPayload: async (payload) => {
+      if (!tracer || !activeStepSpan) return undefined
+      try {
+        const { value: redactedPayload } = redact(payload, {
+          sizeCapBytes: 4096,
+          blobStore: tracer.blobs
+        })
+        activeStepSpan.addEvent('pipilot.chat.request_payload', {
+          body: JSON.stringify(redactedPayload)
+        } as Attributes)
+      } catch {
+        // Telemetry must never affect the LLM call.
+      }
+      return undefined
+    },
+    onResponse: async (resp) => {
+      if (!tracer || !activeStepSpan) return
+      try {
+        activeStepSpan.setAttribute('http.response.status_code', resp.status)
+        const wanted = [
+          'request-id',
+          'x-request-id',
+          'anthropic-request-id',
+          'anthropic-ratelimit-input-tokens-remaining',
+          'anthropic-ratelimit-output-tokens-remaining',
+          'x-ratelimit-remaining-requests',
+          'x-ratelimit-remaining-tokens'
+        ]
+        for (const k of wanted) {
+          const v = resp.headers?.[k] ?? resp.headers?.[k.toLowerCase()]
+          if (typeof v === 'string') {
+            activeStepSpan.setAttribute(`http.response.header.${k}`, v)
+          }
+        }
+      } catch {
+        // ignore
+      }
+    },
+
     // ── Context compaction via transformContext ──
     // Before each LLM call, check if accumulated messages exceed the model's
     // context window.  If so, summarize old messages and keep only recent ones.

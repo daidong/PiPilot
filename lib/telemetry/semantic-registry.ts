@@ -146,7 +146,12 @@ export const PIPILOT_EVENT_NAMES = new Set<string>([
   // gen_ai.client.inference.operation.details is for chat I/O; tool I/O is
   // PiPilot-specific because no GenAI semconv covers it.
   'pipilot.tool.args',
-  'pipilot.tool.result'
+  'pipilot.tool.result',
+  // Wire-level provider request captured via pi-ai's onPayload hook.
+  // Carries the final provider-format JSON (post-convertMessages, post-
+  // cache_control markers). Distinct from gen_ai.client.inference.operation.details
+  // which carries our own pre-translation PiContext.
+  'pipilot.chat.request_payload'
 ])
 
 /** Whitelist of PiPilot link.kind values (§6.5). */
