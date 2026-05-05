@@ -70,6 +70,23 @@ export interface ProjectScope {
  */
 const PROJECT_SCOPE_KEY = Symbol.for('pipilot.telemetry.projectScope')
 
+/**
+ * Process-level reference to the most recently constructed PipilotTracer.
+ *
+ * Used by code paths that don't have a direct way to thread a tracer through
+ * (e.g., the diagram backends that issue their own HTTP calls outside the
+ * pi-ai surface). When zero or multiple windows are open, this returns the
+ * latest one created — good enough for project-scoped context propagation
+ * since OTel's AsyncLocalStorage carries the active span across the same
+ * call chain regardless of which tracer minted it.
+ *
+ * Returns null when no PipilotTracer has been instantiated.
+ */
+let _activeTracer: PipilotTracer | null = null
+export function getActiveTracer(): PipilotTracer | null {
+  return _activeTracer
+}
+
 export class PipilotTracer {
   readonly provider: NodeTracerProvider
   readonly store: TraceStore
@@ -118,6 +135,10 @@ export class PipilotTracer {
       workspaceCommit: opts.workspaceCommit,
       memoryIndexVersion: opts.memoryIndexVersion
     }
+
+    // Publish to process-level accessor for code paths that can't thread the
+    // tracer (diagram backends, future external instrumentation).
+    _activeTracer = this
   }
 
   /** Run callback with project-scoped attribute defaults active. */
@@ -164,6 +185,7 @@ export class PipilotTracer {
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, 5000))
     await Promise.race([this.store.shutdown(), timeout])
     await Promise.race([this.provider.shutdown(), timeout])
+    if (_activeTracer === this) _activeTracer = null
   }
 
   /** Underlying OTel Tracer (for advanced/explicit use). */

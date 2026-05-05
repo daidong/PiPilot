@@ -6,7 +6,7 @@
  *   import { PipilotTracer, tracedCompleteSimple, migrateProjectConfig } from '@research-pilot/telemetry'
  */
 
-export { PipilotTracer } from './tracer.js'
+export { PipilotTracer, getActiveTracer } from './tracer.js'
 export type { TracerInitOptions, ProjectScope } from './tracer.js'
 
 export { TraceStore } from './trace-store.js'
@@ -19,6 +19,9 @@ export type { JsonlSpanExporterOptions } from './exporters/jsonl.js'
 
 export { tracedCompleteSimple } from './llm-trace.js'
 export type { TracedCompleteSimpleOpts } from './llm-trace.js'
+
+export { tracedFetch, recordReviewCompletion } from './http-trace.js'
+export type { TracedFetchOpts } from './http-trace.js'
 
 export { redact, scrubString, sha256Hex, SCRUBBER_VERSION, DEFAULT_SIZE_CAP_BYTES } from './redaction.js'
 export type { RedactionStats, RedactOptions } from './redaction.js'
