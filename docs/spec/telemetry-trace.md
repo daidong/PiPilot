@@ -1,18 +1,20 @@
 # Telemetry & Trace: Objective Runtime Data Capture
 
-> Spec version: 0.3 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
+> Spec version: 0.4 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
 >
-> **Major rewrite vs v0.2.** Establishes a hard boundary: this spec covers **objective runtime data capture only**. Subjective analysis (repair classification, anchor-fact judgments, role migration, context-debt labeling, and similar derived findings) is explicitly **out of scope** and lives in a Layer 3 post-hoc annotation pipeline (human or LLM annotators), not in PiPilot runtime. Specific changes:
+> **Changelog v0.3 → v0.4** (audit fixes; design boundary unchanged):
 >
-> - New §0 boundary declaration; §1 goals rewritten
-> - Trace retention configurable: `7-days | 1-month | forever`, **default `forever`** (§5.1)
-> - Storage estimates added (§5.6)
-> - Removed from runtime: `pipilot.user_message_type` classifier, `pipilot.referring_expressions`, memory-ledger lifecycle (`state`, `supersedes`, etc.), outcome `signal` enum, `project.type` semantic enum
-> - Outcome ledger renamed to user-response-signals ledger (§8.3); records facts only, no judgments
-> - Annotation ledger moved out of PiPilot runtime; brief Layer 3 stub in §9
-> - §9 research-mapping section deleted; replaced with a one-paragraph Layer 3 boundary
-> - Phases simplified: P5 (annotator) removed from PiPilot scope; §10 is now engineering-only
-> - Open questions §11 cleaned: removed every "subjective" question
+> - **OTel correctness (audit #1)**: `project.id`, `session.id`, `privacy.profile` moved from per-process Resource attributes to span attributes. Resource now only carries app/process/build identity (per OTel spec — Resource is process-life immutable). Wiki background agent (`app/src/main/ipc.ts:917`) and any code that crosses project boundaries now demonstrably correct.
+> - **OTel correctness (audit #2)**: local-compute async run is now a **separate trace** with an OTel `Link { type: "follows_from" }` back to the submit span. Reusing a `traceId` with `parentSpanId = null` is invalid per OTel spec.
+> - **OTel correctness (audit #6)**: GenAI fields updated to current semconv — `gen_ai.provider.name` (was `gen_ai.system`), `gen_ai.usage.cache_read.input_tokens` / `gen_ai.usage.cache_creation.input_tokens` (were `_input_tokens` suffix), `gen_ai.client.inference.operation.details` event (replaces per-message events). `schema_url` pinned in §6.3 with schema-conformance tests required at P0 gate.
+> - **Retention contract (audit #3)**: split into three independent dimensions — `rawTraceRetention`, `blobRetention`, `metadataRetention` (digest + ledgers). Defaults all `forever`. Removes contradictions about what survives eviction.
+> - **Project-scoped settings (audit #4)**: telemetry settings live in `ProjectConfig` (`lib/types.ts`), **not** global `AppSettings`. New §10.2 specifies project config migration, project-scoped IPC, and UI surface.
+> - **turnId implementability (audit #5)**: renderer's existing chat-message id is now passed in the `agent:send` IPC envelope as `clientMessageId` + `clientTimestamp`. `turnId = clientMessageId` becomes deterministic across renderer / main / ledgers.
+> - **Local exporter resilience (audit #7)**: §5.1 specifies bounded queue (default 1024 spans), drop policy with counter, disk-full graceful degrade, writer-crash isolation, runtime disable toggle. Sync flush only at shutdown.
+> - **Artifact reality (audit #8)**: §2.1 + §8.1 corrected — current artifact store is per-file JSON, not JSONL. Migration is non-trivial; P1 introduces `artifacts/ledger.jsonl` as a new append-only event log alongside the existing per-file storage (which remains the read-side authority).
+> - **Trace closure semantics (audit #9)**: §5.5 + §6.5 define trace closure via root-span end event + active-child refcount + watchdog timeout for background spans. Background tasks (memory extract, wiki bg) become detached spans on their own trace, joined to the originating trace by `Link { type: "spawned_from" }`.
+>
+> v0.3 boundary intact: Layer 3 (subjective analysis) remains out of scope. No `Paper 1`-specific content anywhere in this file.
 
 ---
 
@@ -154,9 +156,15 @@ All eight covered by a single `tracedCompleteSimple` helper plus closure-level w
 +--------------------------------------------------------------+
 ```
 
-**Lifetimes:**
-- Trace and ledgers share a single project-level retention policy: `7-days | 1-month | forever` (default `forever`).
-- Resource attributes (versions, hashes): per-process, attached to every span.
+**Lifetimes (three independent retention dimensions; see §5.1, §5.2, §5.3):**
+
+| Dimension | What it controls | Default | Configurable values |
+|---|---|---|---|
+| `rawTraceRetention` | `traces/spans.{date}.jsonl` files (full span detail + events) | `forever` | `7-days | 1-month | forever` |
+| `blobRetention` | `blobs/{sha256}` (raw prompt/completion/tool-I/O over inline cap) | `forever` | `7-days | 1-month | forever` |
+| `metadataRetention` | `trace-digest.jsonl` + all four ledgers + `tracing-state.jsonl` | `forever` | `forever` only (these are append-only event logs whose entries are individually small; no eviction supported in v0.4. Project deletion removes them.) |
+
+Resource attributes are per-process, immutable for the process lifetime, and carry only app/build identity (§5.4). Per-project state (project id, session id, privacy profile) lives on span attributes, not Resource.
 
 ### 3.2 Components added
 
@@ -184,8 +192,8 @@ All eight covered by a single `tracedCompleteSimple` helper plus closure-level w
 ### 4.1 ID hierarchy
 
 ```
-project.id               (resource attribute, from .research-pilot/project.json)
-  session.id             (gen_ai.conversation.id, from session.json)
+project.id               (span attribute on every span, from ProjectConfig.id)
+  session.id             (span attribute gen_ai.conversation.id, from session.json)
     trace.id             (per agent:send IPC entry — one user task)
       root span: invoke_agent
         span: invoke_agent step      (per pi-agent-core turn_start..turn_end)
@@ -200,9 +208,21 @@ project.id               (resource attribute, from .research-pilot/project.json)
 ```
 
 - `traceId` per user task, allocated at `agent:send` IPC entry.
-- `session.id` is an attribute and link target, not a span. Cross-trace continuity is reconstructed at analysis time by joining on `gen_ai.conversation.id`.
-- `project.id` is a resource attribute (per process).
-- `turnId = userMessageId`: a stable identifier minted at IPC entry the moment the user submits a message (one user input → one turnId), regardless of how many internal steps follow. Propagated as `pipilot.turn.id`. Assistant-only events (e.g., background memory-extract) carry `pipilot.turn.id = null` and reference the most recent prior turn via `pipilot.turn.followsId`.
+- `session.id` is a **span attribute** on every span (`gen_ai.conversation.id`), not a Resource attribute. Cross-trace continuity is reconstructed at analysis time by joining on `gen_ai.conversation.id`.
+- `project.id` is a **span attribute** on every span (`pipilot.project.id`), not a Resource attribute. The Electron main process can manage multiple projects/windows simultaneously and the wiki background agent walks across project paths (`app/src/main/ipc.ts:917`); per-process Resource attributes would be incorrect per OTel spec.
+- `turnId = clientMessageId`: the renderer already mints a stable id for each user chat message (`app/src/renderer/stores/chat-store.ts:59`). v0.4 requires the renderer to forward this id (and a `clientTimestamp`) in the `agent:send` IPC envelope:
+  ```typescript
+  // app/src/preload/index.ts (proposed addition to chat:send)
+  chatSend(args: {
+    text: string,
+    model?: string,
+    images?: ImageAttachment[],
+    clientMessageId: string,         // NEW — renderer's existing message id
+    clientTimestamp: number,         // NEW — ms since epoch when user pressed send
+  }): Promise<ChatResult>
+  ```
+  Main process uses `clientMessageId` verbatim as `turnId`. This is one input → one `turnId`, deterministic across renderer/main/ledgers. Existing renderer code keeps owning message id minting; main never re-generates.
+  Assistant-only events (e.g., background memory-extract on its own trace per §6.5) carry `pipilot.turn.id = null` and reference the most recent prior turn via `pipilot.turn.followsId`.
 
 ### 4.2 Concurrent parent-child
 
@@ -221,33 +241,42 @@ Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cros
 
 ## 5. Storage Model
 
-### 5.1 Trace store: append-only, configurable retention
+### 5.1 Trace store: append-only, configurable retention, bounded resources
 
 **Format**: `.research-pilot/traces/spans.{date}.jsonl`, one OTLP/JSON `ResourceSpans` envelope per line, batched.
 
-**Write path**: span ends → in-memory queue → flush at 64 spans or 200 ms idle → append-only write. Process exit calls synchronous `flushNow()`.
+**Write path** (audit #7 — bounded queue + drop policy):
 
-**Indices** (rebuilt on startup, atomic temp+rename): `traces/index.{date}.json` for fast viewer lookup.
+1. Span ends → enqueue to in-memory bounded ring queue.
+   - Default capacity: **1024 spans** (configurable per project).
+   - Capacity is hard. When full, oldest queued span is dropped and a counter `pipilot.trace.dropped_spans` is incremented in `tracing-state.jsonl`.
+2. Background flush worker drains queue when: queue ≥ 64 spans **or** 200 ms idle.
+3. Append-only `write()`. No fsync per write; fsync at flush boundary.
+4. **Disk full / write error**: writer enters degraded mode — sets `pipilot.trace.degraded = true` in tracing-state log, drops new spans (counted), retries write at exponential backoff (1s, 2s, 4s, max 60s). Agent path is never blocked. UI surfaces a banner when degraded.
+5. **Writer crash isolation**: trace writer runs in the same process as agent (no separate worker process to keep complexity down), but is wrapped in `try { ... } catch (e) { logToTracingState(e); markDegraded(); }`. Trace-path exceptions never propagate to agent path.
+6. **Runtime disable**: `tracingMode = disabled` in project config drains the queue and stops the flush worker; subsequent spans are no-op.
+7. **Process exit**: synchronous `flushNow()` with 5-second timeout. Beyond timeout, remaining spans are dropped + counted.
 
-**Retention setting**: per project, configured in `project.json` and surfaced in Settings UI alongside the existing Research Intensity / Web Search Depth pickers.
+**Indices** (rebuilt on startup if missing, atomic temp+rename): `traces/index.{date}.json` for fast viewer lookup.
+
+**Retention setting (`rawTraceRetention`)**: per project, configured in `ProjectConfig` (`lib/types.ts`), **not** global `AppSettings`. Surfaced in a project-scoped Settings panel (see §10.2 for IPC + UI specifics).
 
 ```typescript
-// shared-ui/settings-types.ts (proposed addition)
-export type TraceRetention = '7-days' | '1-month' | 'forever'
+// lib/types.ts (proposed addition to ProjectConfig)
+export type TelemetryRetentionLevel = '7-days' | '1-month' | 'forever'
 
-export interface TelemetrySettings {
-  traceRetention: TraceRetention   // default: 'forever'
-  tracingMode: 'enabled' | 'disabled'  // default: 'enabled'
-}
-
-// in DEFAULT_SETTINGS
-telemetry: {
-  traceRetention: 'forever',
-  tracingMode: 'enabled',
+export interface ProjectTelemetryConfig {
+  rawTraceRetention: TelemetryRetentionLevel    // default: 'forever'
+  blobRetention: TelemetryRetentionLevel        // default: 'forever'
+  // metadataRetention is fixed at 'forever' in v0.4 (§3.1 table); reserved
+  // for future use:
+  metadataRetention: 'forever'
+  tracingMode: 'enabled' | 'disabled'           // default: 'enabled'
+  bufferCapacity?: number                        // default: 1024
 }
 
 // resolver
-export function resolveTraceRetention(level: TraceRetention): { evictAfterDays: number | null } {
+export function resolveTelemetryRetention(level: TelemetryRetentionLevel): { evictAfterDays: number | null } {
   switch (level) {
     case '7-days':  return { evictAfterDays: 7 }
     case '1-month': return { evictAfterDays: 30 }
@@ -260,16 +289,17 @@ export function resolveTraceRetention(level: TraceRetention): { evictAfterDays: 
 
 **Retention change**: when a project's retention is downgraded (e.g., `forever → 1-month`), past data older than the new threshold is **not** automatically deleted — the change applies forward. A separate "Compact telemetry" action in Settings runs the eviction sweep on demand. This preserves the principle that the system never silently destroys research data.
 
-### 5.2 Ledgers: entity-keyed, versioned
+### 5.2 Ledgers: entity-keyed, append-only event logs
 
 | Ledger | Path | Key | Status |
 |---|---|---|---|
-| Artifact | `artifacts/ledger.jsonl` | `(artifactId, version)` | upgrade existing artifact JSONL |
-| Memory | `memory-v2/ledger.jsonl` | `memoryId` | upgrade existing memory store |
+| Artifact | `artifacts/ledger.jsonl` | `(artifactId, version)` | **new file** alongside existing per-file artifact JSON (audit #8 — current store at `lib/memory-v2/store.ts:412` is one JSON per artifact, overwritten in place at `:473`; v0.4 does **not** convert that store. The new ledger is append-only and writes one row per op; the per-file artifact JSON remains the read-side authority for current content. P1 migration adds the ledger writes to the existing edit/create paths.) |
+| Memory | `memory-v2/ledger.jsonl` | `memoryId` | **new file** alongside existing memory store; same pattern as artifact ledger |
 | User-response signals | `user-response-signals.jsonl` | `(turnId)` | new (§8.3) |
-| View log | `view-log.jsonl` | `(viewId)` | new (§8.5) |
+| View log | `view-log.jsonl` | `(viewId)` | new (§8.4) |
+| Tracing state | `tracing-state.jsonl` | append-only | audit log of mode/retention/policy changes + degraded-state events (§5.1, §10.1) |
 
-All ledgers retained per project policy (same setting as trace).
+All ledgers governed by `metadataRetention = 'forever'` in v0.4 (no eviction). Project deletion removes them.
 
 **Cross-reference**: each ledger row records `{ traceId?, spanId?, turnId?, toolCallId? }` so analysis can join either direction.
 
@@ -281,33 +311,57 @@ Large content (turn text > 4 KB, tool I/O over cap, diagram SVG, base64 images) 
 
 - Stored once at `.research-pilot/blobs/{sha256}` (single file per hash).
 - Referenced from spans / ledgers as `{ contentHash, size, redactionLevel }`.
-- **Retention**: blobs follow the same project policy as trace + ledgers. Reference-counted GC runs only when retention is finite (`7-days` / `1-month`). For `forever`, blobs are never auto-GC'd; project deletion removes them.
+- **Retention**: governed by `blobRetention` (independent from `rawTraceRetention`). For finite values (`7-days` / `1-month`), reference-counted GC sweeps unreferenced blobs past the threshold. References are counted across traces, ledgers, digest, and view log. For `forever`, blobs are never auto-GC'd; project deletion removes them.
 - `privacy.level = high`: blobs are written with `blobEncryption = at-rest` (libsodium secretstream, key in OS keychain) or not at all (`blobEncryption = none` rejected by the export gate as a configuration error).
+- **Note on retention orthogonality**: a project may set `rawTraceRetention = '7-days'` while keeping `blobRetention = 'forever'`. This makes the longitudinal substrate (digest + ledgers + blobs) survive raw-trace eviction. Conversely, `rawTraceRetention = 'forever' / blobRetention = '1-month'` keeps span structure forever but lets large payload blobs age out.
 
-### 5.4 Resource attributes (per-process)
+### 5.4 Resource attributes (per-process, immutable for process life)
 
-Set once at TraceProvider initialization, attached to every span:
+Per OTel Resource semantics ([OpenTelemetry Resource Data Model](https://opentelemetry.io/docs/specs/otel/resource/data-model/)), Resource attributes are constant for the process lifetime and describe the *producer* of telemetry. They must not vary by project or session, because the Electron main process can manage multiple projects and windows simultaneously.
+
+**Resource attributes (set once at TraceProvider initialization):**
 
 ```
 service.name = "research-copilot"
 service.version = <app/package.json version>
-pipilot.runtime.agent_profile = <coordinator profile id>
-pipilot.runtime.system_prompt_hash = sha256(baseSystemPrompt)
-pipilot.runtime.workspace_commit = git rev-parse HEAD (best effort)
-pipilot.runtime.memory_index_version = <wiki manifest version>
-pipilot.project.id = <project.json id>
-pipilot.project.tag = <free-form user-provided tag, optional>
-pipilot.project.privacy_profile = <low | medium | high>
-gen_ai.conversation.id = <session.id>
+service.instance.id = <ULID minted at process start>
+process.runtime.name = "node"
+process.runtime.version = <process.version>
+os.type = <process.platform>
+pipilot.runtime.app_build_commit = <git rev-parse HEAD at build time>
+pipilot.runtime.system_prompt_hash = sha256(baseSystemPrompt)   // OK at Resource: same for process life
 ```
 
-Note: `pipilot.project.tag` is an **optional, free-form** label. There is no enum, no fixed taxonomy. Layer 3 may classify projects post-hoc using its own scheme.
+**Span attributes (varying per task / project / session — set on every applicable span):**
 
-### 5.5 Trace digest (query acceleration, optional)
+```
+gen_ai.conversation.id     = <session.id>
+pipilot.project.id         = <project.json id>
+pipilot.project.tag        = <free-form user-provided tag, optional>
+pipilot.project.privacy_profile = <low | medium | high>
+pipilot.runtime.agent_profile   = <coordinator profile id; can vary across coordinators in one process>
+pipilot.runtime.workspace_commit = <git rev-parse HEAD of workspace; per-project>
+pipilot.runtime.memory_index_version = <wiki manifest version; per-project>
+```
 
-Even with `forever` retention, trace files become slow to scan for cross-task questions ("how did prompt length evolve over 3 months?"). Digest provides a one-row-per-trace pre-aggregate.
+These are propagated automatically by `Tracer` when a span is created in a given project context. Wiki background agent and other multi-project code paths set the appropriate context per project; spans from each project carry the right project id. (This is exactly the bug audit #1 caught.)
 
-**Path**: `.research-pilot/trace-digest.jsonl` (same retention as trace).
+`pipilot.project.tag` is an **optional, free-form** label. There is no enum, no fixed taxonomy. Layer 3 may classify projects post-hoc using its own scheme.
+
+### 5.5 Trace digest (query acceleration; survives raw-trace eviction)
+
+Trace files are slow to scan for cross-task questions ("how did prompt length evolve over 3 months?"). Digest provides a one-row-per-trace pre-aggregate. Critically, digest is part of `metadataRetention` (forever in v0.4) — it survives `rawTraceRetention` eviction and is the longitudinal substrate when raw traces are gone.
+
+**Path**: `.research-pilot/trace-digest.jsonl` (governed by `metadataRetention = 'forever'`, independent of `rawTraceRetention`).
+
+**Trace closure semantics (audit #9):** a digest row is materialized when the trace's root span ends **AND** its active descendant refcount reaches zero **OR** a watchdog timeout fires. Concretely:
+
+- **Root span**: `invoke_agent {agent.name}` ends when `chat()` returns.
+- **Active descendant refcount**: a per-trace counter incremented when a span starts under that trace, decremented when it ends. Background spawns that legitimately outlive the root (memory extract, wiki bg) **do not increment this counter** — they live on their own trace per §6.5.
+- **Watchdog**: if the refcount hasn't reached zero 30 seconds after root end (e.g., a tool span never closed due to a bug), the digest is materialized with `digestClosureReason = 'watchdog_timeout'` and the un-closed spans are noted in `pipilot.trace.unclosed_span_ids`. The trace is still queryable; it's marked degraded.
+- **Crash recovery**: on startup, TraceStore scans `traces/spans.{date}.jsonl` for traces whose root has ended but whose digest row is missing; replays digest materialization. Idempotent on `traceId`.
+
+This avoids two failure modes: (a) digest written too early and missing real children; (b) digest never written because a fire-and-forget background task never returned.
 
 **Schema** (one row per `traceId`, materialized when the trace's last span ends):
 
@@ -341,7 +395,7 @@ Even with `forever` retention, trace files become slow to scan for cross-task qu
 }
 ```
 
-Digest is **derived data**, not a primary record. If a digest schema bug is found, regenerate from traces (when present). Under `7-days` retention, digest is the longitudinal pre-aggregate that survives trace eviction; under `forever`, digest just speeds up queries.
+Digest is **derived data when raw trace exists, primary record when raw trace is evicted**. Schema versioned via `tracePolicyVersion` so future digest-schema bugs can be re-derived from raw traces only while traces still exist. Once raw traces age out, the digest row is the only record of that trace.
 
 ### 5.6 Storage size estimates
 
@@ -407,14 +461,20 @@ Per OpenTelemetry GenAI v1.37 conventions:
 
 ### 6.3 Standard OTel attributes (every applicable span)
 
-- `gen_ai.system` ∈ `{anthropic, openai, gcp.gemini, anthropic.subscription, openai.codex}`.
+**Schema pinning (audit #6)**: this spec targets OpenTelemetry GenAI semantic conventions as of the version pinned in `lib/telemetry/semantic-registry.ts` (`schemaUrl`). Every emitted span carries the OTel `schema_url` resource attribute. P0 gate includes a schema-conformance test that validates emitted attributes against the pinned schema. When semconv ships a new stable version, we either bump `schemaUrl` and adjust the registry, or stay pinned with explicit deprecation notes.
+
+**Current target: OTel GenAI semconv (Sept 2025+ stable), with these attributes:**
+
+- `gen_ai.provider.name` ∈ `{anthropic, openai, gcp.gemini, anthropic.subscription, openai.codex}`. (Was `gen_ai.system` in older drafts; renamed.)
 - `gen_ai.request.model`, `gen_ai.response.model`.
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`.
-- `gen_ai.usage.cache_read_input_tokens`, `gen_ai.usage.cache_creation_input_tokens` (Anthropic).
+- `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens` (Anthropic). Note dotted segment between `cache_*` and `input_tokens`.
 - `gen_ai.response.finish_reasons`.
 - `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` ∈ `{function, retrieval, extension}`.
 - `gen_ai.conversation.id` (= session.id).
 - `error.type`, `span.status` on failure.
+
+**Migration note**: when this spec freezes (P0), the semantic registry locks to a specific `schema_url`. Backends (Langfuse / Phoenix) may parse newer or older fields differently; we document the chosen pin and require backends to handle our pinned schema, not vice-versa.
 
 ### 6.4 PiPilot extension attributes (`pipilot.*` namespace)
 
@@ -435,10 +495,19 @@ Validated against `lib/telemetry/semantic-registry.ts` in dev mode.
 
 **Removed in v0.3** (subjective; moved to Layer 3): `pipilot.user_message_type`, `pipilot.user_message_type.v2`, `pipilot.referring_expressions`, `pipilot.intent_labels`.
 
-### 6.5 Local compute: dual-span model
+### 6.5 Local compute and other long-running async tasks: separate-trace + Link
 
-- `execute_tool local_compute_execute` (submit): completes when `submitRun()` returns the `runId`.
-- `execute_task local_compute` (run): independent root, `traceId` matches submitter, `parentSpanId = null`, OTel `Link { type: "follows_from", spanId: <submit_span_id> }`. Run lifetime — `runner.ts` updates produce span events; terminal state ends the span.
+**Audit #2 fix**: a single OTel `traceId` describes one causally connected operation. Reusing a traceId with `parentSpanId = null` is invalid. Long-running async tasks that legitimately outlive their submit operation (local-compute runs, background memory extraction, wiki background agent) live on **their own trace** with an OTel `Link` back to the originating span.
+
+**Local compute:**
+- `execute_tool local_compute_execute` (submit): completes when `submitRun()` returns the `runId`. Lives on the user-task trace as a normal child span.
+- `execute_task local_compute` (run): **separate trace** (new `traceId`), root span. The OTel root carries `Links: [{ context: <submit-span-context>, attributes: { 'pipilot.link.kind': 'follows_from' } }]`. The run trace's resource carries the same `pipilot.project.id` and `gen_ai.conversation.id` (as span attributes per §5.4) so it joins to the originating session at analysis time. Run lifetime — `runner.ts` updates produce span events; terminal state ends the span.
+
+**Background memory extraction (`maybeExtractMemories`, `lib/agents/coordinator.ts:948`)**: same pattern — runs on its own trace with `Link { kind: "spawned_from", spanId: <invoke_agent root> }`. This is what audit #9 flagged: a fire-and-forget background task must not hold the user-task trace's refcount open.
+
+**Wiki background agent (`app/src/main/ipc.ts:917`)**: own trace, no link to a user task (it's not initiated by a user turn). `pipilot.project.id` set to whichever project the wiki agent is currently visiting; per audit #1 this is correct precisely *because* project id is a span attribute, not a Resource attribute.
+
+**Why this is correct OTel**: a trace = "what happened for one logical operation". The user's `chat()` is one operation; the long-running compute run is a different operation that *was caused by* the first. Links express that causal relationship without conflating the two operations into one trace.
 
 ### 6.6 Explain snapshot reconciliation
 
@@ -485,15 +554,26 @@ Content not included (already in blob store if retained). Pure facts.
 
 ### 6.9 Events (large / sensitive payloads)
 
-Spans carry small attributes. Large or sensitive payloads attach as OTel events:
+Spans carry small attributes. Large or sensitive payloads attach as OTel events.
 
-- `gen_ai.user.message`, `gen_ai.assistant.message`, `gen_ai.tool.message`, `gen_ai.choice` — OTel-standard events.
-- `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` — tool I/O.
+**OTel-standard event (audit #6)**: prompt/completion messages and tool I/O are emitted via the consolidated `gen_ai.client.inference.operation.details` event (current OTel GenAI convention; replaces older per-message events such as `gen_ai.user.message`, `gen_ai.assistant.message`, `gen_ai.tool.message`, `gen_ai.choice`). The event body carries the full message array under `gen_ai.input.messages` / `gen_ai.output.messages` keys.
+
+```jsonc
+// gen_ai.client.inference.operation.details event body shape
+{
+  "gen_ai.input.messages":  [ { "role": "user", "parts": [ ... ] }, ... ],
+  "gen_ai.output.messages": [ { "role": "assistant", "parts": [ ... ] } ],
+  "gen_ai.system_instructions": [ ... ]   // optional, large content via blob ref
+}
+```
+
+**PiPilot-specific events** (no OTel equivalent):
+
 - `pipilot.artifact.op` — `{artifactId, op, version_after, contentHash, ledgerRowId}`.
 - `pipilot.memory.op` — `{memoryId, op, scope, type, ledgerRowId}`.
 - `pipilot.detector.flag` — `{rule, severity, action_taken}`.
 
-Event bodies pass through redaction (§7) before being attached.
+Event bodies pass through redaction (§7) before being attached. Over-cap content goes to blob store and the event carries `{ contentHash, size, redactionLevel }` references.
 
 ---
 
@@ -672,13 +752,36 @@ Per-project, written once to `.research-pilot/project.json`:
 
 ### 10.1 Tracing-state log
 
-`tracing-state.jsonl` records every toggle (mode change, retention change, redaction policy bump, export override, manual eviction sweep). Append-only, project-life retention.
+`tracing-state.jsonl` records every toggle (mode change, retention change, redaction policy bump, export override, manual eviction sweep, degraded-state events from §5.1). Append-only, governed by `metadataRetention = 'forever'`.
 
 ```jsonc
 { "timestamp": "...", "fromState": "...", "toState": "...", "actor": "user | system | export-gate", "reason": "..." }
 ```
 
 Tracing cannot be silently disabled: any toggle while `tracingMode = enabled` is auditable.
+
+### 10.2 Project-scoped configuration (audit #4)
+
+Telemetry settings are **per-project**, not global. The current `AppSettings` (`shared-ui/settings-types.ts`) is global (lives in `~/.research-copilot/config.json`, managed by `shared-electron/ipc-base.ts:157`); existing `ProjectConfig` (`lib/types.ts:169`) does not yet carry a project id, privacy fields, or telemetry config. v0.4 adds them:
+
+```typescript
+// lib/types.ts (proposed extension)
+export interface ProjectConfig {
+  // Existing fields preserved...
+
+  // NEW (v0.4):
+  id: string                              // ULID, generated on first load if missing
+  privacy: ProjectPrivacyConfig           // see §10
+  telemetry: ProjectTelemetryConfig       // see §5.1
+  configSchemaVersion: number             // for migration; v0.4 = 1
+}
+```
+
+**Migration**: on project load, if `id` is missing, generate a ULID and write it back. If `privacy` or `telemetry` are missing, populate with defaults (privacy `level=low`, telemetry `forever`/`enabled`) and write back. Migration is one-shot, idempotent, recorded in `tracing-state.jsonl` with `actor=system, reason=config-migration-v1`.
+
+**IPC**: project-scoped settings get their own IPC channels (`project:get-config`, `project:update-config`), distinct from the existing global-settings IPC. The settings UI surfaces project settings in a project-scoped sidebar/panel; global settings remain in the main settings dialog. (Concrete UI placement is a P0-gate decision; a mockup is required at gate.)
+
+**Reading order at runtime**: where global settings exist (e.g., model defaults), they apply unless overridden by project config. Telemetry has **no** global counterpart — it's project-only. Reason: a heavy-research user may want `forever` for one project and `7-days` for another (e.g., a project that contains third-party data).
 
 ---
 
@@ -687,21 +790,20 @@ Tracing cannot be silently disabled: any toggle while `tracingMode = enabled` is
 ### P0 — Interface freeze (no functional output)
 
 - Span schema (§6), `pipilot.*` semantic registry, ID hierarchy (§4.1).
-- `turnId` definition (§4.1).
-- Trace digest schema (§5.5).
-- Skill activation events (§6.7).
-- Compaction discarded payload (§6.8).
-- Ledger schemas (§8.1–§8.4) — all in objective form, no subjective fields.
-- Redaction policy v1 (§7).
-- TraceStore append-only model + JsonlSpanExporter shape (§5.1).
-- AsyncLocalStorage propagation contract (§4.2).
+- **OTel schema pinning (audit #6)**: chosen `schema_url` committed to `lib/telemetry/semantic-registry.ts`; conformance test runs in CI.
+- **Resource vs span attribute split (audit #1)** locked: Resource = process/build only; project/session/privacy on span attributes.
+- **Local-compute trace model (audit #2)** locked: separate trace + Link, not shared traceId.
+- **turnId IPC envelope (audit #5)**: `agent:send` IPC handler signature updated to require `clientMessageId` + `clientTimestamp`; preload bridge typed.
+- **Three retention dimensions (audit #3)**: `rawTraceRetention`, `blobRetention`, `metadataRetention` enums and resolvers.
+- **ProjectConfig migration (audit #4)**: `lib/types.ts` schema bump to v1 with `id`, `privacy`, `telemetry`; migration helper + idempotency proof.
+- **Bounded queue + drop policy (audit #7)**: TraceStore queue/disk-full/disable-toggle behavior specified and unit-testable.
+- **Trace closure (audit #9)**: refcount + watchdog + crash-recovery digest replay specified.
 - `tracedCompleteSimple` helper signature.
 - Privacy profile schema (§10).
 - Tracing-state log schema (§10.1).
-- `project.json` upgrade with `privacy.*` and `telemetry.{traceRetention, tracingMode}`.
-- Settings UI: add **Trace retention** picker (`7-days | 1-month | forever`, default `forever`) alongside existing pickers in `shared-ui/settings-types.ts`.
+- Settings UI mockup for project-scoped Telemetry panel (§10.2).
 
-**Gate**: spec accepted; semantic registry committed; types compile; settings UI mockup approved; no runtime behavior change.
+**Gate**: spec accepted; semantic registry committed; types compile; OTel conformance test green against pinned `schema_url`; settings UI mockup approved; no runtime behavior change.
 
 ### P1 — Sub-LLM coverage + tool spans + usage re-source + ledgers
 
@@ -785,7 +887,7 @@ When `privacy.containsThirdPartyData = true`, default-disable OTLP. **Recommenda
 
 ### 12.4 Subscription provider naming
 
-`anthropic-sub` → `gen_ai.system = anthropic.subscription` (separate from direct API). **Recommendation**: keep separate; merging is a SQL operation, splitting after the fact is not.
+`anthropic-sub` → `gen_ai.provider.name = anthropic.subscription` (separate from direct API). **Recommendation**: keep separate; merging is a SQL operation, splitting after the fact is not.
 
 ### 12.5 Storage stats validation
 
@@ -823,7 +925,16 @@ When we tighten redaction, old spans look more leaky than new ones. Recommendati
 | **NEW v0.3: Outcome ledger had embedded judgments** | Renamed to user-response-signals; raw facts only | §8.3 |
 | **NEW v0.3: User shouldn't be a research labeler** | No thumbs UI in spec; signals ledger captures behavior, not user-provided labels | §8.3, §1.2 |
 | **NEW v0.3: Trace retention was hardcoded 7d** | Configurable picker `7-days | 1-month | forever`, default `forever` | §5.1 |
-| `turnId` undefined across ledgers | `turnId = userMessageId`, propagated as `pipilot.turn.id` | §4.1 |
+| **NEW v0.4: Resource attributes carried per-project state (audit #1)** | project/session/privacy moved to span attributes; Resource = process/build only | §5.4 |
+| **NEW v0.4: Local-compute reused traceId with null parent (audit #2)** | Async run is its own trace + OTel Link `follows_from`/`spawned_from` | §6.5 |
+| **NEW v0.4: Retention statements contradicted (audit #3)** | Three independent dimensions: rawTrace, blob, metadata | §3.1, §5.1, §5.3 |
+| **NEW v0.4: Project settings designed as global (audit #4)** | ProjectConfig migration; project-scoped IPC + UI | §10.2 |
+| **NEW v0.4: turnId not implementable across renderer/main (audit #5)** | Renderer's existing message id passed in `agent:send` envelope | §4.1 |
+| **NEW v0.4: GenAI semconv outdated (audit #6)** | Migrated to current semconv; schema_url pinned + conformance test | §6.3 |
+| **NEW v0.4: Local exporter lacked bounded queue (audit #7)** | Bounded queue + drop counter + degraded mode + disable toggle | §5.1 |
+| **NEW v0.4: Artifact JSONL upgrade misrepresented (audit #8)** | Acknowledged per-file JSON store; ledger added alongside | §5.2, §8.1 |
+| **NEW v0.4: Digest closure underspecified (audit #9)** | Root-end + active-child refcount + watchdog + crash replay | §5.5 |
+| `turnId` undefined across ledgers | `turnId = clientMessageId`, propagated as `pipilot.turn.id` | §4.1 |
 | Compaction loses what was dropped | `pipilot.compaction.discarded` event with turn IDs and artifact refs | §6.8 |
 | Skill activation only captured at root | `pipilot.skill.load` events + per-step `pipilot.active_skills` | §6.7 |
 | §5.3 retention contradicted §10 | Reference-counted GC tied to project policy; encryption required at `level=high` | §5.3, §10 |
@@ -835,7 +946,9 @@ When we tighten redaction, old spans look more leaky than new ones. Recommendati
 1. **Storage at `forever` for very heavy users**: estimates suggest ~12 GB/year for the heaviest profile. Acceptable on modern SSDs; may surprise users on smaller laptops. P1 self-monitoring + Settings warning planned (§5.6, §12.5).
 2. **Redaction policy version drift**: §12.6.
 3. **Export gate trust model**: relies on user setting privacy profile honestly; no enforcement against mislabeling. Documented as known limitation.
-4. **Digest under retention downgrade**: if a user flips `forever → 7-days` and then runs "Compact telemetry", they lose blob content but keep digest+ledgers. Layer 3 longitudinal queries still work but cannot retrieve original prompt/completion text. This is the intended trade-off; surfaced in the Compact action's confirmation dialog.
+4. **Digest as primary record after raw-trace eviction**: when `rawTraceRetention` is finite, post-eviction digest is the only record. Digest schema must be rich enough that key analyses don't require raw spans. v0.4 mitigates this by allowing `rawTraceRetention='7-days', blobRetention='forever'` so over-cap content survives. Whether digest schema is *sufficient* for a given analysis is something each analysis project must verify against its data needs.
+5. **OTel semconv pin freshness**: pinning `schema_url` ensures internal correctness but may lag external tooling. Bumping the pin requires registry update + conformance test pass + backend re-verification (Langfuse/Phoenix). Process should be quarterly review.
+6. **Trace closure watchdog timeout choice**: 30 seconds is a guess. Real applications may have legitimate background spans that take longer (e.g., a slow wiki indexing run). Watchdog firing produces a degraded-marker, not data loss. P1 should monitor watchdog firing rate and adjust if false-positive rate is high.
 
 ---
 
