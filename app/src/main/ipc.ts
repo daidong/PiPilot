@@ -5,7 +5,7 @@ import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'el
 import electronUpdater from 'electron-updater'
 const { autoUpdater } = electronUpdater
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, watch, type FSWatcher } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, watch, type FSWatcher } from 'fs'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
 import { createCoordinator } from '../../../lib/agents/coordinator'
 import {
@@ -235,6 +235,28 @@ export function registerWindow(win: BrowserWindow): void {
     }
     windowStates.delete(key)
   })
+}
+
+/**
+ * Recursively sum the on-disk size of `path`. Returns 0 when the path is
+ * missing, unreadable, or a special file. Used by the telemetry footprint
+ * IPC — must never throw, since the agent path runs through the same
+ * handler block.
+ */
+function duFileOrDir(path: string): number {
+  try {
+    if (!existsSync(path)) return 0
+    const st = statSync(path)
+    if (st.isFile()) return st.size
+    if (!st.isDirectory()) return 0
+    let total = 0
+    for (const entry of readdirSync(path)) {
+      total += duFileOrDir(join(path, entry))
+    }
+    return total
+  } catch {
+    return 0
+  }
 }
 
 function createArtifactFromWorkspaceFile(state: WindowRuntimeState, filePath: string) {
@@ -1642,34 +1664,38 @@ export function registerIpcHandlers(): void {
       const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
       const tracingMode = config.telemetry?.tracingMode ?? 'enabled'
       const bufferCapacity = config.telemetry?.bufferCapacity ?? 1024
-      // Storage footprint: sum persisted approxBytes from trace-storage-stats.jsonl
-      // PLUS the in-memory `dailyBytes` counter — the file only flushes on day-roll
-      // and on tracer shutdown, so without this the panel would show stale numbers
-      // (often 0) for the entire current session.
-      let persistedBytes = 0
-      const statsFile = join(state.projectPath, PATHS.traceStorageStats)
-      if (existsSync(statsFile)) {
-        try {
-          const raw = readFileSync(statsFile, 'utf-8')
-          for (const line of raw.split('\n')) {
-            const t = line.trim()
-            if (!t) continue
-            try {
-              const row = JSON.parse(t) as { approxBytes?: number }
-              if (typeof row.approxBytes === 'number') persistedBytes += row.approxBytes
-            } catch { /* skip malformed */ }
-          }
-        } catch { /* best effort */ }
+      // Storage footprint: walk the filesystem under .research-pilot/ for every
+      // telemetry-owned file/dir per spec §5+§8. This is the honest "what's on
+      // disk" answer — includes pre-existing traces from before live readout,
+      // crash-recovered runs, every UTC day's spans file, blobs, ledgers, and
+      // the various .jsonl logs.
+      const telemetryPaths = [
+        PATHS.traces,
+        PATHS.blobs,
+        PATHS.traceDigest,
+        PATHS.traceStorageStats,
+        PATHS.tracingState,
+        PATHS.userResponseSignals,
+        PATHS.viewLog,
+        PATHS.ledgerArtifact,
+        PATHS.ledgerMemory
+      ]
+      let storageFootprintBytes = 0
+      for (const rel of telemetryPaths) {
+        storageFootprintBytes += duFileOrDir(join(state.projectPath, rel))
       }
+      // In-flight bytes is the live counter inside TraceStore — bytes
+      // queued/written THIS session but the filesystem stat may lag a few ms
+      // for the very latest flush. Reported separately so the UI can show
+      // "X in current session" when it's nonzero.
       const inFlight = state.tracer?.store.inFlightDailyBytes ?? { date: '', approxBytes: 0 }
-      const storageFootprintBytes = persistedBytes + inFlight.approxBytes
       return {
         projectId: config.id ?? 'unknown',
         tracingMode,
         bufferCapacity,
         storageFootprintBytes,
         inFlightBytes: inFlight.approxBytes,
-        persistedBytes
+        persistedBytes: storageFootprintBytes
       }
     } catch (err: any) {
       return { error: err?.message ?? 'failed' }
