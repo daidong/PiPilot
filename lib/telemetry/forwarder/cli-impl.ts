@@ -23,19 +23,21 @@ interface CliArgs {
   timeoutMs?: number
   noCursor: boolean
   verbosity: 'quiet' | 'normal' | 'verbose'
+  encoding: 'proto' | 'json'
 }
 
 function parseArgs(argv: string[]): CliArgs | { error: string } {
   if (argv.length === 0) {
     return {
       error:
-        'Usage: trace-forward <projectPath> <endpoint> [--follow] [--header "K=V" ...] [--batch N] [--timeout MS] [--no-cursor] [--quiet|--verbose]'
+        'Usage: trace-forward <projectPath> <endpoint> [--follow] [--json] [--header "K=V" ...] [--batch N] [--timeout MS] [--no-cursor] [--quiet|--verbose]'
     }
   }
   const positional: string[] = []
   let followMode = false
   let noCursor = false
   let verbosity: CliArgs['verbosity'] = 'normal'
+  let encoding: 'proto' | 'json' = 'proto'
   const headers: Record<string, string> = {}
   let batchSize: number | undefined
   let timeoutMs: number | undefined
@@ -45,6 +47,8 @@ function parseArgs(argv: string[]): CliArgs | { error: string } {
     else if (arg === '--no-cursor') noCursor = true
     else if (arg === '--quiet' || arg === '-q') verbosity = 'quiet'
     else if (arg === '--verbose' || arg === '-v') verbosity = 'verbose'
+    else if (arg === '--json') encoding = 'json'
+    else if (arg === '--proto') encoding = 'proto'
     else if (arg === '--header' || arg === '-H') {
       const next = argv[++i]
       if (!next) return { error: '--header requires "K=V"' }
@@ -70,7 +74,7 @@ function parseArgs(argv: string[]): CliArgs | { error: string } {
   const [projectPath, endpoint] = positional as [string, string]
   if (!existsSync(projectPath)) return { error: `projectPath does not exist: ${projectPath}` }
   if (!/^https?:\/\//.test(endpoint)) return { error: `endpoint must start with http:// or https://: ${endpoint}` }
-  return { projectPath, endpoint, follow: followMode, headers, batchSize, timeoutMs, noCursor, verbosity }
+  return { projectPath, endpoint, follow: followMode, headers, batchSize, timeoutMs, noCursor, verbosity, encoding }
 }
 
 async function main(): Promise<number> {
@@ -86,7 +90,8 @@ async function main(): Promise<number> {
     batchSize: parsed.batchSize,
     timeoutMs: parsed.timeoutMs,
     persistCursor: !parsed.noCursor,
-    verbosity: parsed.verbosity
+    verbosity: parsed.verbosity,
+    encoding: parsed.encoding
   }
   if (!parsed.follow) {
     const r = await replayAll(opts)
@@ -100,6 +105,8 @@ async function main(): Promise<number> {
   if (parsed.verbosity !== 'quiet') {
     console.log(`Tailing ${parsed.projectPath} → ${parsed.endpoint} (Ctrl+C to stop)`)
   }
+  // Default keepAlive: true keeps fs.watch + poll timer ref'd so the CLI
+  // process stays alive until SIGINT.
   const handle = await follow(opts)
   return new Promise<number>((resolve) => {
     const onSig = () => {

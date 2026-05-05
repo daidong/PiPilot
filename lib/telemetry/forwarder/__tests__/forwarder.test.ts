@@ -73,9 +73,12 @@ function makeFakeFetch(behavior: { status?: number; throwError?: string } = {}) 
   const status = behavior.status ?? 200
   const fakeFetch: typeof fetch = async (input, init) => {
     if (behavior.throwError) throw new Error(behavior.throwError)
+    let body = ''
+    if (typeof init?.body === 'string') body = init.body
+    else if (init?.body instanceof Uint8Array) body = `<binary ${(init.body as Uint8Array).length} bytes>`
     requests.push({
       url: typeof input === 'string' ? input : input.toString(),
-      body: typeof init?.body === 'string' ? init.body : '',
+      body,
       headers: (init?.headers ?? {}) as Record<string, string>
     })
     return new Response(status === 200 ? '{}' : 'error', {
@@ -88,7 +91,7 @@ function makeFakeFetch(behavior: { status?: number; throwError?: string } = {}) 
 
 // ─── replayAll ────────────────────────────────────────────────────────
 
-test('replayAll posts every envelope across multiple days', async () => {
+test('replayAll posts every envelope across multiple days (json mode)', async () => {
   const dir = makeProject({
     '2026-05-04': [fakeEnvelope('a'), fakeEnvelope('b')],
     '2026-05-05': [fakeEnvelope('c'), fakeEnvelope('d'), fakeEnvelope('e')]
@@ -98,6 +101,7 @@ test('replayAll posts every envelope across multiple days', async () => {
     const r = await replayAll({
       projectPath: dir,
       endpoint: 'http://localhost:6006/v1/traces',
+      encoding: 'json',
       fetchImpl: fakeFetch,
       verbosity: 'quiet'
     })
@@ -110,6 +114,26 @@ test('replayAll posts every envelope across multiple days', async () => {
     const first = JSON.parse(requests[0]!.body)
     assert.ok(Array.isArray(first.resourceSpans))
     assert.equal(first.resourceSpans.length, 2)
+    assert.equal(requests[0]!.headers['Content-Type'], 'application/json')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('replayAll: default encoding is proto (Content-Type application/x-protobuf)', async () => {
+  const dir = makeProject({ '2026-05-05': [fakeEnvelope('a'), fakeEnvelope('b')] })
+  const { fakeFetch, requests } = makeFakeFetch()
+  try {
+    await replayAll({
+      projectPath: dir,
+      endpoint: 'http://localhost:6006/v1/traces',
+      fetchImpl: fakeFetch,
+      verbosity: 'quiet'
+    })
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0]!.headers['Content-Type'], 'application/x-protobuf')
+    // Body is binary — JSON.parse should fail.
+    assert.throws(() => JSON.parse(requests[0]!.body))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -151,6 +175,7 @@ test('replayAll resumes from cursor after appending new envelopes', async () => 
     await replayAll({
       projectPath: dir,
       endpoint: 'http://localhost:6006/v1/traces',
+      encoding: 'json',
       fetchImpl: f1,
       verbosity: 'quiet'
     })
@@ -162,6 +187,7 @@ test('replayAll resumes from cursor after appending new envelopes', async () => 
     const out = await replayAll({
       projectPath: dir,
       endpoint: 'http://localhost:6006/v1/traces',
+      encoding: 'json',
       fetchImpl: f2,
       verbosity: 'quiet'
     })
@@ -221,6 +247,7 @@ test('replayAll skips malformed JSONL lines without aborting', async () => {
     const r = await replayAll({
       projectPath: dir,
       endpoint: 'http://localhost:6006/v1/traces',
+      encoding: 'json',
       fetchImpl: fakeFetch,
       verbosity: 'quiet'
     })
@@ -276,12 +303,14 @@ test('per-endpoint cursor: same project, two endpoints, each tracks independentl
     await replayAll({
       projectPath: dir,
       endpoint: 'http://localhost:6006/v1/traces',
+      encoding: 'json',
       fetchImpl: f1,
       verbosity: 'quiet'
     })
     await replayAll({
       projectPath: dir,
       endpoint: 'http://localhost:4318/v1/traces', // different endpoint
+      encoding: 'json',
       fetchImpl: f2,
       verbosity: 'quiet'
     })
@@ -305,7 +334,8 @@ test('follow: starts up, processes existing rows, then stops cleanly', async () 
       projectPath: dir,
       endpoint: 'http://localhost:6006/v1/traces',
       fetchImpl: fakeFetch,
-      verbosity: 'quiet'
+      verbosity: 'quiet',
+      keepAlive: false
     })
     // Initial replayAll inside follow() should have posted the existing row.
     assert.ok(handle.result.envelopesPosted >= 1)
@@ -326,7 +356,8 @@ test('follow: detects a new line appended to today\'s file', async () => {
       projectPath: dir,
       endpoint: 'http://localhost:6006/v1/traces',
       fetchImpl: fakeFetch,
-      verbosity: 'quiet'
+      verbosity: 'quiet',
+      keepAlive: false
     })
     const baselineRequests = requests.length
     // Append a new envelope.

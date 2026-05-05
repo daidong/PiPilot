@@ -41,6 +41,7 @@ import {
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { encodeTracesProto } from './proto.js'
 
 export interface ForwardOptions {
   /** Project root (contains `.research-pilot/traces/`). */
@@ -59,6 +60,20 @@ export interface ForwardOptions {
   persistCursor?: boolean
   /** Verbosity. Default 'normal'. 'quiet' suppresses progress prints. */
   verbosity?: 'quiet' | 'normal' | 'verbose'
+  /**
+   * Wire format. Default 'proto' — Phoenix and most production OTLP receivers
+   * only accept `application/x-protobuf` at /v1/traces (HTTP 415 otherwise).
+   * Use 'json' when targeting receivers that explicitly support OTLP/JSON
+   * (OpenTelemetry Collector with the otlphttp/json receiver, custom tools).
+   */
+  encoding?: 'proto' | 'json'
+  /**
+   * Default true. When true, fs.watch and setInterval are kept ref'd so the
+   * process stays alive while following. Tests pass false so process exits
+   * naturally after stop() — fs.watch on macOS sometimes doesn't fully
+   * release on close(), causing tests to hang.
+   */
+  keepAlive?: boolean
   /** Inject for testing — defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch
   /** Inject for testing — defaults to Date.now. */
@@ -180,7 +195,12 @@ function readNewLines(filePath: string, fromOffset: number): { lines: string[]; 
 async function postBatch(
   endpoint: string,
   lines: string[],
-  opts: { headers?: Record<string, string>; timeoutMs: number; fetchImpl: typeof fetch }
+  opts: {
+    headers?: Record<string, string>
+    timeoutMs: number
+    fetchImpl: typeof fetch
+    encoding: 'proto' | 'json'
+  }
 ): Promise<{ ok: boolean; status?: number; error?: string }> {
   if (lines.length === 0) return { ok: true }
   const resourceSpans: unknown[] = []
@@ -194,13 +214,28 @@ async function postBatch(
     }
   }
   if (resourceSpans.length === 0) return { ok: true }
+
+  let contentType: string
+  let body: BodyInit
+  if (opts.encoding === 'proto') {
+    contentType = 'application/x-protobuf'
+    try {
+      body = encodeTracesProto(resourceSpans as Parameters<typeof encodeTracesProto>[0])
+    } catch (err) {
+      return { ok: false, error: `proto encode failed: ${(err as Error).message}` }
+    }
+  } else {
+    contentType = 'application/json'
+    body = JSON.stringify({ resourceSpans })
+  }
+
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), opts.timeoutMs)
   try {
     const res = await opts.fetchImpl(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(opts.headers ?? {}) },
-      body: JSON.stringify({ resourceSpans }),
+      headers: { 'Content-Type': contentType, ...(opts.headers ?? {}) },
+      body,
       signal: ctl.signal
     })
     if (!res.ok) {
@@ -239,6 +274,7 @@ export async function replayAll(opts: ForwardOptions): Promise<ForwardResult> {
   const batchSize = opts.batchSize ?? 100
   const timeoutMs = opts.timeoutMs ?? 5000
   const persistCursor = opts.persistCursor ?? true
+  const encoding = opts.encoding ?? 'proto'
   const hash = endpointHash(opts.endpoint)
 
   const cursor = persistCursor ? readCursor(opts.projectPath) : {}
@@ -262,7 +298,7 @@ export async function replayAll(opts: ForwardOptions): Promise<ForwardResult> {
     let posted = 0
     let errored = 0
     for (const batch of chunk(lines, batchSize)) {
-      const res = await postBatch(opts.endpoint, batch, { headers: opts.headers, timeoutMs, fetchImpl })
+      const res = await postBatch(opts.endpoint, batch, { headers: opts.headers, timeoutMs, fetchImpl, encoding })
       if (res.ok) {
         posted += batch.length
         result.bytesPosted += batch.reduce((acc, l) => acc + Buffer.byteLength(l, 'utf8'), 0)
@@ -299,6 +335,7 @@ export async function follow(
   const batchSize = opts.batchSize ?? 100
   const timeoutMs = opts.timeoutMs ?? 5000
   const persistCursor = opts.persistCursor ?? true
+  const encoding = opts.encoding ?? 'proto'
   const hash = endpointHash(opts.endpoint)
 
   const cursor = persistCursor ? readCursor(opts.projectPath) : {}
@@ -335,7 +372,7 @@ export async function follow(
       let errored = 0
       let posted = 0
       for (const batch of chunk(lines, batchSize)) {
-        const res = await postBatch(opts.endpoint, batch, { headers: opts.headers, timeoutMs, fetchImpl })
+        const res = await postBatch(opts.endpoint, batch, { headers: opts.headers, timeoutMs, fetchImpl, encoding })
         if (res.ok) {
           posted += batch.length
           result.bytesPosted += batch.reduce((acc, l) => acc + Buffer.byteLength(l, 'utf8'), 0)
@@ -363,12 +400,19 @@ export async function follow(
   // Set up the watcher. We listen on the traces directory so newly-created
   // files (UTC day-roll mid-process) are picked up. Fallback poll handles
   // platforms where fs.watch is unreliable (some Linux containers).
+  // `keepAlive=false` (tests) makes both refs unref'd so the process can
+  // exit naturally — fs.watch on macOS sometimes doesn't fully release on
+  // close() and would otherwise hang the test runner.
+  const keepAlive = opts.keepAlive ?? true
   const dir = tracesDir(opts.projectPath)
   if (existsSync(dir)) {
     try {
-      watcher = watch(dir, { persistent: true }, () => {
+      watcher = watch(dir, { persistent: keepAlive }, () => {
         void tickOnce()
       })
+      if (!keepAlive && watcher && 'unref' in watcher && typeof watcher.unref === 'function') {
+        watcher.unref()
+      }
     } catch {
       // Watcher unavailable; rely on polling.
       watcher = null
@@ -377,7 +421,7 @@ export async function follow(
   pollTimer = setInterval(() => {
     void tickOnce()
   }, 1000)
-  if (typeof pollTimer === 'object' && pollTimer && 'unref' in pollTimer) {
+  if (!keepAlive && pollTimer && typeof pollTimer === 'object' && 'unref' in pollTimer) {
     ;(pollTimer as { unref: () => void }).unref()
   }
   // Initial sweep.
