@@ -1,6 +1,16 @@
 # Telemetry & Trace: Objective Runtime Data Capture
 
-> Spec version: 0.5 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
+> Spec version: 0.6 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
+>
+> **Changelog v0.5 → v0.6** (review-driven correctness fixes):
+>
+> - **High — §10 Resource/span split residual contradiction**: §10's "Resource attributes carry the profile" rewritten to consistently say privacy profile is on **span attributes**, matching §5.4. Resource is process-life immutable; privacy profile is per-project and cannot live there.
+> - **High — §5.4 system_prompt_hash placement**: `pipilot.runtime.system_prompt_hash` moved from Resource to root `invoke_agent` span attribute. The current `baseSystemPrompt` (`lib/agents/coordinator.ts:491`) embeds project-specific skills catalog, so it varies across projects/coordinators within one process — invalid as Resource. Resource keeps `pipilot.runtime.shell_prompt_hash` (hash of the global `SYSTEM_PROMPT` constant only).
+> - **High — §6.3 OTel semconv stability claim**: GenAI semconv is still marked Development, not Stable. Wording corrected to "pinned development/experimental semconv with conformance tests"; bumping the pin requires re-verification when semconv graduates.
+> - **Medium — §6.3 / §12.4 provider naming**: `gen_ai.provider.name` reverts to OTel's standard values (`anthropic`, `openai`, `gcp.gemini`). Subscription / Codex distinctions move to PiPilot-namespaced attributes: `pipilot.auth.mode` ∈ `{api-key, subscription, codex-cli}` and `pipilot.billing_source`. Cross-backend readability restored.
+> - **Medium — §6.3 schema_url placement**: clarified — `schema_url` is set on the OTLP `ResourceSpans` envelope and on the OTel `Tracer` (instrumentation scope), not as a per-span attribute.
+> - **Medium — §5.1 ring queue drop policy**: drop policy refined — never drop root spans, step spans, or `summarize context` spans (digest-critical). Drop newest non-critical span first; if queue is saturated with critical spans, drop oldest non-critical. Rationale: keeping orphan child spans without their root breaks digest materialization and viewer rendering.
+> - **Cleanup**: removed v0.3/v0.4 residuals — `RunStore` row mentioning "retention sweep", §2.1 row labeling artifact JSONL "upgraded" (current store is per-file JSON, see §5.2 corrected wording), §2.1 reference to "3-option picker" precedent (no picker exists in v0.5), §13 self-review row mentioning "daily-file eviction".
 >
 > **Changelog v0.4 → v0.5** (simplification):
 >
@@ -100,12 +110,11 @@ This spec must build on existing infrastructure, not replace it. Inventory of re
 | `transformContext` callback | `lib/agents/coordinator.ts:530` | compaction trigger + summarization input |
 | Coordinator callbacks | `onStream/onToolCall/onToolResult/onToolProgress/onUsage/onSkillLoaded` | streamed back to renderer via IPC |
 | `RealtimeBuffer` | `app/src/main/realtime-buffer.ts:41` | live push + remount-recovery snapshot for renderer stores |
-| `RunStore` JSONL pattern | `lib/local-compute/run-store.ts` | atomic temp+rename, debounced flush, retention — **template only**, not direct reuse (§5) |
+| `RunStore` JSONL pattern | `lib/local-compute/run-store.ts` | atomic temp+rename, debounced flush — **template only**, not direct reuse (§5) |
 | Explain snapshot | `lib/agents/coordinator.ts:230,805–826` | per-`chat()` JSON dump (matched skills, budget) — proto-task-span; deprecated by trace (§6.6) |
-| Artifact JSONL | `lib/memory-v2/store.ts` | upgraded to artifact ledger (§8.1) |
+| Per-file artifact JSON store | `lib/memory-v2/store.ts:412` (write at `:473`) | current artifact storage — **not** a JSONL; v0.6 adds an append-only `artifacts/ledger.jsonl` alongside, leaving the per-file store as read-side authority (§5.2, §8.1) |
 | Compute run ledger | `lib/local-compute/run-store.ts` | already long-running async records; integrates as §6.5 |
 | `session.json` | `shared-electron/ipc-base.ts:260` | stable cross-process session id |
-| `AppSettings.research` | `shared-ui/settings-types.ts:7` | precedent for the 3-option picker pattern adopted in §5.1 |
 
 ### 2.2 Sub-LLM blind spots (currently invisible)
 
@@ -172,7 +181,7 @@ Resource attributes are per-process, immutable for the process lifetime, and car
 | Component | Location | Responsibility |
 |---|---|---|
 | `Tracer` interface | `lib/telemetry/tracer.ts` | thin wrapper over `@opentelemetry/api`'s tracer; project-scoped |
-| `TraceStore` | `lib/telemetry/trace-store.ts` | append-only JSONL writer; batched flush; retention sweep |
+| `TraceStore` | `lib/telemetry/trace-store.ts` | append-only JSONL writer; batched flush; bounded queue with drop-policy ordering (§5.1) |
 | `JsonlSpanExporter` | `lib/telemetry/exporters/jsonl.ts` | implements OTel `SpanExporter` writing OTLP/JSON wire format |
 | `OtlpSpanExporter` | `lib/telemetry/exporters/otlp.ts` | gated by `RESEARCH_COPILOT_OTLP_ENDPOINT` |
 | `tracedCompleteSimple` | `lib/telemetry/llm-trace.ts` | wraps `completeSimple` with span + redaction |
@@ -250,7 +259,11 @@ Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cros
 
 1. Span ends → enqueue to in-memory bounded ring queue.
    - Default capacity: **1024 spans** (configurable per project).
-   - Capacity is hard. When full, oldest queued span is dropped and a counter `pipilot.trace.dropped_spans` is incremented in `tracing-state.jsonl`.
+   - **Capacity is hard. Drop policy preserves trace integrity** (review fix): every span carries a `criticality` flag. Critical = root `invoke_agent`, every `invoke_agent step`, every `summarize context` (compaction). Non-critical = leaf `chat`, `execute_tool`, events, sub-LLM `chat` spans. When the queue is full:
+     1. Drop the **newest non-critical** span first (preserves causal ordering of older completed work).
+     2. If the queue is saturated with critical spans only, drop the **oldest non-critical** span.
+     3. Critical spans are never dropped due to capacity; they spill to a small overflow ring (256 critical spans). If the overflow ring also fills, the writer enters degraded mode (step 4) and increments `pipilot.trace.degraded_critical_overflow` instead of dropping.
+   - All drops increment counters in `tracing-state.jsonl` by category (`dropped_non_critical_newest`, `dropped_non_critical_oldest`, `degraded_critical_overflow`). Rationale: a digest with orphan child spans whose parent was dropped is worse than a digest missing some leaves; drop policy must preserve enough structure that digest materialization (§5.5) and viewer rendering remain valid.
 2. Background flush worker drains queue when: queue ≥ 64 spans **or** 200 ms idle.
 3. Append-only `write()`. No fsync per write; fsync at flush boundary.
 4. **Disk full / write error**: writer enters degraded mode — sets `pipilot.trace.degraded = true` in tracing-state log, drops new spans (counted), retries write at exponential backoff (1s, 2s, 4s, max 60s). Agent path is never blocked. UI surfaces a banner when degraded.
@@ -303,7 +316,7 @@ Large content (turn text > 4 KB, tool I/O over cap, diagram SVG, base64 images) 
 
 Per OTel Resource semantics ([OpenTelemetry Resource Data Model](https://opentelemetry.io/docs/specs/otel/resource/data-model/)), Resource attributes are constant for the process lifetime and describe the *producer* of telemetry. They must not vary by project or session, because the Electron main process can manage multiple projects and windows simultaneously.
 
-**Resource attributes (set once at TraceProvider initialization):**
+**Resource attributes (set once at TraceProvider initialization, immutable for process life):**
 
 ```
 service.name = "research-copilot"
@@ -313,8 +326,10 @@ process.runtime.name = "node"
 process.runtime.version = <process.version>
 os.type = <process.platform>
 pipilot.runtime.app_build_commit = <git rev-parse HEAD at build time>
-pipilot.runtime.system_prompt_hash = sha256(baseSystemPrompt)   // OK at Resource: same for process life
+pipilot.runtime.shell_prompt_hash = sha256(SYSTEM_PROMPT)   // global constant only; see note below
 ```
+
+**Note on prompt hashing (review fix):** the runtime's actual prompt to the LLM is `baseSystemPrompt = SYSTEM_PROMPT + skillsCatalog + (optionally) agent.md` (`lib/agents/coordinator.ts:491`). Skills catalog and agent.md vary per project, so their hash cannot live on Resource. The Resource attribute therefore covers **only** the global `SYSTEM_PROMPT` constant (the shell). The full prompt hash lives on the root span:
 
 **Span attributes (varying per task / project / session — set on every applicable span):**
 
@@ -326,6 +341,7 @@ pipilot.project.privacy_profile = <low | medium | high>
 pipilot.runtime.agent_profile   = <coordinator profile id; can vary across coordinators in one process>
 pipilot.runtime.workspace_commit = <git rev-parse HEAD of workspace; per-project>
 pipilot.runtime.memory_index_version = <wiki manifest version; per-project>
+pipilot.runtime.full_prompt_hash = <sha256(baseSystemPrompt) — root invoke_agent span only>
 ```
 
 These are propagated automatically by `Tracer` when a span is created in a given project context. Wiki background agent and other multi-project code paths set the appropriate context per project; spans from each project carry the right project id. (This is exactly the bug audit #1 caught.)
@@ -445,20 +461,34 @@ Per OpenTelemetry GenAI v1.37 conventions:
 
 ### 6.3 Standard OTel attributes (every applicable span)
 
-**Schema pinning (audit #6)**: this spec targets OpenTelemetry GenAI semantic conventions as of the version pinned in `lib/telemetry/semantic-registry.ts` (`schemaUrl`). Every emitted span carries the OTel `schema_url` resource attribute. P0 gate includes a schema-conformance test that validates emitted attributes against the pinned schema. When semconv ships a new stable version, we either bump `schemaUrl` and adjust the registry, or stay pinned with explicit deprecation notes.
+**Schema pinning (review fix)**: OTel GenAI semantic conventions are currently marked **Development / Experimental** (not Stable). This spec pins to a specific development-stage `schema_url` as of P0; the pin is recorded in `lib/telemetry/semantic-registry.ts` and surfaced through OTel's standard mechanisms:
 
-**Current target: OTel GenAI semconv (Sept 2025+ stable), with these attributes:**
+- The `schema_url` is set on the OTLP `ResourceSpans` envelope at export time.
+- The `schema_url` is associated with the OTel `Tracer` (instrumentation scope) at acquisition time via `tracerProvider.getTracer(name, version, schemaUrl)`.
+- It is **not** a per-span attribute; the OTel data model places `schema_url` on the export envelope and the instrumentation scope, not on individual spans.
 
-- `gen_ai.provider.name` ∈ `{anthropic, openai, gcp.gemini, anthropic.subscription, openai.codex}`. (Was `gen_ai.system` in older drafts; renamed.)
+P0 gate includes a schema-conformance test validating emitted attribute names/types against the pinned schema. Bumping the pin (e.g., when semconv graduates from Development to Stable) requires: registry update, conformance test re-pass, backend re-verification on Langfuse and Phoenix. Treat as a quarterly review.
+
+**Pinned attributes (current Development semconv):**
+
+- `gen_ai.provider.name` ∈ `{anthropic, openai, gcp.gemini}` — OTel-standard values only.
 - `gen_ai.request.model`, `gen_ai.response.model`.
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`.
-- `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens` (Anthropic). Note dotted segment between `cache_*` and `input_tokens`.
+- `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens` (Anthropic). Dotted segment between `cache_*` and `input_tokens` is intentional per current semconv.
 - `gen_ai.response.finish_reasons`.
 - `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` ∈ `{function, retrieval, extension}`.
 - `gen_ai.conversation.id` (= session.id).
 - `error.type`, `span.status` on failure.
 
-**Migration note**: when this spec freezes (P0), the semantic registry locks to a specific `schema_url`. Backends (Langfuse / Phoenix) may parse newer or older fields differently; we document the chosen pin and require backends to handle our pinned schema, not vice-versa.
+**PiPilot-namespaced auth/billing attributes** (review fix — was incorrectly stuffed into `gen_ai.provider.name`):
+
+- `pipilot.auth.mode` ∈ `{api-key, subscription, codex-cli}` — how this call authenticated.
+- `pipilot.billing_source` ∈ `{api-direct, anthropic-subscription, openai-codex}` — which billing line bears the cost.
+- `pipilot.transport` ∈ `{http, codex-cli, claude-code-cli}` — for transport-distinct calls.
+
+This keeps `gen_ai.provider.name` cross-backend readable (Langfuse/Phoenix can group by it cleanly) while preserving the cost-accounting distinctions PiPilot needs.
+
+**Migration note**: backends consuming PiPilot traces parse our pinned schema. We document the pin; we do not chase semconv churn until graduation.
 
 ### 6.4 PiPilot extension attributes (`pipilot.*` namespace)
 
@@ -729,7 +759,7 @@ Per-project, written once to `.research-pilot/project.json`:
 ```
 
 **Enforcement**:
-- Resource attributes carry the profile to every span.
+- The privacy profile is a **span attribute** (`pipilot.project.privacy_profile` and related — see §5.4). It is **not** a Resource attribute, because the Electron main process can serve multiple projects with different profiles. Tracer emits the profile attributes in the active project's context for every span.
 - `level = high` upgrades default redaction; requires `blobEncryption = at-rest`.
 - **Export gate**: any OTLP / file export checks `publicationPermission`. `none` blocks. `aggregate-only` strips event bodies. `with-redaction` re-runs the strict pipeline. Override requires per-export confirmation; the override itself writes a row to `tracing-state.jsonl`.
 - `containsThirdPartyData = true` defaults OTLP export to disabled.
@@ -868,9 +898,9 @@ Phoenix's native UI keys off OpenInference. Dual-emit costs ~2× span size on `c
 
 When `privacy.containsThirdPartyData = true`, default-disable OTLP. **Recommendation**: yes, default-disable; require explicit per-project override; override writes an audit row.
 
-### 12.4 Subscription provider naming
+### 12.4 Subscription / Codex billing distinction
 
-`anthropic-sub` → `gen_ai.provider.name = anthropic.subscription` (separate from direct API). **Recommendation**: keep separate; merging is a SQL operation, splitting after the fact is not.
+`gen_ai.provider.name` keeps OTel-standard values (`anthropic`, `openai`, `gcp.gemini`) per §6.3. The subscription/Codex/transport distinctions PiPilot cares about (cost accounting, auth-mode debugging) are emitted on `pipilot.auth.mode`, `pipilot.billing_source`, and `pipilot.transport`. **Resolved in v0.6**: the prior approach of stuffing `anthropic.subscription` into `gen_ai.provider.name` was rejected because it broke cross-backend readability (Langfuse/Phoenix don't recognize the value). Splitting later is not a SQL operation; encoding correctly up front is the right call.
 
 ### 12.5 Storage stats validation
 
@@ -896,7 +926,7 @@ When we tighten redaction, old spans look more leaky than new ones. Recommendati
 | Usage double-counting | Single source: leaf `chat` spans; ipc usage re-aggregated | §6.3, P1 |
 | `agent.turn` clashed with pi-agent-core | `invoke_agent` (root), `invoke_agent step` (loop) | §6.2 |
 | Local compute can't be sync child | Dual-span model with `follows_from` link | §6.5 |
-| RunStore pattern doesn't scale | Append-only JSONL, batched flush, daily-file eviction | §5.1 |
+| RunStore pattern doesn't scale | Append-only JSONL, batched flush, bounded queue with criticality-aware drop policy | §5.1 |
 | RealtimeBuffer semantics must be preserved | Phase gate requires equivalence diff before switching | P3 |
 | `args` cannot be exempt from redaction | Redaction pipeline applies to args + result + events + ledgers | §7 |
 | Trace ≠ Ledger | Two layers, two lifetimes (now both per-policy) | §3.1, A1 |
@@ -909,6 +939,12 @@ When we tighten redaction, old spans look more leaky than new ones. Recommendati
 | **NEW v0.3: User shouldn't be a research labeler** | No thumbs UI in spec; signals ledger captures behavior, not user-provided labels | §8.3, §1.2 |
 | **NEW v0.3: Trace retention was hardcoded 7d** | (Superseded by v0.5: retention is now forever, not configurable) | §5.1 |
 | **NEW v0.5: Configurable retention added accidental complexity** | Retention configurability removed entirely; everything is forever; project deletion is the only purge | §3.1, §5.1, §5.2, §5.3, §10.2 |
+| **NEW v0.6: §10 still claimed Resource carried privacy profile (review High #1)** | Rewritten to reference span attributes consistently with §5.4 | §10 |
+| **NEW v0.6: system_prompt_hash misplaced as Resource (review High #2)** | Resource hashes only the global SYSTEM_PROMPT shell; full per-project prompt hash on root span | §5.4 |
+| **NEW v0.6: GenAI semconv claimed "stable" (review High #3)** | Corrected to "pinned development/experimental"; quarterly review on graduation | §6.3 |
+| **NEW v0.6: Subscription/Codex stuffed into gen_ai.provider.name (review Medium #1)** | OTel-standard provider values only; pipilot.auth.mode / billing_source / transport carry the distinctions | §6.3, §12.4 |
+| **NEW v0.6: schema_url described as per-span (review Medium #2)** | Clarified — set on OTLP envelope and Tracer scope, not span attribute | §6.3 |
+| **NEW v0.6: Drop policy could orphan child spans (review Medium #3)** | Criticality-aware drop policy; root/step/compaction never dropped; overflow ring + degraded-mode fallback | §5.1 |
 | **NEW v0.4: Resource attributes carried per-project state (audit #1)** | project/session/privacy moved to span attributes; Resource = process/build only | §5.4 |
 | **NEW v0.4: Local-compute reused traceId with null parent (audit #2)** | Async run is its own trace + OTel Link `follows_from`/`spawned_from` | §6.5 |
 | **NEW v0.4: Retention statements contradicted (audit #3)** | (Superseded by v0.5: no retention configurability at all, no contradictions to resolve) | §3.1 |
