@@ -220,6 +220,17 @@ export class TraceStore implements SpanProcessor {
     return this.tombstoned.size
   }
 
+  /**
+   * Live byte estimate for the current UTC day, NOT yet flushed to
+   * `trace-storage-stats.jsonl`. The on-disk file only gets a row at day-roll
+   * or shutdown; callers that need a real-time number (e.g., the Settings
+   * Telemetry panel) should add this to the on-disk total. Includes the
+   * stamp so the reader can verify it belongs to today's bucket.
+   */
+  get inFlightDailyBytes(): { date: string; approxBytes: number } {
+    return { date: this.currentDayStamp, approxBytes: this.dailyBytes }
+  }
+
   // ----- Internals -----
 
   private scheduleIdleFlush(): void {

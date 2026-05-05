@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { Activity, AlertTriangle } from 'lucide-react'
+import React, { useEffect, useState, useRef } from 'react'
+import { Activity, AlertTriangle, RefreshCw } from 'lucide-react'
 
 const api = (window as any).api
 
@@ -8,7 +8,15 @@ interface ProjectConfig {
   tracingMode: 'enabled' | 'disabled'
   bufferCapacity: number
   storageFootprintBytes: number
+  /** Bytes accumulated this UTC day, not yet flushed to disk. */
+  inFlightBytes?: number
+  /** Bytes already flushed to trace-storage-stats.jsonl (prior days + prior shutdowns). */
+  persistedBytes?: number
 }
+
+/** How often to auto-refresh the panel while it's mounted. 30s balances freshness
+ *  vs. IPC churn for a panel that's mostly idle. */
+const AUTO_REFRESH_MS = 30_000
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -32,9 +40,14 @@ export function TelemetrySettings() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [lastFetchedAt, setLastFetchedAt] = useState<Date | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
+  // `silent=true` is used by the auto-refresh tick — it doesn't toggle the
+  // top-level `loading` spinner so the UI doesn't flicker every 30s.
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true)
+    else setRefreshing(true)
     setError(null)
     try {
       const result = await api.telemetryGetProjectConfig?.()
@@ -46,16 +59,24 @@ export function TelemetrySettings() {
         setCfg(null)
       } else {
         setCfg(result as ProjectConfig)
+        setLastFetchedAt(new Date())
       }
     } catch (err: any) {
       setError(err?.message ?? 'Failed to load telemetry config.')
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
   useEffect(() => {
     void load()
+    // Auto-refresh while the panel is mounted. Cleared on unmount so closing
+    // the Settings modal stops the polling immediately.
+    const id = setInterval(() => {
+      void load(true)
+    }, AUTO_REFRESH_MS)
+    return () => clearInterval(id)
   }, [])
 
   const handleToggle = async () => {
@@ -132,12 +153,32 @@ export function TelemetrySettings() {
       </section>
 
       <section className="border-t pt-4 t-border">
-        <h3 className="text-sm font-semibold t-text mb-2 flex items-center gap-2">
-          <Activity size={14} /> Storage footprint
-        </h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold t-text flex items-center gap-2">
+            <Activity size={14} /> Storage footprint
+          </h3>
+          <button
+            onClick={() => void load(true)}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1 text-xs t-text-muted hover:t-text disabled:opacity-50 transition-colors"
+            aria-label="Refresh storage footprint"
+            title="Refresh"
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
         <div className="flex items-baseline gap-2">
           <span className="text-xl font-mono t-text">{formatBytes(cfg.storageFootprintBytes)}</span>
-          <span className="text-xs t-text-muted">approximate, from daily stats log</span>
+          <span className="text-xs t-text-muted">
+            approximate
+            {typeof cfg.inFlightBytes === 'number' && cfg.inFlightBytes > 0 && (
+              <> · {formatBytes(cfg.inFlightBytes)} in current session</>
+            )}
+            {lastFetchedAt && (
+              <> · updated {lastFetchedAt.toLocaleTimeString()}</>
+            )}
+          </span>
         </div>
         {footprintWarn && (
           <div className="mt-3 flex items-start gap-2 p-2 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-xs">

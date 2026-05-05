@@ -33,7 +33,8 @@
     "test:telemetry": "node --import tsx --test lib/telemetry/__tests__/*.test.ts",
     "test:ledger": "node --import tsx --test lib/ledger/__tests__/*.test.ts",
     "test:renderer": "node --import tsx --test app/src/renderer/stores/__tests__/*.test.ts",
-    "test:diagnostics": "node --import tsx --test lib/telemetry/diagnostics/__tests__/*.test.ts"
+    "test:diagnostics": "node --import tsx --test lib/telemetry/diagnostics/__tests__/*.test.ts",
+    "diagnostics": "node bin/diagnostics.mjs"
   },
   "keywords": [
     "research",

@@ -1642,8 +1642,11 @@ export function registerIpcHandlers(): void {
       const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
       const tracingMode = config.telemetry?.tracingMode ?? 'enabled'
       const bufferCapacity = config.telemetry?.bufferCapacity ?? 1024
-      // Storage footprint: sum approxBytes from trace-storage-stats.jsonl.
-      let storageFootprintBytes = 0
+      // Storage footprint: sum persisted approxBytes from trace-storage-stats.jsonl
+      // PLUS the in-memory `dailyBytes` counter — the file only flushes on day-roll
+      // and on tracer shutdown, so without this the panel would show stale numbers
+      // (often 0) for the entire current session.
+      let persistedBytes = 0
       const statsFile = join(state.projectPath, PATHS.traceStorageStats)
       if (existsSync(statsFile)) {
         try {
@@ -1653,16 +1656,20 @@ export function registerIpcHandlers(): void {
             if (!t) continue
             try {
               const row = JSON.parse(t) as { approxBytes?: number }
-              if (typeof row.approxBytes === 'number') storageFootprintBytes += row.approxBytes
+              if (typeof row.approxBytes === 'number') persistedBytes += row.approxBytes
             } catch { /* skip malformed */ }
           }
         } catch { /* best effort */ }
       }
+      const inFlight = state.tracer?.store.inFlightDailyBytes ?? { date: '', approxBytes: 0 }
+      const storageFootprintBytes = persistedBytes + inFlight.approxBytes
       return {
         projectId: config.id ?? 'unknown',
         tracingMode,
         bufferCapacity,
-        storageFootprintBytes
+        storageFootprintBytes,
+        inFlightBytes: inFlight.approxBytes,
+        persistedBytes
       }
     } catch (err: any) {
       return { error: err?.message ?? 'failed' }

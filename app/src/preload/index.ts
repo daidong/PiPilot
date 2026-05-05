@@ -60,13 +60,18 @@ export interface ElectronAPI {
     turnId?: string
   }) => Promise<{ success: boolean; reason?: string; error?: string }>
 
-  /** Telemetry: read project-scoped config + storage footprint (§10.2). */
+  /** Telemetry: read project-scoped config + storage footprint (§10.2).
+   *  `storageFootprintBytes` = persistedBytes (flushed to trace-storage-stats.jsonl)
+   *  + inFlightBytes (current UTC day, not yet flushed). The split is exposed so
+   *  the UI can label "live" totals when desired. */
   telemetryGetProjectConfig: () => Promise<
     | {
         projectId: string
         tracingMode: 'enabled' | 'disabled'
         bufferCapacity: number
         storageFootprintBytes: number
+        inFlightBytes: number
+        persistedBytes: number
       }
     | { error: string }
     | null
