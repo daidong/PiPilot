@@ -42,7 +42,10 @@ export { tracedFetch, recordReviewCompletion } from './http-trace.js'
 export type { TracedFetchOpts } from './http-trace.js'
 
 export { redact, scrubString, sha256Hex, SCRUBBER_VERSION, DEFAULT_SIZE_CAP_BYTES } from './redaction.js'
-export type { RedactionStats, RedactOptions } from './redaction.js'
+export type { RedactionStats, RedactOptions, BlobSink } from './redaction.js'
+
+export { BlobStore } from './blob-store.js'
+export type { BlobWriteResult } from './blob-store.js'
 
 export {
   SCHEMA_URL,

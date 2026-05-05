@@ -80,10 +80,23 @@ export interface RedactionStats {
   scrubberVersion: typeof SCRUBBER_VERSION
 }
 
+/**
+ * Sync content-addressed sink. When supplied, redact() writes oversized
+ * strings/buffers to the sink before emitting the `{ contentHash }` ref —
+ * so the hash in the trace can actually be resolved back to bytes later.
+ *
+ * Without a sink, redact() still emits the ref but the bytes are lost.
+ * That's fine for telemetry-disabled / offline / test paths but bad for
+ * debugging real traces (the original "C" gap).
+ */
+export interface BlobSink {
+  writeIfMissing(content: string | Buffer | Uint8Array): { hash: string; size: number; isNew: boolean }
+}
+
 export interface RedactOptions {
   sizeCapBytes?: number
-  /** Optional content-addressed blob store callback. Returns sha256 for over-cap fields. */
-  blobStore?: (contents: string | Buffer, mimeType?: string) => Promise<string> | string
+  /** Optional content-addressed blob store. Receives over-cap content + binary blobs. */
+  blobStore?: BlobSink
   /**
    * Returns true if the value looks like an "artifact reference" — anything with an
    * `artifactId` field. Used by stage 5 to short-circuit recursion.
@@ -142,21 +155,51 @@ export function sha256Hex(content: string | Buffer): string {
 }
 
 /**
- * Default over-cap behavior: emit a blob ref with content hash. The actual blob
- * write is the caller's responsibility (TraceStore / ledger writer).
+ * Over-cap branch: emit `{ truncated, contentHash, size }`. When a `blobStore`
+ * is provided, the bytes are written to the sink first so the hash can be
+ * resolved back to the original later (`.research-pilot/blobs/{aa}/{full}`).
  */
-function defaultOverCap(value: string, sizeCap: number): {
+function emitOverCap(
+  value: string | Buffer,
+  blobStore?: BlobSink
+): {
   truncated: true
   contentHash: string
   size: number
   redactionLevel: 'size-cap'
 } {
-  void sizeCap
+  if (blobStore) {
+    const { hash, size } = blobStore.writeIfMissing(value)
+    return {
+      truncated: true,
+      contentHash: 'sha256:' + hash,
+      size,
+      redactionLevel: 'size-cap'
+    }
+  }
+  // No sink: still emit a ref so trace shape is consistent, but bytes are lost.
   return {
     truncated: true,
     contentHash: 'sha256:' + sha256Hex(value),
-    size: Buffer.byteLength(value, 'utf8'),
+    size: typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : value.length,
     redactionLevel: 'size-cap'
+  }
+}
+
+/** Binary-content branch (Buffer / data: URL / large SVG). Same blob-store semantics. */
+function emitBinaryRef(
+  value: string | Buffer,
+  mimeType: string,
+  blobStore?: BlobSink
+): { contentHash: string; mimeType: string; size: number } {
+  if (blobStore) {
+    const { hash, size } = blobStore.writeIfMissing(value)
+    return { contentHash: 'sha256:' + hash, mimeType, size }
+  }
+  return {
+    contentHash: 'sha256:' + sha256Hex(value),
+    mimeType,
+    size: typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : value.length
   }
 }
 
@@ -189,27 +232,14 @@ export function redact(
 
     // Stage 6: binary / image
     if (Buffer.isBuffer(v)) {
-      return {
-        contentHash: 'sha256:' + sha256Hex(v),
-        mimeType: 'application/octet-stream',
-        size: v.length
-      }
+      return emitBinaryRef(v, 'application/octet-stream', opts.blobStore)
     }
     if (typeof v === 'string' && v.startsWith('data:image/')) {
-      // base64-encoded image inlined as data: URL — never inline in trace.
-      const size = Buffer.byteLength(v, 'utf8')
-      return {
-        contentHash: 'sha256:' + sha256Hex(v),
-        mimeType: v.slice(5, v.indexOf(';') > 0 ? v.indexOf(';') : 5 + 9),
-        size
-      }
+      const mime = v.slice(5, v.indexOf(';') > 0 ? v.indexOf(';') : 5 + 9)
+      return emitBinaryRef(v, mime, opts.blobStore)
     }
     if (typeof v === 'string' && v.startsWith('<svg') && v.length > 1024) {
-      return {
-        contentHash: 'sha256:' + sha256Hex(v),
-        mimeType: 'image/svg+xml',
-        size: Buffer.byteLength(v, 'utf8')
-      }
+      return emitBinaryRef(v, 'image/svg+xml', opts.blobStore)
     }
 
     if (typeof v === 'string') {
@@ -218,7 +248,7 @@ export function redact(
       totalHits += hits
       // Stage 4: size cap
       if (Buffer.byteLength(scrubbed, 'utf8') > sizeCap) {
-        return defaultOverCap(scrubbed, sizeCap)
+        return emitOverCap(scrubbed, opts.blobStore)
       }
       return scrubbed
     }
@@ -250,7 +280,7 @@ export function redact(
         return out
       }
       if (Buffer.byteLength(serialized, 'utf8') > sizeCap) {
-        return defaultOverCap(serialized, sizeCap)
+        return emitOverCap(serialized, opts.blobStore)
       }
       return out
     }

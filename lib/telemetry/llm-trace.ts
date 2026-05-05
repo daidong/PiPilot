@@ -98,7 +98,7 @@ export async function tracedCompleteSimple<TApi extends string>(
       'gen_ai.input.messages': pi.messages,
       'gen_ai.system_instructions': pi.systemPrompt
     },
-    { sizeCapBytes: 4096 }
+    { sizeCapBytes: 4096, blobStore: tracer.blobs }
   )
   span.addEvent('gen_ai.client.inference.operation.details', {
     body: JSON.stringify(redactedInput)
@@ -121,7 +121,7 @@ export async function tracedCompleteSimple<TApi extends string>(
     // Output messages event (redacted).
     const { value: redactedOutput, stats: outputStats } = redact(
       { 'gen_ai.output.messages': result.content },
-      { sizeCapBytes: 4096 }
+      { sizeCapBytes: 4096, blobStore: tracer.blobs }
     )
     span.addEvent('gen_ai.client.inference.operation.details', {
       body: JSON.stringify(redactedOutput)

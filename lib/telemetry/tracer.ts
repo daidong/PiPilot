@@ -24,6 +24,7 @@ import { SCHEMA_URL, validatePipilotAttribute } from './semantic-registry.js'
 import { TraceStore } from './trace-store.js'
 import { TraceDigestProcessor } from './digest.js'
 import { LiveSpanProcessor, type LiveSpanSubscriber } from './live-processor.js'
+import { BlobStore } from './blob-store.js'
 import { ulid } from './ulid.js'
 
 export interface TracerInitOptions {
@@ -93,6 +94,10 @@ export class PipilotTracer {
   readonly store: TraceStore
   /** Live span fan-out — used by main process to forward spans to renderer. */
   readonly live: LiveSpanProcessor
+  /** Content-addressed blob store for over-cap content (§5.3). Wired into
+   *  redaction so over-4KB prompts/results land at `.research-pilot/blobs/` and
+   *  the contentHash refs in trace events can be resolved back. */
+  readonly blobs: BlobStore
   private readonly tracer: OtelTracer
   private readonly defaultScope: ProjectScope
 
@@ -116,6 +121,7 @@ export class PipilotTracer {
 
     const digestProcessor = new TraceDigestProcessor(opts.projectPath)
     this.live = new LiveSpanProcessor()
+    this.blobs = new BlobStore(opts.projectPath)
     this.provider = new NodeTracerProvider({
       resource,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -141,7 +141,12 @@ export const PIPILOT_EVENT_NAMES = new Set<string>([
   'pipilot.compaction.discarded',
   'pipilot.artifact.op',
   'pipilot.memory.op',
-  'pipilot.detector.flag'
+  'pipilot.detector.flag',
+  // Tool I/O captured on execute_tool spans (§6.9 — PiPilot extension):
+  // gen_ai.client.inference.operation.details is for chat I/O; tool I/O is
+  // PiPilot-specific because no GenAI semconv covers it.
+  'pipilot.tool.args',
+  'pipilot.tool.result'
 ])
 
 /** Whitelist of PiPilot link.kind values (§6.5). */

@@ -30,9 +30,10 @@ import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS } from '../models.js'
 import { tracedCompleteSimple } from '../telemetry/llm-trace.js'
+import { redact, SCRUBBER_VERSION } from '../telemetry/redaction.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
-import { SpanKind, SpanStatusCode, type Span } from '@opentelemetry/api'
+import { SpanKind, SpanStatusCode, type Span, type Attributes } from '@opentelemetry/api'
 import { createHash } from 'crypto'
 import {
   migrateLegacyArtifacts,
@@ -707,10 +708,27 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           'gen_ai.operation.name': 'execute_tool',
           'gen_ai.tool.name': toolName,
           'gen_ai.tool.call.id': ctx.toolCall.id,
-          'pipilot.tool.category': categorizeTool(toolName)
+          'pipilot.tool.category': categorizeTool(toolName),
+          // §6.4: retry_count default 0. Tools that retry internally can bump
+          // this via span attribute updates before afterToolCall lands.
+          'pipilot.tool.retry_count': 0
         })
         const tid = getTurnId?.()
         if (tid) span.setAttribute('pipilot.turn.id', tid)
+        // §6.9: tool args attach as a span event. Same redaction pipeline as
+        // chat spans (>4KB → blob ref via tracer.blobs). args are typically
+        // small (file paths, bash commands ~100B) so most stay inline.
+        const { value: redactedArgs, stats: argStats } = redact(ctx.args, {
+          sizeCapBytes: 4096,
+          blobStore: tracer.blobs
+        })
+        span.addEvent('pipilot.tool.args', {
+          body: JSON.stringify(redactedArgs)
+        } as Attributes)
+        if (argStats.fieldsRedactedCount > 0) {
+          span.setAttribute('pipilot.redaction.fields_redacted_count', argStats.fieldsRedactedCount)
+          span.setAttribute('pipilot.redaction.scrubber_version', SCRUBBER_VERSION)
+        }
         toolCallSpans.set(ctx.toolCall.id, span)
       }
       return undefined
@@ -734,9 +752,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           }
         }
       }
-      // Telemetry: close the matching execute_tool span and stamp result attrs.
+      // Telemetry: close the matching execute_tool span, stamp result attrs,
+      // and attach the result content as a span event (§6.9).
       const span = toolCallSpans.get(ctx.toolCall.id)
-      if (span) {
+      if (span && tracer) {
         const result = ctx.result as any
         const isError = result && typeof result === 'object' && 'isError' in result && result.isError === true
         if (isError) {
@@ -746,6 +765,44 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         } else {
           span.setStatus({ code: SpanStatusCode.OK })
         }
+        // §6.9: tool result content attached as a span event. We capture the
+        // `content` array (text + image parts the LLM saw) and the `details`
+        // metadata. >4KB → blob ref so big stdouts / file reads / literature
+        // results are recoverable but don't bloat IPC. ImageContent base64
+        // payloads always go through binary-ref short-circuit in redact().
+        try {
+          const resultPayload = {
+            content: result?.content ?? [],
+            details: result?.details ?? null,
+            isError
+          }
+          const { value: redactedResult, stats: resultStats } = redact(resultPayload, {
+            sizeCapBytes: 4096,
+            blobStore: tracer.blobs
+          })
+          span.addEvent('pipilot.tool.result', {
+            body: JSON.stringify(redactedResult)
+          } as Attributes)
+          if (resultStats.fieldsRedactedCount > 0) {
+            // Update the count if args already set it, otherwise add fresh.
+            const existing = (span as unknown as { attributes?: Record<string, unknown> })
+              .attributes?.['pipilot.redaction.fields_redacted_count']
+            const prev = typeof existing === 'number' ? existing : 0
+            span.setAttribute(
+              'pipilot.redaction.fields_redacted_count',
+              prev + resultStats.fieldsRedactedCount
+            )
+            span.setAttribute('pipilot.redaction.scrubber_version', SCRUBBER_VERSION)
+          }
+        } catch (err) {
+          // Result serialization failure (cycles, exotic types) — record but
+          // don't fail the agent path.
+          if (debug) console.warn('[Telemetry] tool result event failed:', err)
+        }
+        span.end()
+        toolCallSpans.delete(ctx.toolCall.id)
+      } else if (span) {
+        // No tracer (shouldn't happen if span exists, but be defensive).
         span.end()
         toolCallSpans.delete(ctx.toolCall.id)
       }
@@ -925,9 +982,18 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           .map(name => skills.find(s => s.name === name))
           .filter((s): s is SkillEntry => s !== undefined)
 
-        // Notify UI about pre-matched skills
+        // Notify UI about pre-matched skills + emit telemetry events (§6.7).
+        // Router-match fires before any step span exists, so the events live
+        // on the root invoke_agent span. Layer 3 can join with `matched_skills`
+        // on the root attr if it needs the bulk list.
         for (const s of matchedSkills) {
           onSkillLoaded?.(s.name)
+          if (rootSpan) {
+            rootSpan.addEvent('pipilot.skill.load', {
+              skillName: s.name,
+              trigger: 'router-match'
+            })
+          }
         }
 
         const skillSummariesPrompt = buildSkillSummariesPrompt(matchedSkills)
