@@ -2,7 +2,7 @@
 
 > Spec version: 0.3 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
 >
-> **Major rewrite vs v0.2.** Establishes a hard boundary: this spec covers **objective runtime data capture only**. Subjective research analysis (Paper 1 findings, repair classification, anchor-fact judgments, role migration, context-debt labeling) is explicitly **out of scope** and lives in a Layer 3 post-hoc annotation pipeline (human or LLM annotators), not in PiPilot runtime. Specific changes:
+> **Major rewrite vs v0.2.** Establishes a hard boundary: this spec covers **objective runtime data capture only**. Subjective analysis (repair classification, anchor-fact judgments, role migration, context-debt labeling, and similar derived findings) is explicitly **out of scope** and lives in a Layer 3 post-hoc annotation pipeline (human or LLM annotators), not in PiPilot runtime. Specific changes:
 >
 > - New §0 boundary declaration; §1 goals rewritten
 > - Trace retention configurable: `7-days | 1-month | forever`, **default `forever`** (§5.1)
@@ -10,7 +10,7 @@
 > - Removed from runtime: `pipilot.user_message_type` classifier, `pipilot.referring_expressions`, memory-ledger lifecycle (`state`, `supersedes`, etc.), outcome `signal` enum, `project.type` semantic enum
 > - Outcome ledger renamed to user-response-signals ledger (§8.3); records facts only, no judgments
 > - Annotation ledger moved out of PiPilot runtime; brief Layer 3 stub in §9
-> - §9 Paper 1 mapping deleted; replaced with a one-paragraph Layer 3 boundary
+> - §9 research-mapping section deleted; replaced with a one-paragraph Layer 3 boundary
 > - Phases simplified: P5 (annotator) removed from PiPilot scope; §10 is now engineering-only
 > - Open questions §11 cleaned: removed every "subjective" question
 
