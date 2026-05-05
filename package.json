@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "research-copilot": "./bin/cli.mjs",
-    "research-copilot-diagnostics": "./bin/diagnostics.mjs"
+    "research-copilot-diagnostics": "./bin/diagnostics.mjs",
+    "research-copilot-trace-forward": "./bin/trace-forward.mjs"
   },
   "files": [
     "bin/",
@@ -29,12 +30,14 @@
     "clean": "rm -rf app/out app/dist",
     "postinstall": "node ./scripts/fix-node-pty-perms.mjs",
     "prepublishOnly": "npm run build",
-    "test": "node --import tsx --test lib/telemetry/__tests__/*.test.ts lib/telemetry/diagnostics/__tests__/*.test.ts lib/ledger/__tests__/*.test.ts app/src/renderer/stores/__tests__/*.test.ts",
+    "test": "node --import tsx --test lib/telemetry/__tests__/*.test.ts lib/telemetry/diagnostics/__tests__/*.test.ts lib/telemetry/forwarder/__tests__/*.test.ts lib/ledger/__tests__/*.test.ts app/src/renderer/stores/__tests__/*.test.ts",
     "test:telemetry": "node --import tsx --test lib/telemetry/__tests__/*.test.ts",
     "test:ledger": "node --import tsx --test lib/ledger/__tests__/*.test.ts",
     "test:renderer": "node --import tsx --test app/src/renderer/stores/__tests__/*.test.ts",
     "test:diagnostics": "node --import tsx --test lib/telemetry/diagnostics/__tests__/*.test.ts",
-    "diagnostics": "node bin/diagnostics.mjs"
+    "test:forwarder": "node --import tsx --test lib/telemetry/forwarder/__tests__/*.test.ts",
+    "diagnostics": "node bin/diagnostics.mjs",
+    "trace-forward": "node bin/trace-forward.mjs"
   },
   "keywords": [
     "research",
