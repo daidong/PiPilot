@@ -1,8 +1,13 @@
 # Telemetry & Trace: Objective Runtime Data Capture
 
-> Spec version: 0.9 (draft) | Last updated: 2026-05-05 | Status: PROPOSAL — NOT IMPLEMENTED
+> Spec version: 0.10 (draft) | Last updated: 2026-05-05 | Status: PROPOSAL — FREEZE CANDIDATE
 >
-> **Changelog v0.8 → v0.9** (review-driven correctness fixes; freeze candidate):
+> **Changelog v0.9 → v0.10** (final review-driven fixes):
+>
+> - **High — Tombstone vs pure OTLP/JSON file**: v0.9 wrote `{ kind: "trace_dropped" }` rows directly into `traces/spans.{date}.jsonl`, contradicting both the "one OTLP/JSON ResourceSpans envelope per line" claim and the "directly readable by any OTel-compatible tool" goal. Fixed: tombstones moved to a sidecar file `traces/tombstones.{date}.jsonl`. Spans file stays pure OTLP/JSON. PiPilot tools join spans + tombstones; third-party OTel tools see the spans file unchanged (they may see partial traces from drops, but PiPilot's own digest/viewer correctly filter).
+> - **Medium — `gen_ai.provider.name` enum missed `deepseek`**: PiPilot already supports DeepSeek (`shared-ui/constants.ts:34`, `shared-electron/ipc-base.ts:399`) and OTel's GenAI semconv well-known list includes it. Added.
+>
+> **Changelog v0.8 → v0.9** (review-driven correctness fixes):
 >
 > - **High — P0 task list synced with v0.7/v0.8 deletions**: removed references to "privacy span attribute" and "ProjectConfig privacy field" (deleted in v0.7) and "refcount + watchdog closure" (deleted in v0.8). P0 is the implementation entry point and was still pulling deleted designs back in.
 > - **High — Drop policy made consistent with append-only model**: a trace's early spans may already be flushed to JSONL when the queue fills. Old wording said "drop and resume after headroom," producing partial traces with mid-trace gaps. Fixed: dropped traces are tombstoned (single `kind: trace_dropped` row written to JSONL) and the traceId is permanently suppressed for the rest of its lifetime via in-memory `Set<string>`. Digest writer + viewer must skip any traceId with a tombstone.
@@ -282,7 +287,9 @@ Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cros
 
 ### 5.1 Trace store: append-only, bounded resources
 
-**Format**: `.research-pilot/traces/spans.{date}.jsonl`, one OTLP/JSON `ResourceSpans` envelope per line, batched.
+**Format**: `.research-pilot/traces/spans.{date}.jsonl`, one OTLP/JSON `ResourceSpans` envelope per line, batched. **The spans file is pure OTLP/JSON** — it contains only `ResourceSpans` rows and is directly readable by any OTel-compatible tool.
+
+PiPilot-specific control records (tombstones) live in a separate sidecar file `traces/tombstones.{date}.jsonl` so the spans file stays format-pure.
 
 **Write path** (audit #7 — bounded queue + drop policy):
 
@@ -291,15 +298,17 @@ Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cros
    - **Drop policy: trace-level tombstone.** When the queue is full, the writer picks the *newest in-flight trace* (the trace whose first span entered the queue most recently) and:
      1. Discards every span of that trace currently in the queue.
      2. Suppresses **all future spans** of that traceId for the rest of its lifetime — once dropped, a trace is dropped permanently. There is no "resume after headroom" window. Suppression is keyed on `traceId` in an in-memory `Set<string>`; cleared on process exit.
-     3. Writes a single tombstone row to `traces/spans.{date}.jsonl`:
+     3. Writes a single tombstone row to the sidecar file `traces/tombstones.{date}.jsonl`:
         ```jsonc
         { "traceId": "...", "kind": "trace_dropped", "reason": "queue_full",
           "droppedAtSpanCount": <how many of this trace's spans were already flushed>,
           "timestamp": "..." }
         ```
+        The spans file (`traces/spans.{date}.jsonl`) is never touched; it stays pure OTLP/JSON.
      4. Increments counter `pipilot.trace.dropped_traces` in `tracing-state.jsonl`.
-   - Digest writer and viewer **skip any traceId that has a `trace_dropped` tombstone** — even if some early spans were already flushed before the queue filled. Crash recovery (§5.5) treats tombstoned traces as closed-with-no-digest.
-   - Rationale: append-only JSONL means already-flushed spans cannot be retracted. Permanent suppression + tombstone is the only way to keep the dataset internally consistent. A "resume on headroom" approach would silently produce partial traces with gaps in the middle, which is worse than a clean drop.
+   - Digest writer, viewer, and any analysis tool consume the spans file **plus** the tombstones sidecar, then **skip any traceId that has a `trace_dropped` tombstone** — even if some early spans of that trace were already flushed before the queue filled. Crash recovery (§5.5) treats tombstoned traces as closed-with-no-digest.
+   - Third-party OTel tools that don't know about tombstones can still read the spans file directly; they will see the dropped trace's early spans as a partial trace, but PiPilot's own tools always join with the sidecar to filter correctly.
+   - Rationale: append-only JSONL means already-flushed spans cannot be retracted. Permanent suppression + sidecar tombstone is the only way to keep the dataset internally consistent **and** keep the OTLP/JSON file format-pure. A "resume on headroom" approach would silently produce partial traces with gaps in the middle, which is worse than a clean drop.
 2. Background flush worker drains queue when: queue ≥ 64 spans **or** 200 ms idle.
 3. Append-only `write()`. No fsync per write; fsync at flush boundary.
 4. **Disk full / write error**: writer enters degraded mode — sets `pipilot.trace.degraded = true` in tracing-state log, drops new spans (counted), retries write at exponential backoff (1s, 2s, 4s, max 60s). Agent path is never blocked. UI surfaces a banner when degraded.
@@ -332,6 +341,7 @@ export interface ProjectTelemetryConfig {
 | User-response signals | `user-response-signals.jsonl` | `(turnId)` | new (§8.3) |
 | View log | `view-log.jsonl` | `(viewId)` | new (§8.4) |
 | Tracing state | `tracing-state.jsonl` | append-only | audit log of mode/retention/policy changes + degraded-state events (§5.1, §10.1) |
+| Trace tombstones | `traces/tombstones.{date}.jsonl` | `traceId` | sidecar to spans.{date}.jsonl marking traces dropped due to queue overflow (§5.1). Kept separate so spans file stays pure OTLP/JSON. |
 
 All ledgers retained forever. Project deletion removes them.
 
@@ -503,7 +513,7 @@ P0 gate includes a schema-conformance test validating emitted attribute names/ty
 
 **Pinned attributes (current Development semconv):**
 
-- `gen_ai.provider.name` ∈ `{anthropic, openai, gcp.gemini}` — OTel-standard values only.
+- `gen_ai.provider.name` ∈ `{anthropic, openai, gcp.gemini, deepseek}` — OTel well-known values only. Add new providers here only after verifying they appear in OTel's GenAI semconv well-known list; otherwise emit `pipilot.auth.mode` and leave `gen_ai.provider.name` unset.
 - `gen_ai.request.model`, `gen_ai.response.model`.
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`.
 - `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens` (Anthropic). Dotted segment between `cache_*` and `input_tokens` is intentional per current semconv.
@@ -939,6 +949,8 @@ OTel recommends events for prompt/completion content (sampling-friendly, easier 
 | **NEW v0.9: gen_ai.tool.type used wrong enum (review Medium #2)** | Aligned with semconv: `{function, extension, datastore}`; retrieval tools now `datastore` | §6.3 |
 | **NEW v0.9: Leaked child spans invisible at root-end digest (review Medium #3)** | openChildSpanCount/Ids + degraded flag in digest; crash-recovery re-emits when open set shrinks | §5.5 |
 | **NEW v0.9: §6.5 wording self-contradicted on Resource vs span attribute (review Low #1)** | Clarified: span attributes on run-root, Resource stays process/build only | §6.5 |
+| **NEW v0.10: Tombstone broke pure OTLP/JSON file format (review High)** | Tombstones moved to sidecar `traces/tombstones.{date}.jsonl`; spans file stays format-pure | §5.1, §5.2 |
+| **NEW v0.10: gen_ai.provider.name enum missed DeepSeek (review Medium)** | Added `deepseek` (already supported in product, also OTel well-known) | §6.3 |
 | **NEW v0.6: system_prompt_hash misplaced as Resource (review High #2)** | (Superseded by v0.8: shell-prompt hash deleted; only `pipilot.runtime.full_prompt_hash` on root span remains) | §5.4 |
 | **NEW v0.6: GenAI semconv claimed "stable" (review High #3)** | Corrected to "pinned development/experimental"; quarterly review on graduation | §6.3 |
 | **NEW v0.6: Subscription/Codex stuffed into gen_ai.provider.name (review Medium #1)** | OTel-standard provider values only; single `pipilot.auth.mode` field carries the distinction (v0.8 collapsed three fields to one) | §6.3 |
