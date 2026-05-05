@@ -29,6 +29,11 @@ import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS } from '../models.js'
+import { tracedCompleteSimple } from '../telemetry/llm-trace.js'
+import type { PipilotTracer } from '../telemetry/tracer.js'
+import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
+import { SpanKind, SpanStatusCode, type Span } from '@opentelemetry/api'
+import { createHash } from 'crypto'
 import {
   migrateLegacyArtifacts,
   findArtifactById,
@@ -95,6 +100,33 @@ function detectIntentsByRules(message: string): Set<IntentLabel> {
 }
 
 
+/**
+ * Map a tool name to its `pipilot.tool.category` enum value (spec §6.4).
+ * Categories are stable across releases; new tools should be added here when
+ * the tool factory adds them.
+ */
+function categorizeTool(toolName: string): string {
+  // File / shell / coding (pi-coding-agent built-ins)
+  if (toolName === 'read' || toolName === 'write' || toolName === 'edit' || toolName === 'multi-edit') return 'file'
+  if (toolName === 'bash' || toolName === 'shell') return 'shell'
+  if (toolName === 'grep' || toolName === 'find' || toolName === 'ls') return 'code'
+  // Research tools
+  if (toolName === 'data-analyze' || toolName === 'data_analyze') return 'data-analysis'
+  if (toolName === 'literature-search' || toolName === 'literature_search') return 'literature'
+  if (toolName === 'web-search' || toolName === 'web_search' || toolName === 'web-fetch' || toolName === 'web_fetch') return 'web'
+  if (toolName === 'save-memory' || toolName === 'recall-memory' || toolName.startsWith('memory-')) return 'memory'
+  if (toolName.startsWith('artifact-') || toolName === 'artifact_create' || toolName === 'artifact_update' || toolName === 'artifact_search') return 'artifact'
+  if (toolName === 'convert-document' || toolName === 'convert_document') return 'document'
+  if (toolName.startsWith('diagram') || toolName === 'generate-diagram') return 'diagram'
+  if (toolName.startsWith('wiki') || toolName === 'wiki-query') return 'wiki'
+  if (toolName.startsWith('citation') || toolName === 'enrich-paper') return 'citation'
+  if (toolName === 'local-compute-execute' || toolName.startsWith('local-compute') || toolName.startsWith('compute-')) return 'compute'
+  if (toolName === 'load_skill' || toolName === 'load-skill') return 'code'
+  // Fallback: 'code' is the broadest non-domain category; safer than inventing
+  // a new value that won't pass dev-mode validation.
+  return 'code'
+}
+
 const MAX_SKILL_PRELOAD = 5
 
 async function matchSkillsWithLLM(
@@ -102,7 +134,9 @@ async function matchSkillsWithLLM(
   apiKey: string,
   message: string,
   skills: SkillEntry[],
-  priorTurns: Array<{ userMessage: string; response: string }> = []
+  priorTurns: Array<{ userMessage: string; response: string }> = [],
+  tracer: PipilotTracer | null = null,
+  authMode?: PipilotAuthMode
 ): Promise<string[]> {
   if (!model || skills.length === 0) return []
 
@@ -134,13 +168,14 @@ async function matchSkillsWithLLM(
     : message
 
   try {
-    const result = await completeSimple(model, {
+    const piContext = {
       systemPrompt,
-      messages: [{ role: 'user', content: userContent, timestamp: Date.now() }]
-    }, {
-      maxTokens: 100,
-      apiKey
-    })
+      messages: [{ role: 'user' as const, content: userContent, timestamp: Date.now() }]
+    }
+    const llmOpts = { maxTokens: 100, apiKey }
+    const result = tracer
+      ? await tracedCompleteSimple(model, piContext, llmOpts, { tracer, authMode, purpose: 'router' })
+      : await completeSimple(model, piContext, llmOpts)
 
     const textContent = result.content.find((c): c is TextContent => c.type === 'text')
     const text = textContent?.text?.trim() ?? ''
@@ -267,6 +302,16 @@ export interface CoordinatorConfig {
   onToolProgress?: (tool: string, toolCallId: string, phase: 'start' | 'update' | 'end', data: unknown) => void
   onUsage?: (usage: unknown, cost: unknown) => void
   onSkillLoaded?: (skillName: string) => void
+  /**
+   * Optional telemetry tracer (telemetry-trace v0.10 spec). When provided, every
+   * sub-LLM call (router, summarizer, extractor) and turn boundary becomes a
+   * trace span. When absent, the agent path runs unchanged.
+   */
+  tracer?: import('../telemetry/tracer.js').PipilotTracer | null
+  /** PiPilot auth mode for `pipilot.auth.mode` span attribute. */
+  authMode?: import('../telemetry/semantic-registry.js').PipilotAuthMode
+  /** Stable turnId minted at the IPC boundary; propagated as `pipilot.turn.id`. */
+  getTurnId?: () => string | undefined
 }
 
 export async function createCoordinator(config: CoordinatorConfig): Promise<{
@@ -293,7 +338,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onToolResult,
     onToolProgress,
     onUsage,
-    onSkillLoaded
+    onSkillLoaded,
+    tracer = null,
+    authMode,
+    getTurnId
   } = config
 
   /** Resolve API key — uses dynamic getter if provided (for OAuth token refresh), else static key. */
@@ -302,6 +350,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   let turnCount = 0
   let activeTurnToolCallCount: number | null = null
   const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
+  // Telemetry §4.2 fallback: map open execute_tool spans by toolCallId so
+  // afterToolCall can close the matching span even when sibling tool calls
+  // run in parallel.
+  const toolCallSpans = new Map<string, Span>()
 
   const migration = migrateLegacyArtifacts(projectPath)
   if (debug && migration.updatedFiles > 0) {
@@ -410,10 +462,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     callLlm: async (systemPrompt: string, userContent: string) => {
       if (!piModel) throw new Error('No model available for sub-call')
       const currentKey = await resolveApiKey()
-      const result = await completeSimple(piModel, {
+      const piContext = {
         systemPrompt,
-        messages: [{ role: 'user', content: userContent, timestamp: Date.now() }]
-      }, { maxTokens: 4096, apiKey: currentKey })
+        messages: [{ role: 'user' as const, content: userContent, timestamp: Date.now() }]
+      }
+      const llmOpts = { maxTokens: 4096, apiKey: currentKey }
+      const result = tracer
+        ? await tracedCompleteSimple(piModel, piContext, llmOpts, { tracer, authMode, purpose: 'callLlm' })
+        : await completeSimple(piModel, piContext, llmOpts)
       const textContent = result.content.find((c): c is TextContent => c.type === 'text')
       return textContent?.text ?? ''
     },
@@ -441,10 +497,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       ]
       // 8K output budget — SVG transcription of a moderately complex
       // diagram (20-30 nodes) typically lands around 4-6K characters.
-      const result = await completeSimple(piModel, {
+      const piContext = {
         systemPrompt,
-        messages: [{ role: 'user', content, timestamp: Date.now() }]
-      }, { maxTokens: 8192, apiKey: currentKey })
+        messages: [{ role: 'user' as const, content, timestamp: Date.now() }]
+      }
+      const llmOpts = { maxTokens: 8192, apiKey: currentKey }
+      const result = tracer
+        ? await tracedCompleteSimple(piModel, piContext, llmOpts, { tracer, authMode, purpose: 'callLlmVision' })
+        : await completeSimple(piModel, piContext, llmOpts)
       const textContent = result.content.find((c): c is TextContent => c.type === 'text')
       return textContent?.text ?? ''
     },
@@ -577,16 +637,39 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
       try {
         const currentKey = await resolveApiKey()
-        const summary = await generateSummary(
-          messagesToSummarize,
-          piModel,
-          settings.reserveTokens,
-          currentKey,
-          undefined,
-          signal,
-          undefined,
-          compactionSummary
-        )
+        // Telemetry §6.2 + §6.8: open `summarize context` span around the
+        // generateSummary call, attach the discarded turnIds event payload.
+        const compactionSpan = tracer
+          ? tracer.startSpan('summarize context', SpanKind.INTERNAL)
+          : null
+        if (compactionSpan) {
+          compactionSpan.setAttributes({
+            'gen_ai.operation.name': 'pipilot.summarize',
+            'pipilot.compaction.discarded_messages': messagesToSummarize.length,
+            'pipilot.compaction.kept_tokens': keptTokens
+          })
+          // §6.8: turnIds are objective. AgentMessage doesn't carry our turnId,
+          // so we attach the indexes; Layer 3 can join by message index → turnId
+          // via the user-response-signals ledger.
+          compactionSpan.addEvent('pipilot.compaction.discarded', {
+            turnIds: JSON.stringify(messagesToSummarize.map((_, i) => `msg-idx-${i}`))
+          })
+        }
+        let summary: string
+        try {
+          summary = await generateSummary(
+            messagesToSummarize,
+            piModel,
+            settings.reserveTokens,
+            currentKey,
+            undefined,
+            signal,
+            undefined,
+            compactionSummary
+          )
+        } finally {
+          compactionSpan?.end()
+        }
         compactionSummary = summary
 
         if (debug) {
@@ -614,24 +697,70 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       if (debug) {
         console.log(`  [Tool] ${ctx.toolCall.name}(${JSON.stringify(ctx.args).slice(0, 120)}...)`)
       }
+      // Telemetry §6.2: open `execute_tool {name}` span. Stored on the toolCallId
+      // so afterToolCall can close it (per spec §4.2 fallback — toolCallId map
+      // works alongside AsyncLocalStorage for sibling parallelism).
+      if (tracer) {
+        const toolName = ctx.toolCall.name
+        const span = tracer.startSpan(`execute_tool ${toolName}`, SpanKind.INTERNAL)
+        span.setAttributes({
+          'gen_ai.operation.name': 'execute_tool',
+          'gen_ai.tool.name': toolName,
+          'gen_ai.tool.call.id': ctx.toolCall.id,
+          'pipilot.tool.category': categorizeTool(toolName)
+        })
+        const tid = getTurnId?.()
+        if (tid) span.setAttribute('pipilot.turn.id', tid)
+        toolCallSpans.set(ctx.toolCall.id, span)
+      }
       return undefined
     },
     afterToolCall: async (ctx) => {
       wrappedOnToolResult(ctx.toolCall.name, ctx.result, ctx.args, ctx.toolCall.id)
-      // Notify when a skill is loaded successfully
+      // Notify when a skill is loaded successfully + emit telemetry event (§6.7)
       if (ctx.toolCall.name === 'load_skill' && onSkillLoaded) {
         const args = ctx.args as { name?: string }
         const result = ctx.result as any
         if (args?.name && result?.success !== false) {
           onSkillLoaded(args.name)
+          // §6.7: pipilot.skill.load event on the active step span. The parent
+          // execute_tool span is already in the OTel context tree, so no
+          // sourceToolCallId field is needed here.
+          if (activeStepSpan) {
+            activeStepSpan.addEvent('pipilot.skill.load', {
+              skillName: args.name,
+              trigger: 'explicit-load'
+            })
+          }
         }
+      }
+      // Telemetry: close the matching execute_tool span and stamp result attrs.
+      const span = toolCallSpans.get(ctx.toolCall.id)
+      if (span) {
+        const result = ctx.result as any
+        const isError = result && typeof result === 'object' && 'isError' in result && result.isError === true
+        if (isError) {
+          const errorClass = (result.details?.error_code ?? result.error_code ?? 'unknown') as string
+          span.setAttribute('pipilot.tool.error_class', errorClass)
+          span.setStatus({ code: SpanStatusCode.ERROR })
+        } else {
+          span.setStatus({ code: SpanStatusCode.OK })
+        }
+        span.end()
+        toolCallSpans.delete(ctx.toolCall.id)
       }
       return undefined
     }
   })
 
-  // Subscribe to agent events for streaming, usage, and tool progress
-  if (onStream || onUsage || onToolProgress) {
+  // Telemetry: track the currently-active step span so AgentEvent transitions can
+  // open/close it. Step spans nest under the `invoke_agent` root span which is
+  // opened in chat() — AsyncLocalStorage propagates the parent automatically.
+  let activeStepSpan: Span | null = null
+  let activeStepIndex = 0
+
+  // Subscribe to agent events for streaming, usage, tool progress, and tracing
+  if (onStream || onUsage || onToolProgress || tracer) {
     agent.subscribe((event: AgentEvent) => {
       if (event.type === 'message_update' && onStream) {
         if (event.assistantMessageEvent.type === 'text_delta') {
@@ -653,6 +782,33 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           onToolProgress(event.toolName, event.toolCallId, 'update', { partialResult: event.partialResult })
         } else if (event.type === 'tool_execution_end') {
           onToolProgress(event.toolName, event.toolCallId, 'end', { result: event.result, isError: event.isError })
+        }
+      }
+
+      // Telemetry: emit `invoke_agent step` spans per pi-agent-core turn boundary.
+      if (tracer) {
+        if (event.type === 'turn_start') {
+          activeStepIndex++
+          activeStepSpan = tracer.startSpan('invoke_agent step', SpanKind.INTERNAL)
+          activeStepSpan.setAttribute('gen_ai.operation.name', 'invoke_agent')
+          activeStepSpan.setAttribute('pipilot.step.index', activeStepIndex)
+          const tid = getTurnId?.()
+          if (tid) activeStepSpan.setAttribute('pipilot.turn.id', tid)
+        } else if (event.type === 'turn_end' && activeStepSpan) {
+          const msg = event.message as any
+          if (msg?.usage) {
+            activeStepSpan.setAttributes({
+              'gen_ai.usage.input_tokens': msg.usage.input ?? 0,
+              'gen_ai.usage.output_tokens': msg.usage.output ?? 0
+            })
+          }
+          if (msg?.stopReason && (msg.stopReason === 'error' || msg.stopReason === 'aborted')) {
+            activeStepSpan.setStatus({ code: SpanStatusCode.ERROR, message: msg.errorMessage })
+          } else {
+            activeStepSpan.setStatus({ code: SpanStatusCode.OK })
+          }
+          activeStepSpan.end()
+          activeStepSpan = null
         }
       }
     })
@@ -684,17 +840,18 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     try {
       const currentKey = await resolveApiKey()
-      const result = await completeSimple(intentRouterModel, {
+      const piContext = {
         systemPrompt: 'You summarize research conversations concisely. Output JSON with keys: summary (string), topicsDiscussed (string[]), openQuestions (string[]). Output ONLY valid JSON.',
         messages: [{
-          role: 'user',
+          role: 'user' as const,
           content: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
           timestamp: Date.now()
         }]
-      }, {
-        maxTokens: 512,
-        apiKey: currentKey
-      })
+      }
+      const llmOpts = { maxTokens: 512, apiKey: currentKey }
+      const result = tracer
+        ? await tracedCompleteSimple(intentRouterModel, piContext, llmOpts, { tracer, authMode, purpose: 'session-summary' })
+        : await completeSimple(intentRouterModel, piContext, llmOpts)
 
       const textContent = result.content.find((c): c is TextContent => c.type === 'text')
       const text = textContent?.text?.trim() ?? ''
@@ -740,7 +897,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     agent,
 
     async chat(message: string, mentions?: ResolvedMention[], images?: Array<{ base64: string; mimeType: string }>) {
-      try {
+      // Telemetry §6.2: wrap the entire chat() body in an `invoke_agent {model}`
+      // root span. Sub-LLM, tool, compaction, and step spans nest under it via
+      // AsyncLocalStorage. Span ends when chat() returns; digest writer keys on
+      // root-span end (§5.5).
+      let rootSpan: Span | null = null
+
+      const runChatBody = async () => {
+        try {
         // --- Intent detection (rule-based only, for explain snapshots) ---
         const intents = detectIntentsByRules(message)
 
@@ -753,7 +917,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           response: t.response
         }))
         const currentKey = await resolveApiKey()
-        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills, priorTurns)
+        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills, priorTurns, tracer, authMode)
+        if (rootSpan && matchedSkillNames.length > 0) {
+          rootSpan.setAttribute('pipilot.matched_skills', matchedSkillNames)
+        }
         const matchedSkills = matchedSkillNames
           .map(name => skills.find(s => s.name === name))
           .filter((s): s is SkillEntry => s !== undefined)
@@ -784,11 +951,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // resumes with the same context the user sees in the UI — no extra
         // LLM call, no compression, lossless.
         let bootstrapContext = ''
+        let bootstrapOrphans = 0
+        const summaryLoaded = !!latestSummary
         if (!bootstrapDone) {
           bootstrapDone = true
           try {
             const cutoffMs = latestSummary ? Date.parse(latestSummary.createdAt) || 0 : 0
             const orphans = readOrphanMessages(projectPath, sessionId, cutoffMs)
+            bootstrapOrphans = orphans.length
             if (orphans.length > 0) {
               bootstrapContext = buildRecentConversationContext(orphans)
               if (debug) {
@@ -798,6 +968,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           } catch (err) {
             if (debug) console.warn('[Bootstrap] Failed to read orphan messages:', err)
           }
+        }
+        // Telemetry §6.4: stamp resumption booleans on the root span. Cheap
+        // booleans set once at first step. Layer 3 can compute fancier
+        // resumption indicators from the raw trace if needed.
+        if (rootSpan) {
+          rootSpan.setAttribute('pipilot.resumption.bootstrap_orphans', bootstrapOrphans > 0)
+          rootSpan.setAttribute('pipilot.resumption.summary_loaded', summaryLoaded)
         }
 
         const persistence = classifyPersistenceDecision(message)
@@ -948,7 +1125,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // Background memory extraction (gated by RESEARCH_COPILOT_AUTO_EXTRACT=1)
         const memoryKey = await resolveApiKey()
         void maybeExtractMemories(
-          { projectPath, model: piModel!, apiKey: memoryKey, systemPrompt: enrichedSystem, debug },
+          { projectPath, model: piModel!, apiKey: memoryKey, systemPrompt: enrichedSystem, debug, tracer, authMode },
           agent.state.messages,
           turnCount
         )
@@ -962,13 +1139,30 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           response: responseText,
           ...(responseImages.length > 0 && { images: responseImages })
         }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error)
-        if (debug) {
-          console.log(`[Chat] Exception: ${errorMsg}`)
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error)
+          if (debug) {
+            console.log(`[Chat] Exception: ${errorMsg}`)
+          }
+          return { success: false, error: errorMsg }
         }
-        return { success: false, error: errorMsg }
       }
+
+      if (!tracer) return runChatBody()
+
+      // Stamp root-span identity attrs (§5.4 + §6.2). Resource attributes carry
+      // process/build identity only — per-task identity goes here.
+      const fullPromptHash = piModel ? createHash('sha256').update(piModel.id).digest('hex').slice(0, 16) : 'unknown'
+      const rootName = `invoke_agent ${piModel?.id ?? 'agent'}`
+      return tracer.runInSpan(rootName, SpanKind.INTERNAL, async (span) => {
+        rootSpan = span
+        span.setAttribute('gen_ai.operation.name', 'invoke_agent')
+        if (piModel) span.setAttribute('gen_ai.request.model', piModel.id)
+        span.setAttribute('pipilot.runtime.full_prompt_hash', `sha256:${fullPromptHash}`)
+        const tid = getTurnId?.()
+        if (tid) span.setAttribute('pipilot.turn.id', tid)
+        return runChatBody()
+      })
     },
 
     clearSessionMemory,

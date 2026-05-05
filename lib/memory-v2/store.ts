@@ -1,5 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { createHash } from 'crypto'
+import { trace as otelTrace } from '@opentelemetry/api'
+import { createArtifactLedgerWriter, type ArtifactOp } from '../ledger/artifact-ledger.js'
 import {
   PATHS,
   AGENT_MD_ID,
@@ -414,6 +417,10 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
   const filePath = join(dir, `${artifact.id}.json`)
   writeFileSync(filePath, JSON.stringify(artifact, null, 2), 'utf-8')
 
+  // Telemetry §8.1: append to artifact ledger. Best-effort — failures don't
+  // affect the agent path. Trace context is auto-pulled by the writer.
+  void writeArtifactLedgerCreate(context.projectPath, artifact, filePath)
+
   return { artifact, filePath }
 }
 
@@ -471,6 +478,8 @@ export function updateArtifact(projectPath: string, artifactId: string, patch: U
   } as Artifact
 
   writeFileSync(found.filePath, JSON.stringify(updated, null, 2), 'utf-8')
+  // Telemetry §8.1: ledger row for edit op.
+  void writeArtifactLedgerUpdate(projectPath, updated, found.artifact)
   return { artifact: updated, filePath: found.filePath }
 }
 
@@ -479,6 +488,7 @@ export function deleteArtifact(projectPath: string, artifactId: string): Artifac
   if (!found) return null
 
   rmSync(found.filePath)
+  void writeArtifactLedgerDelete(projectPath, found.artifact)
   return found
 }
 
@@ -638,3 +648,107 @@ export function readOrphanMessages(
   }
   return result
 }
+
+// ─── Artifact ledger integration (telemetry-trace v0.10 §8.1) ─────────────
+//
+// Best-effort, fire-and-forget. The artifact JSON write is the read-side
+// authority; ledger rows accrete an event log alongside.
+
+function hashArtifactContent(artifact: Artifact): string {
+  // Hash the canonical JSON for stable comparison; minor field reorders
+  // shouldn't trigger spurious diffs because we serialize via JSON.stringify
+  // which is field-order-stable from the same TypeScript shape.
+  const json = JSON.stringify(artifact)
+  return 'sha256:' + createHash('sha256').update(json).digest('hex')
+}
+
+function relPath(projectPath: string, filePath: string): string {
+  // Workspace-relative POSIX path; tolerant of platform separators.
+  const rel = filePath.startsWith(projectPath) ? filePath.slice(projectPath.length) : filePath
+  return rel.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
+async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string): Promise<void> {
+  try {
+    const writer = createArtifactLedgerWriter(projectPath)
+    await writer.append({
+      artifactId: artifact.id,
+      version: 1,
+      op: 'create',
+      type: artifact.type,
+      path: relPath(projectPath, filePath),
+      contentHash: hashArtifactContent(artifact),
+      versionBefore: null,
+      initiator: pickInitiator(artifact)
+    })
+  } catch {
+    // Swallow — ledger failures must not block agent.
+  }
+}
+
+async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact): Promise<void> {
+  try {
+    const writer = createArtifactLedgerWriter(projectPath)
+    await writer.append({
+      artifactId: after.id,
+      version: incrementVersion(after, before),
+      op: 'edit',
+      type: after.type,
+      path: relPath(projectPath, ''),
+      contentHash: hashArtifactContent(after),
+      versionBefore: extractVersion(before),
+      initiator: pickInitiator(after)
+    })
+  } catch {
+    // ignore
+  }
+}
+
+async function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact): Promise<void> {
+  try {
+    const writer = createArtifactLedgerWriter(projectPath)
+    await writer.append({
+      artifactId: artifact.id,
+      version: extractVersion(artifact) + 1,
+      op: 'delete',
+      type: artifact.type,
+      path: '',
+      contentHash: hashArtifactContent(artifact),
+      versionBefore: extractVersion(artifact),
+      initiator: pickInitiator(artifact)
+    })
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Best-effort initiator inference from provenance. Falls back to 'tool' which
+ * is the most common case under PiPilot (artifact ops happen via tool calls).
+ */
+function pickInitiator(a: Artifact): 'user' | 'assistant' | 'tool' | 'external' {
+  const src = a.provenance?.source
+  if (src === 'user') return 'user'
+  if (src === 'agent') return 'assistant'
+  if (src === 'import') return 'external'
+  return 'tool'
+}
+
+function extractVersion(_a: Artifact): number {
+  // Per-file artifact JSON doesn't yet carry a `version` field. We use 1 as
+  // the synthetic baseline; real version increments come from the ledger
+  // count, not the artifact JSON. P1 tradeoff per spec §14.2.
+  return 1
+}
+
+function incrementVersion(_after: Artifact, _before: Artifact): number {
+  // Same simplification: ledger version is a monotonic event count, derived
+  // by analysis tools by counting prior rows for this artifactId, not stored
+  // on the JSON. Returning 2 keeps the row well-formed; analysis SHOULD use
+  // the row order, not this field.
+  return 2
+}
+
+// Suppress unused-import warning when `otelTrace` isn't referenced directly
+// here (the ledger writer pulls trace context via `trace.getActiveSpan()`).
+void otelTrace

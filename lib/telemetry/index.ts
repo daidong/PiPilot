@@ -1,0 +1,58 @@
+/**
+ * Telemetry & Trace public surface (v0.10 spec).
+ *
+ * Single import point for the rest of the app:
+ *
+ *   import { PipilotTracer, tracedCompleteSimple, migrateProjectConfig } from '@research-pilot/telemetry'
+ */
+
+export { PipilotTracer } from './tracer.js'
+export type { TracerInitOptions, ProjectScope } from './tracer.js'
+
+export { TraceStore } from './trace-store.js'
+export type { TraceStoreOptions } from './trace-store.js'
+
+export { TraceDigestProcessor } from './digest.js'
+
+export { JsonlSpanExporter } from './exporters/jsonl.js'
+export type { JsonlSpanExporterOptions } from './exporters/jsonl.js'
+
+export { tracedCompleteSimple } from './llm-trace.js'
+export type { TracedCompleteSimpleOpts } from './llm-trace.js'
+
+export { redact, scrubString, sha256Hex, SCRUBBER_VERSION, DEFAULT_SIZE_CAP_BYTES } from './redaction.js'
+export type { RedactionStats, RedactOptions } from './redaction.js'
+
+export {
+  SCHEMA_URL,
+  TRACE_POLICY_VERSION,
+  GEN_AI_PROVIDER_NAMES,
+  GEN_AI_TOOL_TYPES,
+  GEN_AI_OPERATION_NAMES,
+  PIPILOT_AUTH_MODES,
+  PIPILOT_TOOL_CATEGORIES,
+  PIPILOT_ATTRIBUTE_KEYS,
+  PIPILOT_EVENT_NAMES,
+  PIPILOT_LINK_KINDS,
+  validatePipilotAttribute,
+  validatePipilotEventName
+} from './semantic-registry.js'
+export type {
+  GenAiProviderName,
+  GenAiToolType,
+  GenAiOperationName,
+  PipilotAuthMode,
+  PipilotToolCategory,
+  PipilotLinkKind
+} from './semantic-registry.js'
+
+export { migrateProjectConfig } from './migration.js'
+export type { MigrationResult } from './migration.js'
+
+export { createTracingStateLogger } from './tracing-state.js'
+export type { TracingStateKind, TracingStateRow, TracingStateLogger } from './tracing-state.js'
+
+export { ulid } from './ulid.js'
+
+export { appendJsonl, appendJsonlBatch } from './jsonl-writer.js'
+export type { JsonlWriterOptions } from './jsonl-writer.js'

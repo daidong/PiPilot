@@ -23,6 +23,10 @@ import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
+import { PipilotTracer, migrateProjectConfig, tracedCompleteSimple } from '../../../lib/telemetry/index'
+import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
+import { ROOT_CONTEXT } from '@opentelemetry/api'
+import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
@@ -123,7 +127,9 @@ function formatToolResult(tool: string, result: unknown, args?: unknown): Activi
 import {
   loadUsageTotals,
   accumulateUsage,
-  resetUsageTotals
+  resetUsageTotals,
+  ensurePreTraceCutoff,
+  readTraceAggregatedTotals
 } from './usage-totals'
 
 interface WindowRuntimeState {
@@ -136,6 +142,17 @@ interface WindowRuntimeState {
   isClosing: boolean
   realtimeBuffer: RealtimeBuffer
   fsWatcher: FSWatcher | null
+  // Telemetry-trace IPC envelope (spec §4.1). Set on every `agent:send`; consumed
+  // by the trace path. `lastTurnId` propagates as `pipilot.turn.id` on every span
+  // emitted during the corresponding chat() call.
+  lastTurnId?: string
+  lastClientTimestamp?: number
+  /** PipilotTracer for this window/project. Null when telemetry is disabled. */
+  tracer: PipilotTracer | null
+  /** Previous user turnId — written into user-response-signals.previousTurnId. */
+  previousTurnId?: string
+  /** Wall-clock ms of last assistant response — drives gapMsSincePreviousAssistant. */
+  lastAssistantTimestamp?: number
 }
 
 const windowStates = new Map<number, WindowRuntimeState>()
@@ -181,6 +198,7 @@ function createWindowRuntimeState(): WindowRuntimeState {
     isClosing: false,
     realtimeBuffer: createRealtimeBuffer(),
     fsWatcher: null,
+    tracer: null,
   }
 }
 
@@ -301,6 +319,28 @@ function initializeProject(path: string): void {
   const migration = migrateLegacyArtifacts(path)
   if (migration.updatedFiles > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
     console.log(`[ResearchPilot] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
+  }
+
+  // Telemetry-trace v0.10: ensure traces/blobs dirs + run ProjectConfig migration
+  // (idempotent — adds id/telemetry/configSchemaVersion if absent).
+  for (const dir of [PATHS.traces, PATHS.blobs]) {
+    const fullPath = join(path, dir)
+    if (!existsSync(fullPath)) mkdirSync(fullPath, { recursive: true })
+  }
+  try {
+    migrateProjectConfig(path)
+  } catch (err) {
+    // Migration failures must not block project open. The next start retries.
+    if (process.env.RESEARCH_COPILOT_DEBUG) {
+      console.warn('[ResearchPilot] ProjectConfig telemetry migration failed:', err)
+    }
+  }
+  // §14.3: snapshot pre-trace usage totals on first telemetry-aware load.
+  // Idempotent — only writes on first call when the snapshot is absent.
+  try {
+    ensurePreTraceCutoff(join(path, PATHS.root))
+  } catch {
+    /* best effort */
   }
 
   // Keep process cwd stable; each window passes explicit projectPath.
@@ -623,6 +663,23 @@ async function ensureCoordinator(
         // Persist to disk (per-project accumulated totals)
         const baseDir = join(runProjectPath, PATHS.root)
         accumulateUsage(baseDir, promptTokens, completionTokens, cachedTokens, cacheWriteTokens, rawCost)
+        // §11 P1: dual-write reconciliation. Compare classic accumulator total
+        // against trace-aggregated total; in debug mode, log the delta so a
+        // regression in the trace path is observable. Acceptable delta = the
+        // pre-cutoff snapshot + the current in-flight chat (digest writes lag).
+        if (process.env.RESEARCH_COPILOT_DEBUG) {
+          try {
+            const classic = loadUsageTotals(baseDir)
+            const traceTotals = readTraceAggregatedTotals(runProjectPath)
+            const cutoff = classic.preTraceCutoffTotals?.tokens ?? 0
+            const traceTokens = traceTotals.tokens.input + traceTotals.tokens.output + traceTotals.tokens.cacheRead
+            const expected = classic.totals.tokens - cutoff
+            const delta = expected - traceTokens
+            console.log(`[Usage dual-write] classic=${classic.totals.tokens} cutoff=${cutoff} trace=${traceTokens} delta=${delta}`)
+          } catch {
+            /* best effort */
+          }
+        }
 
         const usageEvent = {
           promptTokens,
@@ -637,7 +694,19 @@ async function ensureCoordinator(
           cacheHitRate: (promptTokens + cachedTokens) > 0 ? cachedTokens / (promptTokens + cachedTokens) : 0
         }
         safeSend(win, 'agent:usage', usageEvent)
-      }
+      },
+
+      // Telemetry-trace v0.10: pass per-window tracer + auth-mode + turnId getter.
+      // The coordinator wraps every sub-LLM call in a `chat` span and stamps
+      // `pipilot.turn.id` on every span via the IPC envelope.
+      tracer: state.tracer,
+      authMode:
+        state.currentAuthMode === 'subscription'
+          ? (resolvedAuth.piProvider === 'anthropic-sub' ? 'anthropic-subscription' : 'openai-codex')
+          : state.currentAuthMode === 'api-key'
+          ? 'api-key'
+          : undefined,
+      getTurnId: () => state.lastTurnId
     })
 
     // Notify UI that initialization is complete
@@ -916,10 +985,25 @@ export function registerIpcHandlers(): void {
 
         const callLlm = async (system: string, user: string) => {
           const currentKey = await resolveApiKey()
-          const result = await completeSimple(model, {
+          const piContext = {
             systemPrompt: system,
-            messages: [{ role: 'user', content: user, timestamp: Date.now() }]
-          }, { maxTokens: 4096, apiKey: currentKey })
+            messages: [{ role: 'user' as const, content: user, timestamp: Date.now() }]
+          }
+          const llmOpts = { maxTokens: 4096, apiKey: currentKey }
+          // Wiki bg agent walks across projects: pick the first window's tracer
+          // if any. Spec §6.5: this lives on its own trace (no parent context),
+          // detached from any active user-task trace.
+          let firstTracer: PipilotTracer | null = null
+          for (const [, s] of windowStates) {
+            if (s.tracer) { firstTracer = s.tracer; break }
+          }
+          const result = firstTracer
+            ? await tracedCompleteSimple(model, piContext, llmOpts, {
+                tracer: firstTracer,
+                parent: ROOT_CONTEXT,
+                purpose: 'wiki-bg'
+              })
+            : await completeSimple(model, piContext, llmOpts)
           const textContent = result.content.find((c: any) => c.type === 'text') as any
           return textContent?.text ?? ''
         }
@@ -1005,11 +1089,57 @@ export function registerIpcHandlers(): void {
   // ─── App-specific handlers ──────────────────────────────────────────────
 
   // Agent chat
-  handleWindow('agent:send', async ({ win, state }, message: string, rawMentions?: string, model?: string, images?: Array<{ base64: string; mimeType: string }>) => {
+  handleWindow(
+    'agent:send',
+    async (
+      { win, state },
+      message: string,
+      rawMentions?: string,
+      model?: string,
+      images?: Array<{ base64: string; mimeType: string }>,
+      // Telemetry envelope (spec §4.1). `clientMessageId` becomes the canonical
+      // turnId; `clientTimestamp` is the ms-since-epoch of the user's send press.
+      // P0: optional + minted if absent (so older renderer builds keep working).
+      // P1 will make this required and consume turnId in the trace path.
+      envelope?: { clientMessageId: string; clientTimestamp: number }
+    ) => {
     if (!state.projectPath) {
       const errResult = { success: false, error: 'No project folder selected. Please select a folder first.' }
       safeSend(win, 'agent:done', errResult)
       return errResult
+    }
+
+    // Resolve telemetry envelope: prefer renderer-supplied id, fall back to mint.
+    // Stored on the per-window state so P1 can read it from the coordinator path.
+    const turnId = envelope?.clientMessageId ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const clientTimestamp = envelope?.clientTimestamp ?? Date.now()
+    state.lastTurnId = turnId
+    state.lastClientTimestamp = clientTimestamp
+
+    // Telemetry §8.3: append a user-response-signals ledger row. Pure facts:
+    // turnId, content hash, length, prior-turn link, gap-since-prev. No
+    // approval/rejection/confidence labels — that's Layer 3.
+    if (state.tracer && state.projectPath) {
+      try {
+        const writer = createUserResponseSignalsWriter(state.projectPath)
+        const contentHash =
+          'sha256:' + createHash('sha256').update(message ?? '').digest('hex')
+        const prevTimestamp = state.lastClientTimestamp ?? clientTimestamp
+        void writer.append({
+          turnId,
+          previousTurnId: state.previousTurnId,
+          gapMsSincePreviousAssistant: state.lastAssistantTimestamp
+            ? clientTimestamp - state.lastAssistantTimestamp
+            : undefined,
+          messageContentHash: contentHash,
+          messageCharLen: (message ?? '').length,
+          referencedArtifactIds: []
+        })
+        state.previousTurnId = turnId
+        void prevTimestamp
+      } catch {
+        // ignore — ledger write must never block the agent
+      }
     }
 
     const requestedModel = model || state.currentModel
@@ -1037,6 +1167,9 @@ export function registerIpcHandlers(): void {
       const result = await coord.chat(message, mentions, images)
       onCoordinatorIdle()
       state.realtimeBuffer.finishStreaming()
+      // Telemetry §8.3: stamp completion time so the next user-response-signal
+      // row can compute gapMsSincePreviousAssistant.
+      state.lastAssistantTimestamp = Date.now()
       safeSend(win, 'agent:done', result)
       return result
     } catch (err: any) {
@@ -1046,7 +1179,8 @@ export function registerIpcHandlers(): void {
       safeSend(win, 'agent:done', errResult)
       return errResult
     }
-  })
+    }
+  )
 
   // Realtime state recovery (renderer calls this on mount to restore lost state)
   handleWindow('agent:get-realtime-snapshot', ({ state }) => {
@@ -1498,6 +1632,109 @@ export function registerIpcHandlers(): void {
   // Session
   handleWindow('session:current', ({ state }) => ({ sessionId: state.sessionId, projectPath: state.projectPath }))
 
+  // ─── Telemetry: project config (§10.2) + storage stats ────────────────
+  // Project-scoped — distinct from global AppSettings IPC. Returns the full
+  // config plus a derived `storageFootprintBytes` summary (sum of stats rows).
+  handleWindow('telemetry:get-project-config', ({ state }) => {
+    if (!state.projectPath) return null
+    try {
+      const projectFile = join(state.projectPath, PATHS.project)
+      const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
+      const tracingMode = config.telemetry?.tracingMode ?? 'enabled'
+      const bufferCapacity = config.telemetry?.bufferCapacity ?? 1024
+      // Storage footprint: sum approxBytes from trace-storage-stats.jsonl.
+      let storageFootprintBytes = 0
+      const statsFile = join(state.projectPath, PATHS.traceStorageStats)
+      if (existsSync(statsFile)) {
+        try {
+          const raw = readFileSync(statsFile, 'utf-8')
+          for (const line of raw.split('\n')) {
+            const t = line.trim()
+            if (!t) continue
+            try {
+              const row = JSON.parse(t) as { approxBytes?: number }
+              if (typeof row.approxBytes === 'number') storageFootprintBytes += row.approxBytes
+            } catch { /* skip malformed */ }
+          }
+        } catch { /* best effort */ }
+      }
+      return {
+        projectId: config.id ?? 'unknown',
+        tracingMode,
+        bufferCapacity,
+        storageFootprintBytes
+      }
+    } catch (err: any) {
+      return { error: err?.message ?? 'failed' }
+    }
+  })
+
+  handleWindow(
+    'telemetry:set-tracing-mode',
+    async ({ state }, mode: 'enabled' | 'disabled') => {
+      if (!state.projectPath) return { success: false, error: 'no project' }
+      try {
+        const projectFile = join(state.projectPath, PATHS.project)
+        const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
+        config.telemetry = {
+          tracingMode: mode,
+          bufferCapacity: config.telemetry?.bufferCapacity ?? 1024
+        }
+        writeFileSync(projectFile, JSON.stringify(config, null, 2))
+        // Apply at runtime: drain queue or rebuild tracer on toggle.
+        if (state.tracer) {
+          if (mode === 'disabled') {
+            await state.tracer.store.disable('user-toggle')
+          } else {
+            state.tracer.store.enable('user-toggle')
+          }
+        } else if (mode === 'enabled') {
+          // Rebuild tracer if it had been torn down.
+          state.tracer = await createTracerForProject(state.projectPath, state.sessionId).catch(() => null)
+        }
+        return { success: true }
+      } catch (err: any) {
+        return { success: false, error: err?.message }
+      }
+    }
+  )
+
+  // ─── Telemetry: view log (§8.4) ────────────────────────────────────────
+  // Renderer pushes passive view events (artifact opened, summary scrolled).
+  // Disabled when tracingMode=disabled (no tracer = no writer).
+  handleWindow(
+    'telemetry:view-log',
+    async (
+      { state },
+      payload: {
+        viewId: string
+        target: { kind: 'artifact' | 'memory' | 'trace' | 'session-summary'; id: string }
+        op: 'view' | 'hover' | 'scroll' | 'dismiss'
+        durationMs?: number
+        turnId?: string
+      }
+    ) => {
+      if (!state.tracer || !state.projectPath) return { success: false, reason: 'tracing-disabled' }
+      try {
+        const projectFile = join(state.projectPath, PATHS.project)
+        const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
+        const writer = createViewLogWriter(state.projectPath)
+        await writer.append({
+          viewId: payload.viewId,
+          projectId: config.id ?? 'unknown',
+          sessionId: state.sessionId,
+          turnId: payload.turnId,
+          target: payload.target,
+          op: payload.op,
+          durationMs: payload.durationMs
+        })
+        return { success: true }
+      } catch (err: any) {
+        return { success: false, error: err?.message }
+      }
+    }
+  )
+
   // Compute environment probe (called eagerly by renderer on mount)
   handleWindow('compute:probe-environment', async ({ win }) => {
     try {
@@ -1645,6 +1882,32 @@ export function registerIpcHandlers(): void {
   }
 
   /**
+   * Build a PipilotTracer bound to the given project. Honors the project's
+   * `telemetry.tracingMode` (returns null if disabled). Resource attrs carry
+   * process/build identity only; per-project state goes onto span attributes
+   * via the tracer's project scope.
+   */
+  async function createTracerForProject(
+    projectPath: string,
+    sessionId: string
+  ): Promise<PipilotTracer | null> {
+    const projectFile = join(projectPath, PATHS.project)
+    if (!existsSync(projectFile)) return null
+    const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
+    if (config.telemetry?.tracingMode === 'disabled') return null
+    const projectId = config.id ?? 'unknown'
+    const serviceVersion = app.getVersion()
+    return new PipilotTracer({
+      projectPath,
+      serviceVersion,
+      appBuildCommit: process.env.RESEARCH_COPILOT_BUILD_COMMIT ?? 'dev',
+      projectId,
+      sessionId,
+      bufferCapacity: config.telemetry?.bufferCapacity ?? 1024
+    })
+  }
+
+  /**
    * Initialize a project folder: tear down any previous coordinator, set up
    * state, hydrate per-project preferences, record the path in the recent
    * projects list. Used by both the folder-picker dialog and direct-open
@@ -1665,6 +1928,10 @@ export function registerIpcHandlers(): void {
       try { await state.coordinator.destroy() } catch { /* best effort */ }
       state.coordinator = null
     }
+    if (state.tracer) {
+      try { await state.tracer.shutdown() } catch { /* best effort */ }
+      state.tracer = null
+    }
     state.realtimeBuffer.reset()
 
     // Set up new project
@@ -1672,6 +1939,16 @@ export function registerIpcHandlers(): void {
     initializeProject(state.projectPath)
     startFsWatcher(state, win)
     state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
+
+    // Telemetry-trace bootstrap (P1 §3.2). Builds a per-window PipilotTracer
+    // tied to this project. Reads tracingMode from project.json (set by
+    // migrateProjectConfig in initializeProject); defaults to 'enabled'.
+    state.tracer = await createTracerForProject(state.projectPath, state.sessionId).catch((err) => {
+      if (process.env.RESEARCH_COPILOT_DEBUG) {
+        console.warn('[ResearchPilot] tracer bootstrap failed:', err)
+      }
+      return null
+    })
 
     // Restore persisted model + reasoning preferences
     const prefsFile = join(state.projectPath, PATHS.root, 'preferences.json')
@@ -1797,6 +2074,16 @@ export function registerIpcHandlers(): void {
           console.error('[Close] coordinator.destroy() error:', err)
         }
         state.coordinator = null
+      }
+
+      // Shut down telemetry tracer (flushes pending span batches; 5s budget)
+      if (state.tracer) {
+        try {
+          await state.tracer.shutdown()
+        } catch (err) {
+          console.error('[Close] tracer.shutdown() error:', err)
+        }
+        state.tracer = null
       }
 
       // Reset main-process state

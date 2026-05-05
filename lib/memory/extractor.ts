@@ -10,6 +10,8 @@
 
 import type { Model, TextContent } from '@mariozechner/pi-ai'
 import { completeSimple } from '@mariozechner/pi-ai'
+import { tracedCompleteSimple } from '../telemetry/llm-trace.js'
+import { ROOT_CONTEXT } from '@opentelemetry/api'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
 import {
   type MemoryType,
@@ -28,6 +30,14 @@ export interface ExtractionConfig {
   apiKey: string
   systemPrompt: string
   debug?: boolean
+  /**
+   * Optional telemetry tracer (telemetry-trace v0.10 §6.5). When set, the
+   * extractor's LLM call becomes a `chat` span on its own trace (background
+   * extraction must not extend the user-task trace's lifetime — keeping the
+   * root-end signal clean for digest writing).
+   */
+  tracer?: import('../telemetry/tracer.js').PipilotTracer | null
+  authMode?: import('../telemetry/semantic-registry.js').PipilotAuthMode
 }
 
 interface ExtractedMemory {
@@ -145,15 +155,23 @@ export async function maybeExtractMemories(
       timestamp: Date.now()
     })
 
-    const result = await completeSimple(config.model, {
+    const piContext = {
       systemPrompt: config.systemPrompt,
       // pi-ai's Message union requires extra fields on assistant turns, but
       // for this context-only replay the providers read role/content/timestamp.
       messages: simplified as any
-    }, {
-      maxTokens: 1024,
-      apiKey: config.apiKey
-    })
+    }
+    const llmOpts = { maxTokens: 1024, apiKey: config.apiKey }
+    // Spec §6.5: background extraction lives on its own trace. ROOT_CONTEXT
+    // detaches from any active span so the OTel SDK mints a fresh traceId.
+    const result = config.tracer
+      ? await tracedCompleteSimple(config.model, piContext, llmOpts, {
+          tracer: config.tracer,
+          parent: ROOT_CONTEXT,
+          authMode: config.authMode,
+          purpose: 'memory-extract'
+        })
+      : await completeSimple(config.model, piContext, llmOpts)
 
     const textContent = result.content.find((c): c is TextContent => c.type === 'text')
     const text = textContent?.text?.trim() ?? ''

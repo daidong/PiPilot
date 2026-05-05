@@ -82,7 +82,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const { useUIStore } = await import('./ui-store')
       const model = useUIStore.getState().selectedModel
-      await api.sendMessage(text, undefined, model, images)
+      await api.sendMessage(text, undefined, model, images, {
+        clientMessageId: userMsg.id,
+        clientTimestamp: userMsg.timestamp
+      })
     } catch {
       // Error handled via agent:done event
     }

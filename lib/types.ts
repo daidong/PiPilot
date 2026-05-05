@@ -48,7 +48,19 @@ export const PATHS = {
   skillsConfig: '.research-pilot/skills-config.json',
 
   // Local compute runs
-  computeRuns: '.research-pilot/compute-runs'
+  computeRuns: '.research-pilot/compute-runs',
+
+  // Telemetry & Trace (v0.10 spec)
+  telemetryRoot: '.research-pilot',
+  traces: '.research-pilot/traces',
+  blobs: '.research-pilot/blobs',
+  ledgerArtifact: '.research-pilot/artifacts/ledger.jsonl',
+  ledgerMemory: '.research-pilot/memory-v2/ledger.jsonl',
+  userResponseSignals: '.research-pilot/user-response-signals.jsonl',
+  viewLog: '.research-pilot/view-log.jsonl',
+  tracingState: '.research-pilot/tracing-state.jsonl',
+  traceDigest: '.research-pilot/trace-digest.jsonl',
+  traceStorageStats: '.research-pilot/trace-storage-stats.jsonl'
 } as const
 
 // ============================================================================
@@ -166,6 +178,20 @@ export interface UserCorrection {
   createdAt: string
 }
 
+// ============================================================================
+// Telemetry / Trace types (v0.10 spec — see docs/spec/telemetry-trace.md §10.2)
+// ============================================================================
+
+export interface ProjectTelemetryConfig {
+  /** Single hard off-switch. Default: 'enabled'. Opt-out only — no granularity. */
+  tracingMode: 'enabled' | 'disabled'
+  /** TraceStore ring queue capacity. Default: 1024 spans. */
+  bufferCapacity?: number
+}
+
+/** Current ProjectConfig schema version. v0.7+ = 1. */
+export const PROJECT_CONFIG_SCHEMA_VERSION = 1 as const
+
 export interface ProjectConfig {
   name: string
   description?: string
@@ -173,6 +199,26 @@ export interface ProjectConfig {
   userCorrections: UserCorrection[]
   createdAt: string
   updatedAt: string
+
+  // v0.7+ telemetry fields (added by migration on first load — see lib/telemetry/migration.ts)
+  /** Stable project id (ULID). Generated on first load if missing. */
+  id?: string
+  /** Project-scoped telemetry knobs. */
+  telemetry?: ProjectTelemetryConfig
+  /** Migration version. 0/undefined = pre-telemetry; 1 = v0.7+. */
+  configSchemaVersion?: number
+}
+
+/** Augments .research-pilot/usage.json with v0.7 cutoff snapshot (§14.3). */
+export interface UsageTotals {
+  tokens: number
+  cost: number
+  /** Set once at first load under v0.7; never updated. */
+  preTraceCutoffTotals?: {
+    tokens: number
+    cost: number
+    cutoffTimestamp: string
+  }
 }
 
 export interface Session {
