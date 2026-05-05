@@ -23,24 +23,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PATHS } from '../types.js'
 import type { LiveSpanSummary } from './live-processor.js'
-
-interface OtlpSpan {
-  traceId: string
-  spanId: string
-  parentSpanId?: string
-  name: string
-  kind: number
-  startTimeUnixNano: string
-  endTimeUnixNano: string
-  attributes: Array<{ key: string; value: { stringValue?: string; intValue?: string; doubleValue?: number; boolValue?: boolean; arrayValue?: { values: Array<{ stringValue?: string }> } } }>
-  events: Array<{ timeUnixNano: string; name: string; attributes: unknown[] }>
-  status: { code: number; message?: string }
-}
-
-interface OtlpEnvelope {
-  resource?: unknown
-  scopeSpans: Array<{ scope?: unknown; schemaUrl?: string; spans: OtlpSpan[] }>
-}
+import { spanToSummary, dateStampUtc, type OtlpEnvelope } from './otlp-decode.js'
 
 interface TombstoneRow {
   traceId: string
@@ -56,55 +39,6 @@ export interface TraceSnapshot {
   /** True when the trace was dropped via tombstone (queue overflow). */
   dropped?: boolean
   dropReason?: string
-}
-
-function dateStampUtc(d: Date): string {
-  const yyyy = d.getUTCFullYear()
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(d.getUTCDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
-}
-
-function nanoToIso(nanoStr: string): string {
-  // OTLP emits unix nanos as decimal strings. Convert to ms for Date().
-  const nano = BigInt(nanoStr)
-  const ms = Number(nano / 1_000_000n)
-  return new Date(ms).toISOString()
-}
-
-function attrsToObject(attrs: OtlpSpan['attributes']): Record<string, string | number | boolean> {
-  const out: Record<string, string | number | boolean> = {}
-  for (const { key, value } of attrs ?? []) {
-    if (typeof value.stringValue === 'string') out[key] = value.stringValue
-    else if (typeof value.intValue === 'string') out[key] = Number(value.intValue)
-    else if (typeof value.doubleValue === 'number') out[key] = value.doubleValue
-    else if (typeof value.boolValue === 'boolean') out[key] = value.boolValue
-    else if (value.arrayValue) {
-      // Stringify simple string arrays (matched_skills etc.).
-      const arr = value.arrayValue.values.map((v) => v.stringValue ?? '').filter(Boolean)
-      out[key] = JSON.stringify(arr)
-    }
-  }
-  return out
-}
-
-function spanToSummary(s: OtlpSpan): LiveSpanSummary {
-  const startMs = Number(BigInt(s.startTimeUnixNano) / 1_000_000n)
-  const endMs = Number(BigInt(s.endTimeUnixNano) / 1_000_000n)
-  return {
-    traceId: s.traceId,
-    spanId: s.spanId,
-    parentSpanId: s.parentSpanId,
-    name: s.name,
-    kind: s.kind,
-    startTime: nanoToIso(s.startTimeUnixNano),
-    endTime: nanoToIso(s.endTimeUnixNano),
-    durationMs: endMs - startMs,
-    statusCode: s.status?.code ?? 0,
-    statusMessage: s.status?.message,
-    attributes: attrsToObject(s.attributes),
-    events: (s.events ?? []).map((e) => ({ name: e.name, timestamp: nanoToIso(e.timeUnixNano) }))
-  }
 }
 
 function readSpansFile(filePath: string, traceId: string): LiveSpanSummary[] {

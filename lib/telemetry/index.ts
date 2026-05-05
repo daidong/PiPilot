@@ -20,6 +20,18 @@ export type { LiveSpanSummary, LiveSpanSubscriber } from './live-processor.js'
 export { loadTraceSnapshot } from './snapshot.js'
 export type { TraceSnapshot } from './snapshot.js'
 
+// Diagnostics (P3): pure-function rule engine over LiveSpanSummary[].
+// Use `import { ... } from '@research-pilot/telemetry/diagnostics'` for the
+// detailed surface; only the entry points are re-exported here.
+export {
+  runDiagnostics,
+  BUILTIN_RULES,
+  loadTraceForDiagnostics,
+  loadTraceCorpus,
+  buildBaseline
+} from './diagnostics/index.js'
+export type { Finding, RegisteredRule, RuleContext, TraceBaseline, Severity } from './diagnostics/index.js'
+
 export { JsonlSpanExporter } from './exporters/jsonl.js'
 export type { JsonlSpanExporterOptions } from './exporters/jsonl.js'
 
