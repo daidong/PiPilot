@@ -1,6 +1,15 @@
 # Telemetry & Trace: Objective Runtime Data Capture
 
-> Spec version: 0.8 (draft) | Last updated: 2026-05-05 | Status: PROPOSAL — NOT IMPLEMENTED
+> Spec version: 0.9 (draft) | Last updated: 2026-05-05 | Status: PROPOSAL — NOT IMPLEMENTED
+>
+> **Changelog v0.8 → v0.9** (review-driven correctness fixes; freeze candidate):
+>
+> - **High — P0 task list synced with v0.7/v0.8 deletions**: removed references to "privacy span attribute" and "ProjectConfig privacy field" (deleted in v0.7) and "refcount + watchdog closure" (deleted in v0.8). P0 is the implementation entry point and was still pulling deleted designs back in.
+> - **High — Drop policy made consistent with append-only model**: a trace's early spans may already be flushed to JSONL when the queue fills. Old wording said "drop and resume after headroom," producing partial traces with mid-trace gaps. Fixed: dropped traces are tombstoned (single `kind: trace_dropped` row written to JSONL) and the traceId is permanently suppressed for the rest of its lifetime via in-memory `Set<string>`. Digest writer + viewer must skip any traceId with a tombstone.
+> - **Medium — Axiom A5 corrected**: was still asserting "Privacy is a project-level contract" after v0.7 deleted privacy governance. Rewritten to "Local-first with always-on secret scrubbing".
+> - **Medium — `gen_ai.tool.type` enum corrected**: was `{function, retrieval, extension}`; current GenAI semconv is `{function, extension, datastore}`. `retrieval` is an *operation* name, not a tool type. PiPilot wiki/literature/web tools now mapped to `datastore`.
+> - **Medium — Trace closure leaked-child handling**: parent can end while a child span never closes (buggy tool). v0.8 said "root never sees end" but that's not always true. Fixed: at root-end, TraceStore checks AsyncLocalStorage for descendants without `end_time` and writes digest with `openChildSpanCount`, `openChildSpanIds`, `degraded=true`. Crash recovery re-emits digest if open-child set shrinks later.
+> - **Low — §6.5 self-contradicting wording**: was "run trace's resource carries ... as span attributes". Fixed to "run-root span carries ... (these are span attributes per §5.4); OTel Resource remains process/build identity only".
 >
 > **Changelog v0.7 → v0.8** (design subtraction; net simpler):
 >
@@ -112,7 +121,7 @@ Anchors all subsequent decisions. If a later section appears to violate these, i
 - **A2 — Capture facts, not judgments.** Runtime records observable events (calls, tokens, status, hashes, raw user message metadata). Subjective labels (repair type, context staleness, trust, anchor-factness) are added in post-hoc Layer 3 annotation, not by the runtime.
 - **A3 — OTel skeleton, PiPilot extensions.** Standard OTel GenAI conventions for portability. PiPilot-specific schema lives under `pipilot.*` namespace and never overloads standard fields.
 - **A4 — Never block the agent.** Tracing failures (disk full, writer bug) must degrade silently. The agent path tolerates trace loss; trace path tolerates agent abort.
-- **A5 — Privacy is a project-level contract, not a per-span flag.** Privacy profile is configured once per project; per-span detectors only adjust redaction aggressiveness.
+- **A5 — Local-first with always-on secret scrubbing.** All telemetry data lives in the user's `.research-pilot/` directory and is never transmitted by PiPilot. The only defense against accidental secret leakage (e.g., user shares a trace file in a bug report) is the always-on scrubber catalog (§7), which runs unconditionally on every event and ledger row. There is no privacy "level," no per-project privacy profile, no opt-in or opt-out.
 - **A6 — Minimum discipline for survival.** P0 freezes interfaces; P1+ fills coverage incrementally with evidence.
 - **A7 — Layer 3 is not part of PiPilot.** Annotation tooling, codebooks, and analysis pipelines live in a separate research codebase. The runtime never depends on them.
 
@@ -279,8 +288,18 @@ Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cros
 
 1. Span ends → enqueue to in-memory bounded ring queue.
    - Default capacity: **1024 spans** (configurable per project).
-   - **Drop policy: trace-level atomicity.** When the queue is full, the *newest in-flight trace* is dropped in its entirety — every span belonging to that traceId is removed from the queue, and any future span on that traceId is suppressed until the queue has headroom. Counter `pipilot.trace.dropped_traces` increments once per dropped trace and is appended to `tracing-state.jsonl`.
-   - Rationale: dropping individual spans creates orphan children whose parent never appears in the digest or viewer. Trace-level drop keeps everything internally consistent — a queryable dataset is better than a fuller-but-broken one.
+   - **Drop policy: trace-level tombstone.** When the queue is full, the writer picks the *newest in-flight trace* (the trace whose first span entered the queue most recently) and:
+     1. Discards every span of that trace currently in the queue.
+     2. Suppresses **all future spans** of that traceId for the rest of its lifetime — once dropped, a trace is dropped permanently. There is no "resume after headroom" window. Suppression is keyed on `traceId` in an in-memory `Set<string>`; cleared on process exit.
+     3. Writes a single tombstone row to `traces/spans.{date}.jsonl`:
+        ```jsonc
+        { "traceId": "...", "kind": "trace_dropped", "reason": "queue_full",
+          "droppedAtSpanCount": <how many of this trace's spans were already flushed>,
+          "timestamp": "..." }
+        ```
+     4. Increments counter `pipilot.trace.dropped_traces` in `tracing-state.jsonl`.
+   - Digest writer and viewer **skip any traceId that has a `trace_dropped` tombstone** — even if some early spans were already flushed before the queue filled. Crash recovery (§5.5) treats tombstoned traces as closed-with-no-digest.
+   - Rationale: append-only JSONL means already-flushed spans cannot be retracted. Permanent suppression + tombstone is the only way to keep the dataset internally consistent. A "resume on headroom" approach would silently produce partial traces with gaps in the middle, which is worse than a clean drop.
 2. Background flush worker drains queue when: queue ≥ 64 spans **or** 200 ms idle.
 3. Append-only `write()`. No fsync per write; fsync at flush boundary.
 4. **Disk full / write error**: writer enters degraded mode — sets `pipilot.trace.degraded = true` in tracing-state log, drops new spans (counted), retries write at exponential backoff (1s, 2s, 4s, max 60s). Agent path is never blocked. UI surfaces a banner when degraded.
@@ -369,11 +388,25 @@ Trace files are slow to scan for cross-task questions ("how did prompt length ev
 
 **Path**: `.research-pilot/trace-digest.jsonl` (retained forever, alongside raw traces).
 
-**Trace closure semantics:** a digest row is materialized when the trace's root span ends — that is when `invoke_agent {agent.name}` ends as `chat()` returns. By construction (§6.5), any background work that legitimately outlives the user task (memory extract, wiki bg, async compute) lives on its own trace, so the root-end signal is sufficient.
+**Trace closure semantics:** a digest row is materialized when the trace's root span ends — that is when `invoke_agent {agent.name}` ends as `chat()` returns. By construction (§6.5), any background work that legitimately outlives the user task (memory extract, wiki bg, async compute) lives on its own trace, so the root-end signal is sufficient under normal operation.
 
-**Crash recovery**: on startup, TraceStore scans `traces/spans.{date}.jsonl` for traces whose root span has an `end_time` but whose digest row is missing; replays digest materialization. Idempotent on `traceId`.
+**Open-child-span detection at root-end:** child spans can leak (a buggy tool implementation that never closes). When the root span ends, TraceStore checks the AsyncLocalStorage span map for any descendants of this `traceId` whose `end_time` is unset and writes the digest with:
 
-If a tool span fails to close due to a bug, the root never sees end and digest never writes — this surfaces as a missing digest row at analysis time and is the right way for the bug to become observable, rather than being hidden behind a watchdog.
+```jsonc
+{
+  "traceId": "...",
+  "openChildSpanCount": 3,                           // 0 in the happy path
+  "openChildSpanIds": ["...", "...", "..."],         // for debugging
+  "degraded": true,                                   // present only when openChildSpanCount > 0
+  ...rest of digest fields...
+}
+```
+
+This makes leaks observable in the digest itself rather than silent. A leaked span that closes *after* digest write is still appended to the trace JSONL (the trace file is append-only); on next startup, crash recovery re-reads the trace and updates the digest in place if the open-child set has shrunk.
+
+**Crash recovery**: on startup, TraceStore scans `traces/spans.{date}.jsonl` for: (a) traces whose root has `end_time` but no digest row → write digest; (b) traces with digest `degraded=true` whose previously-open child spans now have `end_time` → re-emit digest. Idempotent on `traceId` (the latest digest row wins; analysis tools are responsible for picking it).
+
+If the root span itself never ends (`chat()` never returns due to an unrecoverable bug), no digest is written. The trace is still in the JSONL but unindexed. This is the bug-surfaces-itself path — preferable to silently emitting partial digests under watchdog timeouts.
 
 **Schema** (one row per `traceId`, written at root span end). Eight core fields only — anything else can be derived from raw trace by re-scanning, and trace is retained forever:
 
@@ -475,7 +508,7 @@ P0 gate includes a schema-conformance test validating emitted attribute names/ty
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`.
 - `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens` (Anthropic). Dotted segment between `cache_*` and `input_tokens` is intentional per current semconv.
 - `gen_ai.response.finish_reasons`.
-- `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` ∈ `{function, retrieval, extension}`.
+- `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` ∈ `{function, extension, datastore}` (per current GenAI semconv — `retrieval` is an *operation* name, not a tool type; PiPilot's wiki/literature/web tools map to `datastore`).
 - `gen_ai.conversation.id` (= session.id).
 - `error.type`, `span.status` on failure.
 
@@ -511,9 +544,9 @@ Validated against `lib/telemetry/semantic-registry.ts` in dev mode.
 
 **Local compute:**
 - `execute_tool local_compute_execute` (submit): completes when `submitRun()` returns the `runId`. Lives on the user-task trace as a normal child span.
-- `execute_task local_compute` (run): **separate trace** (new `traceId`), root span. The OTel root carries `Links: [{ context: <submit-span-context>, attributes: { 'pipilot.link.kind': 'follows_from' } }]`. The run trace's resource carries the same `pipilot.project.id` and `gen_ai.conversation.id` (as span attributes per §5.4) so it joins to the originating session at analysis time. Run lifetime — `runner.ts` updates produce span events; terminal state ends the span.
+- `execute_task local_compute` (run): **separate trace** (new `traceId`), root span. The OTel root carries `Links: [{ context: <submit-span-context>, attributes: { 'pipilot.link.kind': 'follows_from' } }]`. The run-root span carries `pipilot.project.id` and `gen_ai.conversation.id` (these are span attributes per §5.4; the OTel Resource for the run process remains process/build identity only). This lets the run trace join back to its originating project/session at analysis time. Run lifetime — `runner.ts` updates produce span events; terminal state ends the span.
 
-**Background memory extraction (`maybeExtractMemories`, `lib/agents/coordinator.ts:948`)**: same pattern — runs on its own trace with `Link { kind: "spawned_from", spanId: <invoke_agent root> }`. This is what audit #9 flagged: a fire-and-forget background task must not hold the user-task trace's refcount open.
+**Background memory extraction (`maybeExtractMemories`, `lib/agents/coordinator.ts:948`)**: same pattern — runs on its own trace with `Link { kind: "spawned_from", spanId: <invoke_agent root> }`. A fire-and-forget background task must not extend the user-task trace's lifetime; living on a separate trace makes the user-task root-end signal clean (§5.5).
 
 **Wiki background agent (`app/src/main/ipc.ts:917`)**: own trace, no link to a user task (it's not initiated by a user turn). `pipilot.project.id` set to whichever project the wiki agent is currently visiting; per audit #1 this is correct precisely *because* project id is a span attribute, not a Resource attribute.
 
@@ -790,13 +823,13 @@ export interface ProjectTelemetryConfig {
 ### P0 — Interface freeze (no functional output)
 
 - Span schema (§6), `pipilot.*` semantic registry, ID hierarchy (§4.1).
-- **OTel schema pinning (audit #6)**: chosen `schema_url` committed to `lib/telemetry/semantic-registry.ts`; conformance test runs in CI.
-- **Resource vs span attribute split (audit #1)** locked: Resource = process/build only; project/session/privacy on span attributes.
-- **Local-compute trace model (audit #2)** locked: separate trace + Link, not shared traceId.
-- **turnId IPC envelope (audit #5)**: `agent:send` IPC handler signature updated to require `clientMessageId` + `clientTimestamp`; preload bridge typed.
-- **ProjectConfig migration (audit #4)**: `lib/types.ts` schema bump to v1 with `id`, `privacy`, `telemetry.{tracingMode, bufferCapacity}`; migration helper + idempotency proof.
-- **Bounded queue + drop policy (audit #7)**: TraceStore queue/disk-full/disable-toggle behavior specified and unit-testable.
-- **Trace closure (audit #9)**: refcount + watchdog + crash-recovery digest replay specified.
+- **OTel schema pinning**: chosen `schema_url` committed to `lib/telemetry/semantic-registry.ts`; conformance test runs in CI.
+- **Resource vs span attribute split** locked: Resource = process/build identity only (§5.4); `pipilot.project.id`, `gen_ai.conversation.id`, `pipilot.runtime.full_prompt_hash`, `pipilot.runtime.workspace_commit`, `pipilot.runtime.memory_index_version` are span attributes (varying per task / project).
+- **Local-compute trace model** locked: separate trace + OTel Link, not shared traceId (§6.5).
+- **turnId IPC envelope**: `agent:send` IPC handler signature updated to require `clientMessageId` + `clientTimestamp`; preload bridge typed.
+- **ProjectConfig migration**: `lib/types.ts` schema bump to v1 with `id`, `telemetry.{tracingMode, bufferCapacity}`, `configSchemaVersion`; migration helper + idempotency proof. (No `privacy` field — privacy governance was removed in v0.7.)
+- **Bounded queue + trace-level atomic drop**: TraceStore queue, drop semantics (§5.1), disk-full degraded mode, runtime disable toggle — all specified and unit-testable.
+- **Trace closure**: digest written when root `invoke_agent` span ends (§5.5). Background work is on its own trace per §6.5; no refcount or watchdog needed. Crash recovery scans for traces with root end_time but no digest at startup.
 - `tracedCompleteSimple` helper signature.
 - Tracing-state log schema (§10.1).
 - Migration plan for existing projects (§14).
@@ -900,6 +933,12 @@ OTel recommends events for prompt/completion content (sampling-friendly, easier 
 | **NEW v0.8: Resumption state-machine fields high cost / low value** | Removed `.first_artifact_op_at_step` and `.first_tool_call_at_step`. Kept the two cheap booleans. | §6.4 |
 | **NEW v0.8: Digest schema bloat** | 15 fields → 8 core. Anything Layer 3 might want can be re-derived from raw trace; trace is forever-retained. | §5.5 |
 | **NEW v0.8: Resource shell_prompt_hash was redundant with service.version** | Removed. Only the per-task full prompt hash on root span remains. | §5.4 |
+| **NEW v0.9: P0 task list pulled deleted designs back in (review High #1)** | Synced with v0.7/v0.8 deletions: removed privacy attribute, removed refcount+watchdog references | §11 P0 |
+| **NEW v0.9: Drop policy was incompatible with append-only writes (review High #2)** | Trace tombstone + permanent traceId suppression; viewer/digest must skip tombstoned traces | §5.1 |
+| **NEW v0.9: Axiom A5 still claimed privacy contract (review Medium #1)** | Rewritten to "Local-first with always-on secret scrubbing" | §1.3 A5 |
+| **NEW v0.9: gen_ai.tool.type used wrong enum (review Medium #2)** | Aligned with semconv: `{function, extension, datastore}`; retrieval tools now `datastore` | §6.3 |
+| **NEW v0.9: Leaked child spans invisible at root-end digest (review Medium #3)** | openChildSpanCount/Ids + degraded flag in digest; crash-recovery re-emits when open set shrinks | §5.5 |
+| **NEW v0.9: §6.5 wording self-contradicted on Resource vs span attribute (review Low #1)** | Clarified: span attributes on run-root, Resource stays process/build only | §6.5 |
 | **NEW v0.6: system_prompt_hash misplaced as Resource (review High #2)** | (Superseded by v0.8: shell-prompt hash deleted; only `pipilot.runtime.full_prompt_hash` on root span remains) | §5.4 |
 | **NEW v0.6: GenAI semconv claimed "stable" (review High #3)** | Corrected to "pinned development/experimental"; quarterly review on graduation | §6.3 |
 | **NEW v0.6: Subscription/Codex stuffed into gen_ai.provider.name (review Medium #1)** | OTel-standard provider values only; single `pipilot.auth.mode` field carries the distinction (v0.8 collapsed three fields to one) | §6.3 |
