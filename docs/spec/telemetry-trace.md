@@ -1,6 +1,13 @@
 # Telemetry & Trace: Objective Runtime Data Capture
 
-> Spec version: 0.4 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
+> Spec version: 0.5 (draft) | Last updated: 2026-05-04 | Status: PROPOSAL — NOT IMPLEMENTED
+>
+> **Changelog v0.4 → v0.5** (simplification):
+>
+> - **Retention configurability removed.** All telemetry data — traces, blobs, digest, ledgers — is retained **forever** by default and is not user-configurable. Project deletion is the only purge mechanism. This drops: the `7-days | 1-month | forever` picker, three retention dimensions (`rawTraceRetention` / `blobRetention` / `metadataRetention`), the eviction sweep, the "Compact telemetry" action, and most of the retention-coupling discussion. Storage estimates in §5.6 still apply — users see them as informational, not configurable.
+> - Project-scoped settings reduced to two fields: `privacy` (still needed; per-project privacy profile cannot be global) and `tracingMode: 'enabled' | 'disabled'` (single switch — opt-out only, no granularity).
+> - Removed §11.5 (storage stats fallback to compaction) since there's no compaction.
+> - §13.1 tension #4 (digest under retention downgrade) deleted — the scenario no longer exists.
 >
 > **Changelog v0.3 → v0.4** (audit fixes; design boundary unchanged):
 >
@@ -54,7 +61,7 @@ If research questions change, or new analyses are written, **Layer 1+2 does not 
 
 1. **Complete objective capture of agent execution**: every LLM call (main + 8 sub-LLM blind spots), every tool call, every artifact / memory operation, every compaction event, every user input boundary, every user passive view in the UI. Cover the full execution tree, not just surface symptoms.
 2. **Standards-first portability**: emit OpenTelemetry-conformant traces so Langfuse, Phoenix, Tempo, Datadog, or any OTLP backend can consume our data without bespoke adapters.
-3. **Long-horizon retention by default**: traces and ledgers retained for the lifetime of the project by default, configurable per project to `7-days | 1-month | forever`.
+3. **Long-horizon retention**: traces and ledgers retained forever, for the lifetime of the project. Project deletion is the only purge.
 4. **Pluggable export**: local JSONL by default (zero-dep), OTLP endpoint behind an env flag, never block the agent on exporter failure.
 5. **Privacy as a project-level contract**: redaction, blob retention, and export gating governed by a per-project privacy profile.
 
@@ -156,13 +163,7 @@ All eight covered by a single `tracedCompleteSimple` helper plus closure-level w
 +--------------------------------------------------------------+
 ```
 
-**Lifetimes (three independent retention dimensions; see §5.1, §5.2, §5.3):**
-
-| Dimension | What it controls | Default | Configurable values |
-|---|---|---|---|
-| `rawTraceRetention` | `traces/spans.{date}.jsonl` files (full span detail + events) | `forever` | `7-days | 1-month | forever` |
-| `blobRetention` | `blobs/{sha256}` (raw prompt/completion/tool-I/O over inline cap) | `forever` | `7-days | 1-month | forever` |
-| `metadataRetention` | `trace-digest.jsonl` + all four ledgers + `tracing-state.jsonl` | `forever` | `forever` only (these are append-only event logs whose entries are individually small; no eviction supported in v0.4. Project deletion removes them.) |
+**Lifetimes:** all telemetry data — traces, blobs, digest, ledgers, tracing-state log — is retained **forever**. There is no automatic eviction, no retention picker, no compaction action. Project deletion is the only purge mechanism. v0.5 deliberately removed the configurable-retention machinery because it added project-config surface area for marginal benefit; storage estimates (§5.6) show typical totals are tractable on modern SSDs.
 
 Resource attributes are per-process, immutable for the process lifetime, and carry only app/build identity (§5.4). Per-project state (project id, session id, privacy profile) lives on span attributes, not Resource.
 
@@ -241,7 +242,7 @@ Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cros
 
 ## 5. Storage Model
 
-### 5.1 Trace store: append-only, configurable retention, bounded resources
+### 5.1 Trace store: append-only, bounded resources
 
 **Format**: `.research-pilot/traces/spans.{date}.jsonl`, one OTLP/JSON `ResourceSpans` envelope per line, batched.
 
@@ -259,35 +260,19 @@ Pi-agent-core parallelizes tool calls. A shared mutable "active span" would cros
 
 **Indices** (rebuilt on startup if missing, atomic temp+rename): `traces/index.{date}.json` for fast viewer lookup.
 
-**Retention setting (`rawTraceRetention`)**: per project, configured in `ProjectConfig` (`lib/types.ts`), **not** global `AppSettings`. Surfaced in a project-scoped Settings panel (see §10.2 for IPC + UI specifics).
+**Retention**: forever. No eviction, no automatic cleanup, no compaction action. Daily JSONL files accumulate for the project's lifetime. Project deletion (user-initiated, removes the entire `.research-pilot/` directory) is the only purge.
+
+**Project-scoped knobs** (configured in `ProjectConfig`, see §10.2):
 
 ```typescript
 // lib/types.ts (proposed addition to ProjectConfig)
-export type TelemetryRetentionLevel = '7-days' | '1-month' | 'forever'
-
 export interface ProjectTelemetryConfig {
-  rawTraceRetention: TelemetryRetentionLevel    // default: 'forever'
-  blobRetention: TelemetryRetentionLevel        // default: 'forever'
-  // metadataRetention is fixed at 'forever' in v0.4 (§3.1 table); reserved
-  // for future use:
-  metadataRetention: 'forever'
-  tracingMode: 'enabled' | 'disabled'           // default: 'enabled'
-  bufferCapacity?: number                        // default: 1024
-}
-
-// resolver
-export function resolveTelemetryRetention(level: TelemetryRetentionLevel): { evictAfterDays: number | null } {
-  switch (level) {
-    case '7-days':  return { evictAfterDays: 7 }
-    case '1-month': return { evictAfterDays: 30 }
-    case 'forever': return { evictAfterDays: null }
-  }
+  tracingMode: 'enabled' | 'disabled'           // default: 'enabled'; opt-out only
+  bufferCapacity?: number                        // default: 1024 spans
 }
 ```
 
-**Eviction**: when `evictAfterDays` is set, drop entire daily JSONL files where the newest span ages past the threshold. Never partial-rewrite. When `evictAfterDays = null` (forever), no automatic eviction; only manual project deletion or user-initiated cleanup removes data.
-
-**Retention change**: when a project's retention is downgraded (e.g., `forever → 1-month`), past data older than the new threshold is **not** automatically deleted — the change applies forward. A separate "Compact telemetry" action in Settings runs the eviction sweep on demand. This preserves the principle that the system never silently destroys research data.
+`tracingMode = 'disabled'` drains the queue and stops the flush worker; subsequent spans are no-op. There is no separate retention setting because there is no retention policy to choose.
 
 ### 5.2 Ledgers: entity-keyed, append-only event logs
 
@@ -299,7 +284,7 @@ export function resolveTelemetryRetention(level: TelemetryRetentionLevel): { evi
 | View log | `view-log.jsonl` | `(viewId)` | new (§8.4) |
 | Tracing state | `tracing-state.jsonl` | append-only | audit log of mode/retention/policy changes + degraded-state events (§5.1, §10.1) |
 
-All ledgers governed by `metadataRetention = 'forever'` in v0.4 (no eviction). Project deletion removes them.
+All ledgers retained forever. Project deletion removes them.
 
 **Cross-reference**: each ledger row records `{ traceId?, spanId?, turnId?, toolCallId? }` so analysis can join either direction.
 
@@ -311,9 +296,8 @@ Large content (turn text > 4 KB, tool I/O over cap, diagram SVG, base64 images) 
 
 - Stored once at `.research-pilot/blobs/{sha256}` (single file per hash).
 - Referenced from spans / ledgers as `{ contentHash, size, redactionLevel }`.
-- **Retention**: governed by `blobRetention` (independent from `rawTraceRetention`). For finite values (`7-days` / `1-month`), reference-counted GC sweeps unreferenced blobs past the threshold. References are counted across traces, ledgers, digest, and view log. For `forever`, blobs are never auto-GC'd; project deletion removes them.
+- **Retention**: forever. Blobs are never auto-GC'd; project deletion removes them.
 - `privacy.level = high`: blobs are written with `blobEncryption = at-rest` (libsodium secretstream, key in OS keychain) or not at all (`blobEncryption = none` rejected by the export gate as a configuration error).
-- **Note on retention orthogonality**: a project may set `rawTraceRetention = '7-days'` while keeping `blobRetention = 'forever'`. This makes the longitudinal substrate (digest + ledgers + blobs) survive raw-trace eviction. Conversely, `rawTraceRetention = 'forever' / blobRetention = '1-month'` keeps span structure forever but lets large payload blobs age out.
 
 ### 5.4 Resource attributes (per-process, immutable for process life)
 
@@ -348,11 +332,11 @@ These are propagated automatically by `Tracer` when a span is created in a given
 
 `pipilot.project.tag` is an **optional, free-form** label. There is no enum, no fixed taxonomy. Layer 3 may classify projects post-hoc using its own scheme.
 
-### 5.5 Trace digest (query acceleration; survives raw-trace eviction)
+### 5.5 Trace digest (query acceleration)
 
-Trace files are slow to scan for cross-task questions ("how did prompt length evolve over 3 months?"). Digest provides a one-row-per-trace pre-aggregate. Critically, digest is part of `metadataRetention` (forever in v0.4) — it survives `rawTraceRetention` eviction and is the longitudinal substrate when raw traces are gone.
+Trace files are slow to scan for cross-task questions ("how did prompt length evolve over 3 months?"). Digest provides a one-row-per-trace pre-aggregate, kept alongside the raw trace.
 
-**Path**: `.research-pilot/trace-digest.jsonl` (governed by `metadataRetention = 'forever'`, independent of `rawTraceRetention`).
+**Path**: `.research-pilot/trace-digest.jsonl` (retained forever, alongside raw traces).
 
 **Trace closure semantics (audit #9):** a digest row is materialized when the trace's root span ends **AND** its active descendant refcount reaches zero **OR** a watchdog timeout fires. Concretely:
 
@@ -395,7 +379,7 @@ This avoids two failure modes: (a) digest written too early and missing real chi
 }
 ```
 
-Digest is **derived data when raw trace exists, primary record when raw trace is evicted**. Schema versioned via `tracePolicyVersion` so future digest-schema bugs can be re-derived from raw traces only while traces still exist. Once raw traces age out, the digest row is the only record of that trace.
+Digest is **derived data**. Raw traces are retained forever, so the digest can always be regenerated from source if its schema changes. Schema versioned via `tracePolicyVersion`.
 
 ### 5.6 Storage size estimates
 
@@ -417,7 +401,7 @@ Per-task volumes are estimated from the proposed schema. Numbers are conservativ
 | Average | 15 | ~3.9 MB |
 | Heavy | 50 | ~32 MB |
 
-**Annual estimates (forever retention, traces + digest + ledgers + blobs):**
+**Cumulative totals (everything retained forever):**
 
 | User profile | One year | Three years |
 |---|---|---|
@@ -430,9 +414,9 @@ Per-task volumes are estimated from the proposed schema. Numbers are conservativ
 - Heavy researcher's full year of telemetry: less than four hours of video.
 - Typical paper repo with figures and PDFs: often already 1–5 GB.
 
-**Conclusion**: `forever` is a reasonable default on modern SSDs for typical use. The 3-option picker exists to give privacy-sensitive projects or storage-constrained users an explicit choice. Heavy users on long-horizon studies who hit `>10 GB/year` can either (a) leave it (still small relative to disk), (b) flip to `1-month` and rely on digest+ledgers for longitudinal claims, or (c) periodically run "Compact telemetry" with a custom horizon.
+**Conclusion**: forever-retention totals are tractable on modern SSDs for typical use. v0.5 deliberately removed retention configurability to keep the system simple — telemetry data is treated like git history: it accumulates with the project and is purged with the project.
 
-The estimates above will be validated empirically during P1 with a self-monitoring counter on the TraceStore that writes daily byte totals to `.research-pilot/trace-storage-stats.jsonl`. If real-world numbers exceed estimates by >2×, retention defaults are revisited.
+The estimates above will be validated empirically during P1 with a self-monitoring counter on the TraceStore that writes daily byte totals to `.research-pilot/trace-storage-stats.jsonl`. If real-world numbers significantly exceed estimates, the Settings panel surfaces a banner with the current footprint; users can choose to delete the project or move it to a larger volume. Re-introducing retention configurability is a future-spec decision, not a v0.5 fallback.
 
 ---
 
@@ -752,7 +736,7 @@ Per-project, written once to `.research-pilot/project.json`:
 
 ### 10.1 Tracing-state log
 
-`tracing-state.jsonl` records every toggle (mode change, retention change, redaction policy bump, export override, manual eviction sweep, degraded-state events from §5.1). Append-only, governed by `metadataRetention = 'forever'`.
+`tracing-state.jsonl` records every toggle (tracingMode change, redaction policy bump, export override, degraded-state events from §5.1, project-config migrations). Append-only; retained forever.
 
 ```jsonc
 { "timestamp": "...", "fromState": "...", "toState": "...", "actor": "user | system | export-gate", "reason": "..." }
@@ -762,26 +746,26 @@ Tracing cannot be silently disabled: any toggle while `tracingMode = enabled` is
 
 ### 10.2 Project-scoped configuration (audit #4)
 
-Telemetry settings are **per-project**, not global. The current `AppSettings` (`shared-ui/settings-types.ts`) is global (lives in `~/.research-copilot/config.json`, managed by `shared-electron/ipc-base.ts:157`); existing `ProjectConfig` (`lib/types.ts:169`) does not yet carry a project id, privacy fields, or telemetry config. v0.4 adds them:
+`ProjectConfig` (`lib/types.ts:169`) gains three fields. v0.5 keeps this minimal — only privacy (necessarily per-project) and the on/off switch.
 
 ```typescript
 // lib/types.ts (proposed extension)
 export interface ProjectConfig {
   // Existing fields preserved...
 
-  // NEW (v0.4):
+  // NEW (v0.5):
   id: string                              // ULID, generated on first load if missing
   privacy: ProjectPrivacyConfig           // see §10
   telemetry: ProjectTelemetryConfig       // see §5.1
-  configSchemaVersion: number             // for migration; v0.4 = 1
+  configSchemaVersion: number             // for migration; v0.5 = 1
 }
 ```
 
-**Migration**: on project load, if `id` is missing, generate a ULID and write it back. If `privacy` or `telemetry` are missing, populate with defaults (privacy `level=low`, telemetry `forever`/`enabled`) and write back. Migration is one-shot, idempotent, recorded in `tracing-state.jsonl` with `actor=system, reason=config-migration-v1`.
+**Migration**: on project load, if `id` is missing, generate a ULID and write it back. If `privacy` or `telemetry` are missing, populate with defaults (privacy `level=low`, telemetry `tracingMode='enabled'`) and write back. Migration is one-shot, idempotent, recorded in `tracing-state.jsonl` with `actor=system, reason=config-migration-v1`.
 
-**IPC**: project-scoped settings get their own IPC channels (`project:get-config`, `project:update-config`), distinct from the existing global-settings IPC. The settings UI surfaces project settings in a project-scoped sidebar/panel; global settings remain in the main settings dialog. (Concrete UI placement is a P0-gate decision; a mockup is required at gate.)
+**IPC**: project-scoped settings get their own IPC channels (`project:get-config`, `project:update-config`), distinct from the existing global-settings IPC. The settings UI surfaces these in a project-scoped panel; global settings remain in the main settings dialog. UI mockup required at P0 gate.
 
-**Reading order at runtime**: where global settings exist (e.g., model defaults), they apply unless overridden by project config. Telemetry has **no** global counterpart — it's project-only. Reason: a heavy-research user may want `forever` for one project and `7-days` for another (e.g., a project that contains third-party data).
+**No global telemetry counterpart**: telemetry config is project-only. Privacy is necessarily per-project (different projects have different sensitivity), and `tracingMode` is essentially a privacy switch, so it lives next to privacy.
 
 ---
 
@@ -794,14 +778,13 @@ export interface ProjectConfig {
 - **Resource vs span attribute split (audit #1)** locked: Resource = process/build only; project/session/privacy on span attributes.
 - **Local-compute trace model (audit #2)** locked: separate trace + Link, not shared traceId.
 - **turnId IPC envelope (audit #5)**: `agent:send` IPC handler signature updated to require `clientMessageId` + `clientTimestamp`; preload bridge typed.
-- **Three retention dimensions (audit #3)**: `rawTraceRetention`, `blobRetention`, `metadataRetention` enums and resolvers.
-- **ProjectConfig migration (audit #4)**: `lib/types.ts` schema bump to v1 with `id`, `privacy`, `telemetry`; migration helper + idempotency proof.
+- **ProjectConfig migration (audit #4)**: `lib/types.ts` schema bump to v1 with `id`, `privacy`, `telemetry.{tracingMode, bufferCapacity}`; migration helper + idempotency proof.
 - **Bounded queue + drop policy (audit #7)**: TraceStore queue/disk-full/disable-toggle behavior specified and unit-testable.
 - **Trace closure (audit #9)**: refcount + watchdog + crash-recovery digest replay specified.
 - `tracedCompleteSimple` helper signature.
 - Privacy profile schema (§10).
 - Tracing-state log schema (§10.1).
-- Settings UI mockup for project-scoped Telemetry panel (§10.2).
+- Settings UI mockup for project-scoped Telemetry panel (§10.2). Panel contains: tracingMode toggle, privacy profile, current storage footprint (informational).
 
 **Gate**: spec accepted; semantic registry committed; types compile; OTel conformance test green against pinned `schema_url`; settings UI mockup approved; no runtime behavior change.
 
@@ -819,7 +802,7 @@ export interface ProjectConfig {
 - Resumption attribute set (`pipilot.resumption.*`).
 - Trace digest writer.
 - Self-monitoring storage stats (§5.6 validation).
-- Settings UI for trace retention picker wired up.
+- Settings UI for project-scoped Telemetry panel wired up (tracingMode toggle + storage footprint readout).
 
 **Gate**: traces produced for an end-to-end research session contain all 8 sub-LLM call sites; usage totals match dual-write within tolerance for two weeks; storage stats match estimates within 2×; no agent-path regressions.
 
@@ -891,7 +874,7 @@ When `privacy.containsThirdPartyData = true`, default-disable OTLP. **Recommenda
 
 ### 12.5 Storage stats validation
 
-§5.6 estimates need empirical validation. P1 introduces self-monitoring; if real-world numbers exceed estimates by >2× for `forever` retention, defaults are revisited and a warning surfaces in Settings UI.
+§5.6 estimates need empirical validation. P1 introduces self-monitoring writing daily byte totals. If real-world numbers significantly exceed estimates, the Settings panel surfaces a banner showing the current footprint. v0.5 has no in-app remediation (no compaction action); the user's options are: leave it, delete the project, move the workspace to a larger volume. Re-introducing retention configurability is a future-spec decision if the data warrants it.
 
 ### 12.6 Redaction policy version drift
 
@@ -924,10 +907,11 @@ When we tighten redaction, old spans look more leaky than new ones. Recommendati
 | **NEW v0.3: Ledger lifecycle was a research judgment** | Memory ledger is a pure event log; lifecycle moved to Layer 3 | §8.2 |
 | **NEW v0.3: Outcome ledger had embedded judgments** | Renamed to user-response-signals; raw facts only | §8.3 |
 | **NEW v0.3: User shouldn't be a research labeler** | No thumbs UI in spec; signals ledger captures behavior, not user-provided labels | §8.3, §1.2 |
-| **NEW v0.3: Trace retention was hardcoded 7d** | Configurable picker `7-days | 1-month | forever`, default `forever` | §5.1 |
+| **NEW v0.3: Trace retention was hardcoded 7d** | (Superseded by v0.5: retention is now forever, not configurable) | §5.1 |
+| **NEW v0.5: Configurable retention added accidental complexity** | Retention configurability removed entirely; everything is forever; project deletion is the only purge | §3.1, §5.1, §5.2, §5.3, §10.2 |
 | **NEW v0.4: Resource attributes carried per-project state (audit #1)** | project/session/privacy moved to span attributes; Resource = process/build only | §5.4 |
 | **NEW v0.4: Local-compute reused traceId with null parent (audit #2)** | Async run is its own trace + OTel Link `follows_from`/`spawned_from` | §6.5 |
-| **NEW v0.4: Retention statements contradicted (audit #3)** | Three independent dimensions: rawTrace, blob, metadata | §3.1, §5.1, §5.3 |
+| **NEW v0.4: Retention statements contradicted (audit #3)** | (Superseded by v0.5: no retention configurability at all, no contradictions to resolve) | §3.1 |
 | **NEW v0.4: Project settings designed as global (audit #4)** | ProjectConfig migration; project-scoped IPC + UI | §10.2 |
 | **NEW v0.4: turnId not implementable across renderer/main (audit #5)** | Renderer's existing message id passed in `agent:send` envelope | §4.1 |
 | **NEW v0.4: GenAI semconv outdated (audit #6)** | Migrated to current semconv; schema_url pinned + conformance test | §6.3 |
@@ -943,12 +927,11 @@ When we tighten redaction, old spans look more leaky than new ones. Recommendati
 
 ### 13.1 Known unresolved tensions
 
-1. **Storage at `forever` for very heavy users**: estimates suggest ~12 GB/year for the heaviest profile. Acceptable on modern SSDs; may surprise users on smaller laptops. P1 self-monitoring + Settings warning planned (§5.6, §12.5).
+1. **Storage at forever-retention for very heavy users**: estimates suggest ~12 GB/year for the heaviest profile, ~36 GB at three years. Acceptable on modern SSDs; may surprise users on smaller laptops. v0.5 has no in-app remediation — the user's options are: leave it, delete the project, move the workspace. P1 self-monitoring + Settings banner gives visibility (§5.6, §12.5).
 2. **Redaction policy version drift**: §12.6.
 3. **Export gate trust model**: relies on user setting privacy profile honestly; no enforcement against mislabeling. Documented as known limitation.
-4. **Digest as primary record after raw-trace eviction**: when `rawTraceRetention` is finite, post-eviction digest is the only record. Digest schema must be rich enough that key analyses don't require raw spans. v0.4 mitigates this by allowing `rawTraceRetention='7-days', blobRetention='forever'` so over-cap content survives. Whether digest schema is *sufficient* for a given analysis is something each analysis project must verify against its data needs.
-5. **OTel semconv pin freshness**: pinning `schema_url` ensures internal correctness but may lag external tooling. Bumping the pin requires registry update + conformance test pass + backend re-verification (Langfuse/Phoenix). Process should be quarterly review.
-6. **Trace closure watchdog timeout choice**: 30 seconds is a guess. Real applications may have legitimate background spans that take longer (e.g., a slow wiki indexing run). Watchdog firing produces a degraded-marker, not data loss. P1 should monitor watchdog firing rate and adjust if false-positive rate is high.
+4. **OTel semconv pin freshness**: pinning `schema_url` ensures internal correctness but may lag external tooling. Bumping the pin requires registry update + conformance test pass + backend re-verification (Langfuse/Phoenix). Process should be quarterly review.
+5. **Trace closure watchdog timeout choice**: 30 seconds is a guess. Real applications may have legitimate background spans that take longer (e.g., a slow wiki indexing run). Watchdog firing produces a degraded-marker, not data loss. P1 should monitor watchdog firing rate and adjust if false-positive rate is high.
 
 ---
 
