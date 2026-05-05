@@ -42,7 +42,7 @@ This split serves both audiences:
 - **Engineering** uses Layer 1+2 for debugging, performance analysis, regression detection, and user support.
 - **Research** uses Layer 1+2 as the raw substrate, then runs Layer 3 annotation pipelines (separate codebase, separate tooling) to derive findings.
 
-If Paper 1's research questions change, or new papers are written, **Layer 1+2 does not change** — only the Layer 3 codebook does.
+If research questions change, or new analyses are written, **Layer 1+2 does not change** — only the Layer 3 codebook does.
 
 ---
 
@@ -626,7 +626,7 @@ This spec **does not specify** Layer 3. It exists in a separate research codebas
 - Read-only accessible (Layer 3 must never modify Layer 1+2 data).
 - Versioned (every record carries `tracePolicyVersion`, `redactionPolicyVersion` so Layer 3 knows what shape it's reading).
 
-Layer 3 produces annotation files in its own repo (e.g., `papers/01-empirical-atlas-concepts/annotations/{traceId}.jsonl`). Whether those annotations are produced by humans, by LLM scripts, or by both is a Layer 3 design choice.
+Layer 3 produces annotation files in its own repo (path and format determined by the analysis project). Whether those annotations are produced by humans, by LLM scripts, or by both is a Layer 3 design choice.
 
 A reasonable Layer 3 annotation row, for orientation only:
 
