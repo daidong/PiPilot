@@ -1,6 +1,22 @@
 # Telemetry & Trace: Objective Runtime Data Capture
 
-> Spec version: 0.10 (draft) | Last updated: 2026-05-05 | Status: PROPOSAL — FREEZE CANDIDATE
+> Spec version: 0.11 (draft) | Last updated: 2026-05-06 | Status: PROPOSAL — FREEZE CANDIDATE
+>
+> **Changelog v0.10 → v0.11** (post-implementation alignment, 2026-05-06):
+>
+> Code shipped on the spec/telemetry-trace branch closed several provenance gaps and made one product-policy reversal. Spec text updated to match what's running.
+>
+> - **Default tracingMode flipped to `disabled`** (commit `eb54009`). v0.10 said opt-out; in practice, wire-level capture + tool args/result events meant a typical project accrued ~250 KB/turn forever-retained. Without explicit user consent that's a meaningful storage commitment, so new projects now start opt-in. Existing projects with explicit `tracingMode: 'enabled'` are NOT auto-flipped — only configs without a `telemetry` block default to disabled. §5.1, §10.2, §14.1 updated.
+> - **Provenance gaps closed** (commit `c062894`):
+>   - `pipilot.thinking_level` attribute on root + step spans (§6.4). Mid-session UI changes were previously invisible.
+>   - `pipilot.chat.response_text` event on step spans (§6.9). Main agent loop bypasses `tracedCompleteSimple`, so the per-step assistant message text was previously only in the session JSONL.
+>   - `pipilot.compaction.summary_text` event on `summarize context` spans (§6.9). Per-event summary text was previously only recoverable via the next turn's `request_payload`.
+>   - `model-change` kind in tracing-state log (§10.1). Mid-session model switches now leave an audit row with `fromState`/`toState`.
+>   - Memory ledger now actually written by `save-memory` / `delete-memory` tools (§8.2). Previously the writer existed but had zero callers. `MemoryType` enum extended with `user | feedback | project | reference` to match the user-facing buckets exposed by the tool.
+> - **Artifact-ledger turnId plumbed** (commit `934b978`). v0.10 schema had `turnId?` but no caller passed it; now `CLIContext.turnId` flows through `createArtifact` / `updateArtifact` / `deleteArtifact`. §8.1 schema unchanged; the field is now reliably populated for tool-driven writes.
+> - **`pipilot.tool.args` / `pipilot.tool.result` / `pipilot.chat.request_payload` events documented** in §6.9. These were added in earlier commits (`67d0882`, `a2426ed`) but never made it into the §6.9 PiPilot-events list.
+> - **G2 (artifact historical content reproducibility) explicitly accepted as a gap.** §8.1 mentioned a `diffPath` field in the schema but it's never populated; the spec wording remains, but a note now records that pre-version content reconstruction is out of scope. The §14.2 backfill CLI is also unimplemented and remains carry-over.
+> - **Compaction `generateSummary` wire-capture gap** documented in `lib/telemetry/PARITY.md#wire-level-capture-coverage`. pi-coding-agent's internal summarizer call bypasses `tracedCompleteSimple` (no hook exposed). Accepted as span-only — the new `pipilot.compaction.summary_text` event closes the per-event summary visibility, just not the wire payload of the summarizer call itself.
 >
 > **Changelog v0.9 → v0.10** (final review-driven fixes):
 >
@@ -325,10 +341,12 @@ PiPilot-specific control records (tombstones) live in a separate sidecar file `t
 ```typescript
 // lib/types.ts (proposed addition to ProjectConfig)
 export interface ProjectTelemetryConfig {
-  tracingMode: 'enabled' | 'disabled'           // default: 'enabled'; opt-out only
+  tracingMode: 'enabled' | 'disabled'           // default for new projects: 'disabled' (opt-in, v0.11+)
   bufferCapacity?: number                        // default: 1024 spans
 }
 ```
+
+**Default policy (v0.11+)**: new projects start with `tracingMode: 'disabled'`. Users opt in via Settings → Telemetry → Trace recording. Existing projects with explicit `tracingMode: 'enabled'` keep their value across migrations — the migration writer at §14.1 only sets the default when the `telemetry` block is missing entirely.
 
 `tracingMode = 'disabled'` drains the queue and stops the flush worker; subsequent spans are no-op. There is no separate retention setting because there is no retention policy to choose.
 
@@ -545,6 +563,7 @@ Validated against `lib/telemetry/semantic-registry.ts` in dev mode.
 | `pipilot.turn.id`, `pipilot.turn.followsId` | every span | turnId propagation (§4.1) |
 | `pipilot.matched_skills` | root `invoke_agent` span | objective record of which skills the router selected (a routing decision is a fact, not a judgment) |
 | `pipilot.active_skills` | every `invoke_agent step` span | set of skills active at step start |
+| `pipilot.thinking_level` | root `invoke_agent` + `invoke_agent step` spans | agent thinking level at span open (`xhigh \| high \| medium \| low \| minimal \| off`). Read at span-open time so mid-session UI changes land on the next span. |
 
 **Removed in v0.3** (subjective; moved to Layer 3): `pipilot.user_message_type`, `pipilot.user_message_type.v2`, `pipilot.referring_expressions`, `pipilot.intent_labels`.
 
@@ -603,6 +622,10 @@ pipilot.compaction.discarded {
 
 Just the dropped turn ids. Layer 3 can join to turn-level data (role, char_len, content hash) via the user-response-signals ledger and the trace's user message events, and to artifact mentions via the artifact ledger. No reason to duplicate the join here.
 
+**Implementation note (v0.11)**: the runtime currently emits `msg-idx-N` placeholders rather than real turnIds (the in-process `AgentMessage` doesn't carry turnId). Consumers recover real turnIds by walking `user-response-signals.jsonl` for the same session and taking the first N entries with timestamps before the compaction span's start time. See `docs/spec/trace-and-ledger-joins.md` §4.1.
+
+The actual generated summary text is captured separately via `pipilot.compaction.summary_text` (§6.9) on the same span — without it, per-event summary content is recoverable only from the latest-state file or the next turn's request_payload.
+
 ### 6.9 Events (large / sensitive payloads)
 
 Spans carry small attributes. Large or sensitive payloads attach as OTel events.
@@ -623,6 +646,11 @@ Spans carry small attributes. Large or sensitive payloads attach as OTel events.
 - `pipilot.artifact.op` — `{artifactId, op, version_after, contentHash, ledgerRowId}`.
 - `pipilot.memory.op` — `{memoryId, op, scope, type, ledgerRowId}`.
 - `pipilot.detector.flag` — `{rule, severity, action_taken}`.
+- `pipilot.tool.args` (on `execute_tool` spans) — `{ body: <redacted JSON> }`. Tool input arguments after validation. >4 KB → blob ref. PiPilot extension because no GenAI semconv covers tool I/O.
+- `pipilot.tool.result` (on `execute_tool` spans) — `{ body: <redacted JSON> }`. Tool output (`content[]` + `details` + `isError`). >4 KB → blob ref.
+- `pipilot.chat.request_payload` (on `invoke_agent step` and `chat` spans) — `{ body: <wire-format JSON> }`. The final provider request body captured via pi-ai's `onPayload` hook (post-`convertMessages`, post-`cache_control` markers). Distinct from `gen_ai.client.inference.operation.details` which carries pre-translation `PiContext`. >4 KB content within the body → blob ref.
+- `pipilot.chat.response_text` (on `invoke_agent step` spans) — `{ body: <redacted assistant content[]> }`. Per-step assistant message text captured at `turn_end`. The main agent loop bypasses `tracedCompleteSimple`, so without this event the response text for the final step of a turn is only in the session JSONL. Added in v0.11.
+- `pipilot.compaction.summary_text` (on `summarize context` spans) — `{ body: <redacted summary text> }`. The text body of the running compaction summary, attached right after `generateSummary` returns. Added in v0.11. The wire payload of pi's internal summarizer call is **not** captured (pi doesn't expose a hook); see `lib/telemetry/PARITY.md#wire-level-capture-coverage`.
 
 Event bodies pass through redaction (§7) before being attached. Over-cap content goes to blob store and the event carries `{ contentHash, size, redactionLevel }` references.
 
@@ -683,7 +711,7 @@ Ledgers carry the entity-centric truth that traces only point to. **All ledgers 
   "memoryId": "...",
   "op": "search | retrieve | create | update | delete",
   "scope": "session | project | user-global | cross-project | wiki",
-  "type": "preference | decision | todo | rationale | artifact-summary | user-stated-fact | extracted-claim",
+  "type": "user | feedback | project | reference | preference | decision | todo | rationale | artifact-summary | user-stated-fact | extracted-claim",
   "originatingProjectId": "...",
   "originatingArtifactId": "...",
   "provenance": { "source": "user-message | tool-output | extraction | import", "ref": "..." },
@@ -697,6 +725,8 @@ Ledgers carry the entity-centric truth that traces only point to. **All ledgers 
 **Removed in v0.3** (subjective; moved to Layer 3): `state`, `confidence`, `verifiedStatus`, `expirationTime`, `supersedes`, `supersededBy`, `conflictWith`. The memory ledger is now a pure event log: each operation is a fact. Whether an extracted claim is a "valid anchor fact", whether a memory has "gone stale", whether two memories "conflict" — all Layer 3 judgments.
 
 `type` enum is descriptive of the source (`user-stated-fact` = came verbatim from user; `extracted-claim` = LLM extractor produced it), not evaluative.
+
+**v0.11 addition**: the first 4 values (`user | feedback | project | reference`) match the user-facing buckets exposed by the `save-memory` tool (`lib/memory/memory-tools.ts`). The remaining 7 are inherited from v0.3 for finer-grained provenance categories used by future LLM-side extractors. The `save-memory` and `delete-memory` tool paths now actually write to this ledger (previously the writer was defined but uncalled — the v0.10 spec implied wiring that wasn't there).
 
 Retrieval operations write `{ retrievedMemoryIds, scores }` to the corresponding `pipilot.memory.op` event in the trace.
 
@@ -792,6 +822,7 @@ Recorded events:
 - TraceStore degraded mode entry / exit (§5.1)
 - Drop-counter increments by category (§5.1)
 - Project-config migration completion (§14)
+- `model-change` (v0.11): user changed the active model mid-session. `fromState` and `toState` carry the composite model key (e.g. `openai:gpt-5.5`). The next root `invoke_agent` span will reflect the new model in `gen_ai.request.model`, but the change point itself is recorded here.
 
 ```jsonc
 { "timestamp": "...", "kind": "...", "fromState": "...", "toState": "...", "actor": "user | system", "reason": "..." }
@@ -815,7 +846,7 @@ export interface ProjectConfig {
 }
 
 export interface ProjectTelemetryConfig {
-  tracingMode: 'enabled' | 'disabled'   // default: 'enabled'
+  tracingMode: 'enabled' | 'disabled'   // default for new projects: 'disabled' (v0.11+)
   bufferCapacity?: number                  // default: 1024 spans
 }
 ```
@@ -992,7 +1023,10 @@ On every project load, run a migration check before any other PiPilot code touch
 1. Read project.json.
 2. If 'configSchemaVersion' is missing or < 1:
    a. If 'id' is missing, generate ULID, set 'configSchemaVersion' = 1.
-   b. If 'telemetry' is missing, set { tracingMode: 'enabled', bufferCapacity: 1024 }.
+   b. If 'telemetry' is missing, set { tracingMode: 'disabled', bufferCapacity: 1024 }.
+      (v0.11+: opt-in default. Existing projects with explicit
+      `tracingMode: 'enabled'` are NOT auto-flipped — the `if (!config.telemetry)`
+      guard runs only when the block is missing entirely.)
    c. Write project.json atomically (temp + rename).
    d. Append a row to .research-pilot/tracing-state.jsonl:
       { "kind": "config-migration", "fromVersion": 0, "toVersion": 1,
