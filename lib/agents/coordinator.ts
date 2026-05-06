@@ -21,7 +21,6 @@ import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent, ImageContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
-import { categorizeTool } from '../tools/categories.js'
 import { probeStaticProfile, generateAgentGuidance } from '../local-compute/environment-model.js'
 import { maybeExtractMemories } from '../memory/extractor.js'
 import { createLoadSkillTool } from '../tools/skill-tools.js'
@@ -35,15 +34,15 @@ import {
   type PersistenceDecision
 } from './context-builder.js'
 import { createSessionBootstrap } from './session-bootstrap.js'
+import { createCoordinatorTelemetryAdapter } from './telemetry-adapter.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
 import { runSubLlmText } from '../telemetry/sub-llm.js'
-import { redact, SCRUBBER_VERSION } from '../telemetry/redaction.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
-import { SpanKind, SpanStatusCode, type Span, type Attributes } from '@opentelemetry/api'
+import { SpanKind, type Span } from '@opentelemetry/api'
 import { createHash } from 'crypto'
 import {
   migrateLegacyArtifacts,
@@ -240,10 +239,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   let turnCount = 0
   let activeTurnToolCallCount: number | null = null
   const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
-  // Telemetry §4.2 fallback: map open execute_tool spans by toolCallId so
-  // afterToolCall can close the matching span even when sibling tool calls
-  // run in parallel.
-  const toolCallSpans = new Map<string, Span>()
+  const telemetryAdapter = createCoordinatorTelemetryAdapter({ tracer, getTurnId, debug })
 
   const migration = migrateLegacyArtifacts(projectPath)
   if (debug && migration.updatedFiles > 0) {
@@ -477,55 +473,12 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     sessionId,
     getApiKey: resolveApiKey,
 
-    // Wire-level capture of every LLM call inside the agent loop.
-    // `AgentLoopConfig extends SimpleStreamOptions`, so onPayload/onResponse
-    // (defined in pi-ai's StreamOptions) are inherited and fire for the
-    // main per-step provider call. Closes the "main loop chat span" gap
-    // without any reconstruction — the payload is the actual wire request
-    // (post-convertMessages, post-cache_control, post-system-augmentation)
-    // and resp is the HTTP status+headers before body consumption.
-    //
-    // Both hooks must NEVER throw or modify the payload. They attach to the
-    // currently-active step span (set up by the AgentEvent subscriber on
-    // turn_start). Without an active step span (defensive case), they no-op.
-    onPayload: async (payload) => {
-      if (!tracer || !activeStepSpan) return undefined
-      try {
-        const { value: redactedPayload } = redact(payload, {
-          sizeCapBytes: 4096,
-          blobStore: tracer.blobs
-        })
-        activeStepSpan.addEvent('pipilot.chat.request_payload', {
-          body: JSON.stringify(redactedPayload)
-        } as Attributes)
-      } catch {
-        // Telemetry must never affect the LLM call.
-      }
-      return undefined
-    },
-    onResponse: async (resp) => {
-      if (!tracer || !activeStepSpan) return
-      try {
-        activeStepSpan.setAttribute('http.response.status_code', resp.status)
-        const wanted = [
-          'request-id',
-          'x-request-id',
-          'anthropic-request-id',
-          'anthropic-ratelimit-input-tokens-remaining',
-          'anthropic-ratelimit-output-tokens-remaining',
-          'x-ratelimit-remaining-requests',
-          'x-ratelimit-remaining-tokens'
-        ]
-        for (const k of wanted) {
-          const v = resp.headers?.[k] ?? resp.headers?.[k.toLowerCase()]
-          if (typeof v === 'string') {
-            activeStepSpan.setAttribute(`http.response.header.${k}`, v)
-          }
-        }
-      } catch {
-        // ignore
-      }
-    },
+    // Wire-level capture: onPayload/onResponse are inherited from
+    // pi-ai's StreamOptions on AgentLoopConfig and fire for the main
+    // per-step provider call. Telemetry adapter attaches them to the
+    // current `invoke_agent step` span.
+    onPayload: telemetryAdapter.onPayload,
+    onResponse: telemetryAdapter.onResponse,
 
     // ── Context compaction via transformContext ──
     // Before each LLM call, check if accumulated messages exceed the model's
@@ -652,125 +605,27 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       if (debug) {
         console.log(`  [Tool] ${ctx.toolCall.name}(${JSON.stringify(ctx.args).slice(0, 120)}...)`)
       }
-      // Telemetry §6.2: open `execute_tool {name}` span. Stored on the toolCallId
-      // so afterToolCall can close it (per spec §4.2 fallback — toolCallId map
-      // works alongside AsyncLocalStorage for sibling parallelism).
-      if (tracer) {
-        const toolName = ctx.toolCall.name
-        const span = tracer.startSpan(`execute_tool ${toolName}`, SpanKind.INTERNAL)
-        span.setAttributes({
-          'gen_ai.operation.name': 'execute_tool',
-          'gen_ai.tool.name': toolName,
-          'gen_ai.tool.call.id': ctx.toolCall.id,
-          'pipilot.tool.category': categorizeTool(toolName),
-          // §6.4: retry_count default 0. Tools that retry internally can bump
-          // this via span attribute updates before afterToolCall lands.
-          'pipilot.tool.retry_count': 0
-        })
-        const tid = getTurnId?.()
-        if (tid) span.setAttribute('pipilot.turn.id', tid)
-        // §6.9: tool args attach as a span event. Same redaction pipeline as
-        // chat spans (>4KB → blob ref via tracer.blobs). args are typically
-        // small (file paths, bash commands ~100B) so most stay inline.
-        const { value: redactedArgs, stats: argStats } = redact(ctx.args, {
-          sizeCapBytes: 4096,
-          blobStore: tracer.blobs
-        })
-        span.addEvent('pipilot.tool.args', {
-          body: JSON.stringify(redactedArgs)
-        } as Attributes)
-        if (argStats.fieldsRedactedCount > 0) {
-          span.setAttribute('pipilot.redaction.fields_redacted_count', argStats.fieldsRedactedCount)
-          span.setAttribute('pipilot.redaction.scrubber_version', SCRUBBER_VERSION)
-        }
-        toolCallSpans.set(ctx.toolCall.id, span)
-      }
+      telemetryAdapter.beforeToolCall(ctx)
       return undefined
     },
     afterToolCall: async (ctx) => {
       wrappedOnToolResult(ctx.toolCall.name, ctx.result, ctx.args, ctx.toolCall.id)
-      // Notify when a skill is loaded successfully + emit telemetry event (§6.7)
+      // Notify when a skill is loaded successfully + emit telemetry event (§6.7).
       if (ctx.toolCall.name === 'load_skill' && onSkillLoaded) {
         const args = ctx.args as { name?: string }
         const result = ctx.result as any
         if (args?.name && result?.success !== false) {
           onSkillLoaded(args.name)
-          // §6.7: pipilot.skill.load event on the active step span. The parent
-          // execute_tool span is already in the OTel context tree, so no
-          // sourceToolCallId field is needed here.
-          if (activeStepSpan) {
-            activeStepSpan.addEvent('pipilot.skill.load', {
-              skillName: args.name,
-              trigger: 'explicit-load'
-            })
-          }
+          telemetryAdapter.recordSkillLoadOnActiveStep(args.name, 'explicit-load')
         }
       }
-      // Telemetry: close the matching execute_tool span, stamp result attrs,
-      // and attach the result content as a span event (§6.9).
-      const span = toolCallSpans.get(ctx.toolCall.id)
-      if (span && tracer) {
-        const result = ctx.result as any
-        const isError = result && typeof result === 'object' && 'isError' in result && result.isError === true
-        if (isError) {
-          const errorClass = (result.details?.error_code ?? result.error_code ?? 'unknown') as string
-          span.setAttribute('pipilot.tool.error_class', errorClass)
-          span.setStatus({ code: SpanStatusCode.ERROR })
-        } else {
-          span.setStatus({ code: SpanStatusCode.OK })
-        }
-        // §6.9: tool result content attached as a span event. We capture the
-        // `content` array (text + image parts the LLM saw) and the `details`
-        // metadata. >4KB → blob ref so big stdouts / file reads / literature
-        // results are recoverable but don't bloat IPC. ImageContent base64
-        // payloads always go through binary-ref short-circuit in redact().
-        try {
-          const resultPayload = {
-            content: result?.content ?? [],
-            details: result?.details ?? null,
-            isError
-          }
-          const { value: redactedResult, stats: resultStats } = redact(resultPayload, {
-            sizeCapBytes: 4096,
-            blobStore: tracer.blobs
-          })
-          span.addEvent('pipilot.tool.result', {
-            body: JSON.stringify(redactedResult)
-          } as Attributes)
-          if (resultStats.fieldsRedactedCount > 0) {
-            // Update the count if args already set it, otherwise add fresh.
-            const existing = (span as unknown as { attributes?: Record<string, unknown> })
-              .attributes?.['pipilot.redaction.fields_redacted_count']
-            const prev = typeof existing === 'number' ? existing : 0
-            span.setAttribute(
-              'pipilot.redaction.fields_redacted_count',
-              prev + resultStats.fieldsRedactedCount
-            )
-            span.setAttribute('pipilot.redaction.scrubber_version', SCRUBBER_VERSION)
-          }
-        } catch (err) {
-          // Result serialization failure (cycles, exotic types) — record but
-          // don't fail the agent path.
-          if (debug) console.warn('[Telemetry] tool result event failed:', err)
-        }
-        span.end()
-        toolCallSpans.delete(ctx.toolCall.id)
-      } else if (span) {
-        // No tracer (shouldn't happen if span exists, but be defensive).
-        span.end()
-        toolCallSpans.delete(ctx.toolCall.id)
-      }
+      telemetryAdapter.afterToolCall(ctx)
       return undefined
     }
   })
 
-  // Telemetry: track the currently-active step span so AgentEvent transitions can
-  // open/close it. Step spans nest under the `invoke_agent` root span which is
-  // opened in chat() — AsyncLocalStorage propagates the parent automatically.
-  let activeStepSpan: Span | null = null
-  let activeStepIndex = 0
-
-  // Subscribe to agent events for streaming, usage, tool progress, and tracing
+  // Subscribe to agent events for streaming, usage, tool progress, and tracing.
+  // Step-span lifecycle (turn_start / turn_end) is owned by telemetryAdapter.
   if (onStream || onUsage || onToolProgress || tracer) {
     agent.subscribe((event: AgentEvent) => {
       if (event.type === 'message_update' && onStream) {
@@ -785,7 +640,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           onUsage(usage, usage.cost)
         }
       }
-      // Tool execution progress events (real-time updates during tool execution)
+      // Tool execution progress events (real-time updates during tool execution).
       if (onToolProgress) {
         if (event.type === 'tool_execution_start') {
           onToolProgress(event.toolName, event.toolCallId, 'start', { args: event.args })
@@ -796,32 +651,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         }
       }
 
-      // Telemetry: emit `invoke_agent step` spans per pi-agent-core turn boundary.
-      if (tracer) {
-        if (event.type === 'turn_start') {
-          activeStepIndex++
-          activeStepSpan = tracer.startSpan('invoke_agent step', SpanKind.INTERNAL)
-          activeStepSpan.setAttribute('gen_ai.operation.name', 'invoke_agent')
-          activeStepSpan.setAttribute('pipilot.step.index', activeStepIndex)
-          const tid = getTurnId?.()
-          if (tid) activeStepSpan.setAttribute('pipilot.turn.id', tid)
-        } else if (event.type === 'turn_end' && activeStepSpan) {
-          const msg = event.message as any
-          if (msg?.usage) {
-            activeStepSpan.setAttributes({
-              'gen_ai.usage.input_tokens': msg.usage.input ?? 0,
-              'gen_ai.usage.output_tokens': msg.usage.output ?? 0
-            })
-          }
-          if (msg?.stopReason && (msg.stopReason === 'error' || msg.stopReason === 'aborted')) {
-            activeStepSpan.setStatus({ code: SpanStatusCode.ERROR, message: msg.errorMessage })
-          } else {
-            activeStepSpan.setStatus({ code: SpanStatusCode.OK })
-          }
-          activeStepSpan.end()
-          activeStepSpan = null
-        }
-      }
+      telemetryAdapter.processAgentEvent(event)
     })
   }
 
