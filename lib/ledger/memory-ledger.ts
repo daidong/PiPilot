@@ -18,7 +18,18 @@ import { appendJsonl } from '../telemetry/jsonl-writer.js'
 
 export type MemoryOp = 'search' | 'retrieve' | 'create' | 'update' | 'delete'
 export type MemoryScope = 'session' | 'project' | 'user-global' | 'cross-project' | 'wiki'
+/**
+ * Source-descriptive categories. The first 4 (`user`, `feedback`, `project`,
+ * `reference`) match the user-facing buckets exposed by the save-memory tool
+ * (lib/memory/memory-tools.ts). The remaining 7 are inherited from the v0.3
+ * spec for finer-grained provenance categories — used by future LLM-side
+ * extractors but not the manual save-memory path.
+ */
 export type MemoryType =
+  | 'user'
+  | 'feedback'
+  | 'project'
+  | 'reference'
   | 'preference'
   | 'decision'
   | 'todo'

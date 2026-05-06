@@ -51,7 +51,7 @@ export function createResearchTools(ctx: ResearchToolContext): {
   }))
 
   // Structured memory tools (save-memory, delete-memory)
-  tools.push(...createMemoryTools(ctx.projectPath))
+  tools.push(...createMemoryTools(ctx.projectPath, ctx.getTurnId))
 
   // RFC-005 memory tools: wiki_search / wiki_get / wiki_coverage / wiki_facets / wiki_neighbors / wiki_source
   // Always registered; each tool returns "Wiki not available" at execute time if the wiki doesn't exist

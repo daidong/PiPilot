@@ -23,7 +23,7 @@ import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
-import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot } from '../../../lib/telemetry/index'
+import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger } from '../../../lib/telemetry/index'
 import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
@@ -378,6 +378,7 @@ async function ensureCoordinator(
   if (state.isClosing) throw new Error('Project is closing')
   const requestedModel = model || state.currentModel
   const resolvedAuth = resolveCoordinatorAuth(requestedModel)
+  const previousModel = state.currentModel
   // Recreate coordinator if model/auth mode changed (reasoning effort changes handled by prefs:save)
   if (
     state.coordinator
@@ -392,6 +393,24 @@ async function ensureCoordinator(
   }
   state.currentModel = requestedModel
   state.currentAuthMode = resolvedAuth.authMode
+
+  // Telemetry §10.1: log mid-session model changes to tracing-state.jsonl.
+  // The next root invoke_agent span will reflect the new model in
+  // gen_ai.request.model, but the change point itself was previously
+  // invisible. Best-effort — failures must not block coordinator setup.
+  if (state.projectPath && previousModel && previousModel !== requestedModel) {
+    try {
+      const logger = createTracingStateLogger(state.projectPath)
+      void logger.append({
+        kind: 'model-change',
+        fromState: previousModel,
+        toState: requestedModel,
+        actor: 'user'
+      })
+    } catch {
+      // ignore
+    }
+  }
 
   if (!state.coordinator) {
     const apiKey = resolvedAuth.apiKey

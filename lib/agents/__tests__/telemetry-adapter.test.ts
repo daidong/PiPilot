@@ -403,6 +403,92 @@ test('onPayload + onResponse without active step are silent no-ops', async () =>
 // Null tracer: every method is a silent no-op
 // ---------------------------------------------------------------------------
 
+test('processAgentEvent stamps pipilot.thinking_level on step span when accessor returns a value', async () => {
+  const { dir, tracer } = mkTracer()
+  try {
+    const adapter = createCoordinatorTelemetryAdapter({
+      tracer,
+      getThinkingLevel: () => 'high'
+    })
+    adapter.processAgentEvent(turnStartEvent())
+    adapter.processAgentEvent(turnEndEvent())
+    await tracer.shutdown()
+
+    const step = (await readSpans(dir)).find(s => s.name === 'invoke_agent step')
+    assert.ok(step)
+    assert.equal(findAttr(step, 'pipilot.thinking_level')?.stringValue, 'high')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('processAgentEvent omits pipilot.thinking_level when accessor returns undefined', async () => {
+  const { dir, tracer } = mkTracer()
+  try {
+    const adapter = createCoordinatorTelemetryAdapter({
+      tracer,
+      getThinkingLevel: () => undefined
+    })
+    adapter.processAgentEvent(turnStartEvent())
+    adapter.processAgentEvent(turnEndEvent())
+    await tracer.shutdown()
+
+    const step = (await readSpans(dir)).find(s => s.name === 'invoke_agent step')
+    assert.ok(step)
+    assert.equal(findAttr(step, 'pipilot.thinking_level'), undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('turn_end captures assistant content as pipilot.chat.response_text event', async () => {
+  const { dir, tracer } = mkTracer()
+  try {
+    const adapter = createCoordinatorTelemetryAdapter({ tracer })
+    adapter.processAgentEvent(turnStartEvent())
+    // Build a turn_end with non-empty assistant content.
+    const event = {
+      type: 'turn_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Here is the answer.' }],
+        usage: { input: 10, output: 5 }
+      },
+      toolResults: []
+    } as unknown as AgentEvent
+    adapter.processAgentEvent(event)
+    await tracer.shutdown()
+
+    const step = (await readSpans(dir)).find(s => s.name === 'invoke_agent step')
+    assert.ok(step)
+    const responseEvent = step.events?.find((e: any) => e.name === 'pipilot.chat.response_text')
+    assert.ok(responseEvent, 'expected pipilot.chat.response_text event on step span')
+    const body = responseEvent.attributes?.find((a: any) => a.key === 'body')?.value?.stringValue
+    assert.ok(body && body.includes('Here is the answer.'),
+      `expected response body to contain assistant text, got: ${body}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('turn_end with empty/missing content does not emit response_text event', async () => {
+  const { dir, tracer } = mkTracer()
+  try {
+    const adapter = createCoordinatorTelemetryAdapter({ tracer })
+    adapter.processAgentEvent(turnStartEvent())
+    // event.message has no content array (defensive case)
+    adapter.processAgentEvent(turnEndEvent())
+    await tracer.shutdown()
+
+    const step = (await readSpans(dir)).find(s => s.name === 'invoke_agent step')
+    assert.ok(step)
+    const responseEvent = step.events?.find((e: any) => e.name === 'pipilot.chat.response_text')
+    assert.equal(responseEvent, undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('null tracer: all methods silently no-op (never throw)', async () => {
   const adapter = createCoordinatorTelemetryAdapter({ tracer: null })
   // None of these should throw

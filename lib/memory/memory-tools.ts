@@ -8,6 +8,7 @@
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError } from '../tools/tool-utils.js'
+import { createMemoryLedgerWriter } from '../ledger/memory-ledger.js'
 import {
   type MemoryType,
   memoryFilename,
@@ -24,7 +25,30 @@ import {
 
 const VALID_TYPES: MemoryType[] = ['user', 'feedback', 'project', 'reference']
 
-export function createSaveMemoryTool(projectPath: string): AgentTool {
+/** Best-effort ledger append. Failures swallowed — ledger never blocks the tool path. */
+function appendMemoryLedger(
+  projectPath: string,
+  op: 'create' | 'update' | 'delete',
+  type: MemoryType,
+  filename: string,
+  turnId: string | undefined
+): void {
+  try {
+    const writer = createMemoryLedgerWriter(projectPath)
+    void writer.append({
+      memoryId: filename,
+      op,
+      scope: 'project',
+      type,
+      provenance: { source: 'tool-output' },
+      turnId
+    })
+  } catch {
+    // ignore
+  }
+}
+
+export function createSaveMemoryTool(projectPath: string, getTurnId?: () => string | undefined): AgentTool {
   return {
     name: 'save-memory',
     label: 'Save memory',
@@ -72,6 +96,8 @@ export function createSaveMemoryTool(projectPath: string): AgentTool {
         ensureMemoryDir(projectPath)
 
         const filename = memoryFilename(type, name)
+        // Detect whether this is a new memory or an overwrite for ledger op.
+        const existed = !!findMemoryByName(projectPath, name, type)
         const entry: MemoryEntry = {
           frontmatter: { name, description, type },
           content,
@@ -93,6 +119,9 @@ export function createSaveMemoryTool(projectPath: string): AgentTool {
           ))
         }
 
+        // Telemetry §8.2: ledger row for create/update.
+        appendMemoryLedger(projectPath, existed ? 'update' : 'create', type, filename, getTurnId?.())
+
         return toAgentResult('save-memory', {
           success: true,
           data: {
@@ -107,7 +136,7 @@ export function createSaveMemoryTool(projectPath: string): AgentTool {
   }
 }
 
-export function createDeleteMemoryTool(projectPath: string): AgentTool {
+export function createDeleteMemoryTool(projectPath: string, getTurnId?: () => string | undefined): AgentTool {
   return {
     name: 'delete-memory',
     label: 'Delete memory',
@@ -163,6 +192,15 @@ export function createDeleteMemoryTool(projectPath: string): AgentTool {
         const allEntries = listMemoryFiles(projectPath)
         updateAgentMdIndex(projectPath, allEntries)
 
+        // Telemetry §8.2: ledger row for delete.
+        appendMemoryLedger(
+          projectPath,
+          'delete',
+          existing.frontmatter.type,
+          existing.filename,
+          getTurnId?.()
+        )
+
         return toAgentResult('delete-memory', {
           success: true,
           data: {
@@ -175,9 +213,9 @@ export function createDeleteMemoryTool(projectPath: string): AgentTool {
   }
 }
 
-export function createMemoryTools(projectPath: string): AgentTool[] {
+export function createMemoryTools(projectPath: string, getTurnId?: () => string | undefined): AgentTool[] {
   return [
-    createSaveMemoryTool(projectPath),
-    createDeleteMemoryTool(projectPath)
+    createSaveMemoryTool(projectPath, getTurnId),
+    createDeleteMemoryTool(projectPath, getTurnId)
   ]
 }

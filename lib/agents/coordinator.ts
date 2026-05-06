@@ -42,7 +42,8 @@ import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
 import { runSubLlmText } from '../telemetry/sub-llm.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
-import { SpanKind, type Span } from '@opentelemetry/api'
+import { SpanKind, type Span, type Attributes } from '@opentelemetry/api'
+import { redact } from '../telemetry/redaction.js'
 import { createHash } from 'crypto'
 import {
   migrateLegacyArtifacts,
@@ -239,7 +240,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   let turnCount = 0
   let activeTurnToolCallCount: number | null = null
   const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
-  const telemetryAdapter = createCoordinatorTelemetryAdapter({ tracer, getTurnId, debug })
+  // The thinking-level accessor reads agent.state.thinkingLevel at span-open
+  // time, so mid-session UI changes land on the next span.
+  const telemetryAdapter = createCoordinatorTelemetryAdapter({
+    tracer,
+    getTurnId,
+    getThinkingLevel: () => agent.state.thinkingLevel as string | undefined,
+    debug
+  })
 
   const migration = migrateLegacyArtifacts(projectPath)
   if (debug && migration.updatedFiles > 0) {
@@ -564,6 +572,24 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
             undefined,
             compactionSummary
           )
+          // §6.9 extension: attach the running summary text on the
+          // compaction span so per-event provenance is self-contained.
+          // Without this the summary text was only recoverable via the
+          // next turn's request_payload (where it lands as a synthetic
+          // user message) or the latest-state file (lossy across history).
+          if (compactionSpan && tracer) {
+            try {
+              const { value: redactedSummary } = redact(summary, {
+                sizeCapBytes: 4096,
+                blobStore: tracer.blobs
+              })
+              compactionSpan.addEvent('pipilot.compaction.summary_text', {
+                body: JSON.stringify(redactedSummary)
+              } as Attributes)
+            } catch {
+              // Telemetry must never affect the agent path.
+            }
+          }
         } finally {
           compactionSpan?.end()
         }
@@ -986,6 +1012,11 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         span.setAttribute('pipilot.runtime.full_prompt_hash', `sha256:${fullPromptHash}`)
         const tid = getTurnId?.()
         if (tid) span.setAttribute('pipilot.turn.id', tid)
+        // Capture thinking level on the root span so the per-turn config is
+        // visible alongside model + token usage. Step spans pick it up via
+        // the adapter's getThinkingLevel accessor.
+        const tl = agent.state.thinkingLevel
+        if (tl) span.setAttribute('pipilot.thinking_level', tl)
         return runChatBody()
       })
     },

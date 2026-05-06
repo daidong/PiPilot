@@ -64,13 +64,20 @@ export interface CoordinatorTelemetryAdapterOptions {
   tracer: PipilotTracer | null
   /** Looked up at span-open time so a per-turn id minted at the IPC boundary lands on the span. */
   getTurnId?: () => string | undefined
+  /**
+   * Looked up at step-span open time. Captures the agent's current thinking
+   * level (`xhigh` / `high` / `medium` / `low` / `minimal` / `off`). Mid-session
+   * changes via the UI need to land on the next span, hence the accessor
+   * shape rather than a static string.
+   */
+  getThinkingLevel?: () => string | undefined
   debug?: boolean
 }
 
 export function createCoordinatorTelemetryAdapter(
   opts: CoordinatorTelemetryAdapterOptions
 ): CoordinatorTelemetryAdapter {
-  const { tracer, getTurnId, debug } = opts
+  const { tracer, getTurnId, getThinkingLevel, debug } = opts
 
   let activeStepSpan: Span | null = null
   let activeStepIndex = 0
@@ -214,6 +221,8 @@ export function createCoordinatorTelemetryAdapter(
         activeStepSpan.setAttribute('pipilot.step.index', activeStepIndex)
         const tid = getTurnId?.()
         if (tid) activeStepSpan.setAttribute('pipilot.turn.id', tid)
+        const tl = getThinkingLevel?.()
+        if (tl) activeStepSpan.setAttribute('pipilot.thinking_level', tl)
       } else if (event.type === 'turn_end' && activeStepSpan) {
         const msg = event.message as any
         if (msg?.usage) {
@@ -221,6 +230,26 @@ export function createCoordinatorTelemetryAdapter(
             'gen_ai.usage.input_tokens': msg.usage.input ?? 0,
             'gen_ai.usage.output_tokens': msg.usage.output ?? 0
           })
+        }
+        // Capture assistant content text on the step span — main agent loop
+        // bypasses tracedCompleteSimple, so without this the per-step
+        // response is only reconstructable via the next step's request_payload.
+        // Caller-supplied content can be quite large (multiple tool calls,
+        // long reasoning), so it goes through the same redaction pipeline
+        // (>4KB → blob ref).
+        try {
+          const content = Array.isArray(msg?.content) ? msg.content : null
+          if (content && content.length > 0) {
+            const { value: redacted } = redact(content, {
+              sizeCapBytes: 4096,
+              blobStore: tracer.blobs
+            })
+            activeStepSpan.addEvent('pipilot.chat.response_text', {
+              body: JSON.stringify(redacted)
+            } as Attributes)
+          }
+        } catch (err) {
+          if (debug) console.warn('[Telemetry] response_text event failed:', err)
         }
         if (msg?.stopReason && (msg.stopReason === 'error' || msg.stopReason === 'aborted')) {
           activeStepSpan.setStatus({ code: SpanStatusCode.ERROR, message: msg.errorMessage })

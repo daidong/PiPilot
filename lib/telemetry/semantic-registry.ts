@@ -130,7 +130,10 @@ export const PIPILOT_ATTRIBUTE_KEYS = new Set<string>([
   'pipilot.trace.degraded',
 
   // Local compute / linked traces (§6.5)
-  'pipilot.link.kind'
+  'pipilot.link.kind',
+
+  // Agent runtime config visible on root + step spans
+  'pipilot.thinking_level'
 ])
 
 /**
@@ -151,7 +154,17 @@ export const PIPILOT_EVENT_NAMES = new Set<string>([
   // Carries the final provider-format JSON (post-convertMessages, post-
   // cache_control markers). Distinct from gen_ai.client.inference.operation.details
   // which carries our own pre-translation PiContext.
-  'pipilot.chat.request_payload'
+  'pipilot.chat.request_payload',
+  // Per-step assistant message text content captured at turn_end. The
+  // main agent loop bypasses tracedCompleteSimple, so without this event
+  // the assistant text for the final step of a turn lives only in the
+  // session JSONL. Adding it makes step-level provenance self-contained.
+  'pipilot.chat.response_text',
+  // The text body of the running compaction summary, captured on the
+  // `summarize context` span. Without this, per-event summary text is
+  // recoverable only from the next turn's request_payload (where it gets
+  // injected as a synthetic user message) or from the latest-state file.
+  'pipilot.compaction.summary_text'
 ])
 
 /** Whitelist of PiPilot link.kind values (§6.5). */

@@ -28,6 +28,13 @@ export type TracingStateKind =
   | 'span-dropped'
   | 'startup'
   | 'shutdown'
+  /**
+   * User changed the active model mid-session. fromState/toState carry the
+   * composite model key (e.g. 'openai:gpt-5.5'). The next root invoke_agent
+   * span will reflect the new model in `gen_ai.request.model`, but the
+   * change point itself was previously invisible in trace data.
+   */
+  | 'model-change'
 
 export interface TracingStateRow {
   timestamp: string
