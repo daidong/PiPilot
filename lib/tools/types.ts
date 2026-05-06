@@ -78,6 +78,13 @@ export interface ResearchToolContext {
   /** Live accessor for diagram-tool auth (see `DiagramAuth`). */
   getDiagramAuth?: () => DiagramAuth
   /**
+   * Live accessor for the current turnId. Tools that write to the
+   * artifact-ledger plumb this into the row so each ledger entry has a
+   * 1-hop join back to the originating turn. Returns undefined for
+   * non-turn paths (background work, CLI, bootstrap).
+   */
+  getTurnId?: () => string | undefined
+  /**
    * Rasterize an SVG document to PNG bytes, when a renderer is available.
    * Used by the diagram tool's SVG-fallback review path so a vision model
    * can evaluate the rendered output (not just the SVG source) and catch

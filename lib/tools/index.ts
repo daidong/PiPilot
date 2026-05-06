@@ -46,7 +46,8 @@ export function createResearchTools(ctx: ResearchToolContext): {
   // Artifact tools
   tools.push(...createResearchMemoryTools({
     sessionId: ctx.sessionId,
-    projectPath: ctx.projectPath
+    projectPath: ctx.projectPath,
+    getTurnId: ctx.getTurnId
   }))
 
   // Structured memory tools (save-memory, delete-memory)

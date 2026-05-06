@@ -234,6 +234,14 @@ export interface CLIContext {
   projectPath: string
   lastAgentResponse?: string
   debug?: boolean
+  /**
+   * Per-turn identifier minted at the IPC boundary. Plumbed through to the
+   * artifact-ledger so each row has a 1-hop join back to the originating
+   * turn (otherwise consumers must traverse trace JSONL → root span →
+   * `pipilot.turn.id`). Undefined for non-turn paths (CLI commands, wiki
+   * background agent, bootstrap, migrations).
+   */
+  turnId?: string
 }
 
 // ============================================================================

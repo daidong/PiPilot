@@ -396,6 +396,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     settings: config.resolvedSettings,
     getSettings: config.getResolvedSettings,
     getDiagramAuth: config.getDiagramAuth,
+    getTurnId,
     rasterizeSvg: config.rasterizeSvg,
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)

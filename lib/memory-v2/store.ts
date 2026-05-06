@@ -418,8 +418,9 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
   writeFileSync(filePath, JSON.stringify(artifact, null, 2), 'utf-8')
 
   // Telemetry §8.1: append to artifact ledger. Best-effort — failures don't
-  // affect the agent path. Trace context is auto-pulled by the writer.
-  void writeArtifactLedgerCreate(context.projectPath, artifact, filePath)
+  // affect the agent path. Trace context is auto-pulled by the writer;
+  // turnId comes from CLIContext when the call is on a user turn.
+  void writeArtifactLedgerCreate(context.projectPath, artifact, filePath, context.turnId)
 
   return { artifact, filePath }
 }
@@ -462,7 +463,7 @@ export function findArtifactById(projectPath: string, artifactId: string): Artif
   return null
 }
 
-export function updateArtifact(projectPath: string, artifactId: string, patch: UpdateArtifactInput): ArtifactFileRecord | null {
+export function updateArtifact(projectPath: string, artifactId: string, patch: UpdateArtifactInput, turnId?: string): ArtifactFileRecord | null {
   const found = findArtifactById(projectPath, artifactId)
   if (!found) return null
 
@@ -479,16 +480,16 @@ export function updateArtifact(projectPath: string, artifactId: string, patch: U
 
   writeFileSync(found.filePath, JSON.stringify(updated, null, 2), 'utf-8')
   // Telemetry §8.1: ledger row for edit op.
-  void writeArtifactLedgerUpdate(projectPath, updated, found.artifact)
+  void writeArtifactLedgerUpdate(projectPath, updated, found.artifact, turnId)
   return { artifact: updated, filePath: found.filePath }
 }
 
-export function deleteArtifact(projectPath: string, artifactId: string): ArtifactFileRecord | null {
+export function deleteArtifact(projectPath: string, artifactId: string, turnId?: string): ArtifactFileRecord | null {
   const found = findArtifactById(projectPath, artifactId)
   if (!found) return null
 
   rmSync(found.filePath)
-  void writeArtifactLedgerDelete(projectPath, found.artifact)
+  void writeArtifactLedgerDelete(projectPath, found.artifact, turnId)
   return found
 }
 
@@ -746,7 +747,7 @@ function relPath(projectPath: string, filePath: string): string {
   return rel.replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
-async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string): Promise<void> {
+async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string, turnId?: string): Promise<void> {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
     await writer.append({
@@ -757,14 +758,15 @@ async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact
       path: relPath(projectPath, filePath),
       contentHash: hashArtifactContent(artifact),
       versionBefore: null,
-      initiator: pickInitiator(artifact)
+      initiator: pickInitiator(artifact),
+      turnId
     })
   } catch {
     // Swallow — ledger failures must not block agent.
   }
 }
 
-async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact): Promise<void> {
+async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact, turnId?: string): Promise<void> {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
     await writer.append({
@@ -775,14 +777,15 @@ async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, b
       path: relPath(projectPath, ''),
       contentHash: hashArtifactContent(after),
       versionBefore: extractVersion(before),
-      initiator: pickInitiator(after)
+      initiator: pickInitiator(after),
+      turnId
     })
   } catch {
     // ignore
   }
 }
 
-async function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact): Promise<void> {
+async function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact, turnId?: string): Promise<void> {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
     await writer.append({
@@ -793,7 +796,8 @@ async function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact
       path: '',
       contentHash: hashArtifactContent(artifact),
       versionBefore: extractVersion(artifact),
-      initiator: pickInitiator(artifact)
+      initiator: pickInitiator(artifact),
+      turnId
     })
   } catch {
     // ignore

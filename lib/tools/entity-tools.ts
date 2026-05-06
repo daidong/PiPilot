@@ -39,7 +39,11 @@ function parseJsonSafely(text: string): unknown {
   }
 }
 
-export function createArtifactCreateTool(sessionId: string, projectPath: string): AgentTool {
+export function createArtifactCreateTool(
+  sessionId: string,
+  projectPath: string,
+  getTurnId?: () => string | undefined
+): AgentTool {
   return {
     name: 'artifact-create',
     label: 'Create artifact',
@@ -76,7 +80,7 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
         }))
       }
 
-      const cliContext: CLIContext = { sessionId, projectPath }
+      const cliContext: CLIContext = { sessionId, projectPath, turnId: getTurnId?.() }
 
       let payload: CreateArtifactInput
       if (type === 'note') {
@@ -181,7 +185,10 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
   }
 }
 
-export function createArtifactUpdateTool(projectPath: string): AgentTool {
+export function createArtifactUpdateTool(
+  projectPath: string,
+  getTurnId?: () => string | undefined
+): AgentTool {
   return {
     name: 'artifact-update',
     label: 'Update artifact',
@@ -221,7 +228,7 @@ export function createArtifactUpdateTool(projectPath: string): AgentTool {
         doi: typeof args.doi === 'string' ? args.doi : undefined,
         bibtex: typeof args.bibtex === 'string' ? args.bibtex : undefined,
         pdfUrl: typeof args.pdfUrl === 'string' ? args.pdfUrl : undefined
-      })
+      }, getTurnId?.())
 
       if (!updated) {
         return toAgentResult('artifact-update', toolError('NOT_FOUND', `Artifact not found: ${id}`, {
@@ -285,10 +292,11 @@ export function createArtifactSearchTool(projectPath: string): AgentTool {
 export function createResearchMemoryTools(params: {
   sessionId: string
   projectPath: string
+  getTurnId?: () => string | undefined
 }): AgentTool[] {
   return [
-    createArtifactCreateTool(params.sessionId, params.projectPath),
-    createArtifactUpdateTool(params.projectPath),
+    createArtifactCreateTool(params.sessionId, params.projectPath, params.getTurnId),
+    createArtifactUpdateTool(params.projectPath, params.getTurnId),
     createArtifactSearchTool(params.projectPath)
   ]
 }
