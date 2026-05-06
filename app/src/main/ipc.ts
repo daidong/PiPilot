@@ -23,7 +23,7 @@ import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
-import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger } from '../../../lib/telemetry/index'
+import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger, type LiveSpanSummary } from '../../../lib/telemetry/index'
 import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
@@ -2019,7 +2019,7 @@ export function registerIpcHandlers(): void {
     // accumulates spans for a flame-graph / inspector view. Subscription is
     // cleared on project close (via tracer.shutdown → live.clear).
     if (state.tracer) {
-      state.tracer.live.subscribe((summary) => {
+      state.tracer.live.subscribe((summary: LiveSpanSummary) => {
         safeSend(win, 'trace:live', summary)
       })
     }

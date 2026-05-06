@@ -92,6 +92,7 @@ export type CreateArtifactInput =
       identityConfidence?: 'high' | 'medium' | 'low'
       arxivId?: string
       pubmedId?: string
+      pmcId?: string
       semanticScholarId?: string
     }
   | {
@@ -165,6 +166,7 @@ export interface UpdateArtifactInput {
   identityConfidence?: 'high' | 'medium' | 'low'
   arxivId?: string
   pubmedId?: string
+  pmcId?: string
   semanticScholarId?: string
 }
 

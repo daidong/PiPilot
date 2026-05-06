@@ -261,7 +261,7 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       // Write back to artifact: either the found ID or clear the garbage value
       const newArxivId = resolvedArxivId ?? undefined
       if (newArxivId !== artifact.arxivId) {
-        updateArtifact(projectPath, artifact.id, { arxivId: newArxivId } as any)
+        updateArtifact(projectPath, artifact.id, { arxivId: newArxivId })
         artifact.arxivId = newArxivId  // keep local copy in sync
         log(resolvedArxivId
           ? `resolved arXiv ID: ${resolvedArxivId}`
@@ -284,7 +284,7 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
         for (const sib of scanResult.siblings) {
           if (sib.artifact.arxivId === resolvedArxivId) continue
           try {
-            updateArtifact(sib.projectPath, sib.artifact.id, { arxivId: resolvedArxivId } as any)
+            updateArtifact(sib.projectPath, sib.artifact.id, { arxivId: resolvedArxivId })
             sib.artifact.arxivId = resolvedArxivId
             log(`propagated arXiv ID to sibling project ${sib.projectPath}`)
           } catch (err) {
@@ -296,7 +296,7 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
         for (const sib of scanResult.siblings) {
           if (sib.artifact.pmcId === artifact.pmcId) continue
           try {
-            updateArtifact(sib.projectPath, sib.artifact.id, { pmcId: artifact.pmcId } as any)
+            updateArtifact(sib.projectPath, sib.artifact.id, { pmcId: artifact.pmcId })
             sib.artifact.pmcId = artifact.pmcId
           } catch (err) {
             log(`failed to propagate PMC ID to ${sib.projectPath}/${sib.artifact.id}: ${err}`)
@@ -340,7 +340,7 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
         // the artifact + propagate to siblings so the next scan hits cache.
         if (result.resolvedPmcId && result.resolvedPmcId !== artifact.pmcId) {
           try {
-            updateArtifact(projectPath, artifact.id, { pmcId: result.resolvedPmcId } as any)
+            updateArtifact(projectPath, artifact.id, { pmcId: result.resolvedPmcId })
             artifact.pmcId = result.resolvedPmcId
             log(`resolved PMC ID via paperclip: ${result.resolvedPmcId}`)
           } catch (err) {
@@ -350,7 +350,7 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
             for (const sib of scanResult.siblings) {
               if (sib.artifact.pmcId === result.resolvedPmcId) continue
               try {
-                updateArtifact(sib.projectPath, sib.artifact.id, { pmcId: result.resolvedPmcId } as any)
+                updateArtifact(sib.projectPath, sib.artifact.id, { pmcId: result.resolvedPmcId })
                 sib.artifact.pmcId = result.resolvedPmcId
               } catch { /* swallow */ }
             }
