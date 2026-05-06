@@ -103,7 +103,10 @@ export function accumulateUsage(
       cacheWriteTokens: existing.totals.cacheWriteTokens + cacheWriteTokens,
       cost: existing.totals.cost + cost,
       calls: existing.totals.calls + 1
-    }
+    },
+    // Preserve cutoff snapshot — set once by ensurePreTraceCutoff(), must not
+    // be wiped by routine accumulate writes (telemetry-trace §14.3 dual-write).
+    ...(existing.preTraceCutoffTotals && { preTraceCutoffTotals: existing.preTraceCutoffTotals })
   }
   writeAtomically(usagePath(baseDir), JSON.stringify(next, null, 2))
   return next

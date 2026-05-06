@@ -6,6 +6,7 @@ import electronUpdater from 'electron-updater'
 const { autoUpdater } = electronUpdater
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, watch, type FSWatcher } from 'fs'
+import { stat as statAsync, readdir as readdirAsync } from 'fs/promises'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
 import { createCoordinator } from '../../../lib/agents/coordinator'
 import {
@@ -243,22 +244,38 @@ export function registerWindow(win: BrowserWindow): void {
  * missing, unreadable, or a special file. Used by the telemetry footprint
  * IPC — must never throw, since the agent path runs through the same
  * handler block.
+ *
+ * Async/parallel: trace + blob trees can hold tens of thousands of small
+ * files. A sync recursive walk would block the Electron main process for
+ * hundreds of ms. Per-directory we fan out with Promise.all so the walk
+ * is bounded by the deepest path, not the total file count.
  */
-function duFileOrDir(path: string): number {
+async function duFileOrDirAsync(path: string): Promise<number> {
   try {
-    if (!existsSync(path)) return 0
-    const st = statSync(path)
+    const st = await statAsync(path)
     if (st.isFile()) return st.size
     if (!st.isDirectory()) return 0
+    const entries = await readdirAsync(path)
+    const sizes = await Promise.all(
+      entries.map((entry) => duFileOrDirAsync(join(path, entry)))
+    )
     let total = 0
-    for (const entry of readdirSync(path)) {
-      total += duFileOrDir(join(path, entry))
-    }
+    for (const s of sizes) total += s
     return total
   } catch {
     return 0
   }
 }
+
+/**
+ * Per-project footprint cache — bounds how often we walk the filesystem
+ * even when the Settings panel is open. The IPC handler returns the cached
+ * value when fresh and triggers a refresh on stale, so the UI never blocks
+ * on the walk itself.
+ */
+interface FootprintCacheEntry { bytes: number; computedAt: number }
+const FOOTPRINT_TTL_MS = 60 * 1000
+const footprintCache = new Map<string, FootprintCacheEntry>()
 
 function createArtifactFromWorkspaceFile(state: WindowRuntimeState, filePath: string) {
   const projectPath = state.projectPath
@@ -1673,7 +1690,7 @@ export function registerIpcHandlers(): void {
   // ─── Telemetry: project config (§10.2) + storage stats ────────────────
   // Project-scoped — distinct from global AppSettings IPC. Returns the full
   // config plus a derived `storageFootprintBytes` summary (sum of stats rows).
-  handleWindow('telemetry:get-project-config', ({ state }) => {
+  handleWindow('telemetry:get-project-config', async ({ state }, force?: boolean) => {
     if (!state.projectPath) return null
     try {
       const projectFile = join(state.projectPath, PATHS.project)
@@ -1699,9 +1716,20 @@ export function registerIpcHandlers(): void {
         PATHS.ledgerArtifact,
         PATHS.ledgerMemory
       ]
-      let storageFootprintBytes = 0
-      for (const rel of telemetryPaths) {
-        storageFootprintBytes += duFileOrDir(join(state.projectPath, rel))
+      // TTL-cached: the Settings panel can call this on every manual refresh,
+      // and an active project may also poll opportunistically. Walking
+      // .research-pilot/ on every call would re-scan thousands of blob files.
+      const cached = footprintCache.get(state.projectPath)
+      const now = Date.now()
+      let storageFootprintBytes: number
+      if (!force && cached && now - cached.computedAt < FOOTPRINT_TTL_MS) {
+        storageFootprintBytes = cached.bytes
+      } else {
+        const sizes = await Promise.all(
+          telemetryPaths.map((rel) => duFileOrDirAsync(join(state.projectPath, rel)))
+        )
+        storageFootprintBytes = sizes.reduce((a, b) => a + b, 0)
+        footprintCache.set(state.projectPath, { bytes: storageFootprintBytes, computedAt: now })
       }
       // In-flight bytes is the live counter inside TraceStore — bytes
       // queued/written THIS session but the filesystem stat may lag a few ms

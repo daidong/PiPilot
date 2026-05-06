@@ -83,13 +83,31 @@ export function createCoordinatorTelemetryAdapter(
   let activeStepIndex = 0
   const toolCallSpans = new Map<string, Span>()
 
+  /**
+   * Build an onBlobError handler that records dangling-blob counts on the
+   * supplied span. Without this, oversized payloads that fail to persist
+   * (disk full, perms) still emit { contentHash } refs to bytes that don't
+   * exist on disk, with no signal in the trace.
+   */
+  const blobErrorRecorder = (span: Span | null) => (err: unknown): void => {
+    if (!span) return
+    const attrs = (span as unknown as { attributes?: Record<string, unknown> }).attributes
+    const prev = typeof attrs?.['pipilot.blob.write_failed_count'] === 'number'
+      ? (attrs['pipilot.blob.write_failed_count'] as number)
+      : 0
+    span.setAttribute('pipilot.blob.write_failed_count', prev + 1)
+    const msg = err instanceof Error ? err.message : String(err)
+    span.setAttribute('pipilot.blob.write_failed_message', msg)
+  }
+
   return {
     async onPayload(payload) {
       if (!tracer || !activeStepSpan) return undefined
       try {
         const { value: redactedPayload } = redact(payload, {
           sizeCapBytes: 4096,
-          blobStore: tracer.blobs
+          blobStore: tracer.blobs,
+          onBlobError: blobErrorRecorder(activeStepSpan)
         })
         activeStepSpan.addEvent('pipilot.chat.request_payload', {
           body: JSON.stringify(redactedPayload)
@@ -143,7 +161,8 @@ export function createCoordinatorTelemetryAdapter(
       // chat spans (>4KB → blob ref via tracer.blobs).
       const { value: redactedArgs, stats: argStats } = redact(ctx.args, {
         sizeCapBytes: 4096,
-        blobStore: tracer.blobs
+        blobStore: tracer.blobs,
+        onBlobError: blobErrorRecorder(span)
       })
       span.addEvent('pipilot.tool.args', {
         body: JSON.stringify(redactedArgs)
@@ -186,7 +205,8 @@ export function createCoordinatorTelemetryAdapter(
           }
           const { value: redactedResult, stats: resultStats } = redact(resultPayload, {
             sizeCapBytes: 4096,
-            blobStore: tracer.blobs
+            blobStore: tracer.blobs,
+            onBlobError: blobErrorRecorder(span)
           })
           span.addEvent('pipilot.tool.result', {
             body: JSON.stringify(redactedResult)
@@ -242,7 +262,8 @@ export function createCoordinatorTelemetryAdapter(
           if (content && content.length > 0) {
             const { value: redacted } = redact(content, {
               sizeCapBytes: 4096,
-              blobStore: tracer.blobs
+              blobStore: tracer.blobs,
+              onBlobError: blobErrorRecorder(activeStepSpan)
             })
             activeStepSpan.addEvent('pipilot.chat.response_text', {
               body: JSON.stringify(redacted)

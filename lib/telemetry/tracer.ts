@@ -119,7 +119,13 @@ export class PipilotTracer {
         bufferCapacity: opts.bufferCapacity ?? 1024
       })
 
-    const digestProcessor = new TraceDigestProcessor(opts.projectPath)
+    const digestProcessor = new TraceDigestProcessor(opts.projectPath, {
+      // Sibling-processor view: if TraceStore tombstoned the trace, the raw
+      // spans aren't on disk, so the digest row would otherwise look complete
+      // for partial data. Predicate is read at materialize-time; drops that
+      // happen later than digest emission are not retroactively marked.
+      isTombstoned: (traceId) => this.store.isTombstoned(traceId)
+    })
     this.live = new LiveSpanProcessor()
     this.blobs = new BlobStore(opts.projectPath)
     this.provider = new NodeTracerProvider({
@@ -190,10 +196,15 @@ export class PipilotTracer {
     return this.tracer.startSpan(name, { kind, attributes: attrs }, parent ?? context.active())
   }
 
-  /** Shut down: flush + drain TraceStore + shut down exporter. 5s budget per §5.1. */
+  /** Shut down: flush + drain TraceStore + drain blob writes + shut down exporter. 5s budget per §5.1. */
   async shutdown(): Promise<void> {
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, 5000))
     await Promise.race([this.store.shutdown(), timeout])
+    // Drain async blob writes BEFORE the provider goes down — spans on disk
+    // reference these hashes, so a clean exit needs the bytes to land.
+    // SIGKILL still leaves enqueued writes unwritten; same window the old
+    // sync code had between writeFileSync start and OS fsync, just larger.
+    await Promise.race([this.blobs.flush(), timeout])
     await Promise.race([this.provider.shutdown(), timeout])
     if (_activeTracer === this) _activeTracer = null
   }

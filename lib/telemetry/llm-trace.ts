@@ -91,6 +91,17 @@ export async function tracedCompleteSimple<TApi extends string>(
   if (authMode) reqAttrs['pipilot.auth.mode'] = authMode
   span.setAttributes(reqAttrs)
 
+  // Track blob-write failures so dangling contentHash refs are observable.
+  // Without this, oversized prompts/results that fail to persist (disk full,
+  // permission errors) would emit { contentHash } refs to bytes that don't
+  // exist on disk, with no signal in the trace.
+  let blobWriteFailedCount = 0
+  let lastBlobErrorMessage: string | null = null
+  const onBlobError = (err: unknown): void => {
+    blobWriteFailedCount++
+    lastBlobErrorMessage = err instanceof Error ? err.message : String(err)
+  }
+
   // Redact + attach the consolidated input messages event (§6.9).
   // Pre-flight: if the input is large, redaction caps it via the blob-ref shortcut.
   const { value: redactedInput, stats: inputStats } = redact(
@@ -98,7 +109,7 @@ export async function tracedCompleteSimple<TApi extends string>(
       'gen_ai.input.messages': pi.messages,
       'gen_ai.system_instructions': pi.systemPrompt
     },
-    { sizeCapBytes: 4096, blobStore: tracer.blobs }
+    { sizeCapBytes: 4096, blobStore: tracer.blobs, onBlobError }
   )
   span.addEvent('gen_ai.client.inference.operation.details', {
     body: JSON.stringify(redactedInput)
@@ -123,7 +134,8 @@ export async function tracedCompleteSimple<TApi extends string>(
       try {
         const { value: redactedPayload } = redact(payload, {
           sizeCapBytes: 4096,
-          blobStore: tracer.blobs
+          blobStore: tracer.blobs,
+          onBlobError
         })
         span.addEvent('pipilot.chat.request_payload', {
           body: JSON.stringify(redactedPayload)
@@ -178,7 +190,7 @@ export async function tracedCompleteSimple<TApi extends string>(
     // Output messages event (redacted).
     const { value: redactedOutput, stats: outputStats } = redact(
       { 'gen_ai.output.messages': result.content },
-      { sizeCapBytes: 4096, blobStore: tracer.blobs }
+      { sizeCapBytes: 4096, blobStore: tracer.blobs, onBlobError }
     )
     span.addEvent('gen_ai.client.inference.operation.details', {
       body: JSON.stringify(redactedOutput)
@@ -189,6 +201,11 @@ export async function tracedCompleteSimple<TApi extends string>(
       inputStats.fieldsRedactedCount + outputStats.fieldsRedactedCount
     )
     span.setAttribute('pipilot.redaction.scrubber_version', SCRUBBER_VERSION)
+    if (blobWriteFailedCount > 0) {
+      span.setAttribute('pipilot.blob.write_failed_count', blobWriteFailedCount)
+      if (lastBlobErrorMessage)
+        span.setAttribute('pipilot.blob.write_failed_message', lastBlobErrorMessage)
+    }
 
     if (result.stopReason === 'error' || result.stopReason === 'aborted') {
       span.setStatus({ code: SpanStatusCode.ERROR, message: result.errorMessage })

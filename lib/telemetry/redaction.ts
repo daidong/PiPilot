@@ -81,22 +81,47 @@ export interface RedactionStats {
 }
 
 /**
- * Sync content-addressed sink. When supplied, redact() writes oversized
- * strings/buffers to the sink before emitting the `{ contentHash }` ref —
- * so the hash in the trace can actually be resolved back to bytes later.
+ * Content-addressed sink with sync return. When supplied, redact() hashes
+ * oversized strings/buffers synchronously and the implementation enqueues
+ * the disk write asynchronously — `writeIfMissing` returns immediately so
+ * `redact()` itself stays sync.
  *
- * Without a sink, redact() still emits the ref but the bytes are lost.
- * That's fine for telemetry-disabled / offline / test paths but bad for
- * debugging real traces (the original "C" gap).
+ * The hash returned in `{ contentHash }` is correct as soon as the call
+ * returns; the bytes are typically on disk within a setImmediate tick. To
+ * guarantee on-disk presence (e.g. tests, shutdown), call `flush()` on the
+ * underlying store. Without a sink, redact() still emits the ref but the
+ * bytes are never persisted (telemetry-disabled / offline / test paths).
+ *
+ * `onError` (if supplied) is invoked synchronously iff the implementation
+ * dropped the write under backpressure. Async I/O failures during the
+ * background drain do NOT route through `onError` — the originating span
+ * has typically ended by then; those failures surface via the existing
+ * TraceStore degraded-mode log instead.
  */
 export interface BlobSink {
-  writeIfMissing(content: string | Buffer | Uint8Array): { hash: string; size: number; isNew: boolean }
+  /**
+   * Write `content` if not already present. `onError` (if supplied) is invoked
+   * with the underlying error when the write fails — callers should route this
+   * to span attributes / tracingState so dangling content-hash refs are
+   * observable rather than silent.
+   */
+  writeIfMissing(
+    content: string | Buffer | Uint8Array,
+    onError?: (err: unknown) => void
+  ): { hash: string; size: number; isNew: boolean }
 }
 
 export interface RedactOptions {
   sizeCapBytes?: number
   /** Optional content-addressed blob store. Receives over-cap content + binary blobs. */
   blobStore?: BlobSink
+  /**
+   * Invoked when a blob-store write fails. Caller should record the failure
+   * on the active span (e.g. `pipilot.blob.write_failed_count`) so trace
+   * consumers know the contentHash ref points at bytes that were never
+   * persisted.
+   */
+  onBlobError?: (err: unknown) => void
   /**
    * Returns true if the value looks like an "artifact reference" — anything with an
    * `artifactId` field. Used by stage 5 to short-circuit recursion.
@@ -161,7 +186,8 @@ export function sha256Hex(content: string | Buffer): string {
  */
 function emitOverCap(
   value: string | Buffer,
-  blobStore?: BlobSink
+  blobStore?: BlobSink,
+  onBlobError?: (err: unknown) => void
 ): {
   truncated: true
   contentHash: string
@@ -169,7 +195,7 @@ function emitOverCap(
   redactionLevel: 'size-cap'
 } {
   if (blobStore) {
-    const { hash, size } = blobStore.writeIfMissing(value)
+    const { hash, size } = blobStore.writeIfMissing(value, onBlobError)
     return {
       truncated: true,
       contentHash: 'sha256:' + hash,
@@ -190,10 +216,11 @@ function emitOverCap(
 function emitBinaryRef(
   value: string | Buffer,
   mimeType: string,
-  blobStore?: BlobSink
+  blobStore?: BlobSink,
+  onBlobError?: (err: unknown) => void
 ): { contentHash: string; mimeType: string; size: number } {
   if (blobStore) {
-    const { hash, size } = blobStore.writeIfMissing(value)
+    const { hash, size } = blobStore.writeIfMissing(value, onBlobError)
     return { contentHash: 'sha256:' + hash, mimeType, size }
   }
   return {
@@ -232,14 +259,14 @@ export function redact(
 
     // Stage 6: binary / image
     if (Buffer.isBuffer(v)) {
-      return emitBinaryRef(v, 'application/octet-stream', opts.blobStore)
+      return emitBinaryRef(v, 'application/octet-stream', opts.blobStore, opts.onBlobError)
     }
     if (typeof v === 'string' && v.startsWith('data:image/')) {
       const mime = v.slice(5, v.indexOf(';') > 0 ? v.indexOf(';') : 5 + 9)
-      return emitBinaryRef(v, mime, opts.blobStore)
+      return emitBinaryRef(v, mime, opts.blobStore, opts.onBlobError)
     }
     if (typeof v === 'string' && v.startsWith('<svg') && v.length > 1024) {
-      return emitBinaryRef(v, 'image/svg+xml', opts.blobStore)
+      return emitBinaryRef(v, 'image/svg+xml', opts.blobStore, opts.onBlobError)
     }
 
     if (typeof v === 'string') {
@@ -248,7 +275,7 @@ export function redact(
       totalHits += hits
       // Stage 4: size cap
       if (Buffer.byteLength(scrubbed, 'utf8') > sizeCap) {
-        return emitOverCap(scrubbed, opts.blobStore)
+        return emitOverCap(scrubbed, opts.blobStore, opts.onBlobError)
       }
       return scrubbed
     }
@@ -280,7 +307,7 @@ export function redact(
         return out
       }
       if (Buffer.byteLength(serialized, 'utf8') > sizeCap) {
-        return emitOverCap(serialized, opts.blobStore)
+        return emitOverCap(serialized, opts.blobStore, opts.onBlobError)
       }
       return out
     }

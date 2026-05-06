@@ -64,7 +64,7 @@ export interface ElectronAPI {
    *  `storageFootprintBytes` = persistedBytes (flushed to trace-storage-stats.jsonl)
    *  + inFlightBytes (current UTC day, not yet flushed). The split is exposed so
    *  the UI can label "live" totals when desired. */
-  telemetryGetProjectConfig: () => Promise<
+  telemetryGetProjectConfig: (force?: boolean) => Promise<
     | {
         projectId: string
         tracingMode: 'enabled' | 'disabled'
@@ -500,7 +500,8 @@ const api: ElectronAPI = {
       turnId?: string
     }
   ) => ipcRenderer.invoke('telemetry:view-log', payload),
-  telemetryGetProjectConfig: () => ipcRenderer.invoke('telemetry:get-project-config'),
+  telemetryGetProjectConfig: (force?: boolean) =>
+    ipcRenderer.invoke('telemetry:get-project-config', force),
   telemetrySetTracingMode: (mode: 'enabled' | 'disabled') =>
     ipcRenderer.invoke('telemetry:set-tracing-mode', mode),
   onTraceLive: (cb) => {

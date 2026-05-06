@@ -119,6 +119,15 @@ export class TraceStore implements SpanProcessor {
     if (this.disabled) return
     const traceId = span.spanContext().traceId
 
+    // Degraded mode (disk-full / write error): drop new spans and count them.
+    // Sticky for process lifetime per spec §5.1 — the underlying I/O failure
+    // isn't going to fix itself mid-run, and retrying every flush wastes the
+    // runtime path.
+    if (this.degraded) {
+      this.dropCounter++
+      return
+    }
+
     // Already-tombstoned trace? Suppress permanently.
     if (this.tombstoned.has(traceId)) {
       this.dropCounter++
@@ -221,6 +230,16 @@ export class TraceStore implements SpanProcessor {
   }
 
   /**
+   * True if this traceId has been dropped (queue overflow / manual /
+   * degraded). Exposed so sibling SpanProcessors (e.g. TraceDigestProcessor)
+   * can mark their own outputs as degraded for the same trace, instead of
+   * silently emitting "looks complete" rows for partial data.
+   */
+  isTombstoned(traceId: string): boolean {
+    return this.tombstoned.has(traceId)
+  }
+
+  /**
    * Live byte estimate for the current UTC day, NOT yet flushed to
    * `trace-storage-stats.jsonl`. The on-disk file only gets a row at day-roll
    * or shutdown; callers that need a real-time number (e.g., the Settings
@@ -315,6 +334,16 @@ export class TraceStore implements SpanProcessor {
   flushNow(): Promise<void> {
     if (this.flushInFlight) return this.flushInFlight
     if (this.queue.length === 0) return Promise.resolve()
+    // Degraded: drain the queue to dropped (don't keep retrying I/O that has
+    // already failed). enterDegraded itself can be reached mid-batch, so
+    // entries that arrived between the failure and this flush still need
+    // to be drained instead of pinned forever.
+    if (this.degraded) {
+      const drained = this.queue.length
+      this.queue.length = 0
+      this.dropCounter += drained
+      return Promise.resolve()
+    }
     const batch = this.queue.splice(0, this.queue.length)
 
     // Update flushed counts so future tombstones can report `droppedAtSpanCount`.

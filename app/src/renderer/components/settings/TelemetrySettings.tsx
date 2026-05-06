@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Activity, AlertTriangle, RefreshCw } from 'lucide-react'
 
 const api = (window as any).api
@@ -13,10 +13,6 @@ interface ProjectConfig {
   /** Bytes already flushed to trace-storage-stats.jsonl (prior days + prior shutdowns). */
   persistedBytes?: number
 }
-
-/** How often to auto-refresh the panel while it's mounted. 30s balances freshness
- *  vs. IPC churn for a panel that's mostly idle. */
-const AUTO_REFRESH_MS = 30_000
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -43,14 +39,17 @@ export function TelemetrySettings() {
   const [lastFetchedAt, setLastFetchedAt] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
-  // `silent=true` is used by the auto-refresh tick — it doesn't toggle the
-  // top-level `loading` spinner so the UI doesn't flicker every 30s.
+  // `silent=true` is used by the manual Refresh button — it skips the
+  // top-level `loading` spinner so the UI doesn't full-page-flash on
+  // user-initiated refreshes.
   const load = async (silent = false) => {
     if (!silent) setLoading(true)
     else setRefreshing(true)
     setError(null)
     try {
-      const result = await api.telemetryGetProjectConfig?.()
+      // silent=true means a user-initiated Refresh — bypass the main-side
+      // 60s footprint cache so the click feels responsive and accurate.
+      const result = await api.telemetryGetProjectConfig?.(silent)
       if (!result) {
         setError('No project is open. Telemetry settings are project-scoped.')
         setCfg(null)
@@ -70,13 +69,11 @@ export function TelemetrySettings() {
   }
 
   useEffect(() => {
+    // Load once on mount. The footprint walk runs through a 60s TTL cache
+    // on the main side, so the manual Refresh button is the only path that
+    // can trigger a fresh walk — auto-polling was removed (was wasting
+    // disk I/O on an idle panel; users open Settings and read, not stare).
     void load()
-    // Auto-refresh while the panel is mounted. Cleared on unmount so closing
-    // the Settings modal stops the polling immediately.
-    const id = setInterval(() => {
-      void load(true)
-    }, AUTO_REFRESH_MS)
-    return () => clearInterval(id)
   }, [])
 
   const handleToggle = async () => {

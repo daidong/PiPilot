@@ -45,6 +45,12 @@ interface TraceDigestRow {
   openChildSpanCount?: number
   openChildSpanIds?: string[]
   degraded?: boolean
+  /**
+   * Set when the digest is materialized for a trace whose raw spans were
+   * dropped (TraceStore tombstone) — analysis tools should NOT treat the
+   * token / tool counts as authoritative for these rows.
+   */
+  droppedReason?: 'tombstoned' | 'evicted'
 }
 
 interface TraceState {
@@ -52,6 +58,28 @@ interface TraceState {
   spans: Map<string, ReadableSpan> // by spanId
   toolCallsByCategory: Record<string, number>
   tokens: { input: number; output: number; cache_read: number; cache_creation: number }
+  /** Last span-arrival time. Used by the eviction sweeper to drop rootless
+   *  traces (e.g. wiki-bg sub-LLM calls that never see an invoke_agent span). */
+  lastActivityMs: number
+}
+
+/**
+ * Eviction window for rootless traces. Sub-LLM calls (wiki-bg, summarizer,
+ * memory extractor) often run with `parent: ROOT_CONTEXT` and emit a single
+ * `chat` span with no `invoke_agent` ancestor — without eviction those
+ * entries linger in the in-memory map forever. 10 min is comfortably longer
+ * than any single agent turn, so a real in-progress trace won't be evicted
+ * mid-run.
+ */
+const ROOTLESS_EVICTION_MS = 10 * 60 * 1000
+/** How often the sweeper runs. Cheap (Map.entries scan); 60s is fine. */
+const SWEEP_INTERVAL_MS = 60 * 1000
+
+export interface TraceDigestProcessorOptions {
+  /** Predicate from the sibling TraceStore — true if this traceId was dropped. */
+  isTombstoned?: (traceId: string) => boolean
+  /** Test-only: disable the periodic sweeper. */
+  disableSweepTimer?: boolean
 }
 
 /**
@@ -64,9 +92,19 @@ interface TraceState {
 export class TraceDigestProcessor implements SpanProcessor {
   private readonly projectPath: string
   private readonly traces = new Map<string, TraceState>()
+  private readonly isTombstoned?: (traceId: string) => boolean
+  private sweepTimer: NodeJS.Timeout | null = null
+  private evictedCount = 0
 
-  constructor(projectPath: string) {
+  constructor(projectPath: string, options: TraceDigestProcessorOptions = {}) {
     this.projectPath = projectPath
+    this.isTombstoned = options.isTombstoned
+    if (!options.disableSweepTimer) {
+      this.sweepTimer = setInterval(() => this.sweepRootless(), SWEEP_INTERVAL_MS)
+      if (typeof this.sweepTimer === 'object' && this.sweepTimer && 'unref' in this.sweepTimer) {
+        ;(this.sweepTimer as { unref: () => void }).unref()
+      }
+    }
   }
 
   onStart(_span: unknown, _ctx: Context): void {
@@ -82,9 +120,12 @@ export class TraceDigestProcessor implements SpanProcessor {
         rootSpan: null,
         spans: new Map(),
         toolCallsByCategory: {},
-        tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 }
+        tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+        lastActivityMs: Date.now()
       }
       this.traces.set(traceId, state)
+    } else {
+      state.lastActivityMs = Date.now()
     }
     state.spans.set(ctx.spanId, span)
 
@@ -113,11 +154,44 @@ export class TraceDigestProcessor implements SpanProcessor {
   }
 
   shutdown(): Promise<void> {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer)
+      this.sweepTimer = null
+    }
     return Promise.resolve()
   }
 
   forceFlush(): Promise<void> {
     return Promise.resolve()
+  }
+
+  /** Test/diagnostic: number of rootless traces evicted by the sweeper. */
+  get evictionCount(): number {
+    return this.evictedCount
+  }
+
+  /** Test/diagnostic: current in-memory trace state count. */
+  get pendingTraceCount(): number {
+    return this.traces.size
+  }
+
+  /**
+   * Drop in-memory state for traces that haven't seen activity for
+   * ROOTLESS_EVICTION_MS. These are typically sub-LLM calls (wiki-bg,
+   * memory extractor, summarizer) that ran with `parent: ROOT_CONTEXT` and
+   * never produced an `invoke_agent` root — without eviction they leak
+   * proportionally to the number of background calls.
+   */
+  private sweepRootless(): void {
+    if (this.traces.size === 0) return
+    const now = Date.now()
+    const cutoff = now - ROOTLESS_EVICTION_MS
+    for (const [traceId, state] of this.traces) {
+      if (state.lastActivityMs < cutoff) {
+        this.traces.delete(traceId)
+        this.evictedCount++
+      }
+    }
   }
 
   private async materializeDigest(traceId: string, state: TraceState): Promise<void> {
@@ -149,6 +223,15 @@ export class TraceDigestProcessor implements SpanProcessor {
       row.openChildSpanCount = openSpans.length
       row.openChildSpanIds = openSpans
       row.degraded = true
+    }
+    // If the sibling TraceStore tombstoned this trace (queue overflow,
+    // manual drop, degraded write-failure), the raw spans were discarded.
+    // Mark the digest row so analysis tools don't treat the aggregates as
+    // authoritative — token counts will reflect only the spans that reached
+    // this processor before the drop.
+    if (this.isTombstoned?.(traceId)) {
+      row.degraded = true
+      row.droppedReason = 'tombstoned'
     }
     await appendJsonl(join(this.projectPath, PATHS.traceDigest), row, { onError: () => {} })
   }
