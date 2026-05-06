@@ -1,12 +1,15 @@
 /**
  * Research Pilot Memory V2 Tools (RFC-012)
  *
- * Rewritten to use simple ResearchTool interface instead of AgentFoundry's defineTool.
- * Tool execution logic (createArtifact, updateArtifact, searchArtifacts) is unchanged.
+ * Native pi-mono AgentTool implementations for artifact-create / -update /
+ * -search. Replaces the prior ResearchTool + JSON-Schema↔TypeBox adapter
+ * shim — these tools now register directly with the agent.
  */
 
 import { existsSync } from 'fs'
 import { isAbsolute, resolve } from 'path'
+import { Type } from '@sinclair/typebox'
+import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { type ArtifactType, type CLIContext } from '../types.js'
 import {
   createArtifact,
@@ -14,18 +17,9 @@ import {
   updateArtifact,
   type CreateArtifactInput
 } from '../memory-v2/store.js'
-import { toolError } from './tool-utils.js'
+import { toAgentResult, toolError } from './tool-utils.js'
 
-/**
- * Simple tool interface for research tools.
- * These will be adapted to pi-mono's AgentTool format by the coordinator.
- */
-export interface ResearchTool {
-  name: string
-  description: string
-  parameters: Record<string, unknown>  // JSON Schema
-  execute: (input: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown; error?: string }>
-}
+const ARTIFACT_TYPE_ENUM = ['note', 'paper', 'data', 'web-content', 'tool-output'] as const
 
 function generateCiteKey(authors: string[], year?: number, title?: string): string {
   const firstAuthor = authors[0] || 'unknown'
@@ -45,52 +39,44 @@ function parseJsonSafely(text: string): unknown {
   }
 }
 
-export function createArtifactCreateTool(sessionId: string, projectPath: string): ResearchTool {
+export function createArtifactCreateTool(sessionId: string, projectPath: string): AgentTool {
   return {
     name: 'artifact-create',
+    label: 'Create artifact',
     description: 'Create an artifact (note, paper, data, web-content, tool-output). This is the canonical persistence API for Research Pilot Memory V2.',
-    parameters: {
-      type: 'object',
-      properties: {
-        type: {
-          type: 'string',
-          enum: ['note', 'paper', 'data', 'web-content', 'tool-output'],
-          description: 'Artifact type'
-        },
-        title: { type: 'string', description: 'Artifact title' },
-        content: { type: 'string', description: 'Content for note or web-content' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Artifact tags' },
-        summary: { type: 'string', description: 'Optional concise summary' },
-        authors: { type: 'array', items: { type: 'string' }, description: 'Paper authors' },
-        abstract: { type: 'string', description: 'Paper abstract' },
-        year: { type: 'number', description: 'Paper year' },
-        venue: { type: 'string', description: 'Paper venue' },
-        citeKey: { type: 'string', description: 'Paper citation key' },
-        doi: { type: 'string', description: 'Paper DOI' },
-        bibtex: { type: 'string', description: 'Paper BibTeX' },
-        url: { type: 'string', description: 'Paper or web URL' },
-        pdfUrl: { type: 'string', description: 'Paper PDF URL' },
-        filePath: { type: 'string', description: 'Data artifact file path' },
-        mimeType: { type: 'string', description: 'Data artifact MIME type' },
-        schemaJson: { type: 'string', description: 'JSON string for data schema' },
-        toolName: { type: 'string', description: 'Tool name for tool-output artifacts' },
-        outputPath: { type: 'string', description: 'Output file path for tool-output artifacts' },
-        outputText: { type: 'string', description: 'Output text for tool-output artifacts' }
-      },
-      required: ['type', 'title']
-    },
-    execute: async (input) => {
-      const args = input as Record<string, unknown>
+    parameters: Type.Object({
+      type: Type.Union(ARTIFACT_TYPE_ENUM.map(v => Type.Literal(v)), { description: 'Artifact type' }),
+      title: Type.String({ description: 'Artifact title' }),
+      content: Type.Optional(Type.String({ description: 'Content for note or web-content' })),
+      tags: Type.Optional(Type.Array(Type.String(), { description: 'Artifact tags' })),
+      summary: Type.Optional(Type.String({ description: 'Optional concise summary' })),
+      authors: Type.Optional(Type.Array(Type.String(), { description: 'Paper authors' })),
+      abstract: Type.Optional(Type.String({ description: 'Paper abstract' })),
+      year: Type.Optional(Type.Number({ description: 'Paper year' })),
+      venue: Type.Optional(Type.String({ description: 'Paper venue' })),
+      citeKey: Type.Optional(Type.String({ description: 'Paper citation key' })),
+      doi: Type.Optional(Type.String({ description: 'Paper DOI' })),
+      bibtex: Type.Optional(Type.String({ description: 'Paper BibTeX' })),
+      url: Type.Optional(Type.String({ description: 'Paper or web URL' })),
+      pdfUrl: Type.Optional(Type.String({ description: 'Paper PDF URL' })),
+      filePath: Type.Optional(Type.String({ description: 'Data artifact file path' })),
+      mimeType: Type.Optional(Type.String({ description: 'Data artifact MIME type' })),
+      schemaJson: Type.Optional(Type.String({ description: 'JSON string for data schema' })),
+      toolName: Type.Optional(Type.String({ description: 'Tool name for tool-output artifacts' })),
+      outputPath: Type.Optional(Type.String({ description: 'Output file path for tool-output artifacts' })),
+      outputText: Type.Optional(Type.String({ description: 'Output text for tool-output artifacts' }))
+    }),
+    execute: async (_toolCallId, rawParams) => {
+      const args = rawParams as Record<string, unknown>
       const type = String(args.type) as ArtifactType
       const title = String(args.title || '').trim()
-      if (!title) return toolError('MISSING_PARAMETER', 'title is required.', {
-        suggestions: ['Provide a non-empty title string for the artifact.']
-      })
-
-      const cliContext: CLIContext = {
-        sessionId,
-        projectPath
+      if (!title) {
+        return toAgentResult('artifact-create', toolError('MISSING_PARAMETER', 'title is required.', {
+          suggestions: ['Provide a non-empty title string for the artifact.']
+        }))
       }
+
+      const cliContext: CLIContext = { sessionId, projectPath }
 
       let payload: CreateArtifactInput
       if (type === 'note') {
@@ -131,18 +117,20 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
         }
       } else if (type === 'data') {
         const filePath = typeof args.filePath === 'string' ? args.filePath : ''
-        if (!filePath) return toolError('MISSING_PARAMETER', 'filePath is required for data artifacts.', {
-          suggestions: ['Provide a file path (relative to project root or absolute) for the data artifact.']
-        })
+        if (!filePath) {
+          return toAgentResult('artifact-create', toolError('MISSING_PARAMETER', 'filePath is required for data artifacts.', {
+            suggestions: ['Provide a file path (relative to project root or absolute) for the data artifact.']
+          }))
+        }
         const resolvedFilePath = isAbsolute(filePath) ? filePath : resolve(projectPath, filePath)
         if (!existsSync(resolvedFilePath)) {
-          return toolError('FILE_NOT_FOUND', `File not found: ${filePath}`, {
+          return toAgentResult('artifact-create', toolError('FILE_NOT_FOUND', `File not found: ${filePath}`, {
             suggestions: [
               `Check the file path relative to project root: ${projectPath}`,
               'Use the find or glob tool to locate the correct file path.',
             ],
             context: { resolvedPath: resolvedFilePath, projectPath }
-          })
+          }))
         }
 
         payload = {
@@ -180,7 +168,7 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
 
       const { artifact, filePath } = createArtifact(payload, cliContext)
 
-      return {
+      return toAgentResult('artifact-create', {
         success: true,
         data: {
           id: artifact.id,
@@ -188,39 +176,38 @@ export function createArtifactCreateTool(sessionId: string, projectPath: string)
           title: artifact.title,
           filePath
         }
-      }
+      })
     }
   }
 }
 
-export function createArtifactUpdateTool(projectPath: string): ResearchTool {
+export function createArtifactUpdateTool(projectPath: string): AgentTool {
   return {
     name: 'artifact-update',
+    label: 'Update artifact',
     description: 'Update fields for an existing artifact by id or id prefix.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Artifact id (full or prefix)' },
-        title: { type: 'string', description: 'Updated title' },
-        summary: { type: 'string', description: 'Updated summary' },
-        content: { type: 'string', description: 'Updated note/web content' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Updated tags' },
-        abstract: { type: 'string', description: 'Paper abstract' },
-        year: { type: 'number', description: 'Paper year' },
-        venue: { type: 'string', description: 'Paper venue' },
-        url: { type: 'string', description: 'Paper/web URL' },
-        doi: { type: 'string', description: 'Paper DOI' },
-        bibtex: { type: 'string', description: 'Paper BibTeX' },
-        pdfUrl: { type: 'string', description: 'Paper PDF URL' }
-      },
-      required: ['id']
-    },
-    execute: async (input) => {
-      const args = input as Record<string, unknown>
+    parameters: Type.Object({
+      id: Type.String({ description: 'Artifact id (full or prefix)' }),
+      title: Type.Optional(Type.String({ description: 'Updated title' })),
+      summary: Type.Optional(Type.String({ description: 'Updated summary' })),
+      content: Type.Optional(Type.String({ description: 'Updated note/web content' })),
+      tags: Type.Optional(Type.Array(Type.String(), { description: 'Updated tags' })),
+      abstract: Type.Optional(Type.String({ description: 'Paper abstract' })),
+      year: Type.Optional(Type.Number({ description: 'Paper year' })),
+      venue: Type.Optional(Type.String({ description: 'Paper venue' })),
+      url: Type.Optional(Type.String({ description: 'Paper/web URL' })),
+      doi: Type.Optional(Type.String({ description: 'Paper DOI' })),
+      bibtex: Type.Optional(Type.String({ description: 'Paper BibTeX' })),
+      pdfUrl: Type.Optional(Type.String({ description: 'Paper PDF URL' }))
+    }),
+    execute: async (_toolCallId, rawParams) => {
+      const args = rawParams as Record<string, unknown>
       const id = String(args.id || '')
-      if (!id) return toolError('MISSING_PARAMETER', 'id is required.', {
-        suggestions: ['Provide an artifact id (full or prefix). Use artifact-search to find artifact ids.']
-      })
+      if (!id) {
+        return toAgentResult('artifact-update', toolError('MISSING_PARAMETER', 'id is required.', {
+          suggestions: ['Provide an artifact id (full or prefix). Use artifact-search to find artifact ids.']
+        }))
+      }
 
       const updated = updateArtifact(projectPath, id, {
         title: typeof args.title === 'string' ? args.title : undefined,
@@ -237,16 +224,16 @@ export function createArtifactUpdateTool(projectPath: string): ResearchTool {
       })
 
       if (!updated) {
-        return toolError('NOT_FOUND', `Artifact not found: ${id}`, {
+        return toAgentResult('artifact-update', toolError('NOT_FOUND', `Artifact not found: ${id}`, {
           suggestions: [
             'Check the artifact id — it may have been deleted or the prefix is ambiguous.',
             'Use artifact-search to find the correct artifact id.',
           ],
           context: { searchedId: id }
-        })
+        }))
       }
 
-      return {
+      return toAgentResult('artifact-update', {
         success: true,
         data: {
           id: updated.artifact.id,
@@ -254,37 +241,34 @@ export function createArtifactUpdateTool(projectPath: string): ResearchTool {
           title: updated.artifact.title,
           filePath: updated.filePath
         }
-      }
+      })
     }
   }
 }
 
-export function createArtifactSearchTool(projectPath: string): ResearchTool {
+export function createArtifactSearchTool(projectPath: string): AgentTool {
   return {
     name: 'artifact-search',
+    label: 'Search artifacts',
     description: 'Search artifacts by query terms and return ranked hits.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query' },
-        type: {
-          type: 'string',
-          enum: ['note', 'paper', 'data', 'web-content', 'tool-output'],
-          description: 'Optional artifact type filter'
-        }
-      },
-      required: ['query']
-    },
-    execute: async (input) => {
-      const args = input as Record<string, unknown>
+    parameters: Type.Object({
+      query: Type.String({ description: 'Search query' }),
+      type: Type.Optional(Type.Union(ARTIFACT_TYPE_ENUM.map(v => Type.Literal(v)), {
+        description: 'Optional artifact type filter'
+      }))
+    }),
+    execute: async (_toolCallId, rawParams) => {
+      const args = rawParams as Record<string, unknown>
       const query = String(args.query || '').trim()
-      if (!query) return toolError('MISSING_PARAMETER', 'query is required.', {
-        suggestions: ['Provide a non-empty search query string.']
-      })
+      if (!query) {
+        return toAgentResult('artifact-search', toolError('MISSING_PARAMETER', 'query is required.', {
+          suggestions: ['Provide a non-empty search query string.']
+        }))
+      }
 
       const type = typeof args.type === 'string' ? args.type as ArtifactType : undefined
       const hits = searchArtifacts(projectPath, query, type ? [type] : undefined)
-      return {
+      return toAgentResult('artifact-search', {
         success: true,
         data: hits.slice(0, 20).map(hit => ({
           id: hit.artifact.id,
@@ -293,7 +277,7 @@ export function createArtifactSearchTool(projectPath: string): ResearchTool {
           score: hit.score,
           match: hit.match
         }))
-      }
+      })
     }
   }
 }
@@ -301,7 +285,7 @@ export function createArtifactSearchTool(projectPath: string): ResearchTool {
 export function createResearchMemoryTools(params: {
   sessionId: string
   projectPath: string
-}): ResearchTool[] {
+}): AgentTool[] {
   return [
     createArtifactCreateTool(params.sessionId, params.projectPath),
     createArtifactUpdateTool(params.projectPath),

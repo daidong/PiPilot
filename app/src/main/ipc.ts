@@ -553,10 +553,10 @@ async function ensureCoordinator(
         // tool calls coalesce.
         //
         // Three tool names trigger this:
-        //   - artifact-create / artifact-update: ResearchTools that go through
-        //     wrapResearchTool -> toAgentResult, surfacing the wrapped
-        //     AgentToolResult shape { content, details: { success, tool_name } }
-        //     (so 'success' is nested under details, not on the top level).
+        //   - artifact-create / artifact-update: native AgentTools that return
+        //     toAgentResult-wrapped payloads — the AgentToolResult shape is
+        //     { content, details: { success, tool_name } } (so 'success' is
+        //     nested under details, not on the top level).
         //   - literature-search: AgentTool that auto-saves Paper artifacts
         //     directly via upsertPaperArtifact(), then returns its own
         //     toAgentResult-wrapped payload.

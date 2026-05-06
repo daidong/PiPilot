@@ -1,20 +1,13 @@
 /**
  * Research Tools — main factory that assembles all research tools.
  *
- * Combines:
- * - Web tools (search + fetch) — already return AgentTool
- * - Literature search — already returns AgentTool
- * - Convert document — already returns AgentTool
- * - Data analysis — already returns AgentTool
- * - Entity/artifact tools — return ResearchTool, wrapped via adapter
+ * All tools register as native pi-mono AgentTool; there is no longer a
+ * ResearchTool↔AgentTool adapter shim.
  */
 
-import { Type } from '@sinclair/typebox'
-import type { TSchema } from '@sinclair/typebox'
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentTool } from '@mariozechner/pi-agent-core'
 import type { ResearchToolContext } from './types.js'
-import { toAgentResult, toolError } from './tool-utils.js'
-import { type ResearchTool, createResearchMemoryTools } from './entity-tools.js'
+import { createResearchMemoryTools } from './entity-tools.js'
 import { createMemoryTools } from '../memory/memory-tools.js'
 import { createWebSearchTool, createWebFetchTool } from './web-tools.js'
 import { createLiteratureSearchTool } from './literature-search.js'
@@ -25,70 +18,6 @@ import { createGenerateDiagramTool } from './generate-diagram.js'
 import { createLocalComputeTools } from '../local-compute/tools.js'
 import { createWikiLookupTool } from '../wiki/tool.js'
 import { createWikiTools } from '../wiki/wiki-tools.js'
-
-// ---------------------------------------------------------------------------
-// ResearchTool -> AgentTool adapter
-// ---------------------------------------------------------------------------
-
-/**
- * Wrap a ResearchTool (simple JSON Schema interface) into pi-mono's AgentTool format.
- * This is less invasive than rewriting entity-tools.ts to return AgentTool directly.
- */
-function wrapResearchTool(tool: ResearchTool): AgentTool {
-  // Build TypeBox schema from JSON Schema properties
-  const properties: Record<string, TSchema> = {}
-  const jsonProps = (tool.parameters as {
-    properties?: Record<string, { type?: string; description?: string; enum?: string[]; items?: { type?: string } }>
-  }).properties ?? {}
-  const requiredFields = (tool.parameters as { required?: string[] }).required ?? []
-
-  for (const [key, prop] of Object.entries(jsonProps)) {
-    const isRequired = requiredFields.includes(key)
-    let schema: TSchema
-
-    if (prop.enum) {
-      schema = Type.Union(prop.enum.map(v => Type.Literal(v)))
-    } else if (prop.type === 'number') {
-      schema = Type.Number({ description: prop.description })
-    } else if (prop.type === 'array') {
-      schema = Type.Array(Type.String(), { description: prop.description })
-    } else {
-      schema = Type.String({ description: prop.description })
-    }
-
-    properties[key] = isRequired ? schema : Type.Optional(schema)
-  }
-
-  const parametersSchema = Type.Object(properties)
-
-  return {
-    name: tool.name,
-    description: tool.description,
-    label: tool.name,
-    parameters: parametersSchema,
-    execute: async (
-      _toolCallId: string,
-      params: any,
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<any>> => {
-      try {
-        const result = await tool.execute(params as Record<string, unknown>)
-        // Pass through structured error fields (error_code, suggestions, etc.) from ResearchTool results
-        return toAgentResult(tool.name, result)
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err)
-        return toAgentResult(tool.name, toolError('EXECUTION_FAILED', errorMsg, {
-          retryable: false,
-          suggestions: ['Check tool parameters and try again.'],
-        }))
-      }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Main factory
-// ---------------------------------------------------------------------------
 
 /**
  * Create all research tools for the coordinator agent.
@@ -103,37 +32,29 @@ export function createResearchTools(ctx: ResearchToolContext): {
   const tools: AgentTool[] = []
   const destroyers: Array<() => Promise<void>> = []
 
-  // Web tools (already AgentTool)
+  // Web tools
   tools.push(createWebSearchTool(ctx))
   tools.push(createWebFetchTool(ctx))
 
-  // Research tools (already AgentTool)
+  // Research tools
   tools.push(createLiteratureSearchTool(ctx))
   tools.push(createFetchFulltextTool())
   tools.push(createConvertDocumentTool(ctx))
   tools.push(createDataAnalyzeTool(ctx))
   tools.push(createGenerateDiagramTool(ctx))
 
-  // Artifact tools (ResearchTool -> AgentTool via wrapper)
-  const artifactTools = createResearchMemoryTools({
+  // Artifact tools
+  tools.push(...createResearchMemoryTools({
     sessionId: ctx.sessionId,
     projectPath: ctx.projectPath
-  })
-  for (const tool of artifactTools) {
-    tools.push(wrapResearchTool(tool))
-  }
+  }))
 
   // Structured memory tools (save-memory, delete-memory)
-  const structuredMemoryTools = createMemoryTools(ctx.projectPath)
-  for (const tool of structuredMemoryTools) {
-    tools.push(wrapResearchTool(tool))
-  }
+  tools.push(...createMemoryTools(ctx.projectPath))
 
   // RFC-005 memory tools: wiki_search / wiki_get / wiki_coverage / wiki_facets / wiki_neighbors / wiki_source
   // Always registered; each tool returns "Wiki not available" at execute time if the wiki doesn't exist
-  for (const tool of createWikiTools()) {
-    tools.push(tool)
-  }
+  tools.push(...createWikiTools())
 
   // Legacy wiki_lookup compatibility shim (RFC-003). Scheduled for removal one release after RFC-005 lands.
   tools.push(createWikiLookupTool())
