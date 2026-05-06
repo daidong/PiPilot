@@ -606,6 +606,84 @@ export function readLatestSessionSummary(projectPath: string, sessionId: string)
   return readJson<SessionSummary | null>(join(dir, files[0]), null)
 }
 
+// ============================================================================
+// Compaction State
+// ============================================================================
+//
+// Persists pi-coding-agent's running compaction summary across process
+// restarts. Without this, a long-lived session that has already compacted
+// once will pay the full re-summarization cost on the next compaction
+// after every restart (the prior `previousSummary` argument is lost).
+//
+// Boundary trade-off: when the coordinator's first chat() after restart
+// runs the orphan-recovery bootstrap, it injects session-summary content
+// + replayed user/assistant turns into the head of the new agent
+// transcript. Restoring the prior compactionSummary then asks pi to
+// extend it with messages whose head-most content semantically overlaps
+// with what the prior summary already covered. The LLM extension is
+// expected to dedupe, but a small amount of content overlap is possible.
+// We accept this trade-off — the alternative is to drop the persisted
+// summary whenever a bootstrap occurs, which costs a re-summarization
+// every restart and defeats the purpose of persistence.
+
+export const COMPACTION_STATE_SCHEMA_VERSION = 1
+
+export interface CompactionState {
+  schemaVersion: typeof COMPACTION_STATE_SCHEMA_VERSION
+  sessionId: string
+  summary: string
+  /** Number of compaction events that have contributed to this summary. */
+  compactionCount: number
+  /** ISO timestamp of the most recent write. */
+  updatedAt: string
+}
+
+function compactionStateFile(projectPath: string, sessionId: string): string {
+  return join(projectPath, PATHS.compactionState, `${sessionId}.json`)
+}
+
+/**
+ * Read compaction state for a session. Returns null when:
+ * - file is missing
+ * - JSON is malformed
+ * - schemaVersion does not match the current code
+ * - required fields are missing
+ *
+ * Never throws — corrupt persisted state must not block agent startup.
+ */
+export function readCompactionState(projectPath: string, sessionId: string): CompactionState | null {
+  const filePath = compactionStateFile(projectPath, sessionId)
+  if (!existsSync(filePath)) return null
+  const raw = readJson<unknown>(filePath, null)
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Partial<CompactionState>
+  if (obj.schemaVersion !== COMPACTION_STATE_SCHEMA_VERSION) return null
+  if (typeof obj.sessionId !== 'string' || obj.sessionId !== sessionId) return null
+  if (typeof obj.summary !== 'string' || obj.summary.length === 0) return null
+  if (typeof obj.compactionCount !== 'number') return null
+  if (typeof obj.updatedAt !== 'string') return null
+  return obj as CompactionState
+}
+
+/** Write compaction state. Best-effort — IO errors are swallowed. */
+export function writeCompactionState(projectPath: string, state: CompactionState): void {
+  try {
+    writeJson(compactionStateFile(projectPath, state.sessionId), state)
+  } catch {
+    // Persistence failure must not block the agent.
+  }
+}
+
+/** Delete compaction state for a session. No-op if file is missing. */
+export function deleteCompactionState(projectPath: string, sessionId: string): void {
+  const filePath = compactionStateFile(projectPath, sessionId)
+  try {
+    if (existsSync(filePath)) rmSync(filePath, { force: true })
+  } catch {
+    // ignore
+  }
+}
+
 export interface OrphanMessage {
   role: 'user' | 'assistant'
   content: string

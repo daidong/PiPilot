@@ -42,6 +42,10 @@ import {
   readLatestSessionSummary,
   writeSessionSummary,
   readOrphanMessages,
+  readCompactionState,
+  writeCompactionState,
+  deleteCompactionState,
+  COMPACTION_STATE_SCHEMA_VERSION,
   type OrphanMessage
 } from '../memory-v2/store.js'
 
@@ -527,8 +531,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   // ── Context compaction state ──
   // Tracks the summary of compacted (discarded) messages so iterative
-  // compactions can update rather than regenerate from scratch.
-  let compactionSummary: string | undefined
+  // compactions can update rather than regenerate from scratch. Persisted
+  // to disk per session so a process restart doesn't force a full
+  // re-summarization on the next compaction event. See memory-v2/store.ts
+  // for the boundary trade-off w.r.t. bootstrap orphan injection.
+  const persistedCompaction = readCompactionState(projectPath, sessionId)
+  let compactionSummary: string | undefined = persistedCompaction?.summary
+  let compactionCount: number = persistedCompaction?.compactionCount ?? 0
+  if (debug && persistedCompaction) {
+    console.log(`[Compaction] Restored prior summary (count=${compactionCount}, ${compactionSummary!.length} chars) for session ${sessionId}`)
+  }
 
   // ── Restart bootstrap state ──
   // On the first chat() call after coordinator creation, we recover any
@@ -691,9 +703,21 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           compactionSpan?.end()
         }
         compactionSummary = summary
+        compactionCount += 1
+
+        // Persist the running summary so a process restart doesn't force a
+        // full re-summarization on the next compaction event. Best-effort —
+        // failures must not affect the agent path.
+        writeCompactionState(projectPath, {
+          schemaVersion: COMPACTION_STATE_SCHEMA_VERSION,
+          sessionId,
+          summary,
+          compactionCount,
+          updatedAt: new Date().toISOString()
+        })
 
         if (debug) {
-          console.log(`[Compaction] Summarized ${messagesToSummarize.length} messages (${totalTokens - keptTokens} tokens) → kept ${messagesToKeep.length} messages`)
+          console.log(`[Compaction] Summarized ${messagesToSummarize.length} messages (${totalTokens - keptTokens} tokens) → kept ${messagesToKeep.length} messages (count=${compactionCount})`)
         }
 
         // Inject the compaction summary as a synthetic user message at the top
@@ -893,6 +917,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   async function clearSessionMemory() {
     agent.reset()
     compactionSummary = undefined
+    compactionCount = 0
+    deleteCompactionState(projectPath, sessionId)
   }
 
   async function maybeGenerateSummary(): Promise<void> {

@@ -39,6 +39,7 @@ export const PATHS = {
   memoryRoot: '.research-pilot/memory-v2',
   explainDir: '.research-pilot/memory-v2/explain',
   sessionSummaries: '.research-pilot/memory-v2/session-summaries',
+  compactionState: '.research-pilot/memory-v2/compaction-state',
 
   // Structured long-term memory (auto-memory)
   memory: '.research-pilot/memory',
