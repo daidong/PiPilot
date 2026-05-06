@@ -245,6 +245,22 @@ Spend approximately **equal time** on each of:
 
 ### Writing Style Guidelines
 
+#### Explain, Don't Defend
+
+Write to explain an idea to a colleague, not to defend it against an imagined reviewer.
+Diagnostic: "Would a human author actually feel the need to say this, or am I performing
+rigor?" If the latter, cut it.
+
+Cut: defensive `X is not Y` framings, disqualification clauses (`an X without these
+properties does not qualify`), defensive scope statements (`this is not a report of X`),
+posturing connectives (`crucially`, `importantly`, `it is worth noting`, `we draw a sharp
+boundary`), and em-dash asides that interrupt one idea with another. Prefer plain
+declarative sentences and neutral connectives (`here`, `to be specific`, `in this work`).
+
+For the full catalog and rewrite workflow, load `rewrite-humanize` and see
+`@rewrite-humanize/references/lexicon.md`. This complements (not replaces) the principles
+below.
+
 #### Sentence-Level Clarity (Gopen & Swan's 7 Principles)
 
 | Principle | Rule | Example |

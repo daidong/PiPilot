@@ -74,6 +74,29 @@ For more word-choice guidance, see `@skill/references/lexicon.md`.
 - If the input is already natural and publication-ready, keep it largely unchanged.
 - In that case, explicitly provide positive feedback in `Part 3`.
 
+### 5) Explain, Don't Defend
+
+Write to explain an idea to a colleague, not to defend it against a reviewer.
+Diagnostic: "Would a human author actually feel the need to say this, or am I
+performing rigor?" If the latter, cut it.
+
+Cut these patterns:
+- Defensive framing: "By X, we do not mean Y. We mean Z." -> state Z directly.
+- Disqualification clauses: "An X without these properties does not qualify."
+  -> if the definition is stated clearly, exclusions are implied.
+- Defensive scope: "This is not a report of X." -> "This paper focuses on Y."
+  Describe what the paper does, not what it refrains from doing.
+- Rhetorical posturing: `Crucially`, `Importantly`, `It is worth noting`,
+  `We draw a sharp boundary`. Let the content carry its own weight.
+- Em-dash asides and parenthetical sharpenings that interrupt one idea with
+  another. Prefer one idea per sentence; split or delete.
+
+Prefer neutral connectives: `Here`, `To be specific`, `In this work`.
+
+Note: this complements the narrative-arc guidance in `scientific-writing` and
+`paper-writing`. Narrative means logical scaffolding (motivation -> evidence
+-> takeaway), not dramatized openings or manufactured tension.
+
 ## Venue Tone Notes
 
 - SC / HPDC style favors direct technical claims, reproducibility details, and restrained rhetoric.

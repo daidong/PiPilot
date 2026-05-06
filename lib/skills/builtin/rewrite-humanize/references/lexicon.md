@@ -27,6 +27,11 @@ Always preserve technical meaning and field-specific terminology.
 - `Needless to say`
 - `In order to` (usually `to` is enough)
 - `The fact that`
+- `Crucially,` / `Importantly,` (rhetorical posturing — content should carry its own weight)
+- `We draw a sharp boundary` (and similar self-conscious meta-phrases)
+- `By X, we do not mean Y. We mean Z.` (defensive framing — state Z directly)
+- `An X without these properties does not qualify` (disqualification clause — if the definition is clear, exclusions are implied)
+- `This is not a report of X` (defensive scope — describe what the paper does, not what it refrains from doing)
 
 ## Keep These Elements Stable
 
