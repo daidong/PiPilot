@@ -76,3 +76,74 @@ Two preconditions:
 
 Until both are met, RealtimeBuffer stays. Removing it earlier risks regressing
 the live-UX feel for a research-grade tool where users frequently reload.
+
+---
+
+# Wire-level capture coverage
+
+`tracedCompleteSimple` (`lib/telemetry/llm-trace.ts`) attaches OTel `chat`
+spans plus full request/response wire capture (via pi-ai's `onPayload` /
+`onResponse` hooks) to every LLM call that goes through it. Coverage is
+exhaustive **except** for the gap below.
+
+## Covered (wire-level)
+
+- Main agent loop — `Agent.prompt` triggers pi's per-step provider call. The
+  `onPayload` / `onResponse` hooks set on the `Agent` constructor
+  (`lib/agents/coordinator.ts:599 / :614`) feed the active `invoke_agent step`
+  span.
+- Six explicit sub-LLM call sites, all routed through `tracedCompleteSimple`:
+  - `coordinator.ts:178` intent router
+  - `coordinator.ts:472` `callLlm` (research-tool sub-call)
+  - `coordinator.ts:507` `callLlmVision` (image sub-call)
+  - `coordinator.ts:960` session-summary generator
+  - `lib/memory/extractor.ts:168` background memory extractor
+  - `app/src/main/ipc.ts:1008` wiki background `callLlm`
+
+## Known gap — accepted as span-only
+
+**`generateSummary()` during context compaction.**
+`coordinator.ts:711` calls pi-coding-agent's `generateSummary(...)`, which
+internally calls `pi-ai.completeSimple()` directly. That bypasses
+`tracedCompleteSimple`, so the compaction summarizer LLM call is **not**
+captured at the wire level.
+
+What we do have:
+
+- A `summarize context` span opened around the call
+  (`coordinator.ts:693 / :722`)
+- Span attributes: `gen_ai.operation.name = "pipilot.summarize"`,
+  `pipilot.compaction.discarded_messages`, `pipilot.compaction.kept_tokens`
+- A `pipilot.compaction.discarded` event with the discarded message indices
+
+What we do **not** have on this path:
+
+- `gen_ai.input.messages` / `gen_ai.system_instructions` events
+- `pipilot.chat.request_payload` event (post-`convertMessages` wire body)
+- `gen_ai.usage.*` attributes (input/output/cache tokens)
+- `http.response.status_code` and rate-limit headers
+- `gen_ai.response.finish_reasons`
+
+### Why we accept this
+
+- pi does not expose hooks on its internal summarizer call. Closing the gap
+  requires either (a) waiting for pi to surface a hook, or (b) localizing
+  the summarizer (re-implementing pi's compaction prompt and update-summary
+  semantics here), which forfeits the upgrade path on `pi-coding-agent`.
+- Compaction events are rare (only when context exceeds threshold), bounded
+  by the `summarize context` span timing, and outcome-visible via the
+  resulting `compaction summary` injected into the next turn.
+
+### When to revisit
+
+- pi-coding-agent grows hooks on `generateSummary` → switch to wired
+  variant, no further work needed
+- Compaction-related token cost becomes a meaningful slice of project spend
+  (track via aggregated `summarize context` span counts) → consider
+  localizing the summarizer
+- Audit / compliance requires wire-level capture of every token billed →
+  forces the localize path regardless of cost
+
+Keep this section updated when adding new sub-LLM call sites: every new
+site must either go through `tracedCompleteSimple` or be listed here as
+an accepted gap with rationale.

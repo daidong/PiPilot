@@ -28,6 +28,7 @@ import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../l
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
+import { inferProviderFromModelId } from '../../../lib/models'
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
@@ -2013,9 +2014,8 @@ export function registerIpcHandlers(): void {
         if (prefs.selectedModel) {
           const m = prefs.selectedModel as string
           if (!m.includes(':')) {
-            const provider = m.startsWith('claude-') ? 'anthropic'
-              : m.startsWith('gemini-') ? 'google'
-              : 'openai'
+            // `openai` matches the historical default for unrecognized bare ids.
+            const provider = inferProviderFromModelId(m) ?? 'openai'
             state.currentModel = `${provider}:${m}`
           } else {
             state.currentModel = m

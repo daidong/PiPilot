@@ -21,6 +21,7 @@ import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent, ImageContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
+import { categorizeTool } from '../tools/categories.js'
 import { probeStaticProfile, generateAgentGuidance } from '../local-compute/environment-model.js'
 import { maybeExtractMemories } from '../memory/extractor.js'
 import { createLoadSkillTool } from '../tools/skill-tools.js'
@@ -28,7 +29,7 @@ import { loadAllSkills, readEnabledSkills, resolveSkillDependencies, buildSkills
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
-import { ROUTER_MODELS } from '../models.js'
+import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
 import { tracedCompleteSimple } from '../telemetry/llm-trace.js'
 import { redact, SCRUBBER_VERSION } from '../telemetry/redaction.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
@@ -100,33 +101,6 @@ function detectIntentsByRules(message: string): Set<IntentLabel> {
   return intents
 }
 
-
-/**
- * Map a tool name to its `pipilot.tool.category` enum value (spec §6.4).
- * Categories are stable across releases; new tools should be added here when
- * the tool factory adds them.
- */
-function categorizeTool(toolName: string): string {
-  // File / shell / coding (pi-coding-agent built-ins)
-  if (toolName === 'read' || toolName === 'write' || toolName === 'edit' || toolName === 'multi-edit') return 'file'
-  if (toolName === 'bash' || toolName === 'shell') return 'shell'
-  if (toolName === 'grep' || toolName === 'find' || toolName === 'ls') return 'code'
-  // Research tools
-  if (toolName === 'data-analyze' || toolName === 'data_analyze') return 'data-analysis'
-  if (toolName === 'literature-search' || toolName === 'literature_search') return 'literature'
-  if (toolName === 'web-search' || toolName === 'web_search' || toolName === 'web-fetch' || toolName === 'web_fetch') return 'web'
-  if (toolName === 'save-memory' || toolName === 'recall-memory' || toolName.startsWith('memory-')) return 'memory'
-  if (toolName.startsWith('artifact-') || toolName === 'artifact_create' || toolName === 'artifact_update' || toolName === 'artifact_search') return 'artifact'
-  if (toolName === 'convert-document' || toolName === 'convert_document') return 'document'
-  if (toolName.startsWith('diagram') || toolName === 'generate-diagram') return 'diagram'
-  if (toolName.startsWith('wiki') || toolName === 'wiki-query') return 'wiki'
-  if (toolName.startsWith('citation') || toolName === 'enrich-paper') return 'citation'
-  if (toolName === 'local-compute-execute' || toolName.startsWith('local-compute') || toolName.startsWith('compute-')) return 'compute'
-  if (toolName === 'load_skill' || toolName === 'load-skill') return 'code'
-  // Fallback: 'code' is the broadest non-domain category; safer than inventing
-  // a new value that won't pass dev-mode validation.
-  return 'code'
-}
 
 const MAX_SKILL_PRELOAD = 5
 
@@ -376,15 +350,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         if (debug) console.warn(`[Coordinator] getPiModel("${piProvider}", "${parts[1]}") failed:`, err)
       }
     } else {
-      // Infer provider from model name
-      const providerHint = modelId.startsWith('claude-') ? 'anthropic'
-        : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
-        : modelId.startsWith('gemini-') ? 'google'
-        : null
+      // Infer provider from bare model id, then fall through to the rest in
+      // case the table is stale.
+      const providerHint = inferProviderFromModelId(modelId)
 
+      const fallbackProviders = ['anthropic', 'openai', 'google', 'deepseek']
       const providers = providerHint
-        ? [providerHint, 'anthropic', 'openai', 'google']
-        : ['anthropic', 'openai', 'google']
+        ? [providerHint, ...fallbackProviders.filter(p => p !== providerHint)]
+        : fallbackProviders
 
       for (const provider of providers) {
         try {
@@ -423,10 +396,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           : parts[0] === 'anthropic-sub' ? 'anthropic'
           : parts[0]
       } else {
-        mainProvider = modelId.startsWith('claude-') ? 'anthropic'
-          : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
-          : modelId.startsWith('gemini-') ? 'google'
-          : null
+        mainProvider = inferProviderFromModelId(modelId)
       }
     }
 
