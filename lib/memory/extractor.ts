@@ -5,12 +5,12 @@
  * memory-worthy information from the conversation.
  *
  * Gated by RESEARCH_COPILOT_AUTO_EXTRACT=1 (default OFF).
- * Uses completeSimple() with the main model's system prompt for prompt cache hits.
+ * Reuses the main model's system prompt for prompt cache hits across the
+ * background trace and the user-facing trace.
  */
 
-import type { Model, TextContent } from '@mariozechner/pi-ai'
-import { completeSimple } from '@mariozechner/pi-ai'
-import { tracedCompleteSimple } from '../telemetry/llm-trace.js'
+import type { Model } from '@mariozechner/pi-ai'
+import { runSubLlmText } from '../telemetry/sub-llm.js'
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
 import {
@@ -64,7 +64,7 @@ Return ONLY a JSON array (no markdown fences, no explanation):
 Or: []`
 
 /**
- * Convert AgentMessage[] to simple {role, content} pairs for completeSimple().
+ * Convert AgentMessage[] to simple {role, content} pairs for sub-LLM replay.
  * Truncates long tool results to keep token count reasonable.
  */
 function simplifyMessages(
@@ -155,26 +155,22 @@ export async function maybeExtractMemories(
       timestamp: Date.now()
     })
 
-    const piContext = {
-      systemPrompt: config.systemPrompt,
-      // pi-ai's Message union requires extra fields on assistant turns, but
-      // for this context-only replay the providers read role/content/timestamp.
-      messages: simplified as any
-    }
-    const llmOpts = { maxTokens: 1024, apiKey: config.apiKey }
     // Spec §6.5: background extraction lives on its own trace. ROOT_CONTEXT
     // detaches from any active span so the OTel SDK mints a fresh traceId.
-    const result = config.tracer
-      ? await tracedCompleteSimple(config.model, piContext, llmOpts, {
-          tracer: config.tracer,
-          parent: ROOT_CONTEXT,
-          authMode: config.authMode,
-          purpose: 'memory-extract'
-        })
-      : await completeSimple(config.model, piContext, llmOpts)
-
-    const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-    const text = textContent?.text?.trim() ?? ''
+    // pi-ai's Message union requires extra fields on assistant turns, but
+    // for this context-only replay the providers only read role/content/
+    // timestamp — `as any` gets us past the strict union mismatch.
+    const text = (await runSubLlmText({
+      model: config.model,
+      systemPrompt: config.systemPrompt,
+      messages: simplified as any,
+      apiKey: config.apiKey,
+      maxTokens: 1024,
+      tracer: config.tracer,
+      parent: ROOT_CONTEXT,
+      authMode: config.authMode,
+      purpose: 'memory-extract'
+    })).trim()
     if (!text || text === '[]') return
 
     // Fix #2: More robust JSON extraction

@@ -23,7 +23,7 @@ import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
-import { PipilotTracer, migrateProjectConfig, tracedCompleteSimple, loadTraceSnapshot } from '../../../lib/telemetry/index'
+import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot } from '../../../lib/telemetry/index'
 import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
@@ -965,7 +965,7 @@ export function registerIpcHandlers(): void {
     }
     if (wikiSettings && wikiModel !== 'none') {
       try {
-        const { getModel: getPiModel, completeSimple } = await import('@mariozechner/pi-ai')
+        const { getModel: getPiModel } = await import('@mariozechner/pi-ai')
         const wikiAuth = resolveCoordinatorAuth(wikiModel)
         const [rawProvider, modelId] = wikiModel.split(':')
         // Map subscription providers to their pi-ai provider name
@@ -1008,11 +1008,6 @@ export function registerIpcHandlers(): void {
 
         const callLlm = async (system: string, user: string) => {
           const currentKey = await resolveApiKey()
-          const piContext = {
-            systemPrompt: system,
-            messages: [{ role: 'user' as const, content: user, timestamp: Date.now() }]
-          }
-          const llmOpts = { maxTokens: 4096, apiKey: currentKey }
           // Wiki bg agent walks across projects: pick the first window's tracer
           // if any. Spec §6.5: this lives on its own trace (no parent context),
           // detached from any active user-task trace.
@@ -1020,15 +1015,16 @@ export function registerIpcHandlers(): void {
           for (const [, s] of windowStates) {
             if (s.tracer) { firstTracer = s.tracer; break }
           }
-          const result = firstTracer
-            ? await tracedCompleteSimple(model, piContext, llmOpts, {
-                tracer: firstTracer,
-                parent: ROOT_CONTEXT,
-                purpose: 'wiki-bg'
-              })
-            : await completeSimple(model, piContext, llmOpts)
-          const textContent = result.content.find((c: any) => c.type === 'text') as any
-          return textContent?.text ?? ''
+          return runSubLlmText({
+            model,
+            systemPrompt: system,
+            userContent: user,
+            apiKey: currentKey,
+            maxTokens: 4096,
+            tracer: firstTracer,
+            parent: ROOT_CONTEXT,
+            purpose: 'wiki-bg'
+          })
         }
 
         const pacing = resolveWikiPacing(wikiSettings.speed || 'medium')

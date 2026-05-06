@@ -15,7 +15,7 @@
 import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Agent } from '@mariozechner/pi-agent-core'
-import { getModel as getPiModel, completeSimple } from '@mariozechner/pi-ai'
+import { getModel as getPiModel } from '@mariozechner/pi-ai'
 import { createCodingTools, createGrepTool, createFindTool, createLsTool, estimateTokens, shouldCompact, generateSummary, DEFAULT_COMPACTION_SETTINGS } from '@mariozechner/pi-coding-agent'
 import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent, ImageContent } from '@mariozechner/pi-ai'
@@ -30,7 +30,7 @@ import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
-import { tracedCompleteSimple } from '../telemetry/llm-trace.js'
+import { runSubLlmText } from '../telemetry/sub-llm.js'
 import { redact, SCRUBBER_VERSION } from '../telemetry/redaction.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
@@ -143,17 +143,16 @@ async function matchSkillsWithLLM(
     : message
 
   try {
-    const piContext = {
+    const text = (await runSubLlmText({
+      model,
       systemPrompt,
-      messages: [{ role: 'user' as const, content: userContent, timestamp: Date.now() }]
-    }
-    const llmOpts = { maxTokens: 100, apiKey }
-    const result = tracer
-      ? await tracedCompleteSimple(model, piContext, llmOpts, { tracer, authMode, purpose: 'router' })
-      : await completeSimple(model, piContext, llmOpts)
-
-    const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-    const text = textContent?.text?.trim() ?? ''
+      userContent,
+      apiKey,
+      maxTokens: 100,
+      tracer,
+      authMode,
+      purpose: 'router'
+    })).trim()
     if (!text) return []
 
     // Extract JSON array from response (may be wrapped in code fences)
@@ -433,16 +432,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     callLlm: async (systemPrompt: string, userContent: string) => {
       if (!piModel) throw new Error('No model available for sub-call')
       const currentKey = await resolveApiKey()
-      const piContext = {
+      return runSubLlmText({
+        model: piModel,
         systemPrompt,
-        messages: [{ role: 'user' as const, content: userContent, timestamp: Date.now() }]
-      }
-      const llmOpts = { maxTokens: 4096, apiKey: currentKey }
-      const result = tracer
-        ? await tracedCompleteSimple(piModel, piContext, llmOpts, { tracer, authMode, purpose: 'callLlm' })
-        : await completeSimple(piModel, piContext, llmOpts)
-      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-      return textContent?.text ?? ''
+        userContent,
+        apiKey: currentKey,
+        maxTokens: 4096,
+        tracer,
+        authMode,
+        purpose: 'callLlm'
+      })
     },
     // Vision-capable sibling of callLlm. Mirrors the stateless completeSimple
     // shape above plus the ImageContent transformation used by chat() at the
@@ -468,16 +467,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       ]
       // 8K output budget — SVG transcription of a moderately complex
       // diagram (20-30 nodes) typically lands around 4-6K characters.
-      const piContext = {
+      return runSubLlmText({
+        model: piModel,
         systemPrompt,
-        messages: [{ role: 'user' as const, content, timestamp: Date.now() }]
-      }
-      const llmOpts = { maxTokens: 8192, apiKey: currentKey }
-      const result = tracer
-        ? await tracedCompleteSimple(piModel, piContext, llmOpts, { tracer, authMode, purpose: 'callLlmVision' })
-        : await completeSimple(piModel, piContext, llmOpts)
-      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-      return textContent?.text ?? ''
+        userContent: content,
+        apiKey: currentKey,
+        maxTokens: 8192,
+        tracer,
+        authMode,
+        purpose: 'callLlmVision'
+      })
     },
     visionCapable: !!piModel?.input.includes('image'),
     onToolCall,
@@ -917,21 +916,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     try {
       const currentKey = await resolveApiKey()
-      const piContext = {
+      const text = (await runSubLlmText({
+        model: intentRouterModel,
         systemPrompt: 'You summarize research conversations concisely. Output JSON with keys: summary (string), topicsDiscussed (string[]), openQuestions (string[]). Output ONLY valid JSON.',
-        messages: [{
-          role: 'user' as const,
-          content: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
-          timestamp: Date.now()
-        }]
-      }
-      const llmOpts = { maxTokens: 512, apiKey: currentKey }
-      const result = tracer
-        ? await tracedCompleteSimple(intentRouterModel, piContext, llmOpts, { tracer, authMode, purpose: 'session-summary' })
-        : await completeSimple(intentRouterModel, piContext, llmOpts)
-
-      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-      const text = textContent?.text?.trim() ?? ''
+        userContent: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
+        apiKey: currentKey,
+        maxTokens: 512,
+        tracer,
+        authMode,
+        purpose: 'session-summary'
+      })).trim()
       if (!text) return
       // Extract JSON from possible markdown code fences
       const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? text.match(/(\{[\s\S]*\})/)

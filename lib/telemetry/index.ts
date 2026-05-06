@@ -38,6 +38,9 @@ export type { JsonlSpanExporterOptions } from './exporters/jsonl.js'
 export { tracedCompleteSimple } from './llm-trace.js'
 export type { TracedCompleteSimpleOpts } from './llm-trace.js'
 
+export { runSubLlmText } from './sub-llm.js'
+export type { RunSubLlmOpts } from './sub-llm.js'
+
 export { tracedFetch, recordReviewCompletion } from './http-trace.js'
 export type { TracedFetchOpts } from './http-trace.js'
 
