@@ -31,11 +31,17 @@ const repoRoot = join(__dirname, '..')
 // Rather than reimplementing the rule loop in JS, defer to the TS module via
 // a child node process running tsx. Keeps the CLI thin and aligned with the
 // implementation tree (which is canonical TypeScript).
+//
+// Windows note: `node_modules/.bin/tsx` is `tsx.cmd` on Windows, not a bare
+// executable. Spawning it directly without an extension (or without
+// `shell: true`) fails silently. Use `node --import tsx` instead — it's
+// cross-platform, uses Node's built-in loader hook chain, and matches how
+// `npm test` already invokes tsx via scripts/run-tests.mjs.
 const tsEntry = join(repoRoot, 'lib/telemetry/diagnostics/cli-impl.ts')
-const tsxBin = join(repoRoot, 'node_modules/.bin/tsx')
 
-const result = spawnSync(tsxBin, [tsEntry, ...process.argv.slice(2)], {
-  stdio: 'inherit',
-  cwd: repoRoot
-})
+const result = spawnSync(
+  process.execPath,
+  ['--import', 'tsx', tsEntry, ...process.argv.slice(2)],
+  { stdio: 'inherit', cwd: repoRoot }
+)
 process.exit(result.status ?? 0)

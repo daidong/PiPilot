@@ -27,8 +27,9 @@ test('BlobStore writes content under {prefix}/{full-sha256}', () => {
     const path = store.pathFor(r.hash)
     assert.ok(existsSync(path), `blob file at ${path}`)
     assert.equal(readFileSync(path, 'utf8'), 'hello world')
-    // Path is sharded by 2-char prefix
-    assert.ok(path.includes(`/blobs/${r.hash.slice(0, 2)}/${r.hash}`))
+    // Path is sharded by 2-char prefix. Normalize separators for Windows
+    // where path uses `\` rather than `/`.
+    assert.ok(path.replace(/\\/g, '/').includes(`/blobs/${r.hash.slice(0, 2)}/${r.hash}`))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
