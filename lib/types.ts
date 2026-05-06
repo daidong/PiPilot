@@ -184,7 +184,11 @@ export interface UserCorrection {
 // ============================================================================
 
 export interface ProjectTelemetryConfig {
-  /** Single hard off-switch. Default: 'enabled'. Opt-out only — no granularity. */
+  /**
+   * Single hard off-switch. Default for new projects: 'disabled' (opt-in).
+   * Existing projects with explicit `tracingMode: 'enabled'` keep their value
+   * across migrations — see `lib/telemetry/migration.ts`.
+   */
   tracingMode: 'enabled' | 'disabled'
   /** TraceStore ring queue capacity. Default: 1024 spans. */
   bufferCapacity?: number

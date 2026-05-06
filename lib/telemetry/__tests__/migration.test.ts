@@ -37,7 +37,7 @@ test('migrates a pre-telemetry project (no id, no telemetry, no schema version)'
     assert.equal(r.toVersion, 1)
     assert.ok(r.config.id, 'id assigned')
     assert.equal(r.config.id?.length, 26, 'ULID length')
-    assert.equal(r.config.telemetry?.tracingMode, 'enabled')
+    assert.equal(r.config.telemetry?.tracingMode, 'disabled', 'opt-in default — new projects start disabled')
     assert.equal(r.config.telemetry?.bufferCapacity, 1024)
     assert.equal(r.config.configSchemaVersion, 1)
 

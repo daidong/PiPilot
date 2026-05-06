@@ -1659,7 +1659,10 @@ export function registerIpcHandlers(): void {
     try {
       const projectFile = join(state.projectPath, PATHS.project)
       const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
-      const tracingMode = config.telemetry?.tracingMode ?? 'enabled'
+      // Defensive default: 'disabled' matches the new opt-in policy
+      // (see lib/telemetry/migration.ts). Migration normally fills this in,
+      // so the fallback only fires for malformed configs.
+      const tracingMode = config.telemetry?.tracingMode ?? 'disabled'
       const bufferCapacity = config.telemetry?.bufferCapacity ?? 1024
       // Storage footprint: walk the filesystem under .research-pilot/ for every
       // telemetry-owned file/dir per spec §5+§8. This is the honest "what's on

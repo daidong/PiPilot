@@ -8,7 +8,10 @@
  *   1. Read project.json.
  *   2. If `configSchemaVersion` is missing or < 1:
  *      a. If `id` is missing, generate a ULID, set `configSchemaVersion = 1`.
- *      b. If `telemetry` is missing, set { tracingMode: 'enabled', bufferCapacity: 1024 }.
+ *      b. If `telemetry` is missing, set { tracingMode: 'disabled', bufferCapacity: 1024 }.
+ *         New projects start with telemetry off; user opts in via Settings →
+ *         Telemetry. Existing projects with explicit `tracingMode: 'enabled'`
+ *         keep their value (we don't override what the user already opted into).
  *      c. Write project.json atomically (temp + rename).
  *      d. Append a row to .research-pilot/tracing-state.jsonl.
  *   3. Else: skip (already migrated).
@@ -65,8 +68,12 @@ export function migrateProjectConfig(projectPath: string): MigrationResult {
     config.id = ulid()
   }
   if (!config.telemetry) {
+    // Opt-in default: new projects start with telemetry disabled. Users
+    // enable via Settings → Telemetry. Existing projects that already have
+    // an explicit `telemetry.tracingMode` (including 'enabled') are not
+    // touched — that branch is gated by the `if (!config.telemetry)` above.
     config.telemetry = {
-      tracingMode: 'enabled',
+      tracingMode: 'disabled',
       bufferCapacity: 1024
     }
   }
