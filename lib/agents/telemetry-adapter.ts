@@ -154,7 +154,15 @@ export function createCoordinatorTelemetryAdapter(
       try {
         if (!tracer) return
         const result = ctx.result as any
-        const isError = result && typeof result === 'object' && 'isError' in result && result.isError === true
+        // Two failure surfaces, both must mark the span as ERROR:
+        //   - ctx.isError: pi sets this when the tool throws or otherwise
+        //     fails before the tool code runs to completion. result may
+        //     not carry an isError field in that case.
+        //   - result.isError: the tool ran to completion but returned a
+        //     structured failure (e.g. our toolError() helper).
+        const isError =
+          ctx.isError ||
+          (result && typeof result === 'object' && 'isError' in result && result.isError === true)
         if (isError) {
           const errorClass = (result.details?.error_code ?? result.error_code ?? 'unknown') as string
           span.setAttribute('pipilot.tool.error_class', errorClass)

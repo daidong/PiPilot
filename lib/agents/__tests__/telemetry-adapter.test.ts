@@ -100,14 +100,15 @@ function mkAfterCtx(
   name: string,
   id: string,
   args: unknown,
-  result: AgentToolResult<any>
+  result: AgentToolResult<any>,
+  isError = false
 ): AfterToolCallContext {
   return {
     assistantMessage: {} as never,
     toolCall: { id, name, arguments: args, type: 'tool_call' as const } as never,
     args,
     result,
-    isError: false,
+    isError,
     context: {} as never
   }
 }
@@ -223,6 +224,33 @@ test('afterToolCall stamps error_class when result.isError is true', async () =>
     assert.ok(tool)
     assert.equal(findAttr(tool, 'pipilot.tool.error_class')?.stringValue, 'NETWORK_TIMEOUT')
     assert.equal(tool.status?.code, 2) // ERROR
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('afterToolCall marks ERROR when ctx.isError is true even if result has no isError field', async () => {
+  // Pi sets ctx.isError when the tool throws or fails before the user-level
+  // result is built; result may not carry an isError field. The adapter
+  // must trust ctx.isError as the primary failure signal — otherwise the
+  // span gets stamped OK and pipilot.tool.error_class is missed.
+  const { dir, tracer } = mkTracer()
+  try {
+    const adapter = createCoordinatorTelemetryAdapter({ tracer })
+    adapter.beforeToolCall(mkBeforeCtx('bash', 'tc-throw', { command: 'bad' }))
+    // Result with no isError field — would fool the previous result-only check
+    const minimalResult = {
+      content: [{ type: 'text' as const, text: 'tool threw' }],
+      details: { success: false, tool_name: 'bash' }
+    } as unknown as AgentToolResult<any>
+    adapter.afterToolCall(mkAfterCtx('bash', 'tc-throw', { command: 'bad' }, minimalResult, true))
+    await tracer.shutdown()
+
+    const tool = (await readSpans(dir)).find(s => s.name === 'execute_tool bash')
+    assert.ok(tool)
+    assert.equal(tool.status?.code, 2, 'expected ERROR status from ctx.isError')
+    // error_class falls back to 'unknown' when result.details.error_code is absent
+    assert.equal(findAttr(tool, 'pipilot.tool.error_class')?.stringValue, 'unknown')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
