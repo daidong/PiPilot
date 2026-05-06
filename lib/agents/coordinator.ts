@@ -31,10 +31,10 @@ import {
   classifyPersistenceDecision,
   buildMentionContext,
   buildSessionSummaryContext,
-  buildRecentConversationContext,
   buildSkillSummariesPrompt,
   type PersistenceDecision
 } from './context-builder.js'
+import { createSessionBootstrap } from './session-bootstrap.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
@@ -50,12 +50,10 @@ import {
   findArtifactById,
   readLatestSessionSummary,
   writeSessionSummary,
-  readOrphanMessages,
   readCompactionState,
   writeCompactionState,
   deleteCompactionState,
-  COMPACTION_STATE_SCHEMA_VERSION,
-  type OrphanMessage
+  COMPACTION_STATE_SCHEMA_VERSION
 } from '../memory-v2/store.js'
 
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
@@ -456,14 +454,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     console.log(`[Compaction] Restored prior summary (count=${compactionCount}, ${compactionSummary!.length} chars) for session ${sessionId}`)
   }
 
-  // ── Restart bootstrap state ──
-  // On the first chat() call after coordinator creation, we recover any
-  // user/assistant messages from the persisted JSONL that postdate the
-  // latest SessionSummary. They get injected verbatim into the first user
-  // message so the LLM resumes with the same context the user sees in the UI.
-  // Flips to true on the first chat() call (success or failure) — subsequent
-  // turns rely on agent.state.messages naturally accumulating as usual.
-  let bootstrapDone = false
+  // ── Restart bootstrap ──
+  // On the first chat() call after coordinator creation, recover orphan
+  // user/assistant messages from the persisted JSONL (turns from a
+  // previous process that were never folded into a SessionSummary) and
+  // inject them as a "Recent Conversation" block. Once-only: subsequent
+  // chats rely on agent.state.messages accumulating as usual.
+  const sessionBootstrap = createSessionBootstrap({ projectPath, sessionId, debug })
 
   // Create the pi-mono Agent immediately (no blocking on env probe)
   const agent = new Agent({
@@ -963,38 +960,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const latestSummary = readLatestSessionSummary(projectPath, sessionId)
         const summaryContext = latestSummary ? buildSessionSummaryContext(latestSummary) : ''
 
-        // Restart bootstrap: on the first chat after coordinator creation,
-        // pull any user/assistant messages persisted to the session JSONL
-        // that are newer than the latest summary's createdAt. These are turns
-        // that happened in a previous process and were never folded into a
-        // summary. We inject them as a "Recent Conversation" block so the LLM
-        // resumes with the same context the user sees in the UI — no extra
-        // LLM call, no compression, lossless.
-        let bootstrapContext = ''
-        let bootstrapOrphans = 0
-        const summaryLoaded = !!latestSummary
-        if (!bootstrapDone) {
-          bootstrapDone = true
-          try {
-            const cutoffMs = latestSummary ? Date.parse(latestSummary.createdAt) || 0 : 0
-            const orphans = readOrphanMessages(projectPath, sessionId, cutoffMs)
-            bootstrapOrphans = orphans.length
-            if (orphans.length > 0) {
-              bootstrapContext = buildRecentConversationContext(orphans)
-              if (debug) {
-                console.log(`[Bootstrap] Recovered ${orphans.length} orphan message(s) from prior session`)
-              }
-            }
-          } catch (err) {
-            if (debug) console.warn('[Bootstrap] Failed to read orphan messages:', err)
-          }
-        }
+        // Restart bootstrap (once-only on first chat after restart).
+        const { context: bootstrapContext, orphanCount: bootstrapOrphans } =
+          sessionBootstrap.consume(latestSummary)
         // Telemetry §6.4: stamp resumption booleans on the root span. Cheap
         // booleans set once at first step. Layer 3 can compute fancier
         // resumption indicators from the raw trace if needed.
         if (rootSpan) {
           rootSpan.setAttribute('pipilot.resumption.bootstrap_orphans', bootstrapOrphans > 0)
-          rootSpan.setAttribute('pipilot.resumption.summary_loaded', summaryLoaded)
+          rootSpan.setAttribute('pipilot.resumption.summary_loaded', !!latestSummary)
         }
 
         const persistence = classifyPersistenceDecision(message)
