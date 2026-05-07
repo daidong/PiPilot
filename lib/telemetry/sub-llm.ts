@@ -19,7 +19,8 @@ import type {
   Model,
   SimpleStreamOptions,
   TextContent,
-  ImageContent
+  ImageContent,
+  Usage
 } from '@mariozechner/pi-ai'
 import { completeSimple } from '@mariozechner/pi-ai'
 import { tracedCompleteSimple } from './llm-trace.js'
@@ -65,6 +66,15 @@ export interface RunSubLlmOpts<TApi extends string> {
    * active task trace (background extractors, wiki bg agent).
    */
   parent?: Context
+  /**
+   * Invoked after a successful completion with `(usage, cost)`. Same shape
+   * the main agent loop's `turn_end` produces, so a single accumulator can
+   * service both. Without this, sub-LLM calls (router, summarizer, memory
+   * extractor, wiki-bg) consume billable tokens but never reach `usage.json`
+   * or the StatusBar (G1, telemetry-trace v0.13). Fires for both the traced
+   * and non-traced branches.
+   */
+  onUsage?: (usage: Usage, cost: Usage['cost']) => void
 }
 
 /**
@@ -98,9 +108,17 @@ export async function runSubLlmText<TApi extends string>(
         tracer: opts.tracer,
         ...(opts.parent && { parent: opts.parent }),
         ...(opts.authMode && { authMode: opts.authMode }),
-        purpose: opts.purpose
+        purpose: opts.purpose,
+        ...(opts.onUsage && { onUsage: opts.onUsage })
       })
     : await completeSimple(opts.model, piContext, llmOpts)
+
+  // Telemetry-disabled / no-tracer branch: tracedCompleteSimple's onUsage hook
+  // never fires, so we mirror the same emission here. Sub-LLM tokens must be
+  // visible to the accumulator regardless of telemetry mode.
+  if (!opts.tracer && opts.onUsage && result.stopReason !== 'error' && result.stopReason !== 'aborted') {
+    opts.onUsage(result.usage, result.usage.cost)
+  }
 
   const textContent = result.content.find((c): c is TextContent => c.type === 'text')
   return textContent?.text ?? ''

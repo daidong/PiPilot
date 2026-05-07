@@ -93,7 +93,8 @@ async function matchSkillsWithLLM(
   skills: SkillEntry[],
   priorTurns: Array<{ userMessage: string; response: string }> = [],
   tracer: PipilotTracer | null = null,
-  authMode?: PipilotAuthMode
+  authMode?: PipilotAuthMode,
+  onUsage?: (usage: unknown, cost: unknown) => void
 ): Promise<string[]> {
   if (!model || skills.length === 0) return []
 
@@ -133,7 +134,8 @@ async function matchSkillsWithLLM(
       maxTokens: 100,
       tracer,
       authMode,
-      purpose: 'router'
+      purpose: 'router',
+      ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
     })).trim()
     if (!text) return []
 
@@ -360,7 +362,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         maxTokens: 4096,
         tracer,
         authMode,
-        purpose: 'callLlm'
+        purpose: 'callLlm',
+        ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
       })
     },
     // Vision-capable sibling of callLlm. Mirrors the stateless completeSimple
@@ -395,7 +398,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         maxTokens: 8192,
         tracer,
         authMode,
-        purpose: 'callLlmVision'
+        purpose: 'callLlmVision',
+        ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
       })
     },
     visionCapable: !!piModel?.input.includes('image'),
@@ -718,7 +722,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         maxTokens: 512,
         tracer,
         authMode,
-        purpose: 'session-summary'
+        purpose: 'session-summary',
+        ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
       })).trim()
       if (!text) return
       // Extract JSON from possible markdown code fences
@@ -782,7 +787,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           response: t.response
         }))
         const currentKey = await resolveApiKey()
-        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills, priorTurns, tracer, authMode)
+        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills, priorTurns, tracer, authMode, onUsage)
         if (rootSpan && matchedSkillNames.length > 0) {
           rootSpan.setAttribute('pipilot.matched_skills', matchedSkillNames)
         }
@@ -976,7 +981,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // Background memory extraction (gated by RESEARCH_COPILOT_AUTO_EXTRACT=1)
         const memoryKey = await resolveApiKey()
         void maybeExtractMemories(
-          { projectPath, model: piModel!, apiKey: memoryKey, systemPrompt: enrichedSystem, debug, tracer, authMode },
+          { projectPath, model: piModel!, apiKey: memoryKey, systemPrompt: enrichedSystem, debug, tracer, authMode, onUsage },
           agent.state.messages,
           turnCount
         )

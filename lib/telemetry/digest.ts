@@ -132,8 +132,18 @@ export class TraceDigestProcessor implements SpanProcessor {
     const attrs = span.attributes as Record<string, unknown>
     const op = attrs['gen_ai.operation.name']
 
-    // Aggregate tokens from any chat span.
-    if (op === 'chat') {
+    // Aggregate tokens from chat AND main-loop step spans (G2, v0.13).
+    // Pre-v0.13 only `chat` spans (sub-LLM via tracedCompleteSimple) were
+    // counted, so digest tokens reflected sub-LLM only — not the actual
+    // bulk of an agent run. The two surfaces are disjoint:
+    //   - `chat` op       → sub-LLM (router, summarizer, wiki-bg, …)
+    //   - `invoke_agent` step → main loop (one per pi-mono turn)
+    // No double-counting because pi-ai itself emits no spans inside the
+    // main loop. Step span carries the full usage as of v0.13 too (cache
+    // attrs added in telemetry-adapter onto these spans).
+    const isMainLoopStep =
+      op === 'invoke_agent' && typeof span.name === 'string' && span.name.startsWith('invoke_agent step')
+    if (op === 'chat' || isMainLoopStep) {
       state.tokens.input += Number(attrs['gen_ai.usage.input_tokens'] ?? 0)
       state.tokens.output += Number(attrs['gen_ai.usage.output_tokens'] ?? 0)
       state.tokens.cache_read += Number(attrs['gen_ai.usage.cache_read.input_tokens'] ?? 0)

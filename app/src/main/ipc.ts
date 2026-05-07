@@ -740,6 +740,11 @@ async function ensureCoordinator(
           }
         }
 
+        // G3 (v0.13): Anthropic splits input into 3 buckets (uncached + cache_read
+        // + cache_creation). True hit rate uses all 3 in the denominator —
+        // previously cacheWriteTokens was excluded, inflating the displayed
+        // rate when a turn populated new cache entries.
+        const inputTotal = promptTokens + cachedTokens + cacheWriteTokens
         const usageEvent = {
           promptTokens,
           completionTokens,
@@ -750,7 +755,7 @@ async function ensureCoordinator(
           billableCost: rawCost,
           authMode: state.currentAuthMode,
           billingSource: resolvedAuth.billingSource,
-          cacheHitRate: (promptTokens + cachedTokens) > 0 ? cachedTokens / (promptTokens + cachedTokens) : 0
+          cacheHitRate: inputTotal > 0 ? cachedTokens / inputTotal : 0
         }
         safeSend(win, 'agent:usage', usageEvent)
       },
@@ -1048,9 +1053,41 @@ export function registerIpcHandlers(): void {
           // if any. Spec §6.5: this lives on its own trace (no parent context),
           // detached from any active user-task trace.
           let firstTracer: PipilotTracer | null = null
-          for (const [, s] of windowStates) {
-            if (s.tracer) { firstTracer = s.tracer; break }
+          let firstWin: BrowserWindow | null = null
+          let firstState: WindowRuntimeState | null = null
+          for (const [w, s] of windowStates) {
+            if (s.tracer) { firstTracer = s.tracer; firstWin = w; firstState = s; break }
           }
+          // G1 (telemetry-trace v0.13): attribute wiki-bg tokens to the first
+          // window's project. Cross-project wiki traffic was previously
+          // invisible to usage.json + StatusBar despite being billable.
+          // First-window pick mirrors the tracer-pick policy above.
+          const wikiOnUsage = firstWin && firstState && firstState.projectPath
+            ? (usage: any, cost: any) => {
+                const rawCost = cost?.total ?? 0
+                const promptTokens = usage.input ?? 0
+                const completionTokens = usage.output ?? 0
+                const cachedTokens = usage.cacheRead ?? 0
+                const cacheWriteTokens = usage.cacheWrite ?? 0
+                accumulateUsage(
+                  join(firstState!.projectPath, PATHS.root),
+                  promptTokens, completionTokens, cachedTokens, cacheWriteTokens, rawCost
+                )
+                const inputTotal = promptTokens + cachedTokens + cacheWriteTokens
+                safeSend(firstWin!, 'agent:usage', {
+                  promptTokens,
+                  completionTokens,
+                  cachedTokens,
+                  cacheWriteTokens,
+                  cost: rawCost,
+                  rawCost,
+                  billableCost: rawCost,
+                  authMode: firstState!.currentAuthMode,
+                  billingSource: 'api-key',
+                  cacheHitRate: inputTotal > 0 ? cachedTokens / inputTotal : 0
+                })
+              }
+            : undefined
           return runSubLlmText({
             model,
             systemPrompt: system,
@@ -1059,7 +1096,8 @@ export function registerIpcHandlers(): void {
             maxTokens: 4096,
             tracer: firstTracer,
             parent: ROOT_CONTEXT,
-            purpose: 'wiki-bg'
+            purpose: 'wiki-bg',
+            ...(wikiOnUsage && { onUsage: wikiOnUsage })
           })
         }
 

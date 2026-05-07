@@ -281,9 +281,15 @@ export function createCoordinatorTelemetryAdapter(
       } else if (event.type === 'turn_end' && activeStepSpan) {
         const msg = event.message as any
         if (msg?.usage) {
+          // Full usage on the step span (G2, v0.13). cache_read /
+          // cache_creation were missing before — that meant trace digest
+          // couldn't recover them when aggregating main-loop tokens, and
+          // any cost re-derivation from trace data was off.
           activeStepSpan.setAttributes({
             'gen_ai.usage.input_tokens': msg.usage.input ?? 0,
-            'gen_ai.usage.output_tokens': msg.usage.output ?? 0
+            'gen_ai.usage.output_tokens': msg.usage.output ?? 0,
+            'gen_ai.usage.cache_read.input_tokens': msg.usage.cacheRead ?? 0,
+            'gen_ai.usage.cache_creation.input_tokens': msg.usage.cacheWrite ?? 0
           })
         }
         // Capture assistant content text on the step span — main agent loop

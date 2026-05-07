@@ -38,6 +38,12 @@ export interface ExtractionConfig {
    */
   tracer?: import('../telemetry/tracer.js').PipilotTracer | null
   authMode?: import('../telemetry/semantic-registry.js').PipilotAuthMode
+  /**
+   * Optional usage emitter (G1, telemetry-trace v0.13). When provided, the
+   * extractor's LLM call feeds the same accumulator the main loop uses, so
+   * background-extraction tokens stop being invisible to usage.json + UI.
+   */
+  onUsage?: (usage: unknown, cost: unknown) => void
 }
 
 interface ExtractedMemory {
@@ -169,7 +175,8 @@ export async function maybeExtractMemories(
       tracer: config.tracer,
       parent: ROOT_CONTEXT,
       authMode: config.authMode,
-      purpose: 'memory-extract'
+      purpose: 'memory-extract',
+      ...(config.onUsage && { onUsage: config.onUsage as (usage: any, cost: any) => void })
     })).trim()
     if (!text || text === '[]') return
 

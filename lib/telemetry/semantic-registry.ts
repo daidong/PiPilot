@@ -26,7 +26,7 @@
 export const SCHEMA_URL = 'https://opentelemetry.io/schemas/1.40.0' as const
 
 /** Bump when this file's content materially changes. Recorded on every span. */
-export const TRACE_POLICY_VERSION = 'pipilot-trace-v0.12' as const
+export const TRACE_POLICY_VERSION = 'pipilot-trace-v0.13' as const
 
 /** Standard OTel GenAI provider enum (cross-backend readable). */
 export const GEN_AI_PROVIDER_NAMES = ['anthropic', 'openai', 'gcp.gemini', 'deepseek'] as const

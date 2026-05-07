@@ -16,7 +16,7 @@
  */
 
 import { context, trace, SpanKind, SpanStatusCode, type Context, type Span, type Attributes } from '@opentelemetry/api'
-import type { AssistantMessage, Context as PiContext, Model, SimpleStreamOptions } from '@mariozechner/pi-ai'
+import type { AssistantMessage, Context as PiContext, Model, SimpleStreamOptions, Usage } from '@mariozechner/pi-ai'
 import { completeSimple } from '@mariozechner/pi-ai'
 import type { PipilotTracer } from './tracer.js'
 import { redact, SCRUBBER_VERSION } from './redaction.js'
@@ -41,6 +41,17 @@ export interface TracedCompleteSimpleOpts {
    * `pipilot.span.purpose` hint in P1; P0 just records it as a span name suffix.
    */
   purpose?: string
+  /**
+   * Invoked after a successful chat completion with the same `(usage, cost)`
+   * shape that pi-mono's main-loop `turn_end` exposes. Lets sub-LLM calls
+   * (router, summarizer, memory extractor, wiki-bg) feed the same accumulator
+   * + UI emitter that the main loop uses, instead of being invisible to
+   * `usage.json` and the StatusBar (G1, telemetry-trace v0.13).
+   *
+   * Callback never receives anything on error paths — this is purely a
+   * "billable tokens happened" signal.
+   */
+  onUsage?: (usage: Usage, cost: Usage['cost']) => void
 }
 
 /**
@@ -74,7 +85,7 @@ export async function tracedCompleteSimple<TApi extends string>(
   llmOpts: SimpleStreamOptions | undefined,
   traceOpts: TracedCompleteSimpleOpts
 ): Promise<AssistantMessage> {
-  const { tracer, parent, authMode, purpose } = traceOpts
+  const { tracer, parent, authMode, purpose, onUsage } = traceOpts
   const spanName = purpose ? `chat ${model.id} (${purpose})` : `chat ${model.id}`
   const parentCtx = parent ?? context.active()
 
@@ -211,6 +222,13 @@ export async function tracedCompleteSimple<TApi extends string>(
       span.setStatus({ code: SpanStatusCode.ERROR, message: result.errorMessage })
     } else {
       span.setStatus({ code: SpanStatusCode.OK })
+      // Successful completion → feed the same usage callback the main loop
+      // uses on turn_end. This is what makes router/summarizer/memory-
+      // extractor/wiki-bg tokens visible in usage.json + StatusBar instead
+      // of silently accumulating only in trace digest. Errors deliberately
+      // skip this — half-failed calls have unreliable usage numbers and
+      // shouldn't pollute billable totals.
+      onUsage?.(result.usage, result.usage.cost)
     }
 
     span.end()

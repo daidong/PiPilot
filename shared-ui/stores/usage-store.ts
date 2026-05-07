@@ -132,10 +132,15 @@ export const useUsageStore = create<UsageState>((set, get) => {
       const cacheWrite = event.cacheWriteTokens ?? 0
       const billableCost = event.billableCost ?? event.cost
 
-      // Run-level weighted average cache hit rate
+      // Run-level weighted average cache hit rate (G3, v0.13).
+      // Anthropic splits input into uncached + cache_read + cache_creation;
+      // all three count toward the input volume, so the hit-rate denominator
+      // must include cacheWrite. Previously omitting it inflated the displayed
+      // rate whenever a turn populated new cache entries.
       const newRunPrompt = state.runPromptTokens + event.promptTokens
       const newRunCached = state.runCachedTokens + event.cachedTokens
-      const totalRunInput = newRunPrompt + newRunCached
+      const newRunCacheWrite = state.runCacheWriteTokens + cacheWrite
+      const totalRunInput = newRunPrompt + newRunCached + newRunCacheWrite
       const runCacheHitRate = totalRunInput > 0 ? newRunCached / totalRunInput : 0
 
       return {

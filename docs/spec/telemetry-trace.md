@@ -445,6 +445,12 @@ If the root span itself never ends (`chat()` never returns due to an unrecoverab
   "projectId": "...",
   "startedAt": "...",
   "endedAt": "...",
+  // Token totals aggregate BOTH `chat` spans (sub-LLM via tracedCompleteSimple
+  // — router, summarizer, wiki-bg, memory extractor) AND `invoke_agent step`
+  // spans (one per main-loop pi-mono turn). Pre-v0.13 only `chat` was counted,
+  // making digest tokens reflect sub-LLM only — useless for total-cost
+  // reconciliation. The two surfaces are disjoint (pi-ai itself emits no
+  // spans inside the main loop) so no double-counting.
   "tokens": { "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0 },
   "toolCallsByCategory": { "literature": 3, "data-analysis": 1 },
   "turns": [
