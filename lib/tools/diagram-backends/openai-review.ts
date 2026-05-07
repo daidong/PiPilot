@@ -15,6 +15,7 @@ import type {
   ThresholdTable,
   Verdict,
 } from './types.js'
+import { tracedFetch, recordReviewCompletion } from '../../telemetry/http-trace.js'
 
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
 // Keep in sync with lib/models.ts:MODEL_TIERS.openai.flagship
@@ -75,7 +76,9 @@ Choose verdict:
 }
 
 interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>
+  choices?: Array<{ message?: { content?: string }; finish_reason?: string }>
+  usage?: { prompt_tokens?: number; completion_tokens?: number }
+  model?: string
   error?: { message?: string }
 }
 
@@ -165,16 +168,35 @@ export function createOpenAIReviewProvider(
     const ctl = new AbortController()
     const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
     try {
-      const res = await fetch(CHAT_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
+      const res = await tracedFetch(
+        CHAT_URL,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal: ctl.signal,
         },
-        body: JSON.stringify(body),
-        signal: ctl.signal,
-      })
+        {
+          spanName: `chat ${model} (diagram-review)`,
+          genAi: { operation: 'chat', provider: 'openai', requestModel: model },
+          authMode: 'api-key',
+          purpose: 'diagram-review'
+        }
+      )
       const json = (await res.json()) as ChatCompletionResponse
+      // Stamp completion attrs on the parent execute_tool span (the chat span
+      // has already ended by the time the body is parsed).
+      if (json.usage) {
+        recordReviewCompletion({
+          inputTokens: json.usage.prompt_tokens,
+          outputTokens: json.usage.completion_tokens,
+          finishReason: json.choices?.[0]?.finish_reason,
+          responseModel: json.model ?? model
+        })
+      }
       if (!res.ok) {
         throw new Error(`OpenAI review API error: ${json.error?.message || `HTTP ${res.status}`}`)
       }

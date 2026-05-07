@@ -31,7 +31,94 @@ export interface FileTreeNode {
 
 export interface ElectronAPI {
   // Agent
-  sendMessage: (message: string, rawMentions?: string, model?: string, images?: Array<{ base64: string; mimeType: string }>) => Promise<any>
+  /**
+   * Send a chat message to the agent.
+   *
+   * `envelope` carries the telemetry-trace IPC envelope (spec §4.1):
+   *  - `clientMessageId` becomes the canonical `turnId` propagated through traces
+   *    and ledgers. The renderer already mints a UUID per message, so we forward
+   *    that same id to keep `turnId` deterministic across renderer/main/ledgers.
+   *  - `clientTimestamp` records the ms-since-epoch when the user pressed send.
+   *
+   * Optional during P0 rollout — main falls back to minting the id if the
+   * renderer hasn't been updated yet. P1 will require it.
+   */
+  sendMessage: (
+    message: string,
+    rawMentions?: string,
+    model?: string,
+    images?: Array<{ base64: string; mimeType: string }>,
+    envelope?: { clientMessageId: string; clientTimestamp: number }
+  ) => Promise<any>
+
+  /** Telemetry: passive view-log push (spec §8.4). */
+  telemetryViewLog: (payload: {
+    viewId: string
+    target: { kind: 'artifact' | 'memory' | 'trace' | 'session-summary'; id: string }
+    op: 'view' | 'hover' | 'scroll' | 'dismiss'
+    durationMs?: number
+    turnId?: string
+  }) => Promise<{ success: boolean; reason?: string; error?: string }>
+
+  /** Telemetry: read project-scoped config + storage footprint (§10.2).
+   *  `storageFootprintBytes` = persistedBytes (flushed to trace-storage-stats.jsonl)
+   *  + inFlightBytes (current UTC day, not yet flushed). The split is exposed so
+   *  the UI can label "live" totals when desired. */
+  telemetryGetProjectConfig: (force?: boolean) => Promise<
+    | {
+        projectId: string
+        tracingMode: 'enabled' | 'disabled'
+        bufferCapacity: number
+        storageFootprintBytes: number
+        inFlightBytes: number
+        persistedBytes: number
+      }
+    | { error: string }
+    | null
+  >
+
+  /** Telemetry: toggle tracingMode at runtime. */
+  telemetrySetTracingMode: (mode: 'enabled' | 'disabled') => Promise<{ success: boolean; error?: string }>
+
+  /** Telemetry: subscribe to live span events. Returns an unsubscribe fn. */
+  onTraceLive: (
+    cb: (summary: {
+      traceId: string
+      spanId: string
+      parentSpanId?: string
+      name: string
+      kind: number
+      startTime: string
+      endTime: string
+      durationMs: number
+      statusCode: number
+      statusMessage?: string
+      attributes: Record<string, string | number | boolean>
+      events: Array<{ name: string; timestamp: string }>
+    }) => void
+  ) => () => void
+
+  /** Telemetry: read all spans for a traceId from disk (remount recovery). */
+  telemetryTraceSnapshot: (traceId: string) => Promise<{
+    traceId: string
+    spans: Array<{
+      traceId: string
+      spanId: string
+      parentSpanId?: string
+      name: string
+      kind: number
+      startTime: string
+      endTime: string
+      durationMs: number
+      statusCode: number
+      statusMessage?: string
+      attributes: Record<string, string | number | boolean>
+      events: Array<{ name: string; timestamp: string }>
+    }>
+    dropped?: boolean
+    dropReason?: string
+    error?: string
+  }>
   onStreamChunk: (cb: (chunk: string) => void) => () => void
   onAgentDone: (cb: (result: any) => void) => () => void
   onUsage: (cb: (event: UsageEvent) => void) => () => void
@@ -234,8 +321,8 @@ export interface ElectronAPI {
 }
 
 const api: ElectronAPI = {
-  sendMessage: (message, rawMentions, model, images) =>
-    ipcRenderer.invoke('agent:send', message, rawMentions, model, images),
+  sendMessage: (message, rawMentions, model, images, envelope) =>
+    ipcRenderer.invoke('agent:send', message, rawMentions, model, images, envelope),
   onStreamChunk: (cb) => {
     const handler = (_: any, chunk: string) => cb(chunk)
     ipcRenderer.on('agent:stream-chunk', handler)
@@ -402,6 +489,28 @@ const api: ElectronAPI = {
   },
 
   getCurrentSession: () => ipcRenderer.invoke('session:current'),
+
+  // Telemetry view log (§8.4) — renderer pushes passive view events here.
+  telemetryViewLog: (
+    payload: {
+      viewId: string
+      target: { kind: 'artifact' | 'memory' | 'trace' | 'session-summary'; id: string }
+      op: 'view' | 'hover' | 'scroll' | 'dismiss'
+      durationMs?: number
+      turnId?: string
+    }
+  ) => ipcRenderer.invoke('telemetry:view-log', payload),
+  telemetryGetProjectConfig: (force?: boolean) =>
+    ipcRenderer.invoke('telemetry:get-project-config', force),
+  telemetrySetTracingMode: (mode: 'enabled' | 'disabled') =>
+    ipcRenderer.invoke('telemetry:set-tracing-mode', mode),
+  onTraceLive: (cb) => {
+    const handler = (_: unknown, summary: Parameters<typeof cb>[0]) => cb(summary)
+    ipcRenderer.on('trace:live', handler as (...args: unknown[]) => void)
+    return () => ipcRenderer.removeListener('trace:live', handler as (...args: unknown[]) => void)
+  },
+  telemetryTraceSnapshot: (traceId: string) =>
+    ipcRenderer.invoke('telemetry:trace-snapshot', traceId),
   pickFolder: () => ipcRenderer.invoke('project:pick-folder'),
   openProjectPath: (projectPath: string) => ipcRenderer.invoke('project:open-path', projectPath),
   listRecentProjects: () => ipcRenderer.invoke('project:list-recents'),

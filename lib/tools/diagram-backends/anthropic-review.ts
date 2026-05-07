@@ -24,6 +24,7 @@ import type {
   ThresholdTable,
   Verdict,
 } from './types.js'
+import { tracedFetch, recordReviewCompletion } from '../../telemetry/http-trace.js'
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
 // Keep in sync with lib/models.ts:MODEL_TIERS.anthropic.flagship
@@ -223,13 +224,34 @@ async function doRequest(
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(MESSAGES_URL, {
-      method: 'POST',
-      headers: buildHeaders(token, isOAuth),
-      body: JSON.stringify(body),
-      signal: ctl.signal,
-    })
+    const requestModel = String(body.model ?? DEFAULT_MODEL)
+    const res = await tracedFetch(
+      MESSAGES_URL,
+      {
+        method: 'POST',
+        headers: buildHeaders(token, isOAuth),
+        body: JSON.stringify(body),
+        signal: ctl.signal,
+      },
+      {
+        spanName: `chat ${requestModel} (diagram-review)`,
+        genAi: { operation: 'chat', provider: 'anthropic', requestModel },
+        authMode: isOAuth ? 'anthropic-subscription' : 'api-key',
+        purpose: 'diagram-review'
+      }
+    )
     const json = (await res.json()) as AnthropicMessagesResponse
+    // Stamp usage onto the parent execute_tool span (the chat span has
+    // already ended by the time we parse the body — the active span at this
+    // point is the surrounding diagram tool's execute_tool span).
+    if (json.usage) {
+      recordReviewCompletion({
+        inputTokens: json.usage.input_tokens,
+        outputTokens: json.usage.output_tokens,
+        finishReason: json.stop_reason,
+        responseModel: requestModel
+      })
+    }
     return { status: res.status, json }
   } finally {
     clearTimeout(timer)

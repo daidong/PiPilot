@@ -261,12 +261,37 @@ export const useUIStore = create<UIState>((set) => ({
   // inside the chat-body host, so it only renders there. Researchers expect
   // clicking a file to show them the file; forcing the view switch is the
   // honest implementation of that expectation.
-  openPreview: (entity) => set((s) => ({
-    previewEntity: entity,
-    previewSourceTab: s.leftTab,
-    previewEditorFocused: false,
-    centerView: 'chat',
-  })),
+  openPreview: (entity) => {
+    // Telemetry §8.4: passive view-log entry. Fire-and-forget; main process
+    // drops silently when tracingMode='disabled'. Only entities of types we
+    // model in the spec target enum produce a row.
+    const api = (window as any).api as
+      | {
+          telemetryViewLog?: (payload: {
+            viewId: string
+            target: { kind: 'artifact' | 'memory' | 'trace' | 'session-summary'; id: string }
+            op: 'view'
+          }) => Promise<{ success: boolean }>
+        }
+      | undefined
+    if (api?.telemetryViewLog) {
+      const viewId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      void api.telemetryViewLog({
+        viewId,
+        target: { kind: 'artifact', id: entity.id },
+        op: 'view'
+      })
+    }
+    set((s) => ({
+      previewEntity: entity,
+      previewSourceTab: s.leftTab,
+      previewEditorFocused: false,
+      centerView: 'chat',
+    }))
+  },
   closePreview: () => set({ previewEntity: null, previewSourceTab: null, previewEditorFocused: false }),
   setPreviewEditorFocused: (previewEditorFocused) => set({ previewEditorFocused }),
   setDrawerWidth: (drawerWidth) => set({ drawerWidth: clampDrawerWidth(drawerWidth) }),

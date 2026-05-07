@@ -41,6 +41,25 @@ const DEFAULT_SETTINGS: AppSettings = {
   diagram: { reviewProvider: 'auto' },
 }
 
+// Mirrors lib/models.ts:inferProviderFromModelId — kept inline because
+// shared-electron can't import from lib or shared-ui (cross-rootDir).
+// When updating either copy, sync the other.
+const BARE_MODEL_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ['claude-', 'anthropic'],
+  ['gpt-', 'openai'],
+  ['o3', 'openai'],
+  ['o4', 'openai'],
+  ['gemini-', 'google'],
+  ['deepseek-', 'deepseek'],
+]
+
+function inferProviderFromModelId(modelId: string): string | null {
+  for (const [prefix, provider] of BARE_MODEL_PREFIXES) {
+    if (modelId.startsWith(prefix)) return provider
+  }
+  return null
+}
+
 // Mirrors lib/models.ts:RETIRED_MODEL_MIGRATIONS — kept inline because
 // shared-electron can't import from lib or shared-ui (cross-rootDir).
 const RETIRED_MODEL_MIGRATIONS: Record<string, string> = {
@@ -359,8 +378,8 @@ export function resolveCoordinatorAuth(compositeKey: string): ResolvedCoordinato
   if (i > 0) {
     provider = compositeKey.slice(0, i)
   } else {
-    // Legacy format fallback
-    provider = compositeKey.startsWith('claude-') ? 'anthropic' : 'openai'
+    // Legacy format fallback — `openai` is the historical default for unknown ids.
+    provider = inferProviderFromModelId(compositeKey) ?? 'openai'
   }
 
   switch (provider) {

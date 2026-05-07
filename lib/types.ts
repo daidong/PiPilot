@@ -39,6 +39,7 @@ export const PATHS = {
   memoryRoot: '.research-pilot/memory-v2',
   explainDir: '.research-pilot/memory-v2/explain',
   sessionSummaries: '.research-pilot/memory-v2/session-summaries',
+  compactionState: '.research-pilot/memory-v2/compaction-state',
 
   // Structured long-term memory (auto-memory)
   memory: '.research-pilot/memory',
@@ -48,7 +49,19 @@ export const PATHS = {
   skillsConfig: '.research-pilot/skills-config.json',
 
   // Local compute runs
-  computeRuns: '.research-pilot/compute-runs'
+  computeRuns: '.research-pilot/compute-runs',
+
+  // Telemetry & Trace (v0.10 spec)
+  telemetryRoot: '.research-pilot',
+  traces: '.research-pilot/traces',
+  blobs: '.research-pilot/blobs',
+  ledgerArtifact: '.research-pilot/artifacts/ledger.jsonl',
+  ledgerMemory: '.research-pilot/memory-v2/ledger.jsonl',
+  userResponseSignals: '.research-pilot/user-response-signals.jsonl',
+  viewLog: '.research-pilot/view-log.jsonl',
+  tracingState: '.research-pilot/tracing-state.jsonl',
+  traceDigest: '.research-pilot/trace-digest.jsonl',
+  traceStorageStats: '.research-pilot/trace-storage-stats.jsonl'
 } as const
 
 // ============================================================================
@@ -166,6 +179,24 @@ export interface UserCorrection {
   createdAt: string
 }
 
+// ============================================================================
+// Telemetry / Trace types (v0.10 spec — see docs/spec/telemetry-trace.md §10.2)
+// ============================================================================
+
+export interface ProjectTelemetryConfig {
+  /**
+   * Single hard off-switch. Default for new projects: 'disabled' (opt-in).
+   * Existing projects with explicit `tracingMode: 'enabled'` keep their value
+   * across migrations — see `lib/telemetry/migration.ts`.
+   */
+  tracingMode: 'enabled' | 'disabled'
+  /** TraceStore ring queue capacity. Default: 1024 spans. */
+  bufferCapacity?: number
+}
+
+/** Current ProjectConfig schema version. v0.7+ = 1. */
+export const PROJECT_CONFIG_SCHEMA_VERSION = 1 as const
+
 export interface ProjectConfig {
   name: string
   description?: string
@@ -173,6 +204,26 @@ export interface ProjectConfig {
   userCorrections: UserCorrection[]
   createdAt: string
   updatedAt: string
+
+  // v0.7+ telemetry fields (added by migration on first load — see lib/telemetry/migration.ts)
+  /** Stable project id (ULID). Generated on first load if missing. */
+  id?: string
+  /** Project-scoped telemetry knobs. */
+  telemetry?: ProjectTelemetryConfig
+  /** Migration version. 0/undefined = pre-telemetry; 1 = v0.7+. */
+  configSchemaVersion?: number
+}
+
+/** Augments .research-pilot/usage.json with v0.7 cutoff snapshot (§14.3). */
+export interface UsageTotals {
+  tokens: number
+  cost: number
+  /** Set once at first load under v0.7; never updated. */
+  preTraceCutoffTotals?: {
+    tokens: number
+    cost: number
+    cutoffTimestamp: string
+  }
 }
 
 export interface Session {
@@ -187,6 +238,14 @@ export interface CLIContext {
   projectPath: string
   lastAgentResponse?: string
   debug?: boolean
+  /**
+   * Per-turn identifier minted at the IPC boundary. Plumbed through to the
+   * artifact-ledger so each row has a 1-hop join back to the originating
+   * turn (otherwise consumers must traverse trace JSONL → root span →
+   * `pipilot.turn.id`). Undefined for non-turn paths (CLI commands, wiki
+   * background agent, bootstrap, migrations).
+   */
+  turnId?: string
 }
 
 // ============================================================================

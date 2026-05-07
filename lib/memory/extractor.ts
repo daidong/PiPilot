@@ -5,11 +5,13 @@
  * memory-worthy information from the conversation.
  *
  * Gated by RESEARCH_COPILOT_AUTO_EXTRACT=1 (default OFF).
- * Uses completeSimple() with the main model's system prompt for prompt cache hits.
+ * Reuses the main model's system prompt for prompt cache hits across the
+ * background trace and the user-facing trace.
  */
 
-import type { Model, TextContent } from '@mariozechner/pi-ai'
-import { completeSimple } from '@mariozechner/pi-ai'
+import type { Model } from '@mariozechner/pi-ai'
+import { runSubLlmText } from '../telemetry/sub-llm.js'
+import { ROOT_CONTEXT } from '@opentelemetry/api'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
 import {
   type MemoryType,
@@ -28,6 +30,20 @@ export interface ExtractionConfig {
   apiKey: string
   systemPrompt: string
   debug?: boolean
+  /**
+   * Optional telemetry tracer (telemetry-trace v0.10 §6.5). When set, the
+   * extractor's LLM call becomes a `chat` span on its own trace (background
+   * extraction must not extend the user-task trace's lifetime — keeping the
+   * root-end signal clean for digest writing).
+   */
+  tracer?: import('../telemetry/tracer.js').PipilotTracer | null
+  authMode?: import('../telemetry/semantic-registry.js').PipilotAuthMode
+  /**
+   * Optional usage emitter (G1, telemetry-trace v0.13). When provided, the
+   * extractor's LLM call feeds the same accumulator the main loop uses, so
+   * background-extraction tokens stop being invisible to usage.json + UI.
+   */
+  onUsage?: (usage: unknown, cost: unknown) => void
 }
 
 interface ExtractedMemory {
@@ -54,7 +70,7 @@ Return ONLY a JSON array (no markdown fences, no explanation):
 Or: []`
 
 /**
- * Convert AgentMessage[] to simple {role, content} pairs for completeSimple().
+ * Convert AgentMessage[] to simple {role, content} pairs for sub-LLM replay.
  * Truncates long tool results to keep token count reasonable.
  */
 function simplifyMessages(
@@ -145,18 +161,23 @@ export async function maybeExtractMemories(
       timestamp: Date.now()
     })
 
-    const result = await completeSimple(config.model, {
+    // Spec §6.5: background extraction lives on its own trace. ROOT_CONTEXT
+    // detaches from any active span so the OTel SDK mints a fresh traceId.
+    // pi-ai's Message union requires extra fields on assistant turns, but
+    // for this context-only replay the providers only read role/content/
+    // timestamp — `as any` gets us past the strict union mismatch.
+    const text = (await runSubLlmText({
+      model: config.model,
       systemPrompt: config.systemPrompt,
-      // pi-ai's Message union requires extra fields on assistant turns, but
-      // for this context-only replay the providers read role/content/timestamp.
-      messages: simplified as any
-    }, {
+      messages: simplified as any,
+      apiKey: config.apiKey,
       maxTokens: 1024,
-      apiKey: config.apiKey
-    })
-
-    const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-    const text = textContent?.text?.trim() ?? ''
+      tracer: config.tracer,
+      parent: ROOT_CONTEXT,
+      authMode: config.authMode,
+      purpose: 'memory-extract',
+      ...(config.onUsage && { onUsage: config.onUsage as (usage: any, cost: any) => void })
+    })).trim()
     if (!text || text === '[]') return
 
     // Fix #2: More robust JSON extraction

@@ -15,7 +15,7 @@
 import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import { Agent } from '@mariozechner/pi-agent-core'
-import { getModel as getPiModel, completeSimple } from '@mariozechner/pi-ai'
+import { getModel as getPiModel } from '@mariozechner/pi-ai'
 import { createCodingTools, createGrepTool, createFindTool, createLsTool, estimateTokens, shouldCompact, generateSummary, DEFAULT_COMPACTION_SETTINGS } from '@mariozechner/pi-coding-agent'
 import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent, ImageContent } from '@mariozechner/pi-ai'
@@ -24,33 +24,39 @@ import { createResearchTools, type ResearchToolContext } from '../tools/index.js
 import { probeStaticProfile, generateAgentGuidance } from '../local-compute/environment-model.js'
 import { maybeExtractMemories } from '../memory/extractor.js'
 import { createLoadSkillTool } from '../tools/skill-tools.js'
-import { loadAllSkills, readEnabledSkills, resolveSkillDependencies, buildSkillsCatalogPrompt, buildSkillSummary, type SkillEntry } from '../skills/loader.js'
+import { loadAllSkills, readEnabledSkills, resolveSkillDependencies, buildSkillsCatalogPrompt, type SkillEntry } from '../skills/loader.js'
+import {
+  detectIntentsByRules,
+  classifyPersistenceDecision,
+  buildMentionContext,
+  buildSessionSummaryContext,
+  buildSkillSummariesPrompt,
+  type PersistenceDecision
+} from './context-builder.js'
+import { createSessionBootstrap } from './session-bootstrap.js'
+import { createCoordinatorTelemetryAdapter } from './telemetry-adapter.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
-import { ROUTER_MODELS } from '../models.js'
+import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
+import { runSubLlmText } from '../telemetry/sub-llm.js'
+import type { PipilotTracer } from '../telemetry/tracer.js'
+import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
+import { SpanKind, type Span, type Attributes } from '@opentelemetry/api'
+import { redact } from '../telemetry/redaction.js'
+import { createHash } from 'crypto'
 import {
   migrateLegacyArtifacts,
   findArtifactById,
   readLatestSessionSummary,
   writeSessionSummary,
-  readOrphanMessages,
-  type OrphanMessage
+  readCompactionState,
+  writeCompactionState,
+  deleteCompactionState,
+  COMPACTION_STATE_SCHEMA_VERSION
 } from '../memory-v2/store.js'
 
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
-
-type IntentLabel =
-  | 'literature'
-  | 'data'
-  | 'writing'
-  | 'critique'
-  | 'web'
-  | 'citation'
-  | 'grants'
-  | 'docx'
-  | 'general'
-type PersistenceDecision = 'ephemeral' | 'conditional' | 'persist-requested'
 
 interface TurnExplainSnapshot {
   timestamp: string
@@ -78,23 +84,6 @@ interface TurnExplainSnapshot {
   }
 }
 
-function detectIntentsByRules(message: string): Set<IntentLabel> {
-  const text = message.toLowerCase()
-  const intents = new Set<IntentLabel>()
-
-  if (/(paper|papers|literature|related work|citation|survey|systematic review|find papers|arxiv|doi|bibtex|scholar)/.test(text)) intents.add('literature')
-  if (/(data|dataset|csv|tsv|xlsx|xls|json|parquet|statistics|statistical|analysis|analyze|visualize|plot|chart|graph|matplotlib|seaborn|regression|modeling|correlation|distribution|outlier)/.test(text)) intents.add('data')
-  if (/(rewrite|draft|write|outline|abstract|introduction|section|manuscript|proposal|review article|写作|改写|润色|摘要|大纲)/.test(text)) intents.add('writing')
-  if (/(citation|cite|bibtex|endnote|zotero|doi|reference list|references|参考文献|引文|引证)/.test(text)) intents.add('citation')
-  if (/(grant|grants|proposal|specific aims|broader impacts|nih|nsf|doe|darpa|funding|资助|基金|申报书)/.test(text)) intents.add('grants')
-  if (/(docx|word document|tracked changes|track changes|ooxml|comment thread|批注|修订)/.test(text)) intents.add('docx')
-  if (/(critique|review|evaluate|assessment|assess|weakness|limitation|pros|cons|flaw|评审|评价|批评|缺陷|可行性)/.test(text)) intents.add('critique')
-  if (/(latest|today|news|deadline|release|price|官网|新闻|截止|版本)/.test(text)) intents.add('web')
-
-  return intents
-}
-
-
 const MAX_SKILL_PRELOAD = 5
 
 async function matchSkillsWithLLM(
@@ -102,7 +91,10 @@ async function matchSkillsWithLLM(
   apiKey: string,
   message: string,
   skills: SkillEntry[],
-  priorTurns: Array<{ userMessage: string; response: string }> = []
+  priorTurns: Array<{ userMessage: string; response: string }> = [],
+  tracer: PipilotTracer | null = null,
+  authMode?: PipilotAuthMode,
+  onUsage?: (usage: unknown, cost: unknown) => void
 ): Promise<string[]> {
   if (!model || skills.length === 0) return []
 
@@ -134,16 +126,17 @@ async function matchSkillsWithLLM(
     : message
 
   try {
-    const result = await completeSimple(model, {
+    const text = (await runSubLlmText({
+      model,
       systemPrompt,
-      messages: [{ role: 'user', content: userContent, timestamp: Date.now() }]
-    }, {
+      userContent,
+      apiKey,
       maxTokens: 100,
-      apiKey
-    })
-
-    const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-    const text = textContent?.text?.trim() ?? ''
+      tracer,
+      authMode,
+      purpose: 'router',
+      ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
+    })).trim()
     if (!text) return []
 
     // Extract JSON array from response (may be wrapped in code fences)
@@ -159,72 +152,6 @@ async function matchSkillsWithLLM(
   } catch {
     return []
   }
-}
-
-function buildSkillSummariesPrompt(matchedSkills: SkillEntry[]): string {
-  if (matchedSkills.length === 0) return ''
-  const sections = matchedSkills.map(s => {
-    const summary = buildSkillSummary(s)
-    return `### Pre-loaded: ${s.name}\n\n${summary}`
-  })
-  return [
-    '## Matched Skill Summaries',
-    'The following skills have been pre-matched to this request. The summaries below are overviews only — they do NOT contain the full procedures, scripts, or parameters.',
-    '**Rule: Always call `load_skill(name)` before executing any skill procedure.** The summary is for deciding whether a skill is relevant; the full content is required before acting on it.',
-    '',
-    ...sections
-  ].join('\n\n')
-}
-
-function classifyPersistenceDecision(message: string): { decision: PersistenceDecision; reason: string } {
-  const text = message.toLowerCase()
-
-  if (/(do not save|don't save|no artifact|just answer|不要保存|别保存|不用保存)/.test(text)) {
-    return { decision: 'ephemeral', reason: 'User explicitly requested no persistence.' }
-  }
-
-  if (/(save|persist|remember|track|record|store|archive|保存|记住|记录|跟踪|持久化)/.test(text)) {
-    return { decision: 'persist-requested', reason: 'User requested durable tracking or saving.' }
-  }
-
-  if (/(^|\s)(why|what|how|status|clarify|explain|check)(\s|$)|为什么|怎么|是否|有无|确认/.test(text)) {
-    return { decision: 'ephemeral', reason: 'Message appears to be clarification/status Q&A.' }
-  }
-
-  return { decision: 'conditional', reason: 'Persist only if reuse/traceability triggers are met during execution.' }
-}
-
-
-function buildMentionContext(mentions?: ResolvedMention[]): string {
-  if (!mentions || mentions.length === 0) return ''
-
-  return mentions
-    .filter(m => !m.error)
-    .map(m => `### ${m.label}\n\n${m.content}`)
-    .join('\n\n')
-}
-
-function buildSessionSummaryContext(summary: SessionSummary): string {
-  const lines = [
-    '## Session Summary',
-    `Turns ${summary.turnRange[0]}-${summary.turnRange[1]}:`,
-    summary.summary,
-    '',
-    `Topics: ${summary.topicsDiscussed.join(', ')}`,
-    ...(summary.openQuestions.length > 0
-      ? ['Open questions:', ...summary.openQuestions.map(q => `- ${q}`)]
-      : [])
-  ]
-  return lines.join('\n')
-}
-
-function buildRecentConversationContext(messages: OrphanMessage[]): string {
-  const lines = ['## Recent Conversation (resumed from prior session)', '']
-  for (const msg of messages) {
-    const speaker = msg.role === 'user' ? 'User' : 'Assistant'
-    lines.push(`**${speaker}:** ${msg.content}`, '')
-  }
-  return lines.join('\n').trimEnd()
 }
 
 function writeExplainSnapshot(projectPath: string, snapshot: TurnExplainSnapshot): void {
@@ -267,6 +194,16 @@ export interface CoordinatorConfig {
   onToolProgress?: (tool: string, toolCallId: string, phase: 'start' | 'update' | 'end', data: unknown) => void
   onUsage?: (usage: unknown, cost: unknown) => void
   onSkillLoaded?: (skillName: string) => void
+  /**
+   * Optional telemetry tracer (telemetry-trace v0.10 spec). When provided, every
+   * sub-LLM call (router, summarizer, extractor) and turn boundary becomes a
+   * trace span. When absent, the agent path runs unchanged.
+   */
+  tracer?: import('../telemetry/tracer.js').PipilotTracer | null
+  /** PiPilot auth mode for `pipilot.auth.mode` span attribute. */
+  authMode?: import('../telemetry/semantic-registry.js').PipilotAuthMode
+  /** Stable turnId minted at the IPC boundary; propagated as `pipilot.turn.id`. */
+  getTurnId?: () => string | undefined
 }
 
 export async function createCoordinator(config: CoordinatorConfig): Promise<{
@@ -293,7 +230,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onToolResult,
     onToolProgress,
     onUsage,
-    onSkillLoaded
+    onSkillLoaded,
+    tracer = null,
+    authMode,
+    getTurnId
   } = config
 
   /** Resolve API key — uses dynamic getter if provided (for OAuth token refresh), else static key. */
@@ -302,6 +242,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   let turnCount = 0
   let activeTurnToolCallCount: number | null = null
   const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
+  // The thinking-level accessor reads agent.state.thinkingLevel at span-open
+  // time, so mid-session UI changes land on the next span.
+  const telemetryAdapter = createCoordinatorTelemetryAdapter({
+    tracer,
+    getTurnId,
+    getThinkingLevel: () => agent.state.thinkingLevel as string | undefined,
+    debug
+  })
 
   const migration = migrateLegacyArtifacts(projectPath)
   if (debug && migration.updatedFiles > 0) {
@@ -323,15 +271,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         if (debug) console.warn(`[Coordinator] getPiModel("${piProvider}", "${parts[1]}") failed:`, err)
       }
     } else {
-      // Infer provider from model name
-      const providerHint = modelId.startsWith('claude-') ? 'anthropic'
-        : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
-        : modelId.startsWith('gemini-') ? 'google'
-        : null
+      // Infer provider from bare model id, then fall through to the rest in
+      // case the table is stale.
+      const providerHint = inferProviderFromModelId(modelId)
 
+      const fallbackProviders = ['anthropic', 'openai', 'google', 'deepseek']
       const providers = providerHint
-        ? [providerHint, 'anthropic', 'openai', 'google']
-        : ['anthropic', 'openai', 'google']
+        ? [providerHint, ...fallbackProviders.filter(p => p !== providerHint)]
+        : fallbackProviders
 
       for (const provider of providers) {
         try {
@@ -370,10 +317,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           : parts[0] === 'anthropic-sub' ? 'anthropic'
           : parts[0]
       } else {
-        mainProvider = modelId.startsWith('claude-') ? 'anthropic'
-          : modelId.startsWith('gpt-') || modelId.startsWith('o3') || modelId.startsWith('o4') ? 'openai'
-          : modelId.startsWith('gemini-') ? 'google'
-          : null
+        mainProvider = inferProviderFromModelId(modelId)
       }
     }
 
@@ -410,12 +354,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     callLlm: async (systemPrompt: string, userContent: string) => {
       if (!piModel) throw new Error('No model available for sub-call')
       const currentKey = await resolveApiKey()
-      const result = await completeSimple(piModel, {
+      return runSubLlmText({
+        model: piModel,
         systemPrompt,
-        messages: [{ role: 'user', content: userContent, timestamp: Date.now() }]
-      }, { maxTokens: 4096, apiKey: currentKey })
-      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-      return textContent?.text ?? ''
+        userContent,
+        apiKey: currentKey,
+        maxTokens: 4096,
+        tracer,
+        authMode,
+        purpose: 'callLlm',
+        ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
+      })
     },
     // Vision-capable sibling of callLlm. Mirrors the stateless completeSimple
     // shape above plus the ImageContent transformation used by chat() at the
@@ -441,12 +390,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       ]
       // 8K output budget — SVG transcription of a moderately complex
       // diagram (20-30 nodes) typically lands around 4-6K characters.
-      const result = await completeSimple(piModel, {
+      return runSubLlmText({
+        model: piModel,
         systemPrompt,
-        messages: [{ role: 'user', content, timestamp: Date.now() }]
-      }, { maxTokens: 8192, apiKey: currentKey })
-      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-      return textContent?.text ?? ''
+        userContent: content,
+        apiKey: currentKey,
+        maxTokens: 8192,
+        tracer,
+        authMode,
+        purpose: 'callLlmVision',
+        ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
+      })
     },
     visionCapable: !!piModel?.input.includes('image'),
     onToolCall,
@@ -454,6 +408,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     settings: config.resolvedSettings,
     getSettings: config.getResolvedSettings,
     getDiagramAuth: config.getDiagramAuth,
+    getTurnId,
     rasterizeSvg: config.rasterizeSvg,
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
@@ -497,17 +452,24 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   // ── Context compaction state ──
   // Tracks the summary of compacted (discarded) messages so iterative
-  // compactions can update rather than regenerate from scratch.
-  let compactionSummary: string | undefined
+  // compactions can update rather than regenerate from scratch. Persisted
+  // to disk per session so a process restart doesn't force a full
+  // re-summarization on the next compaction event. See memory-v2/store.ts
+  // for the boundary trade-off w.r.t. bootstrap orphan injection.
+  const persistedCompaction = readCompactionState(projectPath, sessionId)
+  let compactionSummary: string | undefined = persistedCompaction?.summary
+  let compactionCount: number = persistedCompaction?.compactionCount ?? 0
+  if (debug && persistedCompaction) {
+    console.log(`[Compaction] Restored prior summary (count=${compactionCount}, ${compactionSummary!.length} chars) for session ${sessionId}`)
+  }
 
-  // ── Restart bootstrap state ──
-  // On the first chat() call after coordinator creation, we recover any
-  // user/assistant messages from the persisted JSONL that postdate the
-  // latest SessionSummary. They get injected verbatim into the first user
-  // message so the LLM resumes with the same context the user sees in the UI.
-  // Flips to true on the first chat() call (success or failure) — subsequent
-  // turns rely on agent.state.messages naturally accumulating as usual.
-  let bootstrapDone = false
+  // ── Restart bootstrap ──
+  // On the first chat() call after coordinator creation, recover orphan
+  // user/assistant messages from the persisted JSONL (turns from a
+  // previous process that were never folded into a SessionSummary) and
+  // inject them as a "Recent Conversation" block. Once-only: subsequent
+  // chats rely on agent.state.messages accumulating as usual.
+  const sessionBootstrap = createSessionBootstrap({ projectPath, sessionId, debug })
 
   // Create the pi-mono Agent immediately (no blocking on env probe)
   const agent = new Agent({
@@ -523,6 +485,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
     sessionId,
     getApiKey: resolveApiKey,
+
+    // Wire-level capture: onPayload/onResponse are inherited from
+    // pi-ai's StreamOptions on AgentLoopConfig and fire for the main
+    // per-step provider call. Telemetry adapter attaches them to the
+    // current `invoke_agent step` span.
+    onPayload: telemetryAdapter.onPayload,
+    onResponse: telemetryAdapter.onResponse,
 
     // ── Context compaction via transformContext ──
     // Before each LLM call, check if accumulated messages exceed the model's
@@ -577,20 +546,73 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
       try {
         const currentKey = await resolveApiKey()
-        const summary = await generateSummary(
-          messagesToSummarize,
-          piModel,
-          settings.reserveTokens,
-          currentKey,
-          undefined,
-          signal,
-          undefined,
-          compactionSummary
-        )
+        // Telemetry §6.2 + §6.8: open `summarize context` span around the
+        // generateSummary call, attach the discarded turnIds event payload.
+        const compactionSpan = tracer
+          ? tracer.startSpan('summarize context', SpanKind.INTERNAL)
+          : null
+        if (compactionSpan) {
+          compactionSpan.setAttributes({
+            'gen_ai.operation.name': 'pipilot.summarize',
+            'pipilot.compaction.discarded_messages': messagesToSummarize.length,
+            'pipilot.compaction.kept_tokens': keptTokens
+          })
+          // §6.8: turnIds are objective. AgentMessage doesn't carry our turnId,
+          // so we attach the indexes; Layer 3 can join by message index → turnId
+          // via the user-response-signals ledger.
+          compactionSpan.addEvent('pipilot.compaction.discarded', {
+            turnIds: JSON.stringify(messagesToSummarize.map((_, i) => `msg-idx-${i}`))
+          })
+        }
+        let summary: string
+        try {
+          summary = await generateSummary(
+            messagesToSummarize,
+            piModel,
+            settings.reserveTokens,
+            currentKey,
+            undefined,
+            signal,
+            undefined,
+            compactionSummary
+          )
+          // §6.9 extension: attach the running summary text on the
+          // compaction span so per-event provenance is self-contained.
+          // Without this the summary text was only recoverable via the
+          // next turn's request_payload (where it lands as a synthetic
+          // user message) or the latest-state file (lossy across history).
+          if (compactionSpan && tracer) {
+            try {
+              const { value: redactedSummary } = redact(summary, {
+                sizeCapBytes: 4096,
+                blobStore: tracer.blobs
+              })
+              compactionSpan.addEvent('pipilot.compaction.summary_text', {
+                body: JSON.stringify(redactedSummary)
+              } as Attributes)
+            } catch {
+              // Telemetry must never affect the agent path.
+            }
+          }
+        } finally {
+          compactionSpan?.end()
+        }
         compactionSummary = summary
+        compactionCount += 1
+
+        // Persist the running summary so a process restart doesn't force a
+        // full re-summarization on the next compaction event. Best-effort —
+        // failures must not affect the agent path.
+        writeCompactionState(projectPath, {
+          schemaVersion: COMPACTION_STATE_SCHEMA_VERSION,
+          sessionId,
+          summary,
+          compactionCount,
+          updatedAt: new Date().toISOString()
+        })
 
         if (debug) {
-          console.log(`[Compaction] Summarized ${messagesToSummarize.length} messages (${totalTokens - keptTokens} tokens) → kept ${messagesToKeep.length} messages`)
+          console.log(`[Compaction] Summarized ${messagesToSummarize.length} messages (${totalTokens - keptTokens} tokens) → kept ${messagesToKeep.length} messages (count=${compactionCount})`)
         }
 
         // Inject the compaction summary as a synthetic user message at the top
@@ -614,24 +636,28 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       if (debug) {
         console.log(`  [Tool] ${ctx.toolCall.name}(${JSON.stringify(ctx.args).slice(0, 120)}...)`)
       }
+      telemetryAdapter.beforeToolCall(ctx)
       return undefined
     },
     afterToolCall: async (ctx) => {
       wrappedOnToolResult(ctx.toolCall.name, ctx.result, ctx.args, ctx.toolCall.id)
-      // Notify when a skill is loaded successfully
+      // Notify when a skill is loaded successfully + emit telemetry event (§6.7).
       if (ctx.toolCall.name === 'load_skill' && onSkillLoaded) {
         const args = ctx.args as { name?: string }
         const result = ctx.result as any
         if (args?.name && result?.success !== false) {
           onSkillLoaded(args.name)
+          telemetryAdapter.recordSkillLoadOnActiveStep(args.name, 'explicit-load')
         }
       }
+      telemetryAdapter.afterToolCall(ctx)
       return undefined
     }
   })
 
-  // Subscribe to agent events for streaming, usage, and tool progress
-  if (onStream || onUsage || onToolProgress) {
+  // Subscribe to agent events for streaming, usage, tool progress, and tracing.
+  // Step-span lifecycle (turn_start / turn_end) is owned by telemetryAdapter.
+  if (onStream || onUsage || onToolProgress || tracer) {
     agent.subscribe((event: AgentEvent) => {
       if (event.type === 'message_update' && onStream) {
         if (event.assistantMessageEvent.type === 'text_delta') {
@@ -645,7 +671,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           onUsage(usage, usage.cost)
         }
       }
-      // Tool execution progress events (real-time updates during tool execution)
+      // Tool execution progress events (real-time updates during tool execution).
       if (onToolProgress) {
         if (event.type === 'tool_execution_start') {
           onToolProgress(event.toolName, event.toolCallId, 'start', { args: event.args })
@@ -655,12 +681,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           onToolProgress(event.toolName, event.toolCallId, 'end', { result: event.result, isError: event.isError })
         }
       }
+
+      telemetryAdapter.processAgentEvent(event)
     })
   }
 
   async function clearSessionMemory() {
     agent.reset()
     compactionSummary = undefined
+    compactionCount = 0
+    deleteCompactionState(projectPath, sessionId)
   }
 
   async function maybeGenerateSummary(): Promise<void> {
@@ -684,20 +714,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     try {
       const currentKey = await resolveApiKey()
-      const result = await completeSimple(intentRouterModel, {
+      const text = (await runSubLlmText({
+        model: intentRouterModel,
         systemPrompt: 'You summarize research conversations concisely. Output JSON with keys: summary (string), topicsDiscussed (string[]), openQuestions (string[]). Output ONLY valid JSON.',
-        messages: [{
-          role: 'user',
-          content: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
-          timestamp: Date.now()
-        }]
-      }, {
+        userContent: `Summarize this research assistant conversation excerpt.\n\n${historyText}`,
+        apiKey: currentKey,
         maxTokens: 512,
-        apiKey: currentKey
-      })
-
-      const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-      const text = textContent?.text?.trim() ?? ''
+        tracer,
+        authMode,
+        purpose: 'session-summary',
+        ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
+      })).trim()
       if (!text) return
       // Extract JSON from possible markdown code fences
       const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? text.match(/(\{[\s\S]*\})/)
@@ -740,7 +767,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     agent,
 
     async chat(message: string, mentions?: ResolvedMention[], images?: Array<{ base64: string; mimeType: string }>) {
-      try {
+      // Telemetry §6.2: wrap the entire chat() body in an `invoke_agent {model}`
+      // root span. Sub-LLM, tool, compaction, and step spans nest under it via
+      // AsyncLocalStorage. Span ends when chat() returns; digest writer keys on
+      // root-span end (§5.5).
+      let rootSpan: Span | null = null
+
+      const runChatBody = async () => {
+        try {
         // --- Intent detection (rule-based only, for explain snapshots) ---
         const intents = detectIntentsByRules(message)
 
@@ -753,14 +787,26 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           response: t.response
         }))
         const currentKey = await resolveApiKey()
-        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills, priorTurns)
+        const matchedSkillNames = await matchSkillsWithLLM(intentRouterModel, currentKey, message, skills, priorTurns, tracer, authMode, onUsage)
+        if (rootSpan && matchedSkillNames.length > 0) {
+          rootSpan.setAttribute('pipilot.matched_skills', matchedSkillNames)
+        }
         const matchedSkills = matchedSkillNames
           .map(name => skills.find(s => s.name === name))
           .filter((s): s is SkillEntry => s !== undefined)
 
-        // Notify UI about pre-matched skills
+        // Notify UI about pre-matched skills + emit telemetry events (§6.7).
+        // Router-match fires before any step span exists, so the events live
+        // on the root invoke_agent span. Layer 3 can join with `matched_skills`
+        // on the root attr if it needs the bulk list.
         for (const s of matchedSkills) {
           onSkillLoaded?.(s.name)
+          if (rootSpan) {
+            rootSpan.addEvent('pipilot.skill.load', {
+              skillName: s.name,
+              trigger: 'router-match'
+            })
+          }
         }
 
         const skillSummariesPrompt = buildSkillSummariesPrompt(matchedSkills)
@@ -776,28 +822,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         const latestSummary = readLatestSessionSummary(projectPath, sessionId)
         const summaryContext = latestSummary ? buildSessionSummaryContext(latestSummary) : ''
 
-        // Restart bootstrap: on the first chat after coordinator creation,
-        // pull any user/assistant messages persisted to the session JSONL
-        // that are newer than the latest summary's createdAt. These are turns
-        // that happened in a previous process and were never folded into a
-        // summary. We inject them as a "Recent Conversation" block so the LLM
-        // resumes with the same context the user sees in the UI — no extra
-        // LLM call, no compression, lossless.
-        let bootstrapContext = ''
-        if (!bootstrapDone) {
-          bootstrapDone = true
-          try {
-            const cutoffMs = latestSummary ? Date.parse(latestSummary.createdAt) || 0 : 0
-            const orphans = readOrphanMessages(projectPath, sessionId, cutoffMs)
-            if (orphans.length > 0) {
-              bootstrapContext = buildRecentConversationContext(orphans)
-              if (debug) {
-                console.log(`[Bootstrap] Recovered ${orphans.length} orphan message(s) from prior session`)
-              }
-            }
-          } catch (err) {
-            if (debug) console.warn('[Bootstrap] Failed to read orphan messages:', err)
-          }
+        // Restart bootstrap (once-only on first chat after restart).
+        const { context: bootstrapContext, orphanCount: bootstrapOrphans } =
+          sessionBootstrap.consume(latestSummary)
+        // Telemetry §6.4: stamp resumption booleans on the root span. Cheap
+        // booleans set once at first step. Layer 3 can compute fancier
+        // resumption indicators from the raw trace if needed.
+        if (rootSpan) {
+          rootSpan.setAttribute('pipilot.resumption.bootstrap_orphans', bootstrapOrphans > 0)
+          rootSpan.setAttribute('pipilot.resumption.summary_loaded', !!latestSummary)
         }
 
         const persistence = classifyPersistenceDecision(message)
@@ -948,7 +981,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // Background memory extraction (gated by RESEARCH_COPILOT_AUTO_EXTRACT=1)
         const memoryKey = await resolveApiKey()
         void maybeExtractMemories(
-          { projectPath, model: piModel!, apiKey: memoryKey, systemPrompt: enrichedSystem, debug },
+          { projectPath, model: piModel!, apiKey: memoryKey, systemPrompt: enrichedSystem, debug, tracer, authMode, onUsage },
           agent.state.messages,
           turnCount
         )
@@ -962,13 +995,43 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           response: responseText,
           ...(responseImages.length > 0 && { images: responseImages })
         }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error)
-        if (debug) {
-          console.log(`[Chat] Exception: ${errorMsg}`)
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error)
+          if (debug) {
+            console.log(`[Chat] Exception: ${errorMsg}`)
+          }
+          return { success: false, error: errorMsg }
         }
-        return { success: false, error: errorMsg }
       }
+
+      if (!tracer) return runChatBody()
+
+      // Stamp root-span identity attrs (§5.4 + §6.2). Resource attributes carry
+      // process/build identity only — per-task identity goes here.
+      const fullPromptHash = piModel ? createHash('sha256').update(piModel.id).digest('hex').slice(0, 16) : 'unknown'
+      const rootName = `invoke_agent ${piModel?.id ?? 'agent'}`
+      return tracer.runInSpan(rootName, SpanKind.INTERNAL, async (span) => {
+        rootSpan = span
+        span.setAttribute('gen_ai.operation.name', 'invoke_agent')
+        if (piModel) span.setAttribute('gen_ai.request.model', piModel.id)
+        span.setAttribute('pipilot.runtime.full_prompt_hash', `sha256:${fullPromptHash}`)
+        const tid = getTurnId?.()
+        if (tid) span.setAttribute('pipilot.turn.id', tid)
+        // Capture thinking level on the root span so the per-turn config is
+        // visible alongside model + token usage. Step spans pick it up via
+        // the adapter's getThinkingLevel accessor.
+        const tl = agent.state.thinkingLevel
+        if (tl) span.setAttribute('pipilot.thinking_level', tl)
+        // Reset the per-user-turn step counter so request_payload is
+        // recorded only on step 1 of this turn (v0.12 wire-payload
+        // reduction policy — see telemetry-adapter.ts).
+        telemetryAdapter.markUserTurnStart()
+        try {
+          return await runChatBody()
+        } finally {
+          telemetryAdapter.markUserTurnEnd()
+        }
+      })
     },
 
     clearSessionMemory,

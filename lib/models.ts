@@ -98,6 +98,34 @@ export const ROUTER_MODELS: Record<string, string> = {
 /** Sonnet stays separate — current at 4.6 and not on the flagship/previous ladder. */
 export const ANTHROPIC_SONNET = 'claude-sonnet-4-6'
 
+/**
+ * Bare-model-id prefix → pi-ai provider.
+ * Subscription variants (`openai-codex`, `anthropic-sub`) are intentionally
+ * NOT inferred — they share bare ids with their API counterparts and must be
+ * given as explicit `provider:model` composite keys.
+ *
+ * When adding a new provider to MODEL_TIERS, add its bare-id prefix here.
+ */
+const BARE_MODEL_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ['claude-', 'anthropic'],
+  ['gpt-', 'openai'],
+  ['o3', 'openai'],
+  ['o4', 'openai'],
+  ['gemini-', 'google'],
+  ['deepseek-', 'deepseek'],
+]
+
+/**
+ * Infer the pi-ai provider from a bare model id (no `provider:` prefix).
+ * Returns null for unknown ids — caller decides the default policy.
+ */
+export function inferProviderFromModelId(modelId: string): string | null {
+  for (const [prefix, provider] of BARE_MODEL_PREFIXES) {
+    if (modelId.startsWith(prefix)) return provider
+  }
+  return null
+}
+
 /** Default model on first launch / store reset. */
 export const DEFAULT_MODEL_ID = `openai:${MODEL_TIERS.openai.flagship}`
 

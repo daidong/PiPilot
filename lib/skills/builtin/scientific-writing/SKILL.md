@@ -265,10 +265,17 @@ Apply fundamental scientific writing principles. For detailed guidance, refer to
 
 Good academic writing is NOT a list of logical points. It is a narrative that draws the reader in step by step, guiding them to understand and agree with your argument. Think of it as storytelling: each section should motivate the next, every sentence should earn its place, and the reader should never wonder "why am I reading this?"
 
-**Key shift**: From "enumerating logic" to "telling a story."
-- Build suspense with open questions
-- Deliver insights as resolutions
-- Let each paragraph naturally set up the next
+**Key shift**: From "enumerating logic" to "telling a story." Narrative here means logical
+scaffolding — each paragraph follows because the previous one set up its content. It does
+NOT mean dramatized openings, manufactured tension, or rhetorical hooks.
+- Let each paragraph naturally set up the next through its content, not through staged questions
+- State the claim plainly; the reader will keep reading because the reasoning is sound
+
+**Explain, don't defend.** Write to explain an idea to a colleague, not to defend it against a
+reviewer. Cut posturing connectives (`crucially`, `importantly`, `it is worth noting`),
+defensive `X is not Y` framings, disqualification clauses, and em-dash asides that interrupt
+one idea with another. For the full pattern catalog and diagnostic, see the `rewrite-humanize`
+skill (section "Explain, Don't Defend") and `@rewrite-humanize/references/lexicon.md`.
 
 **Style principles:**
 1. **Formal but accessible**: Technical precision without unnecessary jargon
@@ -285,12 +292,13 @@ Good academic writing is NOT a list of logical points. It is a narrative that dr
 #### Good vs Bad Examples
 
 **Opening paragraphs:**
-- Bad: "This section covers three topics. First, we discuss X. Second, we examine Y. Third, we analyze Z."
-- Good: "Understanding X requires grappling with a fundamental tension: while Y promises efficiency, it often sacrifices the nuance that Z demands. This section traces how researchers have navigated this trade-off, revealing patterns that inform our approach."
+- Bad (enumeration): "This section covers three topics. First, we discuss X. Second, we examine Y. Third, we analyze Z."
+- Bad (posturing): "Understanding X requires grappling with a fundamental tension: while Y promises efficiency, it often sacrifices the nuance that Z demands." (dramatized framing — "grappling with", "promises", "sacrifices the nuance" perform rigor instead of stating the claim)
+- Good: "X depends on a trade-off between Y and Z. This section reviews how prior work has handled it and where our approach differs."
 
 **Section transitions:**
-- Bad: "Section 3: Methodology" / "This section describes our methodology."
-- Good: "Section 3: Methodology" / "The tensions identified above—between scalability and accuracy, between generality and domain specificity—shaped our methodological choices. We sought an approach that could..."
+- Bad (vacuous): "Section 3: Methodology" / "This section describes our methodology."
+- Good: "Section 3: Methodology" / "The trade-offs above shape our design. We need an approach that handles scalability without losing domain specificity, which leads us to the following method."
 
 **Troubleshooting common issues:**
 - *Writing feels like a list*: Check if paragraphs start with "First," "Second," "Additionally." Rewrite openings as questions, tensions, or claims.

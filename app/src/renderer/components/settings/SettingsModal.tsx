@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon } from 'lucide-react'
+import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon, Activity } from 'lucide-react'
 import { ApiKeysSettings } from './ApiKeysSettings'
 import { ResearchSettings } from './ResearchSettings'
 import { DataAnalysisSettings } from './DataAnalysisSettings'
 import { WikiAgentSettings } from './WikiAgentSettings'
 import { DiagramSettings } from './DiagramSettings'
+import { TelemetrySettings } from './TelemetrySettings'
 import type { AppSettings } from '../../../../../shared-ui/settings-types'
 import { DEFAULT_SETTINGS } from '../../../../../shared-ui/settings-types'
 
 const api = (window as any).api
 
-type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram'
+type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram' | 'telemetry'
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
   { id: 'api-keys', label: 'API Keys', icon: Key },
@@ -18,6 +19,7 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
   { id: 'data-analysis', label: 'Data Analysis', icon: BarChart2 },
   { id: 'paper-wiki', label: 'Paper Wiki', icon: BookMarked },
   { id: 'diagram', label: 'Diagrams', icon: ImageIcon },
+  { id: 'telemetry', label: 'Telemetry', icon: Activity },
 ]
 
 interface Props {
@@ -270,6 +272,9 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
                 reviewProvider={settings.diagram?.reviewProvider ?? 'auto'}
                 onChangeReviewProvider={v => updateSettings({ diagram: { reviewProvider: v } })}
               />
+            )}
+            {activeTab === 'telemetry' && (
+              <TelemetrySettings />
             )}
           </div>
 

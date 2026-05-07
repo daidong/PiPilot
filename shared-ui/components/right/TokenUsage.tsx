@@ -24,8 +24,11 @@ export function TokenUsage() {
 
   const [confirmReset, setConfirmReset] = useState(false)
 
-  // Cache hit rate: cached reads / total input (prompt + cached)
-  const totalInputTokens = allTimePromptTokens + allTimeCachedTokens
+  // Cache hit rate (G3, v0.13): denominator = uncached input + cache_read +
+  // cache_creation. Anthropic charges all three as input; the previous
+  // formula omitted cache_creation and overstated the rate when new cache
+  // entries were being populated.
+  const totalInputTokens = allTimePromptTokens + allTimeCachedTokens + allTimeCacheWriteTokens
   const allTimeCacheHitRate = totalInputTokens > 0
     ? allTimeCachedTokens / totalInputTokens
     : 0

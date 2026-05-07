@@ -22,6 +22,19 @@ export interface UsageTotals {
     cost: number
     calls: number
   }
+  /**
+   * Snapshot of accumulated totals at the moment the project was first loaded
+   * under v0.7+ (telemetry-trace spec §14.3). Set once, never updated.
+   *
+   * Used by the dual-write window: trace-aggregated totals start at 0 for old
+   * projects, so the renderer/UI can present "pre-cutoff" history honestly
+   * without pretending old data has full trace fidelity.
+   */
+  preTraceCutoffTotals?: {
+    tokens: number
+    cost: number
+    cutoffTimestamp: string
+  }
 }
 
 const EMPTY: UsageTotals = {
@@ -90,7 +103,10 @@ export function accumulateUsage(
       cacheWriteTokens: existing.totals.cacheWriteTokens + cacheWriteTokens,
       cost: existing.totals.cost + cost,
       calls: existing.totals.calls + 1
-    }
+    },
+    // Preserve cutoff snapshot — set once by ensurePreTraceCutoff(), must not
+    // be wiped by routine accumulate writes (telemetry-trace §14.3 dual-write).
+    ...(existing.preTraceCutoffTotals && { preTraceCutoffTotals: existing.preTraceCutoffTotals })
   }
   writeAtomically(usagePath(baseDir), JSON.stringify(next, null, 2))
   return next
@@ -104,4 +120,68 @@ export function resetUsageTotals(baseDir: string): UsageTotals {
   }
   writeAtomically(usagePath(baseDir), JSON.stringify(cleared, null, 2))
   return cleared
+}
+
+/**
+ * Set `preTraceCutoffTotals` on first telemetry-aware load if absent (§14.3).
+ * Idempotent; the cutoff snapshot is set ONCE and never updated again.
+ */
+export function ensurePreTraceCutoff(baseDir: string): UsageTotals {
+  const cur = loadUsageTotals(baseDir)
+  if (cur.preTraceCutoffTotals) return cur
+  const updated: UsageTotals = {
+    ...cur,
+    preTraceCutoffTotals: {
+      tokens: cur.totals.tokens,
+      cost: cur.totals.cost,
+      cutoffTimestamp: new Date().toISOString()
+    }
+  }
+  writeAtomically(usagePath(baseDir), JSON.stringify(updated, null, 2))
+  return updated
+}
+
+/**
+ * Read trace-aggregated token totals by summing the trace-digest.jsonl rows.
+ *
+ * Returns the secondary "post-cutoff" totals — what the new path measures from
+ * traces. Compared against `loadUsageTotals(...) - preTraceCutoffTotals` during
+ * the P1 dual-write window. Acceptable delta is ≈ 0 for new chats.
+ */
+export function readTraceAggregatedTotals(projectPath: string): {
+  tokens: { input: number; output: number; cacheRead: number; cacheCreation: number }
+  digestRowCount: number
+} {
+  const digestPath = join(projectPath, '.research-pilot', 'trace-digest.jsonl')
+  let totalIn = 0
+  let totalOut = 0
+  let totalCR = 0
+  let totalCC = 0
+  let rows = 0
+  try {
+    const raw = readFileSync(digestPath, 'utf-8')
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const row = JSON.parse(trimmed) as { tokens?: { input: number; output: number; cache_read: number; cache_creation: number } }
+        if (row.tokens) {
+          totalIn += row.tokens.input
+          totalOut += row.tokens.output
+          totalCR += row.tokens.cache_read
+          totalCC += row.tokens.cache_creation
+          rows++
+        }
+      } catch {
+        // Skip malformed lines (digest writer is append-only; partial writes
+        // are theoretically possible during crash recovery).
+      }
+    }
+  } catch {
+    // No digest file yet: trace-aggregated totals are zero.
+  }
+  return {
+    tokens: { input: totalIn, output: totalOut, cacheRead: totalCR, cacheCreation: totalCC },
+    digestRowCount: rows
+  }
 }

@@ -18,6 +18,7 @@
 
 import { Blob } from 'node:buffer'
 import type { ImageCapability, ImageGenOptions, ImageProvider, Quality } from './types.js'
+import { tracedFetch } from '../../telemetry/http-trace.js'
 
 const GENERATIONS_URL = 'https://api.openai.com/v1/images/generations'
 const EDITS_URL = 'https://api.openai.com/v1/images/edits'
@@ -59,15 +60,28 @@ async function postJson(url: string, apiKey: string, body: unknown): Promise<Ope
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+    const requestModel = (body as { model?: string }).model ?? DEFAULT_MODEL
+    const res = await tracedFetch(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: ctl.signal,
       },
-      body: JSON.stringify(body),
-      signal: ctl.signal,
-    })
+      {
+        // Image generation isn't a `chat` operation; use a PiPilot-namespaced
+        // span name. The execute_tool parent already carries the diagram tool
+        // identity, so the chat-vs-image distinction is unambiguous.
+        spanName: `pipilot.image.generate ${requestModel}`,
+        genAi: { provider: 'openai', requestModel },
+        authMode: 'api-key',
+        purpose: 'diagram-image-generate'
+      }
+    )
     const json = (await res.json()) as OpenAIImageResponse
     if (!res.ok) {
       const msg = json.error?.message || `HTTP ${res.status}`
@@ -96,12 +110,22 @@ async function postMultipart(
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-      body: form as unknown as ReadableStream,
-      signal: ctl.signal,
-    })
+    const requestModel = fields.model ?? DEFAULT_MODEL
+    const res = await tracedFetch(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+        body: form as unknown as ReadableStream,
+        signal: ctl.signal,
+      },
+      {
+        spanName: `pipilot.image.edit ${requestModel}`,
+        genAi: { provider: 'openai', requestModel },
+        authMode: 'api-key',
+        purpose: 'diagram-image-edit'
+      }
+    )
     const json = (await res.json()) as OpenAIImageResponse
     if (!res.ok) {
       const msg = json.error?.message || `HTTP ${res.status}`

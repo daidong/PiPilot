@@ -1,5 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { createHash } from 'crypto'
+import { trace as otelTrace } from '@opentelemetry/api'
+import { createArtifactLedgerWriter, type ArtifactOp } from '../ledger/artifact-ledger.js'
 import {
   PATHS,
   AGENT_MD_ID,
@@ -89,6 +92,7 @@ export type CreateArtifactInput =
       identityConfidence?: 'high' | 'medium' | 'low'
       arxivId?: string
       pubmedId?: string
+      pmcId?: string
       semanticScholarId?: string
     }
   | {
@@ -162,6 +166,7 @@ export interface UpdateArtifactInput {
   identityConfidence?: 'high' | 'medium' | 'low'
   arxivId?: string
   pubmedId?: string
+  pmcId?: string
   semanticScholarId?: string
 }
 
@@ -414,6 +419,11 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
   const filePath = join(dir, `${artifact.id}.json`)
   writeFileSync(filePath, JSON.stringify(artifact, null, 2), 'utf-8')
 
+  // Telemetry §8.1: append to artifact ledger. Best-effort — failures don't
+  // affect the agent path. Trace context is auto-pulled by the writer;
+  // turnId comes from CLIContext when the call is on a user turn.
+  void writeArtifactLedgerCreate(context.projectPath, artifact, filePath, context.turnId)
+
   return { artifact, filePath }
 }
 
@@ -455,7 +465,7 @@ export function findArtifactById(projectPath: string, artifactId: string): Artif
   return null
 }
 
-export function updateArtifact(projectPath: string, artifactId: string, patch: UpdateArtifactInput): ArtifactFileRecord | null {
+export function updateArtifact(projectPath: string, artifactId: string, patch: UpdateArtifactInput, turnId?: string): ArtifactFileRecord | null {
   const found = findArtifactById(projectPath, artifactId)
   if (!found) return null
 
@@ -471,14 +481,17 @@ export function updateArtifact(projectPath: string, artifactId: string, patch: U
   } as Artifact
 
   writeFileSync(found.filePath, JSON.stringify(updated, null, 2), 'utf-8')
+  // Telemetry §8.1: ledger row for edit op.
+  void writeArtifactLedgerUpdate(projectPath, updated, found.artifact, turnId)
   return { artifact: updated, filePath: found.filePath }
 }
 
-export function deleteArtifact(projectPath: string, artifactId: string): ArtifactFileRecord | null {
+export function deleteArtifact(projectPath: string, artifactId: string, turnId?: string): ArtifactFileRecord | null {
   const found = findArtifactById(projectPath, artifactId)
   if (!found) return null
 
   rmSync(found.filePath)
+  void writeArtifactLedgerDelete(projectPath, found.artifact, turnId)
   return found
 }
 
@@ -596,6 +609,84 @@ export function readLatestSessionSummary(projectPath: string, sessionId: string)
   return readJson<SessionSummary | null>(join(dir, files[0]), null)
 }
 
+// ============================================================================
+// Compaction State
+// ============================================================================
+//
+// Persists pi-coding-agent's running compaction summary across process
+// restarts. Without this, a long-lived session that has already compacted
+// once will pay the full re-summarization cost on the next compaction
+// after every restart (the prior `previousSummary` argument is lost).
+//
+// Boundary trade-off: when the coordinator's first chat() after restart
+// runs the orphan-recovery bootstrap, it injects session-summary content
+// + replayed user/assistant turns into the head of the new agent
+// transcript. Restoring the prior compactionSummary then asks pi to
+// extend it with messages whose head-most content semantically overlaps
+// with what the prior summary already covered. The LLM extension is
+// expected to dedupe, but a small amount of content overlap is possible.
+// We accept this trade-off — the alternative is to drop the persisted
+// summary whenever a bootstrap occurs, which costs a re-summarization
+// every restart and defeats the purpose of persistence.
+
+export const COMPACTION_STATE_SCHEMA_VERSION = 1
+
+export interface CompactionState {
+  schemaVersion: typeof COMPACTION_STATE_SCHEMA_VERSION
+  sessionId: string
+  summary: string
+  /** Number of compaction events that have contributed to this summary. */
+  compactionCount: number
+  /** ISO timestamp of the most recent write. */
+  updatedAt: string
+}
+
+function compactionStateFile(projectPath: string, sessionId: string): string {
+  return join(projectPath, PATHS.compactionState, `${sessionId}.json`)
+}
+
+/**
+ * Read compaction state for a session. Returns null when:
+ * - file is missing
+ * - JSON is malformed
+ * - schemaVersion does not match the current code
+ * - required fields are missing
+ *
+ * Never throws — corrupt persisted state must not block agent startup.
+ */
+export function readCompactionState(projectPath: string, sessionId: string): CompactionState | null {
+  const filePath = compactionStateFile(projectPath, sessionId)
+  if (!existsSync(filePath)) return null
+  const raw = readJson<unknown>(filePath, null)
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Partial<CompactionState>
+  if (obj.schemaVersion !== COMPACTION_STATE_SCHEMA_VERSION) return null
+  if (typeof obj.sessionId !== 'string' || obj.sessionId !== sessionId) return null
+  if (typeof obj.summary !== 'string' || obj.summary.length === 0) return null
+  if (typeof obj.compactionCount !== 'number') return null
+  if (typeof obj.updatedAt !== 'string') return null
+  return obj as CompactionState
+}
+
+/** Write compaction state. Best-effort — IO errors are swallowed. */
+export function writeCompactionState(projectPath: string, state: CompactionState): void {
+  try {
+    writeJson(compactionStateFile(projectPath, state.sessionId), state)
+  } catch {
+    // Persistence failure must not block the agent.
+  }
+}
+
+/** Delete compaction state for a session. No-op if file is missing. */
+export function deleteCompactionState(projectPath: string, sessionId: string): void {
+  const filePath = compactionStateFile(projectPath, sessionId)
+  try {
+    if (existsSync(filePath)) rmSync(filePath, { force: true })
+  } catch {
+    // ignore
+  }
+}
+
 export interface OrphanMessage {
   role: 'user' | 'assistant'
   content: string
@@ -638,3 +729,110 @@ export function readOrphanMessages(
   }
   return result
 }
+
+// ─── Artifact ledger integration (telemetry-trace v0.10 §8.1) ─────────────
+//
+// Best-effort, fire-and-forget. The artifact JSON write is the read-side
+// authority; ledger rows accrete an event log alongside.
+
+function hashArtifactContent(artifact: Artifact): string {
+  // Hash the canonical JSON for stable comparison; minor field reorders
+  // shouldn't trigger spurious diffs because we serialize via JSON.stringify
+  // which is field-order-stable from the same TypeScript shape.
+  const json = JSON.stringify(artifact)
+  return 'sha256:' + createHash('sha256').update(json).digest('hex')
+}
+
+function relPath(projectPath: string, filePath: string): string {
+  // Workspace-relative POSIX path; tolerant of platform separators.
+  const rel = filePath.startsWith(projectPath) ? filePath.slice(projectPath.length) : filePath
+  return rel.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
+async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string, turnId?: string): Promise<void> {
+  try {
+    const writer = createArtifactLedgerWriter(projectPath)
+    await writer.append({
+      artifactId: artifact.id,
+      version: 1,
+      op: 'create',
+      type: artifact.type,
+      path: relPath(projectPath, filePath),
+      contentHash: hashArtifactContent(artifact),
+      versionBefore: null,
+      initiator: pickInitiator(artifact),
+      turnId
+    })
+  } catch {
+    // Swallow — ledger failures must not block agent.
+  }
+}
+
+async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact, turnId?: string): Promise<void> {
+  try {
+    const writer = createArtifactLedgerWriter(projectPath)
+    await writer.append({
+      artifactId: after.id,
+      version: incrementVersion(after, before),
+      op: 'edit',
+      type: after.type,
+      path: relPath(projectPath, ''),
+      contentHash: hashArtifactContent(after),
+      versionBefore: extractVersion(before),
+      initiator: pickInitiator(after),
+      turnId
+    })
+  } catch {
+    // ignore
+  }
+}
+
+async function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact, turnId?: string): Promise<void> {
+  try {
+    const writer = createArtifactLedgerWriter(projectPath)
+    await writer.append({
+      artifactId: artifact.id,
+      version: extractVersion(artifact) + 1,
+      op: 'delete',
+      type: artifact.type,
+      path: '',
+      contentHash: hashArtifactContent(artifact),
+      versionBefore: extractVersion(artifact),
+      initiator: pickInitiator(artifact),
+      turnId
+    })
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Best-effort initiator inference from provenance. Falls back to 'tool' which
+ * is the most common case under PiPilot (artifact ops happen via tool calls).
+ */
+function pickInitiator(a: Artifact): 'user' | 'assistant' | 'tool' | 'external' {
+  const src = a.provenance?.source
+  if (src === 'user') return 'user'
+  if (src === 'agent') return 'assistant'
+  if (src === 'import') return 'external'
+  return 'tool'
+}
+
+function extractVersion(_a: Artifact): number {
+  // Per-file artifact JSON doesn't yet carry a `version` field. We use 1 as
+  // the synthetic baseline; real version increments come from the ledger
+  // count, not the artifact JSON. P1 tradeoff per spec §14.2.
+  return 1
+}
+
+function incrementVersion(_after: Artifact, _before: Artifact): number {
+  // Same simplification: ledger version is a monotonic event count, derived
+  // by analysis tools by counting prior rows for this artifactId, not stored
+  // on the JSON. Returning 2 keeps the row well-formed; analysis SHOULD use
+  // the row order, not this field.
+  return 2
+}
+
+// Suppress unused-import warning when `otelTrace` isn't referenced directly
+// here (the ledger writer pulls trace context via `trace.getActiveSpan()`).
+void otelTrace

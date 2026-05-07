@@ -41,6 +41,9 @@ export type ToolErrorCode =
   | 'NOT_FOUND'
   | 'UNSUPPORTED_FORMAT'
   | 'AMBIGUOUS'
+  // Diagram tool — distinct error classes the agent can recover from differently
+  | 'SVG_REQUIRES_VISION_MODEL'   // Switch to a vision-capable model or use PNG output
+  | 'SVG_TRANSCRIPTION_FAILED'    // PNG anchor is intact; retry with format=png
 
 // ---------------------------------------------------------------------------
 // ToolResult — standardized result envelope
