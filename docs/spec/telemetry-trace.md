@@ -245,6 +245,43 @@ Resource attributes are per-process, immutable for the process lifetime, and car
 - Does **not** hold mutable trace state on `ResearchToolContext`. (See §4.2.)
 - Does **not** classify user messages, count referring expressions, or judge anchor-factness. (Layer 3 concerns.)
 
+### 3.4 Two parallel token-counting paths (and why we keep both)
+
+PiPilot observes LLM token usage through **two independent paths** that both consume the same `(usage, cost)` shape from pi-mono / pi-ai. A future contributor looking at the StatusBar number and the `trace-digest.jsonl` `tokens` field will reasonably ask "why two? Aren't they the same?" — this section is the load-bearing answer.
+
+```
+                       pi-mono Agent / sub-LLM call
+                                  │
+                  ┌───────────────┴───────────────┐
+                  │                               │
+            Classic path                   Telemetry path
+       (UI + persistent total)       (analysis + reconciliation)
+                  │                               │
+        onUsage(usage, cost)          span ends with usage attrs
+                  │                               │
+       ┌──────────┴──────────┐         TraceDigestProcessor
+       │                     │                    │
+  accumulateUsage()    safeSend('agent:usage')    │
+       │                     │                    │
+   usage.json          renderer usage-store   trace-digest.jsonl
+   (allTime totals)    (run / session / UI)  (per-trace aggregate)
+```
+
+**Classic path (`onUsage` → `usage.json` + StatusBar).** Source of truth for the right-side StatusBar, the TokenUsage panel, and persisted `allTime` totals. Updates per LLM call (live, sub-second). Triggered from main-loop `turn_end` and from sub-LLM completions via `tracedCompleteSimple`'s `onUsage` callback (six emission sites: skill router, callLlm, callLlmVision, summarizer, memory extractor, wiki-bg agent — see G1 in v0.13). Survives `tracingMode = 'disabled'`.
+
+**Telemetry path (`TraceDigestProcessor` → `trace-digest.jsonl`).** Source of truth for cross-trace analysis: per-trace token totals, tool-category counts, time-series queries. Updates only when a trace's root span ends — **not live**. Aggregates both `chat` op spans (sub-LLM) and `invoke_agent step` spans (main loop), giving full token coverage as of v0.13 (G2). Disappears when telemetry is off.
+
+**Why two paths, not one.**
+- **Live UI requires the classic path.** Trace digest writes at root-span-end; a turn in progress shows zero progress in digest. The StatusBar updating mid-turn is a UX requirement.
+- **Telemetry survivability requires the classic path.** Users can disable tracing (`tracingMode = 'disabled'`); the StatusBar must keep working.
+- **Pre-cutoff history requires the classic path.** Sessions from before the project saw v0.7+ only exist in `usage.json`. Trace digest starts at `preTraceCutoffTotals.cutoffTimestamp`.
+- **Structural completeness requires the telemetry path.** The classic path needs every LLM call site to remember to invoke `onUsage`, and is therefore drift-prone — G1 found exactly this kind of silent coverage hole. Telemetry is complete by construction (every billed token sits on a span).
+- **Cross-trace analysis requires the telemetry path.** Per-tool / per-skill cost attribution, time-series, and replayability against a future price-table change are not feasible from a flat accumulator.
+
+**How they reconcile.** `ipc.ts:737` (gated on `RESEARCH_COPILOT_DEBUG=1`) logs `(classic.totals.tokens - preTraceCutoffTotals.tokens)` vs `readTraceAggregatedTotals(...).tokens` after each `onUsage`. Post-v0.13 this delta should be ≈ 0 for any session that started after the project's v0.7+ cutoff. A persistent non-zero delta is the operator signal that one path is missing emission sites — e.g. a new sub-LLM helper added without an `onUsage` hook (classic side), or a new span type the digest aggregator doesn't cover (telemetry side).
+
+**Why we deliberately did not unify them.** Unifying onto telemetry as the sole UI source would require: (a) a live in-memory aggregator on top of `TraceDigestProcessor` that pushes IPC events as spans close (live UI), (b) graceful fallback when `tracingMode = 'disabled'` (telemetry survivability), (c) migration of `preTraceCutoffTotals` semantics into the digest schema. This is a real refactor with real cost and the current dual-path design has no observed user-visible incoherence after G1+G2+G3. Under the design axiom (*minimum discipline + evidence-driven incremental improvement*), unification is deferred until a concrete need surfaces — likely a per-tool attribution UI, at which point the live aggregator is the natural place to add it without dislodging the classic path.
+
 ---
 
 ## 4. Identity, Concurrency, Propagation
