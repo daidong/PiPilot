@@ -58,6 +58,17 @@ export interface CoordinatorTelemetryAdapter {
    * No-op when no active step span — callers don't need to guard.
    */
   recordSkillLoadOnActiveStep(skillName: string, trigger: SkillLoadTrigger): void
+  /**
+   * Mark the start/end of a user turn (one root `invoke_agent` span). Call
+   * from coordinator before/after `runChatBody()` inside `tracer.runInSpan`.
+   * Used by the v0.12 wire-payload reduction policy: full
+   * `pipilot.chat.request_payload` is only recorded on step 1 of each user
+   * turn — steps 2..N add one assistant + one tool_result over step (N-1),
+   * which is reconstructable from the response_text + tool.result events on
+   * those steps.
+   */
+  markUserTurnStart(): void
+  markUserTurnEnd(): void
 }
 
 export interface CoordinatorTelemetryAdapterOptions {
@@ -81,6 +92,20 @@ export function createCoordinatorTelemetryAdapter(
 
   let activeStepSpan: Span | null = null
   let activeStepIndex = 0
+  /**
+   * Per-user-turn step counter (resets at every `markUserTurnStart`). Distinct
+   * from `activeStepIndex`, which is session-monotonic and lives on
+   * `pipilot.step.index`. This counter exists only to gate the wire-payload
+   * recording: emit on step 1 of each user turn, suppress on steps 2..N.
+   *
+   * Why per-turn rather than session-monotonic: each user turn enters a fresh
+   * agent loop whose first step has the only "novel" wire content for that
+   * turn (system + tools + the new user message + prior history). Steps 2..N
+   * differ from step 1 by exactly one assistant response + one tool_result,
+   * both already captured as separate span events. Recording the full payload
+   * on each step costs O(steps²) bytes for O(steps) novel content.
+   */
+  let stepIndexInUserTurn = 0
   const toolCallSpans = new Map<string, Span>()
 
   /**
@@ -103,6 +128,15 @@ export function createCoordinatorTelemetryAdapter(
   return {
     async onPayload(payload) {
       if (!tracer || !activeStepSpan) return undefined
+      // v0.12 wire-payload reduction: only record on step 1 of each user
+      // turn. Field traces showed `pipilot.chat.request_payload` events
+      // accounted for ~95% of blob bytes, dominated by the message-history
+      // array growing each step (the same N-1 messages re-recorded on
+      // step N). Steps 2..N are reconstructable from step 1's payload +
+      // each step's assistant response_text + tool_result events. The only
+      // information actually lost is cache_control marker placement
+      // shifting between mid-turn steps.
+      if (stepIndexInUserTurn !== 1) return undefined
       try {
         const { value: redactedPayload } = redact(payload, {
           sizeCapBytes: 4096,
@@ -236,6 +270,7 @@ export function createCoordinatorTelemetryAdapter(
       if (!tracer) return
       if (event.type === 'turn_start') {
         activeStepIndex++
+        stepIndexInUserTurn++
         activeStepSpan = tracer.startSpan('invoke_agent step', SpanKind.INTERNAL)
         activeStepSpan.setAttribute('gen_ai.operation.name', 'invoke_agent')
         activeStepSpan.setAttribute('pipilot.step.index', activeStepIndex)
@@ -285,6 +320,14 @@ export function createCoordinatorTelemetryAdapter(
     recordSkillLoadOnActiveStep(skillName, trigger) {
       if (!activeStepSpan) return
       activeStepSpan.addEvent('pipilot.skill.load', { skillName, trigger })
+    },
+
+    markUserTurnStart() {
+      stepIndexInUserTurn = 0
+    },
+
+    markUserTurnEnd() {
+      stepIndexInUserTurn = 0
     }
   }
 }

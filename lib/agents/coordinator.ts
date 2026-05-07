@@ -1017,7 +1017,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // the adapter's getThinkingLevel accessor.
         const tl = agent.state.thinkingLevel
         if (tl) span.setAttribute('pipilot.thinking_level', tl)
-        return runChatBody()
+        // Reset the per-user-turn step counter so request_payload is
+        // recorded only on step 1 of this turn (v0.12 wire-payload
+        // reduction policy — see telemetry-adapter.ts).
+        telemetryAdapter.markUserTurnStart()
+        try {
+          return await runChatBody()
+        } finally {
+          telemetryAdapter.markUserTurnEnd()
+        }
       })
     },
 

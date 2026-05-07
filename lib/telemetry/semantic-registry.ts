@@ -26,7 +26,7 @@
 export const SCHEMA_URL = 'https://opentelemetry.io/schemas/1.40.0' as const
 
 /** Bump when this file's content materially changes. Recorded on every span. */
-export const TRACE_POLICY_VERSION = 'pipilot-trace-v0.11' as const
+export const TRACE_POLICY_VERSION = 'pipilot-trace-v0.12' as const
 
 /** Standard OTel GenAI provider enum (cross-backend readable). */
 export const GEN_AI_PROVIDER_NAMES = ['anthropic', 'openai', 'gcp.gemini', 'deepseek'] as const
@@ -162,6 +162,15 @@ export const PIPILOT_EVENT_NAMES = new Set<string>([
   // Carries the final provider-format JSON (post-convertMessages, post-
   // cache_control markers). Distinct from gen_ai.client.inference.operation.details
   // which carries our own pre-translation PiContext.
+  //
+  // Emission policy (v0.12): recorded ONLY on step 1 of each user turn — i.e.
+  // the first invoke_agent step span under each root invoke_agent span.
+  // Steps 2..N suppress this event because each adds exactly one assistant
+  // message + one tool_result over step (N-1), both already captured as
+  // pipilot.chat.response_text + pipilot.tool.result events on those steps.
+  // Recording the full payload on every step was O(steps²) bytes for
+  // O(steps) novel content (~95% of blob bytes in field traces). The only
+  // information lost is cache_control marker placement shifts mid-turn.
   'pipilot.chat.request_payload',
   // Per-step assistant message text content captured at turn_end. The
   // main agent loop bypasses tracedCompleteSimple, so without this event
