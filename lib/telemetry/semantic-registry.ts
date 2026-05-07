@@ -26,7 +26,7 @@
 export const SCHEMA_URL = 'https://opentelemetry.io/schemas/1.40.0' as const
 
 /** Bump when this file's content materially changes. Recorded on every span. */
-export const TRACE_POLICY_VERSION = 'pipilot-trace-v0.10' as const
+export const TRACE_POLICY_VERSION = 'pipilot-trace-v0.11' as const
 
 /** Standard OTel GenAI provider enum (cross-backend readable). */
 export const GEN_AI_PROVIDER_NAMES = ['anthropic', 'openai', 'gcp.gemini', 'deepseek'] as const
@@ -112,6 +112,14 @@ export const PIPILOT_ATTRIBUTE_KEYS = new Set<string>([
   // Redaction audit trail
   'pipilot.redaction.fields_redacted_count',
   'pipilot.redaction.scrubber_version',
+
+  // Blob-store async write failures (v0.11). Set when redact() emits a
+  // contentHash ref but the underlying BlobStore.writeIfMissing reported
+  // an error — sync failures (queue saturation) only; async drain failures
+  // surface via the TraceStore degraded-mode log instead (the originating
+  // span has typically ended by then).
+  'pipilot.blob.write_failed_count',
+  'pipilot.blob.write_failed_message',
 
   // Skills
   'pipilot.matched_skills',
