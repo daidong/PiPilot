@@ -18,6 +18,22 @@ const base = import.meta.env.BASE_URL;
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
 
+    <!-- Theme boot: applies stored / system preference before first paint
+         so the page never flashes the wrong palette. Mirrors the toggle
+         logic at the bottom of index.astro. -->
+    <script is:inline>
+      (function () {
+        try {
+          var stored = localStorage.getItem('rc-theme');
+          var prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+          var theme = stored || (prefersLight ? 'light' : 'dark');
+          if (theme === 'light') document.documentElement.classList.add('light');
+        } catch (_e) {
+          /* localStorage may be blocked in privacy modes — fall back to dark default */
+        }
+      })();
+    </script>
+
     <!-- Open Graph -->
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />

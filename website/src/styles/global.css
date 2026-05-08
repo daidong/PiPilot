@@ -17,3 +17,53 @@
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
+
+/* ─── Light mode ──────────────────────────────────────────────────────────
+ * Default page palette is dark. When `<html class="light">` is set, we
+ * flip the slate scale via CSS variables so every existing `bg-slate-*`,
+ * `text-slate-*`, `border-slate-*`, gradient-stop, etc. inverts in place
+ * — no template edits needed. Mint stays the same brand green in both
+ * modes; we just patch a few `text-white` cases that would otherwise
+ * become invisible on a light background.
+ */
+html.light {
+  color-scheme: light;
+
+  /* Inverted slate scale (950 ↔ 50). Each step keeps roughly equivalent
+     contrast so layered surfaces (cards on body, borders on cards) still
+     read as a hierarchy in light mode. */
+  --color-slate-50: #0f172a;
+  --color-slate-100: #1e293b;
+  --color-slate-200: #334155;
+  --color-slate-300: #475569;
+  --color-slate-400: #64748b;
+  --color-slate-500: #94a3b8;
+  --color-slate-600: #cbd5e1;
+  --color-slate-700: #e2e8f0;
+  --color-slate-800: #eef2f7;
+  --color-slate-850: #f1f5f9;
+  --color-slate-900: #f6f8fb;
+  --color-slate-950: #ffffff;
+}
+
+/* `text-white` headings + body chrome would vanish on the new white bg.
+   Flip them to near-black, but preserve white for text sitting directly
+   on a saturated mint surface (buttons, logo chip, hover overlays). */
+html.light .text-white {
+  color: #0f172a;
+}
+html.light :is(.bg-mint-400, .bg-mint-500, .bg-mint-600, .bg-mint-700).text-white,
+html.light :is(.bg-mint-400, .bg-mint-500, .bg-mint-600, .bg-mint-700) .text-white {
+  color: #ffffff;
+}
+
+/* Soften the body shadow stack: pure black at 50% alpha is too heavy on
+   white. Let the existing utility resolve, but tone the alpha for light. */
+html.light .shadow-2xl {
+  --tw-shadow-color: rgb(15 23 42 / 0.12);
+}
+
+/* Smooth the swap so it doesn't flash. */
+html {
+  transition: background-color 200ms ease, color 200ms ease;
+}
