@@ -3,10 +3,11 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 const remarkPlugins = [remarkGfm]
-import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown, Presentation, FileText, Code, Eye } from 'lucide-react'
+import { X, StickyNote, BookOpen, Database, Save, ChevronUp, ChevronDown, Presentation, FileText, Code, Eye, Brain } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import type { LeftTab } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
+import { useMemoryStore, type MemoryType } from '../../stores/memory-store'
 import { useSessionStore } from '../../stores/session-store'
 import { dirnameOf, resolveMarkdownImageUrl } from '../../utils/markdown-image'
 import { isMarpFrontmatter, splitFrontmatter, splitSlides } from '../../utils/marp'
@@ -45,8 +46,16 @@ const LazySourceMarkdownEditor = lazy(async () => {
 const typeIcons: Record<string, React.ReactNode> = {
   note: <StickyNote size={16} className="t-text-warning" />,
   paper: <BookOpen size={16} className="t-text-info" />,
-  data: <Database size={16} className="t-text-success" />
+  data: <Database size={16} className="t-text-success" />,
+  memory: <Brain size={16} className="t-text-accent-soft" />
 }
+
+const MEMORY_TYPE_OPTIONS: Array<{ value: MemoryType; label: string }> = [
+  { value: 'user',      label: 'User — about you (role, expertise, preferences)' },
+  { value: 'feedback',  label: 'Feedback — rules and corrections' },
+  { value: 'project',   label: 'Project — current state, decisions, deadlines' },
+  { value: 'reference', label: 'Reference — pointers to external systems' }
+]
 
 const EXTERNAL_EXTS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg',
@@ -313,6 +322,7 @@ function usePreviewNavigation() {
 export function EntityPreviewPanel() {
   const rawEntity = useUIStore((s) => s.previewEntity)
   const closePreview = useUIStore((s) => s.closePreview)
+  const openPreviewUI = useUIStore((s) => s.openPreview)
   const setPreviewEditorFocused = useUIStore((s) => s.setPreviewEditorFocused)
   const drawerWidth = useUIStore((s) => s.drawerWidth)
   const setDrawerWidth = useUIStore((s) => s.setDrawerWidth)
@@ -362,6 +372,18 @@ export function EntityPreviewPanel() {
   const [fileType, setFileType] = useState<'text' | 'external' | 'csv' | null>(null)
   const [loading, setLoading] = useState(false)
   const [externalMarkdown, setExternalMarkdown] = useState<string | undefined>(undefined)
+
+  // Memory frontmatter draft state. Only used when entity.type === 'memory'.
+  // Reset on entity change in the same effect that resets the markdown
+  // draft, so all preview state stays in sync per entity.
+  const isMemory = rawEntity?.type === 'memory'
+  const saveMemory = useMemoryStore((s) => s.saveMemory)
+  const [memoryNameDraft, setMemoryNameDraft] = useState('')
+  const [memoryTypeDraft, setMemoryTypeDraft] = useState<MemoryType>('user')
+  const [memoryDescDraft, setMemoryDescDraft] = useState('')
+  const [memoryNameBaseline, setMemoryNameBaseline] = useState('')
+  const [memoryTypeBaseline, setMemoryTypeBaseline] = useState<MemoryType>('user')
+  const [memoryDescBaseline, setMemoryDescBaseline] = useState('')
   // Marp rendering: null = follow detection (slides if marp, source if not).
   // A user click on the header toggle explicitly sets 'slides' or 'source'
   // for the current entity. Reset when the entity changes.
@@ -392,6 +414,19 @@ export function EntityPreviewPanel() {
     setSaveSuccess(null)
     setPreviewEditorFocused(false)
     setViewModeOverride(null)
+    // Memory frontmatter drafts: hydrate from the entity. For non-memory
+    // entities these stay at their defaults but are simply unused.
+    if (entity.type === 'memory') {
+      const name = entity.title || ''
+      const mtype = (entity.memoryType as MemoryType) || 'user'
+      const desc = entity.description || ''
+      setMemoryNameDraft(name)
+      setMemoryTypeDraft(mtype)
+      setMemoryDescDraft(desc)
+      setMemoryNameBaseline(name)
+      setMemoryTypeBaseline(mtype)
+      setMemoryDescBaseline(desc)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity?.id])
 
@@ -525,7 +560,15 @@ export function EntityPreviewPanel() {
   const isFileMarkdown = Boolean(entity.filePath && (fileExt === 'md' || fileExt === 'markdown'))
   const isInlineEditable = !entity.filePath
   const isEditable = isInlineEditable || isFileMarkdown
-  const isDirty = isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown)
+  const isMemoryFrontmatterDirty = isMemory && (
+    memoryNameDraft !== memoryNameBaseline ||
+    memoryTypeDraft !== memoryTypeBaseline ||
+    memoryDescDraft !== memoryDescBaseline
+  )
+  const isDirty = (
+    (isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown))
+    || isMemoryFrontmatterDirty
+  )
 
   // Bare-remark (Milkdown's underlying parser) has no frontmatter plugin
   // and will mangle YAML frontmatter on the first round-trip: the opening
@@ -645,7 +688,52 @@ export function EntityPreviewPanel() {
   }, [nav.canNavigate, previewEditorFocused, handleNavPrev, handleNavNext])
 
   const handleSave = async () => {
-    if (!isEditable || !isDirty) return
+    if (!isDirty) return
+
+    // Memory has its own save path: rewrites the .md file under
+    // .research-pilot/memory/ and rebuilds the agent.md index. Bypasses
+    // the artifact store entirely.
+    if (isMemory) {
+      const trimmedName = memoryNameDraft.trim()
+      if (!trimmedName) {
+        setSaveError('Name cannot be empty.')
+        return
+      }
+      try {
+        setSaveError(null)
+        setSaveSuccess(null)
+        const result = await saveMemory({
+          filename: entity.filename as string | undefined,
+          name: trimmedName,
+          type: memoryTypeDraft,
+          description: memoryDescDraft,
+          content: draftMarkdown,
+        })
+        if (!result.success) {
+          setSaveError(result.error || 'Failed to save memory.')
+          return
+        }
+        setMemoryNameBaseline(trimmedName)
+        setMemoryTypeBaseline(memoryTypeDraft)
+        setMemoryDescBaseline(memoryDescDraft)
+        setBaselineMarkdown(draftMarkdown)
+        // If the filename changed (rename / type change), re-target the
+        // preview to the freshly-written file so subsequent saves use
+        // the correct id. Reading from the just-refreshed store snapshot.
+        const newFilename = result.filename
+        if (newFilename && newFilename !== entity.filename) {
+          const newItem = useMemoryStore.getState().items.find((i) => i.filename === newFilename)
+          if (newItem) openPreviewUI(newItem as unknown as EntityItem)
+        }
+        setSaveSuccess('Saved')
+        setTimeout(() => setSaveSuccess(null), 1200)
+      } catch (err: any) {
+        setSaveError(err?.message || 'Failed to save memory.')
+      }
+      return
+    }
+
+    if (!isEditable) return
 
     const nextMarkdown = draftMarkdown
 
@@ -784,7 +872,62 @@ export function EntityPreviewPanel() {
     </div>
   )
 
+  const renderMemoryFrontmatterForm = () => (
+    <div className="space-y-3 pb-4 mb-4 border-b t-border">
+      <div>
+        <label className="block text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted mb-1">
+          Name
+        </label>
+        <input
+          type="text"
+          value={memoryNameDraft}
+          onChange={(e) => setMemoryNameDraft(e.target.value)}
+          className="w-full px-2 py-1 text-sm rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
+          spellCheck={false}
+          aria-label="Memory name"
+        />
+      </div>
+      <div>
+        <label className="block text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted mb-1">
+          Type
+        </label>
+        <select
+          value={memoryTypeDraft}
+          onChange={(e) => setMemoryTypeDraft(e.target.value as MemoryType)}
+          className="w-full px-2 py-1 text-sm rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
+          aria-label="Memory type"
+        >
+          {MEMORY_TYPE_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="block text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted mb-1">
+          Description
+        </label>
+        <input
+          type="text"
+          value={memoryDescDraft}
+          onChange={(e) => setMemoryDescDraft(e.target.value)}
+          placeholder="One-line summary used in agent.md index"
+          className="w-full px-2 py-1 text-sm rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)] placeholder:t-text-muted"
+          spellCheck={false}
+          aria-label="Memory description"
+        />
+      </div>
+    </div>
+  )
+
   const renderContent = () => {
+    if (isMemory) {
+      return (
+        <>
+          {renderMemoryFrontmatterForm()}
+          {renderMarkdownEditor()}
+        </>
+      )
+    }
     if (entity.filePath && fileType) {
       if (fileType === 'external') {
         return (
@@ -878,7 +1021,13 @@ export function EntityPreviewPanel() {
   // with the title itself.
   const crumb = entity.filePath
     ? `files · ${(getExtension(entity.filePath) || 'file').toLowerCase()}`
-    : `library · ${entity.type}`
+    : isMemory
+      ? `memory · ${memoryTypeBaseline}`
+      : `library · ${entity.type}`
+
+  // For memory entities the displayed title tracks the live name draft so
+  // renames feel immediate; everything else stays on the persisted title.
+  const headerTitle = isMemory ? (memoryNameDraft || '(unnamed memory)') : entity.title
 
   // System serif stack for the reading surface. No external font deps —
   // Iowan Old Style ships with macOS, Charter is wide-fallback, Georgia
@@ -930,7 +1079,7 @@ export function EntityPreviewPanel() {
                   letterSpacing: '-0.012em',
                 }}
               >
-                {entity.title}
+                {headerTitle}
               </h2>
             </div>
           </div>

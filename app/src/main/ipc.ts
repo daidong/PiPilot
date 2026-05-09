@@ -22,7 +22,18 @@ import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readE
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
-import { migrateAgentMemoryToFile } from '../../../lib/memory/memory-utils'
+import {
+  migrateAgentMemoryToFile,
+  listMemoryFiles,
+  readMemoryFile,
+  writeMemoryFile,
+  deleteMemoryFile,
+  memoryFilename,
+  updateAgentMdIndex,
+  withIndexLock,
+  type MemoryEntry,
+  type MemoryType
+} from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
 import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger, type LiveSpanSummary } from '../../../lib/telemetry/index'
 import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
@@ -1354,6 +1365,78 @@ export function registerIpcHandlers(): void {
       invalidateEntityCache(state.projectPath)
     }
     return result
+  })
+
+  // Memory (auto-memory) — files under .research-pilot/memory/, indexed in
+  // agent.md. Mirrors lib/memory/memory-tools (which the agent uses) but
+  // surfaced to the user via the Library panel.
+  handleWindow('cmd:memory-list', ({ state }) => {
+    if (!state.projectPath) return [] as MemoryEntry[]
+    return listMemoryFiles(state.projectPath)
+  })
+  handleWindow('cmd:memory-get', ({ state }, filename: string) => {
+    if (!state.projectPath) return null
+    return readMemoryFile(state.projectPath, filename)
+  })
+  // Save handles both create and update. When `filename` is omitted a new
+  // file is written; when provided and the resulting filename differs (the
+  // user changed name or type), the old file is removed before writing.
+  // The agent.md index is rebuilt under withIndexLock on every save so the
+  // list the agent sees stays in lockstep with disk.
+  handleWindow(
+    'cmd:memory-save',
+    async (
+      { state },
+      input: { filename?: string; name: string; type: MemoryType; description: string; content: string },
+    ) => {
+      if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+      const projectPath = state.projectPath
+      try {
+        return await withIndexLock(() => {
+          const newFilename = memoryFilename(input.type, input.name)
+          if (input.filename && input.filename !== newFilename) {
+            deleteMemoryFile(projectPath, input.filename)
+          }
+          writeMemoryFile(projectPath, {
+            frontmatter: {
+              name: input.name,
+              description: input.description,
+              type: input.type,
+            },
+            content: input.content,
+            filename: newFilename,
+          })
+          const entries = listMemoryFiles(projectPath)
+          const indexResult = updateAgentMdIndex(projectPath, entries)
+          if (!indexResult.success) {
+            return {
+              success: false,
+              error: `agent.md index would exceed size limit (${indexResult.charCount} chars).`,
+            }
+          }
+          invalidateEntityCache(projectPath)
+          return { success: true, filename: newFilename }
+        })
+      } catch (err: any) {
+        return { success: false, error: err?.message || 'Failed to save memory.' }
+      }
+    },
+  )
+  handleWindow('cmd:memory-delete', async ({ state }, filename: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const projectPath = state.projectPath
+    try {
+      return await withIndexLock(() => {
+        const removed = deleteMemoryFile(projectPath, filename)
+        if (!removed) return { success: false, error: 'Memory file not found.' }
+        const entries = listMemoryFiles(projectPath)
+        updateAgentMdIndex(projectPath, entries)
+        invalidateEntityCache(projectPath)
+        return { success: true }
+      })
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to delete memory.' }
+    }
   })
 
   // Commands - Context debug (read-only)

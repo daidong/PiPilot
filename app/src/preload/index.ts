@@ -159,6 +159,26 @@ export interface ElectronAPI {
   artifactSearch: (query: string, types?: string[]) => Promise<any[]>
   artifactDelete: (id: string) => Promise<any>
 
+  // Auto-Memory (.research-pilot/memory/*.md, indexed in agent.md)
+  memoryList: () => Promise<Array<{
+    frontmatter: { name: string; description: string; type: 'user' | 'feedback' | 'project' | 'reference' }
+    content: string
+    filename: string
+  }>>
+  memoryGet: (filename: string) => Promise<{
+    frontmatter: { name: string; description: string; type: 'user' | 'feedback' | 'project' | 'reference' }
+    content: string
+    filename: string
+  } | null>
+  memorySave: (input: {
+    filename?: string
+    name: string
+    type: 'user' | 'feedback' | 'project' | 'reference'
+    description: string
+    content: string
+  }) => Promise<{ success: boolean; filename?: string; error?: string }>
+  memoryDelete: (filename: string) => Promise<{ success: boolean; error?: string }>
+
   // Agent control
   stopAgent: () => Promise<void>
   clearSessionMemory: () => Promise<void>
@@ -375,6 +395,10 @@ const api: ElectronAPI = {
   artifactList: (types) => ipcRenderer.invoke('cmd:artifact-list', types),
   artifactSearch: (query, types) => ipcRenderer.invoke('cmd:artifact-search', query, types),
   artifactDelete: (id) => ipcRenderer.invoke('cmd:artifact-delete', id),
+  memoryList: () => ipcRenderer.invoke('cmd:memory-list'),
+  memoryGet: (filename) => ipcRenderer.invoke('cmd:memory-get', filename),
+  memorySave: (input) => ipcRenderer.invoke('cmd:memory-save', input),
+  memoryDelete: (filename) => ipcRenderer.invoke('cmd:memory-delete', filename),
 
   stopAgent: () => ipcRenderer.invoke('agent:stop'),
   clearSessionMemory: () => ipcRenderer.invoke('agent:clear-memory'),

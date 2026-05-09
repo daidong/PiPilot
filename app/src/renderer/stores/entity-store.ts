@@ -2,7 +2,10 @@ import { create } from 'zustand'
 
 export interface EntityItem {
   id: string
-  type: 'note' | 'paper' | 'data'
+  // 'memory' items live in the separate memory-store but flow through the
+  // same preview drawer + openPreview pipeline, so the union includes it
+  // even though entity-store itself never holds them.
+  type: 'note' | 'paper' | 'data' | 'memory'
   title: string
   [key: string]: any
 }

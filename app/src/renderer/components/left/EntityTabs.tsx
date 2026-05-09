@@ -17,11 +17,18 @@ import {
   Loader2,
   Search,
   Check,
-  UploadCloud
+  UploadCloud,
+  User,
+  MessageCircle,
+  Briefcase,
+  Link as LinkIcon,
+  Brain
 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useChatStore } from '../../stores/chat-store'
+import { useSessionStore } from '../../stores/session-store'
+import { useMemoryStore, type MemoryType, type MemoryItem } from '../../stores/memory-store'
 import { WorkspaceTree } from './WorkspaceTree'
 import { useSkillStore, type SkillManifest } from '../../stores/skill-store'
 
@@ -263,6 +270,216 @@ function DataTreeView({ items }: { items: EntityItem[] }) {
 }
 
 /** Library tab content: shows notes + data (everything except papers) */
+// ─── Memory section ─────────────────────────────────────────────────────────
+
+const MEMORY_TYPE_META: Record<MemoryType, { label: string; icon: React.ComponentType<any> }> = {
+  user:      { label: 'User',      icon: User },
+  feedback:  { label: 'Feedback',  icon: MessageCircle },
+  project:   { label: 'Project',   icon: Briefcase },
+  reference: { label: 'Reference', icon: LinkIcon },
+}
+
+const MEMORY_TYPE_ORDER: MemoryType[] = ['user', 'feedback', 'project', 'reference']
+
+const MemoryRow = React.memo(function MemoryRow({ item }: { item: MemoryItem }) {
+  const openPreview = useUIStore((s) => s.openPreview)
+  const closePreview = useUIStore((s) => s.closePreview)
+  const previewEntity = useUIStore((s) => s.previewEntity)
+  const deleteMemory = useMemoryStore((s) => s.deleteMemory)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [showHover, setShowHover] = useState(false)
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const showTimeoutRef = useRef<number | null>(null)
+  const hideTimeoutRef = useRef<number | null>(null)
+  const confirmResetRef = useRef<number | null>(null)
+
+  const cancelHide = () => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current)
+      hideTimeoutRef.current = null
+    }
+  }
+  const handleMouseEnter = () => {
+    cancelHide()
+    showTimeoutRef.current = window.setTimeout(() => {
+      if (rowRef.current) {
+        setAnchorRect(rowRef.current.getBoundingClientRect())
+        setShowHover(true)
+      }
+    }, 400)
+  }
+  const handleMouseLeave = () => {
+    if (showTimeoutRef.current) {
+      clearTimeout(showTimeoutRef.current)
+      showTimeoutRef.current = null
+    }
+    if (confirmDelete) return
+    hideTimeoutRef.current = window.setTimeout(() => setShowHover(false), 300)
+  }
+  const handleDelete = async () => {
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      confirmResetRef.current = window.setTimeout(() => setConfirmDelete(false), 3000)
+      return
+    }
+    if (confirmResetRef.current) clearTimeout(confirmResetRef.current)
+    setShowHover(false)
+    await deleteMemory(item.filename)
+    if (previewEntity?.id === item.id) closePreview()
+    setConfirmDelete(false)
+  }
+
+  return (
+    <div>
+      <div
+        ref={rowRef}
+        className="flex items-center gap-1.5 px-2 py-1 rounded t-bg-hover transition-colors cursor-pointer"
+        onClick={() => openPreview(item as unknown as EntityItem)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        {showHover && anchorRect && (
+          <MemoryHoverPreview
+            item={item}
+            anchorRect={anchorRect}
+            onMouseEnter={cancelHide}
+            onMouseLeave={handleMouseLeave}
+            onDelete={handleDelete}
+            confirmDelete={confirmDelete}
+          />
+        )}
+        <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
+        <span className="text-xs t-text truncate" title={item.title}>{item.title}</span>
+      </div>
+    </div>
+  )
+})
+
+function MemoryHoverPreview({
+  item,
+  anchorRect,
+  onMouseEnter,
+  onMouseLeave,
+  onDelete,
+  confirmDelete
+}: {
+  item: MemoryItem
+  anchorRect: DOMRect
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+  onDelete: () => void
+  confirmDelete: boolean
+}) {
+  const top = Math.min(anchorRect.top, window.innerHeight - 320)
+  return (
+    <div
+      className="fixed z-50 w-80 max-h-72 overflow-y-auto rounded-lg border t-border t-bg-surface shadow-xl"
+      style={{ left: 280, top }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <div className="px-3 py-2 border-b t-border flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h4 className="text-xs font-semibold t-text truncate">{item.title}</h4>
+          <p className="text-[10px] t-text-muted mt-0.5 uppercase tracking-wider">{item.memoryType}</p>
+        </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete() }}
+          className={`p-1 rounded transition-colors ${confirmDelete ? 't-text-error' : 't-text-muted hover:t-text-error-soft'}`}
+          title={confirmDelete ? 'Click again to confirm' : 'Delete'}
+          aria-label={confirmDelete ? `Confirm delete ${item.title}` : `Delete ${item.title}`}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+      <div className="px-3 py-2 space-y-2">
+        {item.description && (
+          <p className="text-[11px] t-text-secondary italic">{item.description}</p>
+        )}
+        {item.content && (
+          <p className="text-[11px] t-text whitespace-pre-wrap">
+            {item.content.length > 400 ? item.content.slice(0, 400) + '...' : item.content}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function MemorySection() {
+  const items = useMemoryStore((s) => s.items)
+  const refreshAll = useMemoryStore((s) => s.refreshAll)
+  const loaded = useMemoryStore((s) => s.loaded)
+  const projectPath = useSessionStore((s) => s.projectPath)
+  // Default-collapsed types — memory is low-frequency reference material,
+  // hide it behind chevrons so notes/data stay the dominant content.
+  const [openTypes, setOpenTypes] = useState<Set<MemoryType>>(new Set())
+
+  useEffect(() => {
+    refreshAll()
+  }, [projectPath, refreshAll])
+
+  const grouped = useMemo(() => {
+    const map = new Map<MemoryType, MemoryItem[]>()
+    for (const t of MEMORY_TYPE_ORDER) map.set(t, [])
+    for (const item of items) {
+      map.get(item.memoryType)?.push(item)
+    }
+    return map
+  }, [items])
+
+  const toggleType = (t: MemoryType) => {
+    setOpenTypes((prev) => {
+      const next = new Set(prev)
+      if (next.has(t)) next.delete(t)
+      else next.add(t)
+      return next
+    })
+  }
+
+  if (!loaded || items.length === 0) {
+    // Hide entirely when no memories exist — no point showing an empty
+    // section. The agent will create the first one and the section
+    // appears on next refresh.
+    return null
+  }
+
+  return (
+    <div className="pt-2">
+      <div className="flex items-center gap-1.5 px-2 pb-0.5">
+        <Brain size={11} className="t-text-accent-soft" />
+        <p className="text-[10px] t-text-accent-soft uppercase tracking-wider">Memory ({items.length})</p>
+      </div>
+      {MEMORY_TYPE_ORDER.map((t) => {
+        const group = grouped.get(t) || []
+        if (group.length === 0) return null
+        const isOpen = openTypes.has(t)
+        const meta = MEMORY_TYPE_META[t]
+        const Icon = meta.icon
+        return (
+          <div key={t}>
+            <button
+              onClick={() => toggleType(t)}
+              className="w-full flex items-center gap-1 px-2 py-0.5 rounded t-bg-hover transition-colors text-left"
+            >
+              {isOpen ? <ChevronDown size={11} className="shrink-0 t-text-muted" /> : <ChevronRight size={11} className="shrink-0 t-text-muted" />}
+              <Icon size={11} className="shrink-0 t-text-muted" />
+              <span className="text-[11px] t-text-secondary">{meta.label}</span>
+              <span className="text-[10px] t-text-muted ml-auto">{group.length}</span>
+            </button>
+            {isOpen && (
+              <div className="pl-3">
+                {group.map((item) => <MemoryRow key={item.id} item={item} />)}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function LibraryContent({
   notes,
   data,
@@ -306,23 +523,21 @@ function LibraryContent({
       </div>
 
       <div className="px-1 py-2 space-y-0.5 overflow-y-auto min-h-0 flex-1">
-        {allItems.length === 0 ? (
-          <p className="px-3 py-4 text-xs t-text-muted text-center">No items yet</p>
-        ) : (
+        {notes.length > 0 && (
           <>
-            {notes.length > 0 && (
-              <>
-                <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-1 pb-0.5">Notes ({notes.length})</p>
-                {notes.map((e) => <EntityRow key={e.id} entity={e} />)}
-              </>
-            )}
-            {data.length > 0 && (
-              <>
-                <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-2 pb-0.5">Data ({data.length})</p>
-                <DataTreeView items={data} />
-              </>
-            )}
+            <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-1 pb-0.5">Notes ({notes.length})</p>
+            {notes.map((e) => <EntityRow key={e.id} entity={e} />)}
           </>
+        )}
+        {data.length > 0 && (
+          <>
+            <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-2 pb-0.5">Data ({data.length})</p>
+            <DataTreeView items={data} />
+          </>
+        )}
+        <MemorySection />
+        {allItems.length === 0 && (
+          <p className="px-3 py-4 text-xs t-text-muted text-center">No items yet</p>
         )}
       </div>
     </>

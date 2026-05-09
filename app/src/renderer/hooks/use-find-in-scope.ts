@@ -92,7 +92,7 @@ function buildRanges(root: Node, query: string, caseSensitive: boolean): Range[]
  * is non-empty, so mounting it is cheap.
  */
 export function useFindInScope(
-  scopeRef: React.RefObject<HTMLElement>,
+  scopeRef: React.RefObject<HTMLElement | null>,
   active: boolean,
 ): UseFindInScopeResult {
   const [query, setQuery] = useState('')
