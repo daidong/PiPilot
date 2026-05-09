@@ -449,9 +449,20 @@ export function WorkspaceTree() {
     })
   }, [])
 
-  const loadChildren = useCallback(async (relativePath: string) => {
+  // `silent: true` skips the loading row that normally replaces a parent's
+  // children while the IPC is in flight. Use it for refresh paths that
+  // already have data on screen — flipping that data into a single
+  // "Loading..." row temporarily collapses the tree height, and the
+  // browser will clamp scrollTop to fit the smaller scrollHeight, which
+  // looks like the panel scrolling itself back to the top. First-time
+  // expansions stay loud (default silent=false) so the user gets clear
+  // feedback that something's happening.
+  const loadChildren = useCallback(async (
+    relativePath: string,
+    opts: { silent?: boolean } = {}
+  ) => {
     const parentKey = toKey(relativePath)
-    setParentLoading(parentKey, true)
+    if (!opts.silent) setParentLoading(parentKey, true)
     try {
       const children: FileTreeNode[] = await api.listTree({
         relativePath,
@@ -472,7 +483,7 @@ export function WorkspaceTree() {
         }
       })
     } finally {
-      setParentLoading(parentKey, false)
+      if (!opts.silent) setParentLoading(parentKey, false)
     }
   }, [setParentLoading, showIgnored])
 
@@ -508,7 +519,9 @@ export function WorkspaceTree() {
       }
       pendingParents = new Set()
       if (dirs.length === 0) return
-      void Promise.all(dirs.map((dir) => loadChildren(dir)))
+      // External fs / agent-driven refresh: data is already on screen, so
+      // skip the loading row to keep scroll position stable.
+      void Promise.all(dirs.map((dir) => loadChildren(dir, { silent: true })))
     }
 
     const scheduleTargeted = (parents: string[] | null) => {
@@ -544,11 +557,15 @@ export function WorkspaceTree() {
     await loadChildren('')
   }, [loadChildren])
 
-  // Reload root + all currently expanded directories
+  // Reload root + all currently expanded directories. Reads `expanded`
+  // via the ref so the callback's identity stays stable across user
+  // expand/collapse — otherwise the showIgnored effect below sees a new
+  // refreshAll on every toggle and triggers a spurious full reload that
+  // clamps the viewport's scroll position to the top.
   const refreshAll = useCallback(async () => {
-    const dirs = ['', ...Array.from(expanded)]
-    await Promise.all(dirs.map((dir) => loadChildren(dir)))
-  }, [expanded, loadChildren])
+    const dirs = ['', ...Array.from(expandedRef.current)]
+    await Promise.all(dirs.map((dir) => loadChildren(dir, { silent: true })))
+  }, [loadChildren])
 
   // When projectPath changes, reload expanded state and tree data
   useEffect(() => {
