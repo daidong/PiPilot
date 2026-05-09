@@ -4,9 +4,12 @@ import remarkGfm from 'remark-gfm'
 import { useChatStore, type ChatMessage } from '../../stores/chat-store'
 import { useEntityStore } from '../../stores/entity-store'
 import { useToolEventsStore } from '../../stores/tool-events-store'
+import { useUIStore } from '../../stores/ui-store'
 import { ToolUseStream } from '@shared/components/center/ToolUseStream'
 import { Bookmark, BookmarkCheck, Copy, Check, Loader2 } from 'lucide-react'
 import { ImageLightbox } from './ImageLightbox'
+import { FindBar } from '../common/FindBar'
+import { useFindInScope } from '../../hooks/use-find-in-scope'
 
 const api = (window as any).api
 
@@ -579,6 +582,14 @@ export function ChatMessages() {
   const [autoScroll, setAutoScroll] = useState(true)
   const isInitialMount = useRef(true)
 
+  // Cmd/Ctrl+F find — scoped to currently-loaded chat messages. When the
+  // preview drawer is open, EntityPreviewPanel claims the shortcut instead,
+  // so we bail here. Older messages aren't in the DOM (paginated load on
+  // scroll-to-top); the user notices naturally and scrolls to bring them in.
+  const previewOpen = useUIStore((s) => s.previewEntity != null)
+  const [findOpen, setFindOpen] = useState(false)
+  const find = useFindInScope(scrollContainerRef, findOpen)
+
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current
     if (!el) return
@@ -618,6 +629,24 @@ export function ChatMessages() {
     }
   }, [messages, streamingText, toolEventsCount, autoScroll])
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Yield to preview drawer when it's open — that surface owns Cmd+F.
+      if (previewOpen) return
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault()
+        setFindOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [previewOpen])
+
+  // Close FindBar when chat is hidden behind the preview drawer.
+  useEffect(() => {
+    if (previewOpen && findOpen) setFindOpen(false)
+  }, [previewOpen, findOpen])
+
   // Scroll to a specific message when requested (e.g. from provenance click)
   useEffect(() => {
     if (!scrollToMessageId || !scrollContainerRef.current) return
@@ -633,6 +662,12 @@ export function ChatMessages() {
   return (
     <div className="relative h-full">
       <SelectionBookmark />
+      <FindBar
+        open={findOpen}
+        onClose={() => setFindOpen(false)}
+        find={find}
+        className="absolute top-2 right-14 z-20"
+      />
       <ChatTimeline messages={messages} scrollContainerRef={scrollContainerRef} />
       <div
         ref={scrollContainerRef}

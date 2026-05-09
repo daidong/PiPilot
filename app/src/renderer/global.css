@@ -170,6 +170,26 @@ body {
   border-color: var(--color-accent-2-muted);
 }
 
+/* Find-bar match highlights via CSS Custom Highlight API.
+   Two named highlights — `find-match` for inactive results, `find-active`
+   for the one the user is currently navigated to. Painted directly onto
+   text Ranges, no DOM mutation. */
+::highlight(find-match) {
+  background-color: rgba(224, 168, 32, 0.35);
+  color: inherit;
+}
+::highlight(find-active) {
+  background-color: rgba(224, 168, 32, 0.85);
+  color: #1b1713;
+}
+html.dark ::highlight(find-match) {
+  background-color: rgba(255, 213, 0, 0.30);
+}
+html.dark ::highlight(find-active) {
+  background-color: rgba(255, 175, 0, 0.85);
+  color: #141a1e;
+}
+
 /* Focus-within glow for input containers (chat input bar) */
 .t-input-container:focus-within {
   border-color: var(--color-input-focus) !important;

@@ -11,6 +11,8 @@ import { useSessionStore } from '../../stores/session-store'
 import { dirnameOf, resolveMarkdownImageUrl } from '../../utils/markdown-image'
 import { isMarpFrontmatter, splitFrontmatter, splitSlides } from '../../utils/marp'
 import { MarpSlideView } from './MarpSlideView'
+import { FindBar } from '../common/FindBar'
+import { useFindInScope } from '../../hooks/use-find-in-scope'
 
 // Mirrors WorkspaceTree.TEXT_EXTENSIONS — the set of file types that open
 // in the preview drawer on click (rather than launching in the system's
@@ -449,6 +451,24 @@ export function EntityPreviewPanel() {
   // the top.
   type ScrollMode = 'rendered' | 'raw' | 'slides'
   const scrollContentRef = useRef<HTMLDivElement>(null)
+
+  // Cmd/Ctrl+F find within the preview drawer. Scope is the rendered/edited
+  // content area. The drawer takes Cmd+F priority while open — ChatMessages
+  // gates its own handler on `previewEntity` being unset.
+  const [findOpen, setFindOpen] = useState(false)
+  const find = useFindInScope(scrollContentRef, findOpen)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault()
+        setFindOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+  // Reset find state when switching to a different entity.
+  useEffect(() => { setFindOpen(false) }, [rawEntity?.id])
   const modeScrollRef = useRef<Record<ScrollMode, number>>({ rendered: 0, raw: 0, slides: 0 })
   useEffect(() => {
     modeScrollRef.current = { rendered: 0, raw: 0, slides: 0 }
@@ -1018,6 +1038,18 @@ export function EntityPreviewPanel() {
       )}
 
       <div ref={scrollContentRef} className="flex-1 overflow-y-auto px-5 py-5 min-h-0">
+        {findOpen && (
+          <div className="sticky top-0 z-20 flex justify-end -mt-3 mb-1 pointer-events-none">
+            <div className="pointer-events-auto">
+              <FindBar
+                open={findOpen}
+                onClose={() => setFindOpen(false)}
+                find={find}
+                className=""
+              />
+            </div>
+          </div>
+        )}
         {renderContent()}
       </div>
 
