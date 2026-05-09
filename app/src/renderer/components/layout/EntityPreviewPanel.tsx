@@ -384,6 +384,22 @@ export function EntityPreviewPanel() {
   const [memoryNameBaseline, setMemoryNameBaseline] = useState('')
   const [memoryTypeBaseline, setMemoryTypeBaseline] = useState<MemoryType>('user')
   const [memoryDescBaseline, setMemoryDescBaseline] = useState('')
+
+  // Note name draft — regular notes are renamed via artifactUpdate's title
+  // patch, so we mirror the memory name flow. agent.md is locked: its id
+  // is the rename anchor for the entire memory subsystem.
+  const isNote = rawEntity?.type === 'note'
+  const isAgentMd = rawEntity?.id === 'agent-md'
+  const [noteNameDraft, setNoteNameDraft] = useState('')
+  const [noteNameBaseline, setNoteNameBaseline] = useState('')
+
+  // agent.md is split at the `## Agent Memory` marker: User Instructions
+  // (above) is what the user writes, Agent Memory (below) is auto-managed
+  // by the memory subsystem and must round-trip untouched. We hold the
+  // memory section in a ref and re-glue it on save so the disk file stays
+  // structurally intact even though the editor only sees the upper half.
+  const AGENT_MEMORY_MARKER = '## Agent Memory'
+  const agentMdMemorySectionRef = useRef('')
   // Marp rendering: null = follow detection (slides if marp, source if not).
   // A user click on the header toggle explicitly sets 'slides' or 'source'
   // for the current entity. Reset when the entity changes.
@@ -409,7 +425,21 @@ export function EntityPreviewPanel() {
     const initial = getEntityContent()
     setDraftMarkdown(initial)
     setBaselineMarkdown(initial)
-    setEditorSeedMarkdown(initial)
+    // For agent.md the editor only sees the User Instructions portion;
+    // the Agent Memory section is parked in a ref and re-glued on save.
+    if (entity.id === 'agent-md') {
+      const idx = initial.indexOf(AGENT_MEMORY_MARKER)
+      if (idx >= 0) {
+        agentMdMemorySectionRef.current = initial.slice(idx)
+        setEditorSeedMarkdown(initial.slice(0, idx).trimEnd())
+      } else {
+        agentMdMemorySectionRef.current = ''
+        setEditorSeedMarkdown(initial)
+      }
+    } else {
+      agentMdMemorySectionRef.current = ''
+      setEditorSeedMarkdown(initial)
+    }
     setSaveError(null)
     setSaveSuccess(null)
     setPreviewEditorFocused(false)
@@ -426,6 +456,11 @@ export function EntityPreviewPanel() {
       setMemoryNameBaseline(name)
       setMemoryTypeBaseline(mtype)
       setMemoryDescBaseline(desc)
+    }
+    if (entity.type === 'note') {
+      const name = entity.title || ''
+      setNoteNameDraft(name)
+      setNoteNameBaseline(name)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity?.id])
@@ -544,6 +579,13 @@ export function EntityPreviewPanel() {
         if (!latest) return
         const content = getArtifactMarkdownContent(latest)
         if (normalizeMarkdown(content) === normalizeMarkdown(baselineRef.current)) return
+        // Keep agent.md's parked Agent Memory section in sync so future
+        // saves re-glue the freshest index, not whatever was on disk when
+        // the entity first opened.
+        if (entity.id === 'agent-md') {
+          const idx = content.indexOf(AGENT_MEMORY_MARKER)
+          agentMdMemorySectionRef.current = idx >= 0 ? content.slice(idx) : ''
+        }
         setDraftMarkdown(content)
         setBaselineMarkdown(content)
         setExternalMarkdown(content)
@@ -565,9 +607,13 @@ export function EntityPreviewPanel() {
     memoryTypeDraft !== memoryTypeBaseline ||
     memoryDescDraft !== memoryDescBaseline
   )
+  // agent.md's name is locked, so only non-pinned notes consult the title
+  // draft for dirtiness.
+  const isNoteNameDirty = isNote && !isAgentMd && noteNameDraft !== noteNameBaseline
   const isDirty = (
     (isEditable && normalizeMarkdown(draftMarkdown) !== normalizeMarkdown(baselineMarkdown))
     || isMemoryFrontmatterDirty
+    || isNoteNameDirty
   )
 
   // Bare-remark (Milkdown's underlying parser) has no frontmatter plugin
@@ -601,6 +647,23 @@ export function EntityPreviewPanel() {
     if (externalMarkdown === undefined) return undefined
     return splitFrontmatter(externalMarkdown).body
   }, [externalMarkdown])
+
+  // For agent.md the editor shows only the User Instructions slice. The
+  // Agent Memory section below the marker is auto-managed by the memory
+  // subsystem; we render it read-only beneath the editor and re-glue it
+  // to whatever the user types when saving (handleSave).
+  const agentMdEditorSeed = isAgentMd ? editorSeedMarkdown : ''
+  const agentMdExternalEditor = useMemo(() => {
+    if (!isAgentMd || externalMarkdown === undefined) return undefined
+    const idx = externalMarkdown.indexOf(AGENT_MEMORY_MARKER)
+    return idx >= 0 ? externalMarkdown.slice(0, idx).trimEnd() : externalMarkdown
+  }, [isAgentMd, externalMarkdown])
+  const agentMdMemoryDisplay = useMemo(() => {
+    if (!isAgentMd) return ''
+    // Prefer the live ref (kept in sync with auto-reload) so the user
+    // always sees the current Agent Memory index.
+    return agentMdMemorySectionRef.current
+  }, [isAgentMd, baselineMarkdown])
 
   const slides = useMemo(
     () => (isMarpFile ? splitSlides(draftBody) : []),
@@ -768,9 +831,20 @@ export function EntityPreviewPanel() {
           return
         }
 
-        const patch = entity.type === 'paper'
+        const patch: Record<string, unknown> = entity.type === 'paper'
           ? { abstract: nextMarkdown }
           : { content: nextMarkdown }
+        // Notes (other than agent.md) carry an editable name. Include the
+        // title in the patch only when the user actually changed it so we
+        // don't churn updatedAt on body-only saves.
+        if (isNote && !isAgentMd && isNoteNameDirty) {
+          const trimmed = noteNameDraft.trim()
+          if (!trimmed) {
+            setSaveError('Name cannot be empty.')
+            return
+          }
+          patch.title = trimmed
+        }
         const updated = await api.artifactUpdate(entity.id, patch)
         if (!updated?.success) {
           throw new Error(updated?.error || 'Failed to save artifact.')
@@ -780,6 +854,11 @@ export function EntityPreviewPanel() {
         const persistedMarkdown = getArtifactMarkdownContent(persisted)
         setDraftMarkdown(persistedMarkdown)
         setBaselineMarkdown(persistedMarkdown)
+        if (isNote && !isAgentMd) {
+          const persistedTitle = (persisted as any)?.title || noteNameDraft.trim()
+          setNoteNameDraft(persistedTitle)
+          setNoteNameBaseline(persistedTitle)
+        }
         await refreshAll()
       } else if (isFileMarkdown && entity.filePath) {
         const api = (window as any).api
@@ -832,13 +911,21 @@ export function EntityPreviewPanel() {
             // The save flow expects draftMarkdown to be the full file, so
             // onChange writes it through directly without re-prepending.
             // Seeded from the live draft (not baseline) so unsaved edits
-            // made in rendered mode survive the toggle.
+            // made in rendered mode survive the toggle. agent.md is the
+            // exception: even raw mode hides the Agent Memory section so
+            // the user can't accidentally drift it out of lockstep with
+            // the memory subsystem.
             <LazySourceMarkdownEditor
               editorId={`${editorKey}:raw`}
-              initialMarkdown={draftMarkdown || baselineMarkdown}
-              externalMarkdown={externalMarkdown}
+              initialMarkdown={isAgentMd ? agentMdEditorSeed : (draftMarkdown || baselineMarkdown)}
+              externalMarkdown={isAgentMd ? agentMdExternalEditor : externalMarkdown}
               onChange={(markdown) => {
-                setDraftMarkdown(markdown)
+                if (isAgentMd) {
+                  const tail = agentMdMemorySectionRef.current
+                  setDraftMarkdown(tail ? markdown.trimEnd() + '\n\n' + tail : markdown)
+                } else {
+                  setDraftMarkdown(markdown)
+                }
                 if (saveError) setSaveError(null)
               }}
               onFocusChange={setPreviewEditorFocused}
@@ -849,11 +936,19 @@ export function EntityPreviewPanel() {
           ) : (
             <LazyMilkdownMarkdownEditor
               editorId={`${editorKey}:rendered`}
-              initialMarkdown={draftBody || baselineBody}
-              externalMarkdown={externalBody}
+              initialMarkdown={isAgentMd ? agentMdEditorSeed : (draftBody || baselineBody)}
+              externalMarkdown={isAgentMd ? agentMdExternalEditor : externalBody}
               baseDir={dirnameOf(entity.filePath)}
               onChange={(markdown) => {
-                setDraftMarkdown((frontmatterBlock ?? '') + markdown)
+                if (isAgentMd) {
+                  // agent.md has no YAML frontmatter, so frontmatterBlock
+                  // is empty — skip the prepend and just re-glue the
+                  // memory section.
+                  const tail = agentMdMemorySectionRef.current
+                  setDraftMarkdown(tail ? markdown.trimEnd() + '\n\n' + tail : markdown)
+                } else {
+                  setDraftMarkdown((frontmatterBlock ?? '') + markdown)
+                }
                 if (saveError) setSaveError(null)
               }}
               onFocusChange={setPreviewEditorFocused}
@@ -871,6 +966,106 @@ export function EntityPreviewPanel() {
       )}
     </div>
   )
+
+  // Notes share the memory frontmatter form's visual language: a single
+  // labeled input above the editor. agent.md's input is locked since its
+  // id is the rename anchor for the entire memory subsystem (changing it
+  // would orphan the index links).
+  const renderNoteNameField = () => (
+    <div className="pb-4 mb-4 border-b t-border">
+      <label className="block text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted mb-1">
+        Name {isAgentMd && <span className="lowercase tracking-normal">· locked</span>}
+      </label>
+      <input
+        type="text"
+        value={isAgentMd ? entity.title : noteNameDraft}
+        onChange={(e) => setNoteNameDraft(e.target.value)}
+        readOnly={isAgentMd}
+        disabled={isAgentMd}
+        className={`w-full px-2 py-1 text-sm rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)] ${isAgentMd ? 'opacity-60 cursor-not-allowed' : ''}`}
+        spellCheck={false}
+        aria-label="Note name"
+      />
+    </div>
+  )
+
+  // For agent.md, render the auto-managed Agent Memory section as a
+  // read-only block under the editor. Tells the user "this part of the
+  // file is curated by the memory subsystem — edit it via the Memory
+  // section in the Library tab, not here." Memory links inside the
+  // index are intercepted: a default <a> click would navigate the
+  // renderer to file:///.../memory/foo.md and blow away SPA state, so
+  // we resolve the filename to a MemoryItem and route through
+  // openPreview, mirroring what clicking the row in the sidebar does.
+  const renderAgentMemoryReadOnly = () => {
+    if (!isAgentMd) return null
+    const section = agentMdMemoryDisplay
+    if (!section) return null
+    return (
+      <div className="mt-5 pt-5 border-t t-border">
+        <div className="flex items-center gap-2 mb-2">
+          <Brain size={12} className="t-text-accent-soft" />
+          <span className="text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted">
+            Agent Memory · auto-managed (read-only)
+          </span>
+        </div>
+        <p className="text-[11px] t-text-muted mb-2">
+          Edit individual memories from the Memory section in the Library tab.
+        </p>
+        <div className="rounded border t-border t-bg-surface px-3 py-2 text-xs">
+          <div className="md-prose">
+            <ReactMarkdown
+              remarkPlugins={remarkPlugins}
+              components={{
+                a: ({ href, children, ...rest }) => {
+                  // memory/ links from buildMemoryIndex always look like
+                  // `memory/{filename}.md`; resolve to the matching
+                  // MemoryItem and open it in this same drawer.
+                  const match = typeof href === 'string'
+                    ? href.match(/^memory\/(.+\.md)$/)
+                    : null
+                  if (match) {
+                    const filename = match[1]
+                    return (
+                      <a
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          const item = useMemoryStore.getState().items.find(
+                            (m) => m.filename === filename,
+                          )
+                          if (item) openPreviewUI(item as unknown as EntityItem)
+                        }}
+                        className="t-text-accent-soft hover:underline cursor-pointer"
+                        {...rest}
+                      >
+                        {children}
+                      </a>
+                    )
+                  }
+                  // External / non-memory links: target="_blank" routes
+                  // through Electron's window-open handler to the system
+                  // browser, which is what other read-only markdown
+                  // surfaces in this app already do.
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="t-text-accent-soft hover:underline"
+                      {...rest}
+                    >
+                      {children}
+                    </a>
+                  )
+                },
+              }}
+            >{section}</ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const renderMemoryFrontmatterForm = () => (
     <div className="space-y-3 pb-4 mb-4 border-b t-border">
@@ -925,6 +1120,18 @@ export function EntityPreviewPanel() {
         <>
           {renderMemoryFrontmatterForm()}
           {renderMarkdownEditor()}
+        </>
+      )
+    }
+    // Notes (including agent.md) share the same scaffold: name field on
+    // top, markdown editor below. agent.md additionally renders a
+    // read-only Agent Memory block under the editor.
+    if (isNote) {
+      return (
+        <>
+          {renderNoteNameField()}
+          {renderMarkdownEditor()}
+          {renderAgentMemoryReadOnly()}
         </>
       )
     }
@@ -1025,9 +1232,14 @@ export function EntityPreviewPanel() {
       ? `memory · ${memoryTypeBaseline}`
       : `library · ${entity.type}`
 
-  // For memory entities the displayed title tracks the live name draft so
-  // renames feel immediate; everything else stays on the persisted title.
-  const headerTitle = isMemory ? (memoryNameDraft || '(unnamed memory)') : entity.title
+  // For memory entities (and renamable notes) the displayed title tracks
+  // the live name draft so renames feel immediate; agent.md is locked, so
+  // it falls back to the persisted entity.title.
+  const headerTitle = isMemory
+    ? (memoryNameDraft || '(unnamed memory)')
+    : (isNote && !isAgentMd)
+      ? (noteNameDraft || '(unnamed note)')
+      : entity.title
 
   // System serif stack for the reading surface. No external font deps —
   // Iowan Old Style ships with macOS, Charter is wide-fallback, Georgia

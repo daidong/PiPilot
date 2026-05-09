@@ -22,7 +22,8 @@ import {
   MessageCircle,
   Briefcase,
   Link as LinkIcon,
-  Brain
+  Brain,
+  StickyNote
 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
@@ -182,10 +183,19 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
         )}
         {isEnriching ? (
           <Loader2 size={10} className="shrink-0 t-text-accent-soft animate-spin" />
+        ) : entity.type === 'note' ? (
+          // agent.md is the lone "pinned" note — accent-soft BookMarked
+          // marks it as the always-visible default. Generated notes use
+          // StickyNote in warning to match the preview drawer's icon.
+          entity.id === 'agent-md' ? (
+            <BookMarked size={11} className="shrink-0 t-text-accent" />
+          ) : (
+            <StickyNote size={11} className="shrink-0 t-text-warning" />
+          )
         ) : (
           <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
         )}
-        <span className="text-xs t-text truncate" title={entity.title}>{entity.title}</span>
+        <span className={`text-xs truncate ${entity.id === 'agent-md' ? 't-text font-medium' : 't-text'}`} title={entity.title}>{entity.title}</span>
       </div>
       {messageId && (
         <button
@@ -511,6 +521,13 @@ function LibraryContent({
 
   const allItems = useMemo(() => [...notes, ...data], [notes, data])
 
+  // Split notes: agent.md is the "pinned" one — always visible, never
+  // folded. Everything else (generated notes, user-saved snippets) tucks
+  // into a default-collapsed subgroup so the section stays compact.
+  const agentMd = useMemo(() => notes.find((n) => n.id === 'agent-md'), [notes])
+  const otherNotes = useMemo(() => notes.filter((n) => n.id !== 'agent-md'), [notes])
+  const [generatedOpen, setGeneratedOpen] = useState(false)
+
   return (
     <>
       <div
@@ -526,7 +543,24 @@ function LibraryContent({
         {notes.length > 0 && (
           <>
             <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-2 pt-1 pb-0.5">Notes ({notes.length})</p>
-            {notes.map((e) => <EntityRow key={e.id} entity={e} />)}
+            {agentMd && <EntityRow key={agentMd.id} entity={agentMd} />}
+            {otherNotes.length > 0 && (
+              <>
+                <button
+                  onClick={() => setGeneratedOpen((v) => !v)}
+                  className="w-full flex items-center gap-1 px-2 py-0.5 rounded t-bg-hover transition-colors text-left"
+                >
+                  {generatedOpen ? <ChevronDown size={11} className="shrink-0 t-text-muted" /> : <ChevronRight size={11} className="shrink-0 t-text-muted" />}
+                  <span className="text-[11px] t-text-secondary">Generated</span>
+                  <span className="text-[10px] t-text-muted ml-auto">{otherNotes.length}</span>
+                </button>
+                {generatedOpen && (
+                  <div className="pl-3">
+                    {otherNotes.map((e) => <EntityRow key={e.id} entity={e} />)}
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
         {data.length > 0 && (
