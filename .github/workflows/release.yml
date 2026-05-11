@@ -57,8 +57,18 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
+      actions: write
     steps:
       - name: Publish release on DIR-LAB/Research-Pilot
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: gh release edit "${GITHUB_REF_NAME}" --draft=false --latest --repo DIR-LAB/Research-Pilot
+
+      # Astro reads the latest release tag at build time, so a fresh
+      # release means the website's version badges + asset links are
+      # stale until we rebuild. Dispatch deploy-website.yml so the
+      # static site picks up the just-published tag.
+      - name: Trigger website redeploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy-website.yml --ref main --repo "$GITHUB_REPOSITORY"
