@@ -29,9 +29,12 @@ export function AuditView() {
 
   const { status, presence, graph, error, reload } = useAuditGraph(active)
 
-  // Filters
+  // Filters. `hideWikiBg` defaults on — background-agent traces are noise
+  // for audit and they scatter the force layout because they're disconnected
+  // from the main lineage cluster.
   const [filters, setFilters] = useState<FiltersState>({
     hideContains: false,
+    hideWikiBg: true,
     selectedTraceId: null,
     kinds: DEFAULT_KINDS,
   })

@@ -19,6 +19,7 @@ import { useAuditPalette } from './audit-theme'
 
 export interface FiltersState {
   hideContains: boolean
+  hideWikiBg: boolean
   selectedTraceId: string | null
   kinds: Set<NodeKind>
 }
@@ -47,10 +48,10 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
   const traceList = useMemo(() => {
     const q = traceQuery.trim().toLowerCase()
     return graph.nodes
-      .filter(n => n.kind === 'trace' && !/wiki-bg/.test(n.label))
+      .filter(n => n.kind === 'trace' && (!filters.hideWikiBg || !/wiki-bg/.test(n.label)))
       .filter(n => !q || n.label.toLowerCase().includes(q) || (n.traceId || '').includes(q))
       .sort((a, b) => Number(b.startNs || 0) - Number(a.startNs || 0))
-  }, [graph, traceQuery])
+  }, [graph, traceQuery, filters.hideWikiBg])
 
   // Entity score (degree weighted toward producer edges). Same intuition as
   // the canvas importance score but kept simple here — the rail only needs
@@ -149,16 +150,27 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
           <div>{graph.counts.spans} spans  ·  {graph.counts.traces} traces</div>
         </div>
 
-        {/* Edge filter */}
-        <label className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer">
-          <input
-            type="checkbox"
-            checked={filters.hideContains}
-            onChange={e => setFilters({ ...filters, hideContains: e.target.checked })}
-            className="accent-[var(--color-accent)]"
-          />
-          <span>Hide <code className="t-bg-elevated px-1 rounded text-[var(--text-xs)] font-mono">contains</code> edges</span>
-        </label>
+        {/* Edge / noise filters */}
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={filters.hideContains}
+              onChange={e => setFilters({ ...filters, hideContains: e.target.checked })}
+              className="accent-[var(--color-accent)]"
+            />
+            <span>Hide <code className="t-bg-elevated px-1 rounded text-[var(--text-xs)] font-mono">contains</code> edges</span>
+          </label>
+          <label className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={filters.hideWikiBg}
+              onChange={e => setFilters({ ...filters, hideWikiBg: e.target.checked })}
+              className="accent-[var(--color-accent)]"
+            />
+            <span>Hide background traces</span>
+          </label>
+        </div>
 
         {/* Node kinds */}
         <div>

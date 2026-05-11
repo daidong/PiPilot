@@ -8,7 +8,8 @@
  * dark-only colors).
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Maximize2 } from 'lucide-react'
 import ForceGraph2D from 'react-force-graph-2d'
 import type {
   AuditGraph,
@@ -40,6 +41,7 @@ export interface ProvenanceGraphProps {
   taint: Record<string, { reason: string; ts: number }>
   filters: {
     hideContains: boolean
+    hideWikiBg: boolean
     selectedTraceId: string | null
     kinds: Set<NodeKind>
   }
@@ -75,13 +77,22 @@ export function ProvenanceGraph({
   }, [])
 
   // —— Filter view ——
+  // Background traces (wiki-bg etc.) are noise for audit and they wreck the
+  // force layout because they're disconnected from the main lineage cluster —
+  // zoomToFit then pulls way out to fit them, leaving the real graph tiny.
   const filtered = useMemo(() => {
+    const traceLabelOf = (id: string) =>
+      graph.nodes.find(n => n.id === `trace:${id}`)?.label || ''
+    const isBg = (n: GraphNode) =>
+      filters.hideWikiBg &&
+      ((n.kind === 'trace' && /wiki-bg/.test(n.label)) ||
+        ((n.kind === 'chat' || n.kind === 'step' || n.kind === 'tool') && n.traceId && /wiki-bg/.test(traceLabelOf(n.traceId))))
     const inTrace = (n: GraphNode) => {
       if (!filters.selectedTraceId) return true
       if (n.kind === 'session') return false
       return n.traceId === filters.selectedTraceId
     }
-    const visible = graph.nodes.filter(n => filters.kinds.has(n.kind) && inTrace(n))
+    const visible = graph.nodes.filter(n => filters.kinds.has(n.kind) && !isBg(n) && inTrace(n))
     const visibleIds = new Set(visible.map(n => n.id))
     const links = graph.edges.filter(e => {
       if (filters.hideContains && e.rel === 'contains') return false
@@ -92,15 +103,29 @@ export function ProvenanceGraph({
     return { nodes: visible.map(n => ({ ...n })), links: links.map(e => ({ ...e })) }
   }, [graph, filters])
 
-  // —— Force tuning + auto-fit ——
+  // —— Force tuning ——
   useEffect(() => {
     const fg = fgRef.current
     if (!fg) return
     fg.d3Force('charge')?.strength(-160)
     fg.d3Force('link')?.distance((l: any) => (l.rel === 'contains' ? 60 : 36))
-    const t = setTimeout(() => fg.zoomToFit?.(600, 60), 1400)
-    return () => clearTimeout(t)
   }, [filtered])
+
+  // Auto-fit on initial settle and on filter changes. Triggered when the
+  // user enters the tab (size > 0 for the first time) and again whenever
+  // the filtered set changes substantively. We fit on every onEngineStop
+  // for the *first* fit after a filter change — flag resets each time.
+  const needsFitRef = useRef(true)
+  useEffect(() => { needsFitRef.current = true }, [filtered])
+  const handleEngineStop = useCallback(() => {
+    if (!needsFitRef.current) return
+    needsFitRef.current = false
+    fgRef.current?.zoomToFit?.(500, 80)
+  }, [])
+
+  const fitToView = useCallback(() => {
+    fgRef.current?.zoomToFit?.(400, 80)
+  }, [])
 
   // —— Imperative focus from parent ——
   useEffect(() => {
@@ -366,7 +391,17 @@ export function ProvenanceGraph({
         onNodeClick={(n: any) => onSelect(n as GraphNode)}
         onBackgroundClick={() => onSelect(null)}
         cooldownTicks={120}
+        onEngineStop={handleEngineStop}
       />
+      {/* Floating fit-to-view control, top-right. Lets the user recover
+          the overview if force or zoom drifts after pan/drag/filter. */}
+      <button
+        onClick={fitToView}
+        title="Fit to view"
+        className="absolute top-3 right-3 p-1.5 rounded-md border t-border-subtle t-bg-elevated t-text-secondary hover:t-text transition-colors shadow-sm"
+      >
+        <Maximize2 size={13} />
+      </button>
     </div>
   )
 }
