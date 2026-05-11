@@ -79,7 +79,8 @@
       {
         "provider": "github",
         "owner": "DIR-LAB",
-        "repo": "Research-Pilot"
+        "repo": "Research-Pilot",
+        "releaseType": "draft"
       }
     ],
     "directories": {

@@ -47,3 +47,18 @@ jobs:
           else
             npx electron-vite build && npx electron-builder --linux --publish always
           fi
+
+  # Flip the draft release that the build matrix populated to public.
+  # Runs only after all three platform legs succeed — partial uploads
+  # stay as drafts and can be cleaned up by hand if a leg fails.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Publish release on DIR-LAB/Research-Pilot
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --latest --repo DIR-LAB/Research-Pilot
