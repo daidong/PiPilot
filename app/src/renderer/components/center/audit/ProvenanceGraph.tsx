@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2 } from 'lucide-react'
 import ForceGraph2D from 'react-force-graph-2d'
+import { forceX, forceY } from 'd3-force'
 import type {
   AuditGraph,
   EdgeRel,
@@ -104,11 +105,51 @@ export function ProvenanceGraph({
   }, [graph, filters])
 
   // —— Force tuning ——
+  // The default charge (-160) is right for connected clusters. The problem
+  // is that nothing pulls isolated/loosely-connected nodes back — they drift
+  // outward indefinitely and force zoomToFit to scale down dramatically to
+  // include them. A weak forceX/Y toward origin keeps the simulation bounded
+  // without flattening real clusters (link force still dominates locally).
   useEffect(() => {
     const fg = fgRef.current
     if (!fg) return
     fg.d3Force('charge')?.strength(-160)
     fg.d3Force('link')?.distance((l: any) => (l.rel === 'contains' ? 60 : 36))
+    fg.d3Force('x', forceX(0).strength(0.04))
+    fg.d3Force('y', forceY(0).strength(0.04))
+  }, [filtered])
+
+  // Largest causal-connected component. zoomToFit fits only these nodes so
+  // a couple of stragglers don't shrink the main graph into a postage stamp.
+  const mainComponentIds = useMemo(() => {
+    const nodeIds = new Set<string>(filtered.nodes.map(n => n.id))
+    const adj = new Map<string, Set<string>>()
+    for (const id of nodeIds) adj.set(id, new Set())
+    for (const e of filtered.links as any[]) {
+      if (e.rel === 'contains') continue
+      const s = typeof e.source === 'object' ? e.source.id : e.source
+      const t = typeof e.target === 'object' ? e.target.id : e.target
+      adj.get(s)?.add(t)
+      adj.get(t)?.add(s)
+    }
+    const seen = new Set<string>()
+    let largest = new Set<string>()
+    for (const id of nodeIds) {
+      if (seen.has(id)) continue
+      const comp = new Set<string>()
+      const stack = [id]
+      while (stack.length) {
+        const cur = stack.pop()!
+        if (comp.has(cur)) continue
+        comp.add(cur); seen.add(cur)
+        for (const nb of adj.get(cur) ?? []) if (!comp.has(nb)) stack.push(nb)
+      }
+      if (comp.size > largest.size) largest = comp
+    }
+    // If the "largest component" is small relative to the whole, fall back to
+    // fitting everything — this dataset just doesn't have one dominant cluster.
+    if (largest.size < Math.max(8, nodeIds.size * 0.25)) return null
+    return largest
   }, [filtered])
 
   // Auto-fit on initial settle and on filter changes. Triggered when the
@@ -117,15 +158,22 @@ export function ProvenanceGraph({
   // for the *first* fit after a filter change — flag resets each time.
   const needsFitRef = useRef(true)
   useEffect(() => { needsFitRef.current = true }, [filtered])
+  // Pass a node filter to zoomToFit so the camera only frames the largest
+  // causal-connected component — stragglers don't dominate the calculation.
+  const fitFilter = useMemo(() => {
+    if (!mainComponentIds) return undefined
+    return (n: any) => mainComponentIds.has(n.id)
+  }, [mainComponentIds])
+
   const handleEngineStop = useCallback(() => {
     if (!needsFitRef.current) return
     needsFitRef.current = false
-    fgRef.current?.zoomToFit?.(500, 80)
-  }, [])
+    fgRef.current?.zoomToFit?.(500, 80, fitFilter)
+  }, [fitFilter])
 
   const fitToView = useCallback(() => {
-    fgRef.current?.zoomToFit?.(400, 80)
-  }, [])
+    fgRef.current?.zoomToFit?.(400, 80, fitFilter)
+  }, [fitFilter])
 
   // —— Imperative focus from parent ——
   useEffect(() => {
