@@ -19,13 +19,13 @@ export function EmptyTelemetry({ reason, onRefresh }: Props) {
         <div className="inline-flex items-center justify-center w-12 h-12 rounded-full t-bg-elevated mb-4">
           <cfg.icon size={20} className="t-text-muted" />
         </div>
-        <h2 className="text-[var(--text-lg)] font-medium t-text mb-2">{cfg.title}</h2>
-        <p className="text-[var(--text-sm)] t-text-secondary leading-relaxed mb-5">
+        <h2 className="text-[15px] font-medium t-text mb-2">{cfg.title}</h2>
+        <p className="text-[13px] t-text-secondary leading-relaxed mb-5">
           {cfg.body}
         </p>
         <button
           onClick={onRefresh}
-          className="px-3 py-1.5 rounded-md border t-border-subtle t-bg-elevated t-text-secondary hover:t-text text-[var(--text-sm)] transition-colors"
+          className="px-3 py-1.5 rounded-md border t-border-subtle t-bg-elevated t-text-secondary hover:t-text text-[13px] transition-colors"
         >
           Refresh
         </button>

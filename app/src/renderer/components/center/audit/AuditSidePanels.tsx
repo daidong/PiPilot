@@ -131,7 +131,7 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
       <div className="flex items-center justify-between px-3 py-2 border-b t-border-subtle">
         <div className="flex items-center gap-1.5">
           <Filter size={12} className="t-text-muted" />
-          <span className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold">Filters</span>
+          <span className="text-[11px] uppercase tracking-wider t-text-muted font-semibold">Filters</span>
         </div>
         <div className="flex items-center gap-1">
           <button onClick={onReload} title="Reload graph" className="p-1 rounded t-text-muted hover:t-text-secondary">
@@ -145,23 +145,23 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
 
       <div className="overflow-y-auto flex-1 px-3 py-3 space-y-4">
         {/* Counts */}
-        <div className="text-[var(--text-xs)] t-text-secondary leading-relaxed tabular-nums">
+        <div className="text-[11px] t-text-secondary leading-relaxed tabular-nums">
           <div>{graph.counts.nodes} nodes  ·  {graph.counts.edges} edges</div>
           <div>{graph.counts.spans} spans  ·  {graph.counts.traces} traces</div>
         </div>
 
         {/* Edge / noise filters */}
         <div className="space-y-1.5">
-          <label className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer">
+          <label className="flex items-center gap-2 text-[13px] t-text-secondary cursor-pointer">
             <input
               type="checkbox"
               checked={filters.hideContains}
               onChange={e => setFilters({ ...filters, hideContains: e.target.checked })}
               className="accent-[var(--color-accent)]"
             />
-            <span>Hide <code className="t-bg-elevated px-1 rounded text-[var(--text-xs)] font-mono">contains</code> edges</span>
+            <span>Hide <code className="t-bg-elevated px-1 rounded text-[11px] font-mono">contains</code> edges</span>
           </label>
-          <label className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer">
+          <label className="flex items-center gap-2 text-[13px] t-text-secondary cursor-pointer">
             <input
               type="checkbox"
               checked={filters.hideWikiBg}
@@ -174,10 +174,10 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
 
         {/* Node kinds */}
         <div>
-          <div className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Node kinds</div>
+          <div className="text-[11px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Node kinds</div>
           <div className="space-y-1">
             {ALL_KINDS.map(k => (
-              <label key={k} className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer">
+              <label key={k} className="flex items-center gap-2 text-[13px] t-text-secondary cursor-pointer">
                 <input
                   type="checkbox"
                   checked={filters.kinds.has(k)}
@@ -194,8 +194,8 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
         {/* Entities */}
         <div>
           <div className="flex items-baseline justify-between mb-1.5">
-            <div className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold">Entities</div>
-            <div className="text-[var(--text-2xs)] t-text-muted tabular-nums">{entityHeaderCount}</div>
+            <div className="text-[11px] uppercase tracking-wider t-text-muted font-semibold">Entities</div>
+            <div className="text-[10px] t-text-muted tabular-nums">{entityHeaderCount}</div>
           </div>
           <div className="relative mb-1.5">
             <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 t-text-muted pointer-events-none" />
@@ -204,26 +204,26 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
               value={entityQuery}
               onChange={e => setEntityQuery(e.target.value)}
               placeholder="search artifacts, files, dirs…"
-              className="w-full pl-6 pr-2 py-1 t-bg-elevated t-border-subtle border rounded text-[var(--text-sm)] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
+              className="w-full pl-6 pr-2 py-1 t-bg-elevated t-border-subtle border rounded text-[13px] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
             />
           </div>
           <div className="space-y-0.5 max-h-[36vh] overflow-y-auto pr-1">
             {entityResults.length === 0 ? (
-              <div className="px-2 py-1 text-[var(--text-xs)] t-text-muted italic">
+              <div className="px-2 py-1 text-[11px] t-text-muted italic">
                 {entityQuery.trim() ? `No entities match “${entityQuery.trim()}”.` : 'No entities in current view.'}
               </div>
             ) : entityResults.map(({ n, s }) => (
               <button
                 key={n.id}
                 onClick={() => onFocusNode(n)}
-                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[var(--text-sm)] transition-colors ${
+                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[13px] transition-colors ${
                   selected?.id === n.id ? 't-bg-accent-2-muted t-text' : 't-text hover:t-bg-hover'
                 }`}
                 title={n.path ?? n.id}
               >
                 <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ background: palette.kind[n.kind] }} />
                 <span className="truncate flex-1">{n.label}</span>
-                <span className="t-text-muted text-[var(--text-2xs)] tabular-nums flex-shrink-0">{s}</span>
+                <span className="t-text-muted text-[10px] tabular-nums flex-shrink-0">{s}</span>
               </button>
             ))}
           </div>
@@ -231,7 +231,7 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
 
         {/* Traces */}
         <div>
-          <div className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold mb-1.5">
+          <div className="text-[11px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">
             Traces ({traceList.length})
           </div>
           <div className="relative mb-1.5">
@@ -241,13 +241,13 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
               value={traceQuery}
               onChange={e => setTraceQuery(e.target.value)}
               placeholder="filter by name or id…"
-              className="w-full pl-6 pr-2 py-1 t-bg-elevated t-border-subtle border rounded text-[var(--text-sm)] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
+              className="w-full pl-6 pr-2 py-1 t-bg-elevated t-border-subtle border rounded text-[13px] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
             />
           </div>
           <div className="space-y-0.5 max-h-[40vh] overflow-y-auto pr-1">
             <button
               onClick={() => setFilters({ ...filters, selectedTraceId: null })}
-              className={`w-full text-left px-2 py-1 rounded text-[var(--text-sm)] transition-colors ${
+              className={`w-full text-left px-2 py-1 rounded text-[13px] transition-colors ${
                 !filters.selectedTraceId ? 't-bg-accent-2-muted t-text' : 't-text-secondary hover:t-bg-hover'
               }`}
             >
@@ -257,13 +257,13 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
               <button
                 key={t.id}
                 onClick={() => setFilters({ ...filters, selectedTraceId: t.traceId || null })}
-                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[var(--text-sm)] transition-colors ${
+                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[13px] transition-colors ${
                   filters.selectedTraceId === t.traceId ? 't-bg-accent-2-muted t-text' : 't-text-secondary hover:t-bg-hover'
                 }`}
                 title={t.traceId}
               >
                 <span className="truncate flex-1">{t.label}</span>
-                <span className="text-[var(--text-2xs)] t-text-muted font-mono tabular-nums flex-shrink-0">{t.traceId?.slice(0, 6)}</span>
+                <span className="text-[10px] t-text-muted font-mono tabular-nums flex-shrink-0">{t.traceId?.slice(0, 6)}</span>
               </button>
             ))}
           </div>
@@ -316,11 +316,11 @@ export function AuditRightRail({
   const quarantine = buildQuarantine(graph, taint, derivedTaint)
 
   return (
-    <div className="t-bg-surface border-l t-border-subtle flex flex-col w-[340px] flex-shrink-0">
+    <div className="t-bg-surface border-l t-border-subtle flex flex-col w-[360px] flex-shrink-0">
       <div className="flex items-center justify-between px-3 py-2 border-b t-border-subtle">
         <div className="flex items-center gap-1.5">
           <Crosshair size={12} className="t-text-muted" />
-          <span className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold">Inspector</span>
+          <span className="text-[11px] uppercase tracking-wider t-text-muted font-semibold">Inspector</span>
         </div>
         <button onClick={onToggleCollapsed} title="Hide details" className="p-1 rounded t-text-muted hover:t-text-secondary">
           <ChevronRight size={13} />
@@ -358,16 +358,16 @@ export function AuditRightRail({
 
 function Placeholder({ source }: { source: string }) {
   return (
-    <div className="t-text-secondary text-[var(--text-sm)] leading-relaxed">
-      <h3 className="t-text text-[var(--text-base)] font-medium mb-2">Click a node</h3>
+    <div className="t-text-secondary text-[13px] leading-relaxed">
+      <h3 className="t-text text-[14px] font-medium mb-2">Click a node</h3>
       <p className="mb-3">Click any node to see its attributes, raw span events, and its support slice (upstream + downstream lineage).</p>
-      <div className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold mb-1.5 mt-4">Audit primitives</div>
+      <div className="text-[11px] uppercase tracking-wider t-text-muted font-semibold mb-1.5 mt-4">Audit primitives</div>
       <ul className="space-y-2 pl-1">
         <li><b className="t-text">Trace</b> — walk upstream from any artifact or file to the originating tool calls and steps.</li>
         <li><b className="t-text">Taint</b> — mark a node suspect; taint flows forward through causal edges. Descendants get a dashed ring.</li>
         <li><b className="t-text">Repair flow</b> — once anything is tainted, this pane shows what would be quarantined and the safe replay point.</li>
       </ul>
-      <div className="mt-4 pt-3 border-t t-border-subtle text-[var(--text-2xs)] t-text-muted font-mono break-all leading-relaxed">{source}</div>
+      <div className="mt-4 pt-3 border-t t-border-subtle text-[10px] t-text-muted font-mono break-all leading-relaxed">{source}</div>
     </div>
   )
 }
@@ -400,7 +400,7 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
         >
           {node.kind}
         </span>
-        <h3 className="flex-1 min-w-0 break-all t-text font-medium text-[var(--text-base)]">{node.label}</h3>
+        <h3 className="flex-1 min-w-0 break-all t-text font-medium text-[14px]">{node.label}</h3>
       </div>
 
       {/* Slice + Taint card */}
@@ -409,17 +409,17 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
         <div>
           <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">Support slice</div>
           <div className="flex items-baseline gap-x-0.5 tabular-nums">
-            <span className="text-[var(--text-lg)] t-text font-medium">{sliceStats.nodes}</span>
-            <span className="text-[var(--text-2xs)] uppercase tracking-wider t-text-muted ml-1 mr-2">node{sliceStats.nodes === 1 ? '' : 's'}</span>
-            <span className="text-[var(--text-lg)] t-text font-medium">{sliceStats.traces.size}</span>
-            <span className="text-[var(--text-2xs)] uppercase tracking-wider t-text-muted ml-1 mr-2">trace{sliceStats.traces.size === 1 ? '' : 's'}</span>
-            <span className="text-[var(--text-lg)] t-text font-medium">{sliceStats.sessions.size}</span>
-            <span className="text-[var(--text-2xs)] uppercase tracking-wider t-text-muted ml-1">session{sliceStats.sessions.size === 1 ? '' : 's'}</span>
+            <span className="text-[15px] t-text font-medium">{sliceStats.nodes}</span>
+            <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1 mr-2">node{sliceStats.nodes === 1 ? '' : 's'}</span>
+            <span className="text-[15px] t-text font-medium">{sliceStats.traces.size}</span>
+            <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1 mr-2">trace{sliceStats.traces.size === 1 ? '' : 's'}</span>
+            <span className="text-[15px] t-text font-medium">{sliceStats.sessions.size}</span>
+            <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">session{sliceStats.sessions.size === 1 ? '' : 's'}</span>
           </div>
           {breakdown.length > 0 && (
             <div className="flex flex-wrap gap-x-2 gap-y-1 mt-2">
               {breakdown.map(([k, n]) => (
-                <span key={k} className="inline-flex items-center gap-1 text-[var(--text-xs)] t-text-secondary tabular-nums">
+                <span key={k} className="inline-flex items-center gap-1 text-[11px] t-text-secondary tabular-nums">
                   <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: palette.kind[k] }} />
                   {n} {k}
                 </span>
@@ -427,7 +427,7 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
             </div>
           )}
           {sliceStats.traces.size > 1 && (
-            <div className="mt-2 px-2 py-1.5 border-l-2 t-border-accent t-bg-accent/10 t-text-accent text-[var(--text-xs)] rounded-r leading-snug">
+            <div className="mt-2 px-2 py-1.5 border-l-2 t-border-accent t-bg-accent/10 t-text-accent text-[11px] rounded-r leading-snug">
               Crosses {sliceStats.traces.size} traces — lineage continues across user turns.
             </div>
           )}
@@ -437,15 +437,15 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
         <div className="pt-3 border-t t-border-subtle">
           <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Taint</div>
           {isDirect ? (
-            <div className="flex items-center gap-2 t-text-error text-[var(--text-sm)]">
+            <div className="flex items-center gap-2 t-text-error text-[13px]">
               <span className="w-2.5 h-2.5 rounded-full border-2 flex-shrink-0" style={{ borderColor: 'currentColor' }} />
               <span className="flex-1 min-w-0 break-words"><b>direct</b> · {taint[node.id].reason}</span>
-              <button onClick={onClearTaint} className="px-2 py-0.5 rounded text-[var(--text-2xs)] uppercase tracking-wider border t-border-subtle t-text-muted hover:t-text">
+              <button onClick={onClearTaint} className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border t-border-subtle t-text-muted hover:t-text">
                 clear
               </button>
             </div>
           ) : isDerived ? (
-            <div className="flex items-center gap-2 t-text-error-soft text-[var(--text-sm)]">
+            <div className="flex items-center gap-2 t-text-error-soft text-[13px]">
               <span className="w-2.5 h-2.5 rounded-full border-2 border-dashed flex-shrink-0 opacity-70" style={{ borderColor: 'currentColor' }} />
               <span><b>derived</b> · downstream of another suspect node</span>
             </div>
@@ -458,12 +458,12 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
                 value={reason}
                 onChange={e => setReason(e.target.value)}
                 placeholder="reason for marking suspect…"
-                className="flex-1 px-2 py-1 t-bg-base t-border-subtle border rounded text-[var(--text-xs)] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
+                className="flex-1 px-2 py-1 t-bg-base t-border-subtle border rounded text-[11px] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
               />
               <button
                 type="submit"
                 disabled={!reason.trim()}
-                className="px-2.5 py-1 rounded text-[var(--text-xs)] font-medium border t-text-error disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-2.5 py-1 rounded text-[11px] font-medium border t-text-error disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 style={{
                   background: 'color-mix(in oklab, var(--color-status-error) 9%, transparent)',
                   borderColor: 'color-mix(in oklab, var(--color-status-error) 30%, transparent)',
@@ -489,8 +489,8 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
           <div className="space-y-1.5">
             {node.rawEvents.map((e, i) => (
               <div key={i} className="t-bg-base border t-border-subtle rounded p-2">
-                <div className="text-[var(--text-2xs)] t-text-accent font-mono mb-1">{e.name}</div>
-                <pre className="text-[var(--text-2xs)] leading-relaxed font-mono t-text whitespace-pre-wrap break-all max-h-64 overflow-auto m-0">
+                <div className="text-[10px] t-text-accent font-mono mb-1">{e.name}</div>
+                <pre className="text-[10px] leading-relaxed font-mono t-text whitespace-pre-wrap break-all max-h-64 overflow-auto m-0">
                   {prettyMaybeJson(e.body)}
                 </pre>
               </div>
@@ -505,7 +505,7 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
           <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Artifact versions</div>
           <div className="space-y-1.5">
             {(node.versions as Array<{ version: number; op: string; timestamp: string }>).map((v, i) => (
-              <div key={i} className="t-bg-base border t-border-subtle rounded p-2 text-[var(--text-xs)] font-mono">
+              <div key={i} className="t-bg-base border t-border-subtle rounded p-2 text-[11px] font-mono">
                 <div className="t-text-accent">v{v.version} · {v.op} · {new Date(v.timestamp).toLocaleString()}</div>
               </div>
             ))}
@@ -539,7 +539,7 @@ function AttributeTable({ node }: { node: GraphNode }) {
   push('path', node.path)
   push('sessionId', node.sessionId)
   return (
-    <table className="w-full text-[var(--text-xs)]">
+    <table className="w-full text-[11px]">
       <tbody>
         {rows.map(([k, v]) => (
           <tr key={k} className="border-b t-border-subtle">
@@ -621,7 +621,7 @@ function QuarantinePreview({
         <button
           key={n.id}
           onClick={() => onFocusNode(n)}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 t-bg-base border t-border-subtle rounded text-[var(--text-xs)] t-text max-w-[200px] hover:t-bg-elevated transition-colors"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 t-bg-base border t-border-subtle rounded text-[11px] t-text max-w-[200px] hover:t-bg-elevated transition-colors"
           title={n.id}
         >
           <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: palette.kind[n.kind] }} />
@@ -629,7 +629,7 @@ function QuarantinePreview({
           {taint[n.id] && <span className="t-text-error text-[10px] leading-none">●</span>}
         </button>
       ))}
-      {arr.length > cap && <span className="text-[var(--text-2xs)] t-text-muted ml-1">+ {arr.length - cap} more</span>}
+      {arr.length > cap && <span className="text-[10px] t-text-muted ml-1">+ {arr.length - cap} more</span>}
     </>
   )
   return (
@@ -644,9 +644,9 @@ function QuarantinePreview({
       <header className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5 t-text-error">
           <AlertTriangle size={12} />
-          <span className="text-[var(--text-xs)] uppercase tracking-wider font-semibold">Repair flow</span>
+          <span className="text-[11px] uppercase tracking-wider font-semibold">Repair flow</span>
         </div>
-        <button onClick={onClearAll} className="px-2 py-0.5 rounded text-[var(--text-2xs)] uppercase tracking-wider border t-border-subtle t-text-muted hover:t-text inline-flex items-center gap-1">
+        <button onClick={onClearAll} className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border t-border-subtle t-text-muted hover:t-text inline-flex items-center gap-1">
           <X size={10} /> clear all
         </button>
       </header>
@@ -656,7 +656,7 @@ function QuarantinePreview({
         {stages.map(s => (
           <li
             key={s.k}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[var(--text-2xs)] ${
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] ${
               s.done ? 't-bg-elevated t-border-subtle t-text' : 't-bg-base t-border-subtle t-text-muted'
             }`}
           >
@@ -674,10 +674,10 @@ function QuarantinePreview({
           borderBottom: '1px solid color-mix(in oklab, var(--color-status-error) 30%, transparent)',
         }}
       >
-        <div className="flex items-baseline gap-1"><span className="text-[var(--text-base)] t-text font-medium tabular-nums">{q.closure.size}</span><span className="text-[var(--text-2xs)] t-text-muted uppercase tracking-wider">quarantined</span></div>
-        <div className="flex items-baseline gap-1"><span className="text-[var(--text-base)] t-text font-medium tabular-nums">{q.direct.length}</span><span className="text-[var(--text-2xs)] t-text-muted uppercase tracking-wider">direct</span></div>
-        <div className="flex items-baseline gap-1"><span className="text-[var(--text-base)] t-text font-medium tabular-nums">{q.derived.length}</span><span className="text-[var(--text-2xs)] t-text-muted uppercase tracking-wider">derived</span></div>
-        <div className="flex items-baseline gap-1"><span className="text-[var(--text-base)] t-text font-medium tabular-nums">{q.traces.size}</span><span className="text-[var(--text-2xs)] t-text-muted uppercase tracking-wider">traces</span></div>
+        <div className="flex items-baseline gap-1"><span className="text-[14px] t-text font-medium tabular-nums">{q.closure.size}</span><span className="text-[10px] t-text-muted uppercase tracking-wider">quarantined</span></div>
+        <div className="flex items-baseline gap-1"><span className="text-[14px] t-text font-medium tabular-nums">{q.direct.length}</span><span className="text-[10px] t-text-muted uppercase tracking-wider">direct</span></div>
+        <div className="flex items-baseline gap-1"><span className="text-[14px] t-text font-medium tabular-nums">{q.derived.length}</span><span className="text-[10px] t-text-muted uppercase tracking-wider">derived</span></div>
+        <div className="flex items-baseline gap-1"><span className="text-[14px] t-text font-medium tabular-nums">{q.traces.size}</span><span className="text-[10px] t-text-muted uppercase tracking-wider">traces</span></div>
       </div>
 
       {/* Would invalidate */}
@@ -696,7 +696,7 @@ function QuarantinePreview({
         {q.replayFrom ? (
           <button
             onClick={() => onFocusNode(q.replayFrom!)}
-            className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-[var(--text-xs)] border t-text hover:opacity-80 transition-opacity"
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-[11px] border t-text hover:opacity-80 transition-opacity"
             style={{
               background: 'color-mix(in oklab, var(--color-accent) 12%, transparent)',
               borderColor: 'color-mix(in oklab, var(--color-accent) 40%, transparent)',
@@ -704,14 +704,14 @@ function QuarantinePreview({
           >
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: palette.kind.step }} />
             <span>{q.replayFrom.label}</span>
-            <span className="t-text-muted text-[var(--text-2xs)] ml-1 font-mono">({q.replayFrom.traceId?.slice(0, 6)})</span>
+            <span className="t-text-muted text-[10px] ml-1 font-mono">({q.replayFrom.traceId?.slice(0, 6)})</span>
           </button>
         ) : (
-          <div className="text-[var(--text-xs)] t-text-muted italic">No clean checkpoint before the suspect — full session rebuild required.</div>
+          <div className="text-[11px] t-text-muted italic">No clean checkpoint before the suspect — full session rebuild required.</div>
         )}
       </div>
 
-      <div className="mt-3 pt-2 border-t border-dashed t-border-subtle text-[var(--text-2xs)] t-text-muted leading-relaxed">
+      <div className="mt-3 pt-2 border-t border-dashed t-border-subtle text-[10px] t-text-muted leading-relaxed">
         Preview only — actual <code className="t-bg-elevated px-1 rounded font-mono text-[10px]">Invalidate</code> / <code className="t-bg-elevated px-1 rounded font-mono text-[10px]">Replay</code> requires runtime hooks. The closure above is what would be written to <code className="t-bg-elevated px-1 rounded font-mono text-[10px]">.research-pilot/taint.jsonl</code>.
       </div>
     </section>

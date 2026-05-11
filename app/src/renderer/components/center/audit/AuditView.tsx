@@ -100,7 +100,7 @@ export function AuditView() {
     return (
       <div className="flex-1 flex items-center justify-center gap-2 t-text-muted">
         <Loader2 size={16} className="animate-spin" />
-        <span className="text-[var(--text-sm)]">Reading telemetry…</span>
+        <span className="text-[13px]">Reading telemetry…</span>
       </div>
     )
   }
@@ -109,9 +109,9 @@ export function AuditView() {
     return (
       <div className="flex-1 flex items-center justify-center px-8">
         <div className="max-w-md text-center">
-          <h2 className="text-[var(--text-lg)] font-medium t-text mb-2">Could not load audit graph</h2>
-          <p className="text-[var(--text-sm)] t-text-error mb-4">{error}</p>
-          <button onClick={reload} className="px-3 py-1.5 rounded-md border t-border-subtle t-bg-elevated t-text text-[var(--text-sm)]">Retry</button>
+          <h2 className="text-[15px] font-medium t-text mb-2">Could not load audit graph</h2>
+          <p className="text-[13px] t-text-error mb-4">{error}</p>
+          <button onClick={reload} className="px-3 py-1.5 rounded-md border t-border-subtle t-bg-elevated t-text text-[13px]">Retry</button>
         </div>
       </div>
     )
