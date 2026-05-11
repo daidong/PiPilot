@@ -41,6 +41,7 @@ import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 import { inferProviderFromModelId } from '../../../lib/models'
+import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
@@ -2267,6 +2268,21 @@ export function registerIpcHandlers(): void {
       }
     }
     return result
+  })
+
+  /**
+   * Audit graph — derive a provenance projection from telemetry on demand.
+   * Read-only. Returns the full graph plus a presence flag so the renderer
+   * can render the empty state without a second round-trip.
+   */
+  handleWindow('audit:get-graph', async ({ state }) => {
+    if (!state.projectPath) {
+      return { presence: { present: false, reason: 'no-root', spanFileCount: 0 }, graph: null }
+    }
+    const presence = await checkTelemetryPresence(state.projectPath)
+    if (!presence.present) return { presence, graph: null }
+    const graph = await projectGraph(state.projectPath)
+    return { presence, graph }
   })
 
   // Close project: stop agent, destroy coordinator, reset state

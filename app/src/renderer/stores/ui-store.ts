@@ -6,7 +6,7 @@ import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 
 import { getInitialTheme, persistTheme, applyThemeClass, type Theme } from '../theme-boot'
 type LeftTab = 'library' | 'files' | 'skills'
-type CenterView = 'chat' | 'literature' | 'compute'
+type CenterView = 'chat' | 'literature' | 'compute' | 'audit'
 export type { LeftTab, CenterView }
 export type { ReasoningEffort }
 
