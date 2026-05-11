@@ -19,6 +19,8 @@ export interface AuditPalette {
   rel: Record<EdgeRel, string>
   // Taint target — the color tinted nodes/edges shift toward
   taint: [number, number, number]
+  // Canvas label color — matches --color-text so it tracks light/dark theme.
+  canvasLabel: string
 }
 
 function readVar(name: string): string {
@@ -57,6 +59,7 @@ function readPalette(): AuditPalette {
   const info    = readVar('--color-status-info')    || '#60a5fa'
 
   const errorRgb = hexToRgb(error) || [239, 83, 80]
+  const text = readVar('--color-text') || '#cdd5db'
 
   return {
     kind: {
@@ -84,6 +87,7 @@ function readPalette(): AuditPalette {
       listed:    withAlpha(accent2Soft, 0.45),
     },
     taint: errorRgb,
+    canvasLabel: text,
   }
 }
 

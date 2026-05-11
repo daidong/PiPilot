@@ -347,8 +347,11 @@ export function ProvenanceGraph({
           const zoomThresh = labelZoomThreshold.get(n.id) ?? 3.0
           const labelable = isSel || isHi || globalScale >= zoomThresh
           if (labelable) {
-            ctx.font = `${Math.max(10, 11 / globalScale)}px ui-monospace,Menlo,monospace`
-            ctx.fillStyle = palette.kind.span === '#fff' ? '#000' : '#cbd5e1'
+            // Match the project's UI font (Inter, loaded via @font-face) so the
+            // canvas chrome doesn't clash with the side rails. Slight optical
+            // bump on the floor (11px) for readability when zoomed far out.
+            ctx.font = `500 ${Math.max(11, 12 / globalScale)}px Inter, system-ui, -apple-system, sans-serif`
+            ctx.fillStyle = palette.canvasLabel
             ctx.textAlign = 'left'
             ctx.fillText(String(n.label).slice(0, 40), n.x + r + 2, n.y + 3)
           }

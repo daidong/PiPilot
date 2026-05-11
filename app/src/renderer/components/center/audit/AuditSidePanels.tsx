@@ -35,10 +35,14 @@ interface LeftProps {
 }
 
 const ALL_KINDS: NodeKind[] = ['trace', 'step', 'tool', 'chat', 'artifact', 'file', 'dir', 'session']
+const ENTITY_KINDS: ReadonlySet<NodeKind> = new Set(['artifact', 'file', 'dir', 'tool'])
+const ENTITY_DEFAULT_LIMIT = 10
+const ENTITY_SEARCH_LIMIT = 80
 
 export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNode, selected, collapsed, onToggleCollapsed }: LeftProps) {
   const palette = useAuditPalette()
   const [traceQuery, setTraceQuery] = useState('')
+  const [entityQuery, setEntityQuery] = useState('')
 
   const traceList = useMemo(() => {
     const q = traceQuery.trim().toLowerCase()
@@ -48,21 +52,56 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
       .sort((a, b) => Number(b.startNs || 0) - Number(a.startNs || 0))
   }, [graph, traceQuery])
 
-  const keyEntities = useMemo(() => {
-    // Light-weight importance proxy for the rail (degree of important edges only).
-    const score = new Map<string, number>()
+  // Entity score (degree weighted toward producer edges). Same intuition as
+  // the canvas importance score but kept simple here — the rail only needs
+  // ranking, not the full importance machinery.
+  const entityScore = useMemo(() => {
+    const m = new Map<string, number>()
     for (const e of graph.edges) {
       if (e.rel === 'contains' || e.rel === 'sub-llm') continue
       const w = (e.rel === 'creates' || e.rel === 'writes') ? 3 : 1
-      score.set(e.source as string, (score.get(e.source as string) ?? 0) + w)
-      score.set(e.target as string, (score.get(e.target as string) ?? 0) + w)
+      m.set(e.source as string, (m.get(e.source as string) ?? 0) + w)
+      m.set(e.target as string, (m.get(e.target as string) ?? 0) + w)
     }
-    return graph.nodes
-      .filter(n => n.kind === 'artifact' || n.kind === 'file' || n.kind === 'tool')
-      .map(n => ({ n, s: score.get(n.id) ?? 0 }))
-      .sort((a, b) => b.s - a.s)
-      .slice(0, 10)
+    return m
   }, [graph])
+
+  const allEntities = useMemo(
+    () => graph.nodes
+      .filter(n => ENTITY_KINDS.has(n.kind))
+      .map(n => ({ n, s: entityScore.get(n.id) ?? 0 })),
+    [graph, entityScore],
+  )
+
+  const entityResults = useMemo(() => {
+    const q = entityQuery.trim().toLowerCase()
+    if (!q) {
+      // Default view: top N by score so the rail doesn't immediately scroll
+      // and the user always sees the most-touched artifacts first.
+      return [...allEntities].sort((a, b) => b.s - a.s).slice(0, ENTITY_DEFAULT_LIMIT)
+    }
+    // Search: substring match against label and path. Rank by:
+    //   1. prefix match on label (most predictive of intent)
+    //   2. substring match on label
+    //   3. substring match on path
+    return allEntities
+      .map(({ n, s }) => {
+        const label = n.label.toLowerCase()
+        const path = (n.path ?? '').toLowerCase()
+        let rank = -1
+        if (label.startsWith(q)) rank = 0
+        else if (label.includes(q)) rank = 1
+        else if (path.includes(q)) rank = 2
+        return { n, s, rank }
+      })
+      .filter(r => r.rank >= 0)
+      .sort((a, b) => a.rank - b.rank || b.s - a.s)
+      .slice(0, ENTITY_SEARCH_LIMIT)
+  }, [allEntities, entityQuery])
+
+  const entityHeaderCount = entityQuery.trim()
+    ? `${entityResults.length}${entityResults.length >= ENTITY_SEARCH_LIMIT ? '+' : ''} / ${allEntities.length}`
+    : `top ${entityResults.length} / ${allEntities.length}`
 
   if (collapsed) {
     return (
@@ -105,7 +144,7 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
 
       <div className="overflow-y-auto flex-1 px-3 py-3 space-y-4">
         {/* Counts */}
-        <div className="text-[var(--text-xs)] t-text-secondary font-mono leading-relaxed tabular-nums">
+        <div className="text-[var(--text-xs)] t-text-secondary leading-relaxed tabular-nums">
           <div>{graph.counts.nodes} nodes  ·  {graph.counts.edges} edges</div>
           <div>{graph.counts.spans} spans  ·  {graph.counts.traces} traces</div>
         </div>
@@ -126,7 +165,7 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
           <div className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Node kinds</div>
           <div className="space-y-1">
             {ALL_KINDS.map(k => (
-              <label key={k} className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer font-mono">
+              <label key={k} className="flex items-center gap-2 text-[var(--text-sm)] t-text-secondary cursor-pointer">
                 <input
                   type="checkbox"
                   checked={filters.kinds.has(k)}
@@ -140,24 +179,39 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
           </div>
         </div>
 
-        {/* Key entities */}
+        {/* Entities */}
         <div>
-          <div className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Key entities</div>
-          <div className="space-y-0.5">
-            {keyEntities.length === 0 ? (
-              <div className="text-[var(--text-xs)] t-text-muted italic">None in current view.</div>
-            ) : keyEntities.map(({ n, s }) => (
+          <div className="flex items-baseline justify-between mb-1.5">
+            <div className="text-[var(--text-xs)] uppercase tracking-wider t-text-muted font-semibold">Entities</div>
+            <div className="text-[var(--text-2xs)] t-text-muted tabular-nums">{entityHeaderCount}</div>
+          </div>
+          <div className="relative mb-1.5">
+            <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 t-text-muted pointer-events-none" />
+            <input
+              type="text"
+              value={entityQuery}
+              onChange={e => setEntityQuery(e.target.value)}
+              placeholder="search artifacts, files, dirs…"
+              className="w-full pl-6 pr-2 py-1 t-bg-elevated t-border-subtle border rounded text-[var(--text-sm)] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
+            />
+          </div>
+          <div className="space-y-0.5 max-h-[36vh] overflow-y-auto pr-1">
+            {entityResults.length === 0 ? (
+              <div className="px-2 py-1 text-[var(--text-xs)] t-text-muted italic">
+                {entityQuery.trim() ? `No entities match “${entityQuery.trim()}”.` : 'No entities in current view.'}
+              </div>
+            ) : entityResults.map(({ n, s }) => (
               <button
                 key={n.id}
                 onClick={() => onFocusNode(n)}
-                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[var(--text-sm)] font-mono transition-colors ${
+                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[var(--text-sm)] transition-colors ${
                   selected?.id === n.id ? 't-bg-accent-2-muted t-text' : 't-text hover:t-bg-hover'
                 }`}
-                title={n.id}
+                title={n.path ?? n.id}
               >
                 <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ background: palette.kind[n.kind] }} />
                 <span className="truncate flex-1">{n.label}</span>
-                <span className="t-text-muted text-[var(--text-2xs)] tabular-nums">{s}</span>
+                <span className="t-text-muted text-[var(--text-2xs)] tabular-nums flex-shrink-0">{s}</span>
               </button>
             ))}
           </div>
@@ -174,14 +228,14 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
               type="text"
               value={traceQuery}
               onChange={e => setTraceQuery(e.target.value)}
-              placeholder="filter…"
-              className="w-full pl-6 pr-2 py-1 t-bg-elevated t-border-subtle border rounded text-[var(--text-xs)] font-mono t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
+              placeholder="filter by name or id…"
+              className="w-full pl-6 pr-2 py-1 t-bg-elevated t-border-subtle border rounded text-[var(--text-sm)] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
             />
           </div>
           <div className="space-y-0.5 max-h-[40vh] overflow-y-auto pr-1">
             <button
               onClick={() => setFilters({ ...filters, selectedTraceId: null })}
-              className={`w-full text-left px-2 py-1 rounded text-[var(--text-xs)] font-mono transition-colors ${
+              className={`w-full text-left px-2 py-1 rounded text-[var(--text-sm)] transition-colors ${
                 !filters.selectedTraceId ? 't-bg-accent-2-muted t-text' : 't-text-secondary hover:t-bg-hover'
               }`}
             >
@@ -191,13 +245,13 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
               <button
                 key={t.id}
                 onClick={() => setFilters({ ...filters, selectedTraceId: t.traceId || null })}
-                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[var(--text-xs)] font-mono transition-colors ${
+                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[var(--text-sm)] transition-colors ${
                   filters.selectedTraceId === t.traceId ? 't-bg-accent-2-muted t-text' : 't-text-secondary hover:t-bg-hover'
                 }`}
                 title={t.traceId}
               >
                 <span className="truncate flex-1">{t.label}</span>
-                <span className="t-text-muted text-[var(--text-2xs)]">{t.traceId?.slice(0, 6)}</span>
+                <span className="text-[var(--text-2xs)] t-text-muted font-mono tabular-nums flex-shrink-0">{t.traceId?.slice(0, 6)}</span>
               </button>
             ))}
           </div>
@@ -301,7 +355,7 @@ function Placeholder({ source }: { source: string }) {
         <li><b className="t-text">Taint</b> — mark a node suspect; taint flows forward through causal edges. Descendants get a dashed ring.</li>
         <li><b className="t-text">Repair flow</b> — once anything is tainted, this pane shows what would be quarantined and the safe replay point.</li>
       </ul>
-      <div className="mt-4 pt-3 border-t t-border-subtle text-[var(--text-2xs)] t-text-muted font-mono break-all">{source}</div>
+      <div className="mt-4 pt-3 border-t t-border-subtle text-[var(--text-2xs)] t-text-muted font-mono break-all leading-relaxed">{source}</div>
     </div>
   )
 }
@@ -329,7 +383,7 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
       {/* Header */}
       <div className="flex items-center gap-2 pb-3 mb-3 border-b t-border-subtle">
         <span
-          className="px-1.5 py-0.5 rounded-full text-[9px] uppercase tracking-wider font-bold font-mono"
+          className="px-1.5 py-0.5 rounded-full text-[9px] uppercase tracking-wider font-bold"
           style={{ background: palette.kind[node.kind], color: '#0c1418' }}
         >
           {node.kind}
@@ -342,7 +396,7 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
         {/* Slice stats */}
         <div>
           <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">Support slice</div>
-          <div className="flex items-baseline gap-x-0.5 font-mono tabular-nums">
+          <div className="flex items-baseline gap-x-0.5 tabular-nums">
             <span className="text-[var(--text-lg)] t-text font-medium">{sliceStats.nodes}</span>
             <span className="text-[var(--text-2xs)] uppercase tracking-wider t-text-muted ml-1 mr-2">node{sliceStats.nodes === 1 ? '' : 's'}</span>
             <span className="text-[var(--text-lg)] t-text font-medium">{sliceStats.traces.size}</span>
@@ -353,7 +407,7 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
           {breakdown.length > 0 && (
             <div className="flex flex-wrap gap-x-2 gap-y-1 mt-2">
               {breakdown.map(([k, n]) => (
-                <span key={k} className="inline-flex items-center gap-1 text-[var(--text-xs)] t-text-secondary font-mono tabular-nums">
+                <span key={k} className="inline-flex items-center gap-1 text-[var(--text-xs)] t-text-secondary tabular-nums">
                   <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: palette.kind[k] }} />
                   {n} {k}
                 </span>
@@ -473,12 +527,12 @@ function AttributeTable({ node }: { node: GraphNode }) {
   push('path', node.path)
   push('sessionId', node.sessionId)
   return (
-    <table className="w-full text-[var(--text-xs)] font-mono">
+    <table className="w-full text-[var(--text-xs)]">
       <tbody>
         {rows.map(([k, v]) => (
           <tr key={k} className="border-b t-border-subtle">
             <td className="py-1 pr-2 t-text-muted align-top w-[38%]">{k}</td>
-            <td className="py-1 t-text break-all">{String(v)}</td>
+            <td className="py-1 t-text break-all font-mono tabular-nums">{String(v)}</td>
           </tr>
         ))}
       </tbody>
@@ -555,7 +609,7 @@ function QuarantinePreview({
         <button
           key={n.id}
           onClick={() => onFocusNode(n)}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 t-bg-base border t-border-subtle rounded text-[var(--text-xs)] font-mono t-text max-w-[200px] hover:t-bg-elevated transition-colors"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 t-bg-base border t-border-subtle rounded text-[var(--text-xs)] t-text max-w-[200px] hover:t-bg-elevated transition-colors"
           title={n.id}
         >
           <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: palette.kind[n.kind] }} />
@@ -590,7 +644,7 @@ function QuarantinePreview({
         {stages.map(s => (
           <li
             key={s.k}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[var(--text-2xs)] font-mono ${
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[var(--text-2xs)] ${
               s.done ? 't-bg-elevated t-border-subtle t-text' : 't-bg-base t-border-subtle t-text-muted'
             }`}
           >
@@ -602,7 +656,7 @@ function QuarantinePreview({
 
       {/* Counts */}
       <div
-        className="flex flex-wrap gap-x-4 py-2 font-mono"
+        className="flex flex-wrap gap-x-4 py-2"
         style={{
           borderTop: '1px solid color-mix(in oklab, var(--color-status-error) 30%, transparent)',
           borderBottom: '1px solid color-mix(in oklab, var(--color-status-error) 30%, transparent)',
@@ -630,7 +684,7 @@ function QuarantinePreview({
         {q.replayFrom ? (
           <button
             onClick={() => onFocusNode(q.replayFrom!)}
-            className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-[var(--text-xs)] font-mono border t-text hover:opacity-80 transition-opacity"
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-[var(--text-xs)] border t-text hover:opacity-80 transition-opacity"
             style={{
               background: 'color-mix(in oklab, var(--color-accent) 12%, transparent)',
               borderColor: 'color-mix(in oklab, var(--color-accent) 40%, transparent)',
@@ -638,7 +692,7 @@ function QuarantinePreview({
           >
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: palette.kind.step }} />
             <span>{q.replayFrom.label}</span>
-            <span className="t-text-muted text-[var(--text-2xs)] ml-1">({q.replayFrom.traceId?.slice(0, 6)})</span>
+            <span className="t-text-muted text-[var(--text-2xs)] ml-1 font-mono">({q.replayFrom.traceId?.slice(0, 6)})</span>
           </button>
         ) : (
           <div className="text-[var(--text-xs)] t-text-muted italic">No clean checkpoint before the suspect — full session rebuild required.</div>
@@ -646,7 +700,7 @@ function QuarantinePreview({
       </div>
 
       <div className="mt-3 pt-2 border-t border-dashed t-border-subtle text-[var(--text-2xs)] t-text-muted leading-relaxed">
-        Preview only — actual <code className="t-bg-elevated px-1 rounded font-mono">Invalidate</code> / <code className="t-bg-elevated px-1 rounded font-mono">Replay</code> requires runtime hooks. The closure above is what would be written to <code className="t-bg-elevated px-1 rounded font-mono">.research-pilot/taint.jsonl</code>.
+        Preview only — actual <code className="t-bg-elevated px-1 rounded font-mono text-[10px]">Invalidate</code> / <code className="t-bg-elevated px-1 rounded font-mono text-[10px]">Replay</code> requires runtime hooks. The closure above is what would be written to <code className="t-bg-elevated px-1 rounded font-mono text-[10px]">.research-pilot/taint.jsonl</code>.
       </div>
     </section>
   )
