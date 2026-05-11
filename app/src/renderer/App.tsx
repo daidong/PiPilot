@@ -886,6 +886,11 @@ export default function App() {
         e.preventDefault()
         useUIStore.getState().setCenterView('compute')
       }
+      // Cmd+4 → Audit (lineage visualization)
+      if ((e.metaKey || e.ctrlKey) && e.key === '4') {
+        e.preventDefault()
+        useUIStore.getState().setCenterView('audit')
+      }
       // Cmd+Shift+K → Close Project
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'K') {
         e.preventDefault()

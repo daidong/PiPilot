@@ -264,6 +264,12 @@ export interface ElectronAPI {
   listRecentProjects: () => Promise<Array<{ path: string; openedAt: string; pinned?: boolean }>>
   removeRecentProject: (projectPath: string) => Promise<{ success: boolean }>
   projectStatsBatch: (paths: string[]) => Promise<Record<string, { papers: number; notes: number; data: number; initialized: boolean }>>
+  // Audit graph — provenance projection from telemetry. Read-only; returns
+  // presence info so the renderer can decide whether to show the empty state.
+  auditGetGraph: () => Promise<{
+    presence: { present: boolean; reason?: 'no-root' | 'no-traces-dir' | 'no-span-files' | 'no-spans'; spanFileCount: number }
+    graph: import('../../../lib/audit-graph/index').AuditGraph | null
+  }>
   closeProject: () => Promise<void>
   onProjectClosed: (cb: () => void) => () => void
 
@@ -540,6 +546,7 @@ const api: ElectronAPI = {
   listRecentProjects: () => ipcRenderer.invoke('project:list-recents'),
   removeRecentProject: (projectPath: string) => ipcRenderer.invoke('project:remove-recent', projectPath),
   projectStatsBatch: (paths: string[]) => ipcRenderer.invoke('project:stats-batch', paths),
+  auditGetGraph: () => ipcRenderer.invoke('audit:get-graph'),
   closeProject: () => ipcRenderer.invoke('project:close'),
   onProjectClosed: (cb) => {
     const handler = () => cb()
