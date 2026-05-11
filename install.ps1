@@ -1,7 +1,7 @@
 # Research Copilot installer (Windows / PowerShell)
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/daidong/PiPilot/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/DIR-LAB/Research-Pilot/main/install.ps1 | iex
 #
 # Downloads the latest unsigned NSIS installer (.exe) from GitHub Releases
 # and runs it. SmartScreen will warn ("Unrecognized app") because the build is
@@ -9,7 +9,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$Repo      = 'daidong/PiPilot'
+$Repo      = 'DIR-LAB/Research-Pilot'
 $ApiLatest = "https://api.github.com/repos/$Repo/releases/latest"
 $AssetRx   = '\.exe$'
 

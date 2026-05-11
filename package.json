@@ -55,9 +55,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/daidong/PiPilot.git"
+    "url": "git+https://github.com/DIR-LAB/Research-Pilot.git"
   },
-  "homepage": "https://daidong.github.io/PiPilot/",
+  "homepage": "https://dir-lab.github.io/Research-Pilot/",
   "engines": {
     "node": ">=18"
   },

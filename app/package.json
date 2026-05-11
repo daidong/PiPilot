@@ -3,7 +3,7 @@
   "version": "0.3.6",
   "private": true,
   "description": "AI-powered research assistant desktop application",
-  "homepage": "https://github.com/daidong/PiPilot",
+  "homepage": "https://github.com/DIR-LAB/Research-Pilot",
   "main": "./out/main/index.mjs",
   "scripts": {
     "dev": "electron-vite dev",
@@ -78,8 +78,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "daidong",
-        "repo": "PiPilot"
+        "owner": "DIR-LAB",
+        "repo": "Research-Pilot"
       }
     ],
     "directories": {

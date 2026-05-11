@@ -1,4 +1,4 @@
-This guide walks you from install to your first successful chat. If you hit a snag, check the [FAQ](FAQ) or open a [Discussion](https://github.com/daidong/PiPilot/discussions).
+This guide walks you from install to your first successful chat. If you hit a snag, check the [FAQ](FAQ) or open a [Discussion](https://github.com/DIR-LAB/Research-Pilot/discussions).
 
 ## 1. Install
 
@@ -8,17 +8,6 @@ This guide walks you from install to your first successful chat. If you hit a sn
 npm install -g research-copilot
 research-copilot
 ```
-
-### Option B — from source
-
-```bash
-git clone https://github.com/daidong/PiPilot.git
-cd PiPilot
-npm install
-npm run dev
-```
-
-Requires **Node.js ≥ 18** and **npm ≥ 9**. Python 3 is optional but needed for data analysis and figure generation.
 
 ## 2. Sign in
 
@@ -99,4 +88,4 @@ Skills are auto-discovered from three locations (later overrides earlier):
 
 - Browse the [FAQ](FAQ) for common issues.
 - See the [README Features section](https://github.com/daidong/PiPilot/blob/main/README.md#features) for a tour of literature search, data analysis, attachments, and more.
-- Questions? Open a [Discussion](https://github.com/daidong/PiPilot/discussions).
+- Questions? Open a [Discussion](https://github.com/DIR-LAB/Research-Pilot/discussions).
