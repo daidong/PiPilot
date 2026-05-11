@@ -162,7 +162,9 @@ export function createOpenAIReviewProvider(
         type: 'json_schema',
         json_schema: { name: 'DiagramReview', strict: true, schema: RESPONSE_SCHEMA },
       },
-      temperature: 0,
+      // No explicit temperature: gpt-5-class reasoning models reject any
+      // value other than the default (1). Structured outputs already pin
+      // the response shape, so determinism via temperature=0 isn't needed.
     }
 
     const ctl = new AbortController()
