@@ -17,7 +17,7 @@ import { mkdirSync, writeFileSync } from 'fs'
 import { Agent } from '@mariozechner/pi-agent-core'
 import { getModel as getPiModel } from '@mariozechner/pi-ai'
 import { createCodingTools, createGrepTool, createFindTool, createLsTool, estimateTokens, shouldCompact, generateSummary, DEFAULT_COMPACTION_SETTINGS } from '@mariozechner/pi-coding-agent'
-import type { AgentTool, AgentEvent } from '@mariozechner/pi-agent-core'
+import type { AgentTool, AgentEvent, AgentMessage } from '@mariozechner/pi-agent-core'
 import type { Model, TextContent, ImageContent } from '@mariozechner/pi-ai'
 
 import { createResearchTools, type ResearchToolContext } from '../tools/index.js'
@@ -57,6 +57,9 @@ import {
 } from '../memory-v2/store.js'
 
 const SYSTEM_PROMPT = loadPrompt('coordinator-system')
+const REASONING_COMPACTION_RESERVE_TOKENS = 48_000
+const REASONING_KEEP_RECENT_TOKENS = 20_000
+const NON_REASONING_KEEP_RECENT_TOKENS = 30_000
 
 interface TurnExplainSnapshot {
   timestamp: string
@@ -85,6 +88,72 @@ interface TurnExplainSnapshot {
 }
 
 const MAX_SKILL_PRELOAD = 5
+
+function estimateCharsAsTokens(chars: number): number {
+  return Math.ceil(chars / 4)
+}
+
+function estimateFixedRequestTokens(systemPrompt: string | undefined, tools: AgentTool<any, any>[] | undefined): number {
+  let chars = systemPrompt?.length ?? 0
+
+  if (tools?.length) {
+    try {
+      const responseTools = tools.map(tool => ({
+        type: 'function',
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        strict: null
+      }))
+      chars += JSON.stringify(responseTools).length
+    } catch {
+      // Fall back to names/descriptions if a tool schema is unexpectedly not serializable.
+      chars += tools.reduce((sum, tool) => sum + tool.name.length + tool.description.length, 0)
+    }
+  }
+
+  return estimateCharsAsTokens(chars)
+}
+
+function estimateCompactionMessageTokens(message: AgentMessage): number {
+  let tokens = estimateTokens(message)
+  if ((message as { role?: string }).role !== 'assistant') return tokens
+
+  const content = (message as { content?: unknown }).content
+  if (!Array.isArray(content)) return tokens
+
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue
+    const typedBlock = block as {
+      type?: string
+      thinkingSignature?: string
+      thoughtSignature?: string
+      textSignature?: string
+    }
+    if (typedBlock.type === 'thinking' && typeof typedBlock.thinkingSignature === 'string') {
+      tokens += estimateCharsAsTokens(typedBlock.thinkingSignature.length)
+    } else if (typedBlock.type === 'toolCall' && typeof typedBlock.thoughtSignature === 'string') {
+      tokens += estimateCharsAsTokens(typedBlock.thoughtSignature.length)
+    } else if (typedBlock.type === 'text' && typeof typedBlock.textSignature === 'string') {
+      tokens += estimateCharsAsTokens(typedBlock.textSignature.length)
+    }
+  }
+
+  return tokens
+}
+
+function createCompactionSettings(model: Model<any> | null, thinkingLevel: string | undefined) {
+  const isReasoningRun = !!model?.reasoning && thinkingLevel !== 'off'
+  return {
+    ...DEFAULT_COMPACTION_SETTINGS,
+    reserveTokens: isReasoningRun
+      ? Math.max(DEFAULT_COMPACTION_SETTINGS.reserveTokens, REASONING_COMPACTION_RESERVE_TOKENS)
+      : DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+    keepRecentTokens: isReasoningRun
+      ? REASONING_KEEP_RECENT_TOKENS
+      : NON_REASONING_KEEP_RECENT_TOKENS
+  }
+}
 
 async function matchSkillsWithLLM(
   model: Model<any> | null,
@@ -160,6 +229,19 @@ function writeExplainSnapshot(projectPath: string, snapshot: TurnExplainSnapshot
   const ts = Date.now().toString(36)
   const path = join(explainDir, `${ts}.${snapshot.sessionId}.turn.json`)
   writeFileSync(path, JSON.stringify(snapshot, null, 2), 'utf-8')
+}
+
+function normalizeCompactionCutIndex(messages: AgentMessage[], cutIndex: number): number {
+  if (cutIndex <= 0 || cutIndex >= messages.length) return cutIndex
+
+  // A tool result is only valid when its corresponding assistant tool-call
+  // message is still in context. If the budget lands inside a tool-result
+  // batch, keep the assistant tool-call message too.
+  while (cutIndex > 0 && messages[cutIndex]?.role === 'toolResult') {
+    cutIndex--
+  }
+
+  return cutIndex
 }
 
 export interface CoordinatorConfig {
@@ -498,13 +580,16 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     // context window.  If so, summarize old messages and keep only recent ones.
     transformContext: async (messages, signal) => {
       const contextWindow = piModel?.contextWindow ?? 128_000
-      const settings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 30_000 }
+      const settings = createCompactionSettings(piModel, agent.state.thinkingLevel)
 
-      // Estimate total tokens from all messages
-      let totalTokens = 0
+      // Estimate the request body that goes to the provider: messages plus
+      // fixed overhead that is resent on every step.
+      let messageTokens = 0
       for (const msg of messages) {
-        totalTokens += estimateTokens(msg)
+        messageTokens += estimateCompactionMessageTokens(msg)
       }
+      const fixedOverheadTokens = estimateFixedRequestTokens(agent.state.systemPrompt, agent.state.tools)
+      const totalTokens = fixedOverheadTokens + messageTokens
 
       if (!shouldCompact(totalTokens, contextWindow, settings)) {
         return messages
@@ -513,14 +598,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       if (!piModel) return messages
 
       if (debug) {
-        console.log(`[Compaction] Context ${totalTokens} tokens exceeds threshold (window=${contextWindow}, reserve=${settings.reserveTokens}). Compacting...`)
+        console.log(`[Compaction] Context ${totalTokens} tokens exceeds threshold (messages=${messageTokens}, overhead=${fixedOverheadTokens}, window=${contextWindow}, reserve=${settings.reserveTokens}). Compacting...`)
       }
 
       // Walk backwards to find the cut point: keep ~keepRecentTokens of recent messages
       let keptTokens = 0
       let cutIndex = messages.length
       for (let i = messages.length - 1; i >= 0; i--) {
-        const msgTokens = estimateTokens(messages[i])
+        const msgTokens = estimateCompactionMessageTokens(messages[i])
         if (keptTokens + msgTokens > settings.keepRecentTokens) {
           cutIndex = i + 1
           break
@@ -532,14 +617,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       // Don't cut if there's nothing meaningful to summarize
       if (cutIndex <= 1) return messages
 
-      // Ensure we don't cut in the middle of a tool-call / tool-result pair
-      // Move cutIndex forward until we hit a user message (safe boundary)
-      while (cutIndex < messages.length) {
-        const msg = messages[cutIndex]
-        if (msg.role === 'user') break
-        cutIndex++
+      // Ensure we don't cut in the middle of a tool-call / tool-result pair.
+      // Allow splitting an in-progress turn: the synthetic summary preserves
+      // the dropped prefix, while the kept suffix starts at a protocol-safe
+      // user/assistant boundary.
+      if (cutIndex >= messages.length && messages.length > 1) {
+        cutIndex = messages.length - 1
       }
-      if (cutIndex >= messages.length) return messages
+      cutIndex = normalizeCompactionCutIndex(messages, cutIndex)
+      if (cutIndex <= 1 || cutIndex >= messages.length) return messages
 
       const messagesToSummarize = messages.slice(0, cutIndex)
       const messagesToKeep = messages.slice(cutIndex)
@@ -555,7 +641,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           compactionSpan.setAttributes({
             'gen_ai.operation.name': 'pipilot.summarize',
             'pipilot.compaction.discarded_messages': messagesToSummarize.length,
-            'pipilot.compaction.kept_tokens': keptTokens
+            'pipilot.compaction.kept_tokens': keptTokens,
+            'pipilot.compaction.fixed_overhead_tokens': fixedOverheadTokens
           })
           // §6.8: turnIds are objective. AgentMessage doesn't carry our turnId,
           // so we attach the indexes; Layer 3 can join by message index → turnId
@@ -612,17 +699,24 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         })
 
         if (debug) {
-          console.log(`[Compaction] Summarized ${messagesToSummarize.length} messages (${totalTokens - keptTokens} tokens) → kept ${messagesToKeep.length} messages (count=${compactionCount})`)
+          console.log(`[Compaction] Summarized ${messagesToSummarize.length} messages (${messageTokens - keptTokens} message tokens) → kept ${messagesToKeep.length} messages (count=${compactionCount})`)
         }
 
         // Inject the compaction summary as a synthetic user message at the top
-        const summaryMessage: import('@mariozechner/pi-agent-core').AgentMessage = {
+        const summaryMessage: AgentMessage = {
           role: 'user' as const,
           content: `[Previous conversation summary]\n\n${summary}\n\n---\n\nThe conversation continues below.`,
           timestamp: Date.now()
         }
 
-        return [summaryMessage, ...messagesToKeep]
+        const compactedMessages = [summaryMessage, ...messagesToKeep]
+
+        // transformContext is called at the request boundary. Mutating the
+        // active loop context keeps later tool steps in the same run from
+        // resending the full pre-compaction transcript.
+        messages.splice(0, messages.length, ...compactedMessages)
+
+        return compactedMessages
       } catch (err) {
         if (debug) {
           console.warn('[Compaction] Failed, using full context:', err)
