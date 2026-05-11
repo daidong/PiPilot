@@ -16,8 +16,8 @@ Welcome to the **Research Copilot** wiki — a community knowledge base for setu
 
 | I want to… | Go to |
 |---|---|
-| Ask a question or share a tip | [Discussions](https://github.com/daidong/PiPilot/discussions) |
-| Report a bug or request a feature | [Issues](https://github.com/daidong/PiPilot/issues) |
+| Ask a question or share a tip | [Discussions](https://github.com/DIR-LAB/Research-Pilot/discussions) |
+| Report a bug or request a feature | [Issues](https://github.com/DIR-LAB/Research-Pilot/issues) |
 | Read setup walkthroughs and guides | This wiki |
 | Read the code-level overview | [README](https://github.com/daidong/PiPilot/blob/main/README.md) and `CLAUDE.md` in the repo |
 

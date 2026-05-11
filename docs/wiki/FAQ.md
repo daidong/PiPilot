@@ -1,4 +1,4 @@
-Common questions and fixes. If yours isn't here, try [Discussions](https://github.com/daidong/PiPilot/discussions) or [Issues](https://github.com/daidong/PiPilot/issues).
+Common questions and fixes. If yours isn't here, try [Discussions](https://github.com/DIR-LAB/Research-Pilot/discussions) or [Issues](https://github.com/DIR-LAB/Research-Pilot/issues).
 
 ## Authentication
 
@@ -97,7 +97,7 @@ Usually means no auth succeeded. Open Settings → API Keys and either paste a k
 
 ### Something else is broken
 
-Open an [Issue](https://github.com/daidong/PiPilot/issues) with:
+Open an [Issue](https://github.com/DIR-LAB/Research-Pilot/issues) with:
 - OS + version
 - Research Copilot version (in About / `package.json`)
 - A minimal reproduction

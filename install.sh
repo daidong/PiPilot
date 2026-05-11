@@ -2,14 +2,14 @@
 # Research Copilot installer (macOS + Linux)
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/DIR-LAB/Research-Pilot/main/install.sh | bash
 #
 # Detects OS + architecture, downloads the latest signed-or-not release asset
 # from GitHub, installs it locally, and (on macOS) clears Gatekeeper quarantine.
 
 set -euo pipefail
 
-REPO="daidong/PiPilot"
+REPO="DIR-LAB/Research-Pilot"
 APP_NAME="Research Copilot"
 API_LATEST="https://api.github.com/repos/${REPO}/releases/latest"
 

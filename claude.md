@@ -157,7 +157,24 @@ Current prompts: `coordinator-system`, `data-analysis-system`, `data-analysis-ta
 
 ## Signing, Notarization & Auto-Update
 
-The macOS build is signed with a Developer ID Application certificate, notarized via Apple's notarytool, and stapled — first-launch has zero Gatekeeper warning. Inside the app, `electron-updater` checks GitHub Releases on startup and every 4 hours; when an update has finished downloading the StatusBar shows a small `Update ready · Restart` pill. All update logic is gated behind `app.isPackaged`, so it stays inert during `npm run dev`.
+The macOS build is signed with a Developer ID Application certificate, notarized via Apple's notarytool, and stapled — first-launch has zero Gatekeeper warning. Inside the app, `electron-updater` checks GitHub Releases on startup and every 4 hours against `DIR-LAB/Research-Pilot`; when an update has finished downloading the StatusBar shows a small `Update ready · Restart` pill. All update logic is gated behind `app.isPackaged`, so it stays inert during `npm run dev`.
+
+### Dual-repo distribution
+
+Source code lives in a **private** repo (`daidong/PiPilot`); user-facing assets live in a separate **public** repo (`DIR-LAB/Research-Pilot`). The public repo holds only distribution artifacts — release `.dmg`/`.exe`/`.deb` files, the marketing website on its `gh-pages` branch, and community Issues/Discussions. No source code is mirrored to the public repo.
+
+Code touchpoints:
+- `app/package.json` → `build.publish.owner` = `DIR-LAB`, `repo` = `Research-Pilot` (electron-builder + electron-updater target)
+- `.github/workflows/release.yml` → uses `PUBLIC_REPO_TOKEN` (PAT with `repo` write scope on the public repo) instead of the default `GITHUB_TOKEN`
+- `.github/workflows/deploy-website.yml` → builds `website/` and pushes the result to `DIR-LAB/Research-Pilot:gh-pages` via `peaceiris/actions-gh-pages`
+- `website/astro.config.mjs` → `site: https://dir-lab.github.io`, `base: /Research-Pilot/`
+- `website/src/pages/index.astro` → fetches releases from `DIR-LAB/Research-Pilot`
+- `install.sh` / `install.ps1` / root `package.json` / `README.md` / public wiki community links → all point at the public repo
+- Source-only links (wiki blob/main references to private RFCs, branch-protection examples below) → keep `daidong/PiPilot` since only collaborators read those surfaces
+
+Required GitHub Secrets on the **private** repo:
+- `PUBLIC_REPO_TOKEN` — PAT with `repo` write scope on `DIR-LAB/Research-Pilot` (lets release.yml upload artifacts and deploy-website.yml push to `gh-pages`)
+- existing macOS signing secrets unchanged (`MAC_CERTS`, `MAC_CERTS_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`)
 
 ### Day-to-day development
 Nothing extra. `npm install && npm run dev` is unchanged. The auto-updater is dormant in dev (no network calls, no pill, no events). To preview the StatusBar pill while developing, set the store directly in DevTools:

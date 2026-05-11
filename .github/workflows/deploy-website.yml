@@ -1,4 +1,4 @@
-name: Deploy Website to GitHub Pages
+name: Deploy Website to Public Repo
 
 on:
   push:
@@ -8,57 +8,28 @@ on:
     types: [published]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-  actions: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
 jobs:
-  # The github-pages environment's "Deployment branches and tags" protection
-  # rule allows main but blocks v* tags. The release:published event runs
-  # this workflow with GITHUB_REF=refs/tags/vX.Y.Z, so the deploy job is
-  # rejected by the environment guard. Re-dispatch the same workflow on
-  # main and let the original tag-triggered run exit early; the new run
-  # arrives via workflow_dispatch (allowed) and completes normally.
-  trampoline:
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Re-dispatch on main to satisfy github-pages env protection
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run deploy-website.yml --ref main --repo "$GITHUB_REPOSITORY"
-
-  build:
-    if: github.event_name != 'release'
+  build-and-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: website/package-lock.json
+
       - run: cd website && npm ci
       - run: cd website && npm run build
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: website/dist
 
-  deploy:
-    if: github.event_name != 'release'
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish to DIR-LAB/Research-Pilot gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          external_repository: DIR-LAB/Research-Pilot
+          publish_branch: gh-pages
+          publish_dir: ./website/dist
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com
+          commit_message: "Deploy website from ${{ github.repository }}@${{ github.sha }}"

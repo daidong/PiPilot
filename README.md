@@ -1,9 +1,9 @@
 # Research Copilot
 
 <p align="center">
-  <a href="https://github.com/daidong/PiPilot/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/daidong/PiPilot?style=for-the-badge&color=14B8A6&labelColor=1f2937&label=LATEST"></a>
-  <a href="https://github.com/daidong/PiPilot/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/daidong/PiPilot?style=for-the-badge&color=eab308&labelColor=1f2937&logo=github&logoColor=white&label=STARS"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/daidong/PiPilot?style=for-the-badge&color=14B8A6&labelColor=1f2937&label=LICENSE"></a>
+  <a href="https://github.com/DIR-LAB/Research-Pilot/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/DIR-LAB/Research-Pilot?style=for-the-badge&color=14B8A6&labelColor=1f2937&label=LATEST"></a>
+  <a href="https://github.com/DIR-LAB/Research-Pilot/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/DIR-LAB/Research-Pilot?style=for-the-badge&color=eab308&labelColor=1f2937&logo=github&logoColor=white&label=STARS"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/DIR-LAB/Research-Pilot?style=for-the-badge&color=14B8A6&labelColor=1f2937&label=LICENSE"></a>
   <img alt="Platforms" src="https://img.shields.io/badge/PLATFORMS-macOS_%7C_Windows_%7C_Linux-7c3aed?style=for-the-badge&labelColor=1f2937">
 </p>
 
@@ -11,7 +11,7 @@
   <img alt="macOS signed" src="https://img.shields.io/badge/MACOS-SIGNED_%26_NOTARIZED-14B8A6?style=for-the-badge&labelColor=1f2937&logo=apple&logoColor=white">
   <img alt="Auto-update" src="https://img.shields.io/badge/AUTO--UPDATE-ENABLED-14B8A6?style=for-the-badge&labelColor=1f2937">
   <img alt="Electron" src="https://img.shields.io/badge/ELECTRON-DESKTOP-2dd4bf?style=for-the-badge&labelColor=1f2937&logo=electron&logoColor=white">
-  <a href="https://github.com/daidong/PiPilot/discussions"><img alt="Discussions" src="https://img.shields.io/badge/COMMUNITY-DISCUSSIONS-7c3aed?style=for-the-badge&labelColor=1f2937&logo=github&logoColor=white"></a>
+  <a href="https://github.com/DIR-LAB/Research-Pilot/discussions"><img alt="Discussions" src="https://img.shields.io/badge/COMMUNITY-DISCUSSIONS-7c3aed?style=for-the-badge&labelColor=1f2937&logo=github&logoColor=white"></a>
 </p>
 
 An AI-powered desktop research assistant for scientists and academics. Literature search, data analysis, academic writing, cross-project paper memory, and project management — powered by your **ChatGPT Pro / Claude Max subscription** (or an API key), all in one desktop app.
@@ -41,7 +41,7 @@ The video above is an **unedited recording** of Research Copilot reproducing the
 
 - 🔐 **Signed & notarized macOS builds** — first launch from a fresh download is now zero-warning. Apple Silicon and Intel both pass Gatekeeper out of the box.
 - ⤴️ **In-app auto-update** — the app checks GitHub Releases on startup and every 4 hours. When a new version finishes downloading, a small `Update ready · Restart` pill appears in the StatusBar; one click and the app relaunches into the new build.
-- 🧹 **One-time migration**: pre-0.3.4 users need to download once more from the [latest release](https://github.com/daidong/PiPilot/releases/latest) to migrate to the auto-updating channel. Every subsequent release reaches you automatically.
+- 🧹 **One-time migration**: pre-0.3.4 users need to download once more from the [latest release](https://github.com/DIR-LAB/Research-Pilot/releases/latest) to migrate to the auto-updating channel. Every subsequent release reaches you automatically.
 
 ---
 
@@ -152,7 +152,7 @@ Attach files directly in the chat input via the paperclip button, drag & drop, o
 ## Installation
 
 Prebuilt binaries for **macOS / Linux / Windows** are published on every tagged release.
-👉 **[Download the latest release](https://github.com/daidong/PiPilot/releases/latest)** or use the one-liner installer for your OS:
+👉 **[Download the latest release](https://github.com/DIR-LAB/Research-Pilot/releases/latest)** or use the one-liner installer for your OS:
 
 ### macOS (Apple Silicon & Intel)
 
@@ -160,13 +160,13 @@ The macOS build is **signed with a Developer ID certificate and notarized by App
 
 ```bash
 # or via the install script (auto-detects arm64 / x64):
-curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DIR-LAB/Research-Pilot/main/install.sh | bash
 ```
 
 ### Linux (x86_64)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DIR-LAB/Research-Pilot/main/install.sh | bash
 ```
 
 Installs the AppImage to `~/.local/share/research-copilot/`, symlinks `~/.local/bin/research-copilot`, and writes a `.desktop` entry. Ubuntu 22.04+ needs `libfuse2`:
@@ -178,7 +178,7 @@ sudo apt install libfuse2
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/daidong/PiPilot/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/DIR-LAB/Research-Pilot/main/install.ps1 | iex
 ```
 
 Downloads and runs the NSIS installer. SmartScreen still shows "Unrecognized app" — click **More info → Run anyway**. (Windows code signing is on the roadmap.)
@@ -189,33 +189,11 @@ Downloads and runs the NSIS installer. SmartScreen still shows "Unrecognized app
 
 **Pre-0.3.4** — please download the latest installer one more time to migrate to the auto-updating channel. After that, you're set.
 
-### Build from source
-
-```bash
-git clone https://github.com/daidong/PiPilot.git
-cd PiPilot
-npm install
-npm run dev          # dev mode with hot reload
-# or:
-cd app && npm run pack:mac      # macOS DMG (arm64 + x64)
-cd app && npm run pack:win      # Windows NSIS installer
-cd app && npm run pack:linux    # Linux AppImage + .deb
-cd app && npm run pack:all      # all three (requires native runners or VMs)
-```
-
-Prerequisites for source builds: **Node.js ≥ 18**, **npm ≥ 9**, and **Python 3** (optional, for data analysis and figure generation).
-
 ### Authentication
 
 On first launch, open the model selector (top of the chat pane) and either **sign in** with ChatGPT Pro / Claude Max via OAuth, or paste an `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` into the unified settings panel (`Cmd+.`). Everything else is optional.
 
 See [Signing in](#signing-in-read-this-first) above for the full breakdown and optional supporting keys.
-
-### Build for Production
-
-```bash
-npm run build
-```
 
 ## Project Structure
 
@@ -276,9 +254,8 @@ Research Copilot stores its data in the workspace under `.research-pilot/`:
 
 ## Community & Support
 
-- **[Discussions](https://github.com/daidong/PiPilot/discussions)** — questions, ideas, usage tips, and general Q&A
-- **[Issues](https://github.com/daidong/PiPilot/issues)** — bug reports and feature requests
-- **[Wiki](https://github.com/daidong/PiPilot/wiki)** — setup walkthroughs, troubleshooting, and how-tos
+- **[Discussions](https://github.com/DIR-LAB/Research-Pilot/discussions)** — questions, ideas, usage tips, and general Q&A
+- **[Issues](https://github.com/DIR-LAB/Research-Pilot/issues)** — bug reports and feature requests
 
 ## License
 

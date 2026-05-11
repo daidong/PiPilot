@@ -14,7 +14,7 @@ let release: Release | null = null;
 try {
   const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  const res = await fetch('https://api.github.com/repos/daidong/PiPilot/releases/latest', { headers });
+  const res = await fetch('https://api.github.com/repos/DIR-LAB/Research-Pilot/releases/latest', { headers });
   if (res.ok) release = (await res.json()) as Release;
 } catch {
   // Build continues without dynamic release info
@@ -31,7 +31,7 @@ const linuxDeb = findAsset((n) => /\.deb$/.test(n));
 
 const versionTag = release?.tag_name ?? 'v0.3.3';
 const versionLabel = versionTag.replace(/^v/, '');
-const releasesUrl = release?.html_url ?? 'https://github.com/daidong/PiPilot/releases/latest';
+const releasesUrl = release?.html_url ?? 'https://github.com/DIR-LAB/Research-Pilot/releases/latest';
 const fmtSize = (bytes?: number) => (bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '');
 ---
 
@@ -66,7 +66,7 @@ const fmtSize = (bytes?: number) => (bytes ? `${(bytes / 1024 / 1024).toFixed(0)
           <svg id="theme-icon-moon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/></svg>
         </button>
         <a
-          href="https://github.com/daidong/PiPilot"
+          href="https://github.com/DIR-LAB/Research-Pilot"
           target="_blank"
           rel="noopener"
           class="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm text-white transition-colors min-h-[44px]"
@@ -730,7 +730,7 @@ const fmtSize = (bytes?: number) => (bytes ? `${(bytes / 1024 / 1024).toFixed(0)
                     <svg class="w-4 h-4 text-slate-500 group-hover:text-mint-400 transition-colors" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
                   </a>
                 </div>
-                <p class="mt-1.5 text-slate-500 text-xs">AppImage needs <code class="text-slate-400">libfuse2</code> on Ubuntu 22.04+. Or install via shell: <code class="text-slate-400">curl -fsSL https://raw.githubusercontent.com/daidong/PiPilot/main/install.sh | bash</code></p>
+                <p class="mt-1.5 text-slate-500 text-xs">AppImage needs <code class="text-slate-400">libfuse2</code> on Ubuntu 22.04+. Or install via shell: <code class="text-slate-400">curl -fsSL https://raw.githubusercontent.com/DIR-LAB/Research-Pilot/main/install.sh | bash</code></p>
               </div>
             </div>
 
@@ -769,13 +769,6 @@ const fmtSize = (bytes?: number) => (bytes ? `${(bytes / 1024 / 1024).toFixed(0)
         </div>
       </div>
 
-      <!-- Alternative: git clone -->
-      <div class="mt-12 pt-8 border-t border-slate-800/60 text-center">
-        <p class="text-slate-500 text-sm">Prefer to build from source?</p>
-        <div class="mt-3 rounded-lg bg-slate-900 border border-slate-800/60 p-4 font-mono text-sm text-slate-300 inline-block">
-          <span class="text-slate-500">$</span> git clone https://github.com/daidong/PiPilot.git && cd PiPilot && npm install && npm run dev
-        </div>
-      </div>
     </div>
   </section>
 
@@ -788,9 +781,9 @@ const fmtSize = (bytes?: number) => (bytes ? `${(bytes / 1024 / 1024).toFixed(0)
         <span class="text-slate-600 text-sm ml-2">MIT License</span>
       </div>
       <div class="flex items-center gap-6 text-sm text-slate-500">
-        <a href="https://github.com/daidong/PiPilot" target="_blank" rel="noopener" class="hover:text-white transition-colors">GitHub</a>
-        <a href="https://github.com/daidong/PiPilot/issues" target="_blank" rel="noopener" class="hover:text-white transition-colors">Issues</a>
-        <a href="https://github.com/daidong/PiPilot/blob/main/LICENSE" target="_blank" rel="noopener" class="hover:text-white transition-colors">License</a>
+        <a href="https://github.com/DIR-LAB/Research-Pilot" target="_blank" rel="noopener" class="hover:text-white transition-colors">GitHub</a>
+        <a href="https://github.com/DIR-LAB/Research-Pilot/issues" target="_blank" rel="noopener" class="hover:text-white transition-colors">Issues</a>
+        <a href="https://github.com/DIR-LAB/Research-Pilot/blob/main/LICENSE" target="_blank" rel="noopener" class="hover:text-white transition-colors">License</a>
       </div>
     </div>
   </footer>
