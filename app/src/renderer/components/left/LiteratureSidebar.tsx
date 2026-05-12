@@ -1,10 +1,11 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import {
   Upload,
   FileText,
   GitBranch,
   RefreshCw,
   BarChart3,
+  RotateCcw,
 } from 'lucide-react'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useUIStore } from '../../stores/ui-store'
@@ -12,6 +13,7 @@ import { useChatStore } from '../../stores/chat-store'
 import { useImportStore } from '../../stores/import-store'
 import { useReportStore, useReportButtonState, type ReportButtonState } from '../../stores/report-store'
 import { ConceptsList } from './ConceptsList'
+import { ReportRegenerateModal } from './ReportRegenerateModal'
 
 function QuickAction({
   icon: Icon,
@@ -127,8 +129,9 @@ function paperReportButtonShape(s: ReturnType<typeof useReportButtonState>): Pap
 function PaperReportAction() {
   const state = useReportButtonState()
   const shape = paperReportButtonShape(state)
+  const [regenOpen, setRegenOpen] = useState(false)
 
-  return (
+  const quickAction = (
     <QuickAction
       icon={FileText}
       label={shape.label}
@@ -136,6 +139,39 @@ function PaperReportAction() {
       onClick={shape.onClick ?? (() => {})}
       disabled={!shape.onClick}
     />
+  )
+
+  // PR-C addition: regenerate affordance is only visible in 'done' state.
+  // Living next to the QuickAction means it doesn't intrude on the
+  // common path (Open report) while staying discoverable. Modal-gated
+  // because regeneration overwrites files AND burns LLM tokens.
+  if (state.state !== 'done') {
+    return quickAction
+  }
+
+  return (
+    <>
+      <div className="flex items-stretch gap-1">
+        <div className="flex-1 min-w-0">{quickAction}</div>
+        <button
+          type="button"
+          onClick={() => setRegenOpen(true)}
+          aria-label="Regenerate Paper Report"
+          title="Regenerate report (overwrites the existing files)"
+          className="shrink-0 flex items-center justify-center w-8 rounded-lg t-text-muted hover:t-text hover:bg-[var(--color-accent-soft)]/8 transition-colors"
+        >
+          <RotateCcw size={13} />
+        </button>
+      </div>
+      <ReportRegenerateModal
+        open={regenOpen}
+        onCancel={() => setRegenOpen(false)}
+        onConfirm={() => {
+          setRegenOpen(false)
+          useReportStore.getState().generateReport({ force: true }).catch(() => {})
+        }}
+      />
+    </>
   )
 }
 
