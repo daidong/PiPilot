@@ -49,6 +49,7 @@ const SUITES = {
   memory: 'lib/memory/__tests__',
   agents: 'lib/agents/__tests__',
   'diagram-backends': 'lib/tools/diagram-backends/__tests__',
+  importers: 'lib/importers/__tests__',
   renderer: 'app/src/renderer/stores/__tests__'
 }
 

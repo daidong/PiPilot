@@ -96,22 +96,28 @@ function buildProvenanceForCreate(
   externalSource: string | undefined,
   override: Partial<Provenance> | undefined
 ): Provenance {
-  const isAgentSourced = !!externalSource
-  const auto: Provenance = {
-    source: isAgentSourced ? 'agent' : 'user',
-    sessionId: context.sessionId,
-    agentId: isAgentSourced ? 'literature-team' : undefined,
-    extractedFrom: isAgentSourced ? 'agent-response' : 'user-input'
-  }
+  // Effective source: override wins, else derive from externalSource
+  // presence. This is the single decision that drives all other defaults.
+  const effectiveSource: Provenance['source'] =
+    override?.source ?? (externalSource ? 'agent' : 'user')
 
-  if (!override) return auto
+  // Defaults for sibling fields are derived from the effective source,
+  // NOT from externalSource alone. Without this rule, an importer
+  // passing `provenance.source: 'import'` would still inherit
+  // `agentId: 'literature-team'` because externalSource is non-empty
+  // for importers (e.g. `'bibtex-import'`).
+  const defaultAgentId = effectiveSource === 'agent' ? 'literature-team' : undefined
+  const defaultExtractedFrom: Provenance['extractedFrom'] =
+    effectiveSource === 'agent' ? 'agent-response'
+    : effectiveSource === 'import' ? 'file-import'
+    : 'user-input'
 
   return {
-    source: override.source ?? auto.source,
+    source: effectiveSource,
     sessionId: context.sessionId,
-    agentId: override.agentId ?? auto.agentId,
-    extractedFrom: override.extractedFrom ?? auto.extractedFrom,
-    messageId: override.messageId
+    agentId: override?.agentId ?? defaultAgentId,
+    extractedFrom: override?.extractedFrom ?? defaultExtractedFrom,
+    messageId: override?.messageId
   }
 }
 
