@@ -1,6 +1,6 @@
 # RFC-007: Paper Pack Report
 
-**Status:** Draft v1 — awaiting Captain's review
+**Status:** Locked (v2) — Q1-Q6 resolved, PR-A starting
 **Author:** Captain + Claude
 **Date:** 2026-05-12
 **Builds on:** RFC-006 (BibTeX import), RFC-003/005 (Paper Wiki + sidecar)
@@ -344,7 +344,47 @@ out of scope here.
 | Double-click protection | IPC refuses second call if running, state machine disables button |
 | LLM for report | Reuse the project's configured chat model (no special model setting) |
 
-## 12. Open Questions (Captain to decide)
+## 12. Resolved Decisions (Q1-Q6)
+
+| ID | Decision |
+|---|---|
+| Q1 — Wiki "done" threshold | Use wiki's own `pending === 0` (no fulltext-coverage gate) |
+| Q2 — Auto-trigger enrichment after import | Yes — landed in PR-A |
+| Q3 — abstract-only papers | Do not block; include them in report with explicit "source: abstract only" badge on each affected appendix entry, plus a footer count |
+| Q4 — Output filename | `rp-paper-pack-report.md` + `rp-paper-pack-report.html` at project root |
+| Q5 — HTML viewer | Open in user's default browser via `shell.openPath()`. Standalone self-contained HTML (see §12.5 below) |
+| Q6 — PR cut | 3 PRs (§13) — A: state machine, B: headless generator, C: HTML polish |
+
+## 12.5. Standalone HTML — Cite-key UX
+
+The `.html` opens in the user's default browser. There's no PiPilot
+runtime in that browser, so cite-key affordances must be self-contained.
+
+**Embed-everything strategy:**
+
+- Every `[citeKey]` in the body becomes an in-page anchor link to
+  `#cite-<citekey>` in the appendix.
+- Each appendix entry (`<article id="cite-<citekey>">`) carries the
+  full per-paper data inline:
+  - Header: title, authors, year, venue, DOI link
+  - TLDR (1-line, always visible)
+  - **Collapsed `<details>` block** containing the Wiki extraction:
+    findings[], methods[], datasets[], limitations[], etc.
+  - Outbound links: DOI, arXiv URL, pdfUrl when present
+- Zero JavaScript required for the core flow. A small optional vanilla
+  JS block (~30 lines) adds scrollspy on the TOC sidebar for v3 polish.
+- Per-paper "source tier" badge: `[fulltext]` / `[abstract]` — so users
+  see at a glance which entries are thin.
+
+Expected size: 100 papers ≈ 500 KB - 1 MB self-contained file.
+Shareable via email, USB, GitHub Pages, etc. Works offline.
+
+**Explicitly not in scope:**
+- ❌ Clicking a cite-key in browser to open PiPilot's WikiReaderPanel.
+  Browser can't call into Electron. If desired in the future, build an
+  in-app report viewer pane (separate RFC).
+
+## 12.6. Original Q1-Q6 (kept for context)
 
 **Q1 — Threshold for "wiki done"?**
 Strict: 100% of papers must have a wiki page. Fails on backoff-stuck
@@ -392,10 +432,16 @@ regen").
 Lean toward **3 PRs**; PR-A is small, validates the gating UX in
 isolation. Sign off on the cut so I can start.
 
-## 13. PR Roadmap (subject to Q6)
+## 13. PR Roadmap (locked)
 
-| PR | Title | Scope |
-|---|---|---|
-| **PR-A** | report status store + gated button UI | report-store.ts, LiteratureSidebar swap, no-op handler |
-| **PR-B** | headless report generation + write artifacts | lib/reports/, IPC, prompts, md+html renderers |
-| **PR-C** | enrichment auto-trigger + HTML polish | wizard tweak, HTML cite-anchor + TOC, regenerate confirm |
+| PR | Title | Scope | Est. lines |
+|---|---|---|---|
+| **PR-A** | state machine + auto-enrichment + gated button | `report-store.ts` (state derivation as pure fn + tests); replace "Quick Update" with "Paper Report" QuickAction showing all 6 states; auto-trigger `enrichPaperArtifacts` on import done; click is no-op for now | ~400 |
+| **PR-B** | headless report generator | `lib/reports/` (input-builder, prompts, synthesizer, onboarding-ranker, hash, state); `lib/commands/report.ts`; IPC handlers `cmd:generate-paper-report` / `cmd:get-paper-report-state` + event `report:progress`; basic markdown + HTML emit (cite-anchor + simple appendix with title/authors/tldr only); button is now wired to actually generate | ~1500 |
+| **PR-C** | HTML polish + UX details | Appendix entries gain `<details>` block with embedded wiki extraction (findings, methods, datasets, limitations); sticky TOC sidebar + scrollspy; print styles; regenerate confirm modal; abstract-only badges | ~400 |
+
+PR-A is intentionally small and self-validating: the state machine
+derivation is a pure function over pipeline status snapshots, so it
+can be unit-tested without any LLM or real wiki/enrichment activity.
+PR-B then attaches to a known-correct state machine, and PR-C is
+visual-only.
