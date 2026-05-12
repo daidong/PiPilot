@@ -281,6 +281,59 @@ test('subscribeToProgress: events arriving after done are dropped', () => {
   assert.equal(store.getState().counts.processed, 0)
 })
 
+// ─── Wizard state (RFC-006 PR-4) ─────────────────────────────────────
+
+test('wizard: starts closed, openWizard flips wizardOpen to true', () => {
+  assert.equal(store.getState().wizardOpen, false)
+  store.getState().openWizard()
+  assert.equal(store.getState().wizardOpen, true)
+})
+
+test('wizard: closeWizard hides the wizard but PRESERVES import progress', async () => {
+  // Run a complete import so we have a result on the store.
+  pendingFileResult = {
+    success: true,
+    result: {
+      added: 2, merged: 1, mergedNoChange: 0, duplicateInFile: 0, failed: 0,
+      failureDetails: [], importedPaperIds: ['p1', 'p2'], parserWarnings: [],
+    },
+  }
+  await store.getState().startFromFile('/tmp/x.bib')
+  store.getState().openWizard()
+  assert.equal(store.getState().status, 'done')
+  assert.equal(store.getState().wizardOpen, true)
+
+  store.getState().closeWizard()
+
+  // Wizard closed, but the result + status survive — user can reopen
+  // and see the summary again.
+  assert.equal(store.getState().wizardOpen, false)
+  assert.equal(store.getState().status, 'done')
+  assert.equal(store.getState().result?.added, 2)
+})
+
+test('wizard: closeAndReset hides the wizard AND clears progress', async () => {
+  pendingFileResult = {
+    success: true,
+    result: {
+      added: 1, merged: 0, mergedNoChange: 0, duplicateInFile: 0, failed: 0,
+      failureDetails: [], importedPaperIds: ['p1'], parserWarnings: [],
+    },
+  }
+  await store.getState().startFromFile('/tmp/x.bib')
+  store.getState().openWizard()
+
+  store.getState().closeAndReset()
+
+  const s = store.getState()
+  assert.equal(s.wizardOpen, false)
+  assert.equal(s.status, 'idle')
+  assert.equal(s.result, null)
+  assert.equal(s.error, null)
+  assert.equal(s.sourcePath, undefined)
+  assert.equal(s.counts.processed, 0)
+})
+
 test('subscribeToProgress: unsub stops further updates', () => {
   store.setState({ status: 'running' })
   const unsub = store.getState().subscribeToProgress()
