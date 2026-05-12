@@ -17,6 +17,7 @@ import {
   sessionSummaryGet,
   enrichPaperArtifacts
 } from '../../../lib/commands/index'
+import { importBibtexFile, importBibtexString, type BibImportResult, type BibImportProgressEvent } from '../../../lib/importers/bibtex'
 import { parseMentions, resolveMentions, getCandidates, invalidateEntityCache } from '../../../lib/mentions/index'
 import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readEnabledSkills, setBuiltinSkillsRoot } from '../../../lib/skills/loader'
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
@@ -1464,6 +1465,84 @@ export function registerIpcHandlers(): void {
         safeSend(win, 'enrich:progress', event)
       }
     })
+  })
+
+  // Commands - import BibTeX (RFC-006 PR-3)
+  //
+  // Two flavors:
+  //   cmd:import-bibtex          → caller supplies a file path on disk
+  //   cmd:import-bibtex-string   → caller supplies the .bib text directly
+  //                                (used when the wizard reads the file in
+  //                                the renderer for size-check / preview)
+  //
+  // Both emit `import:progress` events with one entry per parsed
+  // BibTeX entry (added / merged / merged-no-change / duplicate-in-file
+  // / failed). The result includes `importedPaperIds`, which the caller
+  // is expected to chain into `cmd:enrich-papers` so CrossRef and
+  // Semantic Scholar fill in missing fields.
+  //
+  // Both handlers return a failure-shaped result instead of throwing for
+  // known soft errors (no project open, hard-fail from the importer) so
+  // the renderer can render them in the UI. For unexpected errors we
+  // still let the IPC layer surface the throw via `safeSend`.
+  handleWindow(
+    'cmd:import-bibtex',
+    async ({ win, state }, bibPath: string): Promise<{ success: true; result: BibImportResult } | { success: false; error: string }> => {
+      if (!state.projectPath) {
+        return { success: false, error: 'No project folder selected.' }
+      }
+      if (typeof bibPath !== 'string' || !bibPath.trim()) {
+        return { success: false, error: 'BibTeX file path is required.' }
+      }
+      try {
+        const result = await importBibtexFile(bibPath, {
+          ctx: { sessionId: state.sessionId, projectPath: state.projectPath, debug: false },
+          onProgress: (event: BibImportProgressEvent) => safeSend(win, 'import:progress', event)
+        })
+        return { success: true, result }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err)
+        return { success: false, error }
+      }
+    }
+  )
+
+  handleWindow(
+    'cmd:import-bibtex-string',
+    async ({ win, state }, contents: string): Promise<{ success: true; result: BibImportResult } | { success: false; error: string }> => {
+      if (!state.projectPath) {
+        return { success: false, error: 'No project folder selected.' }
+      }
+      if (typeof contents !== 'string') {
+        return { success: false, error: 'BibTeX content is required.' }
+      }
+      try {
+        const result = await importBibtexString(contents, {
+          ctx: { sessionId: state.sessionId, projectPath: state.projectPath, debug: false },
+          onProgress: (event: BibImportProgressEvent) => safeSend(win, 'import:progress', event)
+        })
+        return { success: true, result }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err)
+        return { success: false, error }
+      }
+    }
+  )
+
+  // Native file picker scoped to .bib files. Used by the Quickstart
+  // wizard (PR-4) so it doesn't need its own dialog wiring. Returns
+  // the absolute path the user chose, or null if they canceled.
+  handleWindow('cmd:pick-bibtex-file', async ({ win }) => {
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Select a BibTeX file',
+      properties: ['openFile'],
+      filters: [
+        { name: 'BibTeX', extensions: ['bib', 'bibtex'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    return result.filePaths[0]
   })
 
 
