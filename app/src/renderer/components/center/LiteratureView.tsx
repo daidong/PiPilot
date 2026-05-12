@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
+import { useImportStore } from '../../stores/import-store'
 import { WikiReaderPanel } from './WikiReaderPanel'
 import {
   makeSearchable,
@@ -701,11 +702,32 @@ export function LiteratureView() {
             {filteredRows.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
                 <BookOpen size={32} className="t-text-muted mb-3 opacity-40" />
-                <p className="text-sm t-text-muted">
-                  {papers.length === 0
-                    ? 'No papers yet. Use the chat to search for literature.'
-                    : 'No papers match your filters.'}
-                </p>
+                {papers.length === 0 ? (
+                  // RFC-006 PR-4 — first-launch / empty-library CTA. Two
+                  // discovery paths: agent-driven search (existing) and
+                  // .bib import (new). The import path opens the wizard
+                  // mounted at App level; nothing to wire here besides
+                  // the click handler.
+                  <>
+                    <p className="text-sm t-text-muted mb-3">
+                      No papers yet.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => useImportStore.getState().openWizard()}
+                      className="text-[12px] t-text-accent hover:underline"
+                    >
+                      Import from a .bib file →
+                    </button>
+                    <p className="mt-3 text-[11px] t-text-muted">
+                      or use the chat to search for literature.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm t-text-muted">
+                    No papers match your filters.
+                  </p>
+                )}
               </div>
             ) : (
               filteredRows.map((row) => (

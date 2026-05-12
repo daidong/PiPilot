@@ -93,6 +93,21 @@ interface ImportState {
   /** Fatal-error message, populated when status === 'error'. */
   error: string | null
 
+  /**
+   * Whether the Import Wizard modal is currently visible. Held here
+   * rather than in ui-store so the wizard can be opened from any CTA
+   * (Papers-tab empty state, HeroIdle starter, future menu item)
+   * without each call site having to wire its own `useState`.
+   */
+  wizardOpen: boolean
+
+  /** Show the wizard. Does not reset progress; users may reopen mid-run. */
+  openWizard: () => void
+  /** Hide the wizard. Does NOT reset import progress — see closeAndReset. */
+  closeWizard: () => void
+  /** Hide the wizard and clear progress / result / error. */
+  closeAndReset: () => void
+
   /** Open the native picker, then immediately start the import. */
   startFromPicker: () => Promise<void>
   /** Start importing a file by absolute path. */
@@ -142,6 +157,18 @@ export const useImportStore = create<ImportState>((set, get) => ({
   counts: { ...ZERO_COUNTS },
   result: null,
   error: null,
+  wizardOpen: false,
+
+  openWizard: () => set({ wizardOpen: true }),
+  closeWizard: () => set({ wizardOpen: false }),
+  closeAndReset: () => set({
+    wizardOpen: false,
+    status: 'idle',
+    sourcePath: undefined,
+    counts: { ...ZERO_COUNTS },
+    result: null,
+    error: null,
+  }),
 
   startFromPicker: async () => {
     const path = await getApi().pickBibtexFile()
