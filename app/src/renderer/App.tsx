@@ -6,6 +6,7 @@ import { CenterPanel } from './components/layout/CenterPanel'
 import { StatusBar } from './components/layout/StatusBar'
 import { TerminalPanel } from './components/layout/TerminalPanel'
 import { ErrorBoundary } from './components/layout/ErrorBoundary'
+import { ImportWizard } from './components/center/ImportWizard'
 import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
 import { useEntityStore } from './stores/entity-store'
@@ -1000,6 +1001,11 @@ export default function App() {
 
         {/* Settings modal overlay */}
         {settingsModal}
+
+        {/* BibTeX import wizard — visibility driven entirely by
+            useImportStore.wizardOpen, so any CTA in the app can
+            open it without prop-drilling. */}
+        <ImportWizard />
       </div>
     </ErrorBoundary>
   )

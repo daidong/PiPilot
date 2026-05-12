@@ -1,5 +1,6 @@
 import React from 'react'
 import { useChatStore } from '../../stores/chat-store'
+import { useImportStore } from '../../stores/import-store'
 
 // ─── HeroIdle ─────────────────────────────────────────────────────────────
 //
@@ -84,6 +85,7 @@ function StarterRow({ starter, onActivate }: { starter: Starter; onActivate: () 
 
 export function HeroIdle() {
   const setDraftText = useChatStore((s) => s.setDraftText)
+  const openImportWizard = useImportStore((s) => s.openWizard)
 
   const handleStarter = (label: string) => {
     const prefill = prefillFromLabel(label)
@@ -105,6 +107,18 @@ export function HeroIdle() {
         {STARTERS.map((s) => (
           <StarterRow key={s.label} starter={s} onActivate={() => handleStarter(s.label)} />
         ))}
+        {/* RFC-006 PR-4 — fourth starter routes to the BibTeX import
+            wizard instead of prefilling the chat input. Matches the
+            same two-line row dialect; the only behavioral difference
+            is that activating it opens a modal rather than focusing
+            the textarea. */}
+        <StarterRow
+          starter={{
+            label: 'Build a paper memory from existing files',
+            description: 'Import a .bib export from Zotero / EndNote / Mendeley to populate the library.',
+          }}
+          onActivate={openImportWizard}
+        />
       </div>
 
       {/* Keyboard tips — deliberately minimal. Only surfaces features
