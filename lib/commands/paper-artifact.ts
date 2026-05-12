@@ -7,6 +7,14 @@ export interface UpsertPaperResult {
   paper?: Literature
   filePath?: string
   error?: string
+  /**
+   * True when the upsert hit an existing paper via dedup and merged into it
+   * (regardless of whether any field actually changed). False when a new
+   * paper artifact was created. Undefined only on failure.
+   *
+   * RFC-006 §0, Q4 — importers report this in their per-entry summary.
+   */
+  wasDeduped?: boolean
 }
 
 function generateCiteKey(authors: string[] | undefined, year?: number): string {
@@ -34,6 +42,41 @@ function buildFallbackBibtex(params: {
     ...(params.url ? [`  url = {${params.url}},`] : []),
     '}'
   ].join('\n')
+}
+
+// ─── Fill-only merge predicates (RFC-006 §0) ─────────────────────────────
+//
+// These predicates classify the *existing* paper's field as "missing or
+// placeholder" so the upsert path knows when it's safe to write a new
+// value in. Without these checks, the dedup-update branch silently
+// downgraded real DOIs to `unknown:*`, full author lists to single
+// authors, and curated titles to filename-derived strings.
+
+function isMissingString(v: string | undefined | null): boolean {
+  return !v || v.trim() === ''
+}
+
+function isPlaceholderDoi(doi: string | undefined | null): boolean {
+  return !doi || doi.startsWith('unknown:')
+}
+
+function isUnknownAuthors(authors: string[]): boolean {
+  if (!authors || authors.length === 0) return true
+  if (authors.length === 1) {
+    const a = authors[0]?.trim().toLowerCase()
+    return a === 'unknown' || a === '' || a === undefined
+  }
+  return false
+}
+
+const CONFIDENCE_ORDER = { low: 0, medium: 1, high: 2 } as const
+function shouldUpgradeConfidence(
+  existing: 'high' | 'medium' | 'low' | undefined,
+  incoming: 'high' | 'medium' | 'low' | undefined
+): boolean {
+  if (!incoming) return false
+  if (!existing) return true
+  return CONFIDENCE_ORDER[incoming] > CONFIDENCE_ORDER[existing]
 }
 
 export function upsertPaperArtifact(
@@ -73,15 +116,18 @@ export function upsertPaperArtifact(
   const authors = opts.authors && opts.authors.length > 0 ? opts.authors : ['Unknown']
   const citeKey = opts.citeKey ?? generateCiteKey(authors, opts.year)
   const doi = (opts.doi ?? '').trim() || `unknown:${citeKey}`
-  const bibtex = (opts.bibtex ?? '').trim() || buildFallbackBibtex({
-    citeKey,
-    title,
-    authors,
-    year: opts.year,
-    venue: opts.venue,
-    doi,
-    url: opts.url
-  })
+  const callerProvidedBibtex = typeof opts.bibtex === 'string' && opts.bibtex.trim().length > 0
+  const bibtex = callerProvidedBibtex
+    ? opts.bibtex!
+    : buildFallbackBibtex({
+        citeKey,
+        title,
+        authors,
+        year: opts.year,
+        venue: opts.venue,
+        doi,
+        url: opts.url
+      })
 
   const dedup = findExistingPaperArtifact(context.projectPath, {
     doi,
@@ -91,33 +137,130 @@ export function upsertPaperArtifact(
   })
 
   if (dedup) {
-    const updated = artifactUpdate(context.projectPath, dedup.id, {
-      title,
-      authors,
-      abstract: opts.abstract ?? dedup.abstract,
-      year: opts.year ?? dedup.year,
-      venue: opts.venue ?? dedup.venue,
-      url: opts.url ?? dedup.url,
-      citeKey,
-      doi,
-      bibtex,
-      pdfUrl: opts.pdfUrl ?? dedup.pdfUrl,
-      searchKeywords: opts.searchKeywords ?? dedup.searchKeywords,
-      externalSource: opts.externalSource ?? dedup.externalSource,
-      relevanceScore: opts.relevanceScore ?? dedup.relevanceScore,
-      citationCount: opts.citationCount ?? dedup.citationCount,
-      subTopic: opts.subTopic ?? dedup.subTopic,
-      keyFindings: opts.keyFindings ?? dedup.keyFindings,
-      relevanceJustification: opts.relevanceJustification ?? dedup.relevanceJustification,
-      addedInRound: opts.addedInRound ?? dedup.addedInRound,
-      addedByTask: opts.addedByTask ?? dedup.addedByTask,
-      fulltextPath: opts.fulltextPath ?? dedup.fulltextPath,
-      identityConfidence: opts.identityConfidence ?? dedup.identityConfidence,
-      arxivId: opts.arxivId ?? dedup.arxivId,
-      pubmedId: opts.pubmedId ?? dedup.pubmedId,
-      pmcId: opts.pmcId ?? dedup.pmcId,
-      semanticScholarId: opts.semanticScholarId ?? dedup.semanticScholarId
-    })
+    // Fill-only merge — only write a field when the existing value is
+    // missing, empty, or a recognized placeholder. Anything the user (or
+    // a prior write path) has populated is preserved, including across
+    // re-imports of stale data. See RFC-006 §0 for the bug this fixes.
+    const patch: Record<string, unknown> = {}
+
+    if (isMissingString(dedup.title)) patch.title = title
+
+    if (isUnknownAuthors(dedup.authors) && !isUnknownAuthors(authors)) {
+      patch.authors = authors
+    }
+
+    if (isMissingString(dedup.abstract) && !isMissingString(opts.abstract)) {
+      patch.abstract = opts.abstract
+    }
+
+    if (dedup.year == null && opts.year != null) patch.year = opts.year
+
+    if (isMissingString(dedup.venue) && !isMissingString(opts.venue)) {
+      patch.venue = opts.venue
+    }
+
+    if (isMissingString(dedup.url) && !isMissingString(opts.url)) {
+      patch.url = opts.url
+    }
+
+    if (isMissingString(dedup.pdfUrl) && !isMissingString(opts.pdfUrl)) {
+      patch.pdfUrl = opts.pdfUrl
+    }
+
+    // citeKey is identity — never overwrite on dedup.
+
+    // DOI: only fill when existing is missing or `unknown:*` placeholder
+    // AND incoming is a real (non-placeholder) DOI. The old code blindly
+    // overwrote real DOIs with `unknown:<citeKey>` when the caller didn't
+    // provide one — that was the headline bug.
+    if (isPlaceholderDoi(dedup.doi) && !isPlaceholderDoi(doi)) {
+      patch.doi = doi
+    }
+
+    // bibtex: overwrite only when (a) the existing entry was auto-generated
+    // (treat undefined as auto-generated for legacy artifacts) AND (b) the
+    // caller actually supplied a curated bibtex. Per RFC-006 Q7=(c).
+    const existingBibtexIsAuto = dedup.bibtexIsAutoGenerated !== false
+    if (existingBibtexIsAuto && callerProvidedBibtex) {
+      patch.bibtex = bibtex
+      patch.bibtexIsAutoGenerated = false
+    } else if (isMissingString(dedup.bibtex)) {
+      // Defensive: existing bibtex is empty for some reason.
+      patch.bibtex = bibtex
+      patch.bibtexIsAutoGenerated = !callerProvidedBibtex
+    }
+
+    if (!dedup.searchKeywords?.length && opts.searchKeywords?.length) {
+      patch.searchKeywords = opts.searchKeywords
+    }
+
+    if (isMissingString(dedup.externalSource) && !isMissingString(opts.externalSource)) {
+      patch.externalSource = opts.externalSource
+    }
+
+    if (dedup.relevanceScore == null && opts.relevanceScore != null) {
+      patch.relevanceScore = opts.relevanceScore
+    }
+
+    if (dedup.citationCount == null && opts.citationCount != null) {
+      patch.citationCount = opts.citationCount
+    }
+
+    if (shouldUpgradeConfidence(dedup.identityConfidence, opts.identityConfidence)) {
+      patch.identityConfidence = opts.identityConfidence
+    }
+
+    if (isMissingString(dedup.arxivId) && !isMissingString(opts.arxivId)) {
+      patch.arxivId = opts.arxivId
+    }
+    if (isMissingString(dedup.pubmedId) && !isMissingString(opts.pubmedId)) {
+      patch.pubmedId = opts.pubmedId
+    }
+    if (isMissingString(dedup.pmcId) && !isMissingString(opts.pmcId)) {
+      patch.pmcId = opts.pmcId
+    }
+    if (isMissingString(dedup.semanticScholarId) && !isMissingString(opts.semanticScholarId)) {
+      patch.semanticScholarId = opts.semanticScholarId
+    }
+
+    if (isMissingString(dedup.subTopic) && !isMissingString(opts.subTopic)) {
+      patch.subTopic = opts.subTopic
+    }
+    if (!dedup.keyFindings?.length && opts.keyFindings?.length) {
+      patch.keyFindings = opts.keyFindings
+    }
+    if (isMissingString(dedup.relevanceJustification) && !isMissingString(opts.relevanceJustification)) {
+      patch.relevanceJustification = opts.relevanceJustification
+    }
+    if (isMissingString(dedup.addedInRound) && !isMissingString(opts.addedInRound)) {
+      patch.addedInRound = opts.addedInRound
+    }
+    if (isMissingString(dedup.addedByTask) && !isMissingString(opts.addedByTask)) {
+      patch.addedByTask = opts.addedByTask
+    }
+    if (isMissingString(dedup.fulltextPath) && !isMissingString(opts.fulltextPath)) {
+      patch.fulltextPath = opts.fulltextPath
+    }
+
+    // tags: union (no field is "more authoritative" — combining is safe)
+    if (opts.tags && opts.tags.length > 0) {
+      const existing = dedup.tags ?? []
+      const seen = new Set(existing)
+      const additions = opts.tags.filter(t => !seen.has(t))
+      if (additions.length > 0) patch.tags = [...existing, ...additions]
+    }
+
+    // Empty patch → no-op write. Still report wasDeduped so callers can
+    // distinguish "merged with no change" from "created new".
+    if (Object.keys(patch).length === 0) {
+      return {
+        success: true,
+        paper: dedup,
+        wasDeduped: true
+      }
+    }
+
+    const updated = artifactUpdate(context.projectPath, dedup.id, patch)
 
     if (!updated.success || !updated.artifact || updated.artifact.type !== 'paper') {
       return { success: false, error: 'Failed to update existing paper.' }
@@ -126,7 +269,8 @@ export function upsertPaperArtifact(
     return {
       success: true,
       paper: updated.artifact,
-      filePath: updated.filePath
+      filePath: updated.filePath,
+      wasDeduped: true
     }
   }
 
@@ -141,6 +285,7 @@ export function upsertPaperArtifact(
     citeKey,
     doi,
     bibtex,
+    bibtexIsAutoGenerated: !callerProvidedBibtex,
     pdfUrl: opts.pdfUrl,
     tags: opts.tags ?? [],
     searchKeywords: opts.searchKeywords,
@@ -170,7 +315,12 @@ export function upsertPaperArtifact(
     return { success: false, error: 'Failed to create paper artifact.' }
   }
 
-  return { success: true, paper: created.artifact, filePath: created.filePath }
+  return {
+    success: true,
+    paper: created.artifact,
+    filePath: created.filePath,
+    wasDeduped: false
+  }
 }
 
 export function updatePaperMetadata(
