@@ -55,10 +55,13 @@ function tmpProject(): string {
  *      the flush is still in progress.
  */
 async function cleanupProject(dir: string): Promise<void> {
-  // ~150ms total of yields — enough for any pending JSONL append on a
-  // freshly-created tmp dir to land.
-  for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 30))
-  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 })
+  // Drain pending fire-and-forget writes. On macOS / Ubuntu 150ms was
+  // enough; on Windows CI runners with their slower file IO and parallel
+  // test load, F16 (crossref) burned through a 4s retry budget without
+  // ever finding the dir stable. A 1-second drain gives any reasonable
+  // JSONL ledger append chain time to settle before rmSync races it.
+  await new Promise(r => setTimeout(r, 1000))
+  rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
 }
 
 function ctx(projectPath: string): CLIContext {
