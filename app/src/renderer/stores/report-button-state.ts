@@ -11,10 +11,9 @@
 
 export type ReportButtonState =
   | 'no-papers'        // library is empty
-  | 'pre-enrichment'   // papers exist, not yet (or partially) enriched
-  | 'enriching'        // enrichment cycle in flight
-  | 'pre-wiki'         // enrichment done, wiki still processing
-  | 'ready'            // pipeline caught up, button is the primary CTA
+  | 'enriching'        // enrichment cycle in flight (Enrich-All button or auto-trigger after import)
+  | 'pre-wiki'         // wiki agent still processing
+  | 'ready'            // wiki has caught up, button is the primary CTA
   | 'generating'       // report generation in flight
   | 'done'             // report exists and matches current input hash
   | 'error'            // last generation attempt failed
@@ -57,37 +56,23 @@ export interface ButtonStateInputs {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
-// Mirrors LiteratureSidebar's existing "is paper sufficiently enriched"
-// threshold — keeping the heuristic in one place would be nice eventually,
-// but for PR-A consistency-by-duplication is acceptable.
-const CORE_FIELDS = ['title', 'authors', 'year', 'venue', 'abstract', 'doi', 'citationCount'] as const
-
-function countCoreFields(paper: PaperShape): number {
-  let count = 0
-  for (const field of CORE_FIELDS) {
-    const v = (paper as unknown as Record<string, unknown>)[field]
-    if (v === undefined || v === null || v === '') continue
-    if (Array.isArray(v) && v.length === 0) continue
-    // Treat unknown:* DOIs as missing for the enrichment-readiness check —
-    // they're placeholders set by upsertPaperArtifact when no real DOI
-    // is available, not real metadata.
-    if (field === 'doi' && typeof v === 'string' && v.startsWith('unknown:')) continue
-    count++
-  }
-  return count
-}
-
-/**
- * Are MOST papers in the library well-enriched? A 90% threshold tolerates
- * the inevitable few papers that can never be enriched (no DOI, no arXiv,
- * Crossref miss). Without tolerance the button would never reach 'ready'
- * for libraries with any unmatchable items.
- */
-export function allPapersWellEnriched(papers: PaperShape[]): boolean {
-  if (papers.length === 0) return false
-  const enriched = papers.filter((p) => countCoreFields(p) >= 5).length
-  return enriched / papers.length >= 0.9
-}
+// (Removed `allPapersWellEnriched` gate per RFC-007 post-PR-A bug fix.)
+//
+// The original gate required 90% of papers to have ≥5 of {title, authors,
+// year, venue, abstract, doi, citationCount} — but DOI and citationCount
+// are CrossRef-only fields. Real-world libraries with arxiv preprints,
+// older work, or non-CrossRef-indexed venues routinely fall below that
+// threshold even after wiki processing has succeeded.
+//
+// The correct gate is wiki readiness, not enrichment depth: the Paper
+// Pack Report's input is the Paper Wiki sidecars, and the wiki agent
+// produces useful extractions from abstracts alone (`source_tier:
+// 'abstract-only'`). If wiki is idle and pending=0, the pack is
+// processable — independent of CrossRef coverage.
+//
+// Users who want to fill missing DOIs / citationCounts still have the
+// dedicated "Enrich All" QuickAction in LiteratureSidebar. The Paper
+// Report button shouldn't double as an enrichment trigger.
 
 /**
  * Compute a stable content-hash of the current paper set for cache-
@@ -139,12 +124,11 @@ export function deriveButtonState(inputs: ButtonStateInputs): ReportButtonState 
   // Enrichment in flight → show its progress.
   if (inputs.enrichmentStatus === 'running') return 'enriching'
 
-  // Enrichment idle but papers thin → need user to kick off enrichment.
-  // (Auto-trigger on import handles the common path; this catches the
-  // "user reopened the project mid-enrichment" edge case.)
-  if (!allPapersWellEnriched(inputs.papers)) return 'pre-enrichment'
-
-  // Enrichment looks satisfied. Now gate on wiki.
+  // (Previously: an `allPapersWellEnriched` gate sat here. Removed —
+  // see the comment block above the helper module's deletion. Wiki
+  // readiness is the only real precondition.)
+  //
+  // Gate on wiki:
   if (!inputs.wikiStatus) return 'pre-wiki'  // wiki status not loaded yet
   if (inputs.wikiStatus.state === 'disabled') return 'pre-wiki'
   if (inputs.wikiStatus.state === 'processing') return 'pre-wiki'
