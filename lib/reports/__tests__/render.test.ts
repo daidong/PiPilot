@@ -223,3 +223,147 @@ test('renderHtml: malicious theme name + synthesis are escaped', () => {
   assert.ok(!html.includes('<img src=x onerror'), 'theme name xss escaped')
   assert.ok(!html.includes('<b>X</b>'), 'synthesis body escaped, no raw html')
 })
+
+// ─── PR-C additions: TOC sidebar + scrollspy + details blocks ────────
+
+test('renderHtml: emits a TOC sidebar with seven section links', () => {
+  const html = renderHtml(inputOf(['a']), emptyAgg(1), emptySynthesis, emptyRanking)
+  assert.match(html, /<nav class="toc"/)
+  assert.match(html, /aria-label="Table of contents"/)
+  // Each section id appears as a TOC target.
+  for (const id of ['at-a-glance', 'themes', 'methods', 'gaps', 'onboarding', 'talking-points', 'appendix']) {
+    assert.ok(
+      html.includes(`data-toc-target="${id}"`),
+      `TOC should link to #${id}`,
+    )
+  }
+})
+
+test('renderHtml: includes scrollspy JS using IntersectionObserver', () => {
+  const html = renderHtml(inputOf(['a']), emptyAgg(1), emptySynthesis, emptyRanking)
+  assert.match(html, /<script>/)
+  assert.match(html, /IntersectionObserver/)
+  // Graceful degradation: feature-detected before use.
+  assert.match(html, /typeof IntersectionObserver === 'undefined'/)
+})
+
+test('renderHtml: appendix entry emits a <details> wiki block when wiki has content', () => {
+  const wikiRich: WikiPaperMemoryMeta = {
+    schemaVersion: 3,
+    canonicalKey: 'doi:10.1/x',
+    slug: 'slug-x',
+    generated_at: '2026-01-01T00:00:00Z',
+    generator_version: 1,
+    source_tier: 'fulltext',
+    paper_type: 'method',
+    tldr: 'TLDR x.',
+    methods: ['Transformer', 'Self-attention'],
+    findings: [{ statement: 'Achieves 78% accuracy.', value: '78%' }],
+    datasets: [{ name: 'ImageNet', role: 'used' }],
+    limitations: [{ text: 'Single language only.' }],
+    negative_results: [],
+    concept_edges: [{ slug: 'attention', relation: 'introduces' }],
+    aliases: [],
+    baselines: [],
+  } as WikiPaperMemoryMeta
+  const e: ReportPaperEntry = { paper: paper('x'), wiki: wikiRich }
+  const input: ReportInput = {
+    projectPath: '/tmp/t',
+    projectName: 'T',
+    papers: [e],
+    capturedAt: '2026-05-12T00:00:00Z',
+  }
+  const html = renderHtml(input, emptyAgg(1), emptySynthesis, emptyRanking)
+  assert.match(html, /<details class="wiki-extract">/)
+  assert.match(html, /<summary>Wiki extraction<\/summary>/)
+  // Sections present.
+  assert.match(html, /<h4>Findings<\/h4>/)
+  assert.match(html, /<h4>Methods<\/h4>/)
+  assert.match(html, /<h4>Datasets<\/h4>/)
+  assert.match(html, /<h4>Limitations<\/h4>/)
+  assert.match(html, /<h4>Concepts<\/h4>/)
+  // Content rendered.
+  assert.match(html, /Achieves 78% accuracy/)
+  assert.match(html, /ImageNet/)
+  assert.match(html, /Single language only/)
+})
+
+test('renderHtml: appendix entry SKIPS the <details> block when wiki is null', () => {
+  const e: ReportPaperEntry = { paper: paper('x'), wiki: null }
+  const input: ReportInput = {
+    projectPath: '/tmp/t',
+    projectName: 'T',
+    papers: [e],
+    capturedAt: '2026-05-12T00:00:00Z',
+  }
+  const html = renderHtml(input, emptyAgg(1), emptySynthesis, emptyRanking)
+  assert.ok(!html.includes('<details class="wiki-extract">'), 'no wiki → no details block')
+})
+
+test('renderHtml: appendix entry SKIPS the <details> block when wiki has no extractable content', () => {
+  // Wiki present but with empty arrays — nothing worth showing.
+  const wikiThin: WikiPaperMemoryMeta = {
+    schemaVersion: 3,
+    canonicalKey: 'doi:10.1/x',
+    slug: 'slug-x',
+    generated_at: '2026-01-01T00:00:00Z',
+    generator_version: 1,
+    source_tier: 'fulltext',
+    paper_type: 'method',
+    tldr: 'Just a tldr.',
+    methods: [],
+    findings: [],
+    datasets: [],
+    limitations: [],
+    negative_results: [],
+    concept_edges: [],
+    aliases: [],
+    baselines: [],
+  } as WikiPaperMemoryMeta
+  const e: ReportPaperEntry = { paper: paper('x'), wiki: wikiThin }
+  const input: ReportInput = {
+    projectPath: '/tmp/t',
+    projectName: 'T',
+    papers: [e],
+    capturedAt: '2026-05-12T00:00:00Z',
+  }
+  const html = renderHtml(input, emptyAgg(1), emptySynthesis, emptyRanking)
+  assert.ok(!html.includes('<details class="wiki-extract">'), 'empty wiki → no details block')
+})
+
+test('renderHtml: print stylesheet hides TOC and opens details', () => {
+  const html = renderHtml(inputOf(['a']), emptyAgg(1), emptySynthesis, emptyRanking)
+  // CSS @media print rules present
+  assert.match(html, /@media print/)
+  assert.match(html, /nav\.toc \{ display: none/)
+  // Wiki summary hidden so the details block reads as a flat section
+  // when printed (readers can't click).
+  assert.match(html, /details\.wiki-extract > summary \{ display: none/)
+})
+
+test('renderHtml: abstract-only badge uses a distinguished warn-style class', () => {
+  const wikiThin: WikiPaperMemoryMeta = {
+    schemaVersion: 3,
+    canonicalKey: 'doi:10.1/x',
+    slug: 'slug-x',
+    generated_at: '2026-01-01T00:00:00Z',
+    generator_version: 1,
+    source_tier: 'abstract-only',
+    paper_type: 'method',
+  } as WikiPaperMemoryMeta
+  const e: ReportPaperEntry = { paper: paper('x'), wiki: wikiThin }
+  const input: ReportInput = {
+    projectPath: '/tmp/t',
+    projectName: 'T',
+    papers: [e],
+    capturedAt: '2026-05-12T00:00:00Z',
+  }
+  const html = renderHtml(input, emptyAgg(1), emptySynthesis, emptyRanking)
+  assert.match(html, /class="badge tier-abstract"/)
+})
+
+test('renderHtml: TOC links degrade to plain anchors when JS is absent', () => {
+  // The href must work without scrollspy — testing it's a real anchor link.
+  const html = renderHtml(inputOf(['a']), emptyAgg(1), emptySynthesis, emptyRanking)
+  assert.match(html, /href="#themes" data-toc-target="themes"/)
+})
