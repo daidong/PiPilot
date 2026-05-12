@@ -126,15 +126,33 @@ export function cacheKey(paper: PaperInput): string {
 
 /**
  * Count how many core fields are present.
+ *
+ * `doi` is treated as MISSING when its value starts with `unknown:` —
+ * that prefix is the placeholder `upsertPaperArtifact` writes when no
+ * real DOI is available (lib/commands/paper-artifact.ts:75). Without
+ * this rule the enrichment pipeline silently skips papers whose only
+ * "DOI" is a placeholder, which means CrossRef / Semantic Scholar
+ * never get a chance to discover the real DOI by title+author.
+ *
+ * Before this fix the function lived in two places — a renderer copy
+ * that excluded `unknown:*` (for the deleted "pre-enrichment" gate)
+ * and this canonical copy that included them. The disagreement caused
+ * a feedback loop: renderer said "needs enrichment", user clicked,
+ * IPC said "already enriched", returned in milliseconds, button never
+ * updated. The renderer-side gate is now gone (RFC-007 PR-C fix); we
+ * also align this function so the manual "Enrich All" QuickAction
+ * actually does the right thing.
  */
 export function countCoreFields(paper: PaperInput): number {
   let count = 0
   for (const field of CORE_FIELDS) {
     const val = paper[field]
-    if (val !== undefined && val !== null && val !== '') {
-      if (Array.isArray(val) && val.length === 0) continue
-      count++
-    }
+    if (val === undefined || val === null || val === '') continue
+    if (Array.isArray(val) && val.length === 0) continue
+    // unknown:* DOIs are placeholders, not real values — don't count
+    // them as evidence that enrichment can be skipped.
+    if (field === 'doi' && typeof val === 'string' && val.startsWith('unknown:')) continue
+    count++
   }
   return count
 }
