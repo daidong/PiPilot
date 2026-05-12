@@ -40,6 +40,7 @@
     "test:diagnostics": "node scripts/run-tests.mjs diagnostics",
     "test:forwarder": "node scripts/run-tests.mjs forwarder",
     "test:importers": "node scripts/run-tests.mjs importers",
+    "test:reports": "node scripts/run-tests.mjs reports",
     "diagnostics": "node bin/diagnostics.mjs",
     "trace-forward": "node bin/trace-forward.mjs"
   },

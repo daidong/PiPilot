@@ -53,6 +53,29 @@ export {
 interface ApiSurface {
   onWikiStatus?: (cb: (s: WikiStatusShape) => void) => () => void
   wikiGetStatus?: () => Promise<WikiStatusShape | null>
+  // RFC-007 PR-B — paper report IPC entry points.
+  generatePaperReport?: (opts?: { force?: boolean }) => Promise<{
+    success: boolean
+    markdownPath?: string
+    htmlPath?: string
+    inputHash?: string
+    error?: string
+    cacheHit?: boolean
+  }>
+  getPaperReportState?: () => Promise<{
+    status: 'idle' | 'running' | 'done' | 'error'
+    inputHash?: string
+    generatedAt?: string
+    markdownPath?: string
+    htmlPath?: string
+    error?: string
+  } | null>
+  openPaperReport?: () => Promise<{ success: boolean; error?: string }>
+  onPaperReportProgress?: (cb: (event: {
+    step: string
+    percent: number
+    detail?: string
+  }) => void) => () => void
 }
 
 function getApi(): ApiSurface {
@@ -91,13 +114,32 @@ interface ReportStoreState {
    */
   triggerEnrichmentForAllPapers: () => Promise<void>
 
-  // ── PR-B placeholders (no-ops in PR-A) ────────────────────────────
-  // The button's 'ready' / 'done' / 'error' handlers wire to these.
-  // PR-A keeps them as stubs so the UI shape is final and only the
-  // bodies change in PR-B.
-  generateReport: () => Promise<void>
+  /**
+   * Trigger report generation via main process. Sets `reportStatus`
+   * to 'running' synchronously, awaits the IPC call, settles to
+   * 'done' / 'error' based on result. Force=true skips the input-hash
+   * cache check on the main side (regenerate even when nothing changed).
+   */
+  generateReport: (opts?: { force?: boolean }) => Promise<void>
+
+  /** Open the generated HTML in the user's default browser. */
   openReport: () => Promise<void>
+
+  /** Clear the error state. Used by the button's 'error' handler. */
   retryFailed: () => void
+
+  /**
+   * Hydrate the store from `<project>/.research-pilot/report-state.json`.
+   * Called once on app startup so a `done` state persists across
+   * restarts. Mounted from App.tsx.
+   */
+  hydrateFromDisk: () => Promise<void>
+
+  /**
+   * Wire up the `report:progress` listener. Returns an unsubscribe.
+   * Mounted once at app level alongside the other subscribers.
+   */
+  subscribeToReportProgress: () => () => void
 }
 
 export const useReportStore = create<ReportStoreState>((set, get) => ({
@@ -123,24 +165,96 @@ export const useReportStore = create<ReportStoreState>((set, get) => ({
     await useEnrichmentStore.getState().enrichAll(ids)
   },
 
-  generateReport: async () => {
-    // PR-B will:
-    //   1. Compute currentInputHash from papers
-    //   2. Set reportStatus to 'running'
-    //   3. Spawn the IPC `cmd:generate-paper-report` call
-    //   4. Subscribe to `report:progress` to update generationStep / percent
-    //   5. On done, set reportStatus + reportInputHash + reportPath
-    //   6. On error, set reportStatus = 'error' + reportError
-    console.warn('[report-store] generateReport: not implemented in PR-A')
+  generateReport: async (opts) => {
+    const api = getApi()
+    if (!api.generatePaperReport) {
+      console.warn('[report-store] generatePaperReport IPC unavailable')
+      return
+    }
+    set({
+      reportStatus: 'running',
+      generationStep: 'starting',
+      generationPercent: 0,
+      reportError: undefined,
+    })
+    try {
+      const result = await api.generatePaperReport(opts)
+      if (result.success) {
+        set({
+          reportStatus: 'done',
+          reportInputHash: result.inputHash,
+          reportPath: result.htmlPath ?? result.markdownPath,
+          reportError: undefined,
+          generationStep: undefined,
+          generationPercent: undefined,
+        })
+      } else {
+        set({
+          reportStatus: 'error',
+          reportError: result.error ?? 'Generation failed',
+          generationStep: undefined,
+          generationPercent: undefined,
+        })
+      }
+    } catch (err) {
+      set({
+        reportStatus: 'error',
+        reportError: err instanceof Error ? err.message : String(err),
+        generationStep: undefined,
+        generationPercent: undefined,
+      })
+    }
   },
 
   openReport: async () => {
-    // PR-B will call shell.openPath(get().reportPath).
-    console.warn('[report-store] openReport: not implemented in PR-A')
+    const api = getApi()
+    if (!api.openPaperReport) {
+      console.warn('[report-store] openPaperReport IPC unavailable')
+      return
+    }
+    const result = await api.openPaperReport()
+    if (!result.success) {
+      // Don't move to 'error' — opening is a user-facing action, not a
+      // generation failure. Surface via console for now; PR-C could
+      // add a toast.
+      console.warn('[report-store] openPaperReport failed:', result.error)
+    }
   },
 
   retryFailed: () => {
     set({ reportStatus: 'idle', reportError: undefined })
+  },
+
+  hydrateFromDisk: async () => {
+    const api = getApi()
+    if (!api.getPaperReportState) return
+    try {
+      const persisted = await api.getPaperReportState()
+      if (!persisted) return
+      // Map persisted shape (which may have 'idle'/'running'/'done'/'error')
+      // back into the store's mirror.
+      set({
+        reportStatus: persisted.status,
+        reportInputHash: persisted.inputHash,
+        reportPath: persisted.htmlPath ?? persisted.markdownPath,
+        reportError: persisted.error,
+      })
+    } catch {
+      // Quiet — missing or unreadable state file isn't worth surfacing.
+    }
+  },
+
+  subscribeToReportProgress: () => {
+    const api = getApi()
+    if (!api.onPaperReportProgress) return () => {}
+    return api.onPaperReportProgress((event) => {
+      // Only consume events while we believe a run is happening.
+      if (get().reportStatus !== 'running') return
+      set({
+        generationStep: event.step + (event.detail ? ` (${event.detail})` : ''),
+        generationPercent: event.percent,
+      })
+    })
   },
 }))
 

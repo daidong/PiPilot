@@ -1,4 +1,4 @@
-import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { app, ipcMain, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'electron'
 // electron-updater is CJS-only; the named-export form breaks the packaged
 // ESM build (`out/main/index.mjs`). Default-import the namespace and pull
 // `autoUpdater` off it.
@@ -18,6 +18,11 @@ import {
   enrichPaperArtifacts
 } from '../../../lib/commands/index'
 import { importBibtexFile, importBibtexString, type BibImportResult, type BibImportProgressEvent } from '../../../lib/importers/bibtex'
+import {
+  generatePaperPackReport,
+  readReportState as readPaperReportState,
+  type ReportProgressEvent as PaperReportProgressEvent,
+} from '../../../lib/reports/index'
 import { parseMentions, resolveMentions, getCandidates, invalidateEntityCache } from '../../../lib/mentions/index'
 import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readEnabledSkills, setBuiltinSkillsRoot } from '../../../lib/skills/loader'
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
@@ -1543,6 +1548,119 @@ export function registerIpcHandlers(): void {
     })
     if (result.canceled || !result.filePaths[0]) return null
     return result.filePaths[0]
+  })
+
+  // ─── Paper Pack Report (RFC-007 PR-B) ────────────────────────────────
+  //
+  // Generation uses the user's currently-configured chat model. The
+  // single LLM call inside the generator is wrapped with the same
+  // subscription-token refresh logic the wiki agent uses (lines 1063+).
+  //
+  // We guard against double-clicks by checking the persisted state up
+  // front — the renderer-side state machine already disables the button
+  // during 'generating', but a fast double-RPC can race that.
+  handleWindow('cmd:generate-paper-report', async ({ win, state }, opts?: { force?: boolean }) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+
+    // Quick double-fire guard: refuse if a run is already in flight.
+    const existing = readPaperReportState(state.projectPath)
+    if (existing?.status === 'running' && !opts?.force) {
+      return { success: false, error: 'A report generation is already running.' }
+    }
+
+    // Resolve model + auth — same pattern as the wiki agent's callLlm.
+    const modelStr = state.currentModel
+    const auth = resolveCoordinatorAuth(modelStr)
+
+    // piModel is typed as the dynamic-import getModel's return type; we
+    // resolve it inline because the import is async (lazy).
+    let piModel: unknown = null
+    let resolveApiKey: () => Promise<string>
+    try {
+      const { getModel: piGetModelLocal } = await import('@mariozechner/pi-ai')
+      const [rawProvider, modelId] = modelStr.split(':')
+      // Match the existing wiki-agent cast: pi-ai's getModel has an
+      // exhaustive provider literal, but our currentModel string is
+      // dynamic. Cast to any (same pattern as line ~1027).
+      const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      piModel = piGetModelLocal(piProvider as any, modelId)
+
+      if (auth.authMode === 'subscription' && auth.piProvider === 'anthropic-sub') {
+        resolveApiKey = async () => {
+          const creds = loadAnthropicSubCredentials()
+          if (!creds) throw new Error('Claude subscription credentials not found.')
+          if (creds.expires < Date.now() + 60_000) {
+            const { refreshAnthropicToken } = await import('@mariozechner/pi-ai/oauth')
+            const fresh = await refreshAnthropicToken(creds.refresh)
+            saveAnthropicSubCredentials(fresh)
+            return fresh.access
+          }
+          return creds.access
+        }
+      } else if (auth.authMode === 'subscription') {
+        resolveApiKey = async () => {
+          const creds = loadCodexCredentials()
+          if (!creds) throw new Error('Codex credentials not found.')
+          if (creds.expires < Date.now() + 60_000) {
+            const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+            const fresh = await refreshOpenAICodexToken(creds.refresh)
+            saveCodexCredentials(fresh)
+            return fresh.access
+          }
+          return creds.access
+        }
+      } else {
+        resolveApiKey = async () => auth.apiKey
+      }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+
+    const callLlm = async (system: string, user: string): Promise<string> => {
+      const apiKey = await resolveApiKey()
+      // authMode is intentionally omitted — the semantic-registry's
+      // narrower string union differs from resolveCoordinatorAuth's,
+      // and the field is optional. Skipping it just affects one OTel
+      // span attribute, not behavior.
+      return runSubLlmText({
+        model: piModel as unknown as Parameters<typeof runSubLlmText>[0]['model'],
+        systemPrompt: system,
+        userContent: user,
+        apiKey,
+        purpose: 'paper-pack-report',
+        tracer: state.tracer ?? null,
+      })
+    }
+
+    const result = await generatePaperPackReport({
+      projectPath: state.projectPath,
+      callLlm,
+      force: opts?.force,
+      onProgress: (event: PaperReportProgressEvent) => {
+        safeSend(win, 'report:progress', event)
+      },
+    })
+    return result
+  })
+
+  // Read persisted state — used by the renderer on app startup to
+  // hydrate the report-store, and after every generation to confirm
+  // what landed on disk.
+  handleWindow('cmd:get-paper-report-state', ({ state }) => {
+    if (!state.projectPath) return null
+    return readPaperReportState(state.projectPath)
+  })
+
+  // Open the generated HTML in the user's default browser.
+  // shell.openPath handles cross-platform file:// resolution.
+  handleWindow('cmd:open-paper-report', async ({ state }) => {
+    if (!state.projectPath) return { success: false, error: 'No project folder selected.' }
+    const reportState = readPaperReportState(state.projectPath)
+    if (!reportState?.htmlPath) return { success: false, error: 'No report has been generated yet.' }
+    const result = await shell.openPath(reportState.htmlPath)
+    if (result) return { success: false, error: result }  // shell returns error string on failure
+    return { success: true }
   })
 
 
