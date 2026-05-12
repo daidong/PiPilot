@@ -363,17 +363,22 @@ function importOneEntry(entry: Entry, title: string, ctx: CLIContext): EntryOutc
  * whether `é` is one codepoint (NFC) or two (NFD).
  */
 function pickStringField(entry: Entry, name: string): string | undefined {
-  const value = entry.fields[name]
+  // The parser's `Fields` type narrows arbitrary key access to `string`
+  // because of `Omit<Record<string, string>, keyof TypedFields>`. The
+  // typed array fields (publisher, keywords, institution, …) still come
+  // back as arrays at runtime, so we have to widen back to `unknown` and
+  // do the runtime check ourselves.
+  const value = entry.fields[name] as unknown
   let str: string | undefined
   if (typeof value === 'string') {
     str = value
   } else if (Array.isArray(value)) {
-    // string[] (publisher, location, institution, …) — join. Skip Creator[]
-    // which is an array of objects.
     if (value.length === 0) return undefined
     if (typeof value[0] === 'string') {
       str = (value as string[]).map(v => v.trim()).filter(Boolean).join('; ')
     } else {
+      // Creator[] (author/editor/etc.) — caller should reach for the
+      // structured field directly, not via this helper.
       return undefined
     }
   } else {

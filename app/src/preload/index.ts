@@ -1,4 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { BibImportResult, BibImportProgressEvent } from '../../../lib/importers/bibtex'
+
+// Re-export the bibtex importer types so renderer code can import them
+// from the preload module rather than reaching into lib directly. Keeps
+// the renderer's import graph stable across PR-3 / PR-4 churn.
+export type { BibImportResult, BibImportProgressEvent }
 
 export interface UsageEvent {
   promptTokens: number
@@ -256,6 +262,28 @@ export interface ElectronAPI {
   // Enrichment
   enrichAllPapers: (paperIds?: string[]) => Promise<{ success: boolean; enriched: number; skipped: number; failed: number }>
   onEnrichProgress: (cb: (info: { paperId: string; status: string }) => void) => () => void
+
+  // BibTeX import (RFC-006 PR-3)
+  //
+  // Two entry points:
+  //   importBibtexFile(path)    — main reads from disk by absolute path
+  //   importBibtexString(text)  — renderer already has the contents
+  //                                (e.g. drag-and-drop or browser file API)
+  //
+  // pickBibtexFile() opens a native picker filtered to .bib/.bibtex.
+  // onImportProgress() subscribes to per-entry progress events; the cb
+  // is invoked once per entry parsed (added / merged / merged-no-change
+  // / duplicate-in-file / failed). Returns an unsubscribe function.
+  importBibtexFile: (bibPath: string) => Promise<
+    | { success: true; result: BibImportResult }
+    | { success: false; error: string }
+  >
+  importBibtexString: (contents: string) => Promise<
+    | { success: true; result: BibImportResult }
+    | { success: false; error: string }
+  >
+  pickBibtexFile: () => Promise<string | null>
+  onImportProgress: (cb: (event: BibImportProgressEvent) => void) => () => void
 
   // Session/Project
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
@@ -516,6 +544,16 @@ const api: ElectronAPI = {
     const handler = (_: any, info: { paperId: string; status: string }) => cb(info)
     ipcRenderer.on('enrich:progress', handler)
     return () => ipcRenderer.removeListener('enrich:progress', handler)
+  },
+
+  // BibTeX import (RFC-006 PR-3) — see ElectronAPI doc above.
+  importBibtexFile: (bibPath) => ipcRenderer.invoke('cmd:import-bibtex', bibPath),
+  importBibtexString: (contents) => ipcRenderer.invoke('cmd:import-bibtex-string', contents),
+  pickBibtexFile: () => ipcRenderer.invoke('cmd:pick-bibtex-file'),
+  onImportProgress: (cb) => {
+    const handler = (_: any, event: BibImportProgressEvent) => cb(event)
+    ipcRenderer.on('import:progress', handler)
+    return () => ipcRenderer.removeListener('import:progress', handler)
   },
 
   getCurrentSession: () => ipcRenderer.invoke('session:current'),

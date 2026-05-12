@@ -9,6 +9,7 @@ import { ErrorBoundary } from './components/layout/ErrorBoundary'
 import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
 import { useEntityStore } from './stores/entity-store'
+import { useImportStore } from './stores/import-store'
 import { useUIStore, applyThemeFromBroadcast } from './stores/ui-store'
 import { useProgressStore } from './stores/progress-store'
 import { useActivityStore } from './stores/activity-store'
@@ -854,6 +855,14 @@ export default function App() {
       useSessionStore.getState().closeProject()
     })
     return unsub
+  }, [])
+
+  // Wire BibTeX import progress events into the import store (RFC-006 PR-3).
+  // Mounted once at App level so the store updates while the wizard is
+  // closed (e.g. user navigated away mid-import) — they can reopen and
+  // see the final summary.
+  useEffect(() => {
+    return useImportStore.getState().subscribeToProgress()
   }, [])
 
   // Listen for menu-triggered Export Chat and Settings
