@@ -34,10 +34,7 @@ import { X } from 'lucide-react'
 import { useImportStore } from '../../stores/import-store'
 import { useEntityStore } from '../../stores/entity-store'
 import { useUIStore } from '../../stores/ui-store'
-
-const api = (window as any).api as {
-  enrichAllPapers?: (paperIds: string[]) => Promise<unknown>
-}
+import { useEnrichmentStore } from '../../stores/enrichment-store'
 
 const FOCUSABLE_SELECTOR = [
   'button:not([disabled])',
@@ -75,18 +72,37 @@ export function ImportWizard() {
   const closeAndReset = useImportStore((s) => s.closeAndReset)
 
   const panelRef = useRef<HTMLDivElement>(null)
-  const [enriching, setEnriching] = useState(false)
 
   // ── Refresh the Papers list once an import finishes ─────────────────
   // The importer writes paper artifacts directly to disk; the entity
   // store has no idea unless we tell it. Refresh whenever status flips
   // to 'done' (even when nothing was added — merges may have filled
   // missing fields on existing papers, which the UI should reflect).
+  //
+  // Also: auto-switch the center view to Library so the user sees the
+  // papers landing, and fire enrichment in the background. RFC-007 §5
+  // — the Paper Report button can't enable until enrichment + wiki
+  // catch up, so we kick off the long chain immediately rather than
+  // waiting for the user to click a separate button.
   useEffect(() => {
-    if (status === 'done') {
-      useEntityStore.getState().refreshAll().catch(() => {})
-    }
-  }, [status])
+    if (status !== 'done') return
+    let cancelled = false
+
+    useEntityStore.getState().refreshAll().then(() => {
+      if (cancelled) return
+      // Auto-trigger enrichment for the just-imported papers. The
+      // enrichment-store guards against double-runs; calling it while
+      // an existing run is in flight is a no-op.
+      if (result && result.importedPaperIds.length > 0) {
+        useEnrichmentStore.getState().enrichAll(result.importedPaperIds).catch(() => {})
+      }
+      // Switch the background view so closing the wizard lands the
+      // user in Literature.
+      useUIStore.getState().setCenterView('literature')
+    }).catch(() => {})
+
+    return () => { cancelled = true }
+  }, [status, result])
 
   // ── A11y: focus management + Escape + Tab trap ──────────────────────
   useEffect(() => {
@@ -196,20 +212,9 @@ export function ImportWizard() {
               : <DoneStep
                   result={result!}
                   sourcePath={sourcePath}
-                  enriching={enriching}
-                  onRunEnrichment={async () => {
-                    if (!result || result.importedPaperIds.length === 0) return
-                    setEnriching(true)
-                    try {
-                      await api.enrichAllPapers?.(result.importedPaperIds)
-                    } finally {
-                      setEnriching(false)
-                      closeAndReset()
-                    }
-                  }}
                   onOpenLibrary={() => {
-                    useUIStore.getState().setCenterView('literature')
-                    useEntityStore.getState().refreshAll().catch(() => {})
+                    // The done-state effect above already switches view +
+                    // refreshes; this is the "close the wizard now" CTA.
                     closeAndReset()
                   }}
                   onImportAnother={() => reset()}
@@ -315,20 +320,18 @@ function CounterRow({ label, value, total, muted }: { label: string; value: numb
 function DoneStep({
   result,
   sourcePath,
-  enriching,
-  onRunEnrichment,
   onOpenLibrary,
   onImportAnother,
 }: {
   result: import('../../../preload/index').BibImportResult
   sourcePath?: string
-  enriching: boolean
-  onRunEnrichment: () => Promise<void>
   onOpenLibrary: () => void
   onImportAnother: () => void
 }) {
   const [failuresOpen, setFailuresOpen] = useState(false)
-  const canEnrich = result.importedPaperIds.length > 0
+  const enrichmentTotal = useEnrichmentStore((s) => s.progress?.total)
+  const enrichmentProcessed = useEnrichmentStore((s) => s.progress?.processed)
+  const enrichmentRunning = useEnrichmentStore((s) => s.status === 'running')
 
   return (
     <div className="flex flex-col gap-4">
@@ -385,23 +388,35 @@ function DoneStep({
         </div>
       )}
 
-      {/* Actions — left-aligned ghost buttons. Primary CTA is whichever
-          is most useful given the state (papers added vs. nothing new). */}
+      {/* Background-task hint — RFC-007 §5: enrichment auto-fires after
+          import; wiki processing follows. The Paper Report button in the
+          left sidebar will progress through its states as the pipeline
+          catches up. Surface a tight one-liner here so users know the
+          work is already happening. */}
+      {result.importedPaperIds.length > 0 && (
+        <div className="border-t t-border pt-3 text-[11px] t-text-muted leading-relaxed">
+          {enrichmentRunning && enrichmentTotal != null ? (
+            <p>
+              Enriching {enrichmentProcessed ?? 0}/{enrichmentTotal} papers in the background.
+              Paper Wiki + Paper Report will become available when ready.
+            </p>
+          ) : (
+            <p>
+              Enrichment + Paper Wiki processing started in the background.
+              Watch the <strong>Paper Report</strong> button in the left
+              sidebar — it&apos;ll progress through stages and turn green
+              when synthesis is ready.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Actions — left-aligned ghost buttons. */}
       <div className="flex flex-wrap gap-2 mt-2">
-        {canEnrich && (
-          <button
-            type="button"
-            onClick={() => { void onRunEnrichment() }}
-            disabled={enriching}
-            className="px-3 py-1.5 rounded-lg border t-border t-bg-elevated t-text text-[12px] font-medium hover:t-bg-hover transition-colors disabled:opacity-50"
-          >
-            {enriching ? 'Enriching…' : 'Run enrichment'}
-          </button>
-        )}
         <button
           type="button"
           onClick={onOpenLibrary}
-          className="px-3 py-1.5 rounded-lg border t-border t-bg-elevated t-text-secondary text-[12px] font-medium hover:t-text hover:t-bg-hover transition-colors"
+          className="px-3 py-1.5 rounded-lg border t-border t-bg-elevated t-text text-[12px] font-medium hover:t-bg-hover transition-colors"
         >
           View library
         </button>

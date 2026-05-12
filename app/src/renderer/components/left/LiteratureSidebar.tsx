@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react'
 import {
   Upload,
-  Zap,
+  FileText,
   GitBranch,
   RefreshCw,
   BarChart3,
@@ -10,6 +10,7 @@ import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { useImportStore } from '../../stores/import-store'
+import { useReportStore, useReportButtonState, type ReportButtonState } from '../../stores/report-store'
 import { ConceptsList } from './ConceptsList'
 
 function QuickAction({
@@ -39,6 +40,102 @@ function QuickAction({
         <p className="text-[10px] t-text-muted leading-tight mt-0.5">{description}</p>
       </div>
     </button>
+  )
+}
+
+// ─── Paper Report action (RFC-007 PR-A) ─────────────────────────────────
+//
+// Quick Action that's the user-facing display for the entire pipeline
+// (enrichment → wiki → ready → generate → done). The label, description,
+// disabled-ness, and click handler all change with the derived
+// `buttonState` — see `useReportButtonState()` in report-store.ts.
+//
+// In PR-A the 'ready' / 'done' / 'error' click handlers are no-ops or
+// console.warn placeholders. PR-B wires them to real generation +
+// open-in-browser actions.
+
+interface PaperReportButtonShape {
+  label: string
+  description: string
+  /** Click target; undefined = button is disabled. */
+  onClick?: () => void
+}
+
+function paperReportButtonShape(s: ReturnType<typeof useReportButtonState>): PaperReportButtonShape {
+  const triggerEnrichment = () => useReportStore.getState().triggerEnrichmentForAllPapers().catch(() => {})
+  const generate = () => useReportStore.getState().generateReport().catch(() => {})
+  const open = () => useReportStore.getState().openReport().catch(() => {})
+  const retry = () => useReportStore.getState().retryFailed()
+
+  switch (s.state) {
+    case 'no-papers':
+      return {
+        label: 'Paper Report',
+        description: 'Import papers to unlock — synthesizes a citation-grounded summary of your library',
+      }
+    case 'pre-enrichment':
+      return {
+        label: 'Run Enrichment first',
+        description: 'Click to enrich paper metadata from CrossRef / Semantic Scholar',
+        onClick: triggerEnrichment,
+      }
+    case 'enriching': {
+      const n = s.enrichmentProcessed ?? 0
+      const total = s.enrichmentTotal ?? 0
+      return {
+        label: total > 0 ? `Enriching ${n}/${total}…` : 'Enriching…',
+        description: 'Paper Report will unlock when enrichment + wiki processing finish',
+      }
+    }
+    case 'pre-wiki': {
+      const n = s.wikiProcessed ?? 0
+      const total = s.wikiTotal ?? 0
+      return {
+        label: total > 0 ? `Wiki processing ${n}/${total}…` : 'Wiki processing…',
+        description: 'Paper Wiki is summarizing each paper — Report unlocks when caught up',
+      }
+    }
+    case 'ready':
+      return {
+        label: 'Generate Paper Report',
+        description: 'Synthesizes a citation-grounded report of your library (~1-3 min)',
+        onClick: generate,
+      }
+    case 'generating': {
+      const pct = s.generationPercent != null ? ` ${s.generationPercent}%` : ''
+      const step = s.generationStep ? `: ${s.generationStep}` : ''
+      return {
+        label: `Generating${step}${pct}`,
+        description: 'Synthesizing across paper wiki data — do not close the project',
+      }
+    }
+    case 'done':
+      return {
+        label: 'Open Paper Report',
+        description: 'Citation-grounded synthesis ready in the project root',
+        onClick: open,
+      }
+    case 'error':
+      return {
+        label: 'Generation failed — retry',
+        description: s.reportError ?? 'Click to clear the error and try again',
+        onClick: retry,
+      }
+  }
+}
+
+function PaperReportAction() {
+  const state = useReportButtonState()
+  const shape = paperReportButtonShape(state)
+
+  return (
+    <QuickAction
+      icon={FileText}
+      label={shape.label}
+      description={shape.description}
+      onClick={shape.onClick ?? (() => {})}
+      disabled={!shape.onClick}
+    />
   )
 }
 
@@ -131,13 +228,8 @@ export function LiteratureSidebar() {
           onClick={() => useImportStore.getState().openWizard()}
           disabled={isStreaming}
         />
-        <QuickAction
-          icon={Zap}
-          label="Quick Update"
-          description="Fill gaps in existing coverage"
-          onClick={() => sendToChat('Please do a quick literature update to fill gaps in ')}
-          disabled={isStreaming}
-        />
+        <PaperReportAction />
+
         <QuickAction
           icon={GitBranch}
           label="Citation Chain"
