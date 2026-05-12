@@ -68,7 +68,7 @@ test('createArtifact: ledger row carries turnId from CLIContext', async () => {
     assert.equal(rows[0].op, 'create')
     assert.equal(rows[0].turnId, 'turn-abc')
   } finally {
-    rmSync(project, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
   }
 })
 
@@ -85,7 +85,7 @@ test('createArtifact: omitted turnId → ledger row has no turnId field', async 
     // The writer strips undefined fields for tidiness, so the key must be absent.
     assert.equal('turnId' in rows[0], false)
   } finally {
-    rmSync(project, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
   }
 })
 
@@ -105,7 +105,7 @@ test('updateArtifact: ledger edit row carries turnId argument', async () => {
     assert.equal(rows[1].op, 'edit')
     assert.equal(rows[1].turnId, 'turn-update')
   } finally {
-    rmSync(project, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
   }
 })
 
@@ -122,7 +122,7 @@ test('updateArtifact: omitted turnId argument → no turnId on edit row', async 
     assert.equal(rows.length, 2)
     assert.equal('turnId' in rows[1], false)
   } finally {
-    rmSync(project, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
   }
 })
 
@@ -141,6 +141,6 @@ test('deleteArtifact: ledger delete row carries turnId argument', async () => {
     assert.equal(rows[1].op, 'delete')
     assert.equal(rows[1].turnId, 'turn-delete')
   } finally {
-    rmSync(project, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
   }
 })
