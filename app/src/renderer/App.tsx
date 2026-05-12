@@ -868,19 +868,44 @@ export default function App() {
     return useImportStore.getState().subscribeToProgress()
   }, [])
 
-  // Wire enrichment progress + wiki status into their respective stores
-  // (RFC-007 PR-A). The Paper Report button reads from these to derive
-  // its six-state label. Mounted once at App level for the same reason
-  // as the import progress listener — the button is in the sidebar and
-  // shouldn't depend on Literature being the active center view.
+  // Wire enrichment progress + wiki status + report-progress into their
+  // respective stores (RFC-007 PR-A/PR-B). The Paper Report button reads
+  // from these to derive its six-state label. Mounted at App level so
+  // the button stays correct from any view.
   useEffect(() => {
     const unsubEnrich = useEnrichmentStore.getState().subscribeToProgress()
     const unsubWiki = useReportStore.getState().subscribeToWikiStatus()
+    const unsubReport = useReportStore.getState().subscribeToReportProgress()
     return () => {
       unsubEnrich()
       unsubWiki()
+      unsubReport()
     }
   }, [])
+
+  // Re-hydrate persisted report state whenever the active project
+  // changes. report-state.json lives inside `<project>/.research-pilot/`,
+  // so opening a different project must drop the prior session's status
+  // and load the new one's. Without this, switching projects would
+  // leave the button showing 'done' from project A while project B's
+  // report doesn't exist.
+  const sessionProjectPath = useSessionStore((s) => s.projectPath)
+  useEffect(() => {
+    if (!sessionProjectPath) {
+      // Clear the mirrored state when no project is open. The button
+      // will fall back to 'no-papers' since the entity store is empty.
+      useReportStore.setState({
+        reportStatus: 'idle',
+        reportInputHash: undefined,
+        reportPath: undefined,
+        reportError: undefined,
+        generationStep: undefined,
+        generationPercent: undefined,
+      })
+      return
+    }
+    useReportStore.getState().hydrateFromDisk().catch(() => {})
+  }, [sessionProjectPath])
 
   // Listen for menu-triggered Export Chat and Settings
   useEffect(() => {

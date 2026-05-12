@@ -1,10 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { BibImportResult, BibImportProgressEvent } from '../../../lib/importers/bibtex'
+import type {
+  GenerateReportResult,
+  ReportProgressEvent,
+} from '../../../lib/reports/index'
+import type { ReportPersistedState } from '../../../lib/reports/state'
 
 // Re-export the bibtex importer types so renderer code can import them
 // from the preload module rather than reaching into lib directly. Keeps
 // the renderer's import graph stable across PR-3 / PR-4 churn.
 export type { BibImportResult, BibImportProgressEvent }
+export type { GenerateReportResult, ReportProgressEvent, ReportPersistedState }
 
 export interface UsageEvent {
   promptTokens: number
@@ -285,6 +291,14 @@ export interface ElectronAPI {
   pickBibtexFile: () => Promise<string | null>
   onImportProgress: (cb: (event: BibImportProgressEvent) => void) => () => void
 
+  // Paper Pack Report (RFC-007 PR-B). The button state machine in
+  // report-store reads from these three entry points + the progress
+  // event stream.
+  generatePaperReport: (opts?: { force?: boolean }) => Promise<GenerateReportResult>
+  getPaperReportState: () => Promise<ReportPersistedState | null>
+  openPaperReport: () => Promise<{ success: boolean; error?: string }>
+  onPaperReportProgress: (cb: (event: ReportProgressEvent) => void) => () => void
+
   // Session/Project
   getCurrentSession: () => Promise<{ sessionId: string; projectPath: string }>
   pickFolder: () => Promise<{ projectPath: string; sessionId: string } | null>
@@ -554,6 +568,16 @@ const api: ElectronAPI = {
     const handler = (_: any, event: BibImportProgressEvent) => cb(event)
     ipcRenderer.on('import:progress', handler)
     return () => ipcRenderer.removeListener('import:progress', handler)
+  },
+
+  // Paper Pack Report (RFC-007 PR-B).
+  generatePaperReport: (opts) => ipcRenderer.invoke('cmd:generate-paper-report', opts),
+  getPaperReportState: () => ipcRenderer.invoke('cmd:get-paper-report-state'),
+  openPaperReport: () => ipcRenderer.invoke('cmd:open-paper-report'),
+  onPaperReportProgress: (cb) => {
+    const handler = (_: any, event: ReportProgressEvent) => cb(event)
+    ipcRenderer.on('report:progress', handler)
+    return () => ipcRenderer.removeListener('report:progress', handler)
   },
 
   getCurrentSession: () => ipcRenderer.invoke('session:current'),
