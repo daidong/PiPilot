@@ -146,6 +146,25 @@ export async function importBibtexString(
   //   for the sentence-case heuristic.
   const lib = parseBibtex(contents, { sentenceCase: false, english: false })
 
+  // Build the set of citekeys associated with parser errors. The parser
+  // is forgiving: on a malformed entry like
+  //   `@article{x, title={A {B}, author={A}}`
+  // it both (a) records a token-mismatch error AND (b) surfaces a
+  // *corrupted* Entry whose `title` field has `author=A` mashed into it.
+  // Without the per-entry skip, we'd happily create a paper with garbage
+  // metadata (PR-2 review #2).
+  //
+  // Heuristic: extract the leading citekey from each error's `input`
+  // snippet (the parser includes the failing entry text). Entries with
+  // a matching key are treated as per-entry failures rather than
+  // bare warnings.
+  const brokenCiteKeys = new Set<string>()
+  for (const err of lib.errors) {
+    if (!err.input) continue
+    const match = err.input.match(/^@\w+\s*\{\s*([^,\s}]+)/)
+    if (match) brokenCiteKeys.add(match[1])
+  }
+
   const result: BibImportResult = {
     added: 0,
     merged: 0,
@@ -163,6 +182,22 @@ export async function importBibtexString(
   for (let index = 0; index < lib.entries.length; index++) {
     const entry = lib.entries[index]
     const citeKey = entry.key
+
+    // Skip entries whose source text triggered a parser error. Even when
+    // the parser hands us a populated Entry, the data is unreliable.
+    if (brokenCiteKeys.has(citeKey)) {
+      result.failed++
+      result.failureDetails.push({
+        citeKey: citeKey || `(entry #${index + 1})`,
+        reason: 'parser-error: entry skipped because BibTeX is malformed',
+      })
+      options.onProgress?.({
+        index, total, citeKey,
+        status: 'failed',
+        reason: 'parser-error',
+      })
+      continue
+    }
 
     // A1 — same citekey appeared earlier in this file. Keep first; skip
     // this one, record a warning. The parser does NOT dedupe these for us.
@@ -520,6 +555,21 @@ function parseKeywords(field: string[] | undefined): string[] {
  * `bibtex8` and wants escaped output, that's a follow-up — the data is
  * still preserved.
  */
+/**
+ * Fields we **never** emit in reconstructed standalone BibTeX.
+ *
+ * - `file` — Zotero / Mendeley local-path attachment. Useless on any
+ *   other machine; would leak local filesystem layout into committed
+ *   project artifacts and into any `references.bib` derived from this
+ *   field (RFC-006 §8 and post-merge review #1 on PR-2).
+ * - `crossref` — the @retorquere parser already flattens inherited
+ *   fields into the child entry (booktitle, editor, publisher, year
+ *   from the parent @proceedings show up directly on the child).
+ *   Keeping the `crossref = {...}` line itself would point at a
+ *   non-existent target in the standalone output (PR-2 review #3).
+ */
+const RECONSTRUCT_EXCLUDED_FIELDS = new Set<string>(['file', 'crossref'])
+
 export function reconstructStandaloneBibtex(entry: Entry): string {
   const lines: string[] = [`@${entry.type}{${entry.key},`]
 
@@ -527,6 +577,7 @@ export function reconstructStandaloneBibtex(entry: Entry): string {
   // (e.g. title first, doi last) survive the round trip. `Object.keys`
   // on the parsed fields keeps insertion order for string keys.
   for (const key of Object.keys(entry.fields)) {
+    if (RECONSTRUCT_EXCLUDED_FIELDS.has(key.toLowerCase())) continue
     const value = entry.fields[key]
     if (value === undefined || value === null) continue
 

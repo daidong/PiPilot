@@ -153,14 +153,35 @@ test('F6: @misc with no DOI/year/venue still imports, low confidence', async () 
   }
 })
 
-test('F7: Zotero `file` field is ignored — no local path leaks into pdfUrl', async () => {
+test('F7: Zotero `file` field is ignored — no local path leaks into pdfUrl OR into stored bibtex', async () => {
   const project = tmpProject()
   try {
     const result = await importBibtexFile(join(FIXTURES, 'F7-zotero-with-file.bib'), { ctx: ctx(project) })
     assert.equal(result.added, 1)
     const paper = findByCiteKey(project, 'zotero2024')
-    assert.equal(paper.pdfUrl, undefined, 'must not synthesize pdfUrl from local file path')
+
+    // pdfUrl must not be synthesized from the local Zotero attachment path.
+    assert.equal(paper.pdfUrl, undefined)
     assert.equal(paper.doi, '10.1126/science.abc1234')
+
+    // PR-2 review #1: stored bibtex must NOT carry the `file = {...}`
+    // line. Otherwise local Zotero paths leak into project artifacts
+    // (committed JSON) and into any references.bib regenerated from
+    // PaperArtifact.bibtex.
+    assert.ok(
+      !/^\s*file\s*=/im.test(paper.bibtex),
+      `stored bibtex still contains a file= line:\n${paper.bibtex}`
+    )
+    assert.ok(
+      !/files\/12345/.test(paper.bibtex),
+      'stored bibtex must not contain the local attachment path'
+    )
+
+    // Round-trip sanity: the stored bibtex parses cleanly and produces
+    // an entry that has the same DOI but no `file` field.
+    const reparsed = parseBibtex(paper.bibtex, { sentenceCase: false, english: false })
+    assert.equal(reparsed.errors.length, 0)
+    assert.ok(!('file' in reparsed.entries[0].fields), 'reparsed entry must not have a file field')
   } finally {
     rmSync(project, { recursive: true, force: true })
   }
@@ -199,15 +220,18 @@ test('F9: @string macros are resolved into the stored bibtex', async () => {
   }
 })
 
-test('F10: malformed entry is soft-failed (other entries would still import)', async () => {
+test('F10: malformed entry is soft-failed (caught by parser-error guard, not just missing-title)', async () => {
   const project = tmpProject()
   try {
     const result = await importBibtexFile(join(FIXTURES, 'F10-malformed.bib'), { ctx: ctx(project) })
-    // The parser surfaces the entry with empty fields → our importer
-    // soft-fails it (missing title) rather than throwing.
+    // F10 (unclosed brace) triggers a parser error that our review-#2 guard
+    // catches before the missing-title check ever runs. Either reason
+    // would be acceptable, but parser-error is more informative for the
+    // user — it says "your file is broken at this entry", not "your
+    // entry forgot a title".
     assert.equal(result.added, 0)
     assert.equal(result.failed, 1)
-    assert.equal(result.failureDetails[0].reason, 'missing-title-field')
+    assert.match(result.failureDetails[0].reason, /parser-error/i)
   } finally {
     rmSync(project, { recursive: true, force: true })
   }
@@ -249,6 +273,72 @@ test('F13: non-numeric year ("to appear") → year is undefined, paper still imp
     const paper = findByCiteKey(project, 'toappear')
     assert.equal(paper.year, undefined)
     assert.equal(paper.title, 'A Paper That Has Not Appeared')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('F15: parser errors fail the corresponding entry — surrounding good entries still import (review #2)', async () => {
+  // Reviewer reproducer: `@article{x, title={A {B}, author={A}}` is
+  // parsed with an error AND produces a corrupted Entry whose title
+  // has `author=A` mashed into it. Without per-entry-error-skipping,
+  // the importer happily creates a garbage paper.
+  const project = tmpProject()
+  try {
+    const result = await importBibtexFile(join(FIXTURES, 'F15-parser-error-with-title.bib'), { ctx: ctx(project) })
+
+    // Surrounding good entries must still import.
+    assert.equal(result.added, 2, 'good_one and good_two should import')
+    // The broken middle entry must fail with a parser-error reason.
+    assert.equal(result.failed, 1)
+    assert.match(result.failureDetails[0].reason, /parser-error/i)
+    assert.equal(result.failureDetails[0].citeKey, 'x')
+
+    // No paper artifact must have been created for the bad entry.
+    const papers = listPapers(project)
+    assert.equal(papers.length, 2)
+    assert.ok(papers.every(p => p.citeKey !== 'x'), 'no paper artifact for the broken key')
+    // None of the good papers should have author=A mashed into the title.
+    assert.ok(papers.every(p => !/author\s*=/i.test(p.title)),
+      'no paper title should have leaked author= text from the corrupt entry')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('F16: crossref is flattened into child fields, but the crossref token does NOT appear in stored bibtex (review #3)', async () => {
+  const project = tmpProject()
+  try {
+    const result = await importBibtexFile(join(FIXTURES, 'F16-crossref.bib'), { ctx: ctx(project) })
+    assert.equal(result.added, 2, 'both proceedings and inproceedings should import')
+
+    const child = findByCiteKey(project, 'paper2024')
+
+    // The parser inherits booktitle from the @proceedings parent. The
+    // child paper artifact should carry that as its venue.
+    assert.equal(child.venue, 'Proceedings of NeurIPS 2024',
+      'crossref inheritance must populate venue from parent')
+
+    // Stored bibtex MUST NOT contain `crossref = {conf2024}` — that token
+    // would point at nothing in a standalone references.bib generated
+    // from this artifact.
+    assert.ok(
+      !/^\s*crossref\s*=/im.test(child.bibtex),
+      `stored bibtex still contains crossref line:\n${child.bibtex}`
+    )
+
+    // …but the inherited fields ARE present in the stored bibtex, since
+    // they were promoted onto the child by the parser. References.bib
+    // can be rebuilt from this artifact alone.
+    assert.ok(/booktitle/i.test(child.bibtex), 'inherited booktitle must be emitted')
+    assert.ok(/year/i.test(child.bibtex), 'inherited year must be emitted')
+
+    // Round-trip: the stored bibtex must be standalone-parseable with
+    // no errors and no crossref references.
+    const reparsed = parseBibtex(child.bibtex, { sentenceCase: false, english: false })
+    assert.equal(reparsed.errors.length, 0)
+    assert.ok(!('crossref' in reparsed.entries[0].fields),
+      'reparsed entry must have no crossref field')
   } finally {
     rmSync(project, { recursive: true, force: true })
   }
