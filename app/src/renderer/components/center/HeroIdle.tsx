@@ -1,46 +1,27 @@
 import React from 'react'
+import { ArrowRight } from 'lucide-react'
 import { useImportStore } from '../../stores/import-store'
 
 // ─── HeroIdle ─────────────────────────────────────────────────────────────
 //
-// Empty-state surface for the chat view. A single starter row that opens
-// the BibTeX import wizard.
+// Empty-state surface for the chat view. A single, visually obvious CTA
+// that opens the BibTeX import wizard.
 //
-// Why only one starter (and not the prior three): the previous starters
-// — "Understand this folder", "Start a literature review on …", "Capture
-// a research note about …" — were essentially canned chat prompts. They
-// added little over just typing into the input box, and the bulk-import
-// path is the highest-value thing a first-time user can do (it's the
-// only path that requires opening a modal rather than typing). Promoting
-// it to be the sole rich CTA matches the Captain's "Lab Memory
-// Quickstart" framing.
+// Why a single button-styled CTA instead of the prior list of muted
+// starter rows:
+//   - The bulk-import path is the highest-value thing a first-time user
+//     can do (it's the only path that requires opening a modal rather
+//     than typing into the chat).
+//   - The prior starters ("Understand this folder", "Start a literature
+//     review on …", "Capture a research note about …") were canned chat
+//     prompts and added little over just typing.
+//   - The CTA needs to read as a button — the prior two-line row was
+//     so visually quiet that users missed it (Captain feedback).
 //
-// Anti-refs obeyed: no icons, no cards, no centered hero, no Sparkles,
-// no 2×2 grid, no marketing prompt. Left-aligned, two-line row, muted
-// neutrals + accent-soft on hover. Same dialect as FolderGate RecentRow.
-
-function StarterRow({ label, description, onActivate }: { label: string; description: string; onActivate: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onActivate}
-      className="group relative w-full text-left flex flex-col gap-0.5 py-2.5 pl-4 pr-2 rounded-sm t-bg-hover transition-colors"
-    >
-      {/* Left accent bar on hover — same dialect as RecentRow in FolderGate
-          and the wiki-row treatment in LiteratureView. */}
-      <span
-        aria-hidden
-        className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-transparent group-hover:t-bg-accent-soft transition-colors"
-      />
-      <span className="text-[13px] t-text-secondary group-hover:t-text transition-colors leading-snug">
-        {label}
-      </span>
-      <span className="text-[11px] t-text-muted leading-snug">
-        {description}
-      </span>
-    </button>
-  )
-}
+// Anti-refs still obeyed: no marketing prompt, no Sparkles icon, no
+// centered hero, no 2×2 grid, no gradients, no shadows. Single
+// left-aligned button with a bordered surface, accent-tinted on hover,
+// and one arrow affordance.
 
 export function HeroIdle() {
   const openImportWizard = useImportStore((s) => s.openWizard)
@@ -48,35 +29,29 @@ export function HeroIdle() {
   return (
     <div className="w-full max-w-lg px-8">
       {/* Section label — matches FolderGate's "Recent projects" treatment */}
-      <div className="pl-4 mb-2 text-[10px] uppercase tracking-wider t-text-muted font-medium">
+      <div className="pl-1 mb-2 text-[10px] uppercase tracking-wider t-text-muted font-medium">
         Start
       </div>
 
-      <div className="flex flex-col">
-        <StarterRow
-          label="Build a paper memory from existing files"
-          description="Import a .bib export from Zotero / EndNote / Mendeley to populate the library."
-          onActivate={openImportWizard}
+      <button
+        type="button"
+        onClick={openImportWizard}
+        className="group w-full text-left flex items-center gap-4 px-5 py-4 rounded-xl border t-border t-bg-elevated hover:border-[var(--color-accent-soft)] hover:bg-[var(--color-accent-soft)]/5 transition-colors"
+      >
+        <div className="flex-1 min-w-0">
+          <p className="text-[14px] font-semibold t-text leading-snug">
+            Build a paper memory from existing files
+          </p>
+          <p className="text-[12px] t-text-muted leading-snug mt-1">
+            Import a .bib export from Zotero / EndNote / Mendeley to populate the library.
+          </p>
+        </div>
+        <ArrowRight
+          size={18}
+          className="shrink-0 t-text-muted group-hover:t-text-accent transition-colors"
+          aria-hidden
         />
-      </div>
-
-      {/* Keyboard tips — deliberately minimal. Only surfaces features
-          that are fully wired today: @ mentions and the send/newline
-          bindings. The slash command palette is hidden until its
-          backend is complete. */}
-      <div className="mt-8 pl-4 flex flex-col gap-1.5 text-[10px] t-text-muted">
-        <div className="flex items-center gap-2">
-          <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">@</kbd>
-          <span>mention a note, paper, or file</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">↵</kbd>
-          <span>send</span>
-          <span className="opacity-50" aria-hidden>·</span>
-          <kbd className="inline-flex items-center px-1 py-0 rounded border t-border-subtle t-bg-elevated text-[9.5px] font-mono t-text-secondary leading-[1.4]">⇧↵</kbd>
-          <span>newline</span>
-        </div>
-      </div>
+      </button>
     </div>
   )
 }
