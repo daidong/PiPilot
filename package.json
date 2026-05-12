@@ -39,6 +39,7 @@
     "test:renderer": "node scripts/run-tests.mjs renderer",
     "test:diagnostics": "node scripts/run-tests.mjs diagnostics",
     "test:forwarder": "node scripts/run-tests.mjs forwarder",
+    "test:importers": "node scripts/run-tests.mjs importers",
     "diagnostics": "node bin/diagnostics.mjs",
     "trace-forward": "node bin/trace-forward.mjs"
   },
@@ -71,6 +72,7 @@
     "@opentelemetry/resources": "^1.30.1",
     "@opentelemetry/sdk-trace-node": "^1.30.1",
     "@opentelemetry/semantic-conventions": "^1.40.0",
+    "@retorquere/bibtex-parser": "^9.0.29",
     "@sinclair/typebox": "^0.34.48",
     "adm-zip": "^0.5.16",
     "ajv": "^8.18.0",
