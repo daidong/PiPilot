@@ -1,66 +1,25 @@
 import React from 'react'
-import { useChatStore } from '../../stores/chat-store'
 import { useImportStore } from '../../stores/import-store'
 
 // ─── HeroIdle ─────────────────────────────────────────────────────────────
 //
-// Empty-state surface for the chat view. Three task-level starters that
-// prefill the input with natural-language prompts — not slash commands.
+// Empty-state surface for the chat view. A single starter row that opens
+// the BibTeX import wizard.
 //
-// Why natural language over slash commands: the agent's coordinator system
-// prompt already tells it to ground in the workspace (glob/grep/artifact-
-// search for any non-trivial request), to walk the wiki_coverage →
-// wiki_search → literature-search flow for literature requests, and to use
-// artifact-create for notes when the user asks to save something. Each
-// starter below maps directly to one of those existing agent behaviors, so
-// clicking a row triggers real work — not a palette lookup.
+// Why only one starter (and not the prior three): the previous starters
+// — "Understand this folder", "Start a literature review on …", "Capture
+// a research note about …" — were essentially canned chat prompts. They
+// added little over just typing into the input box, and the bulk-import
+// path is the highest-value thing a first-time user can do (it's the
+// only path that requires opening a modal rather than typing). Promoting
+// it to be the sole rich CTA matches the Captain's "Lab Memory
+// Quickstart" framing.
 //
 // Anti-refs obeyed: no icons, no cards, no centered hero, no Sparkles,
-// no 2×2 grid, no marketing prompt. Left-aligned, two-line rows, muted
+// no 2×2 grid, no marketing prompt. Left-aligned, two-line row, muted
 // neutrals + accent-soft on hover. Same dialect as FolderGate RecentRow.
 
-interface Starter {
-  /** Clickable headline — also the text prefilled into the chat input. */
-  label: string
-  /** Muted one-line description of what the agent will do. Teaches by
-   *  example without promising more than the agent actually delivers. */
-  description: string
-}
-
-const STARTERS: Starter[] = [
-  {
-    label: 'Understand this folder',
-    description: 'Scan files, existing artifacts, and recent work to get oriented.',
-  },
-  {
-    label: 'Start a literature review on …',
-    description: 'Plan sub-topics, search multiple sources, score and summarize.',
-  },
-  {
-    label: 'Capture a research note about …',
-    description: 'Draft a note artifact from your description.',
-  },
-]
-
-function focusInput() {
-  const input = document.querySelector<HTMLTextAreaElement>('[data-chat-input]')
-  if (!input) return
-  input.focus()
-  // Drop the caret at the end so the user can keep typing from where the
-  // ellipsis used to be — the "…" at the end of a starter label is the
-  // natural continuation point.
-  const end = input.value.length
-  try { input.setSelectionRange(end, end) } catch { /* older textarea APIs */ }
-}
-
-/** Strip a trailing ellipsis so the prefilled text invites continuation
- *  without the user having to delete the "…" first. Leading/trailing
- *  whitespace is normalized. */
-function prefillFromLabel(label: string): string {
-  return label.replace(/…\s*$/, '').replace(/\s+$/, '') + (label.endsWith('…') ? ' ' : '')
-}
-
-function StarterRow({ starter, onActivate }: { starter: Starter; onActivate: () => void }) {
+function StarterRow({ label, description, onActivate }: { label: string; description: string; onActivate: () => void }) {
   return (
     <button
       type="button"
@@ -74,26 +33,17 @@ function StarterRow({ starter, onActivate }: { starter: Starter; onActivate: () 
         className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-transparent group-hover:t-bg-accent-soft transition-colors"
       />
       <span className="text-[13px] t-text-secondary group-hover:t-text transition-colors leading-snug">
-        {starter.label}
+        {label}
       </span>
       <span className="text-[11px] t-text-muted leading-snug">
-        {starter.description}
+        {description}
       </span>
     </button>
   )
 }
 
 export function HeroIdle() {
-  const setDraftText = useChatStore((s) => s.setDraftText)
   const openImportWizard = useImportStore((s) => s.openWizard)
-
-  const handleStarter = (label: string) => {
-    const prefill = prefillFromLabel(label)
-    setDraftText(prefill)
-    // Defer focus one tick so React has committed the new draft text
-    // before we place the caret.
-    requestAnimationFrame(focusInput)
-  }
 
   return (
     <div className="w-full max-w-lg px-8">
@@ -102,21 +52,10 @@ export function HeroIdle() {
         Start
       </div>
 
-      {/* Task starter list */}
       <div className="flex flex-col">
-        {STARTERS.map((s) => (
-          <StarterRow key={s.label} starter={s} onActivate={() => handleStarter(s.label)} />
-        ))}
-        {/* RFC-006 PR-4 — fourth starter routes to the BibTeX import
-            wizard instead of prefilling the chat input. Matches the
-            same two-line row dialect; the only behavioral difference
-            is that activating it opens a modal rather than focusing
-            the textarea. */}
         <StarterRow
-          starter={{
-            label: 'Build a paper memory from existing files',
-            description: 'Import a .bib export from Zotero / EndNote / Mendeley to populate the library.',
-          }}
+          label="Build a paper memory from existing files"
+          description="Import a .bib export from Zotero / EndNote / Mendeley to populate the library."
           onActivate={openImportWizard}
         />
       </div>

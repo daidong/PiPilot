@@ -19,8 +19,8 @@
  *     Summary screen. Three follow-ups:
  *       1. "Run enrichment" — fires enrichAllPapers(importedPaperIds),
  *          then closes the wizard. Off when no papers were imported.
- *       2. "Open Papers tab" — switches centerView + refreshAll +
- *          closes.
+ *       2. "View library" — switches centerView('literature') +
+ *          refreshAll + closes.
  *       3. "Import another" — resets the store and returns to step
  *          'source'.
  *
@@ -207,7 +207,7 @@ export function ImportWizard() {
                       closeAndReset()
                     }
                   }}
-                  onOpenPapersTab={() => {
+                  onOpenLibrary={() => {
                     useUIStore.getState().setCenterView('literature')
                     useEntityStore.getState().refreshAll().catch(() => {})
                     closeAndReset()
@@ -231,7 +231,7 @@ function SourceStep({ onPick }: { onPick: () => Promise<void> }) {
         exported from Zotero, EndNote, Mendeley, or any reference manager.
       </p>
       <p className="text-[12px] t-text-muted leading-relaxed">
-        We&apos;ll add the entries to your Papers tab, skipping anything we already have.
+        We&apos;ll add the entries to your library, skipping anything we already have.
         Duplicates are detected by DOI, citation key, or title&nbsp;+&nbsp;year.
       </p>
 
@@ -317,14 +317,14 @@ function DoneStep({
   sourcePath,
   enriching,
   onRunEnrichment,
-  onOpenPapersTab,
+  onOpenLibrary,
   onImportAnother,
 }: {
   result: import('../../../preload/index').BibImportResult
   sourcePath?: string
   enriching: boolean
   onRunEnrichment: () => Promise<void>
-  onOpenPapersTab: () => void
+  onOpenLibrary: () => void
   onImportAnother: () => void
 }) {
   const [failuresOpen, setFailuresOpen] = useState(false)
@@ -400,10 +400,10 @@ function DoneStep({
         )}
         <button
           type="button"
-          onClick={onOpenPapersTab}
+          onClick={onOpenLibrary}
           className="px-3 py-1.5 rounded-lg border t-border t-bg-elevated t-text-secondary text-[12px] font-medium hover:t-text hover:t-bg-hover transition-colors"
         >
-          Open Papers tab
+          View library
         </button>
         <button
           type="button"

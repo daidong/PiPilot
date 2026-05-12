@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react'
 import {
-  Search,
+  Upload,
   Zap,
   GitBranch,
   RefreshCw,
@@ -9,6 +9,7 @@ import {
 import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
+import { useImportStore } from '../../stores/import-store'
 import { ConceptsList } from './ConceptsList'
 
 function QuickAction({
@@ -124,10 +125,10 @@ export function LiteratureSidebar() {
           Quick Actions
         </p>
         <QuickAction
-          icon={Search}
-          label="Deep Search"
-          description="Comprehensive multi-source literature search"
-          onClick={() => sendToChat('Please do a deep literature search on ')}
+          icon={Upload}
+          label="Import .bib"
+          description="Bulk-import papers from Zotero / EndNote / Mendeley"
+          onClick={() => useImportStore.getState().openWizard()}
           disabled={isStreaming}
         />
         <QuickAction
