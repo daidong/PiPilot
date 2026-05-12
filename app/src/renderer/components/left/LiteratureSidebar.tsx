@@ -64,9 +64,13 @@ interface PaperReportButtonShape {
 }
 
 function paperReportButtonShape(s: ReturnType<typeof useReportButtonState>): PaperReportButtonShape {
-  const triggerEnrichment = () => useReportStore.getState().triggerEnrichmentForAllPapers().catch(() => {})
-  const generate = () => useReportStore.getState().generateReport().catch(() => {})
-  const open = () => useReportStore.getState().openReport().catch(() => {})
+  // Surface promise rejections instead of swallowing them — silent catch
+  // here makes "click did nothing" bugs invisible. console.error gives
+  // us a single line in DevTools per failed action.
+  const generate = () => useReportStore.getState().generateReport()
+    .catch((err) => console.error('[paper-report] generateReport failed:', err))
+  const open = () => useReportStore.getState().openReport()
+    .catch((err) => console.error('[paper-report] openReport failed:', err))
   const retry = () => useReportStore.getState().retryFailed()
 
   switch (s.state) {
@@ -74,12 +78,6 @@ function paperReportButtonShape(s: ReturnType<typeof useReportButtonState>): Pap
       return {
         label: 'Paper Report',
         description: 'Import papers to unlock — synthesizes a citation-grounded summary of your library',
-      }
-    case 'pre-enrichment':
-      return {
-        label: 'Run Enrichment first',
-        description: 'Click to enrich paper metadata from CrossRef / Semantic Scholar',
-        onClick: triggerEnrichment,
       }
     case 'enriching': {
       const n = s.enrichmentProcessed ?? 0
@@ -168,7 +166,8 @@ function PaperReportAction() {
         onCancel={() => setRegenOpen(false)}
         onConfirm={() => {
           setRegenOpen(false)
-          useReportStore.getState().generateReport({ force: true }).catch(() => {})
+          useReportStore.getState().generateReport({ force: true })
+            .catch((err) => console.error('[paper-report] regenerate failed:', err))
         }}
       />
     </>

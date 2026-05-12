@@ -160,6 +160,14 @@ export const useReportStore = create<ReportStoreState>((set, get) => ({
 
   triggerEnrichmentForAllPapers: async () => {
     const papers = useEntityStore.getState().papers
+    const enrichStatus = useEnrichmentStore.getState().status
+    // Diagnostic — surfaces which guard, if any, swallowed the click.
+    // Cheap; left in place because it's the only signal we have when
+    // the button looks unresponsive.
+    console.log(
+      '[paper-report] triggerEnrichmentForAllPapers: papers=%d, enrichment.status=%s',
+      papers.length, enrichStatus,
+    )
     if (papers.length === 0) return
     const ids = papers.map((p) => p.id)
     await useEnrichmentStore.getState().enrichAll(ids)
