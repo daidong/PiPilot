@@ -516,6 +516,95 @@ test('tags are merged (union), not replaced', () => {
 
 // ─── No-op merge ─────────────────────────────────────────────────────────
 
+// ─── Provenance override (RFC-006 review comment #1) ────────────────────
+
+test('provenance override: importer can mark source=import / extractedFrom=file-import', () => {
+  const project = tmpProject()
+  try {
+    // Simulates a BibTeX importer call: externalSource is set, but the
+    // caller supplies a provenance override so the paper is correctly
+    // labelled as an import rather than an agent product.
+    const result = upsertPaperArtifact(
+      'Imported Paper',
+      {
+        authors: ['Smith'],
+        year: 2024,
+        doi: '10.1234/imp',
+        externalSource: 'bibtex-import',
+        provenance: { source: 'import', extractedFrom: 'file-import' }
+      },
+      ctx(project)
+    )
+    assert.equal(result.success, true)
+    assert.equal(result.paper!.provenance.source, 'import')
+    assert.equal(result.paper!.provenance.extractedFrom, 'file-import')
+    // sessionId is always taken from CLIContext, not from the override.
+    assert.equal(result.paper!.provenance.sessionId, 'test-session')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('no provenance override + externalSource → falls back to agent-default (literature-search behavior preserved)', () => {
+  const project = tmpProject()
+  try {
+    const result = upsertPaperArtifact(
+      'Agent-Searched Paper',
+      {
+        authors: ['Smith'],
+        year: 2024,
+        doi: '10.1234/ag',
+        externalSource: 'literature-search'
+        // no provenance override
+      },
+      ctx(project)
+    )
+    assert.equal(result.paper!.provenance.source, 'agent')
+    assert.equal(result.paper!.provenance.extractedFrom, 'agent-response')
+    assert.equal(result.paper!.provenance.agentId, 'literature-team')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('no provenance override + no externalSource → user-default', () => {
+  const project = tmpProject()
+  try {
+    const result = upsertPaperArtifact(
+      'Manual Paper',
+      { authors: ['Smith'], year: 2024, doi: '10.1234/m' },
+      ctx(project)
+    )
+    assert.equal(result.paper!.provenance.source, 'user')
+    assert.equal(result.paper!.provenance.extractedFrom, 'user-input')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('partial provenance override: agentId override accepted, other fields auto-derived', () => {
+  const project = tmpProject()
+  try {
+    const result = upsertPaperArtifact(
+      'Paper',
+      {
+        authors: ['Smith'],
+        year: 2024,
+        doi: '10.1234/x',
+        externalSource: 'literature-search',
+        provenance: { agentId: 'custom-agent' }
+        // source / extractedFrom omitted → fall back to auto
+      },
+      ctx(project)
+    )
+    assert.equal(result.paper!.provenance.source, 'agent')
+    assert.equal(result.paper!.provenance.agentId, 'custom-agent')
+    assert.equal(result.paper!.provenance.extractedFrom, 'agent-response')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
 test('bit-identical re-upsert is a no-op write (still reports wasDeduped=true)', () => {
   const project = tmpProject()
   try {
