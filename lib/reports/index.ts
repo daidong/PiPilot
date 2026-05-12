@@ -84,7 +84,7 @@ export async function generatePaperPackReport(
     })
 
     // ── Step 1: build input ────────────────────────────────────
-    onProgress?.({ step: 'building-input', percent: 5 })
+    onProgress?.({ step: 'building-input', percent: 3 })
     const input = buildReportInput(projectPath)
     if (input.papers.length === 0) {
       throw new Error('No paper artifacts in this project — nothing to synthesize.')
@@ -117,25 +117,57 @@ export async function generatePaperPackReport(
     }
 
     // ── Step 2: deterministic aggregate ────────────────────────
-    onProgress?.({ step: 'aggregating', percent: 15 })
+    onProgress?.({ step: 'aggregating', percent: 8 })
     const agg = aggregateReport(input)
 
     // ── Step 3: onboarding ranker ──────────────────────────────
-    onProgress?.({ step: 'ranking-onboarding', percent: 25 })
+    onProgress?.({ step: 'ranking-onboarding', percent: 12 })
     const ranking = rankOnboardingPath(input)
 
     // ── Step 4: LLM synthesis (the only expensive step) ────────
-    onProgress?.({ step: 'synthesizing-themes', percent: 35, detail: 'one LLM call, ~20-60s' })
-    const synthesis = skipSynthesis
-      ? { themes: [], talkingPoints: [] }
-      : await synthesizeThemes(input, callLlm)
+    //
+    // The LLM call has no internal progress signal — we get one
+    // promise that resolves when the whole completion is done. To
+    // keep the progress bar from looking frozen (which makes users
+    // think the app has hung), we run a slow-creep timer alongside.
+    //
+    // Creep policy:
+    //   - Start at 15% the moment the LLM call dispatches
+    //   - Tick once per second, adding 1% each tick
+    //   - Cap at 85% so we never imply "almost done" while the LLM is
+    //     still running — the real jump to 85+ only happens AFTER the
+    //     promise resolves
+    //   - At a steady tick this fills 15→85 over 70 seconds, which
+    //     comfortably covers the typical 20-60s LLM call. For really
+    //     long calls the bar just sits at 85; for fast calls (<30s)
+    //     it resolves well before reaching 85, jumping forward.
+    //
+    // This is faked progress in the strict sense, but it's faithful
+    // enough: the % only moves when wall-clock time passes, which IS
+    // the user-meaningful signal during an opaque LLM call.
+    onProgress?.({ step: 'synthesizing-themes', percent: 15, detail: 'one LLM call, ~20-60s' })
+    let creepPercent = 15
+    const creepInterval = setInterval(() => {
+      if (creepPercent < 85) {
+        creepPercent++
+        onProgress?.({ step: 'synthesizing-themes', percent: creepPercent, detail: 'one LLM call, ~20-60s' })
+      }
+    }, 1000)
+    let synthesis: typeof skipSynthesis extends true ? { themes: never[]; talkingPoints: never[] } : Awaited<ReturnType<typeof synthesizeThemes>>
+    try {
+      synthesis = skipSynthesis
+        ? ({ themes: [], talkingPoints: [] } as never)
+        : ((await synthesizeThemes(input, callLlm)) as never)
+    } finally {
+      clearInterval(creepInterval)
+    }
 
     // ── Step 5: render markdown ────────────────────────────────
-    onProgress?.({ step: 'rendering-markdown', percent: 85 })
+    onProgress?.({ step: 'rendering-markdown', percent: 90 })
     const markdown = renderMarkdown(input, agg, synthesis, ranking)
 
     // ── Step 6: render HTML ────────────────────────────────────
-    onProgress?.({ step: 'rendering-html', percent: 92 })
+    onProgress?.({ step: 'rendering-html', percent: 95 })
     const html = renderHtml(input, agg, synthesis, ranking)
 
     // ── Step 7: write files ────────────────────────────────────
