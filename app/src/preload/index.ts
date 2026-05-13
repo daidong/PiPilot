@@ -225,12 +225,20 @@ export interface ElectronAPI {
   // Entity creation notifications
   onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
 
-  // Compute (gated behind ENABLE_LOCAL_COMPUTE=1)
+  // Compute (gated behind ENABLE_COMPUTE=1)
   isComputeEnabled: () => boolean
   probeComputeEnvironment: () => Promise<any>
+  hydrateComputeRuns: () => Promise<{ runs: any[] }>
+  approveModalPlan: () => Promise<{ success: boolean }>
+  rejectModalPlan: (comments: string) => Promise<{ success: boolean; error?: string }>
   onComputeRunUpdate: (cb: (event: any) => void) => () => void
   onComputeRunComplete: (cb: (event: any) => void) => () => void
   onComputeEnvironment: (cb: (event: any) => void) => () => void
+  onModalPlanReady: (cb: (plan: any) => void) => () => void
+  onModalPlanApproved: (cb: (data: { approvedAt: string }) => void) => () => void
+  onModalPlanRejected: (cb: (data: { planId: string; rejectedAt?: string; rejectionComments?: string }) => void) => () => void
+  onModalAvailable: (cb: (data: { available: boolean; cliInstalled: boolean; hasCredentials: boolean }) => void) => () => void
+  onModalCostKilled: (cb: (data: { runId: string; estimatedCostUsd: number }) => void) => () => void
 
   // File tracking
   /**
@@ -491,9 +499,12 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
   },
 
-  isComputeEnabled: () => process.env.ENABLE_LOCAL_COMPUTE === '1',
+  isComputeEnabled: () => process.env.ENABLE_COMPUTE === '1',
 
   probeComputeEnvironment: () => ipcRenderer.invoke('compute:probe-environment'),
+  hydrateComputeRuns: () => ipcRenderer.invoke('compute:hydrate-runs'),
+  approveModalPlan: () => ipcRenderer.invoke('compute:modal-approve'),
+  rejectModalPlan: (comments) => ipcRenderer.invoke('compute:modal-reject', comments),
 
   onComputeRunUpdate: (cb) => {
     const handler = (_: any, event: any) => cb(event)
@@ -511,6 +522,36 @@ const api: ElectronAPI = {
     const handler = (_: any, event: any) => cb(event)
     ipcRenderer.on('compute:environment', handler)
     return () => ipcRenderer.removeListener('compute:environment', handler)
+  },
+
+  onModalPlanReady: (cb) => {
+    const handler = (_: any, plan: any) => cb(plan)
+    ipcRenderer.on('compute:modal-plan-ready', handler)
+    return () => ipcRenderer.removeListener('compute:modal-plan-ready', handler)
+  },
+
+  onModalPlanApproved: (cb) => {
+    const handler = (_: any, data: { approvedAt: string }) => cb(data)
+    ipcRenderer.on('compute:modal-plan-approved', handler)
+    return () => ipcRenderer.removeListener('compute:modal-plan-approved', handler)
+  },
+
+  onModalPlanRejected: (cb) => {
+    const handler = (_: any, data: { planId: string; rejectedAt?: string; rejectionComments?: string }) => cb(data)
+    ipcRenderer.on('compute:modal-plan-rejected', handler)
+    return () => ipcRenderer.removeListener('compute:modal-plan-rejected', handler)
+  },
+
+  onModalAvailable: (cb) => {
+    const handler = (_: any, data: { available: boolean; cliInstalled: boolean; hasCredentials: boolean }) => cb(data)
+    ipcRenderer.on('compute:modal-available', handler)
+    return () => ipcRenderer.removeListener('compute:modal-available', handler)
+  },
+
+  onModalCostKilled: (cb) => {
+    const handler = (_: any, data: { runId: string; estimatedCostUsd: number }) => cb(data)
+    ipcRenderer.on('compute:modal-cost-killed', handler)
+    return () => ipcRenderer.removeListener('compute:modal-cost-killed', handler)
   },
 
   onEntityCreated: (cb) => {

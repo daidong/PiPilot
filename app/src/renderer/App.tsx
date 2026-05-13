@@ -817,11 +817,6 @@ export default function App() {
       scheduleEntityRefresh()
     })
 
-    // Eagerly probe compute environment (only when compute feature is enabled)
-    if (api?.isComputeEnabled?.()) {
-      api.probeComputeEnvironment?.().catch(() => {})
-    }
-
     // Compute run events
     const unsubComputeUpdate = api.onComputeRunUpdate((event: any) => {
       useComputeStore.getState().updateRun(event.runId, event)
@@ -832,6 +827,50 @@ export default function App() {
     const unsubComputeEnv = api.onComputeEnvironment((event: any) => {
       useComputeStore.getState().setEnvironment(event)
     })
+    const unsubModalPlanReady = api.onModalPlanReady?.((plan: any) => {
+      useComputeStore.getState().setModalPendingPlan({
+        planId: plan.planId,
+        taskDescription: plan.taskDescription,
+        command: plan.command,
+        scriptPath: plan.scriptPath,
+        image: plan.image,
+        costEstimate: plan.costEstimate,
+        taskProfile: plan.taskProfile,
+        createdAt: plan.createdAt,
+        approved: plan.approved,
+        rejectedAt: plan.rejectedAt,
+        rejectionComments: plan.rejectionComments,
+      })
+    }) ?? (() => {})
+    const unsubModalPlanApproved = api.onModalPlanApproved?.(() => {
+      useComputeStore.getState().clearModalPendingPlan()
+    }) ?? (() => {})
+    const unsubModalPlanRejected = api.onModalPlanRejected?.(() => {
+      useComputeStore.getState().clearModalPendingPlan()
+    }) ?? (() => {})
+    const unsubModalAvailable = api.onModalAvailable?.((event: any) => {
+      useComputeStore.getState().setModalAvailable(event)
+    }) ?? (() => {})
+    const unsubModalCostKilled = api.onModalCostKilled?.((event: any) => {
+      useComputeStore.getState().updateRun(event.runId, {
+        status: 'cost_killed',
+        target: 'modal',
+        estimatedCostUsd: event.estimatedCostUsd,
+      })
+    }) ?? (() => {})
+
+    // Eagerly hydrate compute state after listeners are registered so the
+    // Compute tab shows persisted runs and any probe-triggered events land.
+    if (api?.isComputeEnabled?.()) {
+      api.hydrateComputeRuns?.()
+        .then((result: any) => {
+          for (const run of result?.runs ?? []) {
+            if (run?.runId) useComputeStore.getState().updateRun(run.runId, run)
+          }
+        })
+        .catch(() => {})
+      api.probeComputeEnvironment?.().catch(() => {})
+    }
 
     return () => {
       if (entityRefreshTimer) clearTimeout(entityRefreshTimer)
@@ -849,6 +888,11 @@ export default function App() {
       unsubComputeUpdate()
       unsubComputeComplete()
       unsubComputeEnv()
+      unsubModalPlanReady()
+      unsubModalPlanApproved()
+      unsubModalPlanRejected()
+      unsubModalAvailable()
+      unsubModalCostKilled()
     }
   }, [hasProject])
 

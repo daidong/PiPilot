@@ -16,6 +16,9 @@ import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
 import { createGenerateDiagramTool } from './generate-diagram.js'
 import { createLocalComputeTools } from '../local-compute/tools.js'
+import { createComputePlanTool } from '../compute/plan-tool.js'
+import { createModalComputeTools } from '../modal-compute/tools.js'
+import { PendingPlanStore } from '../modal-compute/pending-plan-store.js'
 import { createWikiLookupTool } from '../wiki/tool.js'
 import { createWikiTools } from '../wiki/wiki-tools.js'
 
@@ -60,12 +63,20 @@ export function createResearchTools(ctx: ResearchToolContext): {
   // Legacy wiki_lookup compatibility shim (RFC-003). Scheduled for removal one release after RFC-005 lands.
   tools.push(createWikiLookupTool())
 
-  // Local compute tools (long-running sandboxed execution)
-  // Gated behind ENABLE_LOCAL_COMPUTE env var for gradual rollout
-  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-    const compute = createLocalComputeTools(ctx)
-    tools.push(...compute.tools)
-    destroyers.push(compute.destroy)
+  // Compute tools (long-running sandboxed execution)
+  // Gated behind ENABLE_COMPUTE env var for gradual rollout.
+  if (process.env.ENABLE_COMPUTE === '1') {
+    const pendingPlanStore = new PendingPlanStore(ctx.projectPath)
+
+    const local = createLocalComputeTools(ctx)
+    tools.push(...local.tools)
+    destroyers.push(local.destroy)
+
+    const modal = createModalComputeTools(ctx)
+    tools.push(...modal.tools)
+    destroyers.push(modal.destroy)
+
+    tools.push(createComputePlanTool(local.runner, pendingPlanStore, ctx))
   }
 
   return {

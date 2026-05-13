@@ -63,6 +63,12 @@ export interface DiagramSettings {
   reviewProvider: DiagramReviewProvider
 }
 
+// ── Compute settings ───────────────────────────────────────────────────────
+
+export interface ModalComputeSettings {
+  costThresholdUsd: number
+}
+
 // ── Combined ────────────────────────────────────────────────────────────────
 
 export interface AppSettings {
@@ -70,6 +76,7 @@ export interface AppSettings {
   dataAnalysis: DataAnalysisSettings
   wikiAgent: WikiAgentSettings
   diagram: DiagramSettings
+  modalCompute: ModalComputeSettings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -87,6 +94,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   diagram: {
     reviewProvider: 'auto',
+  },
+  modalCompute: {
+    costThresholdUsd: 5.00,
   },
 }
 
@@ -111,6 +121,7 @@ export interface ResolvedSettings {
   dataAnalysis: { timeoutMs: number }
   autoSaveThreshold: number
   diagram: { reviewProvider: DiagramReviewProvider }
+  modalCompute: { costThresholdUsd: number }
 }
 
 // ── Resolver functions ──────────────────────────────────────────────────────
@@ -156,5 +167,6 @@ export function resolveSettings(settings: AppSettings): ResolvedSettings {
     dataAnalysis: { timeoutMs: resolveDataAnalysisTimeout(settings.dataAnalysis.executionTimeLimit) },
     autoSaveThreshold: resolveAutoSaveThreshold(settings.research.autoSaveSensitivity),
     diagram: { reviewProvider: settings.diagram?.reviewProvider ?? 'auto' },
+    modalCompute: { costThresholdUsd: settings.modalCompute?.costThresholdUsd ?? 5.00 },
   }
 }

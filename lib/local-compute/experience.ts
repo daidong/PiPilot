@@ -20,9 +20,9 @@ export class ExperienceStore {
   private readonly filePath: string
   private records: ExperienceRecord[] | null = null
 
-  constructor(projectPath: string) {
+  constructor(projectPath: string, fileName = EXPERIENCE_FILE) {
     const dir = path.join(projectPath, '.research-pilot', 'compute-runs')
-    this.filePath = path.join(dir, EXPERIENCE_FILE)
+    this.filePath = path.join(dir, fileName)
   }
 
   private load(): ExperienceRecord[] {

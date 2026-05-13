@@ -1,28 +1,20 @@
 /**
- * Local Compute Tools — 5 AgentTools.
+ * Local Compute Tools — 4 AgentTools.
  *
  * v1.0: local_compute_execute, wait, status, stop
- * v1.2: local_compute_plan (LLM-enhanced profiling + risk assessment)
  */
 
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { execSync } from 'node:child_process'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError } from '../tools/tool-utils.js'
 import type { ResearchToolContext } from '../tools/types.js'
 import { ComputeRunner, type SubmitConfig } from './runner.js'
-import { profileTask } from './task-profiler.js'
-import { probeStaticProfile } from './environment-model.js'
-import { assessRisk } from './strategy.js'
-import { inferTaskKind } from './experience.js'
 
 /**
  * Create all local compute tools. Returns tools + a destroy function for cleanup.
  */
 export function createLocalComputeTools(ctx: ResearchToolContext): {
+  runner: ComputeRunner
   tools: AgentTool[]
   destroy: () => Promise<void>
 } {
@@ -32,7 +24,6 @@ export function createLocalComputeTools(ctx: ResearchToolContext): {
   })
 
   const tools: AgentTool[] = [
-    createPlanTool(runner, ctx),
     createExecuteTool(runner, ctx),
     createWaitTool(runner),
     createStatusTool(runner),
@@ -40,115 +31,9 @@ export function createLocalComputeTools(ctx: ResearchToolContext): {
   ]
 
   return {
+    runner,
     tools,
     destroy: () => runner.destroy(),
-  }
-}
-
-// ---------------------------------------------------------------------------
-// local_compute_plan (v1.2 — LLM-enhanced, optional)
-// ---------------------------------------------------------------------------
-
-function createPlanTool(runner: ComputeRunner, ctx: ResearchToolContext): AgentTool {
-  return {
-    name: 'local_compute_plan',
-    label: 'Local Compute: Plan',
-    description:
-      'Analyze a script before execution: profile the task, assess risks, and get recommendations.\n' +
-      'Optional — you can skip this and call local_compute_execute directly for simple tasks.\n' +
-      'Use this for complex or risky tasks (large datasets, GPU training, unfamiliar code).',
-    parameters: Type.Object({
-      command: Type.String({ description: 'Shell command to execute' }),
-      script_path: Type.Optional(Type.String({ description: 'Relative path to the main script (for deeper analysis)' })),
-      sandbox: Type.Optional(Type.String({ description: '"docker" | "process" | "auto"' })),
-      timeout_minutes: Type.Optional(Type.Number({ description: 'Suggested timeout' })),
-      smoke_command: Type.Optional(Type.String({ description: 'Quick validation command (e.g., "python3 script.py --smoke")' })),
-    }),
-    execute: async (_toolCallId, rawParams) => {
-      const params = rawParams as Record<string, unknown>
-      const command = typeof params.command === 'string' ? params.command.trim() : ''
-
-      if (!command) {
-        return toAgentResult('local_compute_plan', toolError('MISSING_PARAMETER', 'command is required.'))
-      }
-
-      // Read script content if path provided
-      let scriptContent: string | undefined
-      if (typeof params.script_path === 'string') {
-        const scriptPath = path.isAbsolute(params.script_path)
-          ? params.script_path
-          : path.resolve(ctx.workspacePath, params.script_path)
-        try {
-          scriptContent = fs.readFileSync(scriptPath, 'utf-8')
-        } catch { /* script not readable, proceed without */ }
-      }
-
-      // Task profiling (LLM if available, else defaults)
-      const taskProfile = await profileTask(command, scriptContent, ctx.callLlm)
-
-      // Environment probe
-      let env
-      try {
-        env = await probeStaticProfile()
-      } catch {
-        return toAgentResult('local_compute_plan', toolError('EXECUTION_FAILED', 'Failed to probe system environment.'))
-      }
-
-      // Get pre-run snapshot
-      let freeDiskMb = 10_000
-      try {
-        const dfOut = execSync('df -m .', { cwd: ctx.workspacePath, encoding: 'utf-8', timeout: 3000 })
-        const parts = dfOut.trim().split('\n')[1]?.split(/\s+/)
-        const avail = parseInt(parts?.[3] ?? '', 10)
-        if (!isNaN(avail)) freeDiskMb = avail
-      } catch { /* use default */ }
-      const snapshot = {
-        freeMemoryMb: Math.round(os.freemem() / (1024 * 1024)),
-        cpuLoadPercent: Math.round((os.loadavg()[0] / os.cpus().length) * 100),
-        freeDiskMb,
-        activeRuns: runner.getStore().getActiveRuns().map(r => ({ runId: r.runId, weight: r.weight })),
-      }
-
-      // Experience lookup
-      const taskKind = inferTaskKind(command, scriptContent)
-      const experience = runner.getExperience().summarize(taskKind)
-
-      // Risk assessment (LLM if available, else defaults)
-      const riskAdvice = await assessRisk({
-        taskProfile,
-        env,
-        snapshot,
-        experience,
-        command,
-        callLlm: ctx.callLlm,
-      })
-
-      return toAgentResult('local_compute_plan', {
-        success: true,
-        data: {
-          task_profile: taskProfile,
-          risk_assessment: {
-            feasible: riskAdvice.feasible,
-            risks: riskAdvice.risks,
-            warnings: riskAdvice.warnings,
-          },
-          recommendations: {
-            sandbox: riskAdvice.recommendedSandbox,
-            timeout_minutes: riskAdvice.recommendedTimeoutMinutes,
-            stall_threshold_minutes: riskAdvice.recommendedStallThresholdMinutes,
-            agent_guidance: riskAdvice.agentGuidance,
-          },
-          experience_summary: experience ? {
-            task_kind: experience.taskKind,
-            total_runs: experience.totalRuns,
-            successes: experience.successes,
-            failures: experience.failures,
-            avg_duration_seconds: experience.avgDurationSeconds,
-            common_failures: experience.commonFailures,
-          } : null,
-        },
-      })
-    },
   }
 }
 
@@ -200,7 +85,6 @@ function createExecuteTool(runner: ComputeRunner, ctx: ResearchToolContext): Age
 
       try {
         const run = await runner.submit(config)
-        ctx.onToolCall?.('local_compute_execute', { command, runId: run.runId })
 
         return toAgentResult('local_compute_execute', {
           success: true,

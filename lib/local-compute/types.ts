@@ -170,7 +170,7 @@ export interface SchedulerDecision {
 export interface ExperienceRecord {
   runId: string
   taskKind: string
-  sandbox: 'docker' | 'process'
+  sandbox: 'docker' | 'process' | 'modal'
   outcome: 'success' | 'failed' | 'timeout' | 'cancelled'
   failureCode?: FailureCode
   durationSeconds: number

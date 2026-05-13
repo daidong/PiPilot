@@ -25,7 +25,6 @@ export interface TaskProfile {
   networkRequired: boolean
   smokeSupported: boolean
   expectedDurationClass: 'seconds' | 'minutes' | 'hours'
-  confidence: 'high' | 'medium' | 'low'
   reasoning: string
 }
 
@@ -47,7 +46,6 @@ const PROFILER_SYSTEM_PROMPT = `You are a compute task profiler. Analyze the giv
   "networkRequired": boolean,
   "smokeSupported": boolean,  // Has --smoke or similar quick-validation flag
   "expectedDurationClass": "seconds" | "minutes" | "hours",
-  "confidence": "high" | "medium" | "low",
   "reasoning": "Brief explanation of your analysis"
 }
 
@@ -59,7 +57,6 @@ Guidelines:
 - chunkable: true if data can be split (pandas, numpy batch processing)
 - resumable: true if checkpointing detected (torch.save, callbacks)
 - smokeSupported: true ONLY if --smoke, --dry-run, or --validate flag is in argparse/click
-- Be conservative with confidence: "high" only if the pattern is unmistakable
 
 Output ONLY the JSON object, no explanation outside it.`
 
@@ -116,7 +113,6 @@ function defaultProfile(command: string): TaskProfile {
     networkRequired: false,
     smokeSupported: false,
     expectedDurationClass: isViz ? 'seconds' : isTrain ? 'hours' : 'minutes',
-    confidence: 'low',
     reasoning: 'Default profile (LLM unavailable or no script content).',
   }
 }
@@ -135,7 +131,6 @@ function mergeWithDefaults(partial: Partial<TaskProfile>, command: string): Task
     networkRequired: partial.networkRequired ?? defaults.networkRequired,
     smokeSupported: partial.smokeSupported ?? defaults.smokeSupported,
     expectedDurationClass: partial.expectedDurationClass ?? defaults.expectedDurationClass,
-    confidence: partial.confidence ?? defaults.confidence,
     reasoning: partial.reasoning ?? defaults.reasoning,
   }
 }
