@@ -4,6 +4,7 @@
  * Simplified from myRAM's ToolContext — only what Research Copilot actually needs.
  */
 
+import type { Agent, AgentTool } from '@mariozechner/pi-agent-core'
 import type { ResolvedSettings } from '../../shared-ui/settings-types'
 
 /**
@@ -84,6 +85,18 @@ export interface ResearchToolContext {
    * non-turn paths (background work, CLI, bootstrap).
    */
   getTurnId?: () => string | undefined
+  /**
+   * Create a lightweight sub-agent that inherits the coordinator's model and
+   * API key config. Used by the Modal plan agent to run a tool-calling agent
+   * inside a sandboxed directory.
+   */
+  createSubAgent?: (opts: { systemPrompt: string; tools: AgentTool[] }) => Agent
+  /** Modal CLI credentials sourced from Settings > API Keys. */
+  modalCredentials?: { tokenId?: string; tokenSecret?: string }
+  /** Callback fired by Modal runner when elapsed estimated cost crosses threshold. */
+  onModalCostKilled?: (runId: string, estimatedCostUsd: number) => void
+  /** Callback fired after Modal runner refreshes persisted run status during polling. */
+  onModalRunUpdate?: (runId: string, status: import('../modal-compute/types.js').ModalRunStatusResult) => void
   /**
    * Rasterize an SVG document to PNG bytes, when a renderer is available.
    * Used by the diagram tool's SVG-fallback review path so a vision model

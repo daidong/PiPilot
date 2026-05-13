@@ -29,23 +29,62 @@ export interface ComputeFailure {
   suggestions: string[]
 }
 
+export interface ModalImageView {
+  source: 'script' | 'modal_default' | 'unknown'
+  gpuType: string | null
+  runtimeGpuType: string | null
+  buildGpuType: string | null
+  baseImage: string
+  pythonVersion: string | null
+  pythonPackages: string[]
+  pythonPackageInstallers: Array<'uv_pip_install' | 'pip_install' | 'micromamba_install'>
+  systemPackages: string[]
+  envVars: string[]
+  localDirs: string[]
+  localFiles: string[]
+  localPythonSources: string[]
+  buildCommands: string[]
+  buildFunctions: string[]
+  forceBuild: boolean
+  warnings: string[]
+  reasoning: string
+}
+
+export interface ModalCostEstimateView {
+  estimatedTotalUsd: number
+  gpuRateUsdPerHour: number
+  expectedDurationMinutes: number
+  notes: string
+}
+
 export interface ComputeRunView {
   runId: string
+  target?: 'local' | 'modal'
+  planId?: string
+  taskDescription?: string
   status: string
   currentPhase: string
   command: string
+  scriptPath?: string
   sandbox: string
   weight: string
   startedAt?: string
+  lastOutputAt?: string
   elapsedSeconds: number
   outputBytes: number
   outputLines: number
+  timeoutMs?: number
+  stallThresholdMs?: number
   stalled: boolean
   progress?: ComputeProgress
   outputTail: string
   failure?: ComputeFailure
   exitCode?: number
   parentRunId?: string
+  estimatedCostUsd?: number
+  costThresholdUsd?: number
+  costEstimate?: ModalCostEstimateView
+  image?: ModalImageView
 }
 
 export interface EnvironmentSummary {
@@ -60,14 +99,42 @@ export interface EnvironmentSummary {
   sandbox: string
 }
 
+export interface ModalAvailability {
+  available: boolean
+  cliInstalled: boolean
+  hasCredentials: boolean
+}
+
+export interface ModalPlanView {
+  planId: string
+  taskDescription?: string
+  command: string
+  scriptPath: string
+  image: ModalImageView
+  costEstimate: ModalCostEstimateView
+  taskProfile?: {
+    expectedDurationClass?: 'seconds' | 'minutes' | 'hours'
+    durationReasoning?: string
+  }
+  createdAt: string
+  approved: boolean
+  rejectedAt?: string
+  rejectionComments?: string
+}
+
 interface ComputeState {
   runs: Map<string, ComputeRunView>
   environment: EnvironmentSummary | null
+  modalPendingPlan: ModalPlanView | null
+  modalAvailable: ModalAvailability | null
 
   // Actions
   updateRun: (runId: string, data: Partial<ComputeRunView>) => void
   removeRun: (runId: string) => void
   setEnvironment: (env: EnvironmentSummary) => void
+  setModalPendingPlan: (plan: ModalPlanView | null) => void
+  clearModalPendingPlan: () => void
+  setModalAvailable: (available: ModalAvailability) => void
   reset: () => void
 }
 
@@ -78,6 +145,8 @@ interface ComputeState {
 export const useComputeStore = create<ComputeState>((set) => ({
   runs: new Map(),
   environment: null,
+  modalPendingPlan: null,
+  modalAvailable: null,
 
   updateRun: (runId, data) =>
     set((state) => {
@@ -112,8 +181,11 @@ export const useComputeStore = create<ComputeState>((set) => ({
     }),
 
   setEnvironment: (env) => set({ environment: env }),
+  setModalPendingPlan: (plan) => set({ modalPendingPlan: plan }),
+  clearModalPendingPlan: () => set({ modalPendingPlan: null }),
+  setModalAvailable: (available) => set({ modalAvailable: available }),
 
-  reset: () => set({ runs: new Map(), environment: null }),
+  reset: () => set({ runs: new Map(), environment: null, modalPendingPlan: null, modalAvailable: null }),
 }))
 
 // ---------------------------------------------------------------------------
@@ -147,4 +219,8 @@ export function useActiveRunCount(): number {
     if (r.status === 'running' || r.status === 'stalled') count++
   }
   return count
+}
+
+export function usePendingModalPlan(): ModalPlanView | null {
+  return useComputeStore((s) => s.modalPendingPlan)
 }

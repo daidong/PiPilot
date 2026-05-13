@@ -221,7 +221,6 @@ interface TaskProfile {
   networkRequired: boolean
   smokeSupported: boolean           // Has --smoke flag
   expectedDurationClass: 'seconds' | 'minutes' | 'hours'
-  confidence: 'high' | 'medium' | 'low'
   reasoning: string
 }
 ```
@@ -570,19 +569,45 @@ When writing ML training code for local_compute_execute:
 
 ## 14. AgentTools
 
-### 14.1 local_compute_plan (v1.2, optional)
+### 14.1 compute_plan (v1.3, optional)
 
-Analyze a script before execution. Agent can skip this for simple tasks.
+Analyze a script before execution. Use `env: "local"` for local compute or `env: "modal"` for Modal remote compute. Agent can skip this for simple local tasks.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | command | string | Yes | Shell command |
+| env | string | No | "local" / "modal" (default: local) |
 | script_path | string | No | Relative path for deeper analysis |
-| sandbox | string | No | "docker" / "process" / "auto" |
+| sandbox | string | No | "docker" / "process" / "auto" / "modal" |
 | timeout_minutes | number | No | Suggested timeout |
 | smoke_command | string | No | Quick validation command |
 
-Returns: task_profile, risk_assessment, recommendations, experience_summary.
+Local returns: task_profile, risk_assessment, recommendations, experience_summary.
+
+Modal returns: taskProfile, image, costEstimate, plan metadata, and approval flags. The `image` field is an extraction of the Modal image/runtime configuration declared by the submitted script, not a recommendation. Modal execution remains `modal run <scriptPath>`, so the script controls whether it uses a custom image or Modal's default image.
+
+```typescript
+interface ModalImageInspection {
+  source: 'script' | 'modal_default' | 'unknown'
+  baseImage: string
+  pythonVersion: string | null
+  pythonPackages: string[]
+  pythonPackageInstallers: Array<'uv_pip_install' | 'pip_install' | 'micromamba_install'>
+  systemPackages: string[]
+  envVars: string[]
+  localDirs: string[]
+  localFiles: string[]
+  localPythonSources: string[]
+  buildCommands: string[]
+  buildFunctions: string[]
+  buildGpuType: string | null
+  runtimeGpuType: string | null
+  gpuType: string | null
+  forceBuild: boolean
+  warnings: string[]
+  reasoning: string
+}
+```
 
 ### 14.2 local_compute_execute
 

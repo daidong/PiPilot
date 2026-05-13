@@ -5,8 +5,8 @@
  */
 
 import React, { useState } from 'react'
-import { Monitor, ChevronDown, ChevronRight, Info } from 'lucide-react'
-import { useComputeStore, useActiveRunCount } from '../../stores/compute-store'
+import { Monitor, ChevronDown, ChevronRight, Info, Cloud } from 'lucide-react'
+import { useComputeStore } from '../../stores/compute-store'
 
 function ResourceBar({ label, percent }: { label: string; percent: number }) {
   const clamped = Math.min(100, Math.max(0, percent))
@@ -65,9 +65,57 @@ function SandboxExplanation({ environment }: { environment: NonNullable<ReturnTy
   )
 }
 
+function ModalTargetCard() {
+  const modalAvailable = useComputeStore((s) => s.modalAvailable)
+  const pendingPlan = useComputeStore((s) => s.modalPendingPlan)
+  const modalRunning = useComputeStore((s) => Array.from(s.runs.values()).filter(r =>
+    r.target === 'modal' && (r.status === 'running' || r.status === 'stalled')
+  ).length)
+
+  let dot = 'bg-[var(--color-text-muted)]'
+  let status = 'Checking...'
+  let opacity = 0.5
+  if (modalAvailable) {
+    if (!modalAvailable.cliInstalled) {
+      dot = 'bg-red-500'
+      status = 'Install modal-client (pip install modal)'
+      opacity = 1
+    } else if (!modalAvailable.hasCredentials) {
+      dot = 'bg-amber-500'
+      status = 'Configure API keys in Settings'
+      opacity = 1
+    } else {
+      dot = modalRunning > 0 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-text-muted)]'
+      status = modalRunning > 0 ? `${modalRunning} running` : 'Ready'
+      opacity = modalRunning > 0 ? 1 : 0.5
+    }
+  }
+
+  return (
+    <div className="mt-1.5 px-3 py-2.5 rounded-lg t-bg-surface border t-border-subtle">
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} style={{ opacity }} />
+        <Cloud size={13} className="t-text-muted" />
+        <span className="text-xs t-text font-medium">Modal</span>
+        {pendingPlan && (
+          <span className="ml-auto px-1.5 py-0.5 rounded text-[9px] bg-[var(--color-accent-soft)]/15 t-text-accent animate-pulse">
+            approval
+          </span>
+        )}
+      </div>
+      <div className="text-[10px] t-text-muted leading-relaxed">
+        <div>NVIDIA cloud GPUs</div>
+        <div>{status}</div>
+      </div>
+    </div>
+  )
+}
+
 export function ComputeSidebar() {
   const environment = useComputeStore((s) => s.environment)
-  const activeCount = useActiveRunCount()
+  const localRunning = useComputeStore((s) => Array.from(s.runs.values()).filter(r =>
+    (r.target === 'local' || !r.target) && (r.status === 'running' || r.status === 'stalled')
+  ).length)
 
   return (
     <div className="h-full flex flex-col min-h-0">
@@ -82,10 +130,10 @@ export function ComputeSidebar() {
             {/* Header */}
             <div className="flex items-center gap-2 mb-2">
               <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                activeCount > 0
+                localRunning > 0
                   ? 'bg-[var(--color-accent)]'
                   : 'bg-[var(--color-text-muted)]'
-              }`} style={{ opacity: activeCount > 0 ? 1 : 0.5 }} />
+              }`} style={{ opacity: localRunning > 0 ? 1 : 0.5 }} />
               <span className="text-xs t-text font-medium">Local Machine</span>
             </div>
 
@@ -120,8 +168,8 @@ export function ComputeSidebar() {
 
             {/* Status */}
             <div className="mt-2 pt-2 border-t t-border-subtle text-[10px] t-text-muted">
-              {activeCount > 0 ? (
-                <span>{activeCount} running</span>
+              {localRunning > 0 ? (
+                <span>{localRunning} running</span>
               ) : (
                 <span>Ready</span>
               )}
@@ -136,10 +184,7 @@ export function ComputeSidebar() {
           </div>
         )}
 
-        {/* Future target placeholder */}
-        <div className="mt-1.5 px-3 py-2 rounded-lg border border-dashed t-border-subtle cursor-default">
-          <span className="text-[10px] t-text-muted opacity-60">+ Add remote target</span>
-        </div>
+        <ModalTargetCard />
       </div>
 
       <div className="mx-3 border-t t-border" />

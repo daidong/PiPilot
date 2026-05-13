@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon, Activity } from 'lucide-react'
+import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon, Activity, Cpu } from 'lucide-react'
 import { ApiKeysSettings } from './ApiKeysSettings'
 import { ResearchSettings } from './ResearchSettings'
 import { DataAnalysisSettings } from './DataAnalysisSettings'
 import { WikiAgentSettings } from './WikiAgentSettings'
 import { DiagramSettings } from './DiagramSettings'
 import { TelemetrySettings } from './TelemetrySettings'
+import { ComputeSettings } from './ComputeSettings'
 import type { AppSettings } from '../../../../../shared-ui/settings-types'
 import { DEFAULT_SETTINGS } from '../../../../../shared-ui/settings-types'
 
 const api = (window as any).api
 
-type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram' | 'telemetry'
+type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram' | 'telemetry' | 'compute'
 
-const TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
+const BASE_TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
   { id: 'api-keys', label: 'API Keys', icon: Key },
   { id: 'research', label: 'Research', icon: BookOpen },
   { id: 'data-analysis', label: 'Data Analysis', icon: BarChart2 },
@@ -147,6 +148,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
       if (patch.dataAnalysis) next.dataAnalysis = { ...prev.dataAnalysis, ...patch.dataAnalysis }
       if (patch.wikiAgent) next.wikiAgent = { ...prev.wikiAgent, ...patch.wikiAgent }
       if (patch.diagram) next.diagram = { ...prev.diagram, ...patch.diagram }
+      if (patch.modalCompute) next.modalCompute = { ...prev.modalCompute, ...patch.modalCompute }
       return next
     })
     setDirty(true)
@@ -164,7 +166,10 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
 
   if (!open) return null
 
-  const activeLabel = TABS.find(t => t.id === activeTab)?.label ?? 'Settings'
+  const tabs = api?.isComputeEnabled?.()
+    ? [...BASE_TABS, { id: 'compute' as SettingsTab, label: 'Compute', icon: Cpu }]
+    : BASE_TABS
+  const activeLabel = tabs.find(t => t.id === activeTab)?.label ?? 'Settings'
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
@@ -192,8 +197,8 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
           >
             Settings
           </h1>
-          <div className="space-y-1">
-            {TABS.map(tab => {
+          <div className="space-y-0.5">
+            {tabs.map(tab => {
               const Icon = tab.icon
               const active = activeTab === tab.id
               return (
@@ -275,6 +280,12 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
             )}
             {activeTab === 'telemetry' && (
               <TelemetrySettings />
+            )}
+            {activeTab === 'compute' && loaded && (
+              <ComputeSettings
+                modalCompute={settings.modalCompute ?? DEFAULT_SETTINGS.modalCompute}
+                onChange={v => updateSettings({ modalCompute: v })}
+              />
             )}
           </div>
 

@@ -28,17 +28,22 @@ interface WikiAgentSettings {
 interface DiagramSettings {
   reviewProvider: 'auto' | 'openai' | 'anthropic'
 }
+interface ModalComputeSettings {
+  costThresholdUsd: number
+}
 export interface AppSettings {
   research: ResearchSettings
   dataAnalysis: DataAnalysisSettings
   wikiAgent: WikiAgentSettings
   diagram: DiagramSettings
+  modalCompute: ModalComputeSettings
 }
 const DEFAULT_SETTINGS: AppSettings = {
   research: { researchIntensity: 'medium', webSearchDepth: 'standard', autoSaveSensitivity: 'balanced' },
   dataAnalysis: { executionTimeLimit: 'standard' },
   wikiAgent: { model: 'none', speed: 'medium' },
   diagram: { reviewProvider: 'auto' },
+  modalCompute: { costThresholdUsd: 5.00 },
 }
 
 // Mirrors lib/models.ts:inferProviderFromModelId — kept inline because
@@ -90,7 +95,9 @@ const API_KEY_NAMES = [
   'OPENROUTER_API_KEY',
   'PAPERCLIP_API_KEY',
   'DEEPSEEK_API_KEY',
-  'SEMANTIC_SCHOLAR_API_KEY'
+  'SEMANTIC_SCHOLAR_API_KEY',
+  'MODAL_TOKEN_ID',
+  'MODAL_TOKEN_SECRET'
 ] as const
 
 interface AppConfig {
@@ -182,6 +189,7 @@ export function loadSettingsFromConfig(): AppSettings {
     dataAnalysis: { ...DEFAULT_SETTINGS.dataAnalysis, ...config.settings.dataAnalysis },
     wikiAgent: { ...DEFAULT_SETTINGS.wikiAgent, ...config.settings.wikiAgent },
     diagram: { ...DEFAULT_SETTINGS.diagram, ...config.settings.diagram },
+    modalCompute: { ...DEFAULT_SETTINGS.modalCompute, ...config.settings.modalCompute },
   }
   // Migrate retired wiki-agent model IDs to current flagship (mirrors the
   // main selectedModel migration in app/src/renderer/stores/ui-store.ts).

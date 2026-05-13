@@ -5,6 +5,7 @@ import { app, ipcMain, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'el
 import electronUpdater from 'electron-updater'
 const { autoUpdater } = electronUpdater
 import { randomUUID } from 'crypto'
+import { execSync } from 'child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, watch, type FSWatcher } from 'fs'
 import { stat as statAsync, readdir as readdirAsync } from 'fs/promises'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
@@ -43,6 +44,9 @@ import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 import { inferProviderFromModelId } from '../../../lib/models'
 import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
+import { PendingPlanStore } from '../../../lib/modal-compute/pending-plan-store'
+import { formatStatusResult as formatModalStatusResult } from '../../../lib/modal-compute/tools'
+import { formatLocalRunEvent, formatModalRunEvent, hydrateComputeRunEvents } from './compute-run-events'
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
@@ -233,6 +237,32 @@ function getWindowContext(event: IpcMainInvokeEvent): { win: BrowserWindow; stat
     throw new Error('Unable to resolve BrowserWindow from IPC sender.')
   }
   return { win, state: getOrCreateWindowState(win) }
+}
+
+function sendModalAvailability(win: BrowserWindow): void {
+  const hasCredentials = !!((process.env.MODAL_TOKEN_ID || '').trim() && (process.env.MODAL_TOKEN_SECRET || '').trim())
+  try {
+    execSync('modal --version', { timeout: 3000, stdio: 'pipe' })
+    safeSend(win, 'compute:modal-available', { available: hasCredentials, cliInstalled: true, hasCredentials })
+  } catch {
+    safeSend(win, 'compute:modal-available', { available: false, cliInstalled: false, hasCredentials })
+  }
+}
+
+function sendPendingModalPlan(win: BrowserWindow, projectPath: string): void {
+  if (!projectPath) return
+  const plan = new PendingPlanStore(projectPath).read()
+  if (plan && !plan.approved && !plan.rejectedAt) {
+    safeSend(win, 'compute:modal-plan-ready', plan)
+  }
+}
+
+function unwrapToolResult(result: unknown): any {
+  if (result && typeof result === 'object' && 'details' in result) {
+    const details = (result as any).details
+    if (details && typeof details === 'object') return details
+  }
+  return result
 }
 
 export function registerWindow(win: BrowserWindow): void {
@@ -527,6 +557,23 @@ async function ensureCoordinator(
       // presentation-layer settings) take effect without restart.
       getResolvedSettings: () => resolveSettings(loadSettingsFromConfig()),
       getDiagramAuth,
+      modalCredentials: {
+        tokenId: (process.env.MODAL_TOKEN_ID || '').trim(),
+        tokenSecret: (process.env.MODAL_TOKEN_SECRET || '').trim(),
+      },
+      onModalCostKilled: (runId, estimatedCostUsd) => {
+        safeSend(win, 'compute:modal-cost-killed', { runId, estimatedCostUsd })
+        safeSend(win, 'compute:run-complete', {
+          runId,
+          status: 'cost_killed',
+          target: 'modal',
+          estimatedCostUsd,
+        })
+      },
+      onModalRunUpdate: (runId, status) => {
+        const isComplete = ['completed', 'failed', 'timed_out', 'cancelled', 'cost_killed'].includes(status.status)
+        safeSend(win, isComplete ? 'compute:run-complete' : 'compute:run-update', formatModalRunEvent(formatModalStatusResult(runId, status)))
+      },
       // Only wired in Electron's main process; pure-Node contexts (tests)
       // will leave this undefined and the tool will degrade to source-
       // level SVG review.
@@ -650,46 +697,65 @@ async function ensureCoordinator(
         }
 
         // Forward compute run events to renderer
-        if (tool === 'local_compute_execute' && result && typeof result === 'object' && 'success' in result) {
-          const cr = result as any
+        const computeResult = unwrapToolResult(result)
+        if (tool === 'local_compute_execute' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
+          const cr = computeResult as any
           if (cr.success && cr.data) {
-            safeSend(win, 'compute:run-update', {
-              runId: cr.data.run_id,
-              status: cr.data.status,
-              currentPhase: cr.data.current_phase,
-              command: (args as any)?.command ?? '',
-              sandbox: cr.data.sandbox,
-              weight: cr.data.weight,
-              startedAt: new Date().toISOString(),
-            })
+            safeSend(win, 'compute:run-update', formatLocalRunEvent({
+              ...cr.data,
+              started_at: new Date().toISOString(),
+            }, args))
           }
         }
-        if ((tool === 'local_compute_status' || tool === 'local_compute_wait') && result && typeof result === 'object' && 'success' in result) {
-          const cr = result as any
+        if ((tool === 'local_compute_status' || tool === 'local_compute_wait') && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
+          const cr = computeResult as any
           if (cr.success && cr.data?.run_id) {
             const isComplete = ['completed', 'failed', 'timed_out', 'cancelled'].includes(cr.data.status)
             const channel = isComplete ? 'compute:run-complete' : 'compute:run-update'
-            safeSend(win, channel, {
-              runId: cr.data.run_id,
-              status: cr.data.status,
-              currentPhase: cr.data.current_phase,
-              exitCode: cr.data.exit_code,
-              elapsedSeconds: cr.data.elapsed_seconds,
-              outputBytes: cr.data.output_bytes,
-              outputLines: cr.data.output_lines,
-              stalled: cr.data.stalled,
-              progress: cr.data.progress,
-              outputTail: cr.data.output_tail?.slice(-2048),
-              failure: cr.data.failure,
-            })
+            safeSend(win, channel, formatLocalRunEvent(cr.data))
           }
         }
-        if (tool === 'local_compute_stop' && result && typeof result === 'object' && 'success' in result) {
-          const cr = result as any
+        if (tool === 'local_compute_stop' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
+          const cr = computeResult as any
           if (cr.success && cr.data?.run_id) {
             safeSend(win, 'compute:run-complete', {
               runId: cr.data.run_id,
               status: 'cancelled',
+              target: 'local',
+            })
+          }
+        }
+
+        // Forward Modal compute plan and run events to renderer.
+        if (tool === 'compute_plan' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
+          const cr = computeResult as any
+          if (cr.success && cr.data?.target === 'modal' && cr.data?.plan) {
+            safeSend(win, 'compute:modal-plan-ready', cr.data.plan)
+          } else if (cr.success) {
+            sendPendingModalPlan(win, runProjectPath)
+          }
+        }
+        if (tool === 'modal_execute' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
+          const cr = computeResult as any
+          if (cr.success && cr.data?.run_id) {
+            safeSend(win, 'compute:run-update', formatModalRunEvent(cr.data, args))
+          }
+        }
+        if ((tool === 'modal_status' || tool === 'modal_wait') && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
+          const cr = computeResult as any
+          if (cr.success && cr.data?.run_id) {
+            const isComplete = ['completed', 'failed', 'timed_out', 'cancelled', 'cost_killed'].includes(cr.data.status)
+            safeSend(win, isComplete ? 'compute:run-complete' : 'compute:run-update', formatModalRunEvent(cr.data, args))
+          }
+        }
+        if (tool === 'modal_stop' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
+          const cr = computeResult as any
+          if (cr.success && cr.data?.run_id) {
+            safeSend(win, 'compute:run-complete', {
+              runId: cr.data.run_id,
+              status: 'cancelled',
+              target: 'modal',
+              sandbox: 'modal',
             })
           }
         }
@@ -791,18 +857,20 @@ async function ensureCoordinator(
     state.realtimeBuffer.pushActivity(readyEvent)
     safeSend(win, 'agent:activity', readyEvent)
 
-    // Send compute environment info to renderer (non-blocking)
-    probeStaticProfile().then(profile => {
-      safeSend(win, 'compute:environment', {
-        os: profile.os,
-        arch: profile.arch,
-        cpuCores: profile.cpuCores,
-        totalMemoryMb: profile.totalMemoryMb,
-        gpu: profile.gpu.model,
-        mlxAvailable: profile.gpu.mlxAvailable,
-        sandbox: profile.dockerAvailable ? 'docker' : 'process',
-      })
-    }).catch(() => { /* non-fatal */ })
+    if (process.env.ENABLE_COMPUTE === '1') {
+      // Send compute environment info to renderer (non-blocking)
+      probeStaticProfile().then(profile => {
+        safeSend(win, 'compute:environment', {
+          os: profile.os,
+          arch: profile.arch,
+          cpuCores: profile.cpuCores,
+          totalMemoryMb: profile.totalMemoryMb,
+          gpu: profile.gpu.model,
+          mlxAvailable: profile.gpu.mlxAvailable,
+          sandbox: profile.dockerAvailable ? 'docker' : 'process',
+        })
+      }).catch(() => { /* non-fatal */ })
+    }
   }
   return state.coordinator
 }
@@ -1276,6 +1344,12 @@ export function registerIpcHandlers(): void {
       // Telemetry §8.3: stamp completion time so the next user-response-signal
       // row can compute gapMsSincePreviousAssistant.
       state.lastAssistantTimestamp = Date.now()
+      // Persist full agent message history (includes tool calls/results) as a
+      // separate file so it doesn't interfere with the UI chat JSONL.
+      try {
+        const fullHistoryPath = join(state.projectPath, PATHS.sessions, `${state.sessionId}.messages.json`)
+        writeFileSync(fullHistoryPath, JSON.stringify((coord as any).agent.state.messages, null, 2))
+      } catch { /* non-fatal */ }
       safeSend(win, 'agent:done', result)
       return result
     } catch (err: any) {
@@ -2030,7 +2104,10 @@ export function registerIpcHandlers(): void {
   )
 
   // Compute environment probe (called eagerly by renderer on mount)
-  handleWindow('compute:probe-environment', async ({ win }) => {
+  handleWindow('compute:probe-environment', async ({ win, state }) => {
+    if (process.env.ENABLE_COMPUTE !== '1') return null
+    sendModalAvailability(win)
+    sendPendingModalPlan(win, state.projectPath)
     try {
       const profile = await probeStaticProfile()
       const env = {
@@ -2047,6 +2124,40 @@ export function registerIpcHandlers(): void {
     } catch {
       return null
     }
+  })
+
+  handleWindow('compute:hydrate-runs', async ({ state }) => {
+    if (process.env.ENABLE_COMPUTE !== '1' || !state.projectPath) return { runs: [] }
+    const settings = resolveSettings(loadSettingsFromConfig())
+    const runs = await hydrateComputeRunEvents({
+      projectPath: state.projectPath,
+      costThresholdUsd: settings.modalCompute.costThresholdUsd,
+    })
+    return { runs }
+  })
+
+  handleWindow('compute:modal-approve', ({ win, state }) => {
+    if (!state.projectPath) return { success: false }
+    const store = new PendingPlanStore(state.projectPath)
+    const ok = store.approve()
+    if (ok) safeSend(win, 'compute:modal-plan-approved', { approvedAt: new Date().toISOString() })
+    return { success: ok }
+  })
+
+  handleWindow('compute:modal-reject', ({ win, state }, comments: string) => {
+    if (!state.projectPath) return { success: false, error: 'No project open' }
+    const store = new PendingPlanStore(state.projectPath)
+    const result = store.reject(typeof comments === 'string' ? comments : '')
+    if (result.success && result.plan) {
+      safeSend(win, 'compute:modal-plan-rejected', {
+        planId: result.plan.planId,
+        rejectedAt: result.plan.rejectedAt,
+        rejectionComments: result.plan.rejectionComments,
+      })
+    }
+    return result.success
+      ? { success: true }
+      : { success: false, error: result.error ?? 'Failed to reject Modal plan.' }
   })
 
   // Export all chat messages as Markdown
@@ -2273,7 +2384,7 @@ export function registerIpcHandlers(): void {
     }
 
     // Probe compute environment on folder open (only when feature is enabled)
-    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
+    if (process.env.ENABLE_COMPUTE === '1') {
       probeStaticProfile().then(profile => {
         safeSend(win, 'compute:environment', {
           os: profile.os,
@@ -2285,6 +2396,8 @@ export function registerIpcHandlers(): void {
           sandbox: profile.dockerAvailable ? 'docker' : 'process',
         })
       }).catch(() => { /* non-fatal */ })
+      sendModalAvailability(win)
+      sendPendingModalPlan(win, state.projectPath)
     }
 
     win.setTitle(basename(state.projectPath))

@@ -263,6 +263,12 @@ export interface CoordinatorConfig {
   getResolvedSettings?: () => import('../../shared-ui/settings-types').ResolvedSettings
   /** Live accessor for diagram-tool auth (see lib/tools/types.ts DiagramAuth). */
   getDiagramAuth?: () => import('../tools/types.js').DiagramAuth
+  /** Modal credentials for remote compute. */
+  modalCredentials?: { tokenId?: string; tokenSecret?: string }
+  /** Fired when a Modal run is killed because estimated elapsed cost crossed the threshold. */
+  onModalCostKilled?: (runId: string, estimatedCostUsd: number) => void
+  /** Fired after Modal runner refreshes persisted run status during polling. */
+  onModalRunUpdate?: (runId: string, status: import('../modal-compute/types.js').ModalRunStatusResult) => void
   /**
    * Optional SVG rasterizer the coordinator forwards to tools. Populated
    * only when running inside Electron (the main process owns the
@@ -491,6 +497,20 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     getSettings: config.getResolvedSettings,
     getDiagramAuth: config.getDiagramAuth,
     getTurnId,
+    createSubAgent: (opts) => {
+      return new Agent({
+        initialState: {
+          systemPrompt: opts.systemPrompt,
+          model: piModel ?? undefined as any,
+          tools: opts.tools,
+          thinkingLevel: 'low',
+        },
+        getApiKey: resolveApiKey,
+      })
+    },
+    modalCredentials: config.modalCredentials,
+    onModalCostKilled: config.onModalCostKilled,
+    onModalRunUpdate: config.onModalRunUpdate,
     rasterizeSvg: config.rasterizeSvg,
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
@@ -847,8 +867,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   }
 
   // Fire-and-forget: probe environment and update system prompt asynchronously.
-  // Gated behind ENABLE_LOCAL_COMPUTE — no env guidance when compute is disabled.
-  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
+  // Gated behind ENABLE_COMPUTE — no env guidance when compute is disabled.
+  if (process.env.ENABLE_COMPUTE === '1') {
     probeStaticProfile()
       .then(profile => {
         const envGuidance = generateAgentGuidance(profile)

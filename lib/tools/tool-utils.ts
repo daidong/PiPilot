@@ -218,6 +218,6 @@ export function toAgentResult(
 
   return {
     content: [{ type: 'text', text }],
-    details: { success: result.success, tool_name: toolName }
+    details: { ...result, tool_name: toolName }
   }
 }
