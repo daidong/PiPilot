@@ -867,8 +867,8 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   }
 
   // Fire-and-forget: probe environment and update system prompt asynchronously.
-  // Gated behind ENABLE_COMPUTE — no env guidance when compute is disabled.
-  if (process.env.ENABLE_COMPUTE === '1') {
+  // Gated behind ENABLE_LOCAL_COMPUTE — no env guidance when compute is disabled.
+  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
     probeStaticProfile()
       .then(profile => {
         const envGuidance = generateAgentGuidance(profile)

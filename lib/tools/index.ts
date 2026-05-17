@@ -64,8 +64,8 @@ export function createResearchTools(ctx: ResearchToolContext): {
   tools.push(createWikiLookupTool())
 
   // Compute tools (long-running sandboxed execution)
-  // Gated behind ENABLE_COMPUTE env var for gradual rollout.
-  if (process.env.ENABLE_COMPUTE === '1') {
+  // Gated behind ENABLE_LOCAL_COMPUTE env var for gradual rollout.
+  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
     const pendingPlanStore = new PendingPlanStore(ctx.projectPath)
 
     const local = createLocalComputeTools(ctx)
