@@ -1,6 +1,6 @@
 ---
 name: compute-environment
-description: Route long-running research compute between the local sandbox and Modal remote compute. Use for training, fine-tuning, GPU jobs, large data processing, or scripts that may run for many minutes.
+description: Route long-running research compute across available backends — currently local sandbox and Modal remote, generic enough that AWS/GCP/CloudLab can be added without changing this skill. Use for training, fine-tuning, GPU jobs, large data processing, or scripts that may run for many minutes.
 category: Compute
 tags: [compute, gpu, modal, training]
 triggers: [train model, gpu, remote compute, modal, run script, long-running, fine-tune]
@@ -11,65 +11,50 @@ metadata:
 
 # Compute Environment
 
-Use compute tools for scripts that are long-running, resource-heavy, or need progress monitoring.
+Use compute tools for scripts that are long-running, resource-heavy, or need progress monitoring. Each backend (local, modal, …) is registered with capabilities and a current availability status; the agent picks the right one by calling `list_compute_backends` and `compute_plan` with the chosen `backend`.
 
-## Routing
+## Backend routing
 
-Prefer local compute when:
-- The job is quick, exploratory, or mostly file/data wrangling.
-- The script uses MLX/Metal on Apple Silicon.
-- The task can finish in under roughly 30 minutes.
+Default heuristic:
 
-Prefer Modal when:
-- The script needs NVIDIA CUDA GPUs.
-- Training or fine-tuning would take more than roughly 30 minutes locally.
-- The dataset/model is large enough that local memory or GPU support is a poor fit.
+| Use local when | Use Modal when |
+|---|---|
+| Quick / exploratory / file wrangling | Needs NVIDIA CUDA GPUs |
+| MLX/Metal on Apple Silicon | Long training / fine-tuning (>30 min locally) |
+| Likely finishes in <30 minutes | Datasets / models too large for the local machine |
 
-## Tool Flow
+For backend-specific patterns (script template, GPU choice, cost
+awareness, sandbox vs container), consult the per-backend skill:
 
-Local:
-1. Write or inspect the script.
-2. Call `compute_plan` with `env: "local"` and `task_description`.
-3. Call `local_compute_execute`, then monitor with `local_compute_status` or `local_compute_wait`.
+- `compute-local` — local sandbox tips, smoke-test patterns, sandbox choice
+- `compute-modal` — Modal script template, GPU rate awareness, image declaration
 
-Modal:
-1. Write a Modal-compatible script.
-2. Call `compute_plan` with `env: "modal"`, `script_path`, and `task_description`.
-3. Tell the user a Modal plan is awaiting approval in the Compute tab.
-4. Call `modal_execute`. If it returns `waiting_for_approval: true`, wait for user approval before trying again.
-5. Monitor with `modal_status` or `modal_wait`. Stop with `modal_stop` if needed.
+## Tool surface
 
-`task_description` should briefly name the computational objective, important inputs or dataset paths, expected outputs, and success criteria.
+Generic:
+- `list_compute_backends()` — see what's registered and which are available right now
+- `compute_plan({ backend, command, task_description?, script_path?, timeout_minutes? })` — analyze + queue (or auto-approve when backend doesn't require approval)
 
-## Modal Script Template
+Per-backend (replaces `<backend>` with the toolPrefix returned by `list_compute_backends`):
+- `<backend>_execute({ plan_id, … })` — kick off the plan
+- `<backend>_wait({ run_id, timeout_seconds? })` — block until terminal or timeout
+- `<backend>_status({ run_id })` — non-blocking snapshot
+- `<backend>_stop({ run_id })` — cancel (some backends don't support stop)
 
-```python
-import modal
+## Approval gate
 
-image = modal.Image.debian_slim(python_version="3.11").pip_install("torch", "numpy", "pandas")
-app = modal.App("research-copilot-job")
+For backends with `capabilities.requiresApproval: true` (Modal today, AWS/cloud likely), `compute_plan` queues the plan and the response carries `requires_approval: true` plus a message telling the user to approve in the Compute tab. Don't loop on `<backend>_execute` — call it once; if it returns `waiting_for_approval: true`, surface the message to the user and stop.
 
-@app.function(gpu="A10G", image=image, timeout=60 * 60)
-def run_job():
-    import torch
-    # Put heavyweight imports and training code inside the function body.
-    print('##PROGRESS## {"step": 1, "total": 3, "phase": "setup"}')
-    # train/evaluate/process here
+The user can also globally force approval on every backend via Settings → Compute → "Require approval for every compute backend".
 
-@app.local_entrypoint()
-def main():
-    run_job.remote()
+## Cost awareness
+
+For backends with `capabilities.hasCost: true`, `compute_plan` returns a `cost_estimate` with `estimatedTotalUsd`, `hourlyRateUsd`, and `coverage`. A `coverage: 'lower_bound'` flag means only one cost dimension is modeled (today Modal models GPU-time only) — actual bills can be higher. Each backend's auto-kill threshold lives in Settings → Compute.
+
+## Progress lines
+
+For any backend, scripts emit progress lines on stdout in the form:
 ```
-
-## GPU Selection
-
-- T4: cheapest small inference and light evaluation.
-- A10G: default for ordinary PyTorch/TensorFlow training.
-- A100 or A100-80GB: larger models or memory-heavy training.
-- H100: very large or performance-critical jobs only.
-
-## Progress And Cost
-
-Progress lines beginning with `##PROGRESS##` followed by JSON work for both local and Modal runs.
-
-Modal cost is estimated from elapsed time and configured GPU rate. The user can set an auto-kill threshold in Settings > Compute.
+##PROGRESS## {"step": 1, "total": 3, "phase": "setup", "percentage": 33}
+```
+The runner parses these and surfaces them through `<backend>_status` / `<backend>_wait` output so the agent can report fine-grained progress.
