@@ -5,7 +5,6 @@ import { app, ipcMain, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } f
 import electronUpdater from 'electron-updater'
 const { autoUpdater } = electronUpdater
 import { randomUUID } from 'crypto'
-import { execSync } from 'child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, watch, type FSWatcher } from 'fs'
 import { stat as statAsync, readdir as readdirAsync } from 'fs/promises'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'path'
@@ -49,9 +48,9 @@ import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 import { inferProviderFromModelId } from '../../../lib/models'
 import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
-import { PendingPlanStore } from '../../../lib/modal-compute/pending-plan-store'
-import { formatStatusResult as formatModalStatusResult } from '../../../lib/modal-compute/tools'
-import { formatLocalRunEvent, formatModalRunEvent, hydrateComputeRunEvents } from './compute-run-events'
+// RFC-008 §7.5: compute IPC migrated to a single discriminated-event
+// channel; the PR #62 helpers (PendingPlanStore reach-through,
+// per-target formatters, compute-run-events bridge) are gone.
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
@@ -244,31 +243,11 @@ function getWindowContext(event: IpcMainInvokeEvent): { win: BrowserWindow; stat
   return { win, state: getOrCreateWindowState(win) }
 }
 
-function sendModalAvailability(win: BrowserWindow): void {
-  const hasCredentials = !!((process.env.MODAL_TOKEN_ID || '').trim() && (process.env.MODAL_TOKEN_SECRET || '').trim())
-  try {
-    execSync('modal --version', { timeout: 3000, stdio: 'pipe' })
-    safeSend(win, 'compute:modal-available', { available: hasCredentials, cliInstalled: true, hasCredentials })
-  } catch {
-    safeSend(win, 'compute:modal-available', { available: false, cliInstalled: false, hasCredentials })
-  }
-}
-
-function sendPendingModalPlan(win: BrowserWindow, projectPath: string): void {
-  if (!projectPath) return
-  const plan = new PendingPlanStore(projectPath).read()
-  if (plan && !plan.approved && !plan.rejectedAt) {
-    safeSend(win, 'compute:modal-plan-ready', plan)
-  }
-}
-
-function unwrapToolResult(result: unknown): any {
-  if (result && typeof result === 'object' && 'details' in result) {
-    const details = (result as any).details
-    if (details && typeof details === 'object') return details
-  }
-  return result
-}
+// RFC-008 §7.5: sendModalAvailability, sendPendingModalPlan, and
+// unwrapToolResult helpers were retired. Backend availability flows
+// through the ComputeRegistry's `availability-changed` event; pending
+// plans come back via compute:hydrate; tool results no longer carry
+// implicit compute events.
 
 export function registerWindow(win: BrowserWindow): void {
   const key = win.webContents.id
@@ -562,22 +541,23 @@ async function ensureCoordinator(
       // presentation-layer settings) take effect without restart.
       getResolvedSettings: () => resolveSettings(loadSettingsFromConfig()),
       getDiagramAuth,
-      modalCredentials: {
-        tokenId: (process.env.MODAL_TOKEN_ID || '').trim(),
-        tokenSecret: (process.env.MODAL_TOKEN_SECRET || '').trim(),
-      },
-      onModalCostKilled: (runId, estimatedCostUsd) => {
-        safeSend(win, 'compute:modal-cost-killed', { runId, estimatedCostUsd })
-        safeSend(win, 'compute:run-complete', {
-          runId,
-          status: 'cost_killed',
-          target: 'modal',
-          estimatedCostUsd,
-        })
-      },
-      onModalRunUpdate: (runId, status) => {
-        const isComplete = ['completed', 'failed', 'timed_out', 'cancelled', 'cost_killed'].includes(status.status)
-        safeSend(win, isComplete ? 'compute:run-complete' : 'compute:run-update', formatModalRunEvent(formatModalStatusResult(runId, status)))
+      // RFC-008 §7.5: compute configuration. Modal credentials + cost
+      // threshold flow through here as live accessors so the
+      // coordinator's backends pick up settings changes without a
+      // restart. The registry itself is built inside createCoordinator
+      // and exposed on its return value (state.coordinator.computeRegistry).
+      compute: {
+        getModalCredentials: () => ({
+          tokenId: (process.env.MODAL_TOKEN_ID || '').trim() || undefined,
+          tokenSecret: (process.env.MODAL_TOKEN_SECRET || '').trim() || undefined,
+        }),
+        getComputeSettings: () => {
+          const s = resolveSettings(loadSettingsFromConfig())
+          return {
+            modalCostThresholdUsd: s.modalCompute.costThresholdUsd,
+            forceApprovalForAll: false,  // §7.7 will surface this as a real setting
+          }
+        },
       },
       // Only wired in Electron's main process; pure-Node contexts (tests)
       // will leave this undefined and the tool will degrade to source-
@@ -701,69 +681,10 @@ async function ensureCoordinator(
           }
         }
 
-        // Forward compute run events to renderer
-        const computeResult = unwrapToolResult(result)
-        if (tool === 'local_compute_execute' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
-          const cr = computeResult as any
-          if (cr.success && cr.data) {
-            safeSend(win, 'compute:run-update', formatLocalRunEvent({
-              ...cr.data,
-              started_at: new Date().toISOString(),
-            }, args))
-          }
-        }
-        if ((tool === 'local_compute_status' || tool === 'local_compute_wait') && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
-          const cr = computeResult as any
-          if (cr.success && cr.data?.run_id) {
-            const isComplete = ['completed', 'failed', 'timed_out', 'cancelled'].includes(cr.data.status)
-            const channel = isComplete ? 'compute:run-complete' : 'compute:run-update'
-            safeSend(win, channel, formatLocalRunEvent(cr.data))
-          }
-        }
-        if (tool === 'local_compute_stop' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
-          const cr = computeResult as any
-          if (cr.success && cr.data?.run_id) {
-            safeSend(win, 'compute:run-complete', {
-              runId: cr.data.run_id,
-              status: 'cancelled',
-              target: 'local',
-            })
-          }
-        }
-
-        // Forward Modal compute plan and run events to renderer.
-        if (tool === 'compute_plan' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
-          const cr = computeResult as any
-          if (cr.success && cr.data?.target === 'modal' && cr.data?.plan) {
-            safeSend(win, 'compute:modal-plan-ready', cr.data.plan)
-          } else if (cr.success) {
-            sendPendingModalPlan(win, runProjectPath)
-          }
-        }
-        if (tool === 'modal_execute' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
-          const cr = computeResult as any
-          if (cr.success && cr.data?.run_id) {
-            safeSend(win, 'compute:run-update', formatModalRunEvent(cr.data, args))
-          }
-        }
-        if ((tool === 'modal_status' || tool === 'modal_wait') && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
-          const cr = computeResult as any
-          if (cr.success && cr.data?.run_id) {
-            const isComplete = ['completed', 'failed', 'timed_out', 'cancelled', 'cost_killed'].includes(cr.data.status)
-            safeSend(win, isComplete ? 'compute:run-complete' : 'compute:run-update', formatModalRunEvent(cr.data, args))
-          }
-        }
-        if (tool === 'modal_stop' && computeResult && typeof computeResult === 'object' && 'success' in computeResult) {
-          const cr = computeResult as any
-          if (cr.success && cr.data?.run_id) {
-            safeSend(win, 'compute:run-complete', {
-              runId: cr.data.run_id,
-              status: 'cancelled',
-              target: 'modal',
-              sandbox: 'modal',
-            })
-          }
-        }
+        // RFC-008 §7.5: compute run/plan events come from the
+        // ComputeRegistry's subscribe stream (wired below in
+        // ensureCoordinator) — NOT from inspecting tool results here.
+        // The per-tool inspection block PR #62 added is gone.
 
         // Send activity event for tool result with structured detail and duration
         const r = result as any
@@ -857,25 +778,19 @@ async function ensureCoordinator(
       getTurnId: () => state.lastTurnId
     })
 
+    // RFC-008 §7.5: subscribe to the ComputeRegistry's unified event
+    // stream and fan to the renderer via a single channel. Replaces
+    // the 8 backend-specific channels PR #62 introduced.
+    if (state.coordinator?.computeRegistry) {
+      state.coordinator.computeRegistry.subscribe(event => {
+        safeSend(win, 'compute:event', event)
+      })
+    }
+
     // Notify UI that initialization is complete
     const readyEvent = { type: 'system', summary: 'Agent ready' }
     state.realtimeBuffer.pushActivity(readyEvent)
     safeSend(win, 'agent:activity', readyEvent)
-
-    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-      // Send compute environment info to renderer (non-blocking)
-      probeStaticProfile().then(profile => {
-        safeSend(win, 'compute:environment', {
-          os: profile.os,
-          arch: profile.arch,
-          cpuCores: profile.cpuCores,
-          totalMemoryMb: profile.totalMemoryMb,
-          gpu: profile.gpu.model,
-          mlxAvailable: profile.gpu.mlxAvailable,
-          sandbox: profile.dockerAvailable ? 'docker' : 'process',
-        })
-      }).catch(() => { /* non-fatal */ })
-    }
   }
   return state.coordinator
 }
@@ -2215,61 +2130,34 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // Compute environment probe (called eagerly by renderer on mount)
-  handleWindow('compute:probe-environment', async ({ win, state }) => {
-    if (process.env.ENABLE_LOCAL_COMPUTE !== '1') return null
-    sendModalAvailability(win)
-    sendPendingModalPlan(win, state.projectPath)
-    try {
-      const profile = await probeStaticProfile()
-      const env = {
-        os: profile.os,
-        arch: profile.arch,
-        cpuCores: profile.cpuCores,
-        totalMemoryMb: profile.totalMemoryMb,
-        gpu: profile.gpu.model,
-        mlxAvailable: profile.gpu.mlxAvailable,
-        sandbox: profile.dockerAvailable ? 'docker' : 'process',
-      }
-      safeSend(win, 'compute:environment', env)
-      return env
-    } catch {
-      return null
+  // RFC-008 §7.5: compute IPC consolidated to three handlers + one
+  // outbound `compute:event` channel (subscribed inside
+  // ensureCoordinator). Old handlers — compute:probe-environment,
+  // compute:hydrate-runs, compute:modal-approve, compute:modal-reject —
+  // are replaced by compute:hydrate / compute:approve-plan /
+  // compute:reject-plan, each backend-agnostic.
+
+  handleWindow('compute:hydrate', async ({ state }) => {
+    if (process.env.ENABLE_LOCAL_COMPUTE !== '1' || !state.coordinator?.computeRegistry) {
+      return { runs: [], pendingPlans: [] }
     }
+    return state.coordinator.computeRegistry.hydrate()
   })
 
-  handleWindow('compute:hydrate-runs', async ({ state }) => {
-    if (process.env.ENABLE_LOCAL_COMPUTE !== '1' || !state.projectPath) return { runs: [] }
-    const settings = resolveSettings(loadSettingsFromConfig())
-    const runs = await hydrateComputeRunEvents({
-      projectPath: state.projectPath,
-      costThresholdUsd: settings.modalCompute.costThresholdUsd,
-    })
-    return { runs }
-  })
-
-  handleWindow('compute:modal-approve', ({ win, state }) => {
-    if (!state.projectPath) return { success: false }
-    const store = new PendingPlanStore(state.projectPath)
-    const ok = store.approve()
-    if (ok) safeSend(win, 'compute:modal-plan-approved', { approvedAt: new Date().toISOString() })
-    return { success: ok }
-  })
-
-  handleWindow('compute:modal-reject', ({ win, state }, comments: string) => {
-    if (!state.projectPath) return { success: false, error: 'No project open' }
-    const store = new PendingPlanStore(state.projectPath)
-    const result = store.reject(typeof comments === 'string' ? comments : '')
-    if (result.success && result.plan) {
-      safeSend(win, 'compute:modal-plan-rejected', {
-        planId: result.plan.planId,
-        rejectedAt: result.plan.rejectedAt,
-        rejectionComments: result.plan.rejectionComments,
-      })
+  handleWindow('compute:approve-plan', ({ state }, payload: { backend: string; planId: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.backend !== 'string' || typeof payload.planId !== 'string') {
+      return { success: false, error: 'backend and planId are required' }
     }
-    return result.success
-      ? { success: true }
-      : { success: false, error: result.error ?? 'Failed to reject Modal plan.' }
+    return state.coordinator.computeRegistry.approvePlan(payload.backend, payload.planId)
+  })
+
+  handleWindow('compute:reject-plan', ({ state }, payload: { backend: string; planId: string; comments: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.backend !== 'string' || typeof payload.planId !== 'string') {
+      return { success: false, error: 'backend and planId are required' }
+    }
+    return state.coordinator.computeRegistry.rejectPlan(payload.backend, payload.planId, typeof payload.comments === 'string' ? payload.comments : '')
   })
 
   // Export all chat messages as Markdown
@@ -2496,21 +2384,11 @@ export function registerIpcHandlers(): void {
     }
 
     // Probe compute environment on folder open (only when feature is enabled)
-    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-      probeStaticProfile().then(profile => {
-        safeSend(win, 'compute:environment', {
-          os: profile.os,
-          arch: profile.arch,
-          cpuCores: profile.cpuCores,
-          totalMemoryMb: profile.totalMemoryMb,
-          gpu: profile.gpu.model,
-          mlxAvailable: profile.gpu.mlxAvailable,
-          sandbox: profile.dockerAvailable ? 'docker' : 'process',
-        })
-      }).catch(() => { /* non-fatal */ })
-      sendModalAvailability(win)
-      sendPendingModalPlan(win, state.projectPath)
-    }
+    // RFC-008 §7.5: the compute environment probe + modal availability
+    // probe used to fire here. With ComputeRegistry, availability is
+    // discoverable via list_compute_backends and updates flow through
+    // `compute:event` events. The renderer's ComputeView calls
+    // hydrateCompute() on mount to populate runs + pending plans.
 
     win.setTitle(basename(state.projectPath))
 

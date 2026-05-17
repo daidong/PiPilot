@@ -20,8 +20,15 @@ const TOOL_PREFIX_PATTERN = /^[a-z][a-z0-9_]*$/
 
 export interface RegistryOpts {
   projectPath: string
-  /** Global override: force every backend through the approval gate. */
-  forceApproval: boolean
+  /**
+   * Global override: force every backend through the approval gate.
+   * May be a boolean OR a live getter — when a getter, Registry re-reads
+   * it on every plan() so settings changes take effect without requiring
+   * a Registry rebuild. The captured `effectiveRequiresApproval`
+   * (amendment A1) is still snapshotted at plan() time, so the race
+   * guarantee holds either way.
+   */
+  forceApproval: boolean | (() => boolean)
 }
 
 export interface HydrateResult {
@@ -35,11 +42,17 @@ export class ComputeRegistry {
   private readonly runIdRouting = new Map<string, ComputeBackend>()
   private readonly plans: PlanStore
   private readonly subscribers = new Set<(event: ComputeEvent) => void>()
-  private forceApproval: boolean
+  private forceApprovalSource: boolean | (() => boolean)
 
   constructor(opts: RegistryOpts) {
     this.plans = new PlanStore(opts.projectPath)
-    this.forceApproval = opts.forceApproval
+    this.forceApprovalSource = opts.forceApproval
+  }
+
+  private readForceApproval(): boolean {
+    return typeof this.forceApprovalSource === 'function'
+      ? this.forceApprovalSource()
+      : this.forceApprovalSource
   }
 
   /**
@@ -49,12 +62,12 @@ export class ComputeRegistry {
    * already written to PlanStore keep their captured
    * `effectiveRequiresApproval`. Eliminates the settings-flip race.
    */
-  setForceApproval(value: boolean): void {
-    this.forceApproval = value
+  setForceApproval(value: boolean | (() => boolean)): void {
+    this.forceApprovalSource = value
   }
 
   isForceApproval(): boolean {
-    return this.forceApproval
+    return this.readForceApproval()
   }
 
   // ── Backend registration ────────────────────────────────────────────
@@ -105,7 +118,7 @@ export class ComputeRegistry {
   async plan(backendId: string, input: PlanInput): Promise<ComputePlan> {
     const backend = this.requireBackend(backendId)
     const plan = await backend.plan(input)
-    const effectiveRequiresApproval = this.forceApproval || backend.capabilities.requiresApproval
+    const effectiveRequiresApproval = this.readForceApproval() || backend.capabilities.requiresApproval
     const record: PlanRecord = {
       plan,
       effectiveRequiresApproval,
