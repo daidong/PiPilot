@@ -708,7 +708,11 @@ function ModalApprovalCard() {
     let cancelled = false
     api.loadSettings?.()
       .then((settings: any) => {
-        const threshold = settings?.modalCompute?.costThresholdUsd
+        // RFC-008 §7.7: compute.backends.modal.costThresholdUsd is the
+        // new path; fall back to the legacy field for one cycle in case
+        // settings on disk haven't been migrated yet.
+        const threshold = settings?.compute?.backends?.modal?.costThresholdUsd
+          ?? settings?.modalCompute?.costThresholdUsd
         if (!cancelled && typeof threshold === 'number' && Number.isFinite(threshold)) {
           setCostThresholdUsd(threshold)
         }

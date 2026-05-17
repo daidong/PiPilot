@@ -148,7 +148,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
       if (patch.dataAnalysis) next.dataAnalysis = { ...prev.dataAnalysis, ...patch.dataAnalysis }
       if (patch.wikiAgent) next.wikiAgent = { ...prev.wikiAgent, ...patch.wikiAgent }
       if (patch.diagram) next.diagram = { ...prev.diagram, ...patch.diagram }
-      if (patch.modalCompute) next.modalCompute = { ...prev.modalCompute, ...patch.modalCompute }
+      if (patch.compute) next.compute = { ...prev.compute, ...patch.compute }
       return next
     })
     setDirty(true)
@@ -283,8 +283,8 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
             )}
             {activeTab === 'compute' && loaded && (
               <ComputeSettings
-                modalCompute={settings.modalCompute ?? DEFAULT_SETTINGS.modalCompute}
-                onChange={v => updateSettings({ modalCompute: v })}
+                compute={settings.compute ?? DEFAULT_SETTINGS.compute}
+                onChange={v => updateSettings({ compute: v })}
               />
             )}
           </div>

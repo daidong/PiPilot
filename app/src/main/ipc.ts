@@ -554,8 +554,8 @@ async function ensureCoordinator(
         getComputeSettings: () => {
           const s = resolveSettings(loadSettingsFromConfig())
           return {
-            modalCostThresholdUsd: s.modalCompute.costThresholdUsd,
-            forceApprovalForAll: false,  // §7.7 will surface this as a real setting
+            modalCostThresholdUsd: (s.compute.backends.modal?.costThresholdUsd ?? 5) as number,
+            forceApprovalForAll: s.compute.requireApprovalForAllBackends,
           }
         },
       },
