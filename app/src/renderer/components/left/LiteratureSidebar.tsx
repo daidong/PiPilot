@@ -11,6 +11,7 @@ import { useEntityStore, type EntityItem } from '../../stores/entity-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { useImportStore } from '../../stores/import-store'
+import { useEnrichmentStore } from '../../stores/enrichment-store'
 import { useReportStore, useReportButtonState, type ReportButtonState } from '../../stores/report-store'
 import { ConceptsList } from './ConceptsList'
 import { ReportRegenerateModal } from './ReportRegenerateModal'
@@ -91,8 +92,13 @@ function paperReportButtonShape(s: ReturnType<typeof useReportButtonState>): Pap
       const n = s.wikiProcessed ?? 0
       const total = s.wikiTotal ?? 0
       return {
-        label: total > 0 ? `Wiki processing ${n}/${total}…` : 'Wiki processing…',
-        description: 'Paper Wiki is summarizing each paper — Report unlocks when caught up',
+        // The counters come from the wiki agent, which is global across all
+        // open projects — so this project may be entirely done in the wiki
+        // and still see non-zero progress here if another project is being
+        // processed. "(global)" makes that visible instead of letting users
+        // assume X/Y refers only to this library.
+        label: total > 0 ? `Wiki processing ${n}/${total} (global)…` : 'Wiki processing…',
+        description: 'Paper Wiki works across all projects — counters reflect the global queue. Report unlocks when this project is caught up.',
       }
     }
     case 'ready':
@@ -231,10 +237,28 @@ export function LiteratureSidebar() {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const setCenterView = useUIStore((s) => s.setCenterView)
 
-  const allPapersEnriched = useMemo(
-    () => papers.length > 0 && papers.every((p) => countCoreFields(p) >= 5),
+  // A paper is "enriched enough" only if it has ≥5 core fields AND a
+  // non-empty abstract. Without the abstract clause, BibTeX imports
+  // (title + authors + year + venue + doi = exactly 5) would freeze the
+  // Enrich All button as "complete" even though the wiki agent has
+  // nothing to summarize. This mirrors the same fix on the backend
+  // `enrichPapers` gate (lib/agents/metadata-enrichment.ts).
+  const hasAbstract = (p: EntityItem): boolean => {
+    const v = (p as { abstract?: unknown }).abstract
+    return typeof v === 'string' && v.trim().length > 0
+  }
+  const papersMissingData = useMemo(
+    () => papers.filter((p) => countCoreFields(p) < 5 || !hasAbstract(p)),
     [papers]
   )
+  const allPapersEnriched = papers.length > 0 && papersMissingData.length === 0
+
+  // Live enrichment progress — drives the Enrich All button label
+  // while a run is in flight, and after refreshEntities re-hydrates
+  // the entity store the button naturally falls back to its idle state.
+  const enrichmentStatus = useEnrichmentStore((s) => s.status)
+  const enrichmentProgress = useEnrichmentStore((s) => s.progress)
+  const refreshEntities = useEntityStore((s) => s.refreshAll)
 
   const sendToChat = (text: string) => {
     setCenterView('chat')
@@ -274,13 +298,37 @@ export function LiteratureSidebar() {
         />
         <QuickAction
           icon={RefreshCw}
-          label="Enrich All"
-          description={allPapersEnriched ? "All papers already have complete metadata" : "Batch-update metadata for all papers"}
+          label={enrichmentStatus === 'running' ? 'Enriching…' : 'Enrich All'}
+          description={
+            enrichmentStatus === 'running' && enrichmentProgress
+              ? `Enriching ${enrichmentProgress.processed}/${enrichmentProgress.total} — CrossRef → OpenAlex → Semantic Scholar`
+              : allPapersEnriched
+              ? 'All papers already have complete metadata'
+              : papersMissingData.length === papers.length
+              ? `Fetch metadata + abstracts for ${papers.length} papers (CrossRef → OpenAlex → Semantic Scholar)`
+              : `${papersMissingData.length} of ${papers.length} papers missing metadata or abstract`
+          }
           onClick={async () => {
-            const api = (window as any).api
-            await api.enrichAllPapers(papers.map((p: any) => p.id))
+            // Route through enrichment-store so:
+            //  1. `status: 'running'` flips synchronously, lighting up
+            //     the Paper Report button's "Enriching…" label too.
+            //  2. Per-paper progress events get consumed and surfaced
+            //     via `progress.processed / total` (shown above).
+            //  3. Double-click guard is handled in the store.
+            await useEnrichmentStore.getState().enrichAll(
+              papers.map((p) => p.id)
+            )
+            // Pull the updated artifacts (now with abstracts) into the
+            // entity store so the preview panel + report button see
+            // the new state immediately.
+            await refreshEntities()
           }}
-          disabled={isStreaming || papers.length === 0 || allPapersEnriched}
+          disabled={
+            isStreaming
+            || papers.length === 0
+            || allPapersEnriched
+            || enrichmentStatus === 'running'
+          }
         />
       </div>
 

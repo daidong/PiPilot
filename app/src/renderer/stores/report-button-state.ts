@@ -133,6 +133,12 @@ export function deriveButtonState(inputs: ButtonStateInputs): ReportButtonState 
   if (inputs.wikiStatus.state === 'disabled') return 'pre-wiki'
   if (inputs.wikiStatus.state === 'processing') return 'pre-wiki'
   if (inputs.wikiStatus.pending > 0) return 'pre-wiki'
+  // Wiki hasn't acknowledged all papers yet — happens in the gap
+  // between BibTeX import (entity store updates first) and the next
+  // wikiStatus event from the main process. Without this, the button
+  // flashes 'ready' briefly, even though the wiki sidecars the report
+  // needs aren't built yet. See user report: "导入 bibtex 后 button 短暂变绿".
+  if (inputs.wikiStatus.totalInWiki < inputs.papers.length) return 'pre-wiki'
 
   // Everything's caught up — primary CTA.
   return 'ready'

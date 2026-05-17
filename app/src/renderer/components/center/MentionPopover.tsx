@@ -83,7 +83,7 @@ export function MentionPopover({ query, onSelect, onClose }: Props) {
     return grouped.flatMap((g) => g.items)
   }, [grouped])
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
     let stale = false
