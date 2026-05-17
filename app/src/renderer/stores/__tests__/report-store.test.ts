@@ -48,8 +48,8 @@ function paper(citeKey: string, coreCount: number = 7): any {
   return base
 }
 
-function wikiIdle(): WikiStatusShape {
-  return { state: 'idle', processed: 10, pending: 0, totalInWiki: 10 }
+function wikiIdle(count: number = 10): WikiStatusShape {
+  return { state: 'idle', processed: count, pending: 0, totalInWiki: count }
 }
 
 function wikiProcessing(processed = 3, pending = 7): WikiStatusShape {
@@ -129,6 +129,23 @@ test('pre-wiki: papers well-enriched, wiki processing', () => {
   )
 })
 
+test('pre-wiki: post-import gap — wiki has not acknowledged new papers yet', () => {
+  // After a BibTeX import: entity store updates synchronously, but the
+  // next wikiStatus event from the main process hasn't arrived yet, so
+  // wikiStatus still reflects the pre-import library (e.g. empty wiki,
+  // 3 papers just imported). Without the totalInWiki < papers.length
+  // gate, the button flashes 'ready' in this window.
+  const papers = [paper('a', 7), paper('b', 7), paper('c', 7)]
+  assert.equal(
+    deriveButtonState({
+      ...EMPTY_INPUTS,
+      papers,
+      wikiStatus: { state: 'idle', processed: 0, pending: 0, totalInWiki: 0 },
+    }),
+    'pre-wiki',
+  )
+})
+
 test('pre-wiki: wiki idle but pending > 0 — still queueing', () => {
   const papers = [paper('a', 7), paper('b', 7)]
   assert.equal(
@@ -159,7 +176,7 @@ test('ready: mixed-richness papers OK as long as wiki is idle', () => {
     paper('thin2', 2),
   ]
   assert.equal(
-    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle() }),
+    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle(papers.length) }),
     'ready',
   )
 })
@@ -174,7 +191,7 @@ test('ready: user\'s real workspace shape (86% well-enriched) → ready, not pre
     ...Array.from({ length: 27 }, (_, i) => paper(`thin${i}`, 3)),
   ]
   assert.equal(
-    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle() }),
+    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle(papers.length) }),
     'ready',
   )
 })

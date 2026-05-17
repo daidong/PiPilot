@@ -314,7 +314,13 @@ export function useReportButtonState(): {
     reportError,
     enrichmentTotal: enrichmentProgress?.total,
     enrichmentProcessed: enrichmentProgress?.processed,
-    wikiTotal: wikiStatus ? wikiStatus.processed + wikiStatus.pending : undefined,
+    // During the post-import gap, wikiStatus.totalInWiki can lag behind
+    // papers.length (entity store updates synchronously, wiki status
+    // arrives over IPC). Clamp to papers.length so the label shows the
+    // real target — "Wiki processing 0/3…" instead of "0/0".
+    wikiTotal: wikiStatus
+      ? Math.max(wikiStatus.processed + wikiStatus.pending, papers.length)
+      : undefined,
     wikiProcessed: wikiStatus?.processed,
   }
 }

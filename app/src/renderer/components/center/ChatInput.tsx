@@ -91,6 +91,12 @@ export function ChatInput() {
   const modelCaps = useMemo(() => getModelCapabilities(selectedModel), [selectedModel])
   const visionSupported = modelCaps.vision
 
+  const isMac = useMemo(
+    () => typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform),
+    []
+  )
+  const sendKeyLabel = isMac ? '⌘+Enter' : 'Ctrl+Enter'
+
   // Clear ephemeral UI state when switching projects
   useEffect(() => {
     setShowMention(false)
@@ -442,6 +448,14 @@ export function ChatInput() {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Cmd/Ctrl+Enter always sends, even with popovers open — it's an
+    // unambiguous gesture that should never be swallowed by autocomplete.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      handleSend()
+      return
+    }
+
     if (showMention || showCommand) {
       if (['ArrowDown', 'ArrowUp', 'Tab'].includes(e.key)) return
       if (e.key === 'Enter') return
@@ -452,11 +466,7 @@ export function ChatInput() {
         return
       }
     }
-
-    if (e.key === 'Enter' && e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
+    // Plain Enter inserts a newline (textarea default).
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -669,12 +679,17 @@ export function ChatInput() {
               onClick={handleSend}
               disabled={!text.trim() && pendingImages.length === 0 && !pendingFiles.some(f => !f.loading && f.content)}
               className="shrink-0 p-2.5 rounded-lg t-bg-accent text-white disabled:opacity-30 hover:opacity-90 transition-colors"
-              title="Send (Shift+Enter)"
-              aria-label="Send message (Shift+Enter)"
+              title={`Send (${sendKeyLabel})`}
+              aria-label={`Send message (${sendKeyLabel})`}
             >
               <Send size={16} />
             </button>
           )}
+        </div>
+
+        {/* Keybinding hint */}
+        <div className="mt-1.5 text-[10.5px] t-text-muted leading-none select-none">
+          <kbd className="font-mono">{sendKeyLabel}</kbd> to send · <kbd className="font-mono">Enter</kbd> for newline
         </div>
       </div>
     </div>
