@@ -862,7 +862,7 @@ async function ensureCoordinator(
     state.realtimeBuffer.pushActivity(readyEvent)
     safeSend(win, 'agent:activity', readyEvent)
 
-    if (process.env.ENABLE_COMPUTE === '1') {
+    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
       // Send compute environment info to renderer (non-blocking)
       probeStaticProfile().then(profile => {
         safeSend(win, 'compute:environment', {
@@ -1349,12 +1349,6 @@ export function registerIpcHandlers(): void {
       // Telemetry §8.3: stamp completion time so the next user-response-signal
       // row can compute gapMsSincePreviousAssistant.
       state.lastAssistantTimestamp = Date.now()
-      // Persist full agent message history (includes tool calls/results) as a
-      // separate file so it doesn't interfere with the UI chat JSONL.
-      try {
-        const fullHistoryPath = join(state.projectPath, PATHS.sessions, `${state.sessionId}.messages.json`)
-        writeFileSync(fullHistoryPath, JSON.stringify((coord as any).agent.state.messages, null, 2))
-      } catch { /* non-fatal */ }
       safeSend(win, 'agent:done', result)
       return result
     } catch (err: any) {
@@ -2223,7 +2217,7 @@ export function registerIpcHandlers(): void {
 
   // Compute environment probe (called eagerly by renderer on mount)
   handleWindow('compute:probe-environment', async ({ win, state }) => {
-    if (process.env.ENABLE_COMPUTE !== '1') return null
+    if (process.env.ENABLE_LOCAL_COMPUTE !== '1') return null
     sendModalAvailability(win)
     sendPendingModalPlan(win, state.projectPath)
     try {
@@ -2245,7 +2239,7 @@ export function registerIpcHandlers(): void {
   })
 
   handleWindow('compute:hydrate-runs', async ({ state }) => {
-    if (process.env.ENABLE_COMPUTE !== '1' || !state.projectPath) return { runs: [] }
+    if (process.env.ENABLE_LOCAL_COMPUTE !== '1' || !state.projectPath) return { runs: [] }
     const settings = resolveSettings(loadSettingsFromConfig())
     const runs = await hydrateComputeRunEvents({
       projectPath: state.projectPath,
@@ -2502,7 +2496,7 @@ export function registerIpcHandlers(): void {
     }
 
     // Probe compute environment on folder open (only when feature is enabled)
-    if (process.env.ENABLE_COMPUTE === '1') {
+    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
       probeStaticProfile().then(profile => {
         safeSend(win, 'compute:environment', {
           os: profile.os,

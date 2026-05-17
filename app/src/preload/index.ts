@@ -225,7 +225,7 @@ export interface ElectronAPI {
   // Entity creation notifications
   onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
 
-  // Compute (gated behind ENABLE_COMPUTE=1)
+  // Compute (gated behind ENABLE_LOCAL_COMPUTE=1)
   isComputeEnabled: () => boolean
   probeComputeEnvironment: () => Promise<any>
   hydrateComputeRuns: () => Promise<{ runs: any[] }>
@@ -499,7 +499,7 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
   },
 
-  isComputeEnabled: () => process.env.ENABLE_COMPUTE === '1',
+  isComputeEnabled: () => process.env.ENABLE_LOCAL_COMPUTE === '1',
 
   probeComputeEnvironment: () => ipcRenderer.invoke('compute:probe-environment'),
   hydrateComputeRuns: () => ipcRenderer.invoke('compute:hydrate-runs'),
