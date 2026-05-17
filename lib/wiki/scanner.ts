@@ -24,11 +24,18 @@ import { hasAnyFulltextSource } from '../fulltext/index.js'
 // When a paper sits in abstract-fallback and its arXiv download keeps
 // failing, we must NOT re-run the full LLM pipeline every idle cycle.
 // Backoff: give up after MAX_FAILURES attempts; otherwise require a
-// minimum delay that doubles with each failure (1h, 2h, 4h, 8h, capped at
-// 24h). Entries missing the counter (legacy) are allowed through so the
-// first post-upgrade scan can retry once, and the counter starts tracking.
+// minimum delay that doubles with each failure (1h, 2h then stop). The
+// 8h / 24h cap remain in the math below for safety but are unreachable at
+// the current MAX_FULLTEXT_FAILURES=3. Entries missing the counter
+// (legacy) are allowed through so the first post-upgrade scan can retry
+// once, and the counter starts tracking.
+//
+// History: was 5 originally; lowered to 3 because the slow grind on bad
+// DOIs / removed arXiv preprints kept the wiki "processing" state on for
+// days and made the Quick Action pre-wiki for unrelated projects. With
+// 3, a single paper's retry cycle finishes in <4h instead of >16h.
 
-const MAX_FULLTEXT_FAILURES = 5
+const MAX_FULLTEXT_FAILURES = 3
 const BASE_BACKOFF_MS = 60 * 60 * 1000  // 1h
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000
 

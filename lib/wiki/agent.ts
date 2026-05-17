@@ -34,7 +34,7 @@ import {
   safeReadFile,
 } from './io.js'
 import { scanForNewContent } from './scanner.js'
-import { resolveFulltext, resolveArxivIdByTitle } from '../fulltext/index.js'
+import { resolveFulltext, resolveArxivIdByTitle, hasAnyFulltextSource } from '../fulltext/index.js'
 import type { FulltextSource } from './types.js'
 import { updateArtifact } from '../memory-v2/store.js'
 import {
@@ -370,6 +370,80 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       return
     }
 
+    // ── Short-circuit: no content to summarize ──────────────────────────
+    // If we have neither fulltext nor an abstract on the artifact, the
+    // LLM has literally nothing to work with — its output collapses to a
+    // bare title, and the downstream concept-extraction call has been
+    // observed to throw on such near-empty inputs (silently caught by
+    // processSinglePass, leaving the watermark unwritten → reprocess
+    // loop). Detect the no-content case here and write a deterministic
+    // stub instead. Net result: 0 tokens spent, page placeholder
+    // available, watermark committed so the scanner doesn't re-queue.
+    //
+    // If the artifact later gains an abstract, computeSemanticHash will
+    // shift and scanner will re-process as 'semantic-change'. If a new
+    // fulltext source appears, the fulltextStatus we set below routes
+    // it correctly: `abstract-fallback` when there's a plausible source
+    // (the next scan can try a fulltext upgrade), `abstract-only` when
+    // there isn't (no point retrying).
+    const noAbstract = !(artifact.abstract ?? '').trim()
+    if (!fulltext && noAbstract) {
+      log(`skipping LLM for ${slug}: no abstract and no fulltext — writing stub`)
+
+      const fallbackStatus: FulltextStatus =
+        hasAnyFulltextSource(artifact) ? 'abstract-fallback' : 'abstract-only'
+      const sidecar = synthesizeMinimalSidecar(
+        canonicalKey, slug, 'abstract-only', GENERATOR_VERSION, undefined,
+      )
+      const stubBody =
+        `# ${artifact.title}\n\n` +
+        `_No abstract or fulltext was available when this page was ` +
+        `generated. Add an abstract to the paper artifact (or attach a ` +
+        `PDF / arXiv ID) and the wiki will regenerate this page on the ` +
+        `next scan._\n`
+      const paperPath = join(getWikiRoot(), 'papers', `${slug}.md`)
+      safeWriteFile(paperPath, writeMetaBlockInto(stubBody, sidecar))
+
+      recordSidecarStatus({
+        slug,
+        status: 'ok',
+        droppedFields: [],
+        generator_version: GENERATOR_VERSION,
+        recorded_at: new Date().toISOString(),
+        repairUsed: false,
+      })
+      mergeProjectContextIntoPage(slug, projectPath, artifact)
+
+      markPaperProcessed({
+        canonicalKey,
+        slug,
+        semanticHash,
+        fulltextStatus: fallbackStatus,
+        generatorVersion: GENERATOR_VERSION,
+        hashSchemaVersion: HASH_SCHEMA_VERSION,
+        processedAt: new Date().toISOString(),
+      })
+      addProvenance({
+        canonicalKey,
+        projectPath,
+        paperId: artifact.id,
+        addedAt: new Date().toISOString(),
+      })
+      if (scanResult.siblings && scanResult.siblings.length > 0) {
+        for (const sib of scanResult.siblings) {
+          addProvenance({
+            canonicalKey,
+            projectPath: sib.projectPath,
+            paperId: sib.artifact.id,
+            addedAt: new Date().toISOString(),
+          })
+          mergeProjectContextIntoPage(slug, sib.projectPath, sib.artifact)
+        }
+      }
+      appendLog(`Stubbed "${artifact.title}" (no abstract, no fulltext)`)
+      return
+    }
+
     // Generate paper page
     if (!shouldContinue()) return
     const existingConcepts = listExistingConceptSlugs()
@@ -434,31 +508,22 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
     })
     mergeProjectContextIntoPage(slug, projectPath, artifact)
 
-    // Identify concepts
-    if (!shouldContinue()) return
-    const concepts = await identifyConcepts(
-      result.content,
-      artifact.title,
-      existingConcepts,
-      config.callLlm,
-      config.pacing.interCallDelayMs,
-      shouldContinue,
-    )
-
-    // Generate/update concept pages
-    if (concepts.length > 0 && shouldContinue()) {
-      await generateAndUpdateConceptPages(
-        concepts,
-        slug,
-        artifact.title,
-        result.content,
-        config.callLlm,
-        config.pacing.interCallDelayMs,
-        shouldContinue,
-      )
-    }
-
-    // Mark processed + provenance
+    // ── Commit watermark FIRST, before any speculative downstream work ──
+    //
+    // Bug seen in the wild: a paper with empty abstract produced a near-
+    // empty page; the synthesized fallback sidecar was recorded; but a
+    // downstream LLM call (concept extraction) threw, and because
+    // markPaperProcessed had not yet been called, the next scan saw the
+    // paper as `new` again and reprocessed it indefinitely. The page +
+    // sidecar were re-written every cycle but the watermark never
+    // advanced — a silent reprocess loop that ate the per-cycle batch
+    // budget and blocked unrelated fulltext-retry papers from ever being
+    // picked up.
+    //
+    // Rule: once the page is durably on disk and the sidecar parse
+    // outcome has been recorded, the paper IS processed. Concept
+    // extraction is a best-effort enrichment; its failure must not
+    // unmark the paper.
     const entry: ProcessedEntry = {
       canonicalKey,
       slug,
@@ -500,11 +565,43 @@ export function createWikiAgent(config: WikiAgentConfig): WikiAgent {
       }
     }
 
-    // Log
+    // Log NOW so log.md mirrors the actual processed set, not just the
+    // subset that also succeeded at concept extraction.
     const tierLabel = result.fulltextStatus === 'fulltext' ? 'fulltext' : 'abstract'
     appendLog(`Processed "${artifact.title}" (${tierLabel})`)
-
     log(`done: ${artifact.title}`)
+
+    // ── Concept extraction (best-effort) ──
+    // Watermark is already committed; failures here cannot cause a
+    // reprocess loop on the next scan. Errors are swallowed with a log
+    // line so they're visible under RESEARCH_COPILOT_DEBUG but never
+    // bubble up to processSinglePass's catch (which would count this as
+    // a failed paper and skew the error rate).
+    if (!shouldContinue()) return
+    try {
+      const concepts = await identifyConcepts(
+        result.content,
+        artifact.title,
+        existingConcepts,
+        config.callLlm,
+        config.pacing.interCallDelayMs,
+        shouldContinue,
+      )
+
+      if (concepts.length > 0 && shouldContinue()) {
+        await generateAndUpdateConceptPages(
+          concepts,
+          slug,
+          artifact.title,
+          result.content,
+          config.callLlm,
+          config.pacing.interCallDelayMs,
+          shouldContinue,
+        )
+      }
+    } catch (err) {
+      log(`concept extraction failed for ${slug} (paper already marked processed): ${err}`)
+    }
   }
 
   // ── Scheduling ─────────────────────────────────────────────────────────
