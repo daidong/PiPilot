@@ -11,6 +11,8 @@ import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
 import { useEntityStore } from './stores/entity-store'
 import { useImportStore } from './stores/import-store'
+import { useEnrichmentStore } from './stores/enrichment-store'
+import { useReportStore } from './stores/report-store'
 import { useUIStore, applyThemeFromBroadcast } from './stores/ui-store'
 import { useProgressStore } from './stores/progress-store'
 import { useActivityStore } from './stores/activity-store'
@@ -864,6 +866,20 @@ export default function App() {
   // see the final summary.
   useEffect(() => {
     return useImportStore.getState().subscribeToProgress()
+  }, [])
+
+  // Wire enrichment progress + wiki status into their respective stores
+  // (RFC-007 PR-A). The Paper Report button reads from these to derive
+  // its six-state label. Mounted once at App level for the same reason
+  // as the import progress listener — the button is in the sidebar and
+  // shouldn't depend on Literature being the active center view.
+  useEffect(() => {
+    const unsubEnrich = useEnrichmentStore.getState().subscribeToProgress()
+    const unsubWiki = useReportStore.getState().subscribeToWikiStatus()
+    return () => {
+      unsubEnrich()
+      unsubWiki()
+    }
   }, [])
 
   // Listen for menu-triggered Export Chat and Settings
