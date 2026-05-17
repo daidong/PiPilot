@@ -1,9 +1,9 @@
 # Design Note 008: Compute Backend Abstraction
 
-**Status:** Draft (v2) — review pass landed five corrections (see §0.1 Amendments); pending re-review before any code lands
+**Status:** Implemented (v2) — branch `feat/compute-backend-abstraction`, PR #63. All 10 §7 sub-sections landed as 8 commits; build green on all 3 platforms; 460/460 tests including 64 new compute tests pinning amendments A1–A5.
 **Author:** Captain + Claude
 **Reviewer:** Codex review pass 2026-05-17
-**Date:** 2026-05-17 (v1), 2026-05-17 (v2)
+**Date:** 2026-05-17 (v1), 2026-05-17 (v2), 2026-05-17 (v2 implemented)
 **Scope:** Refactor `lib/local-compute/` + `lib/modal-compute/` (PR #62) into a single `lib/compute/` subsystem behind a `ComputeBackend` interface, so that adding AWS Batch / GCP Run / CloudLab / Lambda / etc. is "implement an interface + register" rather than "fork the IPC + the store + the UI". Settles three locked decisions before implementation begins.
 
 ## 0. TL;DR
