@@ -579,6 +579,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     })
     computeRegistry.register(new ModalBackend(modalCtx))
 
+    // Optional diagnostic backend — off by default. See
+    // lib/compute/backends/stub/stub-backend.ts for what it does
+    // (in-memory simulator; reference impl for RFC §19).
+    if (process.env.ENABLE_COMPUTE_STUB === '1') {
+      const { StubBackend } = await import('../compute/backends/stub/stub-backend.js')
+      const stubCtx = makeContext({ getCredentials: () => ({}), getCostThresholdUsd: () => 0 })
+      computeRegistry.register(new StubBackend(stubCtx))
+    }
   }
   toolCtx.computeRegistry = computeRegistry
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
