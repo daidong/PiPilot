@@ -92,7 +92,17 @@ export async function enrichPaperArtifacts(options: EnrichPapersOptions): Promis
   for (const paper of papers) {
     const paperInput = toPaperInput(paper)
 
-    if (countCoreFields(paperInput) >= 5) {
+    // Skip only when the paper is fully usable: ≥5 core fields AND a
+    // non-empty abstract. The abstract clause is critical for BibTeX
+    // imports — ACM/IEEE entries routinely arrive with title + authors +
+    // year + venue + doi (= exactly 5) and no abstract. The old gate
+    // treated them as "complete" and skipped enrichment entirely, so
+    // OpenAlex/Semantic Scholar never got a chance to fill the abstract.
+    // Mirrors the same fix on `enrichPapers` (metadata-enrichment.ts)
+    // and the Enrich All UI button (LiteratureSidebar.tsx).
+    const hasAbstract = typeof paperInput.abstract === 'string'
+      && paperInput.abstract.trim().length > 0
+    if (countCoreFields(paperInput) >= 5 && hasAbstract) {
       onProgress?.({ paperId: paper.id, status: 'skipped' })
       skipped++
       continue

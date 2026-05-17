@@ -98,7 +98,7 @@ function MilkdownInner({
     crepe.editor.config((ctx) => {
       ctx.update(remarkStringifyOptionsCtx, (prev) => ({
         ...prev,
-        rule: '-'
+        rule: '-' as const
       }))
     })
 

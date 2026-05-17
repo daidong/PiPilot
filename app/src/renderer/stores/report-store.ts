@@ -160,6 +160,14 @@ export const useReportStore = create<ReportStoreState>((set, get) => ({
 
   triggerEnrichmentForAllPapers: async () => {
     const papers = useEntityStore.getState().papers
+    const enrichStatus = useEnrichmentStore.getState().status
+    // Diagnostic — surfaces which guard, if any, swallowed the click.
+    // Cheap; left in place because it's the only signal we have when
+    // the button looks unresponsive.
+    console.log(
+      '[paper-report] triggerEnrichmentForAllPapers: papers=%d, enrichment.status=%s',
+      papers.length, enrichStatus,
+    )
     if (papers.length === 0) return
     const ids = papers.map((p) => p.id)
     await useEnrichmentStore.getState().enrichAll(ids)
@@ -306,7 +314,13 @@ export function useReportButtonState(): {
     reportError,
     enrichmentTotal: enrichmentProgress?.total,
     enrichmentProcessed: enrichmentProgress?.processed,
-    wikiTotal: wikiStatus ? wikiStatus.processed + wikiStatus.pending : undefined,
+    // During the post-import gap, wikiStatus.totalInWiki can lag behind
+    // papers.length (entity store updates synchronously, wiki status
+    // arrives over IPC). Clamp to papers.length so the label shows the
+    // real target — "Wiki processing 0/3…" instead of "0/0".
+    wikiTotal: wikiStatus
+      ? Math.max(wikiStatus.processed + wikiStatus.pending, papers.length)
+      : undefined,
     wikiProcessed: wikiStatus?.processed,
   }
 }

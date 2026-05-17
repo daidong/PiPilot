@@ -201,7 +201,7 @@ interface TreeRowProps {
    */
   highlightQuery: string
   handlersRef: React.MutableRefObject<RowHandlers>
-  renameInputRef: React.RefObject<HTMLInputElement>
+  renameInputRef: React.RefObject<HTMLInputElement | null>
 }
 
 /**

@@ -198,7 +198,6 @@ function usePreviewNavigation() {
   const previewEntity = useUIStore((s) => s.previewEntity)
   const openPreview = useUIStore((s) => s.openPreview)
   const notes = useEntityStore((s) => s.notes)
-  const papers = useEntityStore((s) => s.papers)
   const data = useEntityStore((s) => s.data)
   const projectPath = useSessionStore((s) => s.projectPath)
 
@@ -282,8 +281,6 @@ function usePreviewNavigation() {
     switch (previewSourceTab) {
       case 'library':
         return [...notes, ...data]
-      case 'papers':
-        return papers
       case 'files':
         return fileSiblingEntities
       default:
@@ -393,6 +390,16 @@ export function EntityPreviewPanel() {
   const [noteNameDraft, setNoteNameDraft] = useState('')
   const [noteNameBaseline, setNoteNameBaseline] = useState('')
 
+  // Paste-abstract affordance for paper artifacts that BibTeX import +
+  // enrichment couldn't fill in (ACM/IEEE paywalled, pre-arXiv era, etc.).
+  // Long-tail rescue path so the user doesn't have to attach a PDF just
+  // to give the wiki something to summarize. Save flushes via
+  // artifactUpdate → changes semanticHash → wiki agent picks it up on
+  // next scan.
+  const [abstractPaste, setAbstractPaste] = useState('')
+  const [abstractPasteSaving, setAbstractPasteSaving] = useState(false)
+  const [abstractPasteError, setAbstractPasteError] = useState<string | null>(null)
+
   // agent.md is split at the `## Agent Memory` marker: User Instructions
   // (above) is what the user writes, Agent Memory (below) is auto-managed
   // by the memory subsystem and must round-trip untouched. We hold the
@@ -462,6 +469,12 @@ export function EntityPreviewPanel() {
       setNoteNameDraft(name)
       setNoteNameBaseline(name)
     }
+    // Reset paste-abstract draft + error on entity switch. The textarea
+    // appears only for papers with empty abstract, but clearing here
+    // ensures no carry-over from one paper to the next.
+    setAbstractPaste('')
+    setAbstractPasteError(null)
+    setAbstractPasteSaving(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity?.id])
 
@@ -1388,6 +1401,71 @@ export function EntityPreviewPanel() {
               <pre className="mt-1 p-2 t-bg-surface rounded text-[11px] font-mono whitespace-pre-wrap break-all">{entity.bibtex}</pre>
             </details>
           )}
+        </div>
+      )}
+
+      {entity.type === 'paper' && !(entity.abstract && String(entity.abstract).trim()) && (
+        <div className="px-4 py-3 border-b t-border space-y-2" data-testid="paste-abstract-panel">
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-[10px] font-mono uppercase tracking-[0.12em] t-text-muted">
+              No abstract available — paste one
+            </label>
+            <span className="text-[10px] t-text-muted">
+              Wiki picks it up on the next scan
+            </span>
+          </div>
+          <textarea
+            value={abstractPaste}
+            onChange={(e) => {
+              setAbstractPaste(e.target.value)
+              if (abstractPasteError) setAbstractPasteError(null)
+            }}
+            placeholder="Paste the paper's abstract here — saves to the artifact and unblocks the Paper Wiki for this paper."
+            rows={4}
+            className="w-full px-2 py-1.5 text-xs rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)] resize-y"
+            disabled={abstractPasteSaving}
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] t-text-muted">
+              {abstractPasteError ? (
+                <span className="t-text-error">{abstractPasteError}</span>
+              ) : (
+                <>Characters: {abstractPaste.length}</>
+              )}
+            </span>
+            <button
+              onClick={async () => {
+                const trimmed = abstractPaste.trim()
+                if (!trimmed) {
+                  setAbstractPasteError('Paste an abstract first.')
+                  return
+                }
+                setAbstractPasteSaving(true)
+                setAbstractPasteError(null)
+                try {
+                  const api = (window as { api?: { artifactUpdate?: (id: string, patch: Record<string, unknown>) => Promise<{ success: boolean; error?: string }> } }).api
+                  const result = await api?.artifactUpdate?.(entity.id, { abstract: trimmed })
+                  if (!result || result.success !== true) {
+                    setAbstractPasteError(result?.error ?? 'Save failed.')
+                    return
+                  }
+                  await refreshAll()
+                  // refreshAll re-hydrates the entity store; on next render
+                  // the paper has abstract populated and this panel
+                  // disappears (the condition above evaluates to false).
+                  setAbstractPaste('')
+                } catch (err: unknown) {
+                  setAbstractPasteError(err instanceof Error ? err.message : 'Save failed.')
+                } finally {
+                  setAbstractPasteSaving(false)
+                }
+              }}
+              disabled={abstractPasteSaving || !abstractPaste.trim()}
+              className="px-3 py-1 text-xs rounded t-bg-accent text-white disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+            >
+              {abstractPasteSaving ? 'Saving…' : 'Save abstract'}
+            </button>
+          </div>
         </div>
       )}
 

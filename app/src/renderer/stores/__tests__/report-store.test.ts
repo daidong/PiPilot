@@ -48,8 +48,8 @@ function paper(citeKey: string, coreCount: number = 7): any {
   return base
 }
 
-function wikiIdle(): WikiStatusShape {
-  return { state: 'idle', processed: 10, pending: 0, totalInWiki: 10 }
+function wikiIdle(count: number = 10): WikiStatusShape {
+  return { state: 'idle', processed: count, pending: 0, totalInWiki: count }
 }
 
 function wikiProcessing(processed = 3, pending = 7): WikiStatusShape {
@@ -70,26 +70,26 @@ test('no-papers: empty library → no-papers', () => {
   assert.equal(deriveButtonState(EMPTY_INPUTS), 'no-papers')
 })
 
-test('pre-enrichment: papers exist, enrichment idle, most papers thin', () => {
-  const papers = [paper('a', 2), paper('b', 2), paper('c', 2)]
+test('thin papers no longer block: wiki idle → ready (RFC-007 post-PR-C fix)', () => {
+  // Real-world case: imported .bib of arxiv preprints. No DOIs, no
+  // citation counts. Wiki agent has still processed them all (abstract-
+  // only tier). The button should reach 'ready' — wiki readiness is
+  // the real precondition, not CrossRef enrichment depth.
+  const papers = [paper('a', 3), paper('b', 3), paper('c', 3)]  // title+authors+year only
   assert.equal(
-    deriveButtonState({ ...EMPTY_INPUTS, papers }),
-    'pre-enrichment',
+    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle() }),
+    'ready',
+    'thin papers with idle wiki should reach ready',
   )
 })
 
-test('pre-enrichment: unknown:* DOI counts as missing for enrichment heuristic', () => {
-  // A paper with everything filled BUT doi='unknown:foo' has 6 real core
-  // fields, not 7 — and could be at 5 with abstract missing. We want
-  // such papers to count as "needs enrichment".
-  const p = paper('a', 7)
-  p.doi = 'unknown:a'
-  delete p.abstract
-  delete p.venue
+test('thin papers + null wiki status → pre-wiki (wiki gate still applies)', () => {
+  // Same papers, but wiki status hasn't loaded yet. We still gate on
+  // wiki — just not on enrichment depth.
+  const papers = [paper('a', 3), paper('b', 3)]
   assert.equal(
-    deriveButtonState({ ...EMPTY_INPUTS, papers: [p] }),
-    'pre-enrichment',
-    'unknown:* DOI + missing fields should fall below the threshold',
+    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: null }),
+    'pre-wiki',
   )
 })
 
@@ -129,6 +129,23 @@ test('pre-wiki: papers well-enriched, wiki processing', () => {
   )
 })
 
+test('pre-wiki: post-import gap — wiki has not acknowledged new papers yet', () => {
+  // After a BibTeX import: entity store updates synchronously, but the
+  // next wikiStatus event from the main process hasn't arrived yet, so
+  // wikiStatus still reflects the pre-import library (e.g. empty wiki,
+  // 3 papers just imported). Without the totalInWiki < papers.length
+  // gate, the button flashes 'ready' in this window.
+  const papers = [paper('a', 7), paper('b', 7), paper('c', 7)]
+  assert.equal(
+    deriveButtonState({
+      ...EMPTY_INPUTS,
+      papers,
+      wikiStatus: { state: 'idle', processed: 0, pending: 0, totalInWiki: 0 },
+    }),
+    'pre-wiki',
+  )
+})
+
 test('pre-wiki: wiki idle but pending > 0 — still queueing', () => {
   const papers = [paper('a', 7), paper('b', 7)]
   assert.equal(
@@ -149,28 +166,33 @@ test('ready: enrichment idle, wiki idle + pending=0, no report yet', () => {
   )
 })
 
-test('ready: 90% of papers enriched is enough (10% can be perma-thin)', () => {
-  // 9 well-enriched, 1 thin. Threshold is 90% → pass.
+test('ready: mixed-richness papers OK as long as wiki is idle', () => {
+  // Real users have a mix of arxiv preprints (thin metadata) and richer
+  // journal papers. The button shouldn't care — wiki has processed them
+  // all and that's what feeds the report.
   const papers = [
     ...Array.from({ length: 9 }, (_, i) => paper(`good${i}`, 7)),
-    paper('bad', 2),
+    paper('thin1', 3),
+    paper('thin2', 2),
   ]
   assert.equal(
-    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle() }),
+    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle(papers.length) }),
     'ready',
   )
 })
 
-test('pre-enrichment: 89% enriched is below threshold', () => {
-  // 8 / 10 = 80% well-enriched → below 90% → pre-enrichment.
+test('ready: user\'s real workspace shape (86% well-enriched) → ready, not pre-enrichment', () => {
+  // The bug reported on a real 195-paper workspace: 86.2% had ≥5 core
+  // fields (below the old 90% threshold), so the button was stuck on
+  // 'pre-enrichment' even though wiki had processed everything. Pin
+  // this shape so the regression can't sneak back in.
   const papers = [
-    ...Array.from({ length: 8 }, (_, i) => paper(`good${i}`, 7)),
-    paper('bad1', 2),
-    paper('bad2', 2),
+    ...Array.from({ length: 168 }, (_, i) => paper(`well${i}`, 5)),
+    ...Array.from({ length: 27 }, (_, i) => paper(`thin${i}`, 3)),
   ]
   assert.equal(
-    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle() }),
-    'pre-enrichment',
+    deriveButtonState({ ...EMPTY_INPUTS, papers, wikiStatus: wikiIdle(papers.length) }),
+    'ready',
   )
 })
 

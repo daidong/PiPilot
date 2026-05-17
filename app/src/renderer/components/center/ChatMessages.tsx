@@ -353,7 +353,7 @@ function buildScrubNodes(messages: ChatMessage[]): ScrubNode[] {
     }))
 }
 
-function ChatTimeline({ messages, scrollContainerRef }: { messages: ChatMessage[]; scrollContainerRef: React.RefObject<HTMLDivElement> }) {
+function ChatTimeline({ messages, scrollContainerRef }: { messages: ChatMessage[]; scrollContainerRef: React.RefObject<HTMLDivElement | null> }) {
   const requestScrollTo = useChatStore((s) => s.requestScrollTo)
   const nodes = useMemo(() => buildScrubNodes(messages), [messages])
   // positions: 0-1 ratio of each message within the scrollable content

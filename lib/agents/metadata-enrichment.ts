@@ -126,15 +126,33 @@ export function cacheKey(paper: PaperInput): string {
 
 /**
  * Count how many core fields are present.
+ *
+ * `doi` is treated as MISSING when its value starts with `unknown:` —
+ * that prefix is the placeholder `upsertPaperArtifact` writes when no
+ * real DOI is available (lib/commands/paper-artifact.ts:75). Without
+ * this rule the enrichment pipeline silently skips papers whose only
+ * "DOI" is a placeholder, which means CrossRef / Semantic Scholar
+ * never get a chance to discover the real DOI by title+author.
+ *
+ * Before this fix the function lived in two places — a renderer copy
+ * that excluded `unknown:*` (for the deleted "pre-enrichment" gate)
+ * and this canonical copy that included them. The disagreement caused
+ * a feedback loop: renderer said "needs enrichment", user clicked,
+ * IPC said "already enriched", returned in milliseconds, button never
+ * updated. The renderer-side gate is now gone (RFC-007 PR-C fix); we
+ * also align this function so the manual "Enrich All" QuickAction
+ * actually does the right thing.
  */
 export function countCoreFields(paper: PaperInput): number {
   let count = 0
   for (const field of CORE_FIELDS) {
     const val = paper[field]
-    if (val !== undefined && val !== null && val !== '') {
-      if (Array.isArray(val) && val.length === 0) continue
-      count++
-    }
+    if (val === undefined || val === null || val === '') continue
+    if (Array.isArray(val) && val.length === 0) continue
+    // unknown:* DOIs are placeholders, not real values — don't count
+    // them as evidence that enrichment can be skipped.
+    if (field === 'doi' && typeof val === 'string' && val.startsWith('unknown:')) continue
+    count++
   }
   return count
 }
@@ -261,6 +279,144 @@ async function fetchSemanticScholarByDOI(
     config.rateLimiter.release('semantic_scholar')
     config.circuitBreaker.recordFailure('semantic_scholar')
     return null
+  }
+}
+
+/**
+ * Reconstruct plain-text abstract from OpenAlex's `abstract_inverted_index`.
+ *
+ * OpenAlex stores abstracts as `{ word: [position, ...] }` so that they can
+ * be safely indexed without re-publishing copyright-bearing prose verbatim.
+ * Re-assembly is mechanical: sort all (word, position) pairs by position and
+ * join with spaces. Returns `undefined` when the index is missing or empty.
+ *
+ * Exported for tests; treated as internal otherwise.
+ */
+export function reconstructOpenAlexAbstract(
+  index: Record<string, number[]> | null | undefined,
+): string | undefined {
+  if (!index || typeof index !== 'object') return undefined
+  const pairs: { word: string; p: number }[] = []
+  for (const [word, positions] of Object.entries(index)) {
+    if (!Array.isArray(positions)) continue
+    for (const p of positions) {
+      if (typeof p === 'number') pairs.push({ word, p })
+    }
+  }
+  if (pairs.length === 0) return undefined
+  pairs.sort((a, b) => a.p - b.p)
+  return pairs.map(x => x.word).join(' ')
+}
+
+/**
+ * Build an OpenAlex API URL with the optional polite-pool `mailto` parameter.
+ * OpenAlex prefers `mailto` in the query string (per their docs) — that path
+ * also unlocks higher per-day quotas. We reuse `config.crossrefMailto` since
+ * the user's identification is the same regardless of which API we're hitting.
+ */
+function openAlexUrl(path: string, config: EnrichmentConfig): string {
+  const base = `https://api.openalex.org${path}`
+  if (!config.crossrefMailto) return base
+  const sep = base.includes('?') ? '&' : '?'
+  return `${base}${sep}mailto=${encodeURIComponent(config.crossrefMailto)}`
+}
+
+/**
+ * Parse an OpenAlex `Work` record into our PaperInput shape. Shared by the
+ * by-DOI fetcher and the by-title searcher so both paths reconstruct
+ * abstracts the same way and surface the same fields.
+ */
+function parseOpenAlexWork(w: Record<string, unknown>): Partial<PaperInput> {
+  const authorships = (w.authorships as Array<{ author?: { display_name?: string } }>) || []
+  const authors = authorships
+    .map(a => a.author?.display_name)
+    .filter((n): n is string => !!n)
+  const primary = w.primary_location as { source?: { display_name?: string }; landing_page_url?: string } | undefined
+
+  // OpenAlex's `doi` field is a full URL like "https://doi.org/10.1145/...".
+  // Strip the prefix so downstream comparisons (which normalize via
+  // normalizeDOI) line up with what CrossRef returns.
+  const rawDoi = typeof w.doi === 'string' ? w.doi : undefined
+  const doi = rawDoi?.replace(/^https?:\/\/doi\.org\//i, '')
+
+  return {
+    title: (w.title ?? w.display_name) as string | undefined,
+    authors: authors.length > 0 ? authors : undefined,
+    year: typeof w.publication_year === 'number' ? w.publication_year : undefined,
+    venue: primary?.source?.display_name,
+    abstract: reconstructOpenAlexAbstract(w.abstract_inverted_index as Record<string, number[]> | null),
+    citationCount: typeof w.cited_by_count === 'number' ? w.cited_by_count : undefined,
+    url: primary?.landing_page_url,
+    doi,
+  }
+}
+
+/**
+ * Fetch paper metadata from OpenAlex by DOI.
+ *
+ * OpenAlex covers a substantially wider abstract corpus than CrossRef for
+ * paywalled ACM/IEEE/Elsevier papers — CrossRef's `message.abstract` field
+ * is only populated when the publisher chooses to deposit it, which most
+ * paywalled venues do not. OpenAlex synthesizes its abstract index from
+ * additional sources (publisher feeds, repository scrapes), so it's the
+ * highest-yield second hop after CrossRef for BibTeX imports.
+ */
+async function fetchOpenAlexByDOI(
+  doi: string,
+  config: EnrichmentConfig,
+): Promise<Partial<PaperInput> | null> {
+  if (!config.circuitBreaker.isAllowed('openalex')) return null
+
+  try {
+    await config.rateLimiter.acquire('openalex')
+    const url = openAlexUrl(`/works/doi:${encodeURIComponent(doi)}`, config)
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+    config.rateLimiter.release('openalex')
+
+    if (!response.ok) {
+      config.circuitBreaker.recordFailure('openalex')
+      return null
+    }
+
+    config.circuitBreaker.recordSuccess('openalex')
+    const data = await response.json() as Record<string, unknown>
+    if (!data || typeof data !== 'object') return null
+    return parseOpenAlexWork(data)
+  } catch {
+    config.rateLimiter.release('openalex')
+    config.circuitBreaker.recordFailure('openalex')
+    return null
+  }
+}
+
+/**
+ * Search OpenAlex by title to find a matching paper. Used by the
+ * no-DOI enrichment path as a third candidate-pool after DBLP and SS.
+ */
+async function searchOpenAlexByTitle(
+  title: string,
+  config: EnrichmentConfig,
+): Promise<Partial<PaperInput>[]> {
+  if (!config.circuitBreaker.isAllowed('openalex')) return []
+
+  try {
+    await config.rateLimiter.acquire('openalex')
+    const url = openAlexUrl(`/works?search=${encodeURIComponent(title)}&per_page=3`, config)
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+    config.rateLimiter.release('openalex')
+
+    if (!response.ok) {
+      config.circuitBreaker.recordFailure('openalex')
+      return []
+    }
+
+    config.circuitBreaker.recordSuccess('openalex')
+    const data = await response.json() as { results?: Array<Record<string, unknown>> }
+    return (data.results ?? []).map(parseOpenAlexWork)
+  } catch {
+    config.rateLimiter.release('openalex')
+    config.circuitBreaker.recordFailure('openalex')
+    return []
   }
 }
 
@@ -410,13 +566,34 @@ function findByNormalizedTitle(
 // ============================================================================
 
 /**
- * Path A: DOI present — direct lookup via Crossref then Semantic Scholar.
+ * Path A: DOI present — direct lookup via Crossref, OpenAlex, then Semantic Scholar.
+ *
+ * Source ordering rationale:
+ *  1. CrossRef — authoritative for bibliographic metadata (DOI, venue,
+ *     authors, citation count). Abstract coverage is uneven; the publisher
+ *     has to actively deposit one for it to appear here.
+ *  2. OpenAlex — second hop specifically chosen for its abstract coverage,
+ *     which is substantially better than CrossRef for paywalled ACM/IEEE/
+ *     Elsevier papers (synthesized index from publisher feeds + repository
+ *     scrapes). Free, no API key, polite-pool via mailto.
+ *  3. Semantic Scholar — third hop for citationCount accuracy and a final
+ *     abstract fallback. Rate-limited harder than OpenAlex when no key is
+ *     configured, so we hit it last to avoid burning the quota on papers
+ *     OpenAlex already filled.
+ *
+ * The `countCoreFields(paper) < 7` gates between hops short-circuit once
+ * we have full metadata, so well-indexed papers don't fan out to all three.
  */
 async function enrichByDOI(paper: PaperInput, config: EnrichmentConfig): Promise<void> {
   const doi = normalizeDOI(paper.doi!)
 
   const cr = await fetchCrossrefByDOI(doi, config)
   if (cr) mergeMissing(paper, cr, 'crossref')
+
+  if (countCoreFields(paper) < 7) {
+    const oa = await fetchOpenAlexByDOI(doi, config)
+    if (oa) mergeMissing(paper, oa, 'openalex')
+  }
 
   if (countCoreFields(paper) < 7) {
     const ss = await fetchSemanticScholarByDOI(doi, config)
@@ -427,7 +604,13 @@ async function enrichByDOI(paper: PaperInput, config: EnrichmentConfig): Promise
 }
 
 /**
- * Path B: DOI missing — search DBLP then Semantic Scholar by title.
+ * Path B: DOI missing — search DBLP, OpenAlex, then Semantic Scholar by title.
+ *
+ * Each source is consulted in turn; the first to yield a high-confidence
+ * title match wins. If that match carries a DOI, we hop into `enrichByDOI`
+ * to pick up the remaining canonical fields via the DOI path. OpenAlex is
+ * the second hop because its broader corpus surfaces papers that DBLP
+ * (CS-only) doesn't index — important for non-CS BibTeX libraries.
  */
 async function enrichByTitleAuthor(paper: PaperInput, config: EnrichmentConfig): Promise<void> {
   const normTitle = normalizeTitle(paper.title)
@@ -441,6 +624,19 @@ async function enrichByTitleAuthor(paper: PaperInput, config: EnrichmentConfig):
     mergeMissing(paper, dblpMatch, 'dblp')
     if (dblpMatch.doi && countCoreFields(paper) < 7) {
       paper.doi = dblpMatch.doi
+      await enrichByDOI(paper, config)
+    }
+    return
+  }
+
+  // Try OpenAlex search — broader than DBLP, covers non-CS venues
+  const oaCandidates = await searchOpenAlexByTitle(paper.title, config)
+  const oaMatch = findByNormalizedTitle(normTitle, oaCandidates)
+
+  if (oaMatch) {
+    mergeMissing(paper, oaMatch, 'openalex')
+    if (oaMatch.doi && countCoreFields(paper) < 7) {
+      paper.doi = oaMatch.doi
       await enrichByDOI(paper, config)
     }
     return
@@ -480,8 +676,17 @@ export async function enrichPapers(
   const stats: EnrichmentStats = { enriched: 0, skipped: 0, failed: 0 }
   const startTime = Date.now()
 
-  // Skip papers that already have 5+ of 7 core fields
-  const needsEnrichment = papers.filter(p => countCoreFields(p) < 5)
+  // Skip papers that already have 5+ of 7 core fields — UNLESS their
+  // abstract is empty. Abstract is the highest-value field for downstream
+  // wiki generation and Paper Pack Reports; a BibTeX import with title +
+  // authors + year + venue + doi (= 5 fields, often the default for ACM/
+  // IEEE bib entries) would otherwise be considered "enriched enough" and
+  // never get its abstract filled in from OpenAlex/Semantic Scholar even
+  // though the data is available. Treat missing abstract as an automatic
+  // trigger to attempt enrichment regardless of the rest of the count.
+  const hasAbstract = (p: PaperInput): boolean =>
+    typeof p.abstract === 'string' && p.abstract.trim().length > 0
+  const needsEnrichment = papers.filter(p => countCoreFields(p) < 5 || !hasAbstract(p))
   stats.skipped = papers.length - needsEnrichment.length
 
   // Limit how many we enrich

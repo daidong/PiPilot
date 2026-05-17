@@ -1,18 +1,25 @@
 /**
- * Render the Paper Pack Report as standalone HTML (RFC-007 PR-B).
+ * Render the Paper Pack Report as standalone HTML (RFC-007 PR-B + PR-C).
  *
- * Basic version. PR-C will add `<details>` wiki extraction, sticky
- * TOC sidebar with scrollspy, print styles, and an "abstract-only"
- * badge. Here we deliver:
- *   - Inlined CSS (no external assets)
- *   - Same six sections as markdown
- *   - `[citeKey]` becomes `<a href="#cite-citekey">[citeKey]</a>`
- *   - Appendix has `<article id="cite-citekey">` anchors with title,
- *     authors, year, venue, tldr, DOI link
+ * Self-contained single-file output. No external assets, no network.
+ * Email-attachable. Works offline.
  *
- * Zero JavaScript required for the core flow. The HTML works offline,
- * is sharable as a single file, and renders the same in every modern
- * browser.
+ * What PR-C added on top of PR-B's basic emit:
+ *   - Sticky TOC sidebar on the left (with `<nav>` landmark); collapses
+ *     into a flat top bar at narrow widths
+ *   - ~50 lines of vanilla JS doing IntersectionObserver-based scrollspy
+ *     so the TOC entry for the visible section is highlighted as the
+ *     user scrolls
+ *   - Per-paper appendix entries gain a collapsible `<details>` block
+ *     with the full wiki extraction (findings, methods, datasets,
+ *     limitations, negative_results, concept_edges). Collapsed by
+ *     default so the appendix stays scannable.
+ *   - Tightened print styles (no TOC, no `<details>` toggle chrome,
+ *     each paper-card unbroken across pages)
+ *   - Polished `abstract-only` badge — visible but not alarming
+ *
+ * The scrollspy is the only client-side behavior. Everything else still
+ * works with JS disabled (the TOC degrades to plain anchor links).
  */
 
 import type {
@@ -21,6 +28,7 @@ import type {
   SynthesisOutput,
   OnboardingPath,
 } from './types.js'
+import type { WikiPaperMemoryMeta } from '../wiki/memory-schema.js'
 
 export function renderHtml(
   input: ReportInput,
@@ -31,6 +39,17 @@ export function renderHtml(
   const fmtDate = new Date(input.capturedAt).toISOString().slice(0, 10)
   const title = `Paper Pack Report — ${escapeHtml(input.projectName)}`
 
+  // ── TOC entries — keyed off the section ids used below ──────────
+  const tocItems: Array<{ id: string; label: string }> = [
+    { id: 'at-a-glance', label: 'At a glance' },
+    { id: 'themes', label: 'Themes' },
+    { id: 'methods', label: 'Methods & datasets' },
+    { id: 'gaps', label: 'Open questions' },
+    { id: 'onboarding', label: 'Onboarding' },
+    { id: 'talking-points', label: 'Talking points' },
+    { id: 'appendix', label: 'Appendix' },
+  ]
+
   const body: string[] = []
   body.push(`<header>`)
   body.push(`<h1>${escapeHtml(title)}</h1>`)
@@ -39,7 +58,7 @@ export function renderHtml(
       `Generated ${fmtDate}`,
       `${agg.totalPapers} papers`,
       agg.fulltextCount > 0 || agg.abstractOnlyCount > 0
-        ? `${agg.fulltextCount} full-text / ${agg.abstractOnlyCount} abstract-only`
+        ? `${agg.fulltextCount} full-text · ${agg.abstractOnlyCount} abstract-only`
         : null,
       agg.earliestYear !== null && agg.latestYear !== null
         ? `span ${agg.earliestYear}–${agg.latestYear}`
@@ -184,21 +203,28 @@ export function renderHtml(
 
   // ── Appendix ────────────────────────────────────────────────
   body.push(`<section id="appendix">`)
-  body.push(`<h2>Appendix: per-paper one-liners</h2>`)
+  body.push(`<h2>Appendix: per-paper details</h2>`)
   for (const entry of input.papers) {
     const p = entry.paper
     if (!p.citeKey) continue
     const tierBadge = entry.wiki?.source_tier === 'fulltext'
       ? ''
-      : ' <span class="badge muted">abstract only</span>'
+      : ' <span class="badge tier-abstract" title="Wiki extraction came from the paper\'s abstract only — full text was not available">abstract only</span>'
     const authors = formatAuthorsShort(p.authors)
     const year = p.year != null ? `, ${p.year}` : ''
     const venue = p.venue ? ` · ${escapeHtml(p.venue)}` : ''
-    const oneLine = entry.wiki?.tldr || firstSentence(p.abstract) || '<em>No summary available.</em>'
+    const oneLine = entry.wiki?.tldr || firstSentence(p.abstract) || ''
     body.push(`<article id="cite-${escapeHtml(p.citeKey)}" class="paper-card">`)
     body.push(`<h3>${escapeHtml(p.citeKey)}${tierBadge}</h3>`)
     body.push(`<p class="paper-meta"><strong>${escapeHtml(p.title)}</strong> — ${escapeHtml(authors)}${year}${venue}</p>`)
-    body.push(`<p class="paper-tldr">${escapeHtml(oneLine)}</p>`)
+    if (oneLine) {
+      body.push(`<p class="paper-tldr">${escapeHtml(oneLine)}</p>`)
+    } else {
+      body.push(`<p class="paper-tldr empty">No summary available.</p>`)
+    }
+    // PR-C addition: collapsible wiki extraction.
+    const wikiBlock = renderWikiDetailsBlock(entry.wiki)
+    if (wikiBlock) body.push(wikiBlock)
     if (p.doi && !p.doi.startsWith('unknown:')) {
       body.push(`<p class="paper-links"><a href="https://doi.org/${escapeHtml(p.doi)}" target="_blank" rel="noopener">DOI: ${escapeHtml(p.doi)} ↗</a></p>`)
     } else if (p.url) {
@@ -215,7 +241,80 @@ export function renderHtml(
   )
   body.push(`</footer>`)
 
-  return wrapHtml(title, body.join('\n'))
+  return wrapHtml(title, tocItems, body.join('\n'))
+}
+
+// ─── PR-C: Wiki extraction details block ─────────────────────────────────
+
+/**
+ * Render the per-paper `<details>` block containing the wiki extraction.
+ * Collapsed by default so the appendix stays scannable. Skipped entirely
+ * when wiki is null OR when the extraction has nothing of substance to
+ * show (only an empty TLDR isn't worth a disclosure widget).
+ */
+function renderWikiDetailsBlock(wiki: WikiPaperMemoryMeta | null): string | null {
+  if (!wiki) return null
+
+  const findings = wiki.findings ?? []
+  const methods = wiki.methods ?? []
+  const datasets = wiki.datasets ?? []
+  const limitations = wiki.limitations ?? []
+  const negativeResults = wiki.negative_results ?? []
+  const conceptEdges = wiki.concept_edges ?? []
+
+  const hasContent =
+    findings.length > 0 ||
+    methods.length > 0 ||
+    datasets.length > 0 ||
+    limitations.length > 0 ||
+    negativeResults.length > 0 ||
+    conceptEdges.length > 0
+  if (!hasContent) return null
+
+  const parts: string[] = []
+  parts.push(`<details class="wiki-extract">`)
+  parts.push(`<summary>Wiki extraction</summary>`)
+  parts.push(`<div class="wiki-body">`)
+
+  if (findings.length > 0) {
+    parts.push(`<h4>Findings</h4><ul>`)
+    for (const f of findings.slice(0, 8)) {
+      const value = f.value ? ` <span class="finding-value">(${escapeHtml(f.value)})</span>` : ''
+      parts.push(`<li>${escapeHtml(f.statement)}${value}</li>`)
+    }
+    if (findings.length > 8) parts.push(`<li class="more">… and ${findings.length - 8} more</li>`)
+    parts.push(`</ul>`)
+  }
+  if (methods.length > 0) {
+    parts.push(`<h4>Methods</h4><p>${methods.map(escapeHtml).join(', ')}</p>`)
+  }
+  if (datasets.length > 0) {
+    parts.push(`<h4>Datasets</h4><ul>`)
+    for (const d of datasets.slice(0, 6)) {
+      const role = d.role ? ` <span class="dataset-role">(${escapeHtml(d.role)})</span>` : ''
+      parts.push(`<li>${escapeHtml(d.name)}${role}</li>`)
+    }
+    parts.push(`</ul>`)
+  }
+  if (limitations.length > 0) {
+    parts.push(`<h4>Limitations</h4><ul>`)
+    for (const l of limitations.slice(0, 6)) parts.push(`<li>${escapeHtml(l.text)}</li>`)
+    parts.push(`</ul>`)
+  }
+  if (negativeResults.length > 0) {
+    parts.push(`<h4>Negative results</h4><ul>`)
+    for (const n of negativeResults.slice(0, 6)) parts.push(`<li>${escapeHtml(n.text)}</li>`)
+    parts.push(`</ul>`)
+  }
+  if (conceptEdges.length > 0) {
+    parts.push(`<h4>Concepts</h4><p>${conceptEdges
+      .slice(0, 8)
+      .map((e) => `<span class="concept-pill">${escapeHtml(e.slug)}</span>`)
+      .join(' ')}</p>`)
+  }
+
+  parts.push(`</div></details>`)
+  return parts.join('\n')
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -273,9 +372,13 @@ function firstSentence(s: string | undefined): string | null {
   return sentence.length > 0 ? sentence : trimmed.slice(0, 200)
 }
 
-// ─── HTML wrapper + CSS ──────────────────────────────────────────────────
+// ─── HTML wrapper + CSS + scrollspy JS ───────────────────────────────────
 
-function wrapHtml(title: string, body: string): string {
+function wrapHtml(title: string, tocItems: Array<{ id: string; label: string }>, body: string): string {
+  const tocLinks = tocItems
+    .map((t) => `<li><a href="#${t.id}" data-toc-target="${t.id}">${escapeHtml(t.label)}</a></li>`)
+    .join('\n')
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -283,19 +386,84 @@ function wrapHtml(title: string, body: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title}</title>
 <style>
-${BASIC_CSS}
+${POLISHED_CSS}
 </style>
 </head>
 <body>
+<nav class="toc" aria-label="Table of contents">
+<p class="toc-title">Contents</p>
+<ul>
+${tocLinks}
+</ul>
+</nav>
 <main>
 ${body}
 </main>
+<script>
+${SCROLLSPY_JS}
+</script>
 </body>
 </html>
 `
 }
 
-const BASIC_CSS = `
+/**
+ * IntersectionObserver-based scrollspy. ~50 lines. Highlights the TOC
+ * entry corresponding to whichever section is currently most prominent
+ * in the viewport. No dependencies, no transpilation needed — runs in
+ * every browser that supports IntersectionObserver (all modern browsers
+ * since 2017).
+ *
+ * If JS is disabled or the API is missing, the TOC degrades gracefully
+ * to plain anchor links — clicks still work, just no active highlight.
+ */
+const SCROLLSPY_JS = `(function () {
+  if (typeof IntersectionObserver === 'undefined') return;
+  var tocLinks = document.querySelectorAll('[data-toc-target]');
+  if (tocLinks.length === 0) return;
+  var byId = {};
+  tocLinks.forEach(function (a) {
+    var id = a.getAttribute('data-toc-target');
+    byId[id] = a;
+  });
+  var sections = [];
+  Object.keys(byId).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) sections.push(el);
+  });
+  if (sections.length === 0) return;
+  // Track which sections are currently visible. The "active" link is
+  // the topmost visible one. This avoids the common scrollspy glitch
+  // where two adjacent short sections both light up at once.
+  var visible = new Set();
+  function refresh() {
+    var topmost = null;
+    var topmostY = Infinity;
+    visible.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var rect = el.getBoundingClientRect();
+      if (rect.top < topmostY) {
+        topmostY = rect.top;
+        topmost = id;
+      }
+    });
+    Object.keys(byId).forEach(function (id) {
+      byId[id].classList.toggle('active', id === topmost);
+    });
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      var id = entry.target.id;
+      if (entry.isIntersecting) visible.add(id);
+      else visible.delete(id);
+    });
+    refresh();
+  }, { rootMargin: '-80px 0px -50% 0px', threshold: 0 });
+  sections.forEach(function (s) { io.observe(s); });
+})();`
+
+const POLISHED_CSS = `
 :root {
   --fg: #1a1a1a;
   --fg-muted: #555;
@@ -305,6 +473,8 @@ const BASIC_CSS = `
   --border: #e0e0e0;
   --accent: #2c5aa0;
   --accent-faint: #e6efff;
+  --warn-faint: #fff7e0;
+  --warn-text: #8a6d00;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -316,6 +486,8 @@ const BASIC_CSS = `
     --border: #3a3a3a;
     --accent: #6ea3ff;
     --accent-faint: #1f2a40;
+    --warn-faint: #3a3320;
+    --warn-text: #d8c067;
   }
 }
 * { box-sizing: border-box; }
@@ -328,17 +500,87 @@ body {
   margin: 0;
   padding: 0;
 }
+/* Two-column layout: TOC pinned left at >= 1100px, stacked above at narrower widths. */
+nav.toc {
+  position: fixed;
+  top: 2rem;
+  left: 2rem;
+  width: 210px;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  padding: 0;
+  font-size: 0.85rem;
+  z-index: 10;
+}
+nav.toc .toc-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+  font-weight: 600;
+}
+nav.toc ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-left: 2px solid var(--border);
+}
+nav.toc li { margin: 0; }
+nav.toc a {
+  display: block;
+  padding: 4px 12px;
+  color: var(--fg-muted);
+  text-decoration: none;
+  margin-left: -2px;
+  border-left: 2px solid transparent;
+  font-size: 0.85rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+nav.toc a:hover { color: var(--fg); }
+nav.toc a.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
 main {
   max-width: 820px;
   margin: 0 auto;
   padding: 2.5rem 2rem 4rem;
 }
+@media (max-width: 1100px) {
+  nav.toc {
+    position: static;
+    width: auto;
+    max-height: none;
+    padding: 1rem 2rem 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  nav.toc ul {
+    display: flex;
+    flex-wrap: wrap;
+    border-left: none;
+    gap: 0.25rem 0.75rem;
+  }
+  nav.toc a {
+    padding: 2px 0;
+    margin-left: 0;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+  }
+  nav.toc a.active { border-bottom-color: var(--accent); border-left: none; }
+  main { padding-top: 1.25rem; }
+}
+@media (min-width: 1101px) {
+  main { padding-left: 240px; }
+}
 header { margin-bottom: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
 h1 { font-size: 1.6rem; margin: 0 0 0.5rem; font-weight: 600; }
-h2 { font-size: 1.25rem; margin-top: 2.5rem; margin-bottom: 0.75rem; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+h2 { font-size: 1.25rem; margin-top: 2.5rem; margin-bottom: 0.75rem; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; scroll-margin-top: 1rem; }
 h3 { font-size: 1.05rem; margin-top: 1.5rem; margin-bottom: 0.4rem; font-weight: 600; }
+h4 { font-size: 0.85rem; margin-top: 0.8rem; margin-bottom: 0.3rem; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .meta { color: var(--fg-muted); font-size: 0.9rem; margin: 0; }
-section { margin-top: 1.5rem; }
+section { margin-top: 1.5rem; scroll-margin-top: 1rem; }
 ul, ol { padding-left: 1.5rem; }
 li { margin: 0.35rem 0; }
 a.cite {
@@ -362,8 +604,12 @@ a { color: var(--accent); }
   text-transform: uppercase;
   letter-spacing: 0.04em;
   vertical-align: middle;
+  font-weight: 600;
 }
-.badge.muted { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
+.badge.tier-abstract {
+  background: var(--warn-faint);
+  color: var(--warn-text);
+}
 .theme { margin-bottom: 1rem; }
 .theme-papers { color: var(--fg-muted); font-size: 0.88em; margin-top: 0.4rem; }
 .onboarding-why { color: var(--fg-muted); font-size: 0.93em; }
@@ -377,11 +623,57 @@ a { color: var(--accent); }
 .paper-card h3 { margin-top: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.95rem; color: var(--fg-muted); }
 .paper-meta { margin: 0.25rem 0; }
 .paper-tldr { color: var(--fg); margin: 0.4rem 0; }
+.paper-tldr.empty { color: var(--fg-faint); font-style: italic; }
 .paper-links a { font-size: 0.88rem; color: var(--accent); text-decoration: none; }
 .paper-links a:hover { text-decoration: underline; }
+details.wiki-extract {
+  margin: 0.5rem 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+}
+details.wiki-extract > summary {
+  cursor: pointer;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  user-select: none;
+  font-weight: 500;
+}
+details.wiki-extract[open] > summary {
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+.wiki-body { padding: 0.5rem 0.9rem 0.7rem; }
+.wiki-body h4 { margin-top: 0.7rem; }
+.wiki-body h4:first-child { margin-top: 0.3rem; }
+.wiki-body ul { padding-left: 1.2rem; margin: 0.25rem 0; }
+.wiki-body li { margin: 0.18rem 0; font-size: 0.9rem; }
+.finding-value { color: var(--accent); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85em; }
+.dataset-role { color: var(--fg-faint); font-size: 0.85em; }
+.concept-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  margin: 2px 4px 2px 0;
+  background: var(--accent-faint);
+  color: var(--accent);
+  border-radius: 10px;
+  font-size: 0.8em;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
 footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--fg-faint); font-size: 0.85rem; }
 @media print {
   body { background: white; color: black; }
-  .paper-card { break-inside: avoid; }
+  nav.toc { display: none; }
+  main { padding-left: 0; max-width: 100%; }
+  /* Auto-open wiki extractions for print — readers can't click. */
+  details.wiki-extract > summary { display: none; }
+  details.wiki-extract > .wiki-body { padding: 0.3rem 0; }
+  details.wiki-extract { border: none; background: transparent; }
+  .paper-card { break-inside: avoid; page-break-inside: avoid; }
+  section { break-inside: avoid-page; }
+  a.cite { color: black; text-decoration: none; }
+  a { color: black; }
+  .badge, .concept-pill { background: transparent !important; border: 1px solid #999; color: black; }
 }
 `
