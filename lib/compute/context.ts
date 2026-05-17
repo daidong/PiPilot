@@ -5,7 +5,7 @@
  * smell flagged in the PR review.
  */
 
-import type { Agent } from '@mariozechner/pi-agent-core'
+import type { Agent, AgentTool } from '@mariozechner/pi-agent-core'
 import type { ComputeEvent } from './events.js'
 
 export interface ComputeContext {
@@ -32,19 +32,20 @@ export interface ComputeContext {
   emit(event: ComputeEvent): void
 
   /**
-   * Pi-mono Agent class for backends that need a sub-agent (e.g. Modal's
-   * plan agent which sandboxes script analysis). Provided as a class
-   * reference rather than a factory closing over coordinator internals,
-   * so backends are responsible for constructing with the right config.
+   * Construct a pi-mono sub-agent for backends that need one (e.g.
+   * Modal's plan agent which sandboxes script analysis).
+   *
+   * Why a factory and not the Agent class + key resolver: model
+   * resolution (piModel construction from modelId, provider inference,
+   * fallback chain) is non-trivial and lives in the coordinator. The
+   * factory captures all that complexity once at ComputeContext build
+   * time, so backends don't reimplement it. This is the dependency
+   * injection point that was missing in PR #62 (where createSubAgent
+   * leaked onto CoordinatorConfig, exposing it as caller-facing API).
+   *
+   * Backends that don't need sub-agents can ignore this.
+   * Returns undefined when no model is configured (chat-disabled
+   * coordinator); backends should handle gracefully.
    */
-  readonly AgentClass: typeof Agent
-
-  /**
-   * Resolve the API key for a given provider — backends pass this to
-   * AgentClass when constructing sub-agents.
-   */
-  resolveApiKey(provider: string): string | undefined
-
-  /** Default model id (for sub-agents). */
-  readonly defaultModelId: string
+  createSubAgent?(opts: { systemPrompt: string; tools: AgentTool[]; thinkingLevel?: 'off' | 'low' | 'medium' | 'high' }): Agent
 }

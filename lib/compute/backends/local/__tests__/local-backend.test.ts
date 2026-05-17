@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { LocalBackend, LOCAL_BACKEND_DATA_VERSION } from '../local-backend.js'
 import type { ComputeContext } from '../../../context.js'
 import type { ComputeEvent } from '../../../events.js'
-import type { Agent } from '@mariozechner/pi-agent-core'
 
 function tempProject(): string {
   const dir = mkdtempSync(join(tmpdir(), 'rp-local-backend-'))
@@ -22,9 +21,7 @@ function buildContext(projectPath: string, workspacePath: string = projectPath):
     getCredentials: () => ({}),
     getCostThresholdUsd: () => 0,
     emit: e => events.push(e),
-    AgentClass: undefined as unknown as typeof Agent,
-    resolveApiKey: () => undefined,
-    defaultModelId: 'test-model',
+    // LocalBackend doesn't need createSubAgent — leave undefined.
   }
   ;(ctx as any).__events = events
   return ctx
