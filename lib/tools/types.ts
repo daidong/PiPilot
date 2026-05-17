@@ -4,7 +4,6 @@
  * Simplified from myRAM's ToolContext — only what Research Copilot actually needs.
  */
 
-import type { Agent, AgentTool } from '@mariozechner/pi-agent-core'
 import type { ResolvedSettings } from '../../shared-ui/settings-types'
 
 /**
@@ -86,17 +85,13 @@ export interface ResearchToolContext {
    */
   getTurnId?: () => string | undefined
   /**
-   * Create a lightweight sub-agent that inherits the coordinator's model and
-   * API key config. Used by the Modal plan agent to run a tool-calling agent
-   * inside a sandboxed directory.
+   * Compute backend registry — set by the coordinator when ENABLE_LOCAL_COMPUTE=1.
+   * createResearchTools consumes this to emit compute_plan, list_compute_backends,
+   * and per-backend execute/wait/status/stop. Replaces the modal-specific
+   * createSubAgent / modalCredentials / onModalCostKilled / onModalRunUpdate
+   * fields that PR #62 leaked here (RFC-008 §7.4).
    */
-  createSubAgent?: (opts: { systemPrompt: string; tools: AgentTool[] }) => Agent
-  /** Modal CLI credentials sourced from Settings > API Keys. */
-  modalCredentials?: { tokenId?: string; tokenSecret?: string }
-  /** Callback fired by Modal runner when elapsed estimated cost crosses threshold. */
-  onModalCostKilled?: (runId: string, estimatedCostUsd: number) => void
-  /** Callback fired after Modal runner refreshes persisted run status during polling. */
-  onModalRunUpdate?: (runId: string, status: import('../modal-compute/types.js').ModalRunStatusResult) => void
+  computeRegistry?: import('../compute/registry.js').ComputeRegistry
   /**
    * Rasterize an SVG document to PNG bytes, when a renderer is available.
    * Used by the diagram tool's SVG-fallback review path so a vision model

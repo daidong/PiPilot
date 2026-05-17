@@ -263,12 +263,18 @@ export interface CoordinatorConfig {
   getResolvedSettings?: () => import('../../shared-ui/settings-types').ResolvedSettings
   /** Live accessor for diagram-tool auth (see lib/tools/types.ts DiagramAuth). */
   getDiagramAuth?: () => import('../tools/types.js').DiagramAuth
-  /** Modal credentials for remote compute. */
-  modalCredentials?: { tokenId?: string; tokenSecret?: string }
-  /** Fired when a Modal run is killed because estimated elapsed cost crossed the threshold. */
-  onModalCostKilled?: (runId: string, estimatedCostUsd: number) => void
-  /** Fired after Modal runner refreshes persisted run status during polling. */
-  onModalRunUpdate?: (runId: string, status: import('../modal-compute/types.js').ModalRunStatusResult) => void
+  /**
+   * Pre-built compute registry from the main process. When provided, the
+   * coordinator wires it through to createResearchTools so the registry's
+   * backends contribute the compute_plan / list_compute_backends /
+   * <backend>_execute|wait|status|stop tool surface (RFC-008 §7.4).
+   *
+   * Replaces PR #62's modalCredentials / onModalCostKilled / onModalRunUpdate
+   * / createSubAgent leakage onto CoordinatorConfig. Modal credentials and
+   * cost-threshold settings now flow through the ComputeContext bundle
+   * built inside the main process when constructing each backend.
+   */
+  computeRegistry?: import('../compute/registry.js').ComputeRegistry
   /**
    * Optional SVG rasterizer the coordinator forwards to tools. Populated
    * only when running inside Electron (the main process owns the
@@ -497,20 +503,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     getSettings: config.getResolvedSettings,
     getDiagramAuth: config.getDiagramAuth,
     getTurnId,
-    createSubAgent: (opts) => {
-      return new Agent({
-        initialState: {
-          systemPrompt: opts.systemPrompt,
-          model: piModel ?? undefined as any,
-          tools: opts.tools,
-          thinkingLevel: 'low',
-        },
-        getApiKey: resolveApiKey,
-      })
-    },
-    modalCredentials: config.modalCredentials,
-    onModalCostKilled: config.onModalCostKilled,
-    onModalRunUpdate: config.onModalRunUpdate,
+    computeRegistry: config.computeRegistry,
     rasterizeSvg: config.rasterizeSvg,
   }
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)

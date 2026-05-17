@@ -15,10 +15,7 @@ import { createFetchFulltextTool } from './fetch-fulltext.js'
 import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
 import { createGenerateDiagramTool } from './generate-diagram.js'
-import { createLocalComputeTools } from '../local-compute/tools.js'
-import { createComputePlanTool } from '../compute/plan-tool.js'
-import { createModalComputeTools } from '../modal-compute/tools.js'
-import { PendingPlanStore } from '../modal-compute/pending-plan-store.js'
+import { createComputeTools } from '../compute/tools.js'
 import { createWikiLookupTool } from '../wiki/tool.js'
 import { createWikiTools } from '../wiki/wiki-tools.js'
 
@@ -63,20 +60,17 @@ export function createResearchTools(ctx: ResearchToolContext): {
   // Legacy wiki_lookup compatibility shim (RFC-003). Scheduled for removal one release after RFC-005 lands.
   tools.push(createWikiLookupTool())
 
-  // Compute tools (long-running sandboxed execution)
-  // Gated behind ENABLE_LOCAL_COMPUTE env var for gradual rollout.
-  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-    const pendingPlanStore = new PendingPlanStore(ctx.projectPath)
-
-    const local = createLocalComputeTools(ctx)
-    tools.push(...local.tools)
-    destroyers.push(local.destroy)
-
-    const modal = createModalComputeTools(ctx)
-    tools.push(...modal.tools)
-    destroyers.push(modal.destroy)
-
-    tools.push(createComputePlanTool(local.runner, pendingPlanStore, ctx))
+  // Compute tools (RFC-008 §4): generic compute_plan + list_compute_backends,
+  // plus per-backend execute/wait/status/stop. Sourced from a ComputeRegistry
+  // built by the coordinator from registered backends. Gated behind
+  // ENABLE_LOCAL_COMPUTE for backward compatibility with the existing
+  // feature flag. Backends destroy themselves when the coordinator
+  // tears down (Registry.destroy() called from coordinator's destroy).
+  if (process.env.ENABLE_LOCAL_COMPUTE === '1' && ctx.computeRegistry) {
+    tools.push(...createComputeTools({
+      registry: ctx.computeRegistry,
+      workspacePath: ctx.workspacePath,
+    }))
   }
 
   return {
