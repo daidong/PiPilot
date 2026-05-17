@@ -732,9 +732,11 @@ function ModalApprovalCard() {
   const approve = async () => {
     setApproving(true)
     try {
-      const result = await api.approveModalPlan?.()
+      const result = await api.approveComputePlan?.(plan.backend, plan.planId)
       if (result?.success) {
-        clearModalPendingPlan()
+        // Store will receive a plan-approved event and prune the entry;
+        // calling the local setter is a defensive no-op safe fallback.
+        clearModalPendingPlan?.()
         setCenterView('chat')
         await sendChat('compute plan approved')
       }
@@ -757,7 +759,7 @@ function ModalApprovalCard() {
     setRejectionError(null)
     let result: { success: boolean; error?: string } | undefined
     try {
-      result = await api.rejectModalPlan?.(comments)
+      result = await api.rejectComputePlan?.(plan.backend, plan.planId, comments)
     } catch (err: any) {
       setRejecting(false)
       setRejectionError(err?.message || 'Failed to reject Modal plan.')

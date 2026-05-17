@@ -130,9 +130,9 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
       const newStatus = await api.getApiKeyStatus()
       setStatus(newStatus)
       setValues({})
-      if (entries.some(([key]) => key === 'MODAL_TOKEN_ID' || key === 'MODAL_TOKEN_SECRET')) {
-        api.probeComputeEnvironment?.().catch(() => {})
-      }
+      // RFC-008 §7.6: Modal credential changes are picked up by the
+      // ModalBackend's live getCredentials() accessor on the next
+      // probe / plan. No explicit refresh call needed.
       onSaved?.()
     } catch (err: any) {
       setError(err.message || 'Failed to save keys')

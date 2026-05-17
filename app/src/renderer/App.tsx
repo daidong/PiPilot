@@ -817,59 +817,28 @@ export default function App() {
       scheduleEntityRefresh()
     })
 
-    // Compute run events
-    const unsubComputeUpdate = api.onComputeRunUpdate((event: any) => {
-      useComputeStore.getState().updateRun(event.runId, event)
+    // Compute events — RFC-008 §7.6: single channel dispatched through
+    // the store's applyEvent reducer. ComputeEvent is a discriminated
+    // union (run-update | run-complete | plan-ready | plan-approved |
+    // plan-rejected | cost-killed | availability-changed).
+    const unsubComputeEvent = api.onComputeEvent((event: any) => {
+      useComputeStore.getState().applyEvent(event)
     })
-    const unsubComputeComplete = api.onComputeRunComplete((event: any) => {
-      useComputeStore.getState().updateRun(event.runId, event)
-    })
-    const unsubComputeEnv = api.onComputeEnvironment((event: any) => {
-      useComputeStore.getState().setEnvironment(event)
-    })
-    const unsubModalPlanReady = api.onModalPlanReady?.((plan: any) => {
-      useComputeStore.getState().setModalPendingPlan({
-        planId: plan.planId,
-        taskDescription: plan.taskDescription,
-        command: plan.command,
-        scriptPath: plan.scriptPath,
-        image: plan.image,
-        costEstimate: plan.costEstimate,
-        taskProfile: plan.taskProfile,
-        createdAt: plan.createdAt,
-        approved: plan.approved,
-        rejectedAt: plan.rejectedAt,
-        rejectionComments: plan.rejectionComments,
-      })
-    }) ?? (() => {})
-    const unsubModalPlanApproved = api.onModalPlanApproved?.(() => {
-      useComputeStore.getState().clearModalPendingPlan()
-    }) ?? (() => {})
-    const unsubModalPlanRejected = api.onModalPlanRejected?.(() => {
-      useComputeStore.getState().clearModalPendingPlan()
-    }) ?? (() => {})
-    const unsubModalAvailable = api.onModalAvailable?.((event: any) => {
-      useComputeStore.getState().setModalAvailable(event)
-    }) ?? (() => {})
-    const unsubModalCostKilled = api.onModalCostKilled?.((event: any) => {
-      useComputeStore.getState().updateRun(event.runId, {
-        status: 'cost_killed',
-        target: 'modal',
-        estimatedCostUsd: event.estimatedCostUsd,
-      })
-    }) ?? (() => {})
 
-    // Eagerly hydrate compute state after listeners are registered so the
-    // Compute tab shows persisted runs and any probe-triggered events land.
+    // Hydrate persisted runs + pending plans on mount so the Compute
+    // tab restores its pre-crash state in a single round trip
+    // (amendment A3).
     if (api?.isComputeEnabled?.()) {
-      api.hydrateComputeRuns?.()
+      api.hydrateCompute()
         .then((result: any) => {
-          for (const run of result?.runs ?? []) {
-            if (run?.runId) useComputeStore.getState().updateRun(run.runId, run)
+          if (Array.isArray(result?.runs)) {
+            useComputeStore.getState().hydrateRuns(result.runs)
+          }
+          if (Array.isArray(result?.pendingPlans)) {
+            useComputeStore.getState().hydratePendingPlans(result.pendingPlans)
           }
         })
-        .catch(() => {})
-      api.probeComputeEnvironment?.().catch(() => {})
+        .catch(() => { /* non-fatal */ })
     }
 
     return () => {
@@ -885,14 +854,7 @@ export default function App() {
       unsubToolProgress()
       unsubSkillLoaded()
       unsubUsage()
-      unsubComputeUpdate()
-      unsubComputeComplete()
-      unsubComputeEnv()
-      unsubModalPlanReady()
-      unsubModalPlanApproved()
-      unsubModalPlanRejected()
-      unsubModalAvailable()
-      unsubModalCostKilled()
+      unsubComputeEvent()
     }
   }, [hasProject])
 
