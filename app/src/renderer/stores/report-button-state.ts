@@ -65,7 +65,7 @@ const CORE_FIELDS = ['title', 'authors', 'year', 'venue', 'abstract', 'doi', 'ci
 function countCoreFields(paper: PaperShape): number {
   let count = 0
   for (const field of CORE_FIELDS) {
-    const v = (paper as Record<string, unknown>)[field]
+    const v = (paper as unknown as Record<string, unknown>)[field]
     if (v === undefined || v === null || v === '') continue
     if (Array.isArray(v) && v.length === 0) continue
     // Treat unknown:* DOIs as missing for the enrichment-readiness check —
