@@ -50,11 +50,8 @@ const SUITES = {
   agents: 'lib/agents/__tests__',
   'diagram-backends': 'lib/tools/diagram-backends/__tests__',
   importers: 'lib/importers/__tests__',
-<<<<<<< HEAD
   reports: 'lib/reports/__tests__',
-=======
-  compute: 'lib/compute/__tests__',
->>>>>>> ff30961 (feat(compute): foundation — ComputeBackend interface, Registry, PlanStore, events)
+  compute: 'lib/compute',
   renderer: 'app/src/renderer/stores/__tests__'
 }
 
