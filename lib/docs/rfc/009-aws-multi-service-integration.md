@@ -1,10 +1,10 @@
 # RFC-009: AWS Multi-Service Integration
 
-**Status:** Draft — planning only, not scheduled. Reference doc for when we actually add AWS support.
+**Status:** Phase 1 scope locked (2026-05-18) — see §0.2. Implementation not yet started; this RFC is the entry point when work resumes.
 **Author:** Captain + Claude
-**Date:** 2026-05-17
+**Date:** 2026-05-17 (v1), 2026-05-18 (v2 — Phase 1 scope locked)
 **Builds on:** RFC-008 (Compute Backend Abstraction)
-**Scope:** A reference architecture for integrating *multiple* AWS services (EC2, Bedrock, S3, Lambda, CloudWatch, …) without making the agent / coordinator codebase scale super-linearly with each service added.
+**Scope:** A reference architecture for integrating *multiple* AWS services (EC2, Bedrock, S3, Lambda, CloudWatch, …) without making the agent / coordinator codebase scale super-linearly with each service added. **Phase 1 narrows execution to EC2 + minimal S3** (§0.2); the broader layering plan (§2–§5) stays intact as a guide for later phases.
 
 ## 0. TL;DR
 
@@ -20,7 +20,57 @@ The complexity claim this RFC defends: **as long as each AWS service plugs into 
 
 A representative target — EC2 (compute) + Bedrock (provider) + S3 (tools) — costs ~3000 LOC / 3-4 weeks, only ~50% more than EC2 alone. See §6 for the full estimate.
 
-This RFC is a **reference doc**, not an implementation plan. It locks the layering, names the shared infrastructure, and inventories the per-service surface so a future implementer can start without re-litigating the architecture.
+**Phase 1 (next implementation cycle) is narrower than that representative target — see §0.2 below.** This RFC stays the architectural reference; Phase 1 just locks which sub-pieces ship first.
+
+## 0.2 Phase 1 Scope (next implementation cycle) — **the clean handoff**
+
+When work resumes, **build exactly the items on this list and nothing else**. Other sections of this RFC describe Phase 2+ — useful as context, not actionable now.
+
+### In scope (ship in v1)
+
+| Module | LOC | Time | Notes |
+|---|---|---|---|
+| **Shared AWS credentials layer** (§3.1) | ~150 | 0.5 day | `lib/aws/credentials.ts` — access key + secret + region + STS validation. Source priority: settings UI > env > `~/.aws/credentials` > instance metadata. |
+| **AWS Settings UI** (§3.3) | ~150 | 0.5 day | New section in the existing Compute tab (parallel to the Modal section). "Test connection" button hits `sts:GetCallerIdentity` + per-service capability probe for the two services in v1. |
+| **EC2 ComputeBackend** (§4.1) | ~1500-1800 | ~2 weeks | Adapter at `lib/compute/backends/aws-ec2/`, runner at `lib/aws-ec2-compute/`. Instance lifecycle + SSH-tee output to local log + cost killing + crash recovery via instance ledger. **No SCP-back of artifacts** — see Phase 1 design note below. |
+| **S3 minimal tools** (§4.3, narrowed) | ~200-250 | 1.5 days | Three tools only: `s3_download`, `s3_list`, `s3_presigned_url`. `createS3Tools(ctx)` factory wired into `createResearchTools()`. |
+| **Tests + docs** | ~250 | 2 days | Mock AWS SDK for backend e2e; tool tests for S3; user-facing setup doc. |
+| **Total** | **~2200-2600** | **~2-2.5 weeks** | |
+
+### Phase 1 design note — S3 IS the artifact-return mechanism
+
+Phase 1 deliberately couples EC2 + S3 to solve EC2's biggest sharp edge cheaply. Instead of building SCP-back-of-files into the EC2 backend (which requires reliable long-running SSH transfers, progress tracking, retry-on-interrupt, completion-before-terminate sequencing — ~200-300 LOC of fragile I/O code), the contract becomes:
+
+- The user's script writes outputs to S3 directly (`aws s3 cp ./out s3://bucket/$RUN_ID/ --recursive`).
+- EC2 backend's job is launch → SSH-stream stdout to local log → terminate. **It never moves files.**
+- After the run, the user (or coordinator agent) retrieves results via the `s3_download` tool, on demand.
+
+This collapses a hard distributed-systems problem into a documented AWS pattern, and means the run record can complete (and the instance can terminate) the moment the script exits, without waiting on a file transfer. It also means a partial / failed run still has whatever outputs the script managed to upload — no "all-or-nothing" SCP race.
+
+**The framework-level Artifact API (RFC-008 P1 open item) stays DEFERRED.** Phase 1 doesn't need it; if Phase 2+ adds another compute backend where S3-style external storage isn't natural (e.g., a stateless serverless backend), we revisit then.
+
+### Explicitly OUT of Phase 1 (deferred to Phase 2+)
+
+| Item | Why deferred | When to revisit |
+|---|---|---|
+| **Bedrock LLM provider** (§2.2, §4.2) | Anthropic / OpenAI providers cover current LLM needs; Bedrock is a parallel route, not a replacement | When a user actually asks "can I route through Bedrock" |
+| **AWS Batch / Fargate / SageMaker backends** (§4.1) | One compute backend is enough to validate the EC2 pattern; adding more before EC2 is battle-tested risks repeated rework | After EC2 has been used in anger for ~1 month |
+| **S3 mutation tools** (`s3_upload`, `s3_copy`, `s3_delete`) | Phase 1 flow is "EC2 writes → user reads"; no client-side upload needed | When a user workflow requires it |
+| **Lambda / CloudWatch / DynamoDB / Comprehend / etc.** (§4.3) | Phase 1 has no use case for them | Per-service on demand |
+| **Telemetry / cost ledger** (§3.4) | EC2 alone can track its own per-run cost in the existing RunRecord; cross-service aggregation isn't useful until there are multiple cost-bearing services | When Phase 2 lands the second cost-bearing AWS surface |
+| **STS role assumption / SSO / MFA** (§7 Q2-Q3) | Access keys cover the 90% case for solo / small-team users | When a user blocked by enterprise auth asks |
+| **Framework-level Artifact API** (§7 Q7) | S3 replaces the need for v1 (see Phase 1 design note above) | When a non-S3 compute backend needs it |
+
+### Acceptance criteria for Phase 1 done
+
+1. User configures AWS access key + secret + region in Settings → Compute → AWS section; "Test connection" reports green for STS + EC2 + S3.
+2. Agent receives the user's "train this model on AWS" request, calls `compute_plan(backend='aws-ec2', ...)`, plan goes through the existing approval gate.
+3. Approval triggers EC2 launch; instance reaches SSH-ready; script executes; stdout streams to local log file (visible in Compute tab like Modal runs); cost-kill timer enforces threshold; instance terminates on completion.
+4. User script's S3 outputs are retrievable via `s3_download` tool from the agent.
+5. App crash mid-run → restart → hydrate finds the running instance via persisted instance ledger → reattaches log stream OR marks the run completed/failed based on DescribeInstances state. **Zero orphan instances ever.**
+6. CI on all three platforms; tests cover backend mock + S3 tools mock + crash-recovery flow.
+
+This RFC is a **reference doc** for the broader architectural decisions (layering, anti-patterns, shared infrastructure). Phase 1 just locks which sub-pieces ship first.
 
 ## 1. Motivation — why this RFC exists before any code
 
@@ -174,32 +224,33 @@ This is **optional** but flagged here so the per-service code is uniform about w
 
 ## 4. Per-Service Inventory
 
-A reference table for the future implementer. Estimated LOC includes the service's main module + tests; excludes shared infrastructure (§3).
+A reference table for the future implementer. Estimated LOC includes the service's main module + tests; excludes shared infrastructure (§3). **Phase 1 items marked ✅; deferred items marked [DEFERRED] — see §0.2.**
 
 ### 4.1 Layer A: Compute services
 
 | Service | Approval needed? | Cost model | Crash risk | LOC | Notes |
 |---|---|---|---|---|---|
-| **EC2** | Yes | per-hour instance type × duration | High (orphan instances burn $$$) | 1700-2500 | Most complex. Needs instance lifecycle + SSH + artifact SCP back. Critical to persist `instanceId` before returning from submit. |
-| **AWS Batch** | Yes | per-vCPU + per-GB-hour | Low (AWS handles cleanup) | 800-1200 | Submit JobDefinition + JobQueue; poll JobStatus. Much simpler lifecycle. |
-| **Fargate task** | Yes | per-vCPU + per-GB-hour | Low | 700-1000 | Like Batch but no queue layer. RunTask + DescribeTasks. |
-| **SageMaker training** | Yes | per-instance × duration | Medium (training jobs can be stopped but billing is per-second) | 1000-1500 | Closest to Modal's model — AWS manages everything; we provide container image + dataset URI. |
+| ✅ **EC2** (Phase 1) | Yes | per-hour instance type × duration | High (orphan instances burn $$$) | **1500-1800** (reduced — see below) | Phase 1 implementation. **Phase 1 simplification**: no SCP-back of artifacts — user script writes to S3 (§0.2 design note), saving ~200-300 LOC of SSH-file-transfer code. Critical to persist `instanceId` before returning from submit (instance ledger). |
+| [DEFERRED] AWS Batch | Yes | per-vCPU + per-GB-hour | Low (AWS handles cleanup) | 800-1200 | Submit JobDefinition + JobQueue; poll JobStatus. Much simpler lifecycle. |
+| [DEFERRED] Fargate task | Yes | per-vCPU + per-GB-hour | Low | 700-1000 | Like Batch but no queue layer. RunTask + DescribeTasks. |
+| [DEFERRED] SageMaker training | Yes | per-instance × duration | Medium (training jobs can be stopped but billing is per-second) | 1000-1500 | Closest to Modal's model — AWS manages everything; we provide container image + dataset URI. |
 
 ### 4.2 Layer B: LLM Provider
 
 | Service | LOC | Notes |
 |---|---|---|
-| **Bedrock** | 200-400 | Per-model-family adapter (Claude messages / Titan completions / Llama chat). Cross-region inference profiles are a recent addition — design for the 2026+ Bedrock API, not the 2024 one. |
+| [DEFERRED] Bedrock | 200-400 | Per-model-family adapter (Claude messages / Titan completions / Llama chat). Cross-region inference profiles are a recent addition — design for the 2026+ Bedrock API, not the 2024 one. **Phase 1 punt rationale**: existing Anthropic / OpenAI providers cover current LLM needs; adding Bedrock now is parallel work without unblocking the EC2 use case. |
 
 ### 4.3 Layer C: Tools
 
 | Service | Tools | LOC total | Notes |
 |---|---|---|---|
-| **S3** | upload, download, list, presigned-url, copy, delete | 400-500 | The most-asked-for. Watch out for large file uploads (multipart) and prefix-listing pagination. |
-| **Lambda** | invoke (sync), invoke-async, list-functions | 200-300 | Sync invoke fits Tool; long-async (>15min) should be Layer A. |
-| **CloudWatch Logs** | query (Logs Insights), tail | 200-300 | Logs Insights is a query language — tool description must teach the LLM the syntax (`fields @timestamp, @message | filter ...`). |
-| **DynamoDB** | get, query, put | 250-350 | Writes gated by capability flag (don't let agent silently destroy data). |
-| **Textract / Rekognition / Comprehend** | one tool per useful API | 150-300 each | Niche; add only on demand. |
+| ✅ **S3** (Phase 1, narrowed) | **download, list, presigned-url** | **200-250** | Phase 1 set: three read-side tools that let the agent retrieve EC2 job outputs from S3 (§0.2 design note). Watch out for prefix-listing pagination. |
+| [DEFERRED] S3 mutation tools | upload, copy, delete | +200 on top of read set | Not needed for Phase 1's "EC2 writes, agent reads" flow. Add when a workflow requires client-side upload. |
+| [DEFERRED] Lambda | invoke (sync), invoke-async, list-functions | 200-300 | Sync invoke fits Tool; long-async (>15min) should be Layer A. |
+| [DEFERRED] CloudWatch Logs | query (Logs Insights), tail | 200-300 | Logs Insights is a query language — tool description must teach the LLM the syntax (`fields @timestamp, @message | filter ...`). |
+| [DEFERRED] DynamoDB | get, query, put | 250-350 | Writes gated by capability flag (don't let agent silently destroy data). |
+| [DEFERRED] Textract / Rekognition / Comprehend | one tool per useful API | 150-300 each | Niche; add only on demand. |
 
 ## 5. Anti-Patterns — what NOT to do
 
@@ -235,20 +286,28 @@ These show up by default if the layering isn't enforced; each is paid forever on
 
 ✅ Bedrock plugs into pi-mono's provider abstraction. The coordinator switches "provider" the same way it switches between Anthropic and OpenAI today.
 
-## 6. Effort Estimate — the representative target
+## 6. Effort Estimate
 
-A grounded estimate for the user's stated example (EC2 + Bedrock + S3):
+### 6.1 Phase 1 (next implementation cycle) — what we're actually building
 
 | Module | LOC | Time |
 |---|---|---|
-| Shared AWS infra (`lib/aws/credentials.ts` + Settings UI) | 250-350 | 1 day |
-| Layer A: EC2 ComputeBackend | 1700-2500 | 2-3 weeks |
-| Layer B: Bedrock provider | 200-400 | 1-2 days |
-| Layer C: S3 tools (6 core ops) | 400-500 | 2-3 days |
-| Cross-cutting: tests, docs, telemetry hooks | 300-500 | 2-3 days |
-| **Total** | **~2900-4250** | **~3-4 weeks** |
+| Shared AWS infra (`lib/aws/credentials.ts` + Settings UI section) | ~250 | 1 day |
+| Layer A: EC2 ComputeBackend (no SCP-back; S3 as artifact pipeline) | ~1500-1800 | ~2 weeks |
+| Layer C: S3 minimal tools (download + list + presigned_url) | ~200-250 | 1.5 days |
+| Cross-cutting: tests, docs | ~250 | 2 days |
+| **Phase 1 total** | **~2200-2600** | **~2-2.5 weeks** |
 
-Reference: RFC-008 EC2-only estimate was ~2000 LOC / 2-3 weeks. The marginal cost of *adding* Bedrock + S3 on top of EC2 is **~1000 LOC / ~1 week** — most of which is the shared infra that pays for itself across all future AWS services.
+### 6.2 Broader target (Phase 1 + 2: EC2 + Bedrock + S3, reference)
+
+| Module | LOC | Time |
+|---|---|---|
+| Phase 1 (above) | ~2200-2600 | ~2-2.5 weeks |
+| Bedrock provider (Phase 2 add) | 200-400 | 1-2 days |
+| S3 mutation tools (Phase 2 add) | +200 | 1-2 days |
+| **Phase 1+2 total** | **~2700-3300** | **~2.5-3 weeks** |
+
+Reference: RFC-008 EC2-only would have been ~2000 LOC / 2-3 weeks **with** SCP-back-of-artifacts. Phase 1 swaps that for S3-based artifact pipeline (~200-300 LOC saved in EC2, ~200-250 LOC added in S3 tools), netting roughly even on LOC but **drastically reducing the SSH/file-transfer risk surface** (see §0.2 design note).
 
 **Each subsequent service** (Batch, Lambda tools, CloudWatch tools, etc.) drops further because the shared infra already exists:
 - A new Layer A backend: ~1000 LOC (no longer needs to build credentials / settings UI from scratch)
@@ -267,18 +326,54 @@ These don't need to be answered to start, but should be revisited before the EC2
 4. **Per-service capability probes** — do we eagerly probe all AWS services on credential save (slow but informative settings UI), or lazily on first use (fast but errors land late)? Lean lazy with a "Test connection" button (§3.3) doing the eager pass on demand.
 5. **Bedrock model id → region routing** — once cross-region inference profiles are widely available, the provider can hide region routing entirely. Track AWS's API stability before deciding.
 6. **Agent-tool gating for destructive ops** — `s3_delete`, `dynamodb_put` should be capability-gated (similar to the approval gate for ComputeBackend). Where does this live? Probably a new pi-mono tool capability flag; flag for the implementer.
-7. **EC2 artifact return** — this surfaced in the prior compute audit as a P1 gap (no way for a backend to declare "here are the output files"). RFC-008 deferred it. EC2 will force the issue. Either extend `RunStatus` with `artifacts: Array<{path, size, mime}>`, or solve it externally (force scripts to write to S3 + use S3 tools to retrieve). The former is ~150 LOC and benefits Local + Modal too; the latter is zero LOC but pushes the workflow onto the user. Decide at EC2 implementation time.
+7. ✅ **EC2 artifact return** — **RESOLVED 2026-05-18: use S3 (zero LOC framework change).** EC2 jobs write outputs to S3 from inside the user script (`aws s3 cp ... s3://bucket/$RUN_ID/`); the user / agent retrieves them via Phase 1's `s3_download` tool. The framework-level Artifact API (`RunStatus.artifacts: Array<...>`) stays deferred — Phase 1 doesn't need it, and if a Phase 2+ backend later requires in-band artifact return (e.g., a stateless serverless backend with no natural external storage), we'll revisit then. Trade-off accepted: the workflow lives in user-land Python rather than the backend; for AWS this is the documented pattern and removes the hardest SSH+file-transfer logic from EC2's implementation. See §0.2 Phase 1 design note.
 
-## 8. Implementation Order (when work resumes)
+## 8. Implementation Order
 
-Suggested sequence — each step delivers user value standalone, and each one's infrastructure is reused by the next:
+### 8.1 Phase 1 — when work resumes (the clean handoff plan)
 
-1. **Shared AWS credentials layer + Settings UI** (§3.1, §3.3) — 1 day. Unlocks everything.
-2. **Bedrock provider** (Layer B) — 1-2 days. Smallest, validates the credentials layer end-to-end, gives the user an immediate "I can use Claude via Bedrock" win.
-3. **S3 tools** (Layer C) — 2-3 days. Second-smallest, gives the agent file I/O against the user's existing AWS storage.
-4. **EC2 ComputeBackend** (Layer A) — 2-3 weeks. The big one; do it last so the shared infra is battle-tested.
-5. **(Optional) Artifact return API in RFC-008** — 2-3 days. Decide based on EC2 implementation experience whether to extend `RunStatus.artifacts` (recommended) or push to S3.
-6. **(Future) Additional compute backends** — Batch, Fargate, SageMaker on demand. Each one is now ~1 week with shared infra in place.
+```
+Week 1   ──┬── Day 1   Shared AWS credentials layer (§3.1) + Settings UI (§3.3)
+           │           Validate end-to-end with sts:GetCallerIdentity round-trip
+           │
+           ├── Day 2-3 S3 minimal tools — download / list / presigned_url
+           │           Smaller scope, independently testable, exercises credentials
+           │           layer with real AWS calls before EC2 starts
+           │
+           └── Day 4-5 EC2 instance lifecycle skeleton (launch → SSH-ready check →
+                       terminate). No streaming, no artifacts, no cost killing yet —
+                       just prove "agent can ask, instance boots, instance dies"
+
+Week 2   ──┬── Day 1-2 SSH stream → local output.log (reuse existing
+           │           ComputeRunner poll mechanism, same pattern as Modal)
+           │
+           ├── Day 3   Cost estimator + cost killing (per-second billing aware;
+           │           reuse ModalBackend's onCostKilled callback pattern)
+           │
+           └── Day 4-5 Crash recovery: instance ledger persistence + hydrate path.
+                       Verify "kill app, restart, hydrate finds running instance,
+                       reattaches log stream OR marks completed/failed based on
+                       DescribeInstances". Zero orphan instances tolerated.
+
+End-of-Wk2 ── Phase 1 alpha: full loop "agent → compute_plan(backend='aws-ec2') →
+              approve → EC2 launch → run script → script uploads to S3 →
+              EC2 terminate → agent uses s3_download to retrieve" works end-to-end.
+
+Week 3   ──── Hardening: error classification (capacity / quota / auth / SSH timeout
+              → FailureCode union), retry policy, user-facing docs, test coverage,
+              spot-instance support stub (off by default), three-platform CI.
+              Phase 1 production-ready exit.
+```
+
+### 8.2 Phase 2+ (after Phase 1 has been used in anger for ~1 month)
+
+Pull from the [DEFERRED] items in §4 based on actual user demand. Most likely candidates:
+
+- **Bedrock provider** (Layer B, §4.2) — 1-2 days. Smallest possible addition; validates that the credentials layer holds up for non-compute services.
+- **S3 mutation tools** (`s3_upload` / `s3_copy` / `s3_delete`) — 1-2 days. Add when a workflow forces it.
+- **Batch / Fargate / SageMaker** (Layer A, §4.1) — ~1 week each. Each is much smaller than EC2 because the shared infra is now in place.
+
+Per-service cost from Phase 2 onward is **flat** (no shared-infrastructure ramp-up overhead).
 
 ## 9. References
 
