@@ -250,6 +250,36 @@ export class ComputeRegistry {
     return backend.stop(runId)
   }
 
+  /**
+   * Re-probe every registered backend with `force: true` so cached
+   * probe state (LocalBackend's static-profile cache, etc.) is busted.
+   * Emits `availability-changed` for each backend, so subscribers
+   * (renderer ComputeView / Sidebar) update without any extra wiring.
+   *
+   * Triggered by the user from the Compute tab refresh button, and
+   * implicitly after credential saves that affect a backend's
+   * availability (e.g. Modal token entry).
+   */
+  async refreshAvailability(): Promise<void> {
+    await Promise.allSettled(
+      [...this.backends.values()].map(async (backend) => {
+        try {
+          const availability = await backend.probeAvailability({ force: true })
+          this.emit({ kind: 'availability-changed', backend: backend.identity.id, availability })
+        } catch (err) {
+          this.emit({
+            kind: 'availability-changed',
+            backend: backend.identity.id,
+            availability: {
+              available: false,
+              missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
+            },
+          })
+        }
+      }),
+    )
+  }
+
   // ── Lifecycle ───────────────────────────────────────────────────────
 
   async destroy(): Promise<void> {

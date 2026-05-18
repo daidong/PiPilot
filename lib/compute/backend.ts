@@ -28,8 +28,14 @@ export interface ComputeBackend {
    * Live-probe whether this backend can accept work right now.
    * Cheap to call (sub-second). Backends MAY return immediately if
    * they have nothing to check.
+   *
+   * When `opts.force` is true, backends with cached probe state
+   * (LocalBackend's static-profile cache, etc.) MUST invalidate
+   * before re-probing. Used by the Compute tab's manual refresh
+   * affordance so the user can pick up Docker / credentials /
+   * other environment changes without restarting.
    */
-  probeAvailability(): Promise<BackendAvailability>
+  probeAvailability(opts?: { force?: boolean }): Promise<BackendAvailability>
 
   /**
    * Analyze a task and produce a plan. May call out to LLM, read the

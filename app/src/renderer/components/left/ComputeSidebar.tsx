@@ -8,8 +8,10 @@
  */
 
 import React, { useState } from 'react'
-import { ChevronDown, ChevronRight, Info, Cloud, Cpu, AlertTriangle, CircleAlert } from 'lucide-react'
+import { ChevronDown, ChevronRight, Info, Cloud, Cpu, AlertTriangle, CircleAlert, RefreshCw } from 'lucide-react'
 import { useComputeStore, type BackendView, type ComputeRunView } from '../../stores/compute-store'
+
+const api = (window as any).api
 
 interface BackendCardProps {
   backend: BackendView
@@ -140,12 +142,42 @@ export function ComputeSidebar() {
     }
   }
 
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  const refresh = async () => {
+    setRefreshing(true)
+    setRefreshError(null)
+    try {
+      const result = await api?.refreshComputeAvailability?.()
+      if (!result?.success && result?.error) setRefreshError(result.error)
+    } catch (err: any) {
+      setRefreshError(err?.message || 'Refresh failed')
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   return (
     <div className="h-full flex flex-col min-h-0">
       <div className="px-2 pt-2 pb-2">
-        <p className="text-[10px] t-text-accent-soft uppercase tracking-wider px-3 pb-1.5 font-medium">
-          Compute Target
-        </p>
+        <div className="flex items-center justify-between px-3 pb-1.5">
+          <p className="text-[10px] t-text-accent-soft uppercase tracking-wider font-medium">
+            Compute Target
+          </p>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={refreshing}
+            aria-label="Re-probe backend availability"
+            title="Re-probe availability (Docker, Modal credentials, …)"
+            className="t-text-muted hover:t-text disabled:opacity-40 transition-colors"
+          >
+            <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        {refreshError && (
+          <p className="px-3 pb-1.5 text-[10px] text-red-500">{refreshError}</p>
+        )}
 
         {backendList.length === 0 ? (
           <div className="px-3 py-4 rounded-lg t-bg-surface border t-border-subtle">

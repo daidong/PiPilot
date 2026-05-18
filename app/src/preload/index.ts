@@ -230,6 +230,7 @@ export interface ElectronAPI {
   approveComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; error?: string }>
   rejectComputePlan: (backend: string, planId: string, comments: string) => Promise<{ success: boolean; error?: string }>
   stopComputeRun: (runId: string) => Promise<{ success: boolean; error?: string }>
+  refreshComputeAvailability: () => Promise<{ success: boolean; error?: string }>
   onComputeEvent: (cb: (event: any) => void) => () => void
 
   // File tracking
@@ -498,6 +499,8 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('compute:reject-plan', { backend, planId, comments }),
   stopComputeRun: (runId: string) =>
     ipcRenderer.invoke('compute:stop-run', { runId }),
+  refreshComputeAvailability: () =>
+    ipcRenderer.invoke('compute:refresh-availability'),
 
   onComputeEvent: (cb) => {
     const handler = (_: any, event: any) => cb(event)

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Eye, EyeOff, Check, ExternalLink, Cpu, Cloud, Box, Container, Settings as SettingsIcon } from 'lucide-react'
+import { Eye, EyeOff, Check, ExternalLink, Cpu, Cloud, Box, Container, Settings as SettingsIcon, RefreshCw } from 'lucide-react'
 import type { ComputeSettings as ComputeSettingsShape } from '../../../../../shared-ui/settings-types'
 import { useComputeStore, type BackendView } from '../../stores/compute-store'
 
@@ -25,12 +25,54 @@ interface Props {
  * generic ApprovalSection pattern keeps each section's affordances
  * contained.
  */
+/**
+ * Trigger a backend-availability re-probe. Shared by the Settings page
+ * refresh button and the auto-refresh after credential saves; returns
+ * the IPC result so callers can surface errors.
+ */
+export async function refreshBackendAvailability(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const result = await api?.refreshComputeAvailability?.()
+    return result ?? { success: false, error: 'IPC unavailable' }
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Refresh failed' }
+  }
+}
+
 export function ComputeSettings({ compute, onChange }: Props) {
   const localBackend = useComputeStore((s) => s.backends.get('local'))
   const modalBackend = useComputeStore((s) => s.backends.get('modal'))
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+
+  const refresh = async () => {
+    setRefreshing(true)
+    setRefreshError(null)
+    const result = await refreshBackendAvailability()
+    if (!result.success && result.error) setRefreshError(result.error)
+    setRefreshing(false)
+  }
 
   return (
     <div className="space-y-5">
+      <div className="flex items-center justify-between -mb-2">
+        <p className="text-[11px] t-text-muted leading-relaxed max-w-md">
+          Status reflects the last availability probe. Click refresh after starting Docker, saving
+          credentials, or any other environment change.
+        </p>
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={refreshing}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} />
+          {refreshing ? 'Re-probing…' : 'Refresh'}
+        </button>
+      </div>
+      {refreshError && (
+        <p className="text-[11px] text-red-500 -mt-3">{refreshError}</p>
+      )}
       <GlobalSection compute={compute} onChange={onChange} />
       <LocalSection backend={localBackend} />
       <ModalSection compute={compute} onChange={onChange} backend={modalBackend} />
@@ -277,6 +319,11 @@ function ModalCredentialFields() {
       // Clear the input so the placeholder shows "already set" on next render.
       setValues((v) => ({ ...v, [name]: '' }))
       refreshStatus()
+      // Re-probe so the Modal section's status dot flips from "Unavailable"
+      // (credentials missing) to "Ready" without waiting for the user to
+      // click Refresh. saveApiKey already wrote process.env.* in main, so
+      // ModalBackend.probeAvailability will see the new creds.
+      void refreshBackendAvailability()
     } finally {
       setSaving((s) => ({ ...s, [name]: false }))
     }

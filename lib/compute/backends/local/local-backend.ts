@@ -124,9 +124,9 @@ const CAPABILITIES: BackendCapabilities = {
 let envProbeCache: { profile: StaticProfile; at: number } | null = null
 const ENV_PROBE_TTL_MS = 60_000
 
-async function getStaticProfile(): Promise<StaticProfile> {
+async function getStaticProfile(opts?: { force?: boolean }): Promise<StaticProfile> {
   const now = Date.now()
-  if (envProbeCache && now - envProbeCache.at < ENV_PROBE_TTL_MS) {
+  if (!opts?.force && envProbeCache && now - envProbeCache.at < ENV_PROBE_TTL_MS) {
     return envProbeCache.profile
   }
   const profile = await probeStaticProfile()
@@ -233,9 +233,9 @@ export class LocalBackend implements ComputeBackend {
     })
   }
 
-  async probeAvailability(): Promise<BackendAvailability> {
+  async probeAvailability(opts?: { force?: boolean }): Promise<BackendAvailability> {
     try {
-      const profile = await getStaticProfile()
+      const profile = await getStaticProfile(opts)
       const missing: string[] = []
       if (!profile.dockerAvailable) {
         missing.push('Docker not detected — sandbox will fall back to host process')
