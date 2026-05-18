@@ -13,12 +13,14 @@ import {
   ChevronRight,
   ChevronDown,
   RotateCcw,
-  X
+  X,
+  Square,
+  CheckCircle2
 } from 'lucide-react'
-import { useComputeStore, useActiveRuns, useRecentRuns, usePendingModalPlan } from '../../stores/compute-store'
+import { useComputeStore, useActiveRuns, useRecentRuns, usePendingPlans } from '../../stores/compute-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
-import type { ComputeRunView, ModalImageView } from '../../stores/compute-store'
+import type { ComputeRunView, ComputePlanView, BackendView, ModalImageView } from '../../stores/compute-store'
 
 const api = (window as any).api
 
@@ -127,12 +129,51 @@ const STATUS_LABELS: Record<string, string> = {
 
 // ─── Status indicator (small dot, follows accent system) ─────────────────────
 
-function StatusDot({ status }: { status: string }) {
-  const isActive = status === 'running'
+function StatusDot({ status, stalled = false }: { status: string; stalled?: boolean }) {
+  // Pick a tint + pulse decision off the terminal/active state.
+  // Keep the dot the same size to avoid layout jitter; only color and
+  // animation change.
+  let cls = 't-bg-elevated'
+  let style: React.CSSProperties = { opacity: 0.8 }
+  let pulse = false
+  if (status === 'running') {
+    cls = 'bg-[var(--color-accent)]'
+    style = {}
+    if (stalled) {
+      // running but stalled — amber + pulse
+      cls = 'bg-amber-500'
+      pulse = true
+    }
+  } else if (status === 'stalled') {
+    cls = 'bg-amber-500'
+    style = {}
+    pulse = true
+  } else if (status === 'pending_approval') {
+    cls = 'bg-amber-400'
+    style = {}
+    pulse = true
+  } else if (status === 'queued') {
+    cls = 'bg-sky-400'
+    style = { opacity: 0.9 }
+  } else if (status === 'completed') {
+    cls = 'bg-emerald-500'
+    style = { opacity: 0.85 }
+  } else if (status === 'failed' || status === 'timed_out') {
+    cls = 'bg-red-500'
+    style = {}
+  } else if (status === 'cost_killed') {
+    cls = 'bg-red-500'
+    style = {}
+    pulse = true
+  } else if (status === 'cancelled') {
+    cls = 'bg-zinc-400'
+    style = { opacity: 0.7 }
+  }
   return (
-    <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
-      isActive ? 'bg-[var(--color-accent)]' : 't-bg-elevated'
-    }`} style={isActive ? {} : { opacity: 0.8 }} />
+    <span
+      className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${cls} ${pulse ? 'animate-pulse' : ''}`}
+      style={style}
+    />
   )
 }
 
@@ -399,9 +440,25 @@ function RunRow({
   expanded: boolean
   onToggle: () => void
 }) {
-  const isActive = run.status === 'running' || run.status === 'stalled'
+  const isActive = run.status === 'running' || run.status === 'stalled' || run.status === 'queued' || run.status === 'pending_approval'
   const hasProgress = run.progress?.percentage !== undefined
   const setCenterView = useUIStore((s) => s.setCenterView)
+  const backendView = useComputeStore((s) => s.backends.get(run.backend))
+  const canStop = !!backendView?.capabilities?.supportsStop && (run.status === 'running' || run.status === 'stalled' || run.status === 'queued')
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState<string | null>(null)
+  const stop = async () => {
+    setStopping(true)
+    setStopError(null)
+    try {
+      const result = await api.stopComputeRun?.(run.runId)
+      if (!result?.success) setStopError(result?.error || 'Failed to stop run.')
+    } catch (err: any) {
+      setStopError(err?.message || 'Failed to stop run.')
+    } finally {
+      setStopping(false)
+    }
+  }
 
   const sendToChat = (text: string) => {
     setCenterView('chat')
@@ -416,13 +473,19 @@ function RunRow({
   }
 
   const hasMetrics = run.progress?.metrics && Object.keys(run.progress.metrics).length > 0
-  const isModal = run.target === 'modal'
+  const isModal = run.backend === 'modal'
   const modalGpuLabel = modalImageGpuLabel(run.image)
   const modalCost = formatCostSummary(run)
   const primaryText = isModal ? (run.taskDescription?.trim() || run.command) : run.command
+  const isHardFailure = run.status === 'failed' || run.status === 'timed_out' || run.status === 'cost_killed'
+  const rowTint = isHardFailure
+    ? 'border-l-2 border-l-red-500/40 bg-red-500/5'
+    : run.status === 'cancelled'
+      ? 'border-l-2 border-l-zinc-400/30'
+      : ''
 
   return (
-    <div className="border-b t-border last:border-b-0">
+    <div className={`border-b t-border last:border-b-0 ${rowTint}`}>
       {/* Compact row */}
       <div
         className="flex items-center gap-3 px-3 py-2 hover:bg-[var(--color-accent-soft)]/5 transition-colors cursor-pointer"
@@ -437,7 +500,7 @@ function RunRow({
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
 
-        <StatusDot status={run.status} />
+        <StatusDot status={run.status} stalled={run.stalled} />
 
         {/* Command + meta */}
         <div className="flex-1 min-w-0">
@@ -474,7 +537,24 @@ function RunRow({
         <span className={`shrink-0 text-[11px] t-text-muted text-right ${isModal ? 'w-24' : 'w-14'}`}>
           {isModal ? formatActivityLabel(run) : isActive ? run.currentPhase : (run.startedAt ? timeAgo(run.startedAt) : '--')}
         </span>
+
+        {/* Stop button — only shown for backends that support it AND when the run is still active. */}
+        {canStop && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); stop() }}
+            disabled={stopping}
+            aria-label="Stop run"
+            title="Stop run"
+            className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-500/10 t-text-muted hover:text-red-500 disabled:opacity-40 transition-colors"
+          >
+            <Square size={11} fill="currentColor" />
+          </button>
+        )}
       </div>
+      {stopError && (
+        <div className="px-10 -mt-1 mb-1.5 text-[10px] text-red-500">{stopError}</div>
+      )}
 
       {/* Progress section for active runs — always visible (not inside expanded) */}
       {isActive && (
@@ -538,7 +618,7 @@ function RunRow({
                 exit {run.exitCode}
               </span>
             )}
-            {run.target === 'modal' && (
+            {run.backend === 'modal' && (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-muted">
                 <Cloud size={10} /> Modal
               </span>
@@ -622,19 +702,30 @@ function RunRow({
 function FilterBar({
   search,
   onSearchChange,
+  backendFilter,
+  onBackendFilterChange,
+  backendCounts,
+  backends,
 }: {
   search: string
   onSearchChange: (v: string) => void
+  backendFilter: string
+  onBackendFilterChange: (v: string) => void
+  backendCounts: Map<string, number>
+  backends: BackendView[]
 }) {
+  // Only show the chip row when there's more than one backend registered;
+  // a single-backend setup doesn't need a "filter by backend" affordance.
+  const showChips = backends.length > 1
   return (
-    <div className="px-4 py-2 border-b t-border">
+    <div className="px-4 py-2 border-b t-border space-y-2">
       <div className="relative">
         <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 t-text-muted" />
         <input
           type="text"
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search runs by command or ID..."
+          placeholder="Search runs by command, description, or ID..."
           className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
         />
         {search && (
@@ -648,11 +739,47 @@ function FilterBar({
           </button>
         )}
       </div>
+      {showChips && (
+        <div className="flex items-center gap-1 flex-wrap">
+          <BackendChip
+            label="All"
+            active={backendFilter === 'all'}
+            count={Array.from(backendCounts.values()).reduce((a, b) => a + b, 0)}
+            onClick={() => onBackendFilterChange('all')}
+          />
+          {backends.map((b) => (
+            <BackendChip
+              key={b.id}
+              label={b.displayName}
+              active={backendFilter === b.id}
+              count={backendCounts.get(b.id) ?? 0}
+              onClick={() => onBackendFilterChange(b.id)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-type ModalApprovalSection = 'script' | 'environment' | 'cost'
+function BackendChip({ label, active, count, onClick }: { label: string; active: boolean; count: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors ${
+        active
+          ? 'bg-[var(--color-accent-soft)]/15 t-text-accent border-[var(--color-accent-soft)]/40'
+          : 't-bg-surface t-text-muted border-transparent hover:t-text-secondary'
+      }`}
+    >
+      {label}
+      <span className="ml-1 tabular-nums opacity-70">{count}</span>
+    </button>
+  )
+}
+
+type DisclosureKey = string
 
 function ApprovalSection({
   id,
@@ -661,10 +788,10 @@ function ApprovalSection({
   onToggle,
   children,
 }: {
-  id: ModalApprovalSection
+  id: DisclosureKey
   label: string
   expanded: boolean
-  onToggle: (id: ModalApprovalSection) => void
+  onToggle: (id: DisclosureKey) => void
   children: React.ReactNode
 }) {
   return (
@@ -687,9 +814,7 @@ function ApprovalSection({
   )
 }
 
-function ModalApprovalCard() {
-  const plan = usePendingModalPlan()
-  const clearModalPendingPlan = useComputeStore((s) => s.clearModalPendingPlan)
+function PendingPlanCard({ plan }: { plan: ComputePlanView }) {
   const sendChat = useChatStore((s) => s.send)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const setCenterView = useUIStore((s) => s.setCenterView)
@@ -698,51 +823,52 @@ function ModalApprovalCard() {
   const [showRejectEditor, setShowRejectEditor] = useState(false)
   const [rejectionComments, setRejectionComments] = useState('')
   const [rejectionError, setRejectionError] = useState<string | null>(null)
-  const [expandedSection, setExpandedSection] = useState<ModalApprovalSection | null>(null)
-  const [scriptContent, setScriptContent] = useState<string | null>(null)
-  const [scriptError, setScriptError] = useState<string | null>(null)
-  const [loadingScript, setLoadingScript] = useState(false)
-  const [costThresholdUsd, setCostThresholdUsd] = useState(5)
 
+  // Reset local UI state when the plan instance changes.
   useEffect(() => {
-    let cancelled = false
-    api.loadSettings?.()
-      .then((settings: any) => {
-        // RFC-008 §7.7: compute.backends.modal.costThresholdUsd is the
-        // new path; fall back to the legacy field for one cycle in case
-        // settings on disk haven't been migrated yet.
-        const threshold = settings?.compute?.backends?.modal?.costThresholdUsd
-          ?? settings?.modalCompute?.costThresholdUsd
-        if (!cancelled && typeof threshold === 'number' && Number.isFinite(threshold)) {
-          setCostThresholdUsd(threshold)
-        }
-      })
-      .catch(() => { /* default threshold is fine for display */ })
-    return () => { cancelled = true }
-  }, [])
-
-  useEffect(() => {
-    setExpandedSection(null)
-    setScriptContent(null)
-    setScriptError(null)
-    setLoadingScript(false)
     setShowRejectEditor(false)
     setRejectionComments('')
     setRejectionError(null)
-  }, [plan?.planId])
+  }, [plan.planId])
 
-  if (!plan) return null
+  // Slim "approved, waiting for agent" state — Registry already
+  // cleared the PlanRecord, but the renderer keeps the plan around
+  // until the first run-update arrives. Without this state the card
+  // would just vanish for the window between approve and the agent's
+  // next tool call.
+  if (plan.approved) {
+    return (
+      <div className="px-4 py-2.5 border-b t-border t-bg-surface">
+        <div className="rounded-lg border t-border-subtle p-2.5 flex items-start gap-2.5">
+          <CheckCircle2 size={14} className="t-text-accent shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium t-text">
+              {plan.backend} plan approved — waiting for agent to execute…
+            </p>
+            <p className="text-[11px] t-text-muted mt-0.5 truncate">
+              {plan.taskDescription?.trim() || plan.command}
+            </p>
+          </div>
+          <span className="px-1.5 py-0.5 rounded text-[9px] bg-[var(--color-accent-soft)]/15 t-text-accent animate-pulse shrink-0">
+            queued
+          </span>
+        </div>
+      </div>
+    )
+  }
 
   const approve = async () => {
     setApproving(true)
     try {
       const result = await api.approveComputePlan?.(plan.backend, plan.planId)
       if (result?.success) {
-        // Store will receive a plan-approved event and prune the entry;
-        // calling the local setter is a defensive no-op safe fallback.
-        clearModalPendingPlan?.()
         setCenterView('chat')
-        await sendChat('compute plan approved')
+        await sendChat(`compute plan approved (backend: ${plan.backend}, plan_id: ${plan.planId})`)
+      } else {
+        // Surface failures so users don't think the click was lost.
+        // E.g. settings flipped after plan() can produce "Plan does not
+        // require approval" — non-fatal but worth showing.
+        setRejectionError(result?.error || 'Failed to approve plan.')
       }
     } finally {
       setApproving(false)
@@ -766,80 +892,49 @@ function ModalApprovalCard() {
       result = await api.rejectComputePlan?.(plan.backend, plan.planId, comments)
     } catch (err: any) {
       setRejecting(false)
-      setRejectionError(err?.message || 'Failed to reject Modal plan.')
+      setRejectionError(err?.message || 'Failed to reject plan.')
       return
     }
     if (!result?.success) {
       setRejecting(false)
-      setRejectionError(result?.error || 'Failed to reject Modal plan.')
+      setRejectionError(result?.error || 'Failed to reject plan.')
       return
     }
-    clearModalPendingPlan()
     setCenterView('chat')
-    await sendChat(`compute plan rejected. Rejection comments: ${comments}`)
+    await sendChat(`compute plan rejected (backend: ${plan.backend}). Rejection comments: ${comments}`)
   }
 
-  const loadScript = () => {
-    if (scriptContent !== null || scriptError || loadingScript) return
-    setLoadingScript(true)
-    api.readFile(plan.scriptPath)
-      .then((result: { success: boolean; content?: string; error?: string }) => {
-        if (result?.success) {
-          setScriptContent(result.content ?? '')
-          setScriptError(null)
-        } else {
-          setScriptError(result?.error || 'Could not read script file.')
-        }
-      })
-      .catch((err: any) => {
-        setScriptError(err?.message || 'Could not read script file.')
-      })
-      .finally(() => setLoadingScript(false))
+  // Pick a backend-specific body renderer; fall back to GenericPlanBody.
+  let Body: React.FC<{ plan: ComputePlanView }>
+  let headerIcon: React.ReactNode
+  let headerLabel: string
+  if (plan.backend === 'modal') {
+    Body = ModalPlanBody
+    headerIcon = <Cloud size={16} className="t-text-accent shrink-0 mt-0.5" />
+    headerLabel = 'Modal compute plan'
+  } else if (plan.backend === 'local') {
+    Body = LocalPlanBody
+    headerIcon = <Cpu size={16} className="t-text-accent shrink-0 mt-0.5" />
+    headerLabel = 'Local compute plan'
+  } else {
+    Body = GenericPlanBody
+    headerIcon = <Cpu size={16} className="t-text-accent shrink-0 mt-0.5" />
+    headerLabel = `${plan.backend} compute plan`
   }
 
-  const toggleSection = (section: ModalApprovalSection) => {
-    const next = expandedSection === section ? null : section
-    setExpandedSection(next)
-    if (next === 'script') loadScript()
-  }
-
-  const gpuLabel = modalImageGpuLabel(plan.image)
-  const durationLabel = formatPlanMinutes(plan.costEstimate.expectedDurationMinutes)
-  const estimatedCostLabel = formatMoney(plan.costEstimate.estimatedTotalUsd, 2)
-  const rateLabel = formatMoney(plan.costEstimate.gpuRateUsdPerHour, 2)
   const taskText = plan.taskDescription?.trim() || plan.command
-  const pythonPackages = formatList(plan.image.pythonPackages)
-  const packageInstallers = formatList(plan.image.pythonPackageInstallers)
-  const systemPackages = formatList(plan.image.systemPackages)
-  const durationReasoning = plan.taskProfile?.durationReasoning?.trim()
 
   return (
     <div className="px-4 py-3 border-b t-border t-bg-surface">
       <div className="rounded-lg border t-border-subtle p-3 space-y-3">
         <div className="flex items-start gap-3">
-          <Cloud size={16} className="t-text-accent shrink-0 mt-0.5" />
+          {headerIcon}
           <div className="flex-1 min-w-0 space-y-3">
             <div>
-              <p className="text-xs font-semibold t-text">Modal compute plan</p>
-              <p className="text-[12px] t-text-secondary leading-relaxed mt-1 line-clamp-2">
-                {taskText}
-              </p>
+              <p className="text-xs font-semibold t-text">{headerLabel}</p>
+              <p className="text-[12px] t-text-secondary leading-relaxed mt-1 line-clamp-2">{taskText}</p>
             </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <div className="text-[10px] t-text-muted uppercase tracking-wide">GPU</div>
-                <div className="text-xs font-medium t-text mt-0.5 truncate">{gpuLabel}</div>
-              </div>
-              <div>
-                <div className="text-[10px] t-text-muted uppercase tracking-wide">Duration</div>
-                <div className="text-xs font-medium t-text mt-0.5 truncate">{durationLabel}</div>
-              </div>
-              <div>
-                <div className="text-[10px] t-text-muted uppercase tracking-wide">Est. cost</div>
-                <div className="text-xs font-medium t-text mt-0.5 truncate">{estimatedCostLabel}</div>
-              </div>
-            </div>
+            <Body plan={plan} />
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -852,10 +947,7 @@ function ModalApprovalCard() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setShowRejectEditor(true)
-                setRejectionError(null)
-              }}
+              onClick={() => { setShowRejectEditor(true); setRejectionError(null) }}
               disabled={approving || rejecting}
               className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-50"
             >
@@ -864,92 +956,13 @@ function ModalApprovalCard() {
           </div>
         </div>
 
-        <div className="rounded-md border t-border-subtle px-2">
-          <ApprovalSection id="script" label="Script" expanded={expandedSection === 'script'} onToggle={toggleSection}>
-            <div className="space-y-2">
-              <p className="text-[11px] font-mono t-text-secondary break-all">{plan.command}</p>
-              <p className="text-[10px] t-text-muted break-all">{plan.scriptPath}</p>
-              {loadingScript && (
-                <p className="text-[11px] t-text-muted">Loading script...</p>
-              )}
-              {scriptError && (
-                <p className="text-[11px] text-red-500">{scriptError}</p>
-              )}
-              {!loadingScript && !scriptError && scriptContent !== null && (
-                scriptContent.trim() ? (
-                  <pre className="p-2 rounded t-bg-elevated text-[10px] t-text-secondary font-mono overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                    {scriptContent}
-                  </pre>
-                ) : (
-                  <p className="text-[11px] t-text-muted">Script file is empty.</p>
-                )
-              )}
-            </div>
-          </ApprovalSection>
-
-          <ApprovalSection id="environment" label="Environment" expanded={expandedSection === 'environment'} onToggle={toggleSection}>
-            <div className="space-y-2 text-[11px] t-text-secondary leading-relaxed">
-              <p className="font-medium t-text">
-                Python {plan.image.pythonVersion || 'unknown'} &middot; {gpuLabel}
-              </p>
-              <p><span className="t-text-muted">Image source:</span> {modalImageSourceLabel(plan.image)}</p>
-              <p><span className="t-text-muted">Python packages:</span> {pythonPackages}</p>
-              <p><span className="t-text-muted">Package installers:</span> {packageInstallers}</p>
-              <p><span className="t-text-muted">System packages:</span> {systemPackages}</p>
-              {!!plan.image.envVars?.length && <p><span className="t-text-muted">Environment vars:</span> {formatList(plan.image.envVars)}</p>}
-              {!!plan.image.localDirs?.length && <p><span className="t-text-muted">Local dirs:</span> {formatList(plan.image.localDirs)}</p>}
-              {!!plan.image.localFiles?.length && <p><span className="t-text-muted">Local files:</span> {formatList(plan.image.localFiles)}</p>}
-              {!!plan.image.localPythonSources?.length && <p><span className="t-text-muted">Local Python source:</span> {formatList(plan.image.localPythonSources)}</p>}
-              {!!plan.image.buildCommands?.length && <p><span className="t-text-muted">Build commands:</span> {formatList(plan.image.buildCommands)}</p>}
-              {!!plan.image.buildFunctions?.length && <p><span className="t-text-muted">Build functions:</span> {formatList(plan.image.buildFunctions)}</p>}
-              {plan.image.runtimeGpuType && <p><span className="t-text-muted">Runtime GPU:</span> {plan.image.runtimeGpuType}</p>}
-              {plan.image.buildGpuType && <p><span className="t-text-muted">Build GPU:</span> {plan.image.buildGpuType}</p>}
-              {plan.image.forceBuild && <p><span className="t-text-muted">Force build:</span> yes</p>}
-              {!!plan.image.warnings?.length && (
-                <div className="space-y-1">
-                  {plan.image.warnings.map((warning, i) => (
-                    <p key={i} className="rounded-md t-bg-elevated px-2 py-1.5 t-text-muted">
-                      {warning}
-                    </p>
-                  ))}
-                </div>
-              )}
-              {plan.image.reasoning && (
-                <blockquote className="border-l-2 t-border-subtle pl-3 py-1 italic t-text-muted">
-                  {plan.image.reasoning}
-                </blockquote>
-              )}
-              <p className="text-[10px] t-text-muted break-all">{plan.image.baseImage}</p>
-            </div>
-          </ApprovalSection>
-
-          <ApprovalSection id="cost" label="Cost" expanded={expandedSection === 'cost'} onToggle={toggleSection}>
-            <div className="space-y-2 text-[11px] t-text-secondary leading-relaxed">
-              <p className="font-mono t-text">
-                {rateLabel}/hr x {durationLabel} ~= {estimatedCostLabel}
-              </p>
-              {durationReasoning && (
-                <blockquote className="border-l-2 t-border-subtle pl-3 py-1 italic t-text-muted">
-                  {durationReasoning}
-                </blockquote>
-              )}
-              <p><span className="t-text-muted">Auto-kill threshold:</span> {formatMoney(costThresholdUsd, 2)}</p>
-              {plan.costEstimate.notes && (
-                <p className="rounded-md t-bg-elevated px-2 py-1.5 t-text-muted">
-                  {plan.costEstimate.notes}
-                </p>
-              )}
-            </div>
-          </ApprovalSection>
-        </div>
-
         {showRejectEditor && (
           <div className="rounded-md border t-border-subtle p-2.5 space-y-2">
-            <label className="block text-[11px] font-medium t-text" htmlFor={`reject-modal-plan-${plan.planId}`}>
+            <label className="block text-[11px] font-medium t-text" htmlFor={`reject-plan-${plan.planId}`}>
               Rejection comments
             </label>
             <textarea
-              id={`reject-modal-plan-${plan.planId}`}
+              id={`reject-plan-${plan.planId}`}
               value={rejectionComments}
               onChange={(e) => {
                 setRejectionComments(e.target.value)
@@ -965,10 +978,7 @@ function ModalApprovalCard() {
             <div className="flex items-center justify-end gap-1.5">
               <button
                 type="button"
-                onClick={() => {
-                  setShowRejectEditor(false)
-                  setRejectionError(null)
-                }}
+                onClick={() => { setShowRejectEditor(false); setRejectionError(null) }}
                 disabled={rejecting}
                 className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-50"
               >
@@ -990,7 +1000,377 @@ function ModalApprovalCard() {
             )}
           </div>
         )}
+        {!showRejectEditor && rejectionError && (
+          <p className="text-[11px] text-red-500">{rejectionError}</p>
+        )}
       </div>
+    </div>
+  )
+}
+
+// ─── Modal plan body ─────────────────────────────────────────────────────────
+
+function ModalPlanBody({ plan }: { plan: ComputePlanView }) {
+  const [expandedSection, setExpandedSection] = useState<DisclosureKey | null>(null)
+  const [scriptContent, setScriptContent] = useState<string | null>(null)
+  const [scriptError, setScriptError] = useState<string | null>(null)
+  const [loadingScript, setLoadingScript] = useState(false)
+  const [costThresholdUsd, setCostThresholdUsd] = useState(5)
+
+  useEffect(() => {
+    let cancelled = false
+    api.loadSettings?.()
+      .then((settings: any) => {
+        const threshold = settings?.compute?.backends?.modal?.costThresholdUsd
+          ?? settings?.modalCompute?.costThresholdUsd
+        if (!cancelled && typeof threshold === 'number' && Number.isFinite(threshold)) {
+          setCostThresholdUsd(threshold)
+        }
+      })
+      .catch(() => { /* default is fine */ })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    setExpandedSection(null)
+    setScriptContent(null)
+    setScriptError(null)
+    setLoadingScript(false)
+  }, [plan.planId])
+
+  const loadScript = () => {
+    if (!plan.scriptPath || scriptContent !== null || scriptError || loadingScript) return
+    setLoadingScript(true)
+    api.readFile(plan.scriptPath)
+      .then((result: { success: boolean; content?: string; error?: string }) => {
+        if (result?.success) {
+          setScriptContent(result.content ?? '')
+          setScriptError(null)
+        } else {
+          setScriptError(result?.error || 'Could not read script file.')
+        }
+      })
+      .catch((err: any) => setScriptError(err?.message || 'Could not read script file.'))
+      .finally(() => setLoadingScript(false))
+  }
+
+  const toggleSection = (section: DisclosureKey) => {
+    const next = expandedSection === section ? null : section
+    setExpandedSection(next)
+    if (next === 'script') loadScript()
+  }
+
+  // image / costEstimate may be undefined when the plan is malformed;
+  // guard against the obvious crash paths instead of trusting shape.
+  const gpuLabel = modalImageGpuLabel(plan.image)
+  const durationLabel = plan.costEstimate ? formatPlanMinutes(plan.costEstimate.expectedDurationMinutes) : '~--'
+  const estimatedCostLabel = plan.costEstimate ? formatMoney(plan.costEstimate.estimatedTotalUsd, 2) : '$--'
+  const rateLabel = plan.costEstimate ? formatMoney(plan.costEstimate.gpuRateUsdPerHour, 2) : '$--'
+  const pythonPackages = formatList(plan.image?.pythonPackages)
+  const packageInstallers = formatList(plan.image?.pythonPackageInstallers)
+  const systemPackages = formatList(plan.image?.systemPackages)
+  const durationReasoning = plan.taskProfile?.durationReasoning?.trim()
+
+  return (
+    <>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <div className="text-[10px] t-text-muted uppercase tracking-wide">GPU</div>
+          <div className="text-xs font-medium t-text mt-0.5 truncate">{gpuLabel}</div>
+        </div>
+        <div>
+          <div className="text-[10px] t-text-muted uppercase tracking-wide">Duration</div>
+          <div className="text-xs font-medium t-text mt-0.5 truncate">{durationLabel}</div>
+        </div>
+        <div>
+          <div className="text-[10px] t-text-muted uppercase tracking-wide">Est. cost</div>
+          <div className="text-xs font-medium t-text mt-0.5 truncate">{estimatedCostLabel}</div>
+        </div>
+      </div>
+
+      <div className="rounded-md border t-border-subtle px-2">
+        <ApprovalSection id="script" label="Script" expanded={expandedSection === 'script'} onToggle={toggleSection}>
+          <div className="space-y-2">
+            <p className="text-[11px] font-mono t-text-secondary break-all">{plan.command}</p>
+            <p className="text-[10px] t-text-muted break-all">{plan.scriptPath}</p>
+            {loadingScript && <p className="text-[11px] t-text-muted">Loading script...</p>}
+            {scriptError && <p className="text-[11px] text-red-500">{scriptError}</p>}
+            {!loadingScript && !scriptError && scriptContent !== null && (
+              scriptContent.trim() ? (
+                <pre className="p-2 rounded t-bg-elevated text-[10px] t-text-secondary font-mono overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  {scriptContent}
+                </pre>
+              ) : (
+                <p className="text-[11px] t-text-muted">Script file is empty.</p>
+              )
+            )}
+          </div>
+        </ApprovalSection>
+
+        {plan.image && (
+          <ApprovalSection id="environment" label="Environment" expanded={expandedSection === 'environment'} onToggle={toggleSection}>
+            <div className="space-y-2 text-[11px] t-text-secondary leading-relaxed">
+              <p className="font-medium t-text">
+                Python {plan.image.pythonVersion || 'unknown'} &middot; {gpuLabel}
+              </p>
+              <p><span className="t-text-muted">Image source:</span> {modalImageSourceLabel(plan.image)}</p>
+              <p><span className="t-text-muted">Python packages:</span> {pythonPackages}</p>
+              <p><span className="t-text-muted">Package installers:</span> {packageInstallers}</p>
+              <p><span className="t-text-muted">System packages:</span> {systemPackages}</p>
+              {!!plan.image.envVars?.length && <p><span className="t-text-muted">Environment vars:</span> {formatList(plan.image.envVars)}</p>}
+              {!!plan.image.localDirs?.length && <p><span className="t-text-muted">Local dirs:</span> {formatList(plan.image.localDirs)}</p>}
+              {!!plan.image.localFiles?.length && <p><span className="t-text-muted">Local files:</span> {formatList(plan.image.localFiles)}</p>}
+              {!!plan.image.localPythonSources?.length && <p><span className="t-text-muted">Local Python source:</span> {formatList(plan.image.localPythonSources)}</p>}
+              {!!plan.image.buildCommands?.length && <p><span className="t-text-muted">Build commands:</span> {formatList(plan.image.buildCommands)}</p>}
+              {!!plan.image.buildFunctions?.length && <p><span className="t-text-muted">Build functions:</span> {formatList(plan.image.buildFunctions)}</p>}
+              {plan.image.runtimeGpuType && <p><span className="t-text-muted">Runtime GPU:</span> {plan.image.runtimeGpuType}</p>}
+              {plan.image.buildGpuType && <p><span className="t-text-muted">Build GPU:</span> {plan.image.buildGpuType}</p>}
+              {plan.image.forceBuild && <p><span className="t-text-muted">Force build:</span> yes</p>}
+              {!!plan.image.warnings?.length && (
+                <div className="space-y-1">
+                  {plan.image.warnings.map((warning, i) => (
+                    <p key={i} className="rounded-md t-bg-elevated px-2 py-1.5 t-text-muted">{warning}</p>
+                  ))}
+                </div>
+              )}
+              {plan.image.reasoning && (
+                <blockquote className="border-l-2 t-border-subtle pl-3 py-1 italic t-text-muted">
+                  {plan.image.reasoning}
+                </blockquote>
+              )}
+              <p className="text-[10px] t-text-muted break-all">{plan.image.baseImage}</p>
+            </div>
+          </ApprovalSection>
+        )}
+
+        {plan.costEstimate && (
+          <ApprovalSection id="cost" label="Cost" expanded={expandedSection === 'cost'} onToggle={toggleSection}>
+            <div className="space-y-2 text-[11px] t-text-secondary leading-relaxed">
+              <p className="font-mono t-text">
+                {rateLabel}/hr x {durationLabel} ~= {estimatedCostLabel}
+              </p>
+              {durationReasoning && (
+                <blockquote className="border-l-2 t-border-subtle pl-3 py-1 italic t-text-muted">
+                  {durationReasoning}
+                </blockquote>
+              )}
+              <p><span className="t-text-muted">Auto-kill threshold:</span> {formatMoney(costThresholdUsd, 2)}</p>
+              {plan.costEstimate.notes && (
+                <p className="rounded-md t-bg-elevated px-2 py-1.5 t-text-muted">{plan.costEstimate.notes}</p>
+              )}
+            </div>
+          </ApprovalSection>
+        )}
+      </div>
+    </>
+  )
+}
+
+// ─── Local plan body ─────────────────────────────────────────────────────────
+
+interface LocalPlanBackendData {
+  smokeSupported?: boolean
+  risk?: {
+    feasible?: boolean
+    risks?: Array<{ severity: string; category: string; message: string; mitigation?: string }>
+    warnings?: string[]
+  }
+  recommendations?: {
+    sandbox?: 'docker' | 'process'
+    timeoutMinutes?: number
+    stallThresholdMinutes?: number
+    agentGuidance?: string[]
+  }
+  experience?: {
+    taskKind: string
+    totalRuns: number
+    successes: number
+    failures: number
+    avgDurationSeconds: number
+    commonFailures: string[]
+  }
+  resourceSnapshot?: {
+    freeMemoryMb: number
+    cpuLoadPercent: number
+    freeDiskMb: number
+    activeRuns: number
+  }
+  envSummary?: {
+    os: string
+    arch: string
+    cpuCores: number
+    totalMemoryMb: number
+    gpu: string | null
+    mlxAvailable: boolean
+    dockerAvailable: boolean
+  }
+}
+
+function LocalPlanBody({ plan }: { plan: ComputePlanView }) {
+  const [expandedSection, setExpandedSection] = useState<DisclosureKey | null>(null)
+  const [scriptContent, setScriptContent] = useState<string | null>(null)
+  const [scriptError, setScriptError] = useState<string | null>(null)
+  const [loadingScript, setLoadingScript] = useState(false)
+
+  useEffect(() => {
+    setExpandedSection(null)
+    setScriptContent(null)
+    setScriptError(null)
+    setLoadingScript(false)
+  }, [plan.planId])
+
+  const data = (plan.backendData ?? {}) as LocalPlanBackendData
+  const rec = data.recommendations
+  const env = data.envSummary
+
+  const loadScript = () => {
+    if (!plan.scriptPath || scriptContent !== null || scriptError || loadingScript) return
+    setLoadingScript(true)
+    api.readFile(plan.scriptPath)
+      .then((result: { success: boolean; content?: string; error?: string }) => {
+        if (result?.success) {
+          setScriptContent(result.content ?? '')
+          setScriptError(null)
+        } else {
+          setScriptError(result?.error || 'Could not read script file.')
+        }
+      })
+      .catch((err: any) => setScriptError(err?.message || 'Could not read script file.'))
+      .finally(() => setLoadingScript(false))
+  }
+
+  const toggleSection = (section: DisclosureKey) => {
+    const next = expandedSection === section ? null : section
+    setExpandedSection(next)
+    if (next === 'script') loadScript()
+  }
+
+  const sandboxLabel = rec?.sandbox ?? '--'
+  const timeoutLabel = rec?.timeoutMinutes !== undefined ? `${rec.timeoutMinutes} min` : '--'
+  const envLabel = env
+    ? `${env.os} ${env.arch} · ${Math.round(env.totalMemoryMb / 1024)} GB${env.gpu ? ` · ${env.gpu}` : ''}`
+    : '--'
+
+  return (
+    <>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <div className="text-[10px] t-text-muted uppercase tracking-wide">Sandbox</div>
+          <div className="text-xs font-medium t-text mt-0.5 truncate">{sandboxLabel}</div>
+        </div>
+        <div>
+          <div className="text-[10px] t-text-muted uppercase tracking-wide">Timeout</div>
+          <div className="text-xs font-medium t-text mt-0.5 truncate">{timeoutLabel}</div>
+        </div>
+        <div>
+          <div className="text-[10px] t-text-muted uppercase tracking-wide">Host</div>
+          <div className="text-xs font-medium t-text mt-0.5 truncate">{envLabel}</div>
+        </div>
+      </div>
+
+      <div className="rounded-md border t-border-subtle px-2">
+        <ApprovalSection id="script" label="Script" expanded={expandedSection === 'script'} onToggle={toggleSection}>
+          <div className="space-y-2">
+            <p className="text-[11px] font-mono t-text-secondary break-all">{plan.command}</p>
+            {plan.scriptPath && <p className="text-[10px] t-text-muted break-all">{plan.scriptPath}</p>}
+            {loadingScript && <p className="text-[11px] t-text-muted">Loading script...</p>}
+            {scriptError && <p className="text-[11px] text-red-500">{scriptError}</p>}
+            {!loadingScript && !scriptError && scriptContent !== null && (
+              scriptContent.trim() ? (
+                <pre className="p-2 rounded t-bg-elevated text-[10px] t-text-secondary font-mono overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  {scriptContent}
+                </pre>
+              ) : (
+                <p className="text-[11px] t-text-muted">Script file is empty.</p>
+              )
+            )}
+          </div>
+        </ApprovalSection>
+
+        {rec && (
+          <ApprovalSection id="recommendations" label="Recommendations" expanded={expandedSection === 'recommendations'} onToggle={toggleSection}>
+            <div className="space-y-1.5 text-[11px] t-text-secondary leading-relaxed">
+              <p><span className="t-text-muted">Sandbox:</span> {sandboxLabel}</p>
+              <p><span className="t-text-muted">Timeout:</span> {timeoutLabel}</p>
+              {rec.stallThresholdMinutes !== undefined && (
+                <p><span className="t-text-muted">Stall threshold:</span> {rec.stallThresholdMinutes} min</p>
+              )}
+              {!!rec.agentGuidance?.length && (
+                <ul className="space-y-0.5">
+                  {rec.agentGuidance.map((g, i) => (
+                    <li key={i} className="flex items-start gap-1.5 t-text-muted">
+                      <span className="shrink-0 mt-1.5 w-1 h-1 rounded-full t-bg-elevated" />
+                      {g}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </ApprovalSection>
+        )}
+
+        {data.risk && (
+          <ApprovalSection id="risk" label="Risk" expanded={expandedSection === 'risk'} onToggle={toggleSection}>
+            <div className="space-y-1.5 text-[11px] t-text-secondary leading-relaxed">
+              <p>
+                <span className="t-text-muted">Feasible:</span>{' '}
+                {data.risk.feasible === false ? <span className="text-red-500">no</span> : 'yes'}
+              </p>
+              {!!data.risk.risks?.length && (
+                <ul className="space-y-1">
+                  {data.risk.risks.map((r, i) => (
+                    <li key={i} className="rounded-md t-bg-elevated px-2 py-1.5">
+                      <span className="font-medium t-text">[{r.severity}] {r.category}</span>
+                      <span className="t-text-muted"> — {r.message}</span>
+                      {r.mitigation && <p className="text-[10px] t-text-muted mt-0.5">→ {r.mitigation}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!!data.risk.warnings?.length && (
+                <ul className="space-y-0.5">
+                  {data.risk.warnings.map((w, i) => (
+                    <li key={i} className="text-[10px] t-text-muted">⚠︎ {w}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </ApprovalSection>
+        )}
+
+        {env && (
+          <ApprovalSection id="environment" label="Environment" expanded={expandedSection === 'environment'} onToggle={toggleSection}>
+            <div className="space-y-1 text-[11px] t-text-secondary leading-relaxed">
+              <p><span className="t-text-muted">OS:</span> {env.os} {env.arch}</p>
+              <p><span className="t-text-muted">CPU:</span> {env.cpuCores} cores</p>
+              <p><span className="t-text-muted">RAM:</span> {Math.round(env.totalMemoryMb / 1024)} GB</p>
+              {env.gpu && <p><span className="t-text-muted">GPU:</span> {env.gpu}{env.mlxAvailable && ' · MLX'}</p>}
+              <p><span className="t-text-muted">Docker:</span> {env.dockerAvailable ? 'available' : 'not detected'}</p>
+            </div>
+          </ApprovalSection>
+        )}
+      </div>
+    </>
+  )
+}
+
+// ─── Generic fallback body (stub / unknown backends) ────────────────────────
+
+function GenericPlanBody({ plan }: { plan: ComputePlanView }) {
+  const [expandedSection, setExpandedSection] = useState<DisclosureKey | null>(null)
+  return (
+    <div className="rounded-md border t-border-subtle px-2">
+      <ApprovalSection id="command" label="Command" expanded={expandedSection === 'command'} onToggle={() => setExpandedSection(expandedSection === 'command' ? null : 'command')}>
+        <p className="text-[11px] font-mono t-text-secondary break-all">{plan.command}</p>
+        {plan.scriptPath && <p className="text-[10px] t-text-muted break-all mt-1">{plan.scriptPath}</p>}
+      </ApprovalSection>
+      {plan.backendData != null && (
+        <ApprovalSection id="raw" label="Backend data" expanded={expandedSection === 'raw'} onToggle={() => setExpandedSection(expandedSection === 'raw' ? null : 'raw')}>
+          <pre className="p-2 rounded t-bg-elevated text-[10px] t-text-secondary font-mono overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+            {JSON.stringify(plan.backendData, null, 2)}
+          </pre>
+        </ApprovalSection>
+      )}
     </div>
   )
 }
@@ -1028,8 +1408,12 @@ function CoverageBar({ runs }: { runs: ComputeRunView[] }) {
 // ─── Empty state ─────────────────────────────────────────────────────────────
 
 function EmptyState() {
-  const environment = useComputeStore((s) => s.environment)
+  const backends = useComputeStore((s) => s.backends)
   const setCenterView = useUIStore((s) => s.setCenterView)
+  const backendList = Array.from(backends.values()).sort((a, b) =>
+    a.displayName.localeCompare(b.displayName)
+  )
+  const anyAvailable = backendList.some((b) => b.availability?.available)
 
   const goToChat = (text: string) => {
     setCenterView('chat')
@@ -1047,37 +1431,57 @@ function EmptyState() {
     <div className="flex flex-col items-center justify-center h-full text-center px-8">
       <Cpu size={32} className="t-text-muted mb-3 opacity-30" />
       <p className="text-sm t-text font-medium mb-1">
-        Your compute environment is ready
+        {anyAvailable ? 'Your compute environment is ready' : 'No compute backends are available'}
       </p>
       <p className="text-xs t-text-muted max-w-sm leading-relaxed mb-4">
-        Ask the agent to run scripts, train models, or process data.
-        Code executes in a sandboxed environment with progress tracking and failure analysis.
+        {anyAvailable
+          ? 'Ask the agent to run scripts, train models, or process data. Code executes in a sandboxed environment with progress tracking and failure analysis.'
+          : 'Check the left panel for which backends are registered and what requirements are missing. Until at least one backend is available, compute requests will fail.'}
       </p>
 
-      {environment && (
-        <div className="px-4 py-2.5 rounded-lg t-bg-elevated text-[11px] t-text-secondary mb-5">
-          {environment.gpu || `${environment.os} ${environment.arch}`} &middot; {Math.round(environment.totalMemoryMb / 1024)} GB
-          {environment.mlxAvailable && <> &middot; <span className="t-text-accent">MLX</span></>}
-          {environment.sandbox === 'docker' && <> &middot; Docker</>}
+      {/* Compact backend availability roll-up — replaces the legacy
+          "environment" chip that was dead code in the store. */}
+      {backendList.length > 0 && (
+        <div className="px-3 py-2 rounded-lg t-bg-elevated text-[11px] t-text-secondary mb-5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 max-w-md">
+          {backendList.map((b, idx) => {
+            const avail = b.availability
+            const ready = !!avail?.available
+            const dotCls = !avail
+              ? 'bg-[var(--color-text-muted)]'
+              : ready
+                ? 'bg-emerald-500'
+                : avail.missingRequirements?.length === 1
+                  ? 'bg-amber-500'
+                  : 'bg-red-500'
+            return (
+              <span key={b.id} className="inline-flex items-center gap-1">
+                {idx > 0 && <span className="t-text-muted opacity-50">·</span>}
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotCls}`} />
+                <span>{b.displayName}</span>
+              </span>
+            )
+          })}
         </div>
       )}
 
-      <div className="space-y-1.5 w-full max-w-sm">
-        {[
-          'Train a model on my dataset',
-          'Run my analysis script',
-          'Process and clean this data',
-        ].map((prompt) => (
-          <button
-            key={prompt}
-            onClick={() => goToChat(prompt)}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg border t-border-subtle hover:bg-[var(--color-accent-soft)]/5 transition-colors text-left"
-          >
-            <span className="text-xs t-text-secondary">"{prompt}"</span>
-            <ChevronRight size={12} className="t-text-muted" />
-          </button>
-        ))}
-      </div>
+      {anyAvailable && (
+        <div className="space-y-1.5 w-full max-w-sm">
+          {[
+            'Train a model on my dataset',
+            'Run my analysis script',
+            'Process and clean this data',
+          ].map((prompt) => (
+            <button
+              key={prompt}
+              onClick={() => goToChat(prompt)}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg border t-border-subtle hover:bg-[var(--color-accent-soft)]/5 transition-colors text-left"
+            >
+              <span className="text-xs t-text-secondary">"{prompt}"</span>
+              <ChevronRight size={12} className="t-text-muted" />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1087,26 +1491,66 @@ function EmptyState() {
 export function ComputeView() {
   const activeRuns = useActiveRuns()
   const recentRuns = useRecentRuns()
+  const backendsMap = useComputeStore((s) => s.backends)
+  const pendingPlans = usePendingPlans()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [backendFilter, setBackendFilter] = useState<string>('all')
 
   const allRuns = useMemo(() => [...activeRuns, ...recentRuns], [activeRuns, recentRuns])
-  const pendingPlan = usePendingModalPlan()
+
+  // Per-backend run counts feed the filter chip badges.
+  const backendCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of allRuns) m.set(r.backend, (m.get(r.backend) ?? 0) + 1)
+    return m
+  }, [allRuns])
+
+  // Backend list comes from the registry (whatever's wired up), sorted
+  // by display name so the chip order is stable.
+  const backendsList = useMemo(
+    () => Array.from(backendsMap.values()).sort((a, b) => a.displayName.localeCompare(b.displayName)),
+    [backendsMap],
+  )
+
+  // Drop the filter if its backend disappears from the registry.
+  useEffect(() => {
+    if (backendFilter !== 'all' && !backendsMap.has(backendFilter)) {
+      setBackendFilter('all')
+    }
+  }, [backendFilter, backendsMap])
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return allRuns
-    const q = search.toLowerCase()
-    return allRuns.filter(
-      (r) => r.command.toLowerCase().includes(q) || r.runId.toLowerCase().includes(q)
+    let rows = allRuns
+    if (backendFilter !== 'all') {
+      rows = rows.filter((r) => r.backend === backendFilter)
+    }
+    const q = search.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((r) =>
+      r.command.toLowerCase().includes(q) ||
+      r.runId.toLowerCase().includes(q) ||
+      (r.taskDescription?.toLowerCase().includes(q) ?? false),
     )
-  }, [allRuns, search])
+  }, [allRuns, search, backendFilter])
 
   const isEmpty = allRuns.length === 0
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {pendingPlan && <ModalApprovalCard />}
-      {!isEmpty && <FilterBar search={search} onSearchChange={setSearch} />}
+      {pendingPlans.map((plan) => (
+        <PendingPlanCard key={`${plan.backend}::${plan.planId}`} plan={plan} />
+      ))}
+      {!isEmpty && (
+        <FilterBar
+          search={search}
+          onSearchChange={setSearch}
+          backendFilter={backendFilter}
+          onBackendFilterChange={setBackendFilter}
+          backendCounts={backendCounts}
+          backends={backendsList}
+        />
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {isEmpty ? (
@@ -1114,7 +1558,7 @@ export function ComputeView() {
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-8">
             <Cpu size={32} className="t-text-muted mb-3 opacity-40" />
-            <p className="text-sm t-text-muted">No runs match your search.</p>
+            <p className="text-sm t-text-muted">No runs match your filters.</p>
           </div>
         ) : (
           <>
@@ -1129,8 +1573,9 @@ export function ComputeView() {
                 Duration
               </span>
               <span className="w-14 text-right text-[10px] uppercase tracking-wider font-medium t-text-muted">
-                Phase
+                Activity
               </span>
+              <span className="w-6" />
             </div>
 
             {/* Rows */}

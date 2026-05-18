@@ -2160,6 +2160,19 @@ export function registerIpcHandlers(): void {
     return state.coordinator.computeRegistry.rejectPlan(payload.backend, payload.planId, typeof payload.comments === 'string' ? payload.comments : '')
   })
 
+  handleWindow('compute:stop-run', async ({ state }, payload: { runId: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.runId !== 'string' || !payload.runId.trim()) {
+      return { success: false, error: 'runId is required' }
+    }
+    try {
+      await state.coordinator.computeRegistry.stop(payload.runId.trim())
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err?.message || String(err) }
+    }
+  })
+
   // Export all chat messages as Markdown
   handleWindow('chat:export', async ({ win, state }) => {
     if (!state.projectPath || !state.sessionId) {

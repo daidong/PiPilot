@@ -154,19 +154,6 @@ export interface BackendView {
 // Legacy compat types (preserved for existing ComputeView consumers)
 // ---------------------------------------------------------------------------
 
-/** Subset of legacy EnvironmentSummary kept so the existing ComputeView panel still renders. Unused fields can stay undefined. */
-export interface EnvironmentSummary {
-  os?: string
-  arch?: string
-  cpuCores?: number
-  totalMemoryMb?: number
-  freeMemoryMb?: number
-  freeDiskMb?: number
-  gpu?: string
-  mlxAvailable?: boolean
-  sandbox?: string
-}
-
 export interface ModalAvailability {
   available: boolean
   cliInstalled: boolean
@@ -184,8 +171,6 @@ interface ComputeState {
   backends: Map<string, BackendView>
   /** Keyed by `${backend}::${planId}`. Only the most recent plan-ready per backend is shown to the user. */
   pendingPlans: Map<string, ComputePlanView>
-  /** Legacy compat — derived from `backends.get('local')?.availability`. Kept for ComputeView. */
-  environment: EnvironmentSummary | null
 
   // Single reducer for all ComputeEvent variants (RFC-008 §7.6).
   applyEvent: (event: any) => void
@@ -310,7 +295,6 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
   runs: new Map(),
   backends: new Map(),
   pendingPlans: new Map(),
-  environment: null,
 
   applyEvent: (event) => {
     if (!event || typeof event !== 'object') return
@@ -361,14 +345,20 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
         const runs = new Map(state.runs)
         const prev = runs.get(event.runId)
         runs.set(event.runId, runViewFromStatusOnly(event.backend, event.runId, event.status, prev))
-        // On terminal, drop the pending plan if any still referenced this run's planId.
-        if (event.kind === 'run-complete' && prev?.planId) {
+        // As soon as a run-update arrives with a planId, drop the matching
+        // pending plan — the run is alive, so the approval card should
+        // step aside. PlanStore on the main side is already cleared by
+        // Registry.submit(); the renderer cache lagged behind.
+        if (prev?.planId) {
           const plans = new Map(state.pendingPlans)
-          plans.delete(planKey(event.backend, prev.planId))
-          set({ runs, pendingPlans: plans })
-        } else {
-          set({ runs })
+          const key = planKey(event.backend, prev.planId)
+          if (plans.has(key)) {
+            plans.delete(key)
+            set({ runs, pendingPlans: plans })
+            return
+          }
         }
+        set({ runs })
         return
       }
       case 'cost-killed': {
@@ -469,7 +459,7 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
     return { pendingPlans: next }
   }),
 
-  reset: () => set({ runs: new Map(), backends: new Map(), pendingPlans: new Map(), environment: null }),
+  reset: () => set({ runs: new Map(), backends: new Map(), pendingPlans: new Map() }),
 }))
 
 // ---------------------------------------------------------------------------
@@ -505,14 +495,35 @@ export function useActiveRunCount(): number {
 }
 
 /**
+ * Returns all pending plans (any backend) that are either awaiting
+ * approval OR approved-but-not-yet-running. Rejected plans are
+ * excluded — once the user rejects, the card disappears and the
+ * chat flow takes over.
+ *
+ * Sorted oldest-first so the user sees the earliest pending plan
+ * at the top of the Compute tab.
+ */
+export function usePendingPlans(): ComputePlanView[] {
+  const plans = useComputeStore((s) => s.pendingPlans)
+  return Array.from(plans.values())
+    .filter((p) => !p.rejectedAt)
+    .sort((a, b) => {
+      const aT = a.createdAt ? new Date(a.createdAt).getTime() : 0
+      const bT = b.createdAt ? new Date(b.createdAt).getTime() : 0
+      return aT - bT
+    })
+}
+
+/**
  * Legacy selector: returns the most recent pending Modal plan if any,
- * else null. Mirrors the PR #62 API so ComputeView doesn't have to
- * change.
+ * else null. Mirrors the PR #62 API so old call sites still work.
+ * Includes approved-not-yet-running plans (the renderer can decide
+ * whether to render the full approval card or a slim waiting state).
  */
 export function usePendingModalPlan(): ComputePlanView | null {
   const plans = useComputeStore((s) => s.pendingPlans)
   for (const plan of plans.values()) {
-    if (plan.backend === 'modal' && !plan.approved && !plan.rejectedAt) return plan
+    if (plan.backend === 'modal' && !plan.rejectedAt) return plan
   }
   return null
 }
