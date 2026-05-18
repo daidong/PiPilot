@@ -60,22 +60,8 @@ const KEY_FIELDS = [
     url: 'https://www.semanticscholar.org/product/api#api-key-form',
     required: false,
   },
-  {
-    name: 'MODAL_TOKEN_ID',
-    label: 'Modal Token ID',
-    placeholder: 'ak-...',
-    hint: 'Enables Modal remote compute. Get from modal.com Settings API Tokens, or run modal token new.',
-    url: 'https://modal.com/settings/tokens',
-    required: false,
-  },
-  {
-    name: 'MODAL_TOKEN_SECRET',
-    label: 'Modal Token Secret',
-    placeholder: 'as-...',
-    hint: 'Pairs with Modal Token ID for remote compute.',
-    url: 'https://modal.com/settings/tokens',
-    required: false,
-  },
+  // Modal credentials live in Settings → Compute → Modal so all compute
+  // configuration is in one place. See ComputeSettings.tsx.
 ] as const
 
 interface Props {

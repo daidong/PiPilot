@@ -212,7 +212,7 @@ export class ModalBackend implements ComputeBackend {
     const creds = hasCredentials(this.ctx)
     const missing: string[] = []
     if (!cli) missing.push('Modal CLI not installed (`pip install modal`)')
-    if (!creds) missing.push('Modal credentials missing (MODAL_TOKEN_ID + MODAL_TOKEN_SECRET; set via Settings → API Keys or `modal token new`)')
+    if (!creds) missing.push('Modal credentials missing (MODAL_TOKEN_ID + MODAL_TOKEN_SECRET; set via Settings → Compute → Modal or `modal token new`)')
     const hints: string[] = []
     if (!cli) hints.push('pip install modal')
     if (!creds && cli) hints.push('modal token new')
