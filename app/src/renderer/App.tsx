@@ -828,21 +828,19 @@ export default function App() {
     // Hydrate persisted runs + pending plans on mount so the Compute
     // tab restores its pre-crash state in a single round trip
     // (amendment A3).
-    if (api?.isComputeEnabled?.()) {
-      api.hydrateCompute()
-        .then((result: any) => {
-          if (Array.isArray(result?.runs)) {
-            useComputeStore.getState().hydrateRuns(result.runs)
-          }
-          if (Array.isArray(result?.pendingPlans)) {
-            useComputeStore.getState().hydratePendingPlans(result.pendingPlans)
-          }
-          if (Array.isArray(result?.backends)) {
-            useComputeStore.getState().hydrateBackends(result.backends)
-          }
-        })
-        .catch(() => { /* non-fatal */ })
-    }
+    api?.hydrateCompute?.()
+      .then((result: any) => {
+        if (Array.isArray(result?.runs)) {
+          useComputeStore.getState().hydrateRuns(result.runs)
+        }
+        if (Array.isArray(result?.pendingPlans)) {
+          useComputeStore.getState().hydratePendingPlans(result.pendingPlans)
+        }
+        if (Array.isArray(result?.backends)) {
+          useComputeStore.getState().hydrateBackends(result.backends)
+        }
+      })
+      .catch(() => { /* non-fatal */ })
 
     return () => {
       if (entityRefreshTimer) clearTimeout(entityRefreshTimer)
@@ -942,7 +940,7 @@ export default function App() {
         e.preventDefault()
         useUIStore.getState().setCenterView('literature')
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === '3' && api?.isComputeEnabled?.()) {
+      if ((e.metaKey || e.ctrlKey) && e.key === '3') {
         e.preventDefault()
         useUIStore.getState().setCenterView('compute')
       }

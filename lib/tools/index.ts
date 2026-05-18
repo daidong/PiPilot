@@ -62,11 +62,10 @@ export function createResearchTools(ctx: ResearchToolContext): {
 
   // Compute tools (RFC-008 §4): generic compute_plan + list_compute_backends,
   // plus per-backend execute/wait/status/stop. Sourced from a ComputeRegistry
-  // built by the coordinator from registered backends. Gated behind
-  // ENABLE_LOCAL_COMPUTE for backward compatibility with the existing
-  // feature flag. Backends destroy themselves when the coordinator
-  // tears down (Registry.destroy() called from coordinator's destroy).
-  if (process.env.ENABLE_LOCAL_COMPUTE === '1' && ctx.computeRegistry) {
+  // built by the coordinator from registered backends. Backends destroy
+  // themselves when the coordinator tears down (Registry.destroy() called
+  // from coordinator's destroy).
+  if (ctx.computeRegistry) {
     tools.push(...createComputeTools({
       registry: ctx.computeRegistry,
       workspacePath: ctx.workspacePath,

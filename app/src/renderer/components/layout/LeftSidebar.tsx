@@ -215,20 +215,17 @@ export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) 
 
       <div className="flex-1 min-h-0 overflow-hidden">
         {(() => {
-          const computeEnabled = !!(window as any).api?.isComputeEnabled?.()
           const showLit = centerView === 'literature'
-          const showCompute = centerView === 'compute' && computeEnabled
+          const showCompute = centerView === 'compute'
           const showEntity = !showLit && !showCompute
           return (
             <>
               <div className={`h-full ${showLit ? '' : 'hidden'}`} aria-hidden={!showLit} inert={!showLit}>
                 <LiteratureSidebar />
               </div>
-              {computeEnabled && (
-                <div className={`h-full ${showCompute ? '' : 'hidden'}`} aria-hidden={!showCompute} inert={!showCompute}>
-                  <ComputeSidebar />
-                </div>
-              )}
+              <div className={`h-full ${showCompute ? '' : 'hidden'}`} aria-hidden={!showCompute} inert={!showCompute}>
+                <ComputeSidebar />
+              </div>
               <div className={`h-full ${showEntity ? '' : 'hidden'}`} aria-hidden={!showEntity} inert={!showEntity}>
                 <EntityTabs />
               </div>

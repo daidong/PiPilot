@@ -264,11 +264,11 @@ export interface CoordinatorConfig {
   /** Live accessor for diagram-tool auth (see lib/tools/types.ts DiagramAuth). */
   getDiagramAuth?: () => import('../tools/types.js').DiagramAuth
   /**
-   * Compute backend configuration. When provided AND ENABLE_LOCAL_COMPUTE=1,
-   * the coordinator builds a ComputeRegistry, registers LocalBackend +
-   * ModalBackend with the relevant credentials/threshold accessors, and
-   * exposes the registry on its return value so the main process can
-   * subscribe to events + handle hydrate/approve/reject IPC.
+   * Compute backend configuration. When provided, the coordinator builds
+   * a ComputeRegistry, registers LocalBackend + ModalBackend with the
+   * relevant credentials/threshold accessors, and exposes the registry
+   * on its return value so the main process can subscribe to events +
+   * handle hydrate/approve/reject IPC.
    *
    * Replaces PR #62's modalCredentials / onModalCostKilled / onModalRunUpdate
    * / createSubAgent leakage onto CoordinatorConfig (RFC-008 §7.4).
@@ -320,10 +320,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   destroy: () => Promise<void>
   /**
    * Compute backend registry — present when CoordinatorConfig.compute
-   * was provided and ENABLE_LOCAL_COMPUTE=1. The main process uses
-   * this to: (a) subscribe to ComputeEvents and fan them to the
-   * renderer via the single `compute:event` IPC channel, (b) serve
-   * `compute:hydrate`, `compute:approve-plan`, `compute:reject-plan`.
+   * was provided. The main process uses this to: (a) subscribe to
+   * ComputeEvents and fan them to the renderer via the single
+   * `compute:event` IPC channel, (b) serve `compute:hydrate`,
+   * `compute:approve-plan`, `compute:reject-plan`.
    */
   computeRegistry?: import('../compute/registry.js').ComputeRegistry
 }> {
@@ -531,7 +531,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // and the coordinator's apiKey resolution. Backends register into it
   // immediately so createResearchTools sees them when emitting tools.
   let computeRegistry: import('../compute/registry.js').ComputeRegistry | undefined = undefined
-  if (config.compute && process.env.ENABLE_LOCAL_COMPUTE === '1') {
+  if (config.compute) {
     const { ComputeRegistry } = await import('../compute/registry.js')
     const { LocalBackend } = await import('../compute/backends/local/local-backend.js')
     const { ModalBackend } = await import('../compute/backends/modal/modal-backend.js')
@@ -943,15 +943,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   }
 
   // Fire-and-forget: probe environment and update system prompt asynchronously.
-  // Gated behind ENABLE_LOCAL_COMPUTE — no env guidance when compute is disabled.
-  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-    probeStaticProfile()
-      .then(profile => {
-        const envGuidance = generateAgentGuidance(profile)
-        agent.state.systemPrompt = baseSystemPrompt + '\n\n' + envGuidance
-      })
-      .catch(() => { /* non-fatal */ })
-  }
+  // Compute is a default feature now; env guidance is always emitted.
+  probeStaticProfile()
+    .then(profile => {
+      const envGuidance = generateAgentGuidance(profile)
+      agent.state.systemPrompt = baseSystemPrompt + '\n\n' + envGuidance
+    })
+    .catch(() => { /* non-fatal */ })
 
   return {
     agent,

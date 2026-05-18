@@ -2138,7 +2138,12 @@ export function registerIpcHandlers(): void {
   // compute:reject-plan, each backend-agnostic.
 
   handleWindow('compute:hydrate', async ({ state }) => {
-    if (process.env.ENABLE_LOCAL_COMPUTE !== '1' || !state.coordinator?.computeRegistry) {
+    // Coordinator is initialized eagerly on project open (see
+    // openProjectFolder), so the registry should be present by the time
+    // the renderer asks. Return an empty snapshot if the renderer races
+    // ahead of init — applyEvent will fill in once availability-changed
+    // events arrive.
+    if (!state.coordinator?.computeRegistry) {
       return { runs: [], pendingPlans: [] }
     }
     return state.coordinator.computeRegistry.hydrate()
@@ -2407,13 +2412,11 @@ export function registerIpcHandlers(): void {
     // are swallowed — if the user hasn't signed in yet, the next chat
     // attempt will re-trigger ensureCoordinator and surface the auth
     // error properly there.
-    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-      void ensureCoordinator(state, win).catch((err) => {
-        if (process.env.RESEARCH_COPILOT_DEBUG) {
-          console.warn('[compute] eager coordinator init failed:', err?.message || err)
-        }
-      })
-    }
+    void ensureCoordinator(state, win).catch((err) => {
+      if (process.env.RESEARCH_COPILOT_DEBUG) {
+        console.warn('[compute] eager coordinator init failed:', err?.message || err)
+      }
+    })
 
     win.setTitle(basename(state.projectPath))
 

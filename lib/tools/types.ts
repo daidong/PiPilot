@@ -85,11 +85,11 @@ export interface ResearchToolContext {
    */
   getTurnId?: () => string | undefined
   /**
-   * Compute backend registry — set by the coordinator when ENABLE_LOCAL_COMPUTE=1.
-   * createResearchTools consumes this to emit compute_plan, list_compute_backends,
-   * and per-backend execute/wait/status/stop. Replaces the modal-specific
-   * createSubAgent / modalCredentials / onModalCostKilled / onModalRunUpdate
-   * fields that PR #62 leaked here (RFC-008 §7.4).
+   * Compute backend registry — set by the coordinator when CoordinatorConfig.compute
+   * is provided. createResearchTools consumes this to emit compute_plan,
+   * list_compute_backends, and per-backend execute/wait/status/stop. Replaces
+   * the modal-specific createSubAgent / modalCredentials / onModalCostKilled /
+   * onModalRunUpdate fields that PR #62 leaked here (RFC-008 §7.4).
    */
   computeRegistry?: import('../compute/registry.js').ComputeRegistry
   /**

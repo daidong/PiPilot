@@ -166,9 +166,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
 
   if (!open) return null
 
-  const tabs = api?.isComputeEnabled?.()
-    ? [...BASE_TABS, { id: 'compute' as SettingsTab, label: 'Compute', icon: Cpu }]
-    : BASE_TABS
+  const tabs = [...BASE_TABS, { id: 'compute' as SettingsTab, label: 'Compute', icon: Cpu }]
   const activeLabel = tabs.find(t => t.id === activeTab)?.label ?? 'Settings'
 
   return (

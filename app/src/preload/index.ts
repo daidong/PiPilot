@@ -225,8 +225,7 @@ export interface ElectronAPI {
   // Entity creation notifications
   onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
 
-  // Compute (RFC-008 §7.6; gated behind ENABLE_LOCAL_COMPUTE=1)
-  isComputeEnabled: () => boolean
+  // Compute (RFC-008 §7.6)
   hydrateCompute: () => Promise<{ runs: any[]; pendingPlans: any[] }>
   approveComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; error?: string }>
   rejectComputePlan: (backend: string, planId: string, comments: string) => Promise<{ success: boolean; error?: string }>
@@ -491,8 +490,6 @@ const api: ElectronAPI = {
     ipcRenderer.on('agent:skill-loaded', handler)
     return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
   },
-
-  isComputeEnabled: () => process.env.ENABLE_LOCAL_COMPUTE === '1',
 
   hydrateCompute: () => ipcRenderer.invoke('compute:hydrate'),
   approveComputePlan: (backend: string, planId: string) =>

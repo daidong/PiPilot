@@ -152,10 +152,10 @@ export function ComputeSidebar() {
             <div className="flex items-start gap-2 t-text-muted">
               <AlertTriangle size={14} className="opacity-40 shrink-0 mt-0.5" />
               <div className="text-[11px] leading-relaxed">
-                <div>No compute backends registered.</div>
+                <div>Compute backends are initializing…</div>
                 <div className="mt-1 t-text-muted/70">
-                  Set <code className="font-mono">ENABLE_LOCAL_COMPUTE=1</code> and restart, or check
-                  <code className="font-mono"> CoordinatorConfig.compute</code> wiring.
+                  If this persists, open a project folder or check the chat for an
+                  agent-init error (e.g. missing API key).
                 </div>
               </div>
             </div>
