@@ -1534,14 +1534,19 @@ export function ComputeView() {
     )
   }, [allRuns, search, backendFilter])
 
-  const isEmpty = allRuns.length === 0
+  const hasRuns = allRuns.length > 0
+  const hasPendingPlans = pendingPlans.length > 0
+  // EmptyState's job is "this tab has nothing going on" — once a plan is
+  // pending or a run exists, the panel should belong to that work, not
+  // to the marketing prompts.
+  const showEmpty = !hasRuns && !hasPendingPlans
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {pendingPlans.map((plan) => (
         <PendingPlanCard key={`${plan.backend}::${plan.planId}`} plan={plan} />
       ))}
-      {!isEmpty && (
+      {hasRuns && (
         <FilterBar
           search={search}
           onSearchChange={setSearch}
@@ -1553,8 +1558,16 @@ export function ComputeView() {
       )}
 
       <div className="flex-1 overflow-y-auto">
-        {isEmpty ? (
+        {showEmpty ? (
           <EmptyState />
+        ) : !hasRuns ? (
+          // Pending plan(s) but no runs yet — keep the rest of the panel
+          // quiet so the approval card stays visually dominant.
+          <div className="flex flex-col items-center justify-center h-full text-center px-8 py-12">
+            <p className="text-xs t-text-muted leading-relaxed max-w-xs">
+              No runs yet. Approve the plan above to start one, or reject it to ask the agent for a revision.
+            </p>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-8">
             <Cpu size={32} className="t-text-muted mb-3 opacity-40" />
@@ -1591,7 +1604,7 @@ export function ComputeView() {
         )}
       </div>
 
-      {!isEmpty && <CoverageBar runs={allRuns} />}
+      {hasRuns && <CoverageBar runs={allRuns} />}
     </div>
   )
 }
