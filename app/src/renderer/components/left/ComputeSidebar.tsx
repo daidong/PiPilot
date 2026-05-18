@@ -45,9 +45,13 @@ function statusDescriptor(backend: BackendView, runningCount: number) {
     }
   }
   if (runningCount > 0) {
-    return { dot: 'bg-[var(--color-accent)]', text: `${runningCount} running`, dim: false }
+    // Active: pulsing accent so the sidebar reads "work in progress".
+    return { dot: 'bg-[var(--color-accent)] animate-pulse', text: `${runningCount} running`, dim: false }
   }
-  return { dot: 'bg-[var(--color-text-muted)]', text: 'Ready', dim: true }
+  // Idle but healthy. The muted+dim variant we used here before read as
+  // "off / unavailable" next to the red/amber failure states, which is
+  // why both backends looked broken even when their text said Ready.
+  return { dot: 'bg-emerald-500', text: 'Ready', dim: false }
 }
 
 function BackendCard({ backend, runningCount, pendingPlanCount }: BackendCardProps) {
