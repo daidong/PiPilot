@@ -2396,12 +2396,24 @@ export function registerIpcHandlers(): void {
       } catch { /* ignore corrupt file */ }
     }
 
-    // Probe compute environment on folder open (only when feature is enabled)
-    // RFC-008 §7.5: the compute environment probe + modal availability
-    // probe used to fire here. With ComputeRegistry, availability is
-    // discoverable via list_compute_backends and updates flow through
-    // `compute:event` events. The renderer's ComputeView calls
-    // hydrateCompute() on mount to populate runs + pending plans.
+    // RFC-008 §7.5: build the ComputeRegistry eagerly on project open
+    // instead of waiting for the first chat. Without this, the Compute
+    // tab renders "No backends registered" until the user sends a
+    // message — because ensureCoordinator() (which builds the registry)
+    // is otherwise only invoked from the chat path.
+    //
+    // Fire-and-forget: opening a project must not block on coordinator
+    // init (which can take 1-2 min on first run for MCP setup). Errors
+    // are swallowed — if the user hasn't signed in yet, the next chat
+    // attempt will re-trigger ensureCoordinator and surface the auth
+    // error properly there.
+    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
+      void ensureCoordinator(state, win).catch((err) => {
+        if (process.env.RESEARCH_COPILOT_DEBUG) {
+          console.warn('[compute] eager coordinator init failed:', err?.message || err)
+        }
+      })
+    }
 
     win.setTitle(basename(state.projectPath))
 
