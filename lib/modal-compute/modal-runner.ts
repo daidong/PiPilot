@@ -50,6 +50,34 @@ function estimateLines(bytes: number, tail: string): number {
   return Math.max(tailLines, Math.round((bytes / tail.length) * tailLines))
 }
 
+/**
+ * Wait for a child process to exit, bounded by `timeoutMs`. Returns
+ * true if the child exited within the window, false on timeout. Cleans
+ * up both sides of the race so neither the timer nor the listener
+ * leaks if the other wins. Caller is expected to have already verified
+ * `child.exitCode === null` before invoking (otherwise the 'exit'
+ * event already fired and the listener never runs — we'd hit the
+ * timeout for nothing).
+ */
+function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const onExit = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.off('exit', onExit)
+      resolve(false)
+    }, timeoutMs)
+    child.once('exit', onExit)
+  })
+}
+
 export class ModalRunner {
   private readonly store: ModalRunStore
   private readonly experience: ExperienceStore
@@ -256,23 +284,26 @@ export class ModalRunner {
     this.emitRunUpdate(runId)
 
     const child = this.processes.get(runId)
-    if (child && !child.killed) {
+    // `exitCode === null` is the authoritative "still running" check.
+    // Do NOT use `!child.killed` — that flag only tracks whether we
+    // called .kill(), not whether the process is alive: a child that
+    // exited naturally (without us killing it) keeps `killed === false`,
+    // which would send us into a pointless 5-second wait-for-exit loop
+    // on a corpse. Likewise, after a successful `kill('SIGTERM')`,
+    // `child.killed === true` makes any `!child.killed` guard a dead
+    // branch — that bug previously prevented the SIGKILL escalation
+    // from ever firing.
+    if (child && child.exitCode === null) {
       // SIGTERM → wait up to 3s → SIGKILL → wait up to 2s. Only return
       // when the CLI subprocess is gone so the caller's next status
       // query reflects reality. Note: this only kills the local `modal
       // run` driver — remote Modal jobs may keep running for a few
       // seconds until Modal's control plane catches up.
       child.kill('SIGTERM')
-      const exitedGracefully = await Promise.race([
-        new Promise<boolean>(resolve => child.once('exit', () => resolve(true))),
-        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3000)),
-      ])
-      if (!exitedGracefully && !child.killed) {
+      const exitedGracefully = await waitForChildExit(child, 3000)
+      if (!exitedGracefully && child.exitCode === null) {
         child.kill('SIGKILL')
-        await Promise.race([
-          new Promise<void>(resolve => child.once('exit', () => resolve())),
-          new Promise<void>(resolve => setTimeout(resolve, 2000)),
-        ])
+        await waitForChildExit(child, 2000)
       }
     }
 
