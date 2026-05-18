@@ -221,7 +221,6 @@ interface TaskProfile {
   networkRequired: boolean
   smokeSupported: boolean           // Has --smoke flag
   expectedDurationClass: 'seconds' | 'minutes' | 'hours'
-  confidence: 'high' | 'medium' | 'low'
   reasoning: string
 }
 ```
@@ -568,57 +567,116 @@ When writing ML training code for local_compute_execute:
 
 ---
 
-## 14. AgentTools
+## 14. AgentTools (RFC-008)
 
-### 14.1 local_compute_plan (v1.2, optional)
+The compute surface is the union of one generic planning tool, one
+introspection tool, and four per-backend execution tools. Adding a
+backend grows the tool count by exactly four.
 
-Analyze a script before execution. Agent can skip this for simple tasks.
+### 14.1 compute_plan (generic)
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| command | string | Yes | Shell command |
-| script_path | string | No | Relative path for deeper analysis |
-| sandbox | string | No | "docker" / "process" / "auto" |
-| timeout_minutes | number | No | Suggested timeout |
-| smoke_command | string | No | Quick validation command |
-
-Returns: task_profile, risk_assessment, recommendations, experience_summary.
-
-### 14.2 local_compute_execute
-
-Submit a command for sandboxed execution.
+Analyze a compute task on the chosen backend and produce a plan.
+For backends with `requiresApproval: true` (or when
+`compute.requireApprovalForAllBackends` is on), the plan is queued
+until the user approves it in the Compute tab.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| command | string | Yes | Shell command |
-| work_dir | string | No | Workspace-relative working directory |
-| sandbox | string | No | "docker" / "process" / "auto" (default: auto) |
-| timeout_minutes | number | No | Max runtime (default: 60, max: 1440) |
-| stall_threshold_minutes | number | No | Minutes without output before stall (default: 5) |
-| env | object | No | Extra environment variables |
-| smoke_command | string | No | Quick validation command |
-| parent_run_id | string | No | Previous failed run (retry lineage) |
+| backend | string | Yes | Backend id: `'local'` \| `'modal'` \| … |
+| command | string | Yes | Shell command to execute |
+| task_description | string | No | Concise description of the task and success criteria |
+| script_path | string | No | Relative path to the main script (required by some backends, e.g. Modal) |
+| timeout_minutes | number | No | Suggested timeout in minutes |
 
-Returns: run_id, sandbox, status, current_phase, output_path, weight.
+Returns: `backend`, `plan_id`, `task_profile`, `cost_estimate`
+(undefined for free backends), `backend_data` (backend-specific
+extras, JSON-only per amendment A5), `backend_data_version`,
+`requires_approval` (the EFFECTIVE flag captured at plan time per
+amendment A1), and a `message` telling the agent which
+`<backend>_execute` to call next.
 
-### 14.3 local_compute_wait
+### 14.2 list_compute_backends
 
-Block until run completes, stalls, or timeout.
+Introspect the registered backends. Use to pick between local /
+remote when the task could run on more than one.
+
+Parameters: none.
+
+Returns: `{ backends: Array<{ id, display_name, tool_prefix, capabilities, availability }> }`.
+
+### 14.3 `<backend>_execute` (per backend)
+
+Execute a plan that has been approved (or auto-approved for
+no-gate backends).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| run_id | string | Yes | Run ID from execute |
-| timeout_seconds | number | No | Max wait (default: 120, max: 600) |
+| plan_id | string | Yes | Plan id returned by `compute_plan` |
+| timeout_minutes | number | No | Max runtime in minutes |
+| stall_threshold_minutes | number | No | Minutes without output before flagging stall |
+| parent_run_id | string | No | Previous failed run id (retry lineage) |
 
-Returns: status, current_phase, exit_code, output_tail, progress, failure, elapsed_seconds.
+Returns: `run_id`, `backend`, `plan_id`, `status`, `command`,
+`script_path`, `started_at`, `output_path`, `estimated_cost_usd`
+(for hasCost backends), `backend_data`, `backend_data_version`.
 
-### 14.4 local_compute_status
+If the plan still requires approval the response is `{ waiting_for_approval: true, plan_id, message }`. If the plan was rejected the response is `{ rejected: true, plan_id, message }`.
 
-Non-blocking status check. Same return as wait.
+### 14.4 `<backend>_wait`, `_status`, `_stop` (per backend)
 
-### 14.5 local_compute_stop
+`_wait` blocks until terminal or `timeout_seconds` elapses.
+`_status` returns the current snapshot.
+`_stop` cancels (throws if `capabilities.supportsStop` is false).
 
-Cancel a running task. Returns: run_id, status='cancelled'.
+All three accept a single `run_id` parameter. Returns include
+`status`, `exit_code`, `elapsed_seconds`, `output_bytes`,
+`output_lines`, `output_tail`, `last_output_at`, `stalled`,
+`progress`, `failure`, `estimated_cost_usd`, `backend_data`,
+`backend_data_version`.
+
+---
+
+## 14a. Backend-specific payloads
+
+These are the shapes that flow through `backend_data` for the
+backends shipped today. Adding a new backend means publishing its
+own shape + version under this section.
+
+### 14a.1 Local (`backend: 'local'`, `backend_data_version: 1`)
+
+Plan `backend_data`:
+```typescript
+interface LocalBackendPlanData {
+  smokeSupported: boolean
+  risk: { feasible, risks: Array<{severity, category, message, mitigation?}>, warnings: string[] }
+  recommendations: { sandbox: 'docker'|'process', timeoutMinutes, stallThresholdMinutes, agentGuidance: string[] }
+  experience?: { taskKind, totalRuns, successes, failures, avgDurationSeconds, commonFailures }
+  resourceSnapshot: { freeMemoryMb, cpuLoadPercent, freeDiskMb, activeRuns }
+  envSummary: { os, arch, cpuCores, totalMemoryMb, gpu, mlxAvailable, dockerAvailable }
+}
+```
+
+Run `backend_data`:
+```typescript
+interface LocalBackendRunData {
+  workDir, sandboxWorkDir, sandbox: 'docker'|'process',
+  weight: 'heavy'|'light', currentPhase: 'preflight'|'smoke'|'full',
+  smokeCommand?, exitSignal?, stderrTail?, pid?
+}
+```
+
+### 14a.2 Modal (`backend: 'modal'`, `backend_data_version: 1`)
+
+Plan `backend_data`:
+```typescript
+interface ModalBackendPlanData { image: ModalImageInspection }
+```
+(see ModalImageInspection definition in RFC-008 / lib/modal-compute/types.ts)
+
+Run `backend_data`:
+```typescript
+interface ModalBackendRunData { image: ModalImageInspection, costThresholdUsd: number }
+```
 
 ---
 
@@ -735,3 +793,85 @@ Agent turn 2:
      )
   4. Reply: "Fixed missing xgboost dependency. Restarted training."
 ```
+
+---
+
+## 19. Adding a new compute backend
+
+The framework piece (RFC-008) factored Modal as an instance of a
+`ComputeBackend`, so adding AWS Batch / GCP Run / CloudLab / Lambda
+is a contained exercise. Estimated effort per backend: ~400–800 LOC
+plus tests.
+
+### 19.1 Checklist
+
+1. **Create the backend module.** `lib/compute/backends/<id>/<id>-backend.ts`,
+   implementing `ComputeBackend` (see `lib/compute/backend.ts`).
+2. **Declare identity + capabilities.** `id` is the public slug;
+   `toolPrefix` is the tool-safe one used by the generated
+   execute/wait/status/stop tools. The registry rejects
+   duplicate ids or duplicate toolPrefixes (amendment A4).
+3. **Define backend-specific payloads.** `LocalBackendPlanData` /
+   `ModalBackendPlanData` show the convention; pick a JSON-only
+   shape and a `<ID>_BACKEND_DATA_VERSION` constant (amendment A5).
+4. **Implement the methods.**
+   - `probeAvailability()` — cheap check; report `missingRequirements` + `hints`.
+   - `plan()` — produce a `ComputePlan`. Cost-bearing backends populate `costEstimate`.
+   - `submit()` — kick off and return a `ComputeRun`. Emit `run-update` events via `ctx.emit`.
+   - `getStatus()`, `waitForCompletion()`, `stop()`, `destroy()` —
+     thin wrappers around backend internals.
+   - `hydrate()` returns `Array<{ run, status }>` (amendment A3).
+5. **Own cost-killing (if hasCost).** Backend polls its own runs
+   and emits `cost-killed` via `ctx.emit` when
+   `hourlyRateUsd * elapsed > ctx.getCostThresholdUsd()`. Registry
+   has no kill timer (amendment A2).
+6. **Wire into the coordinator.** In `lib/agents/coordinator.ts`
+   inside the compute block, build the backend's `ComputeContext`
+   (credentials + cost threshold + emit + optional createSubAgent)
+   and `computeRegistry.register(new YourBackend(ctx))`.
+7. **Surface settings.** Add a `BackendSettings` entry in
+   `DEFAULT_SETTINGS.compute.backends.<id>`. Add a section to
+   `app/src/renderer/components/settings/ComputeSettings.tsx`
+   for any per-backend knobs.
+8. **(Optional) Per-backend renderer component.** If your
+   `backend_data` is non-trivial, ship a `<YourBackendPlanDetails>`
+   component under `app/src/renderer/components/center/compute/<id>/`
+   and a renderer-side `KNOWN_MAX_VERSION` constant for the
+   schema-version guard.
+9. **Write tests.** Mirror `lib/compute/backends/{local,modal}/__tests__/`:
+   identity/capabilities, probeAvailability paths, hydrate empty,
+   getStatus undefined, destroy no-throw, JSON serializability of
+   plan/run backend_data, plus backend-specific unit tests for any
+   cost estimator / sandbox / connector you ship.
+10. **Add a skill.** `lib/skills/builtin/compute-<id>/SKILL.md`
+    documenting tips specific to this backend (how the agent should
+    structure scripts, what GPU types are available, what cost surface
+    to expect, etc.). The generic `compute-environment` umbrella
+    skill points readers at it.
+
+### 19.2 Conventions
+
+- **Tool names.** Generated as `<toolPrefix>_execute`, `_wait`,
+  `_status`, `_stop`. Pattern enforced by `ComputeRegistry.register()`.
+- **Run ids.** Pick a short prefix (local: `lr-`, modal: `mr-`).
+  Registry doesn't parse — it routes via the `runId → backend` map
+  populated at `submit()` time, so collisions are not silently
+  routed wrong.
+- **Cost coverage.** Set `costEstimate.coverage = 'lower_bound'`
+  when only one cost dimension is modeled (Modal's GPU-only is the
+  reference case). Cost-killing uses `hourlyRateUsd * elapsed`
+  regardless — the flag is informational only.
+- **Approval.** `capabilities.requiresApproval = true` makes the
+  registry write a `PendingPlan` and surface the `plan-ready` event
+  with `requiresApproval: true`. The user's
+  `compute.requireApprovalForAllBackends` setting can force
+  approval on backends that default to no-gate.
+
+### 19.3 What you DON'T have to write
+
+- New IPC channels — `compute:event` carries all backend events.
+- New preload methods — `onComputeEvent` already covers it.
+- New renderer store wiring — `applyEvent` reducer routes by `backend` field.
+- New CoordinatorConfig fields — credentials + threshold flow through
+  the `compute.getComputeSettings` / `compute.getModalCredentials`
+  pattern; widen to `getCredentials(backendId)` when adding the third backend.

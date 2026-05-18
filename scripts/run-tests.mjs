@@ -51,6 +51,7 @@ const SUITES = {
   'diagram-backends': 'lib/tools/diagram-backends/__tests__',
   importers: 'lib/importers/__tests__',
   reports: 'lib/reports/__tests__',
+  compute: 'lib/compute',
   renderer: 'app/src/renderer/stores/__tests__'
 }
 

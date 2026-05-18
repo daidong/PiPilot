@@ -48,6 +48,9 @@ import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 import { inferProviderFromModelId } from '../../../lib/models'
 import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
+// RFC-008 §7.5: compute IPC migrated to a single discriminated-event
+// channel; the PR #62 helpers (PendingPlanStore reach-through,
+// per-target formatters, compute-run-events bridge) are gone.
 
 // ─── Shared utilities from shared-electron ──────────────────────────────────
 import {
@@ -239,6 +242,12 @@ function getWindowContext(event: IpcMainInvokeEvent): { win: BrowserWindow; stat
   }
   return { win, state: getOrCreateWindowState(win) }
 }
+
+// RFC-008 §7.5: sendModalAvailability, sendPendingModalPlan, and
+// unwrapToolResult helpers were retired. Backend availability flows
+// through the ComputeRegistry's `availability-changed` event; pending
+// plans come back via compute:hydrate; tool results no longer carry
+// implicit compute events.
 
 export function registerWindow(win: BrowserWindow): void {
   const key = win.webContents.id
@@ -532,6 +541,24 @@ async function ensureCoordinator(
       // presentation-layer settings) take effect without restart.
       getResolvedSettings: () => resolveSettings(loadSettingsFromConfig()),
       getDiagramAuth,
+      // RFC-008 §7.5: compute configuration. Modal credentials + cost
+      // threshold flow through here as live accessors so the
+      // coordinator's backends pick up settings changes without a
+      // restart. The registry itself is built inside createCoordinator
+      // and exposed on its return value (state.coordinator.computeRegistry).
+      compute: {
+        getModalCredentials: () => ({
+          tokenId: (process.env.MODAL_TOKEN_ID || '').trim() || undefined,
+          tokenSecret: (process.env.MODAL_TOKEN_SECRET || '').trim() || undefined,
+        }),
+        getComputeSettings: () => {
+          const s = resolveSettings(loadSettingsFromConfig())
+          return {
+            modalCostThresholdUsd: (s.compute.backends.modal?.costThresholdUsd ?? 5) as number,
+            forceApprovalForAll: s.compute.requireApprovalForAllBackends,
+          }
+        },
+      },
       // Only wired in Electron's main process; pure-Node contexts (tests)
       // will leave this undefined and the tool will degrade to source-
       // level SVG review.
@@ -654,50 +681,10 @@ async function ensureCoordinator(
           }
         }
 
-        // Forward compute run events to renderer
-        if (tool === 'local_compute_execute' && result && typeof result === 'object' && 'success' in result) {
-          const cr = result as any
-          if (cr.success && cr.data) {
-            safeSend(win, 'compute:run-update', {
-              runId: cr.data.run_id,
-              status: cr.data.status,
-              currentPhase: cr.data.current_phase,
-              command: (args as any)?.command ?? '',
-              sandbox: cr.data.sandbox,
-              weight: cr.data.weight,
-              startedAt: new Date().toISOString(),
-            })
-          }
-        }
-        if ((tool === 'local_compute_status' || tool === 'local_compute_wait') && result && typeof result === 'object' && 'success' in result) {
-          const cr = result as any
-          if (cr.success && cr.data?.run_id) {
-            const isComplete = ['completed', 'failed', 'timed_out', 'cancelled'].includes(cr.data.status)
-            const channel = isComplete ? 'compute:run-complete' : 'compute:run-update'
-            safeSend(win, channel, {
-              runId: cr.data.run_id,
-              status: cr.data.status,
-              currentPhase: cr.data.current_phase,
-              exitCode: cr.data.exit_code,
-              elapsedSeconds: cr.data.elapsed_seconds,
-              outputBytes: cr.data.output_bytes,
-              outputLines: cr.data.output_lines,
-              stalled: cr.data.stalled,
-              progress: cr.data.progress,
-              outputTail: cr.data.output_tail?.slice(-2048),
-              failure: cr.data.failure,
-            })
-          }
-        }
-        if (tool === 'local_compute_stop' && result && typeof result === 'object' && 'success' in result) {
-          const cr = result as any
-          if (cr.success && cr.data?.run_id) {
-            safeSend(win, 'compute:run-complete', {
-              runId: cr.data.run_id,
-              status: 'cancelled',
-            })
-          }
-        }
+        // RFC-008 §7.5: compute run/plan events come from the
+        // ComputeRegistry's subscribe stream (wired below in
+        // ensureCoordinator) — NOT from inspecting tool results here.
+        // The per-tool inspection block PR #62 added is gone.
 
         // Send activity event for tool result with structured detail and duration
         const r = result as any
@@ -791,23 +778,19 @@ async function ensureCoordinator(
       getTurnId: () => state.lastTurnId
     })
 
+    // RFC-008 §7.5: subscribe to the ComputeRegistry's unified event
+    // stream and fan to the renderer via a single channel. Replaces
+    // the 8 backend-specific channels PR #62 introduced.
+    if (state.coordinator?.computeRegistry) {
+      state.coordinator.computeRegistry.subscribe(event => {
+        safeSend(win, 'compute:event', event)
+      })
+    }
+
     // Notify UI that initialization is complete
     const readyEvent = { type: 'system', summary: 'Agent ready' }
     state.realtimeBuffer.pushActivity(readyEvent)
     safeSend(win, 'agent:activity', readyEvent)
-
-    // Send compute environment info to renderer (non-blocking)
-    probeStaticProfile().then(profile => {
-      safeSend(win, 'compute:environment', {
-        os: profile.os,
-        arch: profile.arch,
-        cpuCores: profile.cpuCores,
-        totalMemoryMb: profile.totalMemoryMb,
-        gpu: profile.gpu.model,
-        mlxAvailable: profile.gpu.mlxAvailable,
-        sandbox: profile.dockerAvailable ? 'docker' : 'process',
-      })
-    }).catch(() => { /* non-fatal */ })
   }
   return state.coordinator
 }
@@ -2147,23 +2130,63 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // Compute environment probe (called eagerly by renderer on mount)
-  handleWindow('compute:probe-environment', async ({ win }) => {
+  // RFC-008 §7.5: compute IPC consolidated to three handlers + one
+  // outbound `compute:event` channel (subscribed inside
+  // ensureCoordinator). Old handlers — compute:probe-environment,
+  // compute:hydrate-runs, compute:modal-approve, compute:modal-reject —
+  // are replaced by compute:hydrate / compute:approve-plan /
+  // compute:reject-plan, each backend-agnostic.
+
+  handleWindow('compute:hydrate', async ({ state }) => {
+    // Coordinator is initialized eagerly on project open (see
+    // openProjectFolder), so the registry should be present by the time
+    // the renderer asks. Return an empty snapshot if the renderer races
+    // ahead of init — applyEvent will fill in once availability-changed
+    // events arrive.
+    if (!state.coordinator?.computeRegistry) {
+      return { runs: [], pendingPlans: [] }
+    }
+    return state.coordinator.computeRegistry.hydrate()
+  })
+
+  handleWindow('compute:approve-plan', ({ state }, payload: { backend: string; planId: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.backend !== 'string' || typeof payload.planId !== 'string') {
+      return { success: false, error: 'backend and planId are required' }
+    }
+    return state.coordinator.computeRegistry.approvePlan(payload.backend, payload.planId)
+  })
+
+  handleWindow('compute:reject-plan', ({ state }, payload: { backend: string; planId: string; comments: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.backend !== 'string' || typeof payload.planId !== 'string') {
+      return { success: false, error: 'backend and planId are required' }
+    }
+    return state.coordinator.computeRegistry.rejectPlan(payload.backend, payload.planId, typeof payload.comments === 'string' ? payload.comments : '')
+  })
+
+  handleWindow('compute:refresh-availability', async ({ state }) => {
+    if (!state.coordinator?.computeRegistry) {
+      return { success: false, error: 'Compute registry not initialized' }
+    }
     try {
-      const profile = await probeStaticProfile()
-      const env = {
-        os: profile.os,
-        arch: profile.arch,
-        cpuCores: profile.cpuCores,
-        totalMemoryMb: profile.totalMemoryMb,
-        gpu: profile.gpu.model,
-        mlxAvailable: profile.gpu.mlxAvailable,
-        sandbox: profile.dockerAvailable ? 'docker' : 'process',
-      }
-      safeSend(win, 'compute:environment', env)
-      return env
-    } catch {
-      return null
+      await state.coordinator.computeRegistry.refreshAvailability()
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err?.message || String(err) }
+    }
+  })
+
+  handleWindow('compute:stop-run', async ({ state }, payload: { runId: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.runId !== 'string' || !payload.runId.trim()) {
+      return { success: false, error: 'runId is required' }
+    }
+    try {
+      await state.coordinator.computeRegistry.stop(payload.runId.trim())
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err?.message || String(err) }
     }
   })
 
@@ -2390,20 +2413,22 @@ export function registerIpcHandlers(): void {
       } catch { /* ignore corrupt file */ }
     }
 
-    // Probe compute environment on folder open (only when feature is enabled)
-    if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-      probeStaticProfile().then(profile => {
-        safeSend(win, 'compute:environment', {
-          os: profile.os,
-          arch: profile.arch,
-          cpuCores: profile.cpuCores,
-          totalMemoryMb: profile.totalMemoryMb,
-          gpu: profile.gpu.model,
-          mlxAvailable: profile.gpu.mlxAvailable,
-          sandbox: profile.dockerAvailable ? 'docker' : 'process',
-        })
-      }).catch(() => { /* non-fatal */ })
-    }
+    // RFC-008 §7.5: build the ComputeRegistry eagerly on project open
+    // instead of waiting for the first chat. Without this, the Compute
+    // tab renders "No backends registered" until the user sends a
+    // message — because ensureCoordinator() (which builds the registry)
+    // is otherwise only invoked from the chat path.
+    //
+    // Fire-and-forget: opening a project must not block on coordinator
+    // init (which can take 1-2 min on first run for MCP setup). Errors
+    // are swallowed — if the user hasn't signed in yet, the next chat
+    // attempt will re-trigger ensureCoordinator and surface the auth
+    // error properly there.
+    void ensureCoordinator(state, win).catch((err) => {
+      if (process.env.RESEARCH_COPILOT_DEBUG) {
+        console.warn('[compute] eager coordinator init failed:', err?.message || err)
+      }
+    })
 
     win.setTitle(basename(state.projectPath))
 

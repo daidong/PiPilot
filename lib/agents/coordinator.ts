@@ -264,6 +264,26 @@ export interface CoordinatorConfig {
   /** Live accessor for diagram-tool auth (see lib/tools/types.ts DiagramAuth). */
   getDiagramAuth?: () => import('../tools/types.js').DiagramAuth
   /**
+   * Compute backend configuration. When provided, the coordinator builds
+   * a ComputeRegistry, registers LocalBackend + ModalBackend with the
+   * relevant credentials/threshold accessors, and exposes the registry
+   * on its return value so the main process can subscribe to events +
+   * handle hydrate/approve/reject IPC.
+   *
+   * Replaces PR #62's modalCredentials / onModalCostKilled / onModalRunUpdate
+   * / createSubAgent leakage onto CoordinatorConfig (RFC-008 §7.4).
+   */
+  compute?: {
+    /** Live accessor for Modal credentials sourced from Settings → API Keys. */
+    getModalCredentials?: () => { tokenId?: string; tokenSecret?: string }
+    /**
+     * Live accessor for compute settings: cost threshold per backend
+     * (today only modal honors it) and the global force-approval
+     * override.
+     */
+    getComputeSettings?: () => { modalCostThresholdUsd: number; forceApprovalForAll: boolean }
+  }
+  /**
    * Optional SVG rasterizer the coordinator forwards to tools. Populated
    * only when running inside Electron (the main process owns the
    * BrowserWindow needed to render SVG at fidelity). Tools degrade to
@@ -298,6 +318,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   clearSessionMemory: () => Promise<void>
   abort: () => void
   destroy: () => Promise<void>
+  /**
+   * Compute backend registry — present when CoordinatorConfig.compute
+   * was provided. The main process uses this to: (a) subscribe to
+   * ComputeEvents and fan them to the renderer via the single
+   * `compute:event` IPC channel, (b) serve `compute:hydrate`,
+   * `compute:approve-plan`, `compute:reject-plan`.
+   */
+  computeRegistry?: import('../compute/registry.js').ComputeRegistry
 }> {
   const {
     apiKey,
@@ -491,8 +519,76 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     getSettings: config.getResolvedSettings,
     getDiagramAuth: config.getDiagramAuth,
     getTurnId,
+    // Compute registry — see `computeRegistry` construction below;
+    // assigned in-place after we've built it so backends + tools share
+    // the same instance.
+    computeRegistry: undefined as undefined | import('../compute/registry.js').ComputeRegistry,
     rasterizeSvg: config.rasterizeSvg,
   }
+
+  // ── Compute backend wiring (RFC-008 §7.4–§7.5) ──────────────────────
+  // Built here so the registry can close over piModel (for sub-agents)
+  // and the coordinator's apiKey resolution. Backends register into it
+  // immediately so createResearchTools sees them when emitting tools.
+  let computeRegistry: import('../compute/registry.js').ComputeRegistry | undefined = undefined
+  if (config.compute) {
+    const { ComputeRegistry } = await import('../compute/registry.js')
+    const { LocalBackend } = await import('../compute/backends/local/local-backend.js')
+    const { ModalBackend } = await import('../compute/backends/modal/modal-backend.js')
+    const getCompute = config.compute.getComputeSettings ?? (() => ({ modalCostThresholdUsd: 5, forceApprovalForAll: false }))
+    const getModalCreds = config.compute.getModalCredentials ?? (() => ({}))
+
+    computeRegistry = new ComputeRegistry({
+      projectPath,
+      // Live getter so settings changes take effect on the next plan()
+      // without requiring a coordinator rebuild.
+      forceApproval: () => getCompute().forceApprovalForAll,
+    })
+
+    // ComputeContext factory — closes over piModel/resolveApiKey so
+    // backend.createSubAgent doesn't reach back into the coordinator.
+    function makeContext(opts: { getCredentials: () => Record<string, string | undefined>; getCostThresholdUsd: () => number }) {
+      return {
+        projectPath,
+        workspacePath: projectPath,
+        getCredentials: opts.getCredentials,
+        getCostThresholdUsd: opts.getCostThresholdUsd,
+        emit: (event: import('../compute/events.js').ComputeEvent) => {
+          computeRegistry?.emit(event)
+        },
+        createSubAgent: piModel
+          ? (subOpts: { systemPrompt: string; tools: AgentTool[]; thinkingLevel?: 'off' | 'low' | 'medium' | 'high' }) => new Agent({
+              initialState: {
+                systemPrompt: subOpts.systemPrompt,
+                model: piModel ?? undefined as any,
+                tools: subOpts.tools,
+                thinkingLevel: subOpts.thinkingLevel ?? 'low',
+              },
+              getApiKey: resolveApiKey,
+            })
+          : undefined,
+      }
+    }
+
+    const localCtx = makeContext({ getCredentials: () => ({}), getCostThresholdUsd: () => 0 })
+    computeRegistry.register(new LocalBackend(localCtx))
+
+    const modalCtx = makeContext({
+      getCredentials: () => getModalCreds(),
+      getCostThresholdUsd: () => getCompute().modalCostThresholdUsd,
+    })
+    computeRegistry.register(new ModalBackend(modalCtx))
+
+    // Optional diagnostic backend — off by default. See
+    // lib/compute/backends/stub/stub-backend.ts for what it does
+    // (in-memory simulator; reference impl for RFC §19).
+    if (process.env.ENABLE_COMPUTE_STUB === '1') {
+      const { StubBackend } = await import('../compute/backends/stub/stub-backend.js')
+      const stubCtx = makeContext({ getCredentials: () => ({}), getCostThresholdUsd: () => 0 })
+      computeRegistry.register(new StubBackend(stubCtx))
+    }
+  }
+  toolCtx.computeRegistry = computeRegistry
   const { tools: researchAgentTools, destroy: destroyResearchTools } = createResearchTools(toolCtx)
 
   // Create built-in coding tools from pi-coding-agent
@@ -847,15 +943,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   }
 
   // Fire-and-forget: probe environment and update system prompt asynchronously.
-  // Gated behind ENABLE_LOCAL_COMPUTE — no env guidance when compute is disabled.
-  if (process.env.ENABLE_LOCAL_COMPUTE === '1') {
-    probeStaticProfile()
-      .then(profile => {
-        const envGuidance = generateAgentGuidance(profile)
-        agent.state.systemPrompt = baseSystemPrompt + '\n\n' + envGuidance
-      })
-      .catch(() => { /* non-fatal */ })
-  }
+  // Compute is a default feature now; env guidance is always emitted.
+  probeStaticProfile()
+    .then(profile => {
+      const envGuidance = generateAgentGuidance(profile)
+      agent.state.systemPrompt = baseSystemPrompt + '\n\n' + envGuidance
+    })
+    .catch(() => { /* non-fatal */ })
 
   return {
     agent,
@@ -1138,7 +1232,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     async destroy() {
       agent.abort()
       await destroyResearchTools()
-    }
+      if (computeRegistry) await computeRegistry.destroy()
+    },
+
+    computeRegistry,
   }
 }
 

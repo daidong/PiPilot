@@ -817,21 +817,30 @@ export default function App() {
       scheduleEntityRefresh()
     })
 
-    // Eagerly probe compute environment (only when compute feature is enabled)
-    if (api?.isComputeEnabled?.()) {
-      api.probeComputeEnvironment?.().catch(() => {})
-    }
+    // Compute events — RFC-008 §7.6: single channel dispatched through
+    // the store's applyEvent reducer. ComputeEvent is a discriminated
+    // union (run-update | run-complete | plan-ready | plan-approved |
+    // plan-rejected | cost-killed | availability-changed).
+    const unsubComputeEvent = api.onComputeEvent((event: any) => {
+      useComputeStore.getState().applyEvent(event)
+    })
 
-    // Compute run events
-    const unsubComputeUpdate = api.onComputeRunUpdate((event: any) => {
-      useComputeStore.getState().updateRun(event.runId, event)
-    })
-    const unsubComputeComplete = api.onComputeRunComplete((event: any) => {
-      useComputeStore.getState().updateRun(event.runId, event)
-    })
-    const unsubComputeEnv = api.onComputeEnvironment((event: any) => {
-      useComputeStore.getState().setEnvironment(event)
-    })
+    // Hydrate persisted runs + pending plans on mount so the Compute
+    // tab restores its pre-crash state in a single round trip
+    // (amendment A3).
+    api?.hydrateCompute?.()
+      .then((result: any) => {
+        if (Array.isArray(result?.runs)) {
+          useComputeStore.getState().hydrateRuns(result.runs)
+        }
+        if (Array.isArray(result?.pendingPlans)) {
+          useComputeStore.getState().hydratePendingPlans(result.pendingPlans)
+        }
+        if (Array.isArray(result?.backends)) {
+          useComputeStore.getState().hydrateBackends(result.backends)
+        }
+      })
+      .catch(() => { /* non-fatal */ })
 
     return () => {
       if (entityRefreshTimer) clearTimeout(entityRefreshTimer)
@@ -846,9 +855,7 @@ export default function App() {
       unsubToolProgress()
       unsubSkillLoaded()
       unsubUsage()
-      unsubComputeUpdate()
-      unsubComputeComplete()
-      unsubComputeEnv()
+      unsubComputeEvent()
     }
   }, [hasProject])
 
@@ -933,7 +940,7 @@ export default function App() {
         e.preventDefault()
         useUIStore.getState().setCenterView('literature')
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === '3' && api?.isComputeEnabled?.()) {
+      if ((e.metaKey || e.ctrlKey) && e.key === '3') {
         e.preventDefault()
         useUIStore.getState().setCenterView('compute')
       }

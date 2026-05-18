@@ -12,13 +12,10 @@ import { ComputeView } from '../center/ComputeView'
 import { AuditView } from '../center/audit/AuditView'
 import { EntityPreviewPanel } from './EntityPreviewPanel'
 
-const api = (window as any).api
-const computeEnabled = api?.isComputeEnabled?.() ?? false
-
 const viewTabs: { key: CenterView; label: string; icon: React.ElementType; shortcut: string }[] = [
   { key: 'chat', label: 'Chat', icon: MessageSquare, shortcut: '⌘1' },
   { key: 'literature', label: 'Literature', icon: BookOpen, shortcut: '⌘2' },
-  ...(computeEnabled ? [{ key: 'compute' as CenterView, label: 'Compute', icon: Cpu, shortcut: '⌘3' }] : []),
+  { key: 'compute', label: 'Compute', icon: Cpu, shortcut: '⌘3' },
   { key: 'audit', label: 'Audit', icon: Network, shortcut: '⌘4' },
 ]
 

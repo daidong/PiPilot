@@ -225,12 +225,13 @@ export interface ElectronAPI {
   // Entity creation notifications
   onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
 
-  // Compute (gated behind ENABLE_LOCAL_COMPUTE=1)
-  isComputeEnabled: () => boolean
-  probeComputeEnvironment: () => Promise<any>
-  onComputeRunUpdate: (cb: (event: any) => void) => () => void
-  onComputeRunComplete: (cb: (event: any) => void) => () => void
-  onComputeEnvironment: (cb: (event: any) => void) => () => void
+  // Compute (RFC-008 §7.6)
+  hydrateCompute: () => Promise<{ runs: any[]; pendingPlans: any[] }>
+  approveComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; error?: string }>
+  rejectComputePlan: (backend: string, planId: string, comments: string) => Promise<{ success: boolean; error?: string }>
+  stopComputeRun: (runId: string) => Promise<{ success: boolean; error?: string }>
+  refreshComputeAvailability: () => Promise<{ success: boolean; error?: string }>
+  onComputeEvent: (cb: (event: any) => void) => () => void
 
   // File tracking
   /**
@@ -491,26 +492,20 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
   },
 
-  isComputeEnabled: () => process.env.ENABLE_LOCAL_COMPUTE === '1',
+  hydrateCompute: () => ipcRenderer.invoke('compute:hydrate'),
+  approveComputePlan: (backend: string, planId: string) =>
+    ipcRenderer.invoke('compute:approve-plan', { backend, planId }),
+  rejectComputePlan: (backend: string, planId: string, comments: string) =>
+    ipcRenderer.invoke('compute:reject-plan', { backend, planId, comments }),
+  stopComputeRun: (runId: string) =>
+    ipcRenderer.invoke('compute:stop-run', { runId }),
+  refreshComputeAvailability: () =>
+    ipcRenderer.invoke('compute:refresh-availability'),
 
-  probeComputeEnvironment: () => ipcRenderer.invoke('compute:probe-environment'),
-
-  onComputeRunUpdate: (cb) => {
+  onComputeEvent: (cb) => {
     const handler = (_: any, event: any) => cb(event)
-    ipcRenderer.on('compute:run-update', handler)
-    return () => ipcRenderer.removeListener('compute:run-update', handler)
-  },
-
-  onComputeRunComplete: (cb) => {
-    const handler = (_: any, event: any) => cb(event)
-    ipcRenderer.on('compute:run-complete', handler)
-    return () => ipcRenderer.removeListener('compute:run-complete', handler)
-  },
-
-  onComputeEnvironment: (cb) => {
-    const handler = (_: any, event: any) => cb(event)
-    ipcRenderer.on('compute:environment', handler)
-    return () => ipcRenderer.removeListener('compute:environment', handler)
+    ipcRenderer.on('compute:event', handler)
+    return () => ipcRenderer.removeListener('compute:event', handler)
   },
 
   onEntityCreated: (cb) => {

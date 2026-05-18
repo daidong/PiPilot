@@ -60,6 +60,8 @@ const KEY_FIELDS = [
     url: 'https://www.semanticscholar.org/product/api#api-key-form',
     required: false,
   },
+  // Modal credentials live in Settings → Compute → Modal so all compute
+  // configuration is in one place. See ComputeSettings.tsx.
 ] as const
 
 interface Props {
@@ -114,6 +116,9 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
       const newStatus = await api.getApiKeyStatus()
       setStatus(newStatus)
       setValues({})
+      // RFC-008 §7.6: Modal credential changes are picked up by the
+      // ModalBackend's live getCredentials() accessor on the next
+      // probe / plan. No explicit refresh call needed.
       onSaved?.()
     } catch (err: any) {
       setError(err.message || 'Failed to save keys')

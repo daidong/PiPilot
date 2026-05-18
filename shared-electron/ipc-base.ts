@@ -28,17 +28,34 @@ interface WikiAgentSettings {
 interface DiagramSettings {
   reviewProvider: 'auto' | 'openai' | 'anthropic'
 }
+interface BackendSettings {
+  costThresholdUsd?: number
+  [extra: string]: unknown
+}
+interface ComputeSettings {
+  enabledBackends: string[]
+  defaultBackend: string
+  requireApprovalForAllBackends: boolean
+  backends: Record<string, BackendSettings>
+}
 export interface AppSettings {
   research: ResearchSettings
   dataAnalysis: DataAnalysisSettings
   wikiAgent: WikiAgentSettings
   diagram: DiagramSettings
+  compute: ComputeSettings
 }
 const DEFAULT_SETTINGS: AppSettings = {
   research: { researchIntensity: 'medium', webSearchDepth: 'standard', autoSaveSensitivity: 'balanced' },
   dataAnalysis: { executionTimeLimit: 'standard' },
   wikiAgent: { model: 'none', speed: 'medium' },
   diagram: { reviewProvider: 'auto' },
+  compute: {
+    enabledBackends: ['local', 'modal'],
+    defaultBackend: 'local',
+    requireApprovalForAllBackends: false,
+    backends: { modal: { costThresholdUsd: 5.00 } },
+  },
 }
 
 // Mirrors lib/models.ts:inferProviderFromModelId — kept inline because
@@ -90,7 +107,9 @@ const API_KEY_NAMES = [
   'OPENROUTER_API_KEY',
   'PAPERCLIP_API_KEY',
   'DEEPSEEK_API_KEY',
-  'SEMANTIC_SCHOLAR_API_KEY'
+  'SEMANTIC_SCHOLAR_API_KEY',
+  'MODAL_TOKEN_ID',
+  'MODAL_TOKEN_SECRET'
 ] as const
 
 interface AppConfig {
@@ -177,11 +196,30 @@ export function loadSettingsFromConfig(): AppSettings {
   const config = readConfig()
   if (!config.settings) return { ...DEFAULT_SETTINGS }
   // Merge with defaults to handle new fields added in future versions
+  // RFC-008 §7.7 migration: the old top-level `modalCompute.costThresholdUsd`
+  // lives at `compute.backends.modal.costThresholdUsd` now. Read the legacy
+  // path on disk for one cycle to seed the migration without losing the
+  // user's chosen threshold.
+  const legacyModalCost = (config.settings as any).modalCompute?.costThresholdUsd
+  const storedCompute = (config.settings as any).compute as ComputeSettings | undefined
+  const computeMerged: ComputeSettings = {
+    enabledBackends: storedCompute?.enabledBackends ?? DEFAULT_SETTINGS.compute.enabledBackends,
+    defaultBackend: storedCompute?.defaultBackend ?? DEFAULT_SETTINGS.compute.defaultBackend,
+    requireApprovalForAllBackends: storedCompute?.requireApprovalForAllBackends ?? DEFAULT_SETTINGS.compute.requireApprovalForAllBackends,
+    backends: {
+      ...DEFAULT_SETTINGS.compute.backends,
+      ...(storedCompute?.backends ?? {}),
+      ...(legacyModalCost != null && !storedCompute?.backends?.modal
+        ? { modal: { costThresholdUsd: legacyModalCost } }
+        : {}),
+    },
+  }
   const merged: AppSettings = {
     research: { ...DEFAULT_SETTINGS.research, ...config.settings.research },
     dataAnalysis: { ...DEFAULT_SETTINGS.dataAnalysis, ...config.settings.dataAnalysis },
     wikiAgent: { ...DEFAULT_SETTINGS.wikiAgent, ...config.settings.wikiAgent },
     diagram: { ...DEFAULT_SETTINGS.diagram, ...config.settings.diagram },
+    compute: computeMerged,
   }
   // Migrate retired wiki-agent model IDs to current flagship (mirrors the
   // main selectedModel migration in app/src/renderer/stores/ui-store.ts).

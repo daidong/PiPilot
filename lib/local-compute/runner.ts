@@ -18,7 +18,7 @@ import crypto from 'node:crypto'
 import { RunStore } from './run-store.js'
 import { getProvider } from './sandbox/detect.js'
 import { deriveFailure } from './failure-signals.js'
-import { extractProgress } from './progress.js'
+import { extractProgress, extractResult } from './progress.js'
 import { classifyWeight, canAdmit } from './scheduler.js'
 import { runPreflight, type PreflightResult } from './preflight.js'
 import { ExperienceStore, inferTaskKind } from './experience.js'
@@ -435,22 +435,42 @@ export class ComputeRunner {
     const run = this.store.getRun(runId)
     if (!run || isTerminal(run.status)) return
 
-    const handle = this.handles.get(runId)
-    if (handle) {
-      await handle.kill('SIGTERM')
-      // Give process 3s to exit gracefully, then SIGKILL
-      setTimeout(async () => {
-        await handle.kill('SIGKILL').catch(() => {})
-      }, 3000)
-    }
-
+    // Mark cancelled FIRST so the parallel handleExit() that fires when
+    // SIGTERM lands sees `isTerminal(run.status) === true` and bails —
+    // otherwise it would race to overwrite the status to 'failed'.
     const stderrPath = this.store.getStderrPath(runId)
-    const stderrTail = readFileTail(stderrPath, STDERR_TAIL_BYTES)
+    const stderrTailBefore = readFileTail(stderrPath, STDERR_TAIL_BYTES)
     this.store.updateRun(runId, {
       status: 'cancelled',
       completedAt: new Date().toISOString(),
-      stderrTail,
+      stderrTail: stderrTailBefore,
     })
+
+    const handle = this.handles.get(runId)
+    if (handle) {
+      // SIGTERM → wait up to 3s → SIGKILL → wait up to 2s. Only return
+      // once the process is truly dead (or 5s elapsed), so the LLM that
+      // immediately queries status sees a state consistent with reality.
+      await handle.kill('SIGTERM').catch(() => {})
+      const exitedGracefully = await Promise.race([
+        handle.wait().then(() => true, () => false),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3000)),
+      ])
+      if (!exitedGracefully) {
+        await handle.kill('SIGKILL').catch(() => {})
+        await Promise.race([
+          handle.wait().catch(() => undefined),
+          new Promise(resolve => setTimeout(resolve, 2000)),
+        ])
+      }
+      // Re-read stderr — the process may have flushed more between the
+      // initial read and the final SIGKILL.
+      const stderrTailAfter = readFileTail(stderrPath, STDERR_TAIL_BYTES)
+      if (stderrTailAfter && stderrTailAfter !== stderrTailBefore) {
+        this.store.updateRun(runId, { stderrTail: stderrTailAfter })
+      }
+    }
+
     this.handles.delete(runId)
     this.stopPollingIfIdle()
   }
@@ -465,6 +485,7 @@ export class ComputeRunner {
 
     const outputTail = readFileTail(run.outputPath, OUTPUT_TAIL_BYTES)
     const structured = extractProgress(outputTail)
+    const result = extractResult(outputTail)
     const elapsed = run.startedAt
       ? (Date.now() - new Date(run.startedAt).getTime()) / 1000
       : 0
@@ -475,12 +496,14 @@ export class ComputeRunner {
       currentPhase: run.currentPhase,
       exitCode: run.exitCode,
       outputTail,
+      stderrTail: run.stderrTail,
       outputBytes: run.outputBytes,
       outputLines: run.outputLines,
       elapsedSeconds: Math.round(elapsed),
       stalled: run.stalled,
       progress: structured,
       failure,
+      result,
     }
   }
 

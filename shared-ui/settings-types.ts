@@ -63,6 +63,38 @@ export interface DiagramSettings {
   reviewProvider: DiagramReviewProvider
 }
 
+// ── Compute settings (RFC-008 §7.7) ────────────────────────────────────────
+//
+// Replaces the PR #62 `modalCompute` top-level field. Per-backend
+// settings live under `compute.backends[id]`; global compute behavior
+// (force-approval override) lives at the top of `compute`.
+
+export interface BackendSettings {
+  /** Per-backend cost-kill threshold in USD. Honored only by backends with capabilities.hasCost. */
+  costThresholdUsd?: number
+  /** Backend-specific extras (forward-compat for AWS account, GCP project, etc.). */
+  [extra: string]: unknown
+}
+
+export interface ComputeSettings {
+  /**
+   * Backend ids that the registry should register at coordinator
+   * construction. Empty array = no backends registered (compute
+   * effectively off even when ENABLE_LOCAL_COMPUTE=1).
+   */
+  enabledBackends: string[]
+  /** Default backend id pre-selected in the UI. */
+  defaultBackend: string
+  /**
+   * Global override: every plan goes through the approval gate
+   * regardless of the backend's capabilities.requiresApproval. Used
+   * by shared-lab / audit-compliance setups.
+   */
+  requireApprovalForAllBackends: boolean
+  /** Per-backend bag. Modal lives at `backends.modal`. */
+  backends: Record<string, BackendSettings>
+}
+
 // ── Combined ────────────────────────────────────────────────────────────────
 
 export interface AppSettings {
@@ -70,6 +102,7 @@ export interface AppSettings {
   dataAnalysis: DataAnalysisSettings
   wikiAgent: WikiAgentSettings
   diagram: DiagramSettings
+  compute: ComputeSettings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -87,6 +120,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   diagram: {
     reviewProvider: 'auto',
+  },
+  compute: {
+    enabledBackends: ['local', 'modal'],
+    defaultBackend: 'local',
+    requireApprovalForAllBackends: false,
+    backends: {
+      modal: { costThresholdUsd: 5.00 },
+    },
   },
 }
 
@@ -111,6 +152,12 @@ export interface ResolvedSettings {
   dataAnalysis: { timeoutMs: number }
   autoSaveThreshold: number
   diagram: { reviewProvider: DiagramReviewProvider }
+  compute: {
+    enabledBackends: string[]
+    defaultBackend: string
+    requireApprovalForAllBackends: boolean
+    backends: Record<string, BackendSettings>
+  }
 }
 
 // ── Resolver functions ──────────────────────────────────────────────────────
@@ -156,5 +203,6 @@ export function resolveSettings(settings: AppSettings): ResolvedSettings {
     dataAnalysis: { timeoutMs: resolveDataAnalysisTimeout(settings.dataAnalysis.executionTimeLimit) },
     autoSaveThreshold: resolveAutoSaveThreshold(settings.research.autoSaveSensitivity),
     diagram: { reviewProvider: settings.diagram?.reviewProvider ?? 'auto' },
+    compute: settings.compute ?? DEFAULT_SETTINGS.compute,
   }
 }
