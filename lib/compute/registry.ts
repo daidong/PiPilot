@@ -31,9 +31,22 @@ export interface RegistryOpts {
   forceApproval: boolean | (() => boolean)
 }
 
+/**
+ * Lightweight view of a registered backend, safe to JSON-clone over
+ * IPC. Matches BackendView in the renderer compute-store.
+ */
+export interface RegisteredBackendView {
+  id: string
+  displayName: string
+  toolPrefix: string
+  capabilities: import('./types.js').BackendCapabilities
+  availability: import('./types.js').BackendAvailability
+}
+
 export interface HydrateResult {
   runs: Array<{ run: ComputeRun; status: RunStatus }>
   pendingPlans: Array<{ backend: string; planId: string; record: PlanRecord }>
+  backends: RegisteredBackendView[]
 }
 
 export class ComputeRegistry {
@@ -94,6 +107,27 @@ export class ComputeRegistry {
       }
     }
     this.backends.set(id, backend)
+
+    // Fire an initial availability probe and emit so the renderer's
+    // backends map populates without waiting for hydrate(). This is
+    // what fixes "Checking..." / "Detecting environment..." stuck
+    // states in the Compute sidebar (RFC-008 follow-up). Probe is
+    // best-effort — failure becomes an availability=false event.
+    backend.probeAvailability().then(
+      (availability) => {
+        this.emit({ kind: 'availability-changed', backend: id, availability })
+      },
+      (err) => {
+        this.emit({
+          kind: 'availability-changed',
+          backend: id,
+          availability: {
+            available: false,
+            missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
+          },
+        })
+      },
+    )
   }
 
   list(): ComputeBackend[] {
@@ -229,7 +263,28 @@ export class ComputeRegistry {
    */
   async hydrate(): Promise<HydrateResult> {
     const runs: Array<{ run: ComputeRun; status: RunStatus }> = []
+    const backendsView: RegisteredBackendView[] = []
     for (const backend of this.backends.values()) {
+      // Fresh availability probe so the renderer's backends map is
+      // populated on first open without waiting for the
+      // register-time event (which the renderer may have missed).
+      let availability: import('./types.js').BackendAvailability
+      try {
+        availability = await backend.probeAvailability()
+      } catch (err) {
+        availability = {
+          available: false,
+          missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
+        }
+      }
+      backendsView.push({
+        id: backend.identity.id,
+        displayName: backend.identity.displayName,
+        toolPrefix: backend.identity.toolPrefix,
+        capabilities: backend.capabilities,
+        availability,
+      })
+
       try {
         const entries = await backend.hydrate()
         for (const entry of entries) {
@@ -237,11 +292,11 @@ export class ComputeRegistry {
           runs.push(entry)
         }
       } catch {
-        /* non-fatal: skip this backend */
+        /* non-fatal: skip this backend's runs */
       }
     }
     const pendingPlans = this.plans.listPending()
-    return { runs, pendingPlans }
+    return { runs, pendingPlans, backends: backendsView }
   }
 
   // ── Events ──────────────────────────────────────────────────────────

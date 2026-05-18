@@ -519,13 +519,36 @@ test('subscribe / unsubscribe lifecycle', async () => {
   try {
     const r = new ComputeRegistry({ projectPath: dir, forceApproval: false })
     r.register(new FakeBackend('local', 'local'))
-    const events: ComputeEvent[] = []
-    const unsub = r.subscribe(e => events.push(e))
+    // Filter to plan-related events — register() now schedules an
+    // async probeAvailability that emits availability-changed,
+    // which can land between subscribe() and the assertions below.
+    const planEvents: ComputeEvent[] = []
+    const unsub = r.subscribe(e => {
+      if (e.kind === 'plan-ready') planEvents.push(e)
+    })
     await r.plan('local', { command: 'a' })
-    assert.equal(events.length, 1)
+    assert.equal(planEvents.length, 1)
     unsub()
     await r.plan('local', { command: 'b' })
-    assert.equal(events.length, 1, 'subscriber should not be called after unsubscribe')
+    assert.equal(planEvents.length, 1, 'subscriber should not be called after unsubscribe')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('register: emits availability-changed asynchronously (fixes "Checking…" stuck state)', async () => {
+  const dir = tempProject()
+  try {
+    const r = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    const events: ComputeEvent[] = []
+    r.subscribe(e => events.push(e))
+    r.register(new FakeBackend('local', 'local'))
+    // Wait one tick for the probe promise to resolve.
+    await new Promise(resolve => setTimeout(resolve, 10))
+    const availabilityEvents = events.filter(e => e.kind === 'availability-changed')
+    assert.equal(availabilityEvents.length, 1, 'register should emit one availability-changed event')
+    assert.equal((availabilityEvents[0] as any).backend, 'local')
+    assert.equal((availabilityEvents[0] as any).availability.available, true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

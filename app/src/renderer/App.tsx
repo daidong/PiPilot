@@ -837,6 +837,9 @@ export default function App() {
           if (Array.isArray(result?.pendingPlans)) {
             useComputeStore.getState().hydratePendingPlans(result.pendingPlans)
           }
+          if (Array.isArray(result?.backends)) {
+            useComputeStore.getState().hydrateBackends(result.backends)
+          }
         })
         .catch(() => { /* non-fatal */ })
     }

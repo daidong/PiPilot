@@ -193,6 +193,7 @@ interface ComputeState {
   // Bulk hydration after app boot (compute:hydrate).
   hydrateRuns: (runs: Array<{ run: any; status: any }>) => void
   hydratePendingPlans: (entries: Array<{ backend: string; planId: string; record: any }>) => void
+  hydrateBackends: (backends: Array<{ id: string; displayName: string; toolPrefix: string; capabilities?: BackendCapabilities; availability?: BackendAvailability }>) => void
 
   // Direct setters (used by tests / niche flows; renderer normally uses applyEvent)
   updateRun: (runId: string, data: Partial<ComputeRunView>) => void
@@ -396,6 +397,20 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
       runs.set(entry.run.runId, runViewFrom(backendId, entry.run.runId, entry.run, entry.status))
     }
     set({ runs })
+  },
+
+  hydrateBackends: (entries) => {
+    const backends = new Map(get().backends)
+    for (const entry of entries) {
+      backends.set(entry.id, {
+        id: entry.id,
+        displayName: entry.displayName,
+        toolPrefix: entry.toolPrefix,
+        capabilities: entry.capabilities,
+        availability: entry.availability,
+      })
+    }
+    set({ backends })
   },
 
   hydratePendingPlans: (entries) => {
