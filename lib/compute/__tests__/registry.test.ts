@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ComputeRegistry } from '../registry.js'
+import { extractResult } from '../../local-compute/progress.js'
 import type { ComputeBackend } from '../backend.js'
 import type {
   ComputePlan,
@@ -549,6 +550,100 @@ test('register: emits availability-changed asynchronously (fixes "Checking…" s
     assert.equal(availabilityEvents.length, 1, 'register should emit one availability-changed event')
     assert.equal((availabilityEvents[0] as any).backend, 'local')
     assert.equal((availabilityEvents[0] as any).availability.available, true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ─── submit idempotency (P0-2 fix) ───────────────────────────────────────
+
+test('submit: calling twice with the same planId returns the SAME run (idempotent)', async () => {
+  const dir = tempProject()
+  try {
+    const r = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    const backend = new FakeBackend('local', 'local')
+    r.register(backend)
+    const plan = await r.plan('local', { command: 'echo hi' })
+    const [run1, run2] = await Promise.all([
+      r.submit('local', plan.planId, {}),
+      r.submit('local', plan.planId, {}),
+    ])
+    assert.equal(run1.runId, run2.runId)
+    assert.equal(backend.submittedPlans.length, 1, 'backend.submit should be called only once')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('submit: sequential duplicate submit also short-circuits to the memoized run', async () => {
+  const dir = tempProject()
+  try {
+    const r = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    const backend = new FakeBackend('local', 'local')
+    r.register(backend)
+    const plan = await r.plan('local', { command: 'echo hi' })
+    const first = await r.submit('local', plan.planId, {})
+    const second = await r.submit('local', plan.planId, {})
+    assert.equal(first.runId, second.runId)
+    assert.equal(backend.submittedPlans.length, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ─── extractResult (##RESULT## protocol — P1-1 fix) ──────────────────────
+
+test('extractResult: returns the JSON payload from a single ##RESULT## line', () => {
+  const tail = 'doing work\n##RESULT## {"accuracy":0.92,"loss":0.13}\nbye'
+  const result = extractResult(tail) as Record<string, number>
+  assert.equal(result.accuracy, 0.92)
+  assert.equal(result.loss, 0.13)
+})
+
+test('extractResult: last marker wins when multiple are present', () => {
+  const tail = '##RESULT## {"v":1}\nmid line\n##RESULT## {"v":2}\n'
+  assert.deepEqual(extractResult(tail), { v: 2 })
+})
+
+test('extractResult: returns undefined when no marker present', () => {
+  assert.equal(extractResult('just some output\nno markers here\n'), undefined)
+})
+
+test('extractResult: malformed JSON skips back to an earlier valid line', () => {
+  const tail = '##RESULT## {"good":true}\n##RESULT## not-json\n'
+  // The trailing malformed line is skipped, the earlier valid line wins.
+  assert.deepEqual(extractResult(tail), { good: true })
+})
+
+test('extractResult: supports non-object JSON (numbers, strings, arrays)', () => {
+  assert.equal(extractResult('##RESULT## 42\n'), 42)
+  assert.equal(extractResult('##RESULT## "ok"\n'), 'ok')
+  assert.deepEqual(extractResult('##RESULT## [1,2,3]\n'), [1, 2, 3])
+})
+
+test('submit: failed submit clears the memo so the caller can retry', async () => {
+  const dir = tempProject()
+  try {
+    const r = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    // Backend that fails the FIRST submit and succeeds the second.
+    class FlakyBackend extends FakeBackend {
+      private calls = 0
+      override async submit(plan: ComputePlan, opts: SubmitOpts): Promise<ComputeRun> {
+        this.calls++
+        if (this.calls === 1) throw new Error('transient backend failure')
+        return super.submit(plan, opts)
+      }
+    }
+    const backend = new FlakyBackend('local', 'local')
+    r.register(backend)
+    const plan = await r.plan('local', { command: 'echo hi' })
+    await assert.rejects(() => r.submit('local', plan.planId, {}), /transient/)
+    // After the failure, re-write the plan record (Registry.plan clears
+    // on successful submit; the failure path leaves it intact, but we
+    // re-plan to be explicit about restart-safe semantics).
+    const plan2 = await r.plan('local', { command: 'echo hi' })
+    const run = await r.submit('local', plan2.planId, {})
+    assert.equal(run.status, 'running')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

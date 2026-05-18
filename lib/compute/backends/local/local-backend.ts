@@ -199,9 +199,11 @@ function statusResultToRunStatus(result: RunStatusResult): RunStatus {
     outputBytes: result.outputBytes,
     outputLines: result.outputLines,
     outputTail: result.outputTail,
+    stderrTail: result.stderrTail,
     stalled: result.stalled,
     progress: result.progress,
     failure: result.failure,
+    result: result.result,
     backendData: data,
     backendDataVersion: LOCAL_BACKEND_DATA_VERSION,
   }
@@ -383,6 +385,7 @@ export class LocalBackend implements ComputeBackend {
       kind: 'run-update',
       backend: IDENTITY.id,
       runId: run.runId,
+      planId: run.planId,
       status: this.getStatus(run.runId) ?? {
         status: run.status,
         elapsedSeconds: 0,

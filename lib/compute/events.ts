@@ -39,12 +39,22 @@ export type ComputeEvent =
       kind: 'run-update'
       backend: string
       runId: string
+      /**
+       * The plan that produced this run. Carried on every run event so
+       * the renderer can drop the matching pending-plan card the moment
+       * the run starts emitting updates — otherwise an "approved, waiting
+       * for agent" banner sticks at the top of the Compute tab forever
+       * (the renderer only learns the run's planId via this field; it
+       * does not appear in RunStatus).
+       */
+      planId?: string
       status: RunStatus
     }
   | {
       kind: 'run-complete'
       backend: string
       runId: string
+      planId?: string
       status: RunStatus
     }
   | {

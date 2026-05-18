@@ -27,6 +27,7 @@ import type {
   ModalRunStatusResult,
   ModalTaskProfile,
 } from '../../../modal-compute/types.js'
+import { extractResult } from '../../../local-compute/progress.js'
 import { runPlanAgent } from './plan-agent.js'
 import type { ComputeBackend } from '../../backend.js'
 import type { ComputeContext } from '../../context.js'
@@ -119,6 +120,10 @@ function modalStatusToRunStatus(result: ModalRunStatusResult): RunStatus {
     costEstimate: result.costEstimate,
     costThresholdUsd: result.costThresholdUsd,
   }
+  // Modal interleaves stdout+stderr into a single output file (see
+  // modal-runner pipeline); no separate stderr stream is captured, so
+  // stderrTail stays undefined. ##RESULT## extraction still works
+  // because the cooperative marker appears in the combined tail.
   return {
     status: mapModalState(result.status),
     exitCode: result.exitCode,
@@ -126,10 +131,12 @@ function modalStatusToRunStatus(result: ModalRunStatusResult): RunStatus {
     outputBytes: result.outputBytes,
     outputLines: result.outputLines,
     outputTail: result.outputTail,
+    stderrTail: undefined,
     lastOutputAt: result.lastOutputAt,
     stalled: result.stalled,
     progress: result.progress,
     failure: result.failure,
+    result: extractResult(result.outputTail),
     estimatedCostUsd: result.estimatedCostUsd,
     backendData: data,
     backendDataVersion: MODAL_BACKEND_DATA_VERSION,
@@ -201,6 +208,7 @@ export class ModalBackend implements ComputeBackend {
           kind: terminal ? 'run-complete' : 'run-update',
           backend: IDENTITY.id,
           runId,
+          planId: status.planId,
           status: mapped,
         })
       },
@@ -324,7 +332,13 @@ export class ModalBackend implements ComputeBackend {
     // the runner's first poll cycle.
     const status = this.getStatus(run.runId)
     if (status) {
-      this.ctx.emit({ kind: 'run-update', backend: IDENTITY.id, runId: run.runId, status })
+      this.ctx.emit({
+        kind: 'run-update',
+        backend: IDENTITY.id,
+        runId: run.runId,
+        planId: run.planId,
+        status,
+      })
     }
     return run
   }

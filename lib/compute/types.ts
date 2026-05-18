@@ -182,10 +182,26 @@ export interface RunStatus {
   outputBytes: number
   outputLines: number
   outputTail: string
+  /**
+   * Tail of the run's stderr stream (separately captured, distinct from
+   * `outputTail` which interleaves stdout+stderr for progress tracking).
+   * Backends that don't separate streams (e.g. Modal) leave this undefined.
+   * Cap is backend-defined (LocalBackend uses 4 KB).
+   */
+  stderrTail?: string
   lastOutputAt?: string
   stalled: boolean
   progress?: StructuredProgress
   failure?: FailureSignal
+  /**
+   * Authoritative result payload extracted from the run's output via the
+   * cooperative `##RESULT## <json>` line protocol. The last such line in
+   * the output tail wins. Undefined when the script did not emit one.
+   * Use this — not `outputTail` — to read structured results back from
+   * a job, since `outputTail` is only the last 8 KB and may miss the
+   * result line in the middle of a long log.
+   */
+  result?: unknown
   estimatedCostUsd?: number
   /** Backend-specific extras. JSON-serializable only. */
   backendData: unknown

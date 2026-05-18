@@ -156,10 +156,12 @@ export interface RunStatusResult {
   currentPhase: string
   exitCode?: number
   outputTail: string
+  stderrTail?: string
   outputBytes: number
   outputLines: number
   elapsedSeconds: number
   stalled: boolean
   progress?: StructuredProgress
   failure?: FailureSignal
+  result?: unknown
 }

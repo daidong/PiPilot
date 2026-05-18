@@ -243,11 +243,10 @@ export class ModalRunner {
   async stop(runId: string): Promise<void> {
     const run = this.store.getRun(runId)
     if (!run || isModalTerminal(run.status)) return
-    const child = this.processes.get(runId)
-    if (child && !child.killed) {
-      child.kill('SIGTERM')
-      setTimeout(() => { if (!child.killed) child.kill('SIGKILL') }, 3000)
-    }
+
+    // Mark cancelled FIRST so the 'close' handler that fires when the
+    // modal CLI child exits sees a terminal state and skips the
+    // 'failed' transition.
     this.store.updateRun(runId, {
       status: 'cancelled',
       completedAt: new Date().toISOString(),
@@ -255,6 +254,28 @@ export class ModalRunner {
       estimatedCostSoFar: run.startedAt ? computeElapsedCost(run.startedAt, run.costEstimate.gpuRateUsdPerHour) : run.estimatedCostSoFar,
     })
     this.emitRunUpdate(runId)
+
+    const child = this.processes.get(runId)
+    if (child && !child.killed) {
+      // SIGTERM → wait up to 3s → SIGKILL → wait up to 2s. Only return
+      // when the CLI subprocess is gone so the caller's next status
+      // query reflects reality. Note: this only kills the local `modal
+      // run` driver — remote Modal jobs may keep running for a few
+      // seconds until Modal's control plane catches up.
+      child.kill('SIGTERM')
+      const exitedGracefully = await Promise.race([
+        new Promise<boolean>(resolve => child.once('exit', () => resolve(true))),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3000)),
+      ])
+      if (!exitedGracefully && !child.killed) {
+        child.kill('SIGKILL')
+        await Promise.race([
+          new Promise<void>(resolve => child.once('exit', () => resolve())),
+          new Promise<void>(resolve => setTimeout(resolve, 2000)),
+        ])
+      }
+    }
+
     this.processes.delete(runId)
     this.stopPollingIfIdle()
   }

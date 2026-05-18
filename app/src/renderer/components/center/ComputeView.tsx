@@ -12,12 +12,20 @@ import {
   Search,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   RotateCcw,
   X,
   Square,
   CheckCircle2
 } from 'lucide-react'
-import { useComputeStore, useActiveRuns, useRecentRuns, usePendingPlans } from '../../stores/compute-store'
+import {
+  useComputeStore,
+  useActiveRuns,
+  useRecentRuns,
+  useUnapprovedPendingPlans,
+  useApprovedPendingPlans,
+  planToPlaceholderRun,
+} from '../../stores/compute-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import type { ComputeRunView, ComputePlanView, BackendView, ModalImageView } from '../../stores/compute-store'
@@ -478,24 +486,34 @@ function RunRow({
   const modalCost = formatCostSummary(run)
   const primaryText = isModal ? (run.taskDescription?.trim() || run.command) : run.command
   const isHardFailure = run.status === 'failed' || run.status === 'timed_out' || run.status === 'cost_killed'
-  const rowTint = isHardFailure
-    ? 'border-l-2 border-l-red-500/40 bg-red-500/5'
-    : run.status === 'cancelled'
-      ? 'border-l-2 border-l-zinc-400/30'
-      : ''
+  // Placeholder rows are synthesized client-side from an approved-but-
+  // not-yet-executed plan. They have no real runId on the main side,
+  // so expanding (which loads run-specific details) and stop (which
+  // calls api.stopComputeRun) both make no sense — disable both.
+  const isPlaceholder = !!run.isPlanPlaceholder
+  const canExpand = !isPlaceholder
+  const effectiveCanStop = canStop && !isPlaceholder
+  const rowTint = isPlaceholder
+    ? 'border-l-2 border-l-sky-400/40 bg-sky-400/5'
+    : isHardFailure
+      ? 'border-l-2 border-l-red-500/40 bg-red-500/5'
+      : run.status === 'cancelled'
+        ? 'border-l-2 border-l-zinc-400/30'
+        : ''
 
   return (
     <div className={`border-b t-border last:border-b-0 ${rowTint}`}>
       {/* Compact row */}
       <div
-        className="flex items-center gap-3 px-3 py-2 hover:bg-[var(--color-accent-soft)]/5 transition-colors cursor-pointer"
-        onClick={onToggle}
+        className={`flex items-center gap-3 px-3 py-2 transition-colors ${canExpand ? 'hover:bg-[var(--color-accent-soft)]/5 cursor-pointer' : ''}`}
+        onClick={canExpand ? onToggle : undefined}
       >
         <button
           type="button"
           aria-label={expanded ? 'Collapse run details' : 'Expand run details'}
           aria-expanded={expanded}
-          className="shrink-0 t-text-muted"
+          disabled={!canExpand}
+          className={`shrink-0 t-text-muted ${!canExpand ? 'opacity-30' : ''}`}
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
@@ -507,7 +525,11 @@ function RunRow({
           <p className={`text-[13px] t-text font-medium truncate leading-tight ${isModal ? '' : 'font-mono'}`}>
             {primaryText}
           </p>
-          {isModal ? (
+          {isPlaceholder ? (
+            <p className="text-[11px] t-text-muted truncate mt-0.5">
+              {run.backend} &middot; approved — waiting for agent to execute
+            </p>
+          ) : isModal ? (
             <p className="text-[11px] t-text-muted truncate mt-0.5">
               Modal
               {modalGpuLabel !== 'Modal' && <> &middot; {modalGpuLabel}</>}
@@ -528,18 +550,45 @@ function RunRow({
           )}
         </div>
 
+        {/* Backend — display name (e.g. "Local", "Modal"). For Modal,
+            append the GPU type as a small subtitle below so the
+            backend column also surfaces "L4 / T4 / A10G / CPU". */}
+        <span className="shrink-0 w-20 min-w-0">
+          <span className="block text-[11px] t-text-secondary truncate">
+            {backendView?.displayName ?? run.backend}
+          </span>
+          {isModal && modalGpuLabel && modalGpuLabel !== 'Modal' && (
+            <span className="block text-[10px] t-text-muted truncate">{modalGpuLabel}</span>
+          )}
+        </span>
+
+        {/* Submitted — when the system accepted the task. For real
+            runs this is run.createdAt; for placeholders it's
+            plan.approvedAt. Falls back to startedAt for legacy data
+            that pre-dates the createdAt field. */}
+        <span className="shrink-0 text-[11px] t-text-muted text-right w-20" title={run.createdAt ?? run.startedAt ?? ''}>
+          {timeAgoShort(run.createdAt ?? run.startedAt)}
+        </span>
+
         {/* Duration */}
-        <span className="shrink-0 text-[11px] t-text-muted tabular-nums w-14 text-right">
-          {formatDuration(run.elapsedSeconds)}
+        <span className="shrink-0 text-[11px] t-text-muted tabular-nums w-16 text-right">
+          {isPlaceholder ? '--' : formatDuration(run.elapsedSeconds)}
         </span>
 
-        {/* Time ago or phase */}
-        <span className={`shrink-0 text-[11px] t-text-muted text-right ${isModal ? 'w-24' : 'w-14'}`}>
-          {isModal ? formatActivityLabel(run) : isActive ? run.currentPhase : (run.startedAt ? timeAgo(run.startedAt) : '--')}
+        {/* Activity — last meaningful event. Wider than Submitted/Duration
+            because labels like "Cost killed" / "No output yet" / "Output 3m ago"
+            run long. */}
+        <span className="shrink-0 text-[11px] t-text-muted text-right w-24 truncate">
+          {isPlaceholder ? 'queued' : isModal ? formatActivityLabel(run) : isActive ? run.currentPhase : (run.startedAt ? timeAgo(run.startedAt) : '--')}
         </span>
 
-        {/* Stop button — only shown for backends that support it AND when the run is still active. */}
-        {canStop && (
+        {/* Stop button slot — ALWAYS occupies `w-6` (and the `gap-3`
+            before it) so the row width matches the table header, which
+            reserves the same slot via `<span className="w-6" />`.
+            Without this empty-state placeholder, hiding the button
+            would shift the right-aligned columns (Backend / Submitted
+            / Duration / Activity) by 36px and break alignment. */}
+        {effectiveCanStop ? (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); stop() }}
@@ -550,14 +599,17 @@ function RunRow({
           >
             <Square size={11} fill="currentColor" />
           </button>
+        ) : (
+          <span className="shrink-0 w-6" aria-hidden="true" />
         )}
       </div>
       {stopError && (
         <div className="px-10 -mt-1 mb-1.5 text-[10px] text-red-500">{stopError}</div>
       )}
 
-      {/* Progress section for active runs — always visible (not inside expanded) */}
-      {isActive && (
+      {/* Progress section for active runs — always visible (not inside expanded).
+          Skip for placeholders (they have no run yet — nothing to show). */}
+      {isActive && !isPlaceholder && (
         isModal ? (
           <ModalRunActiveSummary run={run} hasProgress={hasProgress} />
         ) : (
@@ -1488,16 +1540,91 @@ function EmptyState() {
 
 // ─── Main component ──────────────────────────────────────────────────────────
 
+type SortKey = 'command' | 'backend' | 'submitted' | 'duration' | 'activity'
+type SortDir = 'asc' | 'desc' | null    // null === "default" (active-first + submit DESC)
+
+const ACTIVE_STATUSES = new Set(['running', 'stalled', 'queued', 'pending_approval'])
+
+function runSubmittedMs(run: ComputeRunView): number {
+  // Prefer createdAt (when the work entered the system); fall back to
+  // startedAt for legacy runs that were hydrated without a createdAt.
+  const src = run.createdAt ?? run.startedAt
+  return src ? new Date(src).getTime() : 0
+}
+
+function timeAgoShort(iso?: string): string {
+  if (!iso) return '--'
+  return timeAgo(iso)
+}
+
+/**
+ * Sortable header cell. Click cycles asc → desc → default; the active
+ * sort displays a small triangle. Width must mirror the body cell.
+ */
+function SortableHeader({
+  label,
+  sortKey,
+  currentKey,
+  currentDir,
+  onSort,
+  className = '',
+  align = 'left',
+}: {
+  label: string
+  sortKey: SortKey
+  currentKey: SortKey | null
+  currentDir: SortDir
+  onSort: (key: SortKey) => void
+  className?: string
+  align?: 'left' | 'right'
+}) {
+  const isActive = currentKey === sortKey && currentDir !== null
+  const Icon = currentDir === 'asc' ? ChevronUp : ChevronDown
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      className={`text-[10px] uppercase tracking-wider font-medium ${isActive ? 't-text' : 't-text-muted'} hover:t-text inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''} ${className}`}
+    >
+      <span>{label}</span>
+      {isActive && <Icon size={10} className="shrink-0" />}
+    </button>
+  )
+}
+
 export function ComputeView() {
   const activeRuns = useActiveRuns()
   const recentRuns = useRecentRuns()
   const backendsMap = useComputeStore((s) => s.backends)
-  const pendingPlans = usePendingPlans()
+  const unapprovedPlans = useUnapprovedPendingPlans()
+  const approvedPlans = useApprovedPendingPlans()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [backendFilter, setBackendFilter] = useState<string>('all')
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>(null)
 
-  const allRuns = useMemo(() => [...activeRuns, ...recentRuns], [activeRuns, recentRuns])
+  const handleSort = (key: SortKey) => {
+    // Cycle: not-sorted → desc → asc → default
+    if (sortKey !== key) { setSortKey(key); setSortDir('desc'); return }
+    if (sortDir === 'desc') { setSortDir('asc'); return }
+    // asc → back to default
+    setSortKey(null); setSortDir(null)
+  }
+
+  // Approved-but-not-yet-running plans render as synthetic "queued"
+  // rows next to real runs. Once the agent calls execute, the
+  // matching pending plan is dropped from the store and the real run
+  // row takes its place.
+  const placeholderRuns = useMemo(
+    () => approvedPlans.map(planToPlaceholderRun),
+    [approvedPlans],
+  )
+
+  const allRuns = useMemo(
+    () => [...placeholderRuns, ...activeRuns, ...recentRuns],
+    [placeholderRuns, activeRuns, recentRuns],
+  )
 
   // Per-backend run counts feed the filter chip badges.
   const backendCounts = useMemo(() => {
@@ -1526,24 +1653,67 @@ export function ComputeView() {
       rows = rows.filter((r) => r.backend === backendFilter)
     }
     const q = search.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter((r) =>
-      r.command.toLowerCase().includes(q) ||
-      r.runId.toLowerCase().includes(q) ||
-      (r.taskDescription?.toLowerCase().includes(q) ?? false),
-    )
-  }, [allRuns, search, backendFilter])
+    if (q) {
+      rows = rows.filter((r) =>
+        r.command.toLowerCase().includes(q) ||
+        r.runId.toLowerCase().includes(q) ||
+        (r.taskDescription?.toLowerCase().includes(q) ?? false),
+      )
+    }
+    // Apply sort: explicit key, or the default (active-first + submit DESC).
+    const sorted = rows.slice()
+    if (sortKey && sortDir) {
+      const dir = sortDir === 'asc' ? 1 : -1
+      sorted.sort((a, b) => {
+        let av: number | string = 0
+        let bv: number | string = 0
+        if (sortKey === 'command') {
+          av = (a.taskDescription?.trim() || a.command).toLowerCase()
+          bv = (b.taskDescription?.trim() || b.command).toLowerCase()
+          return av < bv ? -1 * dir : av > bv ? 1 * dir : 0
+        }
+        if (sortKey === 'backend') {
+          av = a.backend.toLowerCase()
+          bv = b.backend.toLowerCase()
+          return av < bv ? -1 * dir : av > bv ? 1 * dir : 0
+        }
+        if (sortKey === 'submitted') { av = runSubmittedMs(a); bv = runSubmittedMs(b) }
+        else if (sortKey === 'duration') { av = a.elapsedSeconds; bv = b.elapsedSeconds }
+        else if (sortKey === 'activity') {
+          // Activity = the run's last meaningful timestamp (lastOutputAt
+          // for live runs, startedAt otherwise). Falls back to submit.
+          av = a.lastOutputAt ? new Date(a.lastOutputAt).getTime() : runSubmittedMs(a)
+          bv = b.lastOutputAt ? new Date(b.lastOutputAt).getTime() : runSubmittedMs(b)
+        }
+        return ((av as number) - (bv as number)) * dir
+      })
+    } else {
+      // Default: active rows first (placeholders + running + stalled +
+      // queued + pending_approval), each group ordered by submit DESC.
+      sorted.sort((a, b) => {
+        const aActive = ACTIVE_STATUSES.has(a.status) ? 0 : 1
+        const bActive = ACTIVE_STATUSES.has(b.status) ? 0 : 1
+        if (aActive !== bActive) return aActive - bActive
+        return runSubmittedMs(b) - runSubmittedMs(a)
+      })
+    }
+    return sorted
+  }, [allRuns, search, backendFilter, sortKey, sortDir])
 
   const hasRuns = allRuns.length > 0
-  const hasPendingPlans = pendingPlans.length > 0
-  // EmptyState's job is "this tab has nothing going on" — once a plan is
-  // pending or a run exists, the panel should belong to that work, not
-  // to the marketing prompts.
-  const showEmpty = !hasRuns && !hasPendingPlans
+  const hasUnapprovedPlans = unapprovedPlans.length > 0
+  // EmptyState's job is "this tab has nothing going on" — once a plan
+  // is waiting on approval, or a row exists in the table (real or
+  // placeholder), the panel should belong to that work.
+  const showEmpty = !hasRuns && !hasUnapprovedPlans
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {pendingPlans.map((plan) => (
+      {/* Only UN-approved plans get the prominent top banner with
+          Approve/Reject. Approved plans immediately move into the table
+          below as a "queued" placeholder row, so the user has a single
+          place to track all in-flight work. */}
+      {unapprovedPlans.map((plan) => (
         <PendingPlanCard key={`${plan.backend}::${plan.planId}`} plan={plan} />
       ))}
       {hasRuns && (
@@ -1561,8 +1731,8 @@ export function ComputeView() {
         {showEmpty ? (
           <EmptyState />
         ) : !hasRuns ? (
-          // Pending plan(s) but no runs yet — keep the rest of the panel
-          // quiet so the approval card stays visually dominant.
+          // Unapproved plan(s) but nothing in the table — keep the rest
+          // of the panel quiet so the approval card stays dominant.
           <div className="flex flex-col items-center justify-center h-full text-center px-8 py-12">
             <p className="text-xs t-text-muted leading-relaxed max-w-xs">
               No runs yet. Approve the plan above to start one, or reject it to ask the agent for a revision.
@@ -1575,19 +1745,61 @@ export function ComputeView() {
           </div>
         ) : (
           <>
-            {/* Table header */}
+            {/* Table header — every column is click-to-sort. Column widths
+                MUST match the body cells in RunRow exactly, or the
+                Submitted / Backend / Duration / Activity columns will
+                drift apart at different row widths. */}
             <div className="flex items-center gap-3 px-3 py-1.5 border-b t-border t-bg-surface">
               <div className="w-5" />
               <div className="w-1.5" />
-              <div className="flex-1 text-[10px] uppercase tracking-wider font-medium t-text-muted">
-                Command
+              <div className="flex-1">
+                <SortableHeader
+                  label="Command"
+                  sortKey="command"
+                  currentKey={sortKey}
+                  currentDir={sortDir}
+                  onSort={handleSort}
+                />
               </div>
-              <span className="w-14 text-right text-[10px] uppercase tracking-wider font-medium t-text-muted">
-                Duration
-              </span>
-              <span className="w-14 text-right text-[10px] uppercase tracking-wider font-medium t-text-muted">
-                Activity
-              </span>
+              <div className="w-20 text-left">
+                <SortableHeader
+                  label="Backend"
+                  sortKey="backend"
+                  currentKey={sortKey}
+                  currentDir={sortDir}
+                  onSort={handleSort}
+                />
+              </div>
+              <div className="w-20 text-right">
+                <SortableHeader
+                  label="Submitted"
+                  sortKey="submitted"
+                  currentKey={sortKey}
+                  currentDir={sortDir}
+                  onSort={handleSort}
+                  align="right"
+                />
+              </div>
+              <div className="w-16 text-right">
+                <SortableHeader
+                  label="Duration"
+                  sortKey="duration"
+                  currentKey={sortKey}
+                  currentDir={sortDir}
+                  onSort={handleSort}
+                  align="right"
+                />
+              </div>
+              <div className="w-24 text-right">
+                <SortableHeader
+                  label="Activity"
+                  sortKey="activity"
+                  currentKey={sortKey}
+                  currentDir={sortDir}
+                  onSort={handleSort}
+                  align="right"
+                />
+              </div>
               <span className="w-6" />
             </div>
 

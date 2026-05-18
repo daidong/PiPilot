@@ -24,6 +24,33 @@ export function extractProgress(tail: string): StructuredProgress | undefined {
   return extractRegexProgress(tail)
 }
 
+/**
+ * Cooperative result protocol: scripts can emit `##RESULT## <json>` on a
+ * single line to surface a structured return value to the coordinator
+ * LLM. The last such line in the supplied tail wins.
+ *
+ * Why this exists: the LLM only sees the last 8 KB of output. A long-
+ * running job whose key metric prints in the middle of the log loses
+ * that metric. This protocol gives scripts a stable channel for the
+ * "return value" that survives output truncation. Returns undefined
+ * when the protocol marker is absent or the JSON fails to parse.
+ */
+export function extractResult(tail: string): unknown {
+  const lines = tail.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim()
+    if (!line.startsWith('##RESULT##')) continue
+    const jsonStr = line.slice('##RESULT##'.length).trim()
+    if (!jsonStr) continue
+    try {
+      return JSON.parse(jsonStr)
+    } catch {
+      // Malformed — keep walking back; an earlier valid line may exist.
+    }
+  }
+  return undefined
+}
+
 // ---------------------------------------------------------------------------
 // Cooperative Protocol: ##PROGRESS## {"step": 3, "total": 10, ...}
 // ---------------------------------------------------------------------------

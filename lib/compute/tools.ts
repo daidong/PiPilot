@@ -19,7 +19,30 @@ import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError } from '../tools/tool-utils.js'
 import type { ComputeRegistry } from './registry.js'
 import type { ComputeBackend } from './backend.js'
-import type { ComputeRun, RunStatus } from './types.js'
+import type { BackendAvailability, ComputeRun, RunStatus } from './types.js'
+
+/** Bound on every probeAvailability call surfaced through the LLM tool layer. */
+const PROBE_TIMEOUT_MS = 3000
+
+/**
+ * Wrap a backend's probeAvailability with a hard timeout so a broken
+ * probe (hanging CLI, blocked syscall) can't stall the entire
+ * `list_compute_backends` response. On timeout we surface the backend
+ * as unavailable rather than missing — the LLM still gets a usable
+ * answer it can act on.
+ */
+async function probeWithTimeout(backend: ComputeBackend): Promise<BackendAvailability> {
+  return Promise.race([
+    backend.probeAvailability().catch((err): BackendAvailability => ({
+      available: false,
+      missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
+    })),
+    new Promise<BackendAvailability>(resolve => setTimeout(() => resolve({
+      available: false,
+      missingRequirements: [`Availability probe timed out after ${PROBE_TIMEOUT_MS}ms`],
+    }), PROBE_TIMEOUT_MS)),
+  ])
+}
 
 interface ToolsOpts {
   registry: ComputeRegistry
@@ -53,7 +76,11 @@ function createComputePlanTool(opts: ToolsOpts): AgentTool {
       'Analyze a compute task and produce an execution plan. ' +
       'Choose a backend by id (call list_compute_backends first if unsure). ' +
       'For backends that require approval, the plan is queued until the user ' +
-      'approves in the Compute tab — then call <backend>_execute.',
+      'approves in the Compute tab — then call <backend>_execute. ' +
+      'Tip: the script can emit two cooperative protocol lines to make its ' +
+      'output legible: `##PROGRESS## {json}` for live progress, and ' +
+      '`##RESULT## {json}` for the final structured return value (the latter ' +
+      'survives output truncation and is surfaced as `result` on status).',
     parameters: Type.Object({
       backend: Type.String({ description: 'Backend id: "local" | "modal" | ...' }),
       command: Type.String({ description: 'Shell command to execute' }),
@@ -131,7 +158,7 @@ function createListBackendsTool(opts: ToolsOpts): AgentTool {
         display_name: b.identity.displayName,
         tool_prefix: b.identity.toolPrefix,
         capabilities: b.capabilities,
-        availability: await b.probeAvailability(),
+        availability: await probeWithTimeout(b),
       })))
       return toAgentResult('list_compute_backends', { success: true, data: { backends: data } })
     },
@@ -302,10 +329,17 @@ function serializeStatus(runId: string, status: RunStatus): Record<string, unkno
     output_bytes: status.outputBytes,
     output_lines: status.outputLines,
     output_tail: status.outputTail,
+    // Separately captured stderr tail (when the backend keeps the streams
+    // separate — Local does, Modal interleaves). Useful for failure
+    // diagnosis beyond the failure.message classification.
+    stderr_tail: status.stderrTail,
     last_output_at: status.lastOutputAt,
     stalled: status.stalled,
     progress: status.progress,
     failure: status.failure,
+    // Authoritative result from the cooperative ##RESULT## protocol —
+    // survives output truncation. Prefer this over scraping output_tail.
+    result: status.result,
     estimated_cost_usd: status.estimatedCostUsd,
     backend_data: status.backendData,
     backend_data_version: status.backendDataVersion,

@@ -18,6 +18,32 @@ import { PlanStore } from './plan-store.js'
 
 const TOOL_PREFIX_PATTERN = /^[a-z][a-z0-9_]*$/
 
+/** Bound on every availability probe initiated from the Registry. */
+const PROBE_TIMEOUT_MS = 3000
+
+/**
+ * Race a probeAvailability call against a hard timeout so a hung probe
+ * (Modal CLI blocked on the network, docker daemon stuck) can't stall
+ * hydrate(), refreshAvailability(), or register's initial probe — all
+ * of which run on app boot or in response to user actions where a hang
+ * would block the entire compute surface from rendering.
+ */
+async function probeWithTimeout(
+  backend: ComputeBackend,
+  opts?: { force?: boolean },
+): Promise<import('./types.js').BackendAvailability> {
+  return Promise.race([
+    backend.probeAvailability(opts).catch((err) => ({
+      available: false,
+      missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
+    })),
+    new Promise<import('./types.js').BackendAvailability>(resolve => setTimeout(() => resolve({
+      available: false,
+      missingRequirements: [`Availability probe timed out after ${PROBE_TIMEOUT_MS}ms`],
+    }), PROBE_TIMEOUT_MS)),
+  ])
+}
+
 export interface RegistryOpts {
   projectPath: string
   /**
@@ -56,6 +82,16 @@ export class ComputeRegistry {
   private readonly plans: PlanStore
   private readonly subscribers = new Set<(event: ComputeEvent) => void>()
   private forceApprovalSource: boolean | (() => boolean)
+  /**
+   * In-flight + completed submit() calls, keyed by `${backendId}::${planId}`.
+   * Guards against a coordinator LLM (or a UI double-click) calling
+   * `<backend>_execute` twice on the same plan — both calls return the
+   * SAME ComputeRun instead of spawning two parallel runs. The map only
+   * lives in memory; restart-side idempotency would require persisting
+   * the runId in the PlanRecord and is out of scope here (the duplicate-
+   * submit risk we're hedging is a single-conversation race).
+   */
+  private readonly submitInFlight = new Map<string, Promise<ComputeRun>>()
 
   constructor(opts: RegistryOpts) {
     this.plans = new PlanStore(opts.projectPath)
@@ -112,22 +148,11 @@ export class ComputeRegistry {
     // backends map populates without waiting for hydrate(). This is
     // what fixes "Checking..." / "Detecting environment..." stuck
     // states in the Compute sidebar (RFC-008 follow-up). Probe is
-    // best-effort — failure becomes an availability=false event.
-    backend.probeAvailability().then(
-      (availability) => {
-        this.emit({ kind: 'availability-changed', backend: id, availability })
-      },
-      (err) => {
-        this.emit({
-          kind: 'availability-changed',
-          backend: id,
-          availability: {
-            available: false,
-            missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
-          },
-        })
-      },
-    )
+    // bounded by PROBE_TIMEOUT_MS — a hung backend can't keep the UI
+    // chip in "Checking…" forever.
+    probeWithTimeout(backend).then((availability) => {
+      this.emit({ kind: 'availability-changed', backend: id, availability })
+    })
   }
 
   list(): ComputeBackend[] {
@@ -214,8 +239,30 @@ export class ComputeRegistry {
   /**
    * Amendment A1 (RFC-008): relies entirely on the captured PlanRecord.
    * No re-derivation from current settings — that was the v1 bug.
+   *
+   * Idempotent: calling submit() twice with the same (backendId, planId)
+   * returns the same ComputeRun. The second caller awaits the first
+   * submit's promise — there is no window in which both calls reach
+   * `backend.submit()`. On error the in-flight entry is dropped so the
+   * caller can retry.
    */
   async submit(backendId: string, planId: string, opts: SubmitOpts): Promise<ComputeRun> {
+    const key = `${backendId}::${planId}`
+    const inFlight = this.submitInFlight.get(key)
+    if (inFlight) return inFlight
+
+    const promise = this.doSubmit(backendId, planId, opts)
+    this.submitInFlight.set(key, promise)
+    promise.catch(() => {
+      // Failed submit — drop the memo so the caller can produce a new
+      // plan / retry. Successful submits stay memoized so duplicates
+      // resolve to the same run.
+      this.submitInFlight.delete(key)
+    })
+    return promise
+  }
+
+  private async doSubmit(backendId: string, planId: string, opts: SubmitOpts): Promise<ComputeRun> {
     const backend = this.requireBackend(backendId)
     const record = this.plans.read(backendId, planId)
     if (!record) throw new Error(`No plan ${planId} for backend ${backendId}`)
@@ -263,19 +310,8 @@ export class ComputeRegistry {
   async refreshAvailability(): Promise<void> {
     await Promise.allSettled(
       [...this.backends.values()].map(async (backend) => {
-        try {
-          const availability = await backend.probeAvailability({ force: true })
-          this.emit({ kind: 'availability-changed', backend: backend.identity.id, availability })
-        } catch (err) {
-          this.emit({
-            kind: 'availability-changed',
-            backend: backend.identity.id,
-            availability: {
-              available: false,
-              missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
-            },
-          })
-        }
+        const availability = await probeWithTimeout(backend, { force: true })
+        this.emit({ kind: 'availability-changed', backend: backend.identity.id, availability })
       }),
     )
   }
@@ -296,17 +332,11 @@ export class ComputeRegistry {
     const backendsView: RegisteredBackendView[] = []
     for (const backend of this.backends.values()) {
       // Fresh availability probe so the renderer's backends map is
-      // populated on first open without waiting for the
-      // register-time event (which the renderer may have missed).
-      let availability: import('./types.js').BackendAvailability
-      try {
-        availability = await backend.probeAvailability()
-      } catch (err) {
-        availability = {
-          available: false,
-          missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
-        }
-      }
+      // populated on first open without waiting for the register-time
+      // event (which the renderer may have missed). Bounded by
+      // PROBE_TIMEOUT_MS so a single hung backend can't block hydrate
+      // for every other backend.
+      const availability = await probeWithTimeout(backend)
       backendsView.push({
         id: backend.identity.id,
         displayName: backend.identity.displayName,

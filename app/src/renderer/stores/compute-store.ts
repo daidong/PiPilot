@@ -82,6 +82,14 @@ export interface ComputeRunView {
   scriptPath?: string
   sandbox: string
   weight: string
+  /**
+   * When the system accepted responsibility for this work — for a real
+   * ComputeRun, this is run.createdAt (when the agent called execute);
+   * for a synthetic row representing an approved-but-not-yet-executed
+   * plan, this is plan.approvedAt. Used by the "Submitted" column and
+   * the default sort.
+   */
+  createdAt?: string
   startedAt?: string
   lastOutputAt?: string
   elapsedSeconds: number
@@ -102,6 +110,12 @@ export interface ComputeRunView {
   /** Generic escape hatch for per-backend UI extras (amendment A5). */
   backendData?: unknown
   backendDataVersion?: number
+  /**
+   * True iff this is a synthetic row constructed from an approved-but-
+   * not-yet-executed plan (not a real ComputeRun). RunRow uses this to
+   * disable stop/expand and render the "waiting for agent" label.
+   */
+  isPlanPlaceholder?: boolean
 }
 
 export interface ComputePlanView {
@@ -120,6 +134,7 @@ export interface ComputePlanView {
   costEstimate?: ModalCostEstimateView
   createdAt: string
   approved: boolean
+  approvedAt?: string
   rejectedAt?: string
   rejectionComments?: string
   /** True iff this plan must be approved before execute. */
@@ -204,6 +219,7 @@ function runViewFrom(backendId: string, runId: string, run: any, status: any): C
     scriptPath: run?.scriptPath,
     sandbox: run?.backendData?.sandbox ?? backendId,
     weight: run?.backendData?.weight ?? 'heavy',
+    createdAt: run?.createdAt,
     startedAt: run?.startedAt,
     lastOutputAt: status?.lastOutputAt,
     elapsedSeconds: status?.elapsedSeconds ?? 0,
@@ -226,7 +242,7 @@ function runViewFrom(backendId: string, runId: string, run: any, status: any): C
   }
 }
 
-function runViewFromStatusOnly(backendId: string, runId: string, status: any, prev?: ComputeRunView): ComputeRunView {
+function runViewFromStatusOnly(backendId: string, runId: string, status: any, prev?: ComputeRunView, planId?: string): ComputeRunView {
   const base = prev ?? {
     runId,
     backend: backendId,
@@ -235,6 +251,13 @@ function runViewFromStatusOnly(backendId: string, runId: string, status: any, pr
     command: '',
     sandbox: backendId,
     weight: 'heavy',
+    // No `prev` means this is the FIRST event we've seen for this run
+    // (the run was created during this session — hydrate would have
+    // populated prev otherwise). The status payload does not carry
+    // createdAt, so we approximate it with "now". Precision is good
+    // enough for the Submitted column + default sort because the
+    // run's true createdAt is at most a few hundred ms earlier.
+    createdAt: new Date().toISOString(),
     elapsedSeconds: 0,
     outputBytes: 0,
     outputLines: 0,
@@ -243,6 +266,11 @@ function runViewFromStatusOnly(backendId: string, runId: string, status: any, pr
   } as ComputeRunView
   return {
     ...base,
+    // Carry planId forward — events deliver it explicitly so the
+    // approval-card-removal logic in applyEvent can find the matching
+    // pending plan, but a later event without planId (defensive) won't
+    // erase what we already learned.
+    planId: planId ?? base.planId,
     status: status?.status ?? base.status,
     elapsedSeconds: status?.elapsedSeconds ?? base.elapsedSeconds,
     outputBytes: status?.outputBytes ?? base.outputBytes,
@@ -283,6 +311,7 @@ function planViewFrom(event: any): ComputePlanView {
       : undefined,
     createdAt: plan.createdAt ?? new Date().toISOString(),
     approved: event.record?.approved ?? false,
+    approvedAt: event.record?.approvedAt,
     rejectedAt: event.record?.rejectedAt,
     rejectionComments: event.record?.rejectionComments,
     requiresApproval: event.requiresApproval ?? event.record?.effectiveRequiresApproval ?? false,
@@ -321,7 +350,11 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
         const plans = new Map(state.pendingPlans)
         const existing = plans.get(planKey(event.backend, event.planId))
         if (existing) {
-          plans.set(planKey(event.backend, event.planId), { ...existing, approved: true })
+          plans.set(planKey(event.backend, event.planId), {
+            ...existing,
+            approved: true,
+            approvedAt: event.approvedAt,
+          })
           set({ pendingPlans: plans })
         }
         return
@@ -344,14 +377,17 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
       case 'run-complete': {
         const runs = new Map(state.runs)
         const prev = runs.get(event.runId)
-        runs.set(event.runId, runViewFromStatusOnly(event.backend, event.runId, event.status, prev))
-        // As soon as a run-update arrives with a planId, drop the matching
-        // pending plan — the run is alive, so the approval card should
-        // step aside. PlanStore on the main side is already cleared by
-        // Registry.submit(); the renderer cache lagged behind.
-        if (prev?.planId) {
+        // Prefer the event's planId (carried explicitly by the backend
+        // emitters); fall back to whatever the previous run view had.
+        // This fixes the bug where a newly-spawned run's FIRST event
+        // had `prev === undefined`, so `prev?.planId` was always
+        // undefined, leaving the "approved, waiting for agent" card
+        // stuck at the top of the Compute tab forever.
+        const planId = event.planId ?? prev?.planId
+        runs.set(event.runId, runViewFromStatusOnly(event.backend, event.runId, event.status, prev, planId))
+        if (planId) {
           const plans = new Map(state.pendingPlans)
-          const key = planKey(event.backend, prev.planId)
+          const key = planKey(event.backend, planId)
           if (plans.has(key)) {
             plans.delete(key)
             set({ runs, pendingPlans: plans })
@@ -512,6 +548,67 @@ export function usePendingPlans(): ComputePlanView[] {
       const bT = b.createdAt ? new Date(b.createdAt).getTime() : 0
       return aT - bT
     })
+}
+
+/**
+ * Plans the user already approved but the agent hasn't started yet.
+ * These render as synthetic "queued" rows inside the run table so the
+ * Compute tab tells a complete story: approved work is visible in the
+ * same place as live and finished work, sortable next to it, and gets
+ * replaced by the real run row the moment the agent calls execute.
+ */
+export function useApprovedPendingPlans(): ComputePlanView[] {
+  const plans = useComputeStore((s) => s.pendingPlans)
+  return Array.from(plans.values()).filter((p) => p.approved && !p.rejectedAt)
+}
+
+/** Plans still waiting on user Approve/Reject — only these get the top banner. */
+export function useUnapprovedPendingPlans(): ComputePlanView[] {
+  const plans = useComputeStore((s) => s.pendingPlans)
+  return Array.from(plans.values())
+    .filter((p) => !p.approved && !p.rejectedAt)
+    .sort((a, b) => {
+      const aT = a.createdAt ? new Date(a.createdAt).getTime() : 0
+      const bT = b.createdAt ? new Date(b.createdAt).getTime() : 0
+      return aT - bT
+    })
+}
+
+/**
+ * Build a ComputeRunView from an approved-pending plan so the table
+ * can render it next to real runs without a separate code path. The
+ * runId is namespaced with `pending::` so it's guaranteed not to
+ * collide with a real ComputeRunner-assigned runId; the
+ * `isPlanPlaceholder` flag lets RunRow disable stop/expand.
+ */
+export function planToPlaceholderRun(plan: ComputePlanView): ComputeRunView {
+  return {
+    runId: `pending::${plan.backend}::${plan.planId}`,
+    backend: plan.backend,
+    planId: plan.planId,
+    taskDescription: plan.taskDescription,
+    status: 'queued',
+    currentPhase: 'full',
+    command: plan.command,
+    scriptPath: plan.scriptPath,
+    sandbox: plan.backend,
+    weight: 'heavy',
+    // "Submitted" displays this — the moment the user clicked Approve
+    // is when the system accepted responsibility. Falls back to plan
+    // creation time for backends that don't gate (the approval and
+    // creation are effectively the same instant there).
+    createdAt: plan.approvedAt ?? plan.createdAt,
+    elapsedSeconds: 0,
+    outputBytes: 0,
+    outputLines: 0,
+    stalled: false,
+    outputTail: '',
+    image: plan.image,
+    costEstimate: plan.costEstimate,
+    backendData: plan.backendData,
+    backendDataVersion: plan.backendDataVersion,
+    isPlanPlaceholder: true,
+  }
 }
 
 /**
