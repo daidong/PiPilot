@@ -70,25 +70,53 @@ if (!process.env.PI_CACHE_RETENTION) {
   process.env.PI_CACHE_RETENTION = 'long'
 }
 
-// macOS apps launched from Finder don't inherit shell env vars.
-// Load them from the user's login shell so API keys etc. are available.
-if (process.platform === 'darwin' && !is.dev) {
+// macOS / Linux apps launched from Finder / .desktop launcher don't
+// inherit shell env vars. Load them from the user's login shell so:
+//   1) API keys (ANTHROPIC_API_KEY, etc.) defined in ~/.zshrc are picked up
+//   2) PATH includes user-installed CLIs (modal, docker, brew/pyenv shims)
+//
+// PATH gets special handling: Electron pre-populates it with a minimal
+// `/usr/bin:/bin:/usr/sbin:/sbin` set, so the "don't clobber existing
+// vars" rule below would skip it and leave the shelled-out availability
+// probes for Modal / Docker broken in packaged builds. Instead we PREPEND
+// the shell's PATH so user-installed binaries (~/.local/bin,
+// /opt/homebrew/bin, /usr/local/bin, pyenv shims) are found first while
+// the minimal Electron defaults remain as a fallback.
+if ((process.platform === 'darwin' || process.platform === 'linux') && !is.dev) {
   try {
-    const shellPath = process.env.SHELL || '/bin/zsh'
+    const shellPath = process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
     const raw = execSync(`${shellPath} -ilc 'env'`, { encoding: 'utf-8', timeout: 5000 })
     for (const line of raw.split('\n')) {
       const idx = line.indexOf('=')
-      if (idx > 0) {
-        const key = line.slice(0, idx)
-        const val = line.slice(idx + 1)
-        // Don't overwrite Electron-internal vars
-        if (!key.startsWith('ELECTRON_') && !process.env[key]) {
-          process.env[key] = val
+      if (idx <= 0) continue
+      const key = line.slice(0, idx)
+      const val = line.slice(idx + 1)
+      // Don't overwrite Electron-internal vars
+      if (key.startsWith('ELECTRON_')) continue
+      if (key === 'PATH') {
+        // Prepend shell PATH so user-installed CLIs win lookup, but keep
+        // the Electron defaults appended for safety. Deduplicate entries
+        // so a long-lived process doesn't accumulate bloat on re-runs.
+        const sep = process.platform === 'win32' ? ';' : ':'
+        const existing = (process.env.PATH || '').split(sep)
+        const shellParts = val.split(sep)
+        const seen = new Set<string>()
+        const merged: string[] = []
+        for (const p of [...shellParts, ...existing]) {
+          if (!p || seen.has(p)) continue
+          seen.add(p)
+          merged.push(p)
         }
+        process.env.PATH = merged.join(sep)
+        continue
       }
+      // For non-PATH vars, keep the original behavior — don't clobber an
+      // already-set value (so explicit launch-time overrides still win).
+      if (!process.env[key]) process.env[key] = val
     }
   } catch {
-    // Silently ignore — user will see the "key missing" dialog as fallback
+    // Silently ignore — user will see the "Modal CLI not installed" /
+    // "Docker not detected" hints in the Compute sidebar as fallback.
   }
 }
 
