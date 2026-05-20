@@ -11,10 +11,18 @@ export interface ChatMessage {
 
 const PAGE_SIZE = 20
 
+export interface RetryNotice {
+  attempt: number
+  nextDelayMs: number
+}
+
 interface ChatState {
   messages: ChatMessage[]
   streamingText: string
   isStreaming: boolean
+  /** Set while a transient LLM failure (e.g. 529 overloaded) is backing off. */
+  retryNotice: RetryNotice | null
+  setRetryNotice: (notice: RetryNotice | null) => void
   savedMessageIds: Set<string>
   /** Tool events associated with each assistant message (messageId → events) */
   turnToolEvents: Map<string, ToolEvent[]>
@@ -47,6 +55,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   streamingText: '',
   isStreaming: false,
+  retryNotice: null,
+  setRetryNotice: (notice) => set({ retryNotice: notice }),
   savedMessageIds: new Set<string>(),
   turnToolEvents: new Map<string, ToolEvent[]>(),
   draftText: '',
@@ -67,7 +77,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       messages: [...s.messages, userMsg],
       streamingText: '',
-      isStreaming: true
+      isStreaming: true,
+      retryNotice: null
     }))
 
     // Persist user message
@@ -96,7 +107,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   appendChunk: (chunk: string) => {
-    set((s) => ({ streamingText: s.streamingText + chunk }))
+    // Content resuming means the retry succeeded — drop the notice.
+    set((s) => (s.retryNotice ? { streamingText: s.streamingText + chunk, retryNotice: null } : { streamingText: s.streamingText + chunk }))
   },
 
   finalize: (result) => {
@@ -123,6 +135,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: [...s.messages, assistantMsg],
         streamingText: '',
         isStreaming: false,
+        retryNotice: null,
         turnToolEvents: nextToolEvents,
       }
     })
@@ -139,6 +152,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     messages: [],
     streamingText: '',
     isStreaming: false,
+    retryNotice: null,
     savedMessageIds: new Set<string>(),
     turnToolEvents: new Map<string, ToolEvent[]>(),
     draftText: '',

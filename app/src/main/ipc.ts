@@ -746,6 +746,11 @@ async function ensureCoordinator(
         safeSend(win, 'agent:skill-loaded', skillName)
       },
 
+      // Transient LLM-failure retry notice (e.g. 529 overloaded)
+      onRetryNotice: (info: { attempt: number; nextDelayMs: number; error: string }) => {
+        safeSend(win, 'agent:retry-notice', { ...info, timestamp: Date.now() })
+      },
+
       // Token usage tracking
       // pi-mono Usage type: { input, output, cacheRead, cacheWrite, totalTokens, cost: { input, output, cacheRead, cacheWrite, total } }
       onUsage: (usage: any, cost: any) => {

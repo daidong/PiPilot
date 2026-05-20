@@ -222,6 +222,9 @@ export interface ElectronAPI {
   // Skill activation tracking
   onSkillLoaded: (cb: (skillName: string) => void) => () => void
 
+  // Transient LLM-failure retry notice (e.g. 529 overloaded)
+  onRetryNotice: (cb: (event: { attempt: number; nextDelayMs: number; error: string; timestamp: number }) => void) => () => void
+
   // Entity creation notifications
   onEntityCreated: (cb: (info: { type: string; id: string; title: string }) => void) => () => void
 
@@ -502,6 +505,12 @@ const api: ElectronAPI = {
     const handler = (_: any, skillName: string) => cb(skillName)
     ipcRenderer.on('agent:skill-loaded', handler)
     return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
+  },
+
+  onRetryNotice: (cb) => {
+    const handler = (_: any, event: any) => cb(event)
+    ipcRenderer.on('agent:retry-notice', handler)
+    return () => ipcRenderer.removeListener('agent:retry-notice', handler)
   },
 
   hydrateCompute: () => ipcRenderer.invoke('compute:hydrate'),

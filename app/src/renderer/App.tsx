@@ -765,6 +765,9 @@ export default function App() {
     const unsubSkillLoaded = api.onSkillLoaded((skillName: string) => {
       useActivityStore.getState().addSkill(skillName)
     })
+    const unsubRetryNotice = api.onRetryNotice((event: { attempt: number; nextDelayMs: number }) => {
+      useChatStore.getState().setRetryNotice({ attempt: event.attempt, nextDelayMs: event.nextDelayMs })
+    })
 
     // Debounce entity-change bursts: a single agent turn can emit many
     // artifact-create / artifact-update events; coalesce into one refresh.
@@ -854,6 +857,7 @@ export default function App() {
       unsubActivityClear()
       unsubToolProgress()
       unsubSkillLoaded()
+      unsubRetryNotice()
       unsubUsage()
       unsubComputeEvent()
     }

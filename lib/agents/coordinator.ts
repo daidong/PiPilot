@@ -34,6 +34,7 @@ import {
   type PersistenceDecision
 } from './context-builder.js'
 import { createSessionBootstrap } from './session-bootstrap.js'
+import { runAgentTurnWithRetry } from './transient-retry.js'
 import { createCoordinatorTelemetryAdapter } from './telemetry-adapter.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
@@ -322,6 +323,12 @@ export interface CoordinatorConfig {
   onUsage?: (usage: unknown, cost: unknown) => void
   onSkillLoaded?: (skillName: string) => void
   /**
+   * Fired when a transient LLM failure (e.g. 529 overloaded) triggers a
+   * backoff retry, so the UI can show a "retrying…" notice instead of a
+   * silent pause. See lib/agents/transient-retry.ts.
+   */
+  onRetryNotice?: (info: { attempt: number; nextDelayMs: number; error: string }) => void
+  /**
    * Optional telemetry tracer (telemetry-trace v0.10 spec). When provided, every
    * sub-LLM call (router, summarizer, extractor) and turn boundary becomes a
    * trace span. When absent, the agent path runs unchanged.
@@ -366,6 +373,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     onToolProgress,
     onUsage,
     onSkillLoaded,
+    onRetryNotice,
     tracer = null,
     authMode,
     getTurnId
@@ -376,6 +384,10 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
   let turnCount = 0
   let activeTurnToolCallCount: number | null = null
+  // Set by abort() so the transient-retry backoff can be interrupted —
+  // agent.abort() only cancels an in-flight run, not a wait between
+  // retries. Reset at the start of each turn.
+  let turnAborted = false
   const turnHistory: Array<{ userMessage: string; response: string; toolCallCount: number; timestamp: string }> = []
   // The thinking-level accessor reads agent.state.thinkingLevel at span-open
   // time, so mid-session UI changes land on the next span.
@@ -1138,6 +1150,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // Count tool calls for this turn
         let perTurnToolCallCount = 0
         activeTurnToolCallCount = 0
+        turnAborted = false
 
         try {
           const imageContents = images?.map(img => ({
@@ -1145,7 +1158,18 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
             data: img.base64,
             mimeType: img.mimeType
           }))
-          await agent.prompt(userMessage, imageContents?.length ? imageContents : undefined)
+          // Retry transient LLM failures (e.g. 529 overloaded) with
+          // backoff instead of letting a single API hiccup kill a
+          // long-running turn. See lib/agents/transient-retry.ts.
+          await runAgentTurnWithRetry(agent, userMessage, imageContents, {
+            isAborted: () => turnAborted,
+            onRetry: ({ attempt, nextDelayMs, error }) => {
+              if (debug) {
+                console.log(`[Chat] Transient LLM error (attempt ${attempt}); retrying in ${Math.round(nextDelayMs / 1000)}s — ${error.slice(0, 200)}`)
+              }
+              onRetryNotice?.({ attempt, nextDelayMs, error: error.slice(0, 200) })
+            }
+          })
           perTurnToolCallCount = activeTurnToolCallCount ?? 0
         } finally {
           activeTurnToolCallCount = null
@@ -1285,6 +1309,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
 
     /** Stop the current LLM turn without tearing down tools. */
     abort() {
+      turnAborted = true
       agent.abort()
     },
 

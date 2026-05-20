@@ -313,6 +313,23 @@ function ThinkingIndicator() {
   )
 }
 
+// Shown while a transient LLM failure (e.g. 529 overloaded) is backing
+// off before the next retry. Amber to read as "transient hiccup, not a
+// hard failure"; the attempt count signals progress so the wait doesn't
+// look like a hang.
+function RetryNoticeIndicator({ attempt }: { attempt: number }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center gap-2 mt-3 ml-2 text-[11px] text-amber-500"
+    >
+      <Loader2 size={11} className="animate-spin shrink-0" aria-hidden />
+      <span>Model overloaded — retrying… (attempt {attempt})</span>
+    </div>
+  )
+}
+
 function StreamingBubble() {
   const text = useChatStore((s) => s.streamingText)
   if (!text) return null
@@ -569,6 +586,7 @@ export function ChatMessages() {
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const streamingText = useChatStore((s) => s.streamingText)
+  const retryNotice = useChatStore((s) => s.retryNotice)
   const savedMessageIds = useChatStore((s) => s.savedMessageIds)
   const turnToolEvents = useChatStore((s) => s.turnToolEvents)
   const hasMore = useChatStore((s) => s.hasMore)
@@ -718,6 +736,10 @@ export function ChatMessages() {
             <ToolUseStream />
             {streamingText ? (
               <StreamingBubble />
+            ) : retryNotice ? (
+              /* Transient LLM overload — backing off before retrying.
+                 Replaces the plain "Thinking…" so the pause is explained. */
+              <RetryNoticeIndicator attempt={retryNotice.attempt} />
             ) : !hasRunningTools ? (
               /* Show thinking dots only when no tools are running —
                  running tool cards already have spinners as progress indicator */
