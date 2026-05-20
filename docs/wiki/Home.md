@@ -11,6 +11,7 @@ Welcome to the **Research Copilot** wiki — a community knowledge base for setu
 - **[Skills Catalog](Skills-Catalog)** — all 14 builtin skills with example prompts
 - **[Paper Wiki](Paper-Wiki)** — cross-project memory: how it works, costs, tools
 - **[Glossary](Glossary)** — artifact, skill, mention, session summary, and other terms
+- **[Context Compaction](Context-Compaction)** — how the agent's conversation is kept inside the LLM's context window: `transformContext`, persisted compaction state, restart-time orphan replay
 
 ## Where to go for what
 
