@@ -237,8 +237,21 @@ export interface PlanInput {
   command: string
   taskDescription?: string
   scriptPath?: string
+  /** Actual source code of the script. Local backend uses this for task profiling. */
   scriptContent?: string
   suggestedTimeoutMinutes?: number
+  /**
+   * Backend-specific plan input. Symmetric to ComputePlan.backendData on
+   * the output side (RFC-008 amendment A5). Backends that can derive
+   * everything from `command` + `scriptPath` (Local, Modal) ignore this.
+   * Backends that require caller-supplied configuration (RFC-009 Phase 1
+   * EC2: instanceSpec) read it here.
+   *
+   * Carried over IPC from the `compute_plan` tool's `backend_data`
+   * parameter (JSON-encoded string, parsed at the tool boundary).
+   * JSON-serializable values only.
+   */
+  backendData?: unknown
 }
 
 export interface SubmitOpts {

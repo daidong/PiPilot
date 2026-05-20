@@ -231,6 +231,18 @@ export interface ElectronAPI {
   rejectComputePlan: (backend: string, planId: string, comments: string) => Promise<{ success: boolean; error?: string }>
   stopComputeRun: (runId: string) => Promise<{ success: boolean; error?: string }>
   refreshComputeAvailability: () => Promise<{ success: boolean; error?: string }>
+  /** RFC-009 §3.3: AWS connection probe. STS + S3 + EC2 capability check. */
+  testAwsConnection: () => Promise<{
+    success: boolean
+    error?: string
+    source?: 'settings' | 'env' | 'profile' | 'instance-metadata'
+    stsValid?: boolean
+    stsError?: string
+    accountId?: string
+    arn?: string
+    s3?: { ok: boolean; error?: string }
+    ec2?: { ok: boolean; error?: string }
+  }>
   onComputeEvent: (cb: (event: any) => void) => () => void
 
   // File tracking
@@ -501,6 +513,7 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('compute:stop-run', { runId }),
   refreshComputeAvailability: () =>
     ipcRenderer.invoke('compute:refresh-availability'),
+  testAwsConnection: () => ipcRenderer.invoke('compute:test-aws-connection'),
 
   onComputeEvent: (cb) => {
     const handler = (_: any, event: any) => cb(event)

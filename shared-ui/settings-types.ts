@@ -122,11 +122,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     reviewProvider: 'auto',
   },
   compute: {
-    enabledBackends: ['local', 'modal'],
+    enabledBackends: ['local', 'modal', 'aws-ec2'],
     defaultBackend: 'local',
     requireApprovalForAllBackends: false,
     backends: {
       modal: { costThresholdUsd: 5.00 },
+      'aws-ec2': { costThresholdUsd: 5.00, region: 'us-east-1' },
     },
   },
 }

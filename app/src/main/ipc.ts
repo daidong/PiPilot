@@ -558,6 +558,37 @@ async function ensureCoordinator(
             forceApprovalForAll: s.compute.requireApprovalForAllBackends,
           }
         },
+        // RFC-009 §3.1: AWS settings accessor. Returns the non-sensitive
+        // bits from settings JSON; sensitive fields (accessKeyId,
+        // secretAccessKey, sessionToken) flow through process.env via
+        // the existing saveApiKey IPC, picked up by the credential
+        // provider's env-fallback. Returning empty when no AWS section
+        // is configured signals "AWS support off" — the coordinator
+        // then skips registering the EC2 backend and S3 tools.
+        //
+        // No hardcoded region fallback here: defaults flow through
+        // loadSettingsFromConfig's per-backend deep merge, so an empty
+        // stored `aws-ec2` entry already comes back with the default
+        // 'us-east-1'. If region is genuinely missing despite that, the
+        // credential provider's diagnostic error is the right signal —
+        // it tells the user exactly which field is empty rather than
+        // silently routing their workload to us-east-1.
+        getAwsSettings: () => {
+          const s = resolveSettings(loadSettingsFromConfig())
+          const aws = (s.compute.backends['aws-ec2'] ?? {}) as Record<string, unknown>
+          return {
+            region: typeof aws.region === 'string' ? aws.region : undefined,
+            profile: typeof aws.profile === 'string' ? aws.profile : undefined,
+          }
+        },
+        getAwsEc2CostThresholdUsd: () => {
+          const s = resolveSettings(loadSettingsFromConfig())
+          return (s.compute.backends['aws-ec2']?.costThresholdUsd ?? 5) as number
+        },
+        // Subscribe BEFORE backends register (see coordinator.ts comment).
+        // This must be the canonical subscriber — adding another after
+        // createCoordinator returns would double-deliver every event.
+        onEvent: (event) => safeSend(win, 'compute:event', event),
       },
       // Only wired in Electron's main process; pure-Node contexts (tests)
       // will leave this undefined and the tool will degrade to source-
@@ -778,14 +809,14 @@ async function ensureCoordinator(
       getTurnId: () => state.lastTurnId
     })
 
-    // RFC-008 §7.5: subscribe to the ComputeRegistry's unified event
-    // stream and fan to the renderer via a single channel. Replaces
-    // the 8 backend-specific channels PR #62 introduced.
-    if (state.coordinator?.computeRegistry) {
-      state.coordinator.computeRegistry.subscribe(event => {
-        safeSend(win, 'compute:event', event)
-      })
-    }
+    // RFC-008 §7.5 + RFC-009 fix: the event subscriber is wired INSIDE
+    // createCoordinator via the `compute.onEvent` callback above. That
+    // way subscription happens BEFORE backends register, so initial
+    // availability probes that resolve on the next microtask (Modal's
+    // execSync path) don't get dropped. Subscribing here instead would
+    // miss those events; subscribing here ON TOP of the in-coordinator
+    // subscriber would double-deliver. Either way: don't add a second
+    // subscriber here.
 
     // Notify UI that initialization is complete
     const readyEvent = { type: 'system', summary: 'Agent ready' }
@@ -2172,6 +2203,80 @@ export function registerIpcHandlers(): void {
     try {
       await state.coordinator.computeRegistry.refreshAvailability()
       return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err?.message || String(err) }
+    }
+  })
+
+  // RFC-009 §3.3: per-service AWS connection test. Hits sts:GetCallerIdentity
+  // plus per-service capability probes (S3 / EC2). Returns a structured
+  // report the AWS settings section renders inline.
+  handleWindow('compute:test-aws-connection', async () => {
+    try {
+      const { AwsCredentialProvider, toSdkCredentials } = await import('../../../lib/aws/credentials')
+      const aws = (resolveSettings(loadSettingsFromConfig()).compute.backends['aws-ec2'] ?? {}) as Record<string, unknown>
+      const provider = new AwsCredentialProvider({
+        getSettings: () => ({
+          region: typeof aws.region === 'string' ? aws.region : undefined,
+          profile: typeof aws.profile === 'string' ? aws.profile : undefined,
+        }),
+      })
+      let resolution: any
+      try {
+        resolution = provider.resolve()
+      } catch (err: any) {
+        return { success: false, error: err?.message || String(err) }
+      }
+
+      const sts = await provider.validate(resolution.credentials)
+      if (!sts.valid) {
+        return {
+          success: true,
+          source: resolution.source,
+          stsValid: false,
+          stsError: sts.error,
+          accountId: undefined,
+          arn: undefined,
+          s3: { ok: false, error: 'Skipped (STS failed)' },
+          ec2: { ok: false, error: 'Skipped (STS failed)' },
+        }
+      }
+
+      const s3Result = await (async () => {
+        try {
+          const { S3Client, ListBucketsCommand } = await import('@aws-sdk/client-s3')
+          const client = new S3Client({
+            region: resolution.credentials.region,
+            credentials: toSdkCredentials(resolution.credentials),
+          })
+          await client.send(new ListBucketsCommand({}))
+          return { ok: true as const }
+        } catch (err: any) {
+          return { ok: false as const, error: err?.message || String(err) }
+        }
+      })()
+      const ec2Result = await (async () => {
+        try {
+          const { EC2Client, DescribeRegionsCommand } = await import('@aws-sdk/client-ec2')
+          const client = new EC2Client({
+            region: resolution.credentials.region,
+            credentials: toSdkCredentials(resolution.credentials),
+          })
+          await client.send(new DescribeRegionsCommand({}))
+          return { ok: true as const }
+        } catch (err: any) {
+          return { ok: false as const, error: err?.message || String(err) }
+        }
+      })()
+      return {
+        success: true,
+        source: resolution.source,
+        stsValid: true,
+        accountId: sts.accountId,
+        arn: sts.arn,
+        s3: s3Result,
+        ec2: ec2Result,
+      }
     } catch (err: any) {
       return { success: false, error: err?.message || String(err) }
     }

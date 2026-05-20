@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { Eye, EyeOff, Check, ExternalLink, Cpu, Cloud, Box, Container, Settings as SettingsIcon, RefreshCw } from 'lucide-react'
+import { Eye, EyeOff, Check, ExternalLink, Cpu, Cloud, Box, Container, Settings as SettingsIcon, RefreshCw, HelpCircle } from 'lucide-react'
 import type { ComputeSettings as ComputeSettingsShape } from '../../../../../shared-ui/settings-types'
 import { useComputeStore, type BackendView } from '../../stores/compute-store'
+import { AwsSetupHelpModal } from './AwsSetupHelpModal'
 
 const api = (window as any).api
 
@@ -42,6 +43,7 @@ export async function refreshBackendAvailability(): Promise<{ success: boolean; 
 export function ComputeSettings({ compute, onChange }: Props) {
   const localBackend = useComputeStore((s) => s.backends.get('local'))
   const modalBackend = useComputeStore((s) => s.backends.get('modal'))
+  const awsBackend = useComputeStore((s) => s.backends.get('aws-ec2'))
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
 
@@ -76,6 +78,7 @@ export function ComputeSettings({ compute, onChange }: Props) {
       <GlobalSection compute={compute} onChange={onChange} />
       <LocalSection backend={localBackend} />
       <ModalSection compute={compute} onChange={onChange} backend={modalBackend} />
+      <AwsSection compute={compute} onChange={onChange} backend={awsBackend} />
     </div>
   )
 }
@@ -397,6 +400,277 @@ function ModalCredentialFields() {
         Tokens are stored encrypted in <code className="font-mono">~/.research-copilot/config.json</code> and exported
         to the spawned Modal CLI as <code className="font-mono">MODAL_TOKEN_ID</code> + <code className="font-mono">MODAL_TOKEN_SECRET</code>.
       </p>
+    </div>
+  )
+}
+
+// ─── AWS backend (RFC-009) ────────────────────────────────────────────────
+
+function AwsSection({
+  compute,
+  onChange,
+  backend,
+}: {
+  compute: ComputeSettingsShape
+  onChange: (settings: ComputeSettingsShape) => void
+  backend?: BackendView
+}) {
+  const aws = (compute.backends['aws-ec2'] ?? {}) as Record<string, unknown>
+  const threshold = (aws.costThresholdUsd as number) ?? 5
+  const region = (aws.region as string) ?? 'us-east-1'
+  const profile = (aws.profile as string) ?? ''
+  const [helpOpen, setHelpOpen] = useState(false)
+  const update = (patch: Record<string, unknown>) =>
+    onChange({
+      ...compute,
+      backends: {
+        ...compute.backends,
+        'aws-ec2': { ...compute.backends['aws-ec2'], ...patch },
+      },
+    })
+
+  return (
+    <Section
+      icon={<Cloud size={14} />}
+      title="AWS"
+      subtitle="EC2 compute + S3 read tools. Plans require approval; runs are auto-killed when estimated cost exceeds the threshold. Credentials, region, and per-service capability live here — RFC-009 §3.1."
+      status={statusFromAvailability(backend)}
+    >
+      <div className="flex items-center justify-between gap-2 -mt-1">
+        <p className="text-[11px] t-text-muted leading-relaxed">
+          New to AWS, or hitting <code className="font-mono">iam:PassRole</code> errors? The setup
+          guide has the inline IAM policy and prerequisites.
+        </p>
+        <button
+          type="button"
+          onClick={() => setHelpOpen(true)}
+          className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border t-border text-[11px] t-text-secondary hover:t-text"
+        >
+          <HelpCircle size={11} />
+          How to configure AWS
+        </button>
+      </div>
+      <AwsSetupHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <AwsCredentialFields />
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium t-text mb-1.5">Default region</label>
+          <input
+            type="text"
+            value={region}
+            onChange={(e) => update({ region: e.target.value.trim() })}
+            placeholder="us-east-1"
+            className="w-full text-xs px-2.5 py-1.5 rounded-md border t-border t-bg-base t-text font-mono focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+          />
+          <p className="text-[11px] t-text-muted mt-1 leading-relaxed">
+            Per-call overrides are supported on every S3 tool and the EC2 plan input.
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium t-text mb-1.5">Profile (optional)</label>
+          <input
+            type="text"
+            value={profile}
+            onChange={(e) => update({ profile: e.target.value.trim() })}
+            placeholder="default"
+            className="w-full text-xs px-2.5 py-1.5 rounded-md border t-border t-bg-base t-text font-mono focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+          />
+          <p className="text-[11px] t-text-muted mt-1 leading-relaxed">
+            Reads <code className="font-mono">~/.aws/credentials</code> when set.
+          </p>
+        </div>
+      </div>
+      <div>
+        <label className="block text-xs font-medium t-text mb-1.5">Auto-kill threshold (USD)</label>
+        <input
+          type="number"
+          min={0.1}
+          step={0.5}
+          value={threshold}
+          onChange={(e) => update({ costThresholdUsd: Math.max(0.1, Number(e.target.value) || 0.1) })}
+          className="w-32 text-xs px-2.5 py-1.5 rounded-md border t-border t-bg-base t-text font-mono focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+        />
+        <p className="text-[11px] t-text-muted mt-1 leading-relaxed">
+          EC2 runs are terminated when elapsed estimated cost crosses this amount. The estimate uses
+          on-demand pricing in us-east-1; regional variance and EBS/network egress are not modeled.
+        </p>
+      </div>
+      <AwsTestConnection />
+    </Section>
+  )
+}
+
+const AWS_KEYS = [
+  { name: 'AWS_ACCESS_KEY_ID',     label: 'Access key ID',    placeholder: 'AKIA…' },
+  { name: 'AWS_SECRET_ACCESS_KEY', label: 'Secret access key', placeholder: '••••' },
+  { name: 'AWS_SESSION_TOKEN',     label: 'Session token (optional)', placeholder: 'For STS / SSO temp creds' },
+] as const
+
+function AwsCredentialFields() {
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [status, setStatus] = useState<Record<string, boolean>>({})
+  const [visible, setVisible] = useState<Record<string, boolean>>({})
+  const [saving, setSaving] = useState<Record<string, boolean>>({})
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const refreshStatus = () => {
+    api.getApiKeyStatus?.()
+      .then((s: Record<string, boolean>) => setStatus(s ?? {}))
+      .catch(() => { /* non-fatal */ })
+  }
+  useEffect(() => { refreshStatus() }, [])
+
+  const persist = async (name: string) => {
+    const val = (values[name] ?? '').trim()
+    if (!val) return
+    setSaving((s) => ({ ...s, [name]: true }))
+    setSaveError(null)
+    try {
+      const result = await api.saveApiKey?.(name, val)
+      if (!result?.success) {
+        setSaveError(result?.error || `Failed to save ${name}.`)
+        return
+      }
+      setValues((v) => ({ ...v, [name]: '' }))
+      refreshStatus()
+      void refreshBackendAvailability()
+    } finally {
+      setSaving((s) => ({ ...s, [name]: false }))
+    }
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium t-text">Credentials</span>
+        <a
+          href="https://console.aws.amazon.com/iam/home#/security_credentials"
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => { e.preventDefault(); window.open('https://console.aws.amazon.com/iam/home#/security_credentials', '_blank') }}
+          className="text-[11px] t-text-muted hover:t-text inline-flex items-center gap-1"
+        >
+          Get keys <ExternalLink size={10} />
+        </a>
+      </div>
+      {AWS_KEYS.map((field) => {
+        const alreadySet = status[field.name]
+        const isSaving = saving[field.name]
+        const currentValue = values[field.name] ?? ''
+        return (
+          <div key={field.name}>
+            <div className="flex items-center justify-between mb-1">
+              <label htmlFor={`aws-${field.name}`} className="text-[11px] t-text-secondary">{field.label}</label>
+              {alreadySet && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-500">
+                  <Check size={10} /> configured
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="relative flex-1">
+                <input
+                  id={`aws-${field.name}`}
+                  type={visible[field.name] ? 'text' : 'password'}
+                  value={currentValue}
+                  onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void persist(field.name) } }}
+                  placeholder={alreadySet ? '••••••••  (already set — leave blank to keep)' : field.placeholder}
+                  className="w-full text-[12px] px-2.5 py-1.5 rounded-md border t-border t-bg-base t-text font-mono pr-8 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                />
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 t-text-muted hover:t-text"
+                  onClick={() => setVisible((v) => ({ ...v, [field.name]: !v[field.name] }))}
+                  tabIndex={-1}
+                  aria-label={visible[field.name] ? 'Hide value' : 'Show value'}
+                >
+                  {visible[field.name] ? <EyeOff size={12} /> : <Eye size={12} />}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => void persist(field.name)}
+                disabled={isSaving || !currentValue.trim()}
+                className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-40"
+              >
+                {isSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        )
+      })}
+      {saveError && <p className="text-[11px] text-red-500">{saveError}</p>}
+      <p className="text-[11px] t-text-muted leading-relaxed">
+        Keys are stored encrypted in <code className="font-mono">~/.research-copilot/config.json</code> and exported
+        to the EC2 backend + S3 tools via <code className="font-mono">AWS_ACCESS_KEY_ID</code> + <code className="font-mono">AWS_SECRET_ACCESS_KEY</code>
+        (+ optional <code className="font-mono">AWS_SESSION_TOKEN</code>).
+      </p>
+    </div>
+  )
+}
+
+interface AwsTestResult {
+  success: boolean
+  error?: string
+  source?: string
+  stsValid?: boolean
+  stsError?: string
+  accountId?: string
+  arn?: string
+  s3?: { ok: boolean; error?: string }
+  ec2?: { ok: boolean; error?: string }
+}
+
+function AwsTestConnection() {
+  const [testing, setTesting] = useState(false)
+  const [result, setResult] = useState<AwsTestResult | null>(null)
+  const test = async () => {
+    setTesting(true)
+    try {
+      const r = await api.testAwsConnection?.()
+      setResult(r ?? { success: false, error: 'IPC unavailable' })
+    } catch (err: any) {
+      setResult({ success: false, error: err?.message || String(err) })
+    } finally {
+      setTesting(false)
+    }
+  }
+  return (
+    <div className="space-y-2 pt-1">
+      <button
+        type="button"
+        onClick={() => void test()}
+        disabled={testing}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-40"
+      >
+        <RefreshCw size={11} className={testing ? 'animate-spin' : ''} />
+        {testing ? 'Testing…' : 'Test connection'}
+      </button>
+      {result && (
+        <div className="rounded-md border t-border-subtle px-2.5 py-2 text-[11px] space-y-1">
+          {!result.success && (
+            <p className="text-red-500">✗ {result.error ?? 'Unknown error'}</p>
+          )}
+          {result.success && (
+            <>
+              <p className={result.stsValid ? 'text-emerald-500' : 'text-red-500'}>
+                {result.stsValid ? '✓' : '✗'} STS GetCallerIdentity
+                {result.stsValid && result.arn ? ` — ${result.arn}` : result.stsError ? ` — ${result.stsError}` : ''}
+              </p>
+              <p className={result.ec2?.ok ? 'text-emerald-500' : 'text-red-500'}>
+                {result.ec2?.ok ? '✓' : '✗'} EC2 DescribeRegions{!result.ec2?.ok && result.ec2?.error ? ` — ${result.ec2.error}` : ''}
+              </p>
+              <p className={result.s3?.ok ? 'text-emerald-500' : 'text-red-500'}>
+                {result.s3?.ok ? '✓' : '✗'} S3 ListBuckets{!result.s3?.ok && result.s3?.error ? ` — ${result.s3.error}` : ''}
+              </p>
+              {result.source && (
+                <p className="t-text-muted">source: {result.source}</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

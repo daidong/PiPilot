@@ -13,10 +13,10 @@
  * in §7.10 once the new path is fully wired through IPC + renderer.
  */
 
-import path from 'node:path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError } from '../tools/tool-utils.js'
+import { resolveUserPath } from '../utils/path-utils.js'
 import type { ComputeRegistry } from './registry.js'
 import type { ComputeBackend } from './backend.js'
 import type { BackendAvailability, ComputeRun, RunStatus } from './types.js'
@@ -82,11 +82,17 @@ function createComputePlanTool(opts: ToolsOpts): AgentTool {
       '`##RESULT## {json}` for the final structured return value (the latter ' +
       'survives output truncation and is surfaced as `result` on status).',
     parameters: Type.Object({
-      backend: Type.String({ description: 'Backend id: "local" | "modal" | ...' }),
+      backend: Type.String({ description: 'Backend id: "local" | "modal" | "aws-ec2" | ...' }),
       command: Type.String({ description: 'Shell command to execute' }),
       task_description: Type.Optional(Type.String({ description: 'Concise description of the task, input, expected output.' })),
       script_path: Type.Optional(Type.String({ description: 'Relative path to the main script (for deeper analysis or required by some backends).' })),
       timeout_minutes: Type.Optional(Type.Number({ description: 'Suggested timeout in minutes.' })),
+      backend_data: Type.Optional(Type.String({
+        description:
+          'JSON-encoded backend-specific plan input. ' +
+          'aws-ec2 requires this: { "instanceSpec": { instanceType, region, amiId, keyName, privateKeyPath, sshUser, scriptPath, ... }, "taskProfile": { expectedDurationClass, ... } }. ' +
+          'local and modal ignore this field (they auto-derive everything from script_path).',
+      })),
     }),
     execute: async (_id, rawParams) => {
       const params = rawParams as Record<string, unknown>
@@ -101,9 +107,39 @@ function createComputePlanTool(opts: ToolsOpts): AgentTool {
         ))
       }
 
+      // resolveUserPath expands `~` BEFORE workspace-resolution so
+      // `~/foo.sh` becomes `<home>/foo.sh` (absolute), not
+      // `<workspace>/~/foo.sh` (broken).
       const scriptPath = typeof params.script_path === 'string' && params.script_path.trim()
-        ? (path.isAbsolute(params.script_path) ? params.script_path : path.resolve(workspacePath, params.script_path))
+        ? resolveUserPath(workspacePath, params.script_path)
         : undefined
+
+      // Parse backend_data at the tool boundary so backends can read a
+      // typed object via PlanInput.backendData. Malformed JSON is caught
+      // here and reported with INVALID_PARAMETER — agents self-correct
+      // on that code without retrying with the same broken payload.
+      let backendData: unknown
+      if (typeof params.backend_data === 'string' && params.backend_data.trim()) {
+        try {
+          backendData = JSON.parse(params.backend_data)
+        } catch (err) {
+          return toAgentResult('compute_plan', toolError(
+            'INVALID_PARAMETER',
+            `backend_data is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+            {
+              suggestions: [
+                'Ensure backend_data is a JSON string (object literal serialized).',
+                'Check for unescaped quotes, trailing commas, or missing braces.',
+              ],
+            },
+          ))
+        }
+      } else if (params.backend_data !== undefined && typeof params.backend_data !== 'string') {
+        return toAgentResult('compute_plan', toolError(
+          'INVALID_PARAMETER',
+          `backend_data must be a JSON-encoded string, got ${typeof params.backend_data}.`,
+        ))
+      }
 
       try {
         const plan = await registry.plan(backendId, {
@@ -111,6 +147,7 @@ function createComputePlanTool(opts: ToolsOpts): AgentTool {
           taskDescription: typeof params.task_description === 'string' ? params.task_description.trim() || undefined : undefined,
           scriptPath,
           suggestedTimeoutMinutes: typeof params.timeout_minutes === 'number' ? params.timeout_minutes : undefined,
+          backendData,
         })
         const record = registry.getPlanRecord(backendId, plan.planId)
         const backend = registry.get(backendId)!

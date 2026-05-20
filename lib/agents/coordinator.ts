@@ -282,6 +282,31 @@ export interface CoordinatorConfig {
      * override.
      */
     getComputeSettings?: () => { modalCostThresholdUsd: number; forceApprovalForAll: boolean }
+    /**
+     * Live accessor for AWS credential settings (RFC-009 §3.1). Returns
+     * what the user typed into Settings → Compute → AWS. Sensitive fields
+     * (accessKeyId / secretAccessKey) typically flow through process.env
+     * via the existing saveApiKey IPC path; settings here only need to
+     * include the non-sensitive bits (region, profile) — the credential
+     * provider's env-fallback picks up the rest.
+     *
+     * When this accessor is absent, AWS support is OFF: no AWS backends
+     * are registered and S3 tools are not exposed.
+     */
+    getAwsSettings?: () => import('../aws/credentials.js').SettingsCredentialInput
+    /** Per-backend EC2 cost-kill threshold in USD. Reads compute.backends.aws-ec2.costThresholdUsd. */
+    getAwsEc2CostThresholdUsd?: () => number
+    /**
+     * Subscribe to ComputeEvents. When provided, the coordinator wires
+     * this callback immediately after constructing the registry — BEFORE
+     * any backends are registered. Backends register synchronously but
+     * fire their initial `availability-changed` probe through a promise
+     * chain; backends whose probe has no internal await (e.g. Modal,
+     * which uses execSync) resolve on the very next microtask. If the
+     * subscriber isn't in place by then, the event is dropped and the
+     * renderer never learns the backend exists until a manual refresh.
+     */
+    onEvent?: (event: import('../compute/events.js').ComputeEvent) => void
   }
   /**
    * Optional SVG rasterizer the coordinator forwards to tools. Populated
@@ -523,6 +548,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     // assigned in-place after we've built it so backends + tools share
     // the same instance.
     computeRegistry: undefined as undefined | import('../compute/registry.js').ComputeRegistry,
+    awsCredentialProvider: undefined as undefined | import('../aws/credentials.js').AwsCredentialProvider,
     rasterizeSvg: config.rasterizeSvg,
   }
 
@@ -544,6 +570,19 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       // without requiring a coordinator rebuild.
       forceApproval: () => getCompute().forceApprovalForAll,
     })
+
+    // CRITICAL: subscribe BEFORE registering any backends. Backend
+    // register() fires an initial probe via `probeWithTimeout(...).then(emit)`;
+    // backends whose probeAvailability has no internal await (Modal's
+    // execSync path) resolve on the very next microtask. The `await
+    // import(...)` calls below (for AwsCredentialProvider / AwsEc2Backend)
+    // are the microtask boundaries where those probes fire — if the
+    // subscriber isn't wired here, those backends' availability-changed
+    // events vanish into an empty subscribers set and never reach the
+    // renderer. (Symptom: Modal silently absent from the Compute tab.)
+    if (config.compute.onEvent) {
+      computeRegistry.subscribe(config.compute.onEvent)
+    }
 
     // ComputeContext factory — closes over piModel/resolveApiKey so
     // backend.createSubAgent doesn't reach back into the coordinator.
@@ -578,6 +617,26 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       getCostThresholdUsd: () => getCompute().modalCostThresholdUsd,
     })
     computeRegistry.register(new ModalBackend(modalCtx))
+
+    // RFC-009 §3.1: shared AWS credentials provider. Built once, shared by
+    // the EC2 backend (Layer A) and the S3 tool factory (Layer C). When
+    // getAwsSettings is undefined, AWS support is off and no provider is
+    // exposed — createResearchTools skips registering S3 tools, and the
+    // EC2 backend block below is also skipped.
+    if (config.compute.getAwsSettings) {
+      const { AwsCredentialProvider } = await import('../aws/credentials.js')
+      const awsProvider = new AwsCredentialProvider({
+        getSettings: config.compute.getAwsSettings,
+      })
+      toolCtx.awsCredentialProvider = awsProvider
+
+      const { AwsEc2Backend } = await import('../compute/backends/aws-ec2/aws-ec2-backend.js')
+      const awsCtx = makeContext({
+        getCredentials: () => ({}),
+        getCostThresholdUsd: () => config.compute?.getAwsEc2CostThresholdUsd?.() ?? 5,
+      })
+      computeRegistry.register(new AwsEc2Backend(awsCtx, awsProvider))
+    }
 
     // Optional diagnostic backend — off by default. See
     // lib/compute/backends/stub/stub-backend.ts for what it does

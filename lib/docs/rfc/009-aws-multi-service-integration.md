@@ -49,6 +49,38 @@ This collapses a hard distributed-systems problem into a documented AWS pattern,
 
 **The framework-level Artifact API (RFC-008 P1 open item) stays DEFERRED.** Phase 1 doesn't need it; if Phase 2+ adds another compute backend where S3-style external storage isn't natural (e.g., a stateless serverless backend), we revisit then.
 
+### Phase 1 design note — how the EC2 backend receives its spec (v2, post-shipping fix)
+
+The original Phase 1 plan said EC2 would receive its `instanceSpec` "via `scriptContent` JSON". That turned out to be wrong on two counts and the v2 contract below replaces it:
+
+1. **`scriptContent` already had a meaning** in `PlanInput` (Local backend reads it as the actual script *source code* for task profiling). Overloading the same string field to mean "JSON spec" for one specific backend was a type-unsafe contextual overload — fields should mean one thing.
+2. **The `compute_plan` tool never forwarded `scriptContent`** anyway, so an agent calling `compute_plan(backend='aws-ec2', ...)` could never reach the backend's spec parser — the field arrived as `undefined` no matter what the caller did.
+
+**v2 contract** (now shipped):
+
+- `PlanInput` gains a sibling field `backendData?: unknown` — symmetric to `ComputePlan.backendData` on the output side (RFC-008 amendment A5). Backends that auto-derive everything (Local, Modal) ignore it; backends that require caller-supplied configuration (EC2 in Phase 1) read it.
+- The `compute_plan` tool gains a `backend_data` parameter (JSON-encoded string). The tool-layer execute parses the JSON and forwards the resulting object as `PlanInput.backendData`; malformed JSON returns `INVALID_PARAMETER` so the agent self-corrects.
+- `AwsEc2Backend.parsePlanInput` reads from `input.backendData` (object). It no longer touches `input.scriptContent`.
+- The error message it throws when `backendData` is absent names `backend_data` directly and shows a complete shell-pseudo-example, so the agent doesn't need to read the codebase to recover.
+
+**Phase 2 implication:** when the LLM plan agent lands (the EC2 analogue of `lib/compute/backends/modal/plan-agent.ts`), it produces a `backendData` object internally rather than asking the caller for it. Tool surface stays unchanged — `backend_data` simply becomes optional rather than effectively required.
+
+Coverage: `lib/compute/__tests__/backend-data-plumbing.test.ts` + `lib/compute/backends/aws-ec2/__tests__/aws-ec2-plan-input.test.ts` pin every leg of this contract (forwarding, malformed JSON, missing field, empty-string-as-absent, legacy-scriptContent-ignored).
+
+### Phase 1 retrospective — the three AWS setup gotchas
+
+Captured here so the next backend author (and the docs they write) doesn't repeat the pattern. Bringing Phase 1 to first green smoke test cost roughly four sessions of debugging, all on the user-facing setup path; the code itself was correct. The three gotchas, in the order they were hit:
+
+| # | Gotcha | Root cause | Fix shipped |
+|---|---|---|---|
+| 1 | Test connection said "AWS region is not set" despite the UI showing `us-east-1` | `loadSettingsFromConfig`'s `backends` merge was a shallow spread, so a partial stored `aws-ec2` entry (e.g. only `costThresholdUsd`) replaced the default `{ region: 'us-east-1', ... }` whole. UI displayed `'us-east-1'` via a `??` fallback that didn't persist. | Per-backend deep merge in `shared-electron/ipc-base.ts`. **Better fix later**: deleted the duplicated `DEFAULT_SETTINGS` in shared-electron entirely — single source of truth in shared-ui. |
+| 2 | Test connection green, but `RunInstances` reported the IAM instance profile as "Invalid" — RP was talking to a different AWS account than the user's CLI | `loadApiKeysFromConfig`'s priority was `env > config`. User's shell had stale `AWS_ACCESS_KEY_ID` from account X. User saved account Y's key in the UI. On every restart the loader skipped loading from disk because env was non-empty, so RP silently kept running on account X. | Flipped to `config > env` in `shared-electron/api-key-loader.ts`. **Settings UI is the user's authoritative signal; shell env is the fallback when nothing has been saved.** This priority is now the codebase axiom (CLAUDE.md §"Configuration priority"). |
+| 3 | `RunInstances` rejected with `User ... is not authorized to perform: iam:PassRole on resource: <role>` despite the role existing and being attached to the instance profile | The `aws-setup.md` "lazy path" recommended `AmazonEC2FullAccess` + `AmazonS3ReadOnlyAccess` + `IAMReadOnlyAccess`. None of those managed policies include `iam:PassRole`. EC2 requires the launching user to be explicitly authorized to hand a role to the EC2 service — by design, to prevent low-priv users from escalating via instance profile choice. | Removed the lazy-path managed-policy combo from `aws-setup.md` §1; replaced with the minimum inline JSON policy that includes `PassEc2InstanceRole` with `iam:PassedToService=ec2.amazonaws.com`. Also added an error classifier in `lib/aws-ec2-compute/ec2-runner.ts:classifyEc2FailureSuggestions` that maps `iam:PassRole` (and a dozen other common AWS / SSH cliffs) to actionable suggestions surfaced in the run's `failure.suggestions`. |
+
+**The common pattern across all three**: AWS's failure modes look identical at the cheap-to-check layer (Test connection / STS validation) but diverge at the expensive layer (real RunInstances with a real instance profile + key pair + SG). A single "Test connection: green" doesn't mean the credentials can launch a workload. Phase 2 candidates for closing this gap: a "dry-run launch" probe that tests `RunInstances --dry-run` with a representative spec, surfacing the actual permission cliff before the user wastes a turn on a real failure.
+
+**Lesson for documentation**: when offering "minimum policy" examples, prefer concrete inline JSON over managed-policy attachments. Managed policies are written by AWS for the most common case (no instance profiles), and they often deliberately omit higher-risk actions like `iam:PassRole`. Pointing users at them is faster to write but funnels them into a cliff that's invisible until the wrong moment.
+
 ### Explicitly OUT of Phase 1 (deferred to Phase 2+)
 
 | Item | Why deferred | When to revisit |

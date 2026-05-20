@@ -16,6 +16,7 @@ import { createConvertDocumentTool } from './convert-document.js'
 import { createDataAnalyzeTool } from './data-analyze.js'
 import { createGenerateDiagramTool } from './generate-diagram.js'
 import { createComputeTools } from '../compute/tools.js'
+import { createS3Tools } from './s3-tools.js'
 import { createWikiLookupTool } from '../wiki/tool.js'
 import { createWikiTools } from '../wiki/wiki-tools.js'
 
@@ -69,6 +70,17 @@ export function createResearchTools(ctx: ResearchToolContext): {
     tools.push(...createComputeTools({
       registry: ctx.computeRegistry,
       workspacePath: ctx.workspacePath,
+    }))
+  }
+
+  // S3 tools (RFC-009 Phase 1, §4.3): registered when an AwsCredentialProvider
+  // is plumbed through. Phase 1 ships read-side tools only (download / list /
+  // presigned_url) — the EC2 backend's contract is "script writes to S3,
+  // agent reads from S3" so mutation tools are deferred.
+  if (ctx.awsCredentialProvider) {
+    tools.push(...createS3Tools({
+      workspacePath: ctx.workspacePath,
+      credentialProvider: ctx.awsCredentialProvider,
     }))
   }
 

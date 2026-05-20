@@ -12,51 +12,23 @@ import { homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { ResolvedCoordinatorAuth } from './types'
 
-// ─── Settings types (duplicated from shared-ui/settings-types.ts to avoid cross-rootDir import) ─
-interface ResearchSettings {
-  researchIntensity: 'low' | 'medium' | 'high'
-  webSearchDepth: 'quick' | 'standard' | 'thorough'
-  autoSaveSensitivity: 'conservative' | 'balanced' | 'aggressive'
-}
-interface DataAnalysisSettings {
-  executionTimeLimit: 'short' | 'standard' | 'extended' | 'long'
-}
-interface WikiAgentSettings {
-  model: string   // 'none' = disabled
-  speed: 'slow' | 'medium' | 'fast'
-}
-interface DiagramSettings {
-  reviewProvider: 'auto' | 'openai' | 'anthropic'
-}
-interface BackendSettings {
-  costThresholdUsd?: number
-  [extra: string]: unknown
-}
-interface ComputeSettings {
-  enabledBackends: string[]
-  defaultBackend: string
-  requireApprovalForAllBackends: boolean
-  backends: Record<string, BackendSettings>
-}
-export interface AppSettings {
-  research: ResearchSettings
-  dataAnalysis: DataAnalysisSettings
-  wikiAgent: WikiAgentSettings
-  diagram: DiagramSettings
-  compute: ComputeSettings
-}
-const DEFAULT_SETTINGS: AppSettings = {
-  research: { researchIntensity: 'medium', webSearchDepth: 'standard', autoSaveSensitivity: 'balanced' },
-  dataAnalysis: { executionTimeLimit: 'standard' },
-  wikiAgent: { model: 'none', speed: 'medium' },
-  diagram: { reviewProvider: 'auto' },
-  compute: {
-    enabledBackends: ['local', 'modal'],
-    defaultBackend: 'local',
-    requireApprovalForAllBackends: false,
-    backends: { modal: { costThresholdUsd: 5.00 } },
-  },
-}
+// Settings types + DEFAULT_SETTINGS now come from shared-ui's pure-TS
+// settings-types module. The previous duplicated copies here were a
+// leftover from when settings-types lived alongside React components;
+// the file is now plain TypeScript with zero React deps, so importing
+// it from main-process code carries no runtime cost. Single source of
+// truth means adding a new backend (e.g. RFC-009's 'aws-ec2') only
+// requires touching settings-types.ts — no risk of the two copies
+// drifting and silently losing backend defaults during the
+// per-backend deep merge in loadSettingsFromConfig.
+import type { AppSettings, BackendSettings, ComputeSettings } from '../shared-ui/settings-types'
+import { DEFAULT_SETTINGS } from '../shared-ui/settings-types'
+export type { AppSettings } from '../shared-ui/settings-types'
+
+// API_KEY_NAMES + applyApiKeysToEnv live in ./api-key-loader so they're
+// importable from plain Node tests (this file's top-level `import { shell }
+// from 'electron'` is fatal outside the Electron runtime).
+import { API_KEY_NAMES, applyApiKeysToEnv } from './api-key-loader'
 
 // Mirrors lib/models.ts:inferProviderFromModelId — kept inline because
 // shared-electron can't import from lib or shared-ui (cross-rootDir).
@@ -100,18 +72,6 @@ import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './
 const CONFIG_DIR = join(homedir(), '.research-copilot')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
-const API_KEY_NAMES = [
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'BRAVE_API_KEY',
-  'OPENROUTER_API_KEY',
-  'PAPERCLIP_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'SEMANTIC_SCHOLAR_API_KEY',
-  'MODAL_TOKEN_ID',
-  'MODAL_TOKEN_SECRET'
-] as const
-
 interface AppConfig {
   apiKeys?: Record<string, string>
   settings?: AppSettings
@@ -133,19 +93,36 @@ function writeConfig(config: AppConfig): void {
 
 /**
  * Load API keys from ~/.research-copilot/config.json into process.env.
- * Only sets keys that are NOT already in the environment (env takes priority).
+ *
+ * Priority: **config wins over env**. A value explicitly saved through
+ * the Settings UI is the user's authoritative intent and overwrites
+ * whatever the launching shell happened to export. Shell env stays as
+ * the fallback when config is empty — that path covers CI / scripted
+ * launches and first-run setups where nothing has been saved yet.
+ *
+ * Why config wins: shipping with the opposite priority (env > config)
+ * created a silent footgun. A user who saves a fresh AWS access key in
+ * Settings → Compute → AWS still gets the OLD shell-exported key on
+ * the next launch, because `loadApiKeysFromConfig` skipped loading
+ * from disk when env was already set. Symptom: Test connection shows
+ * green (the stale shell key is also valid), but talks to a different
+ * AWS account than the one the user intended. We hit this with AWS
+ * Phase 1 in 2026-05-18; the fix mirrors the priority chain that
+ * `AwsCredentialProvider.resolve()` already uses for region (override
+ * → settings → env). Settings is the user's signal; env is the
+ * fallback when no signal exists.
+ *
+ * To temporarily test with a different shell-env key (CI etc.):
+ * clear the saved value in the Settings UI first so config is empty,
+ * then env takes over.
  */
 export function loadApiKeysFromConfig(): void {
-  const config = readConfig()
-  if (!config.apiKeys) return
-  for (const key of API_KEY_NAMES) {
-    const envVal = (process.env[key] || '').trim()
-    const configVal = (config.apiKeys[key] || '').trim()
-    if (!envVal && configVal) {
-      process.env[key] = configVal
-    }
-  }
+  applyApiKeysToEnv(readConfig().apiKeys, process.env)
 }
+
+// Re-export so existing imports of applyApiKeysToEnv from this module
+// keep working (the pure-logic body now lives in ./api-key-loader).
+export { applyApiKeysToEnv } from './api-key-loader'
 
 /**
  * Register IPC handlers for API key configuration.
@@ -202,17 +179,34 @@ export function loadSettingsFromConfig(): AppSettings {
   // user's chosen threshold.
   const legacyModalCost = (config.settings as any).modalCompute?.costThresholdUsd
   const storedCompute = (config.settings as any).compute as ComputeSettings | undefined
+
+  // Per-backend deep merge — a shallow spread (...defaults, ...stored)
+  // would let `stored.backends['aws-ec2'] = { costThresholdUsd: 5 }`
+  // (saved when the user dragged the threshold) silently REPLACE the
+  // default `{ costThresholdUsd: 5, region: 'us-east-1' }`, wiping out
+  // region. Symptom: UI shows "us-east-1" (via display fallback) but
+  // settings.region is undefined and the credential provider throws
+  // "region is not set". Merge each backend's keys individually so a
+  // partial stored entry keeps the rest of the defaults.
+  const backendIds = new Set<string>([
+    ...Object.keys(DEFAULT_SETTINGS.compute.backends),
+    ...Object.keys(storedCompute?.backends ?? {}),
+  ])
+  const mergedBackends: Record<string, BackendSettings> = {}
+  for (const id of backendIds) {
+    mergedBackends[id] = {
+      ...DEFAULT_SETTINGS.compute.backends[id],
+      ...(storedCompute?.backends?.[id] ?? {}),
+    }
+  }
+  if (legacyModalCost != null && !storedCompute?.backends?.modal) {
+    mergedBackends.modal = { ...mergedBackends.modal, costThresholdUsd: legacyModalCost }
+  }
   const computeMerged: ComputeSettings = {
     enabledBackends: storedCompute?.enabledBackends ?? DEFAULT_SETTINGS.compute.enabledBackends,
     defaultBackend: storedCompute?.defaultBackend ?? DEFAULT_SETTINGS.compute.defaultBackend,
     requireApprovalForAllBackends: storedCompute?.requireApprovalForAllBackends ?? DEFAULT_SETTINGS.compute.requireApprovalForAllBackends,
-    backends: {
-      ...DEFAULT_SETTINGS.compute.backends,
-      ...(storedCompute?.backends ?? {}),
-      ...(legacyModalCost != null && !storedCompute?.backends?.modal
-        ? { modal: { costThresholdUsd: legacyModalCost } }
-        : {}),
-    },
+    backends: mergedBackends,
   }
   const merged: AppSettings = {
     research: { ...DEFAULT_SETTINGS.research, ...config.settings.research },

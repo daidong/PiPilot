@@ -93,6 +93,13 @@ export interface ResearchToolContext {
    */
   computeRegistry?: import('../compute/registry.js').ComputeRegistry
   /**
+   * Shared AWS credentials provider (RFC-009 §3.1). When set, S3 tools
+   * are registered with it. EC2 backend reuses the same provider so one
+   * configuration surface (Settings → Compute → AWS) drives every AWS
+   * code path. Undefined when AWS support is not configured.
+   */
+  awsCredentialProvider?: import('../aws/credentials.js').AwsCredentialProvider
+  /**
    * Rasterize an SVG document to PNG bytes, when a renderer is available.
    * Used by the diagram tool's SVG-fallback review path so a vision model
    * can evaluate the rendered output (not just the SVG source) and catch

@@ -84,6 +84,21 @@ The coordinator in `lib/agents/coordinator.ts` creates a pi-mono Agent with:
 - Session summaries in `.research-pilot/memory-v2/session-summaries/`
 - Entity types: `'note' | 'paper' | 'data' | 'web-content' | 'tool-output'`
 
+### Configuration priority (Settings UI > shell env)
+
+For every config slot that has both a Settings UI surface **and** a shell-env counterpart, the order is:
+**explicit override (per call) > value saved in Settings UI > shell env > built-in default.**
+
+Concrete instances:
+- **API keys / secrets** (`AWS_ACCESS_KEY_ID`, `MODAL_TOKEN_ID`, `OPENAI_API_KEY`, etc.) — `shared-electron/api-key-loader.ts:applyApiKeysToEnv()` writes config values into `process.env` on startup, overwriting stale shell exports. The Settings UI is the user's authoritative signal; env is the fallback when nothing has been saved (CI / first-run / scripted launches).
+- **AWS region / profile** — `lib/aws/credentials.ts:AwsCredentialProvider.resolve()` uses the same chain: per-call `opts.region` → `settings.region` → `process.env.AWS_REGION` → `process.env.AWS_DEFAULT_REGION`.
+
+Inverting this order is a footgun: a user who saved fresh keys via the UI would still get stale shell-exported keys on the next launch and never know why "Test connection" looked right but operations talked to the wrong account. We hit this with AWS Phase 1 — the regression test is `shared-electron/__tests__/api-key-priority.test.ts`.
+
+**Out of scope for this rule:**
+- Dev/debug flags (`RESEARCH_COPILOT_DEBUG`, `ENABLE_COMPUTE_STUB`, `ELECTRON_RENDERER_URL`) — intentionally env-only, no UI surface.
+- `~/.aws/credentials` profile path overrides (`AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`) — env-only by design (they point to disk locations the UI never persists).
+
 ## Development Commands
 
 ```bash

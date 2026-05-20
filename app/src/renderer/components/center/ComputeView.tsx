@@ -1427,32 +1427,25 @@ function GenericPlanBody({ plan }: { plan: ComputePlanView }) {
   )
 }
 
-// ─── Coverage footer ─────────────────────────────────────────────────────────
+// ─── Footer (run counts only) ────────────────────────────────────────────────
+//
+// Removed: progress bar + "X% success" indicator. The "success rate" framing
+// implied that past terminal runs were a metric the user could improve, but
+// they're immutable history — once a run failed, that's part of the record
+// forever. Surfacing the ratio as a goal-bar invited misreading "X% success"
+// as "task X% done" (it never meant that). Plain counts are honest: they say
+// what happened without dressing it as a target.
 
 function CoverageBar({ runs }: { runs: ComputeRunView[] }) {
   const completed = runs.filter(r => r.status === 'completed').length
   const failed = runs.filter(r => ['failed', 'timed_out'].includes(r.status)).length
   const total = runs.length
-  const successRate = total > 0 ? completed / total : 0
 
   return (
     <div className="flex items-center gap-4 px-4 py-2 border-t t-border t-bg-surface text-[11px] t-text-muted">
       <span>{total} runs</span>
       {completed > 0 && <span>{completed} completed</span>}
       {failed > 0 && <span>{failed} failed</span>}
-      {total > 0 && (
-        <>
-          <div className="flex-1 max-w-48">
-            <div className="h-1.5 rounded-full t-bg-elevated overflow-hidden">
-              <div
-                className="h-full rounded-full t-gradient-accent-h"
-                style={{ width: `${successRate * 100}%` }}
-              />
-            </div>
-          </div>
-          <span>{Math.round(successRate * 100)}% success</span>
-        </>
-      )}
     </div>
   )
 }
