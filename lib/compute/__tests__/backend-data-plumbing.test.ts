@@ -15,7 +15,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ComputeRegistry } from '../registry.js'
 import { createComputeTools } from '../tools.js'
@@ -113,8 +113,7 @@ test('compute_plan expands ~ in script_path before forwarding to backend', async
 
     assert.equal(result.success, true)
     const observedScriptPath = backend.lastPlanInput?.scriptPath ?? ''
-    const { homedir } = await import('node:os')
-    const expected = `${homedir()}/foo.sh`
+    const expected = join(homedir(), 'foo.sh')
     assert.equal(observedScriptPath, expected,
       `script_path "~/foo.sh" should expand to "${expected}", got "${observedScriptPath}"`)
     assert.ok(!observedScriptPath.includes('~'),
