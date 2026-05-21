@@ -349,6 +349,15 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     images?: Array<{ base64: string; mimeType: string }>
   ) => Promise<{ success: boolean; response?: string; error?: string }>
   clearSessionMemory: () => Promise<void>
+  /**
+   * Generate a "welcome back" recap of the current conversation. Runs on the
+   * SAME model as the main turn and replays the SAME system prompt +
+   * conversation (just appending a recap instruction), so the prompt cache the
+   * last turn wrote is hit at 0.1x — only the appended instruction is uncached.
+   * Returns null when there's nothing to recap or the call fails. Best-effort:
+   * never throws. See lib/types.ts `RecapRecord`.
+   */
+  generateRecap: (signal?: AbortSignal) => Promise<{ did: string; next: string } | null>
   abort: () => void
   destroy: () => Promise<void>
   /**
@@ -1306,6 +1315,51 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     },
 
     clearSessionMemory,
+
+    async generateRecap(signal?: AbortSignal) {
+      if (!piModel) return null
+      const history = agent.state.messages
+      if (!history || history.length === 0) return null
+      if (signal?.aborted) return null
+      try {
+        const currentKey = await resolveApiKey()
+        // Append the recap instruction as a fresh user message onto a COPY of
+        // the live context. We must not mutate agent.state.messages — the next
+        // real turn continues from it. Reusing agent.state.systemPrompt and the
+        // existing messages verbatim is what lets the warm cache (written by the
+        // turn that just finished, on this same piModel) be hit at 0.1x.
+        const recapMessages = [
+          ...history,
+          { role: 'user' as const, content: loadPrompt('recap-instruction'), timestamp: Date.now() }
+        ]
+        const text = (await runSubLlmText({
+          model: piModel,
+          systemPrompt: agent.state.systemPrompt,
+          // AgentMessage[] → pi-ai Message[]; runSubLlmText documents this cast.
+          messages: recapMessages as Parameters<typeof runSubLlmText>[0]['messages'],
+          apiKey: currentKey,
+          maxTokens: 220,
+          tracer,
+          authMode,
+          purpose: 'recap',
+          ...(signal && { signal }),
+          ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
+        })).trim()
+        if (!text || signal?.aborted) return null
+
+        // Extract JSON from possible markdown code fences (router/summary pattern).
+        const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? text.match(/(\{[\s\S]*\})/)
+        const jsonStr = jsonMatch?.[1]?.trim() ?? text
+        const parsed = JSON.parse(jsonStr)
+        const did = typeof parsed.did === 'string' ? parsed.did.trim() : ''
+        const next = typeof parsed.next === 'string' ? parsed.next.trim() : ''
+        if (!did && !next) return null
+        return { did, next }
+      } catch (err) {
+        if (debug) console.warn('[Recap] generation failed:', err)
+        return null
+      }
+    },
 
     /** Stop the current LLM turn without tearing down tools. */
     abort() {

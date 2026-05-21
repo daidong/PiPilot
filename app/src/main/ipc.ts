@@ -26,8 +26,9 @@ import {
 import { parseMentions, resolveMentions, getCandidates, invalidateEntityCache } from '../../../lib/mentions/index'
 import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readEnabledSkills, setBuiltinSkillsRoot } from '../../../lib/skills/loader'
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
-import { PATHS, type ProjectConfig } from '../../../lib/types'
+import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
+import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
 import {
   migrateAgentMemoryToFile,
   listMemoryFiles,
@@ -177,6 +178,12 @@ interface WindowRuntimeState {
   previousTurnId?: string
   /** Wall-clock ms of last assistant response — drives gapMsSincePreviousAssistant. */
   lastAssistantTimestamp?: number
+  /**
+   * In-flight auto-recap generation. Aborted when a new turn starts (so the
+   * recap never reads agent.state mid-mutation) or when a newer recap kicks
+   * off. See generateAndPushRecap.
+   */
+  recapAbort?: AbortController
 }
 
 const windowStates = new Map<number, WindowRuntimeState>()
@@ -242,6 +249,45 @@ function getWindowContext(event: IpcMainInvokeEvent): { win: BrowserWindow; stat
     throw new Error('Unable to resolve BrowserWindow from IPC sender.')
   }
   return { win, state: getOrCreateWindowState(win) }
+}
+
+/**
+ * Generate + persist the auto-recap, then push it to the renderer. Requested by
+ * the renderer (`recap:generate`) when the user goes away — NOT after every
+ * turn — to mirror Claude Code's background-while-away model and avoid per-turn
+ * cost. The renderer owns the trigger gating (≥2 min idle, ≥3 turns, dedup);
+ * this just runs the same-model recap and persists the latest. Never throws.
+ *
+ * Caveat (accepted trade-off): firing on away rather than at turn-end means the
+ * prompt cache may have expired (5 min TTL) if the user lingered after the last
+ * turn before leaving — the recap still works, it just may not get a cache hit.
+ */
+async function generateAndPushRecap(
+  state: WindowRuntimeState,
+  win: BrowserWindow
+): Promise<void> {
+  if (!state.coordinator || !state.projectPath || !state.sessionId) return
+
+  // Supersede any still-running recap.
+  state.recapAbort?.abort()
+  const ac = new AbortController()
+  state.recapAbort = ac
+  try {
+    const recap = await state.coordinator.generateRecap(ac.signal)
+    if (!recap || ac.signal.aborted) return
+    const record: RecapRecord = {
+      sessionId: state.sessionId,
+      did: recap.did,
+      next: recap.next,
+      createdAt: new Date().toISOString()
+    }
+    writeLatestRecap(state.projectPath, record)
+    safeSend(win, 'recap:update', record)
+  } catch {
+    // Recap is a convenience; never let it surface as a user-visible error.
+  } finally {
+    if (state.recapAbort === ac) state.recapAbort = undefined
+  }
 }
 
 // RFC-008 §7.5: sendModalAvailability, sendPendingModalPlan, and
@@ -1282,6 +1328,10 @@ export function registerIpcHandlers(): void {
       safeSend(win, 'agent:done', errResult)
       return errResult
     }
+    // Abort any recap still generating from the previous turn before this turn
+    // mutates agent.state.messages — keeps generateRecap from reading a
+    // half-written context.
+    state.recapAbort?.abort()
     // Only clear activity (per-run), NOT progress/todos (persist across turns)
     state.realtimeBuffer.clearActivity()
     safeSend(win, 'agent:activity-clear')
@@ -1330,6 +1380,23 @@ export function registerIpcHandlers(): void {
     if (state.coordinator) {
       await (state.coordinator as any).clearSessionMemory()
     }
+  })
+
+  // Auto-recap: latest persisted recap for this session (null when none).
+  // Read on project reopen so the "where you left off" card can show the recap
+  // generated after the last response.
+  handleWindow('recap:get-latest', ({ state }): RecapRecord | null => {
+    if (!state.projectPath || !state.sessionId) return null
+    return readLatestRecap(state.projectPath, state.sessionId)
+  })
+
+  // Auto-recap: generate now (requested by the renderer when the user goes
+  // away). The renderer gates the trigger conditions; this runs + persists +
+  // pushes via 'recap:update'. Awaited so the renderer's promise settles, but
+  // it never rejects.
+  handleWindow('recap:generate', async ({ win, state }): Promise<{ ok: boolean }> => {
+    await generateAndPushRecap(state, win)
+    return { ok: true }
   })
 
   // Commands - entities

@@ -22,8 +22,54 @@ import { useToolEventsStore } from './stores/tool-events-store'
 import { useUsageStore, type UsageEvent } from './stores/usage-store'
 import { useComputeStore } from './stores/compute-store'
 import { useUpdateStore } from './stores/update-store'
+import { useRecapStore } from './stores/recap-store'
 
 const api = (window as any).api
+
+// ─── Auto-recap away-trigger ──────────────────────────────────────────────
+//
+// Mirrors Claude Code: the recap is generated in the background WHILE the user
+// is away (terminal unfocused + idle), so it's ready on return — not after
+// every turn. The core use case is "I kicked off a long task, switched to
+// another project, and came back later having forgotten where things stood."
+// We use a 2-minute idle threshold: generating soon after the user leaves keeps
+// the prompt cache warmer (5-min TTL) and has the recap ready sooner.
+const RECAP_IDLE_MS = 2 * 60 * 1000
+const RECAP_MIN_TURNS = 3
+// Last user activity (keystroke / pointer / window focus), module-scoped so the
+// poll and the listeners share one source of truth across re-renders.
+let recapLastActivityAt = Date.now()
+const markRecapActivity = () => { recapLastActivityAt = Date.now() }
+
+/**
+ * Try to generate a recap in the background — only when it's worth it. Called by
+ * the poll (while away) and on return (catch-up for borderline timing). Returns
+ * true when a recap for the current state already exists or has just been kicked
+ * off (caller may surface/defer it), false when none will come (disabled, no
+ * project, mid-turn, not idle enough, too few turns). Dedups via lastGenKey so a
+ * long away period triggers exactly one generation; a failed attempt clears its
+ * mark so it can retry later and never leaves a deferred show dangling.
+ */
+function maybeGenerateAwayRecap(): boolean {
+  const recap = useRecapStore.getState()
+  if (!recap.enabled) return false
+  if (!useSessionStore.getState().hasProject) return false
+  const chat = useChatStore.getState()
+  if (chat.isStreaming) return false
+  if (Date.now() - recapLastActivityAt < RECAP_IDLE_MS) return false
+  const assistantMsgs = chat.messages.filter((m) => m.role === 'assistant')
+  if (assistantMsgs.length < RECAP_MIN_TURNS) return false
+  const key = assistantMsgs[assistantMsgs.length - 1].id
+  if (key === recap.lastGenKey) return true // already generated / generating for this state
+  recap.markGenerating(key)
+  api.generateRecap?.().catch(() => {
+    useRecapStore.setState((s) => ({
+      wantShow: false,
+      lastGenKey: s.lastGenKey === key ? null : s.lastGenKey
+    }))
+  })
+  return true
+}
 
 // ─── Folder gate ──────────────────────────────────────────────────────────
 //
@@ -691,6 +737,46 @@ export default function App() {
     initSession()
   }, [])
 
+  // Auto-recap timing (mirrors Claude Code):
+  //   GENERATION — background, while away. A poll fires maybeGenerateAwayRecap
+  //   whenever the window is unfocused; that helper enforces ≥2 min idle, ≥3
+  //   turns, and dedup. Polling (vs. a single timer) robustly covers both
+  //   "went away after a turn" and "a turn finished while away".
+  //   DISPLAY — event-driven, on return. If the user was idle past the
+  //   threshold, ensure a recap exists (catch-up generation for borderline
+  //   timing) and surface it; requestShow defers if it's still cooking.
+  // "Active" = keystroke / pointer / focus; mouse movement alone doesn't count.
+  useEffect(() => {
+    const onReturn = () => {
+      if (document.visibilityState === 'hidden') return
+      const idleFor = Date.now() - recapLastActivityAt
+      if (idleFor > RECAP_IDLE_MS && useSessionStore.getState().hasProject) {
+        // Only request a show if a recap exists or is on its way — keeps the
+        // deferred-show flag from dangling when generation is skipped.
+        if (maybeGenerateAwayRecap()) useRecapStore.getState().requestShow()
+      }
+      markRecapActivity()
+    }
+    const onVisibility = () => { if (document.visibilityState === 'visible') onReturn() }
+    const poll = setInterval(() => {
+      if (document.visibilityState === 'hidden' || !document.hasFocus()) {
+        maybeGenerateAwayRecap()
+      }
+    }, 30_000)
+
+    window.addEventListener('keydown', markRecapActivity)
+    window.addEventListener('pointerdown', markRecapActivity)
+    window.addEventListener('focus', onReturn)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearInterval(poll)
+      window.removeEventListener('keydown', markRecapActivity)
+      window.removeEventListener('pointerdown', markRecapActivity)
+      window.removeEventListener('focus', onReturn)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
+
   // Set up IPC listeners only when project is loaded
   useEffect(() => {
     if (!hasProject) return
@@ -733,9 +819,26 @@ export default function App() {
       }
     })
 
-    // Load chat history from previous session
-    api.getCurrentSession().then((session: { sessionId: string }) => {
-      useChatStore.getState().loadInitial(session.sessionId)
+    // Load chat history, then surface the persisted recap (if any) as a "where
+    // you left off" reminder. We seed the dedup key from the loaded history so
+    // going away right after reopen doesn't regenerate a recap for an unchanged
+    // conversation.
+    api.getCurrentSession().then(async (session: { sessionId: string }) => {
+      await useChatStore.getState().loadInitial(session.sessionId)
+      let recap: any = null
+      try { recap = await api.getLatestRecap?.() } catch { /* ignore */ }
+      const msgs = useChatStore.getState().messages
+      let key: string | null = null
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant') { key = msgs[i].id; break }
+      }
+      useRecapStore.getState().hydrate(recap ?? null, key)
+    })
+
+    // Background recap pushed while away: store it; display is decided on return
+    // (or honored immediately if a return was already waiting on it).
+    const unsubRecap = api.onRecap((recap: any) => {
+      useRecapStore.getState().setLatest(recap)
     })
 
     // Load project root files into working folder
@@ -874,6 +977,7 @@ export default function App() {
       unsubRetryNotice()
       unsubUsage()
       unsubComputeEvent()
+      unsubRecap()
     }
   }, [hasProject])
 

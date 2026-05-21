@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { useToolEventsStore, type ToolEvent } from '@shared/stores/tool-events-store'
 import { useUsageStore } from './usage-store'
 import { useUIStore } from './ui-store'
+import { useRecapStore } from './recap-store'
 
 export interface ChatMessage {
   id: string
@@ -82,6 +83,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: true,
       retryNotice: null
     }))
+
+    // The recap is "where you left off" — once the user resumes working it has
+    // served its purpose, so hide it. It stays persisted; a fresh one replaces
+    // it when this turn finishes.
+    useRecapStore.getState().hide()
 
     // Persist user message
     if (_sessionId) {

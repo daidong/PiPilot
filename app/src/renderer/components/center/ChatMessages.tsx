@@ -6,9 +6,11 @@ import { useEntityStore } from '../../stores/entity-store'
 import { useToolEventsStore } from '../../stores/tool-events-store'
 import { useUIStore } from '../../stores/ui-store'
 import { ToolUseStream } from '@shared/components/center/ToolUseStream'
-import { Bookmark, BookmarkCheck, Copy, Check, Loader2 } from 'lucide-react'
+import type { ToolEvent } from '@shared/stores/tool-events-store'
+import { Bookmark, BookmarkCheck, Copy, Check, Loader2, Clock } from 'lucide-react'
 import { ImageLightbox } from './ImageLightbox'
 import { FindBar } from '../common/FindBar'
+import { RecapCard } from './RecapCard'
 import { useFindInScope } from '../../hooks/use-find-in-scope'
 
 const api = (window as any).api
@@ -33,6 +35,57 @@ function formatMessageTime(ts: number): string {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time
   }
   return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) + ' ' + time
+}
+
+/** Compact wall-clock duration for the round footer: "<1s", "42s", "4m 12s", "3m". */
+function formatRoundDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  if (ms < 1000) return '<1s'
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  const m = Math.floor(totalSec / 60)
+  const s = totalSec % 60
+  return s ? `${m}m ${s}s` : `${m}m`
+}
+
+// Best-effort distinct-file count from a turn's tool events. Tool arg shapes
+// vary, so we scan a handful of common path-bearing keys and dedupe; when we
+// find none we simply omit the "N files" segment rather than guess.
+const FILE_PATH_KEYS = ['path', 'file', 'filePath', 'file_path', 'filename', 'source', 'outputFile']
+function countTouchedFiles(events?: ToolEvent[]): number {
+  if (!events?.length) return 0
+  const files = new Set<string>()
+  for (const e of events) {
+    for (const bag of [e.detail, e.resultDetail]) {
+      if (!bag) continue
+      for (const k of FILE_PATH_KEYS) {
+        const v = (bag as Record<string, unknown>)[k]
+        if (typeof v === 'string' && v.trim()) files.add(v.trim())
+      }
+    }
+  }
+  return files.size
+}
+
+/**
+ * Per-round footer under the last assistant message: how long the round took,
+ * plus a light file/tool stat line. Duration is the wall-clock from the user's
+ * message to this response — computed from existing timestamps, nothing
+ * persisted. Renders nothing when it has no signal to show.
+ */
+function RoundFooter({ durationMs, toolCount, fileCount }: { durationMs: number; toolCount: number; fileCount: number }) {
+  const parts: string[] = []
+  const dur = formatRoundDuration(durationMs)
+  if (dur) parts.push(dur)
+  if (fileCount > 0) parts.push(`${fileCount} file${fileCount === 1 ? '' : 's'}`)
+  if (toolCount > 0) parts.push(`${toolCount} tool${toolCount === 1 ? '' : 's'}`)
+  if (parts.length === 0) return null
+  return (
+    <div className="mt-1 px-1 flex items-center gap-1 text-[10px] t-text-muted select-none">
+      <Clock size={10} />
+      <span>{parts.join(' · ')}</span>
+    </div>
+  )
 }
 
 // Floating tooltip that appears when user selects text inside an assistant bubble
@@ -719,6 +772,25 @@ export function ChatMessages() {
           const gap = prev && prev.role !== msg.role ? 'mt-5' : 'mt-3'
           // Get historical tool events for this assistant message
           const toolEvents = msg.role === 'assistant' ? turnToolEvents.get(msg.id) : undefined
+
+          // Round footer on the last assistant message of a round (next msg is
+          // not assistant). Round start = nearest preceding user message.
+          const next = messages[i + 1]
+          let footer: React.ReactNode = null
+          if (msg.role === 'assistant' && (!next || next.role !== 'assistant')) {
+            let roundStartTs = 0
+            for (let j = i - 1; j >= 0; j--) {
+              if (messages[j].role === 'user') { roundStartTs = messages[j].timestamp; break }
+            }
+            footer = (
+              <RoundFooter
+                durationMs={roundStartTs > 0 ? msg.timestamp - roundStartTs : 0}
+                toolCount={toolEvents?.length ?? 0}
+                fileCount={countTouchedFiles(toolEvents)}
+              />
+            )
+          }
+
           return (
             <div key={msg.id} className={i === 0 ? '' : gap}>
               {toolEvents && toolEvents.length > 0 && (
@@ -728,6 +800,7 @@ export function ChatMessages() {
                 msg={msg}
                 isSaved={savedMessageIds.has(msg.id)}
               />
+              {footer}
             </div>
           )
         })}
@@ -747,6 +820,7 @@ export function ChatMessages() {
             ) : null}
           </div>
         )}
+        {!isStreaming && <RecapCard />}
         <div ref={bottomRef} />
       </div>
     </div>

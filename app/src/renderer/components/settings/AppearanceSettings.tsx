@@ -1,5 +1,6 @@
 import React from 'react'
 import { useUIStore } from '../../stores/ui-store'
+import { useRecapStore } from '../../stores/recap-store'
 import { SegmentedControl, type SegmentOption } from './SegmentedControl'
 import type { ThemePref, ReadingSize } from '../../theme-boot'
 
@@ -41,6 +42,8 @@ export function AppearanceSettings() {
   const setThemePref = useUIStore((s) => s.setThemePref)
   const readingSize = useUIStore((s) => s.readingSize)
   const setReadingSize = useUIStore((s) => s.setReadingSize)
+  const recapEnabled = useRecapStore((s) => s.enabled)
+  const setRecapEnabled = useRecapStore((s) => s.setEnabled)
 
   return (
     <div className="space-y-7">
@@ -69,6 +72,26 @@ export function AppearanceSettings() {
             <p>The quick brown fox reads research papers for hours — comfortably.</p>
           </div>
         </div>
+      </div>
+
+      {/* Session recap */}
+      <div>
+        <h4 className="text-sm font-semibold t-text mb-2">Session recap</h4>
+        <p className="text-[12px] t-text-muted mb-3 leading-relaxed">
+          When you step away and come back, show a short "welcome back" briefing of what you
+          were doing and what's next. Generated in the background while you're away.
+        </p>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={recapEnabled}
+            onChange={(e) => setRecapEnabled(e.target.checked)}
+            className="mt-0.5 accent-[var(--color-accent)]"
+          />
+          <span className="text-[13px] t-text">
+            Show a recap when I return after being away
+          </span>
+        </label>
       </div>
     </div>
   )

@@ -5,6 +5,7 @@ import { useActivityStore } from './activity-store'
 import { useUIStore, hydratePreferences } from './ui-store'
 import { useEntityStore } from './entity-store'
 import { useUsageStore } from './usage-store'
+import { useRecapStore } from './recap-store'
 
 interface SessionState {
   sessionId: string
@@ -37,6 +38,7 @@ async function applyOpenResult(
   useUIStore.getState().reset()
   useEntityStore.getState().reset()
   useUsageStore.getState().resetSession()
+  useRecapStore.getState().clear()
 
   // Briefly toggle hasProject so App's useEffect([hasProject]) re-fires
   // and re-initializes IPC listeners, entity fetches, chat history, etc.

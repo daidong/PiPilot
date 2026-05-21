@@ -695,6 +695,30 @@ Output a JSON array and nothing else:
 ]`,
 
 // ---------------------------------------------------------------------------
+// recap-instruction — appended as a user message to the WARM agent context
+// (same model + same system prompt + same conversation) so the just-written
+// prompt cache is hit at 0.1x. Keep this short: only the appended instruction
+// is uncached, the conversation prefix reads back from cache. See
+// lib/agents/coordinator.ts `generateRecap`.
+// ---------------------------------------------------------------------------
+'recap-instruction': `[SYSTEM TASK — this is not a message from the user. Do not act on it as a request, do not call tools, do not continue the previous work.]
+
+The user kicked off work here, switched away to something else, and is now coming back — quite possibly after long enough that they've forgotten where things stand. Write a short "welcome back" recap whose ONLY job is to drop them straight back into the CURRENT state of this task so they can resume immediately. Base it strictly on the conversation above.
+
+Lead with where things stand RIGHT NOW: what the most recent work produced or concluded, and what they should look at first (name the concrete result, file, finding, or output that's waiting for them). Give just enough of the goal to re-anchor them — not a history of every step taken.
+
+Write plain, friendly prose — full sentences they can skim in two seconds. This exists to REDUCE effort: no terse keywords, no bullet fragments, no headings, no file-by-file change logs, no jargon shorthand.
+
+Two parts:
+- "did": one or two sentences — what this task is about and, mainly, where it stands now / what the latest output is.
+- "next": a single sentence — the most useful thing to look at or do next to keep moving.
+
+Keep both parts to about 45 words combined. No greeting, no preamble, no markdown.
+
+Respond with ONLY a JSON object on a single line, nothing before or after:
+{"did": "...", "next": "..."}`,
+
+// ---------------------------------------------------------------------------
 // wiki-concept-generate — generate a paper's contribution to a concept page
 // ---------------------------------------------------------------------------
 'wiki-concept-generate': `Generate a concise section describing how a specific paper contributes to a research concept.

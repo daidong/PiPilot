@@ -24,6 +24,14 @@ export interface UsageEvent {
   cacheHitRate: number
 }
 
+/** Auto-recap payload mirrored from lib/types.ts RecapRecord. */
+export interface RecapPayload {
+  sessionId: string
+  did: string
+  next: string
+  createdAt: string
+}
+
 export interface UpdateState {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
   version: string
@@ -134,6 +142,12 @@ export interface ElectronAPI {
   onStreamChunk: (cb: (chunk: string) => void) => () => void
   onAgentDone: (cb: (result: any) => void) => () => void
   onUsage: (cb: (event: UsageEvent) => void) => () => void
+  /** Auto-recap pushed from the background "while away" generation (see generateRecap). */
+  onRecap: (cb: (recap: RecapPayload) => void) => () => void
+  /** Latest persisted recap for the current session, or null. Read on project open. */
+  getLatestRecap: () => Promise<RecapPayload | null>
+  /** Request a background recap (renderer calls this when the user goes away). */
+  generateRecap: () => Promise<{ ok: boolean }>
   getAnthropicAuthStatus: () => Promise<any>
   onAnthropicAuthStatus: (cb: (status: any) => void) => () => void
   getOpenAIAuthStatus: () => Promise<{ hasApiKey: boolean }>
@@ -431,6 +445,9 @@ const api: ElectronAPI = {
   onStreamChunk: (cb) => subscribe('agent:stream-chunk', cb),
   onAgentDone: (cb) => subscribe('agent:done', cb),
   onUsage: (cb) => subscribe('agent:usage', cb),
+  onRecap: (cb) => subscribe('recap:update', cb),
+  getLatestRecap: () => invoke('recap:get-latest'),
+  generateRecap: () => invoke('recap:generate'),
   getAnthropicAuthStatus: () => invoke('auth:get-anthropic-status'),
   onAnthropicAuthStatus: (cb) => subscribe('auth:anthropic-status', cb),
   getOpenAIAuthStatus: () => invoke('auth:get-openai-status'),
