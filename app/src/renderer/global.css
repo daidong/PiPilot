@@ -18,6 +18,39 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* Atkinson Hyperlegible (Braille Institute, SIL OFL) — used only on reading
+   surfaces (.md-prose). Its disambiguated letterforms (l/I/1, O/0, etc.) and
+   open counters reduce the shimmer/afterimage that astigmatic and low-vision
+   readers experience with denser sans-serifs. UI chrome keeps Inter. */
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/atkinson-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./assets/fonts/atkinson-700-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/atkinson-400-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./assets/fonts/atkinson-700-italic.woff2') format('woff2');
+}
+
 /*
  * Type scale (1.2 ratio — Minor Third)
  * --text-2xs:  10px  — micro labels, turn ranges
@@ -49,20 +82,26 @@
 }
 
 /* === Theme tokens via CSS custom properties === */
+/* Default dark — tuned for low halation. Near-black + near-white (the old
+   #141a1e/#cdd5db at ~11.8:1) makes bright glyphs bloom and afterimage for
+   astigmatic eyes, because a dark field dilates the pupil and a deformed lens
+   then focuses the bright text poorly. So the ground is lifted off near-black
+   and primary text sits at ~8:1 (still well above AA) in a slightly warm grey.
+   The high-contrast original is available as the .contrast variant below. */
 html.dark {
-  /* Neutrals — warm navy-tinted (myRAM-GCP palette) */
-  --color-bg-base: #141a1e;
-  --color-bg-surface: #1a2127;
-  --color-bg-elevated: #232b32;
-  --color-bg-hover: rgba(255 255 255 / 0.06);
-  --color-border: #2e373f;
-  --color-border-subtle: #242c33;
-  --color-text: #cdd5db;
-  --color-text-secondary: #7e8d98;
-  --color-text-muted: #4a5660;
-  --color-bubble-user: #1a2230;
-  --color-bubble-assistant: #232b32;
-  --color-input-bg: #1a2127;
+  /* Neutrals — warm navy-tinted, lifted for comfort */
+  --color-bg-base: #1a2027;
+  --color-bg-surface: #20272e;
+  --color-bg-elevated: #2a333b;
+  --color-bg-hover: rgba(255 255 255 / 0.05);
+  --color-border: #323c45;
+  --color-border-subtle: #28313a;
+  --color-text: #aeb7bd;            /* ~8:1 on bg-base (was ~11.8:1) */
+  --color-text-secondary: #87929b;  /* ~5:1 */
+  --color-text-muted: #58626c;
+  --color-bubble-user: #1d2735;
+  --color-bubble-assistant: #2a333b;
+  --color-input-bg: #20272e;
   --color-input-border: #3a4550;
   --color-input-focus: rgba(52, 208, 186, 0.5);
   /* Primary accent — teal (myRAM-GCP brighter teal) */
@@ -81,35 +120,29 @@ html.dark {
   --color-status-error-soft: #ff8a80;
   --color-status-warning: #e0a820;
   --color-status-info: #60a5fa;
+  /* Dark needs larger prose for equivalent reading performance (evidence:
+     +15–25% vs light). Multiplies the reading scale on .md-prose only. */
+  --reading-dark-boost: 1.15;
   color-scheme: dark;
 }
 
-/* "Dim" dark — a low-contrast variant layered on html.dark for long reading
-   sessions. The default dark theme sits primary text at ~11.8:1 on the near-
-   black ground; that crispness reads great in a screenshot but causes
-   halation ("glowing"/vibrating text) over multi-hour use. Dim lifts the
-   ground and pulls text down to ~8.6:1 — still comfortably above AA — and
-   eases the accent's glare. Hue/semantics are unchanged: status colors and
-   the indigo secondary inherit html.dark untouched. Higher specificity
-   (two classes) means each overridden token wins regardless of source order. */
-html.dark.dim {
-  --color-bg-base: #181f24;
-  --color-bg-surface: #1e262c;
-  --color-bg-elevated: #28323a;
-  --color-bg-hover: rgba(255 255 255 / 0.05);
-  --color-border: #313b43;
-  --color-border-subtle: #272f36;
-  --color-text: #b3bcc4;            /* ~8.6:1 on bg-base (was ~11.8:1) */
-  --color-text-secondary: #818f9a;
-  --color-text-muted: #56626c;      /* lifted so it isn't sub-2:1 invisible */
-  --color-bubble-user: #1d2735;
-  --color-bubble-assistant: #28323a;
-  --color-input-bg: #1e262c;
-  --color-accent: #38c9b4;          /* a hair softer than the crisp #34d0ba */
-  --color-accent-soft: #5ed8c8;
-  --color-code-text: #5ed8c8;
-  --color-code-bg: rgba(56, 201, 180, 0.07);
-  --color-code-border: rgba(56, 201, 180, 0.18);
+/* "High Contrast" dark — the original crisp palette (~11.8:1), layered on
+   html.dark for users who prefer maximum contrast or read in bright rooms.
+   Not recommended for astigmatism (this is the halation-prone combination).
+   Higher specificity (two classes) means each token here wins. */
+html.dark.contrast {
+  --color-bg-base: #141a1e;
+  --color-bg-surface: #1a2127;
+  --color-bg-elevated: #232b32;
+  --color-bg-hover: rgba(255 255 255 / 0.06);
+  --color-border: #2e373f;
+  --color-border-subtle: #242c33;
+  --color-text: #cdd5db;
+  --color-text-secondary: #7e8d98;
+  --color-text-muted: #4a5660;
+  --color-bubble-user: #1a2230;
+  --color-bubble-assistant: #232b32;
+  --color-input-bg: #1a2127;
 }
 
 html.light {
@@ -133,10 +166,11 @@ html.light {
   --color-input-bg: #fbf7ed;
   --color-input-border: #c7bda8;
   --color-input-focus: rgba(13, 148, 136, 0.4);
-  /* Primary accent — teal/cyan (unchanged; revisit if it feels cool
-     against the warm ground). */
-  --color-accent: #0d9488;
-  --color-accent-soft: #14b8a6;
+  /* Primary accent — teal, warmed slightly (more green, less blue) so it sits
+     coherently on the warm-paper ground instead of reading cool/cyan. Kept
+     dark enough to hold its contrast; accent is never used for body text. */
+  --color-accent: #1c9182;
+  --color-accent-soft: #25a596;
   /* Secondary accent — indigo (brand mark, highlights) */
   --color-accent-2: #6366f1;
   --color-accent-2-soft: #818cf8;
@@ -293,7 +327,12 @@ body {
 /* Markdown prose styling inside assistant bubbles */
 /* Compact layout inspired by chat interfaces, teal/cyan accent */
 .md-prose {
-  font-size: calc(var(--text-sm) * var(--reading-scale, 1));
+  /* Atkinson Hyperlegible for the actual reading; Inter as the metric-close
+     fallback before the woff2 loads. reading-scale = user's size pick;
+     reading-dark-boost = +15% in dark mode (unset → 1 in light). Astigmatism
+     benefits from the looser 1.6 line-height. */
+  font-family: 'Atkinson Hyperlegible', 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: calc(var(--text-sm) * var(--reading-scale, 1) * var(--reading-dark-boost, 1));
   line-height: 1.6;
 }
 .md-prose p {

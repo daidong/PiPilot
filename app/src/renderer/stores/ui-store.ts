@@ -130,7 +130,7 @@ export const useUIStore = create<UIState>((set) => ({
   // Appearance hydrates from localStorage at module init so the zustand state
   // matches the <html> classes applied by bootTheme() in main.tsx. Both ends
   // derive from getInitialThemePref()/getInitialReadingSize() — they stay in
-  // sync. `theme` is the resolved binary appearance ('system'/'dim' folded in).
+  // sync. `theme` is the resolved binary appearance ('system'/'high-contrast' folded in).
   theme: resolveThemePref(getInitialThemePref()).theme,
   themePref: getInitialThemePref(),
   readingSize: getInitialReadingSize(),

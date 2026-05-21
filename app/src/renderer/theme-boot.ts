@@ -6,26 +6,27 @@
  * to the browser default white — a visible flash.
  *
  * Two orthogonal axes:
- *   1. Theme preference — what the user picked: light, dark, dim (low-contrast
- *      dark for long reading), or system (follow the OS).
+ *   1. Theme preference — what the user picked: light, dark (gentle, the
+ *      default dark), high-contrast (the original crisp dark), or system.
  *   2. Reading size — a multiplier applied only to prose surfaces.
  *
  * `Theme` stays the resolved binary appearance (light | dark) so every
- * `theme === 'dark'` check in the app (CodeMirror, audit colors, the quick
- * toggle) keeps working unchanged — `dim` resolves to `dark` plus an extra
- * `html.dim` class that a CSS layer (`html.dark.dim`) consumes.
+ * `theme === 'dark'` check in the app (CodeMirror, audit colors) keeps working
+ * unchanged — `high-contrast` resolves to `dark` plus an extra `.contrast`
+ * class that a CSS layer (`html.dark.contrast`) consumes.
  *
  * Priority for the preference:
  *   1. localStorage['rp-theme'] — explicit user choice (incl. 'system')
- *   2. 'dark' — matches .impeccable.md dark-first baseline
+ *   2. 'light' — the warm-paper theme is the most eye-friendly default
+ *      (a light field constricts the pupil, which sharpens focus for
+ *      astigmatic eyes and avoids the dark-mode halation problem).
  *
- * We deliberately default to dark (not `prefers-color-scheme`) so a fresh
- * install opens on the signature palette. Users who want OS-following pick
- * 'system' explicitly and the choice persists.
+ * 'high-contrast' resolves to dark + a `.contrast` class (the original crisp
+ * palette). The legacy 'dim' preference is migrated to the now-gentle 'dark'.
  */
 
 export type Theme = 'light' | 'dark'
-export type ThemePref = 'light' | 'dark' | 'dim' | 'system'
+export type ThemePref = 'light' | 'dark' | 'high-contrast' | 'system'
 export type ReadingSize = 'compact' | 'comfortable' | 'large'
 
 const THEME_KEY = 'rp-theme'
@@ -39,7 +40,7 @@ const READING_SCALE: Record<ReadingSize, string> = {
 }
 
 function isThemePref(v: unknown): v is ThemePref {
-  return v === 'light' || v === 'dark' || v === 'dim' || v === 'system'
+  return v === 'light' || v === 'dark' || v === 'high-contrast' || v === 'system'
 }
 
 function isReadingSize(v: unknown): v is ReadingSize {
@@ -47,12 +48,13 @@ function isReadingSize(v: unknown): v is ReadingSize {
 }
 
 export function getInitialThemePref(): ThemePref {
-  if (typeof window === 'undefined') return 'dark'
+  if (typeof window === 'undefined') return 'light'
   try {
     const stored = window.localStorage.getItem(THEME_KEY)
+    if (stored === 'dim') return 'dark'  // legacy: folded into the now-gentle dark
     if (isThemePref(stored)) return stored
   } catch { /* localStorage may be unavailable in some contexts */ }
-  return 'dark'
+  return 'light'
 }
 
 export function prefersDark(): boolean {
@@ -61,11 +63,11 @@ export function prefersDark(): boolean {
     && window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
-/** Resolve a preference to the concrete appearance + dim flag. */
-export function resolveThemePref(pref: ThemePref): { theme: Theme; dim: boolean } {
-  if (pref === 'system') return { theme: prefersDark() ? 'dark' : 'light', dim: false }
-  if (pref === 'dim') return { theme: 'dark', dim: true }
-  return { theme: pref, dim: false }
+/** Resolve a preference to the concrete appearance + high-contrast flag. */
+export function resolveThemePref(pref: ThemePref): { theme: Theme; contrast: boolean } {
+  if (pref === 'system') return { theme: prefersDark() ? 'dark' : 'light', contrast: false }
+  if (pref === 'high-contrast') return { theme: 'dark', contrast: true }
+  return { theme: pref, contrast: false }
 }
 
 export function persistThemePref(pref: ThemePref): void {
@@ -80,21 +82,21 @@ export function persistThemePref(pref: ThemePref): void {
  */
 export function applyThemePref(pref: ThemePref): Theme {
   if (typeof document === 'undefined') return resolveThemePref(pref).theme
-  const { theme, dim } = resolveThemePref(pref)
+  const { theme, contrast } = resolveThemePref(pref)
   const el = document.documentElement
   el.classList.remove('dark', 'light')
   el.classList.add(theme)
-  el.classList.toggle('dim', dim)
+  el.classList.toggle('contrast', contrast)
   return theme
 }
 
 export function getInitialReadingSize(): ReadingSize {
-  if (typeof window === 'undefined') return 'compact'
+  if (typeof window === 'undefined') return 'comfortable'
   try {
     const stored = window.localStorage.getItem(READING_KEY)
     if (isReadingSize(stored)) return stored
   } catch { /* ignore */ }
-  return 'compact'
+  return 'comfortable'  // 14px base — easier on the eyes than the old 13px default
 }
 
 export function persistReadingSize(size: ReadingSize): void {

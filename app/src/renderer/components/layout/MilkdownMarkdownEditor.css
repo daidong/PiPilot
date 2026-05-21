@@ -17,9 +17,17 @@
   --crepe-color-selected: color-mix(in srgb, var(--color-accent-soft), transparent 72%);
   --crepe-color-inline-area: color-mix(in srgb, var(--color-accent-soft), transparent 84%);
 
-  --crepe-font-title: 'Inter', system-ui, -apple-system, sans-serif;
-  --crepe-font-default: 'Inter', system-ui, -apple-system, sans-serif;
+  /* Atkinson Hyperlegible for prose so the WYSIWYG editor matches the
+     read-only .md-prose render (both reading surfaces); Inter fallback
+     before the woff2 loads. Code stays monospace. */
+  --crepe-font-title: 'Atkinson Hyperlegible', 'Inter', system-ui, -apple-system, sans-serif;
+  --crepe-font-default: 'Atkinson Hyperlegible', 'Inter', system-ui, -apple-system, sans-serif;
   --crepe-font-code: 'SF Mono', 'Monaco', 'Menlo', 'Fira Code', monospace;
+
+  /* Reading-size multiplier, matched to .md-prose (reading-scale × dark-mode
+     +15% boost) so the WYSIWYG editor and the read-only render stay the same
+     size when you toggle between them or change Reading Size in Settings. */
+  --reading-prose-scale: calc(var(--reading-scale, 1) * var(--reading-dark-boost, 1));
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror {
@@ -114,48 +122,48 @@
 .entity-preview-milkdown-shell .milkdown .ProseMirror h1 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 20px;
-  line-height: 28px;
+  font-size: calc(20px * var(--reading-prose-scale));
+  line-height: calc(28px * var(--reading-prose-scale));
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h2 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 17px;
-  line-height: 24px;
+  font-size: calc(17px * var(--reading-prose-scale));
+  line-height: calc(24px * var(--reading-prose-scale));
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h3 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 15px;
-  line-height: 22px;
+  font-size: calc(15px * var(--reading-prose-scale));
+  line-height: calc(22px * var(--reading-prose-scale));
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h4 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: calc(14px * var(--reading-prose-scale));
+  line-height: calc(20px * var(--reading-prose-scale));
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h5 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 13px;
-  line-height: 19px;
+  font-size: calc(13px * var(--reading-prose-scale));
+  line-height: calc(19px * var(--reading-prose-scale));
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror h6 {
   font-family: var(--crepe-font-default);
   font-weight: 700;
-  font-size: 13px;
-  line-height: 19px;
+  font-size: calc(13px * var(--reading-prose-scale));
+  line-height: calc(19px * var(--reading-prose-scale));
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror p,
 .entity-preview-milkdown-shell .milkdown .ProseMirror li {
-  font-size: 14px;
+  font-size: calc(14px * var(--reading-prose-scale));
   line-height: 1.45;
   font-weight: 400;
 }
@@ -171,13 +179,13 @@
   border: 1px solid var(--color-border);
   margin: 8px 0;
   padding: 8px 10px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--reading-prose-scale));
   line-height: 1.5;
 }
 
 .entity-preview-milkdown-shell .milkdown .ProseMirror code {
   border-radius: 4px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--reading-prose-scale));
 }
 
 .entity-preview-milkdown-shell .milkdown .milkdown-toolbar {

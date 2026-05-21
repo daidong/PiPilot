@@ -6,7 +6,7 @@ import type { ThemePref, ReadingSize } from '../../theme-boot'
 const THEME_OPTIONS: SegmentOption<ThemePref>[] = [
   { label: 'Light', value: 'light' },
   { label: 'Dark', value: 'dark' },
-  { label: 'Dim', value: 'dim' },
+  { label: 'High Contrast', value: 'high-contrast' },
   { label: 'System', value: 'system' },
 ]
 
@@ -17,9 +17,9 @@ const READING_OPTIONS: SegmentOption<ReadingSize>[] = [
 ]
 
 const THEME_HINT: Record<ThemePref, string> = {
-  light: 'Warm-paper light theme, tuned for daylight reading.',
-  dark: 'The signature high-contrast dark theme.',
-  dim: 'Lower-contrast dark — eases halation and brightness fatigue over long reading sessions.',
+  light: 'Warm-paper light theme. Most eye-friendly for long reading and astigmatism.',
+  dark: 'Gentle dark (~8:1) — minimizes the halation/afterimage of bright text on a near-black ground.',
+  'high-contrast': 'The original crisp high-contrast dark. Sharpest, but most prone to halation.',
   system: 'Follows your OS appearance and switches automatically.',
 }
 
