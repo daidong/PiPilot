@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronRight,
   File,
@@ -185,6 +185,30 @@ function normalizePath(path: string): string {
   return path.replace(/\\/g, '/')
 }
 
+/** Containing directory of a relativePath ('' for a root-level entry). */
+function parentOf(relativePath: string): string {
+  const i = relativePath.lastIndexOf('/')
+  return i >= 0 ? relativePath.slice(0, i) : ''
+}
+
+/**
+ * Encode an ArrayBuffer to base64 in 32 KB chunks. The previous per-byte
+ * `reduce((s, b) => s + String.fromCharCode(b), '')` was O(n²) — dropping a
+ * large file (the limit is 100 MB) built a multi-million-char string one byte
+ * at a time and froze the renderer. Chunking keeps it O(n) and bounds the
+ * temporary string + the `fromCharCode.apply` arg list.
+ */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  const CHUNK = 0x8000 // 32 KB
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, i + CHUNK)
+    binary += String.fromCharCode.apply(null, slice as unknown as number[])
+  }
+  return btoa(binary)
+}
+
 interface TreeRowProps {
   node: FileTreeNode
   depth: number
@@ -249,7 +273,7 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
     confirmTrash, renameValue, highlightQuery, handlersRef, renameInputRef
   } = props
   const h = handlersRef.current
-  // Per-extension icon for files; folders keep the warning-tint Folder.
+  // Per-extension icon for files; directory icon/tint encodes expand state.
   const fileIconInfo = node.type === 'file' ? getFileIcon(node.name) : null
   // Indent guides: a vertical 1px line every 14px in the row's left padding.
   // Single repeating-gradient = no extra DOM per depth level.
@@ -263,13 +287,21 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
         backgroundPosition: '0 0'
       }
     : { paddingLeft: '6px' }
+  // "You are here" marker: a 2px teal bar on the active row. Drawn as an inset
+  // shadow so it adds no width (no layout shift) and follows the row's rounded
+  // corners — the Linear-style selection cue called out in .impeccable.md §6.
+  if (isActive) guideStyle.boxShadow = 'inset 2px 0 0 var(--color-accent)'
   return (
     <div
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-expanded={node.type === 'directory' ? isExpanded : undefined}
+      aria-selected={isActive}
       className={`group flex items-center gap-1 rounded px-1.5 h-7 text-xs cursor-pointer ${
         isDropTarget
           ? 'ring-2 ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/10'
           : isActive
-            ? 'bg-[var(--color-accent)]/20 t-text-accent-soft'
+            ? 'bg-[var(--color-accent)]/15 t-text-accent-soft'
             : 't-bg-hover t-text-secondary'
       }`}
       style={guideStyle}
@@ -294,7 +326,14 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
         <span className="w-3 shrink-0" />
       )}
       {node.type === 'directory' ? (
-        <Folder size={12} className="shrink-0 t-text-warning" />
+        // Color encodes open/closed state: muted when collapsed, teal accent
+        // when expanded. Avoids borrowing the status-warning color decoratively
+        // (.impeccable.md §3) and reinforces the chevron's expand affordance.
+        isExpanded ? (
+          <FolderOpen size={12} className="shrink-0 t-text-accent-soft" />
+        ) : (
+          <Folder size={12} className="shrink-0 t-text-muted" />
+        )
       ) : fileIconInfo ? (
         <fileIconInfo.Icon size={12} className={`shrink-0 ${fileIconInfo.tint}`} />
       ) : null}
@@ -407,10 +446,15 @@ export function WorkspaceTree() {
   const [renameValue, setRenameValue] = useState('')
   const [creating, setCreating] = useState<{ parentDir: string; type: 'file' | 'directory' } | null>(null)
   const [createValue, setCreateValue] = useState('')
+  const [notice, setNotice] = useState<string | null>(null)
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const createInputRef = useRef<HTMLInputElement>(null)
+  const scrollRafRef = useRef<number | null>(null)
+  const pendingScrollTopRef = useRef(0)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
 
   // Close context menu on outside click
   useEffect(() => {
@@ -424,6 +468,20 @@ export function WorkspaceTree() {
   useEffect(() => {
     setContextMenu(null)
   }, [leftTab, centerView])
+
+  // Keep the context menu inside the viewport. Measured after layout (before
+  // paint, so no flicker) and nudged back imperatively — the raw click coords
+  // would otherwise spill off the right/bottom edge near the window border.
+  useLayoutEffect(() => {
+    const el = contextMenuRef.current
+    if (!contextMenu || !el) return
+    const rect = el.getBoundingClientRect()
+    const pad = 8
+    const left = Math.max(pad, Math.min(contextMenu.x, window.innerWidth - rect.width - pad))
+    const top = Math.max(pad, Math.min(contextMenu.y, window.innerHeight - rect.height - pad))
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+  }, [contextMenu])
 
   // Auto-focus rename input
   useEffect(() => {
@@ -439,6 +497,34 @@ export function WorkspaceTree() {
       createInputRef.current.focus()
     }
   }, [creating])
+
+  // Transient inline message (e.g. a dropped file was skipped or a write
+  // failed). Auto-clears so it never lingers as stale state.
+  const showNotice = useCallback((msg: string) => {
+    setNotice(msg)
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
+    noticeTimerRef.current = setTimeout(() => setNotice(null), 5000)
+  }, [])
+
+  // Clear pending timers/frames on unmount so they don't fire on a gone tree.
+  useEffect(() => () => {
+    if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
+    if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current)
+  }, [])
+
+  // Coalesce the high-frequency scroll stream into one state update per frame.
+  // The raw `onScroll` fired setScrollTop on every event, re-rendering the
+  // whole tree several times per frame; rAF caps that at the display rate
+  // while always flushing the latest position.
+  const handleViewportScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    pendingScrollTopRef.current = e.currentTarget.scrollTop
+    if (scrollRafRef.current != null) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      setScrollTop(pendingScrollTopRef.current)
+    })
+  }, [])
 
   const setParentLoading = useCallback((parentKey: string, loading: boolean) => {
     setTree((state) => {
@@ -482,10 +568,15 @@ export function WorkspaceTree() {
           }
         }
       })
+    } catch (err) {
+      // Surface the failure instead of leaving it as an unhandled rejection;
+      // callers fire this with `void` or inside Promise.all.
+      console.error('Failed to load workspace tree', err)
+      showNotice('Could not load files. Try refreshing.')
     } finally {
       if (!opts.silent) setParentLoading(parentKey, false)
     }
-  }, [setParentLoading, showIgnored])
+  }, [setParentLoading, showIgnored, showNotice])
 
   // `expandedRef` lets the auto-refresh effect read the latest expanded set
   // without re-subscribing every time the user expands/collapses a folder.
@@ -599,6 +690,9 @@ export function WorkspaceTree() {
       try {
         const results = await api.searchTree(query.trim(), { showIgnored, maxResults: 4000 })
         setSearchResults(results)
+      } catch (err) {
+        console.error('File search failed', err)
+        setSearchResults([])
       } finally {
         setSearching(false)
       }
@@ -676,9 +770,14 @@ export function WorkspaceTree() {
   }, [data, openPreview])
 
   const createArtifact = useCallback(async (node: FileTreeNode) => {
-    await api.createArtifactFromFile(node.path)
-    await refreshEntities()
-  }, [refreshEntities])
+    try {
+      await api.createArtifactFromFile(node.path)
+      await refreshEntities()
+    } catch (err) {
+      console.error('Failed to create artifact from file', err)
+      showNotice(`Could not create artifact from "${node.name}".`)
+    }
+  }, [refreshEntities, showNotice])
 
   const handleTrashClick = useCallback(async (node: FileTreeNode) => {
     if (confirmTrashPath === node.relativePath) {
@@ -687,10 +786,9 @@ export function WorkspaceTree() {
       setConfirmTrashPath(null)
       const result = await api.trashFile(node.path)
       if (result.success) {
-        const parentRelPath = node.relativePath.includes('/')
-          ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
-          : ''
-        await loadChildren(parentRelPath)
+        await loadChildren(parentOf(node.relativePath))
+      } else {
+        showNotice(`Could not trash "${node.name}": ${result.error ?? 'failed'}`)
       }
     } else {
       // First click — arm confirmation
@@ -698,14 +796,12 @@ export function WorkspaceTree() {
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current)
       confirmTimerRef.current = setTimeout(() => setConfirmTrashPath(null), 3000)
     }
-  }, [confirmTrashPath, loadChildren])
+  }, [confirmTrashPath, loadChildren, showNotice])
 
-  // Get parent directory relativePath for a given node
+  // Resolves the directory a node acts on: a directory targets itself (drops,
+  // "new file here" land inside it); a file targets its containing directory.
   const getParentDir = useCallback((node: FileTreeNode): string => {
-    if (node.type === 'directory') return node.relativePath
-    return node.relativePath.includes('/')
-      ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
-      : ''
+    return node.type === 'directory' ? node.relativePath : parentOf(node.relativePath)
   }, [])
 
   const handleRevealInFinder = useCallback((node: FileTreeNode) => {
@@ -725,13 +821,15 @@ export function WorkspaceTree() {
 
   const handlePasteFile = useCallback(async (targetNode: FileTreeNode) => {
     if (!clipboardNode) return
-    const destDir = targetNode.type === 'directory' ? targetNode.relativePath : getParentDir(targetNode)
+    const destDir = getParentDir(targetNode)
     setContextMenu(null)
     const result = await api.copyItem(clipboardNode.relativePath, destDir)
     if (result.success) {
       await loadChildren(destDir)
+    } else {
+      showNotice(`Could not paste "${clipboardNode.name}": ${result.error ?? 'failed'}`)
     }
-  }, [clipboardNode, getParentDir, loadChildren])
+  }, [clipboardNode, getParentDir, loadChildren, showNotice])
 
   const handleCopyPath = useCallback((node: FileTreeNode) => {
     void navigator.clipboard.writeText(node.path)
@@ -743,8 +841,8 @@ export function WorkspaceTree() {
     setContextMenu(null)
   }, [])
 
-  const handleNewFile = useCallback((parentRelPath: string) => {
-    setCreating({ parentDir: parentRelPath, type: 'file' })
+  const startCreate = useCallback((parentRelPath: string, type: 'file' | 'directory') => {
+    setCreating({ parentDir: parentRelPath, type })
     setCreateValue('')
     // Expand the parent so the inline input is visible
     if (parentRelPath) {
@@ -759,20 +857,8 @@ export function WorkspaceTree() {
     }
   }, [tree.byParent, loadChildren])
 
-  const handleNewFolder = useCallback((parentRelPath: string) => {
-    setCreating({ parentDir: parentRelPath, type: 'directory' })
-    setCreateValue('')
-    if (parentRelPath) {
-      setExpanded((prev) => {
-        const next = new Set(prev)
-        next.add(parentRelPath)
-        return next
-      })
-      if (!tree.byParent[toKey(parentRelPath)]) {
-        void loadChildren(parentRelPath)
-      }
-    }
-  }, [tree.byParent, loadChildren])
+  const handleNewFile = useCallback((p: string) => startCreate(p, 'file'), [startCreate])
+  const handleNewFolder = useCallback((p: string) => startCreate(p, 'directory'), [startCreate])
 
   const commitCreate = useCallback(async () => {
     if (!creating || !createValue.trim()) {
@@ -787,9 +873,11 @@ export function WorkspaceTree() {
       : await api.createDir(relPath)
     if (result.success) {
       await loadChildren(creating.parentDir)
+    } else {
+      showNotice(`Could not create "${createValue.trim()}": ${result.error ?? 'failed'}`)
     }
     setCreating(null)
-  }, [creating, createValue, loadChildren])
+  }, [creating, createValue, loadChildren, showNotice])
 
   const handleCreateKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -811,16 +899,18 @@ export function WorkspaceTree() {
       setRenaming(null)
       return
     }
-    const parentDir = renaming.includes('/')
-      ? renaming.slice(0, renaming.lastIndexOf('/'))
-      : ''
+    const parentDir = parentOf(renaming)
     const newRelPath = parentDir ? `${parentDir}/${renameValue.trim()}` : renameValue.trim()
     if (newRelPath !== renaming) {
-      await api.renameFile(renaming, newRelPath)
-      await loadChildren(parentDir)
+      const result = await api.renameFile(renaming, newRelPath)
+      if (result.success) {
+        await loadChildren(parentDir)
+      } else {
+        showNotice(`Could not rename: ${result.error ?? 'failed'}`)
+      }
     }
     setRenaming(null)
-  }, [renaming, renameValue, loadChildren])
+  }, [renaming, renameValue, loadChildren, showNotice])
 
   const handleRenameKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -831,45 +921,45 @@ export function WorkspaceTree() {
     }
   }, [commitRename])
 
-  // Resolve drop target directory for a given node row
-  const getDropDir = useCallback((node: FileTreeNode): string => {
-    if (node.type === 'directory') return node.relativePath
-    return node.relativePath.includes('/')
-      ? node.relativePath.slice(0, node.relativePath.lastIndexOf('/'))
-      : ''
-  }, [])
-
   const handleRowDragOver = useCallback((e: React.DragEvent, node: FileTreeNode) => {
     e.preventDefault()
     e.stopPropagation()
     e.dataTransfer.dropEffect = 'copy'
-    setDropTargetPath(getDropDir(node))
-  }, [getDropDir])
+    setDropTargetPath(getParentDir(node))
+  }, [getParentDir])
 
   const handleRowDragLeave = useCallback((e: React.DragEvent) => {
     if (e.currentTarget.contains(e.relatedTarget as Node)) return
     setDropTargetPath(null)
   }, [])
 
-  const handleRowDrop = useCallback(async (e: React.DragEvent, node: FileTreeNode) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const targetRelPath = getDropDir(node)
-    setDropTargetPath(null)
-    const files = Array.from(e.dataTransfer.files)
+  // Shared drop ingestion for both per-row and viewport-root drops. Encodes
+  // each file, writes it into `targetRelPath`, then reloads that dir once.
+  // Files over the size cap or that fail to write are collected and surfaced
+  // as a single inline notice instead of failing silently.
+  const ingestFiles = useCallback(async (files: File[], targetRelPath: string) => {
+    if (files.length === 0) return
+    const skipped: string[] = []
     for (const file of files) {
       if (file.size > MAX_DROP_FILE_SIZE) {
-        console.warn(`Skipping "${file.name}": exceeds 100 MB limit`)
+        skipped.push(`${file.name} (over 100 MB)`)
         continue
       }
       const buffer = await file.arrayBuffer()
-      const base64 = btoa(
-        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-      )
-      await api.dropToDir(file.name, base64, targetRelPath)
+      const result = await api.dropToDir(file.name, arrayBufferToBase64(buffer), targetRelPath)
+      if (!result?.success) skipped.push(`${file.name} (${result?.error ?? 'failed'})`)
     }
     await loadChildren(targetRelPath)
-  }, [getDropDir, loadChildren])
+    if (skipped.length > 0) showNotice(`Skipped: ${skipped.join(', ')}`)
+  }, [loadChildren, showNotice])
+
+  const handleRowDrop = useCallback(async (e: React.DragEvent, node: FileTreeNode) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const targetRelPath = getParentDir(node)
+    setDropTargetPath(null)
+    await ingestFiles(Array.from(e.dataTransfer.files), targetRelPath)
+  }, [getParentDir, ingestFiles])
 
   const handleViewportDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -885,20 +975,8 @@ export function WorkspaceTree() {
   const handleViewportDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     setDropTargetPath(null)
-    const files = Array.from(e.dataTransfer.files)
-    for (const file of files) {
-      if (file.size > MAX_DROP_FILE_SIZE) {
-        console.warn(`Skipping "${file.name}": exceeds 100 MB limit`)
-        continue
-      }
-      const buffer = await file.arrayBuffer()
-      const base64 = btoa(
-        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-      )
-      await api.dropToDir(file.name, base64, '')
-    }
-    await loadChildren('')
-  }, [loadChildren])
+    await ingestFiles(Array.from(e.dataTransfer.files), '')
+  }, [ingestFiles])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, node: FileTreeNode) => {
     e.preventDefault()
@@ -967,7 +1045,7 @@ export function WorkspaceTree() {
       <div
         key="__creating__"
         className="flex items-center gap-1 rounded px-1.5 h-7 text-xs bg-[var(--color-accent)]/10"
-        style={{ paddingLeft: `${depth * 1.1 + 0.4}em` }}
+        style={{ paddingLeft: `${depth * 14 + 6}px` }}
       >
         <span className="w-3 shrink-0" />
         {creating.type === 'directory' ? (
@@ -1046,21 +1124,32 @@ export function WorkspaceTree() {
             className="w-full bg-transparent text-xs outline-none t-focus-ring t-text"
           />
         </div>
-        <label className="mt-1 flex items-center gap-1 text-[11px] t-text-muted">
+        <label className="mt-1 flex items-center gap-1 text-[11px] t-text-muted cursor-pointer">
           <input
             type="checkbox"
             checked={showIgnored}
             onChange={(e) => setShowIgnored(e.target.checked)}
+            // Native checkbox otherwise renders the OS accent (macOS blue),
+            // the one element off the teal palette. accentColor pulls it back in.
+            style={{ accentColor: 'var(--color-accent)' }}
+            className="cursor-pointer"
           />
           Show ignored files
         </label>
+        {notice && (
+          <p className="mt-1 text-[11px] t-text-error-soft break-words" role="status">
+            {notice}
+          </p>
+        )}
       </div>
 
       <div
         ref={viewportRef}
+        role="tree"
+        aria-label="Workspace files"
         className={`flex-1 min-h-0 overflow-y-auto px-1 py-1 ${dropTargetPath === '__root__' ? 'ring-2 ring-inset ring-[var(--color-accent)]/60 bg-[var(--color-accent)]/5' : ''}`}
         style={{ overflowAnchor: 'none' }}
-        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        onScroll={handleViewportScroll}
         onDragOver={handleViewportDragOver}
         onDragLeave={handleViewportDragLeave}
         onDrop={handleViewportDrop}
@@ -1085,8 +1174,9 @@ export function WorkspaceTree() {
                   <div
                     key={row.key}
                     className="flex items-center gap-1 text-xs t-text-muted h-7"
-                    style={{ paddingLeft: `${row.depth * 1.1 + 2}em` }}
+                    style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
                   >
+                    <span className="w-3 shrink-0" />
                     <Loader2 size={11} className="animate-spin" />
                     Loading...
                   </div>
@@ -1125,6 +1215,7 @@ export function WorkspaceTree() {
       {/* Right-click context menu */}
       {contextMenu && (
         <div
+          ref={contextMenuRef}
           className="fixed z-50 min-w-[180px] rounded-lg border t-border t-bg-surface shadow-xl py-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
