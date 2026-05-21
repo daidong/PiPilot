@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef } from 'react'
-import { Sun, Moon, RotateCcw, Terminal, Settings, MoreHorizontal } from 'lucide-react'
+import { RotateCcw, Terminal, Settings, MoreHorizontal } from 'lucide-react'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { EntityTabs } from '../left/EntityTabs'
@@ -35,19 +35,15 @@ function ToolbarButton({ onClick, tooltip, children, ariaExpanded }: {
   )
 }
 
-// Low-frequency toolbar actions (reset context, theme, terminal) live
-// behind a single kebab. Keeping them out of the primary row preserves
-// breathing room for the ModelSelector at narrow sidebar widths and
-// matches the design principle "top bar configures this conversation;
-// everything else is one click away."
+// Low-frequency toolbar actions (reset context, terminal) live behind a
+// single kebab. Keeping them out of the primary row preserves breathing
+// room for the ModelSelector at narrow sidebar widths and matches the
+// design principle "top bar configures this conversation; everything else
+// is one click away." (Theme switching lives in Settings → Appearance.)
 function OverflowMenu({
-  theme,
-  onToggleTheme,
   onResetContext,
   onToggleTerminal,
 }: {
-  theme: 'dark' | 'light'
-  onToggleTheme: () => void
   onResetContext: () => void
   onToggleTerminal: () => void
 }) {
@@ -99,16 +95,6 @@ function OverflowMenu({
           </button>
           <button
             role="menuitem"
-            onClick={run(onToggleTheme)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs t-text t-bg-hover transition-colors"
-          >
-            {theme === 'dark'
-              ? <Sun size={14} className="t-text-muted" />
-              : <Moon size={14} className="t-text-muted" />}
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          </button>
-          <button
-            role="menuitem"
             onClick={run(onToggleTerminal)}
             className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs t-text t-bg-hover transition-colors"
           >
@@ -125,8 +111,6 @@ function OverflowMenu({
 }
 
 export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const theme = useUIStore((s) => s.theme)
-  const toggleTheme = useUIStore((s) => s.toggleTheme)
   const centerView = useUIStore((s) => s.centerView)
   const leftSidebarWidth = useUIStore((s) => s.leftSidebarWidth)
   const setLeftSidebarWidth = useUIStore((s) => s.setLeftSidebarWidth)
@@ -205,8 +189,6 @@ export function LeftSidebar({ onOpenSettings }: { onOpenSettings: () => void }) 
         <div className="flex items-center gap-1">
           <ReasoningToggle />
           <OverflowMenu
-            theme={theme}
-            onToggleTheme={toggleTheme}
             onResetContext={handleResetContext}
             onToggleTerminal={() => useUIStore.getState().toggleTerminal()}
           />

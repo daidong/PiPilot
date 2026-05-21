@@ -91,9 +91,7 @@ interface UIState {
   wikiReaderBack: () => void
 
   setReasoningEffort: (level: ReasoningEffort) => void
-  setTheme: (theme: Theme) => void
   setThemePref: (pref: ThemePref) => void
-  toggleTheme: () => void
   setReadingSize: (size: ReadingSize) => void
   setLeftTab: (tab: LeftTab) => void
   setCenterView: (view: CenterView) => void
@@ -192,16 +190,6 @@ export const useUIStore = create<UIState>((set) => ({
     // stay in sync. Main echoes back to the sender too; applyThemeFromBroadcast
     // below short-circuits when local state already matches.
     ;(window as any).api?.setTheme?.(pref)
-  },
-  // Back-compat shim: a bare Theme ('light' | 'dark') is a valid preference.
-  setTheme: (theme) => {
-    useUIStore.getState().setThemePref(theme)
-  },
-  // Quick toggle (overflow menu): always lands on an explicit light/dark,
-  // dropping any dim/system preference — that's the point of a fast switch.
-  toggleTheme: () => {
-    const next: ThemePref = useUIStore.getState().theme === 'dark' ? 'light' : 'dark'
-    useUIStore.getState().setThemePref(next)
   },
   setReadingSize: (size) => {
     set({ readingSize: size })
