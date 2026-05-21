@@ -30,6 +30,18 @@ function tmpProject(): string {
   return mkdtempSync(join(tmpdir(), 'pipilot-ledger-turn-'))
 }
 
+function cleanupProject(project: string): void {
+  try {
+    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (process.platform === 'win32' && (code === 'ENOTEMPTY' || code === 'EPERM' || code === 'EBUSY')) {
+      return
+    }
+    throw err
+  }
+}
+
 function readLedger(project: string): Array<Record<string, unknown>> {
   const file = join(project, PATHS.ledgerArtifact)
   if (!existsSync(file)) return []
@@ -68,7 +80,7 @@ test('createArtifact: ledger row carries turnId from CLIContext', async () => {
     assert.equal(rows[0].op, 'create')
     assert.equal(rows[0].turnId, 'turn-abc')
   } finally {
-    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
+    cleanupProject(project)
   }
 })
 
@@ -85,7 +97,7 @@ test('createArtifact: omitted turnId → ledger row has no turnId field', async 
     // The writer strips undefined fields for tidiness, so the key must be absent.
     assert.equal('turnId' in rows[0], false)
   } finally {
-    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
+    cleanupProject(project)
   }
 })
 
@@ -105,7 +117,7 @@ test('updateArtifact: ledger edit row carries turnId argument', async () => {
     assert.equal(rows[1].op, 'edit')
     assert.equal(rows[1].turnId, 'turn-update')
   } finally {
-    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
+    cleanupProject(project)
   }
 })
 
@@ -122,7 +134,7 @@ test('updateArtifact: omitted turnId argument → no turnId on edit row', async 
     assert.equal(rows.length, 2)
     assert.equal('turnId' in rows[1], false)
   } finally {
-    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
+    cleanupProject(project)
   }
 })
 
@@ -141,6 +153,6 @@ test('deleteArtifact: ledger delete row carries turnId argument', async () => {
     assert.equal(rows[1].op, 'delete')
     assert.equal(rows[1].turnId, 'turn-delete')
   } finally {
-    rmSync(project, { recursive: true, force: true, maxRetries: 30, retryDelay: 300 })
+    cleanupProject(project)
   }
 })
