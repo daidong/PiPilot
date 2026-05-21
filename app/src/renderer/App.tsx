@@ -13,7 +13,8 @@ import { useEntityStore } from './stores/entity-store'
 import { useImportStore } from './stores/import-store'
 import { useEnrichmentStore } from './stores/enrichment-store'
 import { useReportStore } from './stores/report-store'
-import { useUIStore, applyThemeFromBroadcast } from './stores/ui-store'
+import { useUIStore, applyThemeFromBroadcast, refreshResolvedTheme } from './stores/ui-store'
+import type { ThemePref } from './theme-boot'
 import { useProgressStore } from './stores/progress-store'
 import { useActivityStore } from './stores/activity-store'
 import { useToolProgressStore } from './stores/tool-progress-store'
@@ -658,10 +659,23 @@ export default function App() {
   // every other open window in lockstep. Listener short-circuits when the
   // store already matches, so the sender's own echo is a no-op.
   useEffect(() => {
-    const unsub = api.onThemeChanged?.((next: 'light' | 'dark') => {
+    const unsub = api.onThemeChanged?.((next: ThemePref) => {
       applyThemeFromBroadcast(next)
     })
     return () => { unsub?.() }
+  }, [])
+
+  // When the preference is 'system', follow OS light/dark changes live —
+  // re-resolve without mutating the stored preference. matchMedia fires only
+  // on actual OS appearance flips, so this is idle the rest of the time.
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => {
+      if (useUIStore.getState().themePref === 'system') refreshResolvedTheme()
+    }
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
   }, [])
 
   // Subscribe to auto-update lifecycle. The pill in the StatusBar reads

@@ -40,6 +40,12 @@
   --text-lg:  1.0625rem;
   --text-xl:  1.25rem;
   --text-2xl: 1.5rem;
+
+  /* Reading-size multiplier for prose surfaces (chat answers, Wiki Reader).
+     Set on <html> by applyReadingSize() in theme-boot. 1 = compact (13px),
+     ~1.077 = comfortable (14px), ~1.231 = large (16px). Only .md-prose
+     consumes it, so UI chrome keeps its density. */
+  --reading-scale: 1;
 }
 
 /* === Theme tokens via CSS custom properties === */
@@ -76,6 +82,34 @@ html.dark {
   --color-status-warning: #e0a820;
   --color-status-info: #60a5fa;
   color-scheme: dark;
+}
+
+/* "Dim" dark — a low-contrast variant layered on html.dark for long reading
+   sessions. The default dark theme sits primary text at ~11.8:1 on the near-
+   black ground; that crispness reads great in a screenshot but causes
+   halation ("glowing"/vibrating text) over multi-hour use. Dim lifts the
+   ground and pulls text down to ~8.6:1 — still comfortably above AA — and
+   eases the accent's glare. Hue/semantics are unchanged: status colors and
+   the indigo secondary inherit html.dark untouched. Higher specificity
+   (two classes) means each overridden token wins regardless of source order. */
+html.dark.dim {
+  --color-bg-base: #181f24;
+  --color-bg-surface: #1e262c;
+  --color-bg-elevated: #28323a;
+  --color-bg-hover: rgba(255 255 255 / 0.05);
+  --color-border: #313b43;
+  --color-border-subtle: #272f36;
+  --color-text: #b3bcc4;            /* ~8.6:1 on bg-base (was ~11.8:1) */
+  --color-text-secondary: #818f9a;
+  --color-text-muted: #56626c;      /* lifted so it isn't sub-2:1 invisible */
+  --color-bubble-user: #1d2735;
+  --color-bubble-assistant: #28323a;
+  --color-input-bg: #1e262c;
+  --color-accent: #38c9b4;          /* a hair softer than the crisp #34d0ba */
+  --color-accent-soft: #5ed8c8;
+  --color-code-text: #5ed8c8;
+  --color-code-bg: rgba(56, 201, 180, 0.07);
+  --color-code-border: rgba(56, 201, 180, 0.18);
 }
 
 html.light {
@@ -259,8 +293,8 @@ body {
 /* Markdown prose styling inside assistant bubbles */
 /* Compact layout inspired by chat interfaces, teal/cyan accent */
 .md-prose {
-  font-size: var(--text-sm);
-  line-height: 1.55;
+  font-size: calc(var(--text-sm) * var(--reading-scale, 1));
+  line-height: 1.6;
 }
 .md-prose p {
   margin: 0.35em 0;

@@ -387,8 +387,8 @@ export interface ElectronAPI {
   // Theme broadcast — set is invoked by the window that toggled; main fans
   // out via 'theme:changed' to every renderer (including the sender) so all
   // open windows re-apply the <html> class in lockstep.
-  setTheme: (theme: 'light' | 'dark') => Promise<void>
-  onThemeChanged: (cb: (theme: 'light' | 'dark') => void) => () => void
+  setTheme: (theme: 'light' | 'dark' | 'dim' | 'system') => Promise<void>
+  onThemeChanged: (cb: (theme: 'light' | 'dark' | 'dim' | 'system') => void) => () => void
 
   // Auto-update (electron-updater backed by GitHub Releases)
   updateGetState: () => Promise<UpdateState>

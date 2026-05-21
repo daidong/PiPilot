@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon, Activity, Cpu } from 'lucide-react'
+import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon, Activity, Cpu, Palette } from 'lucide-react'
 import { ApiKeysSettings } from './ApiKeysSettings'
+import { AppearanceSettings } from './AppearanceSettings'
 import { ResearchSettings } from './ResearchSettings'
 import { DataAnalysisSettings } from './DataAnalysisSettings'
 import { WikiAgentSettings } from './WikiAgentSettings'
@@ -12,10 +13,11 @@ import { DEFAULT_SETTINGS } from '../../../../../shared-ui/settings-types'
 
 const api = (window as any).api
 
-type SettingsTab = 'api-keys' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram' | 'telemetry' | 'compute'
+type SettingsTab = 'api-keys' | 'appearance' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram' | 'telemetry' | 'compute'
 
 const BASE_TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
   { id: 'api-keys', label: 'API Keys', icon: Key },
+  { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'research', label: 'Research', icon: BookOpen },
   { id: 'data-analysis', label: 'Data Analysis', icon: BarChart2 },
   { id: 'paper-wiki', label: 'Paper Wiki', icon: BookMarked },
@@ -246,6 +248,9 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
             {activeTab === 'api-keys' && (
               <ApiKeysSettings showSaveButton />
             )}
+            {activeTab === 'appearance' && (
+              <AppearanceSettings />
+            )}
             {activeTab === 'research' && loaded && (
               <ResearchSettings
                 researchIntensity={settings.research.researchIntensity}
@@ -287,8 +292,9 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
             )}
           </div>
 
-          {/* Footer note for non-api-keys tabs */}
-          {activeTab !== 'api-keys' && (
+          {/* Footer note for disk-persisted AppSettings tabs. Appearance and
+              API keys manage their own persistence, so they skip this note. */}
+          {activeTab !== 'api-keys' && activeTab !== 'appearance' && (
             <div className="px-7 py-3 border-t t-border-subtle">
               <p className="text-[11px] t-text-muted leading-relaxed">
                 Settings are saved automatically. Changes to research and analysis settings take effect for new agent sessions. Existing sessions require an app restart.

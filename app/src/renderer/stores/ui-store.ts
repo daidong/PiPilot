@@ -4,7 +4,11 @@ import { REASONING_MODELS, SUPPORTED_MODELS, DEFAULT_MODEL, RETIRED_MODEL_MIGRAT
 import { parseModelKey } from '../../../../shared-ui/utils'
 import type { ModelOption, ReasoningEffort } from '../../../../shared-ui/types'
 
-import { getInitialTheme, persistTheme, applyThemeClass, type Theme } from '../theme-boot'
+import {
+  getInitialThemePref, persistThemePref, applyThemePref, resolveThemePref,
+  getInitialReadingSize, persistReadingSize, applyReadingSize,
+  type Theme, type ThemePref, type ReadingSize
+} from '../theme-boot'
 type LeftTab = 'library' | 'files' | 'skills'
 type CenterView = 'chat' | 'literature' | 'compute' | 'audit'
 export type { LeftTab, CenterView }
@@ -59,7 +63,9 @@ export type ModelId = string
 export type { ModelOption }
 
 interface UIState {
-  theme: Theme
+  theme: Theme            // resolved binary appearance (drives html class + `theme === 'dark'` checks)
+  themePref: ThemePref    // the user's pick: light | dark | dim | system
+  readingSize: ReadingSize
   leftTab: LeftTab
   centerView: CenterView
   selectedModel: ModelId
@@ -86,7 +92,9 @@ interface UIState {
 
   setReasoningEffort: (level: ReasoningEffort) => void
   setTheme: (theme: Theme) => void
+  setThemePref: (pref: ThemePref) => void
   toggleTheme: () => void
+  setReadingSize: (size: ReadingSize) => void
   setLeftTab: (tab: LeftTab) => void
   setCenterView: (view: CenterView) => void
   setModel: (model: ModelId) => void
@@ -121,10 +129,13 @@ export interface LiteratureFilter {
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  // Theme hydrates from localStorage (or OS preference) at module init so
-  // the zustand state matches the <html> class applied by bootTheme() in
-  // main.tsx. Both ends derive from getInitialTheme() — they stay in sync.
-  theme: getInitialTheme(),
+  // Appearance hydrates from localStorage at module init so the zustand state
+  // matches the <html> classes applied by bootTheme() in main.tsx. Both ends
+  // derive from getInitialThemePref()/getInitialReadingSize() — they stay in
+  // sync. `theme` is the resolved binary appearance ('system'/'dim' folded in).
+  theme: resolveThemePref(getInitialThemePref()).theme,
+  themePref: getInitialThemePref(),
+  readingSize: getInitialReadingSize(),
   leftTab: 'files',
   centerView: 'chat',
   selectedModel: DEFAULT_MODEL,
@@ -168,21 +179,34 @@ export const useUIStore = create<UIState>((set) => ({
     const model = useUIStore.getState().selectedModel
     api?.savePreferences?.({ selectedModel: model, reasoningEffort })
   },
-  setTheme: (theme) => {
-    set({ theme })
-    // Theme is a GLOBAL user preference, not per-project — persist to
-    // localStorage and update the <html> class immediately so the next
-    // app launch (and the welcome screen in particular) respects it.
-    persistTheme(theme)
-    applyThemeClass(theme)
-    // Broadcast to every other open window via main, so multi-window
-    // sessions keep the same theme. Main echoes back to the sender too;
-    // applyThemeFromBroadcast() below short-circuits if state already matches.
-    ;(window as any).api?.setTheme?.(theme)
+  // Set the full appearance preference (light | dark | dim | system).
+  // Appearance is a GLOBAL user preference, not per-project — persist to
+  // localStorage and update the <html> classes immediately so the next app
+  // launch (and the welcome screen in particular) respects it.
+  setThemePref: (pref) => {
+    const { theme } = resolveThemePref(pref)
+    set({ themePref: pref, theme })
+    persistThemePref(pref)
+    applyThemePref(pref)
+    // Broadcast to every other open window via main so multi-window sessions
+    // stay in sync. Main echoes back to the sender too; applyThemeFromBroadcast
+    // below short-circuits when local state already matches.
+    ;(window as any).api?.setTheme?.(pref)
   },
+  // Back-compat shim: a bare Theme ('light' | 'dark') is a valid preference.
+  setTheme: (theme) => {
+    useUIStore.getState().setThemePref(theme)
+  },
+  // Quick toggle (overflow menu): always lands on an explicit light/dark,
+  // dropping any dim/system preference — that's the point of a fast switch.
   toggleTheme: () => {
-    const newTheme = useUIStore.getState().theme === 'dark' ? 'light' : 'dark'
-    useUIStore.getState().setTheme(newTheme)
+    const next: ThemePref = useUIStore.getState().theme === 'dark' ? 'light' : 'dark'
+    useUIStore.getState().setThemePref(next)
+  },
+  setReadingSize: (size) => {
+    set({ readingSize: size })
+    persistReadingSize(size)
+    applyReadingSize(size)
   },
   setLeftTab: (leftTab) => set({ leftTab }),
   setCenterView: (centerView) => set({ centerView }),
@@ -310,13 +334,25 @@ export const useUIStore = create<UIState>((set) => ({
   }
 }))
 
-/** Apply a theme broadcast from another window. Idempotent: short-circuits
- *  when local state already matches, breaking any echo loop with main. */
-export function applyThemeFromBroadcast(theme: Theme): void {
-  if (useUIStore.getState().theme === theme) return
-  useUIStore.setState({ theme })
-  persistTheme(theme)
-  applyThemeClass(theme)
+/** Apply a theme preference broadcast from another window. Idempotent:
+ *  short-circuits when local preference already matches, breaking any echo
+ *  loop with main. */
+export function applyThemeFromBroadcast(pref: ThemePref): void {
+  if (useUIStore.getState().themePref === pref) return
+  const { theme } = resolveThemePref(pref)
+  useUIStore.setState({ themePref: pref, theme })
+  persistThemePref(pref)
+  applyThemePref(pref)
+}
+
+/** Re-resolve the current preference and re-apply. Used by the system-theme
+ *  listener: when the OS flips light/dark and the user is on 'system', the
+ *  resolved appearance must follow without changing the stored preference. */
+export function refreshResolvedTheme(): void {
+  const pref = useUIStore.getState().themePref
+  const { theme } = resolveThemePref(pref)
+  if (useUIStore.getState().theme !== theme) useUIStore.setState({ theme })
+  applyThemePref(pref)
 }
 
 /** Load persisted model, reasoning, and theme preferences from disk. Call after project path is set. */

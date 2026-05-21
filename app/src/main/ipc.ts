@@ -953,8 +953,8 @@ export function registerIpcHandlers(): void {
   // Sender included on purpose — its own listener is idempotent (no-ops when
   // its store already matches), and treating sender like everyone else keeps
   // the broadcast logic uniform.
-  ipcMain.handle('theme:set', (_event, theme: 'light' | 'dark') => {
-    if (theme !== 'light' && theme !== 'dark') return
+  ipcMain.handle('theme:set', (_event, theme: 'light' | 'dark' | 'dim' | 'system') => {
+    if (theme !== 'light' && theme !== 'dark' && theme !== 'dim' && theme !== 'system') return
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue
       win.webContents.send('theme:changed', theme)
