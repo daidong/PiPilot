@@ -184,7 +184,7 @@ export function WikiReaderPanel() {
         ) : isPaperFallback && fallbackPaper ? (
           <PaperFallback paper={fallbackPaper} />
         ) : processedContent ? (
-          <div className="md-prose text-sm" style={{ color: 'var(--color-text)' }}>
+          <div className="md-prose" style={{ color: 'var(--color-text)' }}>
             <ReactMarkdown remarkPlugins={remarkPlugins}>
               {processedContent}
             </ReactMarkdown>

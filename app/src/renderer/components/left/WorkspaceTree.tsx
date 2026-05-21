@@ -906,7 +906,7 @@ export function WorkspaceTree() {
       if (result.success) {
         await loadChildren(parentDir)
       } else {
-        showNotice(`Could not rename: ${result.error ?? 'failed'}`)
+        showNotice(`Could not rename to "${renameValue.trim()}": ${result.error ?? 'failed'}`)
       }
     }
     setRenaming(null)
