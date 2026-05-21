@@ -40,6 +40,7 @@ import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
+import { AwsCredentialProvider } from '../aws/credentials.js'
 import { runSubLlmText } from '../telemetry/sub-llm.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
@@ -636,7 +637,6 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     // exposed — createResearchTools skips registering S3 tools, and the
     // EC2 backend block below is also skipped.
     if (config.compute.getAwsSettings) {
-      const { AwsCredentialProvider } = await import('../aws/credentials.js')
       const awsProvider = new AwsCredentialProvider({
         getSettings: config.compute.getAwsSettings,
       })

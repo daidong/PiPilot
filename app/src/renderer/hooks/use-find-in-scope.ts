@@ -1,9 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-// Named CSS Highlight keys. The same names are referenced in find-bar.css
-// via ::highlight(...) — keep them in sync.
+// Named CSS Highlight keys. The runtime style below references the same
+// names via ::highlight(...), so keep them in sync.
 const HL_MATCH = 'find-match'
 const HL_ACTIVE = 'find-active'
+const HIGHLIGHT_STYLE_ID = 'research-copilot-find-highlights'
+const HIGHLIGHT_STYLE = `
+::highlight(${HL_MATCH}) {
+  background-color: rgba(224, 168, 32, 0.35);
+  color: inherit;
+}
+::highlight(${HL_ACTIVE}) {
+  background-color: rgba(224, 168, 32, 0.85);
+  color: #1b1713;
+}
+html.dark ::highlight(${HL_MATCH}) {
+  background-color: rgba(255, 213, 0, 0.30);
+}
+html.dark ::highlight(${HL_ACTIVE}) {
+  background-color: rgba(255, 175, 0, 0.85);
+  color: #141a1e;
+}
+`
 
 interface CSSWithHighlights {
   highlights?: {
@@ -18,6 +36,14 @@ const HIGHLIGHT_SUPPORTED =
   typeof CSS !== 'undefined' &&
   typeof (CSS as CSSWithHighlights).highlights?.set === 'function' &&
   typeof (window as any).Highlight === 'function'
+
+function ensureHighlightStyle(): void {
+  if (!HIGHLIGHT_SUPPORTED || document.getElementById(HIGHLIGHT_STYLE_ID)) return
+  const style = document.createElement('style')
+  style.id = HIGHLIGHT_STYLE_ID
+  style.textContent = HIGHLIGHT_STYLE
+  document.head.appendChild(style)
+}
 
 export interface UseFindInScopeResult {
   query: string
@@ -111,6 +137,7 @@ export function useFindInScope(
   // Apply the current ranges + active index to the browser highlight registry.
   const applyHighlights = useCallback((ranges: Range[], activeIdx: number) => {
     if (!HIGHLIGHT_SUPPORTED) return
+    ensureHighlightStyle()
     const css = CSS as CSSWithHighlights
     if (ranges.length === 0) {
       css.highlights!.delete(HL_MATCH)

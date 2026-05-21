@@ -48,6 +48,7 @@ import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 import { inferProviderFromModelId } from '../../../lib/models'
 import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
+import { AwsCredentialProvider, toSdkCredentials } from '../../../lib/aws/credentials'
 // RFC-008 §7.5: compute IPC migrated to a single discriminated-event
 // channel; the PR #62 helpers (PendingPlanStore reach-through,
 // per-target formatters, compute-run-events bridge) are gone.
@@ -2218,7 +2219,6 @@ export function registerIpcHandlers(): void {
   // report the AWS settings section renders inline.
   handleWindow('compute:test-aws-connection', async () => {
     try {
-      const { AwsCredentialProvider, toSdkCredentials } = await import('../../../lib/aws/credentials')
       const aws = (resolveSettings(loadSettingsFromConfig()).compute.backends['aws-ec2'] ?? {}) as Record<string, unknown>
       const provider = new AwsCredentialProvider({
         getSettings: () => ({

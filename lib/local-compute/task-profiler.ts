@@ -8,6 +8,7 @@
  */
 
 import type { ResearchToolContext } from '../tools/types.js'
+import { parseJsonObjectFromText } from '../utils/llm-json.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -140,15 +141,5 @@ function mergeWithDefaults(partial: Partial<TaskProfile>, command: string): Task
  * Handles code blocks, preamble text, and trailing commentary.
  */
 export function parseJsonFromLlm(response: string): Record<string, unknown> | null {
-  // Strip markdown code blocks
-  let text = response.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
-  // Find the first { and last } to extract the JSON object
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start === -1 || end === -1 || end <= start) return null
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>
-  } catch {
-    return null
-  }
+  return parseJsonObjectFromText(response)
 }

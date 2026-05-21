@@ -99,15 +99,18 @@ export function readProcessedWatermark(): Map<string, ProcessedEntry> {
   return map
 }
 
+function writeProcessedWatermark(entries: Iterable<ProcessedEntry>): void {
+  const content = Array.from(entries)
+    .map(e => JSON.stringify(e))
+    .join('\n') + '\n'
+  safeWriteFile(processedPath(), content)
+}
+
 export function markPaperProcessed(entry: ProcessedEntry): void {
-  const path = processedPath()
   const existing = readProcessedWatermark()
   existing.set(entry.canonicalKey, entry)
   // Rewrite the full file to handle updates
-  const content = Array.from(existing.values())
-    .map(e => JSON.stringify(e))
-    .join('\n') + '\n'
-  safeWriteFile(path, content)
+  writeProcessedWatermark(existing.values())
 }
 
 /**
@@ -139,11 +142,7 @@ export function restampProcessedBatch(
     changed++
   }
   if (changed === 0) return
-  const path = processedPath()
-  const content = Array.from(existing.values())
-    .map(e => JSON.stringify(e))
-    .join('\n') + '\n'
-  safeWriteFile(path, content)
+  writeProcessedWatermark(existing.values())
 }
 
 /**
@@ -162,11 +161,7 @@ export function markFulltextFailure(canonicalKey: string): void {
     lastFulltextTryAt: new Date().toISOString(),
   }
   existing.set(canonicalKey, updated)
-  const path = processedPath()
-  const content = Array.from(existing.values())
-    .map(e => JSON.stringify(e))
-    .join('\n') + '\n'
-  safeWriteFile(path, content)
+  writeProcessedWatermark(existing.values())
 }
 
 // ── Provenance: provenance.jsonl ───────────────────────────────────────────

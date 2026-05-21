@@ -11,17 +11,16 @@
  * misleading findings.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { PATHS } from '../../types.js'
 import type { LiveSpanSummary } from '../live-processor.js'
-import { spanToSummary, dateStampUtc, type OtlpEnvelope } from '../otlp-decode.js'
-
-interface TombstoneRow {
-  traceId: string
-  kind: 'trace_dropped'
-  reason?: string
-}
+import { dateStampUtc } from '../otlp-decode.js'
+import {
+  listTraceSpanFiles,
+  listTraceTombstoneFiles,
+  readTraceSpansFile,
+  readTraceTombstoneIds,
+  traceFilesDir
+} from '../trace-files.js'
 
 export interface LoadedTrace {
   traceId: string
@@ -59,74 +58,6 @@ function buildChildrenMap(spans: LiveSpanSummary[]): Map<string, LiveSpanSummary
   return out
 }
 
-function readSpansFile(filePath: string): LiveSpanSummary[] {
-  if (!existsSync(filePath)) return []
-  const out: LiveSpanSummary[] = []
-  try {
-    const raw = readFileSync(filePath, 'utf8')
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        const env = JSON.parse(trimmed) as OtlpEnvelope
-        for (const scope of env.scopeSpans ?? []) {
-          for (const span of scope.spans ?? []) {
-            out.push(spanToSummary(span))
-          }
-        }
-      } catch {
-        // Skip malformed lines (writer crash mid-line is theoretically possible).
-      }
-    }
-  } catch {
-    // File unreadable.
-  }
-  return out
-}
-
-function readTombstones(filePath: string): Set<string> {
-  if (!existsSync(filePath)) return new Set()
-  const out = new Set<string>()
-  try {
-    const raw = readFileSync(filePath, 'utf8')
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        const row = JSON.parse(trimmed) as TombstoneRow
-        if (row.traceId) out.add(row.traceId)
-      } catch {
-        // skip
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return out
-}
-
-function listSpanFiles(tracesDir: string): string[] {
-  if (!existsSync(tracesDir)) return []
-  try {
-    return readdirSync(tracesDir)
-      .filter((f) => /^spans\.\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
-      .sort()
-      .reverse() // newest first
-  } catch {
-    return []
-  }
-}
-
-function listTombstoneFiles(tracesDir: string): string[] {
-  if (!existsSync(tracesDir)) return []
-  try {
-    return readdirSync(tracesDir)
-      .filter((f) => /^tombstones\.\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
-  } catch {
-    return []
-  }
-}
-
 /**
  * Load one trace for diagnostics. Scans the most recent `lookbackDays`
  * (default 7) of spans files. Returns `null` if the traceId is tombstoned
@@ -137,19 +68,17 @@ export function loadTraceForDiagnostics(
   traceId: string,
   lookbackDays = 7
 ): LoadedTrace | null {
-  const tracesDir = join(projectPath, PATHS.traces)
+  const tracesDir = traceFilesDir(projectPath)
   const tombs = new Set<string>()
-  for (const f of listTombstoneFiles(tracesDir)) {
-    for (const tid of readTombstones(join(tracesDir, f))) tombs.add(tid)
+  for (const f of listTraceTombstoneFiles(tracesDir)) {
+    for (const tid of readTraceTombstoneIds(join(tracesDir, f))) tombs.add(tid)
   }
   if (tombs.has(traceId)) return null
 
   const all: LiveSpanSummary[] = []
-  const files = listSpanFiles(tracesDir).slice(0, lookbackDays)
+  const files = listTraceSpanFiles(tracesDir, true).slice(0, lookbackDays)
   for (const f of files) {
-    for (const s of readSpansFile(join(tracesDir, f))) {
-      if (s.traceId === traceId) all.push(s)
-    }
+    all.push(...readTraceSpansFile(join(tracesDir, f), traceId))
   }
   if (all.length === 0) return null
   const spans = dedupAndSort(all)
@@ -170,16 +99,16 @@ export function loadTraceCorpus(
   projectPath: string,
   lookbackDays = 1
 ): { spansByTrace: Map<string, LiveSpanSummary[]>; allSpans: LiveSpanSummary[] } {
-  const tracesDir = join(projectPath, PATHS.traces)
+  const tracesDir = traceFilesDir(projectPath)
   const tombs = new Set<string>()
-  for (const f of listTombstoneFiles(tracesDir)) {
-    for (const tid of readTombstones(join(tracesDir, f))) tombs.add(tid)
+  for (const f of listTraceTombstoneFiles(tracesDir)) {
+    for (const tid of readTraceTombstoneIds(join(tracesDir, f))) tombs.add(tid)
   }
   const spansByTrace = new Map<string, LiveSpanSummary[]>()
   const allSpans: LiveSpanSummary[] = []
-  const files = listSpanFiles(tracesDir).slice(0, lookbackDays)
+  const files = listTraceSpanFiles(tracesDir, true).slice(0, lookbackDays)
   for (const f of files) {
-    for (const s of readSpansFile(join(tracesDir, f))) {
+    for (const s of readTraceSpansFile(join(tracesDir, f))) {
       if (tombs.has(s.traceId)) continue
       let bucket = spansByTrace.get(s.traceId)
       if (!bucket) {

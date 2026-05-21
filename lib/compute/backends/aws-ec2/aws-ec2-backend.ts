@@ -47,7 +47,7 @@ import type {
   RunState,
   CostEstimate,
 } from '../../types.js'
-import type { AwsCredentialProvider } from '../../../aws/credentials.js'
+import { toSdkCredentials, type AwsCredentialProvider } from '../../../aws/credentials.js'
 
 export interface AwsEc2BackendPlanData {
   instanceSpec: AwsEc2InstanceSpec
@@ -405,7 +405,6 @@ export class AwsEc2Backend implements ComputeBackend {
     const region = record.instanceSpec.region
     const instanceId = record.instanceId!
     const { EC2Client, DescribeInstancesCommand, TerminateInstancesCommand } = await import('@aws-sdk/client-ec2')
-    const { toSdkCredentials } = await import('../../../aws/credentials.js')
     const creds = this.credentialProvider.resolve({ region })
     const client = new EC2Client({
       region,

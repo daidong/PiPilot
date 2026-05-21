@@ -68,17 +68,23 @@ export function acquireProcessLock(): boolean {
  * Returns true if we created it, false if it already existed.
  */
 function tryExclusiveCreate(lockPath: string): boolean {
+  let fd: number | null = null
   try {
     // O_CREAT|O_EXCL|O_WRONLY: fails with EEXIST if file already exists (atomic)
-    const fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY)
+    fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY)
     const pidBuf = Buffer.from(String(process.pid))
     writeSync(fd, pidBuf)
     closeSync(fd)
+    fd = null
     return true
   } catch (err: any) {
     if (err.code === 'EEXIST') return false
     // Other error (permissions etc.) — treat as lock failure
     return false
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd) } catch { /* ignore */ }
+    }
   }
 }
 

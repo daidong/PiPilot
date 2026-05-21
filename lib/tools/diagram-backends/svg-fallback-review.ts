@@ -20,6 +20,7 @@ import type {
   ThresholdTable,
   Verdict,
 } from './types.js'
+import { parseJsonObjectFromText } from '../../utils/llm-json.js'
 
 // Mildly stricter than the API-key providers to counter self-grading bias.
 const FALLBACK_THRESHOLDS: ThresholdTable = {
@@ -87,33 +88,6 @@ function clampScore(n: unknown): number {
   return Math.min(10, Math.max(0, v))
 }
 
-/**
- * Extract a JSON object from LLM text. Prefers a fenced ```json block; if
- * not present, picks the first balanced {…} it finds. Returns null when
- * parsing fails so the caller can build a conservative review.
- */
-function extractJsonObject(text: string): Record<string, unknown> | null {
-  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/i)
-  if (fenceMatch) {
-    try { return JSON.parse(fenceMatch[1]) as Record<string, unknown> } catch { /* fall through */ }
-  }
-  // Fallback: scan for a balanced {...}. Naive but adequate for single-object replies.
-  const firstBrace = text.indexOf('{')
-  if (firstBrace === -1) return null
-  let depth = 0
-  for (let i = firstBrace; i < text.length; i++) {
-    const ch = text[i]
-    if (ch === '{') depth++
-    else if (ch === '}') {
-      depth--
-      if (depth === 0) {
-        try { return JSON.parse(text.slice(firstBrace, i + 1)) as Record<string, unknown> } catch { return null }
-      }
-    }
-  }
-  return null
-}
-
 export interface SvgFallbackReviewOptions {
   callLlm: (systemPrompt: string, userContent: string) => Promise<string>
   modelLabel?: string
@@ -131,7 +105,7 @@ export function createSvgFallbackReviewProvider(
     const threshold = thresholds[req.docType] ?? thresholds.default
     const svgSource = req.image.toString('utf-8')
     const text = await callLlm(REVIEW_SYSTEM_PROMPT, buildUser(req, threshold, svgSource))
-    const parsed = extractJsonObject(text)
+    const parsed = parseJsonObjectFromText(text)
 
     if (!parsed) {
       // Conservative stance: no usable structured output → treat as needs_edit

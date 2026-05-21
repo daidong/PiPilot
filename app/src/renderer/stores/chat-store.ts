@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { useToolEventsStore, type ToolEvent } from '@shared/stores/tool-events-store'
+import { useUsageStore } from './usage-store'
+import { useUIStore } from './ui-store'
 
 export interface ChatMessage {
   id: string
@@ -87,11 +89,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     // Reset run stats for the new message
-    const { useUsageStore } = await import('./usage-store')
     useUsageStore.getState().resetRun()
 
     try {
-      const { useUIStore } = await import('./ui-store')
       const model = useUIStore.getState().selectedModel
       await api.sendMessage(text, undefined, model, images, {
         clientMessageId: userMsg.id,
@@ -149,18 +149,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clear: () => {
     _sessionId = ''
     return set({
-    messages: [],
-    streamingText: '',
-    isStreaming: false,
-    retryNotice: null,
-    savedMessageIds: new Set<string>(),
-    turnToolEvents: new Map<string, ToolEvent[]>(),
-    draftText: '',
-    hasMore: false,
-    isLoadingHistory: false,
-    _offset: 0,
-    scrollToMessageId: null
-  })},
+      messages: [],
+      streamingText: '',
+      isStreaming: false,
+      retryNotice: null,
+      savedMessageIds: new Set<string>(),
+      turnToolEvents: new Map<string, ToolEvent[]>(),
+      draftText: '',
+      hasMore: false,
+      isLoadingHistory: false,
+      _offset: 0,
+      scrollToMessageId: null
+    })
+  },
 
   markSaved: (messageId: string) => {
     set((s) => {

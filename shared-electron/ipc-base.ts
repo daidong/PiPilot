@@ -29,6 +29,7 @@ export type { AppSettings } from '../shared-ui/settings-types'
 // importable from plain Node tests (this file's top-level `import { shell }
 // from 'electron'` is fatal outside the Electron runtime).
 import { API_KEY_NAMES, applyApiKeysToEnv } from './api-key-loader'
+import { countJsonlRows, readJsonlPageFromEnd } from './jsonl'
 
 // Model registry helpers come from shared-ui's pure-TS modules (no React,
 // no electron deps), the same way DEFAULT_SETTINGS does above. This is the
@@ -656,11 +657,9 @@ export function registerSessionHandlers(
     if (!projectPath) return []
     const file = join(projectPath, sessionsPathKey, `${sid}.jsonl`)
     if (!existsSync(file)) return []
-    const lines = readFileSync(file, 'utf-8').split('\n').filter(Boolean)
-    // offset=0 means most recent batch; we read from the end
-    const start = Math.max(0, lines.length - offset - limit)
-    const end = lines.length - offset
-    return lines.slice(start, end).map((l) => JSON.parse(l))
+    // offset=0 means most recent batch; read from the end without loading
+    // a large chat history file into memory for every scroll page.
+    return readJsonlPageFromEnd(file, offset, limit)
   })
 
   handle('session:get-total-count', (sid: string) => {
@@ -668,7 +667,7 @@ export function registerSessionHandlers(
     if (!projectPath) return 0
     const file = join(projectPath, sessionsPathKey, `${sid}.jsonl`)
     if (!existsSync(file)) return 0
-    return readFileSync(file, 'utf-8').split('\n').filter(Boolean).length
+    return countJsonlRows(file)
   })
 
   handle('session:mark-saved', (sid: string, messageId: string) => {

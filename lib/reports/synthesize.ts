@@ -30,6 +30,7 @@ import type {
   TalkingPoint,
 } from './types.js'
 import { citeKeysOf } from './input-builder.js'
+import { parseJsonObjectFromText } from '../utils/llm-json.js'
 
 // ─── Prompts ─────────────────────────────────────────────────────────────
 
@@ -143,21 +144,7 @@ interface RawSynthesis {
  * back to an empty synthesis (see synthesizeThemes).
  */
 export function extractJsonFromResponse(raw: string): RawSynthesis | null {
-  // Strategy 1: fenced ```json block.
-  const fenced = raw.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/i)
-  if (fenced) {
-    try { return JSON.parse(fenced[1]) as RawSynthesis } catch { /* fall through */ }
-  }
-
-  // Strategy 2: greedy first-brace to last-brace.
-  const firstBrace = raw.indexOf('{')
-  const lastBrace = raw.lastIndexOf('}')
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    const candidate = raw.slice(firstBrace, lastBrace + 1)
-    try { return JSON.parse(candidate) as RawSynthesis } catch { /* fall through */ }
-  }
-
-  return null
+  return parseJsonObjectFromText<RawSynthesis>(raw)
 }
 
 /**

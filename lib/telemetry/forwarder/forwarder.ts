@@ -170,9 +170,9 @@ function readNewLines(filePath: string, fromOffset: number): { lines: string[]; 
   // Read just the slice we haven't seen.
   const fd = openSync(filePath, 'r')
   try {
-    const buf = Buffer.alloc(size - fromOffset)
-    fsReadSync(fd, buf, 0, buf.length, fromOffset)
-    const text = buf.toString('utf8')
+    const buf = Buffer.allocUnsafe(size - fromOffset)
+    const bytesRead = fsReadSync(fd, buf, 0, buf.length, fromOffset)
+    const text = buf.subarray(0, bytesRead).toString('utf8')
     // If the last char isn't a newline, the writer is mid-append. Hold the
     // partial fragment for next round by reporting offset = end-of-last-newline.
     const lastNl = text.lastIndexOf('\n')

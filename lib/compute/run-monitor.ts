@@ -23,10 +23,13 @@ export function readFileTail(filePath: string, maxBytes: number): string {
     if (stat.size === 0) return ''
     const start = Math.max(0, stat.size - maxBytes)
     const fd = fs.openSync(filePath, 'r')
-    const buf = Buffer.alloc(Math.min(stat.size, maxBytes))
-    fs.readSync(fd, buf, 0, buf.length, start)
-    fs.closeSync(fd)
-    return buf.toString('utf-8')
+    try {
+      const buf = Buffer.allocUnsafe(Math.min(stat.size, maxBytes))
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, start)
+      return buf.subarray(0, bytesRead).toString('utf-8')
+    } finally {
+      fs.closeSync(fd)
+    }
   } catch {
     return ''
   }
