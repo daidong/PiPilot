@@ -257,7 +257,17 @@ function ModalSection({
       subtitle="Remote GPU compute via modal.com. Plans require approval before running and are auto-killed when estimated cost exceeds the threshold below."
       status={statusFromAvailability(backend)}
     >
-      <ModalCredentialFields />
+      <CredentialFields
+        fields={MODAL_KEYS}
+        idPrefix="modal"
+        helpLink={{ url: 'https://modal.com/settings/tokens', label: 'Get tokens' }}
+        footer={
+          <>
+            Tokens are stored in plaintext in <code className="font-mono">~/.research-copilot/config.json</code> (owner-only
+            file permissions) and exported to the spawned Modal CLI as <code className="font-mono">MODAL_TOKEN_ID</code> + <code className="font-mono">MODAL_TOKEN_SECRET</code>.
+          </>
+        }
+      />
 
       <div>
         <label className="block text-xs font-medium t-text mb-1.5">Auto-kill threshold (USD)</label>
@@ -291,7 +301,31 @@ const MODAL_KEYS = [
   },
 ] as const
 
-function ModalCredentialFields() {
+interface CredentialFieldSpec {
+  name: string
+  label: string
+  placeholder: string
+}
+
+interface CredentialFieldsProps {
+  /** Secret fields to render (key name → label/placeholder). */
+  fields: readonly CredentialFieldSpec[]
+  /** "Get tokens / Get keys" external link. */
+  helpLink: { url: string; label: string }
+  /** Prefix for input element ids, e.g. 'modal' or 'aws'. */
+  idPrefix: string
+  /** Storage-disclosure paragraph rendered under the inputs. */
+  footer: React.ReactNode
+}
+
+/**
+ * Reusable secret-credential form: password inputs with show/hide toggles,
+ * per-field save buttons, "configured" badges, and a storage-disclosure
+ * footer. Shared by the Modal and AWS sections — they had byte-for-byte the
+ * same state machine and markup, differing only in field list, help link,
+ * id prefix, and footer text.
+ */
+function CredentialFields({ fields, helpLink, idPrefix, footer }: CredentialFieldsProps) {
   const [values, setValues] = useState<Record<string, string>>({})
   const [status, setStatus] = useState<Record<string, boolean>>({})
   const [visible, setVisible] = useState<Record<string, boolean>>({})
@@ -337,23 +371,23 @@ function ModalCredentialFields() {
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium t-text">Credentials</span>
         <a
-          href="https://modal.com/settings/tokens"
+          href={helpLink.url}
           target="_blank"
           rel="noreferrer"
-          onClick={(e) => { e.preventDefault(); window.open('https://modal.com/settings/tokens', '_blank') }}
+          onClick={(e) => { e.preventDefault(); window.open(helpLink.url, '_blank') }}
           className="text-[11px] t-text-muted hover:t-text inline-flex items-center gap-1"
         >
-          Get tokens <ExternalLink size={10} />
+          {helpLink.label} <ExternalLink size={10} />
         </a>
       </div>
-      {MODAL_KEYS.map((field) => {
+      {fields.map((field) => {
         const alreadySet = status[field.name]
         const isSaving = saving[field.name]
         const currentValue = values[field.name] ?? ''
         return (
           <div key={field.name}>
             <div className="flex items-center justify-between mb-1">
-              <label htmlFor={`modal-${field.name}`} className="text-[11px] t-text-secondary">
+              <label htmlFor={`${idPrefix}-${field.name}`} className="text-[11px] t-text-secondary">
                 {field.label}
               </label>
               {alreadySet && (
@@ -365,7 +399,7 @@ function ModalCredentialFields() {
             <div className="flex items-center gap-1.5">
               <div className="relative flex-1">
                 <input
-                  id={`modal-${field.name}`}
+                  id={`${idPrefix}-${field.name}`}
                   type={visible[field.name] ? 'text' : 'password'}
                   value={currentValue}
                   onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
@@ -396,10 +430,7 @@ function ModalCredentialFields() {
         )
       })}
       {saveError && <p className="text-[11px] text-red-500">{saveError}</p>}
-      <p className="text-[11px] t-text-muted leading-relaxed">
-        Tokens are stored encrypted in <code className="font-mono">~/.research-copilot/config.json</code> and exported
-        to the spawned Modal CLI as <code className="font-mono">MODAL_TOKEN_ID</code> + <code className="font-mono">MODAL_TOKEN_SECRET</code>.
-      </p>
+      <p className="text-[11px] t-text-muted leading-relaxed">{footer}</p>
     </div>
   )
 }
@@ -451,7 +482,19 @@ function AwsSection({
         </button>
       </div>
       <AwsSetupHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <AwsCredentialFields />
+      <CredentialFields
+        fields={AWS_KEYS}
+        idPrefix="aws"
+        helpLink={{ url: 'https://console.aws.amazon.com/iam/home#/security_credentials', label: 'Get keys' }}
+        footer={
+          <>
+            Keys are stored in plaintext in <code className="font-mono">~/.research-copilot/config.json</code> (owner-only
+            file permissions) and exported to the EC2 backend + S3 tools via <code className="font-mono">AWS_ACCESS_KEY_ID</code> + <code className="font-mono">AWS_SECRET_ACCESS_KEY</code>
+            {' '}(+ optional <code className="font-mono">AWS_SESSION_TOKEN</code>).
+          </>
+        }
+      />
+
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-xs font-medium t-text mb-1.5">Default region</label>
@@ -505,110 +548,6 @@ const AWS_KEYS = [
   { name: 'AWS_SECRET_ACCESS_KEY', label: 'Secret access key', placeholder: '••••' },
   { name: 'AWS_SESSION_TOKEN',     label: 'Session token (optional)', placeholder: 'For STS / SSO temp creds' },
 ] as const
-
-function AwsCredentialFields() {
-  const [values, setValues] = useState<Record<string, string>>({})
-  const [status, setStatus] = useState<Record<string, boolean>>({})
-  const [visible, setVisible] = useState<Record<string, boolean>>({})
-  const [saving, setSaving] = useState<Record<string, boolean>>({})
-  const [saveError, setSaveError] = useState<string | null>(null)
-
-  const refreshStatus = () => {
-    api.getApiKeyStatus?.()
-      .then((s: Record<string, boolean>) => setStatus(s ?? {}))
-      .catch(() => { /* non-fatal */ })
-  }
-  useEffect(() => { refreshStatus() }, [])
-
-  const persist = async (name: string) => {
-    const val = (values[name] ?? '').trim()
-    if (!val) return
-    setSaving((s) => ({ ...s, [name]: true }))
-    setSaveError(null)
-    try {
-      const result = await api.saveApiKey?.(name, val)
-      if (!result?.success) {
-        setSaveError(result?.error || `Failed to save ${name}.`)
-        return
-      }
-      setValues((v) => ({ ...v, [name]: '' }))
-      refreshStatus()
-      void refreshBackendAvailability()
-    } finally {
-      setSaving((s) => ({ ...s, [name]: false }))
-    }
-  }
-
-  return (
-    <div className="space-y-2.5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium t-text">Credentials</span>
-        <a
-          href="https://console.aws.amazon.com/iam/home#/security_credentials"
-          target="_blank"
-          rel="noreferrer"
-          onClick={(e) => { e.preventDefault(); window.open('https://console.aws.amazon.com/iam/home#/security_credentials', '_blank') }}
-          className="text-[11px] t-text-muted hover:t-text inline-flex items-center gap-1"
-        >
-          Get keys <ExternalLink size={10} />
-        </a>
-      </div>
-      {AWS_KEYS.map((field) => {
-        const alreadySet = status[field.name]
-        const isSaving = saving[field.name]
-        const currentValue = values[field.name] ?? ''
-        return (
-          <div key={field.name}>
-            <div className="flex items-center justify-between mb-1">
-              <label htmlFor={`aws-${field.name}`} className="text-[11px] t-text-secondary">{field.label}</label>
-              {alreadySet && (
-                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-500">
-                  <Check size={10} /> configured
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="relative flex-1">
-                <input
-                  id={`aws-${field.name}`}
-                  type={visible[field.name] ? 'text' : 'password'}
-                  value={currentValue}
-                  onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void persist(field.name) } }}
-                  placeholder={alreadySet ? '••••••••  (already set — leave blank to keep)' : field.placeholder}
-                  className="w-full text-[12px] px-2.5 py-1.5 rounded-md border t-border t-bg-base t-text font-mono pr-8 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-                />
-                <button
-                  type="button"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 t-text-muted hover:t-text"
-                  onClick={() => setVisible((v) => ({ ...v, [field.name]: !v[field.name] }))}
-                  tabIndex={-1}
-                  aria-label={visible[field.name] ? 'Hide value' : 'Show value'}
-                >
-                  {visible[field.name] ? <EyeOff size={12} /> : <Eye size={12} />}
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={() => void persist(field.name)}
-                disabled={isSaving || !currentValue.trim()}
-                className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-40"
-              >
-                {isSaving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
-        )
-      })}
-      {saveError && <p className="text-[11px] text-red-500">{saveError}</p>}
-      <p className="text-[11px] t-text-muted leading-relaxed">
-        Keys are stored encrypted in <code className="font-mono">~/.research-copilot/config.json</code> and exported
-        to the EC2 backend + S3 tools via <code className="font-mono">AWS_ACCESS_KEY_ID</code> + <code className="font-mono">AWS_SECRET_ACCESS_KEY</code>
-        (+ optional <code className="font-mono">AWS_SESSION_TOKEN</code>).
-      </p>
-    </div>
-  )
-}
 
 interface AwsTestResult {
   success: boolean

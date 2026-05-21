@@ -6,7 +6,7 @@
  * Both personal-assistant and research-pilot-desktop import from here.
  */
 import { shell } from 'electron'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync, cpSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync, cpSync, chmodSync } from 'fs'
 import { extname, join, resolve, isAbsolute, basename } from 'path'
 import { homedir } from 'os'
 import type { BrowserWindow } from 'electron'
@@ -30,40 +30,13 @@ export type { AppSettings } from '../shared-ui/settings-types'
 // from 'electron'` is fatal outside the Electron runtime).
 import { API_KEY_NAMES, applyApiKeysToEnv } from './api-key-loader'
 
-// Mirrors lib/models.ts:inferProviderFromModelId — kept inline because
-// shared-electron can't import from lib or shared-ui (cross-rootDir).
-// When updating either copy, sync the other.
-const BARE_MODEL_PREFIXES: ReadonlyArray<readonly [string, string]> = [
-  ['claude-', 'anthropic'],
-  ['gpt-', 'openai'],
-  ['o3', 'openai'],
-  ['o4', 'openai'],
-  ['gemini-', 'google'],
-  ['deepseek-', 'deepseek'],
-]
-
-function inferProviderFromModelId(modelId: string): string | null {
-  for (const [prefix, provider] of BARE_MODEL_PREFIXES) {
-    if (modelId.startsWith(prefix)) return provider
-  }
-  return null
-}
-
-// Mirrors lib/models.ts:RETIRED_MODEL_MIGRATIONS — kept inline because
-// shared-electron can't import from lib or shared-ui (cross-rootDir).
-const RETIRED_MODEL_MIGRATIONS: Record<string, string> = {
-  'openai:gpt-5.4-mini': 'openai:gpt-5.5',
-  'openai:gpt-5.4-nano': 'openai:gpt-5.5',
-  'openai:gpt-5.4-pro': 'openai:gpt-5.5',
-  'openai:gpt-4o': 'openai:gpt-5.5',
-  'openai-codex:gpt-5.4-mini': 'openai-codex:gpt-5.5',
-  'anthropic:claude-opus-4-5-20251101': 'anthropic:claude-opus-4-7',
-  'anthropic:claude-sonnet-4-5-20250929': 'anthropic:claude-sonnet-4-6',
-  'anthropic:claude-haiku-4-5-20251001': 'anthropic:claude-opus-4-7',
-  'anthropic-sub:claude-opus-4-5-20251101': 'anthropic-sub:claude-opus-4-7',
-  'anthropic-sub:claude-sonnet-4-5-20250929': 'anthropic-sub:claude-sonnet-4-6',
-  'anthropic-sub:claude-haiku-4-5-20251001': 'anthropic-sub:claude-opus-4-7',
-}
+// Model registry helpers come from shared-ui's pure-TS modules (no React,
+// no electron deps), the same way DEFAULT_SETTINGS does above. This is the
+// single source of truth — the previous inline copies of BARE_MODEL_PREFIXES
+// and RETIRED_MODEL_MIGRATIONS silently drifted from shared-ui (e.g. the
+// gpt-5.4-pro migration). Importing them keeps main/renderer in lockstep.
+import { inferProviderFromModelId } from '../shared-ui/utils'
+import { RETIRED_MODEL_MIGRATIONS, DEFAULT_MODEL } from '../shared-ui/constants'
 import type { OAuthCredentials } from '@mariozechner/pi-ai/oauth'
 import { TREE_MAX_ENTRIES, isWithinRoot, listTreeChildren, searchTree } from './file-tree'
 
@@ -88,7 +61,11 @@ function readConfig(): AppConfig {
 
 function writeConfig(config: AppConfig): void {
   if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true })
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
+  // API keys live here in plaintext, so restrict to owner-only (0600), the
+  // same posture as the OAuth credential files below. `mode` only applies
+  // when the file is first created, so chmod existing files too.
+  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 })
+  try { chmodSync(CONFIG_FILE, 0o600) } catch { /* best-effort on platforms without POSIX perms */ }
 }
 
 /**
@@ -245,11 +222,15 @@ export function hasLlmAuth(): boolean {
  * Returns null if nothing is configured.
  */
 export function pickPreferredModelId(): string | null {
-  if (loadCodexCredentials()) return 'openai-codex:gpt-5.4'
-  if (loadAnthropicSubCredentials()) return 'anthropic-sub:claude-opus-4-6'
-  if ((process.env.OPENAI_API_KEY || '').trim()) return 'openai:gpt-5.4'
-  if ((process.env.ANTHROPIC_API_KEY || '').trim()) return 'anthropic:claude-opus-4-6'
-  if ((process.env.DEEPSEEK_API_KEY || '').trim()) return 'deepseek:deepseek-v4-flash'
+  // Flagship-tier per provider — kept consistent with DEFAULT_MODEL and
+  // lib/models.ts:MODEL_TIERS so the auto-resolved default matches what the
+  // model picker shows. (Previously hardcoded to the previous generation,
+  // which drifted from the flagship default.)
+  if (loadCodexCredentials()) return 'openai-codex:gpt-5.5'
+  if (loadAnthropicSubCredentials()) return 'anthropic-sub:claude-opus-4-7'
+  if ((process.env.OPENAI_API_KEY || '').trim()) return DEFAULT_MODEL
+  if ((process.env.ANTHROPIC_API_KEY || '').trim()) return 'anthropic:claude-opus-4-7'
+  if ((process.env.DEEPSEEK_API_KEY || '').trim()) return 'deepseek:deepseek-v4-pro'
   return null
 }
 

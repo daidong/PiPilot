@@ -16,6 +16,7 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import { RunStore } from './run-store.js'
+import { readFileTail, getFileSize, estimateLines } from '../compute/run-monitor.js'
 import { getProvider } from './sandbox/detect.js'
 import { deriveFailure } from './failure-signals.js'
 import { extractProgress, extractResult } from './progress.js'
@@ -137,40 +138,6 @@ function takeSnapshot(store: RunStore): PreRunSnapshot {
     freeDiskMb,
     activeRuns,
   }
-}
-
-// ---------------------------------------------------------------------------
-// Tail reading utility
-// ---------------------------------------------------------------------------
-
-function readFileTail(filePath: string, maxBytes: number): string {
-  try {
-    const stat = fs.statSync(filePath)
-    if (stat.size === 0) return ''
-    const start = Math.max(0, stat.size - maxBytes)
-    const fd = fs.openSync(filePath, 'r')
-    const buf = Buffer.alloc(Math.min(stat.size, maxBytes))
-    fs.readSync(fd, buf, 0, buf.length, start)
-    fs.closeSync(fd)
-    return buf.toString('utf-8')
-  } catch {
-    return ''
-  }
-}
-
-function getFileSize(filePath: string): number {
-  try {
-    return fs.statSync(filePath).size
-  } catch {
-    return 0
-  }
-}
-
-function estimateLines(bytes: number, tail: string): number {
-  if (bytes === 0 || tail.length === 0) return 0
-  const tailLines = tail.split('\n').length
-  if (tail.length >= bytes) return tailLines
-  return Math.max(tailLines, Math.round((bytes / tail.length) * tailLines))
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ import { expandHome, resolveUserPath } from '../utils/path-utils.js'
 import { computeEc2ElapsedCost } from './cost-estimator.js'
 import { extractProgress } from '../local-compute/progress.js'
 import { AwsEc2RunStore } from './ec2-run-store.js'
+import { readFileTail, getFileSize, estimateLines } from '../compute/run-monitor.js'
 import {
   type AwsEc2RunRecord,
   type AwsEc2RunState,
@@ -94,31 +95,6 @@ function nextRunId(): string {
   return 'er-' + crypto.randomBytes(4).toString('hex')
 }
 
-function readFileTail(filePath: string, maxBytes: number): string {
-  try {
-    const stat = fs.statSync(filePath)
-    if (stat.size === 0) return ''
-    const start = Math.max(0, stat.size - maxBytes)
-    const fd = fs.openSync(filePath, 'r')
-    const buf = Buffer.alloc(Math.min(stat.size, maxBytes))
-    fs.readSync(fd, buf, 0, buf.length, start)
-    fs.closeSync(fd)
-    return buf.toString('utf-8')
-  } catch {
-    return ''
-  }
-}
-
-function getFileSize(filePath: string): number {
-  try { return fs.statSync(filePath).size } catch { return 0 }
-}
-
-function estimateLines(bytes: number, tail: string): number {
-  if (bytes === 0 || tail.length === 0) return 0
-  const tailLines = tail.split('\n').length
-  if (tail.length >= bytes) return tailLines
-  return Math.max(tailLines, Math.round((bytes / tail.length) * tailLines))
-}
 
 interface ActiveStream {
   /** ssh2 Client instance — keyed for cleanup on stop/destroy. */

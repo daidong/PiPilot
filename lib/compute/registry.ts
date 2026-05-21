@@ -15,34 +15,9 @@ import type {
   PlanRecord,
 } from './types.js'
 import { PlanStore } from './plan-store.js'
+import { probeWithTimeout } from './probe.js'
 
 const TOOL_PREFIX_PATTERN = /^[a-z][a-z0-9_]*$/
-
-/** Bound on every availability probe initiated from the Registry. */
-const PROBE_TIMEOUT_MS = 3000
-
-/**
- * Race a probeAvailability call against a hard timeout so a hung probe
- * (Modal CLI blocked on the network, docker daemon stuck) can't stall
- * hydrate(), refreshAvailability(), or register's initial probe — all
- * of which run on app boot or in response to user actions where a hang
- * would block the entire compute surface from rendering.
- */
-async function probeWithTimeout(
-  backend: ComputeBackend,
-  opts?: { force?: boolean },
-): Promise<import('./types.js').BackendAvailability> {
-  return Promise.race([
-    backend.probeAvailability(opts).catch((err) => ({
-      available: false,
-      missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
-    })),
-    new Promise<import('./types.js').BackendAvailability>(resolve => setTimeout(() => resolve({
-      available: false,
-      missingRequirements: [`Availability probe timed out after ${PROBE_TIMEOUT_MS}ms`],
-    }), PROBE_TIMEOUT_MS)),
-  ])
-}
 
 export interface RegistryOpts {
   projectPath: string

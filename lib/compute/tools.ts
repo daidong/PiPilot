@@ -19,30 +19,8 @@ import { toAgentResult, toolError } from '../tools/tool-utils.js'
 import { resolveUserPath } from '../utils/path-utils.js'
 import type { ComputeRegistry } from './registry.js'
 import type { ComputeBackend } from './backend.js'
-import type { BackendAvailability, ComputeRun, RunStatus } from './types.js'
-
-/** Bound on every probeAvailability call surfaced through the LLM tool layer. */
-const PROBE_TIMEOUT_MS = 3000
-
-/**
- * Wrap a backend's probeAvailability with a hard timeout so a broken
- * probe (hanging CLI, blocked syscall) can't stall the entire
- * `list_compute_backends` response. On timeout we surface the backend
- * as unavailable rather than missing — the LLM still gets a usable
- * answer it can act on.
- */
-async function probeWithTimeout(backend: ComputeBackend): Promise<BackendAvailability> {
-  return Promise.race([
-    backend.probeAvailability().catch((err): BackendAvailability => ({
-      available: false,
-      missingRequirements: [`Availability probe threw: ${err instanceof Error ? err.message : String(err)}`],
-    })),
-    new Promise<BackendAvailability>(resolve => setTimeout(() => resolve({
-      available: false,
-      missingRequirements: [`Availability probe timed out after ${PROBE_TIMEOUT_MS}ms`],
-    }), PROBE_TIMEOUT_MS)),
-  ])
-}
+import type { ComputeRun, RunStatus } from './types.js'
+import { probeWithTimeout } from './probe.js'
 
 interface ToolsOpts {
   registry: ComputeRegistry

@@ -404,200 +404,150 @@ export interface ElectronAPI {
   loadSavedMessageIds: (sessionId: string) => Promise<string[]>
 }
 
+/**
+ * IPC helpers — collapse the repetitive ipcRenderer.invoke / on+removeListener
+ * boilerplate so adding a channel can't accidentally leak a listener or drop
+ * the unsubscribe. `invoke` is a typed request/response passthrough;
+ * `subscribe` wires an event listener and returns its disposer; `send` is a
+ * fire-and-forget passthrough.
+ */
+function invoke<T = any>(channel: string, ...args: any[]): Promise<T> {
+  return ipcRenderer.invoke(channel, ...args)
+}
+
+function subscribe<T = any>(channel: string, cb: (payload: T) => void): () => void {
+  const handler = (_: unknown, payload: T) => cb(payload)
+  ipcRenderer.on(channel, handler as (...args: unknown[]) => void)
+  return () => ipcRenderer.removeListener(channel, handler as (...args: unknown[]) => void)
+}
+
+function send(channel: string, ...args: any[]): void {
+  ipcRenderer.send(channel, ...args)
+}
+
 const api: ElectronAPI = {
   sendMessage: (message, rawMentions, model, images, envelope) =>
-    ipcRenderer.invoke('agent:send', message, rawMentions, model, images, envelope),
-  onStreamChunk: (cb) => {
-    const handler = (_: any, chunk: string) => cb(chunk)
-    ipcRenderer.on('agent:stream-chunk', handler)
-    return () => ipcRenderer.removeListener('agent:stream-chunk', handler)
-  },
-  onAgentDone: (cb) => {
-    const handler = (_: any, result: any) => cb(result)
-    ipcRenderer.on('agent:done', handler)
-    return () => ipcRenderer.removeListener('agent:done', handler)
-  },
-  onUsage: (cb) => {
-    const handler = (_: any, event: UsageEvent) => cb(event)
-    ipcRenderer.on('agent:usage', handler)
-    return () => ipcRenderer.removeListener('agent:usage', handler)
-  },
-  getAnthropicAuthStatus: () => ipcRenderer.invoke('auth:get-anthropic-status'),
-  onAnthropicAuthStatus: (cb) => {
-    const handler = (_: any, status: any) => cb(status)
-    ipcRenderer.on('auth:anthropic-status', handler)
-    return () => ipcRenderer.removeListener('auth:anthropic-status', handler)
-  },
-  getOpenAIAuthStatus: () => ipcRenderer.invoke('auth:get-openai-status'),
+    invoke('agent:send', message, rawMentions, model, images, envelope),
+  onStreamChunk: (cb) => subscribe('agent:stream-chunk', cb),
+  onAgentDone: (cb) => subscribe('agent:done', cb),
+  onUsage: (cb) => subscribe('agent:usage', cb),
+  getAnthropicAuthStatus: () => invoke('auth:get-anthropic-status'),
+  onAnthropicAuthStatus: (cb) => subscribe('auth:anthropic-status', cb),
+  getOpenAIAuthStatus: () => invoke('auth:get-openai-status'),
 
   // OpenAI Codex (ChatGPT Subscription) OAuth
-  getOpenAICodexStatus: () => ipcRenderer.invoke('auth:get-openai-codex-status'),
-  openaiCodexLogin: () => ipcRenderer.invoke('auth:openai-codex-login'),
-  openaiCodexCancel: () => ipcRenderer.invoke('auth:openai-codex-cancel'),
-  openaiCodexLogout: () => ipcRenderer.invoke('auth:openai-codex-logout'),
+  getOpenAICodexStatus: () => invoke('auth:get-openai-codex-status'),
+  openaiCodexLogin: () => invoke('auth:openai-codex-login'),
+  openaiCodexCancel: () => invoke('auth:openai-codex-cancel'),
+  openaiCodexLogout: () => invoke('auth:openai-codex-logout'),
 
   // Anthropic Subscription (Claude Pro/Max) OAuth — enabled by default
   isClaudeSubEnabled: () => true,
-  getAnthropicSubStatus: () => ipcRenderer.invoke('auth:get-anthropic-sub-status'),
-  anthropicSubLogin: () => ipcRenderer.invoke('auth:anthropic-sub-login'),
-  anthropicSubCancel: () => ipcRenderer.invoke('auth:anthropic-sub-cancel'),
-  anthropicSubLogout: () => ipcRenderer.invoke('auth:anthropic-sub-logout'),
+  getAnthropicSubStatus: () => invoke('auth:get-anthropic-sub-status'),
+  anthropicSubLogin: () => invoke('auth:anthropic-sub-login'),
+  anthropicSubCancel: () => invoke('auth:anthropic-sub-cancel'),
+  anthropicSubLogout: () => invoke('auth:anthropic-sub-logout'),
 
-  pickPreferredModel: () => ipcRenderer.invoke('config:pick-preferred-model'),
+  pickPreferredModel: () => invoke('config:pick-preferred-model'),
 
-  getApiKeyStatus: () => ipcRenderer.invoke('config:get-api-key-status'),
-  saveApiKey: (keyName, value) => ipcRenderer.invoke('config:save-api-key', keyName, value),
+  getApiKeyStatus: () => invoke('config:get-api-key-status'),
+  saveApiKey: (keyName, value) => invoke('config:save-api-key', keyName, value),
 
-  listNotes: () => ipcRenderer.invoke('cmd:list-notes'),
-  listLiterature: () => ipcRenderer.invoke('cmd:list-literature'),
-  listData: () => ipcRenderer.invoke('cmd:list-data'),
-  search: (query) => ipcRenderer.invoke('cmd:search', query),
-  deleteEntity: (id) => ipcRenderer.invoke('cmd:delete', id),
-  artifactCreate: (input) => ipcRenderer.invoke('cmd:artifact-create', input),
-  artifactUpdate: (id, patch) => ipcRenderer.invoke('cmd:artifact-update', id, patch),
-  artifactGet: (id) => ipcRenderer.invoke('cmd:artifact-get', id),
-  artifactList: (types) => ipcRenderer.invoke('cmd:artifact-list', types),
-  artifactSearch: (query, types) => ipcRenderer.invoke('cmd:artifact-search', query, types),
-  artifactDelete: (id) => ipcRenderer.invoke('cmd:artifact-delete', id),
-  memoryList: () => ipcRenderer.invoke('cmd:memory-list'),
-  memoryGet: (filename) => ipcRenderer.invoke('cmd:memory-get', filename),
-  memorySave: (input) => ipcRenderer.invoke('cmd:memory-save', input),
-  memoryDelete: (filename) => ipcRenderer.invoke('cmd:memory-delete', filename),
+  listNotes: () => invoke('cmd:list-notes'),
+  listLiterature: () => invoke('cmd:list-literature'),
+  listData: () => invoke('cmd:list-data'),
+  search: (query) => invoke('cmd:search', query),
+  deleteEntity: (id) => invoke('cmd:delete', id),
+  artifactCreate: (input) => invoke('cmd:artifact-create', input),
+  artifactUpdate: (id, patch) => invoke('cmd:artifact-update', id, patch),
+  artifactGet: (id) => invoke('cmd:artifact-get', id),
+  artifactList: (types) => invoke('cmd:artifact-list', types),
+  artifactSearch: (query, types) => invoke('cmd:artifact-search', query, types),
+  artifactDelete: (id) => invoke('cmd:artifact-delete', id),
+  memoryList: () => invoke('cmd:memory-list'),
+  memoryGet: (filename) => invoke('cmd:memory-get', filename),
+  memorySave: (input) => invoke('cmd:memory-save', input),
+  memoryDelete: (filename) => invoke('cmd:memory-delete', filename),
 
-  stopAgent: () => ipcRenderer.invoke('agent:stop'),
-  clearSessionMemory: () => ipcRenderer.invoke('agent:clear-memory'),
-  getRealtimeSnapshot: () => ipcRenderer.invoke('agent:get-realtime-snapshot'),
+  stopAgent: () => invoke('agent:stop'),
+  clearSessionMemory: () => invoke('agent:clear-memory'),
+  getRealtimeSnapshot: () => invoke('agent:get-realtime-snapshot'),
 
-  turnExplainGet: () => ipcRenderer.invoke('cmd:turn-explain-get'),
-  sessionSummaryGet: () => ipcRenderer.invoke('cmd:session-summary-get'),
+  turnExplainGet: () => invoke('cmd:turn-explain-get'),
+  sessionSummaryGet: () => invoke('cmd:session-summary-get'),
 
-  getCandidates: (partial, type) => ipcRenderer.invoke('mention:candidates', partial, type),
+  getCandidates: (partial, type) => invoke('mention:candidates', partial, type),
 
-  onTodoUpdate: (cb) => {
-    const handler = (_: any, item: any) => cb(item)
-    ipcRenderer.on('agent:todo-update', handler)
-    return () => ipcRenderer.removeListener('agent:todo-update', handler)
-  },
-  onTodoClear: (cb) => {
-    const handler = () => cb()
-    ipcRenderer.on('agent:todo-clear', handler)
-    return () => ipcRenderer.removeListener('agent:todo-clear', handler)
-  },
-  onActivityClear: (cb) => {
-    const handler = () => cb()
-    ipcRenderer.on('agent:activity-clear', handler)
-    return () => ipcRenderer.removeListener('agent:activity-clear', handler)
-  },
+  onTodoUpdate: (cb) => subscribe('agent:todo-update', cb),
+  onTodoClear: (cb) => subscribe('agent:todo-clear', cb),
+  onActivityClear: (cb) => subscribe('agent:activity-clear', cb),
 
-  onActivity: (cb) => {
-    const handler = (_: any, event: any) => cb(event)
-    ipcRenderer.on('agent:activity', handler)
-    return () => ipcRenderer.removeListener('agent:activity', handler)
-  },
+  onActivity: (cb) => subscribe('agent:activity', cb),
 
-  onToolProgress: (cb) => {
-    const handler = (_: any, event: any) => cb(event)
-    ipcRenderer.on('agent:tool-progress', handler)
-    return () => ipcRenderer.removeListener('agent:tool-progress', handler)
-  },
+  onToolProgress: (cb) => subscribe('agent:tool-progress', cb),
 
-  onSkillLoaded: (cb) => {
-    const handler = (_: any, skillName: string) => cb(skillName)
-    ipcRenderer.on('agent:skill-loaded', handler)
-    return () => ipcRenderer.removeListener('agent:skill-loaded', handler)
-  },
+  onSkillLoaded: (cb) => subscribe('agent:skill-loaded', cb),
 
-  onRetryNotice: (cb) => {
-    const handler = (_: any, event: any) => cb(event)
-    ipcRenderer.on('agent:retry-notice', handler)
-    return () => ipcRenderer.removeListener('agent:retry-notice', handler)
-  },
+  onRetryNotice: (cb) => subscribe('agent:retry-notice', cb),
 
-  hydrateCompute: () => ipcRenderer.invoke('compute:hydrate'),
+  hydrateCompute: () => invoke('compute:hydrate'),
   approveComputePlan: (backend: string, planId: string) =>
-    ipcRenderer.invoke('compute:approve-plan', { backend, planId }),
+    invoke('compute:approve-plan', { backend, planId }),
   rejectComputePlan: (backend: string, planId: string, comments: string) =>
-    ipcRenderer.invoke('compute:reject-plan', { backend, planId, comments }),
+    invoke('compute:reject-plan', { backend, planId, comments }),
   stopComputeRun: (runId: string) =>
-    ipcRenderer.invoke('compute:stop-run', { runId }),
+    invoke('compute:stop-run', { runId }),
   refreshComputeAvailability: () =>
-    ipcRenderer.invoke('compute:refresh-availability'),
-  testAwsConnection: () => ipcRenderer.invoke('compute:test-aws-connection'),
+    invoke('compute:refresh-availability'),
+  testAwsConnection: () => invoke('compute:test-aws-connection'),
 
-  onComputeEvent: (cb) => {
-    const handler = (_: any, event: any) => cb(event)
-    ipcRenderer.on('compute:event', handler)
-    return () => ipcRenderer.removeListener('compute:event', handler)
-  },
+  onComputeEvent: (cb) => subscribe('compute:event', cb),
 
-  onEntityCreated: (cb) => {
-    const handler = (_: any, info: { type: string; id: string; title: string }) => cb(info)
-    ipcRenderer.on('agent:entity-created', handler)
-    return () => ipcRenderer.removeListener('agent:entity-created', handler)
-  },
+  onEntityCreated: (cb) => subscribe('agent:entity-created', cb),
 
-  onExternalChange: (cb) => {
-    const handler = (_: any, payload?: { parents?: string[] | null }) => {
+  onExternalChange: (cb) =>
+    subscribe<{ parents?: string[] | null } | undefined>('fs:external-change', (payload) => {
       // Older main payloads may be missing — treat as full refresh.
       const parents = payload && 'parents' in payload ? payload.parents ?? null : null
       cb({ parents })
-    }
-    ipcRenderer.on('fs:external-change', handler)
-    return () => ipcRenderer.removeListener('fs:external-change', handler)
-  },
-  onFileCreated: (cb) => {
-    const handler = (_: any, path: string) => cb(path)
-    ipcRenderer.on('agent:file-created', handler)
-    return () => ipcRenderer.removeListener('agent:file-created', handler)
-  },
-  readFile: (path) => ipcRenderer.invoke('file:read', path),
-  writeFile: (path, content) => ipcRenderer.invoke('file:write', path, content),
-  readFileBinary: (path) => ipcRenderer.invoke('file:read-binary', path),
-  resolvePath: (path) => ipcRenderer.invoke('file:resolve-path', path),
-  openFile: (path) => ipcRenderer.invoke('file:open-external', path),
-  listRootFiles: () => ipcRenderer.invoke('file:list-root'),
-  listTree: (options) => ipcRenderer.invoke('file:list-tree', options),
-  searchTree: (query, options) => ipcRenderer.invoke('file:search-tree', query, options),
-  createArtifactFromFile: (filePath) => ipcRenderer.invoke('file:create-artifact', filePath),
-  createFile: (relativePath) => ipcRenderer.invoke('file:create', relativePath),
-  createDir: (relativePath) => ipcRenderer.invoke('file:create-dir', relativePath),
-  renameFile: (oldPath, newPath) => ipcRenderer.invoke('file:rename', oldPath, newPath),
+    }),
+  onFileCreated: (cb) => subscribe('agent:file-created', cb),
+  readFile: (path) => invoke('file:read', path),
+  writeFile: (path, content) => invoke('file:write', path, content),
+  readFileBinary: (path) => invoke('file:read-binary', path),
+  resolvePath: (path) => invoke('file:resolve-path', path),
+  openFile: (path) => invoke('file:open-external', path),
+  listRootFiles: () => invoke('file:list-root'),
+  listTree: (options) => invoke('file:list-tree', options),
+  searchTree: (query, options) => invoke('file:search-tree', query, options),
+  createArtifactFromFile: (filePath) => invoke('file:create-artifact', filePath),
+  createFile: (relativePath) => invoke('file:create', relativePath),
+  createDir: (relativePath) => invoke('file:create-dir', relativePath),
+  renameFile: (oldPath, newPath) => invoke('file:rename', oldPath, newPath),
 
-  trashFile: (filePath) => ipcRenderer.invoke('file:trash', filePath),
-  revealInFinder: (filePath) => ipcRenderer.invoke('file:reveal', filePath),
-  copyItem: (srcRelPath, destDirRelPath) => ipcRenderer.invoke('file:copy-item', srcRelPath, destDirRelPath),
-  dropToDir: (fileName, base64Content, targetDirRelPath) => ipcRenderer.invoke('file:drop-to-dir', fileName, base64Content, targetDirRelPath),
+  trashFile: (filePath) => invoke('file:trash', filePath),
+  revealInFinder: (filePath) => invoke('file:reveal', filePath),
+  copyItem: (srcRelPath, destDirRelPath) => invoke('file:copy-item', srcRelPath, destDirRelPath),
+  dropToDir: (fileName, base64Content, targetDirRelPath) => invoke('file:drop-to-dir', fileName, base64Content, targetDirRelPath),
 
-  dropFile: (fileName, content, tab) => ipcRenderer.invoke('file:drop', fileName, content, tab),
+  dropFile: (fileName, content, tab) => invoke('file:drop', fileName, content, tab),
 
-  enrichAllPapers: (paperIds) => ipcRenderer.invoke('cmd:enrich-papers', paperIds),
-  onEnrichProgress: (cb) => {
-    const handler = (_: any, info: { paperId: string; status: string }) => cb(info)
-    ipcRenderer.on('enrich:progress', handler)
-    return () => ipcRenderer.removeListener('enrich:progress', handler)
-  },
+  enrichAllPapers: (paperIds) => invoke('cmd:enrich-papers', paperIds),
+  onEnrichProgress: (cb) => subscribe('enrich:progress', cb),
 
   // BibTeX import (RFC-006 PR-3) — see ElectronAPI doc above.
-  importBibtexFile: (bibPath) => ipcRenderer.invoke('cmd:import-bibtex', bibPath),
-  importBibtexString: (contents) => ipcRenderer.invoke('cmd:import-bibtex-string', contents),
-  pickBibtexFile: () => ipcRenderer.invoke('cmd:pick-bibtex-file'),
-  onImportProgress: (cb) => {
-    const handler = (_: any, event: BibImportProgressEvent) => cb(event)
-    ipcRenderer.on('import:progress', handler)
-    return () => ipcRenderer.removeListener('import:progress', handler)
-  },
+  importBibtexFile: (bibPath) => invoke('cmd:import-bibtex', bibPath),
+  importBibtexString: (contents) => invoke('cmd:import-bibtex-string', contents),
+  pickBibtexFile: () => invoke('cmd:pick-bibtex-file'),
+  onImportProgress: (cb) => subscribe('import:progress', cb),
 
   // Paper Pack Report (RFC-007 PR-B).
-  generatePaperReport: (opts) => ipcRenderer.invoke('cmd:generate-paper-report', opts),
-  getPaperReportState: () => ipcRenderer.invoke('cmd:get-paper-report-state'),
-  openPaperReport: () => ipcRenderer.invoke('cmd:open-paper-report'),
-  onPaperReportProgress: (cb) => {
-    const handler = (_: any, event: ReportProgressEvent) => cb(event)
-    ipcRenderer.on('report:progress', handler)
-    return () => ipcRenderer.removeListener('report:progress', handler)
-  },
+  generatePaperReport: (opts) => invoke('cmd:generate-paper-report', opts),
+  getPaperReportState: () => invoke('cmd:get-paper-report-state'),
+  openPaperReport: () => invoke('cmd:open-paper-report'),
+  onPaperReportProgress: (cb) => subscribe('report:progress', cb),
 
-  getCurrentSession: () => ipcRenderer.invoke('session:current'),
+  getCurrentSession: () => invoke('session:current'),
 
   // Telemetry view log (§8.4) — renderer pushes passive view events here.
   telemetryViewLog: (
@@ -608,119 +558,83 @@ const api: ElectronAPI = {
       durationMs?: number
       turnId?: string
     }
-  ) => ipcRenderer.invoke('telemetry:view-log', payload),
+  ) => invoke('telemetry:view-log', payload),
   telemetryGetProjectConfig: (force?: boolean) =>
-    ipcRenderer.invoke('telemetry:get-project-config', force),
+    invoke('telemetry:get-project-config', force),
   telemetrySetTracingMode: (mode: 'enabled' | 'disabled') =>
-    ipcRenderer.invoke('telemetry:set-tracing-mode', mode),
-  onTraceLive: (cb) => {
-    const handler = (_: unknown, summary: Parameters<typeof cb>[0]) => cb(summary)
-    ipcRenderer.on('trace:live', handler as (...args: unknown[]) => void)
-    return () => ipcRenderer.removeListener('trace:live', handler as (...args: unknown[]) => void)
-  },
+    invoke('telemetry:set-tracing-mode', mode),
+  onTraceLive: (cb) => subscribe('trace:live', cb),
   telemetryTraceSnapshot: (traceId: string) =>
-    ipcRenderer.invoke('telemetry:trace-snapshot', traceId),
-  pickFolder: () => ipcRenderer.invoke('project:pick-folder'),
-  openProjectPath: (projectPath: string) => ipcRenderer.invoke('project:open-path', projectPath),
-  listRecentProjects: () => ipcRenderer.invoke('project:list-recents'),
-  removeRecentProject: (projectPath: string) => ipcRenderer.invoke('project:remove-recent', projectPath),
-  projectStatsBatch: (paths: string[]) => ipcRenderer.invoke('project:stats-batch', paths),
-  auditGetGraph: () => ipcRenderer.invoke('audit:get-graph'),
-  closeProject: () => ipcRenderer.invoke('project:close'),
-  onProjectClosed: (cb) => {
-    const handler = () => cb()
-    ipcRenderer.on('project:closed', handler)
-    return () => ipcRenderer.removeListener('project:closed', handler)
-  },
+    invoke('telemetry:trace-snapshot', traceId),
+  pickFolder: () => invoke('project:pick-folder'),
+  openProjectPath: (projectPath: string) => invoke('project:open-path', projectPath),
+  listRecentProjects: () => invoke('project:list-recents'),
+  removeRecentProject: (projectPath: string) => invoke('project:remove-recent', projectPath),
+  projectStatsBatch: (paths: string[]) => invoke('project:stats-batch', paths),
+  auditGetGraph: () => invoke('audit:get-graph'),
+  closeProject: () => invoke('project:close'),
+  onProjectClosed: (cb) => subscribe('project:closed', cb),
 
-  getUsageTotals: () => ipcRenderer.invoke('usage:get-totals'),
-  resetUsageTotals: () => ipcRenderer.invoke('usage:reset-totals'),
+  getUsageTotals: () => invoke('usage:get-totals'),
+  resetUsageTotals: () => invoke('usage:reset-totals'),
 
-  loadPreferences: () => ipcRenderer.invoke('prefs:load'),
-  savePreferences: (prefs) => ipcRenderer.invoke('prefs:save', prefs),
+  loadPreferences: () => invoke('prefs:load'),
+  savePreferences: (prefs) => invoke('prefs:save', prefs),
 
   // Unified settings
-  hasLlmAuth: () => ipcRenderer.invoke('config:has-llm-auth'),
-  loadSettings: () => ipcRenderer.invoke('settings:load'),
-  saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
+  hasLlmAuth: () => invoke('config:has-llm-auth'),
+  loadSettings: () => invoke('settings:load'),
+  saveSettings: (settings) => invoke('settings:save', settings),
 
   // Wiki agent
-  wikiGetStatus: () => ipcRenderer.invoke('wiki:get-status'),
-  wikiGetStats: () => ipcRenderer.invoke('wiki:get-stats'),
-  wikiGetLog: () => ipcRenderer.invoke('wiki:get-log'),
-  wikiPause: () => ipcRenderer.invoke('wiki:pause'),
-  wikiResume: () => ipcRenderer.invoke('wiki:resume'),
-  wikiListPages: () => ipcRenderer.invoke('wiki:list-pages'),
-  wikiReadPage: (slug: string) => ipcRenderer.invoke('wiki:read-page', slug),
-  wikiSlugForPaper: (artifactId: string, projectPath: string) => ipcRenderer.invoke('wiki:slug-for-paper', artifactId, projectPath),
-  wikiPaperSlugMap: () => ipcRenderer.invoke('wiki:paper-slug-map'),
-  wikiListPaperMeta: () => ipcRenderer.invoke('wiki:list-paper-meta'),
-  wikiReconcileIdentity: (opts?: { dryRun?: boolean }) => ipcRenderer.invoke('wiki:reconcile-identity', opts),
-  onWikiStatus: (cb) => {
-    const handler = (_: any, status: any) => cb(status)
-    ipcRenderer.on('wiki:status', handler)
-    return () => ipcRenderer.removeListener('wiki:status', handler)
-  },
+  wikiGetStatus: () => invoke('wiki:get-status'),
+  wikiGetStats: () => invoke('wiki:get-stats'),
+  wikiGetLog: () => invoke('wiki:get-log'),
+  wikiPause: () => invoke('wiki:pause'),
+  wikiResume: () => invoke('wiki:resume'),
+  wikiListPages: () => invoke('wiki:list-pages'),
+  wikiReadPage: (slug: string) => invoke('wiki:read-page', slug),
+  wikiSlugForPaper: (artifactId: string, projectPath: string) => invoke('wiki:slug-for-paper', artifactId, projectPath),
+  wikiPaperSlugMap: () => invoke('wiki:paper-slug-map'),
+  wikiListPaperMeta: () => invoke('wiki:list-paper-meta'),
+  wikiReconcileIdentity: (opts?: { dryRun?: boolean }) => invoke('wiki:reconcile-identity', opts),
+  onWikiStatus: (cb) => subscribe('wiki:status', cb),
 
-  openFolderWith: (app) => ipcRenderer.invoke('folder:open-with', app),
+  openFolderWith: (app) => invoke('folder:open-with', app),
 
   // Skills
-  listSkills: () => ipcRenderer.invoke('skills:list'),
-  setEnabledSkills: (enabledSkills) => ipcRenderer.invoke('skills:set-enabled', enabledSkills),
-  uploadSkill: (fileName, base64Data) => ipcRenderer.invoke('skills:upload', fileName, base64Data),
+  listSkills: () => invoke('skills:list'),
+  setEnabledSkills: (enabledSkills) => invoke('skills:set-enabled', enabledSkills),
+  uploadSkill: (fileName, base64Data) => invoke('skills:upload', fileName, base64Data),
 
-  convertFileToText: (fileName, base64Data) => ipcRenderer.invoke('file:convert-to-text', fileName, base64Data),
+  convertFileToText: (fileName, base64Data) => invoke('file:convert-to-text', fileName, base64Data),
 
-  updateGetState: () => ipcRenderer.invoke('update:get-state'),
-  updateCheckNow: () => ipcRenderer.invoke('update:check-now'),
-  updateQuitAndInstall: () => ipcRenderer.invoke('update:quit-and-install'),
-  onUpdateState: (cb) => {
-    const handler = (_: any, state: UpdateState) => cb(state)
-    ipcRenderer.on('update:state', handler)
-    return () => ipcRenderer.removeListener('update:state', handler)
-  },
+  updateGetState: () => invoke('update:get-state'),
+  updateCheckNow: () => invoke('update:check-now'),
+  updateQuitAndInstall: () => invoke('update:quit-and-install'),
+  onUpdateState: (cb) => subscribe('update:state', cb),
 
-  exportChat: () => ipcRenderer.invoke('chat:export'),
-  onExportChat: (cb) => {
-    const handler = () => cb()
-    ipcRenderer.on('menu:export-chat', handler)
-    return () => ipcRenderer.removeListener('menu:export-chat', handler)
-  },
+  exportChat: () => invoke('chat:export'),
+  onExportChat: (cb) => subscribe('menu:export-chat', cb),
 
-  onOpenSettings: (cb) => {
-    const handler = () => cb()
-    ipcRenderer.on('menu:open-settings', handler)
-    return () => ipcRenderer.removeListener('menu:open-settings', handler)
-  },
+  onOpenSettings: (cb) => subscribe('menu:open-settings', cb),
 
-  setTheme: (theme) => ipcRenderer.invoke('theme:set', theme),
-  onThemeChanged: (cb) => {
-    const handler = (_: any, theme: 'light' | 'dark') => cb(theme)
-    ipcRenderer.on('theme:changed', handler)
-    return () => ipcRenderer.removeListener('theme:changed', handler)
-  },
+  setTheme: (theme) => invoke('theme:set', theme),
+  onThemeChanged: (cb) => subscribe('theme:changed', cb),
 
-  saveMessage: (sessionId, msg) => ipcRenderer.invoke('session:save-message', sessionId, msg),
-  loadMessages: (sessionId, offset, limit) => ipcRenderer.invoke('session:load-messages', sessionId, offset, limit),
-  getMessageCount: (sessionId) => ipcRenderer.invoke('session:get-total-count', sessionId),
-  markMessageSaved: (sessionId, messageId) => ipcRenderer.invoke('session:mark-saved', sessionId, messageId),
-  loadSavedMessageIds: (sessionId) => ipcRenderer.invoke('session:load-saved-ids', sessionId),
+  saveMessage: (sessionId, msg) => invoke('session:save-message', sessionId, msg),
+  loadMessages: (sessionId, offset, limit) => invoke('session:load-messages', sessionId, offset, limit),
+  getMessageCount: (sessionId) => invoke('session:get-total-count', sessionId),
+  markMessageSaved: (sessionId, messageId) => invoke('session:mark-saved', sessionId, messageId),
+  loadSavedMessageIds: (sessionId) => invoke('session:load-saved-ids', sessionId),
 
   // Terminal
-  terminalSpawn: (cwd) => ipcRenderer.invoke('terminal:spawn', cwd),
-  terminalInput: (data) => ipcRenderer.send('terminal:input', data),
-  terminalResize: (cols, rows) => ipcRenderer.send('terminal:resize', cols, rows),
-  terminalKill: () => ipcRenderer.invoke('terminal:kill'),
-  onTerminalData: (cb) => {
-    const handler = (_: any, data: string) => cb(data)
-    ipcRenderer.on('terminal:data', handler)
-    return () => ipcRenderer.removeListener('terminal:data', handler)
-  },
-  onTerminalExit: (cb) => {
-    const handler = (_: any, exitCode: number) => cb(exitCode)
-    ipcRenderer.on('terminal:exit', handler)
-    return () => ipcRenderer.removeListener('terminal:exit', handler)
-  }
+  terminalSpawn: (cwd) => invoke('terminal:spawn', cwd),
+  terminalInput: (data) => send('terminal:input', data),
+  terminalResize: (cols, rows) => send('terminal:resize', cols, rows),
+  terminalKill: () => invoke('terminal:kill'),
+  onTerminalData: (cb) => subscribe('terminal:data', cb),
+  onTerminalExit: (cb) => subscribe('terminal:exit', cb)
 }
 
 contextBridge.exposeInMainWorld('api', api)

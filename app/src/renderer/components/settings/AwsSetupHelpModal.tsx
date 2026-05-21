@@ -244,8 +244,8 @@ export function AwsSetupHelpModal({ open, onClose }: Props) {
               <li>Set the <strong>Auto-kill threshold (USD)</strong>. Leave headroom — the estimator uses on-demand us-east-1 pricing and does not model EBS / network egress.</li>
             </ol>
             <p className="mt-2 text-[11px] t-text-muted">
-              Keys are stored encrypted in <code className="font-mono">~/.research-copilot/config.json</code>
-              {' '}and exported to the EC2 backend + S3 tools as
+              Keys are stored in plaintext in <code className="font-mono">~/.research-copilot/config.json</code>
+              {' '}(owner-only file permissions) and exported to the EC2 backend + S3 tools as
               {' '}<code className="font-mono">AWS_ACCESS_KEY_ID</code> /
               {' '}<code className="font-mono">AWS_SECRET_ACCESS_KEY</code>
               {' '}(+ optional <code className="font-mono">AWS_SESSION_TOKEN</code>).

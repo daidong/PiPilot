@@ -137,6 +137,7 @@ export const RETIRED_MODEL_MIGRATIONS: Record<string, string> = {
   // OpenAI low-tier models that are no longer user-visible
   'openai:gpt-5.4-mini': `openai:${MODEL_TIERS.openai.flagship}`,
   'openai:gpt-5.4-nano': `openai:${MODEL_TIERS.openai.flagship}`,
+  'openai:gpt-5.4-pro': `openai:${MODEL_TIERS.openai.flagship}`,
   'openai:gpt-4o': `openai:${MODEL_TIERS.openai.flagship}`,
   'openai-codex:gpt-5.4-mini': `openai-codex:${MODEL_TIERS['openai-codex'].flagship}`,
   // Anthropic 4.5 generation no longer user-visible (Sonnet 4.6 is still current; Haiku stays internal)

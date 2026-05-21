@@ -3,6 +3,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { ModalRunStore } from './modal-run-store.js'
+import { readFileTail, getFileSize, estimateLines } from '../compute/run-monitor.js'
 import { ExperienceStore, inferTaskKind } from '../local-compute/experience.js'
 import { computeElapsedCost } from './cost-estimator.js'
 import { extractProgress } from '../local-compute/progress.js'
@@ -22,32 +23,6 @@ const MAX_TIMEOUT_MS = 24 * 60 * 60_000
 
 function nextRunId(): string {
   return 'mr-' + crypto.randomBytes(4).toString('hex')
-}
-
-function readFileTail(filePath: string, maxBytes: number): string {
-  try {
-    const stat = fs.statSync(filePath)
-    if (stat.size === 0) return ''
-    const start = Math.max(0, stat.size - maxBytes)
-    const fd = fs.openSync(filePath, 'r')
-    const buf = Buffer.alloc(Math.min(stat.size, maxBytes))
-    fs.readSync(fd, buf, 0, buf.length, start)
-    fs.closeSync(fd)
-    return buf.toString('utf-8')
-  } catch {
-    return ''
-  }
-}
-
-function getFileSize(filePath: string): number {
-  try { return fs.statSync(filePath).size } catch { return 0 }
-}
-
-function estimateLines(bytes: number, tail: string): number {
-  if (bytes === 0 || tail.length === 0) return 0
-  const tailLines = tail.split('\n').length
-  if (tail.length >= bytes) return tailLines
-  return Math.max(tailLines, Math.round((bytes / tail.length) * tailLines))
 }
 
 /**

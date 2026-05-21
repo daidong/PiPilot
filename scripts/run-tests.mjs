@@ -52,6 +52,7 @@ const SUITES = {
   importers: 'lib/importers/__tests__',
   reports: 'lib/reports/__tests__',
   compute: 'lib/compute',
+  models: 'lib/__tests__',
   aws: 'lib/aws/__tests__',
   'aws-ec2': 'lib/aws-ec2-compute/__tests__',
   utils: 'lib/utils/__tests__',

@@ -9,7 +9,7 @@ const BARE_MODEL_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['deepseek-', 'deepseek'],
 ]
 
-function inferProviderFromModelId(modelId: string): string | null {
+export function inferProviderFromModelId(modelId: string): string | null {
   for (const [prefix, provider] of BARE_MODEL_PREFIXES) {
     if (modelId.startsWith(prefix)) return provider
   }
