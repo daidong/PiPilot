@@ -43,14 +43,30 @@ const GA_BLOCK = `${GA_HEADER}
 
 function ensureManagedBlock(filePath: string, header: string, block: string): void {
   try {
+    const normalized = block.trimEnd()
     if (!existsSync(filePath)) {
       writeFileSync(filePath, block, 'utf-8')
       return
     }
     const current = readFileSync(filePath, 'utf-8')
-    if (current.includes(header)) return
-    const sep = current.endsWith('\n') ? '\n' : '\n\n'
-    appendFileSync(filePath, sep + block, 'utf-8')
+    const start = current.indexOf(header)
+    if (start === -1) {
+      const sep = current.endsWith('\n') ? '\n' : '\n\n'
+      appendFileSync(filePath, sep + block, 'utf-8')
+      return
+    }
+    // A managed block already exists. Idempotency is keyed on block CONTENT, not
+    // merely the header's presence: refresh it IN PLACE when it has drifted from
+    // the current managed version. Without this, later additions to the block
+    // (e.g. a new ignore rule) would never reach already-shared workspaces —
+    // they'd freeze at whatever first wrote the block. The footer is the block's
+    // last line; we replace header→footer and preserve everything around it.
+    const footer = normalized.slice(normalized.lastIndexOf('\n') + 1)
+    const footerStart = current.indexOf(footer, start)
+    if (footerStart === -1) return // malformed / hand-edited — leave it alone
+    const end = footerStart + footer.length
+    if (current.slice(start, end) === normalized) return // already current
+    writeFileSync(filePath, current.slice(0, start) + normalized + current.slice(end), 'utf-8')
   } catch {
     // best-effort — never block on these
   }

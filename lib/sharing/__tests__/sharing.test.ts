@@ -93,6 +93,31 @@ test('ensureSharingGitignore: asymmetric rule, idempotent, preserves user lines'
   }
 })
 
+test('ensureSharingGitignore: refreshes a drifted managed block in place (no freeze)', () => {
+  const dir = tmp('rp-gi-drift-')
+  try {
+    // An OLDER managed block (pre-agent-md rule) written by a previous build,
+    // plus a user line outside it. Reproduces the already-shared-workspace freeze.
+    writeFileSync(
+      join(dir, '.gitignore'),
+      'node_modules/\n' +
+        '# --- research-pilot sharing (managed, RFC-013) ---\n' +
+        '.research-pilot/*\n' +
+        '!.research-pilot/project.json\n' +
+        '# --- end research-pilot sharing ---\n'
+    )
+    ensureSharingGitignore(dir)
+    const gi = readFileSync(join(dir, '.gitignore'), 'utf-8')
+    assert.ok(gi.includes('**/agent-md.md'), 'drifted block gains the newer agent-md rule')
+    assert.ok(gi.includes('node_modules/'), 'user lines outside the block are preserved')
+    assert.equal(gi.match(/RFC-013/g)?.length, 1, 'still exactly one managed block (no duplication)')
+    ensureSharingGitignore(dir) // now current — must be a no-op
+    assert.equal(readFileSync(join(dir, '.gitignore'), 'utf-8'), gi, 'second call is idempotent')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('ensureSharingGitattributes: managed block, idempotent', () => {
   const dir = tmp('rp-ga-')
   try {
