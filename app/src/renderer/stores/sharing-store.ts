@@ -54,7 +54,9 @@ interface SharingStoreState {
   reset: () => void
 }
 
-const api = (window as any).api
+// Resolve at call time (not at module load) so the store works even if it loads
+// before the preload bridge attaches, and so tests can stub `window.api`.
+const getApi = () => (typeof window === 'undefined' ? undefined : (window as any).api)
 
 export const useSharingStore = create<SharingStoreState>((set, get) => ({
   status: null,
@@ -70,6 +72,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   accessRevoked: false,
 
   refresh: async () => {
+    const api = getApi()
     if (!api?.sharingStatus) return
     set({ loading: true })
     try {
@@ -81,6 +84,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   checkPreflight: async () => {
+    const api = getApi()
     if (!api?.sharingPreflight) return null
     const preflight = await api.sharingPreflight()
     set({ preflight })
@@ -88,6 +92,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   share: async (opts) => {
+    const api = getApi()
     if (!api?.sharingShare) return null
     const result = await api.sharingShare(opts)
     if (result?.ok) await get().refresh()
@@ -95,6 +100,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   sync: async () => {
+    const api = getApi()
     if (!api?.sharingSync || get().syncing) return null
     set({ syncing: true, lastError: null })
     try {
@@ -107,8 +113,10 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
       } else if (result && !result.ok && !result.conflict) {
         set({ lastError: result.error ?? 'Sync failed.' })
       }
-      // A successful sync clears the "updates available" hint and any stale access flag.
-      if (result?.ok) set({ updatesAvailable: false, accessRevoked: false })
+      // A successful sync clears the "updates available" hint, any stale access
+      // flag, AND any prior conflict — otherwise a resolved-then-successful sync
+      // would leave the pill stuck on "Conflict".
+      if (result?.ok) set({ conflict: null, conflictFiles: [], updatesAvailable: false, accessRevoked: false })
       await get().refresh()
       return result
     } catch (e: any) {
@@ -120,6 +128,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   poll: async () => {
+    const api = getApi()
     if (!api?.sharingPoll) return
     const status = get().status
     if (!status?.shared) return
@@ -142,6 +151,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   invite: async (login) => {
+    const api = getApi()
     if (!api?.sharingInvite) return null
     const result = await api.sharingInvite(login)
     if (result?.ok) await get().refresh()
@@ -149,6 +159,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   removeMember: async (login) => {
+    const api = getApi()
     if (!api?.sharingRemoveMember) return null
     const result = await api.sharingRemoveMember(login)
     if (result?.ok) await get().refresh()
@@ -156,6 +167,7 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   loadConflictDetails: async () => {
+    const api = getApi()
     if (!api?.sharingConflictDetails) return
     set({ conflictLoading: true })
     try {
@@ -167,17 +179,19 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   aiMerge: async (file) => {
+    const api = getApi()
     if (!api?.sharingAiMerge) return { ok: false, error: 'unavailable' }
     return api.sharingAiMerge(file)
   },
 
   resolveConflict: async (resolutions) => {
+    const api = getApi()
     if (!api?.sharingResolveConflict || get().resolving) return null
     set({ resolving: true, lastError: null })
     try {
       const result = await api.sharingResolveConflict(resolutions)
       if (result?.ok) {
-        set({ conflict: null, conflictFiles: [], updatesAvailable: false })
+        set({ conflict: null, conflictFiles: [], updatesAvailable: false, accessRevoked: false })
       } else if (result?.accessDenied) {
         set({ accessRevoked: true, lastError: result.error ?? null })
       } else if (result && !result.ok) {
