@@ -42,20 +42,28 @@ test('primaryFileRel: actor → per-actor subdir; no actor → flat', () => {
 
 // ── createArtifact: stamps actor + lands in subdir when shared ────────────────
 
-function makeProject(opts: { shared: boolean; displayName?: string }): string {
+function makeProject(opts: {
+  shared: boolean
+  displayName?: string
+  actorId?: string
+  members?: Array<{ actorId?: string; displayName: string }>
+}): string {
   const dir = mkdtempSync(join(tmpdir(), 'rp-pa-'))
   mkdirSync(join(dir, '.research-pilot'), { recursive: true })
   const cfg: Record<string, unknown> = {
     name: 'P', questions: [], userCorrections: [], createdAt: '', updatedAt: '',
   }
   if (opts.shared) cfg.share = { host: 'github', repo: 'o/r' }
+  if (opts.members) cfg.members = opts.members
   writeFileSync(join(dir, '.research-pilot', 'project.json'), JSON.stringify(cfg))
   if (opts.displayName) {
-    writeFileSync(join(dir, '.research-pilot', 'identity.json'), JSON.stringify({ id: 'act1', displayName: opts.displayName }))
+    writeFileSync(join(dir, '.research-pilot', 'identity.json'), JSON.stringify({ id: opts.actorId ?? 'act1', displayName: opts.displayName }))
   }
   return dir
 }
 const ctx = (projectPath: string): CLIContext => ({ projectPath, sessionId: 's' })
+// Teardown can race index/file writes under full-suite I/O load → tolerate ENOTEMPTY.
+const cleanup = (dir: string): void => { try { rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ } }
 
 test('createArtifact in a SHARED project: actor stamped, file under per-actor subdir, stable across update + indexable', () => {
   const dir = makeProject({ shared: true, displayName: 'Alice Chen' })
@@ -77,7 +85,26 @@ test('createArtifact in a SHARED project: actor stamped, file under per-actor su
     const all = rebuildIndex(dir)
     assert.ok(all.some(a => a.id === rec.artifact.id), 'per-actor artifact is indexed')
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    cleanup(dir)
+  }
+})
+
+test('slug dedup: a roster name collision suffixes the per-actor dir', () => {
+  // Two collaborators both named "Alex" → my dir gets a stable id suffix so our
+  // per-actor subdirs never merge (§6.1).
+  const dir = makeProject({
+    shared: true,
+    displayName: 'Alex',
+    actorId: 'act1',
+    members: [{ actorId: 'act2', displayName: 'Alex' }], // the other Alex
+  })
+  try {
+    const rec = createArtifact({ type: 'note', title: 'Hi', content: 'body' }, ctx(dir))
+    assert.equal(rec.artifact.provenance.actor?.slug, 'alex-act1', 'slug suffixed with id fragment')
+    assert.ok(existsSync(join(dir, 'rp-artifacts', 'notes', 'alex-act1', `${rec.artifact.id}.md`)))
+    // No collision when names are distinct → clean slug (covered by the shared test above).
+  } finally {
+    cleanup(dir)
   }
 })
 
@@ -88,6 +115,6 @@ test('createArtifact in an UNSHARED project: no actor, flat path (back-compat)',
     assert.equal(rec.artifact.provenance.actor, undefined, 'no actor stamped when unshared')
     assert.ok(existsSync(join(dir, 'rp-artifacts', 'notes', `${rec.artifact.id}.md`)), 'flat path under rp-artifacts/')
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    cleanup(dir)
   }
 })

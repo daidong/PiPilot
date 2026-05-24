@@ -55,9 +55,11 @@ function paperSlug(citeKey: string): string {
  * flat `<typeDir>/…` (back-compat). Returns `''` or `<slug>/`.
  */
 function actorDirPrefix(artifact: Artifact): string {
-  const displayName = artifact.provenance?.actor?.displayName
-  if (!displayName) return ''
-  return `${slugifyDisplayName(displayName)}/`
+  const actor = artifact.provenance?.actor
+  if (!actor?.displayName) return ''
+  // Prefer the dedup'd slug stamped at create time; fall back to deriving it.
+  const slug = actor.slug || slugifyDisplayName(actor.displayName)
+  return `${slug}/`
 }
 
 function legacyJsonRel(type: ArtifactType, id: string): string {

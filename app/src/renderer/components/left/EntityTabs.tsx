@@ -196,6 +196,15 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
           <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
         )}
         <span className={`text-xs truncate ${entity.id === 'agent-md' ? 't-text font-medium' : 't-text'}`} title={entity.title}>{entity.title}</span>
+        {/* RFC-013 author badge — who created this artifact (shared projects only) */}
+        {entity.provenance?.actor?.displayName && (
+          <span
+            className="shrink-0 px-1 py-px rounded text-[9px] t-bg-hover t-text-muted max-w-[80px] truncate"
+            title={`Created by ${entity.provenance.actor.displayName}`}
+          >
+            {entity.provenance.actor.displayName}
+          </span>
+        )}
       </div>
       {messageId && (
         <button

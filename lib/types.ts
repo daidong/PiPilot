@@ -88,8 +88,14 @@ export interface Provenance {
 export interface Actor {
   /** Stable per-user id (ULID), source of truth for attribution. */
   id: string
-  /** Friendly label; also the per-actor subdir slug (sanitized). */
+  /** Friendly label; also the basis for the per-actor subdir slug (sanitized). */
   displayName: string
+  /**
+   * Per-actor subdir slug, deduplicated against the roster at create time
+   * (RFC-013 §6.1) and persisted on the artifact so its path stays stable.
+   * Absent ⇒ derive from displayName.
+   */
+  slug?: string
 }
 
 // ============================================================================

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Users, GitBranch, AlertTriangle, ExternalLink, Loader2, UserPlus, MoreHorizontal, ShieldCheck, Trash2, Ban } from 'lucide-react'
+import { Users, GitBranch, AlertTriangle, ExternalLink, Loader2, UserPlus, MoreHorizontal, ShieldCheck, Trash2, Ban, Tag, Check } from 'lucide-react'
 import { useSharingStore } from '../../stores/sharing-store'
 
 /**
@@ -246,6 +246,8 @@ function SharedView() {
         </Row>
       </dl>
 
+      <SnapshotRow />
+
       <div>
         <div className="flex items-center justify-between mb-2">
           <span className="text-[11px] uppercase tracking-wider t-text-muted font-medium flex items-center gap-1.5">
@@ -345,6 +347,36 @@ function MemberRow({
         </div>
       )}
     </li>
+  )
+}
+
+function SnapshotRow() {
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const onSnapshot = async () => {
+    setBusy(true); setError(null); setDone(null)
+    try {
+      const r = await (window as any).api?.sharingSnapshot?.()
+      if (r?.ok) setDone(r.tag ?? 'snapshot created')
+      else setError(r?.error ?? 'Snapshot failed.')
+    } finally { setBusy(false) }
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onSnapshot}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-40"
+        title="Tag the current committed state as a restore point (git tag)"
+      >
+        {busy ? <Loader2 size={12} className="animate-spin" /> : <Tag size={12} />}
+        Snapshot
+      </button>
+      {done && <span className="inline-flex items-center gap-1 text-[11px] t-text-success"><Check size={12} /> {done}</span>}
+      {error && <span className="text-[11px] t-text-error">{error}</span>}
+    </div>
   )
 }
 
