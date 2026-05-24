@@ -387,8 +387,9 @@ Existing single-user projects MUST keep working untouched. Therefore:
 
 - Role is **per-project**, stored as `lead: <actorId>` (and an optional `members[]`) in
   `project.json`. You can be Lead of project A and Member of project B.
-- A Lead can promote a Member to co-Lead from a members list (supports co-PIs). This is
-  the only place a role is ever "chosen".
+- There is **exactly one Lead per project** — the person who created it and clicked
+  **Share**. Role is fixed at creation/join time and is never promoted: everyone who joins
+  via a share link is a Member. (There is no co-Lead.)
 
 ### Identity is a lightweight actor tag, not an account
 
@@ -810,7 +811,7 @@ Settings ▸ [ General | Appearance | Models | … | Sharing ]
 │                                                        │
 │  Members                                  [ Invite… ]  │
 │   • Prof. Dai     Lead    you                          │
-│   • Alice Chen    Member  synced 12 min ago   [ ⋯ ]    │  ← ⋯ = remove / make co-Lead
+│   • Alice Chen    Member  synced 12 min ago   [ ⋯ ]    │  ← ⋯ = remove
 │   • Bob           Member  synced 2 h ago      [ ⋯ ]    │
 └────────────────────────────────────────────────────────┘
 ```
@@ -818,7 +819,7 @@ Settings ▸ [ General | Appearance | Models | … | Sharing ]
 - Before sharing: the tab is just a **`Share project…`** entry point (opens the Share
   dialog, §13).
 - After sharing: it shows **project status** (name, repo, creator, sync state) and the
-  **member list** (displayName + role + last-synced). **Invite / remove / promote** are
+  **member list** (displayName + role + last-synced). **Invite / remove** are
   actions here, each confirming in a small modal.
 
 ---

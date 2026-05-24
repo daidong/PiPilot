@@ -11,10 +11,10 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { slugifyDisplayName, ensureLocalIdentity, getLocalIdentity } from '../identity.js'
+import { slugifyDisplayName, ensureLocalIdentity, getLocalIdentity, getSharedLocalActor } from '../identity.js'
 import { ensureSharingGitignore, ensureSharingGitattributes } from '../workspace-git.js'
 import { looksLikeGithubLogin } from '../gh.js'
-import { getSharingStatus, shareProject, buildSharingPromptClause, syncProject, getConflictDetails, resolveSyncConflict } from '../share.js'
+import { getSharingStatus, shareProject, buildSharingPromptClause, syncProject, getConflictDetails, resolveSyncConflict, registerLocalMemberIdentity } from '../share.js'
 import {
   isGitInstalled,
   gitInit,
@@ -127,6 +127,34 @@ test('ensureLocalIdentity: stable actorId, updatable displayName', () => {
   }
 })
 
+test('getSharedLocalActor: deduplicates same-display-name slugs with actorId fragment', () => {
+  const dir = tmp('rp-actor-slug-')
+  try {
+    mkdirSync(join(dir, '.research-pilot'), { recursive: true })
+    const me = ensureLocalIdentity(dir, 'Alex')
+    writeFileSync(
+      join(dir, '.research-pilot', 'project.json'),
+      JSON.stringify({
+        name: 'Shared',
+        questions: [],
+        userCorrections: [],
+        createdAt: '',
+        updatedAt: '',
+        share: { host: 'github', repo: 'o/r' },
+        members: [
+          { actorId: 'other-actor', displayName: 'Alex', role: 'member' },
+          { actorId: me.id, displayName: 'Alex', role: 'member' },
+        ],
+      })
+    )
+    const actor = getSharedLocalActor(dir)
+    assert.equal(actor?.id, me.id)
+    assert.equal(actor?.slug, `alex-${me.id.slice(-4).toLowerCase()}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ── getSharingStatus: unshared project ───────────────────────────────────────
 
 test('getSharingStatus: unshared non-git project reports shared=false, canShare=true', async () => {
@@ -197,6 +225,70 @@ test('buildSharingPromptClause: empty unless shared + identity, mentions the slu
     assert.match(clause, /Shared workspace/)
     assert.match(clause, /alice-chen\//)
     assert.match(clause, /soft preference/i)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('buildSharingPromptClause: uses the same deduplicated slug as artifact placement', () => {
+  const dir = tmp('rp-clause-collision-')
+  try {
+    mkdirSync(join(dir, '.research-pilot'), { recursive: true })
+    const me = ensureLocalIdentity(dir, 'Alex')
+    writeFileSync(
+      join(dir, '.research-pilot', 'project.json'),
+      JSON.stringify({
+        name: 'P',
+        questions: [],
+        userCorrections: [],
+        createdAt: '',
+        updatedAt: '',
+        share: { host: 'github', repo: 'o/r' },
+        members: [
+          { actorId: 'other-actor', displayName: 'Alex', role: 'member' },
+          { actorId: me.id, displayName: 'Alex', role: 'member' },
+        ],
+      })
+    )
+    assert.match(buildSharingPromptClause(dir), new RegExp(`alex-${me.id.slice(-4).toLowerCase()}/`))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('registerLocalMemberIdentity: fills invite placeholder; role derives from config.lead (no co-Lead)', async () => {
+  const dir = tmp('rp-register-member-')
+  try {
+    mkdirSync(join(dir, '.research-pilot'), { recursive: true })
+    writeFileSync(
+      join(dir, '.research-pilot', 'project.json'),
+      JSON.stringify({
+        name: 'Shared',
+        questions: [],
+        userCorrections: [],
+        createdAt: '',
+        updatedAt: '',
+        lead: 'lead-actor',
+        share: { host: 'github', repo: 'o/r' },
+        members: [
+          { actorId: 'lead-actor', displayName: 'Prof', role: 'lead' },
+          { displayName: 'alice-gh', githubLogin: 'alice-gh', role: 'member' },
+        ],
+      })
+    )
+    const me = ensureLocalIdentity(dir, 'Alice Chen')
+    const r = registerLocalMemberIdentity(dir, me, 'alice-gh')
+    assert.equal(r.ok, true)
+
+    const cfg = JSON.parse(readFileSync(join(dir, '.research-pilot', 'project.json'), 'utf-8'))
+    const member = cfg.members.find((m: any) => m.githubLogin === 'alice-gh')
+    assert.equal(member.actorId, me.id)
+    assert.equal(member.displayName, 'Alice Chen')
+    // Joiner is not config.lead → stays a member. There is no promotion path.
+    assert.equal(member.role, 'member')
+
+    const status = await getSharingStatus(dir)
+    assert.equal(status.myRole, 'member')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

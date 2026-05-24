@@ -47,7 +47,6 @@ interface SharingStoreState {
   poll: () => Promise<void>
   invite: (login: string) => Promise<MemberOpResult | null>
   removeMember: (login: string) => Promise<MemberOpResult | null>
-  promoteMember: (login: string) => Promise<MemberOpResult | null>
   loadConflictDetails: () => Promise<void>
   aiMerge: (file: ConflictFile) => Promise<{ ok: boolean; content?: string; error?: string }>
   resolveConflict: (resolutions: ConflictResolution[]) => Promise<SyncResult | null>
@@ -146,13 +145,6 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   removeMember: async (login) => {
     if (!api?.sharingRemoveMember) return null
     const result = await api.sharingRemoveMember(login)
-    if (result?.ok) await get().refresh()
-    return result
-  },
-
-  promoteMember: async (login) => {
-    if (!api?.sharingPromoteMember) return null
-    const result = await api.sharingPromoteMember(login)
     if (result?.ok) await get().refresh()
     return result
   },

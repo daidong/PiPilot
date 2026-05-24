@@ -40,7 +40,6 @@ import {
   pollRemote,
   inviteMember,
   removeMember,
-  promoteMember,
   acceptInvite,
   listInvitations,
   getConflictDetails,
@@ -2775,11 +2774,6 @@ export function registerIpcHandlers(): void {
   handleWindow('sharing:remove-member', async ({ state }, login: string) => {
     if (!state.projectPath) return { ok: false, error: 'No project open.' }
     return removeMember(state.projectPath, login)
-  })
-
-  handleWindow('sharing:promote-member', async ({ state }, login: string) => {
-    if (!state.projectPath) return { ok: false, error: 'No project open.' }
-    return promoteMember(state.projectPath, login)
   })
 
   // Pick an EMPTY destination folder for the join/clone flow (does not open a project).

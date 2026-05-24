@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { Users, GitBranch, AlertTriangle, ExternalLink, Loader2, UserPlus, MoreHorizontal, ShieldCheck, Trash2, Ban, Tag, Check } from 'lucide-react'
+import { Users, GitBranch, AlertTriangle, ExternalLink, Loader2, UserPlus, MoreHorizontal, Trash2, Ban, Tag, Check } from 'lucide-react'
 import { useSharingStore } from '../../stores/sharing-store'
 
 /**
  * RFC-013 §13.1 — the "Sharing" tab: the single home for everything
  * sharing-related. Unshared ⇒ a Share-project entry point. Shared ⇒ project
- * status + member roster + invite/remove/promote. Specific actions are inline
+ * status + member roster + invite/remove. Specific actions are inline
  * forms here rather than separate modal components (keeps surface area small).
  */
 export function SharingSettings() {
@@ -192,7 +192,6 @@ function SharedView() {
   const status = useSharingStore((s) => s.status)!
   const invite = useSharingStore((s) => s.invite)
   const removeMember = useSharingStore((s) => s.removeMember)
-  const promoteMember = useSharingStore((s) => s.promoteMember)
   const accessRevoked = useSharingStore((s) => s.accessRevoked)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteLogin, setInviteLogin] = useState('')
@@ -294,7 +293,6 @@ function SharedView() {
               isMe={!!status.me && m.actorId === status.me.id}
               canManage={isLead && m.role !== 'lead'}
               onRemove={m.githubLogin ? () => removeMember(m.githubLogin!) : undefined}
-              onPromote={m.githubLogin ? () => promoteMember(m.githubLogin!) : undefined}
             />
           ))}
         </ul>
@@ -304,7 +302,7 @@ function SharedView() {
 }
 
 function MemberRow({
-  displayName, login, role, isMe, canManage, onRemove, onPromote,
+  displayName, login, role, isMe, canManage, onRemove,
 }: {
   displayName: string
   login?: string
@@ -312,7 +310,6 @@ function MemberRow({
   isMe: boolean
   canManage: boolean
   onRemove?: () => void
-  onPromote?: () => void
 }) {
   const [menu, setMenu] = useState(false)
   return (
@@ -325,18 +322,13 @@ function MemberRow({
         </span>
         {isMe && <span className="text-[10px] t-text-muted">you</span>}
       </span>
-      {canManage && (onRemove || onPromote) && (
+      {canManage && onRemove && (
         <div className="relative">
           <button type="button" onClick={() => setMenu((v) => !v)} className="p-1 rounded t-text-muted hover:t-text" aria-label="Member actions">
             <MoreHorizontal size={14} />
           </button>
           {menu && (
             <div className="absolute right-0 top-full mt-1 min-w-[150px] rounded-lg border t-border t-bg-surface shadow-xl z-10 py-1" onMouseLeave={() => setMenu(false)}>
-              {onPromote && (
-                <button type="button" onClick={() => { onPromote(); setMenu(false) }} className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] t-text t-bg-hover">
-                  <ShieldCheck size={13} className="t-text-muted" /> Make co-Lead
-                </button>
-              )}
               {onRemove && (
                 <button type="button" onClick={() => { onRemove(); setMenu(false) }} className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] t-text-error t-bg-hover">
                   <Trash2 size={13} /> Remove

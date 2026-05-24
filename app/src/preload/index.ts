@@ -371,7 +371,6 @@ export interface ElectronAPI {
   sharingPoll: () => Promise<PollResult>
   sharingInvite: (login: string) => Promise<MemberOpResult>
   sharingRemoveMember: (login: string) => Promise<MemberOpResult>
-  sharingPromoteMember: (login: string) => Promise<MemberOpResult>
   sharingPickDestFolder: () => Promise<string | null>
   sharingListInvitations: () => Promise<RepoInvitation[]>
   sharingAcceptInvite: (opts: { repo: string; destFolder: string; displayName: string; invitationId?: number }) => Promise<AcceptInviteResult>
@@ -640,7 +639,6 @@ const api: ElectronAPI = {
   sharingPoll: () => invoke('sharing:poll'),
   sharingInvite: (login) => invoke('sharing:invite', login),
   sharingRemoveMember: (login) => invoke('sharing:remove-member', login),
-  sharingPromoteMember: (login) => invoke('sharing:promote-member', login),
   sharingPickDestFolder: () => invoke('sharing:pick-dest-folder'),
   sharingListInvitations: () => invoke('sharing:list-invitations'),
   sharingAcceptInvite: (opts) => invoke('sharing:accept-invite', opts),

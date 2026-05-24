@@ -1,7 +1,7 @@
 /**
  * RFC-013 — high-level sharing orchestration. Ties together preflight, identity,
  * the asymmetric git files, and the git/gh wrappers into the handful of actions
- * the UI exposes: share, sync, poll, invite/remove/promote, accept-invite.
+ * the UI exposes: share, sync, poll, invite/remove, accept-invite.
  *
  * Invariants honored here:
  * - GitHub required, no fallback (§7).
@@ -14,7 +14,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 
 import { join, dirname } from 'node:path'
 import { PATHS, type ProjectConfig, type ProjectMember } from '../types.js'
 import { checkSharingPreflight, type SharingPreflight } from './preflight.js'
-import { ensureLocalIdentity, getLocalIdentity, slugifyDisplayName } from './identity.js'
+import { ensureLocalIdentity, getLocalIdentity, getSharedLocalActor } from './identity.js'
 import { ensureSharingGitFiles } from './workspace-git.js'
 import {
   isGitRepo,
@@ -43,6 +43,7 @@ import {
   stagePath,
   commitNoEdit,
   createTag,
+  setLocalGitConfig,
 } from './git.js'
 import {
   repoCreatePrivate,
@@ -128,6 +129,8 @@ export async function getSharingStatus(projectPath: string): Promise<SharingStat
     }
   }
 
+  // Exactly one Lead per project: the creator (config.lead). There is no
+  // promotion path, so a member's role is always derived from config.lead.
   const myRole = me ? (me.id === config.lead ? 'lead' : 'member') : undefined
   let sync: SyncState | undefined
   if (await isGitRepo(projectPath)) {
@@ -166,9 +169,9 @@ export function buildSharingPromptClause(projectPath: string): string {
     return ''
   }
   if (!shared) return ''
-  const me = getLocalIdentity(projectPath)
+  const me = getSharedLocalActor(projectPath)
   if (!me) return ''
-  const slug = slugifyDisplayName(me.displayName)
+  const slug = me.slug ?? me.displayName
   return `## Shared workspace (collaboration)
 This project is shared with collaborators over git — everyone works on one branch.
 To avoid file-level collisions, when you CREATE new files, prefer placing them under
@@ -232,10 +235,19 @@ export async function shareProject(projectPath: string, opts: ShareOptions): Pro
 
   const init = await gitInit(projectPath)
   if (!init.ok) return { ok: false, invited: [], inviteErrors: [], error: `git init failed: ${init.stderr}` }
+  await ensureLocalGitAuthor(projectPath)
 
   // Initial commit (project.json + .gitignore + real files guarantee a non-empty tree).
   await autoTrackLargeFiles(projectPath)
-  await commitAll(projectPath, 'Initialize shared project (Research Pilot)')
+  const initialCommit = await commitAll(projectPath, 'Initialize shared project (Research Pilot)')
+  if (!initialCommit.ok) {
+    return {
+      ok: false,
+      invited: [],
+      inviteErrors: [],
+      error: `initial sharing commit failed: ${initialCommit.stderr || initialCommit.stdout}`,
+    }
+  }
 
   // Create the private repo from this fresh repo and push.
   const created = await repoCreatePrivate(projectPath, opts.repoName)
@@ -268,8 +280,24 @@ export async function shareProject(projectPath: string, opts: ShareOptions): Pro
   }
 
   // Push the roster commit so collaborators see project.json on clone.
-  await commitAll(projectPath, 'Record sharing roster').catch(() => {})
-  await push(projectPath).catch(() => {})
+  const rosterCommit = await commitAll(projectPath, 'Record sharing roster')
+  if (!rosterCommit.ok) {
+    return {
+      ok: false,
+      invited,
+      inviteErrors,
+      error: `sharing roster commit failed: ${rosterCommit.stderr || rosterCommit.stdout}`,
+    }
+  }
+  const rosterPush = await push(projectPath)
+  if (!rosterPush.ok) {
+    return {
+      ok: false,
+      invited,
+      inviteErrors,
+      error: `sharing roster push failed: ${rosterPush.raw.stderr || rosterPush.raw.stdout}`,
+    }
+  }
 
   const info = await repoView(slug)
   return { ok: true, slug, repoUrl: info?.url, invited, inviteErrors }
@@ -305,6 +333,7 @@ const ACCESS_DENIED_MESSAGE =
 export async function syncProject(projectPath: string): Promise<SyncResult> {
   const base: SyncResult = { ok: false, pushed: false, pulled: false, ahead: 0, behind: 0, conflict: false, conflictedFiles: [] }
   if (!(await isGitRepo(projectPath))) return { ...base, error: 'Not a git repository.' }
+  await ensureLocalGitAuthor(projectPath)
 
   // 1. commit my changes (route big files to LFS first)
   if (await hasChanges(projectPath)) {
@@ -520,6 +549,49 @@ export interface MemberOpResult {
   error?: string
 }
 
+/**
+ * Persist the local actor in the shared roster. Invite entries start out as
+ * GitHub-login placeholders because the Lead cannot know the invitee's local
+ * actorId. On join, this fills that gap so author badges, "you" markers, role
+ * checks, and slug de-dup all have the same source of truth.
+ */
+export function registerLocalMemberIdentity(
+  projectPath: string,
+  actor: { id: string; displayName: string },
+  githubLogin?: string
+): MemberOpResult {
+  const config = readConfig(projectPath)
+  if (!config.share) return { ok: false, error: 'Project is not shared.' }
+
+  const cleanLogin = githubLogin?.trim() || undefined
+  const members = config.members ?? []
+  const existing =
+    members.find((m) => m.actorId === actor.id) ??
+    (cleanLogin ? members.find((m) => m.githubLogin?.toLowerCase() === cleanLogin.toLowerCase()) : undefined)
+  const role: ProjectMember['role'] = actor.id === config.lead ? 'lead' : 'member'
+
+  let changed = false
+  if (existing) {
+    if (existing.actorId !== actor.id) { existing.actorId = actor.id; changed = true }
+    if (existing.displayName !== actor.displayName) { existing.displayName = actor.displayName; changed = true }
+    if (cleanLogin && existing.githubLogin !== cleanLogin) { existing.githubLogin = cleanLogin; changed = true }
+    if (existing.role !== role) { existing.role = role; changed = true }
+  } else {
+    members.push({
+      actorId: actor.id,
+      displayName: actor.displayName,
+      role,
+      githubLogin: cleanLogin,
+      addedAt: new Date().toISOString(),
+    })
+    config.members = members
+    changed = true
+  }
+
+  if (changed) writeConfig(projectPath, config)
+  return { ok: true }
+}
+
 export async function inviteMember(projectPath: string, login: string): Promise<MemberOpResult> {
   const config = readConfig(projectPath)
   if (!config.share) return { ok: false, error: 'Project is not shared.' }
@@ -546,19 +618,6 @@ export async function removeMember(projectPath: string, login: string): Promise<
   if (!res.ok) return { ok: false, error: res.stderr || 'GitHub rejected the removal.' }
   config.members = (config.members ?? []).filter((m) => m.githubLogin !== login.trim())
   writeConfig(projectPath, config)
-  return { ok: true }
-}
-
-export async function promoteMember(projectPath: string, login: string): Promise<MemberOpResult> {
-  const config = readConfig(projectPath)
-  if (!config.share) return { ok: false, error: 'Project is not shared.' }
-  const res = await collaboratorAdd(config.share.repo, login.trim(), 'admin')
-  if (!res.ok) return { ok: false, error: res.stderr || 'GitHub rejected the promotion.' }
-  const member = (config.members ?? []).find((m) => m.githubLogin === login.trim())
-  if (member) {
-    member.role = 'lead'
-    writeConfig(projectPath, config)
-  }
   return { ok: true }
 }
 
@@ -625,8 +684,15 @@ export async function acceptInvite(opts: AcceptInviteOptions): Promise<AcceptInv
   const clone = await repoClone(opts.repo, dest)
   if (!clone.ok) return { ok: false, error: `Clone failed: ${clone.stderr}` }
 
-  // Fresh local identity for this member (actorId generated here).
-  ensureLocalIdentity(dest, opts.displayName)
+  // Fresh local identity for this member (actorId generated here), then publish
+  // it into the shared roster. The sync is best-effort: if it races, the local
+  // roster edit remains and the normal Sync pill can retry.
+  const actor = ensureLocalIdentity(dest, opts.displayName)
+  registerLocalMemberIdentity(dest, actor, preflight.login)
+  const registrationSync = await syncProject(dest)
+  if (!registrationSync.ok && process.env.RESEARCH_COPILOT_DEBUG) {
+    console.warn('[sharing] joined project, but roster registration did not sync:', registrationSync.error)
+  }
   return { ok: true, projectPath: dest }
 }
 
@@ -638,6 +704,13 @@ async function autoTrackLargeFiles(projectPath: string): Promise<void> {
   for (const rel of big) {
     await lfsTrack(projectPath, rel).catch(() => {})
   }
+}
+
+async function ensureLocalGitAuthor(projectPath: string): Promise<void> {
+  const me = getLocalIdentity(projectPath)
+  if (!me) return
+  await setLocalGitConfig(projectPath, 'user.name', me.displayName).catch(() => {})
+  await setLocalGitConfig(projectPath, 'user.email', `${me.id}@research-pilot.local`).catch(() => {})
 }
 
 function syncCommitMessage(projectPath: string): string {
