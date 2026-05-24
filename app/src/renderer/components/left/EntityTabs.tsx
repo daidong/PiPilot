@@ -32,6 +32,8 @@ import { useSessionStore } from '../../stores/session-store'
 import { useMemoryStore, type MemoryType, type MemoryItem } from '../../stores/memory-store'
 import { WorkspaceTree } from './WorkspaceTree'
 import { useSkillStore, type SkillManifest } from '../../stores/skill-store'
+import { useSharingStore } from '../../stores/sharing-store'
+import { authorColor } from '../../utils/author-color'
 
 function HoverPreview({
   entity,
@@ -108,6 +110,12 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
   const closePreview = useUIStore((s) => s.closePreview)
   const previewEntity = useUIStore((s) => s.previewEntity)
   const requestScrollTo = useChatStore((s) => s.requestScrollTo)
+  // RFC-013 attribution: a leading author dot, shown only in shared projects.
+  // "You" is the teal accent; collaborators get a stable derived color so
+  // *their* work is what pops when scanning. Dot lives in the left gutter so a
+  // long title never clips it (unlike the former trailing text chip).
+  const shared = useSharingStore((s) => s.status?.shared ?? false)
+  const myActorId = useSharingStore((s) => s.status?.me?.id)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showHover, setShowHover] = useState(false)
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null)
@@ -117,6 +125,8 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
   const confirmResetRef = useRef<number | null>(null)
 
   const messageId = entity.provenance?.messageId as string | undefined
+  const actor = entity.provenance?.actor
+  const actorIsMe = !!actor && !!myActorId && actor.id === myActorId
 
   const cancelHide = () => {
     if (hideTimeoutRef.current) {
@@ -181,6 +191,20 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
             confirmDelete={confirmDelete}
           />
         )}
+        {shared && (
+          actor ? (
+            <span
+              className={`shrink-0 w-1.5 h-1.5 rounded-full ${actorIsMe ? 't-bg-accent' : ''}`}
+              style={actorIsMe ? undefined : { backgroundColor: authorColor(actor.id) }}
+              title={actorIsMe ? `${actor.displayName} (you)` : `Created by ${actor.displayName}`}
+              aria-label={actorIsMe ? `Created by you, ${actor.displayName}` : `Created by ${actor.displayName}`}
+            />
+          ) : (
+            // Shared project, but this artifact predates per-actor stamping —
+            // hold the gutter slot so titles stay aligned with attributed rows.
+            <span className="shrink-0 w-1.5" aria-hidden="true" />
+          )
+        )}
         {isEnriching ? (
           <Loader2 size={10} className="shrink-0 t-text-accent-soft animate-spin" />
         ) : entity.type === 'note' ? (
@@ -196,15 +220,6 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
           <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
         )}
         <span className={`text-xs truncate ${entity.id === 'agent-md' ? 't-text font-medium' : 't-text'}`} title={entity.title}>{entity.title}</span>
-        {/* RFC-013 author badge — who created this artifact (shared projects only) */}
-        {entity.provenance?.actor?.displayName && (
-          <span
-            className="shrink-0 px-1 py-px rounded text-[9px] t-bg-hover t-text-muted max-w-[80px] truncate"
-            title={`Created by ${entity.provenance.actor.displayName}`}
-          >
-            {entity.provenance.actor.displayName}
-          </span>
-        )}
       </div>
       {messageId && (
         <button
