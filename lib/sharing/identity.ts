@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { ulid } from '../telemetry/ulid.js'
-import type { Actor } from '../types.js'
+import { PATHS, type Actor } from '../types.js'
 
 const IDENTITY_REL = join('.research-pilot', 'identity.json')
 
@@ -66,4 +66,31 @@ export function ensureLocalIdentity(projectPath: string, displayName?: string): 
 
 export function hasLocalIdentity(projectPath: string): boolean {
   return existsSync(join(projectPath, IDENTITY_REL))
+}
+
+/**
+ * Resolve the local actor for a shared project, including the stable per-actor
+ * directory slug. This is intentionally derived from the shared roster in
+ * project.json so artifact placement and the agent's soft file-placement prompt
+ * agree about collision handling.
+ */
+export function getSharedLocalActor(projectPath: string): Actor | undefined {
+  try {
+    const cfg = JSON.parse(readFileSync(join(projectPath, PATHS.project), 'utf-8')) as {
+      share?: unknown
+      members?: Array<{ actorId?: string; displayName?: string }>
+    }
+    if (!cfg.share) return undefined
+    const me = getLocalIdentity(projectPath)
+    if (!me) return undefined
+
+    const base = slugifyDisplayName(me.displayName)
+    const collision = (cfg.members ?? []).some(
+      (m) => m.actorId && m.actorId !== me.id && m.displayName && slugifyDisplayName(m.displayName) === base
+    )
+    const slug = collision ? `${base}-${me.id.slice(-4).toLowerCase()}` : base
+    return { id: me.id, displayName: me.displayName, slug }
+  } catch {
+    return undefined
+  }
 }

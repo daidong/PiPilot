@@ -6,7 +6,7 @@ import { createArtifactLedgerWriter, type ArtifactOp } from '../ledger/artifact-
 import { readArtifactFromFile } from './artifact-files.js'
 import { getArtifacts, upsertIndexEntry, removeIndexEntry } from './indexer.js'
 import { writeArtifactToFile, removeArtifactFile, primaryFileRel } from './artifact-writer.js'
-import { getLocalIdentity, slugifyDisplayName } from '../sharing/identity.js'
+import { getSharedLocalActor } from '../sharing/identity.js'
 import {
   PATHS,
   AGENT_MD_ID,
@@ -29,25 +29,7 @@ import {
  * create; artifact creation is not a hot path.
  */
 function resolveSharingActor(projectPath: string): Actor | undefined {
-  try {
-    const cfg = JSON.parse(readFileSync(join(projectPath, PATHS.project), 'utf-8')) as {
-      share?: unknown
-      members?: Array<{ actorId?: string; displayName?: string }>
-    }
-    if (!cfg.share) return undefined
-    const me = getLocalIdentity(projectPath)
-    if (!me) return undefined
-    // §6.1 slug dedup: if another roster member resolves to the same base slug,
-    // suffix mine with a short stable id fragment so per-actor dirs never merge.
-    const base = slugifyDisplayName(me.displayName)
-    const collision = (cfg.members ?? []).some(
-      (m) => m.actorId && m.actorId !== me.id && m.displayName && slugifyDisplayName(m.displayName) === base
-    )
-    const slug = collision ? `${base}-${me.id.slice(-4).toLowerCase()}` : base
-    return { id: me.id, displayName: me.displayName, slug }
-  } catch {
-    return undefined
-  }
+  return getSharedLocalActor(projectPath)
 }
 
 export interface ArtifactFileRecord<T extends Artifact = Artifact> {
