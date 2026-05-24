@@ -28,6 +28,9 @@ import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readE
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
+import { rebuildIndex } from '../../../lib/memory-v2/indexer'
+import { migrateToFilesAsCarrier } from '../../../lib/memory-v2/migrate-files'
+import { ensureWorkspaceGitignore } from '../../../lib/memory-v2/workspace-gitignore'
 import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
 import {
   migrateAgentMemoryToFile,
@@ -433,6 +436,22 @@ function initializeProject(path: string): void {
   const migration = migrateLegacyArtifacts(path)
   if (migration.updatedFiles > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
     console.log(`[ResearchPilot] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
+  }
+
+  // RFC-014 files-as-carrier: convert legacy artifact JSON to workspace files
+  // (one-time, backed up to artifacts-legacy/), (re)build the derived index, and
+  // keep the index + backup out of git. All best-effort — never block open.
+  try {
+    const filesMig = migrateToFilesAsCarrier(path)
+    if (!filesMig.skipped && filesMig.migrated > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
+      console.log(`[ResearchPilot] files-as-carrier migration: ${filesMig.migrated} artifact(s) → files`)
+    }
+    rebuildIndex(path)
+    ensureWorkspaceGitignore(path)
+  } catch (err) {
+    if (process.env.RESEARCH_COPILOT_DEBUG) {
+      console.warn('[ResearchPilot] artifact index/migration init failed:', err)
+    }
   }
 
   // Telemetry-trace v0.10: ensure traces/blobs dirs + run ProjectConfig migration
@@ -2472,6 +2491,15 @@ export function registerIpcHandlers(): void {
             : { parents: Array.from(pendingParents) }
           pendingParents.clear()
           sawUnknownParent = false
+          // RFC-014: re-derive the artifact index so direct file edits (the
+          // agent's edit/write tools, an external editor) reflect in the Library.
+          // Our own store writes keep the index fresh via upsert; this covers the
+          // out-of-band edits. Best-effort.
+          try {
+            if (state.projectPath) rebuildIndex(state.projectPath)
+          } catch {
+            /* index is a derived cache; ignore */
+          }
           safeSend(win, 'fs:external-change', payload)
         }, 500)
       })
