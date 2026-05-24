@@ -1,16 +1,26 @@
 # RFC-013: Shared Workspaces — Async Collaboration & PI Oversight
 
-> Spec version: 0.9 (DRAFT — actively under discussion) | Last updated: 2026-05-24
+> Spec version: 1.0 (AS-BUILT) | Last updated: 2026-05-24
+>
+> Status: **IMPLEMENTED** on branch `feat/artifact-files-as-carrier` (not yet merged to
+> `main`; the new UI has not had an in-app smoke test). Phases 0, 0.5, 1, and the core of
+> 2–3 are built and unit-tested. This spec is reconciled with the as-built code:
+> **§0 As-Built Notes** is the authoritative record of where the implementation refined the
+> design below, and what was intentionally **dropped**. Sections 1–18 are the original
+> design narrative — read them through the lens of §0.
+>
+> v1.0 (as-built): artifact dirs nested under `rp-artifacts/` (avoid colliding with users'
+> own `notes/`/`papers/`); per-actor placement via `provenance.actor` + a soft prompt steer;
+> telemetry config + `agent-md` moved to local-only; share refuses an existing git repo;
+> in-app pending-invitation discovery; conflict resolution = AI-merge / pick-one via a
+> merge-commit; **dropped: PI guidance files, progress view, filter-by-author, the Layer-1
+> "recently edited" banner**. Full list in §0.
 >
 > v0.9: editorial consistency pass (no design changes) — fixed stale wording left by earlier
 > revisions: progress digest = files + git log (not session summaries); "three buttons" →
 > one `Sync data` button + Settings tab; `refs.bib`→`references.bib`, `idea.tex`→`idea.md`;
 > "artifacts"→"produced files" in §10; clarified guidance has no *display* widget (authoring
 > shortcut ok); tidied the three-buckets phrasing; moved background-poll to Phase 3 only.
->
-> Status: design exploration. Nothing here is built yet. This document captures the
-> agreed mental model and the decisions made so far; **§17 Open Questions** lists what
-> we still need to nail down before any implementation.
 >
 > v0.2 changes: (1) file policy inverted to **track-everything-by-default** — no presumed
 > directory taxonomy, no guessing reproducibility (§8). (2) Large files (incl. PDFs) live
@@ -68,6 +78,80 @@
 > workspace-scan indexer, §5.1); dangling `provenance.sessionId` problem disappears. This
 > is a real artifact-subsystem refactor, **orthogonal to and a prerequisite for** sharing
 > (§16 Phase 0.5), now spec'd separately as **RFC-014** (`artifact-files-as-carrier.md`).
+
+## 0. As-Built Notes (v1.0) — implementation vs. this design
+
+Implemented on `feat/artifact-files-as-carrier` (RFC-014 files-as-carrier + RFC-013 sharing).
+Where the code differs from §1–§18 below, **this section wins**.
+
+### Built
+- **Phase 0** — asymmetric `.gitignore` + managed `.gitattributes` (`* text=auto`);
+  `lib/sharing/workspace-git.ts`.
+- **Phase 0.5** — files-as-carrier (RFC-014), separately specced + built.
+- **Phase 1** — `Share project` (gh repo create private + push + roster + invite),
+  `Sync data` (commit→fetch→rebase→push, retry), `gh` CLI wrapping, gh setup gate,
+  join/clone-into-empty-folder, removed-collaborator handling. `lib/sharing/`.
+- **Phase 2 (core)** — local `actorId`+displayName identity; `provenance.actor` stamping;
+  per-actor placement; **author badges** (no filter).
+- **Phase 3 (core)** — background poll + "updates available" indicator; **conflict card +
+  AI-merge / binary pick-one** (§9 Layer 2); Layer 0 prevention (per-actor + soft prompt steer).
+
+### Refinements (as-built differs from the prose below)
+1. **Artifact directories are nested under a single distinctive `rp-artifacts/` dir**, not the
+   generic root `notes/`/`papers/`/`tool-output/` shown in §3.2/§5/§9. Final layout:
+   `rp-artifacts/notes/<id>.md`, `rp-artifacts/papers/<citeKey>.bib` (+`.rp.yaml`),
+   `rp-artifacts/tool-output/<id>.md`. Reason: generic names collide with users' own folders
+   (the test repo already had its own `paper/` + `plans/`). `data` sidecars stay next to the
+   data file; `web-content` stays local in `.research-pilot/`.
+2. **Per-actor placement is two mechanisms, not one root `<displayName>/` dir:**
+   (a) **artifacts** created via the tools land in `rp-artifacts/<type>/<slug>/…` — driven by
+   `provenance.actor` stamped at create time (so the path is a pure function of the artifact;
+   the index walk is recursive, find/update/delete recompute the same path with no stored
+   path). (b) **agent free-form files** (code/LaTeX/figures the write/edit tools produce) are
+   steered toward a root `<slug>/` dir by a **soft system-prompt clause** injected only when
+   shared. §5's single `Alice Chen/` holding everything was simplified to these two.
+3. **`agent-md` is per-member local** — `.gitignore` has `**/agent-md.md`. User instructions
+   + agent memory are per-user (§11), not a shared singleton (would mix PI/student
+   instructions + risk co-edit conflicts). Each member keeps their own; `ensureAgentMd`
+   recreates it on open.
+4. **Telemetry config moved out of `project.json` to local `preferences.json`** (schema v2).
+   `tracingMode`/`bufferCapacity` are per-member, never propagated by sync. project.json stays
+   the only shared internal file but no longer carries telemetry. **A shared `project.json` is
+   never rewritten on open** (migration is read-only for shared projects) — otherwise every
+   member's clone shows "uncommitted changes" the instant they join.
+5. **Share refuses a folder that is already a git repo** (or nested in one). Sharing creates +
+   manages its own private repo from scratch; adopting a user's existing history would risk
+   overwriting it. The Share UI blocks it; `shareProject` enforces it. (Mirror of the
+   join-side "clone into an empty folder" rule, §7.1.)
+6. **In-app pending-invitation discovery.** GitHub still emails the invitee, but the Join
+   modal lists their pending invitations (`gh api /user/repository_invitations`) so they don't
+   need to be told the repo slug; accept + clone in one shot. (Refines §7.1.)
+7. **Removed-collaborator detection** distinguishes lost-access (removed / repo gone) from a
+   transient network failure (`classifyRemoteError`); the former is a sticky "No access" state
+   with a banner; local files untouched (§7.1 intent, implemented).
+8. **Conflict resolution mechanics** (§9 Layer 2): on a rebase clash, sync aborts to a clean
+   state and reports; `getConflictDetails` extracts base/mine/theirs from refs; the card lets
+   the user pick **AI-merge** (LLM via the window's current model) / **keep mine** / **keep
+   theirs** per text file, **pick-one** for binary; `resolveSyncConflict` applies them inside a
+   **single merge commit** (never left mid-merge across IPC). Raw git markers are never shown.
+9. **Slug dedup** (§6.1): the disambiguator is a **short stable `actorId` fragment**
+   (`alex-act1/`), not `-2`; the resolved slug is stamped on `provenance.actor.slug` so the
+   path stays stable. Clean name when there's no collision (first-come keeps it).
+10. **Sync control = a pill in the bottom `StatusBar`** (next to the update pill), not a
+    "top bar" (this app has no top bar). Hidden entirely when unshared.
+11. **Snapshot = a "Snapshot" button** in the Settings → Sharing tab (annotated git tag +
+    push). §16/§17.6 said "no dedicated UI"; a minimal one-click button was added.
+
+### Dropped (intentionally cut — do NOT build without re-deciding)
+- **PI guidance files** (`rp-pi-guidance/`, the format/template, the "Write guidance"
+  shortcut) — §10. Judged redundant.
+- **Progress view** (git-log-by-author digest) — §10. Judged redundant.
+- **Filter-by-author** — §2/§6/§16 Phase 2. Badges yes, filtering no.
+- **Layer-1 advisory banner** ("Bob edited this 2h ago") — §9 Layer 1.
+- **LFS threshold is a constant** (50 MB) — auto-route works (`git lfs track` at commit), but
+  it is **not yet user-configurable** in the UI (§8.1 "configurable" is aspirational).
+
+---
 
 ## 1. Overview
 
@@ -139,8 +223,8 @@ personal** split, plus secrets that never touch the repo at all. No awkward
 
 | Bucket | Contents | Travels with share? |
 |---|---|---|
-| **Shared** (tracked in git, one trunk) | **every user file in the workspace, whatever its layout** — code, data, drafts, results, PDFs, **notes (`.md`), papers (`.bib`+PDF)** (§3.1), plus `rp-pi-guidance/` (PI guidance, at root) and — inside `.research-pilot/` — **only `project.json`**. No taxonomy assumed (§8). | ✅ yes |
-| **Private** (gitignored, local-only) | **everything else inside `.research-pilot/`**: the **artifact index** (`artifacts/`, now derived/rebuildable — §3.1), chat (`sessions/`), agent memory (`memory/`, `session-summaries/`, `recaps/`), `preferences.json`, `session.json`, `cache/`, `traces/`, `blobs/`, `compute-runs/`, `ledger.jsonl`, `usage.json`, `reviews/`, `skills-config.json`. We do **not** gitignore *user* files (outside `.research-pilot/`) by guessing reproducibility. | 🚫 never leaves the machine |
+| **Shared** (tracked in git, one trunk) | **every user file in the workspace, whatever its layout** — code, data, drafts, results, PDFs — plus the app's artifacts under **`rp-artifacts/`** (notes `.md`, papers `.bib`+PDF, tool-output `.md`; §0 #1) and — inside `.research-pilot/` — **only `project.json`**. No taxonomy assumed (§8). | ✅ yes |
+| **Private** (gitignored, local-only) | **everything else inside `.research-pilot/`**: the **artifact index** (`index/`, `artifacts/`, derived/rebuildable — §3.1), chat (`sessions/`), agent memory (`memory/`, `session-summaries/`, `recaps/`), `preferences.json` (model choice + telemetry, §0 #4), `identity.json`, `session.json`, `cache/`, `traces/`, `blobs/`, `compute-runs/`, `ledger.jsonl`, `usage.json`, `reviews/`, `skills-config.json` — **plus `rp-artifacts/.../agent-md.md`** (per-member, §0 #3). We do **not** gitignore other *user* files by guessing reproducibility. | 🚫 never leaves the machine |
 | **Never-shared secrets** (outside the project folder) | API keys, OAuth tokens — already in `~/.research-copilot/config.json` | 🔒 never (not in repo at all) |
 
 Source of truth for the live inventory is the codebase; see `lib/types.ts` for the
@@ -184,14 +268,17 @@ Files)** at `docs/spec/artifact-files-as-carrier.md`.
 
 Not every artifact type travels. Decisions:
 
-| Type | Shared? | Where it lives | Notes |
+| Type | Shared? | Where it lives (as-built, §0) | Notes |
 |---|---|---|---|
-| **note** | ✅ shared | `notes/<id>.md` (root) | files-as-carrier |
-| **paper** | ✅ shared, **per-actor (duplicates accepted)** | `papers/<citeKey>.bib` + `.rp.yaml` (root; under `<displayName>/` once shared) | see below |
-| **data** | ✅ shared | the data file + `<file>.rp.yaml` (root) | |
-| **tool-output** | ✅ shared | `tool-output/<id>.md` (root) | can hold real deliverables (e.g. marp slide/lecture decks) → worth sharing |
+| **note** | ✅ shared | `rp-artifacts/notes/<id>.md` (per-actor: `rp-artifacts/notes/<slug>/<id>.md`) | files-as-carrier |
+| **paper** | ✅ shared, **per-actor (duplicates accepted)** | `rp-artifacts/papers/<citeKey>.bib` + `.rp.yaml` (per-actor: `…/papers/<slug>/…`) | see below |
+| **data** | ✅ shared | the data file + `<file>.rp.yaml` (next to the data file) | |
+| **tool-output** | ✅ shared | `rp-artifacts/tool-output/<id>.md` (per-actor: `…/<slug>/…`) | can hold real deliverables (e.g. marp slide/lecture decks) → worth sharing |
 | **web-content** | 🚫 **NOT shared** | `.research-pilot/artifacts/web-content/<id>.json` (**stays inside `.research-pilot/`**) | cache-like (scraped pages, re-fetchable); **exempt from files-as-carrier** — kept as local JSON. Also not in the Library UI / not @-mentionable today |
-| **guidance** | ✅ shared | `rp-pi-guidance/<ts>.md` (root) | §10 |
+| **guidance** | ⛔ **DROPPED** (§0) | — | judged redundant; not built |
+
+> As-built paths nest under `rp-artifacts/` and per-actor under `<slug>/` (§0 refinements
+> 1–2). The "(root)" locations in earlier drafts are superseded.
 
 - **Papers are per-actor with duplicates accepted (decided).** When two members each add the
   same paper, they get separate files under their own `<displayName>/papers/` → **no file
@@ -237,20 +324,24 @@ Repo layout (after sharing):
 
 ```
 qec-2026/                        <- one repo, one main; ALL files tracked by default (§8)
-├─ idea.md   references.bib  data.csv <- PI's ORIGINAL files (notes/papers are REAL files §3.1)
-├─ Alice Chen/                   <- member's new files, agent steered here once shared (§5)
-│    expt1.py   note.md   fig1.png   <- incl. her notes (.md); large files → LFS (§8)
-├─ Bob/
-│    expt2.py
-├─ rp-pi-guidance/               <- PI guidance files at ROOT, PI sole writer (§10)
-│    2026-05-23-to-Alice.md
+├─ paper/  data.csv              <- PI's ORIGINAL user files, any layout
+├─ rp-artifacts/                 <- app-managed artifacts, distinctive name (§0 refinement 1)
+│   ├─ notes/<id>.md   notes/Alice Chen/<id>.md   <- per-actor subdir once shared (§0 #2a)
+│   ├─ papers/<citeKey>.bib (+ .rp.yaml)          papers/Alice Chen/…
+│   ├─ tool-output/<id>.md
+│   └─ notes/agent-md.md         <- per-member, GITIGNORED (`**/agent-md.md`, §0 #3)
+├─ Alice Chen/                   <- member's NEW free-form files (code/figs), soft-steered (§0 #2b)
+│    expt1.py   fig1.png         <- large files → LFS (§8)
+├─ Bob/   expt2.py
 └─ .research-pilot/
    ├─ project.json                               (SHARED — the only shared internal file)
-   ├─ artifacts/   <- LOCAL artifact INDEX, rebuilt from workspace files (GITIGNORED §3.1)
+   ├─ index/  artifacts/  <- LOCAL artifact index, rebuilt from workspace files (GITIGNORED §3.1)
    ├─ sessions/  memory*/  cache/  traces/  ...   (GITIGNORED — local-only §8/§11)
-   ├─ preferences.json  session.json  usage.json  (GITIGNORED — per-machine §8)
+   ├─ preferences.json   <- per-machine: model choice + telemetry config (GITIGNORED, §0 #4)
+   ├─ identity.json  session.json  usage.json     (GITIGNORED — per-machine §8)
    └─ ledger.jsonl                                (GITIGNORED — local audit log §8)
 ```
+> (`rp-pi-guidance/` from earlier drafts was **dropped** — §0.)
 
 **Why this matters:** when each actor's new content lands in a disjoint subdirectory,
 commits touch disjoint files, so git merges are clean fast-forwards and **students never
@@ -305,7 +396,8 @@ Existing single-user projects MUST keep working untouched. Therefore:
   stores a local `actorId` + display name. **It does not read git config** (students may
   not have one configured).
 - `actorId` is stamped into each artifact's `provenance` so the UI can show
-  attribution badges and "filter by author". No login, no password, no user table.
+  **attribution badges** (built — §0). No login, no password, no user table.
+  (Filter-by-author was **dropped**, §0.)
 - GitHub identity (§7) is used only for repo **access control**, not as the in-app
   identity.
 
@@ -316,9 +408,11 @@ not the opaque `actorId`, because the paths should be human-readable when browsi
 repo. Implications handled in implementation:
 - displayName is **sanitized** into a filesystem-safe slug (strip/replace `/ \ : * ? " < > |`,
   trim, collapse spaces).
-- displayName can **collide or change**. On collision, append a short disambiguator
-  (e.g. `Alice Chen-2`). The stable `actorId` in provenance remains the source of truth
-  for attribution; the directory name is just a friendly label and may be remapped.
+- displayName can **collide or change**. As-built (§0 #9): on a roster name collision the
+  slug gets a **short stable `actorId` fragment** (e.g. `alex-act1/`), and the resolved slug
+  is stamped on `provenance.actor.slug` so the artifact's path stays stable. No collision ⇒
+  clean name (first-come keeps it). The stable `actorId` in provenance remains the source of
+  truth for attribution; the directory name is just a friendly label.
 
 ### 6.2 Sibling visibility — everyone sees everyone (resolved)
 
@@ -358,6 +452,13 @@ specific subtree, but it is not v1.
      clone into / merge with an existing non-empty directory.
 4. After clone, the member sets their displayName (§6) and starts working; `Sync data`
    handles all subsequent git traffic.
+
+> **As-built (§0):** the Join modal **lists the member's pending invitations**
+> (`gh api /user/repository_invitations`) so they needn't be told the repo slug — pick one,
+> accept + clone in one shot (manual `owner/name` entry still works for already-accepted
+> repos). **Sharing (Lead side) refuses a folder that is already a git repo** (or nested in
+> one): a shared project gets its own fresh repo created by the flow — start in a non-git
+> folder. This mirrors the empty-folder rule above.
 
 **Removal (PI removes a member):**
 - PI removes the collaborator on GitHub (via `gh`). The removed member's **local files are
@@ -413,14 +514,17 @@ INSIDE .research-pilot/ (app-internal) → share ONLY project.json:
             artifacts/        the artifact INDEX — now derived/rebuildable (§3.1)
             sessions/         chat (§11)
             memory*/          agent memory (§11)
-            preferences.json  per-user model choice (sharing would clobber others)
+            preferences.json  per-user model choice + telemetry config (§0 #4)
+            identity.json     per-user actorId + displayName (§6)
             session.json      per-workspace session UUID (must NOT be shared)
             cache/ traces/ blobs/ compute-runs/   regenerable / local
             ledger*.jsonl  usage.json  reviews/  skills-config.json  …
    (API keys/secrets are already outside the folder — never in the repo)
 
-   The actual knowledge (notes .md, papers .bib+PDF, data, web-content, tool-output)
-   lives as REAL FILES in the workspace (§3.1) and travels by the USER-FILES rule above.
+   The actual knowledge (notes .md, papers .bib+PDF, data, tool-output) lives as REAL FILES
+   under rp-artifacts/ (§0 #1) and travels by the USER-FILES rule above — EXCEPT agent-md.md
+   (per-member instructions+memory, gitignored `**/agent-md.md`, §0 #3) and web-content
+   (local JSON inside .research-pilot/, §3.2).
 
 LFS (transparent, by size threshold) — applies to ANY large file, incl. PDFs:
    large files live in-place in the workspace and are routed to git-LFS
@@ -517,6 +621,11 @@ Summary:
 ---
 
 ## 10. PI Oversight
+
+> ⛔ **DROPPED in v1.0 (§0).** Both pieces of this section — the **progress view** and the
+> **PI guidance files** (`rp-pi-guidance/`) — were judged redundant and are **not built**.
+> The rest of this section is retained as design rationale only; do not implement without
+> re-deciding. (Oversight today = open the shared Library + the repo's git history directly.)
 
 ### Progress is measured by produced artifacts, NOT by reading chat
 
@@ -670,14 +779,14 @@ join modal:**
   invite, remove) open as modals from here.
 - **`Accept invitation`** modal — the Join flow above (triggered by opening an invite link).
 
-Everything else is **contextual, not constant chrome**: member avatars + sync-status pill
-(top bar), per-artifact author badges (passive), and the conflict card (only on the rare
-same-file clash, §9). Guidance needs **no dedicated display widget** — the PI just authors a
-Markdown file in `rp-pi-guidance/` (optionally via the "Write guidance" shortcut in the
-progress view, §10, which only scaffolds a file), and it shows up in everyone's left file
-panel like any other file.
+Everything else is **contextual, not constant chrome**. As-built (§0 #10): the **`Sync data`
+control is a pill in the bottom `StatusBar`** (next to the update pill) — this app has no top
+bar — showing up-to-date / N-to-push / updates-available / syncing / **No access** / conflict,
+and clicking it syncs. Plus **per-artifact author badges** (built, passive, in the Library),
+and the **conflict card** (built, only on the rare same-file clash, §9). The Settings → Sharing
+tab also has a **Snapshot** button (§0 #11). (Guidance UI: **dropped**, §10.)
 
-**Progress view:** §10. **Conflict card:** §9.
+**Conflict card:** §9. (Progress view: **dropped**, §10.)
 
 ### 13.1 Settings → "Sharing" tab (resolved §17.4)
 
@@ -756,9 +865,11 @@ stayed in disjoint per-actor paths; only genuinely co-edited files surface as §
   front-matter), a `paper` writes a `.bib` (+PDF), web-content/tool-output write real
   files. `.research-pilot/artifacts/` becomes a **local derived index** (gitignored),
   rebuilt by a recursive workspace scan (§5.1). Library/search/@-mention read the index.
-- `Artifact` provenance → add `actor: { id, displayName }` (attribution; **nullable** —
-  legacy/solo files have none). Attribution travels in the file's front-matter and/or via
-  git author; the index carries it locally.
+- `Artifact` provenance → add `actor: { id, displayName, slug? }` (attribution + per-actor
+  dir slug; **nullable** — legacy/solo files have none; `slug` set only when shared, §0 #9).
+  Attribution travels in the file's front-matter; the index carries it locally.
+  (As-built artifact paths are under `rp-artifacts/` — §0 #1; this section's bare
+  `notes→.md`/`papers→.bib` phrasing predates that.)
 - `project.json` → add optional `lead: actorId`, `members: actorId[]`,
   `share: { host, repo }`. **All optional**: absent ⇒ unshared/solo ⇒ today's behavior.
   This is the **only shared file inside `.research-pilot/`** (§8).
@@ -786,14 +897,14 @@ stayed in disjoint per-actor paths; only genuinely co-edited files surface as §
 
 ## 16. Phased Rollout
 
-| Phase | Deliverable | Rough LOC |
+| Phase | Deliverable | Status (v1.0, §0) |
 |---|---|---|
-| **0 — Scope hygiene** | Ship default workspace `.gitignore` (asymmetric rule, §8); verify secrets never enter the repo. Enables manual `git init`+clone handoff today. | ~100 |
-| **0.5 — Files-as-carrier refactor (PREREQUISITE)** | §3.1: notes→`.md`, papers→`.bib`(+PDF), web/tool-output→files; `artifacts/` becomes a local index rebuilt from a recursive workspace scan; migrate/keep-readable existing inline artifacts. Orthogonal to sharing but required before it. **Spec'd in RFC-014.** | ~800–1500 |
-| **1 — Git as transport (2 buttons)** | `Share project` / `Sync data`, wrapping git + `gh` CLI (clone/accept-invite/auth, §7.1); snapshot = git tag. | ~600–900 |
-| **2 — Identity & attribution** | `actorId` + display-name prompt; author badges; filter-by-author. | ~250 |
-| **3 — PI oversight loop** | guidance as plain files (no UI); progress view (git log + artifacts); background poll + "updates available" indicator; conflict card (text AI-merge / binary pick-one). | ~500–800 |
-| **4 — (likely never) real-time** | sync server / CRDT / presence. Only if a single project gains many simultaneous editors. Deferred. | — |
+| **0 — Scope hygiene** | default workspace `.gitignore` (asymmetric, §8) + managed `.gitattributes`. | ✅ built |
+| **0.5 — Files-as-carrier (PREREQUISITE)** | §3.1; spec'd in RFC-014. Artifacts under `rp-artifacts/` (§0 #1). | ✅ built |
+| **1 — Git as transport** | `Share project` / `Sync data` wrapping git + `gh` (clone/accept/auth, §7.1); snapshot = git tag. | ✅ built (+ share-guard, invite discovery, removed-member UX — §0) |
+| **2 — Identity & attribution** | `actorId` + displayName; per-actor placement; **author badges**. | ✅ built · ⛔ filter-by-author **dropped** |
+| **3 — collaboration loop** | background poll + "updates available"; **conflict card (AI-merge / pick-one)**; Layer-0 prevention. | ✅ built · ⛔ guidance files + progress view + Layer-1 banner **dropped** (§0) |
+| **4 — (likely never) real-time** | sync server / CRDT / presence. | deferred |
 
 Phase 0 alone already delivers basic handoff. Each phase is independently shippable.
 
@@ -813,7 +924,8 @@ Phase 0 alone already delivers basic handoff. Each phase is independently shippa
    a shortcut/Settings modal showing name / creator / members.**
 5. ~~**Binary-file conflicts**~~ — **RESOLVED (§9): later syncer picks one version, no AI
    merge, no keep-both.** (Originally framed around the now-removed `data/curated/` taxonomy.)
-6. ~~**Snapshot ergonomics**~~ — **RESOLVED: git tag is enough; no dedicated snapshot UI.**
+6. ~~**Snapshot ergonomics**~~ — **RESOLVED: git tag.** As-built (§0 #11), a minimal
+   one-click **Snapshot** button was added in the Sharing tab (annotated tag + push).
 7. ~~**Offline-first behavior**~~ — **RESOLVED (§14): work offline indefinitely; background
    poll detects "behind" and notifies, but nothing applies without a `Sync data` click; the
    pill shows un-pushed vs un-pulled.**
