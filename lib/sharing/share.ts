@@ -132,11 +132,7 @@ export async function getSharingStatus(projectPath: string): Promise<SharingStat
   // Exactly one Lead per project: the creator (config.lead). There is no
   // promotion path, so a member's role is always derived from config.lead.
   const myRole = me ? (me.id === config.lead ? 'lead' : 'member') : undefined
-  let sync: SyncState | undefined
-  if (await isGitRepo(projectPath)) {
-    const ab = await getAheadBehind(projectPath)
-    sync = { ...ab, uncommitted: await hasChanges(projectPath) }
-  }
+  const sync = await getLocalSyncState(projectPath)
 
   const info = config.share.repo ? await repoView(config.share.repo) : null
   return {
@@ -150,6 +146,19 @@ export async function getSharingStatus(projectPath: string): Promise<SharingStat
     myRole,
     sync,
   }
+}
+
+/**
+ * The cheap, LOCAL-only slice of sharing status: ahead/behind/uncommitted from
+ * plain git, with NO network (`repoView`/`gh`) call. The background poll uses it
+ * to keep the Sync pill's "you have local changes" state fresh between full
+ * refreshes — newly created/edited files flip it to "N to push" within a poll
+ * cycle instead of looking falsely "Synced" until the next mount/refresh().
+ */
+export async function getLocalSyncState(projectPath: string): Promise<SyncState | undefined> {
+  if (!(await isGitRepo(projectPath))) return undefined
+  const ab = await getAheadBehind(projectPath)
+  return { ...ab, uncommitted: await hasChanges(projectPath) }
 }
 
 /**
@@ -523,6 +532,9 @@ export interface PollResult {
   reachable: boolean
   /** The remote refused us (removed collaborator / repo gone). Detected automatically. */
   accessRevoked?: boolean
+  /** Fresh LOCAL ahead/uncommitted snapshot (no network), so the pill reflects
+   *  newly created/edited files without a full refresh(). */
+  sync?: SyncState
 }
 
 /** Background poll (§14): network ls-remote vs last-fetched ref. Never mutates files. */

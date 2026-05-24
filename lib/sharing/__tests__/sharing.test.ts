@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { slugifyDisplayName, ensureLocalIdentity, getLocalIdentity, getSharedLocalActor } from '../identity.js'
 import { ensureSharingGitignore, ensureSharingGitattributes } from '../workspace-git.js'
 import { looksLikeGithubLogin } from '../gh.js'
-import { getSharingStatus, shareProject, buildSharingPromptClause, syncProject, getConflictDetails, resolveSyncConflict, registerLocalMemberIdentity } from '../share.js'
+import { getSharingStatus, getLocalSyncState, shareProject, buildSharingPromptClause, syncProject, getConflictDetails, resolveSyncConflict, registerLocalMemberIdentity } from '../share.js'
 import {
   isGitInstalled,
   gitInit,
@@ -363,6 +363,20 @@ test('git wrappers: commit → push → ahead/behind → poll against a local ba
 
     const p = await push(work)
     assert.ok(p.ok, `push succeeds: ${p.raw.stderr}`)
+
+    // getLocalSyncState: the cheap local slice the poll folds in. After push the
+    // tree is clean and level with the remote.
+    const lsClean = await getLocalSyncState(work)
+    assert.deepEqual(
+      { ahead: lsClean?.ahead, behind: lsClean?.behind, uncommitted: lsClean?.uncommitted },
+      { ahead: 0, behind: 0, uncommitted: false }
+    )
+    // A new uncommitted file flips uncommitted=true — this is exactly what now
+    // lets the Sync pill notice freshly created files between full refreshes.
+    writeFileSync(join(work, 'c.txt'), 'dirty')
+    const lsDirty = await getLocalSyncState(work)
+    assert.equal(lsDirty?.uncommitted, true)
+    assert.equal(lsDirty?.ahead, 0)
   } finally {
     rmSync(remote, { recursive: true, force: true })
     rmSync(work, { recursive: true, force: true })

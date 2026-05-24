@@ -130,6 +130,12 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
       // a transient network failure (reachable:false, !accessRevoked) leaves it.
       if (res?.accessRevoked) set({ accessRevoked: true })
       else if (res?.reachable) set({ accessRevoked: false })
+      // Fold in the fresh LOCAL ahead/uncommitted snapshot so the pill flips to
+      // "N to push" after files are created — without a full (network) refresh().
+      if (res?.sync) {
+        const cur = get().status
+        if (cur) set({ status: { ...cur, sync: res.sync } })
+      }
     } catch {
       /* poll is best-effort */
     }

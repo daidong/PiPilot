@@ -35,6 +35,7 @@ import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps
 import {
   checkSharingPreflight,
   getSharingStatus,
+  getLocalSyncState,
   shareProject,
   syncProject,
   pollRemote,
@@ -2763,7 +2764,14 @@ export function registerIpcHandlers(): void {
 
   handleWindow('sharing:poll', async ({ state }) => {
     if (!state.projectPath) return { updatesAvailable: false, reachable: false }
-    return pollRemote(state.projectPath)
+    // Remote detect (network) + a fresh LOCAL ahead/uncommitted snapshot (cheap
+    // git, no network) in one round-trip, so the Sync pill notices files created
+    // since the last refresh() without waiting for a remount.
+    const [remote, sync] = await Promise.all([
+      pollRemote(state.projectPath),
+      getLocalSyncState(state.projectPath),
+    ])
+    return { ...remote, sync }
   })
 
   handleWindow('sharing:invite', async ({ state }, login: string) => {
