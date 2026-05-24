@@ -15,6 +15,7 @@
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { PATHS } from '../types.js'
+import { getArtifacts } from '../memory-v2/indexer.js'
 import type {
   AuditGraph,
   EdgeRel,
@@ -305,17 +306,20 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
   }
 
   // 4. Artifacts (with title lookup) ---------------------------------------
-  async function readArtifactTitle(relPath: string): Promise<string | null> {
-    try {
-      const abs = path.join(projectPath, relPath)
-      const j = JSON.parse(await fs.readFile(abs, 'utf8'))
-      return (j.title as string) || (j.summary as string) || null
-    } catch { return null }
-  }
+  // Titles come from the RFC-014 derived index, not by reading the ledger's
+  // `path` as JSON — post-RFC-014 that path is a real .md/.bib/.rp.yaml file, so
+  // the old JSON.parse always failed and the graph fell back to bare filenames.
+  const titleById = new Map<string, string>()
+  try {
+    for (const a of getArtifacts(projectPath)) {
+      const t = (a as { title?: string; summary?: string }).title || (a as { summary?: string }).summary
+      if (t) titleById.set(a.id, t)
+    }
+  } catch { /* index unavailable — fall back to filenames below */ }
   for (const r of ledger) {
     const id = `artifact:${r.artifactId}`
     if (nodes.has(id)) continue
-    const title = await readArtifactTitle(r.path)
+    const title = titleById.get(r.artifactId) ?? null
     addNode(id, 'artifact', title || r.path.split('/').pop() || r.artifactId, {
       artifactId: r.artifactId,
       type: r.type,
