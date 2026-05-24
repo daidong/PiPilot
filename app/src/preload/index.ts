@@ -15,6 +15,8 @@ import type {
   MemberOpResult,
   AcceptInviteResult,
   RepoInvitation,
+  ConflictFile,
+  ConflictResolution,
 } from '../../../lib/sharing/index'
 
 // Re-export the bibtex importer types so renderer code can import them
@@ -32,6 +34,8 @@ export type {
   PollResult,
   MemberOpResult,
   RepoInvitation,
+  ConflictFile,
+  ConflictResolution,
 }
 
 export interface UsageEvent {
@@ -371,6 +375,10 @@ export interface ElectronAPI {
   sharingPickDestFolder: () => Promise<string | null>
   sharingListInvitations: () => Promise<RepoInvitation[]>
   sharingAcceptInvite: (opts: { repo: string; destFolder: string; displayName: string; invitationId?: number }) => Promise<AcceptInviteResult>
+  sharingConflictDetails: () => Promise<ConflictFile[]>
+  sharingAiMerge: (file: ConflictFile) => Promise<{ ok: boolean; content?: string; error?: string }>
+  sharingResolveConflict: (resolutions: ConflictResolution[]) => Promise<SyncResult>
+  sharingSnapshot: (label?: string) => Promise<{ ok: boolean; tag?: string; error?: string }>
   // Audit graph — provenance projection from telemetry. Read-only; returns
   // presence info so the renderer can decide whether to show the empty state.
   auditGetGraph: () => Promise<{
@@ -636,6 +644,10 @@ const api: ElectronAPI = {
   sharingPickDestFolder: () => invoke('sharing:pick-dest-folder'),
   sharingListInvitations: () => invoke('sharing:list-invitations'),
   sharingAcceptInvite: (opts) => invoke('sharing:accept-invite', opts),
+  sharingConflictDetails: () => invoke('sharing:conflict-details'),
+  sharingAiMerge: (file) => invoke('sharing:ai-merge', file),
+  sharingResolveConflict: (resolutions) => invoke('sharing:resolve-conflict', resolutions),
+  sharingSnapshot: (label) => invoke('sharing:snapshot', label),
   auditGetGraph: () => invoke('audit:get-graph'),
   closeProject: () => invoke('project:close'),
   onProjectClosed: (cb) => subscribe('project:closed', cb),

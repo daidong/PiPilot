@@ -6,6 +6,8 @@ import type {
   ShareResult,
   SyncResult,
   MemberOpResult,
+  ConflictFile,
+  ConflictResolution,
 } from '../../preload/index'
 
 /**
@@ -27,6 +29,10 @@ interface SharingStoreState {
   lastError: string | null
   /** Set when a sync hit a genuine co-edited-file clash (§9). */
   conflict: { files: string[] } | null
+  /** Extracted base/mine/theirs per conflicted file (loaded for the resolve card). */
+  conflictFiles: ConflictFile[]
+  conflictLoading: boolean
+  resolving: boolean
   /**
    * The remote refused us — this member was removed (or the repo is gone). Sticky:
    * a transient network failure neither sets nor clears it; only a real access
@@ -42,6 +48,9 @@ interface SharingStoreState {
   invite: (login: string) => Promise<MemberOpResult | null>
   removeMember: (login: string) => Promise<MemberOpResult | null>
   promoteMember: (login: string) => Promise<MemberOpResult | null>
+  loadConflictDetails: () => Promise<void>
+  aiMerge: (file: ConflictFile) => Promise<{ ok: boolean; content?: string; error?: string }>
+  resolveConflict: (resolutions: ConflictResolution[]) => Promise<SyncResult | null>
   dismissConflict: () => void
   reset: () => void
 }
@@ -56,6 +65,9 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   updatesAvailable: false,
   lastError: null,
   conflict: null,
+  conflictFiles: [],
+  conflictLoading: false,
+  resolving: false,
   accessRevoked: false,
 
   refresh: async () => {
@@ -145,8 +157,46 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
     return result
   },
 
-  dismissConflict: () => set({ conflict: null }),
+  loadConflictDetails: async () => {
+    if (!api?.sharingConflictDetails) return
+    set({ conflictLoading: true })
+    try {
+      const files = await api.sharingConflictDetails()
+      set({ conflictFiles: Array.isArray(files) ? files : [], conflictLoading: false })
+    } catch {
+      set({ conflictLoading: false })
+    }
+  },
+
+  aiMerge: async (file) => {
+    if (!api?.sharingAiMerge) return { ok: false, error: 'unavailable' }
+    return api.sharingAiMerge(file)
+  },
+
+  resolveConflict: async (resolutions) => {
+    if (!api?.sharingResolveConflict || get().resolving) return null
+    set({ resolving: true, lastError: null })
+    try {
+      const result = await api.sharingResolveConflict(resolutions)
+      if (result?.ok) {
+        set({ conflict: null, conflictFiles: [], updatesAvailable: false })
+      } else if (result?.accessDenied) {
+        set({ accessRevoked: true, lastError: result.error ?? null })
+      } else if (result && !result.ok) {
+        set({ lastError: result.error ?? 'Could not apply the merge.' })
+      }
+      await get().refresh()
+      return result
+    } catch (e: any) {
+      set({ lastError: String(e?.message ?? e) })
+      return null
+    } finally {
+      set({ resolving: false })
+    }
+  },
+
+  dismissConflict: () => set({ conflict: null, conflictFiles: [] }),
 
   reset: () =>
-    set({ status: null, preflight: null, updatesAvailable: false, lastError: null, conflict: null, syncing: false, accessRevoked: false }),
+    set({ status: null, preflight: null, updatesAvailable: false, lastError: null, conflict: null, conflictFiles: [], conflictLoading: false, resolving: false, syncing: false, accessRevoked: false }),
 }))

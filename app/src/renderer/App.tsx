@@ -8,6 +8,7 @@ import { StatusBar } from './components/layout/StatusBar'
 import { TerminalPanel } from './components/layout/TerminalPanel'
 import { ErrorBoundary } from './components/layout/ErrorBoundary'
 import { AcceptInviteModal } from './components/layout/AcceptInviteModal'
+import { ConflictResolveModal } from './components/layout/ConflictResolveModal'
 import { ImportWizard } from './components/center/ImportWizard'
 import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
@@ -1214,6 +1215,9 @@ export default function App() {
             useImportStore.wizardOpen, so any CTA in the app can
             open it without prop-drilling. */}
         <ImportWizard />
+
+        {/* RFC-013 §9: conflict resolution card — self-hides unless a sync hit a clash */}
+        <ConflictResolveModal />
       </div>
     </ErrorBoundary>
   )

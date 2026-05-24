@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { slugifyDisplayName, ensureLocalIdentity, getLocalIdentity } from '../identity.js'
 import { ensureSharingGitignore, ensureSharingGitattributes } from '../workspace-git.js'
 import { looksLikeGithubLogin } from '../gh.js'
-import { getSharingStatus, shareProject, buildSharingPromptClause } from '../share.js'
+import { getSharingStatus, shareProject, buildSharingPromptClause, syncProject, getConflictDetails, resolveSyncConflict } from '../share.js'
 import {
   isGitInstalled,
   gitInit,
@@ -249,6 +249,69 @@ test('git wrappers: commit → push → ahead/behind → poll against a local ba
   } finally {
     rmSync(remote, { recursive: true, force: true })
     rmSync(work, { recursive: true, force: true })
+  }
+})
+
+test('conflict round-trip: rebase clash → getConflictDetails → resolveSyncConflict lands on remote', async (t) => {
+  if (!(await isGitInstalled())) return t.skip('git not installed')
+  const remote = tmp('rp-cf-remote-')
+  const a = tmp('rp-cf-a-')
+  const b = tmp('rp-cf-b-')
+  const verify = tmp('rp-cf-v-')
+  const cfg = async (dir: string) => {
+    await runCommand('git', ['config', 'user.email', 'test@example.com'], { cwd: dir })
+    await runCommand('git', ['config', 'user.name', 'Test'], { cwd: dir })
+  }
+  try {
+    const bare = await runCommand('git', ['init', '--bare', '-b', 'main', remote])
+    if (!bare.ok) return t.skip('git init --bare unsupported')
+
+    // A seeds the repo with a base file.
+    await gitInit(a); await cfg(a)
+    writeFileSync(join(a, 'shared.txt'), 'base\n')
+    await commitAll(a, 'base')
+    await addRemote(a, remote)
+    await pushSetUpstream(a)
+
+    // B clones the base.
+    const clone = await runCommand('git', ['clone', remote, b])
+    assert.ok(clone.ok, `clone: ${clone.stderr}`)
+    await cfg(b)
+
+    // A changes shared.txt and pushes.
+    writeFileSync(join(a, 'shared.txt'), 'A version\n')
+    await commitAll(a, 'A edit')
+    const pa = await push(a)
+    assert.ok(pa.ok, `A push: ${pa.raw.stderr}`)
+
+    // B changes the SAME file → diverges.
+    writeFileSync(join(b, 'shared.txt'), 'B version\n')
+    await commitAll(b, 'B edit')
+
+    // B syncs → rebase conflict, aborted, reported.
+    const sync = await syncProject(b)
+    assert.equal(sync.conflict, true, 'conflict detected')
+    assert.ok(sync.conflictedFiles.includes('shared.txt'))
+
+    // Both versions extracted for the card.
+    const details = await getConflictDetails(b)
+    const cf = details.find((d) => d.path === 'shared.txt')
+    assert.ok(cf, 'shared.txt in conflict details')
+    assert.match(cf!.mine ?? '', /B version/)
+    assert.match(cf!.theirs ?? '', /A version/)
+    assert.match(cf!.base ?? '', /base/)
+    assert.equal(cf!.isBinary, false)
+
+    // Resolve with an AI-merged-style content → merge commit + push.
+    const res = await resolveSyncConflict(b, [{ path: 'shared.txt', mode: 'merged', content: 'A and B merged\n' }])
+    assert.ok(res.ok, `resolve: ${res.error}`)
+    assert.equal(res.pushed, true)
+
+    // Remote main carries the merged content.
+    await runCommand('git', ['clone', remote, verify])
+    assert.match(readFileSync(join(verify, 'shared.txt'), 'utf-8'), /A and B merged/)
+  } finally {
+    for (const d of [remote, a, b, verify]) rmSync(d, { recursive: true, force: true })
   }
 })
 

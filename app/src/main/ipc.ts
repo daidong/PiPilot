@@ -43,7 +43,13 @@ import {
   promoteMember,
   acceptInvite,
   listInvitations,
+  getConflictDetails,
+  resolveSyncConflict,
+  buildAiMergePrompt,
+  createSnapshot,
   type ShareOptions,
+  type ConflictFile,
+  type ConflictResolution,
 } from '../../../lib/sharing/index'
 import {
   migrateAgentMemoryToFile,
@@ -936,6 +942,64 @@ export async function destroyAllCoordinators(): Promise<void> {
     Promise.all(promises),
     new Promise<void>(resolve => setTimeout(resolve, 8000)),
   ])
+}
+
+/**
+ * One-off LLM text call from the main process (used by RFC-013 AI-merge).
+ * Resolves the window's current model + auth the same way the report / wiki
+ * agents do (subscription token refresh or API key).
+ */
+async function runMainCallLlm(
+  state: WindowRuntimeState,
+  system: string,
+  user: string,
+  purpose: string
+): Promise<string> {
+  const modelStr = state.currentModel
+  const auth = resolveCoordinatorAuth(modelStr)
+  const { getModel: piGetModel } = await import('@mariozechner/pi-ai')
+  const [rawProvider, modelId] = modelStr.split(':')
+  const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const piModel = piGetModel(piProvider as any, modelId)
+
+  let resolveApiKey: () => Promise<string>
+  if (auth.authMode === 'subscription' && auth.piProvider === 'anthropic-sub') {
+    resolveApiKey = async () => {
+      const creds = loadAnthropicSubCredentials()
+      if (!creds) throw new Error('Claude subscription credentials not found.')
+      if (creds.expires < Date.now() + 60_000) {
+        const { refreshAnthropicToken } = await import('@mariozechner/pi-ai/oauth')
+        const fresh = await refreshAnthropicToken(creds.refresh)
+        saveAnthropicSubCredentials(fresh)
+        return fresh.access
+      }
+      return creds.access
+    }
+  } else if (auth.authMode === 'subscription') {
+    resolveApiKey = async () => {
+      const creds = loadCodexCredentials()
+      if (!creds) throw new Error('Codex credentials not found.')
+      if (creds.expires < Date.now() + 60_000) {
+        const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+        const fresh = await refreshOpenAICodexToken(creds.refresh)
+        saveCodexCredentials(fresh)
+        return fresh.access
+      }
+      return creds.access
+    }
+  } else {
+    resolveApiKey = async () => auth.apiKey
+  }
+  const apiKey = await resolveApiKey()
+  return runSubLlmText({
+    model: piModel as unknown as Parameters<typeof runSubLlmText>[0]['model'],
+    systemPrompt: system,
+    userContent: user,
+    apiKey,
+    purpose,
+    tracer: state.tracer ?? null,
+  })
 }
 
 export function registerIpcHandlers(): void {
@@ -2738,6 +2802,39 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('sharing:accept-invite', (_event: any, opts: { repo: string; destFolder: string; displayName: string; invitationId?: number }) =>
     acceptInvite(opts)
   )
+
+  // ─── RFC-013 §9 conflict resolution (two-version card + AI-merge) ────────
+  handleWindow('sharing:conflict-details', async ({ state }) => {
+    if (!state.projectPath) return []
+    return getConflictDetails(state.projectPath)
+  })
+
+  // AI-merge one text file: reconcile base/mine/theirs via the current model.
+  handleWindow('sharing:ai-merge', async ({ state }, file: ConflictFile) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    try {
+      const { system, user } = buildAiMergePrompt(file)
+      const merged = await runMainCallLlm(state, system, user, 'sharing-ai-merge')
+      return { ok: true, content: merged }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  handleWindow('sharing:resolve-conflict', async ({ state }, resolutions: ConflictResolution[]) => {
+    if (!state.projectPath) {
+      return { ok: false, pushed: false, pulled: false, ahead: 0, behind: 0, conflict: false, conflictedFiles: [], error: 'No project open.' }
+    }
+    const result = await resolveSyncConflict(state.projectPath, resolutions)
+    // The merge changed workspace files — refresh the derived index.
+    try { rebuildIndex(state.projectPath) } catch { /* best effort */ }
+    return result
+  })
+
+  handleWindow('sharing:snapshot', async ({ state }, label?: string) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    return createSnapshot(state.projectPath, label)
+  })
 
   // Recent projects CRUD
   ipcMain.handle('project:list-recents', () => listRecentProjects())

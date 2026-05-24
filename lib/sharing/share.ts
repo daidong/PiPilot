@@ -10,8 +10,8 @@
  * - Detect-but-never-auto-apply: poll only reports; files move only on sync.
  */
 
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 import { PATHS, type ProjectConfig, type ProjectMember } from '../types.js'
 import { checkSharingPreflight, type SharingPreflight } from './preflight.js'
 import { ensureLocalIdentity, getLocalIdentity, slugifyDisplayName } from './identity.js'
@@ -32,6 +32,17 @@ import {
   listLargeChangedFiles,
   runGitRevParse,
   classifyRemoteError,
+  getMergeBase,
+  listChangedFiles,
+  showFileAtRef,
+  isPathBinary,
+  mergeNoCommit,
+  abortMerge,
+  checkoutSide,
+  listUnmergedFiles,
+  stagePath,
+  commitNoEdit,
+  createTag,
 } from './git.js'
 import {
   repoCreatePrivate,
@@ -343,6 +354,136 @@ export async function syncProject(projectPath: string): Promise<SyncResult> {
     return { ...base, pulled, error: `push failed: ${p.raw.stderr}` }
   }
   return { ...base, error: 'Sync kept racing with concurrent pushes; please retry.' }
+}
+
+// ── Conflict resolution (§9 Layer 2) ─────────────────────────────────────────
+
+export interface ConflictFile {
+  path: string
+  /** Content at the merge-base, or null if the file was added on both sides. */
+  base: string | null
+  /** My version (HEAD). */
+  mine: string | null
+  /** The remote version (origin/main). */
+  theirs: string | null
+  /** Binary files can't be AI-merged — the card offers pick-one only. */
+  isBinary: boolean
+}
+
+/**
+ * Extract base/mine/theirs for each genuinely co-edited file so the conflict
+ * card can show a diff and feed AI-merge. Reads from refs (HEAD, origin/main,
+ * merge-base) — repo must be clean (post sync-abort); mutates nothing.
+ */
+export async function getConflictDetails(projectPath: string): Promise<ConflictFile[]> {
+  if (!(await isGitRepo(projectPath))) return []
+  const base = await getMergeBase(projectPath)
+  if (!base) return []
+  const mineChanged = new Set(await listChangedFiles(projectPath, base, 'HEAD'))
+  const theirsChanged = await listChangedFiles(projectPath, base, 'origin/main')
+  const out: ConflictFile[] = []
+  for (const path of theirsChanged) {
+    if (!mineChanged.has(path)) continue
+    const mine = await showFileAtRef(projectPath, 'HEAD', path)
+    const theirs = await showFileAtRef(projectPath, 'origin/main', path)
+    if (mine === theirs) continue // both sides made the same edit → not a real clash
+    out.push({
+      path,
+      base: await showFileAtRef(projectPath, base, path),
+      mine,
+      theirs,
+      isBinary: await isPathBinary(projectPath, path),
+    })
+  }
+  return out
+}
+
+export type ConflictResolution =
+  | { path: string; mode: 'mine' }
+  | { path: string; mode: 'theirs' }
+  | { path: string; mode: 'merged'; content: string }
+
+/**
+ * Apply per-file resolutions and finish the sync as a merge commit. The merge is
+ * opened and committed entirely within this call — the repo is never left
+ * mid-merge across IPC round-trips (recovers via `merge --abort` on any error).
+ */
+export async function resolveSyncConflict(
+  projectPath: string,
+  resolutions: ConflictResolution[]
+): Promise<SyncResult> {
+  const base: SyncResult = { ok: false, pushed: false, pulled: true, ahead: 0, behind: 0, conflict: false, conflictedFiles: [] }
+  if (!(await isGitRepo(projectPath))) return { ...base, error: 'Not a git repository.' }
+
+  await mergeNoCommit(projectPath) // expected to report conflicts; that's the point
+
+  for (const r of resolutions) {
+    if (r.mode === 'mine' || r.mode === 'theirs') {
+      const co = await checkoutSide(projectPath, r.mode === 'mine' ? 'ours' : 'theirs', r.path)
+      if (!co.ok) { await abortMerge(projectPath); return { ...base, error: `resolve ${r.path} failed: ${co.stderr}` } }
+    } else {
+      try {
+        const abs = join(projectPath, r.path)
+        mkdirSync(dirname(abs), { recursive: true })
+        writeFileSync(abs, r.content, 'utf-8')
+      } catch (e: any) {
+        await abortMerge(projectPath)
+        return { ...base, error: `write merged ${r.path} failed: ${String(e?.message ?? e)}` }
+      }
+      const add = await stagePath(projectPath, r.path)
+      if (!add.ok) { await abortMerge(projectPath); return { ...base, error: `stage ${r.path} failed: ${add.stderr}` } }
+    }
+  }
+
+  const unresolved = await listUnmergedFiles(projectPath)
+  if (unresolved.length > 0) {
+    await abortMerge(projectPath)
+    return { ...base, conflict: true, conflictedFiles: unresolved, error: `Still unresolved: ${unresolved.join(', ')}` }
+  }
+
+  const c = await commitNoEdit(projectPath, "Merge collaborators' changes (Research Pilot)")
+  if (!c.ok && !/nothing to commit/i.test(c.stdout + c.stderr)) {
+    await abortMerge(projectPath)
+    return { ...base, error: `merge commit failed: ${c.stderr}` }
+  }
+  const p = await push(projectPath)
+  if (!p.ok) {
+    if (classifyRemoteError(p.raw.stderr + '\n' + p.raw.stdout) === 'access') {
+      return { ...base, accessDenied: true, error: ACCESS_DENIED_MESSAGE }
+    }
+    return { ...base, error: `push failed: ${p.raw.stderr}` }
+  }
+  return { ...base, ok: true, pushed: true }
+}
+
+/** Prompt for AI-merging one text file (caller runs it through the main LLM). */
+export function buildAiMergePrompt(file: ConflictFile): { system: string; user: string } {
+  const system =
+    'You are reconciling two versions of the same file that two collaborators edited ' +
+    'concurrently. Produce ONE merged version that preserves BOTH sides\' intent and keeps the ' +
+    'file valid. Output ONLY the merged file content — no commentary, no code fences, and never ' +
+    'any git conflict markers (<<<<<<, ======, >>>>>>).'
+  const user =
+    `File: ${file.path}\n\n` +
+    `=== COMMON ANCESTOR (base) ===\n${file.base ?? '(did not exist at the common ancestor)'}\n\n` +
+    `=== VERSION A (mine) ===\n${file.mine ?? '(deleted on my side)'}\n\n` +
+    `=== VERSION B (theirs) ===\n${file.theirs ?? '(deleted on their side)'}\n\n` +
+    `Return the merged content of ${file.path}:`
+  return { system, user }
+}
+
+// ── Snapshot (§16: snapshot = git tag) ───────────────────────────────────────
+
+export async function createSnapshot(
+  projectPath: string,
+  label?: string
+): Promise<{ ok: boolean; tag?: string; error?: string }> {
+  if (!(await isGitRepo(projectPath))) return { ok: false, error: 'Not a git repository.' }
+  const ts = new Date().toISOString().replace(/[:.]/g, '-')
+  const tag = `rp-snapshot-${ts}`
+  const r = await createTag(projectPath, tag, label?.trim() || `Snapshot ${ts}`)
+  if (!r.ok) return { ok: false, error: r.stderr || 'Could not create the snapshot tag.' }
+  return { ok: true, tag }
 }
 
 // ── Poll (detect-only) ──────────────────────────────────────────────────────

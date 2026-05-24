@@ -99,6 +99,74 @@ export async function abortRebase(cwd: string): Promise<ExecResult> {
   return git(cwd, ['rebase', '--abort'])
 }
 
+// ── Conflict extraction + merge-based resolution (§9 Layer 2) ────────────────
+
+/** Common ancestor of HEAD and origin/main, or null. */
+export async function getMergeBase(cwd: string): Promise<string | null> {
+  const r = await git(cwd, ['merge-base', 'HEAD', 'origin/main'])
+  return r.ok && r.stdout ? r.stdout : null
+}
+
+/** Files changed between two refs (`git diff --name-only a b`). */
+export async function listChangedFiles(cwd: string, from: string, to: string): Promise<string[]> {
+  const r = await git(cwd, ['diff', '--name-only', from, to])
+  return r.ok && r.stdout ? r.stdout.split('\n').filter(Boolean) : []
+}
+
+/** File content at a ref (`git show ref:path`), or null if absent there (added on one side). */
+export async function showFileAtRef(cwd: string, ref: string, relPath: string): Promise<string | null> {
+  const r = await git(cwd, ['show', `${ref}:${relPath}`])
+  return r.ok ? r.stdout : null
+}
+
+/** Heuristic binary check: a NUL byte in the working-tree file (git's own test). */
+export async function isPathBinary(cwd: string, relPath: string): Promise<boolean> {
+  try {
+    const { readFileSync } = await import('node:fs')
+    const buf = readFileSync(join(cwd, relPath))
+    return buf.subarray(0, 8000).includes(0)
+  } catch {
+    return false
+  }
+}
+
+/** Start a no-commit merge of origin/main (conflicts leave the tree in merge state). */
+export async function mergeNoCommit(cwd: string): Promise<ExecResult> {
+  return git(cwd, ['merge', '--no-commit', '--no-ff', 'origin/main'], 120_000)
+}
+
+export async function abortMerge(cwd: string): Promise<ExecResult> {
+  return git(cwd, ['merge', '--abort'])
+}
+
+/** During a merge, take one side wholesale for a path (`--ours`=HEAD/mine, `--theirs`=incoming). */
+export async function checkoutSide(cwd: string, side: 'ours' | 'theirs', relPath: string): Promise<ExecResult> {
+  const co = await git(cwd, ['checkout', `--${side}`, '--', relPath])
+  if (!co.ok) return co
+  return git(cwd, ['add', '--', relPath])
+}
+
+/** Unmerged (conflicted) paths in the current merge state. */
+export async function listUnmergedFiles(cwd: string): Promise<string[]> {
+  const r = await git(cwd, ['diff', '--name-only', '--diff-filter=U'])
+  return r.ok && r.stdout ? r.stdout.split('\n').filter(Boolean) : []
+}
+
+export async function stagePath(cwd: string, relPath: string): Promise<ExecResult> {
+  return git(cwd, ['add', '--', relPath])
+}
+
+export async function commitNoEdit(cwd: string, message: string): Promise<ExecResult> {
+  return git(cwd, ['commit', '--no-edit', '-m', message])
+}
+
+/** Create + push an annotated tag (snapshot, §16). */
+export async function createTag(cwd: string, tag: string, message: string): Promise<ExecResult> {
+  const t = await git(cwd, ['tag', '-a', tag, '-m', message])
+  if (!t.ok) return t
+  return git(cwd, ['push', 'origin', tag], 120_000)
+}
+
 export interface PushResult {
   ok: boolean
   /** Remote moved under us — caller should re-fetch+rebase and retry. */
