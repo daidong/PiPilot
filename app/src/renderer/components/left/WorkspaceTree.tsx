@@ -424,7 +424,9 @@ export function WorkspaceTree() {
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
   const [query, setQuery] = useState('')
-  const [showIgnored, setShowIgnored] = useState(true)
+  // Default OFF: hide dotfiles + .gitignore matches so the tree shows just the
+  // user's real working files. Toggle on to reveal .git/.research-pilot/etc.
+  const [showIgnored, setShowIgnored] = useState(false)
   const [searchResults, setSearchResults] = useState<FileTreeNode[]>([])
   const [searching, setSearching] = useState(false)
   const expandedStorageKey = useMemo(() => `rp:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
