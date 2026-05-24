@@ -3,6 +3,7 @@ import { Check, X as XIcon, Loader2, CircleDot } from 'lucide-react'
 import { useActivityStore } from '../../stores/activity-store'
 import { useUsageStore } from '../../stores/usage-store'
 import { UpdateReadyPill } from './UpdateReadyPill'
+import { SyncPill } from './SyncPill'
 
 function formatCost(cost: number): string {
   if (cost === 0) return '$0'
@@ -126,6 +127,7 @@ export function StatusBar() {
         {!hasActivity && !hasRunUsage && !hasProjectUsage && (
           <span>Ready</span>
         )}
+        <SyncPill />
         <UpdateReadyPill />
       </div>
     </div>

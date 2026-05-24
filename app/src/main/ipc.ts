@@ -33,6 +33,19 @@ import { migrateToFilesAsCarrier } from '../../../lib/memory-v2/migrate-files'
 import { ensureWorkspaceGitignore } from '../../../lib/memory-v2/workspace-gitignore'
 import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
 import {
+  checkSharingPreflight,
+  getSharingStatus,
+  shareProject,
+  syncProject,
+  pollRemote,
+  inviteMember,
+  removeMember,
+  promoteMember,
+  acceptInvite,
+  listInvitations,
+  type ShareOptions,
+} from '../../../lib/sharing/index'
+import {
   migrateAgentMemoryToFile,
   listMemoryFiles,
   readMemoryFile,
@@ -45,7 +58,7 @@ import {
   type MemoryType
 } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
-import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger, type LiveSpanSummary } from '../../../lib/telemetry/index'
+import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger, readTelemetryPrefs, writeTelemetryPrefs, type LiveSpanSummary } from '../../../lib/telemetry/index'
 import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
@@ -2120,11 +2133,11 @@ export function registerIpcHandlers(): void {
     try {
       const projectFile = join(state.projectPath, PATHS.project)
       const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
-      // Defensive default: 'disabled' matches the new opt-in policy
-      // (see lib/telemetry/migration.ts). Migration normally fills this in,
-      // so the fallback only fires for malformed configs.
-      const tracingMode = config.telemetry?.tracingMode ?? 'disabled'
-      const bufferCapacity = config.telemetry?.bufferCapacity ?? 1024
+      // Schema v2: telemetry config lives in the LOCAL preferences.json, not the
+      // shared project.json (RFC-013). Default 'disabled' matches opt-in policy.
+      const tp = readTelemetryPrefs(state.projectPath)
+      const tracingMode = tp.tracingMode
+      const bufferCapacity = tp.bufferCapacity
       // Storage footprint: walk the filesystem under .research-pilot/ for every
       // telemetry-owned file/dir per spec §5+§8. This is the honest "what's on
       // disk" answer — includes pre-existing traces from before live readout,
@@ -2179,13 +2192,10 @@ export function registerIpcHandlers(): void {
     async ({ state }, mode: 'enabled' | 'disabled') => {
       if (!state.projectPath) return { success: false, error: 'no project' }
       try {
-        const projectFile = join(state.projectPath, PATHS.project)
-        const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
-        config.telemetry = {
-          tracingMode: mode,
-          bufferCapacity: config.telemetry?.bufferCapacity ?? 1024
-        }
-        writeFileSync(projectFile, JSON.stringify(config, null, 2))
+        // Schema v2: persist to LOCAL preferences.json (RFC-013), not the shared
+        // project.json — telemetry on/off is a per-member choice that must never
+        // propagate via sync.
+        writeTelemetryPrefs(state.projectPath, { tracingMode: mode })
         // Apply at runtime: drain queue or rebuild tracer on toggle.
         if (state.tracer) {
           if (mode === 'disabled') {
@@ -2534,7 +2544,10 @@ export function registerIpcHandlers(): void {
     const projectFile = join(projectPath, PATHS.project)
     if (!existsSync(projectFile)) return null
     const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
-    if (config.telemetry?.tracingMode === 'disabled') return null
+    // Schema v2: tracingMode/bufferCapacity come from the LOCAL preferences.json
+    // (RFC-013). project.json still owns the shared project id.
+    const tp = readTelemetryPrefs(projectPath)
+    if (tp.tracingMode === 'disabled') return null
     const projectId = config.id ?? 'unknown'
     const serviceVersion = app.getVersion()
     return new PipilotTracer({
@@ -2543,7 +2556,7 @@ export function registerIpcHandlers(): void {
       appBuildCommit: process.env.RESEARCH_COPILOT_BUILD_COMMIT ?? 'dev',
       projectId,
       sessionId,
-      bufferCapacity: config.telemetry?.bufferCapacity ?? 1024
+      bufferCapacity: tp.bufferCapacity
     })
   }
 
@@ -2581,8 +2594,8 @@ export function registerIpcHandlers(): void {
     state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
 
     // Telemetry-trace bootstrap (P1 §3.2). Builds a per-window PipilotTracer
-    // tied to this project. Reads tracingMode from project.json (set by
-    // migrateProjectConfig in initializeProject); defaults to 'enabled'.
+    // tied to this project. Reads tracingMode from the local preferences.json
+    // (schema v2, RFC-013); defaults to 'disabled' (opt-in).
     state.tracer = await createTracerForProject(state.projectPath, state.sessionId).catch((err) => {
       if (process.env.RESEARCH_COPILOT_DEBUG) {
         console.warn('[ResearchPilot] tracer bootstrap failed:', err)
@@ -2657,6 +2670,75 @@ export function registerIpcHandlers(): void {
     return openProjectFolder(state, win, projectPath)
   })
 
+  // ─── RFC-013 Shared Workspaces ──────────────────────────────────────────
+  // All sharing actions shell to the user's git/gh (the app owns no creds).
+  // Detect-but-never-auto-apply: poll only reports; files move only on sync.
+
+  ipcMain.handle('sharing:preflight', () => checkSharingPreflight())
+
+  handleWindow('sharing:status', async ({ state }) => {
+    if (!state.projectPath) return { shared: false, members: [], me: null }
+    return getSharingStatus(state.projectPath)
+  })
+
+  handleWindow('sharing:share', async ({ state }, opts: ShareOptions) => {
+    if (!state.projectPath) return { ok: false, invited: [], inviteErrors: [], error: 'No project open.' }
+    return shareProject(state.projectPath, opts)
+  })
+
+  handleWindow('sharing:sync', async ({ state }) => {
+    if (!state.projectPath) return { ok: false, pushed: false, pulled: false, ahead: 0, behind: 0, conflict: false, conflictedFiles: [], error: 'No project open.' }
+    const result = await syncProject(state.projectPath)
+    // A pull may have landed others' files — rebuild the derived index so the
+    // Library reflects them. The fs-watcher also debounces a rebuild, but doing
+    // it here makes the post-sync state deterministic for the renderer refresh.
+    if (result.pulled) {
+      try { rebuildIndex(state.projectPath) } catch { /* best effort */ }
+    }
+    return result
+  })
+
+  handleWindow('sharing:poll', async ({ state }) => {
+    if (!state.projectPath) return { updatesAvailable: false, reachable: false }
+    return pollRemote(state.projectPath)
+  })
+
+  handleWindow('sharing:invite', async ({ state }, login: string) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    return inviteMember(state.projectPath, login)
+  })
+
+  handleWindow('sharing:remove-member', async ({ state }, login: string) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    return removeMember(state.projectPath, login)
+  })
+
+  handleWindow('sharing:promote-member', async ({ state }, login: string) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    return promoteMember(state.projectPath, login)
+  })
+
+  // Pick an EMPTY destination folder for the join/clone flow (does not open a project).
+  handleWindow('sharing:pick-dest-folder', async ({ win }) => {
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Choose an empty folder to clone the shared project into',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    return result.filePaths[0]
+  })
+
+  // Pending invitations this user has received (so they can join without the
+  // Lead telling them the repo slug out of band).
+  ipcMain.handle('sharing:list-invitations', () => listInvitations())
+
+  // Accept an invitation: (optionally accept the GitHub invite, then) clone into
+  // the chosen folder. The renderer then opens the returned path through the
+  // normal project-open flow (keeps stores in sync).
+  ipcMain.handle('sharing:accept-invite', (_event: any, opts: { repo: string; destFolder: string; displayName: string; invitationId?: number }) =>
+    acceptInvite(opts)
+  )
+
   // Recent projects CRUD
   ipcMain.handle('project:list-recents', () => listRecentProjects())
   ipcMain.handle('project:remove-recent', (_event: any, projectPath: string) => {
@@ -2673,7 +2755,7 @@ export function registerIpcHandlers(): void {
    * project about to be set up on first open).
    */
   ipcMain.handle('project:stats-batch', (_event: any, paths: string[]) => {
-    const result: Record<string, { papers: number; notes: number; data: number; initialized: boolean }> = {}
+    const result: Record<string, { papers: number; notes: number; data: number; initialized: boolean; shared: boolean }> = {}
     const countFiles = (dir: string): number => {
       try {
         return readdirSync(dir).filter((f: string) => !f.startsWith('.')).length
@@ -2681,9 +2763,18 @@ export function registerIpcHandlers(): void {
         return 0
       }
     }
+    // RFC-013: a project is "shared" iff its project.json carries a `share` binding.
+    const isShared = (p: string): boolean => {
+      try {
+        const cfg = JSON.parse(readFileSync(join(p, PATHS.project), 'utf8')) as ProjectConfig
+        return !!cfg.share
+      } catch {
+        return false
+      }
+    }
     for (const p of paths || []) {
       if (!p || !existsSync(p)) {
-        result[p] = { papers: 0, notes: 0, data: 0, initialized: false }
+        result[p] = { papers: 0, notes: 0, data: 0, initialized: false, shared: false }
         continue
       }
       const initialized = existsSync(join(p, PATHS.root))
@@ -2692,6 +2783,7 @@ export function registerIpcHandlers(): void {
         notes: countFiles(join(p, PATHS.notes)),
         data: countFiles(join(p, PATHS.data)),
         initialized,
+        shared: initialized && isShared(p),
       }
     }
     return result

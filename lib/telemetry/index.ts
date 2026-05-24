@@ -76,6 +76,13 @@ export type {
 export { migrateProjectConfig } from './migration.js'
 export type { MigrationResult } from './migration.js'
 
+export {
+  readTelemetryPrefs,
+  writeTelemetryPrefs,
+  hasTelemetryPrefs,
+  isTracingEnabled,
+} from './telemetry-prefs.js'
+
 export { createTracingStateLogger } from './tracing-state.js'
 export type { TracingStateKind, TracingStateRow, TracingStateLogger } from './tracing-state.js'
 

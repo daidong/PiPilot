@@ -77,6 +77,19 @@ export interface Provenance {
   agentId?: string
   extractedFrom?: 'agent-response' | 'user-input' | 'file-import' | 'tool-output'
   messageId?: string
+  /**
+   * RFC-013 attribution. Nullable: legacy/solo artifacts have none. Travels in
+   * file front-matter / git author; the local index carries it.
+   */
+  actor?: Actor
+}
+
+/** RFC-013 lightweight collaborator identity — a tag, not an account. */
+export interface Actor {
+  /** Stable per-user id (ULID), source of truth for attribution. */
+  id: string
+  /** Friendly label; also the per-actor subdir slug (sanitized). */
+  displayName: string
 }
 
 // ============================================================================
@@ -194,19 +207,22 @@ export interface UserCorrection {
 // Telemetry / Trace types (v0.10 spec — see docs/spec/telemetry-trace.md §10.2)
 // ============================================================================
 
+/**
+ * Telemetry knobs. As of schema v2 these live in the LOCAL, gitignored
+ * `.research-pilot/preferences.json` (under a `telemetry` key) — NOT in the
+ * shared `project.json` — so each collaborator chooses independently and
+ * telemetry on/off is never pushed between members (RFC-013 §8). Read/write via
+ * `lib/telemetry/telemetry-prefs.ts`.
+ */
 export interface ProjectTelemetryConfig {
-  /**
-   * Single hard off-switch. Default for new projects: 'disabled' (opt-in).
-   * Existing projects with explicit `tracingMode: 'enabled'` keep their value
-   * across migrations — see `lib/telemetry/migration.ts`.
-   */
+  /** Single hard off-switch. Default: 'disabled' (opt-in). */
   tracingMode: 'enabled' | 'disabled'
   /** TraceStore ring queue capacity. Default: 1024 spans. */
   bufferCapacity?: number
 }
 
-/** Current ProjectConfig schema version. v0.7+ = 1. */
-export const PROJECT_CONFIG_SCHEMA_VERSION = 1 as const
+/** Current ProjectConfig schema version. v0.7 = 1; v2 = telemetry moved to preferences.json. */
+export const PROJECT_CONFIG_SCHEMA_VERSION = 2 as const
 
 export interface ProjectConfig {
   name: string
@@ -217,12 +233,49 @@ export interface ProjectConfig {
   updatedAt: string
 
   // v0.7+ telemetry fields (added by migration on first load — see lib/telemetry/migration.ts)
-  /** Stable project id (ULID). Generated on first load if missing. */
+  /** Stable project id (ULID). Generated on first load if missing. Shared. */
   id?: string
-  /** Project-scoped telemetry knobs. */
+  /**
+   * @deprecated LEGACY. Telemetry config moved to local `preferences.json` in
+   * schema v2 (RFC-013). Only read by `migrateProjectConfig` to seed the local
+   * prefs once, then deleted from project.json. Never written here anymore.
+   */
   telemetry?: ProjectTelemetryConfig
-  /** Migration version. 0/undefined = pre-telemetry; 1 = v0.7+. */
+  /** Migration version. 0/undefined = pre-telemetry; 1 = v0.7; 2 = telemetry-in-prefs. */
   configSchemaVersion?: number
+
+  // ── RFC-013 sharing fields (all optional — absent ⇒ unshared/solo) ──
+  /** actorId of the project Lead (creator). */
+  lead?: string
+  /** All collaborators (Lead + Members), source-of-truth for the roster. */
+  members?: ProjectMember[]
+  /** Remote binding. Absent ⇒ this project is local-only. */
+  share?: ShareConfig
+}
+
+/** RFC-013 roster entry stored in project.json (the only shared file in .research-pilot/). */
+export interface ProjectMember {
+  /**
+   * Stable per-user id (ULID). Absent for invited-but-not-yet-joined members —
+   * actorId is generated locally on first launch, so the Lead can't know it at
+   * invite time; githubLogin/displayName identify them meanwhile.
+   */
+  actorId?: string
+  /** Friendly label + per-actor subdir slug. */
+  displayName: string
+  /** Derived from how they entered, not chosen. */
+  role: 'lead' | 'member'
+  /** GitHub login, for collaborator management via `gh`. */
+  githubLogin?: string
+  /** ISO timestamp added to the project. */
+  addedAt?: string
+}
+
+/** RFC-013 remote binding. Only GitHub is supported (no non-GitHub fallback). */
+export interface ShareConfig {
+  host: 'github'
+  /** `owner/name` slug of the private repo. */
+  repo: string
 }
 
 /** Augments .research-pilot/usage.json with v0.7 cutoff snapshot (§14.3). */

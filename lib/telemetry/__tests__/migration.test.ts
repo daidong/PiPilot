@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { rmSync } from 'node:fs'
 import { migrateProjectConfig } from '../migration.js'
+import { readTelemetryPrefs, hasTelemetryPrefs } from '../telemetry-prefs.js'
 import { PATHS } from '../../types.js'
 
 function makeProject(seed: object): string {
@@ -34,17 +35,19 @@ test('migrates a pre-telemetry project (no id, no telemetry, no schema version)'
     const r = migrateProjectConfig(dir)
     assert.equal(r.migrated, true)
     assert.equal(r.fromVersion, 0)
-    assert.equal(r.toVersion, 1)
+    assert.equal(r.toVersion, 2)
     assert.ok(r.config.id, 'id assigned')
     assert.equal(r.config.id?.length, 26, 'ULID length')
-    assert.equal(r.config.telemetry?.tracingMode, 'disabled', 'opt-in default — new projects start disabled')
-    assert.equal(r.config.telemetry?.bufferCapacity, 1024)
-    assert.equal(r.config.configSchemaVersion, 1)
+    assert.equal(r.config.telemetry, undefined, 'v2: telemetry not stored in project.json')
+    assert.equal(r.config.configSchemaVersion, 2)
 
-    // Persisted to disk
+    // Persisted to disk — no telemetry block in the shared file.
     const written = JSON.parse(readFileSync(join(dir, PATHS.project), 'utf8'))
-    assert.equal(written.configSchemaVersion, 1)
+    assert.equal(written.configSchemaVersion, 2)
+    assert.equal(written.telemetry, undefined, 'project.json carries no telemetry')
     assert.equal(written.id, r.config.id)
+    // No legacy value ⇒ nothing seeded into local prefs (default disabled on read).
+    assert.equal(hasTelemetryPrefs(dir), false)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -65,30 +68,42 @@ test('idempotent: second call is a no-op', () => {
 
     const r2 = migrateProjectConfig(dir)
     assert.equal(r2.migrated, false)
-    assert.equal(r2.fromVersion, 1)
-    assert.equal(r2.toVersion, 1)
+    assert.equal(r2.fromVersion, 2)
+    assert.equal(r2.toVersion, 2)
     assert.equal(r2.config.id, idAfterFirst, 'id preserved across runs')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('preserves user-set id and telemetry overrides', () => {
+test('v2: migrates legacy telemetry into local prefs, strips it from project.json', () => {
   const dir = makeProject({
     name: 'Test',
     questions: [],
     userCorrections: [],
     id: 'CUSTOM-USER-ID-123',
-    telemetry: { tracingMode: 'disabled', bufferCapacity: 256 },
+    // Legacy v1 shape: telemetry lived in project.json. User had opted IN.
+    telemetry: { tracingMode: 'enabled', bufferCapacity: 256 },
+    configSchemaVersion: 1,
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z'
   })
   try {
     const r = migrateProjectConfig(dir)
-    assert.equal(r.migrated, true) // schema version was missing
+    assert.equal(r.migrated, true) // v1 → v2
+    assert.equal(r.fromVersion, 1)
+    assert.equal(r.toVersion, 2)
     assert.equal(r.config.id, 'CUSTOM-USER-ID-123', 'user id kept')
-    assert.equal(r.config.telemetry?.tracingMode, 'disabled', 'user opt-out kept')
-    assert.equal(r.config.telemetry?.bufferCapacity, 256)
+    assert.equal(r.config.telemetry, undefined, 'telemetry stripped from project.json')
+
+    // project.json on disk no longer carries telemetry.
+    const written = JSON.parse(readFileSync(join(dir, PATHS.project), 'utf8'))
+    assert.equal(written.telemetry, undefined)
+
+    // The opt-in was preserved — moved into the local, gitignored preferences.json.
+    const tp = readTelemetryPrefs(dir)
+    assert.equal(tp.tracingMode, 'enabled', 'user opt-in survives the move')
+    assert.equal(tp.bufferCapacity, 256)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -114,7 +129,7 @@ test('writes config-migration row to tracing-state.jsonl', async () => {
     const row = JSON.parse(lines[0]!)
     assert.equal(row.kind, 'config-migration')
     assert.equal(row.fromState, 0)
-    assert.equal(row.toState, 1)
+    assert.equal(row.toState, 2)
     assert.equal(row.actor, 'system')
   } finally {
     rmSync(dir, { recursive: true, force: true })

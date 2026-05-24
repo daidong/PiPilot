@@ -6,13 +6,14 @@
  *
  * Procedure:
  *   1. Read project.json.
- *   2. If `configSchemaVersion` is missing or < 1:
- *      a. If `id` is missing, generate a ULID, set `configSchemaVersion = 1`.
- *      b. If `telemetry` is missing, set { tracingMode: 'disabled', bufferCapacity: 1024 }.
- *         New projects start with telemetry off; user opts in via Settings →
- *         Telemetry. Existing projects with explicit `tracingMode: 'enabled'`
- *         keep their value (we don't override what the user already opted into).
- *      c. Write project.json atomically (temp + rename).
+ *   2. If `configSchemaVersion` is missing or < target (2):
+ *      a. If `id` is missing, generate a ULID.
+ *      b. v2: telemetry config moved to the LOCAL `preferences.json` (RFC-013 —
+ *         keep it out of the shared project.json). If a legacy `telemetry` block
+ *         exists, seed the local prefs from it once (preserving the user's prior
+ *         opt-in/out), then delete it from project.json. New projects have none;
+ *         prefs default to disabled (opt-in).
+ *      c. Set `configSchemaVersion = 2`, write project.json atomically.
  *      d. Append a row to .research-pilot/tracing-state.jsonl.
  *   3. Else: skip (already migrated).
  *
@@ -26,6 +27,7 @@ import { mkdirSync } from 'node:fs'
 import { PATHS, PROJECT_CONFIG_SCHEMA_VERSION, type ProjectConfig } from '../types.js'
 import { ulid } from './ulid.js'
 import { createTracingStateLogger } from './tracing-state.js'
+import { hasTelemetryPrefs, writeTelemetryPrefs } from './telemetry-prefs.js'
 
 export interface MigrationResult {
   migrated: boolean
@@ -63,19 +65,19 @@ export function migrateProjectConfig(projectPath: string): MigrationResult {
     }
   }
 
-  // ----- Apply v0 → v1 migration -----
+  // ----- Apply migration to v2 -----
   if (!config.id) {
     config.id = ulid()
   }
-  if (!config.telemetry) {
-    // Opt-in default: new projects start with telemetry disabled. Users
-    // enable via Settings → Telemetry. Existing projects that already have
-    // an explicit `telemetry.tracingMode` (including 'enabled') are not
-    // touched — that branch is gated by the `if (!config.telemetry)` above.
-    config.telemetry = {
-      tracingMode: 'disabled',
-      bufferCapacity: 1024
+  // v2: telemetry config no longer lives in the shared project.json. Seed the
+  // local preferences.json from any legacy block once (preserving the user's
+  // prior opt-in/out), then strip it. The guard keeps a manual prefs edit from
+  // being overwritten and makes re-runs safe.
+  if (config.telemetry) {
+    if (!hasTelemetryPrefs(projectPath)) {
+      writeTelemetryPrefs(projectPath, config.telemetry)
     }
+    delete config.telemetry
   }
   config.configSchemaVersion = targetVersion
 
@@ -98,7 +100,7 @@ export function migrateProjectConfig(projectPath: string): MigrationResult {
       fromState: currentVersion,
       toState: targetVersion,
       actor: 'system',
-      reason: 'first-run-on-v0.7'
+      reason: `config-schema-migrate-v${currentVersion}-to-v${targetVersion}`
     })
   } catch {
     // Migration succeeded; tracing-state is informational. Swallow.

@@ -55,6 +55,7 @@ const SUITES = {
   models: 'lib/__tests__',
   aws: 'lib/aws/__tests__',
   'aws-ec2': 'lib/aws-ec2-compute/__tests__',
+  sharing: 'lib/sharing/__tests__',
   utils: 'lib/utils/__tests__',
   'shared-electron': 'shared-electron/__tests__',
   renderer: 'app/src/renderer/stores/__tests__'

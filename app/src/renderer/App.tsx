@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
+import { Users } from 'lucide-react'
 import { SettingsModal, type SettingsTab } from './components/settings/SettingsModal'
 import type { WikiPaperMeta } from '../../../lib/wiki/paper-meta-cache'
 import { LeftSidebar } from './components/layout/LeftSidebar'
@@ -6,6 +7,7 @@ import { CenterPanel } from './components/layout/CenterPanel'
 import { StatusBar } from './components/layout/StatusBar'
 import { TerminalPanel } from './components/layout/TerminalPanel'
 import { ErrorBoundary } from './components/layout/ErrorBoundary'
+import { AcceptInviteModal } from './components/layout/AcceptInviteModal'
 import { ImportWizard } from './components/center/ImportWizard'
 import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
@@ -125,6 +127,7 @@ interface ProjectStats {
   notes: number
   data: number
   initialized: boolean
+  shared?: boolean
 }
 
 function RecentRow({
@@ -165,6 +168,15 @@ function RecentRow({
           <span className={`text-[13px] font-medium truncate ${active ? 't-text' : 't-text-secondary group-hover:t-text'}`}>
             {name}
           </span>
+          {stats?.shared && (
+            <span
+              className="inline-flex items-center shrink-0 t-text-accent-soft"
+              title="Shared project — synced with collaborators via GitHub"
+              aria-label="Shared project"
+            >
+              <Users size={12} aria-hidden />
+            </span>
+          )}
           {entry.pinned && (
             <span className="text-[9px] uppercase tracking-wider t-text-muted">pinned</span>
           )}
@@ -426,6 +438,7 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const [activeIndex, setActiveIndex] = useState(0)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [opening, setOpening] = useState(false)
+  const [inviteOpen, setInviteOpen] = useState(false)
 
   // Load recents once on mount. The main process prunes stale paths server
   // side, so whatever comes back is safe to render.
@@ -540,6 +553,9 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
       {/* Draggable macOS title bar strip */}
       <div className="drag-region fixed top-0 left-0 right-0 h-10 z-50" />
 
+      {/* RFC-013: Join-a-shared-project flow (clone before any project is open) */}
+      <AcceptInviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} />
+
       {/* Main content — two-column grid at xl, single column below. Uses
           <main> landmark so the global skip-to-content link has a target. */}
       <main
@@ -614,8 +630,9 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 </div>
               )}
 
-              {/* New-folder affordance — ghost button, not primary */}
-              <div className="pl-4">
+              {/* Two ways into a project — both ghost buttons, side by side.
+                  Left: open/create a local folder. Right: join a shared project. */}
+              <div className="pl-4 flex items-center justify-between gap-3 flex-wrap">
                 <button
                   onClick={handlePickNew}
                   disabled={opening}
@@ -623,6 +640,16 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
                 >
                   {hasRecents ? 'Open another folder…' : 'Choose a folder to begin'}
                   <Kbd>⌘O</Kbd>
+                </button>
+                {/* RFC-013: join a colleague's shared project (clone into a new folder).
+                    Same ghost-button treatment so it reads as a peer entry point. */}
+                <button
+                  onClick={() => setInviteOpen(true)}
+                  disabled={opening}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border t-border t-text-secondary hover:t-text hover:t-border-accent-soft text-[12px] transition-colors disabled:opacity-50"
+                >
+                  <Users size={13} aria-hidden className="shrink-0" />
+                  Accept an invitation…
                 </button>
               </div>
             </section>

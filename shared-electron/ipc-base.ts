@@ -720,7 +720,14 @@ export function registerPrefsHandlers(
     const { projectPath } = getCtx()
     if (!projectPath) return
     const file = join(projectPath, rootPathKey, 'preferences.json')
-    const data = { ...prefs, updatedAt: new Date().toISOString() }
+    // Merge-preserving: read existing prefs first so unrelated keys (e.g. the
+    // local `telemetry` block, RFC-013) survive a model/effort change. A bare
+    // overwrite here previously wiped sibling keys.
+    let existing: Record<string, unknown> = {}
+    if (existsSync(file)) {
+      try { existing = JSON.parse(readFileSync(file, 'utf-8')) } catch { existing = {} }
+    }
+    const data = { ...existing, ...prefs, updatedAt: new Date().toISOString() }
     writeFileSync(file, JSON.stringify(data, null, 2))
     const modelChanged = prefs.selectedModel && prefs.selectedModel !== callbacks.getCurrentModel()
     const effortChanged = prefs.reasoningEffort && prefs.reasoningEffort !== callbacks.getCurrentReasoningEffort()
