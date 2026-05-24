@@ -14,7 +14,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { PATHS, type ProjectConfig, type ProjectMember } from '../types.js'
 import { checkSharingPreflight, type SharingPreflight } from './preflight.js'
-import { ensureLocalIdentity, getLocalIdentity } from './identity.js'
+import { ensureLocalIdentity, getLocalIdentity, slugifyDisplayName } from './identity.js'
 import { ensureSharingGitFiles } from './workspace-git.js'
 import {
   isGitRepo,
@@ -136,6 +136,35 @@ export async function getSharingStatus(projectPath: string): Promise<SharingStat
     myRole,
     sync,
   }
+}
+
+/**
+ * RFC-013 §9 Layer 1 — the soft conflict-prevention steer injected into the
+ * agent's system prompt ONLY when the project is shared. It nudges the agent to
+ * drop NEW free-form files (code/LaTeX/figures the file tools write, as opposed
+ * to artifacts, which the writer already routes per-actor) into the local
+ * member's `<slug>/` directory. Deliberately soft: editing existing files in
+ * place and shared root deliverables are fine. Returns '' for solo projects (no
+ * clause → today's unconstrained behavior, back-compat).
+ */
+export function buildSharingPromptClause(projectPath: string): string {
+  let shared = false
+  try {
+    shared = !!readConfig(projectPath).share
+  } catch {
+    return ''
+  }
+  if (!shared) return ''
+  const me = getLocalIdentity(projectPath)
+  if (!me) return ''
+  const slug = slugifyDisplayName(me.displayName)
+  return `## Shared workspace (collaboration)
+This project is shared with collaborators over git — everyone works on one branch.
+To avoid file-level collisions, when you CREATE new files, prefer placing them under
+your personal directory \`${slug}/\` (e.g. \`${slug}/analysis.py\`, \`${slug}/figures/plot.png\`).
+This is a soft preference, not a hard rule: editing an existing file in place is fine,
+and genuinely shared deliverables can live at the repo root. Do not modify files under
+another collaborator's directory unless the user explicitly asks you to.`
 }
 
 // ── Share ─────────────────────────────────────────────────────────────────

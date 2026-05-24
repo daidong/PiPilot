@@ -17,6 +17,7 @@ export {
 export type { RepoInvitation } from './gh.js'
 export {
   getSharingStatus,
+  buildSharingPromptClause,
   shareProject,
   syncProject,
   pollRemote,

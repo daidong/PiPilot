@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { slugifyDisplayName, ensureLocalIdentity, getLocalIdentity } from '../identity.js'
 import { ensureSharingGitignore, ensureSharingGitattributes } from '../workspace-git.js'
 import { looksLikeGithubLogin } from '../gh.js'
-import { getSharingStatus, shareProject } from '../share.js'
+import { getSharingStatus, shareProject, buildSharingPromptClause } from '../share.js'
 import {
   isGitInstalled,
   gitInit,
@@ -169,6 +169,34 @@ test('getSharingStatus + shareProject: refuse a folder that is already a git rep
     // It must not have created a remote or written share config.
     const cfg = JSON.parse(readFileSync(join(dir, '.research-pilot', 'project.json'), 'utf-8'))
     assert.equal(cfg.share, undefined, 'share binding not written')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── buildSharingPromptClause (§9 soft steer) ─────────────────────────────────
+
+test('buildSharingPromptClause: empty unless shared + identity, mentions the slug', () => {
+  const dir = tmp('rp-clause-')
+  try {
+    mkdirSync(join(dir, '.research-pilot'), { recursive: true })
+    const cfgPath = join(dir, '.research-pilot', 'project.json')
+    const base = { name: 'P', questions: [], userCorrections: [], createdAt: '', updatedAt: '' }
+
+    // Unshared → no clause.
+    writeFileSync(cfgPath, JSON.stringify(base))
+    assert.equal(buildSharingPromptClause(dir), '')
+
+    // Shared but no local identity yet → still empty (nothing to steer toward).
+    writeFileSync(cfgPath, JSON.stringify({ ...base, share: { host: 'github', repo: 'o/r' } }))
+    assert.equal(buildSharingPromptClause(dir), '')
+
+    // Shared + identity → clause names the per-actor slug, soft language.
+    ensureLocalIdentity(dir, 'Alice Chen')
+    const clause = buildSharingPromptClause(dir)
+    assert.match(clause, /Shared workspace/)
+    assert.match(clause, /alice-chen\//)
+    assert.match(clause, /soft preference/i)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
