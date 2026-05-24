@@ -5,15 +5,20 @@
  * secondary (indigo), and the status palette (success/error/warning/info) is a
  * separate vocabulary that must never be borrowed for decoration. So this
  * categorical palette is deliberately carved OUT of those hues — no teal (~180),
- * green (~145), amber (~75), red (~25), indigo (~275), info-blue (~245). What's
- * left is a muted cool-to-magenta arc plus one warm orange and a gold.
+ * green (~145), amber (~75), red (~25), indigo (~275), info-blue (~245).
+ *
+ * SIX maximally-separated hues — kept small on purpose: at a 7px dot, and for
+ * astigmatic eyes, more colors just become indistinguishable mush. Dropped from
+ * the original eight: GOLD (~92, too near amber-warning — status vocabulary) and
+ * PLUM (~318, a near-duplicate of magenta). When there are more collaborators
+ * than colors the hash wraps; identity is always recoverable via the tooltip.
  *
  * Each entry is theme-aware via CSS `light-dark()`: a DARKER tone on the
  * warm-paper light ground, a LIGHTER tone on the warm-dark ground. A single
- * lightness can't clear contrast on both (gold is luminous, violet is dark), so
+ * lightness can't clear contrast on both (some hues are luminous, some dark), so
  * the two tones are tuned per theme. Every entry verified ≥4.3:1 on light and
- * ≥5.7:1 on dark against the respective bg-base — well past the 3:1 floor for a
- * 6px graphical object (WCAG 1.4.11), with margin for the maintainer's
+ * ≥6:1 on dark against the respective bg-base — well past the 3:1 floor for a
+ * small graphical object (WCAG 1.4.11), with margin for the maintainer's
  * astigmatism. (`color-scheme` is set per theme in global.css, so light-dark()
  * resolves correctly inside the inline style.)
  *
@@ -26,8 +31,6 @@ export const AUTHOR_PALETTE = [
   'light-dark(oklch(0.52 0.13 52),  oklch(0.75 0.13 52))',  // orange
   'light-dark(oklch(0.51 0.15 262), oklch(0.72 0.15 262))', // periwinkle
   'light-dark(oklch(0.53 0.11 210), oklch(0.74 0.11 210))', // cyan
-  'light-dark(oklch(0.49 0.16 318), oklch(0.70 0.16 318))', // plum
-  'light-dark(oklch(0.55 0.12 92),  oklch(0.78 0.12 92))',  // gold
 ] as const
 
 /**

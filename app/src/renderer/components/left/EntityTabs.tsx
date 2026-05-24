@@ -194,7 +194,7 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
         {shared && (
           actor ? (
             <span
-              className={`shrink-0 w-1.5 h-1.5 rounded-full ${actorIsMe ? 't-bg-accent' : ''}`}
+              className={`shrink-0 w-[7px] h-[7px] rounded-full ${actorIsMe ? 't-bg-accent' : ''}`}
               style={actorIsMe ? undefined : { backgroundColor: authorColor(actor.id) }}
               title={actorIsMe ? `${actor.displayName} (you)` : `Created by ${actor.displayName}`}
               aria-label={actorIsMe ? `Created by you, ${actor.displayName}` : `Created by ${actor.displayName}`}
@@ -202,7 +202,7 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
           ) : (
             // Shared project, but this artifact predates per-actor stamping —
             // hold the gutter slot so titles stay aligned with attributed rows.
-            <span className="shrink-0 w-1.5" aria-hidden="true" />
+            <span className="shrink-0 w-[7px]" aria-hidden="true" />
           )
         )}
         {isEnriching ? (
