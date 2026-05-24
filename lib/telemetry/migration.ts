@@ -66,19 +66,30 @@ export function migrateProjectConfig(projectPath: string): MigrationResult {
   }
 
   // ----- Apply migration to v2 -----
+  // v2: telemetry config moves to the LOCAL preferences.json (read side already
+  // prefers it). Seed it from any legacy block once, guarded so a manual prefs
+  // edit isn't clobbered and re-runs are safe. This write is local-only.
+  if (config.telemetry && !hasTelemetryPrefs(projectPath)) {
+    writeTelemetryPrefs(projectPath, config.telemetry)
+  }
+
+  // RFC-013: project.json is the single SHARED file. NEVER rewrite it as a side
+  // effect of opening a shared project — that dirties every collaborator's clone
+  // the instant they join (the v1→v2 telemetry strip + schema bump showed up as
+  // "uncommitted changes" right after Clone & join) and churns the shared file's
+  // history. For shared projects the migration is READ-ONLY: telemetry stays as
+  // inert legacy in the file (ignored — local prefs are authoritative) and the
+  // schema version is left as-is. Schema upkeep of the shared file is not a
+  // member-on-open concern.
+  if (config.share) {
+    return { migrated: false, fromVersion: currentVersion, toVersion: currentVersion, config }
+  }
+
+  // Solo (unshared) project: safe to clean up fully and advance the schema.
   if (!config.id) {
     config.id = ulid()
   }
-  // v2: telemetry config no longer lives in the shared project.json. Seed the
-  // local preferences.json from any legacy block once (preserving the user's
-  // prior opt-in/out), then strip it. The guard keeps a manual prefs edit from
-  // being overwritten and makes re-runs safe.
-  if (config.telemetry) {
-    if (!hasTelemetryPrefs(projectPath)) {
-      writeTelemetryPrefs(projectPath, config.telemetry)
-    }
-    delete config.telemetry
-  }
+  delete config.telemetry
   config.configSchemaVersion = targetVersion
 
   // ----- Atomic write: temp + rename -----

@@ -109,6 +109,41 @@ test('v2: migrates legacy telemetry into local prefs, strips it from project.jso
   }
 })
 
+test('SHARED project: v2 migration is read-only — never rewrites the shared project.json', () => {
+  // Repro of the "joined and instantly shows uncommitted changes" bug: a project
+  // shared at schema v1 (telemetry still in project.json) must NOT be rewritten
+  // when a collaborator opens the clone, or git shows it dirty immediately.
+  const dir = makeProject({
+    name: 'Research Project',
+    questions: [],
+    userCorrections: [],
+    id: '01KSDB8D7BGTS45PQN08TV0CZ8',
+    telemetry: { tracingMode: 'disabled', bufferCapacity: 1024 },
+    configSchemaVersion: 1,
+    lead: '01KSDB8D7BGTS45PQN08TV0CZ8',
+    members: [{ actorId: '01KSDB8D7BGTS45PQN08TV0CZ8', displayName: 'Dong Dai', role: 'lead' }],
+    share: { host: 'github', repo: 'daidong/research-project-directoryskills' },
+    createdAt: '2026-05-23T23:10:31.258Z',
+    updatedAt: '2026-05-24T15:57:03.270Z',
+  })
+  try {
+    const before = readFileSync(join(dir, PATHS.project), 'utf8')
+    const r = migrateProjectConfig(dir)
+
+    assert.equal(r.migrated, false, 'shared project.json is not rewritten on open')
+    assert.equal(r.toVersion, 1, 'schema version left as-is for the shared file')
+
+    const after = readFileSync(join(dir, PATHS.project), 'utf8')
+    assert.equal(after, before, 'project.json must be byte-identical (no dirty clone)')
+
+    // Member still gets telemetry locally (read side uses prefs).
+    assert.equal(hasTelemetryPrefs(dir), true)
+    assert.equal(readTelemetryPrefs(dir).tracingMode, 'disabled')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('writes config-migration row to tracing-state.jsonl', async () => {
   const dir = makeProject({
     name: 'Test',
