@@ -23,6 +23,8 @@ const GI_BLOCK = `${GI_HEADER}
 # Asymmetric rule: keep ALL of .research-pilot/ local EXCEPT the shared project.json.
 .research-pilot/*
 !.research-pilot/project.json
+# agent.md is per-member (your own instructions + agent memory) — local, never shared.
+notes/agent-md.md
 # Secrets never travel.
 .env
 .env.local

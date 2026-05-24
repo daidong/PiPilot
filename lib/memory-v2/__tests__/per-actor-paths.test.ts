@@ -1,0 +1,93 @@
+/**
+ * RFC-013 §9 conflict prevention — per-actor artifact placement.
+ *
+ * In a SHARED project new artifacts carry `provenance.actor` and land under a
+ * `<typeDir>/<displayName-slug>/…` subdir so collaborators never collide on the
+ * same path. The path stays a pure function of the artifact (actor travels in
+ * the file), so update/delete/index recompute it without storage. Solo/legacy
+ * artifacts (no actor) stay flat (back-compat).
+ */
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { primaryFileRel } from '../artifact-writer.js'
+import { createArtifact, updateArtifact } from '../store.js'
+import { rebuildIndex } from '../indexer.js'
+import type { NoteArtifact, PaperArtifact, CLIContext } from '../../types.js'
+
+// ── primaryFileRel: pure path derivation ─────────────────────────────────────
+
+test('primaryFileRel: actor → per-actor subdir; no actor → flat', () => {
+  const note: NoteArtifact = {
+    id: 'n1', type: 'note', title: 'T', tags: [], content: 'c',
+    provenance: { source: 'agent', sessionId: 's' }, createdAt: '', updatedAt: '',
+  }
+  assert.equal(primaryFileRel(note), 'notes/n1.md')
+  assert.equal(
+    primaryFileRel({ ...note, provenance: { ...note.provenance, actor: { id: 'a', displayName: 'Alice Chen' } } }),
+    'notes/alice-chen/n1.md'
+  )
+
+  const paper: PaperArtifact = {
+    id: 'p1', type: 'paper', title: 'P', tags: [], citeKey: 'Smith2020',
+    provenance: { source: 'import', sessionId: 'u', actor: { id: 'b', displayName: 'Bob' } },
+    createdAt: '', updatedAt: '',
+  }
+  assert.equal(primaryFileRel(paper), 'papers/bob/Smith2020.bib')
+})
+
+// ── createArtifact: stamps actor + lands in subdir when shared ────────────────
+
+function makeProject(opts: { shared: boolean; displayName?: string }): string {
+  const dir = mkdtempSync(join(tmpdir(), 'rp-pa-'))
+  mkdirSync(join(dir, '.research-pilot'), { recursive: true })
+  const cfg: Record<string, unknown> = {
+    name: 'P', questions: [], userCorrections: [], createdAt: '', updatedAt: '',
+  }
+  if (opts.shared) cfg.share = { host: 'github', repo: 'o/r' }
+  writeFileSync(join(dir, '.research-pilot', 'project.json'), JSON.stringify(cfg))
+  if (opts.displayName) {
+    writeFileSync(join(dir, '.research-pilot', 'identity.json'), JSON.stringify({ id: 'act1', displayName: opts.displayName }))
+  }
+  return dir
+}
+const ctx = (projectPath: string): CLIContext => ({ projectPath, sessionId: 's' })
+
+test('createArtifact in a SHARED project: actor stamped, file under per-actor subdir, stable across update + indexable', () => {
+  const dir = makeProject({ shared: true, displayName: 'Alice Chen' })
+  try {
+    const rec = createArtifact({ type: 'note', title: 'Hi', content: 'body' }, ctx(dir))
+    const expected = join(dir, 'notes', 'alice-chen', `${rec.artifact.id}.md`)
+
+    assert.equal(rec.artifact.provenance.actor?.displayName, 'Alice Chen', 'actor stamped')
+    assert.ok(existsSync(expected), 'file written under notes/alice-chen/')
+    assert.ok(!existsSync(join(dir, 'notes', `${rec.artifact.id}.md`)), 'not also written flat')
+
+    // Update writes the SAME path (no duplicate/orphan), content changes.
+    const upd = updateArtifact(dir, rec.artifact.id, { content: 'body2' })
+    assert.ok(upd, 'update found the artifact')
+    assert.ok(existsSync(expected), 'still at the per-actor path after update')
+    assert.match(readFileSync(expected, 'utf-8'), /body2/)
+
+    // The recursive index walk picks it up from the subdir.
+    const all = rebuildIndex(dir)
+    assert.ok(all.some(a => a.id === rec.artifact.id), 'per-actor artifact is indexed')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createArtifact in an UNSHARED project: no actor, flat path (back-compat)', () => {
+  const dir = makeProject({ shared: false })
+  try {
+    const rec = createArtifact({ type: 'note', title: 'Hi', content: 'body' }, ctx(dir))
+    assert.equal(rec.artifact.provenance.actor, undefined, 'no actor stamped when unshared')
+    assert.ok(existsSync(join(dir, 'notes', `${rec.artifact.id}.md`)), 'flat path')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

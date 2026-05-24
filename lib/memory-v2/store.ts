@@ -6,10 +6,12 @@ import { createArtifactLedgerWriter, type ArtifactOp } from '../ledger/artifact-
 import { readArtifactFromFile } from './artifact-files.js'
 import { getArtifacts, upsertIndexEntry, removeIndexEntry } from './indexer.js'
 import { writeArtifactToFile, removeArtifactFile, primaryFileRel } from './artifact-writer.js'
+import { getLocalIdentity } from '../sharing/identity.js'
 import {
   PATHS,
   AGENT_MD_ID,
   AGENT_MD_MAX_CHARS,
+  type Actor,
   type Artifact,
   type ArtifactType,
   type CLIContext,
@@ -19,6 +21,22 @@ import {
   type DataSchema,
   type SessionSummary
 } from '../types.js'
+
+/**
+ * RFC-013: in a SHARED project, the local actor that should own newly created
+ * artifacts (drives the per-actor subdir + attribution). Undefined for
+ * solo/unshared projects → artifacts stay flat (back-compat). Read fresh per
+ * create; artifact creation is not a hot path.
+ */
+function resolveSharingActor(projectPath: string): Actor | undefined {
+  try {
+    const cfg = JSON.parse(readFileSync(join(projectPath, PATHS.project), 'utf-8')) as { share?: unknown }
+    if (!cfg.share) return undefined
+    return getLocalIdentity(projectPath) ?? undefined
+  } catch {
+    return undefined
+  }
+}
 
 export interface ArtifactFileRecord<T extends Artifact = Artifact> {
   artifact: T
@@ -307,12 +325,21 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
   const id = crypto.randomUUID()
   const timestamp = nowIso()
 
+  const provenance = mergeProvenance(context, input.provenance)
+  // RFC-013: stamp the local actor in a shared project so the file lands in the
+  // per-actor subdir (conflict prevention) and carries attribution. No-op for
+  // solo projects. An explicitly supplied actor (e.g. re-import) is preserved.
+  if (!provenance.actor) {
+    const actor = resolveSharingActor(context.projectPath)
+    if (actor) provenance.actor = actor
+  }
+
   const common = {
     id,
     title: input.title,
     tags: input.tags ?? [],
     summary: input.summary,
-    provenance: mergeProvenance(context, input.provenance),
+    provenance,
     createdAt: timestamp,
     updatedAt: timestamp
   }

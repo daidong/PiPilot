@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { stringify as stringifyYaml } from 'yaml'
 import { PATHS, type Artifact, type ArtifactType, type PaperArtifact } from '../types.js'
+import { slugifyDisplayName } from '../sharing/identity.js'
 import {
   markdownArtifactToText,
   dataArtifactToSidecar,
@@ -40,6 +41,21 @@ const PAPER_DIR = 'papers'
 function paperSlug(citeKey: string): string {
   const s = (citeKey ?? '').trim().replace(/[/\\:*?"<>|\s]+/g, '_')
   return s || 'paper'
+}
+
+/**
+ * RFC-013 §9 conflict prevention: in a shared project, new artifacts carry
+ * `provenance.actor` (stamped at create time) and live under a per-actor subdir
+ * `<typeDir>/<displayName-slug>/…` so collaborators' files never collide on the
+ * same path. The actor travels in the file's front-matter/sidecar (RFC-014), so
+ * the path stays a PURE FUNCTION of the artifact — find/update/delete recompute
+ * the same location without storing it. Solo/legacy artifacts have no actor →
+ * flat `<typeDir>/…` (back-compat). Returns `''` or `<slug>/`.
+ */
+function actorDirPrefix(artifact: Artifact): string {
+  const displayName = artifact.provenance?.actor?.displayName
+  if (!displayName) return ''
+  return `${slugifyDisplayName(displayName)}/`
 }
 
 function legacyJsonRel(type: ArtifactType, id: string): string {
@@ -66,18 +82,21 @@ export function primaryFileRel(artifact: Artifact): string {
   switch (artifact.type) {
     case 'note':
     case 'tool-output':
-      return `${MD_TYPE_DIR[artifact.type]}/${artifact.id}.md`
+      return `${MD_TYPE_DIR[artifact.type]}/${actorDirPrefix(artifact)}${artifact.id}.md`
     case 'web-content':
+      // Local-only inside .research-pilot — never shared, so no per-actor split.
       return join(PATHS.webContent, `${artifact.id}.json`)
     case 'data':
+      // Sidecar lives next to the user's data file — its location is the data
+      // file's, not a per-actor subdir.
       return `${artifact.filePath}${RP_SIDECAR_SUFFIX}`
     case 'paper':
-      return `${PAPER_DIR}/${paperSlug(artifact.citeKey)}${PAPER_BIB_EXT}`
+      return `${PAPER_DIR}/${actorDirPrefix(artifact)}${paperSlug(artifact.citeKey)}${PAPER_BIB_EXT}`
   }
 }
 
 function paperSidecarRel(paper: PaperArtifact): string {
-  return `${PAPER_DIR}/${paperSlug(paper.citeKey)}${RP_SIDECAR_SUFFIX}`
+  return `${PAPER_DIR}/${actorDirPrefix(paper)}${paperSlug(paper.citeKey)}${RP_SIDECAR_SUFFIX}`
 }
 
 /** Write an artifact's file(s). Returns the workspace-relative primary path. */
