@@ -1126,7 +1126,7 @@ export function WorkspaceTree() {
             className="w-full bg-transparent text-xs outline-none t-focus-ring t-text"
           />
         </div>
-        <label className="mt-1 flex items-center gap-1 text-[11px] t-text-muted cursor-pointer">
+        <label className="mt-1 flex items-center gap-1 text-[11px] t-text-secondary cursor-pointer">
           <input
             type="checkbox"
             checked={showIgnored}
