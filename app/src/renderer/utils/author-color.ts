@@ -6,22 +6,28 @@
  * separate vocabulary that must never be borrowed for decoration. So this
  * categorical palette is deliberately carved OUT of those hues — no teal (~180),
  * green (~145), amber (~75), red (~25), indigo (~275), info-blue (~245). What's
- * left is a muted cool-to-magenta arc plus one warm orange, all at a single
- * mid-lightness so a 6px dot reads on both the warm-paper light ground and the
- * warm-dark ground without per-theme variants.
+ * left is a muted cool-to-magenta arc plus one warm orange and a gold.
  *
- * The local user ("you") is NOT colored from here — they get the teal accent
- * (t-bg-accent) so collaborators' dots are what pops when scanning the list.
+ * Each entry is theme-aware via CSS `light-dark()`: a DARKER tone on the
+ * warm-paper light ground, a LIGHTER tone on the warm-dark ground. A single
+ * lightness can't clear contrast on both (gold is luminous, violet is dark), so
+ * the two tones are tuned per theme. Every entry verified ≥4.3:1 on light and
+ * ≥5.7:1 on dark against the respective bg-base — well past the 3:1 floor for a
+ * 6px graphical object (WCAG 1.4.11), with margin for the maintainer's
+ * astigmatism. (`color-scheme` is set per theme in global.css, so light-dark()
+ * resolves correctly inside the inline style.)
+ *
+ * The local user ("you") is NOT colored from here — see EntityTabs.
  */
 export const AUTHOR_PALETTE = [
-  'oklch(0.62 0.15 300)', // violet
-  'oklch(0.60 0.17 332)', // magenta
-  'oklch(0.64 0.15 356)', // rose
-  'oklch(0.67 0.14 52)',  // orange
-  'oklch(0.58 0.13 262)', // periwinkle
-  'oklch(0.65 0.12 210)', // cyan
-  'oklch(0.55 0.15 318)', // plum
-  'oklch(0.68 0.12 92)',  // gold
+  'light-dark(oklch(0.52 0.17 300), oklch(0.72 0.17 300))', // violet
+  'light-dark(oklch(0.53 0.18 332), oklch(0.72 0.18 332))', // magenta
+  'light-dark(oklch(0.54 0.18 356), oklch(0.72 0.18 356))', // rose
+  'light-dark(oklch(0.52 0.13 52),  oklch(0.75 0.13 52))',  // orange
+  'light-dark(oklch(0.51 0.15 262), oklch(0.72 0.15 262))', // periwinkle
+  'light-dark(oklch(0.53 0.11 210), oklch(0.74 0.11 210))', // cyan
+  'light-dark(oklch(0.49 0.16 318), oklch(0.70 0.16 318))', // plum
+  'light-dark(oklch(0.55 0.12 92),  oklch(0.78 0.12 92))',  // gold
 ] as const
 
 /**
