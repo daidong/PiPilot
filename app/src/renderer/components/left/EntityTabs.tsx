@@ -194,6 +194,7 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
         {shared && (
           actor ? (
             <span
+              role="img"
               className="shrink-0 w-[7px] h-[7px] rounded-full"
               // "You" is a quiet neutral grey (not the teal accent): your own
               // work recedes so collaborators' colored dots are what pops, and
