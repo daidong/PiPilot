@@ -194,8 +194,11 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
         {shared && (
           actor ? (
             <span
-              className={`shrink-0 w-[7px] h-[7px] rounded-full ${actorIsMe ? 't-bg-accent' : ''}`}
-              style={actorIsMe ? undefined : { backgroundColor: authorColor(actor.id) }}
+              className="shrink-0 w-[7px] h-[7px] rounded-full"
+              // "You" is a quiet neutral grey (not the teal accent): your own
+              // work recedes so collaborators' colored dots are what pops, and
+              // the brand accent isn't diluted across every row you authored.
+              style={{ backgroundColor: actorIsMe ? 'var(--color-text-muted)' : authorColor(actor.id) }}
               title={actorIsMe ? `${actor.displayName} (you)` : `Created by ${actor.displayName}`}
               aria-label={actorIsMe ? `Created by you, ${actor.displayName}` : `Created by ${actor.displayName}`}
             />
