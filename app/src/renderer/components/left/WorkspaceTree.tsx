@@ -1164,7 +1164,22 @@ export function WorkspaceTree() {
         ) : query.trim() && rows.length === 0 ? (
           <p className="px-2 py-2 text-xs t-text-muted">No files match "{query}".</p>
         ) : !query.trim() && rootNodes.length === 0 ? (
-          <p className="px-2 py-2 text-xs t-text-muted">No visible files in workspace root.</p>
+          <div className="px-2 py-2 text-xs t-text-muted">
+            {showIgnored ? (
+              'This folder is empty.'
+            ) : (
+              <>
+                No visible files — ignored files are hidden.{' '}
+                <button
+                  type="button"
+                  onClick={() => setShowIgnored(true)}
+                  className="t-text-accent hover:underline t-focus-ring rounded"
+                >
+                  Show ignored files
+                </button>
+              </>
+            )}
+          </div>
         ) : (
           <div>
             {/* Inline create input at root level */}
