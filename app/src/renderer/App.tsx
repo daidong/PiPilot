@@ -499,7 +499,18 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
   // Keyboard navigation — arrow keys move focus through the list, ↵ opens
   // the focused entry, ⌫ twice removes it, ⌘O launches the native picker.
   useEffect(() => {
+    const isEditable = (el: EventTarget | null): boolean => {
+      const node = el as HTMLElement | null
+      if (!node) return false
+      const tag = node.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node.isContentEditable
+    }
     const handler = (e: KeyboardEvent) => {
+      // Don't hijack keys while a modal owns the screen (e.g. the Accept-invite
+      // dialog) or while the user is typing in any field — otherwise Backspace
+      // here silently deletes a recent project from under the modal.
+      if (inviteOpen || isEditable(e.target) || isEditable(document.activeElement)) return
+
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
         e.preventDefault()
         handlePickNew()
@@ -544,7 +555,7 @@ function FolderGate({ onOpenSettings }: { onOpenSettings?: () => void }) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [recents, activeIndex, confirmRemove, handleOpen, handlePickNew, handleRemove])
+  }, [recents, activeIndex, confirmRemove, handleOpen, handlePickNew, handleRemove, inviteOpen])
 
   const hasRecents = recents.length > 0
 
