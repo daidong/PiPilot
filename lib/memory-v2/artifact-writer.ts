@@ -28,14 +28,16 @@ import {
   RP_SIDECAR_SUFFIX
 } from './artifact-files.js'
 
-// note + tool-output → shared Markdown files at the workspace root.
-// web-content is deliberately EXCLUDED: it stays local JSON inside .research-pilot
-// (RFC-013 decision — not shared; exempt from files-as-carrier).
+// Artifacts live under a single distinctive top-level dir, `rp-artifacts/`, so
+// they never collide with the user's own `notes/`, `papers/`, etc. (RFC-013;
+// mirrors the `rp-pi-guidance/` convention). web-content is EXCLUDED: it stays
+// local JSON inside .research-pilot (not shared; exempt from files-as-carrier).
+const RP_ARTIFACTS_DIR = 'rp-artifacts'
 const MD_TYPE_DIR: Record<'note' | 'tool-output', string> = {
-  note: 'notes',
-  'tool-output': 'tool-output'
+  note: `${RP_ARTIFACTS_DIR}/notes`,
+  'tool-output': `${RP_ARTIFACTS_DIR}/tool-output`
 }
-const PAPER_DIR = 'papers'
+const PAPER_DIR = `${RP_ARTIFACTS_DIR}/papers`
 
 /** Filesystem-safe filename stem for a paper, derived from its citeKey. */
 function paperSlug(citeKey: string): string {

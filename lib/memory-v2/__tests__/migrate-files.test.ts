@@ -51,10 +51,10 @@ test('migration converts legacy JSON to files, backs up, sets marker, preserves 
     assert.equal(res.migrated, 3)
     assert.equal(isFilesModelMigrated(proj), true)
 
-    // new files exist (one file per paper)
-    assert.ok(existsSync(join(proj, 'notes', 'n1.md')), 'note .md written')
-    assert.ok(existsSync(join(proj, 'papers', 'one2025.bib')), 'per-paper .bib written')
-    assert.ok(existsSync(join(proj, 'papers', 'one2025.rp.yaml')), 'per-paper sidecar written')
+    // new files exist (one file per paper) under the distinctive rp-artifacts/ dir
+    assert.ok(existsSync(join(proj, 'rp-artifacts', 'notes', 'n1.md')), 'note .md written')
+    assert.ok(existsSync(join(proj, 'rp-artifacts', 'papers', 'one2025.bib')), 'per-paper .bib written')
+    assert.ok(existsSync(join(proj, 'rp-artifacts', 'papers', 'one2025.rp.yaml')), 'per-paper sidecar written')
     assert.ok(existsSync(join(proj, 'data', 'data.csv.rp.yaml')), 'data sidecar written')
 
     // legacy JSON removed

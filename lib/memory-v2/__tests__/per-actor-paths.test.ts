@@ -26,10 +26,10 @@ test('primaryFileRel: actor → per-actor subdir; no actor → flat', () => {
     id: 'n1', type: 'note', title: 'T', tags: [], content: 'c',
     provenance: { source: 'agent', sessionId: 's' }, createdAt: '', updatedAt: '',
   }
-  assert.equal(primaryFileRel(note), 'notes/n1.md')
+  assert.equal(primaryFileRel(note), 'rp-artifacts/notes/n1.md')
   assert.equal(
     primaryFileRel({ ...note, provenance: { ...note.provenance, actor: { id: 'a', displayName: 'Alice Chen' } } }),
-    'notes/alice-chen/n1.md'
+    'rp-artifacts/notes/alice-chen/n1.md'
   )
 
   const paper: PaperArtifact = {
@@ -37,7 +37,7 @@ test('primaryFileRel: actor → per-actor subdir; no actor → flat', () => {
     provenance: { source: 'import', sessionId: 'u', actor: { id: 'b', displayName: 'Bob' } },
     createdAt: '', updatedAt: '',
   }
-  assert.equal(primaryFileRel(paper), 'papers/bob/Smith2020.bib')
+  assert.equal(primaryFileRel(paper), 'rp-artifacts/papers/bob/Smith2020.bib')
 })
 
 // ── createArtifact: stamps actor + lands in subdir when shared ────────────────
@@ -61,11 +61,11 @@ test('createArtifact in a SHARED project: actor stamped, file under per-actor su
   const dir = makeProject({ shared: true, displayName: 'Alice Chen' })
   try {
     const rec = createArtifact({ type: 'note', title: 'Hi', content: 'body' }, ctx(dir))
-    const expected = join(dir, 'notes', 'alice-chen', `${rec.artifact.id}.md`)
+    const expected = join(dir, 'rp-artifacts', 'notes', 'alice-chen', `${rec.artifact.id}.md`)
 
     assert.equal(rec.artifact.provenance.actor?.displayName, 'Alice Chen', 'actor stamped')
-    assert.ok(existsSync(expected), 'file written under notes/alice-chen/')
-    assert.ok(!existsSync(join(dir, 'notes', `${rec.artifact.id}.md`)), 'not also written flat')
+    assert.ok(existsSync(expected), 'file written under rp-artifacts/notes/alice-chen/')
+    assert.ok(!existsSync(join(dir, 'rp-artifacts', 'notes', `${rec.artifact.id}.md`)), 'not also written flat')
 
     // Update writes the SAME path (no duplicate/orphan), content changes.
     const upd = updateArtifact(dir, rec.artifact.id, { content: 'body2' })
@@ -86,7 +86,7 @@ test('createArtifact in an UNSHARED project: no actor, flat path (back-compat)',
   try {
     const rec = createArtifact({ type: 'note', title: 'Hi', content: 'body' }, ctx(dir))
     assert.equal(rec.artifact.provenance.actor, undefined, 'no actor stamped when unshared')
-    assert.ok(existsSync(join(dir, 'notes', `${rec.artifact.id}.md`)), 'flat path')
+    assert.ok(existsSync(join(dir, 'rp-artifacts', 'notes', `${rec.artifact.id}.md`)), 'flat path under rp-artifacts/')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -245,12 +245,6 @@ function mergeProvenance(context: CLIContext, override?: Partial<Provenance>): P
  * Called during project initialization so the user always has agent.md available.
  */
 export function ensureAgentMd(projectPath: string): void {
-  // Skip if already present as a new-format note OR a legacy JSON (which the
-  // migration will convert) — don't double-create (RFC-014 §4.2/§8).
-  const mdPath = join(projectPath, 'notes', `${AGENT_MD_ID}.md`)
-  const legacyPath = join(projectPath, PATHS.notes, `${AGENT_MD_ID}.json`)
-  if (existsSync(mdPath) || existsSync(legacyPath)) return
-
   const now = nowIso()
   const artifact: NoteArtifact = {
     id: AGENT_MD_ID,
@@ -267,6 +261,16 @@ export function ensureAgentMd(projectPath: string): void {
     createdAt: now,
     updatedAt: now
   }
+  // Skip if already present at the current location, the pre-rename location
+  // (`notes/agent-md.md` — still read by the location-agnostic index walk), OR
+  // as legacy JSON. Don't double-create (RFC-014 §4.2/§8).
+  const candidates = [
+    join(projectPath, primaryFileRel(artifact)),       // rp-artifacts/notes/agent-md.md
+    join(projectPath, 'notes', `${AGENT_MD_ID}.md`),   // pre-rename root location
+    join(projectPath, PATHS.notes, `${AGENT_MD_ID}.json`), // legacy JSON
+  ]
+  if (candidates.some(existsSync)) return
+
   writeArtifactToFile(projectPath, artifact)
   upsertIndexEntry(projectPath, artifact)
 }
