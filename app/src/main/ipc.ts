@@ -28,7 +28,7 @@ import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readE
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
-import { rebuildIndex } from '../../../lib/memory-v2/indexer'
+import { rebuildIndex, readIndex } from '../../../lib/memory-v2/indexer'
 import { migrateToFilesAsCarrier } from '../../../lib/memory-v2/migrate-files'
 import { ensureWorkspaceGitignore } from '../../../lib/memory-v2/workspace-gitignore'
 import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
@@ -2772,6 +2772,29 @@ export function registerIpcHandlers(): void {
         return false
       }
     }
+    // Count by artifact type from the derived index (RFC-014: artifacts live in
+    // rp-artifacts/<type>/, possibly per-actor subdirs — counting fixed legacy
+    // dirs reported 0). `readIndex` only reads already-built shards; it never
+    // triggers a full workspace scan, so this stays cheap on the welcome screen.
+    // Fall back to the legacy JSON count for projects not yet opened in a
+    // files-as-carrier build (no index yet).
+    const countByType = (p: string): { papers: number; notes: number; data: number } => {
+      const idx = readIndex(p)
+      if (idx) {
+        let papers = 0, notes = 0, data = 0
+        for (const a of idx) {
+          if (a.type === 'paper') papers++
+          else if (a.type === 'note') notes++
+          else if (a.type === 'data') data++
+        }
+        return { papers, notes, data }
+      }
+      return {
+        papers: countFiles(join(p, PATHS.papers)),
+        notes: countFiles(join(p, PATHS.notes)),
+        data: countFiles(join(p, PATHS.data)),
+      }
+    }
     for (const p of paths || []) {
       if (!p || !existsSync(p)) {
         result[p] = { papers: 0, notes: 0, data: 0, initialized: false, shared: false }
@@ -2779,9 +2802,7 @@ export function registerIpcHandlers(): void {
       }
       const initialized = existsSync(join(p, PATHS.root))
       result[p] = {
-        papers: countFiles(join(p, PATHS.papers)),
-        notes: countFiles(join(p, PATHS.notes)),
-        data: countFiles(join(p, PATHS.data)),
+        ...countByType(p),
         initialized,
         shared: initialized && isShared(p),
       }
