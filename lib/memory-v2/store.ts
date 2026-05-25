@@ -454,8 +454,17 @@ export function resolveArtifactByKey(projectPath: string, key: string, type?: Ar
 }
 
 export function findArtifactById(projectPath: string, artifactId: string): ArtifactFileRecord | null {
-  // RFC-014 §5: resolve via the index. `filePath` is the artifact's primary
-  // backing file (callers use `.artifact`; writes recompute the path).
+  // RFC-014 §5: resolve via the index. `filePath` is the artifact's CANONICAL
+  // backing file — recomputed from the artifact (primaryFileRel), not the path it
+  // was scanned from. This keeps the path a pure function of the artifact
+  // (no stored path; per-actor placement works), with one intentional caveat:
+  // the indexer recognizes managed files ANYWHERE, but mutation always targets
+  // the canonical path. So a managed file the user manually MOVED out of its
+  // canonical location is still READ (scan-anywhere), but on the next edit it
+  // re-materializes at the canonical path (the moved copy is not auto-removed),
+  // and delete targets the canonical path. Treat hand-moved managed artifacts as
+  // read-only until moved back. (Edits that change the canonical path itself —
+  // citeKey/actor/data-location — DO clean up the old file; see updateArtifact.)
   const all = getArtifacts(projectPath)
   const match = all.find(a => a.id === artifactId) ?? all.find(a => a.id.startsWith(artifactId))
   if (!match) return null
@@ -477,12 +486,11 @@ export function updateArtifact(projectPath: string, artifactId: string, patch: U
     updatedAt: nowIso()
   } as Artifact
 
-  // If a data artifact's filePath changed, remove the old sidecar so it doesn't orphan.
-  if (
-    found.artifact.type === 'data' &&
-    typeof patch.filePath === 'string' &&
-    patch.filePath !== found.artifact.filePath
-  ) {
+  // If this edit changes the artifact's canonical backing path — a paper's
+  // citeKey, a data file's location, or the owning actor — remove the OLD file
+  // first so the rename doesn't leave an orphan/duplicate. (The path is a pure
+  // function of the artifact; see findArtifactById.)
+  if (primaryFileRel(found.artifact) !== primaryFileRel(updated)) {
     removeArtifactFile(projectPath, found.artifact)
   }
 

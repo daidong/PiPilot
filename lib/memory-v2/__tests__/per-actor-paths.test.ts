@@ -77,6 +77,27 @@ test('paper files: a legacy <citeKey>.bib (same id) converges to the id-fragment
   }
 })
 
+test('updateArtifact: changing a paper citeKey moves the file and removes the old (no orphan)', () => {
+  const dir = makeProject({ shared: false })
+  try {
+    const p = mkPaper('aaaa1111', 'old2020')
+    writeArtifactToFile(dir, p)
+    rebuildIndex(dir) // make it findable via the index
+    const oldRel = primaryFileRel(p)
+    assert.ok(existsSync(join(dir, oldRel)), 'old citeKey file present')
+
+    const upd = updateArtifact(dir, 'aaaa1111', { citeKey: 'new2021' } as Record<string, unknown>)
+    assert.ok(upd, 'update found the paper')
+    const newRel = primaryFileRel(upd!.artifact)
+    assert.notEqual(oldRel, newRel, 'path changed with the citeKey')
+    assert.ok(existsSync(join(dir, newRel)), 'new citeKey file written')
+    assert.ok(!existsSync(join(dir, oldRel)), 'old citeKey file removed (no orphan)')
+    assert.equal(rebuildIndex(dir).filter(a => a.type === 'paper').length, 1, 'exactly one paper remains')
+  } finally {
+    cleanup(dir)
+  }
+})
+
 test('paper files: a DIFFERENT paper sharing the citeKey is NOT removed (id-guarded)', () => {
   const dir = makeProject({ shared: false })
   try {
