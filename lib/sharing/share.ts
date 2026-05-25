@@ -38,7 +38,7 @@ import {
   isPathBinary,
   mergeNoCommit,
   abortMerge,
-  checkoutSide,
+  resolveMergeSide,
   listUnmergedFiles,
   stagePath,
   commitNoEdit,
@@ -461,7 +461,9 @@ export async function resolveSyncConflict(
 
   for (const r of resolutions) {
     if (r.mode === 'mine' || r.mode === 'theirs') {
-      const co = await checkoutSide(projectPath, r.mode === 'mine' ? 'ours' : 'theirs', r.path)
+      // resolveMergeSide handles modify/delete: if the chosen side deleted the
+      // file, it stages the deletion instead of `checkout --side` (which errors).
+      const co = await resolveMergeSide(projectPath, r.mode === 'mine' ? 'ours' : 'theirs', r.path)
       if (!co.ok) { await abortMerge(projectPath); return { ...base, error: `resolve ${r.path} failed: ${co.stderr}` } }
     } else {
       try {

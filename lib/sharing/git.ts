@@ -146,6 +146,26 @@ export async function checkoutSide(cwd: string, side: 'ours' | 'theirs', relPath
   return git(cwd, ['add', '--', relPath])
 }
 
+/**
+ * Resolve a conflicted path to one side, correctly handling modify/delete: if the
+ * chosen side has no version (it DELETED the file), `git checkout --side` errors
+ * with "path does not have their/our version", so accept the deletion via
+ * `git rm` instead. For ordinary content conflicts (both sides present) this is
+ * exactly {@link checkoutSide}. Stage numbers in an unmerged index: 1=base,
+ * 2=ours, 3=theirs.
+ */
+export async function resolveMergeSide(cwd: string, side: 'ours' | 'theirs', relPath: string): Promise<ExecResult> {
+  const wantStage = side === 'ours' ? '2' : '3'
+  const ls = await git(cwd, ['ls-files', '--unmerged', '--', relPath])
+  const sideHasVersion = ls.ok && ls.stdout.split('\n').some((line) => {
+    const m = line.match(/^\S+\s+\S+\s+(\d)\t/) // "<mode> <sha> <stage>\t<path>"
+    return m?.[1] === wantStage
+  })
+  if (sideHasVersion) return checkoutSide(cwd, side, relPath)
+  // Chosen side deleted the file → stage the deletion (force past the unmerged state).
+  return git(cwd, ['rm', '-f', '--', relPath])
+}
+
 /** Unmerged (conflicted) paths in the current merge state. */
 export async function listUnmergedFiles(cwd: string): Promise<string[]> {
   const r = await git(cwd, ['diff', '--name-only', '--diff-filter=U'])

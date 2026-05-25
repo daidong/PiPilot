@@ -446,6 +446,62 @@ test('conflict round-trip: rebase clash → getConflictDetails → resolveSyncCo
   }
 })
 
+test('conflict round-trip: modify/delete resolves by accepting the deletion (git rm)', async (t) => {
+  if (!(await isGitInstalled())) return t.skip('git not installed')
+  const remote = tmp('rp-md-remote-')
+  const a = tmp('rp-md-a-')
+  const b = tmp('rp-md-b-')
+  const verify = tmp('rp-md-v-')
+  const cfg = async (dir: string) => {
+    await runCommand('git', ['config', 'user.email', 'test@example.com'], { cwd: dir })
+    await runCommand('git', ['config', 'user.name', 'Test'], { cwd: dir })
+  }
+  try {
+    const bare = await runCommand('git', ['init', '--bare', '-b', 'main', remote])
+    if (!bare.ok) return t.skip('git init --bare unsupported')
+
+    await gitInit(a); await cfg(a)
+    writeFileSync(join(a, 'shared.txt'), 'base\n')
+    await commitAll(a, 'base')
+    await addRemote(a, remote)
+    await pushSetUpstream(a)
+
+    const clone = await runCommand('git', ['clone', remote, b])
+    assert.ok(clone.ok, `clone: ${clone.stderr}`)
+    await cfg(b)
+
+    // A DELETES the file and pushes; B MODIFIES the same file → modify/delete.
+    rmSync(join(a, 'shared.txt'))
+    await commitAll(a, 'A delete')
+    const pa = await push(a)
+    assert.ok(pa.ok, `A push: ${pa.raw.stderr}`)
+    writeFileSync(join(b, 'shared.txt'), 'B version\n')
+    await commitAll(b, 'B edit')
+
+    const sync = await syncProject(b)
+    assert.equal(sync.conflict, true, 'modify/delete conflict detected')
+    assert.ok(sync.conflictedFiles.includes('shared.txt'))
+
+    const details = await getConflictDetails(b)
+    const cf = details.find((d) => d.path === 'shared.txt')
+    assert.ok(cf, 'in conflict details')
+    assert.equal(cf!.theirs, null, 'deleted on the incoming (theirs) side')
+    assert.match(cf!.mine ?? '', /B version/)
+
+    // Accept the deletion — pick "theirs" (the side that removed it). This is the
+    // case that used to fail: `checkout --theirs` has no version → now `git rm`.
+    const res = await resolveSyncConflict(b, [{ path: 'shared.txt', mode: 'theirs' }])
+    assert.ok(res.ok, `resolve: ${res.error}`)
+    assert.equal(res.pushed, true)
+    assert.ok(!existsSync(join(b, 'shared.txt')), 'file removed locally')
+
+    await runCommand('git', ['clone', remote, verify])
+    assert.ok(!existsSync(join(verify, 'shared.txt')), 'deletion landed on remote')
+  } finally {
+    for (const d of [remote, a, b, verify]) rmSync(d, { recursive: true, force: true })
+  }
+})
+
 test('listLargeChangedFiles: flags only files over the threshold', async (t) => {
   if (!(await isGitInstalled())) return t.skip('git not installed')
   const work = tmp('rp-lfs-')
