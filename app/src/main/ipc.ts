@@ -28,7 +28,7 @@ import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readE
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
-import { rebuildIndex, readIndex, isIndexBuilt } from '../../../lib/memory-v2/indexer'
+import { rebuildIndex, readIndex, isIndexBuilt, WALK_SKIP_DIRS } from '../../../lib/memory-v2/indexer'
 import { migrateToFilesAsCarrier } from '../../../lib/memory-v2/migrate-files'
 import { ensureWorkspaceGitignore } from '../../../lib/memory-v2/workspace-gitignore'
 import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
@@ -2536,7 +2536,9 @@ export function registerIpcHandlers(): void {
   })
 
   // ─── Filesystem watcher for auto-refreshing the file tree ──────────────
-  const IGNORED_SEGMENTS = new Set(['node_modules', '.git', '.research-pilot'])
+  // Same skip-set the indexer walk uses — a change inside a build/venv/cache dir
+  // is never worth a tree refresh or a reindex.
+  const IGNORED_SEGMENTS = WALK_SKIP_DIRS
   // Editor temp files / OS metadata — saving a file in VS Code, vim, etc.
   // generates a flurry of these. Filtering them at the watcher cuts the
   // refresh storm at the source.

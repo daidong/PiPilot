@@ -31,8 +31,33 @@ import {
 const INDEX_DIR = join(PATHS.root, 'index')
 const INDEX_BUILT_MARKER = '.built'
 
-/** Directories never descended into during the new-format workspace walk. */
-const WALK_SKIP_DIRS = new Set(['.git', 'node_modules', '.research-pilot', '.hg', '.svn'])
+/**
+ * Directories never descended into during the workspace walk (and, reused by the
+ * fs-watcher, never worth a reindex). These are VCS / dependency / virtualenv /
+ * build / cache / IDE dirs — large, tool-generated, and never holders of managed
+ * artifacts (managed `.md` carry rp.id front-matter; papers live in
+ * `rp-artifacts/`; data sidecars sit beside the user's data files, which live in
+ * data/ not build/). Skipping them keeps the scan from ballooning on real
+ * research repos with .venv, node_modules, datasets-as-build-output, etc.
+ */
+export const WALK_SKIP_DIRS = new Set([
+  // VCS
+  '.git', '.hg', '.svn',
+  // JS / deps
+  'node_modules',
+  // Python envs & caches
+  '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
+  '.ipynb_checkpoints', '.tox',
+  // Build / framework output
+  'dist', 'build', 'out', 'target', '.next', '.nuxt', '.svelte-kit', '.output',
+  '.turbo', '.parcel-cache',
+  // Caches / tooling
+  '.cache', '.gradle', '.terraform', 'coverage',
+  // IDE
+  '.idea', '.vscode',
+  // Research Pilot's own metadata (shared only via project.json)
+  '.research-pilot',
+])
 
 function toPosixRel(projectPath: string, abs: string): string {
   return relative(projectPath, abs).split(sep).join('/')

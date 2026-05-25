@@ -42,6 +42,29 @@ function legacyNote(id: string, title: string): NoteArtifact {
   }
 }
 
+test('scan skips heavy/tool dirs — managed files in .venv/node_modules/build are ignored', () => {
+  const dir = tmpProject()
+  try {
+    const seed = (sub: string, id: string) => {
+      const d = join(dir, sub)
+      mkdirSync(d, { recursive: true })
+      writeFileSync(join(d, `${id}.md`), markdownArtifactToText(legacyNote(id, id)))
+    }
+    seed('.venv/lib', 'venv-note')
+    seed('node_modules/pkg', 'nm-note')
+    seed('build', 'build-note')
+    seed('rp-artifacts/notes', 'real') // a normal location
+
+    const ids = scanWorkspaceArtifacts(dir).map(a => a.id)
+    assert.ok(ids.includes('real'), 'a note in a normal dir is indexed')
+    assert.ok(!ids.includes('venv-note'), '.venv skipped')
+    assert.ok(!ids.includes('nm-note'), 'node_modules skipped')
+    assert.ok(!ids.includes('build-note'), 'build skipped')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('scan finds legacy JSON artifacts (read parity)', () => {
   const proj = tmpProject()
   try {
