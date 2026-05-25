@@ -32,6 +32,8 @@ import { useSessionStore } from '../../stores/session-store'
 import { useMemoryStore, type MemoryType, type MemoryItem } from '../../stores/memory-store'
 import { WorkspaceTree } from './WorkspaceTree'
 import { useSkillStore, type SkillManifest } from '../../stores/skill-store'
+import { useSharingStore } from '../../stores/sharing-store'
+import { authorColor } from '../../utils/author-color'
 
 function HoverPreview({
   entity,
@@ -108,6 +110,12 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
   const closePreview = useUIStore((s) => s.closePreview)
   const previewEntity = useUIStore((s) => s.previewEntity)
   const requestScrollTo = useChatStore((s) => s.requestScrollTo)
+  // RFC-013 attribution: a leading author dot, shown only in shared projects.
+  // "You" is the teal accent; collaborators get a stable derived color so
+  // *their* work is what pops when scanning. Dot lives in the left gutter so a
+  // long title never clips it (unlike the former trailing text chip).
+  const shared = useSharingStore((s) => s.status?.shared ?? false)
+  const myActorId = useSharingStore((s) => s.status?.me?.id)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showHover, setShowHover] = useState(false)
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null)
@@ -117,6 +125,8 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
   const confirmResetRef = useRef<number | null>(null)
 
   const messageId = entity.provenance?.messageId as string | undefined
+  const actor = entity.provenance?.actor
+  const actorIsMe = !!actor && !!myActorId && actor.id === myActorId
 
   const cancelHide = () => {
     if (hideTimeoutRef.current) {
@@ -180,6 +190,24 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
             onDelete={handleDelete}
             confirmDelete={confirmDelete}
           />
+        )}
+        {shared && (
+          actor ? (
+            <span
+              role="img"
+              className="shrink-0 w-[7px] h-[7px] rounded-full"
+              // "You" is a quiet neutral grey (not the teal accent): your own
+              // work recedes so collaborators' colored dots are what pops, and
+              // the brand accent isn't diluted across every row you authored.
+              style={{ backgroundColor: actorIsMe ? 'var(--color-text-muted)' : authorColor(actor.id) }}
+              title={actorIsMe ? `${actor.displayName} (you)` : `Created by ${actor.displayName}`}
+              aria-label={actorIsMe ? `Created by you, ${actor.displayName}` : `Created by ${actor.displayName}`}
+            />
+          ) : (
+            // Shared project, but this artifact predates per-actor stamping —
+            // hold the gutter slot so titles stay aligned with attributed rows.
+            <span className="shrink-0 w-[7px]" aria-hidden="true" />
+          )
         )}
         {isEnriching ? (
           <Loader2 size={10} className="shrink-0 t-text-accent-soft animate-spin" />

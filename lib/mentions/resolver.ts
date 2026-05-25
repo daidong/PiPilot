@@ -5,10 +5,11 @@
  * reading files, or fetching URLs.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs'
-import { join, resolve } from 'path'
+import { existsSync, readFileSync } from 'fs'
+import { resolve } from 'path'
 import type { MentionRef } from './parser.js'
-import { PATHS, Entity, Note, Literature, DataAttachment } from '../types.js'
+import { Entity, Note, Literature, DataAttachment, type ArtifactType } from '../types.js'
+import { resolveArtifactByKey } from '../memory-v2/store.js'
 import { getCachedMarkdown } from './document-cache.js'
 
 const MAX_CONTENT_BYTES = 10 * 1024 // 10KB cap
@@ -36,11 +37,11 @@ async function resolveOne(ref: MentionRef, projectPath: string): Promise<Resolve
   try {
     switch (ref.type) {
       case 'note':
-        return resolveEntity(ref, join(projectPath, PATHS.notes), 'note', projectPath)
+        return resolveEntity(ref, 'note', projectPath)
       case 'paper':
-        return resolveEntity(ref, join(projectPath, PATHS.papers), 'paper', projectPath)
+        return resolveEntity(ref, 'paper', projectPath)
       case 'data':
-        return resolveEntity(ref, join(projectPath, PATHS.data), 'data', projectPath)
+        return resolveEntity(ref, 'data', projectPath)
       case 'file':
         return resolveFile(ref, projectPath)
       case 'url':
@@ -54,51 +55,25 @@ async function resolveOne(ref: MentionRef, projectPath: string): Promise<Resolve
 }
 
 /**
- * Resolve an entity mention by scanning JSON files in the directory.
- * Matches by: exact id, id prefix, citeKey (paper), title/name substring.
+ * Resolve an entity mention via the artifact index (RFC-014 §5.4 — replaces the
+ * previous direct JSON-directory scan). Matching (exact id → id prefix → paper
+ * citeKey → title substring) lives in `resolveArtifactByKey`.
  */
 function resolveEntity(
   ref: MentionRef,
-  dir: string,
-  entityType: string,
+  entityType: ArtifactType,
   projectPath: string
 ): ResolvedMention {
-  if (!existsSync(dir)) {
-    return { ref, label: ref.raw, content: '', error: `No ${entityType} directory found` }
+  const entity = resolveArtifactByKey(projectPath, ref.key, entityType) as Entity | null
+  if (!entity) {
+    return { ref, label: ref.raw, content: '', error: `Could not resolve: ${ref.raw}` }
   }
-
-  const files = readdirSync(dir).filter(f => f.endsWith('.json'))
-  const key = ref.key.toLowerCase()
-
-  for (const file of files) {
-    try {
-      const raw = readFileSync(join(dir, file), 'utf-8')
-      const entity = JSON.parse(raw) as Entity
-
-      // Match by exact id
-      if (entity.id === ref.key || entity.id.toLowerCase().startsWith(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
-      }
-
-      // Match by citeKey for papers
-      if (entity.type === 'paper') {
-        const lit = entity as Literature
-        if (lit.citeKey.toLowerCase() === key || lit.citeKey.toLowerCase().startsWith(key)) {
-          return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
-        }
-      }
-
-      // Match by title/name substring
-      const name = entityName(entity).toLowerCase()
-      if (name.includes(key)) {
-        return { ref, label: entityLabel(entity), content: formatEntityContent(entity, projectPath), entityId: entity.id }
-      }
-    } catch {
-      // skip invalid files
-    }
+  return {
+    ref,
+    label: entityLabel(entity),
+    content: formatEntityContent(entity, projectPath),
+    entityId: entity.id
   }
-
-  return { ref, label: ref.raw, content: '', error: `Could not resolve: ${ref.raw}` }
 }
 
 // File extensions that require document conversion (binary formats)

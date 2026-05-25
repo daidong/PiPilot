@@ -41,6 +41,7 @@ import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
 import { AwsCredentialProvider } from '../aws/credentials.js'
+import { buildSharingPromptClause } from '../sharing/index.js'
 import { runSubLlmText } from '../telemetry/sub-llm.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
@@ -705,8 +706,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
   // Environment guidance is injected asynchronously AFTER agent creation (non-blocking)
   const skillsCatalog = buildSkillsCatalogPrompt(skills)
 
+  // RFC-013 §9: soft per-actor file-placement steer — only present when the
+  // project is shared (empty string otherwise, so solo behavior is unchanged).
+  const sharingClause = buildSharingPromptClause(projectPath)
+
   const baseSystemPrompt = SYSTEM_PROMPT
     + (skillsCatalog ? '\n\n' + skillsCatalog : '')
+    + (sharingClause ? '\n\n' + sharingClause : '')
 
   // ── Context compaction state ──
   // Tracks the summary of compacted (discarded) messages so iterative

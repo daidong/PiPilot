@@ -295,5 +295,5 @@ const NON_REASONING_KEEP_RECENT_TOKENS    = 30_000
 
 - `docs/spec/telemetry-trace.md` §6.2, §6.8, §6.9 — compaction-related
   telemetry semantics
-- `lib/docs/rfc/` — there is no compaction RFC; the design grew
+- `docs/rfc/` — there is no compaction RFC; the design grew
   organically alongside pi-mono's `transformContext` hook

@@ -105,4 +105,4 @@ Paper Wiki follows the project's design axiom:
 
 Every failure path degrades to "wiki doesn't exist" behavior. That's why it's disabled by default and isolated from the coordinator's critical path.
 
-For the full design, see [RFC-003: Global Paper Wiki](https://github.com/daidong/PiPilot/blob/main/lib/docs/rfc/003-global-paper-wiki.md) and [RFC-005: Wiki Sidecar and Retrieval](https://github.com/daidong/PiPilot/blob/main/lib/docs/rfc/005-wiki-sidecar-and-retrieval.md).
+For the full design, see [RFC-003: Global Paper Wiki](https://github.com/daidong/PiPilot/blob/main/docs/rfc/003-global-paper-wiki.md) and [RFC-005: Wiki Sidecar and Retrieval](https://github.com/daidong/PiPilot/blob/main/docs/rfc/005-wiki-sidecar-and-retrieval.md).

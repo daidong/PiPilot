@@ -181,6 +181,10 @@ function toKey(relativePath: string): string {
   return relativePath || '__root__'
 }
 
+function hasLoadedParent(byParent: Record<string, FileTreeNode[]>, parentKey: string): boolean {
+  return Object.prototype.hasOwnProperty.call(byParent, parentKey)
+}
+
 function normalizePath(path: string): string {
   return path.replace(/\\/g, '/')
 }
@@ -272,7 +276,6 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
     node, depth, isExpanded, isActive, isDropTarget, isRenaming,
     confirmTrash, renameValue, highlightQuery, handlersRef, renameInputRef
   } = props
-  const h = handlersRef.current
   // Per-extension icon for files; directory icon/tint encodes expand state.
   const fileIconInfo = node.type === 'file' ? getFileIcon(node.name) : null
   // Indent guides: a vertical 1px line every 14px in the row's left padding.
@@ -305,17 +308,20 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
             : 't-bg-hover t-text-secondary'
       }`}
       style={guideStyle}
-      onClick={() => (node.type === 'directory' ? h.toggleExpand(node) : h.openFile(node))}
-      onContextMenu={(e) => h.handleContextMenu(e, node)}
+      onClick={() => {
+        const h = handlersRef.current
+        node.type === 'directory' ? h.toggleExpand(node) : h.openFile(node)
+      }}
+      onContextMenu={(e) => handlersRef.current.handleContextMenu(e, node)}
       title={node.relativePath}
-      onDragOver={(e) => h.handleRowDragOver(e, node)}
-      onDragLeave={h.handleRowDragLeave}
-      onDrop={(e) => h.handleRowDrop(e, node)}
+      onDragOver={(e) => handlersRef.current.handleRowDragOver(e, node)}
+      onDragLeave={(e) => handlersRef.current.handleRowDragLeave(e)}
+      onDrop={(e) => handlersRef.current.handleRowDrop(e, node)}
     >
       {node.type === 'directory' ? (
         <button
           className="shrink-0 t-text-muted"
-          onClick={(e) => { e.stopPropagation(); h.toggleExpand(node) }}
+          onClick={(e) => { e.stopPropagation(); handlersRef.current.toggleExpand(node) }}
         >
           <ChevronRight
             size={12}
@@ -341,9 +347,9 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
         <input
           ref={renameInputRef}
           value={renameValue}
-          onChange={(e) => h.setRenameValue(e.target.value)}
-          onKeyDown={h.handleRenameKeyDown}
-          onBlur={() => h.commitRename()}
+          onChange={(e) => handlersRef.current.setRenameValue(e.target.value)}
+          onKeyDown={(e) => handlersRef.current.handleRenameKeyDown(e)}
+          onBlur={() => handlersRef.current.commitRename()}
           onClick={(e) => e.stopPropagation()}
           className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
         />
@@ -358,14 +364,14 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
             <button
               className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
               title="Preview file"
-              onClick={(e) => { e.stopPropagation(); h.openFile(node) }}
+              onClick={(e) => { e.stopPropagation(); handlersRef.current.openFile(node) }}
             >
               <Eye size={11} />
             </button>
             <button
               className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
               title="Create Artifact from file"
-              onClick={(e) => { e.stopPropagation(); h.createArtifact(node) }}
+              onClick={(e) => { e.stopPropagation(); handlersRef.current.createArtifact(node) }}
             >
               <File size={11} />
             </button>
@@ -378,7 +384,7 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
               : 't-text-error-soft/70 hover:t-text-error'
           }`}
           title={confirmTrash ? 'Click again to confirm' : 'Move to trash'}
-          onClick={(e) => { e.stopPropagation(); h.handleTrashClick(node) }}
+          onClick={(e) => { e.stopPropagation(); handlersRef.current.handleTrashClick(node) }}
         >
           <Trash2 size={11} />
         </button>
@@ -424,7 +430,9 @@ export function WorkspaceTree() {
   const refreshEntities = useEntityStore((s) => s.refreshAll)
 
   const [query, setQuery] = useState('')
-  const [showIgnored, setShowIgnored] = useState(true)
+  // Default OFF: hide dotfiles + .gitignore matches so the tree shows just the
+  // user's real working files. Toggle on to reveal .git/.research-pilot/etc.
+  const [showIgnored, setShowIgnored] = useState(false)
   const [searchResults, setSearchResults] = useState<FileTreeNode[]>([])
   const [searching, setSearching] = useState(false)
   const expandedStorageKey = useMemo(() => `rp:file-tree:expanded:${projectPath || 'none'}`, [projectPath])
@@ -548,7 +556,9 @@ export function WorkspaceTree() {
     opts: { silent?: boolean } = {}
   ) => {
     const parentKey = toKey(relativePath)
-    if (!opts.silent) setParentLoading(parentKey, true)
+    const hadChildren = hasLoadedParent(byParentRef.current, parentKey)
+    const showLoading = !opts.silent || !hadChildren
+    if (showLoading) setParentLoading(parentKey, true)
     try {
       const children: FileTreeNode[] = await api.listTree({
         relativePath,
@@ -574,7 +584,7 @@ export function WorkspaceTree() {
       console.error('Failed to load workspace tree', err)
       showNotice('Could not load files. Try refreshing.')
     } finally {
-      if (!opts.silent) setParentLoading(parentKey, false)
+      if (showLoading) setParentLoading(parentKey, false)
     }
   }, [setParentLoading, showIgnored, showNotice])
 
@@ -585,6 +595,12 @@ export function WorkspaceTree() {
   // random refresh" feel.
   const expandedRef = useRef(expanded)
   useEffect(() => { expandedRef.current = expanded }, [expanded])
+  const byParentRef = useRef(tree.byParent)
+  useEffect(() => { byParentRef.current = tree.byParent }, [tree.byParent])
+  const loadingParentsRef = useRef(tree.loadingParents)
+  useEffect(() => { loadingParentsRef.current = tree.loadingParents }, [tree.loadingParents])
+  const autoLoadAttemptedRef = useRef<Set<string>>(new Set())
+  const skipNextExpandedPersistRef = useRef<string | null>(null)
 
   // Auto-refresh when agent or external editor modifies files. Targeted:
   // when the watcher tells us which parent dirs changed, we only reload
@@ -660,18 +676,43 @@ export function WorkspaceTree() {
 
   // When projectPath changes, reload expanded state and tree data
   useEffect(() => {
+    autoLoadAttemptedRef.current.clear()
+    skipNextExpandedPersistRef.current = expandedStorageKey
     let restored = new Set<string>()
     try {
       const raw = localStorage.getItem(expandedStorageKey)
       if (raw) restored = new Set(JSON.parse(raw) as string[])
     } catch { /* ignore */ }
     setExpanded(restored)
+    setTree({ byParent: {}, loadingParents: new Set() })
     const dirs = ['', ...Array.from(restored)]
     void Promise.all(dirs.map((dir) => loadChildren(dir)))
   }, [expandedStorageKey, loadChildren])
 
+  // Re-establish the invariant that every expanded directory has either
+  // loaded children or an in-flight load. Persisted expansion state can outlive
+  // the in-memory child cache, especially after opening an existing project.
+  useEffect(() => {
+    const missingDirs = Array.from(expanded).filter((dir) => {
+      const parentKey = toKey(dir)
+      return (
+        !hasLoadedParent(tree.byParent, parentKey) &&
+        !tree.loadingParents.has(parentKey) &&
+        !autoLoadAttemptedRef.current.has(parentKey)
+      )
+    })
+    if (missingDirs.length === 0) return
+
+    for (const dir of missingDirs) autoLoadAttemptedRef.current.add(toKey(dir))
+    void Promise.all(missingDirs.map((dir) => loadChildren(dir)))
+  }, [expanded, tree.byParent, tree.loadingParents, loadChildren])
+
   // Persist expanded state to localStorage whenever it changes
   useEffect(() => {
+    if (skipNextExpandedPersistRef.current === expandedStorageKey) {
+      skipNextExpandedPersistRef.current = null
+      return
+    }
     localStorage.setItem(expandedStorageKey, JSON.stringify(Array.from(expanded)))
   }, [expanded, expandedStorageKey])
 
@@ -721,20 +762,32 @@ export function WorkspaceTree() {
     setScrollTop(0)
   }, [query, showIgnored, projectPath])
 
-  const toggleExpand = useCallback(async (node: FileTreeNode) => {
+  const toggleExpand = useCallback((node: FileTreeNode) => {
     if (node.type !== 'directory') return
-    const next = new Set(expanded)
-    if (next.has(node.relativePath)) {
-      next.delete(node.relativePath)
-      setExpanded(next)
-      return
+    let shouldLoad = false
+    setExpanded((prev) => {
+      const parentKey = toKey(node.relativePath)
+      const hasChildren = hasLoadedParent(byParentRef.current, parentKey)
+      const isLoading = loadingParentsRef.current.has(parentKey)
+      const next = new Set(prev)
+      if (next.has(node.relativePath)) {
+        // If restored state says "expanded" but the child cache is missing,
+        // treat the click as a repair/load request instead of collapsing.
+        if (!hasChildren && !isLoading) {
+          shouldLoad = true
+          return prev
+        }
+        next.delete(node.relativePath)
+        return next
+      }
+      next.add(node.relativePath)
+      shouldLoad = !hasChildren && !isLoading
+      return next
+    })
+    if (shouldLoad) {
+      void loadChildren(node.relativePath)
     }
-    next.add(node.relativePath)
-    setExpanded(next)
-    if (!tree.byParent[toKey(node.relativePath)]) {
-      await loadChildren(node.relativePath)
-    }
-  }, [expanded, tree.byParent, loadChildren])
+  }, [loadChildren])
 
   const openFile = useCallback((node: FileTreeNode) => {
     if (node.type !== 'file') return
@@ -1124,7 +1177,7 @@ export function WorkspaceTree() {
             className="w-full bg-transparent text-xs outline-none t-focus-ring t-text"
           />
         </div>
-        <label className="mt-1 flex items-center gap-1 text-[11px] t-text-muted cursor-pointer">
+        <label className="mt-1 flex items-center gap-1 text-[11px] t-text-secondary cursor-pointer">
           <input
             type="checkbox"
             checked={showIgnored}
@@ -1162,7 +1215,22 @@ export function WorkspaceTree() {
         ) : query.trim() && rows.length === 0 ? (
           <p className="px-2 py-2 text-xs t-text-muted">No files match "{query}".</p>
         ) : !query.trim() && rootNodes.length === 0 ? (
-          <p className="px-2 py-2 text-xs t-text-muted">No visible files in workspace root.</p>
+          <div className="px-2 py-2 text-xs t-text-muted">
+            {showIgnored ? (
+              'This folder is empty.'
+            ) : (
+              <>
+                No visible files — ignored files are hidden.{' '}
+                <button
+                  type="button"
+                  onClick={() => setShowIgnored(true)}
+                  className="t-text-accent hover:underline t-focus-ring rounded"
+                >
+                  Show ignored files
+                </button>
+              </>
+            )}
+          </div>
         ) : (
           <div>
             {/* Inline create input at root level */}

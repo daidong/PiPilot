@@ -28,7 +28,29 @@ import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readE
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
+import { rebuildIndex, readIndex, isIndexBuilt, WALK_SKIP_DIRS } from '../../../lib/memory-v2/indexer'
+import { migrateToFilesAsCarrier } from '../../../lib/memory-v2/migrate-files'
+import { ensureWorkspaceGitignore } from '../../../lib/memory-v2/workspace-gitignore'
 import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
+import {
+  checkSharingPreflight,
+  getSharingStatus,
+  getLocalSyncState,
+  shareProject,
+  syncProject,
+  pollRemote,
+  inviteMember,
+  removeMember,
+  acceptInvite,
+  listInvitations,
+  getConflictDetails,
+  resolveSyncConflict,
+  buildAiMergePrompt,
+  createSnapshot,
+  type ShareOptions,
+  type ConflictFile,
+  type ConflictResolution,
+} from '../../../lib/sharing/index'
 import {
   migrateAgentMemoryToFile,
   listMemoryFiles,
@@ -42,7 +64,7 @@ import {
   type MemoryType
 } from '../../../lib/memory/memory-utils'
 import { createRealtimeBuffer, type RealtimeBuffer } from './realtime-buffer'
-import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger, type LiveSpanSummary } from '../../../lib/telemetry/index'
+import { PipilotTracer, migrateProjectConfig, runSubLlmText, loadTraceSnapshot, createTracingStateLogger, readTelemetryPrefs, writeTelemetryPrefs, type LiveSpanSummary } from '../../../lib/telemetry/index'
 import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../lib/ledger/index'
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
@@ -387,6 +409,29 @@ function createArtifactFromWorkspaceFile(state: WindowRuntimeState, filePath: st
   }, { sessionId, projectPath })
 }
 
+/**
+ * Re-derive the artifact index OFF the project-open critical path. The Library
+ * opens instantly on the cached shards; this then picks up any files changed
+ * while the app was closed and nudges the renderer to re-read (same signal the
+ * fs-watcher uses). The short delay lets the window paint the cached state
+ * first; repeated calls coalesce.
+ */
+let bgReindexTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleBackgroundReindex(path: string): void {
+  if (bgReindexTimer) clearTimeout(bgReindexTimer)
+  bgReindexTimer = setTimeout(() => {
+    bgReindexTimer = null
+    try {
+      rebuildIndex(path)
+      for (const win of BrowserWindow.getAllWindows()) {
+        safeSend(win, 'fs:external-change', { parents: null })
+      }
+    } catch {
+      /* derived cache — best effort */
+    }
+  }, 400)
+}
+
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
   const dirs = [
@@ -433,6 +478,31 @@ function initializeProject(path: string): void {
   const migration = migrateLegacyArtifacts(path)
   if (migration.updatedFiles > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
     console.log(`[ResearchPilot] migrated legacy artifacts: files=${migration.updatedFiles}, literature->paper=${migration.convertedLiteratureType}, data.name removed=${migration.removedDataNameField}`)
+  }
+
+  // RFC-014 files-as-carrier: convert legacy artifact JSON to workspace files
+  // (one-time, backed up to artifacts-legacy/), (re)build the derived index, and
+  // keep the index + backup out of git. All best-effort — never block open.
+  try {
+    const filesMig = migrateToFilesAsCarrier(path)
+    if (!filesMig.skipped && filesMig.migrated > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
+      console.log(`[ResearchPilot] files-as-carrier migration: ${filesMig.migrated} artifact(s) → files`)
+    }
+    // Index strategy: a full workspace scan grows with the project, so when a
+    // built index already exists (and the migration didn't just rewrite files)
+    // open INSTANTLY on the cached shards and re-derive in the background to
+    // catch edits made while the app was closed. Only block on a synchronous
+    // scan when there's no index yet (first open) or the migration changed files.
+    if (isIndexBuilt(path) && (filesMig.skipped || filesMig.migrated === 0)) {
+      scheduleBackgroundReindex(path)
+    } else {
+      rebuildIndex(path)
+    }
+    ensureWorkspaceGitignore(path)
+  } catch (err) {
+    if (process.env.RESEARCH_COPILOT_DEBUG) {
+      console.warn('[ResearchPilot] artifact index/migration init failed:', err)
+    }
   }
 
   // Telemetry-trace v0.10: ensure traces/blobs dirs + run ProjectConfig migration
@@ -904,6 +974,64 @@ export async function destroyAllCoordinators(): Promise<void> {
     Promise.all(promises),
     new Promise<void>(resolve => setTimeout(resolve, 8000)),
   ])
+}
+
+/**
+ * One-off LLM text call from the main process (used by RFC-013 AI-merge).
+ * Resolves the window's current model + auth the same way the report / wiki
+ * agents do (subscription token refresh or API key).
+ */
+async function runMainCallLlm(
+  state: WindowRuntimeState,
+  system: string,
+  user: string,
+  purpose: string
+): Promise<string> {
+  const modelStr = state.currentModel
+  const auth = resolveCoordinatorAuth(modelStr)
+  const { getModel: piGetModel } = await import('@mariozechner/pi-ai')
+  const [rawProvider, modelId] = modelStr.split(':')
+  const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const piModel = piGetModel(piProvider as any, modelId)
+
+  let resolveApiKey: () => Promise<string>
+  if (auth.authMode === 'subscription' && auth.piProvider === 'anthropic-sub') {
+    resolveApiKey = async () => {
+      const creds = loadAnthropicSubCredentials()
+      if (!creds) throw new Error('Claude subscription credentials not found.')
+      if (creds.expires < Date.now() + 60_000) {
+        const { refreshAnthropicToken } = await import('@mariozechner/pi-ai/oauth')
+        const fresh = await refreshAnthropicToken(creds.refresh)
+        saveAnthropicSubCredentials(fresh)
+        return fresh.access
+      }
+      return creds.access
+    }
+  } else if (auth.authMode === 'subscription') {
+    resolveApiKey = async () => {
+      const creds = loadCodexCredentials()
+      if (!creds) throw new Error('Codex credentials not found.')
+      if (creds.expires < Date.now() + 60_000) {
+        const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth')
+        const fresh = await refreshOpenAICodexToken(creds.refresh)
+        saveCodexCredentials(fresh)
+        return fresh.access
+      }
+      return creds.access
+    }
+  } else {
+    resolveApiKey = async () => auth.apiKey
+  }
+  const apiKey = await resolveApiKey()
+  return runSubLlmText({
+    model: piModel as unknown as Parameters<typeof runSubLlmText>[0]['model'],
+    systemPrompt: system,
+    userContent: user,
+    apiKey,
+    purpose,
+    tracer: state.tracer ?? null,
+  })
 }
 
 export function registerIpcHandlers(): void {
@@ -2101,11 +2229,11 @@ export function registerIpcHandlers(): void {
     try {
       const projectFile = join(state.projectPath, PATHS.project)
       const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
-      // Defensive default: 'disabled' matches the new opt-in policy
-      // (see lib/telemetry/migration.ts). Migration normally fills this in,
-      // so the fallback only fires for malformed configs.
-      const tracingMode = config.telemetry?.tracingMode ?? 'disabled'
-      const bufferCapacity = config.telemetry?.bufferCapacity ?? 1024
+      // Schema v2: telemetry config lives in the LOCAL preferences.json, not the
+      // shared project.json (RFC-013). Default 'disabled' matches opt-in policy.
+      const tp = readTelemetryPrefs(state.projectPath)
+      const tracingMode = tp.tracingMode
+      const bufferCapacity = tp.bufferCapacity
       // Storage footprint: walk the filesystem under .research-pilot/ for every
       // telemetry-owned file/dir per spec §5+§8. This is the honest "what's on
       // disk" answer — includes pre-existing traces from before live readout,
@@ -2160,13 +2288,10 @@ export function registerIpcHandlers(): void {
     async ({ state }, mode: 'enabled' | 'disabled') => {
       if (!state.projectPath) return { success: false, error: 'no project' }
       try {
-        const projectFile = join(state.projectPath, PATHS.project)
-        const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
-        config.telemetry = {
-          tracingMode: mode,
-          bufferCapacity: config.telemetry?.bufferCapacity ?? 1024
-        }
-        writeFileSync(projectFile, JSON.stringify(config, null, 2))
+        // Schema v2: persist to LOCAL preferences.json (RFC-013), not the shared
+        // project.json — telemetry on/off is a per-member choice that must never
+        // propagate via sync.
+        writeTelemetryPrefs(state.projectPath, { tracingMode: mode })
         // Apply at runtime: drain queue or rebuild tracer on toggle.
         if (state.tracer) {
           if (mode === 'disabled') {
@@ -2411,7 +2536,9 @@ export function registerIpcHandlers(): void {
   })
 
   // ─── Filesystem watcher for auto-refreshing the file tree ──────────────
-  const IGNORED_SEGMENTS = new Set(['node_modules', '.git', '.research-pilot'])
+  // Same skip-set the indexer walk uses — a change inside a build/venv/cache dir
+  // is never worth a tree refresh or a reindex.
+  const IGNORED_SEGMENTS = WALK_SKIP_DIRS
   // Editor temp files / OS metadata — saving a file in VS Code, vim, etc.
   // generates a flurry of these. Filtering them at the watcher cuts the
   // refresh storm at the source.
@@ -2472,6 +2599,15 @@ export function registerIpcHandlers(): void {
             : { parents: Array.from(pendingParents) }
           pendingParents.clear()
           sawUnknownParent = false
+          // RFC-014: re-derive the artifact index so direct file edits (the
+          // agent's edit/write tools, an external editor) reflect in the Library.
+          // Our own store writes keep the index fresh via upsert; this covers the
+          // out-of-band edits. Best-effort.
+          try {
+            if (state.projectPath) rebuildIndex(state.projectPath)
+          } catch {
+            /* index is a derived cache; ignore */
+          }
           safeSend(win, 'fs:external-change', payload)
         }, 500)
       })
@@ -2506,7 +2642,10 @@ export function registerIpcHandlers(): void {
     const projectFile = join(projectPath, PATHS.project)
     if (!existsSync(projectFile)) return null
     const config = JSON.parse(readFileSync(projectFile, 'utf8')) as ProjectConfig
-    if (config.telemetry?.tracingMode === 'disabled') return null
+    // Schema v2: tracingMode/bufferCapacity come from the LOCAL preferences.json
+    // (RFC-013). project.json still owns the shared project id.
+    const tp = readTelemetryPrefs(projectPath)
+    if (tp.tracingMode === 'disabled') return null
     const projectId = config.id ?? 'unknown'
     const serviceVersion = app.getVersion()
     return new PipilotTracer({
@@ -2515,7 +2654,7 @@ export function registerIpcHandlers(): void {
       appBuildCommit: process.env.RESEARCH_COPILOT_BUILD_COMMIT ?? 'dev',
       projectId,
       sessionId,
-      bufferCapacity: config.telemetry?.bufferCapacity ?? 1024
+      bufferCapacity: tp.bufferCapacity
     })
   }
 
@@ -2553,8 +2692,8 @@ export function registerIpcHandlers(): void {
     state.sessionId = loadOrCreateSessionId(PATHS.root, state.projectPath)
 
     // Telemetry-trace bootstrap (P1 §3.2). Builds a per-window PipilotTracer
-    // tied to this project. Reads tracingMode from project.json (set by
-    // migrateProjectConfig in initializeProject); defaults to 'enabled'.
+    // tied to this project. Reads tracingMode from the local preferences.json
+    // (schema v2, RFC-013); defaults to 'disabled' (opt-in).
     state.tracer = await createTracerForProject(state.projectPath, state.sessionId).catch((err) => {
       if (process.env.RESEARCH_COPILOT_DEBUG) {
         console.warn('[ResearchPilot] tracer bootstrap failed:', err)
@@ -2629,6 +2768,110 @@ export function registerIpcHandlers(): void {
     return openProjectFolder(state, win, projectPath)
   })
 
+  // ─── RFC-013 Shared Workspaces ──────────────────────────────────────────
+  // All sharing actions shell to the user's git/gh (the app owns no creds).
+  // Detect-but-never-auto-apply: poll only reports; files move only on sync.
+
+  ipcMain.handle('sharing:preflight', () => checkSharingPreflight())
+
+  handleWindow('sharing:status', async ({ state }) => {
+    if (!state.projectPath) return { shared: false, members: [], me: null }
+    return getSharingStatus(state.projectPath)
+  })
+
+  handleWindow('sharing:share', async ({ state }, opts: ShareOptions) => {
+    if (!state.projectPath) return { ok: false, invited: [], inviteErrors: [], error: 'No project open.' }
+    return shareProject(state.projectPath, opts)
+  })
+
+  handleWindow('sharing:sync', async ({ state }) => {
+    if (!state.projectPath) return { ok: false, pushed: false, pulled: false, ahead: 0, behind: 0, conflict: false, conflictedFiles: [], error: 'No project open.' }
+    const result = await syncProject(state.projectPath)
+    // A pull may have landed others' files — rebuild the derived index so the
+    // Library reflects them. The fs-watcher also debounces a rebuild, but doing
+    // it here makes the post-sync state deterministic for the renderer refresh.
+    if (result.pulled) {
+      try { rebuildIndex(state.projectPath) } catch { /* best effort */ }
+    }
+    return result
+  })
+
+  handleWindow('sharing:poll', async ({ state }) => {
+    if (!state.projectPath) return { updatesAvailable: false, reachable: false }
+    // Remote detect (network) + a fresh LOCAL ahead/uncommitted snapshot (cheap
+    // git, no network) in one round-trip, so the Sync pill notices files created
+    // since the last refresh() without waiting for a remount.
+    const [remote, sync] = await Promise.all([
+      pollRemote(state.projectPath),
+      getLocalSyncState(state.projectPath),
+    ])
+    return { ...remote, sync }
+  })
+
+  handleWindow('sharing:invite', async ({ state }, login: string) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    return inviteMember(state.projectPath, login)
+  })
+
+  handleWindow('sharing:remove-member', async ({ state }, login: string) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    return removeMember(state.projectPath, login)
+  })
+
+  // Pick an EMPTY destination folder for the join/clone flow (does not open a project).
+  handleWindow('sharing:pick-dest-folder', async ({ win }) => {
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Choose an empty folder to clone the shared project into',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    return result.filePaths[0]
+  })
+
+  // Pending invitations this user has received (so they can join without the
+  // Lead telling them the repo slug out of band).
+  ipcMain.handle('sharing:list-invitations', () => listInvitations())
+
+  // Accept an invitation: (optionally accept the GitHub invite, then) clone into
+  // the chosen folder. The renderer then opens the returned path through the
+  // normal project-open flow (keeps stores in sync).
+  ipcMain.handle('sharing:accept-invite', (_event: any, opts: { repo: string; destFolder: string; displayName: string; invitationId?: number }) =>
+    acceptInvite(opts)
+  )
+
+  // ─── RFC-013 §9 conflict resolution (two-version card + AI-merge) ────────
+  handleWindow('sharing:conflict-details', async ({ state }) => {
+    if (!state.projectPath) return []
+    return getConflictDetails(state.projectPath)
+  })
+
+  // AI-merge one text file: reconcile base/mine/theirs via the current model.
+  handleWindow('sharing:ai-merge', async ({ state }, file: ConflictFile) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    try {
+      const { system, user } = buildAiMergePrompt(file)
+      const merged = await runMainCallLlm(state, system, user, 'sharing-ai-merge')
+      return { ok: true, content: merged }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  handleWindow('sharing:resolve-conflict', async ({ state }, resolutions: ConflictResolution[]) => {
+    if (!state.projectPath) {
+      return { ok: false, pushed: false, pulled: false, ahead: 0, behind: 0, conflict: false, conflictedFiles: [], error: 'No project open.' }
+    }
+    const result = await resolveSyncConflict(state.projectPath, resolutions)
+    // The merge changed workspace files — refresh the derived index.
+    try { rebuildIndex(state.projectPath) } catch { /* best effort */ }
+    return result
+  })
+
+  handleWindow('sharing:snapshot', async ({ state }, label?: string) => {
+    if (!state.projectPath) return { ok: false, error: 'No project open.' }
+    return createSnapshot(state.projectPath, label)
+  })
+
   // Recent projects CRUD
   ipcMain.handle('project:list-recents', () => listRecentProjects())
   ipcMain.handle('project:remove-recent', (_event: any, projectPath: string) => {
@@ -2645,7 +2888,7 @@ export function registerIpcHandlers(): void {
    * project about to be set up on first open).
    */
   ipcMain.handle('project:stats-batch', (_event: any, paths: string[]) => {
-    const result: Record<string, { papers: number; notes: number; data: number; initialized: boolean }> = {}
+    const result: Record<string, { papers: number; notes: number; data: number; initialized: boolean; shared: boolean }> = {}
     const countFiles = (dir: string): number => {
       try {
         return readdirSync(dir).filter((f: string) => !f.startsWith('.')).length
@@ -2653,17 +2896,48 @@ export function registerIpcHandlers(): void {
         return 0
       }
     }
+    // RFC-013: a project is "shared" iff its project.json carries a `share` binding.
+    const isShared = (p: string): boolean => {
+      try {
+        const cfg = JSON.parse(readFileSync(join(p, PATHS.project), 'utf8')) as ProjectConfig
+        return !!cfg.share
+      } catch {
+        return false
+      }
+    }
+    // Count by artifact type from the derived index (RFC-014: artifacts live in
+    // rp-artifacts/<type>/, possibly per-actor subdirs — counting fixed legacy
+    // dirs reported 0). `readIndex` only reads already-built shards; it never
+    // triggers a full workspace scan, so this stays cheap on the welcome screen.
+    // Fall back to the legacy JSON count for projects not yet opened in a
+    // files-as-carrier build (no index yet).
+    const countByType = (p: string): { papers: number; notes: number; data: number } => {
+      const idx = readIndex(p)
+      if (idx) {
+        let papers = 0, notes = 0, data = 0
+        for (const a of idx) {
+          if (a.type === 'paper') papers++
+          else if (a.type === 'note') notes++
+          else if (a.type === 'data') data++
+        }
+        return { papers, notes, data }
+      }
+      return {
+        papers: countFiles(join(p, PATHS.papers)),
+        notes: countFiles(join(p, PATHS.notes)),
+        data: countFiles(join(p, PATHS.data)),
+      }
+    }
     for (const p of paths || []) {
       if (!p || !existsSync(p)) {
-        result[p] = { papers: 0, notes: 0, data: 0, initialized: false }
+        result[p] = { papers: 0, notes: 0, data: 0, initialized: false, shared: false }
         continue
       }
       const initialized = existsSync(join(p, PATHS.root))
       result[p] = {
-        papers: countFiles(join(p, PATHS.papers)),
-        notes: countFiles(join(p, PATHS.notes)),
-        data: countFiles(join(p, PATHS.data)),
+        ...countByType(p),
         initialized,
+        shared: initialized && isShared(p),
       }
     }
     return result

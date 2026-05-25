@@ -178,11 +178,14 @@ html.light {
   --color-code-text: #0f766e;
   --color-code-bg: rgba(15, 118, 110, 0.08);
   --color-code-border: rgba(15, 118, 110, 0.2);
-  /* Semantic status colors — unchanged */
-  --color-status-success: #16a34a;
-  --color-status-error: #dc2626;
+  /* Semantic status colors — darkened for AA on the warm-paper ground. The
+     mid-tones (#16a34a/#d97706) only hit ~2.9:1 as small label text on #f6f1e7;
+     these deeper shades clear 4.5:1 (success 6.3, warning 6.3, error 5.8). The
+     light theme is allowed to "sit higher" on contrast (comfort > crispness). */
+  --color-status-success: #166534;
+  --color-status-error: #b91c1c;
   --color-status-error-soft: #ef4444;
-  --color-status-warning: #d97706;
+  --color-status-warning: #92400e;
   --color-status-info: #3b82f6;
   color-scheme: light;
 }

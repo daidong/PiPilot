@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon, Activity, Cpu, Palette } from 'lucide-react'
+import { X, Key, BookOpen, BarChart2, BookMarked, ImageIcon, Activity, Cpu, Palette, Users } from 'lucide-react'
 import { ApiKeysSettings } from './ApiKeysSettings'
 import { AppearanceSettings } from './AppearanceSettings'
 import { ResearchSettings } from './ResearchSettings'
@@ -8,12 +8,13 @@ import { WikiAgentSettings } from './WikiAgentSettings'
 import { DiagramSettings } from './DiagramSettings'
 import { TelemetrySettings } from './TelemetrySettings'
 import { ComputeSettings } from './ComputeSettings'
+import { SharingSettings } from './SharingSettings'
 import type { AppSettings } from '../../../../../shared-ui/settings-types'
 import { DEFAULT_SETTINGS } from '../../../../../shared-ui/settings-types'
 
 const api = (window as any).api
 
-type SettingsTab = 'api-keys' | 'appearance' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram' | 'telemetry' | 'compute'
+type SettingsTab = 'api-keys' | 'appearance' | 'research' | 'data-analysis' | 'paper-wiki' | 'diagram' | 'telemetry' | 'compute' | 'sharing'
 
 const BASE_TABS: { id: SettingsTab; label: string; icon: typeof Key }[] = [
   { id: 'api-keys', label: 'API Keys', icon: Key },
@@ -168,7 +169,11 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
 
   if (!open) return null
 
-  const tabs = [...BASE_TABS, { id: 'compute' as SettingsTab, label: 'Compute', icon: Cpu }]
+  const tabs = [
+    ...BASE_TABS,
+    { id: 'compute' as SettingsTab, label: 'Compute', icon: Cpu },
+    { id: 'sharing' as SettingsTab, label: 'Sharing', icon: Users },
+  ]
   const activeLabel = tabs.find(t => t.id === activeTab)?.label ?? 'Settings'
 
   return (
@@ -290,11 +295,14 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
                 onChange={v => updateSettings({ compute: v })}
               />
             )}
+            {activeTab === 'sharing' && (
+              <SharingSettings />
+            )}
           </div>
 
-          {/* Footer note for disk-persisted AppSettings tabs. Appearance and
-              API keys manage their own persistence, so they skip this note. */}
-          {activeTab !== 'api-keys' && activeTab !== 'appearance' && (
+          {/* Footer note for disk-persisted AppSettings tabs. Appearance, API
+              keys, and Sharing manage their own state, so they skip this note. */}
+          {activeTab !== 'api-keys' && activeTab !== 'appearance' && activeTab !== 'sharing' && (
             <div className="px-7 py-3 border-t t-border-subtle">
               <p className="text-[11px] t-text-muted leading-relaxed">
                 Settings are saved automatically. Changes to research and analysis settings take effect for new agent sessions. Existing sessions require an app restart.

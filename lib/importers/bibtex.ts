@@ -3,7 +3,7 @@
  *
  * Behavior reference: RFC-006 (Design Note 006). This module is the
  * implementation slice; the design lives at
- * `lib/docs/rfc/006-bibtex-import-mapping.md`.
+ * `docs/rfc/006-bibtex-import-mapping.md`.
  *
  * Flow:
  *   1. Read the .bib file as UTF-8. Reject non-UTF-8 with a clear error.

@@ -5,12 +5,38 @@ import type {
   ReportProgressEvent,
 } from '../../../lib/reports/index'
 import type { ReportPersistedState } from '../../../lib/reports/state'
+import type {
+  SharingPreflight,
+  SharingStatus,
+  ShareOptions,
+  ShareResult,
+  SyncResult,
+  PollResult,
+  MemberOpResult,
+  AcceptInviteResult,
+  RepoInvitation,
+  ConflictFile,
+  ConflictResolution,
+} from '../../../lib/sharing/index'
 
 // Re-export the bibtex importer types so renderer code can import them
 // from the preload module rather than reaching into lib directly. Keeps
 // the renderer's import graph stable across PR-3 / PR-4 churn.
 export type { BibImportResult, BibImportProgressEvent }
 export type { GenerateReportResult, ReportProgressEvent, ReportPersistedState }
+// RFC-013 sharing types — surfaced for the renderer's sharing store / UI.
+export type {
+  SharingPreflight,
+  SharingStatus,
+  ShareOptions,
+  ShareResult,
+  SyncResult,
+  PollResult,
+  MemberOpResult,
+  RepoInvitation,
+  ConflictFile,
+  ConflictResolution,
+}
 
 export interface UsageEvent {
   promptTokens: number
@@ -335,7 +361,23 @@ export interface ElectronAPI {
   openProjectPath: (projectPath: string) => Promise<{ projectPath: string; sessionId: string } | null>
   listRecentProjects: () => Promise<Array<{ path: string; openedAt: string; pinned?: boolean }>>
   removeRecentProject: (projectPath: string) => Promise<{ success: boolean }>
-  projectStatsBatch: (paths: string[]) => Promise<Record<string, { papers: number; notes: number; data: number; initialized: boolean }>>
+  projectStatsBatch: (paths: string[]) => Promise<Record<string, { papers: number; notes: number; data: number; initialized: boolean; shared: boolean }>>
+
+  // RFC-013 Shared Workspaces
+  sharingPreflight: () => Promise<SharingPreflight>
+  sharingStatus: () => Promise<SharingStatus>
+  sharingShare: (opts: ShareOptions) => Promise<ShareResult>
+  sharingSync: () => Promise<SyncResult>
+  sharingPoll: () => Promise<PollResult>
+  sharingInvite: (login: string) => Promise<MemberOpResult>
+  sharingRemoveMember: (login: string) => Promise<MemberOpResult>
+  sharingPickDestFolder: () => Promise<string | null>
+  sharingListInvitations: () => Promise<RepoInvitation[]>
+  sharingAcceptInvite: (opts: { repo: string; destFolder: string; displayName: string; invitationId?: number }) => Promise<AcceptInviteResult>
+  sharingConflictDetails: () => Promise<ConflictFile[]>
+  sharingAiMerge: (file: ConflictFile) => Promise<{ ok: boolean; content?: string; error?: string }>
+  sharingResolveConflict: (resolutions: ConflictResolution[]) => Promise<SyncResult>
+  sharingSnapshot: (label?: string) => Promise<{ ok: boolean; tag?: string; error?: string }>
   // Audit graph — provenance projection from telemetry. Read-only; returns
   // presence info so the renderer can decide whether to show the empty state.
   auditGetGraph: () => Promise<{
@@ -588,6 +630,22 @@ const api: ElectronAPI = {
   listRecentProjects: () => invoke('project:list-recents'),
   removeRecentProject: (projectPath: string) => invoke('project:remove-recent', projectPath),
   projectStatsBatch: (paths: string[]) => invoke('project:stats-batch', paths),
+
+  // RFC-013 Shared Workspaces
+  sharingPreflight: () => invoke('sharing:preflight'),
+  sharingStatus: () => invoke('sharing:status'),
+  sharingShare: (opts) => invoke('sharing:share', opts),
+  sharingSync: () => invoke('sharing:sync'),
+  sharingPoll: () => invoke('sharing:poll'),
+  sharingInvite: (login) => invoke('sharing:invite', login),
+  sharingRemoveMember: (login) => invoke('sharing:remove-member', login),
+  sharingPickDestFolder: () => invoke('sharing:pick-dest-folder'),
+  sharingListInvitations: () => invoke('sharing:list-invitations'),
+  sharingAcceptInvite: (opts) => invoke('sharing:accept-invite', opts),
+  sharingConflictDetails: () => invoke('sharing:conflict-details'),
+  sharingAiMerge: (file) => invoke('sharing:ai-merge', file),
+  sharingResolveConflict: (resolutions) => invoke('sharing:resolve-conflict', resolutions),
+  sharingSnapshot: (label) => invoke('sharing:snapshot', label),
   auditGetGraph: () => invoke('audit:get-graph'),
   closeProject: () => invoke('project:close'),
   onProjectClosed: (cb) => subscribe('project:closed', cb),

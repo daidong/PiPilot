@@ -6,6 +6,7 @@ import { useUIStore, hydratePreferences } from './ui-store'
 import { useEntityStore } from './entity-store'
 import { useUsageStore } from './usage-store'
 import { useRecapStore } from './recap-store'
+import { useSharingStore } from './sharing-store'
 
 interface SessionState {
   sessionId: string
@@ -39,6 +40,10 @@ async function applyOpenResult(
   useEntityStore.getState().reset()
   useUsageStore.getState().resetSession()
   useRecapStore.getState().clear()
+  // Sharing state is per-project and partly sticky (conflict / accessRevoked /
+  // updatesAvailable). Clear it so flags never bleed from the previous project
+  // into the next — the new project's refresh() repopulates from scratch.
+  useSharingStore.getState().reset()
 
   // Briefly toggle hasProject so App's useEffect([hasProject]) re-fires
   // and re-initializes IPC listeners, entity fetches, chat history, etc.
@@ -92,6 +97,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     useUIStore.getState().reset()
     useEntityStore.getState().reset()
     useUsageStore.getState().resetSession()
+    useSharingStore.getState().reset()
 
     set({ sessionId: '', projectPath: '', hasProject: false })
   }

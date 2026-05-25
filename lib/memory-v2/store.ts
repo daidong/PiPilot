@@ -3,10 +3,15 @@ import { dirname, join } from 'path'
 import { createHash } from 'crypto'
 import { trace as otelTrace } from '@opentelemetry/api'
 import { createArtifactLedgerWriter, type ArtifactOp } from '../ledger/artifact-ledger.js'
+import { readArtifactFromFile } from './artifact-files.js'
+import { getArtifacts, upsertIndexEntry, removeIndexEntry } from './indexer.js'
+import { writeArtifactToFile, removeArtifactFile, primaryFileRel } from './artifact-writer.js'
+import { getSharedLocalActor } from '../sharing/identity.js'
 import {
   PATHS,
   AGENT_MD_ID,
   AGENT_MD_MAX_CHARS,
+  type Actor,
   type Artifact,
   type ArtifactType,
   type CLIContext,
@@ -16,6 +21,16 @@ import {
   type DataSchema,
   type SessionSummary
 } from '../types.js'
+
+/**
+ * RFC-013: in a SHARED project, the local actor that should own newly created
+ * artifacts (drives the per-actor subdir + attribution). Undefined for
+ * solo/unshared projects → artifacts stay flat (back-compat). Read fresh per
+ * create; artifact creation is not a hot path.
+ */
+function resolveSharingActor(projectPath: string): Actor | undefined {
+  return getSharedLocalActor(projectPath)
+}
 
 export interface ArtifactFileRecord<T extends Artifact = Artifact> {
   artifact: T
@@ -194,23 +209,6 @@ function writeJson(filePath: string, value: unknown): void {
   writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8')
 }
 
-function artifactDirForType(type: ArtifactType): string {
-  switch (type) {
-    case 'note':
-      return PATHS.notes
-    case 'paper':
-      return PATHS.papers
-    case 'data':
-      return PATHS.data
-    case 'web-content':
-      return PATHS.webContent
-    case 'tool-output':
-      return PATHS.toolOutputs
-    default:
-      return PATHS.notes
-  }
-}
-
 function resolveArtifactDirs(projectPath: string): Array<{ type: ArtifactType; dir: string }> {
   return [
     { type: 'note', dir: join(projectPath, PATHS.notes) },
@@ -221,31 +219,10 @@ function resolveArtifactDirs(projectPath: string): Array<{ type: ArtifactType; d
   ]
 }
 
-function normalizeArtifactType(type: string): ArtifactType {
-  if (type === 'literature') return 'paper'
-  if (type === 'note' || type === 'paper' || type === 'data' || type === 'web-content' || type === 'tool-output') {
-    return type
-  }
-  return 'note'
-}
-
-function normalizeArtifact(raw: Artifact): Artifact {
-  const normalizedType = normalizeArtifactType(raw.type)
-  if (normalizedType === raw.type) return raw
-  return {
-    ...raw,
-    type: normalizedType
-  } as Artifact
-}
-
-export function readArtifactFromFile(filePath: string): Artifact | null {
-  try {
-    const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as Artifact
-    return normalizeArtifact(raw)
-  } catch {
-    return null
-  }
-}
+// readArtifactFromFile + artifact normalization now live in artifact-files.ts
+// (shared by the indexer without a circular import). Re-exported for callers
+// that historically imported it from this module.
+export { readArtifactFromFile }
 
 function mergeProvenance(context: CLIContext, override?: Partial<Provenance>): Provenance {
   return {
@@ -262,11 +239,6 @@ function mergeProvenance(context: CLIContext, override?: Partial<Provenance>): P
  * Called during project initialization so the user always has agent.md available.
  */
 export function ensureAgentMd(projectPath: string): void {
-  const notesDir = join(projectPath, PATHS.notes)
-  const filePath = join(notesDir, `${AGENT_MD_ID}.json`)
-  if (existsSync(filePath)) return
-
-  ensureDir(notesDir)
   const now = nowIso()
   const artifact: NoteArtifact = {
     id: AGENT_MD_ID,
@@ -283,7 +255,18 @@ export function ensureAgentMd(projectPath: string): void {
     createdAt: now,
     updatedAt: now
   }
-  writeFileSync(filePath, JSON.stringify(artifact, null, 2), 'utf-8')
+  // Skip if already present at the current location, the pre-rename location
+  // (`notes/agent-md.md` — still read by the location-agnostic index walk), OR
+  // as legacy JSON. Don't double-create (RFC-014 §4.2/§8).
+  const candidates = [
+    join(projectPath, primaryFileRel(artifact)),       // rp-artifacts/notes/agent-md.md
+    join(projectPath, 'notes', `${AGENT_MD_ID}.md`),   // pre-rename root location
+    join(projectPath, PATHS.notes, `${AGENT_MD_ID}.json`), // legacy JSON
+  ]
+  if (candidates.some(existsSync)) return
+
+  writeArtifactToFile(projectPath, artifact)
+  upsertIndexEntry(projectPath, artifact)
 }
 
 /**
@@ -340,12 +323,21 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
   const id = crypto.randomUUID()
   const timestamp = nowIso()
 
+  const provenance = mergeProvenance(context, input.provenance)
+  // RFC-013: stamp the local actor in a shared project so the file lands in the
+  // per-actor subdir (conflict prevention) and carries attribution. No-op for
+  // solo projects. An explicitly supplied actor (e.g. re-import) is preserved.
+  if (!provenance.actor) {
+    const actor = resolveSharingActor(context.projectPath)
+    if (actor) provenance.actor = actor
+  }
+
   const common = {
     id,
     title: input.title,
     tags: input.tags ?? [],
     summary: input.summary,
-    provenance: mergeProvenance(context, input.provenance),
+    provenance,
     createdAt: timestamp,
     updatedAt: timestamp
   }
@@ -417,55 +409,66 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
     }
   }
 
-  const dir = join(context.projectPath, artifactDirForType(artifact.type))
-  ensureDir(dir)
-  const filePath = join(dir, `${artifact.id}.json`)
-  writeFileSync(filePath, JSON.stringify(artifact, null, 2), 'utf-8')
+  // RFC-014 §6: write the real workspace file(s), then sync the derived index.
+  const rel = writeArtifactToFile(context.projectPath, artifact)
+  const filePath = join(context.projectPath, rel)
+  upsertIndexEntry(context.projectPath, artifact)
 
   // Telemetry §8.1: append to artifact ledger. Best-effort — failures don't
   // affect the agent path. Trace context is auto-pulled by the writer;
   // turnId comes from CLIContext when the call is on a user turn.
-  void writeArtifactLedgerCreate(context.projectPath, artifact, filePath, context.turnId)
+  writeArtifactLedgerCreate(context.projectPath, artifact, filePath, context.turnId)
 
   return { artifact, filePath }
 }
 
 export function listArtifacts(projectPath: string, types?: ArtifactType[]): Artifact[] {
-  const dirs = resolveArtifactDirs(projectPath)
-  const typeSet = types ? new Set(types) : null
-  const out: Artifact[] = []
+  // RFC-014 §5: reads go through the derived index (built from workspace files
+  // + legacy JSON). getArtifacts lazily builds the index on first use.
+  const all = getArtifacts(projectPath)
+  if (!types) return all
+  const typeSet = new Set(types)
+  return all.filter(a => typeSet.has(a.type))
+}
 
-  for (const { type, dir } of dirs) {
-    if (typeSet && !typeSet.has(type)) continue
-    if (!existsSync(dir)) continue
-
-    for (const file of safeReaddir(dir)) {
-      if (!file.endsWith('.json')) continue
-      const artifact = readArtifactFromFile(join(dir, file))
-      if (!artifact) continue
-      out.push(artifact)
+/**
+ * Resolve a mention key (id / id-prefix / paper citeKey / title substring) to an
+ * artifact, via the index. Replaces the mention resolver's direct JSON scan
+ * (RFC-014 §5.4). Match order mirrors the historical resolver.
+ */
+export function resolveArtifactByKey(projectPath: string, key: string, type?: ArtifactType): Artifact | null {
+  const k = key.trim()
+  const kl = k.toLowerCase()
+  if (!kl) return null
+  const candidates = getArtifacts(projectPath).filter(a => !type || a.type === type)
+  for (const a of candidates) if (a.id === k) return a
+  for (const a of candidates) if (a.id.toLowerCase().startsWith(kl)) return a
+  for (const a of candidates) {
+    if (a.type === 'paper') {
+      const ck = a.citeKey.toLowerCase()
+      if (ck === kl || ck.startsWith(kl)) return a
     }
   }
-
-  return out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+  for (const a of candidates) if ((a.title ?? '').toLowerCase().includes(kl)) return a
+  return null
 }
 
 export function findArtifactById(projectPath: string, artifactId: string): ArtifactFileRecord | null {
-  const dirs = resolveArtifactDirs(projectPath)
-  for (const { dir } of dirs) {
-    if (!existsSync(dir)) continue
-
-    for (const file of safeReaddir(dir)) {
-      if (!file.endsWith('.json')) continue
-      const fullPath = join(dir, file)
-      const artifact = readArtifactFromFile(fullPath)
-      if (!artifact) continue
-      if (artifact.id === artifactId || artifact.id.startsWith(artifactId) || file.includes(artifactId)) {
-        return { artifact, filePath: fullPath }
-      }
-    }
-  }
-  return null
+  // RFC-014 §5: resolve via the index. `filePath` is the artifact's CANONICAL
+  // backing file — recomputed from the artifact (primaryFileRel), not the path it
+  // was scanned from. This keeps the path a pure function of the artifact
+  // (no stored path; per-actor placement works), with one intentional caveat:
+  // the indexer recognizes managed files ANYWHERE, but mutation always targets
+  // the canonical path. So a managed file the user manually MOVED out of its
+  // canonical location is still READ (scan-anywhere), but on the next edit it
+  // re-materializes at the canonical path (the moved copy is not auto-removed),
+  // and delete targets the canonical path. Treat hand-moved managed artifacts as
+  // read-only until moved back. (Edits that change the canonical path itself —
+  // citeKey/actor/data-location — DO clean up the old file; see updateArtifact.)
+  const all = getArtifacts(projectPath)
+  const match = all.find(a => a.id === artifactId) ?? all.find(a => a.id.startsWith(artifactId))
+  if (!match) return null
+  return { artifact: match, filePath: join(projectPath, primaryFileRel(match)) }
 }
 
 export function updateArtifact(projectPath: string, artifactId: string, patch: UpdateArtifactInput, turnId?: string): ArtifactFileRecord | null {
@@ -483,18 +486,28 @@ export function updateArtifact(projectPath: string, artifactId: string, patch: U
     updatedAt: nowIso()
   } as Artifact
 
-  writeFileSync(found.filePath, JSON.stringify(updated, null, 2), 'utf-8')
+  // If this edit changes the artifact's canonical backing path — a paper's
+  // citeKey, a data file's location, or the owning actor — remove the OLD file
+  // first so the rename doesn't leave an orphan/duplicate. (The path is a pure
+  // function of the artifact; see findArtifactById.)
+  if (primaryFileRel(found.artifact) !== primaryFileRel(updated)) {
+    removeArtifactFile(projectPath, found.artifact)
+  }
+
+  const rel = writeArtifactToFile(projectPath, updated)
+  upsertIndexEntry(projectPath, updated)
   // Telemetry §8.1: ledger row for edit op.
-  void writeArtifactLedgerUpdate(projectPath, updated, found.artifact, turnId)
-  return { artifact: updated, filePath: found.filePath }
+  writeArtifactLedgerUpdate(projectPath, updated, found.artifact, turnId)
+  return { artifact: updated, filePath: join(projectPath, rel) }
 }
 
 export function deleteArtifact(projectPath: string, artifactId: string, turnId?: string): ArtifactFileRecord | null {
   const found = findArtifactById(projectPath, artifactId)
   if (!found) return null
 
-  rmSync(found.filePath)
-  void writeArtifactLedgerDelete(projectPath, found.artifact, turnId)
+  removeArtifactFile(projectPath, found.artifact)
+  removeIndexEntry(projectPath, found.artifact.id)
+  writeArtifactLedgerDelete(projectPath, found.artifact, turnId)
   return found
 }
 
@@ -752,10 +765,10 @@ function relPath(projectPath: string, filePath: string): string {
   return rel.replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
-async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string, turnId?: string): Promise<void> {
+function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string, turnId?: string): void {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
-    await writer.append({
+    writer.appendSync({
       artifactId: artifact.id,
       version: 1,
       op: 'create',
@@ -771,10 +784,10 @@ async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact
   }
 }
 
-async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact, turnId?: string): Promise<void> {
+function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact, turnId?: string): void {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
-    await writer.append({
+    writer.appendSync({
       artifactId: after.id,
       version: incrementVersion(after, before),
       op: 'edit',
@@ -790,10 +803,10 @@ async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, b
   }
 }
 
-async function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact, turnId?: string): Promise<void> {
+function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact, turnId?: string): void {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
-    await writer.append({
+    writer.appendSync({
       artifactId: artifact.id,
       version: extractVersion(artifact) + 1,
       op: 'delete',

@@ -20,12 +20,17 @@ import { useAuditGraph } from './use-audit-graph'
 import { ProvenanceGraph } from './ProvenanceGraph'
 import { AuditLeftRail, AuditRightRail, type FiltersState, type SliceStats } from './AuditSidePanels'
 import { EmptyTelemetry } from './EmptyTelemetry'
+import { useSharingStore } from '../../../stores/sharing-store'
 
 const DEFAULT_KINDS: Set<NodeKind> = new Set(['trace', 'step', 'tool', 'chat', 'artifact', 'file', 'dir'])
 
 export function AuditView() {
   const centerView = useUIStore(s => s.centerView)
   const active = centerView === 'audit'
+  // RFC-013: this graph is built from local telemetry/ledger only, which never
+  // travel. When the project is shared, say so — a collaborator's work shows in
+  // the Library + Git history, not here, and the graph isn't claiming otherwise.
+  const shared = useSharingStore(s => s.status?.shared ?? false)
 
   const { status, presence, graph, error, reload } = useAuditGraph(active)
 
@@ -135,6 +140,11 @@ export function AuditView() {
       />
 
       <div className="flex-1 min-w-0 min-h-0 relative t-bg-base">
+        {shared && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-2.5 py-1 rounded-full border t-border t-bg-surface/90 backdrop-blur text-[10.5px] t-text-muted shadow-sm pointer-events-none">
+            Shows activity on this machine only — collaborators' work appears in the Library &amp; Git history.
+          </div>
+        )}
         <ProvenanceGraph
           graph={graph}
           selected={selected}

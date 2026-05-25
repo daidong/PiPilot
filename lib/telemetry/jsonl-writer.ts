@@ -17,6 +17,7 @@
  */
 
 import { appendFile, mkdir } from 'node:fs/promises'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export interface JsonlWriterOptions {
@@ -40,6 +41,28 @@ export async function appendJsonl(
     await mkdir(dirname(filePath), { recursive: true })
     const line = JSON.stringify(row) + '\n'
     await appendFile(filePath, line, { encoding: 'utf8' })
+    return true
+  } catch (err) {
+    opts.onError?.(err)
+    return false
+  }
+}
+
+/**
+ * Synchronous variant of {@link appendJsonl}. Use when the caller must guarantee
+ * the row is durable before it returns — e.g. a side-effect of an otherwise
+ * synchronous API, where a dangling async write would race the caller (notably
+ * test teardown that deletes the dir, or a crash before the write lands).
+ * Never throws.
+ */
+export function appendJsonlSync(
+  filePath: string,
+  row: unknown,
+  opts: JsonlWriterOptions = {}
+): boolean {
+  try {
+    mkdirSync(dirname(filePath), { recursive: true })
+    appendFileSync(filePath, JSON.stringify(row) + '\n', { encoding: 'utf8' })
     return true
   } catch (err) {
     opts.onError?.(err)
