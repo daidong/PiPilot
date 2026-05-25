@@ -61,12 +61,17 @@ export interface AheadBehind {
 }
 
 /**
- * Counts local-only (ahead) and remote-only (behind) commits against the tracked
- * upstream. Run after {@link fetch} for a fresh comparison.
+ * Counts local-only (ahead) and remote-only (behind) commits against
+ * `origin/main` — the branch the rest of sync explicitly targets (rebase, merge,
+ * push). Deliberately NOT `@{upstream}`: if a repo has `origin` but no upstream
+ * tracking configured, `@{upstream}` errors and ahead reads 0, so syncProject
+ * would skip the push and report success while local commits never left. Run
+ * after {@link fetch} for a fresh comparison. `hasUpstream` here means
+ * "origin/main is resolvable" (we've synced with the remote at least once).
  */
 export async function getAheadBehind(cwd: string): Promise<AheadBehind> {
-  // left = @{u} not in HEAD = behind ; right = HEAD not in @{u} = ahead
-  const r = await git(cwd, ['rev-list', '--left-right', '--count', '@{upstream}...HEAD'])
+  // left = origin/main not in HEAD = behind ; right = HEAD not in origin/main = ahead
+  const r = await git(cwd, ['rev-list', '--left-right', '--count', 'origin/main...HEAD'])
   if (!r.ok) return { ahead: 0, behind: 0, hasUpstream: false }
   const m = r.stdout.split(/\s+/)
   const behind = Number(m[0] ?? 0)
