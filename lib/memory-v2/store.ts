@@ -417,7 +417,7 @@ export function createArtifact(input: CreateArtifactInput, context: CLIContext):
   // Telemetry §8.1: append to artifact ledger. Best-effort — failures don't
   // affect the agent path. Trace context is auto-pulled by the writer;
   // turnId comes from CLIContext when the call is on a user turn.
-  void writeArtifactLedgerCreate(context.projectPath, artifact, filePath, context.turnId)
+  writeArtifactLedgerCreate(context.projectPath, artifact, filePath, context.turnId)
 
   return { artifact, filePath }
 }
@@ -497,7 +497,7 @@ export function updateArtifact(projectPath: string, artifactId: string, patch: U
   const rel = writeArtifactToFile(projectPath, updated)
   upsertIndexEntry(projectPath, updated)
   // Telemetry §8.1: ledger row for edit op.
-  void writeArtifactLedgerUpdate(projectPath, updated, found.artifact, turnId)
+  writeArtifactLedgerUpdate(projectPath, updated, found.artifact, turnId)
   return { artifact: updated, filePath: join(projectPath, rel) }
 }
 
@@ -507,7 +507,7 @@ export function deleteArtifact(projectPath: string, artifactId: string, turnId?:
 
   removeArtifactFile(projectPath, found.artifact)
   removeIndexEntry(projectPath, found.artifact.id)
-  void writeArtifactLedgerDelete(projectPath, found.artifact, turnId)
+  writeArtifactLedgerDelete(projectPath, found.artifact, turnId)
   return found
 }
 
@@ -765,10 +765,10 @@ function relPath(projectPath: string, filePath: string): string {
   return rel.replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
-async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string, turnId?: string): Promise<void> {
+function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact, filePath: string, turnId?: string): void {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
-    await writer.append({
+    writer.appendSync({
       artifactId: artifact.id,
       version: 1,
       op: 'create',
@@ -784,10 +784,10 @@ async function writeArtifactLedgerCreate(projectPath: string, artifact: Artifact
   }
 }
 
-async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact, turnId?: string): Promise<void> {
+function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, before: Artifact, turnId?: string): void {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
-    await writer.append({
+    writer.appendSync({
       artifactId: after.id,
       version: incrementVersion(after, before),
       op: 'edit',
@@ -803,10 +803,10 @@ async function writeArtifactLedgerUpdate(projectPath: string, after: Artifact, b
   }
 }
 
-async function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact, turnId?: string): Promise<void> {
+function writeArtifactLedgerDelete(projectPath: string, artifact: Artifact, turnId?: string): void {
   try {
     const writer = createArtifactLedgerWriter(projectPath)
-    await writer.append({
+    writer.appendSync({
       artifactId: artifact.id,
       version: extractVersion(artifact) + 1,
       op: 'delete',

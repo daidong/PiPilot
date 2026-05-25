@@ -24,7 +24,7 @@
 import { join } from 'node:path'
 import { trace } from '@opentelemetry/api'
 import { PATHS } from '../types.js'
-import { appendJsonl } from '../telemetry/jsonl-writer.js'
+import { appendJsonl, appendJsonlSync } from '../telemetry/jsonl-writer.js'
 
 export type ArtifactOp =
   | 'create'
@@ -58,13 +58,56 @@ export interface ArtifactLedgerRow {
   importMeta?: { source: string; fileMtime?: string }
 }
 
+type LedgerRowInput = Omit<ArtifactLedgerRow, 'timestamp' | 'traceId' | 'spanId'> & {
+  timestamp?: string
+  traceId?: string
+  spanId?: string
+}
+
 export interface ArtifactLedgerWriter {
-  append(row: Omit<ArtifactLedgerRow, 'timestamp' | 'traceId' | 'spanId'> & {
-    timestamp?: string
-    traceId?: string
-    spanId?: string
-  }): Promise<boolean>
+  append(row: LedgerRowInput): Promise<boolean>
+  /**
+   * Synchronous append — guarantees the row is durable before returning. Use
+   * from synchronous APIs (e.g. memory-v2 store create/update/delete) so a
+   * fire-and-forget async write can't race the caller (test teardown deleting
+   * the dir, or a crash before the row lands).
+   */
+  appendSync(row: LedgerRowInput): boolean
   readonly filePath: string
+}
+
+/** Fill in trace context (from OTel if not supplied), timestamp, and strip undefined. */
+function buildRow(row: LedgerRowInput): ArtifactLedgerRow {
+  let traceId = row.traceId
+  let spanId = row.spanId
+  if (!traceId || !spanId) {
+    const ctx = trace.getActiveSpan()?.spanContext()
+    if (ctx) {
+      traceId = traceId ?? ctx.traceId
+      spanId = spanId ?? ctx.spanId
+    }
+  }
+  const fullRow: ArtifactLedgerRow = {
+    artifactId: row.artifactId,
+    version: row.version,
+    op: row.op,
+    type: row.type,
+    path: row.path,
+    contentHash: row.contentHash,
+    diffPath: row.diffPath,
+    versionBefore: row.versionBefore ?? null,
+    initiator: row.initiator,
+    traceId,
+    spanId,
+    turnId: row.turnId,
+    toolCallId: row.toolCallId,
+    timestamp: row.timestamp ?? new Date().toISOString(),
+    importMeta: row.importMeta
+  }
+  for (const k of Object.keys(fullRow) as (keyof ArtifactLedgerRow)[]) {
+    if (fullRow[k] === undefined) delete fullRow[k]
+  }
+  return fullRow
 }
 
 /**
@@ -75,40 +118,11 @@ export function createArtifactLedgerWriter(projectPath: string): ArtifactLedgerW
   const filePath = join(projectPath, PATHS.ledgerArtifact)
   return {
     filePath,
-    async append(row) {
-      // Pull trace context from OTel if not supplied.
-      let traceId = row.traceId
-      let spanId = row.spanId
-      if (!traceId || !spanId) {
-        const span = trace.getActiveSpan()
-        const ctx = span?.spanContext()
-        if (ctx) {
-          traceId = traceId ?? ctx.traceId
-          spanId = spanId ?? ctx.spanId
-        }
-      }
-      const fullRow: ArtifactLedgerRow = {
-        artifactId: row.artifactId,
-        version: row.version,
-        op: row.op,
-        type: row.type,
-        path: row.path,
-        contentHash: row.contentHash,
-        diffPath: row.diffPath,
-        versionBefore: row.versionBefore ?? null,
-        initiator: row.initiator,
-        traceId,
-        spanId,
-        turnId: row.turnId,
-        toolCallId: row.toolCallId,
-        timestamp: row.timestamp ?? new Date().toISOString(),
-        importMeta: row.importMeta
-      }
-      // Strip undefined for tidiness.
-      for (const k of Object.keys(fullRow) as (keyof ArtifactLedgerRow)[]) {
-        if (fullRow[k] === undefined) delete fullRow[k]
-      }
-      return appendJsonl(filePath, fullRow, { onError: () => {} })
+    append(row) {
+      return appendJsonl(filePath, buildRow(row), { onError: () => {} })
+    },
+    appendSync(row) {
+      return appendJsonlSync(filePath, buildRow(row), { onError: () => {} })
     }
   }
 }
