@@ -19,7 +19,7 @@ export function getWikiRoot(): string {
 // ── Generator version — bump when wiki prompts change ──────────────────────
 // V3 = RFC-005: adds embedded <!-- WIKI-META --> memory sidecar block.
 // Existing RFC-003 pages (no meta block) stay valid as body-only memory
-// until the repair pass regenerates them. See lib/docs/rfc/005-wiki-sidecar-and-retrieval.md.
+// until the repair pass regenerates them. See docs/rfc/005-wiki-sidecar-and-retrieval.md.
 
 export const GENERATOR_VERSION = 3
 

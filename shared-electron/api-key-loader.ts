@@ -20,7 +20,7 @@
  * showed three green checks (the stale key was also a valid AWS key,
  * just for a different account), but RunInstances reported the IAM
  * instance profile as "Invalid" — RP was talking to a different AWS
- * account than the user's CLI. See `lib/docs/rfc/009` Phase 1 design
+ * account than the user's CLI. See `docs/rfc/009` Phase 1 design
  * note "v2 priority" for the longer rationale.
  */
 

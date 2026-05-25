@@ -1,7 +1,7 @@
 # AWS Setup — EC2 compute + S3 read tools (Phase 1)
 
 This guide covers how to enable Research Copilot's Phase-1 AWS support
-([RFC-009 §0.2](../../lib/docs/rfc/009-aws-multi-service-integration.md#02-phase-1-scope-next-implementation-cycle--the-clean-handoff)).
+([RFC-009 §0.2](../../docs/rfc/009-aws-multi-service-integration.md#02-phase-1-scope-next-implementation-cycle--the-clean-handoff)).
 Phase 1 ships two AWS surfaces:
 
 | Surface | What it does |

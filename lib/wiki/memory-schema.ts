@@ -2,7 +2,7 @@
  * Wiki Memory Schema — RFC-005 V3.
  *
  * Structured retrieval sidecar embedded at the end of each paper memory page
- * as a <!-- WIKI-META --> JSON block. See lib/docs/rfc/005-wiki-sidecar-and-retrieval.md.
+ * as a <!-- WIKI-META --> JSON block. See docs/rfc/005-wiki-sidecar-and-retrieval.md.
  *
  * Epistemic position (§4.3 / §7):
  *   The sidecar AND the Markdown page body are both WIKI MEMORY — derived
