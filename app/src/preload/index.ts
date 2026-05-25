@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 import type { BibImportResult, BibImportProgressEvent } from '../../../lib/importers/bibtex'
 import type {
   GenerateReportResult,
@@ -424,6 +424,8 @@ export interface ElectronAPI {
   terminalKill: () => Promise<void>
   onTerminalData: (cb: (data: string) => void) => () => void
   onTerminalExit: (cb: (exitCode: number) => void) => () => void
+  clipboardReadText: () => string
+  clipboardWriteText: (text: string) => void
 
   // Skills
   listSkills: () => Promise<Array<{ name: string; description: string; source: string; enabled: boolean }>>
@@ -709,7 +711,9 @@ const api: ElectronAPI = {
   terminalResize: (cols, rows) => send('terminal:resize', cols, rows),
   terminalKill: () => invoke('terminal:kill'),
   onTerminalData: (cb) => subscribe('terminal:data', cb),
-  onTerminalExit: (cb) => subscribe('terminal:exit', cb)
+  onTerminalExit: (cb) => subscribe('terminal:exit', cb),
+  clipboardReadText: () => clipboard.readText(),
+  clipboardWriteText: (text) => clipboard.writeText(text)
 }
 
 contextBridge.exposeInMainWorld('api', api)

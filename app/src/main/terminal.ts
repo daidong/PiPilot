@@ -34,6 +34,24 @@ function getShell(): string {
   return process.env.SHELL || '/bin/zsh'
 }
 
+function getShellArgs(shell: string): string[] {
+  if (process.platform === 'win32') return ['-NoLogo']
+  const base = shell.split('/').pop() || shell
+  if (base === 'bash' || base === 'zsh' || base === 'fish') return ['-l']
+  return []
+}
+
+function getTerminalEnv(): Record<string, string> {
+  return {
+    ...(process.env as Record<string, string>),
+    TERM: 'xterm-256color',
+    COLORTERM: process.env.COLORTERM || 'truecolor',
+    TERM_PROGRAM: 'AgentFoundry',
+    LANG: process.env.LANG || 'en_US.UTF-8',
+    LC_CTYPE: process.env.LC_CTYPE || process.env.LANG || 'en_US.UTF-8'
+  }
+}
+
 export function registerTerminalHandlers(): void {
   ipcMain.handle('terminal:spawn', async (event, cwd: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)
@@ -53,12 +71,12 @@ export function registerTerminalHandlers(): void {
         return { success: false, error: 'Terminal is not available on this platform (node-pty not installed).' }
       }
       const shell = getShell()
-      const term = nodePty.spawn(shell, [], {
+      const term = nodePty.spawn(shell, getShellArgs(shell), {
         name: 'xterm-256color',
         cols: 80,
         rows: 24,
         cwd: cwd || os.homedir(),
-        env: { ...process.env } as Record<string, string>
+        env: getTerminalEnv()
       })
 
       terminals.set(winId, term)
