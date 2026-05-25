@@ -181,6 +181,10 @@ function toKey(relativePath: string): string {
   return relativePath || '__root__'
 }
 
+function hasLoadedParent(byParent: Record<string, FileTreeNode[]>, parentKey: string): boolean {
+  return Object.prototype.hasOwnProperty.call(byParent, parentKey)
+}
+
 function normalizePath(path: string): string {
   return path.replace(/\\/g, '/')
 }
@@ -552,7 +556,9 @@ export function WorkspaceTree() {
     opts: { silent?: boolean } = {}
   ) => {
     const parentKey = toKey(relativePath)
-    if (!opts.silent) setParentLoading(parentKey, true)
+    const hadChildren = hasLoadedParent(byParentRef.current, parentKey)
+    const showLoading = !opts.silent || !hadChildren
+    if (showLoading) setParentLoading(parentKey, true)
     try {
       const children: FileTreeNode[] = await api.listTree({
         relativePath,
@@ -578,7 +584,7 @@ export function WorkspaceTree() {
       console.error('Failed to load workspace tree', err)
       showNotice('Could not load files. Try refreshing.')
     } finally {
-      if (!opts.silent) setParentLoading(parentKey, false)
+      if (showLoading) setParentLoading(parentKey, false)
     }
   }, [setParentLoading, showIgnored, showNotice])
 
@@ -591,6 +597,10 @@ export function WorkspaceTree() {
   useEffect(() => { expandedRef.current = expanded }, [expanded])
   const byParentRef = useRef(tree.byParent)
   useEffect(() => { byParentRef.current = tree.byParent }, [tree.byParent])
+  const loadingParentsRef = useRef(tree.loadingParents)
+  useEffect(() => { loadingParentsRef.current = tree.loadingParents }, [tree.loadingParents])
+  const autoLoadAttemptedRef = useRef<Set<string>>(new Set())
+  const skipNextExpandedPersistRef = useRef<string | null>(null)
 
   // Auto-refresh when agent or external editor modifies files. Targeted:
   // when the watcher tells us which parent dirs changed, we only reload
@@ -666,18 +676,43 @@ export function WorkspaceTree() {
 
   // When projectPath changes, reload expanded state and tree data
   useEffect(() => {
+    autoLoadAttemptedRef.current.clear()
+    skipNextExpandedPersistRef.current = expandedStorageKey
     let restored = new Set<string>()
     try {
       const raw = localStorage.getItem(expandedStorageKey)
       if (raw) restored = new Set(JSON.parse(raw) as string[])
     } catch { /* ignore */ }
     setExpanded(restored)
+    setTree({ byParent: {}, loadingParents: new Set() })
     const dirs = ['', ...Array.from(restored)]
     void Promise.all(dirs.map((dir) => loadChildren(dir)))
   }, [expandedStorageKey, loadChildren])
 
+  // Re-establish the invariant that every expanded directory has either
+  // loaded children or an in-flight load. Persisted expansion state can outlive
+  // the in-memory child cache, especially after opening an existing project.
+  useEffect(() => {
+    const missingDirs = Array.from(expanded).filter((dir) => {
+      const parentKey = toKey(dir)
+      return (
+        !hasLoadedParent(tree.byParent, parentKey) &&
+        !tree.loadingParents.has(parentKey) &&
+        !autoLoadAttemptedRef.current.has(parentKey)
+      )
+    })
+    if (missingDirs.length === 0) return
+
+    for (const dir of missingDirs) autoLoadAttemptedRef.current.add(toKey(dir))
+    void Promise.all(missingDirs.map((dir) => loadChildren(dir)))
+  }, [expanded, tree.byParent, tree.loadingParents, loadChildren])
+
   // Persist expanded state to localStorage whenever it changes
   useEffect(() => {
+    if (skipNextExpandedPersistRef.current === expandedStorageKey) {
+      skipNextExpandedPersistRef.current = null
+      return
+    }
     localStorage.setItem(expandedStorageKey, JSON.stringify(Array.from(expanded)))
   }, [expanded, expandedStorageKey])
 
@@ -731,13 +766,22 @@ export function WorkspaceTree() {
     if (node.type !== 'directory') return
     let shouldLoad = false
     setExpanded((prev) => {
+      const parentKey = toKey(node.relativePath)
+      const hasChildren = hasLoadedParent(byParentRef.current, parentKey)
+      const isLoading = loadingParentsRef.current.has(parentKey)
       const next = new Set(prev)
       if (next.has(node.relativePath)) {
+        // If restored state says "expanded" but the child cache is missing,
+        // treat the click as a repair/load request instead of collapsing.
+        if (!hasChildren && !isLoading) {
+          shouldLoad = true
+          return prev
+        }
         next.delete(node.relativePath)
         return next
       }
       next.add(node.relativePath)
-      shouldLoad = !byParentRef.current[toKey(node.relativePath)]
+      shouldLoad = !hasChildren && !isLoading
       return next
     })
     if (shouldLoad) {
