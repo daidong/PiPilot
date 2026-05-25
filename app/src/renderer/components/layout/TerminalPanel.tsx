@@ -8,6 +8,17 @@ import { useUIStore } from '../../stores/ui-store'
 import { useSessionStore } from '../../stores/session-store'
 
 const api = (window as any).api
+const isMac = navigator.platform.toLowerCase().includes('mac')
+
+function copySelection(term: Terminal): void {
+  const text = term.getSelection()
+  if (text) api.clipboardWriteText?.(text)
+}
+
+function pasteClipboard(term: Terminal): void {
+  const text = api.clipboardReadText?.()
+  if (text) term.paste(text)
+}
 
 export function TerminalPanel() {
   const termRef = useRef<HTMLDivElement>(null)
@@ -35,8 +46,13 @@ export function TerminalPanel() {
     const cs = getComputedStyle(document.documentElement)
     const term = new Terminal({
       fontSize: 13,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: 'Menlo, Monaco, "SF Mono", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Courier New", monospace',
       cursorBlink: true,
+      scrollback: 10000,
+      tabStopWidth: 8,
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
+      altClickMovesCursor: false,
       allowProposedApi: true,
       theme: {
         background: cs.getPropertyValue('--color-bg-base').trim(),
@@ -50,6 +66,40 @@ export function TerminalPanel() {
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
     term.open(termRef.current)
+    term.focus()
+
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true
+      const key = event.key.toLowerCase()
+      const copyChord = (isMac && event.metaKey && key === 'c') || (!isMac && event.ctrlKey && event.shiftKey && key === 'c')
+      const pasteChord = (isMac && event.metaKey && key === 'v') || (!isMac && event.ctrlKey && event.shiftKey && key === 'v')
+      if (copyChord) {
+        copySelection(term)
+        return false
+      }
+      if (pasteChord) {
+        pasteClipboard(term)
+        return false
+      }
+      return true
+    })
+
+    const handleCopy = (event: ClipboardEvent) => {
+      const text = term.getSelection()
+      if (!text) return
+      event.clipboardData?.setData('text/plain', text)
+      event.preventDefault()
+    }
+    const handlePaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData('text/plain') || api.clipboardReadText?.()
+      if (!text) return
+      event.preventDefault()
+      term.paste(text)
+    }
+    const handleMouseDown = () => term.focus()
+    term.element?.addEventListener('copy', handleCopy)
+    term.element?.addEventListener('paste', handlePaste)
+    termRef.current.addEventListener('mousedown', handleMouseDown)
 
     // Fit after layout settles
     requestAnimationFrame(() => {
@@ -63,7 +113,10 @@ export function TerminalPanel() {
     fitRef.current = fit
 
     // Send user input to PTY
-    term.onData((data) => {
+    const inputDisposable = term.onData((data) => {
+      api.terminalInput(data)
+    })
+    const binaryDisposable = term.onBinary((data) => {
       api.terminalInput(data)
     })
 
@@ -93,6 +146,11 @@ export function TerminalPanel() {
       observer.disconnect()
       unsubData()
       unsubExit()
+      inputDisposable.dispose()
+      binaryDisposable.dispose()
+      term.element?.removeEventListener('copy', handleCopy)
+      term.element?.removeEventListener('paste', handlePaste)
+      termRef.current?.removeEventListener('mousedown', handleMouseDown)
       term.dispose()
       xtermRef.current = null
       fitRef.current = null
@@ -109,7 +167,10 @@ export function TerminalPanel() {
     requestAnimationFrame(() => {
       fit.fit()
       const term = xtermRef.current
-      if (term) api.terminalResize(term.cols, term.rows)
+      if (term) {
+        api.terminalResize(term.cols, term.rows)
+        term.focus()
+      }
     })
   }, [visible])
 
@@ -148,7 +209,7 @@ export function TerminalPanel() {
   }
 
   return (
-    <div className="flex flex-col border-t t-border" style={{ height: '100%' }}>
+    <div className="terminal-panel flex flex-col border-t t-border" style={{ height: '100%' }}>
       {/* Header bar */}
       <div className="h-7 flex items-center justify-between px-3 border-b t-border t-bg-surface shrink-0">
         <span className="text-[11px] font-medium t-text-muted uppercase tracking-wider">Terminal</span>

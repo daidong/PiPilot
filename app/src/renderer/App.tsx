@@ -1099,8 +1099,20 @@ export default function App() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (previewEditorFocused) return
+      const target = e.target as HTMLElement | null
+      const terminalFocused = Boolean(target?.closest('.terminal-panel, .xterm'))
 
       // Cmd+1 → Chat, Cmd+2 → Literature, Cmd+3 → Compute
+      // Let xterm own keyboard input while focused; the terminal toggle stays
+      // global so users can hide it without leaving the shell.
+      if (terminalFocused) {
+        if ((e.metaKey || e.ctrlKey) && e.key === '`') {
+          e.preventDefault()
+          useUIStore.getState().toggleTerminal()
+        }
+        return
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key === '1') {
         e.preventDefault()
         useUIStore.getState().setCenterView('chat')
