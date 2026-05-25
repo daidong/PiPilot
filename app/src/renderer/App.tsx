@@ -975,6 +975,13 @@ export default function App() {
       // Fires on both artifact-create and artifact-update; debounced above.
       scheduleEntityRefresh()
     })
+    // External index changes — an outside editor, the agent's file tools, or the
+    // background re-index after a fast project open — re-derive the index in
+    // main. Refresh the Library so it reflects them (previously only the Files
+    // tree listened to this, so the Library could go stale).
+    const unsubExternal = api.onExternalChange(() => {
+      scheduleEntityRefresh()
+    })
 
     // Compute events — RFC-008 §7.6: single channel dispatched through
     // the store's applyEvent reducer. ComputeEvent is a discriminated
@@ -1009,6 +1016,7 @@ export default function App() {
       unsub4()
       unsub5()
       unsub6()
+      unsubExternal()
       unsubActivity()
       unsubActivityClear()
       unsubToolProgress()

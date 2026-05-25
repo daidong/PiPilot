@@ -28,7 +28,7 @@ import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readE
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
-import { rebuildIndex, readIndex } from '../../../lib/memory-v2/indexer'
+import { rebuildIndex, readIndex, isIndexBuilt } from '../../../lib/memory-v2/indexer'
 import { migrateToFilesAsCarrier } from '../../../lib/memory-v2/migrate-files'
 import { ensureWorkspaceGitignore } from '../../../lib/memory-v2/workspace-gitignore'
 import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
@@ -409,6 +409,29 @@ function createArtifactFromWorkspaceFile(state: WindowRuntimeState, filePath: st
   }, { sessionId, projectPath })
 }
 
+/**
+ * Re-derive the artifact index OFF the project-open critical path. The Library
+ * opens instantly on the cached shards; this then picks up any files changed
+ * while the app was closed and nudges the renderer to re-read (same signal the
+ * fs-watcher uses). The short delay lets the window paint the cached state
+ * first; repeated calls coalesce.
+ */
+let bgReindexTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleBackgroundReindex(path: string): void {
+  if (bgReindexTimer) clearTimeout(bgReindexTimer)
+  bgReindexTimer = setTimeout(() => {
+    bgReindexTimer = null
+    try {
+      rebuildIndex(path)
+      for (const win of BrowserWindow.getAllWindows()) {
+        safeSend(win, 'fs:external-change', { parents: null })
+      }
+    } catch {
+      /* derived cache — best effort */
+    }
+  }, 400)
+}
+
 /** Initialize .research-pilot directory structure in the project folder */
 function initializeProject(path: string): void {
   const dirs = [
@@ -465,7 +488,16 @@ function initializeProject(path: string): void {
     if (!filesMig.skipped && filesMig.migrated > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
       console.log(`[ResearchPilot] files-as-carrier migration: ${filesMig.migrated} artifact(s) → files`)
     }
-    rebuildIndex(path)
+    // Index strategy: a full workspace scan grows with the project, so when a
+    // built index already exists (and the migration didn't just rewrite files)
+    // open INSTANTLY on the cached shards and re-derive in the background to
+    // catch edits made while the app was closed. Only block on a synchronous
+    // scan when there's no index yet (first open) or the migration changed files.
+    if (isIndexBuilt(path) && (filesMig.skipped || filesMig.migrated === 0)) {
+      scheduleBackgroundReindex(path)
+    } else {
+      rebuildIndex(path)
+    }
     ensureWorkspaceGitignore(path)
   } catch (err) {
     if (process.env.RESEARCH_COPILOT_DEBUG) {
