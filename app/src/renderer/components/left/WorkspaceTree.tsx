@@ -272,7 +272,6 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
     node, depth, isExpanded, isActive, isDropTarget, isRenaming,
     confirmTrash, renameValue, highlightQuery, handlersRef, renameInputRef
   } = props
-  const h = handlersRef.current
   // Per-extension icon for files; directory icon/tint encodes expand state.
   const fileIconInfo = node.type === 'file' ? getFileIcon(node.name) : null
   // Indent guides: a vertical 1px line every 14px in the row's left padding.
@@ -305,17 +304,20 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
             : 't-bg-hover t-text-secondary'
       }`}
       style={guideStyle}
-      onClick={() => (node.type === 'directory' ? h.toggleExpand(node) : h.openFile(node))}
-      onContextMenu={(e) => h.handleContextMenu(e, node)}
+      onClick={() => {
+        const h = handlersRef.current
+        node.type === 'directory' ? h.toggleExpand(node) : h.openFile(node)
+      }}
+      onContextMenu={(e) => handlersRef.current.handleContextMenu(e, node)}
       title={node.relativePath}
-      onDragOver={(e) => h.handleRowDragOver(e, node)}
-      onDragLeave={h.handleRowDragLeave}
-      onDrop={(e) => h.handleRowDrop(e, node)}
+      onDragOver={(e) => handlersRef.current.handleRowDragOver(e, node)}
+      onDragLeave={(e) => handlersRef.current.handleRowDragLeave(e)}
+      onDrop={(e) => handlersRef.current.handleRowDrop(e, node)}
     >
       {node.type === 'directory' ? (
         <button
           className="shrink-0 t-text-muted"
-          onClick={(e) => { e.stopPropagation(); h.toggleExpand(node) }}
+          onClick={(e) => { e.stopPropagation(); handlersRef.current.toggleExpand(node) }}
         >
           <ChevronRight
             size={12}
@@ -341,9 +343,9 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
         <input
           ref={renameInputRef}
           value={renameValue}
-          onChange={(e) => h.setRenameValue(e.target.value)}
-          onKeyDown={h.handleRenameKeyDown}
-          onBlur={() => h.commitRename()}
+          onChange={(e) => handlersRef.current.setRenameValue(e.target.value)}
+          onKeyDown={(e) => handlersRef.current.handleRenameKeyDown(e)}
+          onBlur={() => handlersRef.current.commitRename()}
           onClick={(e) => e.stopPropagation()}
           className="flex-1 bg-transparent outline-none t-focus-ring border-b border-[var(--color-accent-soft)] text-xs t-text"
         />
@@ -358,14 +360,14 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
             <button
               className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
               title="Preview file"
-              onClick={(e) => { e.stopPropagation(); h.openFile(node) }}
+              onClick={(e) => { e.stopPropagation(); handlersRef.current.openFile(node) }}
             >
               <Eye size={11} />
             </button>
             <button
               className="p-0.5 rounded t-bg-hover hover:t-text-accent-soft"
               title="Create Artifact from file"
-              onClick={(e) => { e.stopPropagation(); h.createArtifact(node) }}
+              onClick={(e) => { e.stopPropagation(); handlersRef.current.createArtifact(node) }}
             >
               <File size={11} />
             </button>
@@ -378,7 +380,7 @@ const TreeRow = React.memo(function TreeRow(props: TreeRowProps) {
               : 't-text-error-soft/70 hover:t-text-error'
           }`}
           title={confirmTrash ? 'Click again to confirm' : 'Move to trash'}
-          onClick={(e) => { e.stopPropagation(); h.handleTrashClick(node) }}
+          onClick={(e) => { e.stopPropagation(); handlersRef.current.handleTrashClick(node) }}
         >
           <Trash2 size={11} />
         </button>
@@ -587,6 +589,8 @@ export function WorkspaceTree() {
   // random refresh" feel.
   const expandedRef = useRef(expanded)
   useEffect(() => { expandedRef.current = expanded }, [expanded])
+  const byParentRef = useRef(tree.byParent)
+  useEffect(() => { byParentRef.current = tree.byParent }, [tree.byParent])
 
   // Auto-refresh when agent or external editor modifies files. Targeted:
   // when the watcher tells us which parent dirs changed, we only reload
@@ -723,20 +727,23 @@ export function WorkspaceTree() {
     setScrollTop(0)
   }, [query, showIgnored, projectPath])
 
-  const toggleExpand = useCallback(async (node: FileTreeNode) => {
+  const toggleExpand = useCallback((node: FileTreeNode) => {
     if (node.type !== 'directory') return
-    const next = new Set(expanded)
-    if (next.has(node.relativePath)) {
-      next.delete(node.relativePath)
-      setExpanded(next)
-      return
+    let shouldLoad = false
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(node.relativePath)) {
+        next.delete(node.relativePath)
+        return next
+      }
+      next.add(node.relativePath)
+      shouldLoad = !byParentRef.current[toKey(node.relativePath)]
+      return next
+    })
+    if (shouldLoad) {
+      void loadChildren(node.relativePath)
     }
-    next.add(node.relativePath)
-    setExpanded(next)
-    if (!tree.byParent[toKey(node.relativePath)]) {
-      await loadChildren(node.relativePath)
-    }
-  }, [expanded, tree.byParent, loadChildren])
+  }, [loadChildren])
 
   const openFile = useCallback((node: FileTreeNode) => {
     if (node.type !== 'file') return
