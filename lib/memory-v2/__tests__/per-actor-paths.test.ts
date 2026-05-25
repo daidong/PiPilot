@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { primaryFileRel } from '../artifact-writer.js'
+import { primaryFileRel, writeArtifactToFile } from '../artifact-writer.js'
 import { createArtifact, updateArtifact } from '../store.js'
 import { rebuildIndex } from '../indexer.js'
 import type { NoteArtifact, PaperArtifact, CLIContext } from '../../types.js'
@@ -37,7 +37,57 @@ test('primaryFileRel: actor → per-actor subdir; no actor → flat', () => {
     provenance: { source: 'import', sessionId: 'u', actor: { id: 'b', displayName: 'Bob' } },
     createdAt: '', updatedAt: '',
   }
-  assert.equal(primaryFileRel(paper), 'rp-artifacts/papers/bob/Smith2020.bib')
+  // Paper filenames carry a stable id fragment so same-citeKey papers don't collide.
+  assert.equal(primaryFileRel(paper), 'rp-artifacts/papers/bob/Smith2020-p1.bib')
+})
+
+// ── paper path uniqueness: same citeKey must not overwrite ────────────────────
+
+const mkPaper = (id: string, citeKey: string): PaperArtifact => ({
+  id, type: 'paper', title: id, tags: [], citeKey,
+  provenance: { source: 'import', sessionId: 'u' }, createdAt: '', updatedAt: '',
+})
+
+test('paper files: same citeKey, distinct ids → distinct files, neither overwritten', () => {
+  const dir = makeProject({ shared: false })
+  try {
+    const a = mkPaper('aaaa1111', 'smith2020')
+    const b = mkPaper('bbbb2222', 'smith2020') // same citeKey, different paper
+    const relA = writeArtifactToFile(dir, a)
+    const relB = writeArtifactToFile(dir, b)
+    assert.notEqual(relA, relB, 'distinct paths despite a shared citeKey')
+    assert.ok(existsSync(join(dir, relA)) && existsSync(join(dir, relB)), 'both .bib files survive')
+    assert.equal(rebuildIndex(dir).filter(x => x.type === 'paper').length, 2, 'both papers indexed')
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('paper files: a legacy <citeKey>.bib (same id) converges to the id-fragment name', () => {
+  const dir = makeProject({ shared: false })
+  try {
+    mkdirSync(join(dir, 'rp-artifacts', 'papers'), { recursive: true })
+    writeFileSync(join(dir, 'rp-artifacts', 'papers', 'smith2020.bib'), '@article{smith2020,}\n')
+    writeFileSync(join(dir, 'rp-artifacts', 'papers', 'smith2020.rp.yaml'), 'id: aaaa1111\n')
+    const rel = writeArtifactToFile(dir, mkPaper('aaaa1111', 'smith2020'))
+    assert.ok(existsSync(join(dir, rel)), 'new id-fragment file written')
+    assert.ok(!existsSync(join(dir, 'rp-artifacts', 'papers', 'smith2020.bib')), 'own legacy file removed')
+  } finally {
+    cleanup(dir)
+  }
+})
+
+test('paper files: a DIFFERENT paper sharing the citeKey is NOT removed (id-guarded)', () => {
+  const dir = makeProject({ shared: false })
+  try {
+    mkdirSync(join(dir, 'rp-artifacts', 'papers'), { recursive: true })
+    writeFileSync(join(dir, 'rp-artifacts', 'papers', 'smith2020.bib'), '@article{smith2020,}\n')
+    writeFileSync(join(dir, 'rp-artifacts', 'papers', 'smith2020.rp.yaml'), 'id: someoneelse\n')
+    writeArtifactToFile(dir, mkPaper('aaaa1111', 'smith2020'))
+    assert.ok(existsSync(join(dir, 'rp-artifacts', 'papers', 'smith2020.bib')), 'a different paper at the legacy name is preserved')
+  } finally {
+    cleanup(dir)
+  }
 })
 
 // ── createArtifact: stamps actor + lands in subdir when shared ────────────────

@@ -14,9 +14,9 @@
  * (leaf) + fs + yaml.
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
-import { stringify as stringifyYaml } from 'yaml'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { PATHS, type Artifact, type ArtifactType, type PaperArtifact } from '../types.js'
 import { slugifyDisplayName } from '../sharing/identity.js'
 import {
@@ -43,6 +43,16 @@ const PAPER_DIR = `${RP_ARTIFACTS_DIR}/papers`
 function paperSlug(citeKey: string): string {
   const s = (citeKey ?? '').trim().replace(/[/\\:*?"<>|\s]+/g, '_')
   return s || 'paper'
+}
+
+/**
+ * Short, stable id fragment appended to a paper's filename so two papers that
+ * share a citeKey (or both lack one → "paper") never map to the same file and
+ * silently overwrite each other. Derived purely from the artifact id, so the
+ * path stays a pure function of the artifact (find/update/delete recompute it).
+ */
+function paperIdFrag(id: string): string {
+  return ((id ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'x').toLowerCase()
 }
 
 /**
@@ -95,12 +105,39 @@ export function primaryFileRel(artifact: Artifact): string {
       // file's, not a per-actor subdir.
       return `${artifact.filePath}${RP_SIDECAR_SUFFIX}`
     case 'paper':
-      return `${PAPER_DIR}/${actorDirPrefix(artifact)}${paperSlug(artifact.citeKey)}${PAPER_BIB_EXT}`
+      return `${PAPER_DIR}/${actorDirPrefix(artifact)}${paperSlug(artifact.citeKey)}-${paperIdFrag(artifact.id)}${PAPER_BIB_EXT}`
   }
 }
 
 function paperSidecarRel(paper: PaperArtifact): string {
-  return `${PAPER_DIR}/${actorDirPrefix(paper)}${paperSlug(paper.citeKey)}${RP_SIDECAR_SUFFIX}`
+  return `${PAPER_DIR}/${actorDirPrefix(paper)}${paperSlug(paper.citeKey)}-${paperIdFrag(paper.id)}${RP_SIDECAR_SUFFIX}`
+}
+
+/** Read the artifact id recorded in a paper sidecar (.rp.yaml), or null. */
+function readSidecarId(absPath: string): string | null {
+  try {
+    const v = parseYaml(readFileSync(absPath, 'utf-8')) as { id?: unknown }
+    return typeof v?.id === 'string' ? v.id : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Converge a pre-uniqueness `<citeKey>.bib`/`.rp.yaml` (no id fragment) for THIS
+ * paper to the new collision-safe name. Guarded by the sidecar id so we never
+ * delete a *different* paper that happens to share the citeKey.
+ */
+function removeLegacyPaperFiles(projectPath: string, paper: PaperArtifact, newBibRel: string): void {
+  const stem = `${PAPER_DIR}/${actorDirPrefix(paper)}${paperSlug(paper.citeKey)}`
+  const legBibRel = `${stem}${PAPER_BIB_EXT}`
+  if (legBibRel === newBibRel) return // no fragment in play
+  const legBibAbs = join(projectPath, legBibRel)
+  const legSideAbs = join(projectPath, `${stem}${RP_SIDECAR_SUFFIX}`)
+  if (existsSync(legBibAbs) && readSidecarId(legSideAbs) === paper.id) {
+    rmSync(legBibAbs, { force: true })
+    if (existsSync(legSideAbs)) rmSync(legSideAbs, { force: true })
+  }
 }
 
 /** Write an artifact's file(s). Returns the workspace-relative primary path. */
@@ -138,6 +175,7 @@ export function writeArtifactToFile(projectPath: string, artifact: Artifact): st
   writeFileSync(bibAbs, paperToBibEntry(paper) + '\n', 'utf-8')
   writeFileSync(join(projectPath, paperSidecarRel(paper)), stringifyYaml(paperToSidecarEntry(paper)), 'utf-8')
   removeLegacyJson(projectPath, paper)
+  removeLegacyPaperFiles(projectPath, paper, bibRel)
   return bibRel
 }
 
@@ -149,6 +187,8 @@ export function removeArtifactFile(projectPath: string, artifact: Artifact): voi
         const abs = join(projectPath, rel)
         if (existsSync(abs)) rmSync(abs, { force: true })
       }
+      // Also clean a pre-uniqueness <citeKey>.bib for this same paper, if any.
+      removeLegacyPaperFiles(projectPath, artifact as PaperArtifact, primaryFileRel(artifact))
     } else {
       // note/web/tool → the .md; data → the sidecar (NOT the data file itself).
       const abs = join(projectPath, primaryFileRel(artifact))
