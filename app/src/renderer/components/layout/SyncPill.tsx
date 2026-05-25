@@ -14,6 +14,10 @@ import { useSessionStore } from '../../stores/session-store'
  * the remote (detect-only, §14) on a slow interval.
  */
 const POLL_INTERVAL_MS = 90_000
+// Hold the first remote poll until just after open: its ~0.5s ls-remote network
+// round-trip shouldn't compete with the busy project-open window. With a ≤90s
+// detect cadence, a ~2s delay on the very first check is imperceptible.
+const INITIAL_POLL_DELAY_MS = 2_000
 
 export function SyncPill() {
   const projectPath = useSessionStore((s) => s.projectPath)
@@ -29,12 +33,14 @@ export function SyncPill() {
 
   useEffect(() => {
     if (!projectPath) return
-    void (async () => {
-      await refresh()
-      await poll()
-    })()
+    // Local status is cheap (no network now) — show it immediately on open.
+    void refresh()
+    // The remote poll is the only network call left; defer the first one so it
+    // doesn't pile onto open, then keep the steady cadence. (By the time it
+    // fires, refresh() has populated status, so poll()'s shared-check passes.)
+    const firstPoll = setTimeout(() => { void poll() }, INITIAL_POLL_DELAY_MS)
     const id = setInterval(() => { void poll() }, POLL_INTERVAL_MS)
-    return () => clearInterval(id)
+    return () => { clearTimeout(firstPoll); clearInterval(id) }
   }, [projectPath, refresh, poll])
 
   if (!status?.shared) return null
