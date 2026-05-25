@@ -134,12 +134,16 @@ export async function getSharingStatus(projectPath: string): Promise<SharingStat
   const myRole = me ? (me.id === config.lead ? 'lead' : 'member') : undefined
   const sync = await getLocalSyncState(projectPath)
 
-  const info = config.share.repo ? await repoView(config.share.repo) : null
+  // repoUrl is just the canonical GitHub URL — build it locally. A `gh repo view`
+  // here was a ~0.5s network round-trip on EVERY status refresh (i.e. every
+  // project open), violating this function's "no network" contract and stalling
+  // load. (`config.share.repo` is the "owner/name" slug.)
+  const repoUrl = config.share.repo ? `https://github.com/${config.share.repo}` : undefined
   return {
     shared: true,
     name: config.name,
     repo: config.share.repo,
-    repoUrl: info?.url,
+    repoUrl,
     members,
     lead,
     me,
