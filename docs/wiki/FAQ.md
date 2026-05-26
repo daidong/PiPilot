@@ -71,6 +71,12 @@ Per-workspace, under `<workspace>/.research-pilot/`:
 
 Global config (API keys, OAuth tokens) lives in `~/.research-copilot/`.
 
+### Why don't I see my saved papers / web pages in the Files tab?
+
+Files starting with `.` (and everything inside dot-directories) are **hidden by default** in the Files tab. Since Research Copilot stores artifacts under `<workspace>/.research-pilot/artifacts/` — `.research-pilot/` starts with a `.` — your saved PDFs and HTML captures don't appear in the tree until you flip the **Show hidden files** checkbox at the top of the Files panel.
+
+> The Files tab is a local file browser, not a git view — so `.gitignore` rules don't apply. Only dotfiles are hidden; things like `node_modules/`, `dist/`, and `coverage/` stay visible.
+
 ### Does Paper Wiki share data across my projects?
 
 Yes — that's the point. The wiki is indexed once globally and reachable from any workspace via the `wiki_search` / `wiki_get` / `wiki_coverage` tools. It runs offline against your local files.
