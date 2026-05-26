@@ -181,7 +181,7 @@ Source code lives in a **private** repo (`daidong/PiPilot`); user-facing assets 
 Code touchpoints:
 - `app/package.json` → `build.publish.owner` = `DIR-LAB`, `repo` = `Research-Pilot` (electron-builder + electron-updater target)
 - `.github/workflows/release.yml` → uses `PUBLIC_REPO_TOKEN` (PAT with `repo` write scope on the public repo) instead of the default `GITHUB_TOKEN`
-- `.github/workflows/deploy-website.yml` → builds `website/` and pushes the result to `DIR-LAB/Research-Pilot:gh-pages` via `peaceiris/actions-gh-pages`
+- `.github/workflows/deploy-website.yml` → builds `website/` and pushes the result to `DIR-LAB/Research-Pilot:gh-pages` via `peaceiris/actions-gh-pages`. Triggers: push to `main` touching `website/**` (auto-deploys content edits) **and** `workflow_dispatch` (used by `release.yml`'s publish job to refresh version badges after a release)
 - `website/astro.config.mjs` → `site: https://dir-lab.github.io`, `base: /Research-Pilot/`
 - `website/src/pages/index.astro` → fetches releases from `DIR-LAB/Research-Pilot`
 - `install.sh` / `install.ps1` / root `package.json` / `README.md` / public wiki community links → all point at the public repo
@@ -217,7 +217,7 @@ spctl -a -vvv -t install "release/mac-arm64/Research Copilot.app"   # expect: so
 For unsigned local packs (demos, smoke tests) skip the env file and run `CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack`.
 
 ### Release flow
-Bump `app/package.json` version, commit, tag `vX.Y.Z`, push the tag. `release.yml` reads signing credentials from GitHub Secrets (`MAC_CERTS`, `MAC_CERTS_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`), builds all three platforms, signs+notarizes macOS, and uploads to a draft GitHub Release. Manually publish the draft when the artifacts look right; `deploy-website.yml` listens for `release: published` and rebuilds the marketing site so download links stay current.
+Bump `app/package.json` version, commit, tag `vX.Y.Z`, push the tag. `release.yml` reads signing credentials from GitHub Secrets (`MAC_CERTS`, `MAC_CERTS_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`), builds all three platforms, signs+notarizes macOS, and uploads the artifacts to GitHub Releases (initially as a draft). A subsequent `publish` job in the same workflow then **auto-flips the release to published** on the public repo (`gh release edit vX.Y.Z --draft=false --latest --repo DIR-LAB/Research-Pilot`) and **explicitly dispatches** `deploy-website.yml --ref main` so the marketing site's version badges and asset links pick up the just-published tag. No manual publish step is required. If the published artifacts look wrong post-hoc, roll back with `gh release edit vX.Y.Z --draft=true --repo DIR-LAB/Research-Pilot`.
 
 ## Main Branch Protection
 
