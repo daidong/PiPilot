@@ -1,6 +1,6 @@
 /**
  * Shared types for Electron main-process IPC handlers.
- * Used by both personal-assistant and research-pilot-desktop.
+ * Used by research-pilot-desktop (the app/ workspace).
  */
 
 export interface FileTreeNode {
@@ -10,12 +10,6 @@ export interface FileTreeNode {
   type: 'file' | 'directory'
   hasChildren?: boolean
   modifiedAt: number
-}
-
-export interface GitIgnoreRule {
-  negated: boolean
-  directoryOnly: boolean
-  regex: RegExp
 }
 
 export interface ResolvedCoordinatorAuth {

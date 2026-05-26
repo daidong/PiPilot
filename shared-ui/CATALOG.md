@@ -3,7 +3,7 @@
 > AgentFoundry's shared-ui library provides reusable React components, Zustand stores,
 > types, constants, and utilities for Electron desktop apps.
 >
-> **Consumed by:** `personal-assistant`, `research-pilot-desktop` (aliased as `@shared`)
+> **Consumed by:** `research-pilot-desktop` (the `app/` workspace, aliased as `@shared`)
 
 ---
 

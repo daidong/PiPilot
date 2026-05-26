@@ -1,5 +1,5 @@
 // Types
-export type { FileTreeNode, GitIgnoreRule, ResolvedCoordinatorAuth } from './types'
+export type { FileTreeNode, ResolvedCoordinatorAuth } from './types'
 export type { SharedHandlerContext, AppSettings } from './ipc-base'
 
 // File tree utilities
@@ -7,7 +7,6 @@ export {
   TREE_MAX_ENTRIES,
   toPosixPath,
   isWithinRoot,
-  readGitIgnoreRules,
   isHiddenPath,
   isIgnored,
   hasVisibleChildren,
