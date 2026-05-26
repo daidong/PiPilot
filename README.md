@@ -252,6 +252,8 @@ Research Copilot stores its data in the workspace under `.research-pilot/`:
     └── session-summaries/
 ```
 
+> Because `.research-pilot/` starts with `.`, it's **hidden from the Files tab by default** alongside other dotfiles. Toggle **Show hidden files** at the top of the Files panel to see your artifacts in the tree.
+
 ## Community & Support
 
 - **[Discussions](https://github.com/DIR-LAB/Research-Pilot/discussions)** — questions, ideas, usage tips, and general Q&A
