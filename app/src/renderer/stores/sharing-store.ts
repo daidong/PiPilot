@@ -9,6 +9,7 @@ import type {
   ConflictFile,
   ConflictResolution,
 } from '../../preload/index'
+import { getDebugConflictFiles, getDebugMergedContent } from './debug-conflict-fixtures'
 
 /**
  * RFC-013 sharing — renderer store. Mirrors the main-process sharing state and
@@ -39,6 +40,18 @@ interface SharingStoreState {
    * signal sets it, and a reachable remote / successful sync clears it.
    */
   accessRevoked: boolean
+  /**
+   * DEBUG ONLY — set by `injectDebugConflict()` (Cmd+Shift+D). Causes
+   * `loadConflictDetails` / `aiMerge` / `resolveConflict` to skip IPC and use
+   * the canned fixture data + a synthetic merge. Off in normal operation.
+   */
+  debugMode: boolean
+  /**
+   * DEBUG ONLY — when true (and debugMode is also true), `aiMerge` waits 4s
+   * before returning the canned merged content. Used to exercise the progress
+   * UI without burning real LLM tokens.
+   */
+  slowMergeSim: boolean
 
   refresh: () => Promise<void>
   checkPreflight: () => Promise<SharingPreflight | null>
@@ -51,6 +64,10 @@ interface SharingStoreState {
   aiMerge: (file: ConflictFile) => Promise<{ ok: boolean; content?: string; error?: string }>
   resolveConflict: (resolutions: ConflictResolution[]) => Promise<SyncResult | null>
   dismissConflict: () => void
+  /** Cmd+Shift+D — populate with canned fixtures. No-op if a real conflict is already up. */
+  injectDebugConflict: () => void
+  /** Toggle the 4-second AI-merge stall used to exercise the progress UI. */
+  setSlowMergeSim: (value: boolean) => void
   reset: () => void
 }
 
@@ -70,6 +87,8 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   conflictLoading: false,
   resolving: false,
   accessRevoked: false,
+  debugMode: false,
+  slowMergeSim: false,
 
   refresh: async () => {
     const api = getApi()
@@ -167,6 +186,8 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   loadConflictDetails: async () => {
+    // Debug-injected fixtures are already in place — don't let real IPC clobber them.
+    if (get().debugMode) return
     const api = getApi()
     if (!api?.sharingConflictDetails) return
     set({ conflictLoading: true })
@@ -179,12 +200,28 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
   },
 
   aiMerge: async (file) => {
+    if (get().debugMode) {
+      if (get().slowMergeSim) await new Promise<void>((r) => setTimeout(r, 4000))
+      return { ok: true, content: getDebugMergedContent(file) }
+    }
     const api = getApi()
     if (!api?.sharingAiMerge) return { ok: false, error: 'unavailable' }
     return api.sharingAiMerge(file)
   },
 
   resolveConflict: async (resolutions) => {
+    if (get().debugMode) {
+      set({ resolving: true, lastError: null })
+      await new Promise<void>((r) => setTimeout(r, 500))
+      set({
+        resolving: false,
+        conflict: null,
+        conflictFiles: [],
+        debugMode: false,
+        slowMergeSim: false,
+      })
+      return { ok: true, conflict: false } as unknown as SyncResult
+    }
     const api = getApi()
     if (!api?.sharingResolveConflict || get().resolving) return null
     set({ resolving: true, lastError: null })
@@ -207,8 +244,37 @@ export const useSharingStore = create<SharingStoreState>((set, get) => ({
     }
   },
 
-  dismissConflict: () => set({ conflict: null, conflictFiles: [] }),
+  dismissConflict: () =>
+    set({ conflict: null, conflictFiles: [], debugMode: false, slowMergeSim: false }),
+
+  injectDebugConflict: () => {
+    if (get().conflict) return // a real conflict (or another debug session) is already up
+    const files = getDebugConflictFiles()
+    set({
+      conflict: { files: files.map((f) => f.path) },
+      conflictFiles: files,
+      conflictLoading: false,
+      debugMode: true,
+      slowMergeSim: false,
+      lastError: null,
+    })
+  },
+
+  setSlowMergeSim: (value) => set({ slowMergeSim: !!value }),
 
   reset: () =>
-    set({ status: null, preflight: null, updatesAvailable: false, lastError: null, conflict: null, conflictFiles: [], conflictLoading: false, resolving: false, syncing: false, accessRevoked: false }),
+    set({
+      status: null,
+      preflight: null,
+      updatesAvailable: false,
+      lastError: null,
+      conflict: null,
+      conflictFiles: [],
+      conflictLoading: false,
+      resolving: false,
+      syncing: false,
+      accessRevoked: false,
+      debugMode: false,
+      slowMergeSim: false,
+    }),
 }))

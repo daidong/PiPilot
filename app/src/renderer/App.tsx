@@ -26,6 +26,7 @@ import { useUsageStore, type UsageEvent } from './stores/usage-store'
 import { useComputeStore } from './stores/compute-store'
 import { useUpdateStore } from './stores/update-store'
 import { useRecapStore } from './stores/recap-store'
+import { useSharingStore } from './stores/sharing-store'
 
 const api = (window as any).api
 
@@ -1148,6 +1149,13 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
         e.preventDefault()
         api.exportChat()
+      }
+      // Cmd+Shift+D → Inject debug conflict scenario (developer-only; harmless
+      // no-op if a real conflict is already showing). See
+      // debug-conflict-fixtures.ts for the canned data.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+        e.preventDefault()
+        useSharingStore.getState().injectDebugConflict()
       }
       // Ctrl+` or Cmd+` → Toggle terminal
       if ((e.metaKey || e.ctrlKey) && e.key === '`') {
