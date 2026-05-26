@@ -1187,7 +1187,7 @@ export function WorkspaceTree() {
             style={{ accentColor: 'var(--color-accent)' }}
             className="cursor-pointer"
           />
-          Show ignored files
+          Show hidden files
         </label>
         {notice && (
           <p className="mt-1 text-[11px] t-text-error-soft break-words" role="status">
@@ -1220,13 +1220,13 @@ export function WorkspaceTree() {
               'This folder is empty.'
             ) : (
               <>
-                No visible files — ignored files are hidden.{' '}
+                No visible files — hidden files (dotfiles) are not shown.{' '}
                 <button
                   type="button"
                   onClick={() => setShowIgnored(true)}
                   className="t-text-accent hover:underline t-focus-ring rounded"
                 >
-                  Show ignored files
+                  Show hidden files
                 </button>
               </>
             )}

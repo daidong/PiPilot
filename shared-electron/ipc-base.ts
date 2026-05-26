@@ -3,7 +3,7 @@
  * Provides common file operations, session management, preferences,
  * usage tracking, auth status, and folder-open helpers.
  *
- * Both personal-assistant and research-pilot-desktop import from here.
+ * Imported by research-pilot-desktop (the app/ workspace).
  */
 import { shell } from 'electron'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync, cpSync, chmodSync } from 'fs'

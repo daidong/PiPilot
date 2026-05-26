@@ -1,10 +1,10 @@
 /**
  * File tree traversal utilities with .gitignore support.
- * Shared between personal-assistant and research-pilot-desktop.
+ * Used by research-pilot-desktop (the app/ workspace).
  */
-import { existsSync, readFileSync, readdirSync, statSync, type Dirent } from 'fs'
+import { existsSync, readdirSync, statSync, type Dirent } from 'fs'
 import { join, resolve, sep } from 'path'
-import type { FileTreeNode, GitIgnoreRule } from './types'
+import type { FileTreeNode } from './types'
 
 export const TREE_MAX_ENTRIES = 500
 
@@ -19,79 +19,29 @@ export function isWithinRoot(rootPath: string, targetPath: string): boolean {
   return normalizedTarget.startsWith(`${normalizedRoot}${sep}`)
 }
 
-export function readGitIgnoreRules(rootPath: string): GitIgnoreRule[] {
-  const filePath = join(rootPath, '.gitignore')
-  if (!existsSync(filePath)) return []
-  let raw = ''
-  try {
-    raw = readFileSync(filePath, 'utf-8')
-  } catch {
-    return []
-  }
-
-  return raw
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line && !line.startsWith('#'))
-    .map(line => {
-      const negated = line.startsWith('!')
-      let pattern = negated ? line.slice(1) : line
-      const directoryOnly = pattern.endsWith('/')
-      if (directoryOnly) pattern = pattern.slice(0, -1)
-
-      const anchored = pattern.startsWith('/')
-      if (anchored) pattern = pattern.slice(1)
-
-      const escaped = pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*/g, '.*')
-        .replace(/\*/g, '[^/]*')
-        .replace(/\?/g, '[^/]')
-
-      let regexPattern = ''
-      if (anchored) {
-        regexPattern = `^${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
-      } else if (pattern.includes('/')) {
-        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '$'}`
-      } else {
-        regexPattern = `(?:^|/)${escaped}${directoryOnly ? '(?:/.*)?' : '(?:$|/)'}`
-      }
-
-      return {
-        negated,
-        directoryOnly,
-        regex: new RegExp(regexPattern)
-      } satisfies GitIgnoreRule
-    })
-}
-
 export function isHiddenPath(relativePath: string): boolean {
   return toPosixPath(relativePath)
     .split('/')
     .some(segment => segment.startsWith('.'))
 }
 
-export function isIgnored(relativePath: string, isDirectory: boolean, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
+/**
+ * A node is hidden from the tree only when it is a dotfile/dot-directory
+ * (any path segment starting with '.'). .gitignore is intentionally NOT
+ * consulted: the Files tab is a local file browser, not a git view, so build
+ * noise like node_modules/ stays visible. Flip `showIgnored` to reveal dotfiles.
+ */
+export function isIgnored(relativePath: string, showIgnored: boolean): boolean {
   if (showIgnored) return false
-  if (isHiddenPath(relativePath)) return true
-
-  const normalized = toPosixPath(relativePath)
-  let ignored = false
-  for (const rule of rules) {
-    if (rule.directoryOnly && !isDirectory && !normalized.includes('/')) continue
-    if (rule.regex.test(normalized)) {
-      ignored = !rule.negated
-    }
-  }
-  return ignored
+  return isHiddenPath(relativePath)
 }
 
-export function hasVisibleChildren(dirPath: string, relativePath: string, rules: GitIgnoreRule[], showIgnored: boolean): boolean {
+export function hasVisibleChildren(dirPath: string, relativePath: string, showIgnored: boolean): boolean {
   try {
     const entries = readdirSync(dirPath, { withFileTypes: true })
     for (const entry of entries) {
       const childRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name
-      if (!isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) {
+      if (!isIgnored(childRelative, showIgnored)) {
         return true
       }
     }
@@ -111,7 +61,6 @@ export function listTreeChildren(
   if (!isWithinRoot(rootPath, basePath)) return []
   if (!existsSync(basePath) || !statSync(basePath).isDirectory()) return []
 
-  const rules = readGitIgnoreRules(rootPath)
   const entries = readdirSync(basePath, { withFileTypes: true })
   const out: FileTreeNode[] = []
 
@@ -123,7 +72,7 @@ export function listTreeChildren(
     .some(entry => {
       const childRelative = toPosixPath(relativePath ? `${relativePath}/${entry.name}` : entry.name)
       const childPath = join(basePath, entry.name)
-      if (isIgnored(childRelative, entry.isDirectory(), rules, showIgnored)) return false
+      if (isIgnored(childRelative, showIgnored)) return false
 
       let modifiedAt = 0
       try {
@@ -137,7 +86,7 @@ export function listTreeChildren(
         path: childPath,
         relativePath: childRelative,
         type: entry.isDirectory() ? 'directory' : 'file',
-        hasChildren: entry.isDirectory() ? hasVisibleChildren(childPath, childRelative, rules, showIgnored) : undefined,
+        hasChildren: entry.isDirectory() ? hasVisibleChildren(childPath, childRelative, showIgnored) : undefined,
         modifiedAt
       })
       return out.length >= limit
@@ -150,7 +99,6 @@ export function searchTree(rootPath: string, query: string, showIgnored: boolean
   const trimmedQuery = query.trim().toLowerCase()
   if (!trimmedQuery) return []
 
-  const rules = readGitIgnoreRules(rootPath)
   const root = resolve(rootPath)
   const stack: Array<{ absPath: string; relativePath: string }> = [{ absPath: root, relativePath: '' }]
   const out: FileTreeNode[] = []
@@ -167,7 +115,7 @@ export function searchTree(rootPath: string, query: string, showIgnored: boolean
     for (const entry of entries) {
       const rel = toPosixPath(node.relativePath ? `${node.relativePath}/${entry.name}` : entry.name)
       const abs = join(node.absPath, entry.name)
-      if (isIgnored(rel, entry.isDirectory(), rules, showIgnored)) continue
+      if (isIgnored(rel, showIgnored)) continue
 
       if (entry.name.toLowerCase().includes(trimmedQuery)) {
         let modifiedAt = 0
