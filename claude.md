@@ -69,6 +69,10 @@ shared-ui/                # Shared React components and Zustand stores
 Renderer (React + Zustand) → IPC invoke → Preload bridge → Main process → Agent/Commands → IPC response → Zustand update → React re-render
 ```
 
+### Persisted UI state in Zustand
+
+When a UI field lives in `useUIStore` AND in `localStorage` (e.g. `leftSidebarWidth`, `leftSidebarCollapsed`, `markdownEditMode`), the localStorage read **must appear in two places**: the store's initial value AND the `reset()` action body. `session-store.ts` calls `useUIStore.getState().reset()` on every project open/close — if `reset()` hardcodes a default instead of re-reading via a `readX()` helper, the persisted preference silently un-applies the moment the user switches projects. Canonical example: `leftSidebarWidth: readLeftWidth()` appears in both spots; same shape for `leftSidebarCollapsed: readLeftCollapsed()`.
+
 ### Agent Layer (pi-mono)
 The coordinator in `lib/agents/coordinator.ts` creates a pi-mono Agent with:
 - Built-in coding tools from `@mariozechner/pi-coding-agent` (read, write, edit, bash, grep, find)

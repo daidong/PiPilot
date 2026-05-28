@@ -1157,6 +1157,22 @@ export default function App() {
         e.preventDefault()
         useSharingStore.getState().injectDebugConflict()
       }
+      // Cmd+B / Ctrl+B → Toggle the left sidebar. Bails out when focus is in an
+      // editable surface so the editor still gets ⌘B for bold (CodeMirror,
+      // Milkdown, chat textarea, contentEditable). Mirrors VS Code's precedence.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+        const tgt = e.target as HTMLElement | null
+        const editable =
+          tgt?.tagName === 'INPUT' ||
+          tgt?.tagName === 'TEXTAREA' ||
+          tgt?.isContentEditable === true ||
+          !!tgt?.closest?.('.cm-editor') ||
+          !!tgt?.closest?.('.milkdown')
+        if (!editable) {
+          e.preventDefault()
+          useUIStore.getState().toggleLeftSidebar()
+        }
+      }
       // Ctrl+` or Cmd+` → Toggle terminal
       if ((e.metaKey || e.ctrlKey) && e.key === '`') {
         e.preventDefault()
