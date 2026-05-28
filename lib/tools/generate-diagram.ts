@@ -486,7 +486,7 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         if (msg.startsWith('SVG_REQUIRES_VISION_MODEL:')) {
           return toAgentResult('generate_diagram', toolError('SVG_REQUIRES_VISION_MODEL', msg.slice('SVG_REQUIRES_VISION_MODEL:'.length).trim(), {
             suggestions: [
-              'Switch the chat model to a vision-capable one (GPT-4o, Claude Opus 4.5, Gemini 2.5) under Settings → Model.',
+              'Switch the chat model to a vision-capable one (GPT, Claude Opus, or Gemini) under Settings → Model.',
               'Or, request a raster output by using a .png extension instead of .svg, or by setting format: "png".',
             ],
           }))
