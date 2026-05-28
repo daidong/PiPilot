@@ -27,6 +27,7 @@ const LEFT_WIDTH_MIN = 260
 const LEFT_WIDTH_MAX = 480
 const LEFT_WIDTH_DEFAULT = 320
 const LEFT_WIDTH_KEY = 'ui.leftSidebarWidth'
+const LEFT_COLLAPSED_KEY = 'ui.leftSidebarCollapsed'
 const clampLeftWidth = (px: number): number =>
   Math.max(LEFT_WIDTH_MIN, Math.min(LEFT_WIDTH_MAX, Math.round(px)))
 const readLeftWidth = (): number => {
@@ -34,6 +35,10 @@ const readLeftWidth = (): number => {
   const raw = window.localStorage?.getItem(LEFT_WIDTH_KEY)
   const n = raw ? Number.parseInt(raw, 10) : NaN
   return Number.isFinite(n) ? clampLeftWidth(n) : LEFT_WIDTH_DEFAULT
+}
+const readLeftCollapsed = (): boolean => {
+  if (typeof window === 'undefined') return false
+  return window.localStorage?.getItem(LEFT_COLLAPSED_KEY) === 'true'
 }
 
 // Markdown edit mode preference (rendered Milkdown vs raw CodeMirror).
@@ -98,6 +103,8 @@ interface UIState {
   setModel: (model: ModelId) => void
   setIdle: (idle: boolean) => void
   toggleRightSidebar: () => void
+  /** ⌘B / Ctrl+B — hides the entire left panel for max chat/view width. Persisted to localStorage. */
+  toggleLeftSidebar: () => void
   terminalVisible: boolean
   terminalAlive: boolean
   toggleTerminal: () => void
@@ -139,7 +146,7 @@ export const useUIStore = create<UIState>((set) => ({
   selectedModel: DEFAULT_MODEL,
   isIdle: true,
   rightSidebarCollapsed: false,
-  leftSidebarCollapsed: false,
+  leftSidebarCollapsed: readLeftCollapsed(),
   terminalVisible: false,
   terminalAlive: false,
   workingFiles: [],
@@ -209,6 +216,12 @@ export const useUIStore = create<UIState>((set) => ({
   },
   setIdle: (isIdle) => set({ isIdle }),
   toggleRightSidebar: () => set((s) => ({ rightSidebarCollapsed: !s.rightSidebarCollapsed })),
+  toggleLeftSidebar: () =>
+    set((s) => {
+      const next = !s.leftSidebarCollapsed
+      try { window.localStorage?.setItem(LEFT_COLLAPSED_KEY, String(next)) } catch { /* quota/disabled */ }
+      return { leftSidebarCollapsed: next }
+    }),
   // Ctrl+`: toggle visibility. If not alive yet, also spawn.
   toggleTerminal: () => set((s) => {
     if (!s.terminalAlive) return { terminalVisible: true, terminalAlive: true }
@@ -258,7 +271,11 @@ export const useUIStore = create<UIState>((set) => ({
       centerView: 'chat',
       isIdle: true,
       rightSidebarCollapsed: false,
-      leftSidebarCollapsed: false,
+      // Mirror leftSidebarWidth below — collapsed state is a global UX
+      // preference, not a per-session/per-project flag, so re-read it from
+      // localStorage instead of hardcoding false. Without this, switching
+      // projects (which calls reset()) silently un-hides the panel.
+      leftSidebarCollapsed: readLeftCollapsed(),
       workingFiles: [],
       previewEntity: null,
       previewSourceTab: null,

@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react'
-import { Check, X as XIcon, Loader2, CircleDot } from 'lucide-react'
+import { Check, X as XIcon, Loader2, CircleDot, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useActivityStore } from '../../stores/activity-store'
 import { useUsageStore } from '../../stores/usage-store'
+import { useUIStore } from '../../stores/ui-store'
 import { UpdateReadyPill } from './UpdateReadyPill'
 import { SyncPill } from './SyncPill'
 
@@ -19,6 +20,8 @@ function formatTokens(tokens: number): string {
 }
 
 export function StatusBar() {
+  const leftCollapsed = useUIStore((s) => s.leftSidebarCollapsed)
+  const toggleLeftSidebar = useUIStore((s) => s.toggleLeftSidebar)
   const events = useActivityStore((s) => s.events)
   const activeSkills = useActivityStore((s) => s.activeSkills)
   const runTokens = useUsageStore((s) => s.runTokens)
@@ -60,6 +63,19 @@ export function StatusBar() {
 
   return (
     <div className="h-7 flex items-center px-4 gap-5 border-t t-border t-bg-surface text-[11px] t-text-secondary select-none shrink-0">
+      {/* Left-sidebar toggle — always visible so the panel stays discoverable
+          when collapsed. ⌘B is the keyboard equivalent (App.tsx). */}
+      <button
+        type="button"
+        onClick={toggleLeftSidebar}
+        title={leftCollapsed ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'}
+        aria-label={leftCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+        aria-pressed={!leftCollapsed}
+        className="flex items-center justify-center w-5 h-5 -ml-1 rounded hover:t-bg-hover t-text-muted hover:t-text"
+      >
+        {leftCollapsed ? <PanelLeftOpen size={12} /> : <PanelLeftClose size={12} />}
+      </button>
+
       {/* Active skills */}
       {hasSkills && (
         <div className="flex items-center gap-2 overflow-hidden">
