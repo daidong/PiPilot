@@ -9,6 +9,7 @@ import { TerminalPanel } from './components/layout/TerminalPanel'
 import { ErrorBoundary } from './components/layout/ErrorBoundary'
 import { AcceptInviteModal } from './components/layout/AcceptInviteModal'
 import { ConflictResolveModal } from './components/layout/ConflictResolveModal'
+import { ToastContainer } from './components/layout/ToastContainer'
 import { ImportWizard } from './components/center/ImportWizard'
 import { useChatStore } from './stores/chat-store'
 import { useSessionStore } from './stores/session-store'
@@ -27,6 +28,7 @@ import { useComputeStore } from './stores/compute-store'
 import { useUpdateStore } from './stores/update-store'
 import { useRecapStore } from './stores/recap-store'
 import { useSharingStore } from './stores/sharing-store'
+import { useToastStore } from './stores/toast-store'
 
 const api = (window as any).api
 
@@ -990,6 +992,27 @@ export default function App() {
     // plan-rejected | cost-killed | availability-changed).
     const unsubComputeEvent = api.onComputeEvent((event: any) => {
       useComputeStore.getState().applyEvent(event)
+      // Nudge the user toward the Compute tab when a plan needing approval
+      // lands — otherwise it sits in the store with no UI surface in
+      // whatever view they're in. The CenterPanel badge handles the
+      // persistent reminder; this toast catches the moment-of-arrival.
+      if (event?.kind === 'plan-ready' && event?.requiresApproval) {
+        const isOnCompute = useUIStore.getState().centerView === 'compute'
+        useToastStore.getState().show({
+          key: `plan-ready:${event.backend}:${event.planId}`,
+          variant: 'warning',
+          message: isOnCompute
+            ? 'New compute plan added below — review and approve to run.'
+            : 'Compute plan ready — review and approve before it runs.',
+          action: isOnCompute
+            ? undefined
+            : {
+                label: 'Open Compute',
+                onClick: () => useUIStore.getState().setCenterView('compute'),
+              },
+          durationMs: 8000,
+        })
+      }
     })
 
     // Hydrate persisted runs + pending plans on mount so the Compute
@@ -1262,6 +1285,10 @@ export default function App() {
 
         {/* RFC-013 §9: conflict resolution card — self-hides unless a sync hit a clash */}
         <ConflictResolveModal />
+
+        {/* Transient one-shot notifications (plan-ready, etc). Empty render
+            when the store has no active toasts, so cheap to keep mounted. */}
+        <ToastContainer />
       </div>
     </ErrorBoundary>
   )

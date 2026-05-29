@@ -531,6 +531,16 @@ export function useActiveRunCount(): number {
 }
 
 /**
+ * Count of plans that emitted `plan-ready` and are still sitting
+ * unhandled (no approval, no rejection). Drives the warning-toned
+ * badge on the Compute tab so a plan submitted from chat isn't
+ * silently lost when the user is in a different view.
+ */
+export function usePendingPlanCount(): number {
+  return useComputeStore((s) => s.pendingPlans.size)
+}
+
+/**
  * Returns all pending plans (any backend) that are either awaiting
  * approval OR approved-but-not-yet-running. Rejected plans are
  * excluded — once the user rejects, the card disappears and the

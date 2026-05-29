@@ -910,7 +910,17 @@ function PendingPlanCard({ plan }: { plan: ComputePlanView }) {
   }
 
   const approve = async () => {
+    // Mirror submitRejection's guard. sendChat() below re-enters the chat
+    // agent (coord.chat → agent.prompt); if a prior prompt is still in
+    // flight, pi-mono throws "Agent is already processing a prompt" and
+    // the approval looks broken even though the registry write succeeded.
+    // Block the action up front instead of letting it fail downstream.
+    if (isStreaming) {
+      setRejectionError('Wait for the current copilot response to finish before approving this plan.')
+      return
+    }
     setApproving(true)
+    setRejectionError(null)
     try {
       const result = await api.approveComputePlan?.(plan.backend, plan.planId)
       if (result?.success) {
@@ -992,16 +1002,18 @@ function PendingPlanCard({ plan }: { plan: ComputePlanView }) {
             <button
               type="button"
               onClick={approve}
-              disabled={approving || rejecting}
-              className="px-3 py-1.5 rounded-md text-white text-[11px] font-medium bg-[var(--color-accent)] disabled:opacity-50"
+              disabled={approving || rejecting || isStreaming}
+              title={isStreaming ? 'Copilot is busy — wait for the current response to finish' : undefined}
+              className="px-3 py-1.5 rounded-md text-white text-[11px] font-medium bg-[var(--color-accent)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {approving ? 'Approving...' : 'Approve'}
             </button>
             <button
               type="button"
               onClick={() => { setShowRejectEditor(true); setRejectionError(null) }}
-              disabled={approving || rejecting}
-              className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-50"
+              disabled={approving || rejecting || isStreaming}
+              title={isStreaming ? 'Copilot is busy — wait for the current response to finish' : undefined}
+              className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Reject
             </button>

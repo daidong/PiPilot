@@ -3,7 +3,7 @@ import { MessageSquare, BookOpen, Cpu, Network } from 'lucide-react'
 import { useUIStore, type CenterView } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { useEntityStore } from '../../stores/entity-store'
-import { useActiveRunCount } from '../../stores/compute-store'
+import { useActiveRunCount, usePendingPlanCount } from '../../stores/compute-store'
 import { HeroIdle } from '../center/HeroIdle'
 import { ChatMessages } from '../center/ChatMessages'
 import { ChatInput } from '../center/ChatInput'
@@ -24,6 +24,7 @@ function ViewSwitcher() {
   const setCenterView = useUIStore((s) => s.setCenterView)
   const paperCount = useEntityStore((s) => s.papers.length)
   const activeComputeRuns = useActiveRunCount()
+  const pendingComputePlans = usePendingPlanCount()
 
   return (
     // Bottom hairline gives the nav a real anchor — without it, the tabs
@@ -60,6 +61,18 @@ function ViewSwitcher() {
             {key === 'compute' && activeComputeRuns > 0 && (
               <span className="px-1.5 py-px text-[10px] rounded-full tabular-nums t-bg-accent/15 t-text-accent">
                 {activeComputeRuns}
+              </span>
+            )}
+            {/* Pending-plan badge — warning-toned so it reads as "needs your
+                attention" and stays visually distinct from the running-count
+                badge above. Pulses gently to catch the eye when the user is
+                in a non-Compute view. */}
+            {key === 'compute' && pendingComputePlans > 0 && (
+              <span
+                aria-label={`${pendingComputePlans} pending ${pendingComputePlans === 1 ? 'plan' : 'plans'}`}
+                className="px-1.5 py-px text-[10px] rounded-full tabular-nums bg-amber-500/15 text-amber-500 animate-pulse"
+              >
+                {pendingComputePlans}
               </span>
             )}
 
