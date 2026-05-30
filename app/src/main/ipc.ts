@@ -29,7 +29,7 @@ import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { rebuildIndex, readIndex, isIndexBuilt, WALK_SKIP_DIRS } from '../../../lib/memory-v2/indexer'
-import { migrateToFilesAsCarrier } from '../../../lib/memory-v2/migrate-files'
+import { migrateToFilesAsCarrier, convergeManagedMdFilenames } from '../../../lib/memory-v2/migrate-files'
 import { ensureWorkspaceGitignore } from '../../../lib/memory-v2/workspace-gitignore'
 import { readLatestRecap, writeLatestRecap } from '../../../lib/memory-v2/recaps'
 import {
@@ -488,12 +488,19 @@ function initializeProject(path: string): void {
     if (!filesMig.skipped && filesMig.migrated > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
       console.log(`[ResearchPilot] files-as-carrier migration: ${filesMig.migrated} artifact(s) → files`)
     }
+    // One-time: rename legacy id-named note/tool-output files to the readable
+    // `<title-slug>-<frag>.md` scheme. Idempotent + marker-gated.
+    const renamedMd = convergeManagedMdFilenames(path)
+    if (renamedMd > 0 && process.env.RESEARCH_COPILOT_DEBUG) {
+      console.log(`[ResearchPilot] note filename convergence: ${renamedMd} file(s) renamed`)
+    }
     // Index strategy: a full workspace scan grows with the project, so when a
     // built index already exists (and the migration didn't just rewrite files)
     // open INSTANTLY on the cached shards and re-derive in the background to
     // catch edits made while the app was closed. Only block on a synchronous
-    // scan when there's no index yet (first open) or the migration changed files.
-    if (isIndexBuilt(path) && (filesMig.skipped || filesMig.migrated === 0)) {
+    // scan when there's no index yet (first open), the migration changed files,
+    // or the filename convergence just renamed files.
+    if (isIndexBuilt(path) && (filesMig.skipped || filesMig.migrated === 0) && renamedMd === 0) {
       scheduleBackgroundReindex(path)
     } else {
       rebuildIndex(path)
