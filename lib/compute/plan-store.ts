@@ -76,8 +76,11 @@ export class PlanStore {
   }
 
   /**
-   * Pending approval entries that survived a crash. Used by
-   * Registry.hydrate() to repopulate the approval UI on app boot.
+   * Pending-approval entries only: gated plans that survived a crash and
+   * are still awaiting the user's Approve/Reject. Narrower than
+   * listActive() (which Registry.hydrate() uses) — this excludes
+   * already-approved plans. Kept for callers that specifically want the
+   * un-approved gate set.
    */
   listPending(): Array<{ backend: string; planId: string; record: PlanRecord }> {
     const result: Array<{ backend: string; planId: string; record: PlanRecord }> = []
@@ -91,6 +94,36 @@ export class PlanStore {
           record,
         })
       }
+    }
+    return result
+  }
+
+  /**
+   * Active entries the Compute tab should restore after a refresh /
+   * restart: plans still awaiting approval AND plans already approved
+   * but not yet submitted (the latter render as "queued, waiting for
+   * agent" placeholder rows — `useApprovedPendingPlans` in the renderer).
+   * Rejected plans are excluded — once the user rejects, the card
+   * disappears and the chat flow takes over.
+   *
+   * This is what Registry.hydrate() uses. `listPending()` (approval-queue
+   * only) is intentionally narrower and kept for callers that specifically
+   * want the un-approved gate set. A submitted plan is `clear()`ed by
+   * Registry.submit(), so anything still here with `approved: true` is an
+   * approved-but-not-yet-run plan whose placeholder row must survive a
+   * refresh — that is the bug this method fixes.
+   */
+  listActive(): Array<{ backend: string; planId: string; record: PlanRecord }> {
+    const result: Array<{ backend: string; planId: string; record: PlanRecord }> = []
+    for (const [k, record] of Object.entries(this.load())) {
+      if (record.rejectedAt) continue
+      const idx = k.indexOf('::')
+      if (idx < 0) continue
+      result.push({
+        backend: k.slice(0, idx),
+        planId: k.slice(idx + 2),
+        record,
+      })
     }
     return result
   }

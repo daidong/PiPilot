@@ -423,6 +423,32 @@ test('rejectPlan: requires non-empty comments, emits plan-rejected', async () =>
   }
 })
 
+test('discardPlan: clears the record, emits plan-discarded, idempotent on unknown', async () => {
+  const dir = tempProject()
+  try {
+    const r = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    r.register(new FakeBackend('local', 'local', { requiresApproval: true }))
+    const plan = await r.plan('local', { command: 'python train.py' })
+    r.approvePlan('local', plan.planId)
+    assert.ok(r.getPlanRecord('local', plan.planId), 'precondition: plan exists')
+
+    const events: ComputeEvent[] = []
+    r.subscribe(e => events.push(e))
+    const result = r.discardPlan('local', plan.planId)
+    assert.equal(result.success, true)
+    // Record is gone — a later hydrate / read won't resurrect the row.
+    assert.equal(r.getPlanRecord('local', plan.planId), undefined)
+    const ev = events.find(e => e.kind === 'plan-discarded')
+    assert.ok(ev)
+    assert.equal((ev as any).planId, plan.planId)
+    // Idempotent: discarding again (or an unknown id) is a successful no-op.
+    assert.equal(r.discardPlan('local', plan.planId).success, true)
+    assert.equal(r.discardPlan('local', 'p-never-existed').success, true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ─── runId routing ───────────────────────────────────────────────────────
 
 test('getStatus / stop: route via runId without prefix-string guessing (amendment A4 sibling cleanup)', async () => {
@@ -490,6 +516,29 @@ test('hydrate: returns { runs, pendingPlans }; populates runId routing', async (
     const result = await r2.hydrate()
     assert.equal(result.pendingPlans.length, 1)
     assert.equal(result.pendingPlans[0].planId, p2.planId)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('hydrate: approved-but-not-submitted plan survives (regression — was dropped, emptying the Compute tab)', async () => {
+  const dir = tempProject()
+  try {
+    const r1 = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    r1.register(new FakeBackend('local', 'local', { requiresApproval: true }))
+    // Plan + approve but DON'T submit — mirrors an agent that proposed a
+    // plan, the user approved it, and the run never started through the
+    // backend (e.g. the agent ran the script via raw bash instead).
+    const p = await r1.plan('local', { command: 'python train.py' })
+    r1.approvePlan('local', p.planId)
+
+    // Simulate a UI refresh / restart with a fresh registry.
+    const r2 = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    r2.register(new FakeBackend('local', 'local', { requiresApproval: true }))
+    const result = await r2.hydrate()
+    assert.equal(result.pendingPlans.length, 1)
+    assert.equal(result.pendingPlans[0].planId, p.planId)
+    assert.equal(result.pendingPlans[0].record.approved, true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -209,6 +209,23 @@ export class ComputeRegistry {
     return { success: true }
   }
 
+  /**
+   * Permanently remove a plan from the store and tell subscribers to drop
+   * its row. Used by the Compute tab's per-row delete affordance to clear
+   * stale entries — most often an approved-but-never-executed plan that
+   * lingered because the agent ran the work some other way (or not at all).
+   *
+   * Unlike rejectPlan(), this keeps NO record: the plan is gone, no
+   * comments, no chat re-entry. Idempotent — discarding an unknown plan is
+   * a successful no-op so a double-click (or a row another window already
+   * cleared) doesn't surface a spurious error.
+   */
+  discardPlan(backendId: string, planId: string): { success: boolean; error?: string } {
+    this.plans.clear(backendId, planId)
+    this.emit({ kind: 'plan-discarded', backend: backendId, planId })
+    return { success: true }
+  }
+
   // ── Submit ──────────────────────────────────────────────────────────
 
   /**
@@ -300,7 +317,11 @@ export class ComputeRegistry {
   /**
    * Amendment A3 (RFC-008): returns runs paired with their latest
    * status, so the renderer can restore the Compute tab in one round
-   * trip. Also surfaces pending plans (gates that survived a crash).
+   * trip. Also surfaces active plans — both gates still awaiting approval
+   * AND approved-but-not-yet-submitted plans (their "queued, waiting for
+   * agent" placeholder rows must survive a refresh; submitted plans are
+   * already cleared from the store, so anything approved still here is
+   * genuinely not-yet-run). See PlanStore.listActive().
    */
   async hydrate(): Promise<HydrateResult> {
     const runs: Array<{ run: ComputeRun; status: RunStatus }> = []
@@ -330,7 +351,7 @@ export class ComputeRegistry {
         /* non-fatal: skip this backend's runs */
       }
     }
-    const pendingPlans = this.plans.listPending()
+    const pendingPlans = this.plans.listActive()
     return { runs, pendingPlans, backends: backendsView }
   }
 

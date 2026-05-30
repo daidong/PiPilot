@@ -2394,6 +2394,14 @@ export function registerIpcHandlers(): void {
     return state.coordinator.computeRegistry.rejectPlan(payload.backend, payload.planId, typeof payload.comments === 'string' ? payload.comments : '')
   })
 
+  handleWindow('compute:discard-plan', ({ state }, payload: { backend: string; planId: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.backend !== 'string' || typeof payload.planId !== 'string') {
+      return { success: false, error: 'backend and planId are required' }
+    }
+    return state.coordinator.computeRegistry.discardPlan(payload.backend, payload.planId)
+  })
+
   handleWindow('compute:refresh-availability', async ({ state }) => {
     if (!state.coordinator?.computeRegistry) {
       return { success: false, error: 'Compute registry not initialized' }
