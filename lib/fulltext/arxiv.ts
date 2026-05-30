@@ -157,6 +157,14 @@ export async function fetchArxivFulltext(arxivId: string): Promise<ArxivFetchRes
       timeout: 60_000,
       maxBuffer: 10 * 1024 * 1024,
       encoding: 'utf-8',
+      // stdin ignored, stdout captured (the Markdown), stderr buffered —
+      // NOT forwarded to the parent process's stderr (execSync's default
+      // when stdio is unset). markitdown shells out to pdfminer, which
+      // logs a `log.warning` per unresolved named pattern color (e.g.
+      // "Cannot set gray non-stroke color because /'H2' is an invalid
+      // float value") on tagged PDFs. These are harmless — text still
+      // extracts — but with stderr inherited they flood the app console.
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
     if (output && output.trim().length > 100) {
       const cachePath = writeArxivConverted(arxivId, output)
