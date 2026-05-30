@@ -16,6 +16,7 @@ import {
   RotateCcw,
   X,
   Square,
+  Trash2,
   CheckCircle2
 } from 'lucide-react'
 import {
@@ -468,6 +469,34 @@ function RunRow({
     }
   }
 
+  // Delete affordance — currently scoped to placeholder rows (an
+  // approved-but-never-executed plan lingering in the Compute tab). The
+  // real PlanRecord lives in compute-plans.json; discarding clears it and
+  // the `plan-discarded` event removes the row everywhere. Real runs are
+  // not deletable here yet (they auto-evict after 7 days).
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const doDelete = async () => {
+    if (!run.planId) { setDeleteError('Missing plan id.'); return }
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const result = await api.discardComputePlan?.(run.backend, run.planId)
+      if (result?.success) {
+        // Optimistic local removal for instant feedback; the backend's
+        // own plan-discarded event arrives next and is a no-op.
+        useComputeStore.getState().applyEvent({ kind: 'plan-discarded', backend: run.backend, planId: run.planId })
+      } else {
+        setDeleteError(result?.error || 'Failed to remove plan.')
+        setDeleting(false)
+      }
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to remove plan.')
+      setDeleting(false)
+    }
+  }
+
   const sendToChat = (text: string) => {
     setCenterView('chat')
     setTimeout(() => {
@@ -493,6 +522,7 @@ function RunRow({
   const isPlaceholder = !!run.isPlanPlaceholder
   const canExpand = !isPlaceholder
   const effectiveCanStop = canStop && !isPlaceholder
+  const canDelete = isPlaceholder && !!run.planId
   const rowTint = isPlaceholder
     ? 'border-l-2 border-l-sky-400/40 bg-sky-400/5'
     : isHardFailure
@@ -599,12 +629,47 @@ function RunRow({
           >
             <Square size={11} fill="currentColor" />
           </button>
+        ) : canDelete ? (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setConfirmDelete((v) => !v); setDeleteError(null) }}
+            disabled={deleting}
+            aria-label="Remove from list"
+            title="Remove this queued plan from the list"
+            className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-500/10 t-text-muted hover:text-red-500 disabled:opacity-40 transition-colors"
+          >
+            <Trash2 size={12} />
+          </button>
         ) : (
           <span className="shrink-0 w-6" aria-hidden="true" />
         )}
       </div>
+      {confirmDelete && (
+        <div className="px-10 -mt-1 mb-1.5 flex items-center gap-2 text-[10px]">
+          <span className="t-text-muted">Remove this queued plan? It never ran — this only clears the row.</span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); doDelete() }}
+            disabled={deleting}
+            className="px-2 py-0.5 rounded text-white font-medium bg-red-500 disabled:opacity-50"
+          >
+            {deleting ? 'Removing…' : 'Remove'}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setConfirmDelete(false) }}
+            disabled={deleting}
+            className="px-2 py-0.5 rounded border t-border t-text-secondary hover:t-text disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {stopError && (
         <div className="px-10 -mt-1 mb-1.5 text-[10px] text-red-500">{stopError}</div>
+      )}
+      {deleteError && (
+        <div className="px-10 -mt-1 mb-1.5 text-[10px] text-red-500">{deleteError}</div>
       )}
 
       {/* Progress section for active runs — always visible (not inside expanded).

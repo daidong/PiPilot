@@ -225,12 +225,26 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
     if (isSaved && saveState === 'idle') setSaveState('saved')
   }, [isSaved])
 
-  const handleSaveNote = async () => {
-    if (saveState !== 'idle') return
+  // Save-as-note now confirms a title first (a small box opens on click). The
+  // title becomes the note's front-matter title AND its on-disk filename, so
+  // letting the user set it here is the single place that names the note.
+  const [showNoteBox, setShowNoteBox] = useState(false)
+  const [noteTitle, setNoteTitle] = useState('')
+  const [noteError, setNoteError] = useState<string | null>(null)
+
+  // Readable default seeded from the message's first line.
+  const seedTitle = () => {
+    const first = msg.content.replace(/^#+\s*/, '').split(/[.!?\n]/)[0].trim()
+    return (first.length > 60 ? first.slice(0, 60).trim() : first) || 'Untitled note'
+  }
+
+  const saveNote = async (rawTitle: string) => {
+    const title = rawTitle.trim()
+    if (!title) { setNoteError('Enter a title.'); return }
+    if (saveState === 'saving') return
     setSaveState('saving')
+    setNoteError(null)
     try {
-      const first = msg.content.replace(/^#+\s*/, '').split(/[.!?\n]/)[0].trim()
-      const title = first.length > 60 ? first.slice(0, 57) + '…' : first || 'Untitled note'
       const created = await api.artifactCreate({
         type: 'note',
         title,
@@ -246,10 +260,20 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
       }
       setSaveState('saved')
       markSaved(msg.id)
+      setShowNoteBox(false)
       await refreshAll()
     } catch {
       setSaveState('idle')
+      setNoteError('Failed to save note.')
     }
+  }
+
+  const openNoteBox = () => {
+    if (saveState === 'saved' || saveState === 'saving') return
+    if (showNoteBox) { setShowNoteBox(false); return }
+    setNoteTitle(seedTitle())
+    setNoteError(null)
+    setShowNoteBox(true)
   }
 
   const [copied, setCopied] = useState(false)
@@ -305,17 +329,18 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
         {!isUser && (
           <div className="absolute -right-8 top-2 flex flex-col gap-1.5">
             <button
-              onClick={handleSaveNote}
-              disabled={saveState !== 'idle'}
+              onClick={openNoteBox}
+              disabled={saveState === 'saving'}
+              aria-expanded={showNoteBox}
               className={`transition-opacity ${
                 saveState === 'saved'
                   ? 'opacity-100 t-text-success'
-                  : saveState === 'saving'
-                    ? 'opacity-100 t-text-muted'
+                  : saveState === 'saving' || showNoteBox
+                    ? 'opacity-100 t-text-accent-soft'
                     : 'opacity-0 group-hover:opacity-100 t-text-muted hover:t-text-accent-soft'
               }`}
-              title={saveState === 'saved' ? 'Saved as note' : 'Save entire message as note'}
-              aria-label={saveState === 'saved' ? 'Message saved as note' : 'Save entire message as note'}
+              title={saveState === 'saved' ? 'Saved as note' : 'Save message as note'}
+              aria-label={saveState === 'saved' ? 'Message saved as note' : 'Save message as note'}
             >
               {saveState === 'saving' ? (
                 <Loader2 size={14} className="animate-spin" />
@@ -325,6 +350,50 @@ const MessageBubble = React.memo(function MessageBubble({ msg, isSaved }: { msg:
                 <Bookmark size={14} />
               )}
             </button>
+
+            {/* Title box — opens to the right; confirm/edit before saving. */}
+            {showNoteBox && (
+              <div
+                className="absolute left-full top-0 ml-2 z-30 w-60 rounded-lg border t-border shadow-lg p-2.5"
+                style={{ background: 'var(--color-bg-elevated)' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <label className="block text-[10px] font-medium t-text-muted mb-1">Save as note — title</label>
+                <input
+                  autoFocus
+                  type="text"
+                  value={noteTitle}
+                  onChange={(e) => { setNoteTitle(e.target.value); if (noteError) setNoteError(null) }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); saveNote(noteTitle) }
+                    else if (e.key === 'Escape') { e.preventDefault(); setShowNoteBox(false) }
+                  }}
+                  placeholder="Note title"
+                  disabled={saveState === 'saving'}
+                  className="w-full px-1.5 py-1 text-[11px] rounded border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
+                />
+                {noteError && <p className="mt-1 text-[10px] text-red-500">{noteError}</p>}
+                <div className="flex items-center justify-end gap-1 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowNoteBox(false)}
+                    disabled={saveState === 'saving'}
+                    className="px-2 py-0.5 text-[10px] rounded border t-border t-text-secondary hover:t-text disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => saveNote(noteTitle)}
+                    disabled={saveState === 'saving'}
+                    className="px-2 py-0.5 text-[10px] rounded text-white font-medium bg-[var(--color-accent)] disabled:opacity-50 inline-flex items-center gap-1"
+                  >
+                    {saveState === 'saving' && <Loader2 size={10} className="animate-spin" />}
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
             <button
               onClick={handleCopy}
               className={`transition-opacity ${

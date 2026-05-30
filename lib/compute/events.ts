@@ -36,6 +36,18 @@ export type ComputeEvent =
       comments: string
     }
   | {
+      /**
+       * User dismissed a plan from the Compute tab (e.g. a stale
+       * approved-but-never-executed placeholder row). The PlanRecord is
+       * cleared from the store; the renderer drops the matching pending
+       * plan. Distinct from 'plan-rejected', which keeps the record (with
+       * rejectedAt + comments) and re-enters the chat flow.
+       */
+      kind: 'plan-discarded'
+      backend: string
+      planId: string
+    }
+  | {
       kind: 'run-update'
       backend: string
       runId: string

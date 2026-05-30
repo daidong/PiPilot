@@ -373,6 +373,15 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
         }
         return
       }
+      case 'plan-discarded': {
+        // User deleted the plan from the Compute tab — drop its row
+        // outright (no rejectedAt bookkeeping, unlike plan-rejected).
+        const plans = new Map(state.pendingPlans)
+        if (plans.delete(planKey(event.backend, event.planId))) {
+          set({ pendingPlans: plans })
+        }
+        return
+      }
       case 'run-update':
       case 'run-complete': {
         const runs = new Map(state.runs)

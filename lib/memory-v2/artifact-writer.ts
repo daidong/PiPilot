@@ -17,7 +17,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import { PATHS, type Artifact, type ArtifactType, type PaperArtifact } from '../types.js'
+import { PATHS, AGENT_MD_ID, type Artifact, type ArtifactType, type PaperArtifact } from '../types.js'
 import { slugifyDisplayName } from '../sharing/identity.js'
 import {
   markdownArtifactToText,
@@ -46,13 +46,27 @@ function paperSlug(citeKey: string): string {
 }
 
 /**
- * Short, stable id fragment appended to a paper's filename so two papers that
- * share a citeKey (or both lack one → "paper") never map to the same file and
- * silently overwrite each other. Derived purely from the artifact id, so the
- * path stays a pure function of the artifact (find/update/delete recompute it).
+ * Short, stable id fragment appended to a human-named artifact filename so two
+ * artifacts that share a slug (two papers with the same citeKey, two notes with
+ * the same title) never map to the same file and silently overwrite each other.
+ * Derived purely from the artifact id, so the path stays a pure function of the
+ * artifact (find/update/delete recompute it).
  */
-function paperIdFrag(id: string): string {
+function idFrag(id: string): string {
   return ((id ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'x').toLowerCase()
+}
+
+/**
+ * Filesystem-safe, human-readable filename stem for a note / tool-output,
+ * derived from its title. Mirrors paperSlug (keeps CJK and other readable
+ * characters, neutralises only path separators + reserved chars) and truncates
+ * so the full `<slug>-<frag>.md` comfortably clears filesystem name limits.
+ * Falls back to `note` when the title yields nothing usable.
+ */
+function noteSlug(title: string): string {
+  let s = (title ?? '').trim().replace(/[/\\:*?"<>|\s]+/g, '_')
+  s = s.replace(/^[._-]+|[._-]+$/g, '').slice(0, 60).replace(/[._-]+$/g, '')
+  return s || 'note'
 }
 
 /**
@@ -96,7 +110,21 @@ export function primaryFileRel(artifact: Artifact): string {
   switch (artifact.type) {
     case 'note':
     case 'tool-output':
-      return `${MD_TYPE_DIR[artifact.type]}/${actorDirPrefix(artifact)}${artifact.id}.md`
+      // The pinned agent.md singleton keeps its fixed `agent-md.md` name. It is
+      // special-cased throughout (ensureAgentMd's idempotency check, prompt
+      // references), and title-naming it ('agent.md' → 'agent') would orphan the
+      // existing file and re-create an empty duplicate on the next open. Keeping
+      // bare `<id>.md` also makes legacyRel === newRel, so the convergence
+      // migration skips it untouched.
+      if (artifact.id === AGENT_MD_ID) {
+        return `${MD_TYPE_DIR[artifact.type]}/${actorDirPrefix(artifact)}${artifact.id}.md`
+      }
+      // Human-readable, like papers: `<title-slug>-<idFrag>.md`. The title
+      // lives in front-matter (the index finds the file by rp.id, not by
+      // name), so the filename is purely for the human browsing the folder.
+      // The idFrag keeps same-titled notes from colliding and keeps the path
+      // a pure function of the artifact.
+      return `${MD_TYPE_DIR[artifact.type]}/${actorDirPrefix(artifact)}${noteSlug(artifact.title)}-${idFrag(artifact.id)}.md`
     case 'web-content':
       // Local-only inside .research-pilot — never shared, so no per-actor split.
       return join(PATHS.webContent, `${artifact.id}.json`)
@@ -105,12 +133,22 @@ export function primaryFileRel(artifact: Artifact): string {
       // file's, not a per-actor subdir.
       return `${artifact.filePath}${RP_SIDECAR_SUFFIX}`
     case 'paper':
-      return `${PAPER_DIR}/${actorDirPrefix(artifact)}${paperSlug(artifact.citeKey)}-${paperIdFrag(artifact.id)}${PAPER_BIB_EXT}`
+      return `${PAPER_DIR}/${actorDirPrefix(artifact)}${paperSlug(artifact.citeKey)}-${idFrag(artifact.id)}${PAPER_BIB_EXT}`
   }
 }
 
+/**
+ * The PRE-rename `<id>.md` path a note/tool-output used before filenames
+ * tracked the title. Used ONLY by the one-time filename-convergence migration
+ * to locate and remove the old id-named file. Returns null for other types.
+ */
+export function legacyMdFileRel(artifact: Artifact): string | null {
+  if (artifact.type !== 'note' && artifact.type !== 'tool-output') return null
+  return `${MD_TYPE_DIR[artifact.type]}/${actorDirPrefix(artifact)}${artifact.id}.md`
+}
+
 function paperSidecarRel(paper: PaperArtifact): string {
-  return `${PAPER_DIR}/${actorDirPrefix(paper)}${paperSlug(paper.citeKey)}-${paperIdFrag(paper.id)}${RP_SIDECAR_SUFFIX}`
+  return `${PAPER_DIR}/${actorDirPrefix(paper)}${paperSlug(paper.citeKey)}-${idFrag(paper.id)}${RP_SIDECAR_SUFFIX}`
 }
 
 /** Read the artifact id recorded in a paper sidecar (.rp.yaml), or null. */

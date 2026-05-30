@@ -272,6 +272,7 @@ export interface ElectronAPI {
   hydrateCompute: () => Promise<{ runs: any[]; pendingPlans: any[] }>
   approveComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; error?: string }>
   rejectComputePlan: (backend: string, planId: string, comments: string) => Promise<{ success: boolean; error?: string }>
+  discardComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; error?: string }>
   stopComputeRun: (runId: string) => Promise<{ success: boolean; error?: string }>
   refreshComputeAvailability: () => Promise<{ success: boolean; error?: string }>
   /** RFC-009 §3.3: AWS connection probe. STS + S3 + EC2 capability check. */
@@ -556,6 +557,8 @@ const api: ElectronAPI = {
     invoke('compute:approve-plan', { backend, planId }),
   rejectComputePlan: (backend: string, planId: string, comments: string) =>
     invoke('compute:reject-plan', { backend, planId, comments }),
+  discardComputePlan: (backend: string, planId: string) =>
+    invoke('compute:discard-plan', { backend, planId }),
   stopComputeRun: (runId: string) =>
     invoke('compute:stop-run', { runId }),
   refreshComputeAvailability: () =>

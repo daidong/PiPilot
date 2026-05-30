@@ -158,6 +158,51 @@ test('PlanStore: listPending returns only ungated, unapproved, non-rejected entr
   }
 })
 
+test('PlanStore: listActive returns every non-rejected entry — approved-but-not-run plans survive hydrate (regression)', () => {
+  const dir = tempProject()
+  try {
+    const store = new PlanStore(dir)
+
+    // (a) requires approval, not yet approved → active (approval banner)
+    store.write('modal', 'p-pending', sampleRecord('p-pending', {
+      effectiveRequiresApproval: true,
+      approved: false,
+    }))
+
+    // (b) requires approval, already approved but NOT yet submitted →
+    // active (renders as a "queued, waiting for agent" placeholder row).
+    // This is the case the old listPending()-backed hydrate dropped,
+    // making the Compute tab go empty after a UI refresh.
+    store.write('modal', 'p-approved', sampleRecord('p-approved', {
+      effectiveRequiresApproval: true,
+      approved: true,
+      approvedAt: new Date().toISOString(),
+    }))
+
+    // (c) rejected → NOT active (chat flow takes over)
+    store.write('modal', 'p-rejected', sampleRecord('p-rejected', {
+      effectiveRequiresApproval: true,
+      approved: false,
+      rejectedAt: new Date().toISOString(),
+      rejectionComments: 'nope',
+    }))
+
+    // (d) auto-approved (no approval required) but not yet submitted →
+    // active (also a queued placeholder until the agent executes).
+    store.write('local', 'p-auto', sampleRecord('p-auto', {
+      effectiveRequiresApproval: false,
+      approved: true,
+    }))
+
+    const active = store.listActive()
+    const ids = active.map((e) => e.planId).sort()
+    assert.deepEqual(ids, ['p-approved', 'p-auto', 'p-pending'])
+    assert.ok(!ids.includes('p-rejected'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('PlanStore: composite key cleanly splits even when planId contains :: (regression guard)', () => {
   const dir = tempProject()
   try {

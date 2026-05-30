@@ -9,15 +9,19 @@
  * between new-format and legacy artifacts.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { PATHS, type Artifact, type ArtifactType } from '../types.js'
 import { readArtifactFromFile } from './artifact-files.js'
-import { writeArtifactToFile } from './artifact-writer.js'
-import { rebuildIndex } from './indexer.js'
+import { writeArtifactToFile, primaryFileRel, legacyMdFileRel } from './artifact-writer.js'
+import { rebuildIndex, scanWorkspaceArtifacts } from './indexer.js'
 
 const MARKER_REL = join(PATHS.root, '.artifact-model')
 const ARCHIVE_REL = join(PATHS.root, 'artifacts-legacy')
+// Separate marker for the one-time note/tool-output filename convergence
+// (id-named `.md` → `<title-slug>-<frag>.md`). Distinct from the files-model
+// marker so it runs once even on workspaces already migrated to files.
+const MD_FILENAME_MARKER_REL = join(PATHS.root, '.note-filenames')
 
 // web-content is intentionally NOT migrated: it stays as local JSON inside
 // `.research-pilot/artifacts/web-content/` (RFC-013 decision — not shared,
@@ -87,4 +91,61 @@ export function migrateToFilesAsCarrier(projectPath: string): MigrationResult {
   }
 
   return { migrated: artifacts.length, skipped: false }
+}
+
+/** True once the one-time filename convergence has run for this project. */
+export function isNoteFilenamesConverged(projectPath: string): boolean {
+  return existsSync(join(projectPath, MD_FILENAME_MARKER_REL))
+}
+
+/**
+ * One-time convergence of legacy id-named note/tool-output files
+ * (`rp-artifacts/notes/[<actor>/]<id>.md`) to the title-based scheme
+ * (`<title-slug>-<frag>.md`). The file's content is unchanged — only its name.
+ *
+ * Safe to call on every project open: gated by a marker, and idempotent anyway
+ * (a file already at the new path has no legacy `<id>.md` sibling to rename).
+ * Returns the number of files renamed. Caller should rebuildIndex afterward so
+ * any cached shard paths are refreshed (the index keys on rp.id, so entries
+ * survive the rename regardless).
+ */
+export function convergeManagedMdFilenames(projectPath: string): number {
+  if (isNoteFilenamesConverged(projectPath)) return 0
+
+  let scanned: Artifact[]
+  try {
+    scanned = scanWorkspaceArtifacts(projectPath)
+  } catch {
+    return 0   // can't scan → leave the marker unset so it retries next open
+  }
+
+  let renamed = 0
+  for (const a of scanned) {
+    if (a.type !== 'note' && a.type !== 'tool-output') continue
+    const legacyRel = legacyMdFileRel(a)
+    if (!legacyRel) continue
+    const newRel = primaryFileRel(a)
+    if (legacyRel === newRel) continue                 // already title-named
+    const legacyAbs = join(projectPath, legacyRel)
+    if (!existsSync(legacyAbs)) continue               // nothing legacy to move
+    try {
+      // Write the new-named file from the artifact, then drop the old one only
+      // after the new file is confirmed on disk (never lose content).
+      writeArtifactToFile(projectPath, a)
+      if (existsSync(join(projectPath, newRel))) {
+        rmSync(legacyAbs, { force: true })
+        renamed++
+      }
+    } catch {
+      // best-effort per file; a failure here just leaves the legacy file in place
+    }
+  }
+
+  try {
+    mkdirSync(join(projectPath, PATHS.root), { recursive: true })
+    writeFileSync(join(projectPath, MD_FILENAME_MARKER_REL), '1', 'utf-8')
+  } catch {
+    // marker write failed → harmlessly retries next open
+  }
+  return renamed
 }
