@@ -22,9 +22,10 @@
  */
 
 import { join } from 'node:path'
-import { trace } from '@opentelemetry/api'
+import { context, trace } from '@opentelemetry/api'
 import { PATHS } from '../types.js'
 import { appendJsonl, appendJsonlSync } from '../telemetry/jsonl-writer.js'
+import { TURN_ID_KEY } from '../telemetry/context-keys.js'
 
 export type ArtifactOp =
   | 'create'
@@ -87,6 +88,17 @@ function buildRow(row: LedgerRowInput): ArtifactLedgerRow {
       spanId = spanId ?? ctx.spanId
     }
   }
+  // Phase T: pull turnId off the active turn context when the caller didn't
+  // supply it (explicit value still wins). The coordinator publishes
+  // TURN_ID_KEY for the whole turn, so in-turn artifact ops carry turnId
+  // without every call site threading it. Rows written outside a turn context
+  // (migrate-import-history backfill, background tasks) resolve to undefined —
+  // left turn-less by design, recovered via the timestamp-window join.
+  let turnId = row.turnId
+  if (!turnId) {
+    const ctxTurn = context.active().getValue(TURN_ID_KEY)
+    if (typeof ctxTurn === 'string') turnId = ctxTurn
+  }
   const fullRow: ArtifactLedgerRow = {
     artifactId: row.artifactId,
     version: row.version,
@@ -99,7 +111,7 @@ function buildRow(row: LedgerRowInput): ArtifactLedgerRow {
     initiator: row.initiator,
     traceId,
     spanId,
-    turnId: row.turnId,
+    turnId,
     toolCallId: row.toolCallId,
     timestamp: row.timestamp ?? new Date().toISOString(),
     importMeta: row.importMeta

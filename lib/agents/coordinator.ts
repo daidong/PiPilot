@@ -43,9 +43,10 @@ import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
 import { AwsCredentialProvider } from '../aws/credentials.js'
 import { buildSharingPromptClause } from '../sharing/index.js'
 import { runSubLlmText } from '../telemetry/sub-llm.js'
+import { TURN_ID_KEY } from '../telemetry/context-keys.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
-import { SpanKind, type Span, type Attributes } from '@opentelemetry/api'
+import { context, SpanKind, type Span, type Attributes } from '@opentelemetry/api'
 import { redact } from '../telemetry/redaction.js'
 import { createHash } from 'crypto'
 import {
@@ -1313,7 +1314,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // reduction policy — see telemetry-adapter.ts).
         telemetryAdapter.markUserTurnStart()
         try {
-          return await runChatBody()
+          // Phase T: publish the turn id on the active OTel context for the
+          // whole turn body. Child spans (skill router, tool calls, sub-LLM,
+          // compaction) inherit pipilot.turn.id via startSpan, and the memory/
+          // artifact ledgers read it as a fallback — no per-span/per-caller
+          // hand-off. The root span itself already carries it (set above).
+          if (!tid) return await runChatBody()
+          return await context.with(context.active().setValue(TURN_ID_KEY, tid), runChatBody)
         } finally {
           telemetryAdapter.markUserTurnEnd()
         }
@@ -1338,7 +1345,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           ...history,
           { role: 'user' as const, content: loadPrompt('recap-instruction'), timestamp: Date.now() }
         ]
-        const text = (await runSubLlmText({
+        const invokeRecap = (): Promise<string> => runSubLlmText({
           model: piModel,
           systemPrompt: agent.state.systemPrompt,
           // AgentMessage[] → pi-ai Message[]; runSubLlmText documents this cast.
@@ -1350,7 +1357,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           purpose: 'recap',
           ...(signal && { signal }),
           ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
-        })).trim()
+        })
+        // Phase T: recap runs after the turn's root span has closed (renderer-
+        // triggered, separate trace). Tag its span with the turn it recaps so
+        // it isn't a turn-less orphan. getTurnId() still points at the last
+        // turn here. Background detach (extractor/wiki-bg) doesn't apply — recap
+        // belongs to its turn.
+        const recapTurnId = getTurnId?.()
+        const text = (recapTurnId
+          ? await context.with(context.active().setValue(TURN_ID_KEY, recapTurnId), invokeRecap)
+          : await invokeRecap()
+        ).trim()
         if (!text || signal?.aborted) return null
 
         // Extract JSON from possible markdown code fences (router/summary pattern).

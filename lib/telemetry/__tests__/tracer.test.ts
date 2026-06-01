@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { SpanKind } from '@opentelemetry/api'
+import { context, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api'
 import { PipilotTracer } from '../tracer.js'
+import { TURN_ID_KEY } from '../context-keys.js'
 import { PATHS } from '../../types.js'
 
 function mkTracer(extra: Partial<ConstructorParameters<typeof PipilotTracer>[0]> = {}) {
@@ -92,6 +93,38 @@ test('withProjectScope overrides default scope for spans inside the callback', a
     const proj = (s: typeof inner) => s.attributes.find((a) => a.key === 'pipilot.project.id')?.value.stringValue
     assert.equal(proj(inner), 'OVERRIDE-Z')
     assert.equal(proj(outerSpan), 'PROJ-X')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Phase T: spans inherit pipilot.turn.id from the active turn context', async () => {
+  const { dir, t } = mkTracer()
+  try {
+    context.with(context.active().setValue(TURN_ID_KEY, 'turn-T1'), () => {
+      // In-turn span (no explicit parent) → inherits the turn id.
+      t.startSpan('chat in-turn', SpanKind.CLIENT).end()
+      // Background detach (extractor / wiki-bg pattern): explicit ROOT_CONTEXT
+      // parent must NOT pick up the turn id even though one is active. This is
+      // the §6.5 / trace-and-ledger-joins §4.4 guarantee.
+      t.startSpan('chat detached', SpanKind.CLIENT, ROOT_CONTEXT).end()
+    })
+    // Outside any turn context → no turn id.
+    t.startSpan('chat no-turn', SpanKind.CLIENT).end()
+
+    await t.shutdown()
+    const stamp = new Date().toISOString().slice(0, 10)
+    const file = join(dir, PATHS.traces, `spans.${stamp}.jsonl`)
+    const env = JSON.parse(readFileSync(file, 'utf8').trim().split('\n')[0]!)
+    const spans: Array<{ name: string; attributes: Array<{ key: string; value: any }> }> =
+      env.scopeSpans[0].spans
+    const turnId = (name: string) =>
+      spans.find((s) => s.name === name)!.attributes.find((a) => a.key === 'pipilot.turn.id')?.value
+        ?.stringValue
+
+    assert.equal(turnId('chat in-turn'), 'turn-T1', 'in-turn span carries turn id')
+    assert.equal(turnId('chat detached'), undefined, 'ROOT_CONTEXT span has no turn id')
+    assert.equal(turnId('chat no-turn'), undefined, 'span outside a turn has no turn id')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
