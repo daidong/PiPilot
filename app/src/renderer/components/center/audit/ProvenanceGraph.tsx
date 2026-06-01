@@ -347,7 +347,16 @@ export function ProvenanceGraph({
         backgroundColor="transparent"
         nodeRelSize={5}
         nodeVal={(n: any) => nodeRadius(n)}
-        nodeLabel={(n: any) => `<b>${n.kind}</b>: ${n.label}`}
+        nodeLabel={(n: any) => {
+          const base = `<b>${n.kind}</b>: ${n.label}`
+          if (n.kind === 'artifact' && typeof n.citationsTotal === 'number' && n.citationsTotal > 0) {
+            const unresolved = n.unresolvedCitations?.length ?? 0
+            return base + (unresolved > 0
+              ? ` — ⚠ ${unresolved}/${n.citationsTotal} citations not retrieved`
+              : ` — ${n.citationsResolved ?? n.citationsTotal}/${n.citationsTotal} citations grounded`)
+          }
+          return base
+        }}
         linkColor={(l: any) => {
           const base = linkColorFor(l)
           return taintedEdges.has(l) ? tintToward(base, palette.taint) : base
@@ -415,6 +424,21 @@ export function ProvenanceGraph({
             ctx.lineWidth = 2 / globalScale
             ctx.strokeStyle = '#fff'
             ctx.beginPath(); ctx.arc(n.x, n.y, r + 2, 0, Math.PI * 2); ctx.stroke()
+          }
+          // Citation flag (A1) — amber badge at top-right of artifacts that cite
+          // never-retrieved sources. Deliberately a different visual language
+          // than the red taint rings: this is an automatic "verify these
+          // references" cue, not a user-marked suspect. A canvasLabel-colored
+          // halo keeps the dot legible on any node fill / theme.
+          if (n.kind === 'artifact' && Array.isArray(n.unresolvedCitations) && n.unresolvedCitations.length > 0) {
+            const bx = n.x + r * 0.72
+            const by = n.y - r * 0.72
+            const br = Math.max(2.2, r * 0.46)
+            ctx.setLineDash([])
+            ctx.beginPath(); ctx.arc(bx, by, br + 1 / globalScale, 0, Math.PI * 2)
+            ctx.fillStyle = palette.canvasLabel; ctx.fill()
+            ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2)
+            ctx.fillStyle = palette.warn; ctx.fill()
           }
           // Label gating: per-node zoom threshold from importance rank
           const zoomThresh = labelZoomThreshold.get(n.id) ?? 3.0
