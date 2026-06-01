@@ -15,7 +15,9 @@
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { PATHS } from '../types.js'
+import type { Artifact, PaperArtifact } from '../types.js'
 import { getArtifacts } from '../memory-v2/indexer.js'
+import { extractCitations, resolveCitations, toCanonicalDoi, toCanonicalUrl } from './citations.js'
 import type {
   AuditGraph,
   EdgeRel,
@@ -305,27 +307,73 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
     }
   }
 
-  // 4. Artifacts (with title lookup) ---------------------------------------
+  // 4. Artifacts (title lookup + citation resolvability) -------------------
   // Titles come from the RFC-014 derived index, not by reading the ledger's
   // `path` as JSON — post-RFC-014 that path is a real .md/.bib/.rp.yaml file, so
   // the old JSON.parse always failed and the graph fell back to bare filenames.
-  const titleById = new Map<string, string>()
-  try {
-    for (const a of getArtifacts(projectPath)) {
-      const t = (a as { title?: string; summary?: string }).title || (a as { summary?: string }).summary
-      if (t) titleById.set(a.id, t)
+  // The index also carries full `content` (rebuildIndex persists the whole
+  // artifact), which the A1 citation scan reads — no extra file I/O.
+  let allArtifacts: Artifact[] = []
+  try { allArtifacts = getArtifacts(projectPath) } catch { /* index unavailable — filenames + no citation stats */ }
+  const artifactsById = new Map(allArtifacts.map(a => [a.id, a]))
+
+  // Retrieved-identifier set for citation resolvability (A1): the project's
+  // paper library plus every DOI / arXiv id / URL seen in a retrieval tool's
+  // args or result. A cited id present here was actually fetched or curated;
+  // one that's absent lands on the per-artifact fabrication watchlist.
+  const retrievedIds = new Set<string>()
+  for (const a of allArtifacts) {
+    if (a.type !== 'paper') continue
+    const p = a as PaperArtifact
+    const d = p.doi ? toCanonicalDoi(p.doi) : null
+    if (d) retrievedIds.add(d)
+    const u = p.url ? toCanonicalUrl(p.url) : null
+    if (u) retrievedIds.add(u)
+  }
+  const RETRIEVAL_TOOLS = new Set([
+    'fetch-fulltext', 'web_fetch', 'web_search', 'literature-search', 'convert_document'
+  ])
+  for (const sp of spans) {
+    if (!sp.name.startsWith('execute_tool ')) continue
+    const tool = String(sp.attrs['gen_ai.tool.name'] || sp.name.replace('execute_tool ', ''))
+    if (!RETRIEVAL_TOOLS.has(tool)) continue
+    for (const evName of ['pipilot.tool.args', 'pipilot.tool.result']) {
+      const ev = sp.events.find(e => e.name === evName)
+      if (!ev) continue
+      for (const c of extractCitations(String(ev.attrs.body ?? ''))) retrievedIds.add(c.canonical)
     }
-  } catch { /* index unavailable — fall back to filenames below */ }
+  }
+
+  // Citation stats apply only to "citing" text artifacts; papers ARE the
+  // sources, data/binary have no prose. Empty content → no signal (omit).
+  const CITING_TYPES = new Set(['note', 'web-content', 'tool-output'])
+  const citationStats = (a: Artifact | undefined): Partial<GraphNode> => {
+    if (!a || !CITING_TYPES.has(a.type)) return {}
+    const text = typeof (a as { content?: unknown }).content === 'string'
+      ? (a as { content: string }).content
+      : ''
+    if (!text) return {}
+    const res = resolveCitations(extractCitations(text), retrievedIds)
+    return {
+      citationsTotal: res.total,
+      citationsResolved: res.resolved,
+      citationResolutionRate: res.rate,
+      ...(res.unresolved.length > 0 && { unresolvedCitations: res.unresolved }),
+    }
+  }
+
   for (const r of ledger) {
     const id = `artifact:${r.artifactId}`
     if (nodes.has(id)) continue
-    const title = titleById.get(r.artifactId) ?? null
+    const a = artifactsById.get(r.artifactId)
+    const title = (a && ((a as { title?: string }).title || (a as { summary?: string }).summary)) || null
     addNode(id, 'artifact', title || r.path.split('/').pop() || r.artifactId, {
       artifactId: r.artifactId,
       type: r.type,
       title,
       path: r.path,
       versions: ledgerByArtifact.get(r.artifactId) || [],
+      ...citationStats(a),
     })
   }
 
