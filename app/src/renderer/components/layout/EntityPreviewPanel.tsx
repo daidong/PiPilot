@@ -496,6 +496,9 @@ export function EntityPreviewPanel() {
 
     const targetType: 'text' | 'csv' = CSV_EXTS.has(ext) ? 'csv' : 'text'
     const isMarkdown = ext === 'md' || ext === 'markdown'
+    // Plain-text editables share markdown's draft/baseline machinery so Save,
+    // dirty detection and the unsaved-close guard all work uniformly.
+    const isEditableText = NAVIGABLE_FILE_EXTS.has(ext) && !isMarkdown && !CSV_EXTS.has(ext)
     setFileType(targetType)
     setLoading(true)
     api.readFile(entity.filePath)
@@ -503,7 +506,7 @@ export function EntityPreviewPanel() {
         if (res.success && typeof res.content === 'string') {
           setFileContent(res.content)
           if (res.path) resolvedAbsPathRef.current = res.path
-          if (targetType === 'text' && isMarkdown) {
+          if (targetType === 'text' && (isMarkdown || isEditableText)) {
             setDraftMarkdown(res.content)
             setBaselineMarkdown(res.content)
             setEditorSeedMarkdown(res.content)
@@ -511,8 +514,8 @@ export function EntityPreviewPanel() {
             setSaveError(null)
             setSaveSuccess(null)
           }
-        } else if (!res.success && targetType === 'text' && isMarkdown) {
-          setSaveError(res.error || 'Failed to load markdown file.')
+        } else if (!res.success && targetType === 'text' && (isMarkdown || isEditableText)) {
+          setSaveError(res.error || 'Failed to load file.')
         }
       })
       .finally(() => setLoading(false))
@@ -613,8 +616,18 @@ export function EntityPreviewPanel() {
 
   const fileExt = entity.filePath ? getExtension(entity.filePath) : ''
   const isFileMarkdown = Boolean(entity.filePath && (fileExt === 'md' || fileExt === 'markdown'))
+  // Plain-text workspace files (.gitignore, .env, .json, .py, .yml, …) are now
+  // editable+savable in the drawer, same as markdown but through a raw editor
+  // and a verbatim writeFile (no frontmatter/Milkdown round-trip). Scoped to the
+  // text types the tree already opens here (NAVIGABLE_FILE_EXTS), minus markdown
+  // (richer path) and CSV (its own table preview).
+  const isEditableTextFile = Boolean(entity.filePath)
+    && NAVIGABLE_FILE_EXTS.has(fileExt)
+    && !isFileMarkdown
+    && fileExt !== 'csv'
+    && fileExt !== 'tsv'
   const isInlineEditable = !entity.filePath
-  const isEditable = isInlineEditable || isFileMarkdown
+  const isEditable = isInlineEditable || isFileMarkdown || isEditableTextFile
   const isMemoryFrontmatterDirty = isMemory && (
     memoryNameDraft !== memoryNameBaseline ||
     memoryTypeDraft !== memoryTypeBaseline ||
@@ -819,13 +832,17 @@ export function EntityPreviewPanel() {
       return
     }
 
-    const issues = detectPotentialLoss(baselineMarkdown, nextMarkdown)
-    if (issues.length > 0) {
-      const details = issues.map((issue) => `- ${issue}`).join('\n')
-      const proceed = window.confirm(
-        `Potential markdown compatibility risk detected:\n${details}\n\nSave anyway?`
-      )
-      if (!proceed) return
+    // detectPotentialLoss guards markdown round-trips (code fences, mermaid,
+    // images). It's meaningless for hand-edited plain text, so skip it there.
+    if (isInlineEditable || isFileMarkdown) {
+      const issues = detectPotentialLoss(baselineMarkdown, nextMarkdown)
+      if (issues.length > 0) {
+        const details = issues.map((issue) => `- ${issue}`).join('\n')
+        const proceed = window.confirm(
+          `Potential markdown compatibility risk detected:\n${details}\n\nSave anyway?`
+        )
+        if (!proceed) return
+      }
     }
 
     try {
@@ -873,11 +890,11 @@ export function EntityPreviewPanel() {
           setNoteNameBaseline(persistedTitle)
         }
         await refreshAll()
-      } else if (isFileMarkdown && entity.filePath) {
+      } else if (entity.filePath && (isFileMarkdown || isEditableTextFile)) {
         const api = (window as any).api
         const result = await api.writeFile(entity.filePath, nextMarkdown)
         if (!result?.success) {
-          throw new Error(result?.error || 'Failed to write markdown file.')
+          throw new Error(result?.error || 'Failed to write file.')
         }
         const verify = await api.readFile(entity.filePath)
         const persistedMarkdown = (verify?.success && typeof verify.content === 'string')
@@ -977,6 +994,42 @@ export function EntityPreviewPanel() {
           {draftMarkdown.length} / 5,000
         </span>
       )}
+    </div>
+  )
+
+  // Plain-text files (.gitignore, .env, configs, source) edit through the raw
+  // CodeMirror source editor — verbatim, no markdown transforms — and save via
+  // writeFile. Reuses the same draft/baseline/Save/Cmd+S state as markdown, so
+  // the dirty badge and unsaved-close guard work unchanged.
+  const renderPlainTextEditor = () => (
+    <div className="space-y-2">
+      {(saveError || saveSuccess) && (
+        <div className={`text-xs px-2 py-1 rounded border ${
+          saveError
+            ? 't-text-error-soft border-[var(--color-status-error-soft)] bg-[var(--color-status-error)]/10'
+            : 't-text-accent border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10'
+        }`}
+        >
+          {saveError || saveSuccess}
+        </div>
+      )}
+      <div className="border t-border rounded-lg overflow-hidden">
+        <Suspense fallback={<div className="px-3 py-2 text-xs t-text-muted">Loading editor...</div>}>
+          <LazySourceMarkdownEditor
+            editorId={`${editorKey}:plaintext`}
+            initialMarkdown={draftMarkdown || fileContent || ''}
+            externalMarkdown={externalMarkdown}
+            onChange={(text) => {
+              setDraftMarkdown(text)
+              if (saveError) setSaveError(null)
+            }}
+            onFocusChange={setPreviewEditorFocused}
+            onSaveShortcut={() => {
+              void handleSave()
+            }}
+          />
+        </Suspense>
+      </div>
     </div>
   )
 
@@ -1181,6 +1234,9 @@ export function EntityPreviewPanel() {
           }
           return renderMarkdownEditor()
         }
+        if (isEditableTextFile) {
+          return renderPlainTextEditor()
+        }
         return (
           <pre className="text-xs whitespace-pre-wrap break-words t-text font-mono leading-relaxed">{fileContent}</pre>
         )
@@ -1343,7 +1399,7 @@ export function EntityPreviewPanel() {
                 <Save size={14} />
               </button>
             )}
-            {isEditable && !showSlideView && (
+            {(isInlineEditable || isFileMarkdown) && !showSlideView && (
               <button
                 onClick={toggleMarkdownEditMode}
                 className="p-1 rounded t-text-muted t-bg-hover transition-colors"
