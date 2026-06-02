@@ -24,6 +24,7 @@ import {
   getAheadBehind,
   push,
   listLargeChangedFiles,
+  listIgnoredButTracked,
   addRemote,
   pushSetUpstream,
   classifyRemoteError,
@@ -499,6 +500,35 @@ test('conflict round-trip: modify/delete resolves by accepting the deletion (git
     assert.ok(!existsSync(join(verify, 'shared.txt')), 'deletion landed on remote')
   } finally {
     for (const d of [remote, a, b, verify]) rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('listIgnoredButTracked: flags shared files a later .gitignore rule now matches', async (t) => {
+  if (!(await isGitInstalled())) return t.skip('git not installed')
+  const work = tmp('rp-ignored-tracked-')
+  try {
+    await gitInit(work)
+    await runCommand('git', ['config', 'user.email', 'test@example.com'], { cwd: work })
+    await runCommand('git', ['config', 'user.name', 'Test'], { cwd: work })
+    mkdirSync(join(work, 'shared'), { recursive: true })
+    writeFileSync(join(work, 'shared', 'note.md'), '# already shared\n')
+    await commitAll(work, 'share a folder')
+
+    // Healthy repo: nothing tracked is ignored.
+    assert.deepEqual(await listIgnoredButTracked(work), [])
+    const clean = await getLocalSyncState(work)
+    assert.deepEqual(clean?.ignoredTracked, [])
+
+    // User ignores an already-shared folder. git does NOT untrack it — the file
+    // keeps syncing — but it now surfaces as tracked-but-ignored (the warning
+    // set the Sync pill shows), because NEW files there would silently not sync.
+    writeFileSync(join(work, '.gitignore'), 'shared/\n')
+    const flagged = await listIgnoredButTracked(work)
+    assert.ok(flagged.includes('shared/note.md'), 'the already-tracked file is flagged')
+    const state = await getLocalSyncState(work)
+    assert.ok((state?.ignoredTracked ?? []).includes('shared/note.md'), 'surfaced via getLocalSyncState')
+  } finally {
+    rmSync(work, { recursive: true, force: true })
   }
 })
 

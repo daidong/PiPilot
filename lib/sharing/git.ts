@@ -49,6 +49,20 @@ export async function commitAll(cwd: string, message: string): Promise<ExecResul
   return git(cwd, ['commit', '-m', message])
 }
 
+/**
+ * Files that are BOTH tracked AND matched by an ignore rule. `.gitignore` only
+ * affects untracked files, so a user who ignores an already-shared folder does
+ * NOT stop it syncing — `git add -A` keeps committing the tracked files, while
+ * NEW files in that folder are silently skipped (→ asymmetric, shared, no-error
+ * divergence). This lists exactly that set so sync can warn. Empty on a healthy
+ * shared repo. `-c` (cached) is required alongside `-i` by modern git.
+ */
+export async function listIgnoredButTracked(cwd: string): Promise<string[]> {
+  const r = await git(cwd, ['ls-files', '-c', '-i', '--exclude-standard'])
+  if (!r.ok) return []
+  return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean)
+}
+
 export async function fetch(cwd: string): Promise<ExecResult> {
   return git(cwd, ['fetch', 'origin'], 120_000)
 }
