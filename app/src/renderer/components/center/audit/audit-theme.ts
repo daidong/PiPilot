@@ -21,6 +21,8 @@ export interface AuditPalette {
   taint: [number, number, number]
   // Canvas label color — matches --color-text so it tracks light/dark theme.
   canvasLabel: string
+  // Warning color (--color-status-warning) — used for the citation-flag badge.
+  warn: string
 }
 
 function readVar(name: string): string {
@@ -88,6 +90,7 @@ function readPalette(): AuditPalette {
     },
     taint: errorRgb,
     canvasLabel: text,
+    warn: warning,
   }
 }
 

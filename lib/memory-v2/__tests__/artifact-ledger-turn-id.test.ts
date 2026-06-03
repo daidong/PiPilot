@@ -2,16 +2,18 @@
  * Tests for artifact-ledger turnId plumbing.
  *
  * The artifact-ledger writer auto-pulls traceId/spanId from the active OTel
- * span, but turnId is not on the span (it's on a tracer-managed attribute,
- * which OTel doesn't expose for read). So callers must pass turnId
- * explicitly. These tests pin three facts:
+ * span. As of Phase T it also falls back to the turn id published on the
+ * active OTel context (TURN_ID_KEY) when the caller omits it — but an explicit
+ * turnId still wins, and these store-level callers thread it directly. These
+ * tests pin three facts about the explicit path:
  *
  *   1. createArtifact: when CLIContext.turnId is set, the create row carries it.
  *   2. updateArtifact / deleteArtifact: when 4th-arg turnId is set, the row carries it.
  *   3. Back-compat: omitting turnId yields a row without the field (not "null").
  *
- * No agent, no LLM, no tracer wired — pure file-IO test against the ledger
- * append path.
+ * No agent, no LLM, no tracer wired and no surrounding turn context — pure
+ * file-IO test against the ledger append path. The context-fallback path is
+ * covered separately in lib/ledger/__tests__/ledgers.test.ts.
  */
 
 import { test } from 'node:test'

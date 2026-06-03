@@ -45,6 +45,7 @@ const SUITES = {
   diagnostics: 'lib/telemetry/diagnostics/__tests__',
   forwarder: 'lib/telemetry/forwarder/__tests__',
   ledger: 'lib/ledger/__tests__',
+  'audit-graph': 'lib/audit-graph/__tests__',
   'memory-v2': 'lib/memory-v2/__tests__',
   memory: 'lib/memory/__tests__',
   agents: 'lib/agents/__tests__',

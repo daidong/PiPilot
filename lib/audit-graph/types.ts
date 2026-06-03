@@ -75,6 +75,15 @@ export interface GraphNode {
   title?: string | null
   path?: string
   versions?: unknown[]
+
+  // Citation resolvability (A1) — present only on citing text artifacts
+  // (note / web-content / tool-output) that carry scannable content.
+  // `citationResolutionRate` is null when the artifact cites nothing.
+  citationsTotal?: number
+  citationsResolved?: number
+  citationResolutionRate?: number | null
+  /** Canonical ids cited but never retrieved — the fabrication watchlist. */
+  unresolvedCitations?: string[]
 }
 
 export interface GraphEdge {
