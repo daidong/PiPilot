@@ -21,6 +21,7 @@ import {
   gitInit,
   hasChanges,
   commitAll,
+  listIgnoredButTracked,
   fetch,
   getAheadBehind,
   rebaseOntoUpstream,
@@ -80,6 +81,13 @@ export interface SyncState {
   behind: number
   hasUpstream: boolean
   uncommitted: boolean
+  /**
+   * Tracked files now matched by a `.gitignore` rule (RFC-013). Non-empty means
+   * someone ignored an already-shared path: old files keep syncing but NEW files
+   * there silently won't. Surfaced as a warning on the Sync pill. Omitted/[] on a
+   * healthy repo.
+   */
+  ignoredTracked?: string[]
 }
 
 export interface SharingStatus {
@@ -162,7 +170,8 @@ export async function getSharingStatus(projectPath: string): Promise<SharingStat
 export async function getLocalSyncState(projectPath: string): Promise<SyncState | undefined> {
   if (!(await isGitRepo(projectPath))) return undefined
   const ab = await getAheadBehind(projectPath)
-  return { ...ab, uncommitted: await hasChanges(projectPath) }
+  const ignoredTracked = await listIgnoredButTracked(projectPath)
+  return { ...ab, uncommitted: await hasChanges(projectPath), ignoredTracked }
 }
 
 /**

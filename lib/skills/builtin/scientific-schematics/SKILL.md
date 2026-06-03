@@ -43,7 +43,7 @@ doc_type:       journal | conference | thesis | grant | preprint |
                 report | poster | presentation | default
 diagram_type:   flowchart | architecture | pathway | circuit |
                 network | conceptual | auto
-iterations:     1 | 2 | 3   (default 2)
+iterations:     1 | 2 | 3   (default 2 for png, 1 for svg)
 aspect:         auto | square | landscape | portrait   (default auto)
 quality:        low | medium | high | auto   (default derived from doc_type)
 format:         auto | png | svg   (default auto — inferred from output extension)
@@ -76,6 +76,11 @@ the reviewer signals the draft was close-but-not-there. Override with
 `quality: "low"` for explicit exploration / drafts, or `"high"` to force
 camera-ready on the first pass.
 
+For **SVG output** the anchor quality is capped at `medium`: the verdict
+loop runs on a PNG that is transcribed to vector, and the photoreal
+`high` raster detail does not survive transcription. Pass an explicit
+`quality: "high"` to override the cap when you truly want it.
+
 The tool returns the final image path, per-iteration review scores,
 the quality tier used for each iteration, the verdict trail
 (acceptable / needs_edit / needs_regen), and a JSON review log at
@@ -98,7 +103,9 @@ review loop directly. Best raw visual quality. Use when:
 **SVG** — same gpt-image-2 PNG verdict loop, then a vision-capable chat
 model transcribes the finalized PNG into editable SVG markup. The .png
 anchor is preserved as a sibling file (`<name>.png` next to `<name>.svg`)
-so the user can diff visual drift later. Use when:
+so the user can diff visual drift later. By default SVG runs a faster
+single medium-quality anchor pass (override with `iterations` / `quality`
+when a figure needs more). Use when:
 - The user wants to **edit labels / colors** in Inkscape, draw.io, or
   by hand
 - Embedding in LaTeX as `\includegraphics{*.svg}` or in HTML/Markdown
@@ -296,6 +303,12 @@ Default is **2 iterations** for almost every case. Do not bump to 3
 without concrete evidence — the third iteration frequently *regresses*
 a fix from the second, and the tool now detects this and stops early
 anyway (see "Regression detection" below).
+
+**SVG output defaults to a single iteration.** Its verdict loop runs on a
+PNG anchor that is transcribed to vector afterwards, so a second
+refinement round on the anchor buys little once the layout is legible.
+Pass `iterations: 2` explicitly when an SVG anchor's first pass comes
+back structurally off.
 
 - `iterations: 1` — only when you want the first-pass output without
   any review-driven rework.

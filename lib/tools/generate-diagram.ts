@@ -153,6 +153,18 @@ function bumpedQuality(current: Quality): Quality {
   return QUALITY_ORDER[idx + 1]
 }
 
+/**
+ * Cap the SVG-anchor quality. SVG output (Path A) runs the verdict loop
+ * on a PNG "anchor" that is transcribed to vector afterwards. The
+ * photoreal `high` raster tier costs the most render time, but its extra
+ * detail does not survive transcription — the delivered artifact is
+ * resolution-independent SVG. Cap the anchor at `medium`; `low` / `medium`
+ * / `auto` pass through unchanged.
+ */
+function capSvgAnchorQuality(q: Quality): Quality {
+  return q === 'high' ? 'medium' : q
+}
+
 const GenerateDiagramSchema = Type.Object({
   prompt: Type.String({
     description: 'Natural-language description of the diagram to generate. Be specific about components, labels, layout, and quantities.',
@@ -167,7 +179,7 @@ const GenerateDiagramSchema = Type.Object({
     description: `Diagram category. One of: ${VALID_DIAGRAM_TYPES.join(' | ')}. Defaults to auto (keyword-detected).`,
   })),
   iterations: Type.Optional(Type.Number({
-    description: 'Maximum refinement iterations (1-3). Each costs one generation + one review. Default: 2.',
+    description: 'Maximum refinement iterations (1-3). Each costs one generation + one review. Default: 2 for raster (PNG); 1 for SVG output, whose verdict loop runs on a PNG anchor that is transcribed to vector afterwards (a 2nd round buys little there). Pass an explicit value to override.',
   })),
   aspect: Type.Optional(Type.String({
     description: 'Output aspect ratio. One of: auto | square | landscape | portrait. Default: auto (model picks from the prompt). Use "landscape" for wide architecture / flow diagrams with >3 horizontal panels, "portrait" for top-to-bottom CONSORT / PRISMA flows, "square" for single-concept schematics.',
@@ -176,7 +188,7 @@ const GenerateDiagramSchema = Type.Object({
     description: 'Desired output format: auto | png | svg. Default: auto (inferred from the output extension). Pass "svg" when the user says "SVG / 矢量图 / vector / 向量图", pass "png" when they say "PNG / 图片 / raster". Explicit format beats the extension: if format="svg" but output="foo.png", the file is renamed to foo.svg and extensionChanged is reported.',
   })),
   quality: Type.Optional(Type.String({
-    description: 'gpt-image-2 rendering quality: low | medium | high | auto. When omitted, defaults from doc_type — high for journal/conference/thesis/grant, medium for preprint/report/poster, low for presentation. Start at low for cheap exploration; the tool automatically bumps one tier on a needs_edit verdict in later iterations.',
+    description: 'gpt-image-2 rendering quality: low | medium | high | auto. When omitted, defaults from doc_type — high for journal/conference/thesis/grant, medium for preprint/report/poster, low for presentation. For SVG output the anchor is capped at medium (the photoreal "high" detail does not survive transcription to vector). Start at low for cheap exploration; the tool automatically bumps one tier on a needs_edit verdict in later iterations.',
   })),
   reference_path: Type.Optional(Type.String({
     description: 'Optional workspace-relative path to a reference image the first iteration edits instead of drawing from scratch. Requires reference_mode: revise_layout (other modes are not yet implemented).',
@@ -389,11 +401,12 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
 
       const docType = sanitizeDocType(params.doc_type)
       const diagramType = sanitizeDiagramType(params.diagram_type, userPrompt)
-      const iterations = sanitizeIterations(params.iterations)
+      // Final `iterations` / `initialQuality` are resolved below, once the
+      // output format is known — SVG (Path A) gets cheaper speed defaults.
+      const explicitIterations = params.iterations !== undefined ? sanitizeIterations(params.iterations) : undefined
       const aspect = sanitizeAspect(params.aspect)
       const explicitQuality = sanitizeQuality(params.quality)
       const defaultQuality = defaultQualityForDocType(docType)
-      const initialQuality: Quality = explicitQuality ?? defaultQuality
 
       // Only validate reference_mode when a reference_path was supplied.
       // The schema advertises three modes for forward compatibility but
@@ -438,6 +451,18 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
       const formatPref = sanitizeFormat(params.format)
       const effectiveFormat = resolveEffectiveFormat(formatPref, originalExtension)
       const userRequestedSvg = effectiveFormat === 'svg'
+
+      // Path A speed defaults. When SVG output is requested, the verdict
+      // loop runs on a PNG "anchor" that is transcribed to vector
+      // afterwards, so a 2nd refinement round and the `high` raster tier
+      // buy detail that does not survive transcription. Default SVG runs to
+      // a single medium-capped anchor; an explicit `iterations` / `quality`
+      // from the caller still wins. (The chat-model SVG fallback ignores
+      // the quality tier, so the cap is a no-op there; the 1-iteration
+      // default merely speeds that fallback up too.)
+      const iterations = explicitIterations ?? (userRequestedSvg ? 1 : 2)
+      const initialQuality: Quality = explicitQuality
+        ?? (userRequestedSvg ? capSvgAnchorQuality(defaultQuality) : defaultQuality)
 
       // Read live settings (hot-reload) — falls back to the static snapshot.
       // Note: `ctx.settings.diagram` is set by resolveSettings(); older

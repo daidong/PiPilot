@@ -48,6 +48,7 @@ export function SyncPill() {
   const sy = status.sync
   const behind = (sy?.behind ?? 0) > 0 || updatesAvailable
   const ahead = (sy?.ahead ?? 0) > 0 || !!sy?.uncommitted
+  const ignoredTracked = sy?.ignoredTracked ?? []
 
   let icon = <Check size={11} aria-hidden className="shrink-0" />
   let label = 'Synced'
@@ -69,6 +70,19 @@ export function SyncPill() {
     label = 'Conflict'
     tone = 't-text-error'
     title = `Co-edited file conflict: ${conflict.files.join(', ') || 'resolve and re-sync'}`
+  } else if (ignoredTracked.length > 0) {
+    // A shared, tracked path is now matched by .gitignore. Old files still sync,
+    // but NEW files there silently won't — a quiet divergence we surface loudly.
+    icon = <AlertTriangle size={11} aria-hidden className="shrink-0" />
+    label = 'Ignored files'
+    tone = 't-text-warning'
+    const preview = ignoredTracked.slice(0, 5).join(', ')
+    const more = ignoredTracked.length > 5 ? ` +${ignoredTracked.length - 5} more` : ''
+    title =
+      `${ignoredTracked.length} shared file(s) are now matched by .gitignore. ` +
+      `Old files still sync, but NEW files in those folders silently will NOT. ` +
+      `Un-ignore them in .gitignore, or use "stop sharing this folder". ` +
+      `Affected: ${preview}${more}`
   } else if (behind && ahead) {
     icon = <RefreshCw size={11} aria-hidden className="shrink-0" />
     label = 'Sync'
