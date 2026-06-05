@@ -1,6 +1,6 @@
 {
   "name": "@research-copilot/app",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "private": true,
   "description": "AI-powered research assistant desktop application",
   "homepage": "https://github.com/DIR-LAB/Research-Pilot",
