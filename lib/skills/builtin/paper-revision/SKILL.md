@@ -150,7 +150,7 @@ All three layers should appear in the paper, but the mechanism layer is the defe
 
 **When to delegate:**
 - If the user wants a structured quality score before strategic diagnosis, use `scholar-evaluation` first, then return here to interpret the scores as revision priorities.
-- If alternative framings need deeper exploration, use `brainstorming-research-ideas` (Tension Hunting, Stakeholder Rotation, and Simplicity Test lenses are most relevant).
+- If alternative framings need deeper exploration, use `research-strategy` for premise audit, strongest objections, and decisive validation checks.
 
 **Output:** A written decision on the paper's revised framing, including the main thesis, contribution hierarchy, and what NOT to claim.
 
@@ -449,7 +449,7 @@ Supporting skills below are optional collaborators, not prerequisites. Load them
 | Phase | When to load a supporting skill | Which skill |
 |-------|-------------------------------|-------------|
 | Diagnosis | User wants a structured quality score before strategic diagnosis | `scholar-evaluation` |
-| Claim crystallization | Alternative framings need deeper brainstorming | `brainstorming-research-ideas` |
+| Claim crystallization | Alternative framings need deeper strategy work | `research-strategy` |
 | Evidence strengthening | Missing references identified during evidence audit | `literature-search` tool |
 | Evidence strengthening | Need experiment-design patterns or checklist guidance | `paper-writing` (reference only) |
 | Reviewer defense | Want to simulate a full reviewer evaluation | `scholar-evaluation` |

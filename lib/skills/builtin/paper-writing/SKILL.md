@@ -25,7 +25,7 @@ This skill covers the full lifecycle of conference paper writing: from assemblin
 **Do NOT use this skill when**:
 - Research is still in progress — finish experiments and analysis first.
 - You need a literature survey — use the `literature-search` tool.
-- You need to brainstorm research directions — use `brainstorming-research-ideas` or `creative-thinking-for-research`.
+- You need to evaluate, sharpen, or brainstorm research directions — use `research-strategy`.
 - You already have a draft and want to **strategically revise** it (reframe the contribution, strengthen evidence, prepare reviewer defense, unify the narrative) — use `paper-revision` instead. That skill covers framing diagnosis, claim crystallization, and reviewer-adversarial revision, which are fundamentally different from first-draft writing.
 - You are writing a **journal article** (Nature, Science, NEJM, etc.), **technical report**, or **research summary** — use `scientific-writing` instead, which covers IMRAD structure, journal-specific citation styles (APA/AMA/Vancouver), and reporting guidelines (CONSORT/STROBE/PRISMA).
 
@@ -38,6 +38,10 @@ This skill covers the full lifecycle of conference paper writing: from assemblin
 | Technical report, white paper, grant report | `scientific-writing` | Professional report formatting |
 
 If the venue is ambiguous, ask the user before proceeding.
+
+### Do Not Reuse This Structure for Talks
+
+This skill's narrative serves reviewers: contribution claims, evidence, novelty, and venue expectations. Do not directly reuse its paper structure for slides or public/mixed-audience talks. Talks need an audience-facing story spine before contribution claims, frameworks, or result lists. For Marp decks, use `academic-marp-slides`.
 
 ---
 
