@@ -1,6 +1,6 @@
 ---
 name: academic-marp-slides
-description: "Create or revise high-quality academic presentation slides in Markdown using Marp, following a disciplined multi-phase workflow. Use when the user needs conference talk slides, lab meeting decks, thesis defense presentations, research seminars, invited talks, OR wants to revise an existing Marp slide file. Enforces Assertion-Evidence structure and Mayer's multimedia learning principles. For teaching/lecture slides use `teaching-marp-slides`; for written documents use `paper-writing` or `scientific-writing`; for individual figures use `scientific-visualization`."
+description: "Create or revise high-quality academic and research presentation slides in Markdown using Marp, following a story-first multi-phase workflow. Use when the user needs conference talk slides, lab or group meeting decks, thesis defense presentations, research seminars, invited talks, mixed-audience or industry research talks, OR wants to create, revise, or edit a talk deck or a specific slide of it (e.g. 'revise slide 7 of my conference talk'). Starts from an audience-facing story spine before slide titles, frameworks, screenshots, or feature lists; then applies Assertion-Evidence and Mayer multimedia principles. For teaching/lecture slides use `teaching-marp-slides`; for written documents use `paper-writing` or `scientific-writing`; for individual figures use `scientific-visualization`."
 category: Presentation
 tags: [Marp, Slides, Presentation, Conference Talk, Lab Meeting, Thesis Defense, Seminar, Research Talk, Assertion-Evidence, 做PPT, 学术幻灯片, 演示文稿, 学术报告]
 triggers: [make slides, create presentation, conference talk, lab meeting slides, thesis defense, research presentation, seminar slides, marp, slide deck, revise slides, edit slides, improve slides, 做幻灯片, 做报告, 学术演讲, 修改幻灯片, PPT]
@@ -15,11 +15,15 @@ metadata:
 
 ## Core Principle
 
+**A talk is not a structured summary. It is a guided change in audience understanding.** Before slide titles, contribution lists, frameworks, screenshots, or feature inventories, design the path the audience must travel: what they believe now, what observation disrupts that belief, what diagnosis explains it, why it matters to them, what turn follows, what approach answers it, and what evidence proves it.
+
+Apply the story-first workflow built into this skill before Phase 1 whenever the talk is short, public-facing, mixed-audience, industry-facing, demo-heavy, pitch-like, or when the user says the deck feels introductory, flat, report-like, product-like, lacking story, or lacking human connection.
+
 **Slides are not documents.** They are visual aids for a spoken narrative. A good slide deck cannot be produced in one pass — it requires iteration through distinct phases, each with a different goal. This skill enforces a **phased workflow** that separates thinking (what to say) from structuring (what order) from visual design (how it looks). Skipping phases produces the flat, overstuffed, logically-loose decks that plague academic talks.
 
 The two theoretical anchors:
 
-1. **Assertion-Evidence structure** (Michael Alley): Every slide title is a **complete sentence** stating a claim. The slide body is **visual evidence** for that claim. No bullet-point lists of topics.
+1. **Assertion-Evidence structure** (Michael Alley): Every content slide must have a clear claim and visual evidence. In specialist research talks, this usually means the visible title is a complete-sentence assertion. In short, public, executive, industry, or mixed-audience talks, the visible title may be a keyword/chapter title, but the speaker notes must contain the hidden assertion the slide proves.
 2. **Mayer's multimedia learning principles**: Images + spoken explanation beats on-screen text read aloud. Reduce redundancy, maximize signaling, keep related elements spatially close.
 
 **Violating either of these is the most common reason academic slides fail.**
@@ -156,7 +160,7 @@ Phase 4: Polish      ──►  Visual refinement            (20%)
 
 **Goal**: Decide what story to tell before touching any slide software.
 
-**Tools allowed**: Prose outlines and assertion lists. **Do not create a `.md` file yet.**
+**Tools allowed**: Prose story spines, slide spines, and evidence promises. **Do not create a `.md` file yet.**
 
 ### Step 1.1 — Consolidated intake (ask everything up front, in one batch)
 
@@ -167,31 +171,30 @@ Rather than asking questions one at a time and ping-ponging, ask for everything 
 1. **Audience** — peers in subfield / adjacent field / broad scientific / funders / mixed
 2. **Talk length** — lightning 5 min / short 10–12 min / standard 15–25 min / invited 45–60 min / defense 45–60 min
 3. **Venue** — conference hall / seminar room / lab meeting / online — affects theme choice
-4. **The one-sentence thesis** — the single most important thing the audience should remember one week later. If the user can't articulate this, help them extract it from their paper/notes, but do not proceed until it exists.
-5. **2–3 supporting claims** that back up the thesis
-6. **Context material available** — paper draft, prior slides, reference talks (tie to Context Gate above)
-7. **Hard constraints** — mandatory slides (affiliation logos, funding acknowledgments), required sections (disclosures, conflicts)
+4. **Opening material** — a real observation, case, failure, surprise, demo, or lived workflow that can open the talk. If the user only gives a broad "gap," help extract a concrete scene from the source material.
+5. **Audience stakes** — why this audience should care before the solution appears
+6. **Evidence available** — demo, data, results, screenshots, artifacts, figures, or examples that prove the story is real
+7. **Context material available** — paper draft, prior slides, reference talks (tie to Context Gate above)
+8. **Hard constraints** — mandatory slides (affiliation logos, funding acknowledgments), required sections (disclosures, conflicts)
 
-Batch these as one message. Do not begin drafting assertions until the user has answered the required items (1, 2, 4, 5) at minimum.
+Batch these as one message. Do not begin drafting slide titles until the user has answered the required items (1, 2, 4, 5) at minimum, or the Context Gate surfaced enough evidence to infer them and you state the assumptions.
 
-### Step 1.2 — Draft the assertion list
+### Step 1.2 — Draft the story spine before slide titles
 
-Write out **every slide's title as a complete declarative sentence**. Example:
+Before writing any assertion list, framework, section list, or Marp skeleton, write a prose story spine using the contract below.
 
-Bad (topic labels):
-- Introduction
-- Methods
-- Results
-- Discussion
+Required fields:
 
-Good (assertions):
-- Predicting crystal structures beyond 30 atoms is infeasible with traditional CSP methods
-- Existing AI generative models for crystals lack symmetry and local-environment constraints
-- LEGO-xtal combines subgroup augmentation with SO(3)-descriptor pre-relaxation
-- From 25 known sp² carbon structures, we generated 1,741 new low-energy allotropes
-- We discovered four previously unknown negative-curvature graphite structures
+1. **Audience belief** — what the audience likely assumes now
+2. **Opening observation** — the concrete case, failure, surprise, or lived workflow that starts the talk
+3. **Diagnosis** — what is actually going wrong beneath the surface
+4. **Stakes** — why this audience should care now
+5. **Turn** — what must change once the diagnosis is accepted
+6. **Approach** — the method, system, framework, or design that follows naturally
+7. **Evidence** — the result, demo, artifact, data, screenshot, or example that proves it
+8. **Invitation/takeaway** — what the audience should remember, discuss, or reconsider
 
-Each assertion will become exactly one slide in Phase 2. The audience should follow the logical thread by reading titles alone.
+If the story spine starts with a framework, contribution list, or feature list, stop and rewrite it. The audience must feel the problem before the framework appears.
 
 ### Step 1.3 — Propose 2–3 narrative structure options (let the user pick)
 
@@ -201,22 +204,62 @@ Candidate structures:
 
 | Structure | Best when… | Risk |
 |-----------|-----------|------|
-| **Problem-Method-Result** | Standard research with clear problem, clean methodology, quantitative result | Feels generic; no tension |
+| **Observation -> Diagnosis -> Design** | Audience needs to recognize a real phenomenon before hearing the solution | Requires a sharp opening observation |
+| **Case -> Generalization -> Framework** | A concrete demo, user story, or workflow can reveal a broader principle | The case can feel narrow unless generalized clearly |
+| **Failure -> Constraint -> Solution** | Existing tools look impressive but fail in real deployment | Can sound negative if not balanced |
+| **Before -> Breakdown -> After** | Audience already knows the old workflow and needs to see what changes | Needs a clear before/after artifact |
+| **Question -> Investigation -> Answer** | Talk follows a research puzzle or intellectual journey | Can meander if the answer is weak |
+| **Problem -> Method -> Result** | Specialist research audiences expect compressed paper logic | Often feels generic for short, public, or industry talks |
 | **Reversal** | Finding contradicts common belief or prior work | Requires a genuinely surprising result |
-| **Journey** | Exploratory work, serendipitous discovery, methodology paper | Can meander without strong editing |
 | **Comparison** | Benchmarks, head-to-head systems studies, framework papers | Audience may lose interest in the losers |
 
 Present the 2–3 most plausible candidates to the user with a one-line trade-off for each, then wait for their pick.
 
-### Step 1.4 — ★ STOP AND CONFIRM ★
+### Step 1.4 — Choose title style
+
+Do not always force visible assertion titles.
+
+Use **assertion titles** when:
+
+- Audience is technical or specialist
+- Talk is research-result heavy
+- Each slide presents evidence for a claim
+
+Use **keyword/chapter titles** when:
+
+- Talk is short, public-facing, executive, industry, outreach, pitch-like, or panel-adjacent
+- The spoken narrative carries the claim
+- Slides serve as anchors, not documents
+
+In keyword-title mode, every content slide still needs a hidden speaker-note assertion:
+
+```markdown
+# The Gap
+
+<!-- Speaker assertion: The gap is no longer model access; it is whether AI can operate inside accountable workflows. -->
+```
+
+### Step 1.5 — Draft the slide spine
+
+Derive the slide sequence from the story spine. Each content slide must include:
+
+1. **Story beat** — where this slide sits in the audience's cognitive path
+2. **Surface title** — assertion title or keyword/chapter title, depending on title style
+3. **Hidden assertion** — required for keyword-title mode; optional if the visible title is already a complete assertion
+4. **Evidence promise** — what visual/demo/data/screenshot will prove this beat
+
+The audience should be able to follow the talk as a story, not as a table of contents. Technical elements must appear as answers to established obstacles, not as an up-front taxonomy.
+
+### Step 1.6 — ★ STOP AND CONFIRM ★
 
 Present to the user before writing any Markdown. Structure the handoff like a junior-to-advisor briefing:
 
 **Proposal:**
-1. The one-sentence thesis
-2. The ordered list of assertion-style slide titles
-3. The chosen narrative structure (one of the candidates the user picked)
-4. Target slide count and time budget
+1. The story spine (audience belief, observation, diagnosis, stakes, turn, approach, evidence, invitation)
+2. The chosen narrative structure (one of the candidates the user picked)
+3. Title style (assertion or keyword/chapter) and why
+4. The ordered slide spine: story beat, surface title, hidden assertion if needed, evidence promise
+5. Target slide count and time budget
 
 **Assumptions I made (tell me if any are wrong):**
 - [List any inferences — audience expertise level, what to omit, what to emphasize]
@@ -226,15 +269,18 @@ Present to the user before writing any Markdown. Structure the handoff like a ju
 
 **Do not proceed to Phase 2 without explicit approval.** Fixing a broken storyline here costs minutes; fixing it in Phase 3 costs hours.
 
-**Persist the approved storyline.** After approval, call `artifact-create` with `type='note'` and a title like `Slides storyline — <talk title>`, storing the thesis, assertion list, and narrative choice. This gives the user a resumable checkpoint and makes the plan searchable in future sessions.
+**Persist the approved storyline.** After approval, call `artifact-create` with `type='note'` and a title like `Slides storyline — <talk title>`, storing the story spine, narrative choice, title style, slide spine, and evidence promises. This gives the user a resumable checkpoint and makes the plan searchable in future sessions.
 
 ### Phase 1 Checklist
 
 - [ ] Context Gate completed (workspace searched; source material confirmed or absence flagged)
-- [ ] Consolidated intake completed (audience, length, venue, thesis, supporting claims, context material, constraints)
-- [ ] One-sentence thesis is specific (not "we studied X")
-- [ ] Every planned slide has an assertion-style title
+- [ ] Consolidated intake completed (audience, length, venue, opening observation, stakes, evidence, context material, constraints)
+- [ ] Story spine completed before slide titles
+- [ ] Opening observation is concrete, not just "there is a gap"
 - [ ] 2–3 narrative candidates were presented; user picked one
+- [ ] Title style chosen deliberately
+- [ ] Every planned slide has a story beat and evidence promise
+- [ ] Keyword-title slides include hidden speaker-note assertions
 - [ ] STOP gate briefing surfaced assumptions and open questions
 - [ ] User has approved the storyline
 - [ ] Approved storyline persisted as a note artifact
@@ -243,7 +289,7 @@ Present to the user before writing any Markdown. Structure the handoff like a ju
 
 ## Phase 2: Skeleton
 
-**Goal**: Translate the approved storyline into a Marp file where every slide exists but contains no visual content yet.
+**Goal**: Translate the approved slide spine into a Marp file where every slide exists but contains no visual content yet.
 
 **Tools allowed**: Create the `.md` file with minimum front matter. Use the default theme. **No images, no CSS tuning, no colors.**
 
@@ -264,17 +310,18 @@ math: mathjax
 ---
 ```
 
-### Step 2.3 — One slide per assertion
+### Step 2.3 — One slide per story beat
 
-For each approved assertion from Phase 1:
+For each approved story beat from Phase 1:
 
 ```markdown
 ---
 
-# [Full assertion sentence from Phase 1]
+# [Surface title from Phase 1]
 
-> PLACEHOLDER: [one sentence describing what evidence goes here]
+> PLACEHOLDER: [one sentence describing the evidence promised for this story beat]
 
+<!-- Speaker assertion: [hidden assertion if the visible title is a keyword/chapter title] -->
 <!-- Speaker notes: key points to say aloud -->
 ```
 
@@ -304,7 +351,7 @@ If skeleton is 30% over or under target, fix it now.
 
 Show the user the skeleton (titles + placeholders only). Ask:
 
-- Does the logical flow from title to title still work when read in order?
+- Does the logical flow from story beat to story beat still work when read in order?
 - Is any slide doing too much or too little?
 - Are there missing transitions?
 
@@ -313,8 +360,9 @@ Wait for approval before Phase 3.
 ### Phase 2 Checklist
 
 - [ ] Skeleton file written under `.research-pilot/artifacts/tool-output/slides/` (or user-specified path)
-- [ ] Every assertion has a slide
+- [ ] Every story beat has a slide
 - [ ] Every slide has a placeholder describing what visual evidence goes there
+- [ ] Keyword-title slides include hidden speaker assertions
 - [ ] Slide count matches target time budget
 - [ ] Section dividers, title, thank-you slides in place
 - [ ] User has approved the skeleton
@@ -338,7 +386,27 @@ Wait for approval before Phase 3.
 | Qualitative contrast | Two-column before/after layout |
 | Discovery / example | Representative image + caption |
 
-### Step 3.2 — Source figures by priority (use project skills/tools)
+### Step 3.2 — Evidence must serve the story
+
+A screenshot, chart, or demo is not automatically evidence. Before placing any visual, write the story contract for it:
+
+1. **Obstacle answered** — what problem or tension already established in the story does this visual answer?
+2. **Speaker pointing target** — what should the speaker point at or narrate?
+3. **Ten-second memory** — what should the audience remember after a quick glance?
+
+Bad:
+
+- Screenshot shows the model picker.
+- Screenshot shows the audit graph.
+
+Good:
+
+- This screenshot proves model choice is made per task, because different workflow steps cross different data boundaries.
+- This audit graph proves the answer can be reviewed after the fact, rather than trusted as a black box.
+
+If a visual only proves "we have this feature," reframe it as story evidence or cut it.
+
+### Step 3.3 — Source figures by priority (use project skills/tools)
 
 1. **Existing publication figures** from the paper draft or prior slides — but simplify: remove panels, enlarge fonts, trim legends. Publication figures are too dense for slides.
 2. **Fresh publication-quality figures** — delegate to project skills:
@@ -350,7 +418,7 @@ Wait for approval before Phase 3.
 5. **Related-work / citation slides** — use the `literature-search` tool to gather references with proper metadata; pull BibTeX/DOIs into speaker notes or a References backup slide.
 6. **Inline SVG / HTML components** — for metric cards, simple bar charts, timelines (see Component Library below).
 
-### Step 3.3 — Follow one-idea-per-slide limits
+### Step 3.4 — Follow one-idea-per-slide limits
 
 Marp **silently clips** overflowing content. These are survival rules:
 
@@ -362,7 +430,7 @@ Marp **silently clips** overflowing content. These are survival rules:
 
 If a slide violates these, **split it**. Never shrink text to fit.
 
-### Step 3.4 — Less is more (reject filler content)
+### Step 3.5 — Less is more (reject filler content)
 
 Every slide, bullet, figure, and icon must earn its place. Actively reject these filler patterns:
 
@@ -374,7 +442,7 @@ Every slide, bullet, figure, and icon must earn its place. Actively reject these
 
 If a slide feels empty, fix it by **re-composing the layout** (larger figure, better whitespace, two-column split), never by inventing content. One thousand no's for every yes.
 
-### Step 3.5 — Apply Mayer non-redundancy
+### Step 3.6 — Apply Mayer non-redundancy
 
 Whatever you will say aloud must **NOT** also appear as on-screen text. On-screen text should only be:
 
@@ -384,9 +452,9 @@ Whatever you will say aloud must **NOT** also appear as on-screen text. On-scree
 
 Write spoken narration in speaker notes (HTML comments), not on the slide surface.
 
-### Step 3.6 — Write the takeaway line
+### Step 3.7 — Write the takeaway line
 
-Every content slide needs a visible one-line takeaway that reinforces the title-assertion:
+Every content slide needs a visible one-line takeaway that reinforces the slide claim:
 
 ```markdown
 # LEGO-xtal generates 1,741 new sp² allotropes from 25 starting structures
@@ -396,7 +464,7 @@ Every content slide needs a visible one-line takeaway that reinforces the title-
 **A ~70× expansion of the known low-energy sp² carbon space** using only symmetry augmentation and descriptor-guided pre-relaxation.
 ```
 
-### Step 3.7 — ★ STOP AND CONFIRM ★
+### Step 3.8 — ★ STOP AND CONFIRM ★
 
 Render the deck locally and show the user. Like Phase 1, include assumptions and open questions alongside the draft:
 
@@ -411,7 +479,7 @@ Render the deck locally and show the user. Like Phase 1, include assumptions and
 
 Ask the user to:
 
-- Flip through and confirm each slide delivers on its title-assertion
+- Flip through and confirm each slide delivers on its story beat and slide claim
 - Flag any slide that feels too dense, too empty, or illogical
 - Note any figure that needs to be replaced or redrawn
 
@@ -420,6 +488,7 @@ Wait for approval before Phase 4.
 ### Phase 3 Checklist
 
 - [ ] Every slide has primary visual evidence
+- [ ] Every visual answers a specific obstacle in the story
 - [ ] No slide violates the one-idea limits
 - [ ] No slide has more than ~30 English words (or ~50 CJK characters) of on-screen prose
 - [ ] Every slide has a takeaway line
@@ -509,24 +578,52 @@ Classify the request before editing:
 |-------|---------|----------|
 | **L1 — Surface** | Typos, colors, rewordings, image resizing | "fix typos", "make accent green", "this figure too small" |
 | **L2 — Local** | Rework one slide, swap a figure, tighten bullets | "rewrite slide 7", "replace figure on slide 12" |
-| **L3 — Structural** | Reorder sections, add/remove slides, change narrative | "cut 5 min from the talk", "motivation should come after results" |
+| **L3 — Structural** | Reorder sections, add/remove slides, change narrative or story spine | "cut 5 min from the talk", "motivation should come after results", "this feels like an introduction, not a story" |
 | **Vague** | "feels off", "middle is boring", "too dense" | Diagnose first, propose a plan |
 
 Report which level you think applies before editing if it's anything beyond L1.
+
+## Story Diagnosis Checklist
+
+Use this before any visual, title, screenshot, or wording edits when the user says the deck feels:
+
+- introductory
+- flat
+- too much like a report
+- too much like a product pitch
+- lacking story
+- lacking human connection
+- not compelling
+- hard for the audience to care about
+
+Check:
+
+1. Does the deck open with a concrete observed phenomenon, case, failure, or tension?
+2. Does the audience have a reason to care before the solution appears?
+3. Is the framework introduced as an answer to a problem, or as a taxonomy?
+4. Are screenshots/data used as evidence in a story, or as feature demonstrations?
+5. Is there a human actor in the narrative: researcher, user, student, customer, reviewer, or operator?
+6. Does each technical element answer a previously established obstacle?
+7. Can the talk be summarized as "we noticed X, realized Y, therefore built/tested Z"?
+8. If the method/system name were removed, would the story still be interesting?
+
+If two or more fail, classify the request as **L3 structural**. Do not polish the existing deck first. Propose a new story spine and revised slide spine, then wait for user confirmation before editing.
 
 ## Quick Diagnosis Checklist
 
 When the user reports a problem but doesn't pinpoint it, run through this in order. Report findings before making edits.
 
 **Structural level**
-- [ ] Reading titles alone tells a coherent story?
+- [ ] Story spine is visible: audience belief -> observation -> diagnosis -> stakes -> turn -> approach -> evidence -> invitation?
+- [ ] Reading titles/story beats alone tells a coherent story?
 - [ ] Slide count matches stated talk length (±20%)?
 - [ ] Each section has a divider?
 - [ ] Results slides outnumber background slides?
 
 **Per-slide level (scan each content slide)**
-- [ ] Title is an assertion (complete sentence with a claim)?
+- [ ] Title is an assertion, or keyword-title mode has a hidden speaker assertion?
 - [ ] Main visual evidence present and supports the title?
+- [ ] Visual evidence answers a specific story obstacle instead of merely showing a feature?
 - [ ] Body text ≤30 English words (or ~50 CJK chars)?
 - [ ] Takeaway line present?
 - [ ] Not violating one-idea-per-slide limits (≤6 bullets, ≤1 primary figure)?
@@ -543,11 +640,12 @@ Flag any failing items. Let the user pick which to fix.
 
 1. **Load and read** the existing `.md` file completely.
 2. **Classify the request** (L1 / L2 / L3 / vague).
-3. **If L3 or vague**: run diagnosis, propose a plan, wait for user confirmation.
-4. **If L1 or L2 with specific targets**: execute directly.
-5. **Use targeted edits** — not full-file rewrites. Full rewrites are a red flag that you are over-reaching.
-6. **Report changes** as a compact, 1-indexed diff summary (e.g., "Slide 5: replaced figure; Slide 8: split into 8a + 8b").
-7. **Do not polish unrelated slides** unless the user asked for a consistency pass.
+3. **If the user reports a story/compellingness problem**: run Story Diagnosis first; if two or more fail, propose a new story spine and wait for confirmation.
+4. **If L3 or vague**: run diagnosis, propose a plan, wait for user confirmation.
+5. **If L1 or L2 with specific targets**: execute directly.
+6. **Use targeted edits** — not full-file rewrites. Full rewrites are a red flag unless the approved diagnosis is L3 structural story repair.
+7. **Report changes** as a compact, 1-indexed diff summary (e.g., "Slide 5: replaced figure; Slide 8: split into 8a + 8b").
+8. **Do not polish unrelated slides** unless the user asked for a consistency pass.
 
 ## Common Revise Requests and How to Handle
 
@@ -558,6 +656,8 @@ Flag any failing items. Let the user pick which to fix.
 | "This figure is too small" | L2 | Adjust `w:` value, offer to simplify figure |
 | "Rewrite slide 7's bullets" | L2 | Rewrite only slide 7, preserve style |
 | "The middle feels too dense" | L2 vague | Diagnose first: flag overloaded slides, propose splits |
+| "This feels like an intro, not a story" | L3 structural | Run Story Diagnosis, propose new story spine before editing |
+| "The screenshots feel like feature demos" | L3 structural | Re-map screenshots to story obstacles; confirm revised slide spine |
 | "Add a slide about X" | L3 | Ask where it goes, what evidence it needs, confirm title |
 | "Cut 5 minutes from the talk" | L3 | Identify cuttable slides, confirm before removing |
 | "Reorganize so method comes before motivation" | L3 | Confirm the user really wants this (non-standard arc), then reorder |
@@ -887,7 +987,7 @@ Code: github.com/yourname/project
 |---------|-----------|-----|
 | Audience asks "what was the point?" after talk | Phase 1 was skipped; no clear thesis | Return to Phase 1 |
 | Slides look busy and cramped | Phase 3 violated one-idea limits | Split overloaded slides |
-| Listener got lost in the middle | Missing transitions; assertion chain has gaps | Re-read titles in order |
+| Listener got lost in the middle | Missing transitions; story spine has gaps | Re-read story beats in order |
 | Figures illegible from back row | Used publication figures directly | Re-export at slide sizes using `scientific-visualization` |
 | Content overflows and gets clipped | Marp silent-clipping | Visual preview every slide |
 | Polish consumed all the time | Started Phase 4 before content stable | No visual work until content approved |
@@ -916,7 +1016,7 @@ npx @marp-team/marp-cli slides.md --pptx --allow-local-files
 | Publication-quality figures | `scientific-visualization` → PNG/SVG → embed |
 | Custom low-level plots | `matplotlib` or `seaborn` → PNG/SVG → embed |
 | Diagrams and schematics | `scientific-schematics` → SVG → embed |
-| Convert paper draft → talk | `convert-document` tool on PDF/DOCX → extract assertions in Phase 1 |
+| Convert paper draft → talk | `convert-document` tool on PDF/DOCX → extract observations, stakes, evidence, and claims in Phase 1 |
 | Fresh data-driven numbers | `data-analyze` tool → feed results into Phase 3 |
 | Related-work / references | `literature-search` tool → populate References backup slide; also used as quick tier-2 context scan in Context Gate |
 | Search workspace for prior work | `artifact-search` on `papers`/`notes` during Context Gate (tier 1) |

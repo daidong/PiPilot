@@ -34,7 +34,8 @@ import {
   type PersistenceDecision
 } from './context-builder.js'
 import { createSessionBootstrap } from './session-bootstrap.js'
-import { runAgentTurnWithRetry } from './transient-retry.js'
+import { runAgentTurnWithRetry, isTransientLlmError } from './transient-retry.js'
+import { isUsageLimitError, humanizeLlmError } from './llm-error-humanizer.js'
 import { createCoordinatorTelemetryAdapter } from './telemetry-adapter.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
@@ -1179,6 +1180,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           // long-running turn. See lib/agents/transient-retry.ts.
           await runAgentTurnWithRetry(agent, userMessage, imageContents, {
             isAborted: () => turnAborted,
+            // A Claude *subscription* usage cap is not worth retrying — it
+            // resets on a rolling window, not in seconds. Without this, the
+            // raw "429 … rate_limit_error" string matches isTransientLlmError
+            // and the turn silently retries 5× (looking stuck at "thinking")
+            // before surfacing anything. Surface it immediately instead.
+            isTransient: (msg) =>
+              isTransientLlmError(msg) &&
+              !(authMode === 'anthropic-subscription' && isUsageLimitError(msg)),
             onRetry: ({ attempt, nextDelayMs, error }) => {
               if (debug) {
                 console.log(`[Chat] Transient LLM error (attempt ${attempt}); retrying in ${Math.round(nextDelayMs / 1000)}s — ${error.slice(0, 200)}`)
@@ -1235,9 +1244,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         }
 
         if (stopReason === 'error') {
+          // Rewrite a Claude-subscription usage cap into an actionable message
+          // (mirrors how the Codex provider humanizes ChatGPT limits). Returns
+          // null for every other error, so the raw message is preserved.
+          const humanized = humanizeLlmError(errorMessage, { authMode })
           return {
             success: false,
-            error: errorMessage
+            error: humanized
+              || errorMessage
               || 'The LLM request failed. This usually indicates an issue on the model server or with authentication. If you are using a Claude or ChatGPT subscription, try signing out and back in via Settings. Otherwise verify your API key, model selection, and network connection.'
           }
         }

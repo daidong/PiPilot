@@ -64,7 +64,10 @@ function safeReadText(filePath: string): string | null {
  * Only matches lines that are NOT indented (top-level keys).
  */
 function parseFrontmatterField(content: string, field: string): string | undefined {
-  const match = content.match(/^---\n([\s\S]*?)\n---/)
+  // \r?\n so CRLF checkouts (Windows runners default to core.autocrlf=true)
+  // still match — otherwise the whole frontmatter silently fails to parse and
+  // the skill is dropped. See lib/__tests__/skills-loader.test.ts CRLF case.
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (!match) return undefined
   const body = match[1]
   const line = body
@@ -413,12 +416,12 @@ export function buildSkillsCatalogPrompt(entries: SkillEntry[]): string {
  * catalog description, without loading the full skill content.
  */
 export function buildSkillSummary(entry: SkillEntry, maxChars = 2000): string {
-  // Strip frontmatter
-  const bodyMatch = entry.content.match(/^---\n[\s\S]*?\n---\n*([\s\S]*)$/)
+  // Strip frontmatter (CRLF-tolerant — see parseFrontmatterField).
+  const bodyMatch = entry.content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n*([\s\S]*)$/)
   const body = bodyMatch?.[1] ?? entry.content
 
   // Extract Overview + When to Use sections (typically the first ~500 tokens)
-  const sections = body.split(/\n## /)
+  const sections = body.split(/\r?\n## /)
   const overview = sections[0]?.trim() ?? ''  // text before first ## or the # heading section
   const whenToUse = sections.find(s => /^When to Use/i.test(s))
   const summaryParts = [overview]

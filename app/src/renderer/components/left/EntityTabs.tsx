@@ -3,6 +3,26 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 const remarkPlugins = [remarkGfm]
+
+/**
+ * Compact timestamp for Library note rows — answers "when was this produced?"
+ * without eating the narrow sidebar width. Today collapses to a time; older
+ * items show a date (with year only when it differs from now). The full
+ * date-time goes in the row's `title` for hover precision.
+ */
+function formatNoteTime(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const now = new Date()
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  }
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  }
+  return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })
+}
 import {
   BookMarked,
   FolderOpen,
@@ -102,7 +122,7 @@ const tabs = [
   { key: 'skills' as const, label: 'Skills', icon: Sparkles }
 ]
 
-const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem }) {
+const EntityRow = React.memo(function EntityRow({ entity, showTime = false }: { entity: EntityItem; showTime?: boolean }) {
   const deleteEntity = useEntityStore((s) => s.deleteEntity)
   const enrichingPapers = useEntityStore((s) => s.enrichingPapers)
   const isEnriching = enrichingPapers.has(entity.id)
@@ -126,6 +146,10 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
 
   const messageId = entity.provenance?.messageId as string | undefined
   const actor = entity.provenance?.actor
+  // "Produced at" = createdAt, falling back to updatedAt for legacy rows that
+  // predate the field. Only surfaced when the caller opts in (Generated notes).
+  const timeIso = (entity.createdAt || entity.updatedAt) as string | undefined
+  const timeLabel = showTime ? formatNoteTime(timeIso) : ''
   const actorIsMe = !!actor && !!myActorId && actor.id === myActorId
 
   const cancelHide = () => {
@@ -222,6 +246,14 @@ const EntityRow = React.memo(function EntityRow({ entity }: { entity: EntityItem
           )
         ) : (
           <span className="w-1 h-1 rounded-full shrink-0 t-bg-elevated" />
+        )}
+        {timeLabel && (
+          <span
+            className="shrink-0 text-[10px] t-text-muted tabular-nums"
+            title={timeIso ? new Date(timeIso).toLocaleString() : undefined}
+          >
+            {timeLabel}
+          </span>
         )}
         <span className={`text-xs truncate ${entity.id === 'agent-md' ? 't-text font-medium' : 't-text'}`} title={entity.title}>{entity.title}</span>
       </div>
@@ -550,11 +582,20 @@ function LibraryContent({
   const allItems = useMemo(() => [...notes, ...data], [notes, data])
 
   // Split notes: agent.md is the "pinned" one — always visible, never
-  // folded. Everything else (generated notes, user-saved snippets) tucks
-  // into a default-collapsed subgroup so the section stays compact.
+  // folded. Everything else (generated notes, user-saved snippets) groups
+  // under a default-expanded, collapsible "Generated" subgroup.
   const agentMd = useMemo(() => notes.find((n) => n.id === 'agent-md'), [notes])
-  const otherNotes = useMemo(() => notes.filter((n) => n.id !== 'agent-md'), [notes])
-  const [generatedOpen, setGeneratedOpen] = useState(false)
+  // Newest-first so the timestamps read top-to-bottom as a timeline. Sort key
+  // matches what EntityRow displays (createdAt, falling back to updatedAt);
+  // missing/unparseable dates sink to the bottom.
+  const otherNotes = useMemo(() => {
+    const ts = (n: EntityItem) => {
+      const t = Date.parse((n.createdAt || n.updatedAt) as string)
+      return isNaN(t) ? -Infinity : t
+    }
+    return notes.filter((n) => n.id !== 'agent-md').sort((a, b) => ts(b) - ts(a))
+  }, [notes])
+  const [generatedOpen, setGeneratedOpen] = useState(true)
 
   return (
     <>
@@ -584,7 +625,7 @@ function LibraryContent({
                 </button>
                 {generatedOpen && (
                   <div className="pl-3">
-                    {otherNotes.map((e) => <EntityRow key={e.id} entity={e} />)}
+                    {otherNotes.map((e) => <EntityRow key={e.id} entity={e} showTime />)}
                   </div>
                 )}
               </>

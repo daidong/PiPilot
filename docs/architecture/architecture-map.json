@@ -263,14 +263,14 @@
       "loaderApi": ["loadBuiltinSkills", "loadWorkspaceSkills", "loadAllSkills(workspace)", "resolveSkillDependencies", "buildSkillManifests", "readEnabledSkills (.research-pilot/skills-config.json)", "writeEnabledSkills", "buildSkillsCatalogPrompt"],
       "loadTool": "Agent loads a skill's full procedures at runtime via the load_skill tool (lib/tools/skill-tools.ts).",
       "builtin": [
-        "academic-marp-slides", "brainstorming-research-ideas", "coding", "compute-environment",
-        "compute-local", "compute-modal", "compute-stub", "creative-thinking-for-research",
+        "academic-marp-slides", "coding", "compute-environment",
+        "compute-local", "compute-modal", "compute-stub",
         "matplotlib", "paper-revision", "paper-writing", "research-grants", "rewrite-humanize",
-        "scholar-evaluation", "scientific-schematics", "scientific-visualization", "scientific-writing",
+        "research-strategy", "scholar-evaluation", "scientific-schematics", "scientific-visualization", "scientific-writing",
         "seaborn", "teaching-marp-slides"
       ],
-      "builtinCount": 19,
-      "note": "CLAUDE.md says '12 builtin skills' — STALE. Actual count is 19 at this commit (includes compute-* and marp-slides skills)."
+      "builtinCount": 18,
+      "note": "CLAUDE.md says '12 builtin skills' — STALE. Actual count is 18 at this commit (includes compute-* and marp-slides skills)."
     },
 
     "compute": {
