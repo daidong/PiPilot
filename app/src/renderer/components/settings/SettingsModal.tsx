@@ -261,9 +261,11 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
                 researchIntensity={settings.research.researchIntensity}
                 webSearchDepth={settings.research.webSearchDepth}
                 autoSaveSensitivity={settings.research.autoSaveSensitivity}
+                subTaskModelTier={settings.research.subTaskModelTier}
                 onChangeIntensity={v => updateSettings({ research: { ...settings.research, researchIntensity: v } })}
                 onChangeWebDepth={v => updateSettings({ research: { ...settings.research, webSearchDepth: v } })}
                 onChangeAutoSave={v => updateSettings({ research: { ...settings.research, autoSaveSensitivity: v } })}
+                onChangeSubTaskModelTier={v => updateSettings({ research: { ...settings.research, subTaskModelTier: v } })}
               />
             )}
             {activeTab === 'data-analysis' && loaded && (

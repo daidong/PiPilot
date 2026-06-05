@@ -4,7 +4,7 @@
  * Simplified from myRAM's ToolContext — only what Research Copilot actually needs.
  */
 
-import type { ResolvedSettings } from '../../shared-ui/settings-types'
+import type { ResolvedSettings, SubTaskModelTier } from '../../shared-ui/settings-types'
 
 /**
  * Credentials the diagram tool can use to reach image-generation and review
@@ -34,6 +34,22 @@ export interface SvgRasterizeOptions {
   height?: number
 }
 
+/**
+ * Options for a `callLlm` sub-call.
+ *
+ * `tier: 'light'` marks the call as a B-class sub-task safe to run on the
+ * cheap router-tier model (see lib/agents/sub-task-tier.ts). Omit it (or pass
+ * `'flagship'`) to keep the call on the main model. ONLY pass `'light'` for
+ * stateless single-shot calls — never for anything that replays conversation
+ * history; those keep the warm prompt cache and must stay on the main model.
+ * `purpose` labels the sub-LLM telemetry span so cost can be attributed per
+ * sub-task during A/B comparison.
+ */
+export interface SubLlmCallOptions {
+  tier?: SubTaskModelTier
+  purpose?: string
+}
+
 export interface ResearchToolContext {
   /** Root of the workspace (e.g., project directory) */
   workspacePath: string
@@ -42,7 +58,7 @@ export interface ResearchToolContext {
   /** Project-level path for artifact storage */
   projectPath: string
   /** Optional LLM call function for tools that need sub-calls */
-  callLlm?: (systemPrompt: string, userContent: string) => Promise<string>
+  callLlm?: (systemPrompt: string, userContent: string, opts?: SubLlmCallOptions) => Promise<string>
   /**
    * Vision-capable variant of `callLlm`. Stateless single-shot sub-call —
    * does not pass through the agent tool loop or mutate session state.

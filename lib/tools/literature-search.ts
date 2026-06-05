@@ -529,7 +529,7 @@ export function createLiteratureSearchTool(ctx: ResearchToolContext): AgentTool 
       }
 
       try {
-        const reviewText = await ctx.callLlm(REVIEWER_SYSTEM, reviewInput)
+        const reviewText = await ctx.callLlm(REVIEWER_SYSTEM, reviewInput, { tier: 'light', purpose: 'literature-review' })
         const parsed = safeJsonParse<ReviewerLLMOutput>(reviewText)
         if (!parsed || !Array.isArray(parsed.scoredPapers)) {
           // Parse failure fallback: the reviewer LLM output was unparseable

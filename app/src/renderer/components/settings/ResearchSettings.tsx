@@ -1,19 +1,21 @@
 import React from 'react'
 import { SegmentedControl } from './SegmentedControl'
-import type { ResearchIntensity, WebSearchDepth, AutoSaveSensitivity } from '../../../../../shared-ui/settings-types'
+import type { ResearchIntensity, WebSearchDepth, AutoSaveSensitivity, SubTaskModelTier } from '../../../../../shared-ui/settings-types'
 
 interface Props {
   researchIntensity: ResearchIntensity
   webSearchDepth: WebSearchDepth
   autoSaveSensitivity: AutoSaveSensitivity
+  subTaskModelTier: SubTaskModelTier
   onChangeIntensity: (v: ResearchIntensity) => void
   onChangeWebDepth: (v: WebSearchDepth) => void
   onChangeAutoSave: (v: AutoSaveSensitivity) => void
+  onChangeSubTaskModelTier: (v: SubTaskModelTier) => void
 }
 
 export function ResearchSettings({
-  researchIntensity, webSearchDepth, autoSaveSensitivity,
-  onChangeIntensity, onChangeWebDepth, onChangeAutoSave,
+  researchIntensity, webSearchDepth, autoSaveSensitivity, subTaskModelTier,
+  onChangeIntensity, onChangeWebDepth, onChangeAutoSave, onChangeSubTaskModelTier,
 }: Props) {
   return (
     <div className="space-y-7">
@@ -80,6 +82,27 @@ export function ResearchSettings({
           {autoSaveSensitivity === 'conservative' && 'Only saves highly relevant papers. Keeps your library focused.'}
           {autoSaveSensitivity === 'balanced' && 'Saves papers with good relevance. A sensible default.'}
           {autoSaveSensitivity === 'aggressive' && 'Saves more papers for broader coverage. May include tangential results.'}
+        </p>
+      </div>
+
+      {/* Sub-Task Model Tier */}
+      <div>
+        <h4 className="text-sm font-semibold t-text mb-2">Sub-Task Model</h4>
+        <p className="text-[12px] t-text-muted mb-3 leading-relaxed">
+          Which model runs internal helper steps — literature relevance review, compute task-profiling
+          and risk checks, and diagram review. Your chat and its summaries always use your selected model.
+        </p>
+        <SegmentedControl
+          options={[
+            { label: 'Light (cheaper)', value: 'light' as SubTaskModelTier },
+            { label: 'Flagship', value: 'flagship' as SubTaskModelTier },
+          ]}
+          value={subTaskModelTier}
+          onChange={onChangeSubTaskModelTier}
+        />
+        <p className="text-[11px] t-text-muted mt-2 leading-relaxed">
+          {subTaskModelTier === 'light' && 'Routes these single-shot helper calls to a fast, low-cost model. Recommended — they are classification/extraction steps that gain nothing from the flagship model.'}
+          {subTaskModelTier === 'flagship' && 'Runs every helper step on your main model. Higher cost and latency; use to A/B the quality difference.'}
         </p>
       </div>
     </div>

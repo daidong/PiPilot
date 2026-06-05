@@ -86,7 +86,7 @@ export async function assessRisk(opts: {
 
   try {
     const facts = formatFacts(taskProfile, env, snapshot, experience, command)
-    const response = await callLlm(RISK_ASSESSMENT_PROMPT, facts)
+    const response = await callLlm(RISK_ASSESSMENT_PROMPT, facts, { tier: 'light', purpose: 'risk-assess' })
     const parsed = parseJsonFromLlm(response) as Partial<RiskAdvice> | null
     if (!parsed) return defaultAdvice(env, snapshot)
     return mergeWithDefaults(parsed, env, snapshot)

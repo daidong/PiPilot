@@ -89,7 +89,7 @@ function clampScore(n: unknown): number {
 }
 
 export interface SvgFallbackReviewOptions {
-  callLlm: (systemPrompt: string, userContent: string) => Promise<string>
+  callLlm: (systemPrompt: string, userContent: string, opts?: import('../types.js').SubLlmCallOptions) => Promise<string>
   modelLabel?: string
   thresholds?: ThresholdTable
 }
@@ -104,7 +104,7 @@ export function createSvgFallbackReviewProvider(
   async function review(req: ReviewRequest): Promise<ReviewResult> {
     const threshold = thresholds[req.docType] ?? thresholds.default
     const svgSource = req.image.toString('utf-8')
-    const text = await callLlm(REVIEW_SYSTEM_PROMPT, buildUser(req, threshold, svgSource))
+    const text = await callLlm(REVIEW_SYSTEM_PROMPT, buildUser(req, threshold, svgSource), { tier: 'light', purpose: 'svg-review' })
     const parsed = parseJsonObjectFromText(text)
 
     if (!parsed) {

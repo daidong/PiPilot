@@ -8,10 +8,21 @@ export type ResearchIntensity = 'low' | 'medium' | 'high'
 export type WebSearchDepth = 'quick' | 'standard' | 'thorough'
 export type AutoSaveSensitivity = 'conservative' | 'balanced' | 'aggressive'
 
+/**
+ * Tier for internal single-shot sub-task LLM calls (literature relevance
+ * review, compute task-profiling + risk assessment, SVG-fallback diagram
+ * review). `'light'` routes them to the cheap router-tier model; `'flagship'`
+ * forces the main model — the pre-optimization behavior, kept as an A/B
+ * control. Stateful, cache-bearing calls (the main turn, recap) are NOT
+ * governed by this; they always use the main model. See lib/agents/sub-task-tier.ts.
+ */
+export type SubTaskModelTier = 'light' | 'flagship'
+
 export interface ResearchSettings {
   researchIntensity: ResearchIntensity
   webSearchDepth: WebSearchDepth
   autoSaveSensitivity: AutoSaveSensitivity
+  subTaskModelTier: SubTaskModelTier
 }
 
 // ── Data analysis settings ──────────────────────────────────────────────────
@@ -110,6 +121,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     researchIntensity: 'medium',
     webSearchDepth: 'standard',
     autoSaveSensitivity: 'balanced',
+    subTaskModelTier: 'light',
   },
   dataAnalysis: {
     executionTimeLimit: 'standard',
@@ -152,6 +164,8 @@ export interface ResolvedSettings {
   webSearch: ResolvedWebSearch
   dataAnalysis: { timeoutMs: number }
   autoSaveThreshold: number
+  /** Pass-through enum; the coordinator picks the model per sub-task call. */
+  subTaskModelTier: SubTaskModelTier
   diagram: { reviewProvider: DiagramReviewProvider }
   compute: {
     enabledBackends: string[]
@@ -203,6 +217,7 @@ export function resolveSettings(settings: AppSettings): ResolvedSettings {
     webSearch: resolveWebSearchDepth(settings.research.webSearchDepth),
     dataAnalysis: { timeoutMs: resolveDataAnalysisTimeout(settings.dataAnalysis.executionTimeLimit) },
     autoSaveThreshold: resolveAutoSaveThreshold(settings.research.autoSaveSensitivity),
+    subTaskModelTier: settings.research.subTaskModelTier ?? 'light',
     diagram: { reviewProvider: settings.diagram?.reviewProvider ?? 'auto' },
     compute: settings.compute ?? DEFAULT_SETTINGS.compute,
   }

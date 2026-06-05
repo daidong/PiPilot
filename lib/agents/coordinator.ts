@@ -41,6 +41,7 @@ import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
+import { resolveSubTaskModel } from './sub-task-tier.js'
 import { AwsCredentialProvider } from '../aws/credentials.js'
 import { buildSharingPromptClause } from '../sharing/index.js'
 import { runSubLlmText } from '../telemetry/sub-llm.js'
@@ -511,18 +512,29 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     workspacePath: projectPath,
     sessionId,
     projectPath,
-    callLlm: async (systemPrompt: string, userContent: string) => {
+    callLlm: async (systemPrompt: string, userContent: string, opts) => {
       if (!piModel) throw new Error('No model available for sub-call')
       const currentKey = await resolveApiKey()
+      // B-class sub-task sinking: a `tier: 'light'` opt-in runs on the cheap
+      // router model when Settings permits (default), else stays on piModel.
+      // Read the setting live so the toggle takes effect without a coordinator
+      // rebuild. intentRouterModel is selected same-provider as piModel, so the
+      // resolveApiKey() key is valid for whichever model we pick.
+      const subSetting = (config.getResolvedSettings?.() ?? config.resolvedSettings)?.subTaskModelTier ?? 'light'
+      const model = resolveSubTaskModel(opts?.tier, {
+        mainModel: piModel,
+        lightModel: intentRouterModel,
+        setting: subSetting,
+      })
       return runSubLlmText({
-        model: piModel,
+        model,
         systemPrompt,
         userContent,
         apiKey: currentKey,
         maxTokens: 4096,
         tracer,
         authMode,
-        purpose: 'callLlm',
+        purpose: opts?.purpose ?? 'callLlm',
         ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
       })
     },
