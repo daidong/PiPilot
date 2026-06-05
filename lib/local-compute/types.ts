@@ -79,7 +79,11 @@ export interface RunRecord {
 // until §7.10 deletes these modules.
 // ---------------------------------------------------------------------------
 
-export type { FailureCode, FailureSignal, StructuredProgress, OutputProgress } from '../compute/shared-types.js'
+// Import (not just re-export) so these names are in local scope for the
+// interfaces below (ExperienceRecord.failureCode, RunStatusResult.progress/
+// failure); the trailing `export type` keeps them available to importers too.
+import type { FailureCode, FailureSignal, StructuredProgress, OutputProgress } from '../compute/shared-types.js'
+export type { FailureCode, FailureSignal, StructuredProgress, OutputProgress }
 
 // ---------------------------------------------------------------------------
 // Sandbox Provider Interface

@@ -1280,7 +1280,16 @@ export function registerIpcHandlers(): void {
           let firstWin: BrowserWindow | null = null
           let firstState: WindowRuntimeState | null = null
           for (const [w, s] of windowStates) {
-            if (s.tracer) { firstTracer = s.tracer; firstWin = w; firstState = s; break }
+            // `w` is the webContents.id key, not a BrowserWindow. Resolve the
+            // actual window so safeSend() below gets a real BrowserWindow (it
+            // calls win.isDestroyed()); assigning the numeric id here used to
+            // make the usage-attribution send throw.
+            if (s.tracer) {
+              firstTracer = s.tracer
+              firstWin = BrowserWindow.getAllWindows().find(win => win.webContents.id === w) ?? null
+              firstState = s
+              break
+            }
           }
           // G1 (telemetry-trace v0.13): attribute wiki-bg tokens to the first
           // window's project. Cross-project wiki traffic was previously

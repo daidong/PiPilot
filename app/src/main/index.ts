@@ -97,7 +97,9 @@ if ((process.platform === 'darwin' || process.platform === 'linux') && !is.dev) 
         // Prepend shell PATH so user-installed CLIs win lookup, but keep
         // the Electron defaults appended for safety. Deduplicate entries
         // so a long-lived process doesn't accumulate bloat on re-runs.
-        const sep = process.platform === 'win32' ? ';' : ':'
+        // This block only runs on darwin/linux (see the guard above), so the
+        // POSIX ':' separator is always correct here.
+        const sep = ':'
         const existing = (process.env.PATH || '').split(sep)
         const shellParts = val.split(sep)
         const seen = new Set<string>()

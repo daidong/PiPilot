@@ -20,6 +20,7 @@ import { probeStaticProfile, type StaticProfile } from '../../../local-compute/e
 import { assessRisk } from '../../../local-compute/strategy.js'
 import { inferTaskKind } from '../../../local-compute/experience.js'
 import type { RunRecord, RunStatusResult } from '../../../local-compute/types.js'
+import type { ResearchToolContext } from '../../../tools/types.js'
 import type { ComputeBackend } from '../../backend.js'
 import type { ComputeContext } from '../../context.js'
 import type {
@@ -65,8 +66,11 @@ export interface LocalBackendPlanData {
     totalRuns: number
     successes: number
     failures: number
-    avgDurationSeconds: number
-    commonFailures: string[]
+    // Mirrors ExperienceSummary (lib/local-compute/experience.ts), which this
+    // is copied from verbatim: avgDurationSeconds is optional (no runs yet)
+    // and commonFailures is a failure-kind → count map, not a list.
+    avgDurationSeconds?: number
+    commonFailures: Record<string, number>
   }
   resourceSnapshot: {
     freeMemoryMb: number
@@ -266,7 +270,10 @@ export class LocalBackend implements ComputeBackend {
       : input.command
 
     // 1. Task profile via existing profiler (LLM-backed when configured)
-    const callLlm = (this.ctx as any).callLlm as undefined | ((p: { systemPrompt: string; userMessage: string }) => Promise<string>)
+    // ComputeContext doesn't declare callLlm, but the coordinator wires the
+    // real ResearchToolContext.callLlm onto it; cast to that exact positional
+    // signature so it matches profileTask/assessRisk's parameter type.
+    const callLlm = (this.ctx as any).callLlm as ResearchToolContext['callLlm']
     const legacyProfile = await profileTask(profileCommand, scriptContent, callLlm)
 
     // 2. Environment + snapshot
