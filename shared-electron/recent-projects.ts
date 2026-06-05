@@ -33,7 +33,7 @@ interface StoreShape {
   entries: RecentProjectEntry[]
 }
 
-const MAX_ENTRIES = 10
+const MAX_ENTRIES = 20
 
 // ── File helpers ───────────────────────────────────────────────────────────
 

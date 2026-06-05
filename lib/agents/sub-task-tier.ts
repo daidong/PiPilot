@@ -11,10 +11,17 @@
  *
  * THE RULE: a call may sink only when it (a) opts in with `tier: 'light'` AND
  * (b) never carries conversation `messages`. Stateful, cache-bearing calls
- * (the main turn loop, recap) always stay on the main model — switching their
- * model would evict the warm prompt cache and cost MORE. `ctx.callLlm`'s
- * signature structurally enforces (b): it only accepts `systemPrompt +
- * userContent`, never a message array.
+ * always stay on the main model — switching their model would evict the warm
+ * prompt cache and cost MORE. `ctx.callLlm`'s signature structurally enforces
+ * (b): it only accepts `systemPrompt + userContent`, never a message array.
+ *
+ * NEVER-SINK members (each replays the main system prompt + conversation
+ * `messages` on piModel for cache affinity, so each is its own path OUTSIDE
+ * `ctx.callLlm` — by design, not debt):
+ *   - recap            — coordinator.ts, `runSubLlmText({ model: piModel, messages })`
+ *   - memory-extract   — lib/memory/extractor.ts, same shape
+ * If you add a sub-call that needs conversation history, it joins this list:
+ * keep it on piModel and do NOT give it a `tier: 'light'` opt-in.
  *
  * `subTaskModelTier` (Settings → Research, default `'light'`) is the global
  * control. Setting it to `'flagship'` overrides every opt-in back to the main
