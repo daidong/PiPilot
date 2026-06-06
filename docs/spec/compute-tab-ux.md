@@ -129,6 +129,15 @@ Each running task shows, **inline without expanding**:
 - Search + per-backend filter (today's filter bar, retained).
 - Ungrouped runs fall into an "(ungrouped)" bucket.
 
+### 4.5 Scheduled tasks (management surface)
+A **Scheduled** section manages the home-scoped cron tasks defined in RFC-016
+§4.5 (multi-day / recurring experiments). Per task: command, schedule, backend,
+enabled toggle, **next-due**, **last-run**, and **missed-since-last-open** (so
+app-open/best-effort gaps are visible, not silent — RFC-016 §4.5). Actions:
+edit, enable/disable, delete, run-now. Each fired tick appears in Zone ③ as a
+normal run, grouped into the task's campaign. Placement (its own zone vs. a
+panel off the target strip) — see §11.
+
 ## 5. Run detail (expanded)
 A running or finished row expands to:
 - **Output stream** (the persisted append-only file, RFC-016 §4.1) — tail by

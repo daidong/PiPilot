@@ -1,11 +1,17 @@
 # RFC-016: Compute Lifecycle — Ephemeral-Local + Poll-Remote (lessons from Claude Code)
 
-> Spec version: 0.2 (DRAFT — not implemented) | Last updated: 2026-06-06
+> Spec version: 0.3 (DRAFT — not implemented) | Last updated: 2026-06-06
 >
 > Status: **PROPOSED**. Replaces the earlier patch-oriented "durable run
 > reconciliation" sketch floated in discussion. This RFC reframes three
 > separately-reported bugs as symptoms of one architectural mistake and
 > converges them onto a single, simpler lifecycle model.
+>
+> v0.3: adds **scheduled / recurring runs** (§4.5) — a thin app-lifetime cron
+> *trigger layer*, not a third track. Prompted by multi-day longitudinal
+> experiments (e.g. a 14-day cache-TTL probe). Supersedes a briefly-floated
+> standalone "RFC-018" — it belongs here because each scheduled tick is just an
+> ordinary §4.1/§4.2 run.
 >
 > v0.2: **local runs auto-execute — no per-task approval** (§4.4). Approval
 > becomes a remote/cost concern only. This dissolves the orphan-plan bug for
@@ -195,6 +201,53 @@ The model therefore splits the gate by track:
 Consequence: the orphan-plan bug (bug 2) **evaporates for local** rather than
 needing the RFC-015 machinery; RFC-015 narrows to remote.
 
+### 4.5 Scheduled / recurring runs (a trigger layer, not a third track)
+
+Multi-day longitudinal experiments are not one-shot runs and are **not a third
+track** — they are a thin **trigger layer** that fires ordinary runs (§4.1/§4.2)
+on a schedule. Motivating shape: a 14-day cache-TTL probe — insert a fresh prefix
+hourly (unique seed avoids pollution), check hits at +1m/+10m/+1h/+6h/+12h/+24h,
+≈336 hourly samples per provider.
+
+Model — deliberately minimal; **the app stays dumb**:
+
+- A **cron task** = `{ id, schedule (cron expr / interval), command, workDir,
+  backend, enabled }`, persisted as `~/.research-pilot/cron/<id>.json` —
+  **home-scoped** (a standing task, not tied to one project).
+- A **scanner** runs while the app is open: every ~1 min it checks each enabled
+  task and, when due, **submits the command as a normal run** (ephemeral-local
+  §4.1 or remote §4.2). Each tick shows up in the Compute run history like any
+  other run.
+- **The app owns recurrence only.** Per-tick experiment logic (which prefix to
+  insert, which offset checks are due) lives in the **script**, which reads its
+  own state file. The app does not model offsets — it only guarantees periodic
+  invocation. (Materializing every check into an app-side ledger was the
+  needless complexity in the first sketch; the script owns its own cadence.)
+
+Honest property — **best-effort, app-open only**:
+
+- The scanner ticks only while the app is running. Ticks due during downtime (app
+  closed, laptop asleep) are **skipped by default**, not backfilled. Surface
+  `lastRun / nextDue / missedSinceLastOpen` so gaps are **visible, not silent**.
+- For *time-critical* experiments (the probe's exact offsets), a skipped tick is a
+  **lost sample**. That is a **per-experiment substrate choice**, not a scanner
+  feature to engineer around: tolerate gaps → run locally; need zero gaps → run on
+  a remote always-on backend (§4.2 — Modal scheduled functions / an always-on
+  instance). The scanner stays simple either way.
+
+Composition + approval: a scheduled tick reuses §4.1/§4.2 wholesale — completion,
+output persistence, and re-derived truth all apply unchanged. Per §4.4, local
+ticks auto-run; a remote scheduled task confirms cost **once at creation**
+(RFC-015), not per tick.
+
+Decisions (defaults chosen; override in settings):
+- Scope: **home-scoped** (`~/.research-pilot/cron/`).
+- Missed ticks: **skip** (optional per-task "catch up once on reopen").
+- Each tick → an ordinary §4.1/§4.2 run.
+
+UI: managed in the Compute tab's **Scheduled** section (RFC-017 §4.5) — list,
+enable/disable, next-due, last-run, missed count, edit, delete.
+
 ## 5. How each bug dissolves
 
 | Bug | Why it happens today | Dissolved by |
@@ -263,13 +316,19 @@ RFC-015 = *get a remote run started on confirm*, RFC-016 = *track any run
 - **Phase 2 — simplify local concurrency (bug 3 + memory-gate bug).** Drop
   heavy/light + blanket memory gate; OS-managed concurrency with an optional soft
   cap. Split live-state from terminal-result history.
-- **Phase 3 — approval bridge (bug 2).** Land RFC-015's deterministic
-  submit-on-approval; run enters the local track.
-- **Phase 4 — remote track.** Make Modal/AWS `hydrate()` poll the remote source
-  of truth; formalize the `livenessModel` capability.
+- **Phase 3 — auto-run local + danger check (bug 2, local).** Default
+  `requiresApproval = false` for local; add the rule-based danger check (§4.4).
+  Delete the "approved — waiting" placeholder. (Remote approval = RFC-015,
+  folded into Phase 4.)
+- **Phase 4 — remote track + remote confirm.** Make Modal/AWS `hydrate()` poll the
+  remote source of truth; formalize the `livenessModel` capability; land RFC-015's
+  cost-confirm→submit for remote.
+- **Phase 5 — scheduled runs (§4.5).** Home-scoped cron files + app-lifetime
+  scanner that fires due ticks as §4.1/§4.2 runs; `lastRun/nextDue/missed`
+  surfacing. Independent of 1–4 (rides whatever tracks exist).
 
 Phases 1–2 are the high-value core (they retire most of the lifecycle complexity
-that produced the bugs). 3 and 4 can follow independently.
+that produced the bugs). 3, 4, 5 can follow independently.
 
 ## 10. Risks & open questions
 
