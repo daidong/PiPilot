@@ -7,6 +7,10 @@
 > implicit "the agent must re-call execute after approval" contract documented
 > nowhere and surprising in practice.
 >
+> See also **RFC-016** (compute-lifecycle): this RFC gets a run *started*;
+> RFC-016 governs how it is *tracked to completion* (the run enters RFC-016's
+> ephemeral-local track after the deterministic submit). The two compose.
+>
 > v0.1: initial draft. Core decision: a **deterministic submit is the spine**
 > (keeps the Local Compute axiom "LLM is never on the critical path" intact); the
 > injected agent turn is an **enhancement layer** for narration + monitoring, not
