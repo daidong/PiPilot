@@ -8,9 +8,10 @@
 > lifecycle (RFC-016), the auto-run-local decision (RFC-016 §4.4), and the
 > experiment-sweep workflow this RFC centers on.
 >
-> Depends on **RFC-016** (compute lifecycle: ephemeral-local + poll-remote) and
-> **RFC-015** (approval bridge — now remote-only). This RFC is the UI layer; those
-> are the model layer.
+> Depends on **RFC-016** (compute lifecycle: ephemeral-local + poll-remote;
+> includes the local plan+execute fusion and the folded-in remote approval bridge
+> — RFC-015 is retained only as that bridge's mechanism detail). This RFC is the
+> UI layer; RFC-016 is the model layer.
 
 ## 1. Problem
 
@@ -100,8 +101,8 @@ it never scrolls away.)
 ### 4.2 Zone ① — Needs you (conditional)
 Only rendered when something genuinely needs a decision. Under RFC-016 §4.4 that
 is **not** routine local approval. It is:
-- **Remote cost confirmation**: a remote run with an estimated cost (and the
-  RFC-015 approval bridge submits it on confirm).
+- **Remote cost confirmation**: a remote run with an estimated cost (the
+  RFC-016 §4.4 remote bridge deterministically submits it on confirm).
 - **Flagged-danger confirmation**: a *rule-based* danger check (not LLM plan
   approval) flagged a local command (e.g. recursive delete, network exfil). One
   tap to proceed or skip. Everything not flagged auto-runs and never appears here.
@@ -206,7 +207,8 @@ Open: a single list with badges (recommended — fewer modes) vs. split columns.
    fetches on demand.
 
 ## 12. Out of scope
-- The lifecycle model itself (RFC-016) and the remote approval bridge (RFC-015).
+- The lifecycle model itself (RFC-016 — including the remote approval bridge it
+  absorbed from RFC-015).
 - Backend configuration UIs (Settings → Compute), unchanged.
 - The left sidebar's experience-insights / stats content (kept; only its
   placement is touched by §11).

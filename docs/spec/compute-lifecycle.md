@@ -1,11 +1,21 @@
 # RFC-016: Compute Lifecycle — Ephemeral-Local + Poll-Remote (lessons from Claude Code)
 
-> Spec version: 0.3 (DRAFT — not implemented) | Last updated: 2026-06-06
+> Spec version: 0.4 (DRAFT — not implemented) | Last updated: 2026-06-06
 >
 > Status: **PROPOSED**. Replaces the earlier patch-oriented "durable run
 > reconciliation" sketch floated in discussion. This RFC reframes three
 > separately-reported bugs as symptoms of one architectural mistake and
-> converges them onto a single, simpler lifecycle model.
+> converges them onto a single, simpler lifecycle model. With v0.4 it is the
+> canonical compute-lifecycle spec; the active design set is **this RFC + RFC-017
+> (UI)**.
+>
+> v0.4: **corrects §4.4** after code review — local is *already*
+> `requiresApproval: false` (`local-backend.ts:117`); the real orphan cause is
+> that `compute_plan` and `{backend}_execute` are **two separate agent calls**, so
+> a born-approved local plan still waits for the second call. "Auto-run local"
+> therefore = **fuse plan+execute**, not "remove a gate". Also **folds RFC-015 in**
+> (§4.4 / §8): RFC-015 is now the detailed *remote-bridge* reference, not a
+> separate track.
 >
 > v0.3: adds **scheduled / recurring runs** (§4.5) — a thin app-lifetime cron
 > *trigger layer*, not a third track. Prompted by multi-day longitudinal
@@ -17,11 +27,9 @@
 > becomes a remote/cost concern only. This dissolves the orphan-plan bug for
 > local entirely and narrows RFC-015's bridge to remote backends.
 >
-> Relationship to **RFC-015** (auto-execute on approval): with v0.2, RFC-015's
-> approval→execution *bridge* applies to **remote** backends only (where real
-> spend warrants a confirm). Local needs no bridge — it auto-runs (§4.4) and the
-> run enters the local track directly. RFC-016 supplies the *lifecycle the
-> submitted/auto-run task then lives in* (§8).
+> **RFC-015 is folded into this RFC** (§4.4 / §8). Its remote confirm→submit
+> bridge is now specced here; the RFC-015 file is retained only as the worked-out
+> mechanism reference (serialization / idempotency / optional enhancement turn).
 
 ## 1. Three bugs, one root cause
 
@@ -170,36 +178,51 @@ Docker-local is interesting: the container *is* queryable (`docker inspect`
 returns exit code), so it can use the remote-poll mechanics locally — i.e. the
 sentinel approach is for the *process* sandbox; docker reuses `inspect`.
 
-### 4.4 Approval is a remote/cost concern — local auto-runs
+### 4.4 Approval, and why local plans still orphan
 
-The per-task "plan → approve → execute" gate is **redundant friction for local
-tasks** and should be dropped. The agent already has unrestricted local
-code-execution via its built-in `bash`/code tools — gating `local_execute`
-behind a second, heavier plan-approval is inconsistent: either you trust the
-agent to run local code (then per-task approval is noise) or you don't (then it
-belongs to the up-front bash-permission/trust layer, not a compute workflow).
-This mirrors Claude Code: permission is an up-front *trust gate*, not a per-task
-approval; once running, you can stop/kill.
+**Correction (v0.4, from code review).** Local is **already** un-gated:
+`local-backend.ts:117` declares `requiresApproval: false` (only `modal` /
+`aws-ec2` are `true`). Effective gating is `forceApprovalForAll ||
+backend.requiresApproval`, so a local plan is gated **only** when the user turns
+on Settings → Compute → "require approval for all backends". Local's problem was
+never "remove an approval gate" — there is none by default.
 
-The model therefore splits the gate by track:
+The real orphan cause is structural: **`compute_plan` and `{backend}_execute`
+are two separate agent tool calls.** A non-gated local plan is born `approved:
+true`, but it does **not run** until the agent makes the second call. If the
+agent plans a batch and its turn ends before executing (or just stops), the plan
+sits forever as "approved — waiting for agent to execute". Approval is a
+*separate* gate on top; removing it does not close this gap.
 
-- **Local → auto-run.** Default `requiresApproval = false`. The controls that
-  matter are (1) up-front trust (a settings/permission decision, not per-task)
-  and (2) strong *post-start* management — observe live output, stop/kill early,
-  plus the OOM/stall safety signals. No "approved — waiting for agent to execute"
-  placeholder; no orphan-plan state.
+The model splits by track:
+
+- **Local → fuse plan + execute (auto-run).** For a non-gated backend, planning
+  and submitting are **one step**: either a single `run` tool (plan + submit
+  fused) or the registry auto-submits a born-approved plan on `plan()`. No
+  "waiting for agent to execute" placeholder, no orphan. The agent still gets the
+  plan's risk/recommendations back from the fused call; the run enters the local
+  track (§4.1). The controls that matter for local are (1) up-front trust (a
+  settings decision, not per-task) and (2) strong *post-start* management —
+  observe / stop / kill + the OOM/stall safety signals.
 - **Local danger check (rule-based, not LLM).** A cheap pattern check (reuse
   `strategy.ts`'s risk pass) flags *genuinely* dangerous commands (recursive
-  delete, network exfil, etc.) for a one-tap confirm — **warn only when risky**,
-  not approve-everything. Mirrors Claude Code's destructive-command warnings.
-- **Remote → confirm (cost gate).** Modal/AWS spend real money and provision
-  external resources; a confirm (or a cost ceiling) is warranted. This is where
-  RFC-015's approval bridge lives.
+  delete, network exfil…) for a one-tap confirm — **warn only when risky**, not
+  approve-everything. Mirrors Claude Code's destructive-command warnings.
+- **Remote → plan → confirm(cost) → submit (the absorbed RFC-015 bridge).**
+  Modal/AWS spend real money, so keep the explicit step. On a user *confirm*, the
+  main process **deterministically `submit()`s** the plan (the "spine") using its
+  captured `recommendations`, idempotently (submit is already memoized and clears
+  the plan on success); an optional lightweight agent turn narrates + monitors.
+  The run enters the remote track (§4.2). *(Mechanism formerly RFC-015, folded
+  here; see that file for the worked serialization / idempotency / enhancement-turn
+  detail.)*
 - **`forceApprovalForAll` stays** as the escape hatch: a paranoid / shared-lab
-  user can re-impose the gate on local too.
+  user re-imposes a gate on local, which then routes through the same confirm
+  step as remote.
 
-Consequence: the orphan-plan bug (bug 2) **evaporates for local** rather than
-needing the RFC-015 machinery; RFC-015 narrows to remote.
+Consequence: the orphan-plan bug closes by **fusing plan+execute for local** and
+**deterministic submit-on-confirm for remote** — not by per-task approval
+machinery.
 
 ### 4.5 Scheduled / recurring runs (a trigger layer, not a third track)
 
@@ -254,7 +277,7 @@ enable/disable, next-due, last-run, missed count, edit, delete.
 |---|---|---|
 | Zombie runs | persisted `running` + in-memory-only exit detection + one-shot reconcile + no exit-code on disk | §4.1: continuous liveness in monitor + child-written exit sentinel; state is no longer a trusted persisted flag |
 | Sequential | timeout-based heavy/light + single heavy slot + zombie occupying it | §4.1: drop the local scheduler (OS-managed concurrency); zombies gone so no slot is held |
-| Orphan plans | approval flips a flag but nothing submits | **Local**: §4.4 drops per-task approval entirely — auto-runs, no orphan state. **Remote**: RFC-015 deterministic submit-on-confirm; the run then enters the remote track (§8) |
+| Orphan plans | `compute_plan` and `execute` are two agent calls; an (already) approved plan never runs until the 2nd call, which may never come | **Local**: §4.4 fuses plan+execute (no 2nd call to miss). **Remote**: deterministic submit on cost-confirm (§4.4) |
 
 The blanket-memory-gate bug (a 4th, raised separately) also dissolves: §4.1
 removes pre-admission resource gating in favour of OS arbitration + post-hoc OOM
@@ -295,18 +318,15 @@ reconcile on reopen, or (b) kill them (CC-style)? Given 60-min jobs, default to
 - `ComputeBackend` capability `livenessModel`; registry routes finalization logic
   by it.
 
-## 8. Relationship to RFC-015
+## 8. RFC-015 (folded in)
 
-With v0.2, RFC-015 applies to **remote** backends only (§4.4 makes local
-auto-run, so local has no approval to bridge). On a user *confirm* of a remote
-plan, the main process **deterministically** `submit()`s (the "spine"), then an
-optional lightweight agent turn narrates + monitors. The submitted remote run
-enters the **remote track (§4.2)**, whose status is re-derived by polling — so
-RFC-015's spine never has to trust durable run-state. The two RFCs compose:
-RFC-015 = *get a remote run started on confirm*, RFC-016 = *track any run
-(local or remote) to completion*.
-
-(RFC-015's header carries a cross-reference back here.)
+RFC-015's remote approval→execution bridge is **folded into §4.4** as of v0.4 —
+the canonical spec is now this document. The RFC-015 file is retained only as the
+detailed mechanism reference (turn serialization, idempotency, the optional
+enhancement turn) for the remote confirm→submit step. There is no separate
+"RFC-015 track": local fuses plan+execute (§4.4); remote confirms-then-submits
+(§4.4) and the run enters the remote track (§4.2). Active design = **this RFC +
+RFC-017 (UI)**.
 
 ## 9. Migration / rollout
 
@@ -316,10 +336,11 @@ RFC-015 = *get a remote run started on confirm*, RFC-016 = *track any run
 - **Phase 2 — simplify local concurrency (bug 3 + memory-gate bug).** Drop
   heavy/light + blanket memory gate; OS-managed concurrency with an optional soft
   cap. Split live-state from terminal-result history.
-- **Phase 3 — auto-run local + danger check (bug 2, local).** Default
-  `requiresApproval = false` for local; add the rule-based danger check (§4.4).
-  Delete the "approved — waiting" placeholder. (Remote approval = RFC-015,
-  folded into Phase 4.)
+- **Phase 3 — fuse plan+execute for local + danger check (bug 2, local).**
+  Non-gated local plans plan-and-submit in one step (no separate execute call to
+  orphan on); add the rule-based danger check (§4.4). Delete the "approved —
+  waiting for agent to execute" placeholder. (`requiresApproval` is *already*
+  false for local — this is the structural fix, not a flag flip.)
 - **Phase 4 — remote track + remote confirm.** Make Modal/AWS `hydrate()` poll the
   remote source of truth; formalize the `livenessModel` capability; land RFC-015's
   cost-confirm→submit for remote.

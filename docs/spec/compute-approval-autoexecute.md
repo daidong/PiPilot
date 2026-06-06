@@ -1,5 +1,12 @@
 # RFC-015: Auto-Execute Compute Plans on Approval
 
+> ⚠️ **FOLDED INTO RFC-016 §4.4 (as of RFC-016 v0.4).** The canonical spec for
+> approval→execution is now `compute-lifecycle.md`. This file is retained only as
+> the worked-out *mechanism* reference for the **remote** confirm→submit bridge
+> (serialization / idempotency / the optional enhancement turn). It is **not a
+> separate implementation track** — local fuses plan+execute and needs no bridge.
+> Read the body below as the remote case.
+>
 > Spec version: 0.1 (DRAFT — not implemented) | Last updated: 2026-06-05
 >
 > Status: **PROPOSED**. No code written. This RFC captures the design agreed in
