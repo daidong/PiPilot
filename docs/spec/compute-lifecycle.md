@@ -1,16 +1,21 @@
 # RFC-016: Compute Lifecycle — Ephemeral-Local + Poll-Remote (lessons from Claude Code)
 
-> Spec version: 0.1 (DRAFT — not implemented) | Last updated: 2026-06-06
+> Spec version: 0.2 (DRAFT — not implemented) | Last updated: 2026-06-06
 >
 > Status: **PROPOSED**. Replaces the earlier patch-oriented "durable run
 > reconciliation" sketch floated in discussion. This RFC reframes three
 > separately-reported bugs as symptoms of one architectural mistake and
 > converges them onto a single, simpler lifecycle model.
 >
-> Relationship to **RFC-015** (auto-execute on approval): RFC-015 is the
-> approval→execution *bridge* (one of the three bugs below). It still stands;
-> this RFC supplies the *lifecycle the submitted run then lives in* and explains
-> why the bridge gets simpler under this model (§8).
+> v0.2: **local runs auto-execute — no per-task approval** (§4.4). Approval
+> becomes a remote/cost concern only. This dissolves the orphan-plan bug for
+> local entirely and narrows RFC-015's bridge to remote backends.
+>
+> Relationship to **RFC-015** (auto-execute on approval): with v0.2, RFC-015's
+> approval→execution *bridge* applies to **remote** backends only (where real
+> spend warrants a confirm). Local needs no bridge — it auto-runs (§4.4) and the
+> run enters the local track directly. RFC-016 supplies the *lifecycle the
+> submitted/auto-run task then lives in* (§8).
 
 ## 1. Three bugs, one root cause
 
@@ -159,13 +164,44 @@ Docker-local is interesting: the container *is* queryable (`docker inspect`
 returns exit code), so it can use the remote-poll mechanics locally — i.e. the
 sentinel approach is for the *process* sandbox; docker reuses `inspect`.
 
+### 4.4 Approval is a remote/cost concern — local auto-runs
+
+The per-task "plan → approve → execute" gate is **redundant friction for local
+tasks** and should be dropped. The agent already has unrestricted local
+code-execution via its built-in `bash`/code tools — gating `local_execute`
+behind a second, heavier plan-approval is inconsistent: either you trust the
+agent to run local code (then per-task approval is noise) or you don't (then it
+belongs to the up-front bash-permission/trust layer, not a compute workflow).
+This mirrors Claude Code: permission is an up-front *trust gate*, not a per-task
+approval; once running, you can stop/kill.
+
+The model therefore splits the gate by track:
+
+- **Local → auto-run.** Default `requiresApproval = false`. The controls that
+  matter are (1) up-front trust (a settings/permission decision, not per-task)
+  and (2) strong *post-start* management — observe live output, stop/kill early,
+  plus the OOM/stall safety signals. No "approved — waiting for agent to execute"
+  placeholder; no orphan-plan state.
+- **Local danger check (rule-based, not LLM).** A cheap pattern check (reuse
+  `strategy.ts`'s risk pass) flags *genuinely* dangerous commands (recursive
+  delete, network exfil, etc.) for a one-tap confirm — **warn only when risky**,
+  not approve-everything. Mirrors Claude Code's destructive-command warnings.
+- **Remote → confirm (cost gate).** Modal/AWS spend real money and provision
+  external resources; a confirm (or a cost ceiling) is warranted. This is where
+  RFC-015's approval bridge lives.
+- **`forceApprovalForAll` stays** as the escape hatch: a paranoid / shared-lab
+  user can re-impose the gate on local too.
+
+Consequence: the orphan-plan bug (bug 2) **evaporates for local** rather than
+needing the RFC-015 machinery; RFC-015 narrows to remote.
+
 ## 5. How each bug dissolves
 
 | Bug | Why it happens today | Dissolved by |
 |---|---|---|
 | Zombie runs | persisted `running` + in-memory-only exit detection + one-shot reconcile + no exit-code on disk | §4.1: continuous liveness in monitor + child-written exit sentinel; state is no longer a trusted persisted flag |
 | Sequential | timeout-based heavy/light + single heavy slot + zombie occupying it | §4.1: drop the local scheduler (OS-managed concurrency); zombies gone so no slot is held |
-| Orphan plans | approval flips a flag but nothing submits (RFC-015) | RFC-015 deterministic submit-on-approval; the run then enters the local track (§8) |
+| Orphan plans | approval flips a flag but nothing submits | **Local**: §4.4 drops per-task approval entirely — auto-runs, no orphan state. **Remote**: RFC-015 deterministic submit-on-confirm; the run then enters the remote track (§8) |
 
 The blanket-memory-gate bug (a 4th, raised separately) also dissolves: §4.1
 removes pre-admission resource gating in favour of OS arbitration + post-hoc OOM
@@ -208,15 +244,16 @@ reconcile on reopen, or (b) kill them (CC-style)? Given 60-min jobs, default to
 
 ## 8. Relationship to RFC-015
 
-RFC-015 (auto-execute on approval) is the fix for **bug 2** and is unchanged in
-intent: on a user `plan-approved`, the main process **deterministically**
-`submit()`s (the "spine"), then an optional lightweight agent turn narrates +
-monitors. Under RFC-016, the submitted local run simply enters the **local track
-(§4.1)** — so RFC-015's spine no longer has to worry about durable run-state; it
-hands off to a lifecycle that re-derives truth from OS + disk. The two RFCs
-compose: RFC-015 = *get it started*, RFC-016 = *track it to completion*.
+With v0.2, RFC-015 applies to **remote** backends only (§4.4 makes local
+auto-run, so local has no approval to bridge). On a user *confirm* of a remote
+plan, the main process **deterministically** `submit()`s (the "spine"), then an
+optional lightweight agent turn narrates + monitors. The submitted remote run
+enters the **remote track (§4.2)**, whose status is re-derived by polling — so
+RFC-015's spine never has to trust durable run-state. The two RFCs compose:
+RFC-015 = *get a remote run started on confirm*, RFC-016 = *track any run
+(local or remote) to completion*.
 
-(Action: add a one-line cross-reference to RFC-015's header pointing here.)
+(RFC-015's header carries a cross-reference back here.)
 
 ## 9. Migration / rollout
 
