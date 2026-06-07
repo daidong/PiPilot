@@ -78,10 +78,13 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [codexStatus, setCodexStatus] = useState<{ isLoggedIn: boolean } | null>(null)
   const [codexLoggingIn, setCodexLoggingIn] = useState(false)
+  const [anthropicSubStatus, setAnthropicSubStatus] = useState<{ isLoggedIn: boolean } | null>(null)
+  const [anthropicSubLoggingIn, setAnthropicSubLoggingIn] = useState(false)
 
   useEffect(() => {
     api.getApiKeyStatus().then((s: Record<string, boolean>) => setStatus(s))
     api.getOpenAICodexStatus?.().then((s: any) => setCodexStatus(s)).catch(() => {})
+    api.getAnthropicSubStatus?.().then((s: any) => setAnthropicSubStatus(s)).catch(() => {})
   }, [])
 
   const handleCodexLogin = async () => {
@@ -100,10 +103,26 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
     }
   }
 
+  const handleAnthropicSubLogin = async () => {
+    setAnthropicSubLoggingIn(true)
+    try {
+      const result = await api.anthropicSubLogin?.()
+      if (result?.success) {
+        setAnthropicSubStatus({ isLoggedIn: true })
+      } else {
+        setError(result?.error || 'Claude sign-in failed')
+      }
+    } catch (err: any) {
+      setError(err.message || 'Claude sign-in failed')
+    } finally {
+      setAnthropicSubLoggingIn(false)
+    }
+  }
+
   const handleSave = async () => {
     const entries = Object.entries(values).filter(([, v]) => v.trim())
-    if (entries.length === 0 && !status.ANTHROPIC_API_KEY && !status.OPENAI_API_KEY && !codexStatus?.isLoggedIn) {
-      setError('Please enter at least one LLM API key or sign in with ChatGPT.')
+    if (entries.length === 0 && !status.ANTHROPIC_API_KEY && !status.OPENAI_API_KEY && !codexStatus?.isLoggedIn && !anthropicSubStatus?.isLoggedIn) {
+      setError('Please enter at least one LLM API key or sign in with a Claude or ChatGPT subscription.')
       return
     }
     setSaving(true)
@@ -180,6 +199,32 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
         })}
       </div>
 
+      {/* Claude Subscription */}
+      <div className="rounded-lg border t-border t-bg-surface/50 p-3.5 mt-3.5">
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-[13px] font-medium t-text flex items-center gap-2">
+            Claude Subscription
+            <span className="text-[11px] t-text-muted">(alternative to Anthropic API key)</span>
+            {anthropicSubStatus?.isLoggedIn && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-green-500">
+                <Check size={11} /> signed in
+              </span>
+            )}
+          </label>
+        </div>
+        <button
+          onClick={handleAnthropicSubLogin}
+          disabled={anthropicSubLoggingIn || anthropicSubStatus?.isLoggedIn}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-md border t-border text-[13px] t-text-secondary hover:t-text t-bg-hover disabled:opacity-50"
+        >
+          <LogIn size={14} />
+          {anthropicSubLoggingIn ? 'Signing in...' : anthropicSubStatus?.isLoggedIn ? 'Already signed in' : 'Sign in with Claude'}
+        </button>
+        <p className="text-[12px] t-text-muted mt-1.5 leading-relaxed">
+          Use your Claude Pro/Max subscription instead of an API key. No per-token billing.
+        </p>
+      </div>
+
       {/* ChatGPT Subscription */}
       <div className="rounded-lg border t-border t-bg-surface/50 p-3.5 mt-3.5">
         <div className="flex items-center justify-between mb-2">
@@ -207,7 +252,7 @@ export function ApiKeysSettings({ showSaveButton, onSaved }: Props) {
       </div>
 
       <p className="text-[12px] t-text-muted mt-3 leading-relaxed">
-        * At least one of Anthropic or OpenAI (API key or ChatGPT subscription) is required.
+        * At least one of Anthropic (API key or Claude subscription) or OpenAI (API key or ChatGPT subscription) is required.
       </p>
 
       {error && <p className="text-[12px] text-red-400 mt-2.5" role="alert">{error}</p>}

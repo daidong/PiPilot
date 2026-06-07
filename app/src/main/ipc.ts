@@ -1050,8 +1050,12 @@ export function registerIpcHandlers(): void {
   // background, and surfaces an "update ready" state to the renderer. The
   // user clicks "Restart to upgrade" → quitAndInstall().
   //
-  // Disabled in dev (no signature). On Linux outside AppImage the updater
-  // also auto-disables itself; .deb users must apt-update themselves.
+  // Disabled in dev (no signature). On Linux we only self-update AppImage
+  // builds: newer electron-updater ships a DebUpdater that no longer
+  // auto-disables on .deb/.rpm, so we gate it off here to avoid a spurious
+  // GitHub-release lookup (e.g. latest-linux-arm64.yml 404s — that artifact
+  // isn't published). .deb/.rpm users update via their package manager.
+  const isLinuxSystemPackage = process.platform === 'linux' && !process.env.APPIMAGE
   const currentVersion = app.getVersion()
   let updateState: {
     status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
@@ -1067,7 +1071,7 @@ export function registerIpcHandlers(): void {
     }
   }
 
-  if (app.isPackaged) {
+  if (app.isPackaged && !isLinuxSystemPackage) {
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = false
 
@@ -1114,6 +1118,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('update:check-now', async () => {
     if (!app.isPackaged) return { ok: false, reason: 'dev-mode' }
+    if (isLinuxSystemPackage) return { ok: false, reason: 'managed-by-package-manager' }
     try {
       await autoUpdater.checkForUpdates()
       return { ok: true }

@@ -69,6 +69,7 @@
         "AppImage",
         "deb"
       ],
+      "executableName": "research-copilot",
       "category": "Science",
       "icon": "build/icon.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}",
