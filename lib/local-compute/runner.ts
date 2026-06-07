@@ -42,6 +42,14 @@ const DEFAULT_STALL_THRESHOLD_MS = 5 * 60_000 // 5 min
 const MAX_TIMEOUT_MS = 24 * 60 * 60_000      // 24 hours
 const MAX_OUTPUT_BYTES = 1024 * 1024 * 1024  // 1 GB output cap
 const DESTROY_KILL_TIMEOUT_MS = 5_000        // 5s grace before SIGKILL on destroy
+/**
+ * RFC-016 §4.1 / Phase 2: a SOFT sanity cap on concurrent local runs —
+ * NOT the old heavy/light admission gate. Local runs are I/O-bound probes
+ * far more often than ML training; the OS arbitrates contention. This only
+ * stops a runaway loop from spawning thousands at once. Override via the
+ * runner's `maxConcurrent` option (settings.compute.backends.local.maxConcurrentRuns).
+ */
+const DEFAULT_MAX_CONCURRENT = 8
 
 // ---------------------------------------------------------------------------
 // ID Generation
@@ -153,6 +161,23 @@ export interface SubmitConfig {
   env?: Record<string, string>
   smokeCommand?: string
   parentRunId?: string
+  campaignId?: string
+}
+
+/**
+ * Read a child-written exit-code sentinel (RFC-016 §4.1). Returns the
+ * integer exit code, or undefined when the file is missing / unparseable
+ * (the child was SIGKILLed or the box lost power before writing).
+ */
+function readExitSentinel(exitCodePath: string): number | undefined {
+  try {
+    const raw = fs.readFileSync(exitCodePath, 'utf-8').trim()
+    if (!raw) return undefined
+    const code = parseInt(raw, 10)
+    return Number.isFinite(code) ? code : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export class ComputeRunner {
@@ -163,17 +188,37 @@ export class ComputeRunner {
   private readonly handles = new Map<string, SandboxHandle>()
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private readonly pollInFlight = new Set<string>()
+  /**
+   * RFC-016 §8 / §4.1: push live status to subscribers on every poll and
+   * on every terminal transition. Without this the local Compute tab only
+   * ever saw the single run-update emitted at submit time and then froze —
+   * the very "zombie run" UI symptom RFC-016 set out to kill. Modal/AWS
+   * already had this via their runner's onRunUpdate; local was missing it.
+   */
+  private readonly onRunUpdate: (runId: string, status: RunStatusResult) => void
+  /** Soft, configurable concurrency cap (RFC-016 §4.1 / Phase 2). */
+  private readonly maxConcurrent: number
 
-  constructor(opts: { projectPath: string; workspacePath: string }) {
+  constructor(opts: {
+    projectPath: string
+    workspacePath: string
+    onRunUpdate?: (runId: string, status: RunStatusResult) => void
+    maxConcurrent?: number
+  }) {
     this.store = new RunStore(opts.projectPath)
     this.experience = new ExperienceStore(opts.projectPath)
     this.workspacePath = opts.workspacePath
     this.projectPath = opts.projectPath
+    this.onRunUpdate = opts.onRunUpdate ?? (() => {})
+    this.maxConcurrent = opts.maxConcurrent ?? DEFAULT_MAX_CONCURRENT
 
     // Reconcile stale runs from a previous session (crash recovery)
     this.reconcileStaleRuns()
 
-    // Resume polling for any genuinely active runs
+    // Resume polling for any genuinely active runs. After a reconstruction
+    // these runs are handle-less; pollOnce re-derives their liveness from
+    // OS (PID) + the child-written exit sentinel rather than a (now-gone)
+    // in-memory handle.wait().
     const active = this.store.getActiveRuns()
     if (active.length > 0) this.ensurePolling()
 
@@ -181,22 +226,92 @@ export class ComputeRunner {
     this.store.evictOld()
   }
 
+  /** Absolute path of a run's child-written exit-code sentinel. */
+  private exitCodePath(runId: string): string {
+    return path.join(this.store.getRunDir(runId), 'exit_code')
+  }
+
+  /** Push the current status snapshot to subscribers. Best-effort. */
+  private emitUpdate(runId: string): void {
+    try {
+      const status = this.getStatus(runId)
+      if (status) this.onRunUpdate(runId, status)
+    } catch { /* never let a subscriber error break the pipeline */ }
+  }
+
   /**
-   * On startup, detect and transition stale 'running'/'stalled' records whose
-   * processes are gone (crashed app, killed process, PID reused).
+   * Finalize a handle-less run from its child-written exit sentinel
+   * (RFC-016 §4.1 slow path). `0 → completed`, `non-zero → failed`,
+   * `missing → failed` (the child was SIGKILLed / crashed before it could
+   * record an exit code). Records experience like the fast path does.
+   */
+  private finalizeFromSentinel(runId: string): void {
+    const run = this.store.getRun(runId)
+    if (!run || isTerminal(run.status)) return
+    const code = readExitSentinel(this.exitCodePath(runId))
+    const completedAt = new Date().toISOString()
+    const stderrTail = readFileTail(this.store.getStderrPath(runId), STDERR_TAIL_BYTES)
+    let status: RunState
+    let error: string | undefined
+    if (code === undefined) {
+      status = 'failed'
+      error = 'Process ended without recording an exit code (killed or crashed before completion).'
+    } else if (code === 0) {
+      status = 'completed'
+    } else {
+      status = 'failed'
+    }
+    const updated = this.store.updateRun(runId, {
+      status,
+      exitCode: code,
+      completedAt,
+      stderrTail,
+      stalled: false,
+      error,
+    })
+    if (updated) this.recordExperience(updated, status === 'completed' ? 'completed' : 'failed')
+    this.emitUpdate(runId)
+  }
+
+  /**
+   * On startup, reconcile every non-terminal record against reality
+   * (RFC-016 §4.1): a dead PID is finalized from the exit sentinel (so a
+   * run that actually *succeeded* is no longer mislabeled `failed`); an
+   * alive PID is left running and re-monitored by the poller — never
+   * unconditionally marked `failed`, which was the pre-RFC-016 bug.
    */
   private reconcileStaleRuns(): void {
     const active = this.store.getActiveRuns()
     for (const run of active) {
       if (isStaleRun(run)) {
-        this.store.updateRun(run.runId, {
-          status: 'failed',
-          completedAt: new Date().toISOString(),
-          error: 'Process no longer running (app crashed or process was killed).',
-          stalled: false,
-        })
+        // Process is gone — derive the true terminal status from the
+        // child-written sentinel instead of assuming failure.
+        this.finalizeFromSentinel(run.runId)
       }
+      // PID alive → leave as running; ensurePolling()+pollOnce resume
+      // monitoring via OS liveness, not an in-memory handle.
     }
+  }
+
+  /** Record an experience row for a finished run (best-effort). */
+  private recordExperience(run: RunRecord, outcome: 'completed' | 'failed'): void {
+    try {
+      const durationSeconds = run.startedAt
+        ? Math.round((Date.now() - new Date(run.startedAt).getTime()) / 1000)
+        : 0
+      const taskKind = inferTaskKind(run.command)
+      const failure = outcome !== 'completed' ? deriveFailure(run) : undefined
+      this.experience.record({
+        runId: run.runId,
+        taskKind,
+        sandbox: run.sandbox,
+        outcome: outcome === 'completed' ? 'success' : 'failed',
+        failureCode: failure?.code,
+        durationSeconds,
+        retryCount: run.retryCount,
+        timestamp: run.completedAt ?? new Date().toISOString(),
+      })
+    } catch { /* non-fatal: experience recording should never break the pipeline */ }
   }
 
   // -------------------------------------------------------------------------
@@ -211,9 +326,11 @@ export class ComputeRunner {
     const stallThresholdMs = (config.stallThresholdMinutes ?? 5) * 60_000
     const weight = classifyWeight((config.timeoutMinutes ?? 60), config.command)
 
-    // Scheduler check
+    // Admission (RFC-016 §4.1 / Phase 2): soft concurrency cap + disk
+    // floor only. No heavy/light gate, no blanket memory gate — the OS
+    // arbitrates contention; OOM/stall are caught post-hoc.
     const snapshot = takeSnapshot(this.store)
-    const decision = canAdmit(snapshot, weight)
+    const decision = canAdmit(snapshot, this.maxConcurrent)
     if (!decision.allowed) {
       throw new Error(`Scheduler: ${decision.reason}`)
     }
@@ -261,6 +378,7 @@ export class ComputeRunner {
       stalled: false,
       retryCount: config.parentRunId ? ((this.store.getRun(config.parentRunId)?.retryCount ?? 0) + 1) : 0,
       parentRunId: config.parentRunId,
+      campaignId: config.campaignId,
     }
 
     this.store.createRun(record)
@@ -272,6 +390,7 @@ export class ComputeRunner {
         command: commandToRun,
         workDir,
         outputPath,
+        exitCodePath: this.exitCodePath(runId),
         env: config.env,
       })
       this.handles.set(runId, handle)
@@ -334,9 +453,16 @@ export class ComputeRunner {
           command: config.command,
           workDir: run.sandboxWorkDir,
           outputPath: run.outputPath,
+          exitCodePath: this.exitCodePath(runId),
           env: config.env,
         })
         this.handles.set(runId, handle)
+        // Re-record PID + starttime for the full-phase process so a
+        // reconstruction during the full run can still re-derive liveness.
+        const fullPid = typeof handle.pid === 'number' ? handle.pid : undefined
+        if (fullPid) {
+          this.store.updateRun(runId, { pid: fullPid, pidStartTime: getPidStartTime(fullPid) })
+        }
         handle.wait().then(async (fullResult) => {
           await this.handleExit(runId, fullResult, { ...config, smokeCommand: undefined })
         }).catch(() => {})
@@ -364,25 +490,7 @@ export class ComputeRunner {
     })
 
     // Record experience
-    if (updated) {
-      try {
-        const durationSeconds = updated.startedAt
-          ? Math.round((Date.now() - new Date(updated.startedAt).getTime()) / 1000)
-          : 0
-        const taskKind = inferTaskKind(updated.command)
-        const failure = status !== 'completed' ? deriveFailure(updated) : undefined
-        this.experience.record({
-          runId,
-          taskKind,
-          sandbox: updated.sandbox,
-          outcome: status === 'completed' ? 'success' : 'failed',
-          failureCode: failure?.code,
-          durationSeconds,
-          retryCount: updated.retryCount,
-          timestamp: completedAt,
-        })
-      } catch { /* non-fatal: experience recording should never break the pipeline */ }
-    }
+    if (updated) this.recordExperience(updated, status === 'completed' ? 'completed' : 'failed')
 
     // Cleanup sandbox handle
     const handle = this.handles.get(runId)
@@ -391,6 +499,7 @@ export class ComputeRunner {
       this.handles.delete(runId)
     }
 
+    this.emitUpdate(runId)
     this.stopPollingIfIdle()
   }
 
@@ -439,6 +548,7 @@ export class ComputeRunner {
     }
 
     this.handles.delete(runId)
+    this.emitUpdate(runId)
     this.stopPollingIfIdle()
   }
 
@@ -524,10 +634,42 @@ export class ComputeRunner {
     this.stopPollingIfIdle()
   }
 
+  /**
+   * Kill a run's process — via its in-memory handle when we have one, or
+   * via the persisted PID's process group when we don't (a reconstructed,
+   * handle-less run). SIGTERM now, SIGKILL after a short grace.
+   */
+  private killRun(run: RunRecord, sigkillDelayMs = 3000): void {
+    const handle = this.handles.get(run.runId)
+    if (handle) {
+      handle.kill('SIGTERM').catch(() => {})
+      setTimeout(() => { handle.kill('SIGKILL').catch(() => {}) }, sigkillDelayMs)
+      this.handles.delete(run.runId)
+      return
+    }
+    if (run.pid) {
+      const pid = run.pid
+      try { process.kill(-pid, 'SIGTERM') } catch { /* already dead */ }
+      setTimeout(() => { try { process.kill(-pid, 'SIGKILL') } catch { /* already dead */ } }, sigkillDelayMs)
+    }
+  }
+
   private pollOnce(runId: string): void {
     // Fresh read from store to avoid stale data after handleExit
     const run = this.store.getRun(runId)
     if (!run || isTerminal(run.status)) return
+
+    // RFC-016 §4.1 continuous liveness: for a handle-less run (this runner
+    // was reconstructed — the in-memory handle.wait() that would have
+    // finalized it is gone), re-derive completion from OS liveness + the
+    // child-written exit sentinel. This is what makes the monitor — not
+    // just handle.wait() — able to finalize, which is what was missing and
+    // produced eternal "running" zombies after a main-process reload.
+    if (!this.handles.has(runId) && isStaleRun(run)) {
+      this.finalizeFromSentinel(runId)
+      this.stopPollingIfIdle()
+      return
+    }
 
     const now = new Date().toISOString()
     const currentBytes = getFileSize(run.outputPath)
@@ -562,14 +704,9 @@ export class ComputeRunner {
 
     // Output size cap — kill if output exceeds MAX_OUTPUT_BYTES
     if (currentBytes > MAX_OUTPUT_BYTES) {
-      const handle = this.handles.get(run.runId)
-      if (handle) {
-        handle.kill('SIGTERM').catch(() => {})
-        setTimeout(() => { handle.kill('SIGKILL').catch(() => {}) }, 3000)
-        this.handles.delete(run.runId)
-      }
+      this.killRun(run)
       const stderrTail = readFileTail(this.store.getStderrPath(run.runId), STDERR_TAIL_BYTES)
-      this.store.updateRun(run.runId, {
+      const updated = this.store.updateRun(run.runId, {
         ...patch,
         status: 'failed',
         completedAt: now,
@@ -577,6 +714,8 @@ export class ComputeRunner {
         stderrTail,
         error: `Output exceeded ${Math.round(MAX_OUTPUT_BYTES / (1024 * 1024))}MB limit. Process killed.`,
       })
+      if (updated) this.recordExperience(updated, 'failed')
+      this.emitUpdate(run.runId)
       return
     }
 
@@ -584,28 +723,23 @@ export class ComputeRunner {
     if (run.startedAt) {
       const elapsedMs = Date.now() - new Date(run.startedAt).getTime()
       if (elapsedMs > run.timeoutMs) {
-        const handle = this.handles.get(run.runId)
-        if (handle) {
-          handle.kill('SIGTERM').catch(() => {})
-          // SIGKILL follow-up after 3s grace period
-          setTimeout(() => {
-            handle.kill('SIGKILL').catch(() => {})
-          }, 3000)
-          this.handles.delete(run.runId)
-        }
+        this.killRun(run)
         const stderrTail = readFileTail(this.store.getStderrPath(run.runId), STDERR_TAIL_BYTES)
-        this.store.updateRun(run.runId, {
+        const updated = this.store.updateRun(run.runId, {
           ...patch,
           status: 'timed_out',
           completedAt: now,
           stalled: false, // Clear stall flag on terminal transition
           stderrTail,
         })
+        if (updated) this.recordExperience(updated, 'failed')
+        this.emitUpdate(run.runId)
         return
       }
     }
 
     this.store.updateRun(run.runId, patch)
+    this.emitUpdate(run.runId)
   }
 
   // -------------------------------------------------------------------------

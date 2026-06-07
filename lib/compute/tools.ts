@@ -26,6 +26,19 @@ interface ToolsOpts {
   registry: ComputeRegistry
   /** Workspace path for resolving relative script_path arguments. */
   workspacePath: string
+  /**
+   * RFC-017 §6 — stable id of the current agent turn. Used to stamp a
+   * campaignId on runs the agent submits in one turn, so a sweep the agent
+   * kicked off reads as a single campaign in the Compute tab. Absent ⇒ runs
+   * are ungrouped.
+   */
+  getTurnId?: () => string | undefined
+}
+
+/** Campaign id for runs the agent submits this turn (RFC-017 §6 option a). */
+function turnCampaignId(opts: ToolsOpts): string | undefined {
+  const turnId = opts.getTurnId?.()
+  return turnId ? `turn-${turnId}` : undefined
 }
 
 /**
@@ -53,8 +66,12 @@ function createComputePlanTool(opts: ToolsOpts): AgentTool {
     description:
       'Analyze a compute task and produce an execution plan. ' +
       'Choose a backend by id (call list_compute_backends first if unsure). ' +
-      'For backends that require approval, the plan is queued until the user ' +
-      'approves in the Compute tab — then call <backend>_execute. ' +
+      'Local (auto-run) backends FUSE plan+execute: a safe command starts ' +
+      'immediately and returns a run_id — observe it with <backend>_status / ' +
+      '<backend>_wait and do NOT call <backend>_execute. A locally-flagged ' +
+      'dangerous command (rm -rf, curl|sh, …) instead waits for a one-tap ' +
+      '"Run anyway" in the Compute tab. Cost-bearing remote backends queue ' +
+      'until the user confirms the cost in the Compute tab (it runs on confirm). ' +
       'Tip: the script can emit two cooperative protocol lines to make its ' +
       'output legible: `##PROGRESS## {json}` for live progress, and ' +
       '`##RESULT## {json}` for the final structured return value (the latter ' +
@@ -131,6 +148,64 @@ function createComputePlanTool(opts: ToolsOpts): AgentTool {
         const backend = registry.get(backendId)!
         const toolPrefix = backend.identity.toolPrefix
         const requiresApproval = record?.effectiveRequiresApproval ?? backend.capabilities.requiresApproval
+        const dangerFlags = record?.dangerFlags ?? []
+
+        // RFC-016 §4.4 — FUSE plan+execute for a non-gated, ephemeral-local
+        // backend: run immediately so there is no second execute call to
+        // orphan. The agent gets the run id back and observes via _status /
+        // _wait. (Danger-flagged or force-approved local plans are gated and
+        // fall through to the confirm path below.)
+        if (!requiresApproval && registry.autoRunsFor(backendId)) {
+          try {
+            const run = await registry.submit(backendId, plan.planId, {
+              timeoutMinutes: typeof params.timeout_minutes === 'number' ? params.timeout_minutes : undefined,
+              campaignId: turnCampaignId(opts),
+            })
+            return toAgentResult('compute_plan', {
+              success: true,
+              data: {
+                backend: plan.backend,
+                plan_id: plan.planId,
+                run_id: run.runId,
+                status: run.status,
+                auto_run: true,
+                task_profile: plan.taskProfile,
+                cost_estimate: plan.costEstimate,
+                backend_data: plan.backendData,
+                backend_data_version: plan.backendDataVersion,
+                requires_approval: false,
+                message:
+                  `Plan auto-ran (run_id="${run.runId}"). It is executing now — ` +
+                  `poll with ${toolPrefix}_status or block with ${toolPrefix}_wait. ` +
+                  `Do NOT call ${toolPrefix}_execute again.`,
+              },
+            })
+          } catch (err) {
+            return toAgentResult('compute_plan', toolError(
+              'EXECUTION_FAILED',
+              err instanceof Error ? err.message : String(err),
+            ))
+          }
+        }
+
+        // Under deterministic confirm (RFC-016 §4.4) the agent NEVER needs a
+        // second execute call for a gated plan — confirming in the Compute tab
+        // submits it. Name the actual gate so the agent doesn't invent one
+        // (e.g. mistaking a risk *warning* for the approval reason).
+        const forcedApproval = requiresApproval && dangerFlags.length === 0 && registry.autoRunsFor(backendId)
+        let gateReason: string
+        if (dangerFlags.length > 0) {
+          gateReason = `Plan flagged risky (${dangerFlags.join('; ')}). It runs when the user taps "Run anyway" in the Compute tab.`
+        } else if (forcedApproval) {
+          gateReason = `Approval is required only because "require approval for all backends" is enabled in Settings → Compute (not because of the task). The user confirms in the Compute tab and it runs.`
+        } else if (plan.costEstimate) {
+          gateReason = `This backend bills the user — the plan needs cost confirmation in the Compute tab. It runs on confirm.`
+        } else {
+          gateReason = `The plan needs the user to approve it in the Compute tab. It runs on approval.`
+        }
+        const message = requiresApproval
+          ? `${gateReason} Do NOT call ${toolPrefix}_execute — confirmation submits the plan deterministically; just tell the user it's waiting in the Compute tab.`
+          : `Plan ready. Call ${toolPrefix}_execute (plan_id="${plan.planId}") to run.`
         return toAgentResult('compute_plan', {
           success: true,
           data: {
@@ -141,9 +216,9 @@ function createComputePlanTool(opts: ToolsOpts): AgentTool {
             backend_data: plan.backendData,
             backend_data_version: plan.backendDataVersion,
             requires_approval: requiresApproval,
-            message: requiresApproval
-              ? `Plan ready. Ask the user to approve in the Compute tab before calling ${toolPrefix}_execute.`
-              : `Plan ready. Call ${toolPrefix}_execute (plan_id="${plan.planId}") to run.`,
+            ...(dangerFlags.length > 0 ? { danger_flags: dangerFlags } : {}),
+            ...(forcedApproval ? { gate: 'force_approval_setting' } : {}),
+            message,
           },
         })
       } catch (err) {
@@ -217,6 +292,7 @@ function createExecuteTool(backend: ComputeBackend, opts: ToolsOpts): AgentTool 
           timeoutMinutes: typeof params.timeout_minutes === 'number' ? params.timeout_minutes : undefined,
           stallThresholdMinutes: typeof params.stall_threshold_minutes === 'number' ? params.stall_threshold_minutes : undefined,
           parentRunId: typeof params.parent_run_id === 'string' ? params.parent_run_id : undefined,
+          campaignId: turnCampaignId(opts),
         })
         return toAgentResult(`${toolPrefix}_execute`, { success: true, data: serializeRun(run) })
       } catch (err) {
@@ -324,6 +400,7 @@ function serializeRun(run: ComputeRun): Record<string, unknown> {
     run_id: run.runId,
     backend: run.backend,
     plan_id: run.planId,
+    campaign_id: run.campaignId,
     status: run.status,
     command: run.command,
     script_path: run.scriptPath,

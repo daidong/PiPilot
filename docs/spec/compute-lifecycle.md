@@ -1,8 +1,12 @@
 # RFC-016: Compute Lifecycle — Ephemeral-Local + Poll-Remote (lessons from Claude Code)
 
-> Spec version: 0.4 (DRAFT — not implemented) | Last updated: 2026-06-06
+> Spec version: 0.5 (IMPLEMENTED) | Last updated: 2026-06-07
 >
-> Status: **PROPOSED**. Replaces the earlier patch-oriented "durable run
+> Status: **IMPLEMENTED** (all five phases). See the "Implementation status"
+> section at the end for what shipped and the one pragmatic divergence
+> (remote-track re-derivation). v0.4 and earlier history is retained below.
+>
+> v0.4 status was: **PROPOSED**. Replaces the earlier patch-oriented "durable run
 > reconciliation" sketch floated in discussion. This RFC reframes three
 > separately-reported bugs as symptoms of one architectural mistake and
 > converges them onto a single, simpler lifecycle model. With v0.4 it is the
@@ -373,3 +377,54 @@ that produced the bugs). 3, 4, 5 can follow independently.
 - Profile-driven *cost* estimation — orthogonal.
 - Reworking the `ComputeBackend` registry/abstraction itself (RFC-008) — this RFC
   changes lifecycle tracking, not the backend interface beyond one capability flag.
+
+## 12. Implementation status (v0.5)
+
+All five phases shipped, with tests in `lib/compute/__tests__/`.
+
+**Phase 1 — exit sentinel + liveness finalization.**
+- `process-sandbox.ts` wraps the command so the *child* records its own exit
+  code: `…; rc=$?; echo $rc > <runDir>/exit_code; exit $rc` (the `exit $rc`
+  preserves the wrapper's own exit status so the fast path isn't masked).
+- `runner.ts`: `pollOnce` finalizes a handle-less run from the sentinel when
+  `isStaleRun` (PID dead); `reconcileStaleRuns` reads the sentinel and assigns
+  the real terminal status (`0→completed`, non-zero→`failed`, missing→`failed`
+  with a "killed before write" message) instead of unconditional `failed`; an
+  alive PID after reconstruction resumes monitoring via a poller, not a handle.
+- The runner gained an `onRunUpdate` callback, threaded `ComputeRunner →
+  LocalBackend → ctx.emit`, so local runs push every poll + terminal transition
+  to the renderer (this was missing entirely — local previously emitted only at
+  submit, the UI "zombie" symptom).
+
+**Phase 2 — simplify local concurrency.** `scheduler.ts` dropped the
+heavy/light classifier and the `MIN_FREE_MEMORY_MB` gate; admission is now a
+soft `maxConcurrent` cap (default 8) + a disk floor. `classifyWeight` is
+retained only to populate the display `weight`.
+
+**Phase 3 — fuse plan+execute + danger check.** New `danger-check.ts`
+(rule-based: `rm -rf`, `curl|sh`, `dd of=/dev`, fork-bomb, sudo, …). The
+registry adds a `livenessModel` capability (`ephemeral-local` | `remote-poll`)
+and `backendAutoRuns()`; the `compute_plan` tool *fuses* plan+submit for a
+non-gated ephemeral-local backend (returns a `run_id`, no second call). A
+flagged command becomes a danger gate (`PlanRecord.dangerFlags`) routed to a
+one-tap confirm. The "approved — waiting for agent" placeholder is gone.
+
+**Phase 4 — remote track + deterministic confirm.** `livenessModel` set on all
+backends. `Registry.confirmAndSubmit()` is the RFC-015 bridge: the main process
+approves + submits a gated plan (cost *or* danger) on user confirm, idempotently
+— wired via `compute:confirm-plan` IPC. Remote runners reconcile on
+reconstruction: EC2 resumes cost/timeout polling for live instances and
+terminates interrupted-setup orphans; Modal honestly finalizes a crash-orphaned
+run (its `modal run` driver stream can't be cheaply re-derived). **Pragmatic
+divergence:** full remote-API re-derivation (`modal app list` polling) was *not*
+built — the streaming-CLI model makes it a larger follow-up; the zombie-on-
+restart class is closed either way.
+
+**Phase 5 — scheduled runs.** `lib/compute/cron/` (schedule parser for
+intervals + 5-field cron, home-scoped `~/.research-pilot/cron/<id>.json` store,
+and an app-lifetime `CronScanner`). Ticks submit via plan → `confirmAndSubmit`
+(creation-time confirm covers cost/danger). `lastRun / nextDue /
+missedSinceLastOpen` are surfaced; missed ticks are skipped (optional per-task
+catch-up). IPC: `compute:cron-{list,create,update,delete,run-now}` + a
+`compute:cron-event` channel. Each tick is grouped under the task's
+`campaignId` (RFC-017 §6).

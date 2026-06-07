@@ -1,8 +1,13 @@
 # RFC-017: Compute Tab UX Redesign
 
-> Spec version: 0.1 (DRAFT — not implemented) | Last updated: 2026-06-06
+> Spec version: 0.2 (IMPLEMENTED) | Last updated: 2026-06-07
 >
-> Status: **PROPOSED**. Redesigns the Compute tab around *user intent and
+> Status: **IMPLEMENTED**. `ComputeView.tsx` is re-composed around the three
+> zones; the compute-store gained `campaignId` on run views + the
+> `useDecisions` / `useRunningRuns` / `useCampaigns` / `useCronTasks` selectors
+> and `groupRunsIntoCampaigns`. See "Implementation status" at the end.
+>
+> v0.1 status was: **PROPOSED**. Redesigns the Compute tab around *user intent and
 > operation type* instead of internal lifecycle buckets. Supersedes the relevant
 > center-panel sections of `local-compute-ui.md`, which predate the dual-track
 > lifecycle (RFC-016), the auto-run-local decision (RFC-016 §4.4), and the
@@ -212,3 +217,34 @@ Open: a single list with badges (recommended — fewer modes) vs. split columns.
 - Backend configuration UIs (Settings → Compute), unchanged.
 - The left sidebar's experience-insights / stats content (kept; only its
   placement is touched by §11).
+
+## 13. Implementation status (v0.2)
+
+- **Three zones** (§4): `ComputeView` renders ① Needs you (conditional) → ②
+  Running → ③ Finished, plus a Scheduled section. The old sortable lifecycle
+  table and the "approved — waiting" placeholder row are deleted.
+- **Target strip** (§4.1): a sticky `TargetStrip` of backend chips
+  (dot + icon + ready/unavailable). The left `ComputeSidebar` is kept
+  (open question §11.3 resolved as "both" — strip for glance, sidebar for
+  detail).
+- **Zone ① Needs you** (§4.2): the reworked `PendingPlanCard` is the decision
+  card — danger (`⚠ Run anyway`), cost (`☁ Confirm & run`), or forced approval —
+  with **Skip** (discard) and a tertiary "Send back to agent" (reject +
+  comments). Primary action calls `confirmComputePlan` (RFC-016 §4.4
+  deterministic submit), not approve→chat→execute.
+- **Zone ② Running** (§4.3): `RunRow` reused with inline progress + a locality
+  badge (`⚙ this Mac` vs `☁ Modal · keeps running if you quit · $X`) +
+  re-derived status + Stop.
+- **Zone ③ Finished** (§4.4): `CampaignGroup` collapses members under an
+  aggregate (`8 ✓ · 1 ✗ · 1 ●`); search + per-backend filter retained;
+  one-off finished runs fall into an "ungrouped" bucket.
+- **Campaign key** (§6): decided as **(a) submission batch** — `campaignId`
+  stamped at submit time (`turn-<turnId>` for agent batches, the cron task's
+  `campaignId` for scheduled ticks). Threaded through all three backends + run
+  events; grouped by `groupRunsIntoCampaigns`.
+- **Scheduled** (§4.5): `ScheduledSection` lists tasks with next-due / last-run /
+  missed, an enable toggle, run-now, edit, delete, and an add form.
+- **Open questions resolved:** §11.1 → (a) submission-batch; §11.2 → one list +
+  badges; §11.3 → keep both strip + sidebar. §11.4 (danger patterns) → the
+  rule-based set in `lib/local-compute/danger-check.ts`; §11.5 ("hand to chat"
+  payload) → unchanged (still the existing "Fix & retry in chat" affordance).

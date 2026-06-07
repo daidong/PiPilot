@@ -19,8 +19,15 @@ export type ComputeEvent =
       backend: string
       planId: string
       plan: ComputePlan
-      /** True iff this plan must be approved before submit() runs. */
+      /** True iff this plan must be approved/confirmed before submit() runs. */
       requiresApproval: boolean
+      /**
+       * RFC-016 §4.4: rule-based danger findings (recursive delete, pipe-to-
+       * shell, …) for a non-gated local command. Non-empty ⇒ this gate is a
+       * *danger confirm*, not a cost/approval gate — the renderer renders the
+       * "⚠ flagged risky" card and a one-tap Run-anyway.
+       */
+      dangerFlags?: string[]
     }
   | {
       kind: 'plan-approved'
@@ -60,6 +67,8 @@ export type ComputeEvent =
        * does not appear in RunStatus).
        */
       planId?: string
+      /** RFC-017 §6 — campaign grouping key (also not present on RunStatus). */
+      campaignId?: string
       status: RunStatus
     }
   | {
@@ -67,6 +76,7 @@ export type ComputeEvent =
       backend: string
       runId: string
       planId?: string
+      campaignId?: string
       status: RunStatus
     }
   | {

@@ -103,6 +103,8 @@ export interface ComputeRunView {
   failure?: ComputeFailure
   exitCode?: number
   parentRunId?: string
+  /** RFC-017 §6 — campaign/sweep grouping key (Finished zone). */
+  campaignId?: string
   estimatedCostUsd?: number
   costThresholdUsd?: number
   costEstimate?: ModalCostEstimateView
@@ -137,8 +139,16 @@ export interface ComputePlanView {
   approvedAt?: string
   rejectedAt?: string
   rejectionComments?: string
-  /** True iff this plan must be approved before execute. */
+  /** True iff this plan must be approved/confirmed before execute. */
   requiresApproval: boolean
+  /**
+   * RFC-016 §4.4 — rule-based danger findings for a non-gated local command.
+   * Non-empty ⇒ this is a *danger confirm* (Zone ① "Run anyway"), not a cost
+   * or approval gate.
+   */
+  dangerFlags?: string[]
+  /** True iff the backend bills the user (drives the cost-confirm framing). */
+  hasCost?: boolean
   backendData?: unknown
   backendDataVersion?: number
 }
@@ -165,6 +175,27 @@ export interface BackendView {
   availability?: BackendAvailability
 }
 
+/** RFC-016 §4.5 — a scheduled task plus its computed scheduling facts. */
+export interface CronTaskView {
+  id: string
+  name?: string
+  schedule: string
+  command: string
+  workDir?: string
+  backend: string
+  scriptPath?: string
+  backendData?: string
+  enabled: boolean
+  createdAt: string
+  lastRun?: string
+  lastRunId?: string
+  catchUpOnReopen?: boolean
+  campaignId: string
+  nextDue?: string
+  missedSinceLastOpen: number
+  scheduleValid: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Legacy compat types (preserved for existing ComputeView consumers)
 // ---------------------------------------------------------------------------
@@ -186,9 +217,15 @@ interface ComputeState {
   backends: Map<string, BackendView>
   /** Keyed by `${backend}::${planId}`. Only the most recent plan-ready per backend is shown to the user. */
   pendingPlans: Map<string, ComputePlanView>
+  /** RFC-016 §4.5 — scheduled tasks (home-scoped), keyed by task id. */
+  cronTasks: Map<string, CronTaskView>
 
   // Single reducer for all ComputeEvent variants (RFC-008 §7.6).
   applyEvent: (event: any) => void
+
+  // Cron events (compute:cron-event) — separate channel from run events.
+  applyCronEvent: (event: any) => void
+  hydrateCronTasks: (tasks: CronTaskView[]) => void
 
   // Bulk hydration after app boot (compute:hydrate).
   hydrateRuns: (runs: Array<{ run: any; status: any }>) => void
@@ -217,6 +254,7 @@ function runViewFrom(backendId: string, runId: string, run: any, status: any): C
     currentPhase: status?.backendData?.currentPhase ?? 'full',
     command: run?.command ?? '',
     scriptPath: run?.scriptPath,
+    campaignId: run?.campaignId,
     sandbox: run?.backendData?.sandbox ?? backendId,
     weight: run?.backendData?.weight ?? 'heavy',
     createdAt: run?.createdAt,
@@ -242,7 +280,7 @@ function runViewFrom(backendId: string, runId: string, run: any, status: any): C
   }
 }
 
-function runViewFromStatusOnly(backendId: string, runId: string, status: any, prev?: ComputeRunView, planId?: string): ComputeRunView {
+function runViewFromStatusOnly(backendId: string, runId: string, status: any, prev?: ComputeRunView, planId?: string, campaignId?: string): ComputeRunView {
   const base = prev ?? {
     runId,
     backend: backendId,
@@ -271,6 +309,7 @@ function runViewFromStatusOnly(backendId: string, runId: string, status: any, pr
     // pending plan, but a later event without planId (defensive) won't
     // erase what we already learned.
     planId: planId ?? base.planId,
+    campaignId: campaignId ?? base.campaignId,
     status: status?.status ?? base.status,
     elapsedSeconds: status?.elapsedSeconds ?? base.elapsedSeconds,
     outputBytes: status?.outputBytes ?? base.outputBytes,
@@ -315,6 +354,8 @@ function planViewFrom(event: any): ComputePlanView {
     rejectedAt: event.record?.rejectedAt,
     rejectionComments: event.record?.rejectionComments,
     requiresApproval: event.requiresApproval ?? event.record?.effectiveRequiresApproval ?? false,
+    dangerFlags: event.dangerFlags ?? event.record?.dangerFlags,
+    hasCost: !!plan.costEstimate,
     backendData: plan.backendData,
     backendDataVersion: plan.backendDataVersion,
   }
@@ -324,6 +365,22 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
   runs: new Map(),
   backends: new Map(),
   pendingPlans: new Map(),
+  cronTasks: new Map(),
+
+  applyCronEvent: (event) => {
+    if (!event || typeof event !== 'object') return
+    if (event.kind === 'cron-tasks' && Array.isArray(event.tasks)) {
+      get().hydrateCronTasks(event.tasks)
+    }
+    // 'cron-fired' is informational; the follow-up 'cron-tasks' event carries
+    // the refreshed list, and the fired run shows up via the normal run events.
+  },
+
+  hydrateCronTasks: (tasks) => {
+    const map = new Map<string, CronTaskView>()
+    for (const t of tasks) map.set(t.id, t)
+    set({ cronTasks: map })
+  },
 
   applyEvent: (event) => {
     if (!event || typeof event !== 'object') return
@@ -393,7 +450,8 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
         // undefined, leaving the "approved, waiting for agent" card
         // stuck at the top of the Compute tab forever.
         const planId = event.planId ?? prev?.planId
-        runs.set(event.runId, runViewFromStatusOnly(event.backend, event.runId, event.status, prev, planId))
+        const campaignId = event.campaignId ?? prev?.campaignId
+        runs.set(event.runId, runViewFromStatusOnly(event.backend, event.runId, event.status, prev, planId, campaignId))
         if (planId) {
           const plans = new Map(state.pendingPlans)
           const key = planKey(event.backend, planId)
@@ -504,7 +562,7 @@ export const useComputeStore = create<ComputeState>((set, get) => ({
     return { pendingPlans: next }
   }),
 
-  reset: () => set({ runs: new Map(), backends: new Map(), pendingPlans: new Map() }),
+  reset: () => set({ runs: new Map(), backends: new Map(), pendingPlans: new Map(), cronTasks: new Map() }),
 }))
 
 // ---------------------------------------------------------------------------
@@ -628,6 +686,133 @@ export function planToPlaceholderRun(plan: ComputePlanView): ComputeRunView {
     backendDataVersion: plan.backendDataVersion,
     isPlanPlaceholder: true,
   }
+}
+
+// ---------------------------------------------------------------------------
+// RFC-017 — three-zone selectors (Needs you / Running / Finished + campaigns)
+// ---------------------------------------------------------------------------
+
+const RUNNING_STATUSES = new Set(['running', 'stalled', 'queued', 'pending_approval'])
+
+function submittedMs(run: ComputeRunView): number {
+  const src = run.createdAt ?? run.startedAt
+  return src ? new Date(src).getTime() : 0
+}
+
+/** Zone ② — live runs (running / stalled). The heart of the tab. */
+export function useRunningRuns(): ComputeRunView[] {
+  const runs = useComputeStore((s) => s.runs)
+  return Array.from(runs.values())
+    .filter((r) => RUNNING_STATUSES.has(r.status))
+    .sort((a, b) => submittedMs(b) - submittedMs(a))
+}
+
+/** Zone ③ — finished (terminal) runs, newest first. */
+export function useFinishedRuns(): ComputeRunView[] {
+  const runs = useComputeStore((s) => s.runs)
+  return Array.from(runs.values())
+    .filter((r) => !RUNNING_STATUSES.has(r.status))
+    .sort((a, b) => submittedMs(b) - submittedMs(a))
+}
+
+export interface Campaign {
+  /** campaignId, or a synthetic id for a one-off finished run. */
+  id: string
+  /** True when this is a multi-run group rendered with a header. */
+  grouped: boolean
+  /** Human label for the group header (shared command family). */
+  label: string
+  runs: ComputeRunView[]
+  completed: number
+  failed: number
+  total: number
+  latestMs: number
+}
+
+/**
+ * A short, shared label for a campaign group — the command family its runs
+ * have in common (RFC-017 §4.4). E.g. `python probe.py --label a/b/c` →
+ * "probe.py". Falls back to the raw command, truncated.
+ */
+function campaignLabel(runs: ComputeRunView[]): string {
+  const first = runs[0]
+  const raw = (first?.taskDescription?.trim() || first?.command || 'runs').trim()
+  // Prefer a script-ish token (foo.py / foo.sh / foo.js); else the first
+  // non-interpreter word; else the first word.
+  const tokens = raw.split(/\s+/)
+  const script = tokens.find((t) => /\.(py|sh|js|ts|rb|jl|R)$/i.test(t))
+  if (script) return script.split('/').pop() || script
+  const interp = new Set(['python', 'python3', 'node', 'bash', 'sh', 'Rscript', 'julia', 'ruby'])
+  const word = tokens.find((t) => !interp.has(t)) ?? tokens[0] ?? raw
+  return word.length > 40 ? word.slice(0, 39) + '…' : word
+}
+
+/**
+ * Zone ③ grouping (RFC-017 §4.4/§6, distilled). ONE place per run: only
+ * FINISHED runs appear here — a still-running member lives in the Running
+ * zone, never duplicated here. A campaignId with ≥2 finished members renders
+ * as a collapsible group; a single finished run (grouped or not) renders as a
+ * bare row.
+ */
+export function groupRunsIntoCampaigns(runs: Iterable<ComputeRunView>): Campaign[] {
+  const groups = new Map<string, ComputeRunView[]>()
+  const singles: ComputeRunView[] = []
+  for (const r of runs) {
+    if (RUNNING_STATUSES.has(r.status)) continue   // live runs belong to the Running zone
+    if (r.campaignId) {
+      const arr = groups.get(r.campaignId) ?? []
+      arr.push(r)
+      groups.set(r.campaignId, arr)
+    } else {
+      singles.push(r)
+    }
+  }
+  const out: Campaign[] = []
+  for (const [id, members] of groups) {
+    if (members.length >= 2) out.push(buildCampaign(id, true, members))
+    else singles.push(members[0])   // a lone campaign member reads better as a bare row
+  }
+  for (const r of singles) out.push(buildCampaign(`run::${r.runId}`, false, [r]))
+  return out.sort((a, b) => b.latestMs - a.latestMs)
+}
+
+export function useCampaigns(): Campaign[] {
+  const runs = useComputeStore((s) => s.runs)
+  return groupRunsIntoCampaigns(runs.values())
+}
+
+function buildCampaign(id: string, grouped: boolean, members: ComputeRunView[]): Campaign {
+  let completed = 0, failed = 0, latestMs = 0
+  for (const r of members) {
+    if (r.status === 'completed') completed++
+    else if (['failed', 'timed_out', 'cost_killed', 'cancelled'].includes(r.status)) failed++
+    latestMs = Math.max(latestMs, submittedMs(r))
+  }
+  const runs = members.slice().sort((a, b) => submittedMs(b) - submittedMs(a))
+  return { id, grouped, label: campaignLabel(runs), runs, completed, failed, total: members.length, latestMs }
+}
+
+/**
+ * Zone ① — decisions that genuinely need the user (RFC-017 §4.2): a gated
+ * plan awaiting confirm. Under RFC-016 §4.4 this is a remote *cost* confirm,
+ * a flagged *danger* confirm, or a forced approval — never routine local
+ * approval (local auto-runs).
+ */
+export function useDecisions(): ComputePlanView[] {
+  const plans = useComputeStore((s) => s.pendingPlans)
+  return Array.from(plans.values())
+    .filter((p) => p.requiresApproval && !p.approved && !p.rejectedAt)
+    .sort((a, b) => {
+      const aT = a.createdAt ? new Date(a.createdAt).getTime() : 0
+      const bT = b.createdAt ? new Date(b.createdAt).getTime() : 0
+      return aT - bT
+    })
+}
+
+/** RFC-016 §4.5 — scheduled tasks, oldest first. */
+export function useCronTasks(): CronTaskView[] {
+  const tasks = useComputeStore((s) => s.cronTasks)
+  return Array.from(tasks.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 
 /**

@@ -12,24 +12,27 @@ import {
   Search,
   ChevronRight,
   ChevronDown,
-  ChevronUp,
   RotateCcw,
   X,
   Square,
   Trash2,
-  CheckCircle2
+  AlertTriangle,
+  Plus,
+  Clock,
+  Play,
+  Pencil,
+  Power,
 } from 'lucide-react'
 import {
   useComputeStore,
-  useActiveRuns,
-  useRecentRuns,
-  useUnapprovedPendingPlans,
-  useApprovedPendingPlans,
-  planToPlaceholderRun,
+  useDecisions,
+  useRunningRuns,
+  useCampaigns,
+  useCronTasks,
 } from '../../stores/compute-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
-import type { ComputeRunView, ComputePlanView, BackendView, ModalImageView } from '../../stores/compute-store'
+import type { ComputeRunView, ComputePlanView, BackendView, ModalImageView, CronTaskView, Campaign } from '../../stores/compute-store'
 
 const api = (window as any).api
 
@@ -116,24 +119,6 @@ function modalImageSourceLabel(image?: ModalImageView): string {
 
 function modalImageGpuLabel(image?: ModalImageView): string {
   return image?.gpuType ?? 'CPU'
-}
-
-function formatActivityLabel(run: ComputeRunView): string {
-  if (run.stalled || run.status === 'stalled') return 'Stalled'
-  if (run.status !== 'running') return STATUS_LABELS[run.status] ?? run.status
-  if ((run.outputLines > 0 || run.outputBytes > 0) && run.lastOutputAt) return `Output ${timeAgo(run.lastOutputAt)}`
-  if (run.outputLines > 0) return `${run.outputLines} lines`
-  return 'No output yet'
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  running: 'Running',
-  stalled: 'Stalled',
-  completed: 'Completed',
-  failed: 'Failed',
-  timed_out: 'Timed out',
-  cancelled: 'Cancelled',
-  cost_killed: 'Cost killed',
 }
 
 // ─── Status indicator (small dot, follows accent system) ─────────────────────
@@ -241,47 +226,6 @@ function ModalDisclosureSection({
         {label}
       </button>
       {open && <div className="pl-5 pb-3">{children}</div>}
-    </div>
-  )
-}
-
-function ModalRunActiveSummary({ run, hasProgress }: { run: ComputeRunView; hasProgress: boolean }) {
-  const cost = formatCostSummary(run)
-  return (
-    <div className="px-10 pb-2">
-      {hasProgress ? (
-        <ProgressBar percentage={run.progress!.percentage!} />
-      ) : (
-        <div className="h-1 rounded-full t-bg-elevated overflow-hidden">
-          <div className="h-full w-1/3 rounded-full animate-pulse t-gradient-accent-h opacity-30" />
-        </div>
-      )}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-2">
-        <DetailField label="Phase" value={run.progress?.phase ?? run.currentPhase ?? 'Modal'} />
-        <DetailField label="Elapsed" value={formatDuration(run.elapsedSeconds)} />
-        <DetailField label="Cost so far" value={cost ?? '--'} />
-        <DetailField label="Output" value={`${formatBytes(run.outputBytes)} · ${run.outputLines} lines`} />
-        <DetailField label="Last output" value={(run.outputLines > 0 || run.outputBytes > 0) && run.lastOutputAt ? timeAgo(run.lastOutputAt) : 'No output yet'} />
-      </div>
-      {(hasProgress || run.progress?.currentStep !== undefined || run.progress?.etaSeconds !== undefined) && (
-        <div className="flex flex-wrap gap-1.5 mt-2">
-          {hasProgress && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-secondary">
-              <span className="t-text-muted">Progress</span> {run.progress!.percentage}%
-            </span>
-          )}
-          {run.progress?.currentStep !== undefined && run.progress?.totalSteps !== undefined && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-secondary">
-              <span className="t-text-muted">Step</span> {run.progress.currentStep}/{run.progress.totalSteps}
-            </span>
-          )}
-          {run.progress?.etaSeconds !== undefined && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-secondary">
-              <span className="t-text-muted">ETA</span> {formatDuration(run.progress.etaSeconds)}
-            </span>
-          )}
-        </div>
-      )}
     </div>
   )
 }
@@ -453,7 +397,13 @@ function RunRow({
   const hasProgress = run.progress?.percentage !== undefined
   const setCenterView = useUIStore((s) => s.setCenterView)
   const backendView = useComputeStore((s) => s.backends.get(run.backend))
-  const canStop = !!backendView?.capabilities?.supportsStop && (run.status === 'running' || run.status === 'stalled' || run.status === 'queued')
+  // Show Stop for any live run UNLESS the backend explicitly disables it.
+  // Gating on `=== true` previously hid the button whenever the renderer's
+  // backends map hadn't hydrated capabilities yet (a race) — so a running
+  // row had no way to stop. Default-on is correct: every real backend
+  // supports stop; only an explicit `supportsStop: false` removes it.
+  const isLive = run.status === 'running' || run.status === 'stalled' || run.status === 'queued'
+  const canStop = isLive && backendView?.capabilities?.supportsStop !== false
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState<string | null>(null)
   const stop = async () => {
@@ -466,34 +416,6 @@ function RunRow({
       setStopError(err?.message || 'Failed to stop run.')
     } finally {
       setStopping(false)
-    }
-  }
-
-  // Delete affordance — currently scoped to placeholder rows (an
-  // approved-but-never-executed plan lingering in the Compute tab). The
-  // real PlanRecord lives in compute-plans.json; discarding clears it and
-  // the `plan-discarded` event removes the row everywhere. Real runs are
-  // not deletable here yet (they auto-evict after 7 days).
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const doDelete = async () => {
-    if (!run.planId) { setDeleteError('Missing plan id.'); return }
-    setDeleting(true)
-    setDeleteError(null)
-    try {
-      const result = await api.discardComputePlan?.(run.backend, run.planId)
-      if (result?.success) {
-        // Optimistic local removal for instant feedback; the backend's
-        // own plan-discarded event arrives next and is a no-op.
-        useComputeStore.getState().applyEvent({ kind: 'plan-discarded', backend: run.backend, planId: run.planId })
-      } else {
-        setDeleteError(result?.error || 'Failed to remove plan.')
-        setDeleting(false)
-      }
-    } catch (err: any) {
-      setDeleteError(err?.message || 'Failed to remove plan.')
-      setDeleting(false)
     }
   }
 
@@ -511,206 +433,107 @@ function RunRow({
 
   const hasMetrics = run.progress?.metrics && Object.keys(run.progress.metrics).length > 0
   const isModal = run.backend === 'modal'
+  const isRemote = isModal || run.backend !== 'local'
   const modalGpuLabel = modalImageGpuLabel(run.image)
-  const modalCost = formatCostSummary(run)
-  const primaryText = isModal ? (run.taskDescription?.trim() || run.command) : run.command
+  const primaryText = (run.taskDescription?.trim() || run.command || run.runId)
   const isHardFailure = run.status === 'failed' || run.status === 'timed_out' || run.status === 'cost_killed'
-  // Placeholder rows are synthesized client-side from an approved-but-
-  // not-yet-executed plan. They have no real runId on the main side,
-  // so expanding (which loads run-specific details) and stop (which
-  // calls api.stopComputeRun) both make no sense — disable both.
-  const isPlaceholder = !!run.isPlanPlaceholder
-  const canExpand = !isPlaceholder
-  const effectiveCanStop = canStop && !isPlaceholder
-  const canDelete = isPlaceholder && !!run.planId
-  const rowTint = isPlaceholder
-    ? 'border-l-2 border-l-sky-400/40 bg-sky-400/5'
-    : isHardFailure
-      ? 'border-l-2 border-l-red-500/40 bg-red-500/5'
-      : run.status === 'cancelled'
-        ? 'border-l-2 border-l-zinc-400/30'
-        : ''
+  const rowTint = isHardFailure
+    ? 'border-l-2 border-l-red-500/40'
+    : run.status === 'cancelled'
+      ? 'border-l-2 border-l-zinc-400/30'
+      : ''
+
+  // One compact outcome word for finished/abnormal states (the green dot
+  // already says "completed", so we show nothing for a clean success).
+  const outcome: { text: string; cls: string } | null =
+    (run.stalled || run.status === 'stalled') ? { text: 'stalled', cls: 'text-amber-500' }
+    : run.status === 'failed' ? { text: run.exitCode !== undefined ? `failed · exit ${run.exitCode}` : 'failed', cls: 'text-red-500' }
+    : run.status === 'timed_out' ? { text: 'timed out', cls: 'text-red-500' }
+    : run.status === 'cost_killed' ? { text: 'cost killed', cls: 'text-red-500' }
+    : run.status === 'cancelled' ? { text: 'cancelled', cls: 't-text-muted' }
+    : null
+
+  const tailLine = (run.outputTail || '').trim().split('\n').filter(Boolean).pop() || ''
 
   return (
     <div className={`border-b t-border last:border-b-0 ${rowTint}`}>
-      {/* Compact row */}
+      {/* Compact one-line row */}
       <div
-        className={`flex items-center gap-3 px-3 py-2 transition-colors ${canExpand ? 'hover:bg-[var(--color-accent-soft)]/5 cursor-pointer' : ''}`}
-        onClick={canExpand ? onToggle : undefined}
+        className="flex items-center gap-2.5 px-3 py-1.5 transition-colors hover:bg-[var(--color-accent-soft)]/5 cursor-pointer"
+        onClick={onToggle}
       >
         <button
           type="button"
           aria-label={expanded ? 'Collapse run details' : 'Expand run details'}
           aria-expanded={expanded}
-          disabled={!canExpand}
-          className={`shrink-0 t-text-muted ${!canExpand ? 'opacity-30' : ''}`}
+          className="shrink-0 t-text-muted"
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
 
         <StatusDot status={run.status} stalled={run.stalled} />
 
-        {/* Command + meta */}
-        <div className="flex-1 min-w-0">
-          <p className={`text-[13px] t-text font-medium truncate leading-tight ${isModal ? '' : 'font-mono'}`}>
-            {primaryText}
-          </p>
-          {isPlaceholder ? (
-            <p className="text-[11px] t-text-muted truncate mt-0.5">
-              {run.backend} &middot; approved — waiting for agent to execute
-            </p>
-          ) : isModal ? (
-            <p className="text-[11px] t-text-muted truncate mt-0.5">
-              Modal
-              {modalGpuLabel !== 'Modal' && <> &middot; {modalGpuLabel}</>}
-              <> &middot; {STATUS_LABELS[run.status] ?? run.status}</>
-              {modalCost && <> &middot; {modalCost}</>}
-              {run.failure && <> &middot; {run.failure.code}</>}
-            </p>
-          ) : (
-            <p className="text-[11px] t-text-muted truncate mt-0.5">
-              {run.runId}
-              {run.status !== 'running' && run.status !== 'stalled' && (
-                <> &middot; {STATUS_LABELS[run.status] ?? run.status}</>
-              )}
-              {run.stalled && <> &middot; <span className="t-text-accent-soft">stalled — no output for a while</span></>}
-              {run.failure && <> &middot; {run.failure.code}</>}
-              {run.parentRunId && <> &middot; retry</>}
-            </p>
-          )}
-        </div>
+        {/* Headline — WHAT ran (command / task). The cr-id is detail, not headline. */}
+        <span className={`flex-1 min-w-0 truncate text-[13px] t-text ${isModal ? '' : 'font-mono'}`} title={primaryText}>
+          {primaryText}
+        </span>
 
-        {/* Backend — display name (e.g. "Local", "Modal"). For Modal,
-            append the GPU type as a small subtitle below so the
-            backend column also surfaces "L4 / T4 / A10G / CPU". */}
-        <span className="shrink-0 w-20 min-w-0">
-          <span className="block text-[11px] t-text-secondary truncate">
-            {backendView?.displayName ?? run.backend}
+        {/* Right meta — compact, tabular, muted. Locality is ONE glyph. */}
+        <span className="shrink-0 flex items-center gap-2.5 text-[11px] t-text-muted tabular-nums">
+          <span
+            title={isModal ? 'Modal — runs remotely; keeps running if you quit' : run.backend === 'local' ? 'Local — this machine' : run.backend}
+          >
+            {isRemote ? `☁ ${backendView?.displayName ?? run.backend}` : '⚙'}
           </span>
-          {isModal && modalGpuLabel && modalGpuLabel !== 'Modal' && (
-            <span className="block text-[10px] t-text-muted truncate">{modalGpuLabel}</span>
-          )}
+          {isModal && modalGpuLabel !== 'Modal' && <span>{modalGpuLabel}</span>}
+          {run.estimatedCostUsd !== undefined && run.estimatedCostUsd > 0 && <span>{formatMoney(run.estimatedCostUsd, 2)}</span>}
+          {outcome && <span className={outcome.cls}>{outcome.text}</span>}
+          <span className="t-text-muted/80" title={run.createdAt ?? run.startedAt ?? ''}>{timeAgoShort(run.createdAt ?? run.startedAt)}</span>
+          {run.elapsedSeconds > 0 && <span className="w-12 text-right">{formatDuration(run.elapsedSeconds)}</span>}
         </span>
 
-        {/* Submitted — when the system accepted the task. For real
-            runs this is run.createdAt; for placeholders it's
-            plan.approvedAt. Falls back to startedAt for legacy data
-            that pre-dates the createdAt field. */}
-        <span className="shrink-0 text-[11px] t-text-muted text-right w-20" title={run.createdAt ?? run.startedAt ?? ''}>
-          {timeAgoShort(run.createdAt ?? run.startedAt)}
-        </span>
-
-        {/* Duration */}
-        <span className="shrink-0 text-[11px] t-text-muted tabular-nums w-16 text-right">
-          {isPlaceholder ? '--' : formatDuration(run.elapsedSeconds)}
-        </span>
-
-        {/* Activity — last meaningful event. Wider than Submitted/Duration
-            because labels like "Cost killed" / "No output yet" / "Output 3m ago"
-            run long. */}
-        <span className="shrink-0 text-[11px] t-text-muted text-right w-24 truncate">
-          {isPlaceholder ? 'queued' : isModal ? formatActivityLabel(run) : isActive ? run.currentPhase : (run.startedAt ? timeAgo(run.startedAt) : '--')}
-        </span>
-
-        {/* Stop button slot — ALWAYS occupies `w-6` (and the `gap-3`
-            before it) so the row width matches the table header, which
-            reserves the same slot via `<span className="w-6" />`.
-            Without this empty-state placeholder, hiding the button
-            would shift the right-aligned columns (Backend / Submitted
-            / Duration / Activity) by 36px and break alignment. */}
-        {effectiveCanStop ? (
+        {/* Stop (live runs only); fixed slot keeps the meta column aligned.
+            Bordered so it reads as a control, not decoration. */}
+        {canStop ? (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); stop() }}
             disabled={stopping}
             aria-label="Stop run"
             title="Stop run"
-            className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-500/10 t-text-muted hover:text-red-500 disabled:opacity-40 transition-colors"
+            className="shrink-0 inline-flex items-center gap-1 h-6 px-1.5 rounded border t-border t-text-secondary hover:text-red-500 hover:border-red-500/40 hover:bg-red-500/10 disabled:opacity-40 transition-colors"
           >
-            <Square size={11} fill="currentColor" />
-          </button>
-        ) : canDelete ? (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setConfirmDelete((v) => !v); setDeleteError(null) }}
-            disabled={deleting}
-            aria-label="Remove from list"
-            title="Remove this queued plan from the list"
-            className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded hover:bg-red-500/10 t-text-muted hover:text-red-500 disabled:opacity-40 transition-colors"
-          >
-            <Trash2 size={12} />
+            <Square size={9} fill="currentColor" />
+            <span className="text-[10px] font-medium">{stopping ? 'Stopping…' : 'Stop'}</span>
           </button>
         ) : (
           <span className="shrink-0 w-6" aria-hidden="true" />
         )}
       </div>
-      {confirmDelete && (
-        <div className="px-10 -mt-1 mb-1.5 flex items-center gap-2 text-[10px]">
-          <span className="t-text-muted">Remove this queued plan? It never ran — this only clears the row.</span>
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); doDelete() }}
-            disabled={deleting}
-            className="px-2 py-0.5 rounded text-white font-medium bg-red-500 disabled:opacity-50"
-          >
-            {deleting ? 'Removing…' : 'Remove'}
-          </button>
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setConfirmDelete(false) }}
-            disabled={deleting}
-            className="px-2 py-0.5 rounded border t-border t-text-secondary hover:t-text disabled:opacity-50"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
       {stopError && (
-        <div className="px-10 -mt-1 mb-1.5 text-[10px] text-red-500">{stopError}</div>
-      )}
-      {deleteError && (
-        <div className="px-10 -mt-1 mb-1.5 text-[10px] text-red-500">{deleteError}</div>
+        <div className="pl-9 pr-3 -mt-0.5 mb-1 text-[10px] text-red-500">{stopError}</div>
       )}
 
-      {/* Progress section for active runs — always visible (not inside expanded).
-          Skip for placeholders (they have no run yet — nothing to show). */}
-      {isActive && !isPlaceholder && (
-        isModal ? (
-          <ModalRunActiveSummary run={run} hasProgress={hasProgress} />
-        ) : (
-          <div className="px-10 pb-1.5">
-            {/* Progress bar: determinate if we have percentage, indeterminate pulse if not */}
-            {hasProgress ? (
-              <ProgressBar percentage={run.progress!.percentage!} />
-            ) : (
-              <div className="h-1 rounded-full t-bg-elevated overflow-hidden">
-                <div className="h-full w-1/3 rounded-full animate-pulse t-gradient-accent-h opacity-30" />
-              </div>
-            )}
-            <div className="flex items-center gap-3 mt-1 text-[10px] t-text-muted">
-              {hasProgress && <span>{run.progress!.percentage}%</span>}
-              {run.progress?.currentStep !== undefined && run.progress?.totalSteps !== undefined && (
-                <span>Step {run.progress.currentStep}/{run.progress.totalSteps}</span>
-              )}
-              {run.progress?.phase && <span>{run.progress.phase}</span>}
-              {run.progress?.etaSeconds !== undefined && (
-                <span>ETA {formatDuration(run.progress.etaSeconds)}</span>
-              )}
-              {run.startedAt && <span>started {timeAgo(run.startedAt)}</span>}
-              {run.outputLines > 0 && <span>{run.outputLines} lines</span>}
+      {/* Live runs: a thin progress fill + ONE tail line. Everything else
+          (full output, env, exit code, metrics) lives in the expanded view. */}
+      {isActive && (
+        <div className="pl-9 pr-3 pb-1.5">
+          {hasProgress ? (
+            <ProgressBar percentage={run.progress!.percentage!} />
+          ) : (
+            <div className="h-1 rounded-full t-bg-elevated overflow-hidden">
+              <div className="h-full w-1/3 rounded-full animate-pulse t-gradient-accent-h opacity-30" />
             </div>
-            {/* Key metrics shown inline for active runs (most important data) */}
-            {hasMetrics && (
-              <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {Object.entries(run.progress!.metrics!).map(([key, val]) => (
-                  <span key={key} className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-secondary font-mono">
-                    <span className="t-text-muted">{key}</span> {typeof val === 'number' ? (val < 0.01 ? val.toExponential(2) : val.toFixed(4)) : val}
-                  </span>
-                ))}
-              </div>
+          )}
+          <div className="mt-1 flex items-center gap-2 text-[10px] t-text-muted min-w-0">
+            {hasProgress && <span className="tabular-nums shrink-0">{run.progress!.percentage}%</span>}
+            {run.progress?.currentStep !== undefined && run.progress?.totalSteps !== undefined && (
+              <span className="tabular-nums shrink-0">step {run.progress.currentStep}/{run.progress.totalSteps}</span>
             )}
+            {tailLine && <span className="truncate font-mono opacity-80">{tailLine}</span>}
+            {!tailLine && !hasProgress && <span className="opacity-70">no output yet</span>}
           </div>
-        )
+        </div>
       )}
 
       {/* Expanded detail */}
@@ -719,13 +542,11 @@ function RunRow({
           <ModalRunDetails run={run} hasMetrics={!!hasMetrics} sendToChat={sendToChat} />
         ) : (
         <div className="px-10 pb-3 space-y-2">
-          {/* Metadata chips */}
+          {/* Metadata chips (weight chip dropped — meaningless since the
+              heavy/light scheduler was removed in RFC-016 §4.1). */}
           <div className="flex flex-wrap gap-1.5">
             <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-muted">
               {run.sandbox}
-            </span>
-            <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-muted">
-              {run.weight}
             </span>
             <span className="px-1.5 py-0.5 text-[10px] rounded t-bg-elevated t-text-muted">
               {formatBytes(run.outputBytes)} &middot; {run.outputLines} lines
@@ -948,55 +769,21 @@ function PendingPlanCard({ plan }: { plan: ComputePlanView }) {
     setRejectionError(null)
   }, [plan.planId])
 
-  // Slim "approved, waiting for agent" state — Registry already
-  // cleared the PlanRecord, but the renderer keeps the plan around
-  // until the first run-update arrives. Without this state the card
-  // would just vanish for the window between approve and the agent's
-  // next tool call.
-  if (plan.approved) {
-    return (
-      <div className="px-4 py-2.5 border-b t-border t-bg-surface">
-        <div className="rounded-lg border t-border-subtle p-2.5 flex items-start gap-2.5">
-          <CheckCircle2 size={14} className="t-text-accent shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium t-text">
-              {plan.backend} plan approved — waiting for agent to execute…
-            </p>
-            <p className="text-[11px] t-text-muted mt-0.5 truncate">
-              {plan.taskDescription?.trim() || plan.command}
-            </p>
-          </div>
-          <span className="px-1.5 py-0.5 rounded text-[9px] bg-[var(--color-accent-soft)]/15 t-text-accent animate-pulse shrink-0">
-            queued
-          </span>
-        </div>
-      </div>
-    )
-  }
-
+  // RFC-016 §4.4 — deterministic confirm → submit. The main process
+  // approves + submits the plan directly (no chat re-entry, no second
+  // execute call for the agent to forget). The card disappears the moment
+  // the first run-update for the resulting run arrives.
   const approve = async () => {
-    // Mirror submitRejection's guard. sendChat() below re-enters the chat
-    // agent (coord.chat → agent.prompt); if a prior prompt is still in
-    // flight, pi-mono throws "Agent is already processing a prompt" and
-    // the approval looks broken even though the registry write succeeded.
-    // Block the action up front instead of letting it fail downstream.
-    if (isStreaming) {
-      setRejectionError('Wait for the current copilot response to finish before approving this plan.')
-      return
-    }
     setApproving(true)
     setRejectionError(null)
     try {
-      const result = await api.approveComputePlan?.(plan.backend, plan.planId)
-      if (result?.success) {
-        setCenterView('chat')
-        await sendChat(`compute plan approved (backend: ${plan.backend}, plan_id: ${plan.planId})`)
-      } else {
-        // Surface failures so users don't think the click was lost.
-        // E.g. settings flipped after plan() can produce "Plan does not
-        // require approval" — non-fatal but worth showing.
-        setRejectionError(result?.error || 'Failed to approve plan.')
+      const result = await api.confirmComputePlan?.(plan.backend, plan.planId)
+      if (!result?.success) {
+        setRejectionError(result?.error || 'Failed to start the run.')
       }
+      // On success the run-update event drops this card; nothing else to do.
+    } catch (err: any) {
+      setRejectionError(err?.message || 'Failed to start the run.')
     } finally {
       setApproving(false)
     }
@@ -1031,29 +818,54 @@ function PendingPlanCard({ plan }: { plan: ComputePlanView }) {
     await sendChat(`compute plan rejected (backend: ${plan.backend}). Rejection comments: ${comments}`)
   }
 
+  // Skip = drop the decision outright (no agent re-entry). Distinct from
+  // "send back to agent" (reject with comments), kept as a tertiary action.
+  const skip = async () => {
+    setApproving(true)
+    setRejectionError(null)
+    try {
+      const r = await api.discardComputePlan?.(plan.backend, plan.planId)
+      if (r?.success) {
+        useComputeStore.getState().applyEvent({ kind: 'plan-discarded', backend: plan.backend, planId: plan.planId })
+      } else {
+        setRejectionError(r?.error || 'Failed to skip plan.')
+        setApproving(false)
+      }
+    } catch (err: any) {
+      setRejectionError(err?.message || 'Failed to skip plan.')
+      setApproving(false)
+    }
+  }
+
+  // Decide the card's framing (RFC-016 §4.4 / RFC-017 §4.2): a flagged-danger
+  // confirm, a remote cost confirm, or a forced approval.
+  const isDanger = (plan.dangerFlags?.length ?? 0) > 0
+  const isCost = !isDanger && !!plan.hasCost
+
   // Pick a backend-specific body renderer; fall back to GenericPlanBody.
   let Body: React.FC<{ plan: ComputePlanView }>
   let headerIcon: React.ReactNode
   let headerLabel: string
-  if (plan.backend === 'modal') {
-    Body = ModalPlanBody
+  if (isDanger) {
+    headerIcon = <AlertTriangle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+    headerLabel = `Flagged risky — ${plan.backend}`
+  } else if (plan.backend === 'modal') {
     headerIcon = <Cloud size={16} className="t-text-accent shrink-0 mt-0.5" />
-    headerLabel = 'Modal compute plan'
-  } else if (plan.backend === 'local') {
-    Body = LocalPlanBody
-    headerIcon = <Cpu size={16} className="t-text-accent shrink-0 mt-0.5" />
-    headerLabel = 'Local compute plan'
+    headerLabel = 'Modal run — confirm cost'
   } else {
-    Body = GenericPlanBody
     headerIcon = <Cpu size={16} className="t-text-accent shrink-0 mt-0.5" />
     headerLabel = `${plan.backend} compute plan`
   }
+  if (plan.backend === 'modal') Body = ModalPlanBody
+  else if (plan.backend === 'local') Body = LocalPlanBody
+  else Body = GenericPlanBody
 
+  const primaryLabel = isDanger ? 'Run anyway' : isCost ? 'Confirm & run' : 'Approve & run'
   const taskText = plan.taskDescription?.trim() || plan.command
 
   return (
     <div className="px-4 py-3 border-b t-border t-bg-surface">
-      <div className="rounded-lg border t-border-subtle p-3 space-y-3">
+      <div className={`rounded-lg border p-3 space-y-3 ${isDanger ? 'border-amber-500/40 bg-amber-500/5' : 't-border-subtle'}`}>
         <div className="flex items-start gap-3">
           {headerIcon}
           <div className="flex-1 min-w-0 space-y-3">
@@ -1061,26 +873,43 @@ function PendingPlanCard({ plan }: { plan: ComputePlanView }) {
               <p className="text-xs font-semibold t-text">{headerLabel}</p>
               <p className="text-[12px] t-text-secondary leading-relaxed mt-1 line-clamp-2">{taskText}</p>
             </div>
+            {isDanger && (
+              <ul className="space-y-1">
+                {plan.dangerFlags!.map((f, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                    <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <Body plan={plan} />
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex flex-col items-stretch gap-1.5 shrink-0">
             <button
               type="button"
               onClick={approve}
-              disabled={approving || rejecting || isStreaming}
-              title={isStreaming ? 'Copilot is busy — wait for the current response to finish' : undefined}
-              className="px-3 py-1.5 rounded-md text-white text-[11px] font-medium bg-[var(--color-accent)] disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={approving || rejecting}
+              className={`px-3 py-1.5 rounded-md text-white text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed ${isDanger ? 'bg-amber-500' : 'bg-[var(--color-accent)]'}`}
             >
-              {approving ? 'Approving...' : 'Approve'}
+              {approving ? 'Starting…' : primaryLabel}
+            </button>
+            <button
+              type="button"
+              onClick={skip}
+              disabled={approving || rejecting}
+              className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Skip
             </button>
             <button
               type="button"
               onClick={() => { setShowRejectEditor(true); setRejectionError(null) }}
               disabled={approving || rejecting || isStreaming}
               title={isStreaming ? 'Copilot is busy — wait for the current response to finish' : undefined}
-              className="px-2.5 py-1.5 rounded-md border t-border text-[11px] t-text-secondary hover:t-text disabled:opacity-50 disabled:cursor-not-allowed"
+              className="text-[10px] t-text-muted hover:t-text-secondary disabled:opacity-50"
             >
-              Reject
+              Send back to agent…
             </button>
           </div>
         </div>
@@ -1504,29 +1333,6 @@ function GenericPlanBody({ plan }: { plan: ComputePlanView }) {
   )
 }
 
-// ─── Footer (run counts only) ────────────────────────────────────────────────
-//
-// Removed: progress bar + "X% success" indicator. The "success rate" framing
-// implied that past terminal runs were a metric the user could improve, but
-// they're immutable history — once a run failed, that's part of the record
-// forever. Surfacing the ratio as a goal-bar invited misreading "X% success"
-// as "task X% done" (it never meant that). Plain counts are honest: they say
-// what happened without dressing it as a target.
-
-function CoverageBar({ runs }: { runs: ComputeRunView[] }) {
-  const completed = runs.filter(r => r.status === 'completed').length
-  const failed = runs.filter(r => ['failed', 'timed_out'].includes(r.status)).length
-  const total = runs.length
-
-  return (
-    <div className="flex items-center gap-4 px-4 py-2 border-t t-border t-bg-surface text-[11px] t-text-muted">
-      <span>{total} runs</span>
-      {completed > 0 && <span>{completed} completed</span>}
-      {failed > 0 && <span>{failed} failed</span>}
-    </div>
-  )
-}
-
 // ─── Empty state ─────────────────────────────────────────────────────────────
 
 function EmptyState() {
@@ -1610,283 +1416,338 @@ function EmptyState() {
 
 // ─── Main component ──────────────────────────────────────────────────────────
 
-type SortKey = 'command' | 'backend' | 'submitted' | 'duration' | 'activity'
-type SortDir = 'asc' | 'desc' | null    // null === "default" (active-first + submit DESC)
-
-const ACTIVE_STATUSES = new Set(['running', 'stalled', 'queued', 'pending_approval'])
-
-function runSubmittedMs(run: ComputeRunView): number {
-  // Prefer createdAt (when the work entered the system); fall back to
-  // startedAt for legacy runs that were hydrated without a createdAt.
-  const src = run.createdAt ?? run.startedAt
-  return src ? new Date(src).getTime() : 0
-}
-
 function timeAgoShort(iso?: string): string {
   if (!iso) return '--'
   return timeAgo(iso)
 }
 
-/**
- * Sortable header cell. Click cycles asc → desc → default; the active
- * sort displays a small triangle. Width must mirror the body cell.
- */
-function SortableHeader({
-  label,
-  sortKey,
-  currentKey,
-  currentDir,
-  onSort,
-  className = '',
-  align = 'left',
-}: {
-  label: string
-  sortKey: SortKey
-  currentKey: SortKey | null
-  currentDir: SortDir
-  onSort: (key: SortKey) => void
-  className?: string
-  align?: 'left' | 'right'
-}) {
-  const isActive = currentKey === sortKey && currentDir !== null
-  const Icon = currentDir === 'asc' ? ChevronUp : ChevronDown
+// ─── Zone header ─────────────────────────────────────────────────────────────
+
+function ZoneHeader({ label, count, accent }: { label: string; count?: number; accent?: boolean }) {
   return (
-    <button
-      type="button"
-      onClick={() => onSort(sortKey)}
-      className={`text-[10px] uppercase tracking-wider font-medium ${isActive ? 't-text' : 't-text-muted'} hover:t-text inline-flex items-center gap-0.5 ${align === 'right' ? 'justify-end' : ''} ${className}`}
-    >
-      <span>{label}</span>
-      {isActive && <Icon size={10} className="shrink-0" />}
-    </button>
+    <div className="flex items-center gap-2 px-4 pt-3 pb-1.5">
+      <span className={`text-[10px] uppercase tracking-wider font-semibold ${accent ? 't-text-accent-soft' : 't-text-muted'}`}>
+        {label}
+      </span>
+      {count !== undefined && count > 0 && (
+        <span className="text-[10px] tabular-nums t-text-muted">{count}</span>
+      )}
+    </div>
   )
 }
 
+// ─── Target strip (sticky) — RFC-017 §4.1 ────────────────────────────────────
+
+function TargetStrip({ backends }: { backends: BackendView[] }) {
+  if (backends.length === 0) return null
+  return (
+    <div className="sticky top-0 z-10 flex items-center gap-3 px-4 py-1.5 border-b t-border t-bg-surface overflow-x-auto">
+      {backends.map((b) => {
+        const Icon = b.id === 'modal' || b.id.includes('aws') || b.id.includes('gcp') || b.id.includes('cloud') ? Cloud : Cpu
+        const avail = b.availability
+        const ready = !!avail?.available
+        const dotCls = !avail ? 't-bg-elevated' : ready ? 'bg-emerald-500' : avail.missingRequirements?.length === 1 ? 'bg-amber-500' : 'bg-red-500'
+        return (
+          <span key={b.id} className="inline-flex items-center gap-1.5 shrink-0 text-[11px] t-text-secondary">
+            <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotCls}`} />
+            <Icon size={12} className="t-text-muted" />
+            <span className="t-text">{b.displayName}</span>
+            <span className="t-text-muted">
+              {ready ? 'ready' : (avail?.hints?.[0] ?? avail?.missingRequirements?.[0] ?? 'unavailable')}
+            </span>
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Campaign group — RFC-017 §4.4 ───────────────────────────────────────────
+
+function CampaignGroup({
+  campaign,
+  expandedId,
+  onToggleRow,
+}: {
+  campaign: Campaign
+  expandedId: string | null
+  onToggleRow: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  // A single finished run reads better as a bare row — no group chrome.
+  if (!campaign.grouped) {
+    const run = campaign.runs[0]
+    return <RunRow run={run} expanded={expandedId === run.runId} onToggle={() => onToggleRow(run.runId)} />
+  }
+
+  return (
+    <div className="border-b t-border last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2.5 px-3 py-1.5 hover:bg-[var(--color-accent-soft)]/5 transition-colors text-left"
+      >
+        {open ? <ChevronDown size={14} className="t-text-muted shrink-0" /> : <ChevronRight size={14} className="t-text-muted shrink-0" />}
+        <span className="flex-1 min-w-0 text-[13px] t-text truncate">
+          {campaign.label} <span className="t-text-muted">· {campaign.total} runs</span>
+        </span>
+        <span className="shrink-0 flex items-center gap-2.5 text-[11px] tabular-nums">
+          {campaign.completed > 0 && <span className="text-emerald-600 dark:text-emerald-400">{campaign.completed} ✓</span>}
+          {campaign.failed > 0 && <span className="text-red-500">{campaign.failed} ✗</span>}
+          <span className="t-text-muted/80">{campaign.latestMs ? timeAgo(new Date(campaign.latestMs).toISOString()) : '--'}</span>
+        </span>
+        <span className="shrink-0 w-6" aria-hidden="true" />
+      </button>
+      {open && campaign.runs.map((run) => (
+        <div key={run.runId} className="border-l-2 border-l-[var(--color-accent-soft)]/20 ml-5">
+          <RunRow run={run} expanded={expandedId === run.runId} onToggle={() => onToggleRow(run.runId)} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Scheduled section — RFC-016 §4.5 / RFC-017 §4.5 ──────────────────────────
+
+function formatNextDue(iso?: string): string {
+  if (!iso) return '--'
+  const ms = new Date(iso).getTime() - Date.now()
+  if (ms <= 0) return 'due now'
+  if (ms < 3600_000) return `in ${Math.round(ms / 60_000)}m`
+  if (ms < 86400_000) return `in ${Math.round(ms / 3600_000)}h`
+  return `in ${Math.round(ms / 86400_000)}d`
+}
+
+function ScheduledSection({ tasks, backends }: { tasks: CronTaskView[]; backends: BackendView[] }) {
+  const [open, setOpen] = useState(false)
+  const [showForm, setShowForm] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [name, setName] = useState('')
+  const [schedule, setSchedule] = useState('1h')
+  const [command, setCommand] = useState('')
+  const [workDir, setWorkDir] = useState('')
+  const [backend, setBackend] = useState('local')
+  const [catchUp, setCatchUp] = useState(false)
+
+  const resetForm = () => {
+    setName(''); setSchedule('1h'); setCommand(''); setWorkDir(''); setBackend('local'); setCatchUp(false)
+    setEditId(null); setErr(null)
+  }
+
+  const startEdit = (t: CronTaskView) => {
+    setEditId(t.id); setName(t.name ?? ''); setSchedule(t.schedule); setCommand(t.command)
+    setWorkDir(t.workDir ?? ''); setBackend(t.backend); setCatchUp(!!t.catchUpOnReopen)
+    setShowForm(true); setErr(null); setOpen(true)
+  }
+
+  const submit = async () => {
+    setBusy(true); setErr(null)
+    const payload = { name: name.trim() || undefined, schedule: schedule.trim(), command: command.trim(), workDir: workDir.trim() || undefined, backend, catchUpOnReopen: catchUp, enabled: true }
+    try {
+      const r = editId
+        ? await api.cronUpdate?.(editId, payload)
+        : await api.cronCreate?.(payload)
+      if (r?.success) { setShowForm(false); resetForm() }
+      else setErr(r?.error || 'Failed to save schedule.')
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to save schedule.')
+    } finally { setBusy(false) }
+  }
+
+  const toggle = async (t: CronTaskView) => { await api.cronUpdate?.(t.id, { enabled: !t.enabled }) }
+  const del = async (t: CronTaskView) => { await api.cronDelete?.(t.id) }
+  const runNow = async (t: CronTaskView) => { await api.cronRunNow?.(t.id) }
+
+  return (
+    <div className="border-t t-border">
+      <div className="flex items-center gap-2 px-4 pt-3 pb-1.5">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-1.5 t-text-muted hover:t-text">
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          <Clock size={12} />
+          <span className="text-[10px] uppercase tracking-wider font-semibold">Scheduled</span>
+          {tasks.length > 0 && <span className="text-[10px] tabular-nums t-text-muted">{tasks.length}</span>}
+        </button>
+        <button
+          type="button"
+          onClick={() => { setShowForm((v) => !v); resetForm(); setOpen(true) }}
+          className="ml-auto inline-flex items-center gap-1 text-[10px] t-text-accent hover:underline"
+        >
+          <Plus size={11} /> New schedule
+        </button>
+      </div>
+
+      {open && (
+        <div className="pb-2">
+          {showForm && (
+            <div className="mx-4 mb-2 p-2.5 rounded-md border t-border-subtle t-bg-surface space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional)"
+                  className="px-2 py-1 text-[11px] rounded border t-border t-bg-base t-text" />
+                <input value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder='Schedule e.g. "1h" or "0 * * * *"'
+                  className="px-2 py-1 text-[11px] rounded border t-border t-bg-base t-text font-mono" />
+              </div>
+              <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="Command to run each tick"
+                className="w-full px-2 py-1 text-[11px] rounded border t-border t-bg-base t-text font-mono" />
+              <div className="grid grid-cols-2 gap-2">
+                <input value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="Working dir (absolute, optional)"
+                  className="px-2 py-1 text-[11px] rounded border t-border t-bg-base t-text font-mono" />
+                <select value={backend} onChange={(e) => setBackend(e.target.value)}
+                  className="px-2 py-1 text-[11px] rounded border t-border t-bg-base t-text">
+                  {backends.map((b) => <option key={b.id} value={b.id}>{b.displayName}</option>)}
+                  {backends.length === 0 && <option value="local">Local</option>}
+                </select>
+              </div>
+              <label className="flex items-center gap-1.5 text-[11px] t-text-muted">
+                <input type="checkbox" checked={catchUp} onChange={(e) => setCatchUp(e.target.checked)} />
+                Catch up once on reopen if ticks were missed
+              </label>
+              {err && <p className="text-[11px] text-red-500">{err}</p>}
+              <div className="flex items-center justify-end gap-1.5">
+                <button type="button" onClick={() => { setShowForm(false); resetForm() }} disabled={busy}
+                  className="px-2.5 py-1 rounded border t-border text-[11px] t-text-secondary hover:t-text">Cancel</button>
+                <button type="button" onClick={submit} disabled={busy}
+                  className="px-3 py-1 rounded text-white text-[11px] font-medium bg-[var(--color-accent)] disabled:opacity-50">
+                  {busy ? 'Saving…' : editId ? 'Save' : 'Add'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {tasks.length === 0 && !showForm ? (
+            <p className="px-4 py-2 text-[11px] t-text-muted">
+              No scheduled tasks. They run while the app is open (best-effort) and each tick appears as a normal run.
+            </p>
+          ) : (
+            tasks.map((t) => (
+              <div key={t.id} className="flex items-center gap-2 px-4 py-1.5 hover:bg-[var(--color-accent-soft)]/5">
+                <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${t.enabled ? (t.scheduleValid ? 'bg-emerald-500' : 'bg-red-500') : 't-bg-elevated'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[12px] t-text truncate">{t.name || t.command}</p>
+                  <p className="text-[10px] t-text-muted truncate">
+                    <span className="font-mono">{t.schedule}</span>
+                    {' · '}{t.scheduleValid ? `next ${formatNextDue(t.nextDue)}` : 'invalid schedule'}
+                    {t.lastRun && <> · last {timeAgo(t.lastRun)}</>}
+                    {t.missedSinceLastOpen > 0 && <> · <span className="text-amber-500">{t.missedSinceLastOpen} missed</span></>}
+                    {' · '}{t.backend}
+                  </p>
+                </div>
+                <button type="button" onClick={() => runNow(t)} title="Run now" className="shrink-0 t-text-muted hover:t-text-accent"><Play size={12} /></button>
+                <button type="button" onClick={() => toggle(t)} title={t.enabled ? 'Disable' : 'Enable'} className={`shrink-0 ${t.enabled ? 't-text-accent' : 't-text-muted'} hover:t-text`}><Power size={12} /></button>
+                <button type="button" onClick={() => startEdit(t)} title="Edit" className="shrink-0 t-text-muted hover:t-text"><Pencil size={12} /></button>
+                <button type="button" onClick={() => del(t)} title="Delete" className="shrink-0 t-text-muted hover:text-red-500"><Trash2 size={12} /></button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Main component — RFC-017 three zones ─────────────────────────────────────
+
 export function ComputeView() {
-  const activeRuns = useActiveRuns()
-  const recentRuns = useRecentRuns()
+  const decisions = useDecisions()
+  const running = useRunningRuns()
+  const campaigns = useCampaigns()
+  const cronTasks = useCronTasks()
   const backendsMap = useComputeStore((s) => s.backends)
-  const unapprovedPlans = useUnapprovedPendingPlans()
-  const approvedPlans = useApprovedPendingPlans()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [backendFilter, setBackendFilter] = useState<string>('all')
-  const [sortKey, setSortKey] = useState<SortKey | null>(null)
-  const [sortDir, setSortDir] = useState<SortDir>(null)
 
-  const handleSort = (key: SortKey) => {
-    // Cycle: not-sorted → desc → asc → default
-    if (sortKey !== key) { setSortKey(key); setSortDir('desc'); return }
-    if (sortDir === 'desc') { setSortDir('asc'); return }
-    // asc → back to default
-    setSortKey(null); setSortDir(null)
-  }
-
-  // Approved-but-not-yet-running plans render as synthetic "queued"
-  // rows next to real runs. Once the agent calls execute, the
-  // matching pending plan is dropped from the store and the real run
-  // row takes its place.
-  const placeholderRuns = useMemo(
-    () => approvedPlans.map(planToPlaceholderRun),
-    [approvedPlans],
-  )
-
-  const allRuns = useMemo(
-    () => [...placeholderRuns, ...activeRuns, ...recentRuns],
-    [placeholderRuns, activeRuns, recentRuns],
-  )
-
-  // Per-backend run counts feed the filter chip badges.
-  const backendCounts = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const r of allRuns) m.set(r.backend, (m.get(r.backend) ?? 0) + 1)
-    return m
-  }, [allRuns])
-
-  // Backend list comes from the registry (whatever's wired up), sorted
-  // by display name so the chip order is stable.
   const backendsList = useMemo(
     () => Array.from(backendsMap.values()).sort((a, b) => a.displayName.localeCompare(b.displayName)),
     [backendsMap],
   )
 
-  // Drop the filter if its backend disappears from the registry.
   useEffect(() => {
-    if (backendFilter !== 'all' && !backendsMap.has(backendFilter)) {
-      setBackendFilter('all')
-    }
+    if (backendFilter !== 'all' && !backendsMap.has(backendFilter)) setBackendFilter('all')
   }, [backendFilter, backendsMap])
 
-  const filtered = useMemo(() => {
-    let rows = allRuns
-    if (backendFilter !== 'all') {
-      rows = rows.filter((r) => r.backend === backendFilter)
-    }
+  // Apply search + backend filter to campaign members; drop emptied groups.
+  const filteredCampaigns = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (q) {
-      rows = rows.filter((r) =>
-        r.command.toLowerCase().includes(q) ||
-        r.runId.toLowerCase().includes(q) ||
-        (r.taskDescription?.toLowerCase().includes(q) ?? false),
-      )
-    }
-    // Apply sort: explicit key, or the default (active-first + submit DESC).
-    const sorted = rows.slice()
-    if (sortKey && sortDir) {
-      const dir = sortDir === 'asc' ? 1 : -1
-      sorted.sort((a, b) => {
-        let av: number | string = 0
-        let bv: number | string = 0
-        if (sortKey === 'command') {
-          av = (a.taskDescription?.trim() || a.command).toLowerCase()
-          bv = (b.taskDescription?.trim() || b.command).toLowerCase()
-          return av < bv ? -1 * dir : av > bv ? 1 * dir : 0
-        }
-        if (sortKey === 'backend') {
-          av = a.backend.toLowerCase()
-          bv = b.backend.toLowerCase()
-          return av < bv ? -1 * dir : av > bv ? 1 * dir : 0
-        }
-        if (sortKey === 'submitted') { av = runSubmittedMs(a); bv = runSubmittedMs(b) }
-        else if (sortKey === 'duration') { av = a.elapsedSeconds; bv = b.elapsedSeconds }
-        else if (sortKey === 'activity') {
-          // Activity = the run's last meaningful timestamp (lastOutputAt
-          // for live runs, startedAt otherwise). Falls back to submit.
-          av = a.lastOutputAt ? new Date(a.lastOutputAt).getTime() : runSubmittedMs(a)
-          bv = b.lastOutputAt ? new Date(b.lastOutputAt).getTime() : runSubmittedMs(b)
-        }
-        return ((av as number) - (bv as number)) * dir
-      })
-    } else {
-      // Default: active rows first (placeholders + running + stalled +
-      // queued + pending_approval), each group ordered by submit DESC.
-      sorted.sort((a, b) => {
-        const aActive = ACTIVE_STATUSES.has(a.status) ? 0 : 1
-        const bActive = ACTIVE_STATUSES.has(b.status) ? 0 : 1
-        if (aActive !== bActive) return aActive - bActive
-        return runSubmittedMs(b) - runSubmittedMs(a)
-      })
-    }
-    return sorted
-  }, [allRuns, search, backendFilter, sortKey, sortDir])
+    const match = (r: ComputeRunView) =>
+      (backendFilter === 'all' || r.backend === backendFilter) &&
+      (!q || r.command.toLowerCase().includes(q) || r.runId.toLowerCase().includes(q) || (r.taskDescription?.toLowerCase().includes(q) ?? false))
+    return campaigns
+      .map((c) => ({ ...c, runs: c.runs.filter(match) }))
+      .filter((c) => c.runs.length > 0)
+  }, [campaigns, search, backendFilter])
 
-  const hasRuns = allRuns.length > 0
-  const hasUnapprovedPlans = unapprovedPlans.length > 0
-  // EmptyState's job is "this tab has nothing going on" — once a plan
-  // is waiting on approval, or a row exists in the table (real or
-  // placeholder), the panel should belong to that work.
-  const showEmpty = !hasRuns && !hasUnapprovedPlans
+  const finishedCount = useMemo(() => campaigns.reduce((n, c) => n + c.completed + c.failed, 0), [campaigns])
+  const backendCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const c of campaigns) for (const r of c.runs) m.set(r.backend, (m.get(r.backend) ?? 0) + 1)
+    return m
+  }, [campaigns])
+  // Only offer filter chips for backends that actually have finished runs —
+  // empty "modal 0 / aws-ec2 0" chips were pure noise.
+  const backendsWithRuns = useMemo(
+    () => backendsList.filter((b) => (backendCounts.get(b.id) ?? 0) > 0),
+    [backendsList, backendCounts],
+  )
+
+  const toggleRow = (id: string) => setExpandedId(expandedId === id ? null : id)
+
+  const hasAnything = decisions.length > 0 || running.length > 0 || campaigns.length > 0 || cronTasks.length > 0
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* Only UN-approved plans get the prominent top banner with
-          Approve/Reject. Approved plans immediately move into the table
-          below as a "queued" placeholder row, so the user has a single
-          place to track all in-flight work. */}
-      {unapprovedPlans.map((plan) => (
-        <PendingPlanCard key={`${plan.backend}::${plan.planId}`} plan={plan} />
-      ))}
-      {hasRuns && (
-        <FilterBar
-          search={search}
-          onSearchChange={setSearch}
-          backendFilter={backendFilter}
-          onBackendFilterChange={setBackendFilter}
-          backendCounts={backendCounts}
-          backends={backendsList}
-        />
-      )}
-
       <div className="flex-1 overflow-y-auto">
-        {showEmpty ? (
-          <EmptyState />
-        ) : !hasRuns ? (
-          // Unapproved plan(s) but nothing in the table — keep the rest
-          // of the panel quiet so the approval card stays dominant.
-          <div className="flex flex-col items-center justify-center h-full text-center px-8 py-12">
-            <p className="text-xs t-text-muted leading-relaxed max-w-xs">
-              No runs yet. Approve the plan above to start one, or reject it to ask the agent for a revision.
-            </p>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center px-8">
-            <Cpu size={32} className="t-text-muted mb-3 opacity-40" />
-            <p className="text-sm t-text-muted">No runs match your filters.</p>
-          </div>
-        ) : (
-          <>
-            {/* Table header — every column is click-to-sort. Column widths
-                MUST match the body cells in RunRow exactly, or the
-                Submitted / Backend / Duration / Activity columns will
-                drift apart at different row widths. */}
-            <div className="flex items-center gap-3 px-3 py-1.5 border-b t-border t-bg-surface">
-              <div className="w-5" />
-              <div className="w-1.5" />
-              <div className="flex-1">
-                <SortableHeader
-                  label="Command"
-                  sortKey="command"
-                  currentKey={sortKey}
-                  currentDir={sortDir}
-                  onSort={handleSort}
-                />
-              </div>
-              <div className="w-20 text-left">
-                <SortableHeader
-                  label="Backend"
-                  sortKey="backend"
-                  currentKey={sortKey}
-                  currentDir={sortDir}
-                  onSort={handleSort}
-                />
-              </div>
-              <div className="w-20 text-right">
-                <SortableHeader
-                  label="Submitted"
-                  sortKey="submitted"
-                  currentKey={sortKey}
-                  currentDir={sortDir}
-                  onSort={handleSort}
-                  align="right"
-                />
-              </div>
-              <div className="w-16 text-right">
-                <SortableHeader
-                  label="Duration"
-                  sortKey="duration"
-                  currentKey={sortKey}
-                  currentDir={sortDir}
-                  onSort={handleSort}
-                  align="right"
-                />
-              </div>
-              <div className="w-24 text-right">
-                <SortableHeader
-                  label="Activity"
-                  sortKey="activity"
-                  currentKey={sortKey}
-                  currentDir={sortDir}
-                  onSort={handleSort}
-                  align="right"
-                />
-              </div>
-              <span className="w-6" />
-            </div>
+        <TargetStrip backends={backendsList} />
 
-            {/* Rows */}
-            {filtered.map((run) => (
-              <RunRow
-                key={run.runId}
-                run={run}
-                expanded={expandedId === run.runId}
-                onToggle={() => setExpandedId(expandedId === run.runId ? null : run.runId)}
-              />
+        {/* Zone ① Needs you — hidden when empty */}
+        {decisions.length > 0 && (
+          <>
+            <ZoneHeader label="Needs you" count={decisions.length} accent />
+            {decisions.map((plan) => (
+              <PendingPlanCard key={`${plan.backend}::${plan.planId}`} plan={plan} />
             ))}
           </>
         )}
-      </div>
 
-      {hasRuns && <CoverageBar runs={allRuns} />}
+        {/* Zone ② Running — the heart */}
+        {running.length > 0 && (
+          <>
+            <ZoneHeader label="Running" count={running.length} />
+            {running.map((run) => (
+              <RunRow key={run.runId} run={run} expanded={expandedId === run.runId} onToggle={() => toggleRow(run.runId)} />
+            ))}
+          </>
+        )}
+
+        {/* Zone ③ Finished — grouped by campaign */}
+        {campaigns.length > 0 && (
+          <>
+            <ZoneHeader label="Finished" count={finishedCount} />
+            <FilterBar
+              search={search}
+              onSearchChange={setSearch}
+              backendFilter={backendFilter}
+              onBackendFilterChange={setBackendFilter}
+              backendCounts={backendCounts}
+              backends={backendsWithRuns}
+            />
+            {filteredCampaigns.length === 0 ? (
+              <div className="px-4 py-6 text-center text-xs t-text-muted">No finished runs match your filters.</div>
+            ) : (
+              filteredCampaigns.map((c) => (
+                <CampaignGroup key={c.id} campaign={c} expandedId={expandedId} onToggleRow={toggleRow} />
+              ))
+            )}
+          </>
+        )}
+
+        {/* Scheduled tasks (management surface) */}
+        <ScheduledSection tasks={cronTasks} backends={backendsList} />
+
+        {!hasAnything && <EmptyState />}
+      </div>
     </div>
   )
 }

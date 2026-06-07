@@ -25,6 +25,16 @@ function nextRunId(): string {
   return 'mr-' + crypto.randomBytes(4).toString('hex')
 }
 
+/** True when a PID exists (regardless of owner). Used by reconcile. */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Wait for a child process to exit, bounded by `timeoutMs`. Returns
  * true if the child exited within the window, false on timeout. Cleans
@@ -80,6 +90,33 @@ export class ModalRunner {
     this.onRunUpdate = opts.onRunUpdate ?? (() => {})
     this.credentials = opts.modalCredentials
     this.store.evictOld()
+    this.reconcileStaleRuns()
+  }
+
+  /**
+   * RFC-016 §4.2 — reconcile on (re)construction. The local `modal run`
+   * driver is not detached, so after an app crash/restart its PID is gone
+   * and the live stream is unrecoverable. We cannot cheaply re-derive the
+   * remote job's true state from here (that would need `modal app list`
+   * querying), so rather than leave a perpetual "running" zombie we
+   * finalize honestly and point the user at the dashboard. Graceful quits
+   * already mark in-flight runs `cancelled` via destroy()→stop(), so this
+   * only catches the crash path.
+   */
+  private reconcileStaleRuns(): void {
+    for (const run of this.store.getActiveRuns()) {
+      const alive = run.pid ? isPidAlive(run.pid) : false
+      if (alive) continue
+      this.store.updateRun(run.runId, {
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        stalled: false,
+        error:
+          'Interrupted by an app restart — the local Modal stream was lost. ' +
+          'The remote job may have continued; check `modal app list` and re-run if needed.',
+      })
+      this.emitRunUpdate(run.runId)
+    }
   }
 
   async submit(config: ModalSubmitConfig): Promise<ModalRunRecord> {
@@ -111,6 +148,7 @@ export class ModalRunner {
       stalled: false,
       retryCount: config.parentRunId ? ((this.store.getRun(config.parentRunId)?.retryCount ?? 0) + 1) : 0,
       parentRunId: config.parentRunId,
+      campaignId: config.campaignId,
       estimatedCostSoFar: 0,
     }
     this.store.createRun(record)

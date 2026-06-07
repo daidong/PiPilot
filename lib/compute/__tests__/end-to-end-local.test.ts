@@ -16,30 +16,29 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
-import { freemem, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ComputeRegistry } from '../registry.js'
 import { LocalBackend } from '../backends/local/local-backend.js'
+import { createComputeTools } from '../tools.js'
 import type { ComputeContext } from '../context.js'
 import type { ComputeEvent } from '../events.js'
 import { isTerminal } from '../types.js'
 
-// Two reasons to skip these e2e tests at startup:
-//   1. Windows — ComputeRunner's sandbox layer is POSIX-only
-//      (docker/process providers spawn via /bin/sh). Windows returns
-//      "no PID returned" and the runner gives up. The Win32 sandbox
-//      provider is future work.
-//   2. Low free memory — Scheduler.canAdmit enforces a 500MB minimum;
-//      below that the submit() throws before spawn. We use a 600MB
-//      floor to leave a safety margin since the snapshot is taken at
-//      submit() time, not test-startup time.
+// Reason to skip these e2e tests at startup:
+//   - Windows — ComputeRunner's sandbox layer is POSIX-only
+//     (docker/process providers spawn via /bin/sh). Windows returns
+//     "no PID returned" and the runner gives up. The Win32 sandbox
+//     provider is future work.
+//
+// (The old "low free memory" skip is gone: RFC-016 §4.1 / Phase 2
+// removed the blanket MIN_FREE_MEMORY_MB admission gate, so submit() no
+// longer throws on a busy host.)
 //
 // Unit tests still cover Registry / LocalBackend / event flow on
 // every platform; this file is the "actually fork a process" smoke.
 function reasonToSkip(): string | false {
   if (process.platform === 'win32') return 'Windows sandbox unsupported'
-  const freeMb = freemem() / (1024 * 1024)
-  if (freeMb < 600) return `Low free memory (${Math.round(freeMb)}MB free, need ~600MB to clear scheduler gate)`
   return false
 }
 const SKIP_E2E = { skip: reasonToSkip() } as const
@@ -123,6 +122,34 @@ test('end-to-end local: failed process surfaces failure signal', SKIP_E2E, async
     assert.ok(status)
     assert.equal(status!.status, 'failed', `expected failed; status=${status!.status}, exit=${status!.exitCode}`)
     assert.equal(status!.exitCode, 7)
+
+    await registry.destroy()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('end-to-end local: compute_plan FUSES plan+execute (RFC-016 §4.4) — real process reaches completed', SKIP_E2E, async () => {
+  const dir = tempProject()
+  try {
+    const registry = new ComputeRegistry({ projectPath: dir, forceApproval: false })
+    const ctx = buildContext(dir, [], (e) => registry.emit(e))
+    registry.register(new LocalBackend(ctx))
+
+    const tools = createComputeTools({ registry, workspacePath: dir, getTurnId: () => 'turn-e2e' })
+    const planTool = tools.find(t => t.name === 'compute_plan')!
+    const res: any = await planTool.execute('tc', { backend: 'local', command: 'echo fused-run' })
+    const data = res.details.data
+
+    // Fusion: the safe local command auto-ran and returned a run id.
+    assert.equal(data.auto_run, true, 'local plan should auto-run')
+    assert.ok(data.run_id, 'auto-run returns a run id')
+
+    // The campaignId stamped from the turn flows onto the run.
+    const status = await registry.waitForCompletion(data.run_id, 30_000)
+    assert.ok(status)
+    assert.equal(status!.status, 'completed', `echo should complete; got ${status!.status}`)
+    assert.equal(status!.exitCode, 0)
 
     await registry.destroy()
   } finally {

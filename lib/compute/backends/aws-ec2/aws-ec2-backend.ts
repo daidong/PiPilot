@@ -84,6 +84,7 @@ const CAPABILITIES: BackendCapabilities = {
   supportsGpu: true,
   supportsStop: true,
   supportsStreaming: false,
+  livenessModel: 'remote-poll',   // RFC-016 §4.2 — poll EC2/SSM for truth
 }
 
 function nextPlanId(): string {
@@ -105,6 +106,7 @@ function ec2RunToComputeRun(record: AwsEc2RunRecord, threshold: number): Compute
     status: record.status as RunState,
     command: record.command,
     scriptPath: record.scriptPath,
+    campaignId: record.campaignId,
     createdAt: record.createdAt,
     startedAt: record.startedAt,
     completedAt: record.completedAt,
@@ -245,6 +247,7 @@ export class AwsEc2Backend implements ComputeBackend {
           backend: IDENTITY.id,
           runId,
           planId: status.planId ?? '',
+          campaignId: this.runner?.getStore().getRun(runId)?.campaignId,
           status: mapped,
         })
       },
@@ -334,6 +337,7 @@ export class AwsEc2Backend implements ComputeBackend {
       timeoutMinutes: opts.timeoutMinutes,
       stallThresholdMinutes: opts.stallThresholdMinutes,
       parentRunId: opts.parentRunId,
+      campaignId: opts.campaignId,
     })
     const run = ec2RunToComputeRun(record, this.ctx.getCostThresholdUsd())
     const status = this.getStatus(run.runId)
@@ -343,6 +347,7 @@ export class AwsEc2Backend implements ComputeBackend {
         backend: IDENTITY.id,
         runId: run.runId,
         planId: run.planId,
+        campaignId: run.campaignId,
         status,
       })
     }

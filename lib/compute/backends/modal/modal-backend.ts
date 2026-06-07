@@ -73,6 +73,7 @@ const CAPABILITIES: BackendCapabilities = {
   supportsGpu: true,
   supportsStop: true,
   supportsStreaming: false,
+  livenessModel: 'remote-poll',   // RFC-016 §4.2 — poll the remote for truth
 }
 
 function nextPlanId(): string {
@@ -101,6 +102,7 @@ function modalRecordToComputeRun(record: ModalRunRecord, costThresholdUsd: numbe
     status: mapModalState(record.status),
     command: record.command,
     scriptPath: record.scriptPath,
+    campaignId: record.campaignId,
     createdAt: record.createdAt,
     startedAt: record.startedAt,
     completedAt: record.completedAt,
@@ -209,6 +211,7 @@ export class ModalBackend implements ComputeBackend {
           backend: IDENTITY.id,
           runId,
           planId: status.planId,
+          campaignId: this.runner?.getStore().getRun(runId)?.campaignId,
           status: mapped,
         })
       },
@@ -326,6 +329,7 @@ export class ModalBackend implements ComputeBackend {
       timeoutMinutes: opts.timeoutMinutes,
       stallThresholdMinutes: opts.stallThresholdMinutes,
       parentRunId: opts.parentRunId,
+      campaignId: opts.campaignId,
     })
     const run = modalRecordToComputeRun(record, this.ctx.getCostThresholdUsd())
     // Emit initial run-update so subscribers see the new run before
@@ -337,6 +341,7 @@ export class ModalBackend implements ComputeBackend {
         backend: IDENTITY.id,
         runId: run.runId,
         planId: run.planId,
+        campaignId: run.campaignId,
         status,
       })
     }

@@ -119,6 +119,7 @@ const CAPABILITIES: BackendCapabilities = {
   supportsGpu: false,           // refined at probeAvailability time
   supportsStop: true,
   supportsStreaming: false,
+  livenessModel: 'ephemeral-local',   // RFC-016 §4.1 — auto-run eligible
 }
 
 /**
@@ -182,6 +183,7 @@ function recordToComputeRun(record: RunRecord, backendId: string): ComputeRun {
     planId: record.runId,                   // local has no plan persistence; runId acts as planId
     status: mapRunState(record.status),
     command: record.command,
+    campaignId: record.campaignId,
     createdAt: record.createdAt,
     startedAt: record.startedAt,
     completedAt: record.completedAt,
@@ -236,6 +238,26 @@ export class LocalBackend implements ComputeBackend {
     this.runner = new ComputeRunner({
       projectPath: ctx.projectPath,
       workspacePath: ctx.workspacePath,
+      // RFC-016 §8: push every poll + terminal transition to the Registry
+      // so the Compute tab shows re-derived truth instead of freezing on
+      // the single submit-time event (the old "zombie run" UI symptom).
+      onRunUpdate: (runId, result) => {
+        const status = statusResultToRunStatus(result)
+        const terminal =
+          status.status === 'completed' ||
+          status.status === 'failed' ||
+          status.status === 'timed_out' ||
+          status.status === 'cancelled' ||
+          status.status === 'cost_killed'
+        this.ctx.emit({
+          kind: terminal ? 'run-complete' : 'run-update',
+          backend: IDENTITY.id,
+          runId,
+          planId: runId,   // local has no plan persistence — runId acts as planId
+          campaignId: this.runner?.getStore().getRun(runId)?.campaignId,
+          status,
+        })
+      },
     })
   }
 
@@ -383,6 +405,7 @@ export class LocalBackend implements ComputeBackend {
       timeoutMinutes: opts.timeoutMinutes ?? recommendations?.timeoutMinutes,
       stallThresholdMinutes: opts.stallThresholdMinutes ?? recommendations?.stallThresholdMinutes,
       parentRunId: opts.parentRunId,
+      campaignId: opts.campaignId,
       smokeCommand: data?.smokeSupported ? `${plan.command} --smoke` : undefined,
     })
     const run = recordToComputeRun(record, IDENTITY.id)
@@ -393,6 +416,7 @@ export class LocalBackend implements ComputeBackend {
       backend: IDENTITY.id,
       runId: run.runId,
       planId: run.planId,
+      campaignId: run.campaignId,
       status: this.getStatus(run.runId) ?? {
         status: run.status,
         elapsedSeconds: 0,

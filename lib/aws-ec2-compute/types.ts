@@ -126,6 +126,7 @@ export interface AwsEc2RunRecord {
   stalled: boolean
   retryCount: number
   parentRunId?: string
+  campaignId?: string
   estimatedCostSoFar?: number
 }
 
@@ -144,6 +145,7 @@ export interface AwsEc2SubmitConfig {
   timeoutMinutes?: number
   stallThresholdMinutes?: number
   parentRunId?: string
+  campaignId?: string
 }
 
 export interface AwsEc2RunStatusResult {

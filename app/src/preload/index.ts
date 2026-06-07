@@ -271,6 +271,8 @@ export interface ElectronAPI {
   // Compute (RFC-008 §7.6)
   hydrateCompute: () => Promise<{ runs: any[]; pendingPlans: any[] }>
   approveComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; error?: string }>
+  /** RFC-016 §4.4 — confirm a gated plan (cost / danger) and submit it deterministically from main. */
+  confirmComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; runId?: string; error?: string }>
   rejectComputePlan: (backend: string, planId: string, comments: string) => Promise<{ success: boolean; error?: string }>
   discardComputePlan: (backend: string, planId: string) => Promise<{ success: boolean; error?: string }>
   stopComputeRun: (runId: string) => Promise<{ success: boolean; error?: string }>
@@ -288,6 +290,16 @@ export interface ElectronAPI {
     ec2?: { ok: boolean; error?: string }
   }>
   onComputeEvent: (cb: (event: any) => void) => () => void
+  /** Main pushes the full hydrate snapshot once the coordinator/registry is built (fixes the first-open race). */
+  onComputeHydrated: (cb: (snapshot: { runs: any[]; pendingPlans: any[]; backends?: any[] }) => void) => () => void
+
+  // Scheduled / recurring compute runs (RFC-016 §4.5)
+  cronList: () => Promise<{ tasks: any[] }>
+  cronCreate: (task: any) => Promise<{ success: boolean; task?: any; error?: string }>
+  cronUpdate: (id: string, patch: any) => Promise<{ success: boolean; task?: any; error?: string }>
+  cronDelete: (id: string) => Promise<{ success: boolean; error?: string }>
+  cronRunNow: (id: string) => Promise<{ success: boolean; runId?: string; error?: string }>
+  onCronEvent: (cb: (event: any) => void) => () => void
 
   // File tracking
   /**
@@ -555,6 +567,8 @@ const api: ElectronAPI = {
   hydrateCompute: () => invoke('compute:hydrate'),
   approveComputePlan: (backend: string, planId: string) =>
     invoke('compute:approve-plan', { backend, planId }),
+  confirmComputePlan: (backend: string, planId: string) =>
+    invoke('compute:confirm-plan', { backend, planId }),
   rejectComputePlan: (backend: string, planId: string, comments: string) =>
     invoke('compute:reject-plan', { backend, planId, comments }),
   discardComputePlan: (backend: string, planId: string) =>
@@ -566,6 +580,14 @@ const api: ElectronAPI = {
   testAwsConnection: () => invoke('compute:test-aws-connection'),
 
   onComputeEvent: (cb) => subscribe('compute:event', cb),
+  onComputeHydrated: (cb) => subscribe('compute:hydrated', cb),
+
+  cronList: () => invoke('compute:cron-list'),
+  cronCreate: (task: any) => invoke('compute:cron-create', task),
+  cronUpdate: (id: string, patch: any) => invoke('compute:cron-update', { id, patch }),
+  cronDelete: (id: string) => invoke('compute:cron-delete', { id }),
+  cronRunNow: (id: string) => invoke('compute:cron-run-now', { id }),
+  onCronEvent: (cb) => subscribe('compute:cron-event', cb),
 
   onEntityCreated: (cb) => subscribe('agent:entity-created', cb),
 

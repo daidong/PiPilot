@@ -70,6 +70,9 @@ export interface RunRecord {
   // Retry lineage
   retryCount: number
   parentRunId?: string
+
+  /** RFC-017 §6 — campaign grouping key stamped at submit. */
+  campaignId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +96,17 @@ export interface SpawnConfig {
   command: string
   workDir: string
   outputPath: string                 // Where stdout+stderr go
+  /**
+   * RFC-016 §4.1 slow-path: when set, the CHILD writes its own exit code
+   * to this path (`echo $? > exitCodePath`) once the command finishes.
+   * This is the durable completion fact that lets the monitor (or a
+   * reopened app) finalize a run whose in-memory `handle.wait()` is gone
+   * (main-process reload, model switch, project reopen). The sentinel is
+   * written by the child, not by our in-memory exit handler — so it
+   * survives a runner reconstruction. Missing sentinel + dead PID ⇒
+   * `killed` (SIGKILL before the write, or power loss).
+   */
+  exitCodePath?: string
   env?: Record<string, string>
   timeoutMs?: number
   signal?: AbortSignal
