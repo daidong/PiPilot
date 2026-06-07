@@ -384,6 +384,26 @@ function ModalRunDetails({
 
 // ─── Run row (expandable, follows PaperRow pattern) ──────────────────────────
 
+// ─── Finished-zone row grid ──────────────────────────────────────────────────
+// One shared column spec for RunRow's compact line AND the CampaignGroup header,
+// so every row in Zone ③ aligns into a single table (RFC-017 §4.4). Each row is
+// `[chevron][status dot][headline …][where][outcome][when][duration][action]`.
+const COL_WHERE = 'shrink-0 w-16 text-[11px] t-text-muted truncate'
+const COL_OUTCOME = 'shrink-0 w-24 text-[11px] truncate'
+const COL_WHEN = 'shrink-0 w-10 text-right text-[11px] t-text-muted/80 tabular-nums'
+const COL_DUR = 'shrink-0 w-14 text-right text-[11px] t-text-muted tabular-nums'
+const COL_ACTION = 'shrink-0 w-6'
+
+/** Aggregate status dot for a campaign — ringed so it reads distinctly from a
+ *  single run's plain dot. Green = all clean; red = all failed; amber = mixed. */
+function CampaignDot({ completed, failed }: { completed: number; failed: number }) {
+  const tone =
+    failed === 0 ? { dot: 'bg-emerald-500', ring: 'ring-emerald-500/30' }
+    : completed === 0 ? { dot: 'bg-red-500', ring: 'ring-red-500/30' }
+    : { dot: 'bg-amber-500', ring: 'ring-amber-500/30' }
+  return <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ring-2 ${tone.dot} ${tone.ring}`} />
+}
+
 function RunRow({
   run,
   expanded,
@@ -434,7 +454,6 @@ function RunRow({
   const hasMetrics = run.progress?.metrics && Object.keys(run.progress.metrics).length > 0
   const isModal = run.backend === 'modal'
   const isRemote = isModal || run.backend !== 'local'
-  const modalGpuLabel = modalImageGpuLabel(run.image)
   const primaryText = (run.taskDescription?.trim() || run.command || run.runId)
   const isHardFailure = run.status === 'failed' || run.status === 'timed_out' || run.status === 'cost_killed'
   const rowTint = isHardFailure
@@ -478,22 +497,27 @@ function RunRow({
           {primaryText}
         </span>
 
-        {/* Right meta — compact, tabular, muted. Locality is ONE glyph. */}
-        <span className="shrink-0 flex items-center gap-2.5 text-[11px] t-text-muted tabular-nums">
-          <span
-            title={isModal ? 'Modal — runs remotely; keeps running if you quit' : run.backend === 'local' ? 'Local — this machine' : run.backend}
-          >
-            {isRemote ? `☁ ${backendView?.displayName ?? run.backend}` : '⚙'}
-          </span>
-          {isModal && modalGpuLabel !== 'Modal' && <span>{modalGpuLabel}</span>}
-          {run.estimatedCostUsd !== undefined && run.estimatedCostUsd > 0 && <span>{formatMoney(run.estimatedCostUsd, 2)}</span>}
-          {outcome && <span className={outcome.cls}>{outcome.text}</span>}
-          <span className="t-text-muted/80" title={run.createdAt ?? run.startedAt ?? ''}>{timeAgoShort(run.createdAt ?? run.startedAt)}</span>
-          {run.elapsedSeconds > 0 && <span className="w-12 text-right">{formatDuration(run.elapsedSeconds)}</span>}
+        {/* Right meta — fixed aligned columns so every finished row reads as one
+            table (RFC-017 §4.4): where · outcome · when · duration. Cost / GPU
+            move to the expanded detail to keep the columns from drifting. */}
+        <span
+          className={COL_WHERE}
+          title={isModal ? 'Modal — runs remotely; keeps running if you quit' : run.backend === 'local' ? 'Local — this machine' : run.backend}
+        >
+          {isRemote ? `☁ ${backendView?.displayName ?? run.backend}` : '⚙'}
+        </span>
+        <span className={`${COL_OUTCOME} ${outcome ? outcome.cls : 'text-emerald-600 dark:text-emerald-400'}`}>
+          {outcome ? outcome.text : run.status === 'completed' ? '✓' : ''}
+        </span>
+        <span className={COL_WHEN} title={run.createdAt ?? run.startedAt ?? ''}>
+          {timeAgoShort(run.createdAt ?? run.startedAt)}
+        </span>
+        <span className={COL_DUR}>
+          {run.elapsedSeconds > 0 ? formatDuration(run.elapsedSeconds) : ''}
         </span>
 
-        {/* Stop (live runs only); fixed slot keeps the meta column aligned.
-            Bordered so it reads as a control, not decoration. */}
+        {/* Stop (live runs only); the w-6 spacer keeps the action column aligned
+            for finished rows. Bordered so it reads as a control, not decoration. */}
         {canStop ? (
           <button
             type="button"
@@ -507,7 +531,7 @@ function RunRow({
             <span className="text-[10px] font-medium">{stopping ? 'Stopping…' : 'Stop'}</span>
           </button>
         ) : (
-          <span className="shrink-0 w-6" aria-hidden="true" />
+          <span className={COL_ACTION} aria-hidden="true" />
         )}
       </div>
       {stopError && (
@@ -638,6 +662,8 @@ function RunRow({
 // ─── Filter bar ──────────────────────────────────────────────────────────────
 
 function FilterBar({
+  label,
+  count,
   search,
   onSearchChange,
   backendFilter,
@@ -645,6 +671,8 @@ function FilterBar({
   backendCounts,
   backends,
 }: {
+  label: string
+  count: number
   search: string
   onSearchChange: (v: string) => void
   backendFilter: string
@@ -656,14 +684,21 @@ function FilterBar({
   // a single-backend setup doesn't need a "filter by backend" affordance.
   const showChips = backends.length > 1
   return (
-    <div className="px-4 py-2 border-b t-border space-y-2">
-      <div className="relative">
+    // The zone header, search, and filter chips share ONE row (RFC-017 §4.4 —
+    // no separate header line): label sits left, search flex-grows, chips sit to
+    // its right and wrap under only when the row is genuinely too narrow.
+    <div className="px-4 py-2 border-b t-border flex items-center gap-3 flex-wrap">
+      <span className="shrink-0 text-[10px] uppercase tracking-wider font-semibold t-text-muted">
+        {label}
+        {count > 0 && <span className="ml-1.5 tabular-nums">{count}</span>}
+      </span>
+      <div className="relative flex-1 min-w-[10rem]">
         <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 t-text-muted" />
         <input
           type="text"
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search runs by command, description, or ID..."
+          placeholder="Search runs…"
           className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border t-border t-bg-surface t-text focus:outline-none focus:border-[var(--color-accent-soft)]"
         />
         {search && (
@@ -678,7 +713,7 @@ function FilterBar({
         )}
       </div>
       {showChips && (
-        <div className="flex items-center gap-1 flex-wrap">
+        <div className="shrink-0 flex items-center gap-1">
           <BackendChip
             label="All"
             active={backendFilter === 'all'}
@@ -1418,7 +1453,11 @@ function EmptyState() {
 
 function timeAgoShort(iso?: string): string {
   if (!iso) return '--'
-  return timeAgo(iso)
+  const diff = Date.now() - new Date(iso).getTime()
+  if (diff < 60_000) return 'now'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`
+  return `${Math.floor(diff / 86_400_000)}d`
 }
 
 // ─── Zone header ─────────────────────────────────────────────────────────────
@@ -1432,32 +1471,6 @@ function ZoneHeader({ label, count, accent }: { label: string; count?: number; a
       {count !== undefined && count > 0 && (
         <span className="text-[10px] tabular-nums t-text-muted">{count}</span>
       )}
-    </div>
-  )
-}
-
-// ─── Target strip (sticky) — RFC-017 §4.1 ────────────────────────────────────
-
-function TargetStrip({ backends }: { backends: BackendView[] }) {
-  if (backends.length === 0) return null
-  return (
-    <div className="sticky top-0 z-10 flex items-center gap-3 px-4 py-1.5 border-b t-border t-bg-surface overflow-x-auto">
-      {backends.map((b) => {
-        const Icon = b.id === 'modal' || b.id.includes('aws') || b.id.includes('gcp') || b.id.includes('cloud') ? Cloud : Cpu
-        const avail = b.availability
-        const ready = !!avail?.available
-        const dotCls = !avail ? 't-bg-elevated' : ready ? 'bg-emerald-500' : avail.missingRequirements?.length === 1 ? 'bg-amber-500' : 'bg-red-500'
-        return (
-          <span key={b.id} className="inline-flex items-center gap-1.5 shrink-0 text-[11px] t-text-secondary">
-            <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotCls}`} />
-            <Icon size={12} className="t-text-muted" />
-            <span className="t-text">{b.displayName}</span>
-            <span className="t-text-muted">
-              {ready ? 'ready' : (avail?.hints?.[0] ?? avail?.missingRequirements?.[0] ?? 'unavailable')}
-            </span>
-          </span>
-        )
-      })}
     </div>
   )
 }
@@ -1481,6 +1494,11 @@ function CampaignGroup({
     return <RunRow run={run} expanded={expandedId === run.runId} onToggle={() => onToggleRow(run.runId)} />
   }
 
+  // Locality glyph for the campaign as a whole — same column as a run's.
+  const allLocal = campaign.runs.every((r) => r.backend === 'local')
+  const allRemote = campaign.runs.every((r) => r.backend !== 'local')
+  const where = allLocal ? '⚙' : allRemote ? '☁' : '⚙ ☁'
+
   return (
     <div className="border-b t-border last:border-b-0">
       <button
@@ -1489,15 +1507,18 @@ function CampaignGroup({
         className="w-full flex items-center gap-2.5 px-3 py-1.5 hover:bg-[var(--color-accent-soft)]/5 transition-colors text-left"
       >
         {open ? <ChevronDown size={14} className="t-text-muted shrink-0" /> : <ChevronRight size={14} className="t-text-muted shrink-0" />}
+        <CampaignDot completed={campaign.completed} failed={campaign.failed} />
         <span className="flex-1 min-w-0 text-[13px] t-text truncate">
           {campaign.label} <span className="t-text-muted">· {campaign.total} runs</span>
         </span>
-        <span className="shrink-0 flex items-center gap-2.5 text-[11px] tabular-nums">
+        <span className={COL_WHERE} title={allLocal ? 'Local — this machine' : allRemote ? 'Remote' : 'Mixed local + remote'}>{where}</span>
+        <span className="shrink-0 w-24 text-[11px] flex items-center gap-1.5 tabular-nums">
           {campaign.completed > 0 && <span className="text-emerald-600 dark:text-emerald-400">{campaign.completed} ✓</span>}
           {campaign.failed > 0 && <span className="text-red-500">{campaign.failed} ✗</span>}
-          <span className="t-text-muted/80">{campaign.latestMs ? timeAgo(new Date(campaign.latestMs).toISOString()) : '--'}</span>
         </span>
-        <span className="shrink-0 w-6" aria-hidden="true" />
+        <span className={COL_WHEN}>{campaign.latestMs ? timeAgoShort(new Date(campaign.latestMs).toISOString()) : '--'}</span>
+        <span className={COL_DUR} aria-hidden="true" />
+        <span className={COL_ACTION} aria-hidden="true" />
       </button>
       {open && campaign.runs.map((run) => (
         <div key={run.runId} className="border-l-2 border-l-[var(--color-accent-soft)]/20 ml-5">
@@ -1699,7 +1720,7 @@ export function ComputeView() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="flex-1 overflow-y-auto">
-        <TargetStrip backends={backendsList} />
+        {/* Backends live in the left ComputeSidebar — no target strip here. */}
 
         {/* Zone ① Needs you — hidden when empty */}
         {decisions.length > 0 && (
@@ -1721,11 +1742,13 @@ export function ComputeView() {
           </>
         )}
 
-        {/* Zone ③ Finished — grouped by campaign */}
+        {/* Zone ③ Finished — grouped by campaign. The "Finished N" header is
+            merged into the filter row to save vertical space (RFC-017 §4.4). */}
         {campaigns.length > 0 && (
           <>
-            <ZoneHeader label="Finished" count={finishedCount} />
             <FilterBar
+              label="Finished"
+              count={finishedCount}
               search={search}
               onSearchChange={setSearch}
               backendFilter={backendFilter}

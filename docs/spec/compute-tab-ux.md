@@ -1,11 +1,23 @@
 # RFC-017: Compute Tab UX Redesign
 
-> Spec version: 0.2 (IMPLEMENTED) | Last updated: 2026-06-07
+> Spec version: 0.3 (IMPLEMENTED) | Last updated: 2026-06-07
 >
 > Status: **IMPLEMENTED**. `ComputeView.tsx` is re-composed around the three
 > zones; the compute-store gained `campaignId` on run views + the
 > `useDecisions` / `useRunningRuns` / `useCampaigns` / `useCronTasks` selectors
 > and `groupRunsIntoCampaigns`. See "Implementation status" at the end.
+>
+> **v0.3 revision (post-build UX pass):** three changes from user feedback on the
+> rendered tab — (1) the **target strip is removed** (backends already live in
+> the left `ComputeSidebar`; the strip was redundant); (2) the "Finished N"
+> zone header is **merged into the filter row** (header label + search + chips on
+> one line) to reclaim vertical space; (3) every Finished row — campaign *and*
+> single run — now renders on **one shared column grid** (`[chevron][dot]
+> headline … where · outcome · when · duration`) so headlines and meta align,
+> and campaigns use a ringed **aggregate dot** that reads distinctly from a run's
+> plain dot. Per-run cost / Modal GPU moved off the collapsed row into the
+> expanded detail to keep the columns from drifting. §4.1, §4.4, §11.2/§11.3,
+> and §13 below reflect this.
 >
 > v0.1 status was: **PROPOSED**. Redesigns the Compute tab around *user intent and
 > operation type* instead of internal lifecycle buckets. Supersedes the relevant
@@ -72,14 +84,16 @@ The redesign is driven by what the user actually wants to do:
 | Understand cost | per-run + per-campaign remote cost | ②/③ |
 | Feed results back | jump to Chat / hand run output to the agent | ②/③ |
 | Declutter | dismiss/delete a record | ③ |
-| Know where it runs | target/backend + resources | Target strip |
+| Know where it runs | target/backend + resources | Left sidebar + per-row `where` |
 
 ## 4. Layout
 
+Backends are NOT shown in the center panel — the left `ComputeSidebar` already
+carries them (name, capability badges, availability, running count). The center
+is purely the three work zones + Scheduled:
+
 ```
-┌─ Target strip (sticky) ──────────────────────────────────────────────┐
-│  ⚙ Local · darwin arm64 · 24GB · M4      ☁ Modal idle    ☁ AWS off    │
-├─ ① Needs you  (hidden when empty) ──────────────────────────────────┤
+┌─ ① Needs you  (hidden when empty) ──────────────────────────────────┐
 │  ☁ Modal run — est. $0.40, A100·10min        [Confirm & run] [Skip]   │
 │  ⚠ Local: `rm -rf results/` flagged risky    [Run anyway]   [Skip]    │
 ├─ ② Running  (the heart) ────────────────────────────────────────────┤
@@ -87,21 +101,25 @@ The redesign is driven by what the user actually wants to do:
 │     ▓▓▓▓▓▓░░░ 62%   tail: "probe 124/200 · 512-tok prefix… "           │
 │  ● phase2_construction_delay        ☁ Modal · keeps running · $0.12   │
 │     ▓▓▓░░░░░░ 31%   tail: "delay=2s … cache-usable=false"     [Stop]   │
-├─ ③ Finished  (grouped by campaign) ─────────────────────────────────┤
-│  Search […]            All · ⚙ Local · ☁ Modal · ☁ AWS                │
-│  ▸ branchability sweep        8 ✓ · 1 ✗ · 1 ●        2h ago           │
-│  ▾ ttl-sentinel campaign      3 ✓                    just now         │
-│       ✓ run_ttl…anthropic   exit 0 · 4m12s   [View][Retry][Reuse]     │
-│       ✓ run_ttl…openai      exit 0 · 3m58s   [View][Retry][Reuse]     │
-│  ▸ (ungrouped)                phase1_semantics ✓                      │
+├─ ③ Finished  ── header + search + chips on ONE row ─────────────────┤
+│  FINISHED 17   [ Search runs… ]            All · ⚙ Local · ☁ Modal     │
+│  ── one shared column grid; campaign ◉ vs run ● ──────────────────── │
+│   chev dot  command / label …            where  outcome     when  dur │
+│  ▸ ◉  branchability sweep · 10 runs        ⚙     8 ✓ · 1 ✗   2h        │
+│  ▾ ◉  ttl-sentinel campaign · 3 runs       ⚙     3 ✓         now       │
+│      ● run_ttl…anthropic                   ⚙     ✓           now  4m12s│
+│      ● run_ttl…openai                      ⚙     ✓           now  3m58s│
+│  ▸ ●  phase1_semantics                     ⚙     ✓           3h   1m02s│
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.1 Target strip (sticky)
-Backends and their state at a glance: local host + resources; remote backends
-idle/active + whether configured. Click → backend detail / settings. (Reuses
-much of today's `ComputeSidebar` target card, promoted to a thin sticky strip so
-it never scrolls away.)
+### 4.1 Backend visibility — left sidebar, not a center strip
+**v0.3:** an earlier draft promoted the backend target card into a sticky strip
+at the top of the center panel. That was dropped as redundant: the left
+`ComputeSidebar` already shows every backend with its name, capability badges,
+availability state, and running count, and has more room for stats / experience
+insights. The center panel shows no backend strip. (Resolves §11.3 as
+"sidebar only," reversing v0.2's "keep both.")
 
 ### 4.2 Zone ① — Needs you (conditional)
 Only rendered when something genuinely needs a decision. Under RFC-016 §4.4 that
@@ -127,13 +145,30 @@ Each running task shows, **inline without expanding**:
 
 ### 4.4 Zone ③ — Finished, grouped by campaign
 - Runs **group into campaigns/sweeps** (grouping key — see §6). A collapsed
-  campaign shows aggregate outcome (`8 ✓ · 1 ✗ · 1 ●`) + relative time. Expanding
+  campaign shows aggregate outcome (`8 ✓ · 1 ✗`) + relative time. Expanding
   lists member runs.
 - Per run: outcome + exit code + duration, and actions **View** (output/logs),
   **Retry** (re-submit with parent lineage), **Reuse** (clone command into a new
   run / hand to chat).
-- Search + per-backend filter (today's filter bar, retained).
-- Ungrouped runs fall into an "(ungrouped)" bucket.
+- Search + per-backend filter, **merged with the zone header onto one row**
+  (v0.3): `FINISHED N` label · search (flex) · per-backend chips (chips only when
+  >1 backend has finished runs). No separate header line.
+- A single finished run renders as a bare row; ungrouped one-offs are simply
+  those bare rows interleaved by time (no explicit "(ungrouped)" bucket).
+- **Shared column grid (v0.3).** Every row in this zone — a campaign header and a
+  single run alike — renders on the same grid so it reads as one table, not a
+  ragged list:
+  `[chevron] [status dot] [headline … flex] [where] [outcome] [when] [duration] [action]`.
+  - Leading is always `chevron + dot`, so headlines start at the same x. A
+    campaign uses a **ringed aggregate dot** (`◉` — green all-clean / amber mixed
+    / red all-failed); a run uses its plain status `●`.
+    The dot-vs-no-dot inconsistency of v0.2 (campaign rows had no dot) is gone.
+  - The right-hand columns are fixed-width and right-packed, so `where` / outcome
+    / `when` / `duration` line up vertically across every row. `when` uses a
+    compact form (`8h`, `5m`, `now`, `2d`).
+  - Per-run **cost (`$x`) and Modal GPU label are NOT on the collapsed row** —
+    they live in the expanded detail (§5). This keeps the columns from drifting
+    on the common all-local case; remote cost is one expand away.
 
 ### 4.5 Scheduled tasks (management surface)
 A **Scheduled** section manages the home-scoped cron tasks defined in RFC-016
@@ -142,7 +177,7 @@ enabled toggle, **next-due**, **last-run**, and **missed-since-last-open** (so
 app-open/best-effort gaps are visible, not silent — RFC-016 §4.5). Actions:
 edit, enable/disable, delete, run-now. Each fired tick appears in Zone ③ as a
 normal run, grouped into the task's campaign. Placement (its own zone vs. a
-panel off the target strip) — see §11.
+panel off the sidebar) — see §11.
 
 ## 5. Run detail (expanded)
 A running or finished row expands to:
@@ -186,10 +221,10 @@ Open: a single list with badges (recommended — fewer modes) vs. split columns.
   on the `compute:event` it already subscribes to.
 
 ## 9. Empty & first-run states
-- **No runs ever**: a short "what is compute" explainer + the target strip, not a
-  blank table.
-- **All idle**: target strip + a quiet "no active runs" with recent campaigns
-  below.
+- **No runs ever**: a short "what is compute" explainer (the `EmptyState`), not a
+  blank table; backends stay visible in the left sidebar.
+- **All idle**: a quiet "no active runs" with recent campaigns below; backends in
+  the left sidebar.
 
 ## 10. Component / store changes
 - `ComputeView.tsx`: re-compose around the three zones; demote the lifecycle-bucket
@@ -199,13 +234,16 @@ Open: a single list with badges (recommended — fewer modes) vs. split columns.
   (remote-cost / danger-confirm).
 - Store: add `campaignId` to run views; selectors `useRunningRuns`,
   `useCampaigns(finished)`, `useDecisions` (remote-confirm + flagged-danger).
-- `ComputeSidebar` target card → sticky target strip (or keep sidebar; §11).
+- Backends stay in the left `ComputeSidebar`; the center panel gets **no** target
+  strip (v0.3 — see §4.1).
 
 ## 11. Open questions
-1. **Campaign grouping key** (§6) — (a) submission-batch recommended.
-2. **Local/remote**: one list + badges (recommended) vs. split.
-3. **Target strip vs. sidebar**: promote target to a sticky top strip, or keep the
-   left `ComputeSidebar`? (Sidebar has more room for stats/experience insights.)
+1. **Campaign grouping key** (§6) — (a) submission-batch recommended. *(Resolved.)*
+2. **Local/remote**: one list + badges (recommended) vs. split. *(Resolved → one
+   list + badges; locality is one glyph in the `where` column.)*
+3. **Target strip vs. sidebar**: ~~promote target to a sticky top strip, or keep
+   the left `ComputeSidebar`?~~ *(Resolved v0.3 → **sidebar only**; no center
+   strip. The sidebar has more room for stats / experience insights.)*
 4. **Danger-check policy** (RFC-016 §4.4): which command patterns flag into Zone ①,
    and is the classifier shared with the coding-agent bash permission layer?
 5. **"Hand to chat"** payload: full output vs. summary vs. a reference the agent
@@ -223,10 +261,9 @@ Open: a single list with badges (recommended — fewer modes) vs. split columns.
 - **Three zones** (§4): `ComputeView` renders ① Needs you (conditional) → ②
   Running → ③ Finished, plus a Scheduled section. The old sortable lifecycle
   table and the "approved — waiting" placeholder row are deleted.
-- **Target strip** (§4.1): a sticky `TargetStrip` of backend chips
-  (dot + icon + ready/unavailable). The left `ComputeSidebar` is kept
-  (open question §11.3 resolved as "both" — strip for glance, sidebar for
-  detail).
+- **Backend visibility** (§4.1): no center target strip. Backends live only in
+  the left `ComputeSidebar`. *(v0.2 shipped a sticky `TargetStrip`; it was
+  removed in v0.3 as redundant — `TargetStrip` is deleted.)*
 - **Zone ① Needs you** (§4.2): the reworked `PendingPlanCard` is the decision
   card — danger (`⚠ Run anyway`), cost (`☁ Confirm & run`), or forced approval —
   with **Skip** (discard) and a tertiary "Send back to agent" (reject +
@@ -236,8 +273,13 @@ Open: a single list with badges (recommended — fewer modes) vs. split columns.
   badge (`⚙ this Mac` vs `☁ Modal · keeps running if you quit · $X`) +
   re-derived status + Stop.
 - **Zone ③ Finished** (§4.4): `CampaignGroup` collapses members under an
-  aggregate (`8 ✓ · 1 ✗ · 1 ●`); search + per-backend filter retained;
-  one-off finished runs fall into an "ungrouped" bucket.
+  aggregate (`8 ✓ · 1 ✗`); single runs render as bare rows. **v0.3:** the
+  `FINISHED N` header is merged into the filter row (label + search + chips on
+  one line via `FilterBar`'s `label`/`count` props), and every row — campaign and
+  run — shares one column grid (`COL_WHERE/COL_OUTCOME/COL_WHEN/COL_DUR/
+  COL_ACTION` in `ComputeView.tsx`) with a leading `chevron + dot`. Campaigns use
+  a ringed `CampaignDot`; `timeAgoShort` returns compact units; per-run cost / GPU
+  moved to the expanded detail.
 - **Campaign key** (§6): decided as **(a) submission batch** — `campaignId`
   stamped at submit time (`turn-<turnId>` for agent batches, the cron task's
   `campaignId` for scheduled ticks). Threaded through all three backends + run
@@ -245,6 +287,7 @@ Open: a single list with badges (recommended — fewer modes) vs. split columns.
 - **Scheduled** (§4.5): `ScheduledSection` lists tasks with next-due / last-run /
   missed, an enable toggle, run-now, edit, delete, and an add form.
 - **Open questions resolved:** §11.1 → (a) submission-batch; §11.2 → one list +
-  badges; §11.3 → keep both strip + sidebar. §11.4 (danger patterns) → the
-  rule-based set in `lib/local-compute/danger-check.ts`; §11.5 ("hand to chat"
-  payload) → unchanged (still the existing "Fix & retry in chat" affordance).
+  badges; §11.3 → **sidebar only, no center strip** (v0.3, reversed from v0.2's
+  "both"). §11.4 (danger patterns) → the rule-based set in
+  `lib/local-compute/danger-check.ts`; §11.5 ("hand to chat" payload) → unchanged
+  (still the existing "Fix & retry in chat" affordance).
