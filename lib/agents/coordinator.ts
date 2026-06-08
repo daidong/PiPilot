@@ -34,18 +34,21 @@ import {
   type PersistenceDecision
 } from './context-builder.js'
 import { createSessionBootstrap } from './session-bootstrap.js'
-import { runAgentTurnWithRetry } from './transient-retry.js'
+import { runAgentTurnWithRetry, isTransientLlmError } from './transient-retry.js'
+import { isUsageLimitError, humanizeLlmError } from './llm-error-humanizer.js'
 import { createCoordinatorTelemetryAdapter } from './telemetry-adapter.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
 import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
+import { resolveSubTaskModel } from './sub-task-tier.js'
 import { AwsCredentialProvider } from '../aws/credentials.js'
 import { buildSharingPromptClause } from '../sharing/index.js'
 import { runSubLlmText } from '../telemetry/sub-llm.js'
+import { TURN_ID_KEY } from '../telemetry/context-keys.js'
 import type { PipilotTracer } from '../telemetry/tracer.js'
 import type { PipilotAuthMode } from '../telemetry/semantic-registry.js'
-import { SpanKind, type Span, type Attributes } from '@opentelemetry/api'
+import { context, SpanKind, type Span, type Attributes } from '@opentelemetry/api'
 import { redact } from '../telemetry/redaction.js'
 import { createHash } from 'crypto'
 import {
@@ -509,18 +512,29 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
     workspacePath: projectPath,
     sessionId,
     projectPath,
-    callLlm: async (systemPrompt: string, userContent: string) => {
+    callLlm: async (systemPrompt: string, userContent: string, opts) => {
       if (!piModel) throw new Error('No model available for sub-call')
       const currentKey = await resolveApiKey()
+      // B-class sub-task sinking: a `tier: 'light'` opt-in runs on the cheap
+      // router model when Settings permits (default), else stays on piModel.
+      // Read the setting live so the toggle takes effect without a coordinator
+      // rebuild. intentRouterModel is selected same-provider as piModel, so the
+      // resolveApiKey() key is valid for whichever model we pick.
+      const subSetting = (config.getResolvedSettings?.() ?? config.resolvedSettings)?.subTaskModelTier ?? 'light'
+      const model = resolveSubTaskModel(opts?.tier, {
+        mainModel: piModel,
+        lightModel: intentRouterModel,
+        setting: subSetting,
+      })
       return runSubLlmText({
-        model: piModel,
+        model,
         systemPrompt,
         userContent,
         apiKey: currentKey,
         maxTokens: 4096,
         tracer,
         authMode,
-        purpose: 'callLlm',
+        purpose: opts?.purpose ?? 'callLlm',
         ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
       })
     },
@@ -1178,6 +1192,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           // long-running turn. See lib/agents/transient-retry.ts.
           await runAgentTurnWithRetry(agent, userMessage, imageContents, {
             isAborted: () => turnAborted,
+            // A Claude *subscription* usage cap is not worth retrying — it
+            // resets on a rolling window, not in seconds. Without this, the
+            // raw "429 … rate_limit_error" string matches isTransientLlmError
+            // and the turn silently retries 5× (looking stuck at "thinking")
+            // before surfacing anything. Surface it immediately instead.
+            isTransient: (msg) =>
+              isTransientLlmError(msg) &&
+              !(authMode === 'anthropic-subscription' && isUsageLimitError(msg)),
             onRetry: ({ attempt, nextDelayMs, error }) => {
               if (debug) {
                 console.log(`[Chat] Transient LLM error (attempt ${attempt}); retrying in ${Math.round(nextDelayMs / 1000)}s — ${error.slice(0, 200)}`)
@@ -1234,9 +1256,14 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         }
 
         if (stopReason === 'error') {
+          // Rewrite a Claude-subscription usage cap into an actionable message
+          // (mirrors how the Codex provider humanizes ChatGPT limits). Returns
+          // null for every other error, so the raw message is preserved.
+          const humanized = humanizeLlmError(errorMessage, { authMode })
           return {
             success: false,
-            error: errorMessage
+            error: humanized
+              || errorMessage
               || 'The LLM request failed. This usually indicates an issue on the model server or with authentication. If you are using a Claude or ChatGPT subscription, try signing out and back in via Settings. Otherwise verify your API key, model selection, and network connection.'
           }
         }
@@ -1313,7 +1340,13 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
         // reduction policy — see telemetry-adapter.ts).
         telemetryAdapter.markUserTurnStart()
         try {
-          return await runChatBody()
+          // Phase T: publish the turn id on the active OTel context for the
+          // whole turn body. Child spans (skill router, tool calls, sub-LLM,
+          // compaction) inherit pipilot.turn.id via startSpan, and the memory/
+          // artifact ledgers read it as a fallback — no per-span/per-caller
+          // hand-off. The root span itself already carries it (set above).
+          if (!tid) return await runChatBody()
+          return await context.with(context.active().setValue(TURN_ID_KEY, tid), runChatBody)
         } finally {
           telemetryAdapter.markUserTurnEnd()
         }
@@ -1338,7 +1371,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           ...history,
           { role: 'user' as const, content: loadPrompt('recap-instruction'), timestamp: Date.now() }
         ]
-        const text = (await runSubLlmText({
+        const invokeRecap = (): Promise<string> => runSubLlmText({
           model: piModel,
           systemPrompt: agent.state.systemPrompt,
           // AgentMessage[] → pi-ai Message[]; runSubLlmText documents this cast.
@@ -1350,7 +1383,17 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
           purpose: 'recap',
           ...(signal && { signal }),
           ...(onUsage && { onUsage: onUsage as (usage: any, cost: any) => void })
-        })).trim()
+        })
+        // Phase T: recap runs after the turn's root span has closed (renderer-
+        // triggered, separate trace). Tag its span with the turn it recaps so
+        // it isn't a turn-less orphan. getTurnId() still points at the last
+        // turn here. Background detach (extractor/wiki-bg) doesn't apply — recap
+        // belongs to its turn.
+        const recapTurnId = getTurnId?.()
+        const text = (recapTurnId
+          ? await context.with(context.active().setValue(TURN_ID_KEY, recapTurnId), invokeRecap)
+          : await invokeRecap()
+        ).trim()
         if (!text || signal?.aborted) return null
 
         // Extract JSON from possible markdown code fences (router/summary pattern).

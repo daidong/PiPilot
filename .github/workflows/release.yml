@@ -14,7 +14,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-2022, ubuntu-latest]
+        # ubuntu-latest builds the x64 Linux artifacts; ubuntu-24.04-arm
+        # (a free GitHub-hosted arm64 runner for public repos) builds the
+        # arm64 ones natively, so native modules like node-pty get real
+        # arm64 binaries instead of relying on x64→arm64 cross-packaging.
+        # Each Linux runner builds only its host arch (the linux target in
+        # app/package.json intentionally has no `arch` array), so the two
+        # legs publish disjoint files to the same draft release:
+        #   x64   → *-amd64.deb, *-x86_64.AppImage, latest-linux.yml
+        #   arm64 → *-arm64.deb, *-arm64.AppImage,  latest-linux-arm64.yml
+        os: [macos-latest, windows-2022, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout

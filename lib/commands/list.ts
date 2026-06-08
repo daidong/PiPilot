@@ -22,6 +22,8 @@ export interface NoteListItem {
   tags: string[]
   filePath?: string
   provenance?: Provenance
+  createdAt: string
+  updatedAt: string
 }
 
 export interface LiteratureListItem {
@@ -91,7 +93,9 @@ export function listNotes(projectPath: string): NoteListItem[] {
       content: note.content,
       tags: note.tags,
       filePath: note.filePath,
-      provenance: note.provenance
+      provenance: note.provenance,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt
     }))
 }
 

@@ -1,65 +1,56 @@
 /**
- * Scheduler — "One heavy at a time" admission control.
+ * Scheduler — admission for local runs (RFC-016 §4.1 / Phase 2).
  *
- * Rules:
- * - Max 1 heavy run concurrent
- * - Max 3 total runs concurrent (heavy + light)
- * - Resource checks: memory (500MB min), disk (500MB min)
+ * The pre-RFC-016 model was "one heavy at a time": a timeout-based
+ * heavy/light classifier + MAX_HEAVY_CONCURRENT=1 + a blanket
+ * MIN_FREE_MEMORY_MB gate measured via `os.freemem()`. That guard was
+ * mis-tuned (default 60-min timeout ⇒ everything "heavy" ⇒ effectively
+ * sequential) and the memory floor badly undercounted available memory on
+ * macOS, so trivial I/O-bound probes were needlessly blocked.
  *
- * Light tasks: timeout <= 2 min or viz/plot commands.
- * Heavy tasks: everything else.
+ * RFC-016 replaces it with OS-arbitrated concurrency: run concurrently and
+ * let the OS handle contention; recover resource safety post-hoc via the
+ * OOM failure-signal + stall detection (not pre-admission blocking). The
+ * only admission checks that remain are:
+ *   - a SOFT, configurable concurrency cap (runaway-loop backstop, not a
+ *     heavy/light gate), and
+ *   - a disk-space floor (a run that can't write output fails instantly —
+ *     blocking it up front gives a clearer error than a cryptic ENOSPC).
  */
 
 import type { RunWeight, PreRunSnapshot, SchedulerDecision } from './types.js'
 
-const MAX_HEAVY_CONCURRENT = 1
-const MAX_TOTAL_CONCURRENT = 3
-const MIN_FREE_MEMORY_MB = 500
 const MIN_FREE_DISK_MB = 500
 
 /**
- * Classify a run as heavy or light based on timeout and command.
+ * Classify a run as heavy or light. NOTE: this no longer affects
+ * admission (RFC-016 dropped the heavy/light gate). It is retained only to
+ * populate RunRecord.weight for display — the Compute tab still surfaces a
+ * weight chip. Safe to delete once that chip is gone.
  */
 export function classifyWeight(timeoutMinutes: number, command: string): RunWeight {
   if (timeoutMinutes <= 2) return 'light'
-  // Only classify as light if timeout is moderate AND command looks like a viz task
   if (timeoutMinutes <= 10 && /\b(plot|viz|chart|figure|draw|render)\b/i.test(command)) return 'light'
   return 'heavy'
 }
 
 /**
- * Check if a new run can start given current system state.
+ * Admit a new local run. OS-arbitrated concurrency means there is no
+ * heavy/light reasoning and no memory gate — only the soft total cap and
+ * the disk floor.
  */
-export function canAdmit(snapshot: PreRunSnapshot, weight: RunWeight): SchedulerDecision {
-  const activeHeavy = snapshot.activeRuns.filter(r => r.weight === 'heavy').length
+export function canAdmit(snapshot: PreRunSnapshot, maxConcurrent: number): SchedulerDecision {
   const totalActive = snapshot.activeRuns.length
 
-  // Rule 1: max 1 heavy run
-  if (weight === 'heavy' && activeHeavy >= MAX_HEAVY_CONCURRENT) {
-    const heavyRun = snapshot.activeRuns.find(r => r.weight === 'heavy')
+  if (totalActive >= maxConcurrent) {
     return {
       allowed: false,
-      reason: `A heavy compute run is already active${heavyRun ? ` (${heavyRun.runId})` : ''}. Wait for it to finish, or stop it first.`,
+      reason:
+        `Local concurrency cap reached (${totalActive}/${maxConcurrent} runs active). ` +
+        `Wait for one to finish, stop one, or raise the cap in Settings → Compute.`,
     }
   }
 
-  // Rule 2: max 3 concurrent total
-  if (totalActive >= MAX_TOTAL_CONCURRENT) {
-    return {
-      allowed: false,
-      reason: `Too many concurrent runs (${totalActive}/${MAX_TOTAL_CONCURRENT}). Wait for one to finish, or stop one.`,
-    }
-  }
-
-  // Rule 3: memory check
-  if (snapshot.freeMemoryMb < MIN_FREE_MEMORY_MB) {
-    return {
-      allowed: false,
-      reason: `Low memory (${Math.round(snapshot.freeMemoryMb)}MB free, need ${MIN_FREE_MEMORY_MB}MB). Close applications to free resources.`,
-    }
-  }
-
-  // Rule 4: disk check
   if (snapshot.freeDiskMb < MIN_FREE_DISK_MB) {
     return {
       allowed: false,

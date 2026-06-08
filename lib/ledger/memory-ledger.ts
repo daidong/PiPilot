@@ -12,9 +12,10 @@
  */
 
 import { join } from 'node:path'
-import { trace } from '@opentelemetry/api'
+import { context, trace } from '@opentelemetry/api'
 import { PATHS } from '../types.js'
 import { appendJsonl } from '../telemetry/jsonl-writer.js'
+import { TURN_ID_KEY } from '../telemetry/context-keys.js'
 
 export type MemoryOp = 'search' | 'retrieve' | 'create' | 'update' | 'delete'
 export type MemoryScope = 'session' | 'project' | 'user-global' | 'cross-project' | 'wiki'
@@ -79,6 +80,16 @@ export function createMemoryLedgerWriter(projectPath: string): MemoryLedgerWrite
           spanId = spanId ?? ctx.spanId
         }
       }
+      // Phase T: pull turnId off the active turn context when the caller didn't
+      // supply it (explicit value still wins). The coordinator publishes
+      // TURN_ID_KEY for the whole turn, so in-turn memory ops carry turnId
+      // without every call site threading it. Background ops that ran outside a
+      // turn context resolve to undefined here — left turn-less by design.
+      let turnId = row.turnId
+      if (!turnId) {
+        const ctxTurn = context.active().getValue(TURN_ID_KEY)
+        if (typeof ctxTurn === 'string') turnId = ctxTurn
+      }
       const fullRow: MemoryLedgerRow = {
         memoryId: row.memoryId,
         op: row.op,
@@ -89,7 +100,7 @@ export function createMemoryLedgerWriter(projectPath: string): MemoryLedgerWrite
         provenance: row.provenance,
         traceId,
         spanId,
-        turnId: row.turnId,
+        turnId,
         timestamp: row.timestamp ?? new Date().toISOString()
       }
       for (const k of Object.keys(fullRow) as (keyof MemoryLedgerRow)[]) {

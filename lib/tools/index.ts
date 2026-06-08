@@ -70,6 +70,7 @@ export function createResearchTools(ctx: ResearchToolContext): {
     tools.push(...createComputeTools({
       registry: ctx.computeRegistry,
       workspacePath: ctx.workspacePath,
+      getTurnId: ctx.getTurnId,
     }))
   }
 

@@ -27,11 +27,32 @@ export class ProcessSandbox implements SandboxProvider {
     // Use bash to tee stderr to both the combined output file and a separate stderr file.
     // This ensures progress bars (tqdm writes to stderr) appear in the combined output
     // while stderr is also captured separately for failure analysis.
-    const wrappedCommand = `( ${config.command} ) 2> >(tee -a ${JSON.stringify(stderrPath)} >&2) >> ${JSON.stringify(config.outputPath)} 2>&1`
+    //
+    // RFC-016 §4.1: when an exitCodePath is configured, the CHILD records
+    // its own exit code as a durable sentinel the moment the command
+    // finishes. `$?` here is the user command's exit status — process
+    // substitutions (the `tee` redirections) don't clobber it. This is
+    // the slow-path completion fact: if our in-memory `handle.wait()` is
+    // gone after a runner reconstruction, the monitor reads this file to
+    // finalize the run instead of leaving it a zombie `running`.
+    const core = `( ${config.command} ) 2> >(tee -a ${JSON.stringify(stderrPath)} >&2) >> ${JSON.stringify(config.outputPath)} 2>&1`
+    // Capture the user command's exit code into `rc`, persist it to the
+    // sentinel, then RE-EXIT with `rc` so the bash process's own exit code
+    // still matches the user command. (Without `exit $rc`, the trailing
+    // `echo` would make the wrapper exit 0 and the in-memory fast path
+    // would mislabel every run as completed.)
+    const wrappedCommand = config.exitCodePath
+      ? `${core}; rc=$?; echo $rc > ${JSON.stringify(config.exitCodePath)}; exit $rc`
+      : core
 
     // Initialize output files
     fs.writeFileSync(config.outputPath, '')
     fs.writeFileSync(stderrPath, '')
+    // Clear any stale sentinel from a prior run reusing this directory so
+    // a leftover exit_code can never be mistaken for this run's result.
+    if (config.exitCodePath) {
+      try { fs.rmSync(config.exitCodePath, { force: true }) } catch { /* ignore */ }
+    }
 
     const child = spawn('/bin/bash', ['-c', wrappedCommand], {
       cwd: config.workDir,

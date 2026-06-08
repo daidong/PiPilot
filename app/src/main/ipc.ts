@@ -69,6 +69,11 @@ import { createUserResponseSignalsWriter, createViewLogWriter } from '../../../l
 import { ROOT_CONTEXT } from '@opentelemetry/api'
 import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
+// RFC-016 §4.5: home-scoped scheduled / recurring compute runs.
+import { CronStore } from '../../../lib/compute/cron/cron-store'
+import { CronScanner } from '../../../lib/compute/cron/scanner'
+import type { CronTask, CronEvent } from '../../../lib/compute/cron/types'
+import { isValidSchedule } from '../../../lib/compute/cron/schedule'
 import { inferProviderFromModelId } from '../../../lib/models'
 import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
 import { runAuditPipeline, type AuditRunResult } from '../../../lib/audit-graph/audit/index'
@@ -239,6 +244,67 @@ function onCoordinatorIdle(): void {
       wikiIdleTimer = null
     }, 30_000)
   }
+}
+
+// ─── Scheduled runs (RFC-016 §4.5) — one global, home-scoped scanner ─────
+let cronStore: CronStore | null = null
+let cronScanner: CronScanner | null = null
+
+function broadcastCron(event: CronEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    safeSend(win, 'compute:cron-event', event)
+  }
+}
+
+/** First open project's compute registry — where scheduled ticks submit. */
+function findActiveComputeRegistry(): import('../../../lib/compute/registry').ComputeRegistry | null {
+  for (const [, state] of windowStates) {
+    const reg = state.coordinator?.computeRegistry
+    if (reg) return reg
+  }
+  return null
+}
+
+/**
+ * Lazily build + start the singleton cron scanner. Idempotent. The submit
+ * callback routes a due tick into whichever project's registry is open
+ * (home-scoped tasks; RFC-016 §4.5): plan → confirmAndSubmit (the
+ * creation-time confirm covers cost/danger, so ticks don't re-prompt). A
+ * tick with no open project is skipped — surfaced via missedSinceLastOpen,
+ * not backfilled.
+ */
+function ensureCronScanner(): CronScanner {
+  if (cronScanner) return cronScanner
+  cronStore = new CronStore()
+  cronScanner = new CronScanner({
+    store: cronStore,
+    onEvent: broadcastCron,
+    submit: async (task: CronTask) => {
+      const registry = findActiveComputeRegistry()
+      if (!registry) return { skipped: true, error: 'No project open — scheduled tick skipped.' }
+      if (!registry.has(task.backend)) return { error: `Backend "${task.backend}" is not registered.` }
+      const command = task.workDir
+        ? `cd ${JSON.stringify(task.workDir)} && ${task.command}`
+        : task.command
+      let backendData: unknown
+      if (task.backendData) {
+        try { backendData = JSON.parse(task.backendData) } catch { /* ignore malformed */ }
+      }
+      try {
+        const plan = await registry.plan(task.backend, {
+          command,
+          scriptPath: task.scriptPath,
+          backendData,
+        })
+        const res = await registry.confirmAndSubmit(task.backend, plan.planId, { campaignId: task.campaignId })
+        return { runId: res.run?.runId, error: res.success ? undefined : res.error }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  })
+  cronScanner.start()
+  return cronScanner
 }
 
 function createWindowRuntimeState(): WindowRuntimeState {
@@ -952,6 +1018,19 @@ async function ensureCoordinator(
     const readyEvent = { type: 'system', summary: 'Agent ready' }
     state.realtimeBuffer.pushActivity(readyEvent)
     safeSend(win, 'agent:activity', readyEvent)
+
+    // PUSH the compute hydrate snapshot now that the registry exists. The
+    // renderer's mount-time `compute:hydrate` pull may have run before the
+    // coordinator was built (eager init is fire-and-forget on project open),
+    // in which case it got an empty snapshot and the pre-restart run/plan
+    // history never appeared until a manual Ctrl+R. This push closes that
+    // race — the renderer applies whichever (pull or push) carries data.
+    if (state.coordinator.computeRegistry) {
+      state.coordinator.computeRegistry
+        .hydrate()
+        .then((snapshot) => safeSend(win, 'compute:hydrated', snapshot))
+        .catch(() => { /* non-fatal: the pull path still covers the ready case */ })
+    }
   }
   return state.coordinator
 }
@@ -962,6 +1041,11 @@ async function ensureCoordinator(
  * Called from before-quit to ensure compute processes are cleaned up.
  */
 export async function destroyAllCoordinators(): Promise<void> {
+  // Stop the scheduled-run scanner (RFC-016 §4.5).
+  if (cronScanner) {
+    cronScanner.stop()
+    cronScanner = null
+  }
   // Destroy wiki agent
   if (wikiAgent) {
     wikiAgent.destroy()
@@ -1054,13 +1138,21 @@ export function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
   ipcHandlersRegistered = true
 
+  // RFC-016 §4.5: start the home-scoped scheduled-run scanner at app launch
+  // so missedSinceLastOpen is snapshotted from the real app-open moment.
+  try { ensureCronScanner() } catch { /* non-fatal — cron is optional */ }
+
   // ─── Auto-update via electron-updater ──────────────────────────────────────
   // Checks GitHub Releases for newer signed+notarized builds, downloads in
   // background, and surfaces an "update ready" state to the renderer. The
   // user clicks "Restart to upgrade" → quitAndInstall().
   //
-  // Disabled in dev (no signature). On Linux outside AppImage the updater
-  // also auto-disables itself; .deb users must apt-update themselves.
+  // Disabled in dev (no signature). On Linux we only self-update AppImage
+  // builds: newer electron-updater ships a DebUpdater that no longer
+  // auto-disables on .deb/.rpm, so we gate it off here to avoid a spurious
+  // GitHub-release lookup (e.g. latest-linux-arm64.yml 404s — that artifact
+  // isn't published). .deb/.rpm users update via their package manager.
+  const isLinuxSystemPackage = process.platform === 'linux' && !process.env.APPIMAGE
   const currentVersion = app.getVersion()
   let updateState: {
     status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
@@ -1076,7 +1168,7 @@ export function registerIpcHandlers(): void {
     }
   }
 
-  if (app.isPackaged) {
+  if (app.isPackaged && !isLinuxSystemPackage) {
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = false
 
@@ -1123,6 +1215,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('update:check-now', async () => {
     if (!app.isPackaged) return { ok: false, reason: 'dev-mode' }
+    if (isLinuxSystemPackage) return { ok: false, reason: 'managed-by-package-manager' }
     try {
       await autoUpdater.checkForUpdates()
       return { ok: true }
@@ -1164,6 +1257,15 @@ export function registerIpcHandlers(): void {
     handler: (ctx: { win: BrowserWindow; state: WindowRuntimeState }, ...args: T) => Promise<R> | R
   ) => {
     ipcMain.handle(channel, (event, ...args) => handler(getWindowContext(event), ...(args as T)))
+  }
+
+  // Window-agnostic handler (no per-window state) — used by the global cron
+  // scanner handlers, which operate on home-scoped tasks.
+  const handle = <T extends unknown[], R>(
+    channel: string,
+    handler: (...args: T) => Promise<R> | R
+  ) => {
+    ipcMain.handle(channel, (_event, ...args) => handler(...(args as T)))
   }
 
   // ─── Register shared handlers from @shared-electron ─────────────────────
@@ -1284,7 +1386,16 @@ export function registerIpcHandlers(): void {
           let firstWin: BrowserWindow | null = null
           let firstState: WindowRuntimeState | null = null
           for (const [w, s] of windowStates) {
-            if (s.tracer) { firstTracer = s.tracer; firstWin = w; firstState = s; break }
+            // `w` is the webContents.id key, not a BrowserWindow. Resolve the
+            // actual window so safeSend() below gets a real BrowserWindow (it
+            // calls win.isDestroyed()); assigning the numeric id here used to
+            // make the usage-attribution send throw.
+            if (s.tracer) {
+              firstTracer = s.tracer
+              firstWin = BrowserWindow.getAllWindows().find(win => win.webContents.id === w) ?? null
+              firstState = s
+              break
+            }
           }
           // G1 (telemetry-trace v0.13): attribute wiki-bg tokens to the first
           // window's project. Cross-project wiki traffic was previously
@@ -2402,6 +2513,22 @@ export function registerIpcHandlers(): void {
     return state.coordinator.computeRegistry.approvePlan(payload.backend, payload.planId)
   })
 
+  // RFC-016 §4.4 — deterministic confirm → submit. The user confirmed a
+  // gated plan in the Compute tab (remote cost confirm, or a flagged-danger
+  // local command). The MAIN process approves + submits it directly rather
+  // than relying on the agent making a second execute call (the orphan-plan
+  // failure mode). Returns the spawned run id on success.
+  handleWindow('compute:confirm-plan', async ({ state }, payload: { backend: string; planId: string }) => {
+    if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
+    if (!payload || typeof payload.backend !== 'string' || typeof payload.planId !== 'string') {
+      return { success: false, error: 'backend and planId are required' }
+    }
+    const result = await state.coordinator.computeRegistry.confirmAndSubmit(payload.backend, payload.planId)
+    return result.success
+      ? { success: true, runId: result.run?.runId }
+      : { success: false, error: result.error }
+  })
+
   handleWindow('compute:reject-plan', ({ state }, payload: { backend: string; planId: string; comments: string }) => {
     if (!state.coordinator?.computeRegistry) return { success: false, error: 'Compute registry not initialized' }
     if (!payload || typeof payload.backend !== 'string' || typeof payload.planId !== 'string') {
@@ -2416,6 +2543,62 @@ export function registerIpcHandlers(): void {
       return { success: false, error: 'backend and planId are required' }
     }
     return state.coordinator.computeRegistry.discardPlan(payload.backend, payload.planId)
+  })
+
+  // ─── Scheduled runs (RFC-016 §4.5) ──────────────────────────────────
+  handle('compute:cron-list', () => {
+    const scanner = ensureCronScanner()
+    return { tasks: scanner.listStatuses() }
+  })
+
+  handle('compute:cron-create', (payload: Partial<CronTask>) => {
+    const scanner = ensureCronScanner()
+    const schedule = typeof payload?.schedule === 'string' ? payload.schedule.trim() : ''
+    const command = typeof payload?.command === 'string' ? payload.command.trim() : ''
+    if (!schedule || !isValidSchedule(schedule)) {
+      return { success: false, error: 'Invalid schedule. Use an interval (e.g. "1h", "15m") or a 5-field cron expression.' }
+    }
+    if (!command) return { success: false, error: 'Command is required.' }
+    const task = cronStore!.create({
+      name: typeof payload.name === 'string' ? payload.name.trim() || undefined : undefined,
+      schedule,
+      command,
+      workDir: typeof payload.workDir === 'string' ? payload.workDir.trim() || undefined : undefined,
+      backend: typeof payload.backend === 'string' && payload.backend.trim() ? payload.backend.trim() : 'local',
+      scriptPath: typeof payload.scriptPath === 'string' ? payload.scriptPath.trim() || undefined : undefined,
+      backendData: typeof payload.backendData === 'string' ? payload.backendData : undefined,
+      enabled: payload.enabled !== false,
+      catchUpOnReopen: !!payload.catchUpOnReopen,
+    })
+    scanner.emitTasks()
+    return { success: true, task }
+  })
+
+  handle('compute:cron-update', (payload: { id: string; patch: Partial<CronTask> }) => {
+    const scanner = ensureCronScanner()
+    if (!payload || typeof payload.id !== 'string') return { success: false, error: 'id is required' }
+    const patch = payload.patch ?? {}
+    if (typeof patch.schedule === 'string' && !isValidSchedule(patch.schedule)) {
+      return { success: false, error: 'Invalid schedule.' }
+    }
+    const task = cronStore!.update(payload.id, patch)
+    if (!task) return { success: false, error: `No cron task ${payload.id}` }
+    scanner.emitTasks()
+    return { success: true, task }
+  })
+
+  handle('compute:cron-delete', (payload: { id: string }) => {
+    const scanner = ensureCronScanner()
+    if (!payload || typeof payload.id !== 'string') return { success: false, error: 'id is required' }
+    const ok = cronStore!.delete(payload.id)
+    scanner.emitTasks()
+    return { success: ok }
+  })
+
+  handle('compute:cron-run-now', async (payload: { id: string }) => {
+    const scanner = ensureCronScanner()
+    if (!payload || typeof payload.id !== 'string') return { success: false, error: 'id is required' }
+    return scanner.runNow(payload.id)
   })
 
   handleWindow('compute:refresh-availability', async ({ state }) => {

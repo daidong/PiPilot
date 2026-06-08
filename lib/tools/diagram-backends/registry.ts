@@ -34,9 +34,9 @@ import { createSvgFallbackReviewProvider } from './svg-fallback-review.js'
 import { createRasterizeThenReviewProvider, type RasterizerFn } from './rasterize-review.js'
 import { transcribePngToSvg } from './png-to-svg-transcriber.js'
 import type { DiagramProviderSet, ImageCapability, ImageProvider, Quality, ReviewProvider } from './types.js'
-import type { DiagramAuth } from '../types.js'
+import type { DiagramAuth, SubLlmCallOptions } from '../types.js'
 
-export type CallLlmFn = (systemPrompt: string, userContent: string) => Promise<string>
+export type CallLlmFn = (systemPrompt: string, userContent: string, opts?: SubLlmCallOptions) => Promise<string>
 
 export type CallLlmVisionFn = (
   systemPrompt: string,

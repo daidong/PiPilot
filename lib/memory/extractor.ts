@@ -7,6 +7,18 @@
  * Gated by RESEARCH_COPILOT_AUTO_EXTRACT=1 (default OFF).
  * Reuses the main model's system prompt for prompt cache hits across the
  * background trace and the user-facing trace.
+ *
+ * NEVER-SINK (do not route to the light/router-tier model). This extractor is
+ * a deliberately separate path from `ctx.callLlm` — NOT tech debt — for the
+ * same reason recap is: it replays the main system prompt + conversation
+ * `messages` on the main model (`config.model` = piModel) to ride the warm
+ * prompt cache. `ctx.callLlm` structurally cannot carry a message array (it
+ * accepts only systemPrompt + userContent), so anything that needs the
+ * conversation history had to be its own path. Switching this call to a
+ * cheaper model would force a cold read of the system prompt + history (a
+ * per-model cache) and cost MORE, not less. It belongs with `recap` in the
+ * never-sink class — see lib/agents/sub-task-tier.ts. (The B-class sub-task
+ * sinking only ever touches stateless single-shot `ctx.callLlm` callers.)
  */
 
 import type { Model } from '@mariozechner/pi-ai'

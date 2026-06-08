@@ -81,6 +81,7 @@ export async function profileTask(
     const response = await callLlm(
       PROFILER_SYSTEM_PROMPT,
       `Command: ${command}\n\nScript content:\n${scriptContent.slice(0, 8000)}`,
+      { tier: 'light', purpose: 'task-profile' },
     )
 
     // Parse JSON from response — handle code blocks and preamble text

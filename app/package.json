@@ -1,6 +1,6 @@
 {
   "name": "@research-copilot/app",
-  "version": "0.4.6",
+  "version": "0.4.8",
   "private": true,
   "description": "AI-powered research assistant desktop application",
   "homepage": "https://github.com/DIR-LAB/Research-Pilot",
@@ -69,6 +69,7 @@
         "AppImage",
         "deb"
       ],
+      "executableName": "research-copilot",
       "category": "Science",
       "icon": "build/icon.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}",

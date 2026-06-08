@@ -128,7 +128,10 @@ function truncate(s: string, max: number): string {
 
 // ─── Output parser + validator ───────────────────────────────────────────
 
-interface RawSynthesis {
+// `type` (not `interface`) so it satisfies the `T extends Record<string, unknown>`
+// constraint on parseJsonObjectFromText — interfaces lack an implicit index
+// signature (they can be augmented), object-literal type aliases do not.
+type RawSynthesis = {
   themes?: Array<{ name?: string; papers?: string[]; synthesis?: string }>
   talking_points?: Array<{ point?: string; cite_keys?: string[] }>
 }

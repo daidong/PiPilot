@@ -1,4 +1,4 @@
-Research Copilot ships with **15 builtin skills** — lazy-loaded Markdown modules that give the agent domain expertise. Skills auto-activate when the coordinator detects a matching intent or when you invoke them by name.
+Research Copilot ships with builtin skills — lazy-loaded Markdown modules that give the agent domain expertise. Skills auto-activate when the coordinator detects a matching intent or when you invoke them by name.
 
 For how skills work and how to write your own, see [Getting Started → Add custom skills](Getting-Started#5-add-custom-skills-optional).
 
@@ -49,22 +49,18 @@ Publication-quality diagrams via OpenRouter (Gemini 3 Pro Image + review). Itera
 ## Presentations
 
 ### `academic-marp-slides`
-Create or revise research presentation slides in Markdown via Marp, following a disciplined 4-phase workflow (Storyline → Skeleton → Content → Polish). Enforces Assertion-Evidence structure and Mayer's multimedia principles. Conference talks, lab meetings, thesis defenses, invited talks.
+Create or revise research presentation slides in Markdown via Marp, following a story-first 4-phase workflow (Storyline → Skeleton → Content → Polish). Starts from an audience-facing story spine, then applies Assertion-Evidence structure and Mayer's multimedia principles. Conference talks, lab meetings, thesis defenses, invited talks, mixed-audience research talks.
 > *"Turn this paper draft into a 12-slide conference talk."*
 
 ### `teaching-marp-slides`
 Create or revise lecture/teaching slides in Markdown via Marp for upper-undergrad and graduate courses. 6-phase workflow (Objectives → Prereqs → Arc → Content → Engagement → Dual Export). Enforces Cognitive Load Theory, worked-example effect, scaffolding, retrieval practice. Produces both lecture and handout versions.
 > *"Make a 50-minute lecture on backpropagation for my grad ML class."*
 
-## Research Ideation
+## Research Strategy
 
-### `brainstorming-research-ideas`
-Structured ideation frameworks for high-impact research directions. Use when exploring new topics, pivoting focus, or hitting diminishing returns.
-> *"Brainstorm five research directions at the intersection of <A> and <B>."*
-
-### `creative-thinking-for-research`
-Eight cognitive-science frameworks for breakthrough ideas. Use when stuck in a local optimum and `brainstorming-research-ideas` alone yields only incremental candidates.
-> *"I'm stuck — reframe this problem using analogical reasoning and two other cognitive lenses."*
+### `research-strategy`
+High-bar research strategy, topic exploration, idea generation, scope/framing critique, and mentor-style direction refinement. Produces few candidates with premise audits, nearest alternatives, decisive experiments, kill criteria, and strongest objections.
+> *"This research direction feels plausible, but I need you to audit the premise and tell me whether it is actually worth pursuing."*
 
 ## General
 

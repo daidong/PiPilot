@@ -97,6 +97,7 @@ export interface ModalRunRecord {
   pid?: number
   retryCount: number
   parentRunId?: string
+  campaignId?: string
   estimatedCostSoFar?: number
 }
 
@@ -105,6 +106,7 @@ export interface ModalSubmitConfig {
   timeoutMinutes?: number
   stallThresholdMinutes?: number
   parentRunId?: string
+  campaignId?: string
 }
 
 export interface ModalRunStatusResult {

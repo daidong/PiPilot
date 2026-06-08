@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Research Copilot — Architecture Map</title>
+<style>
+  :root {
+    --bg: #0e1419;
+    --bg-2: #141b22;
+    --bg-3: #1a232c;
+    --panel: #161e26;
+    --border: #25323d;
+    --border-2: #324150;
+    --text: #dbe5ec;
+    --text-dim: #8ba0b0;
+    --text-faint: #5d7282;
+    --accent: #4fd1c5;
+    --accent-2: #63b3ed;
+    --accent-3: #b794f4;
+    --warn: #f6ad55;
+    --danger: #fc8181;
+    --green: #68d391;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 14px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent-2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .mono { font-family: var(--mono); font-size: 0.86em; }
+  ::selection { background: rgba(79,209,197,0.3); }
+
+  /* Layout */
+  .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+  nav.toc {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    background: var(--bg-2); border-right: 1px solid var(--border);
+    padding: 22px 16px; font-size: 13px;
+  }
+  nav.toc .brand { font-weight: 700; font-size: 15px; color: var(--text); letter-spacing: .2px; }
+  nav.toc .brand .dot { color: var(--accent); }
+  nav.toc .ver { color: var(--text-faint); font-size: 11px; margin-top: 2px; font-family: var(--mono); }
+  nav.toc .search-wrap { margin: 16px 0 12px; }
+  nav.toc input {
+    width: 100%; background: var(--bg-3); border: 1px solid var(--border-2); color: var(--text);
+    border-radius: 7px; padding: 7px 9px; font-size: 12.5px; font-family: var(--mono);
+  }
+  nav.toc input:focus { outline: none; border-color: var(--accent); }
+  nav.toc a.toc-link {
+    display: block; color: var(--text-dim); padding: 4px 8px; border-radius: 6px;
+    border-left: 2px solid transparent; margin: 1px 0;
+  }
+  nav.toc a.toc-link:hover { background: var(--bg-3); color: var(--text); text-decoration: none; }
+  nav.toc a.toc-link.active { color: var(--accent); border-left-color: var(--accent); background: rgba(79,209,197,0.07); }
+  nav.toc .toc-group { color: var(--text-faint); text-transform: uppercase; font-size: 10.5px; letter-spacing: .8px; margin: 16px 0 4px 8px; }
+
+  main { padding: 0 0 120px; max-width: 1080px; }
+  .wrap { padding: 0 40px; }
+  header.hero {
+    padding: 40px 40px 28px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(160deg, #131c24 0%, #0e1419 100%);
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 27px; letter-spacing: -.3px; }
+  header.hero .sub { color: var(--text-dim); max-width: 720px; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .chip {
+    background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 20px;
+    padding: 4px 12px; font-size: 12px; font-family: var(--mono); color: var(--text-dim);
+  }
+  .chip b { color: var(--accent); font-weight: 600; }
+  .axiom {
+    margin-top: 20px; padding: 12px 16px; border-left: 3px solid var(--accent-3);
+    background: rgba(183,148,244,0.06); border-radius: 0 8px 8px 0; color: var(--text-dim);
+    font-style: italic;
+  }
+
+  section { padding-top: 38px; }
+  section > .wrap > h2 {
+    font-size: 19px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px;
+  }
+  section > .wrap > h2 .num { color: var(--accent); font-family: var(--mono); font-size: 14px; opacity: .8; }
+  section > .wrap > .lead { color: var(--text-dim); margin: 0 0 18px; font-size: 13.5px; }
+  h3.sub-h { font-size: 14.5px; color: var(--text); margin: 22px 0 10px; }
+
+  /* Cards */
+  .grid { display: grid; gap: 14px; }
+  .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 15px 16px; transition: border-color .15s, transform .1s;
+  }
+  .card:hover { border-color: var(--border-2); }
+  .card h4 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .card h4 .tag { font-family: var(--mono); font-size: 10.5px; padding: 1px 7px; border-radius: 5px; background: var(--bg-3); color: var(--accent); border: 1px solid var(--border-2); }
+  .card .path { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .card p { margin: 6px 0 0; color: var(--text-dim); font-size: 12.8px; }
+  .card ul { margin: 8px 0 0; padding-left: 16px; color: var(--text-dim); font-size: 12.5px; }
+  .card li { margin: 2px 0; }
+  .card li code { color: var(--accent-2); }
+
+  .kv { font-family: var(--mono); font-size: 11.5px; }
+  .kv b { color: var(--accent); font-weight: 600; }
+
+  /* Diagram */
+  .diagram { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .proc-cols { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+  .proc {
+    border: 1px solid var(--border-2); border-radius: 10px; padding: 14px; background: var(--bg-2);
+    position: relative;
+  }
+  .proc .ptitle { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .proc.main .ptitle { color: var(--accent); }
+  .proc.preload .ptitle { color: var(--warn); }
+  .proc.renderer .ptitle { color: var(--accent-2); }
+  .proc .pfile { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin-bottom: 8px; }
+  .proc ul { margin: 0; padding-left: 15px; font-size: 12px; color: var(--text-dim); }
+  .flow {
+    margin-top: 16px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 14px 16px; line-height: 1.9;
+  }
+  .flow .step { display: block; }
+  .flow .arrow { color: var(--accent); }
+  .flow b { color: var(--accent-2); }
+
+  /* tables / lists */
+  .channels { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; }
+  .chgroup { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; }
+  .chgroup .gname { font-weight: 600; font-size: 12.5px; color: var(--accent); margin-bottom: 6px; font-family: var(--mono); }
+  .chgroup .chans { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chgroup-tag, .chans span {
+    font-family: var(--mono); font-size: 10.3px; background: var(--bg-3); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 4px; padding: 1px 6px;
+  }
+  .chans span.b { border-color: rgba(99,179,237,0.4); color: var(--accent-2); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table th { text-align: left; color: var(--text-faint); font-weight: 600; padding: 7px 10px; border-bottom: 1px solid var(--border-2); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  table td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text-dim); vertical-align: top; }
+  table td code { color: var(--accent-2); }
+  table tr:hover td { background: var(--bg-2); }
+
+  .recipe { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .recipe h4 { margin: 0 0 4px; font-size: 14px; color: var(--text); }
+  .recipe .anchor { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .recipe ol { margin: 10px 0 0; padding-left: 20px; font-size: 12.8px; color: var(--text-dim); }
+  .recipe ol li { margin: 4px 0; }
+  .recipe code { color: var(--accent-2); }
+
+  .gotcha { border-left: 3px solid var(--warn); background: rgba(246,173,85,0.05); padding: 11px 14px; border-radius: 0 8px 8px 0; margin-bottom: 10px; }
+  .gotcha .gt { font-weight: 600; color: var(--warn); font-size: 12.5px; }
+  .gotcha p { margin: 3px 0 0; font-size: 12.5px; color: var(--text-dim); }
+
+  .stale { color: var(--danger); font-weight: 600; }
+  .hidden { display: none !important; }
+  footer { padding: 30px 40px; color: var(--text-faint); font-size: 12px; border-top: 1px solid var(--border); margin-top: 30px; }
+
+  @media (max-width: 880px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.toc { display: none; }
+    .grid.cols-2, .grid.cols-3, .channels, .proc-cols { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="toc">
+    <div class="brand">Research Copilot <span class="dot">◆</span></div>
+    <div class="ver">Architecture Map · v0.2.22 · ce8f77a</div>
+    <div class="search-wrap"><input id="filter" type="text" placeholder="filter cards…" autocomplete="off" /></div>
+    <div class="toc-group">Foundations</div>
+    <a class="toc-link" href="#overview">Overview &amp; Stack</a>
+    <a class="toc-link" href="#diagram">Process Model &amp; Data Flow</a>
+    <div class="toc-group">Subsystems</div>
+    <a class="toc-link" href="#subsystems">Subsystem Map</a>
+    <a class="toc-link" href="#ipc">IPC Channels (~88)</a>
+    <a class="toc-link" href="#stores">Zustand Stores</a>
+    <a class="toc-link" href="#agent">Coordinator &amp; Tools</a>
+    <a class="toc-link" href="#compute">Compute (RFC-008)</a>
+    <a class="toc-link" href="#telemetry">Telemetry &amp; Audit</a>
+    <a class="toc-link" href="#skills">Skills &amp; Models</a>
+    <div class="toc-group">Building</div>
+    <a class="toc-link" href="#recipes">Extension Recipes</a>
+    <a class="toc-link" href="#conventions">Conventions &amp; Gotchas</a>
+    <a class="toc-link" href="#rfcs">RFC Index</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <h1>Research Copilot — Architecture Map</h1>
+      <div class="sub">AI research-assistant desktop app. Electron shell over <code>pi-mono</code> agent runtime, React + Zustand UI, and a framework-independent <code>lib/</code> brain (agents, tools, skills, storage, compute, telemetry). This page is the human navigator; the sibling <a href="architecture-map.json"><code>architecture-map.json</code></a> is the machine spec for the feature-building agent.</div>
+      <div class="meta-row">
+        <span class="chip"><b>642</b> tracked files</span>
+        <span class="chip">lib/ <b>411</b></span>
+        <span class="chip">app/ <b>126</b></span>
+        <span class="chip">ipc.ts <b>3029</b> lines</span>
+        <span class="chip">coordinator.ts <b>1403</b></span>
+        <span class="chip">stack: <b>Electron · React · Zustand · pi-mono · OTel</b></span>
+      </div>
+      <div class="axiom">"The system does not pursue complex architecture to guarantee quality. Instead, it pursues minimum discipline to guarantee survival + evidence-driven incremental improvement."</div>
+    </header>
+
+    <!-- OVERVIEW -->
+    <section id="overview"><div class="wrap">
+      <h2><span class="num">01</span> Overview &amp; Stack</h2>
+      <p class="lead">Three layers: the Electron <b>app/</b> shell, the reusable <b>shared-*</b> packages, and the <b>lib/</b> agent brain. The brain is framework-independent and holds the bulk of the logic.</p>
+      <div class="grid cols-3">
+        <div class="card" data-s><h4>app/ <span class="tag">126</span></h4><p>Electron desktop: <code>src/main</code> (lifecycle + ~88 IPC + agent wiring), <code>src/preload</code> (context bridge), <code>src/renderer</code> (React UI + 27 Zustand stores).</p></div>
+        <div class="card" data-s><h4>lib/ <span class="tag">411</span></h4><p>Framework-independent brain: agents, tools, skills, memory-v2, compute, telemetry, wiki, reports, sharing, importers. The part that thinks.</p></div>
+        <div class="card" data-s><h4>shared-ui/ <span class="tag">26</span></h4><p>Reused React/Zustand: tool-renderer registry, ModelSelector, ReasoningToggle, activity/progress/usage stores, model constants.</p></div>
+        <div class="card" data-s><h4>shared-electron/ <span class="tag">11</span></h4><p>Reusable IPC utils: api-key-loader (config&gt;env priority), file-tree, ipc-base, jsonl, recent-projects.</p></div>
+        <div class="card" data-s><h4>Agent runtime <span class="tag">pi-mono</span></h4><p><code>@mariozechner/pi-coding-agent</code> + <code>pi-agent-core</code> + <code>pi-ai</code>. Provides the Agent loop, coding tools (read/write/edit/bash/grep/find), and LLM integration.</p></div>
+        <div class="card" data-s><h4>Build &amp; Test</h4><p><code>npm run dev</code> = electron-vite dev (3 targets). <code>npm test</code> = custom runner (<code>scripts/run-tests.mjs</code>) with suites: memory-v2, agents, telemetry, ledger, renderer, …</p></div>
+      </div>
+    </div></section>
+
+    <!-- DIAGRAM -->
+    <section id="diagram"><div class="wrap">
+      <h2><span class="num">02</span> Process Model &amp; Data Flow</h2>
+      <p class="lead">Classic Electron 3-process split. Every renderer↔backend call crosses the preload bridge; the agent turn fans callbacks back as broadcasts.</p>
+      <div class="diagram">
+        <div class="proc-cols">
+          <div class="proc renderer">
+            <div class="ptitle">▸ Renderer</div>
+            <div class="pfile">app/src/renderer/ — React + Zustand</div>
+            <ul>
+              <li>App.tsx → Left | Center | Right | StatusBar</li>
+              <li>27 stores subscribe to <code>window.api.on*</code></li>
+              <li><code>session.hasProject</code> gates the whole UI</li>
+            </ul>
+          </div>
+          <div class="proc preload">
+            <div class="ptitle">▸ Preload Bridge</div>
+            <div class="pfile">app/src/preload/index.ts (722)</div>
+            <ul>
+              <li><code>invoke()</code> request/response</li>
+              <li><code>subscribe()</code> → disposer (events)</li>
+              <li><code>send()</code> fire-and-forget</li>
+              <li>exposes <code>window.api</code></li>
+            </ul>
+          </div>
+          <div class="proc main">
+            <div class="ptitle">▸ Main Process</div>
+            <div class="pfile">app/src/main/{index,ipc}.ts</div>
+            <ul>
+              <li>~88 IPC handlers (ipc.ts)</li>
+              <li>ensureCoordinator → createCoordinator</li>
+              <li>per-window state + telemetry tracer</li>
+              <li>calls into <code>lib/</code></li>
+            </ul>
+          </div>
+        </div>
+        <div class="flow">
+          <span class="step"><span class="arrow">▸ round-trip:</span> Renderer <b>window.api.x()</b> <span class="arrow">→</span> preload invoke <span class="arrow">→</span> <b>ipcMain.handle</b> (ipc.ts) <span class="arrow">→</span> lib/ command <span class="arrow">→</span> return <span class="arrow">→</span> Zustand <span class="arrow">→</span> re-render</span>
+          <span class="step" style="margin-top:8px"><span class="arrow">▸ agent turn:</span> <b>sendMessage</b> <span class="arrow">→</span> 'agent:send' <span class="arrow">→</span> ensureCoordinator (recreate if model/auth changed) <span class="arrow">→</span> createCoordinator(onStream, onToolCall, onToolResult, onUsage, tracer…)</span>
+          <span class="step"><span style="opacity:0">▸ agent turn:</span> coordinator: detect intent (rules) + match skills (LLM) <span class="arrow">→</span> assemble tools <span class="arrow">→</span> build system prompt <span class="arrow">→</span> pi-mono Agent runs (transient-retry wraps)</span>
+          <span class="step"><span style="opacity:0">▸ agent turn:</span> hooks fire callbacks <span class="arrow">→</span> <b>safeSend</b>('agent:stream-chunk' | 'agent:activity' | 'agent:usage' …) <span class="arrow">→</span> stores <span class="arrow">→</span> 'agent:done'</span>
+        </div>
+      </div>
+    </div></section>
+
+    <!-- SUBSYSTEMS -->
+    <section id="subsystems"><div class="wrap">
+      <h2><span class="num">03</span> Subsystem Map</h2>
+      <p class="lead">Each <code>lib/</code> subsystem is self-contained. Find the one your feature touches, then jump to its extension recipe.</p>
+      <div class="grid cols-2">
+        <div class="card" data-s><h4>agents <span class="path">lib/agents/</span></h4><p>Coordinator orchestrator (1403 lines): creates the pi-mono Agent, detects intent, matches skills (LLM, ≤5), context compaction, telemetry adapter, transient-retry. Prompt registry in <code>prompts/index.ts</code>.</p></div>
+        <div class="card" data-s><h4>tools <span class="path">lib/tools/</span></h4><p><code>createResearchTools(ctx)</code> assembles native pi-mono AgentTools: web, literature, fulltext, convert, data-analyze, diagram, artifacts, memory, wiki, compute, S3. Categories drive telemetry stamping.</p></div>
+        <div class="card" data-s><h4>memory-v2 <span class="path">lib/memory-v2/</span></h4><p>RFC-014 files-as-carrier artifact store. Notes=<code>.md</code>, papers=<code>.bib</code>+sidecar, data=<code>.rp.yaml</code> under <code>rp-artifacts/</code>; <code>.research-pilot/index/</code> is a derived cache. Naming: <code>&lt;title-slug&gt;-&lt;id8&gt;</code>.</p></div>
+        <div class="card" data-s><h4>memory <span class="path">lib/memory/</span></h4><p>Auto-Memory: <code>.research-pilot/memory/&lt;type&gt;/&lt;slug&gt;.md</code> + a Memory Index in <code>agent.md</code>. Types user|feedback|project|reference. <em>Distinct from memory-v2; both current.</em></p></div>
+        <div class="card" data-s><h4>commands <span class="path">lib/commands/</span></h4><p>Thin command layer over the store: artifact CRUD, list/search, upsertPaperArtifact (dedup, fill-only merge), enrichment, session-summary, memory-explain.</p></div>
+        <div class="card" data-s><h4>mentions <span class="path">lib/mentions/</span></h4><p><code>@(note|paper|data|file|url):key</code> parse → resolve (id→prefix→citeKey→title) → candidates (entity-index + git ls-files). Cache invalidated on artifact CRUD.</p></div>
+        <div class="card" data-s><h4>skills <span class="path">lib/skills/</span></h4><p>SKILL.md system. <code>loader.ts</code> merges builtin + ~/.research-pilot + workspace (later wins). <b>19 builtin skills.</b> Loaded on demand via the <code>load_skill</code> tool.</p></div>
+        <div class="card" data-s><h4>compute <span class="path">lib/compute/ +3</span></h4><p>RFC-008 ComputeBackend interface + Registry + PlanStore. Local / Modal / AWS-EC2 instances. Plan→approve→execute gate. Adding a backend ≈ 400–800 LOC (§19 checklist).</p></div>
+        <div class="card" data-s><h4>telemetry <span class="path">lib/telemetry/ (48)</span></h4><p>OTel PipilotTracer → JSONL spans. turn.id auto-propagates via OTel context (TURN_ID_KEY). Opt-in (default off), per-collaborator. Blob store for &gt;4KB content.</p></div>
+        <div class="card" data-s><h4>ledger <span class="path">lib/ledger/ (6)</span></h4><p>Append-only logs: artifact ledger, memory ledger, user-response-signals, view-log. Writers auto-fill traceId/spanId/turnId from active context.</p></div>
+        <div class="card" data-s><h4>audit-graph <span class="path">lib/audit-graph/ (6)</span></h4><p>Trust &amp; Audit v0.8. Pure provenance graph from spans+ledgers+index → Audit tab. Citation resolvability (A1) flags suspicious/fabricated citations.</p></div>
+        <div class="card" data-s><h4>wiki <span class="path">lib/wiki/ (20)</span></h4><p>RFC-005 background agent builds a paper/concept library with memory sidecars; backs <code>wiki_*</code> tools. Pause/resume around the coordinator. Epistemic contract: never cite raw memory values.</p></div>
+        <div class="card" data-s><h4>reports <span class="path">lib/reports/ (16)</span></h4><p>RFC-007 Paper Pack — onboarding reading path. input→aggregate→rank→synthesize(LLM)→render md+html. Hash-cached.</p></div>
+        <div class="card" data-s><h4>sharing <span class="path">lib/sharing/ (9)</span></h4><p>RFC-013 git-backed PI→student collab. One private repo, single main, lane=folder. share/sync/poll/invite/accept + AI-merge conflicts. Detect-but-never-auto-apply.</p></div>
+        <div class="card" data-s><h4>importers / fulltext <span class="path">lib/importers/ · fulltext/</span></h4><p>BibTeX bulk import (dedup, fill-only merge, RFC-006). <code>resolveFulltext()</code>: cache → Paperclip MCP → arXiv direct.</p></div>
+      </div>
+    </div></section>
+
+    <!-- IPC -->
+    <section id="ipc"><div class="wrap">
+      <h2><span class="num">04</span> IPC Channels <span style="font-size:13px;color:var(--text-faint);font-family:var(--mono)">~88 · ipc.ts</span></h2>
+      <p class="lead">Grouped by domain. <span class="chans" style="display:inline"><span class="b">blue</span></span> = broadcast (main→renderer via safeSend). Adding one is a 3-step recipe (see §09).</p>
+      <div class="channels">
+        <div class="chgroup" data-s><div class="gname">agent · chat</div><div class="chans"><span>agent:send</span><span>agent:stop</span><span>agent:clear-memory</span><span>agent:get-realtime-snapshot</span><span class="b">stream-chunk</span><span class="b">done</span><span class="b">activity</span><span class="b">tool-progress</span><span class="b">usage</span><span class="b">skill-loaded</span><span class="b">retry-notice</span><span class="b">todo-update</span><span class="b">entity-created</span><span class="b">file-created</span></div></div>
+        <div class="chgroup" data-s><div class="gname">entities · memory</div><div class="chans"><span>cmd:artifact-create/update/get/list/search/delete</span><span>cmd:memory-list/get/save/delete</span><span>cmd:list-notes/literature/data</span><span>cmd:search</span><span>cmd:turn-explain-get</span><span>cmd:session-summary-get</span></div></div>
+        <div class="chgroup" data-s><div class="gname">files</div><div class="chans"><span>file:read/write/read-binary</span><span>file:list-root/list-tree/search-tree</span><span>file:create/create-dir/create-artifact</span><span>file:rename/trash/reveal/open-external</span><span>file:copy-item/drop-to-dir/drop</span><span>file:resolve-path/convert-to-text</span><span class="b">fs:external-change</span></div></div>
+        <div class="chgroup" data-s><div class="gname">auth · config</div><div class="chans"><span>config:get-api-key-status/save-api-key</span><span>config:pick-preferred-model/has-llm-auth</span><span>auth:anthropic-sub-login/cancel/logout</span><span>auth:openai-codex-login/cancel/logout</span><span>settings:load/save</span><span>prefs:load/save</span></div></div>
+        <div class="chgroup" data-s><div class="gname">projects · sessions</div><div class="chans"><span>project:pick-folder/open-path/close</span><span>project:list-recents/remove-recent/stats-batch</span><span>session:current</span><span>session:save/load-message</span><span>session:mark-saved/load-saved-ids</span></div></div>
+        <div class="chgroup" data-s><div class="gname">compute · RFC-008</div><div class="chans"><span>compute:hydrate</span><span>compute:approve/reject/discard-plan</span><span>compute:stop-run</span><span>compute:refresh-availability</span><span>compute:test-aws-connection</span><span class="b">compute:event</span></div></div>
+        <div class="chgroup" data-s><div class="gname">sharing · RFC-013</div><div class="chans"><span>sharing:preflight/status/share/sync/poll</span><span>sharing:invite/remove-member</span><span>sharing:list-invitations/accept-invite</span><span>sharing:conflict-details/ai-merge/resolve-conflict</span><span>sharing:snapshot</span></div></div>
+        <div class="chgroup" data-s><div class="gname">telemetry · recap</div><div class="chans"><span>telemetry:view-log</span><span>telemetry:get-project-config</span><span>telemetry:set-tracing-mode</span><span>telemetry:trace-snapshot</span><span class="b">trace:live</span><span>recap:get-latest/generate</span><span class="b">recap:update</span><span>audit:get-graph</span></div></div>
+        <div class="chgroup" data-s><div class="gname">wiki</div><div class="chans"><span class="b">wiki:get-status</span><span>wiki:get-stats/log</span><span>wiki:pause/resume</span><span>wiki:list-pages/read-page</span><span>wiki:slug-for-paper/paper-slug-map/list-paper-meta</span><span>wiki:reconcile-identity</span></div></div>
+        <div class="chgroup" data-s><div class="gname">import · reports · skills</div><div class="chans"><span>cmd:import-bibtex/string/pick-file</span><span class="b">import:progress</span><span>cmd:enrich-papers</span><span class="b">enrich:progress</span><span>cmd:generate-paper-report/get-state/open</span><span class="b">report:progress</span><span>skills:list/set-enabled/upload</span></div></div>
+        <div class="chgroup" data-s><div class="gname">terminal · node-pty</div><div class="chans"><span>terminal:spawn/input/resize/kill</span><span class="b">terminal:data</span><span class="b">terminal:exit</span></div></div>
+        <div class="chgroup" data-s><div class="gname">ui · update · misc</div><div class="chans"><span>theme:set</span><span class="b">theme:changed</span><span>chat:export</span><span class="b">menu:export-chat/open-settings</span><span>update:get-state/check-now/quit-and-install</span><span class="b">update:state</span><span>usage:get-totals/reset</span><span>folder:open-with</span></div></div>
+      </div>
+    </div></section>
+
+    <!-- STORES -->
+    <section id="stores"><div class="wrap">
+      <h2><span class="num">05</span> Zustand Stores <span style="font-size:13px;color:var(--text-faint);font-family:var(--mono)">app/src/renderer/stores/ + shared-ui</span></h2>
+      <p class="lead">Most clear on project open/close via <code>reset()/clear()</code>. A few persist global UX prefs to localStorage — those must be re-read in <b>both</b> the initial value and <code>reset()</code> (the persisted-UI gotcha).</p>
+      <table>
+        <thead><tr><th>store</th><th>owns</th><th>localStorage</th></tr></thead>
+        <tbody>
+          <tr data-s><td><code>ui-store</code></td><td>sidebar widths, <code>leftTab</code> ('library'|'files'|'skills'), <code>centerView</code> ('chat'|'literature'|'compute'|'audit'), theme, preview drawer, filters, workingFiles</td><td>width · collapsed · markdownEditMode · theme · readingSize</td></tr>
+          <tr data-s><td><code>chat-store</code></td><td>messages, streamingText, isStreaming, draftText, retryNotice, turnToolEvents Map</td><td>— (IPC)</td></tr>
+          <tr data-s><td><code>session-store</code></td><td>projectPath, sessionId, <code>hasProject</code> (gates UI); orchestrates other stores' reset on open/close</td><td>—</td></tr>
+          <tr data-s><td><code>entity-store</code></td><td>notes, papers, data + enrichingPapers Set</td><td>—</td></tr>
+          <tr data-s><td><code>memory-store</code></td><td>Auto-Memory items (user|feedback|project|reference)</td><td>—</td></tr>
+          <tr data-s><td><code>activity-store</code> <span class="chgroup-tag">shared</span></td><td>real-time tool-call activity + activeSkills (status chips)</td><td>—</td></tr>
+          <tr data-s><td><code>progress-store</code> <span class="chgroup-tag">shared</span></td><td>agent todos (@progress / @task)</td><td>—</td></tr>
+          <tr data-s><td><code>tool-events-store</code> <span class="chgroup-tag">shared</span></td><td>chat-inline tool-use cards (per-turn)</td><td>—</td></tr>
+          <tr data-s><td><code>tool-progress-store</code> <span class="chgroup-tag">shared</span></td><td>tool execution progress %</td><td>—</td></tr>
+          <tr data-s><td><code>usage-store</code> <span class="chgroup-tag">shared</span></td><td>run + all-time tokens/cost/cache-rate</td><td>all-time totals</td></tr>
+          <tr data-s><td><code>compute-store</code></td><td>backends Map, runs, pendingPlans; <code>applyEvent</code> routes compute:event by backend</td><td>—</td></tr>
+          <tr data-s><td><code>recap-store</code></td><td>where-you-left-off recap</td><td>enabled flag</td></tr>
+          <tr data-s><td><code>import-store</code></td><td>BibTeX import state machine (counts, result, failures)</td><td>—</td></tr>
+          <tr data-s><td><code>enrichment-store</code></td><td>paper metadata enrichment progress</td><td>—</td></tr>
+          <tr data-s><td><code>report-store</code></td><td>Paper Pack report state; derived buttonState</td><td>—</td></tr>
+          <tr data-s><td><code>skill-store</code></td><td>available skills + enabled state</td><td>—</td></tr>
+          <tr data-s><td><code>sharing-store</code></td><td>status, conflict, updatesAvailable, accessRevoked, debugMode</td><td>—</td></tr>
+          <tr data-s><td><code>trace-store</code></td><td>live execution lineage for Audit (≤50 FIFO)</td><td>—</td></tr>
+          <tr data-s><td><code>update-store</code></td><td>auto-update lifecycle (idle|checking|downloading|ready)</td><td>dismissedVersion</td></tr>
+          <tr data-s><td><code>toast-store</code></td><td>transient notifications (dedup by key)</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div></section>
+
+    <!-- AGENT & TOOLS -->
+    <section id="agent"><div class="wrap">
+      <h2><span class="num">06</span> Coordinator &amp; Tool Catalog</h2>
+      <p class="lead"><code>createCoordinator(config)</code> → <code>{agent, chat(), clearSessionMemory(), generateRecap(), abort(), destroy()}</code>. Intent is rule-detected; skills are LLM-matched; tools are assembled by <code>createResearchTools(ctx)</code>.</p>
+      <h3 class="sub-h">Tools registered by <code>lib/tools/index.ts</code></h3>
+      <table>
+        <thead><tr><th>tool</th><th>source</th><th>purpose</th></tr></thead>
+        <tbody>
+          <tr data-s><td><code>web_search</code> · <code>web_fetch</code></td><td>web-tools.ts</td><td>Brave + arXiv search; fetch &amp; parse a page to text/markdown.</td></tr>
+          <tr data-s><td><code>literature-search</code></td><td>literature-search.ts</td><td>Multi-agent plan→search→review→summarize over S2 / arXiv / OpenAlex / DBLP.</td></tr>
+          <tr data-s><td><code>fetch-fulltext</code></td><td>fetch-fulltext.ts</td><td>Paper fulltext by DOI/arXiv/PMC, section targeting (cache→Paperclip→arXiv).</td></tr>
+          <tr data-s><td><code>convert_document</code></td><td>convert-document.ts</td><td>DOCX/PDF → markdown.</td></tr>
+          <tr data-s><td><code>data_analyze</code></td><td>data-analyze.ts</td><td>LLM-generated Python analysis with strict output manifests.</td></tr>
+          <tr data-s><td><code>generate_diagram</code></td><td>generate-diagram.ts + diagram-backends/</td><td>generate→review→edit loop; OpenAI image, Anthropic/OpenAI vision review, SVG fallback.</td></tr>
+          <tr data-s><td><code>artifact-create / -update / -search</code></td><td>entity-tools.ts</td><td>CRUD/search over the 5 artifact types.</td></tr>
+          <tr data-s><td><code>save-memory / delete-memory</code></td><td>memory/memory-tools.ts</td><td>Cross-session Auto-Memory (.md + agent.md index).</td></tr>
+          <tr data-s><td><code>wiki_search/get/coverage/facets/neighbors/source</code></td><td>wiki/wiki-tools.ts</td><td>RFC-005 memory-layer access to the local paper/concept wiki (always registered).</td></tr>
+          <tr data-s><td><code>wiki_lookup</code></td><td>wiki/tool.ts</td><td>Legacy RFC-003 shim, slated for removal.</td></tr>
+          <tr data-s><td><code>compute_plan · list_compute_backends · &lt;prefix&gt;_execute/wait/status/stop</code></td><td>compute/tools.ts</td><td><em>If ctx.computeRegistry.</em> 1 + 4N tools for N backends.</td></tr>
+          <tr data-s><td><code>s3_download / s3_list / s3_presigned_url</code></td><td>s3-tools.ts</td><td><em>If ctx.awsCredentialProvider.</em> RFC-009 read-side S3.</td></tr>
+        </tbody>
+      </table>
+      <h3 class="sub-h">Intents &amp; prompts</h3>
+      <div class="grid cols-2">
+        <div class="card" data-s><h4>Intent labels <span class="tag">rule-based</span></h4><p class="kv">literature · data · writing · critique · web · citation · grants · docx · general</p><p>Detected by <code>detectIntentsByRules()</code> in context-builder.ts; drives dynamic skill loading.</p></div>
+        <div class="card" data-s><h4>Prompt keys <span class="tag">prompts/index.ts</span></h4><p class="kv">coordinator-system · data-analysis-{system,tasks} · data-code-template · literature-{planner,reviewer,summarizer}-system · data-analyzer-system · writing-{outliner,drafter}-system · wiki-paper-{abstract,fulltext} · wiki-concept-{identify,generate} · recap-instruction</p></div>
+      </div>
+      <h3 class="sub-h">Core types <span class="path">lib/types.ts</span></h3>
+      <div class="card" data-s>
+        <p class="kv"><b>ArtifactType</b> = 'note' | 'paper' | 'data' | 'web-content' | 'tool-output'</p>
+        <ul>
+          <li><code>Artifact</code> = Note | Paper | Data | WebContent | ToolOutput (base: id,type,title,tags,summary,contentRef,provenance,timestamps)</li>
+          <li><code>PaperArtifact</code>: citeKey, bibtex, doi, authors, abstract, year, venue, citationCount, enrichmentSource…</li>
+          <li><code>Provenance</code> {source:'user'|'agent'|'import', sessionId, actor?} · <code>Actor</code> {id:ULID, displayName, slug?} (RFC-013)</li>
+          <li><code>ResearchToolContext</code> (lib/tools/types.ts): workspacePath, callLlm, callLlmVision, getDiagramAuth, getTurnId, computeRegistry?, awsCredentialProvider?, rasterizeSvg</li>
+        </ul>
+      </div>
+    </div></section>
+
+    <!-- COMPUTE -->
+    <section id="compute"><div class="wrap">
+      <h2><span class="num">07</span> Compute Subsystem <span style="font-size:13px;color:var(--text-faint);font-family:var(--mono)">RFC-008</span></h2>
+      <p class="lead">One <code>ComputeBackend</code> interface + <code>Registry</code> + <code>PlanStore</code>. Local / Modal / AWS-EC2 are instances. The plan→approve→execute gate keeps cost-bearing work behind explicit user approval.</p>
+      <div class="grid cols-2">
+        <div class="card" data-s><h4>ComputeBackend <span class="path">lib/compute/backend.ts</span></h4><ul><li><code>probeAvailability()</code> · <code>plan(input)</code> · <code>submit(plan,opts)</code></li><li><code>getStatus</code> · <code>waitForCompletion</code> · <code>stop</code> · <code>destroy</code></li><li><code>hydrate()</code> → {run,status} (crash recovery, A3)</li><li>Identity {id, displayName, <b>toolPrefix</b>} (A4) + Capabilities {requiresApproval, hasCost, supportsGpu, supportsStop, supportsStreaming}</li></ul></div>
+        <div class="card" data-s><h4>Registry &amp; PlanStore</h4><ul><li><code>register()</code> validates id/toolPrefix uniqueness</li><li><code>plan()</code> captures <b>immutable</b> effectiveRequiresApproval (A1)</li><li><code>approve/reject/discardPlan</code>, <code>submit()</code> (in-flight memo)</li><li>PlanStore = persistent <code>~/.research-pilot/compute-plans.json</code></li></ul></div>
+        <div class="card" data-s><h4>Backends</h4><ul><li><b>local</b> — no approval/cost, in-proc or Docker, preflight/smoke/full phasing</li><li><b>modal</b> — approval + cost + GPU; plan-agent inspects script; backend-owned cost-kill (A2)</li><li><b>aws-ec2</b> — approval + cost + GPU; Phase 1 user supplies InstanceSpec; provisions EC2 + SSH</li></ul></div>
+        <div class="card" data-s><h4>States &amp; flow</h4><p class="kv">plan: pending → approved | rejected | discarded</p><p class="kv">run: pending_approval | queued | running | completed | failed | timed_out | cancelled | cost_killed</p><p><code>compute_plan</code> → persist (gate if requiresApproval) → user approves (IPC) → <code>&lt;prefix&gt;_execute</code> → backend emits run-update/complete via ctx.emit → <code>compute:event</code> → store.</p></div>
+      </div>
+      <div class="card" data-s style="margin-top:14px"><h4>AWS credential chain <span class="path">lib/aws/credentials.ts</span></h4><p class="kv">per-call opts → <b>Settings UI</b> → env (AWS_ACCESS_KEY_ID / AWS_REGION / AWS_DEFAULT_REGION) → ~/.aws/credentials profile → EC2 instance metadata</p><p>Region &amp; keys resolve independently. Matches the global config-priority rule — inverting it lets stale shell exports shadow fresh UI keys.</p></div>
+    </div></section>
+
+    <!-- TELEMETRY -->
+    <section id="telemetry"><div class="wrap">
+      <h2><span class="num">08</span> Telemetry &amp; Audit</h2>
+      <p class="lead">OpenTelemetry traces every turn / step / tool / LLM call into JSONL spans; ledgers record artifact &amp; memory events; the audit-graph derives a provenance graph for the Audit tab. <b>Opt-in</b> (default off), per-collaborator.</p>
+      <div class="grid cols-2">
+        <div class="card" data-s><h4>Tracing <span class="path">lib/telemetry/ (48)</span></h4><ul><li><code>PipilotTracer</code> — one TracerProvider/main; AsyncLocalStorage context; <code>startSpan()</code> auto-stamps project/session/<b>turn.id</b></li><li><code>TraceStore</code> — ring queue → <code>.research-pilot/traces/spans.*.jsonl</code> (OTLP/JSON)</li><li><code>TURN_ID_KEY</code> propagates turn.id through OTel context (recent work)</li><li><code>blob-store</code> for &gt;4KB content; <code>redaction</code> scrubs PII</li><li>dev guard throws on unknown <code>pipilot.*</code> attribute keys</li></ul></div>
+        <div class="card" data-s><h4>Ledgers <span class="path">lib/ledger/ (6)</span></h4><ul><li>artifact ledger → <code>artifacts/ledger.jsonl</code> (create|edit|delete|convert|export|…)</li><li>memory ledger → <code>memory-v2/ledger.jsonl</code></li><li>user-response-signals · view-log</li><li>writers auto-fill traceId/spanId/<b>turnId</b> from active context</li></ul></div>
+        <div class="card" data-s><h4>Audit-graph <span class="path">lib/audit-graph/ (6)</span></h4><ul><li>Nodes: session|trace|step|tool|chat|artifact|file|dir|span</li><li>Edges: contains|precedes|invokes|reads|writes|creates|retrieved|mentions…</li><li><code>projectGraph()</code> pure materializer → <code>audit:get-graph</code> → Audit tab</li><li>Citation resolvability (A1) flags suspicious / fabricated citations</li></ul></div>
+        <div class="card" data-s><h4>What to emit when adding a tool</h4><ul><li>Register name→category in <code>lib/tools/categories.ts</code></li><li>telemetry-adapter auto-creates <code>execute_tool {name}</code> spans</li><li>On error: <code>span.setAttribute('pipilot.tool.error_class', …)</code></li><li>If it writes artifacts: append an artifact-ledger row (turnId auto-fills)</li></ul></div>
+      </div>
+    </div></section>
+
+    <!-- SKILLS & MODELS -->
+    <section id="skills"><div class="wrap">
+      <h2><span class="num">09</span> Skills &amp; Models</h2>
+      <div class="grid cols-2">
+        <div class="card" data-s><h4>Skills <span class="tag">18 builtin</span></h4><p>SKILL.md front-matter (name, description, category?, depends?, tags?, triggers?) + body. Discovery merges builtin → user (~/.research-pilot) → workspace (later wins). <span class="stale">CLAUDE.md's "12" is stale.</span></p><p class="kv" style="margin-top:8px">academic-marp-slides · coding · compute-environment · compute-local · compute-modal · compute-stub · matplotlib · paper-revision · paper-writing · research-grants · research-strategy · rewrite-humanize · scholar-evaluation · scientific-schematics · scientific-visualization · scientific-writing · seaborn · teaching-marp-slides</p></div>
+        <div class="card" data-s><h4>Models <span class="path">lib/models.ts</span></h4><p>UI shows only <b>flagship + previous</b> per provider; <b>light</b> tier (mini/nano/haiku) is internal-only (intent router, enrichment).</p>
+          <table style="margin-top:8px"><thead><tr><th>provider</th><th>flagship</th><th>previous</th><th>light</th></tr></thead><tbody>
+          <tr><td>openai</td><td>gpt-5.5</td><td>gpt-5.4</td><td>gpt-5.4-nano</td></tr>
+          <tr><td>openai-codex</td><td>gpt-5.5</td><td>gpt-5.4</td><td>gpt-5.4-mini</td></tr>
+          <tr><td>anthropic</td><td>claude-opus-4-7</td><td>claude-opus-4-6</td><td>haiku-4-5</td></tr>
+          <tr><td>anthropic-sub</td><td>claude-opus-4-7</td><td>claude-opus-4-6</td><td>haiku-4-5</td></tr>
+          <tr><td>deepseek</td><td>deepseek-v4-pro</td><td>—</td><td>deepseek-v4-flash</td></tr>
+          </tbody></table>
+          <p style="margin-top:8px">Default <code>openai:gpt-5.5</code>. Sub variants need explicit <code>provider:model</code>. Verify ids exist in pinned pi-ai or routers fail silently (RFC-002).</p>
+        </div>
+      </div>
+    </div></section>
+
+    <!-- RECIPES -->
+    <section id="recipes"><div class="wrap">
+      <h2><span class="num">10</span> Extension Recipes</h2>
+      <p class="lead">The canonical "where do I add code" answers. The JSON spec has these too, with file anchors — feed it to the feature agent.</p>
+
+      <div class="recipe" data-s><h4>Add a research tool</h4><span class="anchor">lib/tools/index.ts:33–95</span>
+        <ol><li>Create <code>lib/tools/&lt;name&gt;.ts</code> exporting <code>createXTool(ctx): AgentTool</code> (<code>Type.Object</code> params, <code>execute()</code> → <code>toAgentResult()</code>).</li><li><code>tools.push(createXTool(ctx))</code> in <code>index.ts</code> (gate behind a ctx flag if it needs optional creds — see compute/s3).</li><li>Add name→category in <code>lib/tools/categories.ts</code> (telemetry).</li><li>Add a render config in <code>shared-ui/tool-renderers/registry.ts</code> (icon, summaries).</li><li>If it writes artifacts, append an artifact-ledger row.</li></ol></div>
+
+      <div class="recipe" data-s><h4>Add an IPC channel (end-to-end)</h4><span class="anchor">app/src/main/ipc.ts → preload → renderer</span>
+        <ol><li><b>main:</b> <code>ipcMain.handle('domain:verb', …)</code> (or the per-window wrapper); return <code>{success, data?|error}</code>.</li><li><b>preload:</b> add the method to <code>ElectronAPI</code> + <code>api</code> via <code>invoke()/subscribe()/send()</code>.</li><li><b>renderer:</b> call <code>window.api.&lt;method&gt;()</code>.</li><li>For pushes: <code>safeSend(win,'event',payload)</code> + a <code>subscribe()</code> bridge.</li></ol></div>
+
+      <div class="recipe" data-s><h4>Add a compute backend</h4><span class="anchor">~400–800 LOC · docs/spec/compute.md §19</span>
+        <ol><li>Create <code>lib/compute/backends/&lt;id&gt;/&lt;id&gt;-backend.ts</code> implementing <code>ComputeBackend</code>.</li><li>Declare Identity (toolPrefix <code>/^[a-z][a-z0-9_]*$/</code>) + Capabilities; define JSON-only PlanData/RunData + version (A5).</li><li>Implement all methods; emit run-update/complete via <code>ctx.emit</code>; own the cost-kill if hasCost (A2).</li><li>Register in <code>lib/agents/coordinator.ts</code>: <code>computeRegistry.register(new XBackend(ctx, deps))</code>.</li><li>Surface settings in ComputeSettings.tsx; add a <code>compute-&lt;id&gt;</code> skill + tests.</li></ol>
+        <p style="color:var(--green);font-size:12px;margin:8px 0 0">No new IPC / preload / store wiring — <code>compute:event</code> + <code>onComputeEvent</code> + <code>applyEvent</code> carry it.</p></div>
+
+      <div class="grid cols-2">
+        <div class="recipe" data-s style="margin:0"><h4>Add a skill</h4><ol><li>Create <code>lib/skills/builtin/&lt;name&gt;/SKILL.md</code> (front-matter + body).</li><li><code>loader.ts</code> auto-discovers — no registration.</li><li>Or drop into <code>workspace/.research-pilot/skills/</code> for project-only.</li></ol></div>
+        <div class="recipe" data-s style="margin:0"><h4>Add a prompt</h4><ol><li>Add a key→string entry in <code>lib/agents/prompts/index.ts</code>.</li><li>Use via <code>loadPrompt('key')</code>. Keep strings inline (bundler-safe).</li></ol></div>
+        <div class="recipe" data-s style="margin:0"><h4>Add a store / UI tab</h4><ol><li>Create <code>stores/&lt;x&gt;-store.ts</code>; subscribe to <code>window.api.on*</code> at App mount.</li><li>Extend the <code>LeftTab</code>/<code>CenterView</code> union in <code>ui-store.ts</code>; branch in the panel.</li><li>Reset in session-store; persist global prefs in <b>both</b> init + reset().</li></ol></div>
+        <div class="recipe" data-s style="margin:0"><h4>Add an artifact type</h4><ol><li>Extend <code>ArtifactType</code> + define <code>&lt;X&gt;Artifact</code> in <code>lib/types.ts</code>.</li><li>serialize/parse in <code>artifact-files.ts</code>; path in <code>artifact-writer.ts</code>; scan in <code>indexer.ts</code>.</li><li>Update <code>commands/{list,search}.ts</code> + UI tabs.</li></ol></div>
+      </div>
+    </div></section>
+
+    <!-- CONVENTIONS -->
+    <section id="conventions"><div class="wrap">
+      <h2><span class="num">11</span> Conventions &amp; Gotchas</h2>
+      <p class="lead">Hard-won rules. Violating these has cost releases. The feature agent must respect them.</p>
+      <div class="gotcha" data-s><div class="gt">Reply prefix</div><p>Always reply starting with <b>"Hey, Captain!"</b> (CLAUDE.md).</p></div>
+      <div class="gotcha" data-s><div class="gt">Config priority: UI &gt; env</div><p>explicit per-call &gt; Settings UI &gt; shell env &gt; default. Inverting lets stale shell-exported keys shadow fresh UI keys silently. Guarded by <code>api-key-priority.test.ts</code>. Dev/debug flags (<code>RESEARCH_COPILOT_DEBUG</code>, <code>ENABLE_COMPUTE_STUB</code>) and <code>AWS_*_FILE</code> paths are intentionally env-only.</p></div>
+      <div class="gotcha" data-s><div class="gt">CJS imports in main process</div><p>In <code>app/src/main/</code>, <b>default-import</b> CJS pkgs (electron-updater, node-pty): <code>import x from 'pkg'; const {y}=x</code>. Named imports break the packaged ESM build — cost a release.</p></div>
+      <div class="gotcha" data-s><div class="gt">Persisted UI state in reset()</div><p>localStorage-backed prefs (leftSidebarWidth/collapsed, markdownEditMode) must be re-read in <b>both</b> the store's initial value <b>and</b> <code>reset()</code> — session-store calls <code>ui-store.reset()</code> on every project open/close.</p></div>
+      <div class="gotcha" data-s><div class="gt">Workspace folder = .research-pilot only</div><p><code>.agentfoundry/</code> is NOT created by runtime code (only in ignore lists / RFC-001). No task-anchor/focus mechanism — planning is model-maintained; cross-session state = session-summaries + recaps + artifacts + memory.</p></div>
+      <div class="gotcha" data-s><div class="gt">'dim' is a CSS layer, not a theme</div><p>Dim = <code>html.dark.dim</code>, not a 3rd value in the theme union. Don't collapse it.</p></div>
+      <div class="gotcha" data-s><div class="gt">Telemetry is opt-in &amp; per-collaborator</div><p>Default off; toggle in gitignored <code>.research-pilot/preferences.json</code>. RFC-013 §8 prevents a PI from flipping everyone's tracing on.</p></div>
+      <div class="gotcha" data-s><div class="gt">Global keydown guard</div><p>Renderer global keydown handlers on plain keys must bail when a modal is open or focus is editable (a ⌫ handler once deleted recents while typing in a modal).</p></div>
+      <div class="gotcha" data-s><div class="gt">Stacked-PR --delete-branch cascade</div><p>Merging A in A→B→C with <code>--delete-branch</code> auto-closes B/C and they can't reopen. Retarget downstream PRs first or collapse the stack.</p></div>
+      <div class="gotcha" data-s><div class="gt">main branch protection</div><p>required <code>build</code> check, strict mode, no force-push/delete; admins bypass (<code>enforce_admins:false</code>) so direct version-bump pushes work.</p></div>
+    </div></section>
+
+    <!-- RFCS -->
+    <section id="rfcs"><div class="wrap">
+      <h2><span class="num">12</span> RFC Index <span style="font-size:13px;color:var(--text-faint);font-family:var(--mono)">docs/spec/</span></h2>
+      <div class="grid cols-2">
+        <div class="card" data-s><h4>RFC-005 · Wiki memory layer</h4><p>Background paper/concept library + <code>wiki_*</code> tools + epistemic contract (cite sources, not memory values).</p></div>
+        <div class="card" data-s><h4>RFC-006 · BibTeX import</h4><p>Bulk import with dedup (DOI/citeKey/title+year) + fill-only merge.</p></div>
+        <div class="card" data-s><h4>RFC-007 · Enrichment + Paper Pack</h4><p>PR-A paper metadata enrichment; PR-B onboarding report pipeline.</p></div>
+        <div class="card" data-s><h4>RFC-008 · ComputeBackend</h4><p>Interface + Registry + PlanStore + per-backend tools. Amendments A1–A5.</p></div>
+        <div class="card" data-s><h4>RFC-009 · AWS S3 + EC2</h4><p>Read-side S3 tools; EC2 backend (script writes S3, agent reads).</p></div>
+        <div class="card" data-s><h4>RFC-013 · Shared workspaces</h4><p>git-backed PI→student collab; lane=folder; AI-merge conflicts.</p></div>
+        <div class="card" data-s><h4>RFC-014 · Files-as-carrier <span class="tag">merged</span></h4><p>Workspace files are the artifact source of truth; index is derived.</p></div>
+        <div class="card" data-s><h4>Trust &amp; Audit v0.8</h4><p>Provenance graph + adversarial auditor + Audit tab. Axiom A2: record and warn, never fight user modifications.</p></div>
+      </div>
+    </div></section>
+
+    <footer>
+      Generated 2026-06-01 from commit <code>ce8f77a</code> (branch <code>feat/telemetry-turn-id-context-propagation</code>). Core facts read from source; per-subsystem internals mapped by exploration — verify the exact file before large edits. Companion machine spec: <a href="architecture-map.json">architecture-map.json</a>.
+    </footer>
+  </main>
+</div>
+
+<script>
+  // Active-section highlight in the TOC
+  const links = [...document.querySelectorAll('nav.toc a.toc-link')];
+  const map = new Map(links.map(l => [l.getAttribute('href').slice(1), l]));
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const l = map.get(e.target.id);
+        if (l) l.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  document.querySelectorAll('section[id]').forEach(s => obs.observe(s));
+
+  // Live card filter
+  const filter = document.getElementById('filter');
+  const cards = [...document.querySelectorAll('[data-s]')];
+  filter.addEventListener('input', () => {
+    const q = filter.value.trim().toLowerCase();
+    cards.forEach(c => {
+      const hit = !q || c.textContent.toLowerCase().includes(q);
+      c.classList.toggle('hidden', !hit);
+    });
+    // hide a section if all its cards are hidden
+    document.querySelectorAll('section[id]').forEach(sec => {
+      const local = [...sec.querySelectorAll('[data-s]')];
+      const anyVisible = !q || local.length === 0 || local.some(c => !c.classList.contains('hidden'));
+      sec.style.opacity = anyVisible ? '1' : '0.25';
+    });
+  });
+</script>
+</body>
+</html>

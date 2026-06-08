@@ -21,6 +21,7 @@ import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node'
 import { Resource } from '@opentelemetry/resources'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
 import { SCHEMA_URL, validatePipilotAttribute } from './semantic-registry.js'
+import { TURN_ID_KEY } from './context-keys.js'
 import { TraceStore } from './trace-store.js'
 import { TraceDigestProcessor } from './digest.js'
 import { LiveSpanProcessor, type LiveSpanSubscriber } from './live-processor.js'
@@ -190,10 +191,20 @@ export class PipilotTracer {
     if (scope.workspaceCommit) attrs['pipilot.runtime.workspace_commit'] = scope.workspaceCommit
     if (scope.memoryIndexVersion) attrs['pipilot.runtime.memory_index_version'] = scope.memoryIndexVersion
 
+    // Phase T: inherit the active turn id from the OTel context so every span
+    // created during a user turn (router, tools, sub-LLM, compaction) carries
+    // pipilot.turn.id without per-span hand-off. Read from the RESOLVED parent
+    // context — `parent ?? active` — so calls that detach via ROOT_CONTEXT
+    // (background memory extractor, wiki-bg) correctly get NO turn id even when
+    // a turn is active on the global context (§6.5 / trace-and-ledger-joins §4.4).
+    const turnCtx = parent ?? context.active()
+    const turnId = turnCtx.getValue(TURN_ID_KEY)
+    if (typeof turnId === 'string') attrs['pipilot.turn.id'] = turnId
+
     // Validate every pipilot.* key in dev mode.
     for (const k of Object.keys(attrs)) validatePipilotAttribute(k)
 
-    return this.tracer.startSpan(name, { kind, attributes: attrs }, parent ?? context.active())
+    return this.tracer.startSpan(name, { kind, attributes: attrs }, turnCtx)
   }
 
   /** Shut down: flush + drain TraceStore + drain blob writes + shut down exporter. 5s budget per §5.1. */

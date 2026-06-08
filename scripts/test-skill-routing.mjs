@@ -168,6 +168,16 @@ const DEFAULT_CASES = [
     msg: 'help me draft a NeurIPS paper intro',
     expect: ['paper-writing'],
     forbid: ['academic-marp-slides', 'teaching-marp-slides']
+  },
+  {
+    msg: 'brainstorm research ideas for agentic HPC scheduling',
+    expect: ['research-strategy'],
+    forbid: ['academic-marp-slides', 'teaching-marp-slides']
+  },
+  {
+    msg: '这个研究方向值不值得做？帮我审一下premise和最强反对意见',
+    expect: ['research-strategy'],
+    forbid: ['paper-writing', 'academic-marp-slides']
   }
 ]
 

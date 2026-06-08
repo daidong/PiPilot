@@ -7,7 +7,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from 'react'
-import { Filter, Search, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, AlertTriangle, X, Crosshair, Eye, ExternalLink, FolderOpen } from 'lucide-react'
+import { Filter, Search, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, AlertTriangle, X, Crosshair, Eye, ExternalLink, FolderOpen, Quote } from 'lucide-react'
 import type {
   AuditGraph,
   GraphNode,
@@ -106,6 +106,17 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
   const entityHeaderCount = entityQuery.trim()
     ? `${entityResults.length}${entityResults.length >= ENTITY_SEARCH_LIMIT ? '+' : ''} / ${allEntities.length}`
     : `top ${entityResults.length} / ${allEntities.length}`
+
+  // Citation watchlist (A1): artifacts that cite identifiers never retrieved
+  // this project — the most-suspect first. Empty unless something looks
+  // fabricated, so the section stays quiet on clean projects.
+  const flaggedCitations = useMemo(
+    () => graph.nodes
+      .filter(n => n.kind === 'artifact' && (n.unresolvedCitations?.length ?? 0) > 0)
+      .map(n => ({ n, unresolved: n.unresolvedCitations!.length, total: n.citationsTotal ?? 0 }))
+      .sort((a, b) => b.unresolved - a.unresolved),
+    [graph],
+  )
 
   if (collapsed) {
     return (
@@ -231,6 +242,34 @@ export function AuditLeftRail({ graph, filters, setFilters, onReload, onFocusNod
             ))}
           </div>
         </div>
+
+        {/* Suspicious citations (A1) — only when something looks fabricated */}
+        {flaggedCitations.length > 0 && (
+          <div>
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <AlertTriangle size={11} className="t-text-warning flex-shrink-0" />
+              <span className="text-[11px] uppercase tracking-wider t-text-warning font-semibold">
+                Suspicious citations ({flaggedCitations.length})
+              </span>
+            </div>
+            <div className="space-y-0.5 max-h-[28vh] overflow-y-auto pr-1">
+              {flaggedCitations.map(({ n, unresolved, total }) => (
+                <button
+                  key={n.id}
+                  onClick={() => onFocusNode(n)}
+                  className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-[13px] transition-colors ${
+                    selected?.id === n.id ? 't-bg-accent-2-muted t-text' : 't-text hover:t-bg-hover'
+                  }`}
+                  title={`${unresolved} of ${total} citations never retrieved`}
+                >
+                  <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ background: palette.kind.artifact }} />
+                  <span className="truncate flex-1">{n.label}</span>
+                  <span className="t-text-warning text-[10px] tabular-nums flex-shrink-0">{unresolved}/{total}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Traces */}
         <div>
@@ -578,6 +617,9 @@ function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, audit
           })()}
         </div>
       </div>
+
+      {/* Citation resolvability (A1) — only renders for citing artifacts */}
+      <CitationsCard node={node} />
 
       {/* Span events — what the node actually did (args) and returned (result).
           Shown first because it's the answer to "what happened here?"; the
@@ -972,6 +1014,71 @@ function BlobBtn({ onClick, disabled, icon, label }: { onClick: () => void; disa
     >
       {icon}{label}
     </button>
+  )
+}
+
+/** Map a citation resolution rate to a tone + one-word verdict. */
+function citationTone(rate: number | null): { cls: string; label: string } {
+  if (rate === null) return { cls: 't-text-muted', label: 'no citations' }
+  if (rate >= 1) return { cls: 't-text-success', label: 'all grounded' }
+  if (rate <= 0) return { cls: 't-text-error', label: 'none grounded' }
+  return { cls: 't-text-warning', label: 'partially grounded' }
+}
+
+/**
+ * Citation resolvability card (A1). Shows how many of a delivered text
+ * artifact's DOI / arXiv / URL references were actually retrieved this
+ * project, and lists the ones that weren't — the fabrication watchlist.
+ * Renders nothing for non-artifact nodes or artifacts the projector didn't
+ * scan (no `citationsTotal`).
+ */
+function CitationsCard({ node }: { node: GraphNode }) {
+  if (node.kind !== 'artifact' || typeof node.citationsTotal !== 'number') return null
+  const total = node.citationsTotal
+  const resolved = node.citationsResolved ?? 0
+  const rate = node.citationResolutionRate ?? null
+  const unresolved = node.unresolvedCitations ?? []
+  const tone = citationTone(rate)
+  const pct = rate === null ? 0 : Math.round(rate * 100)
+  return (
+    <div className="t-bg-elevated border t-border-subtle rounded-md p-3 mb-3">
+      <div className="flex items-center gap-1.5 mb-2">
+        <Quote size={11} className="t-text-muted" />
+        <span className="text-[9px] uppercase tracking-wider t-text-muted font-semibold">Citations</span>
+      </div>
+      {total === 0 ? (
+        <div className="text-[12px] t-text-muted">No DOI / arXiv / URL references in this artifact.</div>
+      ) : (
+        <>
+          <div className="flex items-baseline gap-1.5 tabular-nums">
+            <span className={`text-[15px] font-medium ${tone.cls}`}>{resolved}/{total}</span>
+            <span className="text-[10px] uppercase tracking-wider t-text-muted">retrieved</span>
+            <span className={`ml-auto text-[11px] font-medium ${tone.cls}`}>{pct}% · {tone.label}</span>
+          </div>
+          <div className="mt-1.5 h-1.5 rounded-full overflow-hidden t-bg-base">
+            <div className="h-full transition-[width]" style={{ width: `${pct}%`, background: 'var(--color-status-success)' }} />
+          </div>
+          {unresolved.length > 0 && (
+            <div className="mt-2.5">
+              <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">
+                Unresolved — never retrieved
+              </div>
+              <ul className="space-y-0.5 m-0 p-0 list-none">
+                {unresolved.map((c, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-[11px] t-text-error font-mono break-all">
+                    <AlertTriangle size={10} className="mt-0.5 flex-shrink-0" />
+                    <span>{c}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-1.5 text-[10px] t-text-muted leading-snug">
+                Not seen by a retrieval tool or in the paper library — verify before trusting.
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 

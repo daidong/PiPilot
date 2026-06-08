@@ -16,8 +16,22 @@ import type {
 } from './types.js'
 import { PlanStore } from './plan-store.js'
 import { probeWithTimeout } from './probe.js'
+import { dangerReasons } from '../local-compute/danger-check.js'
 
 const TOOL_PREFIX_PATTERN = /^[a-z][a-z0-9_]*$/
+
+/**
+ * RFC-016 §4.4: a backend whose plans should plan-and-execute in one step
+ * (no separate execute call to orphan). True for non-gated, ephemeral-local
+ * backends — i.e. local. Remote (cost-gated, remote-poll) backends never
+ * auto-run; they confirm first.
+ */
+export function backendAutoRuns(backend: ComputeBackend): boolean {
+  return (
+    !backend.capabilities.requiresApproval &&
+    backend.capabilities.livenessModel === 'ephemeral-local'
+  )
+}
 
 export interface RegistryOpts {
   projectPath: string
@@ -152,11 +166,23 @@ export class ComputeRegistry {
   async plan(backendId: string, input: PlanInput): Promise<ComputePlan> {
     const backend = this.requireBackend(backendId)
     const plan = await backend.plan(input)
-    const effectiveRequiresApproval = this.readForceApproval() || backend.capabilities.requiresApproval
+    const baseGate = this.readForceApproval() || backend.capabilities.requiresApproval
+
+    // RFC-016 §4.4: a rule-based danger scan applies ONLY to backends that
+    // would otherwise auto-run (non-gated, ephemeral-local). A flagged
+    // command (rm -rf, curl|sh, …) is promoted to a one-tap *danger
+    // confirm*; everything unflagged auto-runs. Skip the scan when a real
+    // gate already applies — the user is confirming regardless.
+    const dangerFlags = !baseGate && backendAutoRuns(backend)
+      ? dangerReasons(plan.command)
+      : []
+    const effectiveRequiresApproval = baseGate || dangerFlags.length > 0
+
     const record: PlanRecord = {
       plan,
       effectiveRequiresApproval,
       approved: !effectiveRequiresApproval,
+      ...(dangerFlags.length > 0 ? { dangerFlags } : {}),
     }
     this.plans.write(backendId, plan.planId, record)
     this.emit({
@@ -165,8 +191,15 @@ export class ComputeRegistry {
       planId: plan.planId,
       plan,
       requiresApproval: effectiveRequiresApproval,
+      ...(dangerFlags.length > 0 ? { dangerFlags } : {}),
     })
     return plan
+  }
+
+  /** Whether this backend's plans should plan-and-execute in one step. */
+  autoRunsFor(backendId: string): boolean {
+    const backend = this.backends.get(backendId)
+    return backend ? backendAutoRuns(backend) : false
   }
 
   /** Returns the PlanRecord for a (backend, planId) pair — used by the compute_plan tool to surface effectiveRequiresApproval. */
@@ -268,6 +301,35 @@ export class ComputeRegistry {
     this.runIdRouting.set(run.runId, backend)
     this.plans.clear(backendId, planId)
     return run
+  }
+
+  /**
+   * Deterministic confirm → submit (RFC-016 §4.4 spine; absorbs RFC-015's
+   * remote approval→execution bridge). The user confirmed a gated plan in
+   * the Compute tab — a remote *cost* confirm, or a flagged-*danger* local
+   * command. We approve it (if it carried a gate) and submit it FROM THE
+   * MAIN PROCESS, rather than emitting plan-approved and hoping the agent
+   * makes a second execute call (the orphan-plan failure mode). Idempotent
+   * via the same submit memo, so a UI double-click resolves to one run.
+   */
+  async confirmAndSubmit(
+    backendId: string,
+    planId: string,
+    opts: SubmitOpts = {},
+  ): Promise<{ success: boolean; run?: ComputeRun; error?: string }> {
+    const record = this.plans.read(backendId, planId)
+    if (!record) return { success: false, error: `No plan ${planId} for backend ${backendId}` }
+    if (record.rejectedAt) return { success: false, error: 'Plan was rejected; produce a new plan before confirming.' }
+    if (record.effectiveRequiresApproval && !record.approved) {
+      const approval = this.approvePlan(backendId, planId)
+      if (!approval.success) return { success: false, error: approval.error }
+    }
+    try {
+      const run = await this.submit(backendId, planId, opts)
+      return { success: true, run }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
   }
 
   // ── Run inspection ──────────────────────────────────────────────────

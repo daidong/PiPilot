@@ -1,0 +1,533 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "meta": {
+    "name": "Research Copilot — Architecture Map",
+    "purpose": "Machine-readable architecture map for an agent building NEW features. Read this first to locate the right subsystem, follow the matching extension recipe, and respect the project conventions. Paths are relative to repo root.",
+    "repoRoot": "/Users/daidong/Documents/gitrepos/AgentFoundry",
+    "productName": "Research Copilot",
+    "packageName": "research-copilot",
+    "version": "0.2.22",
+    "generatedAt": "2026-06-01",
+    "sourceCommit": "ce8f77a",
+    "branch": "feat/telemetry-turn-id-context-propagation",
+    "designAxiom": "The system does not pursue complex architecture to guarantee quality. Instead, it pursues minimum discipline to guarantee survival + evidence-driven incremental improvement.",
+    "accuracyNote": "Core facts (tool registration, model tiers, ArtifactType, UI tab unions, builtin skill list, intent labels, lib exports) were read directly from source. Per-subsystem internals were mapped by exploration agents and are accurate at the listed commit; verify the exact file before large edits."
+  },
+
+  "stack": {
+    "runtime": "Electron (main + preload + renderer 3-process model)",
+    "ui": "React + Zustand + TailwindCSS",
+    "agentRuntime": "pi-mono — @mariozechner/pi-coding-agent + @mariozechner/pi-agent-core + @mariozechner/pi-ai",
+    "telemetry": "OpenTelemetry (custom PipilotTracer, JSONL span store)",
+    "language": "TypeScript (ESM). Main process is ESM-packaged — see conventions.cjsImportsInMain.",
+    "build": "electron-vite (3 targets: main[ssr], preload[ssr], renderer[client])",
+    "tests": "node scripts/run-tests.mjs (custom runner; suites: memory-v2, agents, telemetry, ledger, renderer, diagnostics, forwarder, importers, reports, ...)"
+  },
+
+  "commands": {
+    "install": "npm install",
+    "dev": "npm run dev    # cd app && npx electron-vite dev — auto-updater dormant in dev",
+    "build": "npm run build    # cd app && npx electron-vite build",
+    "test": "npm test    # node scripts/run-tests.mjs (append a suite name to scope)",
+    "packMac": "cd app && npm run pack    # DMG; unsigned: CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack"
+  },
+
+  "topology": {
+    "description": "Tracked-file counts by top-level dir at the source commit. lib/ holds framework-independent agent logic; app/ is the Electron shell; shared-* are reused across surfaces.",
+    "dirs": {
+      "lib": { "files": 411, "role": "Framework-independent research agent logic (agents, tools, skills, storage, compute, telemetry, wiki, reports, sharing). The brain." },
+      "app": { "files": 126, "role": "Electron desktop app: src/main (lifecycle + IPC), src/preload (context bridge), src/renderer (React UI)." },
+      "docs": { "files": 29, "role": "Specs/RFCs (docs/spec/*.md), wiki drafts, and THIS architecture map (docs/architecture/)." },
+      "shared-ui": { "files": 26, "role": "React + Zustand reused across surfaces: stores, tool-renderer registry, ModelSelector/ReasoningToggle, settings-types, model constants." },
+      "shared-electron": { "files": 11, "role": "Reusable Electron/IPC utilities: api-key-loader, file-tree, ipc-base, jsonl, recent-projects." },
+      "website": { "files": 19, "role": "Astro marketing site, deployed to DIR-LAB/Research-Pilot gh-pages." },
+      "scripts": { "files": 5, "role": "Build/test helpers (run-tests.mjs, fix-node-pty-perms.mjs)." },
+      "bin": { "files": 3, "role": "CLI entrypoints: cli.mjs, diagnostics.mjs, trace-forward.mjs." }
+    }
+  },
+
+  "processModel": {
+    "main": {
+      "entry": "app/src/main/index.ts (339 lines)",
+      "responsibilities": [
+        "BrowserWindow lifecycle (single window default, reuse on activate); macOS hiddenInset titlebar; sandbox:false",
+        "Startup: inject shell env -> applyApiKeysToEnv (config overrides stale shell exports) -> register workspace-asset:// protocol -> registerIpcHandlers + registerTerminalHandlers -> spawn wiki agent (fire-and-forget)",
+        "Menu (File/Edit/View/Window), graceful shutdown (destroy all coordinators + terminals on before-quit)"
+      ],
+      "perWindowState": "WindowRuntimeState (coordinator, realtimeBuffer, tracer, fsWatcher) keyed by webContents.id"
+    },
+    "preload": {
+      "entry": "app/src/preload/index.ts (722 lines)",
+      "exposes": "contextBridge.exposeInMainWorld('api', api) — the ElectronAPI surface",
+      "primitives": ["invoke(channel,...args) request/response", "subscribe(channel,cb)->disposer for events", "send(channel,...) fire-and-forget"]
+    },
+    "renderer": {
+      "entry": "app/src/renderer/App.tsx (root) + main.tsx (bootstraps theme before React mounts via theme-boot.ts)",
+      "stateMgmt": "Zustand stores in app/src/renderer/stores/ subscribe to window.api.on* channels at App mount",
+      "gate": "session-store.hasProject gates the whole UI: FolderGate when no project, MainApp when open"
+    }
+  },
+
+  "dataFlow": {
+    "ipcRoundTrip": "Renderer (React+Zustand) -> window.api.<method> -> preload invoke -> ipcMain.handle in app/src/main/ipc.ts -> lib/* command/agent -> return -> Zustand update -> React re-render",
+    "agentTurn": [
+      "renderer: window.api.sendMessage(message, mentions?, model?, images?, envelope?) -> IPC 'agent:send'",
+      "main: parse turn envelope (clientMessageId -> turnId for telemetry); record user-response-signals.jsonl",
+      "main: ensureCoordinator(state, win, model) — recreate coordinator if model/auth changed; resolveCoordinatorAuth(model)",
+      "main: createCoordinator({apiKey, getApiKeyOverride, model, resolvedSettings, getDiagramAuth, compute:{...}, rasterizeSvg, onStream, onToolCall, onToolResult, onToolProgress, onUsage, onRetryNotice, onSkillLoaded, tracer, getTurnId})",
+      "lib: coordinator detects intent (rules) + matches skills (LLM) -> assembles tools (research + coding + nav + skill-loader) -> builds system prompt -> creates pi-mono Agent",
+      "lib: agent runs the turn (transient-retry wraps it); hooks emit OTel spans + fire onStream/onToolCall/onToolResult callbacks",
+      "main: callbacks -> safeSend(win, 'agent:stream-chunk' | 'agent:activity' | 'agent:tool-progress' | 'agent:usage' | ...) -> renderer stores",
+      "main: 'agent:done' with result; realtimeBuffer mirrors UI state for remount recovery (agent:get-realtime-snapshot)"
+    ]
+  },
+
+  "subsystems": {
+    "main-ipc": {
+      "dir": "app/src/main/",
+      "purpose": "Electron main process: app lifecycle + ~88 IPC channels + agent wiring + terminal (node-pty).",
+      "keyFiles": {
+        "index.ts": "App lifecycle, window creation, startup sequence, menu, shutdown.",
+        "ipc.ts": "3029 lines — ALL IPC handlers + ensureCoordinator/createCoordinator wiring. The biggest file; group new handlers by domain.",
+        "terminal.ts": "node-pty PTY spawn/input/resize/kill, data/exit broadcast.",
+        "usage-totals.ts": "Per-project persistent token/cost accumulation (.research-pilot).",
+        "svg-rasterizer.ts": "Electron-side SVG->PNG for generate_diagram review.",
+        "realtime-buffer.ts": "Mirrors streaming/activity/progress for UI remount recovery."
+      },
+      "ipcChannelGroups": {
+        "agent-chat": ["agent:send", "agent:stop", "agent:clear-memory", "agent:get-realtime-snapshot", "agent:stream-chunk(b)", "agent:done(b)", "agent:activity(b)", "agent:tool-progress(b)", "agent:skill-loaded(b)", "agent:retry-notice(b)", "agent:usage(b)", "agent:entity-created(b)", "agent:file-created(b)", "agent:todo-update(b)", "agent:todo-clear(b)", "agent:activity-clear(b)"],
+        "telemetry": ["telemetry:view-log", "telemetry:get-project-config", "telemetry:set-tracing-mode", "telemetry:trace-snapshot", "trace:live(b)"],
+        "recap": ["recap:get-latest", "recap:generate", "recap:update(b)"],
+        "entities": ["cmd:artifact-create|update|get|list|search|delete", "cmd:memory-list|get|save|delete", "cmd:list-notes|list-literature|list-data", "cmd:search", "cmd:delete", "cmd:turn-explain-get", "cmd:session-summary-get"],
+        "mentions": ["mention:candidates"],
+        "files": ["file:read|write|read-binary", "file:list-root|list-tree|search-tree", "file:create|create-dir|create-artifact", "file:rename|trash", "file:reveal|open-external", "file:copy-item|drop-to-dir|drop", "file:resolve-path", "file:convert-to-text", "fs:external-change(b)"],
+        "auth-config": ["config:get-api-key-status", "config:save-api-key", "config:pick-preferred-model", "config:has-llm-auth", "auth:get-anthropic-status", "auth:anthropic-sub-login|cancel|logout", "auth:get-openai-status", "auth:openai-codex-login|cancel|logout", "settings:load|save", "prefs:load|save"],
+        "projects-sessions": ["project:pick-folder", "project:open-path", "project:close", "project:list-recents", "project:remove-recent", "project:stats-batch", "session:current", "session:save-message|load-message|get-total-count", "session:mark-saved|load-saved-ids"],
+        "compute": ["compute:hydrate", "compute:approve-plan|reject-plan|discard-plan", "compute:stop-run", "compute:refresh-availability", "compute:test-aws-connection", "compute:event(b)"],
+        "sharing": ["sharing:preflight|status|share|sync|poll", "sharing:invite|remove-member", "sharing:list-invitations|accept-invite", "sharing:conflict-details|ai-merge|resolve-conflict", "sharing:snapshot"],
+        "enrichment-import-reports": ["cmd:import-bibtex|import-bibtex-string|pick-bibtex-file", "import:progress(b)", "cmd:enrich-papers", "enrich:progress(b)", "cmd:generate-paper-report", "cmd:get-paper-report-state", "cmd:open-paper-report", "report:progress(b)"],
+        "wiki": ["wiki:get-status(b)", "wiki:get-stats", "wiki:pause|resume", "wiki:list-pages|read-page", "wiki:slug-for-paper|paper-slug-map|list-paper-meta", "wiki:reconcile-identity", "wiki:get-log"],
+        "skills": ["skills:list", "skills:set-enabled", "skills:upload"],
+        "update": ["update:get-state", "update:check-now", "update:quit-and-install", "update:state(b)"],
+        "ui-misc": ["theme:set", "theme:changed(b)", "chat:export", "menu:export-chat(b)", "menu:open-settings(b)", "audit:get-graph", "usage:get-totals|reset-totals", "folder:open-with"],
+        "terminal": ["terminal:spawn", "terminal:input", "terminal:resize", "terminal:kill", "terminal:data(b)", "terminal:exit(b)"]
+      },
+      "note": "(b) = broadcast (safeSend to window). ~88 channels total. Approximate per-group counts; read ipc.ts for the authoritative list."
+    },
+
+    "renderer-ui": {
+      "dir": "app/src/renderer/",
+      "purpose": "React UI. Layout = LeftSidebar | (CenterPanel + TerminalPanel) | RightSidebar | StatusBar + global modals.",
+      "layoutRegions": {
+        "left": "LeftSidebar.tsx — UserProfile, ModelSelector, ReasoningToggle, OverflowMenu, tab panel driven by ui-store.leftTab ('library'->EntityTabs | 'files'->WorkspaceTree | 'skills'). LiteratureSidebar/ComputeSidebar are tab-specific.",
+        "center": "CenterPanel.tsx — ViewSwitcher (Chat|Literature|Compute|Audit, shortcuts cmd1-4) driven by ui-store.centerView. Chat=ChatMessages+ChatInput+EntityPreviewPanel drawer; Literature=LiteratureView; Compute=ComputeView; Audit=AuditView; HeroIdle empty state; RecapCard.",
+        "right": "RightSidebar.tsx — TokenUsage, WorkingFolder, ProgressSteps (todos), ActivityLog (tool calls).",
+        "statusBar": "StatusBar.tsx — sidebar toggle, active-skill chips, tool-call summary, run/all-time tokens, SyncPill (sharing), UpdateReadyPill.",
+        "modals": "SettingsModal (multi-tab), ImportWizard (BibTeX), ConflictResolveModal (sync), AcceptInviteModal, EntityPreviewPanel (drawer), ToastContainer."
+      },
+      "uiUnions": {
+        "LeftTab": "'library' | 'files' | 'skills'  (app/src/renderer/stores/ui-store.ts:12)",
+        "CenterView": "'chat' | 'literature' | 'compute' | 'audit'  (ui-store.ts:13)",
+        "Theme": "resolved 'light' | 'dark'; ThemePref adds 'system'; 'dim' is a CSS layer (html.dark.dim), NOT a 3rd theme value; ReadingSize is a separate CSS scale."
+      },
+      "patterns": {
+        "persistedUiReset": "Fields living in BOTH useUIStore AND localStorage (leftSidebarWidth, leftSidebarCollapsed, markdownEditMode) MUST read localStorage in TWO places: the store initial value AND reset(). session-store calls useUIStore.getState().reset() on every project open/close — hardcoding a default in reset() silently un-applies the saved pref. Canonical: leftSidebarWidth: readLeftWidth() in both spots.",
+        "toolRenderer": "shared-ui/tool-renderers/registry.ts maps tool name -> {displayName, icon, category, formatCallSummary, formatResultSummary, formatProgress}. ActivityLog + ToolUseCard auto-pick up entries; add a config object, no per-app registration.",
+        "themeBoot": "main.tsx calls bootTheme() (theme-boot.ts) synchronously before React renders to avoid flash; ui-store hydrates from localStorage; App.tsx listens to matchMedia when pref='system'."
+      }
+    },
+
+    "stores": {
+      "dir": "app/src/renderer/stores/ (+ re-exports from shared-ui/stores/)",
+      "purpose": "Zustand state. Most clear via reset()/clear() on project open/close; a few persist to localStorage (global UX prefs).",
+      "catalog": {
+        "ui-store": "Layout: sidebar widths, leftTab, centerView, theme/reading-size, modal visibility, preview drawer, literatureFilter, workingFiles. localStorage: width/collapsed/markdownEditMode/theme/readingSize.",
+        "chat-store": "messages, streamingText, isStreaming, draftText, retryNotice, turnToolEvents Map. Persists via IPC, not localStorage.",
+        "session-store": "projectPath, sessionId, hasProject (gates renderer). Orchestrates reset of other stores on open/close.",
+        "entity-store": "notes, papers, data arrays + enrichingPapers Set. IPC-fetched.",
+        "memory-store": "Auto-Memory items (user|feedback|project|reference). IPC-fetched.",
+        "activity-store": "[shared-ui] real-time tool-call activity log + activeSkills (status-bar chips).",
+        "progress-store": "[shared-ui] todos from agent (@progress/@task).",
+        "tool-events-store": "[shared-ui] chat-inline tool-use cards (per-turn snapshot).",
+        "tool-progress-store": "[shared-ui] tool execution progress %.",
+        "usage-store": "[shared-ui] run + all-time tokens/cost/cache-rate. localStorage: all-time totals.",
+        "toast-store": "transient notifications (dedup by key).",
+        "recap-store": "background where-you-left-off recap. localStorage: enabled flag.",
+        "compute-store": "backends Map, runs, pendingPlans. Hydrated on mount; applyEvent reducer routes compute:event by backend field.",
+        "import-store": "BibTeX import state machine (idle|running|done|error, counts, result, failures).",
+        "enrichment-store": "paper metadata enrichment progress.",
+        "report-store": "Paper Pack report state machine; derived buttonState (report-button-state.ts).",
+        "skill-store": "available skills (builtin|user|workspace) + enabled state.",
+        "sharing-store": "sharing status, conflict, updatesAvailable, accessRevoked, debugMode.",
+        "trace-store": "live execution lineage for Audit (max ~50 traces FIFO).",
+        "update-store": "auto-update lifecycle (idle|checking|downloading|ready). localStorage: dismissedVersion."
+      },
+      "testFiles": ["import-store.test.ts", "recap-store.test.ts", "report-store.test.ts", "sharing-store.test.ts", "trace-store.test.ts"]
+    },
+
+    "agents": {
+      "dir": "lib/agents/",
+      "purpose": "Coordinator orchestrator + helpers. Creates the pi-mono Agent, detects intent, matches skills, manages context compaction, telemetry, retries.",
+      "keyFiles": {
+        "coordinator.ts": "1403 lines. createCoordinator(config) / createCoordinatorRunner(config) -> {agent, chat(), clearSessionMemory(), generateRecap(), abort(), destroy(), computeRegistry?}. Resolves model, detects intent (rules), matches skills (LLM, up to 5), assembles tools, builds system prompt, installs transformContext (compaction) + beforeToolCall/afterToolCall hooks, builds compute Registry (Local+Modal, optional AWS-EC2).",
+        "context-builder.ts": "detectIntentsByRules(message)->Set<IntentLabel>; classifyPersistenceDecision; buildMentionContext; buildSessionSummaryContext; buildSkillSummariesPrompt.",
+        "metadata-enrichment.ts": "Fill missing DOI/abstract/venue/citationCount via Crossref->OpenAlex->Semantic Scholar (DOI path) or DBLP->OpenAlex->S2 (title path).",
+        "rate-limiter.ts": "Token-bucket RateLimiter + CircuitBreaker per external source.",
+        "session-bootstrap.ts": "Recovers user/assistant messages that postdate the latest SessionSummary; injected once as 'Recent Conversation'.",
+        "telemetry-adapter.ts": "Owns OTel span lifecycle for the pi-agent loop (onPayload/onResponse wire capture, tool spans, turn_start/turn_end, pipilot.skill.load events).",
+        "transient-retry.ts": "runAgentTurnWithRetry — detect+retry transient LLM errors (529/503/etc., overloaded, timeouts) with 2->4->8->16->30s backoff; resumes via agent.continue().",
+        "prompts/index.ts": "Prompt registry. loadPrompt(key). Bundler-safe inline strings."
+      },
+      "intentLabels": ["literature", "data", "writing", "critique", "web", "citation", "grants", "docx", "general"],
+      "promptKeys": ["coordinator-system", "data-analysis-system", "data-analysis-tasks", "data-code-template", "literature-planner-system", "literature-reviewer-system", "literature-summarizer-system", "data-analyzer-system", "writing-outliner-system", "writing-drafter-system", "wiki-paper-abstract", "wiki-paper-fulltext", "wiki-concept-identify", "wiki-concept-generate", "recap-instruction"]
+    },
+
+    "tools": {
+      "dir": "lib/tools/",
+      "purpose": "Research tools as native pi-mono AgentTool. Assembled by createResearchTools(ctx) in lib/tools/index.ts.",
+      "factory": "createResearchTools(ctx: ResearchToolContext) -> {tools: AgentTool[], destroy}",
+      "registered": [
+        {"name": "web_search", "file": "web-tools.ts", "purpose": "Brave + arXiv search."},
+        {"name": "web_fetch", "file": "web-tools.ts", "purpose": "Fetch & parse a web page to text/markdown."},
+        {"name": "literature-search", "file": "literature-search.ts", "purpose": "Multi-agent pipeline plan->search->review->summarize over Semantic Scholar/arXiv/OpenAlex/DBLP."},
+        {"name": "fetch-fulltext", "file": "fetch-fulltext.ts", "purpose": "Retrieve paper fulltext by DOI/arXiv/PMC with section targeting (cache->Paperclip->arXiv)."},
+        {"name": "convert_document", "file": "convert-document.ts", "purpose": "DOCX/PDF -> markdown."},
+        {"name": "data_analyze", "file": "data-analyze.ts", "purpose": "LLM-generated Python analysis with strict output manifests."},
+        {"name": "generate_diagram", "file": "generate-diagram.ts", "purpose": "generate->review->edit loop; backends in diagram-backends/ (OpenAI image, Anthropic/OpenAI vision review, SVG-fallback)."},
+        {"name": "artifact-create | artifact-update | artifact-search", "file": "entity-tools.ts (createResearchMemoryTools)", "purpose": "CRUD/search over notes/papers/data/web-content/tool-output artifacts."},
+        {"name": "save-memory | delete-memory", "file": "../memory/memory-tools.ts (createMemoryTools)", "purpose": "Persist/remove cross-session Auto-Memory (.md + agent.md index)."},
+        {"name": "wiki_search | wiki_get | wiki_coverage | wiki_facets | wiki_neighbors | wiki_source", "file": "../wiki/wiki-tools.ts (createWikiTools)", "purpose": "RFC-005 memory-layer access to the local paper/concept wiki. Always registered (returns 'not available' if no wiki)."},
+        {"name": "wiki_lookup", "file": "../wiki/tool.ts", "purpose": "Legacy RFC-003 compatibility shim; scheduled for removal after RFC-005."},
+        {"name": "compute_plan | list_compute_backends | <toolPrefix>_execute|wait|status|stop", "file": "../compute/tools.ts (createComputeTools)", "purpose": "RFC-008. Registered only if ctx.computeRegistry present. 1 + 4N tools for N backends."},
+        {"name": "s3_download | s3_list | s3_presigned_url", "file": "s3-tools.ts (createS3Tools)", "purpose": "RFC-009 read-side S3. Registered only if ctx.awsCredentialProvider present."}
+      ],
+      "categories": "lib/tools/categories.ts maps tool name -> pipilot.tool.category (file|shell|code|data-analysis|literature|web|memory|artifact|document|diagram|wiki|citation|compute) for telemetry auto-stamping.",
+      "helpers": "tool-utils.ts: toAgentResult / toolSuccess / toolError adapters. types.ts: ResearchToolContext."
+    },
+
+    "storage": {
+      "dirs": ["lib/memory-v2/", "lib/memory/", "lib/commands/", "lib/mentions/"],
+      "purpose": "Artifact storage (files-as-carrier, RFC-014), Auto-Memory, command-layer CRUD, @-mention parsing/resolution.",
+      "memoryV2": {
+        "model": "RFC-014 files-as-carrier: workspace files are the source of truth; .research-pilot/index/ is a derived, lazily-built cache.",
+        "onDisk": {
+          "notes": "rp-artifacts/notes/<title-slug>-<id8>.md (YAML front-matter + body; lossless via nested rp: block).",
+          "tool-output": "rp-artifacts/tool-output/<title-slug>-<id8>.md (same as notes).",
+          "papers": "rp-artifacts/papers/<citeKey-slug>-<id8>.bib + .rp.yaml sidecar.",
+          "data": "<user-file>.rp.yaml sidecar next to the data file.",
+          "web-content": ".research-pilot/artifacts/web-content/<id>.json (local-only, not shared).",
+          "agent.md": "Special artifact id 'agent-md' pinned to .research-pilot/notes/agent-md.md, <=5000 chars, injected every turn, cannot be deleted.",
+          "index": ".research-pilot/index/ (sharded per artifact id; .built marker; getArtifacts() reads it).",
+          "sessionSummaries": ".research-pilot/memory-v2/session-summaries/{sessionId}/*.json",
+          "recaps": ".research-pilot/memory-v2/recaps/{sessionId}.json (latest-only)"
+        },
+        "keyFiles": {
+          "store.ts": "CRUD entry (createArtifact/updateArtifact/deleteArtifact/findArtifactById/searchArtifacts/resolveArtifactByKey). Appends to artifact ledger (fire-and-forget).",
+          "artifact-files.ts": "Serialization: YAML front-matter (.md), .bib+.rp.yaml (papers), .rp.yaml (data). Normalizes legacy shapes (type:'literature'->'paper').",
+          "artifact-writer.ts": "Writes canonical paths; removes legacy JSON; per-actor subdirs for RFC-013.",
+          "indexer.ts": "Lazy derived index; rebuildIndex() scans workspace; recognizes new + legacy formats during migration.",
+          "front-matter.ts": "Tiny lossless YAML-fence parser/serializer.",
+          "migrate-files.ts": "One-time legacy JSON -> files-as-carrier migration (backs up to artifacts-legacy/).",
+          "workspace-gitignore.ts": "Managed .gitignore block keeping derived index/backups out of git."
+        }
+      },
+      "autoMemory": {
+        "dir": "lib/memory/ (memory-tools.ts, memory-utils.ts, extractor.ts)",
+        "model": "Standalone .research-pilot/memory/<type>/<slug>.md files + a Memory Index section in agent.md. Types: user|feedback|project|reference.",
+        "flow": "save-memory writes file + updates agent.md index under withIndexLock(); delete-memory removes both. Appends to memory ledger.",
+        "note": "memory-v2 = artifact store (current). lib/memory = LLM-facing long-term memory + user prefs (still active). Distinct subsystems."
+      },
+      "commands": {
+        "artifact.ts": "Thin wrapper over store.ts CRUD.",
+        "delete.ts": "deleteEntity() guards agent.md.",
+        "list.ts": "listAllArtifacts/listNotes/listLiterature/listData -> UI types.",
+        "search.ts": "searchEntities() over store.searchArtifacts (8-char id truncation).",
+        "paper-artifact.ts": "upsertPaperArtifact() — dedup by DOI/citeKey/title+year, fill-only merge (RFC-006).",
+        "paper-enrichment.ts": "enrichPaperArtifacts() -> metadata-enrichment.",
+        "session-summary.ts": "readLatestSessionSummary().",
+        "memory-explain.ts": "memoryExplainTurn() debug aid."
+      },
+      "mentions": {
+        "parser": "@(note|paper|data|file|url):key  (quoted or bare). Returns cleanMessage + mentions[].",
+        "resolver": "entity mentions -> resolveArtifactByKey (id->prefix->citeKey->title); file mentions -> workspace-safe path; documents -> cached markdown; url -> fetch.",
+        "candidates": "getCandidates(projectPath, typeFilter?, query?) from in-memory entity-index + git ls-files; invalidated after artifact CRUD.",
+        "exports": "lib/mentions/index.ts: parseMentions, resolveMentions, getCandidates + types MentionType/MentionRef/ParseResult/ResolvedMention/MentionCandidate."
+      }
+    },
+
+    "skills": {
+      "dir": "lib/skills/",
+      "purpose": "SKILL.md skill system: startup summaries + on-demand procedures, dynamically loaded by the coordinator.",
+      "format": "Front-matter (name, description, category?, depends?[], tags?[], triggers?[]) + markdown body.",
+      "discovery": "loader.ts merges 3 locations (later overrides earlier by name): 1) lib/skills/builtin/ 2) ~/.research-pilot/skills/ (user-global) 3) <workspace>/.research-pilot/skills/.",
+      "loaderApi": ["loadBuiltinSkills", "loadWorkspaceSkills", "loadAllSkills(workspace)", "resolveSkillDependencies", "buildSkillManifests", "readEnabledSkills (.research-pilot/skills-config.json)", "writeEnabledSkills", "buildSkillsCatalogPrompt"],
+      "loadTool": "Agent loads a skill's full procedures at runtime via the load_skill tool (lib/tools/skill-tools.ts).",
+      "builtin": [
+        "academic-marp-slides", "coding", "compute-environment",
+        "compute-local", "compute-modal", "compute-stub",
+        "matplotlib", "paper-revision", "paper-writing", "research-grants", "rewrite-humanize",
+        "research-strategy", "scholar-evaluation", "scientific-schematics", "scientific-visualization", "scientific-writing",
+        "seaborn", "teaching-marp-slides"
+      ],
+      "builtinCount": 18,
+      "note": "CLAUDE.md says '12 builtin skills' — STALE. Actual count is 18 at this commit (includes compute-* and marp-slides skills)."
+    },
+
+    "compute": {
+      "dirs": ["lib/compute/", "lib/local-compute/", "lib/modal-compute/", "lib/aws-ec2-compute/", "lib/aws/"],
+      "purpose": "RFC-008 ComputeBackend abstraction. One interface + Registry + PlanStore; Local/Modal/AWS-EC2 are instances. Adding a backend is a contained ~400-800 LOC exercise.",
+      "interface": {
+        "name": "ComputeBackend (lib/compute/backend.ts)",
+        "methods": ["probeAvailability(opts?)", "plan(input)->ComputePlan", "submit(plan,opts)->ComputeRun", "getStatus(runId)", "waitForCompletion(runId,timeoutMs)", "stop(runId)", "destroy()", "hydrate()->Array<{run,status}>"],
+        "identity": "BackendIdentity {id, displayName, toolPrefix} — toolPrefix separate from id (so 'aws-ec2' id -> 'aws_ec2' tool prefix); Registry enforces uniqueness + /^[a-z][a-z0-9_]*$/.",
+        "capabilities": "{requiresApproval, hasCost, supportsGpu, supportsStop, supportsStreaming}"
+      },
+      "registry": "lib/compute/registry.ts — register(backend), plan() (captures immutable effectiveRequiresApproval per A1), approvePlan/rejectPlan/discardPlan, submit() (checks captured approval, in-flight memo), getStatus/waitForCompletion/stop (runIdRouting), hydrate(), subscribe/emit (ComputeEvents).",
+      "planStore": "lib/compute/plan-store.ts — persistent ~/.research-pilot/compute-plans.json; listPending() (unapproved gated), listActive() (non-rejected surviving refresh).",
+      "states": {
+        "plan": "pending(unapproved) -> approved | rejected | discarded; effectiveRequiresApproval captured at plan() time (A1).",
+        "run": "pending_approval | queued | running | completed | failed | timed_out | cancelled | cost_killed"
+      },
+      "backends": {
+        "local": "lib/compute/backends/local/ + lib/local-compute/. requiresApproval:false, no cost, supportsStop. Runs in-process or Docker sandbox with preflight/smoke/full phasing + stall detection.",
+        "modal": "lib/compute/backends/modal/ + lib/modal-compute/. requiresApproval:true, hasCost, supportsGpu. Plan-agent inspects script for image/GPU/duration; cost-killing is backend-owned (A2).",
+        "aws-ec2": "lib/compute/backends/aws-ec2/ + lib/aws-ec2-compute/. requiresApproval:true, hasCost, supportsGpu. Phase 1: user supplies InstanceSpec via compute_plan backend_data; provisions EC2, SSH, exec."
+      },
+      "tools": "lib/compute/tools.ts generates: compute_plan (generic, so agent can compare backends), list_compute_backends, and per-backend <toolPrefix>_execute|wait|status|stop. Total 1+4N.",
+      "awsCredentials": "lib/aws/credentials.ts AwsCredentialProvider.resolve() chain: per-call opts -> Settings UI -> env (AWS_ACCESS_KEY_ID / AWS_REGION / AWS_DEFAULT_REGION) -> ~/.aws/credentials profile -> EC2 instance metadata. Region & keys resolve independently. sts:GetCallerIdentity validation cached 5min.",
+      "amendments": {
+        "A1": "effectiveRequiresApproval captured at plan() time, immutable — settings flip after plan does not change the gate.",
+        "A2": "Cost-killing is backend-owned (poll, kill, emit cost-killed); Registry only fans events.",
+        "A3": "hydrate() returns {run,status} so renderer restores Compute tab in one round-trip.",
+        "A4": "toolPrefix separate from id (hyphen ids allowed; tool names stay safe).",
+        "A5": "backendData must be JSON-only + backendDataVersion for safe evolution; renderer guards on version."
+      }
+    },
+
+    "telemetry": {
+      "dirs": ["lib/telemetry/ (48 files)", "lib/ledger/ (6 files)"],
+      "purpose": "OpenTelemetry tracing of every turn/step/tool/LLM call, plus append-only ledgers. Opt-in (default disabled).",
+      "keyFiles": {
+        "tracer.ts": "PipilotTracer — single TracerProvider per main process; AsyncLocalStorageContextManager; startSpan() auto-stamps project/session/turn identity (pipilot.project.id, gen_ai.conversation.id, pipilot.turn.id).",
+        "trace-store.ts": "Bounded ring queue (1024), trace-level atomic drop, JSONL writer (.research-pilot/traces/spans.*.jsonl, OTLP/JSON), tombstone sidecar, degraded mode.",
+        "context-keys.ts": "TURN_ID_KEY = Symbol.for('pipilot.telemetry.turnId'). Ledgers + startSpan auto-inherit turn.id from OTel context.",
+        "blob-store.ts": "Content-addressed store for >4KB content (.research-pilot/blobs/{aa}/{sha256}); async-queue, dedup, backpressure.",
+        "llm-trace.ts": "tracedCompleteSimple() wraps pi-ai completeSimple with chat {model} span + GenAI semconv.",
+        "http-trace.ts": "tracedFetch() wraps HTTP with http.client span.",
+        "redaction.ts": "Scrubs PII; oversized strings -> blob ref {contentHash,size}.",
+        "semantic-registry.ts": "Pinned OTel schema_url, GenAI enum whitelists, PIPILOT_ATTRIBUTE_KEYS; dev guard throws on unknown pipilot.* keys. TRACE_POLICY_VERSION='pipilot-trace-v0.13'.",
+        "telemetry-prefs.ts": "Per-project gitignored .research-pilot/preferences.json (telemetry.tracingMode enabled|disabled, bufferCapacity). Each collaborator toggles independently (RFC-013 §8)."
+      },
+      "turnIdPropagation": "Coordinator publishes TURN_ID_KEY for the whole turn body + auto-recap; startSpan reads it from resolved parent context; ledger writers fall back to context turn.id. Background work (memory extractor, wiki-bg) detaches via ROOT_CONTEXT so stays turn-less by design.",
+      "ledgers": {
+        "artifact": ".research-pilot/artifacts/ledger.jsonl — {artifactId,version,op,type,path,contentHash,initiator,traceId?,spanId?,turnId?,timestamp,...}. Ops: create|edit|overwrite|delete|convert|export|execute|read|imported. createArtifactLedgerWriter(projectPath) (append/appendSync).",
+        "memory": ".research-pilot/memory-v2/ledger.jsonl — {memoryId,op,scope,type,provenance,traceId?,spanId?,turnId?,timestamp}. createMemoryLedgerWriter.",
+        "userResponseSignals": ".research-pilot/user-response-signals.jsonl",
+        "viewLog": ".research-pilot/view-log.jsonl"
+      }
+    },
+
+    "audit-graph": {
+      "dir": "lib/audit-graph/ (6 files)",
+      "purpose": "Trust & Audit (RFC trust-audit v0.8). Pure read-only provenance graph derived from spans + ledgers + index; backs the Audit tab. Axiom A2: record and warn, never fight user modifications.",
+      "keyFiles": {
+        "types.ts": "Nodes: session|trace|step|tool|chat|artifact|file|dir|span. Edges: contains|precedes|invokes|returns|sub-llm|reads|writes|creates|retrieved|mentions|listed.",
+        "project.ts": "projectGraph(projectPath) — pure materializer over spans (OTLP/JSON, permissive parse) + artifact ledger + trace digest + memory-v2 index. ~tens of ms for 1k spans.",
+        "citations.ts": "A1 citation resolvability — extract DOI/arXiv/URL, canonicalize, resolve against paper library + retrieval tool args/results. Returns {total,resolved,rate,unresolved[]}. Applies to note|web-content|tool-output (the 'citing' artifacts)."
+      },
+      "auditTabData": "IPC 'audit:get-graph' -> projectGraph() -> AuditGraph {builtAt,source,counts,nodes[],edges[]} -> canvas viz. Unresolved citations surface as suspicious-citation flags (recent commits e7238f5/f7441a5/ce8f77a).",
+      "extensionNote": "Graph projector stays a pure read-only materializer; add new checks as separate rule engines (cf lib/telemetry/diagnostics) over spans or the materialized graph."
+    },
+
+    "wiki": {
+      "dir": "lib/wiki/ (20 files)",
+      "purpose": "RFC-005 background wiki agent: builds a local paper/concept library with structured memory sidecars; backs wiki_* tools.",
+      "keyFiles": {
+        "agent.ts": "State machine created->idle->scanning->processing->cooldown->loop with pause|resume|destroy. Single writer via cross-process OS lock + in-process withWikiLock(). Paused during active coordinator, resumed when idle.",
+        "wiki-tools.ts": "wiki_search (BM25+alias+facet), wiki_get, wiki_coverage, wiki_facets, wiki_neighbors, wiki_source.",
+        "memory-schema.ts": "RFC-005 sidecar schema (datasets/methods/findings/concepts/limitations/project_lenses/provenance_projects); metadata_version."
+      },
+      "onDisk": [".research-pilot/wiki/papers/{slug}.md", ".research-pilot/wiki/concepts/{slug}.md", ".research-pilot/wiki/index/ (BM25, alias map, facets, concept graph, query log)"],
+      "epistemicContract": "Wiki tools return memory-layer data only. Coordinator must NEVER cite raw findings[].value / meta:* directly — call wiki_source to locate the underlying artifact and read it for quotes/numbers."
+    },
+
+    "reports": {
+      "dir": "lib/reports/ (16 files)",
+      "purpose": "RFC-007 PR-B Paper Pack report — onboarding reading path over the local paper library.",
+      "pipeline": ["input-builder (papers + wiki extractions)", "aggregate (deterministic histograms)", "ranker (top-5 onboarding path)", "synthesize (single LLM theme grouping)", "render-markdown + render-html", "persist ./rp-paper-pack-report.{md,html} + .research-pilot/report-state.json"],
+      "caching": "Hash of aggregated input; reuse if hash matches and status=done unless force=true. Coarse progress (6 steps) since LLM synthesis (~30s) dominates."
+    },
+
+    "sharing": {
+      "dir": "lib/sharing/ (9 files)",
+      "purpose": "RFC-013 async git-backed PI->student collaboration. One private GitHub repo, all members on single main; lane=folder (per-actor subdir), not branch.",
+      "keyFiles": {
+        "share.ts": "High-level API: checkSharingPreflight, getSharingStatus, shareProject, syncProject (commit->fetch->rebase->push, retry on race), pollRemote (report-only), inviteMember, acceptInvite, resolveSyncConflict.",
+        "git.ts": "Typed git wrappers (never throw): init/hasChanges/commitAll/fetch/getAheadBehind/rebaseOntoUpstream/mergeNoCommit/createTag/...",
+        "gh.ts": "gh CLI wrappers: repoCreatePrivate/repoView/repoClone/collaboratorAdd|Remove/listRepoInvitations/acceptRepoInvitation.",
+        "identity.ts": "Per-actor .research-pilot/identity.json (gitignored, ULID + displayName + slug).",
+        "workspace-git.ts": "Asymmetric managed .gitignore + .gitattributes: share notes/papers/data/user files; keep sessions/memory/index/caches/traces/prefs local-only; LFS routing by size.",
+        "preflight.ts": "Checklist (gh auth, git, LFS, ...)."
+      },
+      "conflictModel": "Detect-but-never-auto-apply: poll only reports; files move only on sync. Rebase conflicts -> extract conflicting files -> optional AI merge (LLM with both sides + project context) -> stage+commit. Identity-sensitive state must stay gitignored."
+    },
+
+    "fulltext-search": {
+      "dirs": ["lib/fulltext/ (6 files)", "lib/search/ (1 file)", "lib/utils/ (4 files)"],
+      "purpose": "Paper fulltext retrieval + paper matching + small utils.",
+      "fulltext": "resolveFulltext(request) single dispatch: cache (zero network) -> Paperclip MCP (if PAPERCLIP_API_KEY + DOI/PMC/PubMed) -> arXiv direct (arxivId or title resolve) -> null. Used by wiki-bg, fetch-fulltext tool, convert_document.",
+      "utils": "lib/utils/: llm-json (robust JSON extraction from LLM), path-utils. lib/search/: paper-match."
+    },
+
+    "importers": {
+      "dir": "lib/importers/ (18 files)",
+      "purpose": "Bulk import into the paper library (BibTeX primary).",
+      "bibtex": "importBibtexFile(filePath, opts) — @retorquere/bibtex-parser (sentence-case OFF), dedup by citeKey within file, per-entry upsertPaperArtifact() (fill-only merge RFC-006). Returns {added,merged,mergedNoChange,duplicateInFile,failed,failureDetails[],importedPaperIds[]} + per-entry progress callback."
+    }
+  },
+
+  "coreTypes": {
+    "file": "lib/types.ts (465 lines)",
+    "types": {
+      "ArtifactType": "'note' | 'paper' | 'data' | 'web-content' | 'tool-output'  (line 72)",
+      "Artifact": "Union NoteArtifact | PaperArtifact | DataArtifact | WebContentArtifact | ToolOutputArtifact (line 200). Base: ArtifactBase {id,type,title,tags,summary,contentRef,provenance,createdAt,updatedAt}.",
+      "PaperArtifact": "citeKey, bibtex, doi, authors, abstract, year, venue, url, pdfUrl, searchKeywords, externalSource, relevanceScore, citationCount, enrichmentSource.",
+      "DataArtifact": "DataSchema, sampleRows, rowCount, stats.",
+      "Provenance": "{source:'user'|'agent'|'import', sessionId, agentId, extractedFrom, actor?} (line 74).",
+      "Actor": "{id:ULID, displayName, slug?} — RFC-013 multi-user (line 88).",
+      "ProjectConfig": "Workspace config incl. members/lead/share (RFC-013) + telemetry (line 233).",
+      "Session": "{sessionId, projectPath, workspacePath, lastActivity} (line 299).",
+      "SessionSummary": "{turnRange, summary, topicsDiscussed[], openQuestions[], createdAt} (line 430).",
+      "RecapRecord": "Auto-recap payload (line 448).",
+      "aliases": "ResearchEntity=Artifact, Note=NoteArtifact, Literature=PaperArtifact, DataAttachment=DataArtifact, Entity=Artifact (lines 461-465)."
+    },
+    "researchToolContext": "lib/tools/types.ts ResearchToolContext: workspacePath, sessionId, projectPath, callLlm, callLlmVision, visionCapable, onToolCall, onToolResult, settings, getSettings, getDiagramAuth, getTurnId, computeRegistry?, awsCredentialProvider?, rasterizeSvg."
+  },
+
+  "models": {
+    "file": "lib/models.ts",
+    "rule": "UI exposes only flagship + previous per provider. light tier (mini/nano/haiku) is internal-only (intent router, enrichment) — never in the model picker.",
+    "tiers": {
+      "openai": {"flagship": "gpt-5.5", "previous": "gpt-5.4", "light": "gpt-5.4-nano"},
+      "openai-codex": {"flagship": "gpt-5.5", "previous": "gpt-5.4", "light": "gpt-5.4-mini"},
+      "anthropic": {"flagship": "claude-opus-4-7", "previous": "claude-opus-4-6", "light": "claude-haiku-4-5-20251001"},
+      "anthropic-sub": {"flagship": "claude-opus-4-7", "previous": "claude-opus-4-6", "light": "claude-haiku-4-5-20251001"},
+      "google": {"flagship": "", "previous": null, "light": "gemini-2.0-flash-lite (router-only)"},
+      "deepseek": {"flagship": "deepseek-v4-pro", "previous": null, "light": "deepseek-v4-flash"}
+    },
+    "default": "openai:gpt-5.5 (DEFAULT_MODEL_ID)",
+    "sonnet": "claude-sonnet-4-6 (ANTHROPIC_SONNET) — separate, not on the flagship/previous ladder.",
+    "subscriptionVariants": "openai-codex / anthropic-sub share bare ids with API counterparts; must be given as explicit provider:model composite keys (not inferred).",
+    "retiredMigrations": "RETIRED_MODEL_MIGRATIONS auto-upgrades legacy ids on app launch.",
+    "warning": "When bumping models, verify ids exist in pinned @mariozechner/pi-ai dist/models.generated.js — stale ids cause silent router failures (RFC-002)."
+  },
+
+  "extensionRecipes": {
+    "addResearchTool": {
+      "steps": [
+        "Create lib/tools/<name>.ts exporting createXTool(ctx: ResearchToolContext): AgentTool using Type.Object({...}) params and execute() returning toAgentResult(...).",
+        "Import + tools.push(createXTool(ctx)) in lib/tools/index.ts (gate behind a ctx flag if it needs optional creds, cf compute/s3).",
+        "Add the tool name -> category in lib/tools/categories.ts for telemetry stamping.",
+        "Add a render config in shared-ui/tool-renderers/registry.ts (icon, summaries).",
+        "If it writes artifacts, append an artifact-ledger row (createArtifactLedgerWriter); turnId auto-fills from context."
+      ],
+      "anchor": "lib/tools/index.ts:33-95"
+    },
+    "addPrompt": {
+      "steps": ["Add a key->string entry in lib/agents/prompts/index.ts.", "Access via loadPrompt('key')."],
+      "anchor": "lib/agents/prompts/index.ts"
+    },
+    "addSkill": {
+      "steps": ["Create lib/skills/builtin/<name>/SKILL.md (front-matter: name, description, category?, depends?, tags?, triggers?) + body.", "loader.ts auto-discovers on next loadAllSkills(); no registration code.", "Or drop into <workspace>/.research-pilot/skills/ for project-only."],
+      "anchor": "lib/skills/loader.ts"
+    },
+    "addStore": {
+      "steps": [
+        "Create app/src/renderer/stores/<x>-store.ts with create<State>((set,get)=>({...})).",
+        "Subscribe to relevant window.api.on* channels at App mount.",
+        "Add reset/clear in session-store's project open/close path.",
+        "If persisting a global pref to localStorage, read it in BOTH the initial value AND reset() (persistedUiReset gotcha)."
+      ]
+    },
+    "addIpcChannel": {
+      "steps": [
+        "main: register handler in app/src/main/ipc.ts (ipcMain.handle('domain:verb', ...) or the per-window handleWindow wrapper). Return {success,data?|error}.",
+        "preload: add method to ElectronAPI + api object in app/src/preload/index.ts using invoke()/subscribe()/send().",
+        "renderer: call window.api.<method>() from a store/component.",
+        "For broadcasts use safeSend(win,'event',payload) + a subscribe() bridge."
+      ],
+      "anchor": "app/src/main/ipc.ts"
+    },
+    "addComputeBackend": {
+      "loc": "~400-800 LOC; docs/spec/compute.md §19 is the canonical checklist.",
+      "steps": [
+        "Create lib/compute/backends/<id>/<id>-backend.ts implementing ComputeBackend.",
+        "Declare BackendIdentity {id, displayName, toolPrefix(/^[a-z][a-z0-9_]*$/)} + BackendCapabilities.",
+        "Define JSON-only <X>BackendPlanData + <X>BackendRunData + <X>_BACKEND_DATA_VERSION=1 (A5).",
+        "Implement probeAvailability/plan/submit/getStatus/waitForCompletion/stop/destroy/hydrate; emit run-update/run-complete via ctx.emit.",
+        "If hasCost: own the cost-kill (poll + emit cost-killed) — Registry does not (A2).",
+        "Register in lib/agents/coordinator.ts: computeRegistry.register(new XBackend(ctx, deps)).",
+        "Surface settings in DEFAULT_SETTINGS + ComputeSettings.tsx; optional per-backend renderer with version guard.",
+        "Add a compute-<id> skill + tests (identity, probe, hydrate, JSON-serializability)."
+      ],
+      "noNeedToTouch": ["IPC channels (compute:event carries everything)", "preload (onComputeEvent routes by backend field)", "renderer store wiring (applyEvent reducer)"]
+    },
+    "addArtifactType": {
+      "steps": [
+        "Add to ArtifactType union + define <X>Artifact in lib/types.ts (add to Artifact union).",
+        "Add serialize/parse in lib/memory-v2/artifact-files.ts.",
+        "Add canonical path in lib/memory-v2/artifact-writer.ts.",
+        "Add scan recognition in lib/memory-v2/indexer.ts.",
+        "Update lib/commands/{list,search}.ts and any UI tabs."
+      ]
+    },
+    "addCenterViewOrLeftTab": {
+      "steps": [
+        "Extend the CenterView or LeftTab union in app/src/renderer/stores/ui-store.ts.",
+        "Add a branch in CenterPanel.tsx / LeftSidebar.tsx and a tab button.",
+        "Add a keyboard shortcut in App.tsx if a center view.",
+        "Wire count badges from the relevant store if needed."
+      ]
+    }
+  },
+
+  "conventions": {
+    "replyPrefix": "CLAUDE.md: always reply starting with 'Hey, Captain!'.",
+    "configPriority": "explicit per-call override > Settings UI value > shell env > built-in default. Inverting is a footgun (stale shell keys shadow fresh UI keys). Enforced by shared-electron/__tests__/api-key-priority.test.ts. Env-only (no UI): RESEARCH_COPILOT_DEBUG, ENABLE_COMPUTE_STUB, ELECTRON_RENDERER_URL, AWS_SHARED_CREDENTIALS_FILE, AWS_CONFIG_FILE.",
+    "cjsImportsInMain": "In app/src/main/, default-import CJS packages (electron-updater, node-pty): `import electronUpdater from 'electron-updater'; const {autoUpdater}=electronUpdater`. Named imports break the packaged ESM build (cost a release).",
+    "persistedUiReset": "localStorage-backed UI prefs must be re-read in BOTH the store initial value AND reset() — session-store calls ui-store.reset() on every project open/close.",
+    "workspaceFolder": "Runtime metadata lives under a single top-level .research-pilot/. .agentfoundry/ is NOT created by runtime code (only in .gitignore/ignore lists/RFC-001). No task-anchor/focus mechanism exists — planning is model-maintained; cross-session state = session-summaries + recaps + artifacts + memory.",
+    "telemetryOptIn": "Tracing default disabled; per-project per-collaborator toggle in gitignored .research-pilot/preferences.json. Dev guard throws on unknown pipilot.* attribute keys.",
+    "stackedPrDeleteBranch": "Merging A in A->B->C with --delete-branch auto-CLOSES B/C (can't reopen). Pre-retarget downstream PRs or collapse the stack.",
+    "managedBlockDrift": "Managed gitignore/gitattributes blocks must refresh on CONTENT drift, not freeze on header presence.",
+    "globalKeydownGuard": "Renderer global keydown handlers on plain keys must bail when a modal is open or focus is in an editable field.",
+    "themeDim": "'dim' is a CSS layer (html.dark.dim), NOT a 3rd theme value — don't collapse it into the theme union.",
+    "mainBranchProtection": "main protected: required 'build' check (ci.yml), strict mode, 0 approvals, no force-push/delete; admins bypass (enforce_admins:false) so direct push works for version bumps.",
+    "dualRepoDistribution": "Source = private daidong/PiPilot; user-facing assets = public DIR-LAB/Research-Pilot. electron-updater targets the public repo."
+  },
+
+  "rfcs": {
+    "spec-dir": "docs/spec/",
+    "index": {
+      "RFC-005": "Wiki memory layer (paper/concept library + wiki_* tools + epistemic contract).",
+      "RFC-006": "BibTeX import + fill-only merge dedup.",
+      "RFC-007": "PR-A paper metadata enrichment; PR-B Paper Pack report.",
+      "RFC-008": "ComputeBackend abstraction (Registry + PlanStore + per-backend tools). Amendments A1-A5.",
+      "RFC-009": "AWS S3 read-side tools + EC2 backend (script writes to S3, agent reads).",
+      "RFC-013": "Shared workspaces — git-backed PI->student collaboration (lane=folder, AI-merge).",
+      "RFC-014": "Files-as-carrier — workspace files are the artifact source of truth; index is derived (MERGED).",
+      "trust-audit v0.8": "Provenance graph + adversarial auditor + Audit tab. Axiom A2: record and warn, never fight user modifications."
+    }
+  },
+
+  "whereToStart": {
+    "newAgentTool": "lib/tools/ + register in lib/tools/index.ts (extensionRecipes.addResearchTool).",
+    "newUiSurface": "app/src/renderer/components/ + a store + ui-store union (extensionRecipes.addCenterViewOrLeftTab/addStore).",
+    "newBackendEndpoint": "app/src/main/ipc.ts + app/src/preload/index.ts (extensionRecipes.addIpcChannel).",
+    "newComputeBackend": "lib/compute/backends/ + coordinator register (extensionRecipes.addComputeBackend; docs/spec/compute.md §19).",
+    "newSkill": "lib/skills/builtin/<name>/SKILL.md (extensionRecipes.addSkill).",
+    "newArtifactKind": "lib/types.ts + lib/memory-v2/ (extensionRecipes.addArtifactType).",
+    "changingModels": "lib/models.ts (verify ids in pi-ai models.generated.js).",
+    "biggestFiles": ["app/src/main/ipc.ts (3029)", "lib/agents/coordinator.ts (1403)", "lib/agents/prompts/index.ts (coordinator-system ~1600 lines of prompt)", "app/src/preload/index.ts (722)", "lib/types.ts (465)"]
+  }
+}

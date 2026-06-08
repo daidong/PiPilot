@@ -221,10 +221,40 @@ export class AwsEc2Runner {
     this.onCostKilled = opts.onCostKilled
     this.onRunUpdate = opts.onRunUpdate ?? (() => {})
     this.store.evictOld()
+    this.reconcileOnStart()
   }
 
   getStore(): AwsEc2RunStore {
     return this.store
+  }
+
+  /**
+   * RFC-016 §4.2 — reconcile on (re)construction. destroy() deliberately
+   * leaves EC2 instances running, so after a restart we must re-derive:
+   *   - a 'running' run with a live instanceId → resume cost/timeout
+   *     polling (the live SSH stream is gone, but the poll loop still
+   *     re-derives elapsed cost and enforces the kill thresholds — the
+   *     remote source of truth keeps the run from becoming a zombie);
+   *   - a run interrupted mid-setup (launching/connecting) is
+   *     unrecoverable without re-running the SSH workflow, so terminate
+   *     any orphaned instance (prevent a silent cost leak) and mark failed.
+   */
+  private reconcileOnStart(): void {
+    const active = this.store.getActiveRuns()
+    if (active.length === 0) return
+    let resumeMonitoring = false
+    for (const run of active) {
+      if (run.status === 'running' && run.instanceId) {
+        resumeMonitoring = true
+        continue
+      }
+      void this.terminateAndMark(
+        run.runId,
+        'failed',
+        'Interrupted by an app restart during instance setup; any orphaned instance was terminated to avoid a cost leak. Re-run if needed.',
+      ).catch(() => {})
+    }
+    if (resumeMonitoring) this.ensurePolling()
   }
 
   // ── Submit ──────────────────────────────────────────────────────────
@@ -258,6 +288,7 @@ export class AwsEc2Runner {
       stalled: false,
       retryCount: config.parentRunId ? ((this.store.getRun(config.parentRunId)?.retryCount ?? 0) + 1) : 0,
       parentRunId: config.parentRunId,
+      campaignId: config.campaignId,
       estimatedCostSoFar: 0,
     }
     this.store.createRun(record)

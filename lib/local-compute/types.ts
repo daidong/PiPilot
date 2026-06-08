@@ -70,6 +70,9 @@ export interface RunRecord {
   // Retry lineage
   retryCount: number
   parentRunId?: string
+
+  /** RFC-017 §6 — campaign grouping key stamped at submit. */
+  campaignId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +82,11 @@ export interface RunRecord {
 // until §7.10 deletes these modules.
 // ---------------------------------------------------------------------------
 
-export type { FailureCode, FailureSignal, StructuredProgress, OutputProgress } from '../compute/shared-types.js'
+// Import (not just re-export) so these names are in local scope for the
+// interfaces below (ExperienceRecord.failureCode, RunStatusResult.progress/
+// failure); the trailing `export type` keeps them available to importers too.
+import type { FailureCode, FailureSignal, StructuredProgress, OutputProgress } from '../compute/shared-types.js'
+export type { FailureCode, FailureSignal, StructuredProgress, OutputProgress }
 
 // ---------------------------------------------------------------------------
 // Sandbox Provider Interface
@@ -89,6 +96,17 @@ export interface SpawnConfig {
   command: string
   workDir: string
   outputPath: string                 // Where stdout+stderr go
+  /**
+   * RFC-016 §4.1 slow-path: when set, the CHILD writes its own exit code
+   * to this path (`echo $? > exitCodePath`) once the command finishes.
+   * This is the durable completion fact that lets the monitor (or a
+   * reopened app) finalize a run whose in-memory `handle.wait()` is gone
+   * (main-process reload, model switch, project reopen). The sentinel is
+   * written by the child, not by our in-memory exit handler — so it
+   * survives a runner reconstruction. Missing sentinel + dead PID ⇒
+   * `killed` (SIGKILL before the write, or power loss).
+   */
+  exitCodePath?: string
   env?: Record<string, string>
   timeoutMs?: number
   signal?: AbortSignal

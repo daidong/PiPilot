@@ -44,6 +44,18 @@ export interface BackendCapabilities {
   supportsStop: boolean
   /** Backend can stream output incrementally (vs. only on completion). */
   supportsStreaming: boolean
+  /**
+   * RFC-016 §4: where the source of truth for a run's liveness lives.
+   *   'ephemeral-local' — the OS (PID) + in-memory await + on-disk exit
+   *      sentinel; the run dies with the machine. Eligible for plan+execute
+   *      *fusion* (auto-run on plan, no separate execute call to orphan).
+   *   'remote-poll' — a durable remote handle polled for truth; the job
+   *      outlives the local process and (when hasCost) is gated behind a
+   *      cost confirm before submit.
+   * Optional for back-compat; absent ⇒ treated as 'remote-poll' (the safe,
+   * non-auto-run default, so an un-annotated backend never auto-fires).
+   */
+  livenessModel?: 'ephemeral-local' | 'remote-poll'
 }
 
 export interface BackendAvailability {
@@ -162,6 +174,13 @@ export interface ComputeRun {
   status: RunState
   command: string
   scriptPath?: string
+  /**
+   * RFC-017 §6 — campaign/sweep grouping key. Stamped at submit time from
+   * the agent turn that produced the batch, or from a scheduled task's
+   * campaignId (RFC-016 §4.5). Runs sharing a campaignId render as one group
+   * in the Compute tab's Finished zone. Absent ⇒ ungrouped.
+   */
+  campaignId?: string
   createdAt: string
   startedAt?: string
   completedAt?: string
@@ -227,6 +246,14 @@ export interface PlanRecord {
   approvedAt?: string
   rejectedAt?: string
   rejectionComments?: string
+  /**
+   * RFC-016 §4.4: rule-based danger findings for an otherwise-auto-run
+   * (non-gated, ephemeral-local) command. When non-empty, the plan is
+   * gated as a *danger confirm* (effectiveRequiresApproval becomes true)
+   * — distinct from a remote *cost confirm* or a forced *approval*. Drives
+   * the "⚠ flagged risky — Run anyway / Skip" card in Compute Zone ①.
+   */
+  dangerFlags?: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -258,4 +285,6 @@ export interface SubmitOpts {
   timeoutMinutes?: number
   stallThresholdMinutes?: number
   parentRunId?: string
+  /** RFC-017 §6 — campaign grouping key stamped onto the resulting run. */
+  campaignId?: string
 }

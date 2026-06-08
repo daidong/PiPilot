@@ -98,7 +98,7 @@ export function isManagedMarkdown(data: Record<string, unknown>): boolean {
  */
 export function markdownArtifactToText(a: NoteArtifact | WebContentArtifact | ToolOutputArtifact): string {
   const bodyField = bodyFieldFor(a.type)
-  const body = String((a as Record<string, unknown>)[bodyField] ?? '')
+  const body = String((a as unknown as Record<string, unknown>)[bodyField] ?? '')
   const rp: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(a)) {
     if (FM_TOP_LEVEL.has(k) || k === bodyField) continue
@@ -240,16 +240,19 @@ function bibEntryTypeOf(p: PaperArtifact): string {
  * paper's data on read). Such inputs fall back to field-based emit.
  */
 function bibParsesCleanly(text: string): boolean {
-  let hadError = false
-  let parsed: { entries?: Entry[] }
+  let parsed: { entries?: Entry[]; errors?: unknown[] }
   try {
-    parsed = parseBibtex(text, { sentenceCase: false, errorHandler: () => { hadError = true } }) as unknown as {
-      entries?: Entry[]
+    // The parser reports non-fatal problems on the result's `errors[]` (the
+    // `errorHandler` option this used to pass doesn't exist on this lib's
+    // Options type and was silently ignored); a non-empty errors[] means the
+    // .bib didn't parse cleanly, so fall back to field-based emit.
+    parsed = parseBibtex(text, { sentenceCase: false }) as unknown as {
+      entries?: Entry[]; errors?: unknown[]
     }
   } catch {
     return false
   }
-  if (hadError || !Array.isArray(parsed.entries) || parsed.entries.length !== 1) return false
+  if ((parsed.errors?.length ?? 0) > 0 || !Array.isArray(parsed.entries) || parsed.entries.length !== 1) return false
   const title = (parsed.entries[0].fields as Record<string, unknown>).title
   const t = Array.isArray(title) ? title.join('') : title ?? ''
   return String(t).trim().length > 0
@@ -443,7 +446,7 @@ export function parsePaperFile(bibText: string, sidecar: Record<string, unknown>
   // Fallback: a raw `.bib` with no sidecar — best-effort parse (needs an rp_id).
   let parsed: { entries?: Entry[] }
   try {
-    parsed = parseBibtex(bibText, { sentenceCase: false, errorHandler: () => {} }) as unknown as {
+    parsed = parseBibtex(bibText, { sentenceCase: false }) as unknown as {
       entries?: Entry[]
     }
   } catch {
@@ -463,8 +466,9 @@ export function parsePaperLibrary(bibText: string, sidecarMap: Record<string, un
   let parsed: { entries: Entry[] }
   try {
     // sentenceCase:false preserves the user's title capitalization (matches the
-    // BibTeX importer); errorHandler swallows malformed-entry warnings.
-    parsed = parseBibtex(bibText, { sentenceCase: false, errorHandler: () => {} }) as unknown as {
+    // BibTeX importer). Malformed entries surface on the result's errors[] and
+    // are tolerated here — we emit whatever valid entries parsed.
+    parsed = parseBibtex(bibText, { sentenceCase: false }) as unknown as {
       entries: Entry[]
     }
   } catch {

@@ -67,6 +67,7 @@ const CAPABILITIES: BackendCapabilities = {
   supportsGpu: false,
   supportsStop: true,
   supportsStreaming: false,
+  livenessModel: 'ephemeral-local',   // in-memory simulator — auto-run eligible
 }
 
 function nextPlanId(): string {

@@ -1015,6 +1015,21 @@ export default function App() {
       }
     })
 
+    // RFC-016 §4.5: scheduled-task events (separate channel from run events).
+    const unsubCronEvent = api.onCronEvent?.((event: any) => {
+      useComputeStore.getState().applyCronEvent(event)
+    })
+
+    // Main pushes the hydrate snapshot once the coordinator/registry is
+    // built — covers the case where the mount-time pull below raced ahead
+    // of coordinator init and got an empty snapshot (the "had to Ctrl+R to
+    // see history" bug). Applying the same hydrate functions is idempotent.
+    const unsubComputeHydrated = api.onComputeHydrated?.((snapshot: any) => {
+      if (Array.isArray(snapshot?.backends)) useComputeStore.getState().hydrateBackends(snapshot.backends)
+      if (Array.isArray(snapshot?.runs)) useComputeStore.getState().hydrateRuns(snapshot.runs)
+      if (Array.isArray(snapshot?.pendingPlans)) useComputeStore.getState().hydratePendingPlans(snapshot.pendingPlans)
+    })
+
     // Hydrate persisted runs + pending plans on mount so the Compute
     // tab restores its pre-crash state in a single round trip
     // (amendment A3).
@@ -1028,6 +1043,15 @@ export default function App() {
         }
         if (Array.isArray(result?.backends)) {
           useComputeStore.getState().hydrateBackends(result.backends)
+        }
+      })
+      .catch(() => { /* non-fatal */ })
+
+    // RFC-016 §4.5: hydrate the home-scoped scheduled tasks once on mount.
+    api?.cronList?.()
+      .then((result: any) => {
+        if (Array.isArray(result?.tasks)) {
+          useComputeStore.getState().hydrateCronTasks(result.tasks)
         }
       })
       .catch(() => { /* non-fatal */ })
@@ -1048,6 +1072,8 @@ export default function App() {
       unsubRetryNotice()
       unsubUsage()
       unsubComputeEvent()
+      unsubCronEvent?.()
+      unsubComputeHydrated?.()
       unsubRecap()
     }
   }, [hasProject])
