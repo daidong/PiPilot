@@ -71,6 +71,7 @@ import { createHash } from 'crypto'
 import { probeStaticProfile } from '../../../lib/local-compute/environment-model'
 import { inferProviderFromModelId } from '../../../lib/models'
 import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
+import { runAuditPipeline, type AuditRunResult } from '../../../lib/audit-graph/audit/index'
 import { AwsCredentialProvider, toSdkCredentials } from '../../../lib/aws/credentials'
 // RFC-008 §7.5: compute IPC migrated to a single discriminated-event
 // channel; the PR #62 helpers (PendingPlanStore reach-through,
@@ -992,7 +993,8 @@ async function runMainCallLlm(
   state: WindowRuntimeState,
   system: string,
   user: string,
-  purpose: string
+  purpose: string,
+  opts: { telemetry?: boolean; temperature?: number; images?: { data: string; mimeType: string }[] } = {},
 ): Promise<string> {
   const modelStr = state.currentModel
   const auth = resolveCoordinatorAuth(modelStr)
@@ -1031,13 +1033,20 @@ async function runMainCallLlm(
     resolveApiKey = async () => auth.apiKey
   }
   const apiKey = await resolveApiKey()
+  const userContent = opts.images && opts.images.length > 0
+    ? [
+        { type: 'text' as const, text: user },
+        ...opts.images.map(img => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType })),
+      ]
+    : user
   return runSubLlmText({
     model: piModel as unknown as Parameters<typeof runSubLlmText>[0]['model'],
     systemPrompt: system,
-    userContent: user,
+    userContent,
     apiKey,
     purpose,
-    tracer: state.tracer ?? null,
+    ...(opts.temperature !== undefined && { temperature: opts.temperature }),
+    tracer: opts.telemetry === false ? null : state.tracer ?? null,
   })
 }
 
@@ -2971,6 +2980,29 @@ export function registerIpcHandlers(): void {
     if (!presence.present) return { presence, graph: null }
     const graph = await projectGraph(state.projectPath)
     return { presence, graph }
+  })
+
+  handleWindow('audit:run-deliverable', async ({ state }, opts?: { targetStepId?: string | null }): Promise<{
+    success: boolean
+    result?: AuditRunResult
+    error?: string
+  }> => {
+    if (!state.projectPath) return { success: false, error: 'No project is open.' }
+    try {
+      const presence = await checkTelemetryPresence(state.projectPath)
+      if (!presence.present) return { success: false, error: 'No telemetry is available to audit.' }
+      const graph = await projectGraph(state.projectPath)
+      const result = await runAuditPipeline({
+        projectPath: state.projectPath,
+        graph,
+        targetStepId: opts?.targetStepId ?? null,
+        persist: true,
+        callLlm: (system, user, images) => runMainCallLlm(state, system, user, 'audit-judge', { telemetry: false, temperature: 0, images }),
+      })
+      return { success: true, result }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
   })
 
   // Close project: stop agent, destroy coordinator, reset state

@@ -61,6 +61,7 @@ export interface GraphNode {
   outputTokens?: number | null
   cacheReadTokens?: number | null
   isError?: boolean
+  retryCount?: number | null
   eventNames?: string[]
   rawEvents?: { name: string; body: string }[]
 

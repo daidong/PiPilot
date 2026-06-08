@@ -113,6 +113,43 @@ async function readJsonlIfExists<T>(filePath: string): Promise<T[]> {
   return out
 }
 
+function containsSizeCapRedaction(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  if ((value as { redactionLevel?: unknown }).redactionLevel === 'size-cap') return true
+  if (Array.isArray(value)) return value.some(containsSizeCapRedaction)
+  return Object.values(value as Record<string, unknown>).some(containsSizeCapRedaction)
+}
+
+function collectToolCallIds(value: unknown, out: Set<string>): void {
+  if (!value || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    for (const item of value) collectToolCallIds(item, out)
+    return
+  }
+  const block = value as { type?: unknown; id?: unknown }
+  if (block.type === 'toolCall' && typeof block.id === 'string' && block.id.length > 0) {
+    out.add(block.id)
+  }
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    collectToolCallIds(child, out)
+  }
+}
+
+function parseResponseToolCallIds(step: InternalSpan): Set<string> | null {
+  const event = step.events.find(e => e.name === 'pipilot.chat.response_text')
+  if (!event || typeof event.attrs.body !== 'string') return null
+  let body: unknown
+  try {
+    body = JSON.parse(event.attrs.body)
+  } catch {
+    return null
+  }
+  if (containsSizeCapRedaction(body)) return null
+  const ids = new Set<string>()
+  collectToolCallIds(body, ids)
+  return ids
+}
+
 // —— Main projector —————————————————————————————————————————————————————
 
 export async function projectGraph(projectPath: string): Promise<AuditGraph> {
@@ -242,6 +279,7 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
       outputTokens: (sp.attrs['gen_ai.usage.output_tokens'] as number | undefined) ?? null,
       cacheReadTokens: (sp.attrs['gen_ai.usage.cache_read.input_tokens'] as number | undefined) ?? null,
       isError: !!sp.attrs['pipilot.tool.error_class'],
+      retryCount: (sp.attrs['pipilot.tool.retry_count'] as number | undefined) ?? null,
       eventNames: sp.events.map(e => e.name),
       rawEvents: sp.events.map(e => ({ name: e.name, body: String(e.attrs.body ?? '').slice(0, 4000) })),
     })
@@ -261,6 +299,21 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
   }
 
   // Tool ↔ step bidirectional (invokes + returns)
+  const issuerStepByCallId = new Map<string, GraphNode>()
+  for (const sp of spans) {
+    if (sp.name !== 'invoke_agent step') continue
+    const stepNode = nodes.get(`span:${sp.spanId}`)
+    if (!stepNode) continue
+    const ids = parseResponseToolCallIds(sp)
+    if (!ids) continue
+    for (const id of ids) issuerStepByCallId.set(id, stepNode)
+  }
+
+  const sameTurnWhenKnown = (a: GraphNode, b: GraphNode): boolean => {
+    if (a.turnId && b.turnId) return a.turnId === b.turnId
+    return true
+  }
+
   const toolsByTrace = new Map<string, GraphNode[]>()
   for (const n of nodes.values()) {
     if (n.kind === 'tool' && n.traceId) {
@@ -269,7 +322,8 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
   }
   for (const [tid, tools] of toolsByTrace) {
     const steps = (stepsByTrace.get(tid) || []).slice().sort((a, b) => Number(a.startNs) - Number(b.startNs))
-    for (const tool of tools) {
+    const stepsByIndex = (stepsByTrace.get(tid) || []).slice().sort((a, b) => (a.stepIndex ?? 0) - (b.stepIndex ?? 0))
+    const linkByTime = (tool: GraphNode) => {
       // INVOKES — last step started before the tool
       let owner: GraphNode | null = null
       for (const s of steps) {
@@ -277,12 +331,40 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
       }
       if (owner) addEdge(owner.id, tool.id, 'invokes')
 
-      // RETURNS — the next step that starts AFTER the tool ends consumes its result
+      // RETURNS — the next step in the same turn consumes its result. If the
+      // issuer is the final step of a turn, do not link into the next turn.
       let consumer: GraphNode | null = null
       for (const s of steps) {
-        if (Number(s.startNs) >= Number(tool.endNs)) { consumer = s; break }
+        if (Number(s.startNs) >= Number(tool.endNs) && (!owner || sameTurnWhenKnown(owner, s))) {
+          consumer = s
+          break
+        }
       }
       if (consumer) addEdge(tool.id, consumer.id, 'returns')
+    }
+
+    for (const tool of tools) {
+      if (tool.toolCallId) {
+        const issuer = issuerStepByCallId.get(tool.toolCallId)
+        if (issuer && issuer.traceId === tid && sameTurnWhenKnown(issuer, tool)) {
+          let consumer: GraphNode | null = null
+          const issuerIndex = issuer.stepIndex ?? null
+          if (issuerIndex !== null) {
+            for (const s of stepsByIndex) {
+              if ((s.stepIndex ?? Number.MAX_SAFE_INTEGER) > issuerIndex && sameTurnWhenKnown(issuer, s)) {
+                consumer = s
+                break
+              }
+            }
+          }
+          if (consumer) {
+            addEdge(issuer.id, tool.id, 'invokes')
+            addEdge(tool.id, consumer.id, 'returns')
+            continue
+          }
+        }
+      }
+      linkByTime(tool)
     }
   }
 
@@ -316,17 +398,24 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
       if (t) titleById.set(a.id, t)
     }
   } catch { /* index unavailable — fall back to filenames below */ }
+  const artifactIdsNeedingCreateTextFallback = new Set<string>()
   for (const r of ledger) {
     const id = `artifact:${r.artifactId}`
-    if (nodes.has(id)) continue
-    const title = titleById.get(r.artifactId) ?? null
-    addNode(id, 'artifact', title || r.path.split('/').pop() || r.artifactId, {
-      artifactId: r.artifactId,
-      type: r.type,
-      title,
-      path: r.path,
-      versions: ledgerByArtifact.get(r.artifactId) || [],
-    })
+    if (!nodes.has(id)) {
+      const title = titleById.get(r.artifactId) ?? null
+      addNode(id, 'artifact', title || r.path.split('/').pop() || r.artifactId, {
+        artifactId: r.artifactId,
+        type: r.type,
+        title,
+        path: r.path,
+        versions: ledgerByArtifact.get(r.artifactId) || [],
+      })
+    }
+    if (r.spanId && nodes.has(`span:${r.spanId}`)) {
+      addEdge(`span:${r.spanId}`, id, 'creates')
+    } else if (!r.spanId) {
+      artifactIdsNeedingCreateTextFallback.add(r.artifactId)
+    }
   }
 
   // 5. Walk tool spans for file/dir lineage --------------------------------
@@ -392,7 +481,9 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
         const innerTxt = r.content?.[0]?.text
         if (innerTxt) {
           const inner = JSON.parse(innerTxt) as { id?: string }
-          if (inner.id) addEdge(spanNodeId, `artifact:${inner.id}`, 'creates')
+          if (inner.id && artifactIdsNeedingCreateTextFallback.has(inner.id)) {
+            addEdge(spanNodeId, `artifact:${inner.id}`, 'creates')
+          }
         }
       } catch { /* skip */ }
     }

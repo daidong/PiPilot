@@ -52,6 +52,8 @@ const SUITES = {
   importers: 'lib/importers/__tests__',
   reports: 'lib/reports/__tests__',
   compute: 'lib/compute',
+  'audit-graph': 'lib/audit-graph',
+  'audit-renderer': 'app/src/renderer/components/center/audit',
   models: 'lib/__tests__',
   aws: 'lib/aws/__tests__',
   'aws-ec2': 'lib/aws-ec2-compute/__tests__',

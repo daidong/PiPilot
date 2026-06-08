@@ -1,5 +1,5 @@
 /**
- * Force-directed render of the provenance projection.
+ * Timeline render of the provenance projection.
  *
  * The math here (support slice BFS, taint propagation, importance scoring,
  * zoom-gated labels, tinted contamination) is identical to the prototype
@@ -9,9 +9,8 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Maximize2 } from 'lucide-react'
+import { GitBranch, Maximize2 } from 'lucide-react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { forceX, forceY } from 'd3-force'
 import type {
   AuditGraph,
   EdgeRel,
@@ -20,6 +19,7 @@ import type {
   NodeKind,
 } from '../../../../../../lib/audit-graph/index'
 import { useAuditPalette, tintToward } from './audit-theme'
+import { buildSystemAuditProjection, edgeKey } from './system-audit-projection'
 
 // —— Importance + radius priors ————————————————————————————————————————
 
@@ -33,6 +33,185 @@ const CAUSAL: ReadonlySet<EdgeRel> = new Set([
   'precedes', 'invokes', 'returns', 'sub-llm', 'reads', 'writes', 'creates', 'retrieved', 'mentions', 'listed',
 ])
 
+type RenderNode = GraphNode & {
+  x?: number
+  y?: number
+  fx?: number
+  fy?: number
+  __layoutTraceId?: string
+}
+
+type RenderLink = Omit<GraphEdge, 'source' | 'target'> & {
+  source: string | RenderNode
+  target: string | RenderNode
+}
+
+interface RenderGraph {
+  nodes: RenderNode[]
+  links: RenderLink[]
+}
+
+const STEP_GAP = 86
+const TRACK_GAP = 58
+const TRACE_ROW_GAP = 390
+
+function nodeTime(n: GraphNode): number {
+  const t = Number(n.startNs)
+  return Number.isFinite(t) && t > 0 ? t : Number.MAX_SAFE_INTEGER
+}
+
+function edgeSourceId(e: RenderLink): string {
+  return typeof e.source === 'object' ? e.source.id : e.source
+}
+
+function edgeTargetId(e: RenderLink): string {
+  return typeof e.target === 'object' ? e.target.id : e.target
+}
+
+function fixedNode(n: RenderNode, x: number, y: number): RenderNode {
+  return { ...n, x, y, fx: x, fy: y }
+}
+
+function layoutProvenanceGraph(filtered: RenderGraph): RenderGraph {
+  const links = filtered.links.map(e => ({ ...e }))
+  const connected = new Map<string, RenderLink[]>()
+  for (const e of links) {
+    const s = edgeSourceId(e)
+    const t = edgeTargetId(e)
+    const a = connected.get(s); if (a) a.push(e); else connected.set(s, [e])
+    const b = connected.get(t); if (b) b.push(e); else connected.set(t, [e])
+  }
+
+  const inferredTrace = new Map<string, string>()
+  for (const n of filtered.nodes) {
+    if (n.traceId) inferredTrace.set(n.id, n.traceId)
+    else if (n.kind === 'trace') inferredTrace.set(n.id, n.id.replace(/^trace:/, ''))
+  }
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const e of links) {
+      const s = edgeSourceId(e)
+      const t = edgeTargetId(e)
+      const st = inferredTrace.get(s)
+      const tt = inferredTrace.get(t)
+      if (st && !tt) { inferredTrace.set(t, st); changed = true }
+      if (tt && !st) { inferredTrace.set(s, tt); changed = true }
+    }
+  }
+
+  const traceIds = [...new Set([...inferredTrace.values()])]
+    .sort((a, b) => {
+      const ta = Math.min(...filtered.nodes.filter(n => inferredTrace.get(n.id) === a).map(nodeTime))
+      const tb = Math.min(...filtered.nodes.filter(n => inferredTrace.get(n.id) === b).map(nodeTime))
+      return ta - tb || a.localeCompare(b)
+    })
+  if (traceIds.length === 0) traceIds.push('__untraced__')
+
+  const placed = new Map<string, RenderNode>()
+  const toolOwnerStep = new Map<string, string>()
+  for (const e of links) {
+    if (e.rel === 'invokes') toolOwnerStep.set(edgeTargetId(e), edgeSourceId(e))
+  }
+
+  for (const [traceOrdinal, traceId] of traceIds.entries()) {
+    const traceNodes = filtered.nodes
+      .filter(n => (inferredTrace.get(n.id) ?? '__untraced__') === traceId)
+      .sort((a, b) => nodeTime(a) - nodeTime(b) || a.id.localeCompare(b.id))
+    const steps = traceNodes
+      .filter(n => n.kind === 'step')
+      .sort((a, b) => (a.stepIndex ?? 0) - (b.stepIndex ?? 0) || nodeTime(a) - nodeTime(b))
+    const baseY = (traceOrdinal - (traceIds.length - 1) / 2) * TRACE_ROW_GAP
+    const stepIndex = new Map<string, number>()
+    const stepX = new Map<string, number>()
+    steps.forEach((step, i) => {
+      const x = (i - Math.max(0, steps.length - 1) / 2) * STEP_GAP
+      stepIndex.set(step.id, i)
+      stepX.set(step.id, x)
+      placed.set(step.id, fixedNode(step, x, baseY))
+    })
+
+    const fallbackColumn = (n: RenderNode) => {
+      if (steps.length === 0) {
+        const i = traceNodes.indexOf(n)
+        return (i - Math.max(0, traceNodes.length - 1) / 2) * STEP_GAP
+      }
+      const byTime = steps.findIndex(s => nodeTime(s) >= nodeTime(n))
+      const i = byTime >= 0 ? byTime : steps.length - 1
+      return stepX.get(steps[i].id) ?? 0
+    }
+
+    const laneUse = new Map<string, number>()
+    const nextLane = (x: number, lanes: number[]) => {
+      const key = String(Math.round(x / 18))
+      const used = laneUse.get(key) ?? 0
+      laneUse.set(key, used + 1)
+      return lanes[used % lanes.length] + Math.trunc(used / lanes.length) * Math.sign(lanes[used % lanes.length] || 1)
+    }
+
+    for (const n of traceNodes) {
+      if (placed.has(n.id)) continue
+      if (n.kind === 'trace' || n.kind === 'session') {
+        const x = (steps.length ? -((steps.length - 1) / 2) * STEP_GAP : 0) - 115
+        placed.set(n.id, fixedNode(n, x, baseY - TRACK_GAP * 1.7))
+      }
+    }
+
+    const tools = traceNodes
+      .filter(n => n.kind === 'tool' || n.kind === 'chat' || n.kind === 'span')
+      .sort((a, b) => nodeTime(a) - nodeTime(b) || a.id.localeCompare(b.id))
+    for (const n of tools) {
+      if (placed.has(n.id)) continue
+      const owner = toolOwnerStep.get(n.id)
+      const x = owner && stepX.has(owner) ? (stepX.get(owner) ?? 0) + STEP_GAP * 0.38 : fallbackColumn(n)
+      const lanes = n.kind === 'chat' ? [-2.3, 2.3, -3.2, 3.2] : [-1, 1, -1.9, 1.9]
+      const lane = nextLane(x, lanes)
+      placed.set(n.id, fixedNode(n, x, baseY + lane * TRACK_GAP))
+    }
+
+    const outer = traceNodes
+      .filter(n => !placed.has(n.id))
+      .sort((a, b) => {
+        const aTool = (connected.get(a.id) ?? []).map(e => placed.get(edgeSourceId(e)) ?? placed.get(edgeTargetId(e))).find(Boolean)
+        const bTool = (connected.get(b.id) ?? []).map(e => placed.get(edgeSourceId(e)) ?? placed.get(edgeTargetId(e))).find(Boolean)
+        return (aTool?.x ?? 0) - (bTool?.x ?? 0) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id)
+      })
+    for (const n of outer) {
+      const anchorEdge = (connected.get(n.id) ?? []).find(e => placed.has(edgeSourceId(e)) || placed.has(edgeTargetId(e)))
+      const anchor = anchorEdge ? (placed.get(edgeSourceId(anchorEdge)) ?? placed.get(edgeTargetId(anchorEdge))) : undefined
+      const rel = anchorEdge?.rel
+      const direction =
+        rel === 'writes' || rel === 'creates'
+          ? 1
+          : rel === 'reads' || rel === 'retrieved' || rel === 'listed' || rel === 'mentions'
+            ? -1
+            : 0
+      const x = (anchor?.x ?? fallbackColumn(n)) + direction * STEP_GAP * 0.62
+      const lanes = n.kind === 'artifact'
+        ? [2.9, 3.8, -3.8]
+        : n.kind === 'file' || n.kind === 'dir'
+          ? [-2.9, 2.9, -3.8, 3.8]
+          : [-2.4, 2.4, -3.2, 3.2]
+      const lane = nextLane(x, lanes)
+      placed.set(n.id, fixedNode(n, x, baseY + lane * TRACK_GAP))
+    }
+  }
+
+  for (const n of filtered.nodes) {
+    if (placed.has(n.id)) continue
+    const i = placed.size
+    placed.set(n.id, fixedNode(n, (i % 8) * STEP_GAP, TRACE_ROW_GAP + Math.floor(i / 8) * TRACK_GAP))
+  }
+
+  return {
+    nodes: filtered.nodes.map(n => ({
+      ...(placed.get(n.id) ?? n),
+      __layoutTraceId: inferredTrace.get(n.id),
+    })),
+    links,
+  }
+}
+
 // —— Public props ————————————————————————————————————————————————————
 
 export interface ProvenanceGraphProps {
@@ -40,6 +219,8 @@ export interface ProvenanceGraphProps {
   selected: GraphNode | null
   onSelect: (node: GraphNode | null) => void
   taint: Record<string, { reason: string; ts: number }>
+  /** Machine-derived suspicion scores — nodes flagged without user action. */
+  autoSuspect?: Map<string, string[]>
   filters: {
     hideContains: boolean
     hideWikiBg: boolean
@@ -48,19 +229,33 @@ export interface ProvenanceGraphProps {
   }
   /** Imperative focus — parent calls this when user picks a node from a list. */
   focusRef?: React.MutableRefObject<((node: GraphNode) => void) | null>
-  /** Bubble support-slice membership up so the side panel can show stats. */
-  onSliceChange?: (slice: { nodes: Set<string>; derivedTaint: Set<string> }) => void
+  /** Bubble support/critical membership up so the side panel can show stats. */
+  onSliceChange?: (slice: {
+    nodes: Set<string>
+    derivedTaint: Set<string>
+    audit?: {
+      mode: 'audit' | 'full'
+      targetId: string | null
+      targetLabel: string | null
+      spineNodes: Set<string>
+      observationNodes: Set<string>
+      materialNodes: Set<string>
+      recoveredFailureNodes: Set<string>
+      hiddenBranchNodes: Set<string>
+    }
+  }) => void
 }
 
 // —— Component ————————————————————————————————————————————————————————
 
 export function ProvenanceGraph({
-  graph, selected, onSelect, taint, filters, focusRef, onSliceChange,
+  graph, selected, onSelect, taint, autoSuspect, filters, focusRef, onSliceChange,
 }: ProvenanceGraphProps) {
   const palette = useAuditPalette()
   const fgRef = useRef<any>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 600 })
+  const [viewMode, setViewMode] = useState<'audit' | 'full'>('audit')
 
   // —— Resize observer ——
   useLayoutEffect(() => {
@@ -101,31 +296,49 @@ export function ProvenanceGraph({
     })
     // react-force-graph mutates source/target into node refs at runtime, so we
     // hand it shallow clones to avoid corrupting the upstream data.
-    return { nodes: visible.map(n => ({ ...n })), links: links.map(e => ({ ...e })) }
+    return { nodes: visible.map(n => ({ ...n })), links: links.map(e => ({ ...e })) } as RenderGraph
   }, [graph, filters])
 
+  const auditProjection = useMemo(
+    () => buildSystemAuditProjection({ nodes: filtered.nodes, edges: filtered.links as GraphEdge[] }),
+    [filtered],
+  )
+
+  const layouted = useMemo(() => layoutProvenanceGraph(filtered), [filtered])
+  const displayed = useMemo(() => {
+    if (viewMode !== 'audit' || auditProjection.auditNodes.size === 0) return layouted
+    const ids = auditProjection.auditNodes
+    const nodes = layouted.nodes.filter(n => ids.has(n.id))
+    const links = layouted.links.filter(l => (
+      ids.has(edgeSourceId(l)) &&
+      ids.has(edgeTargetId(l)) &&
+      auditProjection.auditEdges.has(edgeKey({
+        source: edgeSourceId(l),
+        target: edgeTargetId(l),
+        rel: l.rel,
+      }))
+    ))
+    return { nodes, links }
+  }, [layouted, viewMode, auditProjection])
+
   // —— Force tuning ——
-  // The default charge (-160) is right for connected clusters. The problem
-  // is that nothing pulls isolated/loosely-connected nodes back — they drift
-  // outward indefinitely and force zoomToFit to scale down dramatically to
-  // include them. A weak forceX/Y toward origin keeps the simulation bounded
-  // without flattening real clusters (link force still dominates locally).
+  // Provenance is a causal timeline, so nodes are fixed onto tracks instead
+  // of left to settle into a force-directed knot. Link force remains present
+  // only so react-force-graph can run its lifecycle and draw arrows.
   useEffect(() => {
     const fg = fgRef.current
     if (!fg) return
-    fg.d3Force('charge')?.strength(-160)
-    fg.d3Force('link')?.distance((l: any) => (l.rel === 'contains' ? 60 : 36))
-    fg.d3Force('x', forceX(0).strength(0.04))
-    fg.d3Force('y', forceY(0).strength(0.04))
-  }, [filtered])
+    fg.d3Force('charge')?.strength(-20)
+    fg.d3Force('link')?.distance((l: any) => (l.rel === 'contains' ? 90 : 58))
+  }, [displayed])
 
   // Largest causal-connected component. zoomToFit fits only these nodes so
   // a couple of stragglers don't shrink the main graph into a postage stamp.
   const mainComponentIds = useMemo(() => {
-    const nodeIds = new Set<string>(filtered.nodes.map(n => n.id))
+    const nodeIds = new Set<string>(displayed.nodes.map(n => n.id))
     const adj = new Map<string, Set<string>>()
     for (const id of nodeIds) adj.set(id, new Set())
-    for (const e of filtered.links as any[]) {
+    for (const e of displayed.links as any[]) {
       if (e.rel === 'contains') continue
       const s = typeof e.source === 'object' ? e.source.id : e.source
       const t = typeof e.target === 'object' ? e.target.id : e.target
@@ -150,14 +363,14 @@ export function ProvenanceGraph({
     // fitting everything — this dataset just doesn't have one dominant cluster.
     if (largest.size < Math.max(8, nodeIds.size * 0.25)) return null
     return largest
-  }, [filtered])
+  }, [displayed])
 
   // Auto-fit on initial settle and on filter changes. Triggered when the
   // user enters the tab (size > 0 for the first time) and again whenever
   // the filtered set changes substantively. We fit on every onEngineStop
   // for the *first* fit after a filter change — flag resets each time.
   const needsFitRef = useRef(true)
-  useEffect(() => { needsFitRef.current = true }, [filtered])
+  useEffect(() => { needsFitRef.current = true }, [displayed])
   // Pass a node filter to zoomToFit so the camera only frames the largest
   // causal-connected component — stragglers don't dominate the calculation.
   const fitFilter = useMemo(() => {
@@ -179,20 +392,20 @@ export function ProvenanceGraph({
   useEffect(() => {
     if (!focusRef) return
     focusRef.current = (n: GraphNode) => {
-      const live = filtered.nodes.find((x: any) => x.id === n.id) as any
+      const live = displayed.nodes.find((x: any) => x.id === n.id) as any
       if (live && live.x !== undefined && fgRef.current) {
         fgRef.current.centerAt(live.x, live.y, 600)
         fgRef.current.zoom(2.2, 600)
       }
     }
     return () => { focusRef.current = null }
-  }, [focusRef, filtered])
+  }, [focusRef, displayed])
 
   // —— Importance + label thresholds ——
   const importance = useMemo(() => {
     const m = new Map<string, number>()
-    for (const n of filtered.nodes) m.set(n.id, KIND_WEIGHT[n.kind] ?? 1)
-    for (const e of filtered.links as any[]) {
+    for (const n of displayed.nodes) m.set(n.id, KIND_WEIGHT[n.kind] ?? 1)
+    for (const e of displayed.links as any[]) {
       if (e.rel === 'contains' || e.rel === 'sub-llm') continue
       const s = typeof e.source === 'object' ? e.source.id : e.source
       const t = typeof e.target === 'object' ? e.target.id : e.target
@@ -201,7 +414,7 @@ export function ProvenanceGraph({
       m.set(t, (m.get(t) ?? 0) + w)
     }
     return m
-  }, [filtered])
+  }, [displayed])
 
   const importanceCutoff = useMemo(() => {
     const vals = [...importance.values()].sort((a, b) => b - a)
@@ -213,7 +426,7 @@ export function ProvenanceGraph({
   // Per-node zoom threshold: top 5 unlock at 0.7, 6-15 at 1.0, etc.
   const labelZoomThreshold = useMemo(() => {
     const m = new Map<string, number>()
-    const ranked = [...filtered.nodes]
+    const ranked = [...displayed.nodes]
       .map(n => ({ id: n.id, imp: importance.get(n.id) ?? 0 }))
       .sort((a, b) => b.imp - a.imp)
     ranked.forEach((e, i) => {
@@ -226,7 +439,7 @@ export function ProvenanceGraph({
       m.set(e.id, t)
     })
     return m
-  }, [filtered, importance])
+  }, [displayed, importance])
 
   function nodeRadius(n: GraphNode): number {
     const base = BASE_RADIUS[n.kind] ?? 4
@@ -299,31 +512,44 @@ export function ProvenanceGraph({
     const set = new Set<any>()
     const closure = new Set<string>([...Object.keys(taint), ...derivedTaint])
     if (closure.size === 0) return set
-    for (const l of filtered.links as any[]) {
+    for (const l of displayed.links as any[]) {
       if (l.rel === 'contains' || l.rel === 'sub-llm') continue
       const s = typeof l.source === 'object' ? l.source.id : l.source
       const t = typeof l.target === 'object' ? l.target.id : l.target
       if (closure.has(s) && closure.has(t)) set.add(l)
     }
     return set
-  }, [taint, derivedTaint, filtered])
+  }, [taint, derivedTaint, displayed])
 
   // —— Slice-membership set of link OBJECTS for accessor lookups ——
   const highlightLinks = useMemo(() => {
     const set = new Set<any>()
     if (!selected) return set
-    filtered.links.forEach((l: any) => {
+    displayed.links.forEach((l: any) => {
       const src = typeof l.source === 'object' ? l.source.id : l.source
       const tgt = typeof l.target === 'object' ? l.target.id : l.target
       if (highlight.nodes.has(src) && highlight.nodes.has(tgt) && highlight.nodes.size > 1) set.add(l)
     })
     return set
-  }, [filtered, selected, highlight])
+  }, [displayed, selected, highlight])
 
   // —— Bubble slice info up ——
   useEffect(() => {
-    onSliceChange?.({ nodes: highlight.nodes, derivedTaint })
-  }, [highlight, derivedTaint, onSliceChange])
+    onSliceChange?.({
+      nodes: highlight.nodes,
+      derivedTaint,
+      audit: {
+        mode: viewMode,
+        targetId: auditProjection.targetStepId,
+        targetLabel: auditProjection.targetLabel,
+        spineNodes: auditProjection.spineNodes,
+        observationNodes: auditProjection.observationNodes,
+        materialNodes: auditProjection.materialNodes,
+        recoveredFailureNodes: auditProjection.recoveredFailureNodes,
+        hiddenBranchNodes: auditProjection.hiddenBranchNodes,
+      },
+    })
+  }, [highlight, derivedTaint, auditProjection, viewMode, onSliceChange])
 
   // —— Link color accessor (shared between line / arrow / particle) ——
   function linkColorFor(l: any, opaque = false): string {
@@ -343,7 +569,7 @@ export function ProvenanceGraph({
         ref={fgRef}
         width={size.w}
         height={size.h}
-        graphData={filtered}
+        graphData={displayed}
         backgroundColor="transparent"
         nodeRelSize={5}
         nodeVal={(n: any) => nodeRadius(n)}
@@ -385,29 +611,42 @@ export function ProvenanceGraph({
           const isSel = selected?.id === n.id
           const isDirectTaint = !!taint[n.id]
           const isDerivedTaint = derivedTaint.has(n.id)
+          const isAutoSuspect = !isDirectTaint && !isDerivedTaint && (autoSuspect?.has(n.id) ?? false)
           const imp = importance.get(n.id) ?? 0
           const important = imp >= importanceCutoff
           const baseC = palette.kind[n.kind as NodeKind] || '#aaa'
-          const fill = isDirectTaint
-            ? tintToward(baseC, palette.taint, 0.7)
-            : isDerivedTaint
-              ? tintToward(baseC, palette.taint, 0.4)
-              : baseC
+          const fill = isAutoSuspect
+            ? tintToward(baseC, palette.taint, 0.55)
+            : isDirectTaint
+              ? tintToward(baseC, palette.taint, 0.35)
+              : isDerivedTaint
+                ? tintToward(baseC, palette.taint, 0.2)
+                : baseC
           const dim = selected ? (!isHi && !isSel) : !important
           ctx.globalAlpha = dim ? 0.22 : 1
           ctx.beginPath()
           ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
           ctx.fillStyle = fill
           ctx.fill()
-          // Rings — direct = thick solid red, derived = thin dashed red, selected = white
-          if (isDirectTaint) {
+          // Rings:
+          //   auto-suspect (machine)  → thick solid red ring
+          //   direct taint (user)     → thin dashed red ring (darker)
+          //   derived taint (user)    → thin dashed red ring (lighter)
+          //   selected                → white ring
+          if (isAutoSuspect) {
             ctx.lineWidth = 2.4 / globalScale
             ctx.strokeStyle = `rgb(${palette.taint.join(',')})`
             ctx.setLineDash([])
             ctx.beginPath(); ctx.arc(n.x, n.y, r + 2.5, 0, Math.PI * 2); ctx.stroke()
+          } else if (isDirectTaint) {
+            ctx.lineWidth = 1.6 / globalScale
+            ctx.strokeStyle = `rgba(${palette.taint.join(',')},0.9)`
+            ctx.setLineDash([3 / globalScale, 2 / globalScale])
+            ctx.beginPath(); ctx.arc(n.x, n.y, r + 2.5, 0, Math.PI * 2); ctx.stroke()
+            ctx.setLineDash([])
           } else if (isDerivedTaint) {
-            ctx.lineWidth = 1.4 / globalScale
-            ctx.strokeStyle = `rgba(${palette.taint.join(',')},0.7)`
+            ctx.lineWidth = 1.2 / globalScale
+            ctx.strokeStyle = `rgba(${palette.taint.join(',')},0.55)`
             ctx.setLineDash([3 / globalScale, 2 / globalScale])
             ctx.beginPath(); ctx.arc(n.x, n.y, r + 2.5, 0, Math.PI * 2); ctx.stroke()
             ctx.setLineDash([])
@@ -438,9 +677,38 @@ export function ProvenanceGraph({
         }}
         onNodeClick={(n: any) => onSelect(n as GraphNode)}
         onBackgroundClick={() => onSelect(null)}
-        cooldownTicks={120}
+        cooldownTicks={1}
         onEngineStop={handleEngineStop}
       />
+      <div className="absolute top-3 left-3 flex items-center gap-1 rounded-md border t-border-subtle t-bg-elevated shadow-sm p-1">
+        <button
+          onClick={() => setViewMode('audit')}
+          title="Show system audit projection"
+          className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
+            viewMode === 'audit' ? 't-bg-accent-2-muted t-text' : 't-text-muted hover:t-text-secondary'
+          }`}
+        >
+          <GitBranch size={12} />
+          Audit
+        </button>
+        <button
+          onClick={() => setViewMode('full')}
+          title="Show full trace timeline"
+          className={`px-2 py-1 rounded text-[11px] transition-colors ${
+            viewMode === 'full' ? 't-bg-accent-2-muted t-text' : 't-text-muted hover:t-text-secondary'
+          }`}
+        >
+          Full
+        </button>
+        {viewMode === 'audit' && auditProjection.recoveredFailureNodes.size > 0 && (
+          <span
+            title="Recovered failures are hidden from the audit projection"
+            className="ml-1 px-1.5 py-0.5 rounded border t-border-subtle t-text-muted text-[10px] tabular-nums"
+          >
+            {auditProjection.recoveredFailureNodes.size} recovered
+          </span>
+        )}
+      </div>
       {/* Floating fit-to-view control, top-right. Lets the user recover
           the overview if force or zoom drifts after pan/drag/filter. */}
       <button

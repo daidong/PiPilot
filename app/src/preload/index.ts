@@ -385,6 +385,11 @@ export interface ElectronAPI {
     presence: { present: boolean; reason?: 'no-root' | 'no-traces-dir' | 'no-span-files' | 'no-spans'; spanFileCount: number }
     graph: import('../../../lib/audit-graph/index').AuditGraph | null
   }>
+  auditRunDeliverable: (opts?: { targetStepId?: string | null }) => Promise<{
+    success: boolean
+    result?: import('../../../lib/audit-graph/audit/index').AuditRunResult
+    error?: string
+  }>
   closeProject: () => Promise<void>
   onProjectClosed: (cb: () => void) => () => void
 
@@ -652,6 +657,7 @@ const api: ElectronAPI = {
   sharingResolveConflict: (resolutions) => invoke('sharing:resolve-conflict', resolutions),
   sharingSnapshot: (label) => invoke('sharing:snapshot', label),
   auditGetGraph: () => invoke('audit:get-graph'),
+  auditRunDeliverable: (opts) => invoke('audit:run-deliverable', opts),
   closeProject: () => invoke('project:close'),
   onProjectClosed: (cb) => subscribe('project:closed', cb),
 

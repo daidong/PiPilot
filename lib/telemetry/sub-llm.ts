@@ -54,6 +54,9 @@ export interface RunSubLlmOpts<TApi extends string> {
 
   /** Max output tokens. Defaults to provider default when omitted. */
   maxTokens?: number
+  /** Sampling temperature. Pass 0 for deterministic, reproducible calls
+   *  (e.g. the audit judge). Defaults to the provider default when omitted. */
+  temperature?: number
   /** Abort signal (compaction passes the agent's signal here). */
   signal?: AbortSignal
 
@@ -101,6 +104,7 @@ export async function runSubLlmText<TApi extends string>(
   }
   const llmOpts: SimpleStreamOptions = { apiKey: opts.apiKey }
   if (opts.maxTokens !== undefined) llmOpts.maxTokens = opts.maxTokens
+  if (opts.temperature !== undefined) llmOpts.temperature = opts.temperature
   if (opts.signal) llmOpts.signal = opts.signal
 
   const result = opts.tracer

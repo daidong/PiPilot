@@ -6,14 +6,17 @@
  * dots in the filters and pill chips match the dots in the canvas.
  */
 
-import { useMemo, useState } from 'react'
-import { Filter, Search, RefreshCw, ChevronLeft, ChevronRight, AlertTriangle, X, Crosshair } from 'lucide-react'
+import { useMemo, useState, type ReactNode } from 'react'
+import { Filter, Search, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, AlertTriangle, X, Crosshair, Eye, ExternalLink, FolderOpen } from 'lucide-react'
 import type {
   AuditGraph,
   GraphNode,
   NodeKind,
 } from '../../../../../../lib/audit-graph/index'
+import { PATHS } from '../../../../../../lib/types'
 import { useAuditPalette } from './audit-theme'
+
+const api = (window as any).api
 
 // —— Left rail ————————————————————————————————————————————————————————
 
@@ -282,12 +285,25 @@ export interface SliceStats {
   byKind: Map<NodeKind, number>
 }
 
+export interface AuditProjectionStats {
+  mode: 'audit' | 'full'
+  targetId: string | null
+  targetLabel: string | null
+  spineNodes: number
+  observationNodes: number
+  materialNodes: number
+  recoveredFailureNodes: number
+  hiddenBranchNodes: number
+}
+
 interface RightProps {
   graph: AuditGraph
   selected: GraphNode | null
   taint: Record<string, { reason: string; ts: number }>
   derivedTaint: Set<string>
+  autoSuspect?: Map<string, string[]>
   sliceStats: SliceStats
+  auditStats?: AuditProjectionStats | null
   onTaint: (id: string, reason: string) => void
   onClearTaint: (id: string) => void
   onClearAllTaint: () => void
@@ -297,7 +313,7 @@ interface RightProps {
 }
 
 export function AuditRightRail({
-  graph, selected, taint, derivedTaint, sliceStats, onTaint, onClearTaint, onClearAllTaint, onFocusNode, collapsed, onToggleCollapsed,
+  graph, selected, taint, derivedTaint, autoSuspect, sliceStats, auditStats, onTaint, onClearTaint, onClearAllTaint, onFocusNode, collapsed, onToggleCollapsed,
 }: RightProps) {
   if (collapsed) {
     return (
@@ -342,7 +358,9 @@ export function AuditRightRail({
             node={selected}
             taint={taint}
             derivedTaint={derivedTaint}
+            autoSuspect={autoSuspect}
             sliceStats={sliceStats}
+            auditStats={auditStats}
             onTaint={r => onTaint(selected.id, r)}
             onClearTaint={() => onClearTaint(selected.id)}
           />
@@ -378,12 +396,14 @@ interface NDProps {
   node: GraphNode
   taint: Record<string, { reason: string; ts: number }>
   derivedTaint: Set<string>
+  autoSuspect?: Map<string, string[]>
   sliceStats: SliceStats
+  auditStats?: AuditProjectionStats | null
   onTaint: (reason: string) => void
   onClearTaint: () => void
 }
 
-function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTaint }: NDProps) {
+function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, auditStats, onTaint, onClearTaint }: NDProps) {
   const palette = useAuditPalette()
   const [reason, setReason] = useState('')
   const isDirect = !!taint[node.id]
@@ -405,8 +425,37 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
 
       {/* Slice + Taint card */}
       <div className="t-bg-elevated border t-border-subtle rounded-md p-3 mb-3 space-y-3">
+        {auditStats && (
+          <div>
+            <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">
+              {auditStats.mode === 'audit' ? 'Audit projection' : 'Full trace'}
+            </div>
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 tabular-nums">
+              <span>
+                <span className="text-[15px] t-text font-medium">{auditStats.spineNodes}</span>
+                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">spine</span>
+              </span>
+              <span>
+                <span className="text-[15px] t-text font-medium">{auditStats.observationNodes}</span>
+                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">observed</span>
+              </span>
+              <span>
+                <span className="text-[15px] t-text font-medium">{auditStats.materialNodes}</span>
+                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">material</span>
+              </span>
+              <span>
+                <span className="text-[15px] t-text font-medium">{auditStats.recoveredFailureNodes}</span>
+                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">recovered</span>
+              </span>
+            </div>
+            <div className="text-[11px] t-text-muted leading-snug mt-1.5">
+              Target: {auditStats.targetLabel ?? 'latest step'}. Hidden branch nodes: {auditStats.hiddenBranchNodes}.
+            </div>
+          </div>
+        )}
+
         {/* Slice stats */}
-        <div>
+        <div className={auditStats ? 'pt-3 border-t t-border-subtle' : ''}>
           <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">Support slice</div>
           <div className="flex items-baseline gap-x-0.5 tabular-nums">
             <span className="text-[15px] t-text font-medium">{sliceStats.nodes}</span>
@@ -426,6 +475,9 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
               ))}
             </div>
           )}
+          <div className="text-[11px] t-text-muted leading-snug mt-1.5">
+            Everything upstream and downstream of this node — what fed into it, and what was produced from it.
+          </div>
           {sliceStats.traces.size > 1 && (
             <div className="mt-2 px-2 py-1.5 border-l-2 t-border-accent t-bg-accent/10 t-text-accent text-[11px] rounded-r leading-snug">
               Crosses {sliceStats.traces.size} traces — lineage continues across user turns.
@@ -436,68 +488,130 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
         {/* Taint */}
         <div className="pt-3 border-t t-border-subtle">
           <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Taint</div>
-          {isDirect ? (
-            <div className="flex items-center gap-2 t-text-error text-[13px]">
-              <span className="w-2.5 h-2.5 rounded-full border-2 flex-shrink-0" style={{ borderColor: 'currentColor' }} />
-              <span className="flex-1 min-w-0 break-words"><b>direct</b> · {taint[node.id].reason}</span>
-              <button onClick={onClearTaint} className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border t-border-subtle t-text-muted hover:t-text">
-                clear
-              </button>
-            </div>
-          ) : isDerived ? (
-            <div className="flex items-center gap-2 t-text-error-soft text-[13px]">
-              <span className="w-2.5 h-2.5 rounded-full border-2 border-dashed flex-shrink-0 opacity-70" style={{ borderColor: 'currentColor' }} />
-              <span><b>derived</b> · downstream of another suspect node</span>
-            </div>
-          ) : (
-            <form
-              className="flex gap-2"
-              onSubmit={e => { e.preventDefault(); if (reason.trim()) { onTaint(reason.trim()); setReason('') } }}
-            >
-              <input
-                value={reason}
-                onChange={e => setReason(e.target.value)}
-                placeholder="reason for marking suspect…"
-                className="flex-1 px-2 py-1 t-bg-base t-border-subtle border rounded text-[11px] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
-              />
-              <button
-                type="submit"
-                disabled={!reason.trim()}
-                className="px-2.5 py-1 rounded text-[11px] font-medium border t-text-error disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                style={{
-                  background: 'color-mix(in oklab, var(--color-status-error) 9%, transparent)',
-                  borderColor: 'color-mix(in oklab, var(--color-status-error) 30%, transparent)',
-                }}
+          {(() => {
+            const autoReasons = autoSuspect?.get(node.id)
+            if (isDirect) return (
+              <div className="space-y-1.5">
+                {autoReasons && (
+                  <div className="flex items-start gap-1.5 text-[11px] t-text-muted">
+                    <AlertTriangle size={11} className="flex-shrink-0 mt-0.5 opacity-60" />
+                    <span>{autoReasons.join(' · ')}</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2 t-text-error text-[13px]">
+                  <span className="w-2.5 h-2.5 rounded-full border-dashed border-2 flex-shrink-0" style={{ borderColor: 'currentColor' }} />
+                  <span className="flex-1 min-w-0 break-words"><b>marked</b> · {taint[node.id].reason}</span>
+                  <button onClick={onClearTaint} className="px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border t-border-subtle t-text-muted hover:t-text">
+                    clear
+                  </button>
+                </div>
+              </div>
+            )
+            if (isDerived) return (
+              <div className="space-y-1.5">
+                {autoReasons && (
+                  <div className="flex items-start gap-1.5 text-[11px] t-text-muted">
+                    <AlertTriangle size={11} className="flex-shrink-0 mt-0.5 opacity-60" />
+                    <span>{autoReasons.join(' · ')}</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2 t-text-error-soft text-[13px]">
+                  <span className="w-2.5 h-2.5 rounded-full border-2 border-dashed flex-shrink-0 opacity-70" style={{ borderColor: 'currentColor' }} />
+                  <span><b>derived</b> · downstream of a marked suspect node</span>
+                </div>
+              </div>
+            )
+            if (autoReasons) return (
+              <div className="space-y-2">
+                <div className="flex items-start gap-1.5 text-[12px] t-text-error">
+                  <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+                  <span className="leading-snug">{autoReasons.join(' · ')}</span>
+                </div>
+                <form
+                  className="flex gap-2"
+                  onSubmit={e => { e.preventDefault(); if (reason.trim()) { onTaint(reason.trim()); setReason('') } }}
+                >
+                  <input
+                    value={reason}
+                    onChange={e => setReason(e.target.value)}
+                    placeholder="confirm or add reason…"
+                    className="flex-1 px-2 py-1 t-bg-base t-border-subtle border rounded text-[11px] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!reason.trim()}
+                    className="px-2.5 py-1 rounded text-[11px] font-medium border t-text-error disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    style={{
+                      background: 'color-mix(in oklab, var(--color-status-error) 9%, transparent)',
+                      borderColor: 'color-mix(in oklab, var(--color-status-error) 30%, transparent)',
+                    }}
+                  >
+                    confirm
+                  </button>
+                </form>
+              </div>
+            )
+            return (
+              <form
+                className="flex gap-2"
+                onSubmit={e => { e.preventDefault(); if (reason.trim()) { onTaint(reason.trim()); setReason('') } }}
               >
-                mark suspect
-              </button>
-            </form>
-          )}
+                <input
+                  value={reason}
+                  onChange={e => setReason(e.target.value)}
+                  placeholder="reason for marking suspect…"
+                  className="flex-1 px-2 py-1 t-bg-base t-border-subtle border rounded text-[11px] t-text placeholder:t-text-muted focus:outline-none focus:t-border-accent"
+                />
+                <button
+                  type="submit"
+                  disabled={!reason.trim()}
+                  className="px-2.5 py-1 rounded text-[11px] font-medium border t-text-error disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  style={{
+                    background: 'color-mix(in oklab, var(--color-status-error) 9%, transparent)',
+                    borderColor: 'color-mix(in oklab, var(--color-status-error) 30%, transparent)',
+                  }}
+                >
+                  mark suspect
+                </button>
+              </form>
+            )
+          })()}
         </div>
       </div>
 
-      {/* Attributes table */}
-      <div>
-        <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Attributes</div>
-        <AttributeTable node={node} />
-      </div>
-
-      {/* Span events */}
+      {/* Span events — what the node actually did (args) and returned (result).
+          Shown first because it's the answer to "what happened here?"; the
+          opaque IDs in Attributes below are only for correlating with raw traces. */}
       {node.rawEvents && node.rawEvents.length > 0 && (
-        <div className="mt-3">
+        <div>
           <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Span events</div>
           <div className="space-y-1.5">
-            {node.rawEvents.map((e, i) => (
-              <div key={i} className="t-bg-base border t-border-subtle rounded p-2">
-                <div className="text-[10px] t-text-accent font-mono mb-1">{e.name}</div>
-                <pre className="text-[10px] leading-relaxed font-mono t-text whitespace-pre-wrap break-all max-h-64 overflow-auto m-0">
-                  {prettyMaybeJson(e.body)}
-                </pre>
-              </div>
-            ))}
+            {node.rawEvents.map((e, i) => {
+              const refs = collectBlobRefs(e.body)
+              return (
+                <div key={i} className="t-bg-base border t-border-subtle rounded p-2">
+                  <div className="text-[10px] t-text-accent font-mono mb-1">{EVENT_LABELS[e.name] ?? e.name}</div>
+                  <pre className="text-[10px] leading-relaxed font-mono t-text whitespace-pre-wrap break-all max-h-64 overflow-auto m-0">
+                    {humanizeEventBody(e.name, e.body)}
+                  </pre>
+                  {refs.length > 0 && (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold">Large content (stored on disk)</div>
+                      {refs.map((r, j) => <BlobRefCard key={j} refData={r} />)}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
+
+      {/* Attributes table */}
+      <div className="mt-3">
+        <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1.5">Attributes</div>
+        <AttributeTable node={node} />
+      </div>
 
       {/* Versions */}
       {node.versions && (node.versions as unknown[]).length > 0 && (
@@ -517,28 +631,41 @@ function NodeDetails({ node, taint, derivedTaint, sliceStats, onTaint, onClearTa
 }
 
 function AttributeTable({ node }: { node: GraphNode }) {
-  const rows: Array<[string, unknown]> = []
-  const push = (k: string, v: unknown) => { if (v !== undefined && v !== null && v !== '') rows.push([k, v]) }
-  push('id', node.id)
-  push('traceId', node.traceId)
-  push('spanId', node.spanId)
-  push('parentSpanId', node.parentSpanId)
-  push('turnId', node.turnId)
-  push('stepIndex', node.stepIndex)
-  push('toolName', node.toolName)
-  push('toolCategory', node.toolCategory)
-  push('toolCallId', node.toolCallId)
-  push('model', node.model)
-  push('inputTokens', node.inputTokens)
-  push('outputTokens', node.outputTokens)
-  push('cacheReadTokens', node.cacheReadTokens)
-  push('durationMs', typeof node.durationMs === 'number' ? node.durationMs.toFixed(1) : undefined)
-  push('isError', node.isError)
-  push('artifactId', node.artifactId)
-  push('type', node.type)
-  push('path', node.path)
-  push('sessionId', node.sessionId)
-  return (
+  // Default-collapsed: the opaque IDs are only useful for correlating with raw
+  // OpenTelemetry traces, which a normal user never does.
+  const [showDebug, setShowDebug] = useState(false)
+
+  const primary: Array<[string, unknown]> = []
+  const debug: Array<[string, unknown]> = []
+  const pushTo = (rows: Array<[string, unknown]>, k: string, v: unknown) => {
+    if (v !== undefined && v !== null && v !== '') rows.push([k, v])
+  }
+
+  // Primary — "did it work / how long / how big / what is it". The things a
+  // user reads to judge the node.
+  pushTo(primary, 'isError', node.isError)
+  pushTo(primary, 'durationMs', typeof node.durationMs === 'number' ? node.durationMs.toFixed(1) : undefined)
+  pushTo(primary, 'model', node.model)
+  pushTo(primary, 'inputTokens', node.inputTokens)
+  pushTo(primary, 'outputTokens', node.outputTokens)
+  pushTo(primary, 'cacheReadTokens', node.cacheReadTokens)
+  pushTo(primary, 'type', node.type)
+  pushTo(primary, 'path', node.path)
+
+  // Debug — opaque identifiers for correlating with the raw trace stream.
+  pushTo(debug, 'id', node.id)
+  pushTo(debug, 'traceId', node.traceId)
+  pushTo(debug, 'spanId', node.spanId)
+  pushTo(debug, 'parentSpanId', node.parentSpanId)
+  pushTo(debug, 'turnId', node.turnId)
+  pushTo(debug, 'stepIndex', node.stepIndex)
+  pushTo(debug, 'toolName', node.toolName)
+  pushTo(debug, 'toolCategory', node.toolCategory)
+  pushTo(debug, 'toolCallId', node.toolCallId)
+  pushTo(debug, 'artifactId', node.artifactId)
+  pushTo(debug, 'sessionId', node.sessionId)
+
+  const renderRows = (rows: Array<[string, unknown]>) => (
     <table className="w-full text-[11px]">
       <tbody>
         {rows.map(([k, v]) => (
@@ -550,10 +677,302 @@ function AttributeTable({ node }: { node: GraphNode }) {
       </tbody>
     </table>
   )
+
+  return (
+    <div>
+      {primary.length > 0
+        ? renderRows(primary)
+        : <div className="text-[11px] t-text-muted italic py-1">No primary attributes.</div>}
+      {debug.length > 0 && (
+        <div className="mt-2">
+          <button
+            onClick={() => setShowDebug(s => !s)}
+            className="flex items-center gap-1 text-[10px] uppercase tracking-wider t-text-muted hover:t-text-secondary"
+          >
+            {showDebug ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            Debug IDs ({debug.length})
+          </button>
+          {showDebug && <div className="mt-1.5">{renderRows(debug)}</div>}
+        </div>
+      )}
+    </div>
+  )
 }
 
-function prettyMaybeJson(s: string): string {
-  try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s }
+/** Friendly headers for the noisy raw event names. */
+const EVENT_LABELS: Record<string, string> = {
+  'pipilot.tool.args': 'Arguments',
+  'pipilot.tool.result': 'Result',
+  'pipilot.chat.response_text': 'Assistant output',
+  'pipilot.chat.request_payload': 'Prompt sent',
+}
+
+/** Join the text parts of a tool result's `content` array, if present. */
+function extractResultText(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== 'object') return null
+  const content = (parsed as { content?: unknown }).content
+  if (!Array.isArray(content)) return null
+  const parts = content
+    .filter((c): c is { text: string } => !!c && typeof (c as { text?: unknown }).text === 'string')
+    .map(c => c.text)
+  return parts.length > 0 ? parts.join('\n') : null
+}
+
+/** Pretty-print a tool's argument object — unwraps the common `command` case. */
+function formatArgs(args: unknown): string {
+  if (args && typeof args === 'object' && typeof (args as { command?: unknown }).command === 'string') {
+    return (args as { command: string }).command
+  }
+  if (typeof args === 'string') return args
+  return JSON.stringify(args, null, 2)
+}
+
+/**
+ * Render an LLM message content array (assistant output or a prompt message)
+ * as readable prose. Each block becomes a small labelled section; the useless
+ * `thinkingSignature` crypto blob is dropped, tool calls show name + command,
+ * blob refs are left as-is for the blob viewer to pick up.
+ */
+function renderContentBlocks(blocks: unknown[]): string {
+  const out: string[] = []
+  for (const b of blocks) {
+    if (!b || typeof b !== 'object') { out.push(String(b)); continue }
+    const block = b as Record<string, unknown>
+    switch (block.type) {
+      case 'text':
+        if (typeof block.text === 'string') out.push(block.text)
+        break
+      case 'thinking':
+      case 'reasoning':
+        if (typeof block.thinking === 'string') out.push(`💭 thinking\n${block.thinking}`)
+        else if (typeof block.text === 'string') out.push(`💭 thinking\n${block.text}`)
+        break
+      case 'toolCall':
+        out.push(`🔧 ${String(block.name ?? 'tool')}\n${formatArgs(block.arguments)}`)
+        break
+      case 'tool_use':
+        out.push(`🔧 ${String(block.name ?? 'tool')}\n${formatArgs(block.input)}`)
+        break
+      case 'toolResult':
+      case 'tool_result': {
+        const t = extractResultText(block) ?? (typeof block.content === 'string' ? block.content : JSON.stringify(block.content))
+        out.push(`↩ tool result\n${t}`)
+        break
+      }
+      case 'image':
+        out.push('🖼 [image]')
+        break
+      default:
+        out.push(JSON.stringify(block, null, 2))
+    }
+  }
+  return out.join('\n\n')
+}
+
+/**
+ * Human-readable span-event body. Tool args/results and chat messages are
+ * unwrapped from their JSON envelope so the user sees the actual command /
+ * output / reasoning with real newlines instead of an escaped `\n` soup.
+ * Falls back to pretty JSON, then to the raw string if it isn't JSON at all.
+ */
+function humanizeEventBody(name: string, body: string): string {
+  let parsed: unknown
+  try { parsed = JSON.parse(body) } catch { return body }
+
+  // Whole payload spilled to a blob — the card below handles it; don't dump
+  // the raw `{ contentHash, … }` envelope here.
+  if (isBlobRef(parsed)) return '⟶ Content too large for the trace; stored on disk (see below).'
+
+  if (name === 'pipilot.tool.args') {
+    const cmd = (parsed as { command?: unknown })?.command
+    if (typeof cmd === 'string') return cmd
+    return JSON.stringify(parsed, null, 2)
+  }
+
+  if (name === 'pipilot.tool.result') {
+    const text = extractResultText(parsed)
+    if (text != null) return text
+    return JSON.stringify(parsed, null, 2)
+  }
+
+  // Assistant output: content is an array of text/thinking/toolCall blocks.
+  if (name === 'pipilot.chat.response_text' && Array.isArray(parsed)) {
+    return renderContentBlocks(parsed)
+  }
+
+  // Prompt sent: the wire payload — render system + each message readably.
+  if (name === 'pipilot.chat.request_payload' && parsed && typeof parsed === 'object') {
+    const p = parsed as Record<string, unknown>
+    if (Array.isArray(p.messages)) {
+      const parts: string[] = []
+      if (typeof p.system === 'string' && p.system.trim()) parts.push(`[system]\n${p.system}`)
+      for (const m of p.messages) {
+        const role = String((m as { role?: unknown })?.role ?? '?')
+        const content = (m as { content?: unknown })?.content
+        const bodyText = Array.isArray(content) ? renderContentBlocks(content)
+          : typeof content === 'string' ? content
+          : JSON.stringify(content, null, 2)
+        parts.push(`[${role}]\n${bodyText}`)
+      }
+      return parts.join('\n\n')
+    }
+    return JSON.stringify(parsed, null, 2)
+  }
+
+  return JSON.stringify(parsed, null, 2)
+}
+
+// —— Blob references ——————————————————————————————————————————————————
+//
+// When a tool result / chat message exceeded the 4 KB span cap, the redaction
+// pipeline spilled the full bytes to the content-addressed blob store and left
+// a `{ contentHash, size, mimeType? }` ref in its place (lib/telemetry/
+// redaction.ts). The bytes are already on local disk at
+// `.research-pilot/blobs/{aa}/{hash}` — we never "download", we just read or
+// hand the local file to the OS.
+
+interface BlobRef {
+  contentHash: string
+  size?: number
+  mimeType?: string
+  /** true for size-cap text spill; absent for binary/image refs. */
+  truncated?: boolean
+}
+
+/** A blob ref is any object carrying a string `contentHash`. */
+function isBlobRef(v: unknown): v is { contentHash: string } & Record<string, unknown> {
+  return !!v && typeof v === 'object' && typeof (v as { contentHash?: unknown }).contentHash === 'string'
+}
+
+/** Walk a parsed value tree collecting every blob ref, de-duped by hash. */
+function collectBlobRefs(body: string): BlobRef[] {
+  let parsed: unknown
+  try { parsed = JSON.parse(body) } catch { return [] }
+  const found = new Map<string, BlobRef>()
+  const walk = (v: unknown) => {
+    if (!v || typeof v !== 'object') return
+    if (Array.isArray(v)) { v.forEach(walk); return }
+    if (isBlobRef(v)) {
+      const o = v as Record<string, unknown>
+      if (!found.has(o.contentHash as string)) {
+        found.set(o.contentHash as string, {
+          contentHash: o.contentHash as string,
+          size: typeof o.size === 'number' ? o.size : undefined,
+          mimeType: typeof o.mimeType === 'string' ? o.mimeType : undefined,
+          truncated: o.truncated === true,
+        })
+      }
+    }
+    for (const val of Object.values(v as Record<string, unknown>)) walk(val)
+  }
+  walk(parsed)
+  return [...found.values()]
+}
+
+/** Local workspace-relative path for a blob hash — mirrors BlobStore.pathFor. */
+function blobRelPath(contentHash: string): string {
+  const h = contentHash.startsWith('sha256:') ? contentHash.slice('sha256:'.length) : contentHash
+  return `${PATHS.blobs}/${h.slice(0, 2)}/${h}`
+}
+
+function formatBytes(n?: number): string {
+  if (typeof n !== 'number') return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Inline only when small enough not to choke the renderer. */
+const TEXT_INLINE_MAX = 512 * 1024
+const IMAGE_INLINE_MAX = 8 * 1024 * 1024
+
+/**
+ * A spilled-content ref. The bytes live on local disk; this card reads them on
+ * demand (text/image preview) or hands the file to the OS (open / reveal). It
+ * never transfers anything off the machine.
+ */
+function BlobRefCard({ refData }: { refData: BlobRef }) {
+  const [preview, setPreview] = useState<{ kind: 'text'; text: string } | { kind: 'image'; url: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const rel = blobRelPath(refData.contentHash)
+
+  const isImage = !!refData.mimeType?.startsWith('image/')
+  const isBinary = !!refData.mimeType && !isImage
+  const tooBigForText = (refData.size ?? 0) > TEXT_INLINE_MAX
+  const tooBigForImage = (refData.size ?? 0) > IMAGE_INLINE_MAX
+
+  const previewText = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const res = await api?.readFile?.(rel)
+      if (res?.success) setPreview({ kind: 'text', text: res.content ?? '' })
+      else setErr(res?.error ?? 'Could not read blob')
+    } finally { setBusy(false) }
+  }
+  const previewImage = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const res = await api?.readFileBinary?.(rel)
+      if (res?.success) setPreview({ kind: 'image', url: `data:${refData.mimeType};base64,${res.base64}` })
+      else setErr(res?.error ?? 'Could not read blob')
+    } finally { setBusy(false) }
+  }
+  const openExternal = () => api?.openFile?.(rel)
+  const reveal = () => api?.revealInFinder?.(rel)
+
+  const kindLabel = isImage ? (refData.mimeType ?? 'image')
+    : isBinary ? (refData.mimeType ?? 'binary')
+    : 'text (over 4 KB)'
+
+  return (
+    <div className="t-bg-elevated border t-border-subtle rounded p-2 text-[10px]">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="t-text-secondary">{kindLabel}</span>
+        {refData.size != null && <span className="t-text-muted tabular-nums">· {formatBytes(refData.size)}</span>}
+        <span className="t-text-muted font-mono truncate flex-1" title={refData.contentHash}>
+          {refData.contentHash.replace('sha256:', '').slice(0, 10)}
+        </span>
+      </div>
+
+      {err && <div className="t-text-error mb-1">{err}</div>}
+
+      {preview?.kind === 'image' && (
+        <img src={preview.url} alt="blob preview" className="max-w-full rounded border t-border-subtle mb-1" />
+      )}
+      {preview?.kind === 'text' && (
+        <pre className="text-[10px] leading-relaxed font-mono t-text whitespace-pre-wrap break-all max-h-64 overflow-auto m-0 mb-1 t-bg-base rounded p-1.5">
+          {preview.text}
+        </pre>
+      )}
+
+      <div className="flex flex-wrap gap-1">
+        {isImage && !tooBigForImage && !preview && (
+          <BlobBtn onClick={previewImage} disabled={busy} icon={<Eye size={10} />} label="Preview" />
+        )}
+        {!refData.mimeType && !tooBigForText && !preview && (
+          <BlobBtn onClick={previewText} disabled={busy} icon={<Eye size={10} />} label="View text" />
+        )}
+        <BlobBtn onClick={openExternal} icon={<ExternalLink size={10} />} label="Open" />
+        <BlobBtn onClick={reveal} icon={<FolderOpen size={10} />} label="Reveal" />
+      </div>
+      {(tooBigForText && !refData.mimeType) && (
+        <div className="t-text-muted mt-1 italic">Too large to preview inline — open it instead.</div>
+      )}
+    </div>
+  )
+}
+
+function BlobBtn({ onClick, disabled, icon, label }: { onClick: () => void; disabled?: boolean; icon: ReactNode; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border t-border-subtle t-text-secondary hover:t-text disabled:opacity-40 transition-colors"
+    >
+      {icon}{label}
+    </button>
+  )
 }
 
 // —— Quarantine preview ——————————————————————————————————————————————
