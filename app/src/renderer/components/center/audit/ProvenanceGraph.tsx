@@ -19,18 +19,20 @@ import type {
   NodeKind,
 } from '../../../../../../lib/audit-graph/index'
 import { useAuditPalette, tintToward } from './audit-theme'
-import { buildSystemAuditProjection, edgeKey } from './system-audit-projection'
+import { pruneGraph, edgeCausalClass } from '../../../../../../lib/audit-graph/prune'
+import type { StepSupportMetric } from '../../../../../../lib/audit-graph/prune'
+import { edgeKey } from '../../../../../../lib/audit-graph/graph-utils'
 
 // —— Importance + radius priors ————————————————————————————————————————
 
 const BASE_RADIUS: Record<NodeKind, number> = {
-  session: 8, trace: 7, step: 4, tool: 4, chat: 3, artifact: 6, file: 4, dir: 3.5, span: 3,
+  session: 8, trace: 7, step: 4, tool: 4, chat: 3, artifact: 6, file: 4, dir: 3.5, span: 3, skill: 5,
 }
 const KIND_WEIGHT: Record<NodeKind, number> = {
-  artifact: 6, file: 4, tool: 2.5, trace: 2, dir: 1.5, step: 0.5, chat: 0.2, session: 1, span: 0.5,
+  artifact: 6, file: 4, tool: 2.5, trace: 2, dir: 1.5, step: 0.5, chat: 0.2, session: 1, span: 0.5, skill: 3,
 }
 const CAUSAL: ReadonlySet<EdgeRel> = new Set([
-  'precedes', 'invokes', 'returns', 'sub-llm', 'reads', 'writes', 'creates', 'retrieved', 'mentions', 'listed',
+  'precedes', 'invokes', 'returns', 'sub-llm', 'reads', 'writes', 'creates', 'retrieved', 'mentions', 'listed', 'applies',
 ])
 
 type RenderNode = GraphNode & {
@@ -229,19 +231,25 @@ export interface ProvenanceGraphProps {
   }
   /** Imperative focus — parent calls this when user picks a node from a list. */
   focusRef?: React.MutableRefObject<((node: GraphNode) => void) | null>
+  /** Nodes with current provenance search hits. Purely visual. */
+  searchMatchNodeIds?: Set<string>
+  /** Active provenance search hit node. Purely visual. */
+  activeSearchNodeId?: string | null
   /** Bubble support/critical membership up so the side panel can show stats. */
   onSliceChange?: (slice: {
     nodes: Set<string>
     derivedTaint: Set<string>
-    audit?: {
-      mode: 'audit' | 'full'
-      targetId: string | null
-      targetLabel: string | null
-      spineNodes: Set<string>
-      observationNodes: Set<string>
-      materialNodes: Set<string>
-      recoveredFailureNodes: Set<string>
-      hiddenBranchNodes: Set<string>
+    prune?: {
+      on: boolean
+      terminalStepId: string | null
+      terminalLabel: string | null
+      keptNodes: number
+      prunedNodes: number
+      flaggedNodes: number
+      spineNodes: number
+      metric: StepSupportMetric | null
+      edgeClasses: { causal: number; temporal: number; structural: number }
+      nodeRoles: { container: number; step: number; tool: number; artifact: number; file: number; skill: number }
     }
   }) => void
 }
@@ -249,13 +257,16 @@ export interface ProvenanceGraphProps {
 // —— Component ————————————————————————————————————————————————————————
 
 export function ProvenanceGraph({
-  graph, selected, onSelect, taint, autoSuspect, filters, focusRef, onSliceChange,
+  graph, selected, onSelect, taint, autoSuspect, filters, focusRef, onSliceChange, searchMatchNodeIds, activeSearchNodeId,
 }: ProvenanceGraphProps) {
   const palette = useAuditPalette()
   const fgRef = useRef<any>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 600 })
-  const [viewMode, setViewMode] = useState<'audit' | 'full'>('audit')
+  // Prune is a *view toggle* on the full graph: off → the graph as-is; on →
+  // the deterministically-pruned set is greyed (never removed) and the critical
+  // path is highlighted. Default off so the user first sees everything.
+  const [prune, setPrune] = useState(false)
 
   // —— Resize observer ——
   useLayoutEffect(() => {
@@ -288,7 +299,16 @@ export function ProvenanceGraph({
       if (n.kind === 'session') return false
       return n.traceId === filters.selectedTraceId
     }
-    const visible = graph.nodes.filter(n => filters.kinds.has(n.kind) && !isBg(n) && inTrace(n))
+    let visible = graph.nodes.filter(n => filters.kinds.has(n.kind) && !isBg(n) && inTrace(n))
+    // "Telemetry has data → it must display." The default Hide-background-traces
+    // filter can hide *everything* for a project whose telemetry is all
+    // background (wiki / literature) activity — leaving a confusing blank canvas
+    // even though presence reported data. If the active filters would blank the
+    // canvas while the graph actually has nodes, fall back to showing the graph
+    // (background included) rather than nothing.
+    if (visible.length === 0 && graph.nodes.length > 0) {
+      visible = graph.nodes.filter(n => filters.kinds.has(n.kind))
+    }
     const visibleIds = new Set(visible.map(n => n.id))
     const links = graph.edges.filter(e => {
       if (filters.hideContains && e.rel === 'contains') return false
@@ -299,27 +319,19 @@ export function ProvenanceGraph({
     return { nodes: visible.map(n => ({ ...n })), links: links.map(e => ({ ...e })) } as RenderGraph
   }, [graph, filters])
 
-  const auditProjection = useMemo(
-    () => buildSystemAuditProjection({ nodes: filtered.nodes, edges: filtered.links as GraphEdge[] }),
+  // Deterministic prune of the *currently filtered* graph. Computed regardless
+  // of the toggle so the side panel can show before/after counts; the toggle
+  // only controls whether the partition is painted.
+  const pruneResult = useMemo(
+    () => pruneGraph({ nodes: filtered.nodes, edges: filtered.links as GraphEdge[] }),
     [filtered],
   )
+  const prunedNodeSet = useMemo(() => new Set(pruneResult.prunedNodes), [pruneResult])
+  const keptEdgeSet = useMemo(() => new Set(pruneResult.keptEdges), [pruneResult])
 
   const layouted = useMemo(() => layoutProvenanceGraph(filtered), [filtered])
-  const displayed = useMemo(() => {
-    if (viewMode !== 'audit' || auditProjection.auditNodes.size === 0) return layouted
-    const ids = auditProjection.auditNodes
-    const nodes = layouted.nodes.filter(n => ids.has(n.id))
-    const links = layouted.links.filter(l => (
-      ids.has(edgeSourceId(l)) &&
-      ids.has(edgeTargetId(l)) &&
-      auditProjection.auditEdges.has(edgeKey({
-        source: edgeSourceId(l),
-        target: edgeTargetId(l),
-        rel: l.rel,
-      }))
-    ))
-    return { nodes, links }
-  }, [layouted, viewMode, auditProjection])
+  // Prune never removes nodes — the full filtered graph is always displayed.
+  const displayed = layouted
 
   // —— Force tuning ——
   // Provenance is a causal timeline, so nodes are fixed onto tracks instead
@@ -535,31 +547,52 @@ export function ProvenanceGraph({
 
   // —— Bubble slice info up ——
   useEffect(() => {
+    const terminal = pruneResult.terminalStepId
+      ? graph.nodes.find(n => n.id === pruneResult.terminalStepId)
+      : undefined
     onSliceChange?.({
       nodes: highlight.nodes,
       derivedTaint,
-      audit: {
-        mode: viewMode,
-        targetId: auditProjection.targetStepId,
-        targetLabel: auditProjection.targetLabel,
-        spineNodes: auditProjection.spineNodes,
-        observationNodes: auditProjection.observationNodes,
-        materialNodes: auditProjection.materialNodes,
-        recoveredFailureNodes: auditProjection.recoveredFailureNodes,
-        hiddenBranchNodes: auditProjection.hiddenBranchNodes,
+      prune: {
+        on: prune,
+        terminalStepId: pruneResult.terminalStepId,
+        terminalLabel: terminal?.label ?? pruneResult.terminalStepId,
+        keptNodes: pruneResult.keptNodes.length,
+        prunedNodes: pruneResult.prunedNodes.length,
+        flaggedNodes: Object.keys(pruneResult.flags).length,
+        spineNodes: pruneResult.spineNodes.length,
+        metric: pruneResult.terminalStepId
+          ? pruneResult.supportMetrics[pruneResult.terminalStepId] ?? null
+          : null,
+        edgeClasses: pruneResult.stageStats.edgeClasses,
+        nodeRoles: pruneResult.stageStats.nodeRoles,
       },
     })
-  }, [highlight, derivedTaint, auditProjection, viewMode, onSliceChange])
+  }, [highlight, derivedTaint, pruneResult, prune, graph, onSliceChange])
+
+  // —— Link key + prune membership ——
+  const linkKey = (l: any): string => edgeKey({ source: edgeSourceId(l), target: edgeTargetId(l), rel: l.rel })
+  // When prune is on and nothing is selected, an edge is "greyed" unless it is
+  // on the kept critical-path subgraph. Kept edges only connect kept nodes, so
+  // the critical path never routes through grey.
+  const isPrunedLink = (l: any): boolean => prune && !selected && !keptEdgeSet.has(linkKey(l))
 
   // —— Link color accessor (shared between line / arrow / particle) ——
+  // Edges are coloured by their Stage-0 causal CLASS, not per-rel: causal edges
+  // keep their relation hue (creates/reads/… stay distinguishable), temporal
+  // edges (the step timeline) render as a dashed neutral grey, and structural
+  // scaffolding (contains/mentions) is barely visible. The right-rail shows the
+  // per-class counts as the legend.
   function linkColorFor(l: any, opaque = false): string {
+    const cls = edgeCausalClass(l.rel as EdgeRel)
     const base = palette.rel[l.rel as EdgeRel] ?? 'rgba(120,120,120,0.5)'
     if (selected) {
       if (highlightLinks.has(l)) return opaque ? base.replace(/[\d.]+\)$/, '1)') : base.replace(/[\d.]+\)$/, '0.95)')
       return 'rgba(80,80,80,0.06)'
     }
-    const muted = l.rel === 'contains' || l.rel === 'sub-llm'
-    if (muted) return 'rgba(80,80,80,0.06)'
+    if (isPrunedLink(l)) return 'rgba(80,80,80,0.06)'
+    if (cls === 'structural') return 'rgba(80,80,80,0.06)'
+    if (cls === 'temporal') return 'rgba(140,140,150,0.34)'
     return opaque ? base.replace(/[\d.]+\)$/, '1)') : base
   }
 
@@ -587,15 +620,21 @@ export function ProvenanceGraph({
           const base = linkColorFor(l)
           return taintedEdges.has(l) ? tintToward(base, palette.taint) : base
         }}
-        linkLineDash={(l: any) => (taintedEdges.has(l) ? [4, 3] : null)}
+        linkLineDash={(l: any) => {
+          if (taintedEdges.has(l)) return [4, 3]
+          if (!selected && edgeCausalClass(l.rel as EdgeRel) === 'temporal') return [3, 3]
+          return null
+        }}
         linkWidth={(l: any) => {
           if (taintedEdges.has(l)) return 1.8
           if (selected) return highlightLinks.has(l) ? 2 : 0.5
+          if (isPrunedLink(l)) return 0.4
           return (l.rel === 'creates' || l.rel === 'writes') ? 1.8 : 0.6
         }}
         linkDirectionalArrowLength={(l: any) => {
-          if (l.rel === 'contains' || l.rel === 'sub-llm') return 0
+          if (edgeCausalClass(l.rel as EdgeRel) !== 'causal') return 0
           if (selected) return highlightLinks.has(l) ? 7 : 0
+          if (isPrunedLink(l)) return 0
           return (l.rel === 'creates' || l.rel === 'writes') ? 6 : 4
         }}
         linkDirectionalArrowRelPos={0.92}
@@ -605,7 +644,7 @@ export function ProvenanceGraph({
         }}
         linkDirectionalParticles={(l: any) => {
           if (!selected) return 0
-          if (l.rel === 'contains' || l.rel === 'sub-llm') return 0
+          if (edgeCausalClass(l.rel as EdgeRel) !== 'causal') return 0
           return highlightLinks.has(l) ? 3 : 0
         }}
         linkDirectionalParticleWidth={2.4}
@@ -618,6 +657,8 @@ export function ProvenanceGraph({
           const r = nodeRadius(n)
           const isHi = highlight.nodes.has(n.id)
           const isSel = selected?.id === n.id
+          const isSearchMatch = searchMatchNodeIds?.has(n.id) ?? false
+          const isActiveSearch = activeSearchNodeId === n.id
           const isDirectTaint = !!taint[n.id]
           const isDerivedTaint = derivedTaint.has(n.id)
           const isAutoSuspect = !isDirectTaint && !isDerivedTaint && (autoSuspect?.has(n.id) ?? false)
@@ -631,7 +672,9 @@ export function ProvenanceGraph({
               : isDerivedTaint
                 ? tintToward(baseC, palette.taint, 0.2)
                 : baseC
-          const dim = selected ? (!isHi && !isSel) : !important
+          const dim = selected
+            ? (!isHi && !isSel && !isSearchMatch)
+            : prune ? prunedNodeSet.has(n.id) : !important
           ctx.globalAlpha = dim ? 0.22 : 1
           ctx.beginPath()
           ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
@@ -663,6 +706,12 @@ export function ProvenanceGraph({
             ctx.lineWidth = 2 / globalScale
             ctx.strokeStyle = '#fff'
             ctx.beginPath(); ctx.arc(n.x, n.y, r + 2, 0, Math.PI * 2); ctx.stroke()
+          }
+          if (isSearchMatch) {
+            ctx.setLineDash([])
+            ctx.lineWidth = (isActiveSearch ? 3 : 1.7) / globalScale
+            ctx.strokeStyle = isActiveSearch ? 'rgba(245, 158, 11, 1)' : 'rgba(245, 158, 11, 0.68)'
+            ctx.beginPath(); ctx.arc(n.x, n.y, r + (isActiveSearch ? 5 : 4), 0, Math.PI * 2); ctx.stroke()
           }
           // Citation flag (A1) — amber badge at top-right of artifacts that cite
           // never-retrieved sources. Deliberately a different visual language
@@ -706,32 +755,63 @@ export function ProvenanceGraph({
       />
       <div className="absolute top-3 left-3 flex items-center gap-1 rounded-md border t-border-subtle t-bg-elevated shadow-sm p-1">
         <button
-          onClick={() => setViewMode('audit')}
-          title="Show system audit projection"
+          onClick={() => setPrune(p => !p)}
+          title={prune ? 'Showing pruned graph — click to show the full graph' : 'Prune: grey everything off the critical path'}
           className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
-            viewMode === 'audit' ? 't-bg-accent-2-muted t-text' : 't-text-muted hover:t-text-secondary'
+            prune ? 't-bg-accent-2-muted t-text' : 't-text-muted hover:t-text-secondary'
           }`}
         >
           <GitBranch size={12} />
-          Audit
+          Prune
         </button>
-        <button
-          onClick={() => setViewMode('full')}
-          title="Show full trace timeline"
-          className={`px-2 py-1 rounded text-[11px] transition-colors ${
-            viewMode === 'full' ? 't-bg-accent-2-muted t-text' : 't-text-muted hover:t-text-secondary'
-          }`}
-        >
-          Full
-        </button>
-        {viewMode === 'audit' && auditProjection.recoveredFailureNodes.size > 0 && (
+        {prune && (
           <span
-            title="Recovered failures are hidden from the audit projection"
+            title="Kept on the critical path · greyed off it"
             className="ml-1 px-1.5 py-0.5 rounded border t-border-subtle t-text-muted text-[10px] tabular-nums"
           >
-            {auditProjection.recoveredFailureNodes.size} recovered
+            {pruneResult.keptNodes.length} kept · {pruneResult.prunedNodes.length} greyed
           </span>
         )}
+      </div>
+
+      {/* Stage-0 classification legend — always visible. Edges are coloured by
+          causal class, nodes grouped into 5 roles. Counts are live. */}
+      <div className="absolute bottom-3 left-3 rounded-md border t-border-subtle t-bg-elevated/95 backdrop-blur shadow-sm px-2.5 py-2 text-[10px] t-text-secondary select-none">
+        <div className="uppercase tracking-wider t-text-muted font-semibold mb-1 text-[9px]">Edge class</div>
+        <div className="space-y-0.5 mb-2">
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-5" style={{ borderTop: `2px solid ${(palette.rel.returns ?? 'rgba(120,120,120,1)').replace(/[\d.]+\)$/, '1)')}` }} />
+            <span className="t-text tabular-nums">{pruneResult.stageStats.edgeClasses.causal}</span>
+            <span>causal</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-5" style={{ borderTop: '2px dashed rgba(140,140,150,0.85)' }} />
+            <span className="t-text tabular-nums">{pruneResult.stageStats.edgeClasses.temporal}</span>
+            <span>temporal</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-5" style={{ borderTop: '2px solid rgba(120,120,120,0.22)' }} />
+            <span className="t-text tabular-nums">{pruneResult.stageStats.edgeClasses.structural}</span>
+            <span>structural</span>
+          </div>
+        </div>
+        <div className="uppercase tracking-wider t-text-muted font-semibold mb-1 text-[9px]">Node role</div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+          {([
+            ['container', palette.kind.trace],
+            ['step', palette.kind.step],
+            ['tool', palette.kind.tool],
+            ['artifact', palette.kind.artifact],
+            ['file', palette.kind.file],
+            ['skill', palette.kind.skill],
+          ] as const).map(([role, color]) => (
+            <div key={role} className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full" style={{ background: color }} />
+              <span className="t-text tabular-nums">{pruneResult.stageStats.nodeRoles[role]}</span>
+              <span>{role}</span>
+            </div>
+          ))}
+        </div>
       </div>
       {/* Floating fit-to-view control, top-right. Lets the user recover
           the overview if force or zoom drifts after pan/drag/filter. */}

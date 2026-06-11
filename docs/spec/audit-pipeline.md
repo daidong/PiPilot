@@ -10,6 +10,15 @@ This pipeline does **not** rebuild the graph and does **not** re-run any tool.
 It reads the graph, extracts claims from the deliverable, builds a small
 evidence packet per claim, and asks one LLM to judge entailment.
 
+> **Upstream of this pipeline** are two deterministic, zero-LLM stages:
+> provenance collection (telemetry + artifact ledger) and the **deterministic
+> prune** of the resulting graph (`lib/audit-graph/prune.ts`). Both are
+> summarized in [provenance-and-prune.md](./provenance-and-prune.md). The prune
+> partitions the full graph into the critical path (kept) vs. greyed scaffolding
+> and annotates per-node flags + per-step support metrics; it is a *view* and a
+> *signal layer*, separate from (and not required by) the claim-level audit
+> below, which keeps its own deliverable/claims notion.
+
 ---
 
 ## 0. Locked principles

@@ -15,6 +15,7 @@ import type {
 } from '../../../../../../lib/audit-graph/index'
 import { PATHS } from '../../../../../../lib/types'
 import { useAuditPalette } from './audit-theme'
+import type { AuditSearchMatch } from './audit-search'
 
 const api = (window as any).api
 
@@ -325,14 +326,21 @@ export interface SliceStats {
 }
 
 export interface AuditProjectionStats {
-  mode: 'audit' | 'full'
-  targetId: string | null
-  targetLabel: string | null
+  on: boolean
+  terminalStepId: string | null
+  terminalLabel: string | null
+  keptNodes: number
+  prunedNodes: number
+  flaggedNodes: number
   spineNodes: number
-  observationNodes: number
-  materialNodes: number
-  recoveredFailureNodes: number
-  hiddenBranchNodes: number
+  metric: {
+    nGroundingTools: number
+    toolKindDiversity: number
+    redundancy: number
+    suspiciousRatio: number
+  } | null
+  edgeClasses: { causal: number; temporal: number; structural: number }
+  nodeRoles: { container: number; step: number; tool: number; artifact: number; file: number; skill: number }
 }
 
 interface RightProps {
@@ -347,12 +355,15 @@ interface RightProps {
   onClearTaint: (id: string) => void
   onClearAllTaint: () => void
   onFocusNode: (n: GraphNode) => void
+  searchQuery?: string
+  searchCaseSensitive?: boolean
+  activeSearchMatch?: AuditSearchMatch | null
   collapsed: boolean
   onToggleCollapsed: () => void
 }
 
 export function AuditRightRail({
-  graph, selected, taint, derivedTaint, autoSuspect, sliceStats, auditStats, onTaint, onClearTaint, onClearAllTaint, onFocusNode, collapsed, onToggleCollapsed,
+  graph, selected, taint, derivedTaint, autoSuspect, sliceStats, auditStats, onTaint, onClearTaint, onClearAllTaint, onFocusNode, searchQuery = '', searchCaseSensitive = false, activeSearchMatch = null, collapsed, onToggleCollapsed,
 }: RightProps) {
   if (collapsed) {
     return (
@@ -400,6 +411,9 @@ export function AuditRightRail({
             autoSuspect={autoSuspect}
             sliceStats={sliceStats}
             auditStats={auditStats}
+            searchQuery={searchQuery}
+            searchCaseSensitive={searchCaseSensitive}
+            activeSearchMatch={activeSearchMatch}
             onTaint={r => onTaint(selected.id, r)}
             onClearTaint={() => onClearTaint(selected.id)}
           />
@@ -438,11 +452,14 @@ interface NDProps {
   autoSuspect?: Map<string, string[]>
   sliceStats: SliceStats
   auditStats?: AuditProjectionStats | null
+  searchQuery: string
+  searchCaseSensitive: boolean
+  activeSearchMatch: AuditSearchMatch | null
   onTaint: (reason: string) => void
   onClearTaint: () => void
 }
 
-function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, auditStats, onTaint, onClearTaint }: NDProps) {
+function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, auditStats, searchQuery, searchCaseSensitive, activeSearchMatch, onTaint, onClearTaint }: NDProps) {
   const palette = useAuditPalette()
   const [reason, setReason] = useState('')
   const isDirect = !!taint[node.id]
@@ -462,33 +479,81 @@ function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, audit
         <h3 className="flex-1 min-w-0 break-all t-text font-medium text-[14px]">{node.label}</h3>
       </div>
 
+      {/* Skill — how this skill entered the turn. router-match = pre-selected by
+          the intent router at turn start; explicit-load = the agent called
+          load_skill mid-turn; mixed = both happened across different turns. */}
+      {node.kind === 'skill' && node.skillTrigger && (
+        <div className="t-bg-elevated border t-border-subtle rounded-md p-3 mb-3">
+          <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">Skill trigger</div>
+          <div className="text-[12px] t-text">
+            {node.skillTrigger === 'router-match' && 'Pre-matched by the intent router at turn start.'}
+            {node.skillTrigger === 'explicit-load' && 'Loaded mid-turn via the load_skill tool.'}
+            {node.skillTrigger === 'mixed' && 'Both router-matched and explicitly loaded across turns.'}
+          </div>
+        </div>
+      )}
+
       {/* Slice + Taint card */}
       <div className="t-bg-elevated border t-border-subtle rounded-md p-3 mb-3 space-y-3">
         {auditStats && (
           <div>
             <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">
-              {auditStats.mode === 'audit' ? 'Audit projection' : 'Full trace'}
+              {auditStats.on ? 'Prune' : 'Full graph'}
             </div>
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 tabular-nums">
-              <span>
-                <span className="text-[15px] t-text font-medium">{auditStats.spineNodes}</span>
-                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">spine</span>
-              </span>
-              <span>
-                <span className="text-[15px] t-text font-medium">{auditStats.observationNodes}</span>
-                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">observed</span>
-              </span>
-              <span>
-                <span className="text-[15px] t-text font-medium">{auditStats.materialNodes}</span>
-                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">material</span>
-              </span>
-              <span>
-                <span className="text-[15px] t-text font-medium">{auditStats.recoveredFailureNodes}</span>
-                <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">recovered</span>
-              </span>
-            </div>
-            <div className="text-[11px] t-text-muted leading-snug mt-1.5">
-              Target: {auditStats.targetLabel ?? 'latest step'}. Hidden branch nodes: {auditStats.hiddenBranchNodes}.
+            {auditStats.on ? (
+              <>
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 tabular-nums">
+                  <span>
+                    <span className="text-[15px] t-text font-medium">{auditStats.keptNodes}</span>
+                    <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">kept</span>
+                  </span>
+                  <span>
+                    <span className="text-[15px] t-text font-medium">{auditStats.prunedNodes}</span>
+                    <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">greyed</span>
+                  </span>
+                  <span>
+                    <span className="text-[15px] t-text font-medium">{auditStats.flaggedNodes}</span>
+                    <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">flagged</span>
+                  </span>
+                  <span>
+                    <span className="text-[15px] t-text font-medium">{auditStats.spineNodes}</span>
+                    <span className="text-[10px] uppercase tracking-wider t-text-muted ml-1">on path</span>
+                  </span>
+                </div>
+                <div className="text-[11px] t-text-muted leading-snug mt-1.5">
+                  Critical path ends at {auditStats.terminalLabel ?? 'the latest step'}.
+                  {auditStats.metric && (
+                    <> Grounding tools: {auditStats.metric.nGroundingTools} ({auditStats.metric.toolKindDiversity} kind{auditStats.metric.toolKindDiversity === 1 ? '' : 's'}); suspicious {Math.round(auditStats.metric.suspiciousRatio * 100)}%.</>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-[11px] t-text-muted leading-snug">
+                Toggle <b className="t-text">Prune</b> on the graph to grey everything off the critical path.
+                Full graph: {auditStats.keptNodes + auditStats.prunedNodes} nodes.
+              </div>
+            )}
+
+            {/* Stage-0 typing — edge classes + node roles over the whole graph.
+                This is the classification legend: edges are coloured by class on
+                the canvas (causal = relation hue, temporal = dashed grey,
+                structural = faint). */}
+            <div className="mt-2 pt-2 border-t t-border-subtle">
+              <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1">Edge classes</div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] t-text-secondary tabular-nums">
+                <span><span className="t-text font-medium">{auditStats.edgeClasses.causal}</span> causal</span>
+                <span><span className="t-text font-medium">{auditStats.edgeClasses.temporal}</span> temporal</span>
+                <span><span className="t-text font-medium">{auditStats.edgeClasses.structural}</span> structural</span>
+              </div>
+              <div className="text-[9px] uppercase tracking-wider t-text-muted font-semibold mb-1 mt-2">Node roles</div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] t-text-secondary tabular-nums">
+                <span><span className="t-text font-medium">{auditStats.nodeRoles.container}</span> container</span>
+                <span><span className="t-text font-medium">{auditStats.nodeRoles.step}</span> step</span>
+                <span><span className="t-text font-medium">{auditStats.nodeRoles.tool}</span> tool</span>
+                <span><span className="t-text font-medium">{auditStats.nodeRoles.artifact}</span> artifact</span>
+                <span><span className="t-text font-medium">{auditStats.nodeRoles.file}</span> file</span>
+                <span><span className="t-text font-medium">{auditStats.nodeRoles.skill}</span> skill</span>
+              </div>
             </div>
           </div>
         )}
@@ -630,11 +695,18 @@ function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, audit
           <div className="space-y-1.5">
             {node.rawEvents.map((e, i) => {
               const refs = collectBlobRefs(e.body)
+              const isActiveEvent = activeSearchMatch?.nodeId === node.id && activeSearchMatch.eventName === e.name
+              const eventText = humanizeEventBody(e.name, e.body)
               return (
-                <div key={i} className="t-bg-base border t-border-subtle rounded p-2">
+                <div
+                  key={i}
+                  className={`t-bg-base border rounded p-2 ${
+                    isActiveEvent ? 't-border-accent shadow-sm' : 't-border-subtle'
+                  }`}
+                >
                   <div className="text-[10px] t-text-accent font-mono mb-1">{EVENT_LABELS[e.name] ?? e.name}</div>
                   <pre className="text-[10px] leading-relaxed font-mono t-text whitespace-pre-wrap break-all max-h-64 overflow-auto m-0">
-                    {humanizeEventBody(e.name, e.body)}
+                    <HighlightedSearchText text={eventText} query={searchQuery} caseSensitive={searchCaseSensitive} />
                   </pre>
                   {refs.length > 0 && (
                     <div className="mt-1.5 space-y-1">
@@ -670,6 +742,30 @@ function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, audit
       )}
     </div>
   )
+}
+
+function HighlightedSearchText({ text, query, caseSensitive }: { text: string; query: string; caseSensitive: boolean }) {
+  const q = query.trim()
+  if (!q) return <>{text}</>
+
+  const hay = caseSensitive ? text : text.toLowerCase()
+  const needle = caseSensitive ? q : q.toLowerCase()
+  const parts: ReactNode[] = []
+  let from = 0
+  let key = 0
+  while (from <= hay.length - needle.length) {
+    const idx = hay.indexOf(needle, from)
+    if (idx === -1) break
+    if (idx > from) parts.push(text.slice(from, idx))
+    parts.push(
+      <mark key={key++} className="rounded px-0.5 bg-amber-300/70 text-zinc-950">
+        {text.slice(idx, idx + q.length)}
+      </mark>,
+    )
+    from = idx + Math.max(needle.length, 1)
+  }
+  if (from < text.length) parts.push(text.slice(from))
+  return <>{parts}</>
 }
 
 function AttributeTable({ node }: { node: GraphNode }) {
@@ -747,6 +843,7 @@ const EVENT_LABELS: Record<string, string> = {
   'pipilot.tool.result': 'Result',
   'pipilot.chat.response_text': 'Assistant output',
   'pipilot.chat.request_payload': 'Prompt sent',
+  'pipilot.chat.input_delta': 'Δ Input delta (this step)',
 }
 
 /** Join the text parts of a tool result's `content` array, if present. */
@@ -765,8 +862,22 @@ function formatArgs(args: unknown): string {
   if (args && typeof args === 'object' && typeof (args as { command?: unknown }).command === 'string') {
     return (args as { command: string }).command
   }
-  if (typeof args === 'string') return args
+  if (typeof args === 'string') {
+    try { return JSON.stringify(JSON.parse(args), null, 2) } catch { return args }
+  }
   return JSON.stringify(args, null, 2)
+}
+
+function renderUnknownValue(value: unknown): string {
+  if (value === undefined) return ''
+  if (value === null) return 'null'
+  if (typeof value === 'string') return value
+  return JSON.stringify(value, null, 2)
+}
+
+function renderWireContent(content: unknown): string {
+  if (Array.isArray(content)) return renderContentBlocks(content)
+  return renderUnknownValue(content)
 }
 
 /**
@@ -780,20 +891,52 @@ function renderContentBlocks(blocks: unknown[]): string {
   for (const b of blocks) {
     if (!b || typeof b !== 'object') { out.push(String(b)); continue }
     const block = b as Record<string, unknown>
+    if (typeof block.text === 'string' && block.type === undefined) {
+      out.push(block.text)
+      continue
+    }
+    if (block.inlineData || block.image_url) {
+      out.push('[image]')
+      continue
+    }
+    if (block.functionCall && typeof block.functionCall === 'object') {
+      const call = block.functionCall as Record<string, unknown>
+      out.push(`[tool call] ${String(call.name ?? 'tool')}\n${formatArgs(call.args)}`)
+      continue
+    }
+    if (block.functionResponse && typeof block.functionResponse === 'object') {
+      const res = block.functionResponse as Record<string, unknown>
+      out.push(`[tool result] ${String(res.name ?? '')}\n${renderUnknownValue(res.response)}`)
+      continue
+    }
     switch (block.type) {
       case 'text':
+      case 'input_text':
+      case 'output_text':
         if (typeof block.text === 'string') out.push(block.text)
+        break
+      case 'message':
+        out.push(renderWireMessage(block))
         break
       case 'thinking':
       case 'reasoning':
-        if (typeof block.thinking === 'string') out.push(`💭 thinking\n${block.thinking}`)
-        else if (typeof block.text === 'string') out.push(`💭 thinking\n${block.text}`)
+        if (typeof block.thinking === 'string') out.push(`[thinking]\n${block.thinking}`)
+        else if (typeof block.text === 'string') out.push(`[thinking]\n${block.text}`)
+        else if (Array.isArray(block.summary) && block.summary.length > 0) {
+          out.push(`[thinking]\n${renderContentBlocks(block.summary)}`)
+        }
         break
       case 'toolCall':
         out.push(`🔧 ${String(block.name ?? 'tool')}\n${formatArgs(block.arguments)}`)
         break
       case 'tool_use':
         out.push(`🔧 ${String(block.name ?? 'tool')}\n${formatArgs(block.input)}`)
+        break
+      case 'function_call':
+        out.push(`[tool call] ${String(block.name ?? 'tool')}\n${formatArgs(block.arguments)}`)
+        break
+      case 'function_call_output':
+        out.push(`[tool result]\n${renderWireContent(block.output)}`)
         break
       case 'toolResult':
       case 'tool_result': {
@@ -802,6 +945,7 @@ function renderContentBlocks(blocks: unknown[]): string {
         break
       }
       case 'image':
+      case 'input_image':
         out.push('🖼 [image]')
         break
       default:
@@ -845,23 +989,74 @@ function humanizeEventBody(name: string, body: string): string {
   // Prompt sent: the wire payload — render system + each message readably.
   if (name === 'pipilot.chat.request_payload' && parsed && typeof parsed === 'object') {
     const p = parsed as Record<string, unknown>
-    if (Array.isArray(p.messages)) {
+    const conversation =
+      Array.isArray(p.messages) ? p.messages
+        : Array.isArray(p.input) ? p.input
+          : Array.isArray(p.contents) ? p.contents
+            : null
+    if (conversation) {
       const parts: string[] = []
       if (typeof p.system === 'string' && p.system.trim()) parts.push(`[system]\n${p.system}`)
-      for (const m of p.messages) {
-        const role = String((m as { role?: unknown })?.role ?? '?')
-        const content = (m as { content?: unknown })?.content
-        const bodyText = Array.isArray(content) ? renderContentBlocks(content)
-          : typeof content === 'string' ? content
-          : JSON.stringify(content, null, 2)
-        parts.push(`[${role}]\n${bodyText}`)
+      if (typeof p.instructions === 'string' && p.instructions.trim()) {
+        parts.push(`[instructions]\n${p.instructions}`)
       }
+      const config = p.config as { systemInstruction?: unknown } | undefined
+      if (typeof config?.systemInstruction === 'string' && config.systemInstruction.trim()) {
+        parts.push(`[system]\n${config.systemInstruction}`)
+      }
+      for (const m of conversation) parts.push(renderWireMessage(m))
       return parts.join('\n\n')
     }
     return JSON.stringify(parsed, null, 2)
   }
 
+  // Input delta: what entered / left the context since the previous step.
+  if (name === 'pipilot.chat.input_delta' && parsed && typeof parsed === 'object') {
+    const d = parsed as { appended?: unknown; removed?: unknown; carriedOver?: unknown }
+    const appended = Array.isArray(d.appended) ? d.appended : []
+    const removed = Array.isArray(d.removed) ? d.removed : []
+    const parts: string[] = []
+    if (typeof d.carriedOver === 'number') {
+      parts.push(`${d.carriedOver} earlier message(s) carried over unchanged.`)
+    }
+    if (removed.length > 0) {
+      parts.push(`── removed (compacted away) · ${removed.length} ──`)
+      for (const m of removed) parts.push(renderWireMessage(m))
+    }
+    if (appended.length > 0) {
+      parts.push(`＋ added this step · ${appended.length}`)
+      for (const m of appended) parts.push(renderWireMessage(m))
+    }
+    return parts.length > 0 ? parts.join('\n\n') : '(no change)'
+  }
+
   return JSON.stringify(parsed, null, 2)
+}
+
+/** Render one wire message (role + content blocks/string) as readable prose. */
+function renderWireMessage(m: unknown): string {
+  if (!m || typeof m !== 'object') return renderUnknownValue(m)
+  const item = m as Record<string, unknown>
+
+  if (item.type === 'function_call') {
+    return `[tool call] ${String(item.name ?? 'tool')}\n${formatArgs(item.arguments)}`
+  }
+  if (item.type === 'function_call_output') {
+    return `[tool result]\n${renderWireContent(item.output)}`
+  }
+  if (item.type === 'reasoning') {
+    if (Array.isArray(item.summary) && item.summary.length > 0) {
+      return `[thinking]\n${renderContentBlocks(item.summary)}`
+    }
+    return '[thinking]\n[encrypted reasoning]'
+  }
+
+  const role = String(item.role ?? (item.type === 'message' ? 'assistant' : '?'))
+  if ('content' in item) return `[${role}]\n${renderWireContent(item.content)}`
+  if ('parts' in item) return `[${role}]\n${renderWireContent(item.parts)}`
+
+  const fallback = renderUnknownValue(item)
+  return fallback ? `[${role}]\n${fallback}` : `[${role}]`
 }
 
 // —— Blob references ——————————————————————————————————————————————————

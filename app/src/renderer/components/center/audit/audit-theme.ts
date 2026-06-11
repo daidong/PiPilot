@@ -59,6 +59,9 @@ function readPalette(): AuditPalette {
   const muted   = readVar('--color-text-muted')     || '#4a5660'
   const secondary = readVar('--color-text-secondary') || '#7e8d98'
   const info    = readVar('--color-status-info')    || '#60a5fa'
+  // Skill nodes get a dedicated violet, distinct from trace (accent2) and the
+  // sky-blue file/info hue, so "what guided this step" reads at a glance.
+  const skill   = readVar('--color-status-skill')   || '#c084fc'
 
   const errorRgb = hexToRgb(error) || [239, 83, 80]
   const text = readVar('--color-text') || '#cdd5db'
@@ -74,6 +77,7 @@ function readPalette(): AuditPalette {
       file:     info,                       // file = informational (sky blue)
       dir:      accent2Soft,
       span:     muted,
+      skill:    skill,
     },
     rel: {
       contains:  withAlpha(muted, 0.18),
@@ -87,6 +91,7 @@ function readPalette(): AuditPalette {
       retrieved: withAlpha(info, 0.55),
       mentions:  withAlpha(muted, 0.35),
       listed:    withAlpha(accent2Soft, 0.45),
+      applies:   withAlpha(skill, 0.55),
     },
     taint: errorRgb,
     canvasLabel: text,

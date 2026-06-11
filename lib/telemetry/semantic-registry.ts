@@ -172,6 +172,11 @@ export const PIPILOT_EVENT_NAMES = new Set<string>([
   // O(steps) novel content (~95% of blob bytes in field traces). The only
   // information lost is cache_control marker placement shifts mid-turn.
   'pipilot.chat.request_payload',
+  // Per-step conversation-array diff captured after the first payload in a
+  // session. Provider wire payloads name the conversation array differently:
+  // messages (Anthropic/OpenAI-compatible/Mistral/Bedrock), input
+  // (OpenAI/Azure/Codex Responses), contents (Google/Vertex).
+  'pipilot.chat.input_delta',
   // Per-step assistant message text content captured at turn_end. The
   // main agent loop bypasses tracedCompleteSimple, so without this event
   // the assistant text for the final step of a turn lives only in the

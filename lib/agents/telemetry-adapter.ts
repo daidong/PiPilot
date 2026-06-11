@@ -85,6 +85,86 @@ export interface CoordinatorTelemetryAdapterOptions {
   debug?: boolean
 }
 
+/**
+ * The per-step input delta recorded as `pipilot.chat.input_delta`: what entered
+ * (and, on compaction, left) the model's context since the previous step.
+ */
+export interface InputDelta {
+  /** Messages new in this step's input vs the previous step's. */
+  appended: unknown[]
+  /** Messages present last step but gone now — non-empty only on compaction. */
+  removed: unknown[]
+  /** Count of leading + trailing messages carried over unchanged. */
+  carriedOver: number
+}
+
+/**
+ * Provider message arrays carry volatile `cache_control` markers whose position
+ * shifts between consecutive steps (the v0.12 reduction note calls this out as
+ * "the only information actually lost"). Strip them so a marker move on an
+ * otherwise-identical message doesn't masquerade as a content change and blow
+ * up the diff.
+ */
+function stripVolatile(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(stripVolatile)
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (k === 'cache_control') continue
+      out[k] = stripVolatile(val)
+    }
+    return out
+  }
+  return v
+}
+
+function messageKey(m: unknown): string {
+  try { return JSON.stringify(stripVolatile(m)) } catch { return String(m) }
+}
+
+/**
+ * The conversation array inside a provider wire payload. Providers name it
+ * differently, so we probe the known keys in order:
+ *   - `messages`  — Anthropic, OpenAI-compatible chat, Mistral, Bedrock
+ *   - `input`     — OpenAI/Azure/Codex Responses API (what GPT runs send)
+ *   - `contents`  — Google Gemini / Vertex
+ * Returns the first one that is an array; `[]` otherwise (a string `input`,
+ * or an unrecognized shape, yields no delta rather than a wrong one).
+ */
+function extractMessages(payload: unknown): unknown[] {
+  if (!payload || typeof payload !== 'object') return []
+  const p = payload as Record<string, unknown>
+  for (const key of ['messages', 'input', 'contents']) {
+    if (Array.isArray(p[key])) return p[key] as unknown[]
+  }
+  return []
+}
+
+/**
+ * Diff two provider payloads by their message arrays, trimming the common
+ * leading prefix AND trailing suffix. Normal step growth → `appended` only.
+ * Compaction (an early chunk replaced by a summary, the recent tail kept) →
+ * `removed` (the dropped messages) + `appended` (the summary), with the
+ * surviving tail correctly excluded from both. This is exactly "this step's
+ * input minus last step's", so compaction is captured natively — no separate
+ * compaction-event bookkeeping. `cache_control` marker shifts are normalized out.
+ */
+export function diffPayloadMessages(prev: unknown, curr: unknown): InputDelta {
+  const a = extractMessages(prev).map(m => ({ raw: m, key: messageKey(m) }))
+  const b = extractMessages(curr).map(m => ({ raw: m, key: messageKey(m) }))
+  let p = 0
+  const maxP = Math.min(a.length, b.length)
+  while (p < maxP && a[p].key === b[p].key) p++
+  let s = 0
+  const maxS = Math.min(a.length, b.length) - p
+  while (s < maxS && a[a.length - 1 - s].key === b[b.length - 1 - s].key) s++
+  return {
+    appended: b.slice(p, b.length - s).map(x => x.raw),
+    removed: a.slice(p, a.length - s).map(x => x.raw),
+    carriedOver: p + s
+  }
+}
+
 export function createCoordinatorTelemetryAdapter(
   opts: CoordinatorTelemetryAdapterOptions
 ): CoordinatorTelemetryAdapter {
@@ -109,6 +189,14 @@ export function createCoordinatorTelemetryAdapter(
   const toolCallSpans = new Map<string, Span>()
 
   /**
+   * The previous step's wire payload, kept across the whole session (not reset
+   * per user turn) so every step after the very first carries a small, exact
+   * input delta — including the first step of each user turn, whose delta is
+   * just the new user message. Null only before the session's first onPayload.
+   */
+  let prevPayload: unknown = null
+
+  /**
    * Build an onBlobError handler that records dangling-blob counts on the
    * supplied span. Without this, oversized payloads that fail to persist
    * (disk full, perms) still emit { contentHash } refs to bytes that don't
@@ -128,24 +216,46 @@ export function createCoordinatorTelemetryAdapter(
   return {
     async onPayload(payload) {
       if (!tracer || !activeStepSpan) return undefined
-      // v0.12 wire-payload reduction: only record on step 1 of each user
-      // turn. Field traces showed `pipilot.chat.request_payload` events
-      // accounted for ~95% of blob bytes, dominated by the message-history
-      // array growing each step (the same N-1 messages re-recorded on
-      // step N). Steps 2..N are reconstructable from step 1's payload +
-      // each step's assistant response_text + tool_result events. The only
-      // information actually lost is cache_control marker placement
-      // shifting between mid-turn steps.
-      if (stepIndexInUserTurn !== 1) return undefined
+      // Advance the cross-step cursor first so it tracks every step even if
+      // recording below throws.
+      const prior = prevPayload
+      prevPayload = payload
       try {
-        const { value: redactedPayload } = redact(payload, {
-          sizeCapBytes: 4096,
-          blobStore: tracer.blobs,
-          onBlobError: blobErrorRecorder(activeStepSpan)
-        })
-        activeStepSpan.addEvent('pipilot.chat.request_payload', {
-          body: JSON.stringify(redactedPayload)
-        } as Attributes)
+        // v0.12 wire-payload reduction: the FULL request payload is recorded
+        // only on step 1 of each user turn — it's the per-turn anchor. Steps
+        // 2..N would re-record the whole growing message-history array
+        // (O(steps²) bytes for O(steps) of novel content), so instead each
+        // step records just its input *delta* below.
+        if (stepIndexInUserTurn === 1) {
+          const { value: redactedPayload } = redact(payload, {
+            sizeCapBytes: 4096,
+            blobStore: tracer.blobs,
+            onBlobError: blobErrorRecorder(activeStepSpan)
+          })
+          activeStepSpan.addEvent('pipilot.chat.request_payload', {
+            body: JSON.stringify(redactedPayload)
+          } as Attributes)
+        }
+
+        // Per-step input delta: what entered (and, on compaction, left) the
+        // model's context since the previous step. The diff runs across the
+        // whole session, so every step after the first carries a small, exact
+        // delta — the basis for "what did this step actually see that the last
+        // one didn't". Skipped on the session's first step (no prior payload);
+        // that step's full input is the request_payload above.
+        if (prior !== null) {
+          const delta = diffPayloadMessages(prior, payload)
+          if (delta.appended.length > 0 || delta.removed.length > 0) {
+            const { value: redactedDelta } = redact(delta, {
+              sizeCapBytes: 4096,
+              blobStore: tracer.blobs,
+              onBlobError: blobErrorRecorder(activeStepSpan)
+            })
+            activeStepSpan.addEvent('pipilot.chat.input_delta', {
+              body: JSON.stringify(redactedDelta)
+            } as Attributes)
+          }
+        }
       } catch {
         // Telemetry must never affect the LLM call.
       }

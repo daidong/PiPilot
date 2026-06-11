@@ -23,6 +23,7 @@ export type NodeKind =
   | 'file'
   | 'dir'
   | 'span'
+  | 'skill'
 
 export type EdgeRel =
   | 'contains'    // session → trace, trace → span (OTel parent/child)
@@ -36,6 +37,7 @@ export type EdgeRel =
   | 'retrieved'   // artifact → tool (artifact-search returned this artifact)
   | 'mentions'    // file → tool (file path referenced but not read)
   | 'listed'      // dir → tool (tool observed this directory's listing)
+  | 'applies'     // skill → step (skill guided this step's reasoning)
 
 export interface GraphNode {
   id: string
@@ -76,6 +78,12 @@ export interface GraphNode {
   title?: string | null
   path?: string
   versions?: unknown[]
+
+  // Skill — project-shared node (one per skill name). `skillTrigger` is
+  // 'mixed' when the same skill was both router-matched in one turn and
+  // explicitly loaded via load_skill in another.
+  skillName?: string
+  skillTrigger?: 'router-match' | 'explicit-load' | 'mixed'
 
   // Citation resolvability (A1) — present only on citing text artifacts
   // (note / web-content / tool-output) that carry scannable content.

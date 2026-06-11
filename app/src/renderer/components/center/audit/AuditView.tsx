@@ -22,7 +22,10 @@ import { ProvenanceGraph } from './ProvenanceGraph'
 import { AuditLeftRail, AuditRightRail, type AuditProjectionStats, type FiltersState, type SliceStats } from './AuditSidePanels'
 import { EmptyTelemetry } from './EmptyTelemetry'
 import { useSharingStore } from '../../../stores/sharing-store'
-import { computeAutoSuspect } from './auto-suspect'
+import { pruneGraph } from '../../../../../../lib/audit-graph/prune'
+import type { StepSupportMetric } from '../../../../../../lib/audit-graph/prune'
+import { AuditFindBar } from './AuditFindBar'
+import { searchAuditGraph } from './audit-search'
 
 const DEFAULT_KINDS: Set<NodeKind> = new Set(['trace', 'step', 'tool', 'chat', 'artifact', 'file', 'dir'])
 const api = (window as any).api
@@ -73,6 +76,14 @@ export function AuditView() {
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
 
+  // Provenance input/output search. This searches the loaded graph snapshot
+  // (raw span events + node metadata); the follow-up backend path can extend it
+  // to blobs without changing the view wiring.
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findCaseSensitive, setFindCaseSensitive] = useState(false)
+  const [activeFindIndex, setActiveFindIndex] = useState(0)
+
   // Imperative focus into the graph (set by ProvenanceGraph)
   const focusRef = useRef<((n: GraphNode) => void) | null>(null)
 
@@ -94,42 +105,34 @@ export function AuditView() {
   }, [])
 
   // Slice info bubbled up from the canvas — used to compute right-rail stats.
+  type PruneInfo = {
+    on: boolean
+    terminalStepId: string | null
+    terminalLabel: string | null
+    keptNodes: number
+    prunedNodes: number
+    flaggedNodes: number
+    spineNodes: number
+    metric: StepSupportMetric | null
+    edgeClasses: { causal: number; temporal: number; structural: number }
+    nodeRoles: { container: number; step: number; tool: number; artifact: number; file: number; skill: number }
+  }
   const [sliceInfo, setSliceInfo] = useState<{
     nodes: Set<string>
     derivedTaint: Set<string>
-    audit?: {
-      mode: 'audit' | 'full'
-      targetId: string | null
-      targetLabel: string | null
-      spineNodes: Set<string>
-      observationNodes: Set<string>
-      materialNodes: Set<string>
-      recoveredFailureNodes: Set<string>
-      hiddenBranchNodes: Set<string>
-    }
+    prune?: PruneInfo
   }>(
     { nodes: new Set(), derivedTaint: new Set() },
   )
   const onSliceChange = useCallback(
-    (info: {
-      nodes: Set<string>
-      derivedTaint: Set<string>
-      audit?: {
-        mode: 'audit' | 'full'
-        targetId: string | null
-        targetLabel: string | null
-        spineNodes: Set<string>
-        observationNodes: Set<string>
-        materialNodes: Set<string>
-        recoveredFailureNodes: Set<string>
-        hiddenBranchNodes: Set<string>
-      }
-    }) => setSliceInfo(info),
+    (info: { nodes: Set<string>; derivedTaint: Set<string>; prune?: PruneInfo }) => setSliceInfo(info),
     [],
   )
 
+  // Per-node flags from the deterministic prune drive the canvas suspicion
+  // rings and the inspector's flag list (supersedes the old auto-suspect).
   const autoSuspect = useMemo(
-    () => (graph ? computeAutoSuspect(graph) : new Map<string, string[]>()),
+    () => (graph ? new Map(Object.entries(pruneGraph(graph).flags)) : new Map<string, string[]>()),
     [graph],
   )
 
@@ -137,6 +140,93 @@ export function AuditView() {
     () => new Map((graph?.nodes ?? []).map(n => [n.id, n])),
     [graph],
   )
+
+  const searchMatches = useMemo(
+    () => (graph ? searchAuditGraph(graph, findQuery, findCaseSensitive) : []),
+    [graph, findQuery, findCaseSensitive],
+  )
+  const searchMatchNodeIds = useMemo(
+    () => new Set(searchMatches.map(m => m.nodeId)),
+    [searchMatches],
+  )
+  const activeSearchMatch = findOpen && searchMatches.length > 0
+    ? searchMatches[Math.min(activeFindIndex, searchMatches.length - 1)]
+    : null
+
+  const setFindQueryReset = useCallback((query: string) => {
+    setFindQuery(query)
+    setActiveFindIndex(0)
+  }, [])
+  const nextFindMatch = useCallback(() => {
+    setActiveFindIndex(i => searchMatches.length === 0 ? 0 : (i + 1) % searchMatches.length)
+  }, [searchMatches.length])
+  const prevFindMatch = useCallback(() => {
+    setActiveFindIndex(i => searchMatches.length === 0 ? 0 : (i <= 0 ? searchMatches.length - 1 : i - 1))
+  }, [searchMatches.length])
+
+  useEffect(() => {
+    if (activeFindIndex < searchMatches.length) return
+    setActiveFindIndex(searchMatches.length > 0 ? searchMatches.length - 1 : 0)
+  }, [activeFindIndex, searchMatches.length])
+
+  useEffect(() => {
+    if (!active) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        event.stopPropagation()
+        setFindOpen(true)
+        return
+      }
+      if (findOpen && event.key === 'Escape' && !typing) {
+        event.preventDefault()
+        setFindOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [active, findOpen])
+
+  useEffect(() => {
+    if (!graph || !activeSearchMatch) return
+    const node = nodeById.get(activeSearchMatch.nodeId)
+    if (!node) return
+
+    setSelected(node)
+    setRightCollapsed(false)
+    setFilters(current => {
+      let changed = false
+      let kinds = current.kinds
+      if (!kinds.has(node.kind)) {
+        kinds = new Set(kinds)
+        kinds.add(node.kind)
+        changed = true
+      }
+
+      let selectedTraceId = current.selectedTraceId
+      if (selectedTraceId && node.traceId !== selectedTraceId) {
+        selectedTraceId = null
+        changed = true
+      }
+
+      let hideWikiBg = current.hideWikiBg
+      const traceLabel = node.kind === 'trace'
+        ? node.label
+        : node.traceId
+          ? graph.nodes.find(n => n.id === `trace:${node.traceId}`)?.label ?? ''
+          : ''
+      if (hideWikiBg && /wiki-bg/.test(traceLabel)) {
+        hideWikiBg = false
+        changed = true
+      }
+
+      return changed ? { ...current, kinds, selectedTraceId, hideWikiBg } : current
+    })
+
+    window.setTimeout(() => focusRef.current?.(node), 0)
+  }, [graph, nodeById, activeSearchMatch])
 
   const runDeliverableAudit = useCallback(async () => {
     if (!api?.auditRunDeliverable) {
@@ -146,7 +236,7 @@ export function AuditView() {
     setAuditRunning(true)
     setAuditError(null)
     try {
-      const res = await api.auditRunDeliverable({ targetStepId: sliceInfo.audit?.targetId ?? null })
+      const res = await api.auditRunDeliverable({ targetStepId: sliceInfo.prune?.terminalStepId ?? null })
       if (!res?.success) {
         setAuditError(res?.error ?? 'Audit failed.')
         return
@@ -157,7 +247,7 @@ export function AuditView() {
     } finally {
       setAuditRunning(false)
     }
-  }, [sliceInfo.audit?.targetId])
+  }, [sliceInfo.prune?.terminalStepId])
 
   const focusEvidenceForClaim = useCallback((claimId: string) => {
     const verdict = auditRun?.report.claims.find(c => c.claimId === claimId)
@@ -186,16 +276,18 @@ export function AuditView() {
   }, [graph, sliceInfo])
 
   const auditStats: AuditProjectionStats | null = useMemo(() => {
-    if (!sliceInfo.audit) return null
+    if (!sliceInfo.prune) return null
     return {
-      mode: sliceInfo.audit.mode,
-      targetId: sliceInfo.audit.targetId,
-      targetLabel: sliceInfo.audit.targetLabel,
-      spineNodes: sliceInfo.audit.spineNodes.size,
-      observationNodes: sliceInfo.audit.observationNodes.size,
-      materialNodes: sliceInfo.audit.materialNodes.size,
-      recoveredFailureNodes: sliceInfo.audit.recoveredFailureNodes.size,
-      hiddenBranchNodes: sliceInfo.audit.hiddenBranchNodes.size,
+      on: sliceInfo.prune.on,
+      terminalStepId: sliceInfo.prune.terminalStepId,
+      terminalLabel: sliceInfo.prune.terminalLabel,
+      keptNodes: sliceInfo.prune.keptNodes,
+      prunedNodes: sliceInfo.prune.prunedNodes,
+      flaggedNodes: sliceInfo.prune.flaggedNodes,
+      spineNodes: sliceInfo.prune.spineNodes,
+      metric: sliceInfo.prune.metric,
+      edgeClasses: sliceInfo.prune.edgeClasses,
+      nodeRoles: sliceInfo.prune.nodeRoles,
     }
   }, [sliceInfo])
 
@@ -258,6 +350,19 @@ export function AuditView() {
             )}
           </button>
         )}
+        <AuditFindBar
+          open={findOpen}
+          query={findQuery}
+          onQueryChange={setFindQueryReset}
+          caseSensitive={findCaseSensitive}
+          onToggleCaseSensitive={() => setFindCaseSensitive(v => !v)}
+          matches={searchMatches}
+          activeIndex={Math.min(activeFindIndex, Math.max(0, searchMatches.length - 1))}
+          onSelectIndex={setActiveFindIndex}
+          onNext={nextFindMatch}
+          onPrev={prevFindMatch}
+          onClose={() => setFindOpen(false)}
+        />
         {auditPanelOpen && (
         <div className="absolute top-14 left-2 z-20 w-[min(520px,calc(100%-16px))] border t-border-subtle t-bg-surface/95 backdrop-blur shadow-sm rounded-md">
           <div className="flex items-center gap-2 px-2.5 py-2">
@@ -340,6 +445,8 @@ export function AuditView() {
           filters={filters}
           focusRef={focusRef}
           onSliceChange={onSliceChange}
+          searchMatchNodeIds={searchMatchNodeIds}
+          activeSearchNodeId={activeSearchMatch?.nodeId ?? null}
         />
       </div>
 
@@ -355,6 +462,9 @@ export function AuditView() {
         onClearTaint={clearTaint}
         onClearAllTaint={() => setTaint({})}
         onFocusNode={onFocusNode}
+        searchQuery={findOpen ? findQuery : ''}
+        searchCaseSensitive={findCaseSensitive}
+        activeSearchMatch={activeSearchMatch}
         collapsed={rightCollapsed}
         onToggleCollapsed={() => setRightCollapsed(c => !c)}
       />

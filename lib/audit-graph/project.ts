@@ -300,6 +300,52 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
     for (let i = 1; i < arr.length; i++) addEdge(arr[i - 1].id, arr[i].id, 'precedes')
   }
 
+  // Skills (applies) — already recorded in telemetry as `pipilot.skill.load`
+  // events; this pass turns them into shared nodes + causal edges so prune /
+  // support metrics can see which skill guided a step.
+  //   - explicit-load: the event rides the step span that called load_skill →
+  //     edge skill → that step.
+  //   - router-match: the event rides the root invoke_agent span (no step yet),
+  //     and the skill is injected from turn start → edge skill → the trace's
+  //     FIRST step.
+  // Skill nodes are project-shared (id = `skill:<name>`), like file/artifact,
+  // so "which steps used skill X" reads as a fan-in.
+  const firstStepByTrace = new Map<string, GraphNode>()
+  for (const [tid, arr] of stepsByTrace) {
+    if (arr.length > 0) firstStepByTrace.set(tid, arr[0]) // arr sorted ascending above
+  }
+  const skillTriggersSeen = new Map<string, Set<string>>()
+  const appliesEdgesSeen = new Set<string>()
+  for (const sp of spans) {
+    const skillEvents = sp.events.filter(e => e.name === 'pipilot.skill.load')
+    if (skillEvents.length === 0) continue
+    const targetStep = sp.name === 'invoke_agent step'
+      ? nodes.get(`span:${sp.spanId}`)
+      : firstStepByTrace.get(sp.traceId)
+    if (!targetStep) continue
+    for (const ev of skillEvents) {
+      const name = typeof ev.attrs.skillName === 'string' ? ev.attrs.skillName : null
+      if (!name) continue
+      const trigger = ev.attrs.trigger === 'explicit-load' ? 'explicit-load' : 'router-match'
+      const skillId = `skill:${name}`
+      addNode(skillId, 'skill', name, { skillName: name, skillTrigger: trigger })
+      const seen = skillTriggersSeen.get(skillId) ?? new Set<string>()
+      seen.add(trigger)
+      skillTriggersSeen.set(skillId, seen)
+      const edgeId = `${skillId}->${targetStep.id}`
+      if (!appliesEdgesSeen.has(edgeId)) {
+        appliesEdgesSeen.add(edgeId)
+        addEdge(skillId, targetStep.id, 'applies')
+      }
+    }
+  }
+  for (const [skillId, seen] of skillTriggersSeen) {
+    if (seen.size > 1) {
+      const n = nodes.get(skillId)
+      if (n) n.skillTrigger = 'mixed'
+    }
+  }
+
   // Tool ↔ step bidirectional (invokes + returns)
   const issuerStepByCallId = new Map<string, GraphNode>()
   for (const sp of spans) {

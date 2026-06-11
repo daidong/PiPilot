@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PipilotTracer } from '../../telemetry/tracer.js'
 import { PATHS } from '../../types.js'
-import { createCoordinatorTelemetryAdapter } from '../telemetry-adapter.js'
+import { createCoordinatorTelemetryAdapter, diffPayloadMessages } from '../telemetry-adapter.js'
 import type {
   AgentEvent,
   BeforeToolCallContext,
@@ -394,6 +394,198 @@ test('onPayload + onResponse without active step are silent no-ops', async () =>
     const spans = await readSpans(dir)
     const stepSpans = spans.filter(s => s.name === 'invoke_agent step')
     assert.equal(stepSpans.length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// diffPayloadMessages + per-step input_delta
+// ---------------------------------------------------------------------------
+
+test('diffPayloadMessages: normal growth yields appended only', () => {
+  const prev = { messages: [{ role: 'user', content: 'A' }] }
+  const curr = {
+    messages: [
+      { role: 'user', content: 'A' },
+      { role: 'assistant', content: 'B' },
+      { role: 'user', content: 'C' }
+    ]
+  }
+  const d = diffPayloadMessages(prev, curr)
+  assert.equal(d.removed.length, 0)
+  assert.deepEqual(d.appended, [
+    { role: 'assistant', content: 'B' },
+    { role: 'user', content: 'C' }
+  ])
+  assert.equal(d.carriedOver, 1)
+})
+
+test('diffPayloadMessages: OpenAI Responses input array yields appended only', () => {
+  const prev = {
+    input: [
+      { role: 'developer', content: 'System' },
+      { role: 'user', content: [{ type: 'input_text', text: 'A' }] }
+    ],
+    model: 'gpt-5.5',
+    instructions: 'extra non-conversation field'
+  }
+  const curr = {
+    input: [
+      { role: 'developer', content: 'System' },
+      { role: 'user', content: [{ type: 'input_text', text: 'A' }] },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'B', annotations: [] }],
+        status: 'completed'
+      }
+    ],
+    model: 'gpt-5.5',
+    instructions: 'extra non-conversation field'
+  }
+  const d = diffPayloadMessages(prev, curr)
+  assert.equal(d.removed.length, 0)
+  assert.deepEqual(d.appended, [
+    {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'B', annotations: [] }],
+      status: 'completed'
+    }
+  ])
+  assert.equal(d.carriedOver, 2)
+})
+
+test('diffPayloadMessages: Google contents array yields appended only', () => {
+  const prev = {
+    contents: [{ role: 'user', parts: [{ text: 'A' }] }],
+    config: { systemInstruction: 'System' }
+  }
+  const curr = {
+    contents: [
+      { role: 'user', parts: [{ text: 'A' }] },
+      { role: 'model', parts: [{ text: 'B' }] }
+    ],
+    config: { systemInstruction: 'System' }
+  }
+  const d = diffPayloadMessages(prev, curr)
+  assert.equal(d.removed.length, 0)
+  assert.deepEqual(d.appended, [{ role: 'model', parts: [{ text: 'B' }] }])
+  assert.equal(d.carriedOver, 1)
+})
+
+test('diffPayloadMessages: scalar input is ignored rather than treated as conversation', () => {
+  const d = diffPayloadMessages(
+    { input: 'A' },
+    { input: 'A plus B' }
+  )
+  assert.deepEqual(d.appended, [])
+  assert.deepEqual(d.removed, [])
+  assert.equal(d.carriedOver, 0)
+})
+
+test('diffPayloadMessages: compaction shows removed prefix + summary, keeps surviving suffix', () => {
+  const prev = {
+    messages: [
+      { role: 'user', content: 'A' },
+      { role: 'assistant', content: 'B' },
+      { role: 'user', content: 'C' }
+    ]
+  }
+  // Early chunk (A, B) replaced by a summary; the recent tail (C) survives.
+  const curr = {
+    messages: [
+      { role: 'user', content: 'SUMMARY' },
+      { role: 'user', content: 'C' }
+    ]
+  }
+  const d = diffPayloadMessages(prev, curr)
+  assert.deepEqual(d.removed, [
+    { role: 'user', content: 'A' },
+    { role: 'assistant', content: 'B' }
+  ])
+  assert.deepEqual(d.appended, [{ role: 'user', content: 'SUMMARY' }])
+  assert.equal(d.carriedOver, 1) // trailing C carried over, excluded from both
+})
+
+test('diffPayloadMessages: a cache_control marker shift is not a content change', () => {
+  const prev = { messages: [{ role: 'user', content: 'A', cache_control: { type: 'ephemeral' } }] }
+  const curr = {
+    messages: [
+      { role: 'user', content: 'A' }, // same message, marker gone
+      { role: 'assistant', content: 'B' }
+    ]
+  }
+  const d = diffPayloadMessages(prev, curr)
+  assert.equal(d.removed.length, 0)
+  assert.deepEqual(d.appended, [{ role: 'assistant', content: 'B' }])
+})
+
+test('onPayload records pipilot.chat.input_delta on steps after the first', async () => {
+  const { dir, tracer } = mkTracer()
+  try {
+    const adapter = createCoordinatorTelemetryAdapter({ tracer })
+    // Step 1: full payload anchor, no delta (no prior payload).
+    adapter.processAgentEvent(turnStartEvent())
+    await adapter.onPayload({ messages: [{ role: 'user', content: 'A' }] })
+    adapter.processAgentEvent(turnEndEvent())
+    // Step 2: input grew by one message → delta with that message appended.
+    adapter.processAgentEvent(turnStartEvent())
+    await adapter.onPayload({
+      messages: [{ role: 'user', content: 'A' }, { role: 'assistant', content: 'B' }]
+    })
+    adapter.processAgentEvent(turnEndEvent())
+    await tracer.shutdown()
+
+    const steps = (await readSpans(dir)).filter(s => s.name === 'invoke_agent step')
+    const step1 = steps.find(s => attrAsNumber(s, 'pipilot.step.index') === 1)
+    const step2 = steps.find(s => attrAsNumber(s, 'pipilot.step.index') === 2)
+    assert.ok(step1 && step2)
+    // Step 1: request_payload present, input_delta absent.
+    assert.ok(step1.events?.find((e: any) => e.name === 'pipilot.chat.request_payload'))
+    assert.equal(step1.events?.find((e: any) => e.name === 'pipilot.chat.input_delta'), undefined)
+    // Step 2: input_delta present (and request_payload suppressed by v0.12 gate).
+    const deltaEvent = step2.events?.find((e: any) => e.name === 'pipilot.chat.input_delta')
+    assert.ok(deltaEvent, 'expected input_delta on step 2')
+    assert.equal(step2.events?.find((e: any) => e.name === 'pipilot.chat.request_payload'), undefined)
+    const body = JSON.parse(
+      deltaEvent.attributes?.find((a: any) => a.key === 'body')?.value?.stringValue
+    )
+    assert.equal(body.appended.length, 1)
+    assert.equal(body.removed.length, 0)
+    assert.deepEqual(body.appended[0], { role: 'assistant', content: 'B' })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('onPayload records pipilot.chat.input_delta for OpenAI Responses input arrays', async () => {
+  const { dir, tracer } = mkTracer()
+  try {
+    const adapter = createCoordinatorTelemetryAdapter({ tracer })
+    adapter.processAgentEvent(turnStartEvent())
+    await adapter.onPayload({ input: [{ role: 'user', content: 'A' }] })
+    adapter.processAgentEvent(turnEndEvent())
+
+    adapter.processAgentEvent(turnStartEvent())
+    await adapter.onPayload({
+      input: [{ role: 'user', content: 'A' }, { role: 'assistant', content: 'B' }]
+    })
+    adapter.processAgentEvent(turnEndEvent())
+    await tracer.shutdown()
+
+    const step2 = (await readSpans(dir))
+      .filter(s => s.name === 'invoke_agent step')
+      .find(s => attrAsNumber(s, 'pipilot.step.index') === 2)
+    assert.ok(step2)
+    const deltaEvent = step2.events?.find((e: any) => e.name === 'pipilot.chat.input_delta')
+    assert.ok(deltaEvent, 'expected input_delta for Responses input arrays')
+    const body = JSON.parse(
+      deltaEvent.attributes?.find((a: any) => a.key === 'body')?.value?.stringValue
+    )
+    assert.deepEqual(body.appended, [{ role: 'assistant', content: 'B' }])
+    assert.deepEqual(body.removed, [])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

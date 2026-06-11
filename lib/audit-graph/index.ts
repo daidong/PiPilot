@@ -1,3 +1,5 @@
 export type { AuditGraph, GraphNode, GraphEdge, NodeKind, EdgeRel } from './types.js'
 export { projectGraph, checkTelemetryPresence } from './project.js'
 export type { TelemetryPresence } from './project.js'
+export { pruneGraph, edgeCausalClass, nodeRole } from './prune.js'
+export type { PruneResult, StepSupportMetric, EdgeCausalClass, NodeRole } from './prune.js'

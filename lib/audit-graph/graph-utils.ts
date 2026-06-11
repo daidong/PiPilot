@@ -35,6 +35,7 @@ export function classifyEdge(rel: EdgeRel): EdgeClass {
     case 'retrieved':
     case 'listed':
     case 'mentions':
+    case 'applies': // skill → step: the skill content feeds the step's reasoning
       return 'data-in'
     case 'writes':
     case 'creates':

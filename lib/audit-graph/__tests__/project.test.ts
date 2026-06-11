@@ -163,3 +163,62 @@ test('projectGraph links tool calls by toolCallId and creates artifacts from led
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('projectGraph turns skill.load events into shared skill nodes + applies edges', async () => {
+  const dir = join(tmpdir(), `pipilot-audit-skill-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  try {
+    mkdirSync(join(dir, PATHS.traces), { recursive: true })
+
+    const skillEvent = (skillName: string, trigger: string) => ({
+      name: 'pipilot.skill.load',
+      attributes: [attr('skillName', skillName), attr('trigger', trigger)],
+    })
+
+    const spans = [
+      // Root span carries the router-match skill (no step exists yet).
+      span({
+        spanId: 'root-1',
+        name: 'invoke_agent chat',
+        start: 50,
+        end: 600,
+        events: [skillEvent('paper-writing', 'router-match')],
+      }),
+      span({
+        spanId: 'step-1',
+        name: 'invoke_agent step',
+        start: 100,
+        end: 200,
+        attrs: [attr('pipilot.step.index', 1)],
+      }),
+      // Explicit load mid-turn rides the step span that called load_skill.
+      span({
+        spanId: 'step-2',
+        name: 'invoke_agent step',
+        start: 300,
+        end: 400,
+        attrs: [attr('pipilot.step.index', 2)],
+        events: [skillEvent('matplotlib', 'explicit-load')],
+      }),
+    ]
+
+    writeFileSync(
+      join(dir, PATHS.traces, 'spans.2026-06-01.jsonl'),
+      JSON.stringify({ scopeSpans: [{ spans }] }) + '\n',
+    )
+
+    const graph = await projectGraph(dir)
+
+    const paperWriting = graph.nodes.find(n => n.id === 'skill:paper-writing')
+    const matplotlib = graph.nodes.find(n => n.id === 'skill:matplotlib')
+    assert.ok(paperWriting && paperWriting.kind === 'skill', 'paper-writing skill node exists')
+    assert.equal(paperWriting?.skillTrigger, 'router-match')
+    assert.ok(matplotlib && matplotlib.kind === 'skill', 'matplotlib skill node exists')
+    assert.equal(matplotlib?.skillTrigger, 'explicit-load')
+
+    // router-match attaches to the trace's FIRST step; explicit-load to its own step.
+    assert.ok(hasEdge(graph, 'skill:paper-writing', 'span:step-1', 'applies'), 'router-match → first step')
+    assert.ok(hasEdge(graph, 'skill:matplotlib', 'span:step-2', 'applies'), 'explicit-load → loading step')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
