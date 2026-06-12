@@ -27,6 +27,7 @@ import { parseMentions, resolveMentions, getCandidates, invalidateEntityCache } 
 import { buildSkillManifests, writeEnabledSkills, installSkillToWorkspace, readEnabledSkills, setBuiltinSkillsRoot } from '../../../lib/skills/loader'
 import { setCachedMarkdown } from '../../../lib/mentions/document-cache'
 import { PATHS, type ProjectConfig, type RecapRecord } from '../../../lib/types'
+import { getSyntheticPiModel } from '../../../lib/models'
 import { ensureAgentMd, migrateLegacyArtifacts } from '../../../lib/memory-v2/store'
 import { rebuildIndex, readIndex, isIndexBuilt, WALK_SKIP_DIRS } from '../../../lib/memory-v2/indexer'
 import { migrateToFilesAsCarrier, convergeManagedMdFilenames } from '../../../lib/memory-v2/migrate-files'
@@ -1084,7 +1085,7 @@ async function runMainCallLlm(
   const [rawProvider, modelId] = modelStr.split(':')
   const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const piModel = piGetModel(piProvider as any, modelId)
+  const piModel = piGetModel(piProvider as any, modelId) ?? getSyntheticPiModel(modelId)
 
   let resolveApiKey: () => Promise<string>
   if (auth.authMode === 'subscription' && auth.piProvider === 'anthropic-sub') {
@@ -1332,7 +1333,7 @@ export function registerIpcHandlers(): void {
         const [rawProvider, modelId] = wikiModel.split(':')
         // Map subscription providers to their pi-ai provider name
         const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
-        const model = getPiModel(piProvider as any, modelId)
+        const model = getPiModel(piProvider as any, modelId) ?? getSyntheticPiModel(modelId)
 
         // Build async key getter (handles subscription token refresh)
         let resolveApiKey: () => Promise<string>
@@ -1917,7 +1918,7 @@ export function registerIpcHandlers(): void {
       // dynamic. Cast to any (same pattern as line ~1027).
       const piProvider = rawProvider === 'anthropic-sub' ? 'anthropic' : rawProvider
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      piModel = piGetModelLocal(piProvider as any, modelId)
+      piModel = piGetModelLocal(piProvider as any, modelId) ?? getSyntheticPiModel(modelId)
 
       if (auth.authMode === 'subscription' && auth.piProvider === 'anthropic-sub') {
         resolveApiKey = async () => {

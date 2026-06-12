@@ -28,7 +28,7 @@ import { tracedFetch, recordReviewCompletion } from '../../telemetry/http-trace.
 
 const MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
 // Keep in sync with lib/models.ts:MODEL_TIERS.anthropic.flagship
-const DEFAULT_MODEL = 'claude-opus-4-7'
+const DEFAULT_MODEL = 'claude-opus-4-8'
 const ANTHROPIC_VERSION = '2023-06-01'
 const REQUEST_TIMEOUT_MS = 180_000
 // Five structured dimensions + an enumerated blockingIssues array can

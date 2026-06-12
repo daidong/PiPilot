@@ -40,7 +40,7 @@ import { createCoordinatorTelemetryAdapter } from './telemetry-adapter.js'
 import { loadPrompt } from './prompts/index.js'
 import type { ResolvedMention } from '../mentions/index.js'
 import { PATHS, AGENT_MD_ID, type SessionSummary, type NoteArtifact } from '../types.js'
-import { ROUTER_MODELS, inferProviderFromModelId } from '../models.js'
+import { ROUTER_MODELS, inferProviderFromModelId, getSyntheticPiModel } from '../models.js'
 import { resolveSubTaskModel } from './sub-task-tier.js'
 import { AwsCredentialProvider } from '../aws/credentials.js'
 import { buildSharingPromptClause } from '../sharing/index.js'
@@ -426,7 +426,9 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       // Map subscription providers to their pi-ai provider name
       const piProvider = parts[0] === 'anthropic-sub' ? 'anthropic' : parts[0]
       try {
-        const result = getPiModel(piProvider as any, parts[1] as any)
+        // `?? getSyntheticPiModel` covers Anthropic ids pi-ai doesn't ship yet
+        // (claude-opus-4-8, claude-fable-5). See lib/models.ts.
+        const result = getPiModel(piProvider as any, parts[1] as any) ?? getSyntheticPiModel(parts[1])
         if (result) piModel = result
       } catch (err) {
         if (debug) console.warn(`[Coordinator] getPiModel("${piProvider}", "${parts[1]}") failed:`, err)
@@ -444,6 +446,7 @@ export async function createCoordinator(config: CoordinatorConfig): Promise<{
       for (const provider of providers) {
         try {
           const result = getPiModel(provider as any, modelId as any)
+            ?? (provider === 'anthropic' ? getSyntheticPiModel(modelId) : null)
           if (result) {
             piModel = result
             if (debug) console.log(`[Coordinator] Resolved model "${modelId}" via provider "${provider}"`)

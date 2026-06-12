@@ -14,6 +14,8 @@
  * IDs cause silent router failures (see RFC-002).
  */
 
+import type { Model } from '@mariozechner/pi-ai'
+
 export type ModelTierKey =
   | 'openai'
   | 'openai-codex'
@@ -38,6 +40,12 @@ export interface ModelTier {
  *   anthropic: claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001
  *   deepseek: deepseek-v4-pro, deepseek-v4-flash (text-only — no image input)
  *
+ * NOTE: `claude-opus-4-8` and `claude-fable-5` are NOT in pi-ai yet (even the
+ * latest 0.73.1 tops out at claude-opus-4-7). We use them anyway via the
+ * SYNTHETIC_PI_MODELS shim below — `getSyntheticPiModel()` returns a hand-built
+ * Model for them so the `anthropic-messages` stream provider forwards the id to
+ * api.anthropic.com unchanged. Drop the shim entries once pi-ai ships them.
+ *
  * TODO: gpt-5.5-pro was released 2026-04-23 but is not yet in pi-ai 0.70.2.
  * Add it to the openai tier (as a separate flagship-pro entry) once pi-ai picks it up.
  */
@@ -53,13 +61,13 @@ export const MODEL_TIERS: Record<ModelTierKey, ModelTier> = {
     light: 'gpt-5.4-mini', // nano not available in openai-codex provider
   },
   anthropic: {
-    flagship: 'claude-opus-4-7',
-    previous: 'claude-opus-4-6',
+    flagship: 'claude-opus-4-8',
+    previous: 'claude-fable-5',
     light: 'claude-haiku-4-5-20251001',
   },
   'anthropic-sub': {
-    flagship: 'claude-opus-4-7',
-    previous: 'claude-opus-4-6',
+    flagship: 'claude-opus-4-8',
+    previous: 'claude-fable-5',
     light: 'claude-haiku-4-5-20251001',
   },
   google: {
@@ -95,8 +103,62 @@ export const ROUTER_MODELS: Record<string, string> = {
   deepseek: MODEL_TIERS.deepseek.light!,
 }
 
-/** Sonnet stays separate — current at 4.6 and not on the flagship/previous ladder. */
+/**
+ * Canonical current-Sonnet id. Sonnet is intentionally NOT in the user model
+ * picker (removed by request) and not on the flagship/previous ladder — kept as
+ * the reference id for non-picker use (it's still a real, resolvable model).
+ */
 export const ANTHROPIC_SONNET = 'claude-sonnet-4-6'
+
+/**
+ * Synthetic pi-ai Model entries for Anthropic models that the pinned (and even
+ * the latest) `@mariozechner/pi-ai` does not ship yet. pi-ai's `getModel()`
+ * returns `undefined` for an unknown id and exposes no "register model" API, so
+ * we hand-build the Model objects here. They use `api: 'anthropic-messages'`,
+ * which is a real, registered stream provider — it simply forwards `model.id`
+ * to api.anthropic.com, so any genuine Anthropic id works with an API key (or
+ * subscription OAuth). Specs/pricing from Anthropic's models overview:
+ *   - claude-opus-4-8: $5/$25, 1M ctx, 128K out (same surface as 4.7).
+ *   - claude-fable-5:  $10/$50, 1M ctx, 128K out (released 2026-06-09).
+ *
+ * Caveat: pi-ai's internal `supportsXhigh()` only string-matches opus-4-6/4-7,
+ * so these synthetic ids are treated as not-xhigh by pi-ai and the highest
+ * effort level may be capped at `high`. Acceptable until pi-ai ships them.
+ */
+export const SYNTHETIC_PI_MODELS: Record<string, Model<'anthropic-messages'>> = {
+  'claude-opus-4-8': {
+    id: 'claude-opus-4-8',
+    name: 'Claude Opus 4.8',
+    api: 'anthropic-messages',
+    provider: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'claude-fable-5': {
+    id: 'claude-fable-5',
+    name: 'Claude Fable 5',
+    api: 'anthropic-messages',
+    provider: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+}
+
+/**
+ * Fallback model resolver: returns a synthetic Anthropic Model for ids pi-ai
+ * doesn't know yet, else null. Call sites do `getModel(...) ?? getSyntheticPiModel(id)`.
+ */
+export function getSyntheticPiModel(modelId: string): Model<'anthropic-messages'> | null {
+  return SYNTHETIC_PI_MODELS[modelId] ?? null
+}
 
 /**
  * Bare-model-id prefix → pi-ai provider.
@@ -140,11 +202,18 @@ export const RETIRED_MODEL_MIGRATIONS: Record<string, string> = {
   'openai:gpt-5.4-pro': `openai:${MODEL_TIERS.openai.flagship}`,
   'openai:gpt-4o': `openai:${MODEL_TIERS.openai.flagship}`,
   'openai-codex:gpt-5.4-mini': `openai-codex:${MODEL_TIERS['openai-codex'].flagship}`,
-  // Anthropic 4.5 generation no longer user-visible (Sonnet 4.6 is still current; Haiku stays internal)
+  // Anthropic Opus 4.6/4.7 + Sonnet 4.6 dropped from the picker → migrate to the 4.8 flagship
+  'anthropic:claude-opus-4-7': `anthropic:${MODEL_TIERS.anthropic.flagship}`,
+  'anthropic:claude-opus-4-6': `anthropic:${MODEL_TIERS.anthropic.flagship}`,
+  'anthropic:claude-sonnet-4-6': `anthropic:${MODEL_TIERS.anthropic.flagship}`,
+  'anthropic-sub:claude-opus-4-7': `anthropic-sub:${MODEL_TIERS['anthropic-sub'].flagship}`,
+  'anthropic-sub:claude-opus-4-6': `anthropic-sub:${MODEL_TIERS['anthropic-sub'].flagship}`,
+  'anthropic-sub:claude-sonnet-4-6': `anthropic-sub:${MODEL_TIERS['anthropic-sub'].flagship}`,
+  // Anthropic 4.5 generation no longer user-visible (Haiku stays internal)
   'anthropic:claude-opus-4-5-20251101': `anthropic:${MODEL_TIERS.anthropic.flagship}`,
-  'anthropic:claude-sonnet-4-5-20250929': `anthropic:${ANTHROPIC_SONNET}`,
+  'anthropic:claude-sonnet-4-5-20250929': `anthropic:${MODEL_TIERS.anthropic.flagship}`,
   'anthropic:claude-haiku-4-5-20251001': `anthropic:${MODEL_TIERS.anthropic.flagship}`,
   'anthropic-sub:claude-opus-4-5-20251101': `anthropic-sub:${MODEL_TIERS['anthropic-sub'].flagship}`,
-  'anthropic-sub:claude-sonnet-4-5-20250929': `anthropic-sub:${ANTHROPIC_SONNET}`,
+  'anthropic-sub:claude-sonnet-4-5-20250929': `anthropic-sub:${MODEL_TIERS['anthropic-sub'].flagship}`,
   'anthropic-sub:claude-haiku-4-5-20251001': `anthropic-sub:${MODEL_TIERS['anthropic-sub'].flagship}`,
 }
