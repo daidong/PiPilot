@@ -356,6 +356,9 @@ For any non-trivial algorithm or heuristic, make the method reviewer-auditable:
 **Steps:**
 
 1. **Terminology consistency pass.** Check that each core concept uses exactly one term throughout.
+   Consistency applies to standard terms only — an invented term used consistently is
+   still jargon. Apply the term budget: at most 2-3 coined terms per paper, each defined
+   in one plain sentence at first use; replace the rest with plain phrases.
 
 2. **Remove AI-generated prose patterns.** Common tells:
    - Formulaic transitions ("First and foremost," "It is worth noting that")
@@ -363,6 +366,10 @@ For any non-trivial algorithm or heuristic, make the method reviewer-auditable:
    - List-heavy structure where paragraphs are expected
    - Inflated vocabulary ("leverage" → "use," "delve into" → "investigate")
    - Mechanical "总分总" (general-specific-general) paragraph structure
+   - Coined hyphenated compounds (X-bounded, X-aware, X-driven, X-facing) left undefined
+   - Evaluative adjectives as claims ("conservative", "trustworthy") with no measurable behavior attached
+   - Abstract nouns as sentence subjects; two or more new concepts compressed into one clause
+   - The same claim re-paraphrased per section in new vocabulary (reads as new undefined content)
 
 3. **Venue-specific style.** Apply `rewrite-humanize` with venue awareness:
    - **SC/HPDC:** Direct claims, reproducibility details, restrained rhetoric, operational relevance

@@ -277,6 +277,17 @@ defensive `X is not Y` framings, disqualification clauses, and em-dash asides th
 one idea with another. For the full pattern catalog and diagnostic, see the `rewrite-humanize`
 skill (section "Explain, Don't Defend") and `@rewrite-humanize/references/lexicon.md`.
 
+**Term discipline (anti-jargon; added 2026-06-11 after SC'26 reviews of an AI-drafted paper)**:
+- Coin at most 2-3 new terms per manuscript; define each in one plain sentence at first use
+- No hyphenated coinages (X-bounded, X-aware, X-driven, X-facing) where a plain phrase works
+- Evaluative adjectives about your own method (robust, conservative, trustworthy) must be
+  paired with the measurable behavior they refer to, in the same sentence
+- One new concept per sentence; unpack rather than compress
+- Sentence subjects are concrete actors (we, the system), not abstractions; state each
+  claim once and refer back instead of re-paraphrasing it per section
+- Read-aloud test: if you would not say the sentence to a colleague, rewrite it
+- Full contract with reviewer-calibrated examples: `@paper-writing/references/plain-language-contract.md`
+
 **Style principles:**
 1. **Formal but accessible**: Technical precision without unnecessary jargon
 2. **Direct, confident claims**: Avoid hedging unless genuinely uncertain

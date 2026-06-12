@@ -299,6 +299,47 @@ below.
 - **State assumptions formally**: Before theorems, list all assumptions explicitly
 - **Intuition + rigor**: Provide intuitive explanations alongside formal proofs
 
+#### Term Discipline and Density (Plain-Language Contract)
+
+Added 2026-06-11 after SC'26 reviews of an AI-drafted submission in this workspace:
+all four reviewers attacked the writing ("filled with many jargons that are not
+properly explained"; "I have never seen such opaque language in a computer science
+paper"). The patterns below are LLM drafting defaults — suppress them actively.
+
+- **Term budget**: coin at most 2-3 new terms per paper, only for concepts used 5+
+  times with no standard name. Define each in one plain sentence at first use.
+  The "consistent terminology" rule above applies to standard terms; it never
+  justifies keeping an invented one.
+- **No hyphenated coinages**: X-bounded, X-aware, X-backed, X-driven, X-facing —
+  each is an undefined micro-term. Use the plain phrase instead.
+- **Adjectives are not claims**: "conservative", "trustworthy", "robust", "safe"
+  describing your own system must be paired, in the same sentence, with the
+  measurable behavior they stand for.
+- **One new idea per sentence**: never compress two new concepts into one clause
+  to sound dense. Unpacking is not dumbing down.
+- **Concrete actors**: sentence subjects are things that act (we, the system), not
+  abstractions (evidence, validation, serving). No nominalization chains.
+- **Say it once**: each claim has one canonical statement; elsewhere refer back.
+  Re-paraphrasing a claim in new vocabulary reads as a new undefined concept.
+- **No meta-writing**: do not describe your claims ("this defines our claim
+  boundary") — make them.
+- **Read-aloud test**: if you would not say the sentence to a colleague at a
+  whiteboard, rewrite it.
+
+Calibration example (the BAD version drew the reviewer quote above):
+
+> BAD: "Evidence is never pooled before semantic partition, never attached to trace
+> summaries alone, never transferred across workloads without executed validation,
+> and never served outside the corresponding family-bounded control space."
+>
+> GOOD: "We reuse a configuration only where its performance was actually measured.
+> Traces are first split by interface; two workloads' results are merged only when
+> their measured responses agree; and a recommendation is served only to workloads
+> in the same family."
+
+A reusable copy of this contract lives at `@skill/references/plain-language-contract.md`
+for pasting into prompts outside this skill.
+
 ---
 
 ## Conference Requirements Quick Reference
@@ -452,6 +493,11 @@ Before presenting the draft to the user, verify:
 - [ ] No generic opening sentences
 - [ ] Hedging removed unless necessary
 - [ ] All figures have self-contained captions
+- [ ] Term sheet: at most 2-3 coined terms, each defined in one plain sentence at first use
+- [ ] No undefined hyphenated coinages (X-bounded / X-aware / X-driven / X-facing)
+- [ ] No evaluative adjective about our own system without its measurable behavior in the same sentence
+- [ ] Each major claim stated once in canonical form; referred back elsewhere, never re-paraphrased
+- [ ] Read 3 random paragraphs aloud — every sentence passes the whiteboard test
 
 **Technical:**
 - [ ] All citations verified via `literature-search` (no memory-generated BibTeX)
