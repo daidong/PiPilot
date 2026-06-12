@@ -33,7 +33,9 @@ Do NOT use this skill to:
 2. Preserve claim strength (do not overstate or weaken conclusions).
 3. Preserve uncertainty language (`may`, `might`, `suggests`, etc.) unless user explicitly asks otherwise.
 4. Do not add new references, experiments, or unsupported statements.
-5. Keep domain terminology accurate and consistent.
+5. Keep *standard* domain terminology accurate and consistent. Author-coined terms are
+   NOT protected: flag every non-standard coinage and replace it with a plain phrase
+   where meaning allows (see rule 6).
 6. If source has section headings, keep the same structure unless user requests restructuring.
 
 ## Role
@@ -96,6 +98,29 @@ Prefer neutral connectives: `Here`, `To be specific`, `In this work`.
 Note: this complements the narrative-arc guidance in `scientific-writing` and
 `paper-writing`. Narrative means logical scaffolding (motivation -> evidence
 -> takeaway), not dramatized openings or manufactured tension.
+
+### 6) De-Jargon Pass (added 2026-06-11 after SC'26 reviews of an AI-drafted paper)
+
+LLM drafts invent terminology and compress meaning; reviewers punish both
+("filled with many jargons that are not properly explained"; "I have never seen
+such opaque language in a computer science paper"). Scan for and fix:
+
+- Coined terms and hyphenated compounds (X-bounded, X-aware, X-backed, X-driven,
+  X-facing) that are not standard in the field: replace with a plain phrase, or —
+  only if the term is genuinely load-bearing (used 5+ times) — keep it and add a
+  one-line plain definition at first use.
+- Evaluative adjectives used as technical claims (conservative, trustworthy,
+  robust, principled, safe): attach the measurable behavior in the same sentence,
+  or delete the adjective.
+- Abstract nouns as sentence subjects ("evidence is never transferred...",
+  "validation is performed..."): rewrite with a concrete actor and an active verb.
+- Over-compressed sentences carrying two or more new concepts: split and unpack.
+- The same claim re-paraphrased across sections in different vocabulary: keep one
+  canonical statement, replace the rest with a short back-reference.
+- Meta-writing about the paper's own claims ("this defines the claim boundary"):
+  delete; state the claim itself.
+
+Full contract with a reviewer-calibrated BAD/GOOD example: `@paper-writing/references/plain-language-contract.md`.
 
 ## Venue Tone Notes
 
