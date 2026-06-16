@@ -57,6 +57,13 @@ export interface RunSubLlmOpts<TApi extends string> {
   /** Sampling temperature. Pass 0 for deterministic, reproducible calls
    *  (e.g. the audit judge). Defaults to the provider default when omitted. */
   temperature?: number
+  /**
+   * Reasoning/thinking effort for reasoning models. CRITICAL for one-shot
+   * structured calls: without it a reasoning model can spend the entire output
+   * budget on reasoning tokens and return NO text. Pass `'minimal'` for
+   * extraction-style calls that just need the answer. Omit for non-reasoning.
+   */
+  reasoning?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   /** Abort signal (compaction passes the agent's signal here). */
   signal?: AbortSignal
 
@@ -105,6 +112,7 @@ export async function runSubLlmText<TApi extends string>(
   const llmOpts: SimpleStreamOptions = { apiKey: opts.apiKey }
   if (opts.maxTokens !== undefined) llmOpts.maxTokens = opts.maxTokens
   if (opts.temperature !== undefined) llmOpts.temperature = opts.temperature
+  if (opts.reasoning !== undefined) llmOpts.reasoning = opts.reasoning
   if (opts.signal) llmOpts.signal = opts.signal
 
   const result = opts.tracer
@@ -125,5 +133,12 @@ export async function runSubLlmText<TApi extends string>(
   }
 
   const textContent = result.content.find((c): c is TextContent => c.type === 'text')
-  return textContent?.text ?? ''
+  const text = textContent?.text ?? ''
+  if (!text) {
+    // Decisive diagnostic for the empty-response case: stopReason='error' +
+    // errorMessage = a swallowed API error; 'length' = output budget exhausted;
+    // content with only thinking/toolCall = reasoning-only (no text part).
+    console.warn(`[sub-llm] EMPTY text purpose=${opts.purpose} stopReason=${result.stopReason} err=${result.errorMessage ?? ''} contentTypes=${JSON.stringify(result.content.map(c => c.type))}`)
+  }
+  return text
 }

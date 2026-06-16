@@ -6,6 +6,8 @@
  */
 
 import type { AgentTool } from '@mariozechner/pi-agent-core'
+import { context } from '@opentelemetry/api'
+import { TOOL_CALL_KEY } from '../telemetry/context-keys.js'
 import type { ResearchToolContext } from './types.js'
 import { createResearchMemoryTools } from './entity-tools.js'
 import { createMemoryTools } from '../memory/memory-tools.js'
@@ -39,7 +41,7 @@ export function createResearchTools(ctx: ResearchToolContext): {
 
   // Research tools
   tools.push(createLiteratureSearchTool(ctx))
-  tools.push(createFetchFulltextTool())
+  tools.push(createFetchFulltextTool(ctx))
   tools.push(createConvertDocumentTool(ctx))
   tools.push(createDataAnalyzeTool(ctx))
   tools.push(createGenerateDiagramTool(ctx))
@@ -81,12 +83,29 @@ export function createResearchTools(ctx: ResearchToolContext): {
   if (ctx.awsCredentialProvider) {
     tools.push(...createS3Tools({
       workspacePath: ctx.workspacePath,
+      projectPath: ctx.projectPath,
       credentialProvider: ctx.awsCredentialProvider,
     }))
   }
 
+  // Publish the active tool-call id on the OTel context for the whole lifetime
+  // of every tool's execute(). Any artifact write that funnels through the
+  // memory-v2 store / artifact ledger — regardless of which tool, artifact
+  // type, or how many awaits deep — then reads this back (see buildRow in
+  // artifact-ledger.ts) and stamps the row with its creator, so the audit graph
+  // can draw a `creates` edge generically. One uniform wrap over every research
+  // tool; no per-tool threading, no enumeration of "download" tools.
+  const withToolCallContext = (t: AgentTool): AgentTool => ({
+    ...t,
+    execute: (toolCallId, params, signal, onUpdate) =>
+      context.with(
+        context.active().setValue(TOOL_CALL_KEY, toolCallId),
+        () => t.execute(toolCallId, params, signal, onUpdate),
+      ),
+  })
+
   return {
-    tools,
+    tools: tools.map(withToolCallContext),
     destroy: async () => {
       for (const d of destroyers) {
         await d().catch(() => {})

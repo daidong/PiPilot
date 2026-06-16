@@ -262,10 +262,16 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
                 webSearchDepth={settings.research.webSearchDepth}
                 autoSaveSensitivity={settings.research.autoSaveSensitivity}
                 subTaskModelTier={settings.research.subTaskModelTier}
+                auditModel={settings.research.auditModel ?? 'main'}
+                auditVisionModel={settings.research.auditVisionModel ?? 'main'}
+                auditConcurrency={settings.research.auditConcurrency ?? 5}
                 onChangeIntensity={v => updateSettings({ research: { ...settings.research, researchIntensity: v } })}
                 onChangeWebDepth={v => updateSettings({ research: { ...settings.research, webSearchDepth: v } })}
                 onChangeAutoSave={v => updateSettings({ research: { ...settings.research, autoSaveSensitivity: v } })}
                 onChangeSubTaskModelTier={v => updateSettings({ research: { ...settings.research, subTaskModelTier: v } })}
+                onChangeAuditModel={v => updateSettings({ research: { ...settings.research, auditModel: v } })}
+                onChangeAuditVisionModel={v => updateSettings({ research: { ...settings.research, auditVisionModel: v } })}
+                onChangeAuditConcurrency={v => updateSettings({ research: { ...settings.research, auditConcurrency: v } })}
               />
             )}
             {activeTab === 'data-analysis' && loaded && (

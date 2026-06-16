@@ -18,6 +18,7 @@ import path from 'node:path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError } from './tool-utils.js'
+import { recordFileWrite } from '../ledger/file-ledger.js'
 import type { ResearchToolContext } from './types.js'
 import {
   composeEditPrompt,
@@ -783,6 +784,8 @@ export function createGenerateDiagramTool(ctx: ResearchToolContext): AgentTool {
         }
 
         fs.writeFileSync(finalAbsOutput, transcribed.svg, 'utf-8')
+        void recordFileWrite(ctx.projectPath, finalAbsOutput, { tool: 'generate_diagram' })
+        void recordFileWrite(ctx.projectPath, anchorAbs, { tool: 'generate_diagram' })
 
         transcriptionRecord = {
           repaired: transcribed.repaired,

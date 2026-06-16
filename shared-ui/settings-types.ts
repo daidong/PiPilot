@@ -23,6 +23,26 @@ export interface ResearchSettings {
   webSearchDepth: WebSearchDepth
   autoSaveSensitivity: AutoSaveSensitivity
   subTaskModelTier: SubTaskModelTier
+  /**
+   * Model for the audit pipeline's text-only LLM calls (claim extraction §5.2
+   * C.1, prune adjudication §3.2). `'main'` follows the main agent model.
+   * These are short, structured calls that cheap small tiers handle well
+   * (GPT `…-mini`/`…-nano`, Claude `haiku-…`). See docs/spec/audit-pipeline.md §6.1.
+   */
+  auditModel: string
+  /**
+   * Model for the audit escalation call (§5.2 C.5) — must be vision-capable,
+   * since the residue it judges is visual/semantic (figures, images). `'main'`
+   * follows the main agent model. A small model that can't see images silently
+   * fails the figure case, so pick a multimodal model here.
+   */
+  auditVisionModel: string
+  /**
+   * Max per-node audits to run concurrently in the "Audit trace" batch. Per-node
+   * audits are independent, so they parallelize; this caps in-flight LLM calls
+   * to respect rate limits / cost. Default 5.
+   */
+  auditConcurrency: number
 }
 
 // ── Data analysis settings ──────────────────────────────────────────────────
@@ -122,6 +142,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     webSearchDepth: 'standard',
     autoSaveSensitivity: 'balanced',
     subTaskModelTier: 'light',
+    auditModel: 'main',
+    auditVisionModel: 'main',
+    auditConcurrency: 5,
   },
   dataAnalysis: {
     executionTimeLimit: 'standard',
@@ -166,6 +189,13 @@ export interface ResolvedSettings {
   autoSaveThreshold: number
   /** Pass-through enum; the coordinator picks the model per sub-task call. */
   subTaskModelTier: SubTaskModelTier
+  /**
+   * Audit LLM model slots. `'main'` is a sentinel meaning "follow the main
+   * agent model" — the IPC layer resolves it to `state.currentModel` at call
+   * time (it has no AppSettings access to the live model). Anything else is a
+   * concrete `provider:modelId` passed straight to runMainCallLlm's override.
+   */
+  audit: { model: string; visionModel: string; concurrency: number }
   diagram: { reviewProvider: DiagramReviewProvider }
   compute: {
     enabledBackends: string[]
@@ -218,6 +248,11 @@ export function resolveSettings(settings: AppSettings): ResolvedSettings {
     dataAnalysis: { timeoutMs: resolveDataAnalysisTimeout(settings.dataAnalysis.executionTimeLimit) },
     autoSaveThreshold: resolveAutoSaveThreshold(settings.research.autoSaveSensitivity),
     subTaskModelTier: settings.research.subTaskModelTier ?? 'light',
+    audit: {
+      model: settings.research.auditModel ?? 'main',
+      visionModel: settings.research.auditVisionModel ?? 'main',
+      concurrency: settings.research.auditConcurrency ?? 5,
+    },
     diagram: { reviewProvider: settings.diagram?.reviewProvider ?? 'auto' },
     compute: settings.compute ?? DEFAULT_SETTINGS.compute,
   }

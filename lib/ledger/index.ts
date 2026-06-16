@@ -30,3 +30,6 @@ export type {
 
 export { createViewLogWriter } from './view-log.js'
 export type { ViewLogRow, ViewLogWriter, ViewTargetKind, ViewOp } from './view-log.js'
+
+export { createFileLedgerWriter, recordFileWrite } from './file-ledger.js'
+export type { FileLedgerRow, FileLedgerWriter, FileOp } from './file-ledger.js'

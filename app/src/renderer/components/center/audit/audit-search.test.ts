@@ -17,7 +17,7 @@ const graph: AuditGraph = {
       toolName: 'data-analyze',
       rawEvents: [
         { name: 'pipilot.tool.args', body: JSON.stringify({ path: 'input.csv', operation: 'mean' }) },
-        { name: 'pipilot.tool.result', body: 'The measured mean is 4.2 for cohort A.' },
+        { name: 'pipilot.tool.result', body: 'The measured mean is 4.2 for cohort A. Standalone digit 6 appears here.' },
       ],
     }),
     n('span:step-1', 'step', {
@@ -46,4 +46,22 @@ test('searchAuditGraph defaults to case-insensitive and supports case-sensitive 
   assert.equal(searchAuditGraph(graph, 'updated', false).length, 1)
   assert.equal(searchAuditGraph(graph, 'updated', true).length, 0)
   assert.equal(searchAuditGraph(graph, 'Updated', true).length, 1)
+})
+
+test('searchAuditGraph uses whole-token boundaries for alphanumeric text', () => {
+  assert.equal(searchAuditGraph(graph, 'put.csv', false).length, 0)
+  assert.equal(searchAuditGraph(graph, '6', false).length, 1)
+
+  const encodedGraph: AuditGraph = {
+    ...graph,
+    nodes: [
+      n('span:blob', 'tool', {
+        label: 'blob',
+        rawEvents: [
+          { name: 'pipilot.tool.result', body: 'base64: abc6def hash: 946abc value: 60' },
+        ],
+      }),
+    ],
+  }
+  assert.equal(searchAuditGraph(encodedGraph, '6', false).length, 0)
 })

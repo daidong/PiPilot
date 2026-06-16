@@ -17,8 +17,10 @@
  *    `derived_from` edge in the projection, so it is not in the causal set.
  *  - Span collapse (old Stage 2) is dropped: the projection emits a flat
  *    `trace contains span`, never a span→span tree, so there is nothing to fold.
- *  - Error markers are flagged, never pruned (the "is this abandoned / did it
- *    affect reasoning" judgement is deferred to the LLM stage).
+ *  - Error markers split by purpose. An errored tool result that flowed onward
+ *    is an audit flag; an errored tool branch that produced nothing consumed
+ *    and was followed by later work in the same trace is deterministically
+ *    greyed as abandoned.
  *
  * Determinism: the result holds sorted arrays (node ids, edge keys) and the
  * flag / metric records are built by iterating a sorted node list, so two runs
@@ -113,8 +115,12 @@ export interface PruneResult {
   prunedEdges: string[]
   /** The step backbone of the focused trace (critical-path spine), sorted. */
   spineNodes: string[]
-  /** nodeId → sorted flag list. Only nodes with ≥1 flag appear. */
+  /** nodeId → sorted flag list. Compatibility union of pruneFlags + auditFlags. */
   flags: Record<string, string[]>
+  /** Flags that reduce/grey the graph scope. */
+  pruneFlags: Record<string, string[]>
+  /** Flags that trigger targeted audit checks. */
+  auditFlags: Record<string, string[]>
   /** stepId → support metrics, for each step of the focused trace. */
   supportMetrics: Record<string, StepSupportMetric>
   stageStats: {
@@ -182,7 +188,59 @@ const ARGS_PREFIX = 200
 function intentClass(n: GraphNode): string {
   const argsBody = n.rawEvents?.find(e => e.name === 'pipilot.tool.args')?.body ?? ''
   const name = n.toolName || n.label
-  return `${name} ${djb2(argsBody.slice(0, ARGS_PREFIX))}`
+  return `${name} ${djb2(argsBody.slice(0, ARGS_PREFIX))}`
+}
+
+/**
+ * `repeated_intent` clusters: per (trace, tool+args) intent class, the tool
+ * nodes that fall in a window of ≥3 invocations within 3 consecutive step
+ * indices — genuine do-overs on an identical call. Returns the member list per
+ * key, sorted ascending by step index, so the LAST element is the latest
+ * invocation (the presumptive keeper) and the rest are superseded. Shared by the
+ * deterministic prune (identical-result clusters) and the flag/LLM path
+ * (divergent clusters). See docs/spec/audit-pipeline.md §3.
+ */
+function repeatedIntentClusters(graph: GraphLike, nodeById: Map<string, GraphNode>): Map<string, { id: string; idx: number }[]> {
+  const byKey = new Map<string, { id: string; idx: number }[]>()
+  for (const e of graph.edges) {
+    if (e.rel !== 'invokes') continue
+    const step = nodeById.get(e.source)
+    const tool = nodeById.get(e.target)
+    if (!step || !tool || tool.kind !== 'tool') continue
+    const key = `${tool.traceId ?? ''} ${intentClass(tool)}`
+    const entry = { id: tool.id, idx: step.stepIndex ?? 0 }
+    const list = byKey.get(key)
+    if (list) list.push(entry); else byKey.set(key, [entry])
+  }
+  const clusters = new Map<string, { id: string; idx: number }[]>()
+  for (const [key, list] of byKey) {
+    if (list.length < 3) continue
+    list.sort((a, b) => a.idx - b.idx || a.id.localeCompare(b.id))
+    const members = new Map<string, number>()
+    for (let i = 0; i < list.length; i++) {
+      const window = list.filter(x => x.idx >= list[i].idx && x.idx <= list[i].idx + 2)
+      if (window.length >= 3) for (const x of window) members.set(x.id, x.idx)
+    }
+    if (members.size >= 3) {
+      clusters.set(key, [...members].map(([id, idx]) => ({ id, idx })).sort((a, b) => a.idx - b.idx || a.id.localeCompare(b.id)))
+    }
+  }
+  return clusters
+}
+
+/** Trimmed `result` body of a tool, or null when missing or redacted — a null
+ *  means we CANNOT confirm two invocations produced the same result, so the
+ *  cluster is treated as divergent (deferred to §3.2, never det-pruned). */
+function resultFingerprint(n: GraphNode | undefined): string | null {
+  const body = n?.rawEvents?.find(e => e.name === 'pipilot.tool.result')?.body
+  if (typeof body !== 'string' || !body.trim()) return null
+  if (/size-cap|redactionLevel/.test(body)) return null
+  return body.trim()
+}
+
+/** Superseded members of a cluster = all but the latest (the keeper). */
+function supersededMembers(members: { id: string; idx: number }[]): { id: string; idx: number }[] {
+  return members.slice(0, -1)
 }
 
 // —— Main —————————————————————————————————————————————————————————————————
@@ -236,6 +294,22 @@ export function pruneGraph(
     }
   }
 
+  // Deterministic prune-flags remove abandoned branches from the focused scope.
+  // This runs after the causal flood because an abandoned errored tool is still
+  // causally adjacent to a kept step; the flag purpose, not graph reachability,
+  // is what greys it.
+  // `repeated_intent` clusters, computed once and shared: the deterministic
+  // prune greys identical-result do-overs (keep latest), and the flag/LLM path
+  // handles the divergent ones.
+  const intentClusters = repeatedIntentClusters(graph, nodeById)
+  const deterministicPruned = computeDeterministicPrunedNodes(
+    graph,
+    { nodeById, incoming, outgoing },
+    terminalTraceId,
+    intentClusters,
+  )
+  for (const id of deterministicPruned) kept.delete(id)
+
   // —— Kept edges: ONLY causal edges inside the kept set. Temporal (`precedes`,
   // the step timeline) and structural (`contains`, `mentions`) edges are greyed
   // even between kept steps — the step ordering is scaffolding, and the causal
@@ -248,8 +322,15 @@ export function pruneGraph(
   }
 
   // —— Stages 5/6: flags + support metrics ——————————————————————————————————
-  const flags = computeFlags(graph, { nodeById, incoming, outgoing })
-  const supportMetrics = computeSupportMetrics(graph, { nodeById, incoming }, terminalTraceId, flags)
+  const { pruneFlags, auditFlags } = computeFlags(
+    graph,
+    { nodeById, incoming, outgoing },
+    terminalTraceId,
+    deterministicPruned,
+    intentClusters,
+  )
+  const allFlags = mergeFlagMaps(pruneFlags, auditFlags)
+  const supportMetrics = computeSupportMetrics(graph, { nodeById, incoming }, terminalTraceId, allFlags)
 
   // —— Partition + sorted, serializable output —————————————————————————————
   const allEdgeKeys = graph.edges.map(edgeKey)
@@ -260,10 +341,9 @@ export function pruneGraph(
     return n?.kind === 'step' && n.traceId === terminalTraceId
   })
 
-  const sortedFlags: Record<string, string[]> = {}
-  for (const id of [...flags.keys()].sort()) {
-    sortedFlags[id] = [...new Set(flags.get(id))].sort()
-  }
+  const sortedFlags = sortFlagMap(allFlags)
+  const sortedPruneFlags = sortFlagMap(pruneFlags)
+  const sortedAuditFlags = sortFlagMap(auditFlags)
   const sortedMetrics: Record<string, StepSupportMetric> = {}
   for (const id of [...supportMetrics.keys()].sort()) {
     sortedMetrics[id] = supportMetrics.get(id) as StepSupportMetric
@@ -283,6 +363,8 @@ export function pruneGraph(
     prunedEdges: prunedEdges.sort(),
     spineNodes: spineNodes.sort(),
     flags: sortedFlags,
+    pruneFlags: sortedPruneFlags,
+    auditFlags: sortedAuditFlags,
     supportMetrics: sortedMetrics,
     stageStats: {
       G0: { nodes: graph.nodes.length, edges: graph.edges.length },
@@ -303,19 +385,117 @@ interface Index {
   outgoing: Map<string, GraphEdge[]>
 }
 
-/**
- * Per-node suspicion markers. These only *tag* — they never prune. Excluded by
- * design: `high_latency` / `long_output` (performance/storage signals, not
- * correctness — see auto-suspect.ts for the rationale this preserves).
- */
-function computeFlags(graph: GraphLike, idx: Index): Map<string, string[]> {
-  const { incoming, outgoing, nodeById } = idx
-  const out = new Map<string, string[]>()
-  const flag = (id: string, name: string) => {
-    const list = out.get(id)
-    if (list) { if (!list.includes(name)) list.push(name) }
-    else out.set(id, [name])
+function sortFlagMap(flags: Map<string, string[]>): Record<string, string[]> {
+  const sorted: Record<string, string[]> = {}
+  for (const id of [...flags.keys()].sort()) {
+    sorted[id] = [...new Set(flags.get(id))].sort()
   }
+  return sorted
+}
+
+function mergeFlagMaps(...maps: Array<Map<string, string[]>>): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const map of maps) {
+    for (const [id, flags] of map) {
+      const list = out.get(id) ?? []
+      for (const flag of flags) if (!list.includes(flag)) list.push(flag)
+      out.set(id, list)
+    }
+  }
+  return out
+}
+
+function productWasConsumed(productId: string, outgoing: Map<string, GraphEdge[]>): boolean {
+  return (outgoing.get(productId) ?? []).some(e => e.rel === 'reads' || e.rel === 'retrieved')
+}
+
+function computeDeterministicPrunedNodes(
+  graph: GraphLike,
+  idx: Index,
+  terminalTraceId: string | null,
+  intentClusters: Map<string, { id: string; idx: number }[]>,
+): Set<string> {
+  const { outgoing, nodeById } = idx
+  const pruned = new Set<string>()
+  if (!terminalTraceId) return pruned
+
+  const focusedTools = graph.nodes
+    .filter(n => n.kind === 'tool' && n.traceId === terminalTraceId)
+    .sort((a, b) => timeOf(a) - timeOf(b) || a.id.localeCompare(b.id))
+
+  for (const tool of focusedTools) {
+    if (!tool.isError) continue
+    const consumedDirectly = (outgoing.get(tool.id) ?? []).some(e => e.rel === 'returns')
+    if (consumedDirectly) continue
+
+    const productIds = (outgoing.get(tool.id) ?? [])
+      .filter(e => e.rel === 'writes' || e.rel === 'creates')
+      .map(e => e.target)
+    const producedConsumed = productIds.some(id => productWasConsumed(id, outgoing))
+    if (producedConsumed) continue
+
+    const hasLaterSuccess = focusedTools.some(other =>
+      other.id !== tool.id &&
+      !other.isError &&
+      timeOf(other) > timeOf(tool),
+    )
+    if (!hasLaterSuccess) continue
+
+    pruned.add(tool.id)
+    for (const id of productIds) pruned.add(id)
+  }
+
+  // §3.1 repeated_intent: when every invocation in a cluster produced the SAME
+  // result, the earlier ones are pure do-overs — grey them, keep the latest.
+  // Divergent or redacted-result clusters can't be settled by topology and are
+  // left for the §3.2 LLM. Focused trace only (the keeper carries the traceId).
+  for (const members of intentClusters.values()) {
+    const keeper = nodeById.get(members[members.length - 1].id)
+    if (keeper?.traceId !== terminalTraceId) continue
+    const fps = members.map(m => resultFingerprint(nodeById.get(m.id)))
+    const allIdentical = fps.every(f => f !== null && f === fps[0])
+    if (!allIdentical) continue
+    for (const m of supersededMembers(members)) {
+      pruned.add(m.id)
+      for (const e of outgoing.get(m.id) ?? []) {
+        if (e.rel === 'writes' || e.rel === 'creates') pruned.add(e.target)
+      }
+    }
+  }
+
+  return pruned
+}
+
+/**
+ * Per-node suspicion markers, split by purpose. `pruneFlags` identify nodes
+ * already greyed by deterministic scope reduction or candidates for later
+ * adjudication; `auditFlags` trigger targeted checks. Excluded by design:
+ * `high_latency` / `long_output` (performance/storage signals, not correctness
+ * — see auto-suspect.ts for the rationale this preserves).
+ *
+ * Thresholds are intentionally conservative (≥3, not ≥2) so a single repeat is
+ * never flagged — one retry / re-read / overwrite is normal agent behaviour,
+ * not a smell. `terminalTraceId` lets `unused_output` exempt the deliverable:
+ * the last product of the focused turn is unread by construction and must not
+ * self-flag.
+ */
+function computeFlags(
+  graph: GraphLike,
+  idx: Index,
+  terminalTraceId: string | null,
+  deterministicPruned: Set<string>,
+  intentClusters: Map<string, { id: string; idx: number }[]>,
+): { pruneFlags: Map<string, string[]>; auditFlags: Map<string, string[]> } {
+  const { incoming, outgoing, nodeById } = idx
+  const pruneFlags = new Map<string, string[]>()
+  const auditFlags = new Map<string, string[]>()
+  const flag = (map: Map<string, string[]>, id: string, name: string) => {
+    const list = map.get(id)
+    if (list) { if (!list.includes(name)) list.push(name) }
+    else map.set(id, [name])
+  }
+  const pruneFlag = (id: string, name: string) => flag(pruneFlags, id, name)
+  const auditFlag = (id: string, name: string) => flag(auditFlags, id, name)
 
   const relCount = (edges: GraphEdge[] | undefined, rel: EdgeRel): number =>
     (edges ?? []).reduce((acc, e) => acc + (e.rel === rel ? 1 : 0), 0)
@@ -335,61 +515,82 @@ function computeFlags(graph: GraphLike, idx: Index): Map<string, string[]> {
   }
   for (const { id } of minIdxByTrace.values()) firstStepIds.add(id)
 
+  // The deliverable(s): the latest-produced product(s) within the focused
+  // trace. The final output of a turn is unread by construction — nothing
+  // downstream consumes it — so flagging it `unused_output` would self-trip on
+  // every successful run. We exempt the products whose producing tool fires
+  // last in the terminal trace; genuinely abandoned mid-trace products (an
+  // earlier, superseded draft) still flag. Production time = the max
+  // `timeOf` over a product's writes/creates producers in the focused trace.
+  const deliverableIds = new Set<string>()
+  if (terminalTraceId) {
+    const prodTime = new Map<string, number>()
+    let bestTime = Number.NEGATIVE_INFINITY
+    for (const n of graph.nodes) {
+      if (n.kind !== 'file' && n.kind !== 'artifact') continue
+      let t = Number.NEGATIVE_INFINITY
+      for (const e of incoming.get(n.id) ?? []) {
+        if (e.rel !== 'writes' && e.rel !== 'creates') continue
+        const tool = nodeById.get(e.source)
+        if (!tool || tool.traceId !== terminalTraceId) continue
+        t = Math.max(t, timeOf(tool))
+      }
+      if (t === Number.NEGATIVE_INFINITY) continue // not produced in the focused trace
+      prodTime.set(n.id, t)
+      bestTime = Math.max(bestTime, t)
+    }
+    for (const [id, t] of prodTime) if (t === bestTime) deliverableIds.add(id)
+  }
+
   for (const n of graph.nodes) {
     if (n.kind === 'tool') {
-      if (n.isError) flag(n.id, 'error')
-      if (n.retryCount && n.retryCount > 0) flag(n.id, 'retried')
+      // `abandoned_error` is the errored-abandoned label; a non-error tool that
+      // landed in deterministicPruned did so as a repeated_intent do-over and is
+      // labelled by the cluster loop below, not here.
+      if (deterministicPruned.has(n.id) && n.isError) pruneFlag(n.id, 'abandoned_error')
+      else if (n.isError && hasRel(outgoing.get(n.id), 'returns')) auditFlag(n.id, 'error')
+      if (n.retryCount && n.retryCount >= 3) pruneFlag(n.id, 'retried')
     }
 
     if (n.kind === 'file') {
       // reads: file → tool (file is the source); writes: tool → file (target).
-      if (relCount(outgoing.get(n.id), 'reads') >= 2) flag(n.id, 'reread')
-      if (relCount(incoming.get(n.id), 'writes') >= 2) flag(n.id, 'overwritten')
+      if (relCount(outgoing.get(n.id), 'reads') >= 3) auditFlag(n.id, 'reread')
+      if (relCount(incoming.get(n.id), 'writes') >= 3) auditFlag(n.id, 'overwritten')
     }
 
-    if (n.kind === 'artifact' && Array.isArray(n.versions) && n.versions.length > 1) {
-      flag(n.id, 'overwritten')
+    if (n.kind === 'artifact' && Array.isArray(n.versions) && n.versions.length >= 3) {
+      auditFlag(n.id, 'overwritten')
     }
 
     // ungrounded_step: a NON-FIRST step that consumed no tool output (no
     // incoming returns). The first step of a trace is excluded — it has no
     // prior step to feed it, so "ungrounded" there is a guaranteed false positive.
     if (n.kind === 'step' && !firstStepIds.has(n.id) && !hasRel(incoming.get(n.id), 'returns')) {
-      flag(n.id, 'ungrounded_step')
+      auditFlag(n.id, 'ungrounded_step')
     }
 
     // unused_output: a product (written file / created artifact) that nothing
-    // reads. The deliverable typically lands here — it is FLAGGED, not pruned.
+    // reads — EXCEPT the focused turn's deliverable, which is unread by design
+    // (see deliverableIds above). Genuinely abandoned products still flag.
     if (n.kind === 'file' || n.kind === 'artifact') {
       const isProduct = hasRel(incoming.get(n.id), 'writes') || hasRel(incoming.get(n.id), 'creates')
       const isRead = hasRel(outgoing.get(n.id), 'reads') || hasRel(outgoing.get(n.id), 'retrieved')
-      if (isProduct && !isRead) flag(n.id, 'unused_output')
+      if (deterministicPruned.has(n.id)) pruneFlag(n.id, 'abandoned_error_product')
+      else if (isProduct && !isRead && !deliverableIds.has(n.id)) auditFlag(n.id, 'unused_output')
     }
   }
 
-  // repeated_intent: same tool name invoked ≥3 times within a window of 3
-  // consecutive step indices (K=3), per trace. Flags the clustered tool nodes.
-  const byKey = new Map<string, { id: string; idx: number }[]>()
-  for (const e of graph.edges) {
-    if (e.rel !== 'invokes') continue
-    const step = nodeById.get(e.source)
-    const tool = nodeById.get(e.target)
-    if (!step || !tool || tool.kind !== 'tool') continue
-    const key = `${tool.traceId ?? ''} ${tool.toolName || tool.label}`
-    const entry = { id: tool.id, idx: step.stepIndex ?? 0 }
-    const list = byKey.get(key)
-    if (list) list.push(entry); else byKey.set(key, [entry])
-  }
-  for (const list of byKey.values()) {
-    if (list.length < 3) continue
-    list.sort((a, b) => a.idx - b.idx || a.id.localeCompare(b.id))
-    for (let i = 0; i < list.length; i++) {
-      const window = list.filter(x => x.idx >= list[i].idx && x.idx <= list[i].idx + 2)
-      if (window.length >= 3) for (const x of window) flag(x.id, 'repeated_intent')
-    }
+  // repeated_intent: same tool + same args invoked ≥3× within a 3-step window
+  // (computed once in `intentClusters`). We flag ONLY the superseded members —
+  // every invocation except the latest (the presumptive keeper, "前几次未被采用").
+  // Identical-result clusters were already greyed deterministically (§3.1); the
+  // flag here drives the §3.2 LLM for the divergent ones, and the keeper is
+  // never flagged so it survives as the baseline.
+  for (const members of intentClusters.values()) {
+    for (const m of supersededMembers(members)) pruneFlag(m.id, 'repeated_intent')
   }
 
-  return out
+  return { pruneFlags, auditFlags }
 }
 
 // —— Support metrics ——————————————————————————————————————————————————————

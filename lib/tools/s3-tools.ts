@@ -26,6 +26,7 @@ import { Readable } from 'node:stream'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError } from './tool-utils.js'
+import { recordFileWrite } from '../ledger/file-ledger.js'
 import type { AwsCredentialProvider } from '../aws/credentials.js'
 import { toSdkCredentials } from '../aws/credentials.js'
 
@@ -35,6 +36,9 @@ import { toSdkCredentials } from '../aws/credentials.js'
 
 export interface S3ToolsContext {
   workspacePath: string
+  /** Project root where `.research-pilot` lives, for the file provenance ledger.
+   *  Falls back to workspacePath when omitted. */
+  projectPath?: string
   credentialProvider: AwsCredentialProvider
 }
 
@@ -213,6 +217,7 @@ export function createS3DownloadTool(ctx: S3ToolsContext): AgentTool {
         const { GetObjectCommand } = await import('@aws-sdk/client-s3')
         const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
         const bytes = await streamToFile(resp.Body, destPath)
+        void recordFileWrite(ctx.projectPath ?? ctx.workspacePath, destPath, { tool: 's3_download' })
         const rel = path.relative(ctx.workspacePath, destPath)
         return toAgentResult('s3_download', {
           success: true,

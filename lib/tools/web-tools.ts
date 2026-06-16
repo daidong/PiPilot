@@ -14,6 +14,7 @@ import path from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError, truncateHeadTail, type ToolResult } from './tool-utils.js'
+import { recordFileWrite } from '../ledger/file-ledger.js'
 import type { ResearchToolContext } from './types.js'
 
 // ---------------------------------------------------------------------------
@@ -579,6 +580,7 @@ export function createWebFetchTool(ctx: ResearchToolContext): AgentTool {
         await mkdir(contentDir, { recursive: true })
         const filePath = path.join(contentDir, `${hash}.${ext}`)
         await writeFile(filePath, output, 'utf-8')
+        void recordFileWrite(ctx.projectPath, filePath, { tool: 'web_fetch' })
 
         // Preview: up to 2K chars, cut at last newline for readability
         const previewRaw = output.slice(0, WEB_DEFAULTS.fetchPreviewChars)

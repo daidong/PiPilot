@@ -19,10 +19,12 @@ import {
   type FulltextSource,
 } from '../fulltext/index.js'
 import { fetchPaperclipMetadata } from '../fulltext/paperclip.js'
+import { recordFileWrite } from '../ledger/file-ledger.js'
+import type { ResearchToolContext } from './types.js'
 
 const DEFAULT_MAX_CHARS = 40_000
 
-export function createFetchFulltextTool(): AgentTool {
+export function createFetchFulltextTool(ctx: ResearchToolContext): AgentTool {
   return {
     name: 'fetch-fulltext',
     label: 'Fetch Full Text',
@@ -141,6 +143,7 @@ export function createFetchFulltextTool(): AgentTool {
         // cached, return its path without re-fetching.
         const cached = await resolveFulltext(req)
         if (cached) {
+          if (cached.cachePath) void recordFileWrite(ctx.projectPath, cached.cachePath, { tool: 'fetch-fulltext' })
           return toAgentResult('fetch-fulltext', toolSuccess({
             metadata: { title: title ?? null, doi: doi ?? null, pmc_id: pmcId ?? null, arxiv_id: arxivId ?? null, fulltext_available: true },
             sections: cached.sectionList ?? null,
@@ -179,6 +182,8 @@ export function createFetchFulltextTool(): AgentTool {
             context: { doi, arxivId, pmcId, pubmedId, title },
           }))
       }
+
+      if (result.cachePath) void recordFileWrite(ctx.projectPath, result.cachePath, { tool: 'fetch-fulltext' })
 
       const truncate = (s: string): { value: string; truncated: boolean } => {
         if (s.length <= maxChars) return { value: s, truncated: false }

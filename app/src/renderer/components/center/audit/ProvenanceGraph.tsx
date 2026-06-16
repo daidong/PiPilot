@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { GitBranch, Maximize2 } from 'lucide-react'
+import { GitBranch, Loader2, Maximize2 } from 'lucide-react'
 import ForceGraph2D from 'react-force-graph-2d'
 import type {
   AuditGraph,
@@ -235,6 +235,15 @@ export interface ProvenanceGraphProps {
   searchMatchNodeIds?: Set<string>
   /** Active provenance search hit node. Purely visual. */
   activeSearchNodeId?: string | null
+  /** The single user-facing Prune switch. Internally, AuditView may enrich it. */
+  pruneOn: boolean
+  onPruneChange: (on: boolean) => void
+  prunePending?: boolean
+  /**
+   * Nodes greyed by Prune's ambiguous-node check. Rendered with a DISTINCT
+   * dashed outline so the user can inspect model-backed scope changes.
+   */
+  adjudicatedGrey?: Set<string>
   /** Bubble support/critical membership up so the side panel can show stats. */
   onSliceChange?: (slice: {
     nodes: Set<string>
@@ -258,16 +267,12 @@ export interface ProvenanceGraphProps {
 
 export function ProvenanceGraph({
   graph, selected, onSelect, taint, autoSuspect, filters, focusRef, onSliceChange, searchMatchNodeIds, activeSearchNodeId,
+  pruneOn, onPruneChange, prunePending, adjudicatedGrey,
 }: ProvenanceGraphProps) {
   const palette = useAuditPalette()
   const fgRef = useRef<any>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 600 })
-  // Prune is a *view toggle* on the full graph: off → the graph as-is; on →
-  // the deterministically-pruned set is greyed (never removed) and the critical
-  // path is highlighted. Default off so the user first sees everything.
-  const [prune, setPrune] = useState(false)
-
   // —— Resize observer ——
   useLayoutEffect(() => {
     if (!containerRef.current) return
@@ -554,7 +559,7 @@ export function ProvenanceGraph({
       nodes: highlight.nodes,
       derivedTaint,
       prune: {
-        on: prune,
+        on: pruneOn,
         terminalStepId: pruneResult.terminalStepId,
         terminalLabel: terminal?.label ?? pruneResult.terminalStepId,
         keptNodes: pruneResult.keptNodes.length,
@@ -568,14 +573,14 @@ export function ProvenanceGraph({
         nodeRoles: pruneResult.stageStats.nodeRoles,
       },
     })
-  }, [highlight, derivedTaint, pruneResult, prune, graph, onSliceChange])
+  }, [highlight, derivedTaint, pruneResult, pruneOn, graph, onSliceChange])
 
   // —— Link key + prune membership ——
   const linkKey = (l: any): string => edgeKey({ source: edgeSourceId(l), target: edgeTargetId(l), rel: l.rel })
   // When prune is on and nothing is selected, an edge is "greyed" unless it is
   // on the kept critical-path subgraph. Kept edges only connect kept nodes, so
   // the critical path never routes through grey.
-  const isPrunedLink = (l: any): boolean => prune && !selected && !keptEdgeSet.has(linkKey(l))
+  const isPrunedLink = (l: any): boolean => pruneOn && !selected && !keptEdgeSet.has(linkKey(l))
 
   // —— Link color accessor (shared between line / arrow / particle) ——
   // Edges are coloured by their Stage-0 causal CLASS, not per-rel: causal edges
@@ -672,9 +677,10 @@ export function ProvenanceGraph({
               : isDerivedTaint
                 ? tintToward(baseC, palette.taint, 0.2)
                 : baseC
-          const dim = selected
+          const isAdjudicatedGrey = adjudicatedGrey?.has(n.id) ?? false
+          const dim = (pruneOn && isAdjudicatedGrey) || (selected
             ? (!isHi && !isSel && !isSearchMatch)
-            : prune ? prunedNodeSet.has(n.id) : !important
+            : pruneOn ? prunedNodeSet.has(n.id) : !important)
           ctx.globalAlpha = dim ? 0.22 : 1
           ctx.beginPath()
           ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
@@ -712,6 +718,17 @@ export function ProvenanceGraph({
             ctx.lineWidth = (isActiveSearch ? 3 : 1.7) / globalScale
             ctx.strokeStyle = isActiveSearch ? 'rgba(245, 158, 11, 1)' : 'rgba(245, 158, 11, 0.68)'
             ctx.beginPath(); ctx.arc(n.x, n.y, r + (isActiveSearch ? 5 : 4), 0, Math.PI * 2); ctx.stroke()
+          }
+          // Prune model decision: a distinct dashed violet ring at full alpha
+          // so it reads even though the node itself is dimmed.
+          if (pruneOn && isAdjudicatedGrey) {
+            ctx.globalAlpha = 1
+            ctx.lineWidth = 1.4 / globalScale
+            ctx.strokeStyle = 'rgba(139, 92, 246, 0.9)'
+            ctx.setLineDash([2 / globalScale, 2 / globalScale])
+            ctx.beginPath(); ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2); ctx.stroke()
+            ctx.setLineDash([])
+            ctx.globalAlpha = dim ? 0.22 : 1
           }
           // Citation flag (A1) — amber badge at top-right of artifacts that cite
           // never-retrieved sources. Deliberately a different visual language
@@ -755,21 +772,21 @@ export function ProvenanceGraph({
       />
       <div className="absolute top-3 left-3 flex items-center gap-1 rounded-md border t-border-subtle t-bg-elevated shadow-sm p-1">
         <button
-          onClick={() => setPrune(p => !p)}
-          title={prune ? 'Showing pruned graph — click to show the full graph' : 'Prune: grey everything off the critical path'}
+          onClick={() => onPruneChange(!pruneOn)}
+          title={pruneOn ? 'Showing pruned graph — click to show the full graph' : 'Prune: grey background and abandoned work'}
           className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
-            prune ? 't-bg-accent-2-muted t-text' : 't-text-muted hover:t-text-secondary'
+            pruneOn ? 't-bg-accent-2-muted t-text' : 't-text-muted hover:t-text-secondary'
           }`}
         >
-          <GitBranch size={12} />
+          {prunePending ? <Loader2 size={12} className="animate-spin" /> : <GitBranch size={12} />}
           Prune
         </button>
-        {prune && (
+        {pruneOn && (
           <span
-            title="Kept on the critical path · greyed off it"
+            title="Kept on the critical path · greyed outside the current prune scope"
             className="ml-1 px-1.5 py-0.5 rounded border t-border-subtle t-text-muted text-[10px] tabular-nums"
           >
-            {pruneResult.keptNodes.length} kept · {pruneResult.prunedNodes.length} greyed
+            {pruneResult.keptNodes.length} kept · {pruneResult.prunedNodes.length + (adjudicatedGrey?.size ?? 0)} greyed
           </span>
         )}
       </div>

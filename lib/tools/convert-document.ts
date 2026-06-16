@@ -19,6 +19,7 @@ import { promisify } from 'node:util';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { toAgentResult, type ToolResult } from './tool-utils.js';
+import { recordFileWrite } from '../ledger/file-ledger.js';
 import type { ResearchToolContext } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -913,6 +914,7 @@ export function createConvertDocumentTool(ctx: ResearchToolContext): AgentTool {
             const segmentAbsPath = buildPerRangeOutputPath(outputAbsolutePath, range, mode);
             await fsp.mkdir(path.dirname(segmentAbsPath), { recursive: true });
             await fsp.writeFile(segmentAbsPath, segmentText, 'utf8');
+            void recordFileWrite(projectPath, segmentAbsPath, { tool: 'convert_document' });
             const segmentRelPath = toProjectRelative(projectPath, segmentAbsPath);
             const segmentPreview = buildPreview(segmentText);
 
@@ -998,6 +1000,7 @@ export function createConvertDocumentTool(ctx: ResearchToolContext): AgentTool {
 
       // ── Write output & build preview ────────────────────────────
       await fsp.writeFile(outputAbsolutePath, producedText, 'utf8');
+      void recordFileWrite(projectPath, outputAbsolutePath, { tool: 'convert_document' });
       const outputRelativePath = toProjectRelative(projectPath, outputAbsolutePath);
       const preview = buildPreview(producedText);
 

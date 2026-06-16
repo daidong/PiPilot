@@ -198,6 +198,7 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
     traceId?: string
     spanId?: string
     turnId?: string
+    toolCallId?: string
     timestamp: string
   }
   const ledger = await readJsonlIfExists<LedgerRow>(path.join(projectPath, PATHS.ledgerArtifact))
@@ -206,6 +207,14 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
     const list = ledgerByArtifact.get(r.artifactId)
     if (list) list.push(r); else ledgerByArtifact.set(r.artifactId, [r])
   }
+
+  // File provenance ledger — write-time records of raw files a tool produced
+  // (downloaded fulltext, fetched web content, converted docs, generated
+  // figures, python analysis outputs). Each carries the producing `toolCallId`,
+  // letting us draw an authoritative `writes` edge tool → file below, instead of
+  // re-guessing file lineage from tool arguments.
+  interface FileLedgerRow { path: string; op: string; toolCallId?: string; timestamp?: string }
+  const fileLedger = await readJsonlIfExists<FileLedgerRow>(path.join(projectPath, PATHS.ledgerFile))
 
   interface DigestRow { traceId: string; sessionId?: string; [k: string]: unknown }
   const digest = await readJsonlIfExists<DigestRow>(path.join(projectPath, PATHS.traceDigest))
@@ -490,8 +499,21 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
     }
   }
 
+  // Index tool nodes by their tool-call id so a ledger row stamped with
+  // `toolCallId` (the creator key published on the OTel context for the whole
+  // duration of a tool's execute()) can join straight to the producing tool —
+  // generically, for any artifact type and any tool, with no dependence on the
+  // span context surviving the tool's internal awaits.
+  const toolNodeByCallId = new Map<string, string>()
+  for (const n of nodes.values()) {
+    if (n.kind === 'tool' && n.toolCallId) toolNodeByCallId.set(n.toolCallId, n.id)
+  }
+
   // Merge of two audit layers: main's citation stats (A1) on the node, plus
-  // this branch's ledger-spanId `creates` edge / text-fallback bookkeeping.
+  // this branch's `creates` edge / text-fallback bookkeeping. Creator join, in
+  // priority order: (1) ledger `toolCallId` → tool node (primary, robust);
+  // (2) ledger `spanId` → span node (works when the writing span was active);
+  // (3) artifact-create result text fallback (for rows with neither).
   const artifactIdsNeedingCreateTextFallback = new Set<string>()
   for (const r of ledger) {
     const id = `artifact:${r.artifactId}`
@@ -507,7 +529,10 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
         ...citationStats(a),
       })
     }
-    if (r.spanId && nodes.has(`span:${r.spanId}`)) {
+    const toolNodeId = r.toolCallId ? toolNodeByCallId.get(r.toolCallId) : undefined
+    if (toolNodeId) {
+      addEdge(toolNodeId, id, 'creates')
+    } else if (r.spanId && nodes.has(`span:${r.spanId}`)) {
       addEdge(`span:${r.spanId}`, id, 'creates')
     } else if (!r.spanId) {
       artifactIdsNeedingCreateTextFallback.add(r.artifactId)
@@ -590,6 +615,36 @@ export async function projectGraph(projectPath: string): Promise<AuditGraph> {
         if (nodes.has(`artifact:${aid}`)) addEdge(`artifact:${aid}`, spanNodeId, 'retrieved')
       }
     }
+  }
+
+  // 5b. File provenance: authoritative tool → file `writes` edges -----------
+  // From the file ledger (write-time records), join each row to its producing
+  // tool node by `toolCallId` and draw a `writes` edge. This is the recorded
+  // source — it supersedes the args-derived `writes`/`mentions` guesses above
+  // (addEdge dedupes, and a downloaded file the agent never passed as a write
+  // arg would otherwise have NO incoming edge at all). The file node is created
+  // on demand so a produced-but-never-read file still appears with its source.
+  // Normalize a recorded file path to the SAME key the args-walk uses: the
+  // agent refers to in-project files by a project-relative path (read/grep
+  // args), so an absolute path recorded under the project must be relativized
+  // here or its `writes` edge would orphan onto a separate node. Older ledgers
+  // (pre-normalization) stored absolutes; this also reconnects those with no
+  // re-run.
+  const toAgentPath = (p: string): string => {
+    if (!path.isAbsolute(p)) return p
+    const rel = path.relative(projectPath, p)
+    return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : p
+  }
+  const seenFileWrites = new Set<string>()
+  for (const r of fileLedger) {
+    if (r.op !== 'write' || !r.toolCallId) continue
+    const toolNodeId = toolNodeByCallId.get(r.toolCallId)
+    if (!toolNodeId) continue
+    const fileId = fileNode(shortenPath(toAgentPath(r.path)))
+    const key = toolNodeId + '\t' + fileId
+    if (seenFileWrites.has(key)) continue
+    seenFileWrites.add(key)
+    addEdge(toolNodeId, fileId, 'writes')
   }
 
   // 6. Emit ----------------------------------------------------------------

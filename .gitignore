@@ -55,3 +55,6 @@ __pycache__/
 
 # Local-only design exploration scratch
 design-explorations/
+
+# Benchmark run outputs (heavy scratch: mp4/pdf/tar/frames/etc) — never commit
+runs/

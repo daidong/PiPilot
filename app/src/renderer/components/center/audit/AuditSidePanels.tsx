@@ -358,12 +358,14 @@ interface RightProps {
   searchQuery?: string
   searchCaseSensitive?: boolean
   activeSearchMatch?: AuditSearchMatch | null
+  /** Audit drill-down in THIS selected node's events. */
+  auditHighlight?: { claimExact: string[]; claimFuzzy: string[]; resultExact: string[] }
   collapsed: boolean
   onToggleCollapsed: () => void
 }
 
 export function AuditRightRail({
-  graph, selected, taint, derivedTaint, autoSuspect, sliceStats, auditStats, onTaint, onClearTaint, onClearAllTaint, onFocusNode, searchQuery = '', searchCaseSensitive = false, activeSearchMatch = null, collapsed, onToggleCollapsed,
+  graph, selected, taint, derivedTaint, autoSuspect, sliceStats, auditStats, onTaint, onClearTaint, onClearAllTaint, onFocusNode, searchQuery = '', searchCaseSensitive = false, activeSearchMatch = null, auditHighlight, collapsed, onToggleCollapsed,
 }: RightProps) {
   if (collapsed) {
     return (
@@ -414,6 +416,7 @@ export function AuditRightRail({
             searchQuery={searchQuery}
             searchCaseSensitive={searchCaseSensitive}
             activeSearchMatch={activeSearchMatch}
+            auditHighlight={auditHighlight}
             onTaint={r => onTaint(selected.id, r)}
             onClearTaint={() => onClearTaint(selected.id)}
           />
@@ -423,6 +426,32 @@ export function AuditRightRail({
       </div>
     </div>
   )
+}
+
+function auditHighlightForEvent(
+  eventName: string,
+  auditHighlight?: { claimExact: string[]; claimFuzzy: string[]; resultExact: string[] },
+): { claimExact: string[]; claimFuzzy: string[]; resultExact: string[] } | undefined {
+  if (!auditHighlight) return undefined
+  if (eventName === 'pipilot.chat.response_text') {
+    return {
+      claimExact: auditHighlight.claimExact,
+      claimFuzzy: auditHighlight.claimFuzzy,
+      resultExact: [],
+    }
+  }
+  if (eventName === 'pipilot.tool.result') {
+    return {
+      claimExact: [],
+      claimFuzzy: [],
+      resultExact: auditHighlight.resultExact,
+    }
+  }
+  return undefined
+}
+
+function searchClassForEvent(eventName: string): string {
+  return INPUT_EVENT_NAMES.has(eventName) ? SEARCH_INPUT_CLS : AMBER
 }
 
 // —— Placeholder ——————————————————————————————————————————————————————
@@ -455,11 +484,12 @@ interface NDProps {
   searchQuery: string
   searchCaseSensitive: boolean
   activeSearchMatch: AuditSearchMatch | null
+  auditHighlight?: { claimExact: string[]; claimFuzzy: string[]; resultExact: string[] }
   onTaint: (reason: string) => void
   onClearTaint: () => void
 }
 
-function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, auditStats, searchQuery, searchCaseSensitive, activeSearchMatch, onTaint, onClearTaint }: NDProps) {
+function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, auditStats, searchQuery, searchCaseSensitive, activeSearchMatch, auditHighlight, onTaint, onClearTaint }: NDProps) {
   const palette = useAuditPalette()
   const [reason, setReason] = useState('')
   const isDirect = !!taint[node.id]
@@ -697,6 +727,8 @@ function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, audit
               const refs = collectBlobRefs(e.body)
               const isActiveEvent = activeSearchMatch?.nodeId === node.id && activeSearchMatch.eventName === e.name
               const eventText = humanizeEventBody(e.name, e.body)
+              const eventAuditHighlight = auditHighlightForEvent(e.name, auditHighlight)
+              const searchClass = searchClassForEvent(e.name)
               return (
                 <div
                   key={i}
@@ -706,7 +738,15 @@ function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, audit
                 >
                   <div className="text-[10px] t-text-accent font-mono mb-1">{EVENT_LABELS[e.name] ?? e.name}</div>
                   <pre className="text-[10px] leading-relaxed font-mono t-text whitespace-pre-wrap break-all max-h-64 overflow-auto m-0">
-                    <HighlightedSearchText text={eventText} query={searchQuery} caseSensitive={searchCaseSensitive} />
+                    <HighlightedSearchText
+                      text={eventText}
+                      query={searchQuery}
+                      caseSensitive={searchCaseSensitive}
+                      searchClass={searchClass}
+                      claimExact={eventAuditHighlight?.claimExact}
+                      claimFuzzy={eventAuditHighlight?.claimFuzzy}
+                      resultExact={eventAuditHighlight?.resultExact}
+                    />
                   </pre>
                   {refs.length > 0 && (
                     <div className="mt-1.5 space-y-1">
@@ -744,27 +784,129 @@ function NodeDetails({ node, taint, derivedTaint, autoSuspect, sliceStats, audit
   )
 }
 
-function HighlightedSearchText({ text, query, caseSensitive }: { text: string; query: string; caseSensitive: boolean }) {
-  const q = query.trim()
-  if (!q) return <>{text}</>
+const AMBER = 'rounded px-0.5 bg-amber-300/70 text-zinc-950'
+const SEARCH_INPUT_CLS = 'rounded px-0.5 bg-zinc-300/60 text-zinc-950 dark:bg-zinc-600/50 dark:text-zinc-50'
+const CLAIM_CLS = 'rounded px-0.5 bg-sky-500/30 text-sky-700 dark:text-sky-300 font-semibold'
+const RESULT_CLS = 'rounded px-0.5 bg-fuchsia-500/30 text-fuchsia-700 dark:text-fuchsia-300 font-semibold'
+type Range = { start: number; end: number; cls: string }
+const INPUT_EVENT_NAMES = new Set([
+  'pipilot.tool.args',
+  'pipilot.chat.request_payload',
+  'pipilot.chat.input_delta',
+])
 
+const TOKEN_RX = /[\p{L}\p{N}][\p{L}\p{N}_.-]*/gu
+const ALNUM_CHAR = /[\p{L}\p{N}]/u
+const SINGLE_DIGIT_RX = /^\d$/u
+function tokenize(s: string): { t: string; start: number; end: number }[] {
+  return [...s.matchAll(TOKEN_RX)].map(m => ({ t: m[0].toLowerCase(), start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }))
+}
+
+function isAlphaNumericAt(text: string, index: number): boolean {
+  if (index < 0 || index >= text.length) return false
+  return ALNUM_CHAR.test(text[index])
+}
+
+function isWholeTokenMatch(text: string, index: number, length: number): boolean {
+  return !isAlphaNumericAt(text, index - 1) && !isAlphaNumericAt(text, index + length)
+}
+
+// Whole-token matches only: a needle matches when it is bounded by non
+// alphanumeric chars on both sides. This keeps values like "6" out of base64
+// blobs and hashes while still matching a standalone "6".
+function tokenMatchRanges(text: string, needle: string, cls: string, caseSensitive = false): Range[] {
+  const n = caseSensitive ? needle : needle.toLowerCase()
+  if (!n) return []
   const hay = caseSensitive ? text : text.toLowerCase()
-  const needle = caseSensitive ? q : q.toLowerCase()
-  const parts: ReactNode[] = []
+  const out: Range[] = []
   let from = 0
-  let key = 0
-  while (from <= hay.length - needle.length) {
-    const idx = hay.indexOf(needle, from)
+  while (true) {
+    const idx = hay.indexOf(n, from)
     if (idx === -1) break
-    if (idx > from) parts.push(text.slice(from, idx))
-    parts.push(
-      <mark key={key++} className="rounded px-0.5 bg-amber-300/70 text-zinc-950">
-        {text.slice(idx, idx + q.length)}
-      </mark>,
-    )
-    from = idx + Math.max(needle.length, 1)
+    if (isWholeTokenMatch(text, idx, n.length)) out.push({ start: idx, end: idx + n.length, cls })
+    from = idx + n.length
   }
-  if (from < text.length) parts.push(text.slice(from))
+  return out
+}
+
+// Fuzzy locator for a paraphrased claim: the extractor's claim text is rarely a
+// verbatim substring of the rendered output, so we find the contiguous WINDOW of
+// the text with the most overlap of the claim's significant tokens and return
+// that tight char range. Below a threshold → null (caller falls back to tokens).
+function fuzzyRange(text: string, claim: string): Range | null {
+  const textToks = tokenize(text)
+  const claimSet = new Set(tokenize(claim).map(x => x.t).filter(t => t.length > 2 && !SINGLE_DIGIT_RX.test(t)))
+  if (claimSet.size === 0 || textToks.length === 0) return null
+  const win = Math.min(Math.max(claimSet.size, 4), 60)
+  let bestScore = 0, bestI = 0, bestJ = 0
+  for (let i = 0; i < textToks.length; i++) {
+    const j = Math.min(i + win, textToks.length)
+    const present = new Set<string>()
+    let firstHit = -1, lastHit = -1
+    for (let k = i; k < j; k++) {
+      if (claimSet.has(textToks[k].t)) { present.add(textToks[k].t); if (firstHit < 0) firstHit = k; lastHit = k }
+    }
+    if (present.size > bestScore) { bestScore = present.size; bestI = firstHit; bestJ = lastHit }
+  }
+  if (bestI < 0 || bestScore / claimSet.size < 0.4) return null
+  return { start: textToks[bestI].start, end: textToks[bestJ].end, cls: CLAIM_CLS }
+}
+
+// Distinctive tokens of a claim (numbers, long or capitalized words) — the
+// fallback when no contiguous region matches: at least light up the landmarks.
+function distinctiveRanges(text: string, claim: string): Range[] {
+  const toks = [...new Set(
+    [...claim.matchAll(TOKEN_RX)]
+      .map(m => m[0])
+      .filter(w => !SINGLE_DIGIT_RX.test(w) && (/\d/.test(w) || w.length >= 6 || /^[A-Z]/.test(w))),
+  )].map(w => w.toLowerCase())
+  const ranges: Range[] = []
+  for (const w of toks) {
+    ranges.push(...tokenMatchRanges(text, w, CLAIM_CLS))
+  }
+  return ranges
+}
+
+function exactRanges(text: string, needle: string, ci: boolean, cls: string): Range[] {
+  return tokenMatchRanges(text, needle, cls, !ci)
+}
+
+// Highlights the Cmd+F query + audit evidence (claim blue, actual result
+// fuchsia) by collecting all ranges and rendering left-to-right, dropping
+// overlaps (earliest wins). Input events use a neutral search color so they do
+// not read as audit evidence.
+function HighlightedSearchText({ text, query, caseSensitive, searchClass = AMBER, claimExact, claimFuzzy, resultExact }: {
+  text: string
+  query: string
+  caseSensitive: boolean
+  searchClass?: string
+  claimExact?: string[]
+  claimFuzzy?: string[]
+  resultExact?: string[]
+}) {
+  const ranges: Range[] = []
+  const q = query.trim()
+  if (q) ranges.push(...exactRanges(text, q, !caseSensitive, searchClass))
+  for (const t of claimExact ?? []) { const tt = t.trim(); if (tt) ranges.push(...exactRanges(text, tt, true, CLAIM_CLS)) }
+  for (const t of resultExact ?? []) { const tt = t.trim(); if (tt) ranges.push(...exactRanges(text, tt, true, RESULT_CLS)) }
+  for (const t of claimFuzzy ?? []) {
+    const tt = t.trim(); if (!tt) continue
+    const r = fuzzyRange(text, tt)
+    if (r) ranges.push(r)
+    else ranges.push(...distinctiveRanges(text, tt))
+  }
+  if (ranges.length === 0) return <>{text}</>
+
+  ranges.sort((a, b) => a.start - b.start || b.end - a.end)
+  const parts: ReactNode[] = []
+  let pos = 0, key = 0
+  for (const r of ranges) {
+    if (r.start < pos) continue // overlaps an already-emitted range
+    if (r.start > pos) parts.push(text.slice(pos, r.start))
+    parts.push(<mark key={key++} className={r.cls}>{text.slice(r.start, r.end)}</mark>)
+    pos = r.end
+  }
+  if (pos < text.length) parts.push(text.slice(pos))
   return <>{parts}</>
 }
 

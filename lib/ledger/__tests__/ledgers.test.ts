@@ -11,7 +11,7 @@ import {
   createUserResponseSignalsWriter,
   createViewLogWriter
 } from '../index.js'
-import { TURN_ID_KEY } from '../../telemetry/context-keys.js'
+import { TURN_ID_KEY, TOOL_CALL_KEY } from '../../telemetry/context-keys.js'
 import { PATHS } from '../../types.js'
 
 // The Phase T turnId fallback reads the active OTel context. In the running
@@ -199,6 +199,74 @@ test('artifact ledger: explicit turnId wins over the context value', async () =>
     )
     const row = JSON.parse(readFileSync(join(dir, PATHS.ledgerArtifact), 'utf8').trim())
     assert.equal(row.turnId, 'turn-explicit')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('artifact ledger: toolCallId falls back to the active tool-call context', async () => {
+  const dir = tempProject()
+  try {
+    const w = createArtifactLedgerWriter(dir)
+    await context.with(context.active().setValue(TOOL_CALL_KEY, 'call-ctx-1'), () =>
+      w.append({
+        artifactId: 'a-1',
+        version: 1,
+        op: 'create',
+        type: 'paper',
+        path: 'a.md',
+        contentHash: 'sha256:1',
+        initiator: 'assistant'
+        // no explicit toolCallId — must be picked up from the context
+      })
+    )
+    const row = JSON.parse(readFileSync(join(dir, PATHS.ledgerArtifact), 'utf8').trim())
+    assert.equal(row.toolCallId, 'call-ctx-1')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('artifact ledger: explicit toolCallId wins over the context value', async () => {
+  const dir = tempProject()
+  try {
+    const w = createArtifactLedgerWriter(dir)
+    await context.with(context.active().setValue(TOOL_CALL_KEY, 'call-ctx-1'), () =>
+      w.append({
+        artifactId: 'a-1',
+        version: 1,
+        op: 'create',
+        type: 'paper',
+        path: 'a.md',
+        contentHash: 'sha256:1',
+        initiator: 'assistant',
+        toolCallId: 'call-explicit'
+      })
+    )
+    const row = JSON.parse(readFileSync(join(dir, PATHS.ledgerArtifact), 'utf8').trim())
+    assert.equal(row.toolCallId, 'call-explicit')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('artifact ledger: no tool-call context → row has no toolCallId field', async () => {
+  const dir = tempProject()
+  try {
+    const w = createArtifactLedgerWriter(dir)
+    // Written outside any tool call (import / background backfill); the writer
+    // must not invent a creator. Such rows stay creator-less by design.
+    await w.append({
+      artifactId: 'a-1',
+      version: 1,
+      op: 'create',
+      type: 'paper',
+      path: 'a.md',
+      contentHash: 'sha256:1',
+      initiator: 'assistant'
+    })
+    const row = JSON.parse(readFileSync(join(dir, PATHS.ledgerArtifact), 'utf8').trim())
+    assert.equal('toolCallId' in row, false)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

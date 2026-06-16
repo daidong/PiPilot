@@ -75,8 +75,10 @@ import { CronScanner } from '../../../lib/compute/cron/scanner'
 import type { CronTask, CronEvent } from '../../../lib/compute/cron/types'
 import { isValidSchedule } from '../../../lib/compute/cron/schedule'
 import { inferProviderFromModelId } from '../../../lib/models'
-import { projectGraph, checkTelemetryPresence } from '../../../lib/audit-graph/index'
-import { runAuditPipeline, type AuditRunResult } from '../../../lib/audit-graph/audit/index'
+import { projectGraph, checkTelemetryPresence, pruneGraph } from '../../../lib/audit-graph/index'
+import { runNodeAudit, escalateFinding, orderAuditCandidates, readCachedNodeAudit, mapWithConcurrency, summarizeNodeAudits, type FaithfulnessFinding, type NodeAuditRunResult, type TraceAuditSummary } from '../../../lib/audit-graph/audit/index'
+import type { NodeAuditResult } from '../../../lib/audit-graph/audit/types'
+import { selectAdjudicationCandidates, adjudicateFlaggedNodes } from '../../../lib/audit-graph/adjudicate'
 import { AwsCredentialProvider, toSdkCredentials } from '../../../lib/aws/credentials'
 // RFC-008 §7.5: compute IPC migrated to a single discriminated-event
 // channel; the PR #62 helpers (PendingPlanStore reach-through,
@@ -1078,9 +1080,11 @@ async function runMainCallLlm(
   system: string,
   user: string,
   purpose: string,
-  opts: { telemetry?: boolean; temperature?: number; images?: { data: string; mimeType: string }[] } = {},
+  opts: { telemetry?: boolean; temperature?: number; images?: { data: string; mimeType: string }[]; model?: string } = {},
 ): Promise<string> {
-  const modelStr = state.currentModel
+  // §6.1: audit calls may target a different (cheaper / vision) model than the
+  // main agent. `opts.model` is the resolved `provider:modelId`; absent → main.
+  const modelStr = opts.model ?? state.currentModel
   const auth = resolveCoordinatorAuth(modelStr)
   const { getModel: piGetModel } = await import('@mariozechner/pi-ai')
   const [rawProvider, modelId] = modelStr.split(':')
@@ -1123,15 +1127,41 @@ async function runMainCallLlm(
         ...opts.images.map(img => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType })),
       ]
     : user
-  return runSubLlmText({
-    model: piModel as unknown as Parameters<typeof runSubLlmText>[0]['model'],
-    systemPrompt: system,
-    userContent,
-    apiKey,
-    purpose,
-    ...(opts.temperature !== undefined && { temperature: opts.temperature }),
-    tracer: opts.telemetry === false ? null : state.tracer ?? null,
-  })
+  // Reasoning models (gpt-5.x, etc.) reject temperature≠1 (a `temperature: 0`
+  // request 400s → empty text) and burn output budget on reasoning tokens, so
+  // without headroom they return NO text block at all. For those: drop the
+  // caller's temperature and give a generous maxTokens so a text answer
+  // survives after the reasoning. Non-reasoning models keep the exact behavior.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isReasoning = !!(piModel as any)?.reasoning
+  if (purpose.startsWith('audit-')) {
+    console.warn(`[audit-llm] purpose=${purpose} model=${modelStr} piModelResolved=${!!piModel} reasoning=${isReasoning} apiKeyLen=${apiKey?.length ?? 0}`)
+  }
+  let out = ''
+  try {
+    out = await runSubLlmText({
+      model: piModel as unknown as Parameters<typeof runSubLlmText>[0]['model'],
+      systemPrompt: system,
+      userContent,
+      apiKey,
+      purpose,
+      // Reasoning models: force LOW reasoning + headroom. Otherwise the model
+      // spends the whole output budget on reasoning tokens and returns no text.
+      // NB: gpt-5.5 rejects 'minimal' (400) — 'low' is the lowest it accepts.
+      // Non-reasoning: honor the caller's temperature.
+      ...(isReasoning ? { reasoning: 'low' as const, maxTokens: 16384 } : (opts.temperature !== undefined && { temperature: opts.temperature })),
+      tracer: opts.telemetry === false ? null : state.tracer ?? null,
+    })
+  } catch (err) {
+    if (purpose.startsWith('audit-')) {
+      console.warn(`[audit-llm] THREW for ${purpose} model=${modelStr}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    throw err
+  }
+  if (purpose.startsWith('audit-') && !out) {
+    console.warn(`[audit-llm] EMPTY text from ${modelStr} (reasoning=${isReasoning}) — likely an API error swallowed by completeSimple, or reasoning-only output`)
+  }
+  return out
 }
 
 export function registerIpcHandlers(): void {
@@ -3165,9 +3195,16 @@ export function registerIpcHandlers(): void {
     return { presence, graph }
   })
 
-  handleWindow('audit:run-deliverable', async ({ state }, opts?: { targetStepId?: string | null }): Promise<{
+  /**
+   * Per-node process-faithfulness audit (audit-pipeline.md §5). Extracts claims
+   * from the selected node via ONE telemetry-free LLM call (§5.2 C.1), then runs
+   * the deterministic correspondence compare (C.2–C.4). The prune's `auditFlags`
+   * drive the targeted checks (ungrounded_step → phantom, §5.3). The audit model
+   * is the §6.1 slot (`'main'` follows the agent model).
+   */
+  handleWindow('audit:run-node', async ({ state }, opts: { nodeId: string; artifactText?: string; excludeNodeIds?: string[] }): Promise<{
     success: boolean
-    result?: AuditRunResult
+    result?: Awaited<ReturnType<typeof runNodeAudit>>
     error?: string
   }> => {
     if (!state.projectPath) return { success: false, error: 'No project is open.' }
@@ -3175,14 +3212,161 @@ export function registerIpcHandlers(): void {
       const presence = await checkTelemetryPresence(state.projectPath)
       if (!presence.present) return { success: false, error: 'No telemetry is available to audit.' }
       const graph = await projectGraph(state.projectPath)
-      const result = await runAuditPipeline({
+      const prune = pruneGraph(graph)
+      const auditModel = resolveSettings(loadSettingsFromConfig()).audit.model
+      // Artifact nodes carry no content in the graph — read it from disk so the
+      // extractor sees the deliverable text.
+      let artifactText = opts.artifactText
+      if (!artifactText) {
+        const node = graph.nodes.find(n => n.id === opts.nodeId)
+        if (node?.kind === 'artifact' && node.path) {
+          try { artifactText = await (await import('fs/promises')).readFile(join(state.projectPath, node.path), 'utf8') } catch { /* best-effort */ }
+        }
+      }
+      const result = await runNodeAudit({
         projectPath: state.projectPath,
         graph,
-        targetStepId: opts?.targetStepId ?? null,
+        nodeId: opts.nodeId,
+        auditFlags: prune.auditFlags,
+        ...(artifactText !== undefined && { artifactText }),
+        ...(opts.excludeNodeIds && { excludeNodeIds: opts.excludeNodeIds }),
         persist: true,
-        callLlm: (system, user, images) => runMainCallLlm(state, system, user, 'audit-judge', { telemetry: false, temperature: 0, images }),
+        callLlm: (system, user) => runMainCallLlm(state, system, user, 'audit-extract', {
+          telemetry: false, temperature: 0, ...(auditModel !== 'main' && { model: auditModel }),
+        }),
       })
       return { success: true, result }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * Batch-audit the whole focused trace concurrently and return a deterministic
+   * roll-up (§10). Per-node audits are independent so they run in a pool of size
+   * `audit.concurrency` (Settings). Cache-first per node → re-runs are cheap.
+   * Progress is streamed to the renderer via `audit:trace-progress`. The summary
+   * includes the honest coverage gap (tool ops with no claim and no flag).
+   */
+  handleWindow('audit:audit-trace', async ({ state }, opts?: { excludeNodeIds?: string[] }): Promise<{
+    success: boolean
+    summary?: TraceAuditSummary
+    error?: string
+  }> => {
+    if (!state.projectPath) return { success: false, error: 'No project is open.' }
+    try {
+      const presence = await checkTelemetryPresence(state.projectPath)
+      if (!presence.present) return { success: false, error: 'No telemetry is available to audit.' }
+      const projectPath = state.projectPath
+      const graph = await projectGraph(projectPath)
+      const prune = pruneGraph(graph)
+      const settings = resolveSettings(loadSettingsFromConfig()).audit
+      const auditModel = settings.model
+      const terminalTraceId = prune.terminalStepId
+        ? graph.nodes.find(n => n.id === prune.terminalStepId)?.traceId ?? null
+        : null
+      const candidates = orderAuditCandidates(graph, {
+        terminalTraceId,
+        prunedNodes: prune.prunedNodes,
+        ...(opts?.excludeNodeIds && { excludeNodeIds: opts.excludeNodeIds }),
+      })
+      const focusedToolIds = graph.nodes
+        .filter(n => n.kind === 'tool' && n.traceId === terminalTraceId && !prune.prunedNodes.includes(n.id))
+        .map(n => n.id)
+
+      const sendProgress = (done: number, total: number): void => {
+        for (const win of BrowserWindow.getAllWindows()) safeSend(win, 'audit:trace-progress', { done, total })
+      }
+      sendProgress(0, candidates.length)
+
+      const results = await mapWithConcurrency(candidates, settings.concurrency, async (nodeId): Promise<NodeAuditResult> => {
+        const cached = await readCachedNodeAudit(projectPath, nodeId)
+        if (cached) return cached
+        const node = graph.nodes.find(n => n.id === nodeId)
+        let artifactText: string | undefined
+        if (node?.kind === 'artifact' && node.path) {
+          try { artifactText = await (await import('fs/promises')).readFile(join(projectPath, node.path), 'utf8') } catch { /* best-effort */ }
+        }
+        try {
+          const run = await runNodeAudit({
+            projectPath,
+            graph,
+            nodeId,
+            auditFlags: prune.auditFlags,
+            ...(artifactText !== undefined && { artifactText }),
+            ...(opts?.excludeNodeIds && { excludeNodeIds: opts.excludeNodeIds }),
+            persist: true,
+            callLlm: (system, user) => runMainCallLlm(state, system, user, 'audit-extract', {
+              telemetry: false, temperature: 0, ...(auditModel !== 'main' && { model: auditModel }),
+            }),
+          })
+          return run.result
+        } catch {
+          // Per-node error isolation: one failed node must not abort the batch.
+          const node2 = graph.nodes.find(n => n.id === nodeId)
+          return { nodeId, nodeKind: node2?.kind ?? 'step', findings: [], triggeredFlags: [] }
+        }
+      }, sendProgress)
+
+      return { success: true, summary: summarizeNodeAudits(results, focusedToolIds) }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * §3.2 — LLM adjudication of flagged-but-ambiguous nodes (abandoned vs used).
+   * Additive over the deterministic prune: returns the greyed set + every
+   * decision (re-inspectable, §8). Safety bias KEEP is enforced in the lib.
+   */
+  handleWindow('audit:adjudicate-prune', async ({ state }, opts?: { terminalStepId?: string | null }): Promise<{
+    success: boolean
+    decisions?: import('../../../lib/audit-graph/adjudicate').AdjudicationDecision[]
+    greyed?: string[]
+    error?: string
+  }> => {
+    if (!state.projectPath) return { success: false, error: 'No project is open.' }
+    try {
+      const presence = await checkTelemetryPresence(state.projectPath)
+      if (!presence.present) return { success: false, error: 'No telemetry is available to audit.' }
+      const graph = await projectGraph(state.projectPath)
+      const prune = pruneGraph(graph, opts?.terminalStepId ? { terminalStepId: opts.terminalStepId } : {})
+      const candidates = selectAdjudicationCandidates(graph, prune)
+      const auditModel = resolveSettings(loadSettingsFromConfig()).audit.model
+      const { decisions, greyed } = await adjudicateFlaggedNodes({
+        candidates,
+        callLlm: (system, user) => runMainCallLlm(state, system, user, 'audit-adjudicate', {
+          telemetry: false, temperature: 0, ...(auditModel !== 'main' && { model: auditModel }),
+        }),
+      })
+      return { success: true, decisions, greyed }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * §5.2 C.5 — escalate one unverifiable visual/semantic finding to the demoted
+   * vision judge. Uses the §6.1 `auditVisionModel` slot (must be vision-capable).
+   */
+  handleWindow('audit:escalate-finding', async ({ state }, opts: { finding: FaithfulnessFinding }): Promise<{
+    success: boolean
+    finding?: FaithfulnessFinding
+    error?: string
+  }> => {
+    if (!state.projectPath) return { success: false, error: 'No project is open.' }
+    try {
+      const graph = await projectGraph(state.projectPath)
+      const visionModel = resolveSettings(loadSettingsFromConfig()).audit.visionModel
+      const finding = await escalateFinding({
+        finding: opts.finding,
+        graph,
+        projectPath: state.projectPath,
+        callLlm: (system, user, images) => runMainCallLlm(state, system, user, 'audit-escalate', {
+          telemetry: false, temperature: 0, images, ...(visionModel !== 'main' && { model: visionModel }),
+        }),
+      })
+      return { success: true, finding }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
     }

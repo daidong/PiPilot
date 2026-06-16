@@ -397,9 +397,32 @@ export interface ElectronAPI {
     presence: { present: boolean; reason?: 'no-root' | 'no-traces-dir' | 'no-span-files' | 'no-spans'; spanFileCount: number }
     graph: import('../../../lib/audit-graph/index').AuditGraph | null
   }>
-  auditRunDeliverable: (opts?: { targetStepId?: string | null }) => Promise<{
+  // Per-node process-faithfulness audit (audit-pipeline.md §5/§10). Extracts
+  // claims from the node via one LLM call, then runs the deterministic compare.
+  auditRunNode: (opts: { nodeId: string; artifactText?: string; excludeNodeIds?: string[] }) => Promise<{
     success: boolean
-    result?: import('../../../lib/audit-graph/audit/index').AuditRunResult
+    result?: import('../../../lib/audit-graph/audit/index').NodeAuditRunResult
+    error?: string
+  }>
+  // Batch-audit the whole focused trace concurrently → deterministic summary
+  // (with coverage gap). Progress streams via onAuditTraceProgress.
+  auditAuditTrace: (opts?: { excludeNodeIds?: string[] }) => Promise<{
+    success: boolean
+    summary?: import('../../../lib/audit-graph/audit/index').TraceAuditSummary
+    error?: string
+  }>
+  onAuditTraceProgress: (cb: (p: { done: number; total: number }) => void) => () => void
+  // §3.2 LLM adjudication of flagged-but-ambiguous nodes (abandoned vs used).
+  auditAdjudicatePrune: (opts?: { terminalStepId?: string | null }) => Promise<{
+    success: boolean
+    decisions?: import('../../../lib/audit-graph/adjudicate').AdjudicationDecision[]
+    greyed?: string[]
+    error?: string
+  }>
+  // §5.2 C.5 escalation of one unverifiable visual/semantic finding to the vision judge.
+  auditEscalateFinding: (opts: { finding: import('../../../lib/audit-graph/audit/index').FaithfulnessFinding }) => Promise<{
+    success: boolean
+    finding?: import('../../../lib/audit-graph/audit/index').FaithfulnessFinding
     error?: string
   }>
   closeProject: () => Promise<void>
@@ -679,7 +702,11 @@ const api: ElectronAPI = {
   sharingResolveConflict: (resolutions) => invoke('sharing:resolve-conflict', resolutions),
   sharingSnapshot: (label) => invoke('sharing:snapshot', label),
   auditGetGraph: () => invoke('audit:get-graph'),
-  auditRunDeliverable: (opts) => invoke('audit:run-deliverable', opts),
+  auditRunNode: (opts) => invoke('audit:run-node', opts),
+  auditAuditTrace: (opts) => invoke('audit:audit-trace', opts),
+  onAuditTraceProgress: (cb) => subscribe('audit:trace-progress', cb),
+  auditAdjudicatePrune: (opts) => invoke('audit:adjudicate-prune', opts),
+  auditEscalateFinding: (opts) => invoke('audit:escalate-finding', opts),
   closeProject: () => invoke('project:close'),
   onProjectClosed: (cb) => subscribe('project:closed', cb),
 

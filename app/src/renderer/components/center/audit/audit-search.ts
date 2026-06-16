@@ -20,6 +20,7 @@ interface SearchEntry {
 }
 
 const EXCERPT_RADIUS = 72
+const ALNUM_RX = /[\p{L}\p{N}]/u
 
 function normalizeText(value: unknown): string {
   if (value === undefined || value === null) return ''
@@ -39,6 +40,15 @@ function makeExcerpt(text: string, index: number, queryLength: number): { excerp
     matchStart: prefixOffset + index - from,
     matchEnd: prefixOffset + index - from + queryLength,
   }
+}
+
+function isAlphaNumericAt(text: string, index: number): boolean {
+  if (index < 0 || index >= text.length) return false
+  return ALNUM_RX.test(text[index])
+}
+
+function isWholeTokenMatch(text: string, index: number, length: number): boolean {
+  return !isAlphaNumericAt(text, index - 1) && !isAlphaNumericAt(text, index + length)
 }
 
 function addEntry(entries: SearchEntry[], node: GraphNode, field: string, value: unknown, eventName?: string): void {
@@ -86,6 +96,10 @@ export function searchAuditGraph(graph: AuditGraph, query: string, caseSensitive
     while (from <= hay.length - needle.length) {
       const idx = hay.indexOf(needle, from)
       if (idx === -1) break
+      if (!isWholeTokenMatch(entry.text, idx, q.length)) {
+        from = idx + Math.max(needle.length, 1)
+        continue
+      }
       const excerpt = makeExcerpt(entry.text, idx, q.length)
       matches.push({
         id: `${entry.node.id}:${entry.field}:${entry.eventName ?? 'attr'}:${idx}:${matches.length}`,

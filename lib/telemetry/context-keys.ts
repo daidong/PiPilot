@@ -22,3 +22,14 @@
  * context, not the global active one.
  */
 export const TURN_ID_KEY = Symbol.for('pipilot.telemetry.turnId')
+
+/**
+ * Active tool-call id (`pipilot.tool.call.id`). Published on the OTel context by
+ * `createResearchTools` for the lifetime of one tool's `execute()`, so any
+ * artifact write happening inside that call — however deeply nested or however
+ * many `await`s later — can attribute itself to the originating tool without
+ * the tool threading the id by hand. This is the creator key the audit-graph
+ * `creates` edge joins on. It mirrors the value pi-mono stamps on the tool span
+ * as `gen_ai.tool.call.id`, so the ledger row and the tool node line up.
+ */
+export const TOOL_CALL_KEY = Symbol.for('pipilot.telemetry.toolCallId')

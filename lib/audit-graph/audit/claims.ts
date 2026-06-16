@@ -105,7 +105,7 @@ function nodeSearchText(n: GraphNode): string {
   ].filter(Boolean).join('\n').toLowerCase()
 }
 
-function tokenMatchesNode(token: string, n: GraphNode): boolean {
+export function tokenMatchesNode(token: string, n: GraphNode): boolean {
   const t = token.toLowerCase()
   const hay = nodeSearchText(n)
   if (hay.includes(t)) return true
@@ -149,18 +149,26 @@ export function extractClaims(
   }).filter(c => c.text.length > 0)
 }
 
+// Pull narrative text from one assistant content block. The agent's reasoning
+// lives in `thinking` blocks (extended-thinking models emit `{type:'thinking',
+// thinking:'…'}`), with `text` reserved for the final answer — so an audit that
+// read only `text` saw nothing on every reasoning step. We read BOTH. `tool_use`
+// blocks carry no narrative and are skipped.
+function extractBlockText(block: unknown): string {
+  if (!block || typeof block !== 'object') return ''
+  const b = block as Record<string, unknown>
+  if (typeof b.text === 'string') return b.text
+  if (typeof b.thinking === 'string') return b.thinking
+  return ''
+}
+
 export function extractResponseTextFromStep(step: GraphNode | undefined): string {
   const raw = step?.rawEvents?.find(e => e.name === 'pipilot.chat.response_text')?.body
   if (!raw) return ''
   try {
     const parsed = JSON.parse(raw)
     if (Array.isArray(parsed)) {
-      return parsed.map(block => {
-        if (block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string') {
-          return (block as { text: string }).text
-        }
-        return ''
-      }).filter(Boolean).join('\n\n')
+      return parsed.map(extractBlockText).filter(Boolean).join('\n\n')
     }
     if (typeof parsed === 'string') return parsed
   } catch {

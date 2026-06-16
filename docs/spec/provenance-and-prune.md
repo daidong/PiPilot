@@ -149,21 +149,30 @@ Stages, mapped to the code:
   kept without dragging in the parallel trace that also touched it.
 - **Stage 4 — dead-end pruning, absorbed into deliverable safety.** A product of
   a kept tool stays kept even if nobody reads it (that is the deliverable shape).
-  Such nodes get the `unused_output` flag — signalled, not greyed. Only nodes a
-  surviving step never touched end up pruned.
+  Such nodes are signalled, not greyed. Only nodes a surviving step never touched
+  end up pruned.
 - **Stage 5 — error handling.** Only the `error` flag is set; nothing is pruned
   or archived on account of an error.
-- **Stage 5(6) — suspicious tagging** (`computeFlags`). Per-node flags:
-  - `error` — tool span errored. `retried` — tool retryCount > 0.
-  - `reread` — a file read ≥2×. `overwritten` — a file written ≥2× (or an
-    artifact with >1 version).
+- **Stage 5(6) — suspicious tagging** (`computeFlags`). Thresholds are
+  deliberately conservative — a single repeat is normal agent behaviour, never a
+  smell — so the count flags fire at **≥3**, not ≥2. Per-node flags:
+  - `error` — tool span errored. `retried` — tool `retryCount ≥ 3`.
+  - `reread` — a file read ≥3×. `overwritten` — a file written ≥3× (or an
+    artifact with ≥3 versions).
   - `ungrounded_step` — a **non-first** step with no incoming `returns` (consumed
     no tool output). The first step of each trace is excluded — it has no prior
     step to feed it, so flagging it is a guaranteed false positive.
-  - `repeated_intent` — the same **tool name** invoked ≥3× within a window of 3
-    consecutive step indices (K=3), per trace; flags the clustered tool nodes.
-    Name-based only (args are the `redundancy` metric's concern, not this flag).
-  - `unused_output` — a product (written file / created artifact) nothing reads.
+  - `repeated_intent` — the same tool **invoked with the same args** ≥3× within a
+    window of 3 consecutive step indices (K=3), per trace; flags the clustered
+    tool nodes. Keyed on `intentClass` (`toolName + hash(args[:200])`), so a tool
+    that legitimately fires repeatedly on **different** inputs (three distinct
+    file reads, three distinct searches) is not flagged — only genuine do-overs
+    on an identical call.
+  - `unused_output` — a product (written file / created artifact) nothing reads,
+    **except** the focused turn's deliverable. The final output of a turn is
+    unread by construction, so flagging it would self-trip on every successful
+    run; the latest-produced product(s) within the terminal trace are exempt.
+    Genuinely abandoned mid-trace products (a superseded earlier draft) still flag.
   - **Deliberately excluded:** `high_latency` and `long_output` — they answer
     "how slow / how big", not "is it wrong".
 - **Stage 6(7) — support metrics** (`computeSupportMetrics`). Per focused-trace

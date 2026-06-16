@@ -16,6 +16,7 @@ import { promisify } from 'node:util'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { toAgentResult, toolError, type ToolResult } from './tool-utils.js'
+import { recordFileWrite } from '../ledger/file-ledger.js'
 import type { ResearchToolContext } from './types.js'
 import { loadPrompt } from '../agents/prompts/index.js'
 
@@ -205,11 +206,16 @@ export function createDataAnalyzeTool(ctx: ResearchToolContext): AgentTool {
         ] as const) {
           if (fs.existsSync(dir)) {
             for (const f of fs.readdirSync(dir)) {
+              const absOut = path.join(dir, f)
               outputs.push({
                 name: f,
                 type,
-                path: path.relative(ctx.workspacePath, path.join(dir, f))
+                path: path.relative(ctx.workspacePath, absOut)
               })
+              // python (a subprocess) wrote these; record each so the audit
+              // graph can attribute them to this data_analyze call. The known
+              // output dirs make a dir-diff unnecessary.
+              void recordFileWrite(ctx.projectPath, absOut, { tool: 'data_analyze' })
             }
           }
         }

@@ -56,8 +56,12 @@ export const PATHS = {
   telemetryRoot: '.research-pilot',
   traces: '.research-pilot/traces',
   blobs: '.research-pilot/blobs',
+  // Audit run logs (process-faithfulness audit). Isolated: projectGraph never
+  // reads this dir, so the audit's own LLM steps can't pollute the next graph.
+  audit: '.research-pilot/audit',
   ledgerArtifact: '.research-pilot/artifacts/ledger.jsonl',
   ledgerMemory: '.research-pilot/memory-v2/ledger.jsonl',
+  ledgerFile: '.research-pilot/files/ledger.jsonl',
   userResponseSignals: '.research-pilot/user-response-signals.jsonl',
   viewLog: '.research-pilot/view-log.jsonl',
   tracingState: '.research-pilot/tracing-state.jsonl',

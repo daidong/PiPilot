@@ -25,7 +25,7 @@ import { join } from 'node:path'
 import { context, trace } from '@opentelemetry/api'
 import { PATHS } from '../types.js'
 import { appendJsonl, appendJsonlSync } from '../telemetry/jsonl-writer.js'
-import { TURN_ID_KEY } from '../telemetry/context-keys.js'
+import { TURN_ID_KEY, TOOL_CALL_KEY } from '../telemetry/context-keys.js'
 
 export type ArtifactOp =
   | 'create'
@@ -99,6 +99,18 @@ function buildRow(row: LedgerRowInput): ArtifactLedgerRow {
     const ctxTurn = context.active().getValue(TURN_ID_KEY)
     if (typeof ctxTurn === 'string') turnId = ctxTurn
   }
+  // Creator attribution: pull the active tool-call id off the OTel context when
+  // the caller didn't supply one (explicit value still wins). createResearchTools
+  // publishes TOOL_CALL_KEY for the whole duration of each tool's execute(), so
+  // any artifact write nested inside a tool — paper download, image extract,
+  // table save, data output — carries the creating tool's id without the tool
+  // threading it by hand. Rows written outside any tool call (imports, background
+  // backfill) resolve to undefined and stay creator-less by design.
+  let toolCallId = row.toolCallId
+  if (!toolCallId) {
+    const ctxCall = context.active().getValue(TOOL_CALL_KEY)
+    if (typeof ctxCall === 'string') toolCallId = ctxCall
+  }
   const fullRow: ArtifactLedgerRow = {
     artifactId: row.artifactId,
     version: row.version,
@@ -112,7 +124,7 @@ function buildRow(row: LedgerRowInput): ArtifactLedgerRow {
     traceId,
     spanId,
     turnId,
-    toolCallId: row.toolCallId,
+    toolCallId,
     timestamp: row.timestamp ?? new Date().toISOString(),
     importMeta: row.importMeta
   }
